@@ -197,8 +197,11 @@ adjustment, an optional pomodoro_shift object for a whole-item `++[N]`/`--[N]` \
 shift, an optional pomodoro_split object for a whole-item `=/` split, an optional pomodoro_merge object for a whole-item `=*` merge, an optional pomodoro_close object for a `=x` link close suffix or \
 whole-item close, and structured diagnostics. \
 An `x=` item adds a text-only `pomodoro_past` object (the typed name, \
-blocks, repair flag, stack position, and existing close spec) plus \
-`pomodoro_past` and `pomodoro_past_repair` spans. \
+blocks, repair flag, optional segment suffix, stack position with optional \
+pin and lead blocks, and existing close spec) plus `pomodoro_past`, \
+`pomodoro_past_repair`, and `pomodoro_past_segment` spans. A run of `x=` \
+items hangs from one place: a start suffix (`~`, `~n`) goes on its first \
+item and an end suffix (`~n+`, `~~`) on its last. \
 Wikilink highlighting is syntax-only and never touches the vault. Byte \
 offsets index the original TEXT before whitespace normalization, are \
 half-open [start, end), never overlap, and always land on a character \
@@ -356,7 +359,7 @@ and block-ID spans: `@r:id=x1!2` and `^r:id=x1` stay 'pomodoro_link' (or \
 report `invalid_pomodoro_close` on the conflicting component or the precise \
 list range. A `@@` declaration never applies to close, `=`/`=<X>`, or \
 `=name` items, and neither is ever rewritten. \
-A whole-item `x=` past (`x=` starts now, `x` stops now, `x=` records what already happened: everything before the second `=` is time, everything after it is tasks) is lowercase only and must start an item or sit inside a same-line session chain; `X=3` and mid-body `Plan x=3` stay prose, while every `x=` token is claimed as valid, invalid, or unfinished, never prose. It reports mode 'pomodoro_past' with `section` carrying the typed name and a `pomodoro_past` object (`raw` exactly as typed, `name` (null when unnamed), `name_is_literal`, `blocks` (default 5), `minutes` (`blocks` times 5), `repair`, `stack` (`index` 1-based in typed order, `size`, `offset_blocks` summed from later members), and `close` in the existing close-spec shape including `log`). Names follow the `=name` rules: bare names need an ASCII letter, contain no `-`, do not end in a digit, and must not be close-shaped (digit-led needs `#`: `x=#2fa`; `x=2fa` starts FA for 10 minutes); a bare name takes one glued count on either side (`x=3fix`, `x=fix3`), and bytes `=name` rejects report its `Pomodoro name` wording; unquoted names end at `!`, `=`, `@`, `~`, `*`, `-`, and whitespace, while `#\"literal\"` quotes (straight or curly) canonicalize like `=#\"…\"`, match by key equality, and run through the closing quote (so `!`/`=` inside quotes are name content, not delimiters). The repair `!` binds to `E`, and everything after the second `=` goes to the close lexer unchanged (including `x=3=1,` needing `pomodoro_close_task` and `x= 2` needing `pomodoro_close_log_text`); an `x=` token counts as a close for chain ownership, inline entries, and child bullets. Spans cover `x=` plus a leading count (`pomodoro_past`), a trailing count (`pomodoro_past`), the name only (`pomodoro_name`), the repair `!` (`pomodoro_past_repair`), the second `=` (`pomodoro_close`), plus the existing close sub-spans and `pomodoro_close_log_index` entries. Malformed `E` reports `invalid_pomodoro_past` (usage error from `bob capture`): past records have no offsets; a second count, zero count, close-shaped bare name, dashed bare name, retired `@` separator, or redundant `#` prefix gets a teaching rewrite. Drop, park, and completion modifiers belong after a second `=`; `x=` cannot split or merge. Every rewrite preserves the typed count, name, repair `!`, and close part; oversized counts reuse the start `too large` wording; `x=#`/`x=3#`/`x=#\"DEEP` need `pomodoro_name`. \
+A whole-item `x=` past (`x=` starts now, `x` stops now, `x=` records what already happened: everything before the second `=` is time, everything after it is tasks) is lowercase only and must start an item or sit inside a same-line session chain; `X=3` and mid-body `Plan x=3` stay prose, while every `x=` token is claimed as valid, invalid, or unfinished, never prose. It reports mode 'pomodoro_past' with `section` carrying the typed name and a `pomodoro_past` object (`raw` exactly as typed, `name` (null when unnamed), `name_is_literal`, `blocks` (default 5), `minutes` (`blocks` times 5), `repair`, optional `segment` (`raw`, `kind` `tail`/`index`/`head`, optional 1-99 `index`, `edge` `start`/`end`), `stack` (`index` 1-based in typed order, `size`, `offset_blocks` summed from later members, plus `pin` `start`/`end` and `lead_blocks` summed from earlier members for pinned runs), and `close` in the existing close-spec shape including `log`). An optional segment suffix closes `E` (`x=~` starts where your last Pomodoro ended, `x=~n` starts at segment `n`, `x=~n+` ends at segment `n`, `x=~~` ends where your first Pomodoro starts); a run of `x=` items hangs from one place, so a start suffix goes on its first item and an end suffix on its last, and any other placement reports `invalid_pomodoro_past`. Names follow the `=name` rules: bare names need an ASCII letter, contain no `-`, do not end in a digit, and must not be close-shaped (digit-led needs `#`: `x=#2fa`; `x=2fa` starts FA for 10 minutes); a bare name takes one glued count on either side (`x=3fix`, `x=fix3`), and bytes `=name` rejects report its `Pomodoro name` wording; unquoted names end at `!`, `=`, `@`, `~`, `*`, `-`, and whitespace, while `#\"literal\"` quotes (straight or curly) canonicalize like `=#\"…\"`, match by key equality, and run through the closing quote (so `!`/`=` inside quotes are name content, not delimiters). The repair `!` binds to `E`, and everything after the second `=` goes to the close lexer unchanged (including `x=3=1,` needing `pomodoro_close_task` and `x= 2` needing `pomodoro_close_log_text`); an `x=` token counts as a close for chain ownership, inline entries, and child bullets. Spans cover `x=` plus a leading count (`pomodoro_past`), a trailing count (`pomodoro_past`), the name only (`pomodoro_name`), the suffix bytes (`pomodoro_past_segment`), the repair `!` (`pomodoro_past_repair`), the second `=` (`pomodoro_close`), plus the existing close sub-spans and `pomodoro_close_log_index` entries. Malformed `E` reports `invalid_pomodoro_past` (usage error from `bob capture`): past records have no offsets; a second count, zero count, close-shaped bare name, dashed bare name, retired `@` separator, redundant `#` prefix, malformed or misplaced segment suffix, or a second suffix in one run gets a teaching rewrite. Drop, park, and completion modifiers belong after a second `=`; `x=` cannot split or merge. Every rewrite preserves the typed count, name, repair `!`, and close part; oversized counts reuse the start `too large` wording; `x=#`/`x=3#`/`x=#\"DEEP` need `pomodoro_name`. \
 A '@^id@' marker already carries the project-note intent: it reports mode \
 'project_note' with a 'route' need until the \
 route is typed. A '@:id@' marker is the offer form: it reports mode \
@@ -840,9 +843,11 @@ struct CaptureParseItem {
 
 /// Wire projection of a validated whole-item `x=` past spec. `minutes` is
 /// `blocks * 5`; `blocks_typed` stays internal and is never serialized.
-/// `name` is `null` when unnamed. `stack` carries the text-only run
-/// position (`index` 1-based, `size`, `offset_blocks` summed from later
-/// members). `close` reuses the existing close-spec shape.
+/// `name` is `null` when unnamed. `segment` is the optional segment suffix
+/// (`~`/`~n`/`~n+`/`~~`), omitted when none. `stack` carries the text-only
+/// run position (`index` 1-based, `size`, `offset_blocks` summed from later
+/// members, plus `pin`/`lead_blocks` for pinned runs). `close` reuses the
+/// existing close-spec shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct PastWire {
     raw: String,
@@ -851,8 +856,22 @@ struct PastWire {
     blocks: u32,
     minutes: u64,
     repair: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    segment: Option<PomodoroPastSpecSegmentWire>,
     stack: PastStackWire,
     close: PomodoroCloseSpec,
+}
+
+/// Wire projection of [`PomodoroPastSpec::segment`]: `raw` plus `kind`
+/// (`tail`/`index`/`head`), optional 1–99 `index`, and `edge`
+/// (`start`/`end`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct PomodoroPastSpecSegmentWire {
+    raw: String,
+    kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    index: Option<u32>,
+    edge: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -860,6 +879,10 @@ struct PastStackWire {
     index: u32,
     size: u32,
     offset_blocks: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pin: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lead_blocks: Option<u32>,
 }
 
 fn past_wire(spec: &PomodoroPastSpec) -> PastWire {
@@ -870,10 +893,38 @@ fn past_wire(spec: &PomodoroPastSpec) -> PastWire {
         blocks: spec.blocks,
         minutes: spec.blocks as u64 * 5,
         repair: spec.repair,
+        segment: spec.segment.as_ref().map(|segment| {
+            let (kind, index) = match segment.kind {
+                capture_language::PastSegmentKind::Tail => {
+                    ("tail".to_string(), None)
+                }
+                capture_language::PastSegmentKind::Head => {
+                    ("head".to_string(), None)
+                }
+                capture_language::PastSegmentKind::Index => {
+                    ("index".to_string(), segment.index)
+                }
+            };
+            let edge = match segment.edge {
+                capture_language::PastEdge::Start => "start".to_string(),
+                capture_language::PastEdge::End => "end".to_string(),
+            };
+            PomodoroPastSpecSegmentWire {
+                raw: segment.raw.clone(),
+                kind,
+                index,
+                edge,
+            }
+        }),
         stack: PastStackWire {
             index: spec.stack.index,
             size: spec.stack.size,
             offset_blocks: spec.stack.offset_blocks,
+            pin: spec.stack.pin.map(|pin| match pin {
+                capture_language::PastEdge::Start => "start".to_string(),
+                capture_language::PastEdge::End => "end".to_string(),
+            }),
+            lead_blocks: spec.stack.lead_blocks,
         },
         close: spec.close.clone(),
     }
@@ -3141,6 +3192,9 @@ fn format_pomodoro_close(close: &PomodoroCloseSpec) -> String {
 fn format_pomodoro_past(past: &PastWire) -> String {
     let base = past.raw.clone();
     let mut parts = Vec::new();
+    if let Some(segment) = past.segment.as_ref() {
+        parts.push(format!("segment {}", segment.raw));
+    }
     if let Some(name) = past.name.as_deref() {
         parts.push(name.to_string());
     }

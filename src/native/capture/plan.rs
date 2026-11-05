@@ -289,6 +289,14 @@ pub(super) fn plan_capture_batch_with_config_path(
                     _ => unreachable!(),
                 }
             }
+            if let Some(suffixed) =
+                stack_specs.iter().find(|spec| spec.segment.is_some())
+            {
+                return Err(CaptureError::usage(format!(
+                    "{} places a past Pomodoro on today's timeline, which this build cannot record yet",
+                    suffixed.raw,
+                )));
+            }
             let preflight = super::pomodoro_past::compute_preflight(
                 &stack_specs,
                 now,

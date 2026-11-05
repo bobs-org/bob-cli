@@ -3359,6 +3359,14 @@ fn parse_editor_past_item<'a>(
                 SpanKind::PomodoroName,
             ));
         }
+        // Segment suffix bytes (`~` through an optional `+`).
+        if let Some((s, e)) = valid.segment_range {
+            spans.push(mk_span(
+                token_start + s,
+                token_start + e,
+                SpanKind::PomodoroPastSegment,
+            ));
+        }
         // Repair `!` only.
         if split.repair
             && let Some(off) = split.repair_offset
@@ -3477,11 +3485,14 @@ fn parse_editor_past_item<'a>(
                     blocks: valid.blocks,
                     blocks_typed: valid.blocks_typed,
                     repair: split.repair,
+                    segment: valid.segment.clone(),
                     close: partial_close,
                     stack: PastStackPos {
                         index: 0,
                         size: 0,
                         offset_blocks: 0,
+                        pin: None,
+                        lead_blocks: None,
                     },
                 };
                 return Some(editor_past_outcome(
@@ -3543,11 +3554,14 @@ fn parse_editor_past_item<'a>(
             blocks: valid.blocks,
             blocks_typed: valid.blocks_typed,
             repair: split.repair,
+            segment: valid.segment.clone(),
             close,
             stack: PastStackPos {
                 index: 0,
                 size: 0,
                 offset_blocks: 0,
+                pin: None,
+                lead_blocks: None,
             },
         };
         return Some(editor_past_outcome(
@@ -3598,11 +3612,14 @@ fn parse_editor_past_item<'a>(
                         blocks: valid.blocks,
                         blocks_typed: valid.blocks_typed,
                         repair: split.repair,
+                        segment: valid.segment.clone(),
                         close,
                         stack: PastStackPos {
                             index: 0,
                             size: 0,
                             offset_blocks: 0,
+                            pin: None,
+                            lead_blocks: None,
                         },
                     };
                     return Some(editor_past_outcome(
@@ -3636,11 +3653,14 @@ fn parse_editor_past_item<'a>(
                     blocks: valid.blocks,
                     blocks_typed: valid.blocks_typed,
                     repair: split.repair,
+                    segment: valid.segment.clone(),
                     close,
                     stack: PastStackPos {
                         index: 0,
                         size: 0,
                         offset_blocks: 0,
+                        pin: None,
+                        lead_blocks: None,
                     },
                 };
                 return Some(editor_past_outcome(
@@ -3769,11 +3789,14 @@ fn parse_editor_past_item<'a>(
                 blocks: valid.blocks,
                 blocks_typed: valid.blocks_typed,
                 repair: split.repair,
+                segment: valid.segment.clone(),
                 close,
                 stack: PastStackPos {
                     index: 0,
                     size: 0,
                     offset_blocks: 0,
+                    pin: None,
+                    lead_blocks: None,
                 },
             };
             Some(editor_past_outcome(
@@ -3841,11 +3864,14 @@ fn parse_editor_past_item<'a>(
                 blocks: valid.blocks,
                 blocks_typed: valid.blocks_typed,
                 repair: split.repair,
+                segment: valid.segment.clone(),
                 close,
                 stack: PastStackPos {
                     index: 0,
                     size: 0,
                     offset_blocks: 0,
+                    pin: None,
+                    lead_blocks: None,
                 },
             };
             Some(editor_past_outcome(

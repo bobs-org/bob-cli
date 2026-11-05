@@ -1367,20 +1367,48 @@ fn parse_ordinary_draft(
     // Past stacks: maximal runs of consecutive Past items, across same-line
     // chains and blank-line boundaries. Every other item interrupts runs.
     // Invalid items already returned errors above, so every Past here is
-    // valid; still, only Past kinds join runs.
+    // valid; still, only Past kinds join runs. Pin diagnostics are usage
+    // errors on the offending item.
     {
-        let blocks: Vec<Option<u32>> = items
+        let members: Vec<super::past::PastStackMember<'_>> = items
             .iter()
             .map(|it| match &it.parsed.kind {
-                CaptureKind::PomodoroPast { spec } => Some(spec.blocks),
-                _ => None,
+                CaptureKind::PomodoroPast { spec } => {
+                    super::past::PastStackMember {
+                        blocks: Some(spec.blocks),
+                        edge: spec.segment.as_ref().map(|s| s.edge),
+                        segment_raw: spec
+                            .segment
+                            .as_ref()
+                            .map(|s| s.raw.as_str()),
+                        raw_token: spec.raw.as_str(),
+                    }
+                }
+                _ => super::past::PastStackMember {
+                    blocks: None,
+                    edge: None,
+                    segment_raw: None,
+                    raw_token: "",
+                },
             })
             .collect();
-        let stacks = super::past::compute_past_stacks(&blocks);
+        let (stacks, diagnostics) = super::past::compute_past_stacks(&members);
         for (it, st) in items.iter_mut().zip(stacks) {
             if let CaptureKind::PomodoroPast { spec } = &mut it.parsed.kind {
                 spec.stack = st;
             }
+        }
+        if let Some((idx, message)) = diagnostics.into_iter().next() {
+            let item = &items[idx];
+            return Err(CaptureItemParseError::coded(
+                "invalid_pomodoro_past",
+                format!(
+                    "capture item {} starting on line {}: {}",
+                    item.index + 1,
+                    item.line_start,
+                    message
+                ),
+            ));
         }
     }
 

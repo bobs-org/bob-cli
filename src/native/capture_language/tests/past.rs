@@ -59,7 +59,9 @@ fn past_token_table_reports_expected_specs() {
             PastStackPos {
                 index: 1,
                 size: 1,
-                offset_blocks: 0
+                offset_blocks: 0,
+                pin: None,
+                lead_blocks: None,
             },
             "{typed}"
         );
@@ -115,10 +117,6 @@ fn past_teaching_errors_name_token_and_rewrite() {
         ("x=3#fix@2", "x=3fix"),
         ("x=2#\"DEEP WORK\"@4", "x=2#\"DEEP WORK\""),
         ("x=#\"DEEP WORK\"@3", "x=3#\"DEEP WORK\""),
-        ("x=~2", "x==~2"),
-        ("x=3~2", "x=3=~2"),
-        ("x=build~2", "x=build=~2"),
-        ("x=fix3~2", "x=fix3=~2"),
         ("x=*3", "x==*3"),
         ("x=0", "x=1"),
         ("x=fix0", "x=fix1"),
@@ -345,4 +343,164 @@ fn past_chain_ownership_and_stacks() {
         other => panic!("not past: {other:?}"),
     };
     assert_eq!(spec.close.log.len(), 1);
+}
+
+#[test]
+fn past_segment_suffix_valid_shapes() {
+    // (typed, expected raw suffix, kind, index, edge, blocks, name)
+    let rows = vec![
+        ("x=~", "~", "tail", None, "start", 5, None),
+        ("x=3~", "~", "tail", None, "start", 3, None),
+        ("x=fix~2", "~2", "index", Some(2), "start", 5, Some("FIX")),
+        ("x=fix2~2+", "~2+", "index", Some(2), "end", 2, Some("FIX")),
+        (
+            "x=#\"DEEP WORK\"~1",
+            "~1",
+            "index",
+            Some(1),
+            "start",
+            5,
+            Some("DEEP WORK"),
+        ),
+        (
+            "x=2#deep-work~1+",
+            "~1+",
+            "index",
+            Some(1),
+            "end",
+            2,
+            Some("DEEP-WORK"),
+        ),
+        ("x=~~", "~~", "head", None, "end", 5, None),
+        ("x=2~1!=!1", "~1", "index", Some(1), "start", 2, None),
+    ];
+    for (typed, raw, kind, index, edge, blocks, name) in rows {
+        let parsed = execute(typed).unwrap_or_else(|e| panic!("{typed}: {e}"));
+        let spec = past_spec(&parsed);
+        assert_eq!(spec.blocks, blocks, "{typed}");
+        assert_eq!(spec.name.as_deref(), name, "{typed}");
+        let segment = spec.segment.as_ref().expect("{typed} has segment");
+        assert_eq!(segment.raw, raw, "{typed}");
+        let kind_label = match segment.kind {
+            PastSegmentKind::Tail => "tail",
+            PastSegmentKind::Index => "index",
+            PastSegmentKind::Head => "head",
+        };
+        assert_eq!(kind_label, kind, "{typed}");
+        assert_eq!(segment.index, index, "{typed}");
+        let edge_label = match segment.edge {
+            PastEdge::Start => "start",
+            PastEdge::End => "end",
+        };
+        assert_eq!(edge_label, edge, "{typed}");
+        // Editor agrees and emits the segment span.
+        let edit = editor(typed);
+        assert_eq!(edit.mode, EditorMode::PomodoroPast, "{typed}");
+        assert!(edit.diagnostics.is_empty(), "{typed}");
+        let espec = editor_past(&edit);
+        assert_eq!(
+            espec.segment.as_ref().map(|s| s.raw.as_str()),
+            Some(raw),
+            "{typed}"
+        );
+        assert!(
+            edit.spans
+                .iter()
+                .any(|span| span.kind == SpanKind::PomodoroPastSegment),
+            "{typed} has segment span"
+        );
+    }
+}
+
+#[test]
+fn past_segment_suffix_lexical_teaching_rows() {
+    let rows = vec![
+        ("x=~0", "x=~"),
+        ("x=3~0", "x=3~"),
+        ("x=~+", "x=~"),
+        ("x=~0+", "x=~"),
+        ("x=~~+", "x=~~"),
+        ("x=~~2", "x=~~"),
+        ("x=2~01", "x=2~1"),
+        ("x=2~123", "future clock"),
+        ("x=2~0800", "future clock"),
+        ("x=~2fix", "x=fix~2"),
+        ("x=~2#deep-work", "x=#deep-work~2"),
+        ("x=2~1~2", "one segment suffix"),
+        ("x=2~~1", "one segment suffix"),
+        ("x=3~1!+", "x=3~1+!"),
+        ("x=2~1,3", "x=2=~1,3"),
+        ("x=2-1", "x=2~1"),
+        ("x=-", "x=~"),
+        ("x=3-", "x=3~"),
+        ("x=deep-work", "x=#deep-work"),
+        ("x=deep~work", "x=#deep-work"),
+    ];
+    for (typed, rewrite) in rows {
+        let err =
+            execute(typed).expect_err(format!("{typed} should fail").as_str());
+        assert!(err.contains(&format!("`{typed}`")), "{typed}: {err}");
+        assert!(err.contains(rewrite), "{typed}: {err}");
+        let edit = editor(typed);
+        assert_eq!(edit.mode, EditorMode::PomodoroPast, "{typed}");
+        assert_eq!(edit.diagnostics.len(), 1, "{typed}");
+        assert_eq!(
+            edit.diagnostics[0].code, "invalid_pomodoro_past",
+            "{typed}"
+        );
+        assert_eq!(edit.diagnostics[0].message, err, "{typed}");
+    }
+}
+
+#[test]
+fn past_run_pins_and_diagnostics() {
+    // A start suffix on the first item pins the run forward.
+    let draft = execute_draft("x=a~2 x=b").expect("pinned start");
+    assert_eq!(draft.items.len(), 2);
+    for item in &draft.items {
+        if let CaptureKind::PomodoroPast { spec } = &item.parsed.kind {
+            assert_eq!(spec.stack.pin, Some(PastEdge::Start));
+        }
+    }
+    let (first_lead, second_lead) =
+        match (&draft.items[0].parsed.kind, &draft.items[1].parsed.kind) {
+            (
+                CaptureKind::PomodoroPast { spec: a },
+                CaptureKind::PomodoroPast { spec: b },
+            ) => (a.stack.lead_blocks, b.stack.lead_blocks),
+            _ => panic!("not past"),
+        };
+    assert_eq!((first_lead, second_lead), (Some(0), Some(5)));
+    // An end suffix on the last item pins the run backward.
+    let draft = execute_draft("x=email1 x=read2~2+").expect("pinned end");
+    for item in &draft.items {
+        if let CaptureKind::PomodoroPast { spec } = &item.parsed.kind {
+            assert_eq!(spec.stack.pin, Some(PastEdge::End));
+        }
+    }
+    // A start suffix anywhere else is misplaced.
+    let err = execute_draft("x=a x=b~2").expect_err("misplaced start");
+    assert!(err.contains("can't place this run"), "{err}");
+    assert!(err.contains("x=a~2 x=b"), "{err}");
+    let edit = editor("x=a\n\nx=b~2");
+    let bad = edit
+        .items
+        .iter()
+        .find(|it| !it.diagnostics.is_empty())
+        .expect("misplaced start has a diagnostic");
+    assert_eq!(
+        bad.diagnostics[0].code, "invalid_pomodoro_past",
+        "misplaced start code"
+    );
+    assert!(
+        bad.diagnostics[0].message.contains("can't place this run"),
+        "misplaced start message"
+    );
+    // An end suffix anywhere else is misplaced.
+    let err = execute_draft("x=a~~ x=b").expect_err("misplaced end");
+    assert!(err.contains("can't place this run"), "{err}");
+    assert!(err.contains("x=a x=b~~"), "{err}");
+    // Two suffixes in one run report the second place.
+    let err = execute_draft("x=a~2 x=b~1").expect_err("double pin");
+    assert!(err.contains("adds a second place"), "{err}");
 }

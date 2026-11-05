@@ -456,6 +456,38 @@ pub(crate) struct PomodoroStartSpec {
     pub(crate) drop: Vec<u32>,
 }
 
+/// Which edge a segment suffix pins: the run starts at a start edge or
+/// ends at an end edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PastEdge {
+    Start,
+    End,
+}
+
+/// Which shape a segment suffix took: the tail (`~`), an indexed segment
+/// (`~n` / `~n+`), or the head (`~~`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PastSegmentKind {
+    Tail,
+    Index,
+    Head,
+}
+
+/// A validated segment suffix at the end of `E`: the raw suffix text plus
+/// its kind, optional 1–99 index, and pinned edge.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct PastSegment {
+    /// Suffix exactly as typed (`~`, `~2`, `~2+`, `~~`).
+    pub(crate) raw: String,
+    pub(crate) kind: PastSegmentKind,
+    /// Segment index for `~n` / `~n+`, omitted for tail and head.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) index: Option<u32>,
+    pub(crate) edge: PastEdge,
+}
+
 /// A whole-item `x=` past Pomodoro specification. `raw` is the trimmed
 /// past token exactly as typed (for example `x=fix@2=*3`). `name` holds
 /// the canonical upper-cased name when a name was typed; `None` is unnamed.
@@ -483,6 +515,9 @@ pub(crate) struct PomodoroPastSpec {
     /// True when the repair `!` before the second `=` was typed.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) repair: bool,
+    /// Segment suffix at the end of `E`, when typed. Omitted when none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) segment: Option<PastSegment>,
     /// Close selection after the second `=`, in the existing close shape.
     pub(crate) close: PomodoroCloseSpec,
     /// Stack position within a maximal run of consecutive past items.
@@ -491,12 +526,20 @@ pub(crate) struct PomodoroPastSpec {
 
 /// Stack position of one past member inside its maximal consecutive run.
 /// `index` is 1-based in typed order; `size` is the run length;
-/// `offset_blocks` is the sum of later members' blocks.
+/// `offset_blocks` is the sum of later members' blocks. `pin` is the run's
+/// shared pin edge for runs that carry a suffix; `lead_blocks` is the sum
+/// of earlier members' blocks for pinned runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub(crate) struct PastStackPos {
     pub(crate) index: u32,
     pub(crate) size: u32,
     pub(crate) offset_blocks: u32,
+    /// Pin edge for pinned runs, omitted for unpinned runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pin: Option<PastEdge>,
+    /// Sum of earlier members' blocks for pinned runs, omitted otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) lead_blocks: Option<u32>,
 }
 
 /// One `=/` split selector: a `#name` or `#"Literal"` type part.

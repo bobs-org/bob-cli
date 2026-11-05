@@ -109,7 +109,8 @@ pub(crate) fn split_past_token(raw_token: &str) -> Option<PastSplit> {
     })
 }
 
-/// Validated `E` part: block count and optional typed name.
+/// Validated `E` part: block count, optional typed name, and optional
+/// segment suffix.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PastEValid {
     /// Block count (default 5 when untyped).
@@ -124,6 +125,10 @@ pub(crate) struct PastEValid {
     pub(crate) blocks_range: Option<(usize, usize)>,
     /// Relative range of the name (without `#`/`@D`), when typed.
     pub(crate) name_range: Option<(usize, usize)>,
+    /// Validated segment suffix, when typed.
+    pub(crate) segment: Option<super::PastSegment>,
+    /// Relative range of the suffix (`~` through an optional `+`), when typed.
+    pub(crate) segment_range: Option<(usize, usize)>,
 }
 
 /// What `validate_past_e` found.
@@ -170,6 +175,8 @@ pub(crate) fn validate_past_e(
             name_is_literal: false,
             blocks_range: None,
             name_range: None,
+            segment: None,
+            segment_range: None,
         });
     }
     // Split/merge shapes never record a past session.
@@ -195,8 +202,17 @@ pub(crate) fn validate_past_e(
                 if !lexed.is_literal {
                     let typed = &e[lexed.start..lexed.end];
                     if can_spell_bare(typed) {
-                        let rewrite =
-                            format!("x={d_text}{typed}{}", past_suffix(split));
+                        // Preserve a following segment suffix in the rewrite;
+                        // any other tail (retired `@`, trailing count) keeps
+                        // the historical rewrite that drops it.
+                        let tail = &e[lexed.end..];
+                        let kept_tail =
+                            if tail.starts_with('~') { tail } else { "" };
+                        let rewrite = format!(
+                            "x={d_text}{typed}{}{}",
+                            kept_tail,
+                            past_suffix(split)
+                        );
                         return PastEOutcome::Invalid(
                             retired_start_spelling_error(
                                 raw_token,
@@ -271,6 +287,35 @@ pub(crate) fn validate_past_e(
             &rewrite,
         ));
     }
+    // An optional segment suffix closes `E`: it must consume the rest.
+    let mut segment: Option<super::PastSegment> = None;
+    let mut segment_range: Option<(usize, usize)> = None;
+    {
+        let rest = &e[pos..];
+        if rest.starts_with('~') {
+            let name_is_bare = name.as_ref().is_some_and(|n| !n.is_literal);
+            let bare_name_text = if name_is_bare {
+                name.as_ref().map(|n| &e[n.start..n.end])
+            } else {
+                None
+            };
+            match lex_past_suffix(
+                raw_token,
+                e,
+                pos,
+                split,
+                name_is_bare,
+                bare_name_text,
+            ) {
+                Ok((seg, len)) => {
+                    segment = Some(seg);
+                    segment_range = Some((2 + pos, 2 + pos + len));
+                    pos += len;
+                }
+                Err(message) => return PastEOutcome::Invalid(message),
+            }
+        }
+    }
     // Anything left in `E` is a teaching error.
     let rest = &e[pos..];
     if !rest.is_empty() {
@@ -343,6 +388,8 @@ pub(crate) fn validate_past_e(
         name_is_literal,
         blocks_range: count_range.map(|(start, end)| (2 + start, 2 + end)),
         name_range,
+        segment,
+        segment_range,
     })
 }
 
@@ -421,6 +468,352 @@ struct PastRestContext {
     name_is_bare: bool,
 }
 
+/// Lex the segment suffix at `pos` in `e` (`e[pos..]` starts with `~`).
+/// Returns the validated segment plus its byte length in `e`. The suffix
+/// must consume the rest of `E`; any leftover produces its own teaching
+/// error. `name_is_bare` and `bare_name_text` support the `deep~work`
+/// dashed-name teaching. All rewrites keep the typed repair `!` and close
+/// part via [`past_suffix`].
+fn lex_past_suffix(
+    raw_token: &str,
+    e: &str,
+    pos: usize,
+    split: &PastSplit,
+    name_is_bare: bool,
+    bare_name_text: Option<&str>,
+) -> Result<(super::PastSegment, usize), String> {
+    use super::{PastEdge, PastSegment, PastSegmentKind};
+    let rest = &e[pos..];
+    let parsed_prefix = &e[..pos];
+    let repair_close = past_suffix(split);
+    let mk_tail = |raw: &str| PastSegment {
+        raw: raw.to_string(),
+        kind: PastSegmentKind::Tail,
+        index: None,
+        edge: PastEdge::Start,
+    };
+    let mk_head = |raw: &str| PastSegment {
+        raw: raw.to_string(),
+        kind: PastSegmentKind::Head,
+        index: None,
+        edge: PastEdge::End,
+    };
+    let mk_index = |raw: &str, index: u32, edge: PastEdge| PastSegment {
+        raw: raw.to_string(),
+        kind: PastSegmentKind::Index,
+        index: Some(index),
+        edge,
+    };
+    // `~~` head first (longest match).
+    if let Some(after) = rest.strip_prefix("~~") {
+        if after.is_empty() {
+            return Ok((mk_head("~~"), 2));
+        }
+        // Extra after `~~`.
+        if after.starts_with('~') {
+            return Err(format!(
+                "`{raw_token}` has two segment suffixes; one segment suffix per item"
+            ));
+        }
+        // A name after the suffix belongs before it.
+        if after
+            .as_bytes()
+            .first()
+            .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'#')
+        {
+            let new_e = format!("{parsed_prefix}{after}~~");
+            return Err(format!(
+                "the suffix comes last in `E`: `{raw_token}` places it before the name, write `x={new_e}{repair_close}`"
+            ));
+        }
+        // `~~` plus a number: no number allowed — unless a count/name
+        // already precedes it, in which case the digit starts a second
+        // suffix attempt (`x=2~~1`).
+        if after.as_bytes().first().is_some_and(u8::is_ascii_digit) {
+            if !parsed_prefix.is_empty() {
+                return Err(format!(
+                    "`{raw_token}` has two segment suffixes; one segment suffix per item"
+                ));
+            }
+            let rewrite = format!("x={parsed_prefix}~~{repair_close}");
+            return Err(format!(
+                "`~~` already ends at your first Pomodoro and takes no number: `{raw_token}` ends there, write `{rewrite}`"
+            ));
+        }
+        if after.starts_with('+') || after.starts_with(',') {
+            // `~~+` takes no number; `~~,3` is not a suffix shape.
+            if after.starts_with('+') && !parsed_prefix.is_empty() {
+                return Err(format!(
+                    "`{raw_token}` has two segment suffixes; one segment suffix per item"
+                ));
+            }
+            let rewrite = format!("x={parsed_prefix}~~{repair_close}");
+            return Err(format!(
+                "`~~` already ends at your first Pomodoro and takes no number: `{raw_token}` ends there, write `{rewrite}`"
+            ));
+        }
+        // Any other extra (`!`, `*`, etc.) after `~~` takes no number.
+        let rewrite = format!("x={parsed_prefix}~~{repair_close}");
+        return Err(format!(
+            "`~~` already ends at your first Pomodoro and takes no number: `{raw_token}` ends there, write `{rewrite}`"
+        ));
+    }
+    // Single `~`: tail, indexed, or an error.
+    let after = &rest[1..];
+    if after.is_empty() {
+        return Ok((mk_tail("~"), 1));
+    }
+    // `~` followed by letters or `#`: either the dashed-name teaching or
+    // a tail suffix with the name after it.
+    if after
+        .as_bytes()
+        .first()
+        .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'#')
+    {
+        // `x=deep~work`: a bare name, `~`, letters, and a valid
+        // `deep-work` selector teaches `#`.
+        if name_is_bare
+            && let Some(bare) = bare_name_text
+            && let Some(tilde_end) = after
+                .find(|c: char| {
+                    !(c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                })
+                .or(Some(after.len()))
+            && tilde_end > 0
+        {
+            let after_name = &after[..tilde_end];
+            let full_name = format!("{bare}-{after_name}");
+            if is_pomodoro_selector_component(&full_name) {
+                let leading = parsed_prefix
+                    .bytes()
+                    .take_while(u8::is_ascii_digit)
+                    .count()
+                    .min(parsed_prefix.len());
+                let (leading_text, _) = parsed_prefix.split_at(leading);
+                let hash_form = format!("x={leading_text}#{full_name}");
+                // Only teach the hash form when nothing else follows the
+                // name (a count or suffix after would be a different error).
+                let tail = &after[tilde_end..];
+                if tail.is_empty() {
+                    return Err(pomodoro_glued_timing_error(
+                        raw_token, &hash_form,
+                    ));
+                }
+            }
+        }
+        // Otherwise the tail suffix comes last.
+        let new_e = format!("{parsed_prefix}{after}~");
+        return Err(format!(
+            "the suffix comes last in `E`: `{raw_token}` places it before the name, write `x={new_e}{repair_close}`"
+        ));
+    }
+    if let Some(plus_tail) = after.strip_prefix('+') {
+        // `~+` without an index: two readings.
+        let end_now = format!("x={parsed_prefix}{repair_close}");
+        let fill = format!("x={parsed_prefix}~{repair_close}");
+        let _ = plus_tail;
+        return Err(format!(
+            "`{raw_token}` takes no offset; to end now write `{end_now}`, to fill since your last Pomodoro write `{fill}`"
+        ));
+    }
+    if after.as_bytes().first().is_some_and(u8::is_ascii_digit) {
+        let digit_len = after.bytes().take_while(u8::is_ascii_digit).count();
+        let digits = &after[..digit_len];
+        let after_digits = &after[digit_len..];
+        // Three-or-more-digit indexes are reserved for a future clock,
+        // even with a leading zero (`~0800`).
+        if digit_len >= 3 {
+            return Err(format!(
+                "`{raw_token}` reserves three-or-more-digit suffixes for a future clock suffix; segments are 1-99"
+            ));
+        }
+        // Leading-zero and zero shapes.
+        if digits.starts_with('0') {
+            if digits == "0" && after_digits.is_empty() {
+                let rewrite = format!("x={parsed_prefix}~{repair_close}");
+                return Err(format!(
+                    "`~` already names the tail: `{raw_token}` starts where your last Pomodoro ended, write `{rewrite}`"
+                ));
+            }
+            if digits == "0" && after_digits.starts_with('+') {
+                // `~0+`: like `~+`.
+                let end_now = format!("x={parsed_prefix}{repair_close}");
+                let fill = format!("x={parsed_prefix}~{repair_close}");
+                return Err(format!(
+                    "`{raw_token}` takes no offset; to end now write `{end_now}`, to fill since your last Pomodoro write `{fill}`"
+                ));
+            }
+            if digits.len() > 1 {
+                // `~01`: strip the leading zero.
+                let stripped = digits.trim_start_matches('0');
+                let index_text =
+                    if stripped.is_empty() { "0" } else { stripped };
+                // Preserve any `+` and complain about the zero.
+                let plus = if after_digits.starts_with('+') {
+                    "+"
+                } else {
+                    ""
+                };
+                let rewrite = format!(
+                    "x={parsed_prefix}~{index_text}{plus}{repair_close}"
+                );
+                return Err(format!(
+                    "`{raw_token}` has a leading zero: write `{rewrite}`"
+                ));
+            }
+            // Remaining `~0...` shapes name the tail.
+            let leftover = after_digits;
+            let new_e = if leftover.is_empty() {
+                format!("{parsed_prefix}~")
+            } else {
+                format!("{parsed_prefix}{leftover}~")
+            };
+            let rewrite = format!("x={new_e}{repair_close}");
+            return Err(format!(
+                "`~` already names the tail: `{raw_token}` starts where your last Pomodoro ended, write `{rewrite}`"
+            ));
+        }
+        let index: u32 = digits.parse().unwrap_or(0);
+        if after_digits.is_empty() {
+            let raw = format!("~{digits}");
+            let len = 1 + digit_len;
+            return Ok((mk_index(&raw, index, PastEdge::Start), len));
+        }
+        if let Some(after_plus) = after_digits.strip_prefix('+') {
+            let raw = format!("~{digits}+");
+            let len = 1 + digit_len + 1;
+            if after_plus.is_empty() {
+                return Ok((mk_index(&raw, index, PastEdge::End), len));
+            }
+            // Extra after `~n+`.
+            if after_plus.starts_with('~') {
+                return Err(format!(
+                    "`{raw_token}` has two segment suffixes; one segment suffix per item"
+                ));
+            }
+            if after_plus.contains(',') {
+                let moved = format!("{raw}{after_plus}");
+                let rewrite = past_close_rewrite(parsed_prefix, &moved, split);
+                return Err(format!(
+                    "a comma list is a drop: `{raw_token}` drops links, write `{rewrite}`"
+                ));
+            }
+            if after_plus
+                .as_bytes()
+                .first()
+                .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'#')
+            {
+                let new_e = format!("{parsed_prefix}{after_plus}{raw}");
+                return Err(format!(
+                    "the suffix comes last in `E`: `{raw_token}` places it before the name, write `x={new_e}{repair_close}`"
+                ));
+            }
+            // `!`, `*`, or other bytes after `~n+`.
+            let parsed_with_suffix = format!("{parsed_prefix}{raw}");
+            return Err(past_rest_error(
+                raw_token,
+                split,
+                &parsed_with_suffix,
+                after_plus,
+                PastRestContext {
+                    has_leading: !parsed_prefix.is_empty(),
+                    has_name: true,
+                    name_is_bare: false,
+                },
+            ));
+        }
+        // Extra after `~n` without `+`.
+        if after_digits.starts_with('~') {
+            return Err(format!(
+                "`{raw_token}` has two segment suffixes; one segment suffix per item"
+            ));
+        }
+        if after_digits.contains(',') {
+            let moved = format!("~{digits}{after_digits}");
+            let rewrite = past_close_rewrite(parsed_prefix, &moved, split);
+            return Err(format!(
+                "a comma list is a drop: `{raw_token}` drops links, write `{rewrite}`"
+            ));
+        }
+        if after_digits
+            .as_bytes()
+            .first()
+            .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'#')
+        {
+            let raw = format!("~{digits}");
+            let new_e = format!("{parsed_prefix}{after_digits}{raw}");
+            return Err(format!(
+                "the suffix comes last in `E`: `{raw_token}` places it before the name, write `x={new_e}{repair_close}`"
+            ));
+        }
+        if let Some(bang_plus) = after_digits.strip_prefix('!') {
+            // `~n!+`: the `+` belongs before the repair `!`.
+            if bang_plus.starts_with('+') {
+                let raw = format!("~{digits}+");
+                let rewrite = format!(
+                    "x={parsed_prefix}{raw}!{repair_close_trimmed}",
+                    repair_close_trimmed = repair_close
+                        .strip_prefix('!')
+                        .unwrap_or(repair_close.as_str()),
+                );
+                // When the original already had a repair `!`, the trimmed
+                // close keeps it exactly once.
+                let rewrite = if split.repair {
+                    format!(
+                        "x={parsed_prefix}~{digits}+!{close_tail}",
+                        close_tail = if split.has_second_eq {
+                            format!("={}", split.close_text)
+                        } else {
+                            String::new()
+                        }
+                    )
+                } else {
+                    rewrite
+                };
+                return Err(format!(
+                    "`+` belongs to the suffix, before `!`: `{raw_token}` ends at the segment edge, write `{rewrite}`"
+                ));
+            }
+        }
+        // `!`, `*`, or other bytes after `~n`: reuse the generic teaching
+        // with the suffix included in the parsed prefix.
+        let parsed_with_suffix = format!("{parsed_prefix}~{digits}");
+        return Err(past_rest_error(
+            raw_token,
+            split,
+            &parsed_with_suffix,
+            after_digits,
+            PastRestContext {
+                has_leading: !parsed_prefix.is_empty(),
+                has_name: true,
+                name_is_bare: false,
+            },
+        ));
+    }
+    // Any other byte after `~` (`,`, `!`, `*`, `-`, ...): the tail suffix
+    // plus leftover, handled by the generic teaching with the suffix
+    // included — except a comma list, which is a drop.
+    if after.contains(',') {
+        let moved = format!("~{after}");
+        let rewrite = past_close_rewrite(parsed_prefix, &moved, split);
+        return Err(format!(
+            "a comma list is a drop: `{raw_token}` drops links, write `{rewrite}`"
+        ));
+    }
+    let parsed_with_suffix = format!("{parsed_prefix}~");
+    Err(past_rest_error(
+        raw_token,
+        split,
+        &parsed_with_suffix,
+        after,
+        PastRestContext {
+            has_leading: !parsed_prefix.is_empty(),
+            has_name: true,
+            name_is_bare: false,
+        },
+    ))
+}
+
 /// Teaching error for text left in `E` after its count/name prefix
 /// (`parsed`). Close-part text moves after a second `=`.
 fn past_rest_error(
@@ -456,10 +849,21 @@ fn past_rest_error(
                 return pomodoro_glued_timing_error(raw_token, &hash_form);
             }
         }
-        let kept = after_dash.trim_start_matches(|c: char| c.is_ascii_digit());
-        let rewrite = format!("x={parsed}{kept}{suffix}");
+        // Dash offsets teach two readings: the segment suffix and ending now.
+        let digit_len =
+            after_dash.bytes().take_while(u8::is_ascii_digit).count();
+        let digits = &after_dash[..digit_len];
+        let kept = &after_dash[digit_len..];
+        let end_now = format!("x={parsed}{kept}{suffix}");
+        if digits.is_empty() {
+            let fill = format!("x={parsed}~{suffix}");
+            return format!(
+                "`{raw_token}` takes no offset; to start where your last Pomodoro ended write `{fill}`, to end now write `{end_now}`"
+            );
+        }
+        let fill = format!("x={parsed}{kept}~{digits}{suffix}");
         return format!(
-            "a past Pomodoro always ends where the next one starts (or now), so it takes no offset; write `{rewrite}` instead of `{raw_token}`"
+            "`{raw_token}` takes no offset; to start at segment {digits} write `{fill}`, to end now write `{end_now}`"
         );
     }
     if let Some(list) = rest.strip_prefix('*') {
@@ -473,10 +877,10 @@ fn past_rest_error(
             "to park {tasks}, put it after a second `=`: `{raw_token}` never parks, write `{rewrite}`"
         );
     }
-    if rest.starts_with('~') {
+    if rest.starts_with('~') && rest.contains(',') {
         let rewrite = past_close_rewrite(parsed, rest, split);
         return format!(
-            "drop links in the close part after a second `=`: `{raw_token}` never drops, write `{rewrite}`"
+            "a comma list is a drop: `{raw_token}` drops links, write `{rewrite}`"
         );
     }
     if rest.starts_with('!') {
@@ -548,31 +952,42 @@ fn is_task_number_list(text: &str) -> bool {
     !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit() || b == b',')
 }
 
-/// Compute stack positions for a sequence of optional block counts.
-/// `blocks[i]` is `Some(blocks)` for a valid Past item, `None` for every
-/// other item (including invalid or unfinished Past, which break runs).
-/// Returns one [`PastStackPos`] per input position (zeros for `None`).
-/// A stack is a maximal run of consecutive `Some`; each member gets its
-/// 1-based index, the run size, and the sum of later members' blocks (with
-/// a wide `u64` sum saturated to `u32` so large counts cannot overflow
-/// text-only parsing).
+/// One member's contribution to [`compute_past_stacks`]: its block count
+/// (when valid), its suffix edge and raw suffix (when a suffix was typed),
+/// and its full raw token for pin-rewrite diagnostics.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PastStackMember<'a> {
+    pub(crate) blocks: Option<u32>,
+    pub(crate) edge: Option<super::PastEdge>,
+    pub(crate) segment_raw: Option<&'a str>,
+    pub(crate) raw_token: &'a str,
+}
+
+/// Compute stack positions plus pin diagnostics for a run of past items.
+/// `members[i].blocks` is `Some` for a valid Past item, `None` for every
+/// other item (which breaks runs). Returns positions plus `(item index,
+/// message)` pin diagnostics using the two run messages in the contract.
+/// A start suffix (`~`, `~n`) belongs on the run's first item; an end
+/// suffix (`~n+`, `~~`) belongs on its last. A suffix anywhere else, or a
+/// second suffix in one run, is reported on the offending item.
 pub(crate) fn compute_past_stacks(
-    blocks: &[Option<u32>],
-) -> Vec<super::PastStackPos> {
-    use super::PastStackPos;
-    let mut out = vec![
-        PastStackPos {
-            index: 0,
-            size: 0,
-            offset_blocks: 0,
-        };
-        blocks.len()
-    ];
+    members: &[PastStackMember<'_>],
+) -> (Vec<super::PastStackPos>, Vec<(usize, String)>) {
+    use super::{PastEdge, PastStackPos};
+    let zero = PastStackPos {
+        index: 0,
+        size: 0,
+        offset_blocks: 0,
+        pin: None,
+        lead_blocks: None,
+    };
+    let mut out = vec![zero; members.len()];
+    let mut diagnostics = Vec::new();
     let mut run_start: Option<usize> = None;
-    for (i, b) in blocks.iter().enumerate() {
-        let is_past = b.is_some();
+    for (i, m) in members.iter().enumerate() {
+        let is_past = m.blocks.is_some();
         let run_end = if is_past {
-            if i + 1 == blocks.len() || blocks[i + 1].is_none() {
+            if i + 1 == members.len() || members[i + 1].blocks.is_none() {
                 Some(i)
             } else {
                 None
@@ -588,13 +1003,72 @@ pub(crate) fn compute_past_stacks(
             // Suffix sums with a wide representation.
             let mut suffix: u64 = 0;
             for k in (start..=end).rev() {
-                let blk = blocks[k].unwrap_or(0) as u64;
+                let blk = members[k].blocks.unwrap_or(0) as u64;
                 out[k] = PastStackPos {
                     index: (k - start + 1) as u32,
                     size,
                     offset_blocks: u32::try_from(suffix).unwrap_or(u32::MAX),
+                    pin: None,
+                    lead_blocks: None,
                 };
                 suffix = suffix.saturating_add(blk);
+            }
+            // Pin assignment and diagnostics for this run.
+            let suffixed: Vec<usize> = (start..=end)
+                .filter(|k| members[*k].edge.is_some())
+                .collect();
+            if suffixed.is_empty() {
+                // Unpinned run: positions already set.
+            } else if suffixed.len() == 1 {
+                let k = suffixed[0];
+                let edge = members[k].edge.unwrap_or(PastEdge::Start);
+                let legal = (edge == PastEdge::Start && k == start)
+                    || (edge == PastEdge::End && k == end);
+                if legal {
+                    // Prefix sums for lead_blocks.
+                    let mut lead: u64 = 0;
+                    for m_idx in start..=end {
+                        let lead_blocks =
+                            u32::try_from(lead).unwrap_or(u32::MAX);
+                        out[m_idx].pin = Some(edge);
+                        out[m_idx].lead_blocks = Some(lead_blocks);
+                        lead = lead.saturating_add(u64::from(
+                            members[m_idx].blocks.unwrap_or(0),
+                        ));
+                    }
+                } else {
+                    diagnostics.push((
+                        k,
+                        misplaced_pin_message(members, start, end, k),
+                    ));
+                }
+            } else {
+                // Two or more suffixes: the first keeps its position for
+                // context, every later suffixed member adds a second place.
+                for (n, k) in suffixed.iter().enumerate() {
+                    if n == 0 {
+                        continue;
+                    }
+                    let raw = members[*k].raw_token;
+                    diagnostics.push((
+                        *k,
+                        format!(
+                            "`{raw}` adds a second place to this run: a run of `x=` items hangs from one place; keep one suffix or capture them separately"
+                        ),
+                    ));
+                }
+                // Also report a misplaced first suffix, so a run like
+                // `x=a x=b~2 x=c~1` names both problems.
+                let first = suffixed[0];
+                let edge = members[first].edge.unwrap_or(PastEdge::Start);
+                let legal = (edge == PastEdge::Start && first == start)
+                    || (edge == PastEdge::End && first == end);
+                if !legal {
+                    diagnostics.push((
+                        first,
+                        misplaced_pin_message(members, start, end, first),
+                    ));
+                }
             }
             run_start = None;
         }
@@ -602,5 +1076,98 @@ pub(crate) fn compute_past_stacks(
             run_start = None;
         }
     }
-    out
+    // Stable diagnostic order by item index.
+    diagnostics.sort_by_key(|(idx, _)| *idx);
+    (out, diagnostics)
+}
+
+/// Misplaced-suffix message with a rewrite that moves the suffix text to
+/// the legal end member (first for a start pin, last for an end pin).
+fn misplaced_pin_message(
+    members: &[PastStackMember<'_>],
+    start: usize,
+    end: usize,
+    offending: usize,
+) -> String {
+    use super::PastEdge;
+    let raw = members[offending].raw_token;
+    let edge = members[offending].edge.unwrap_or(PastEdge::Start);
+    let target = if edge == PastEdge::Start { start } else { end };
+    let rewrite =
+        rewrite_run_with_moved_suffix(members, start, end, offending, target);
+    format!(
+        "`{raw}` can't place this run: a run of `x=` items hangs from one place, so a start suffix (`~`, `~n`) goes on its first item and an end suffix (`~n+`, `~~`) on its last; write `{rewrite}` or capture them separately"
+    )
+}
+
+/// Rebuild a run's tokens with the offending member's suffix moved to
+/// `target` (the first member for a start pin, the last for an end pin).
+/// Every other member keeps its typed repair `!` and close part; only the
+/// suffix bytes move.
+fn rewrite_run_with_moved_suffix(
+    members: &[PastStackMember<'_>],
+    start: usize,
+    end: usize,
+    offending: usize,
+    target: usize,
+) -> String {
+    let suffix_raw = members[offending].segment_raw.unwrap_or("");
+    let mut tokens = Vec::new();
+    for idx in start..=end {
+        let raw = members[idx].raw_token;
+        if idx == offending {
+            tokens.push(remove_suffix_text(raw, suffix_raw));
+        } else if idx == target {
+            tokens.push(insert_suffix_text(raw, suffix_raw));
+        } else {
+            tokens.push(raw.to_string());
+        }
+    }
+    tokens.join(" ")
+}
+
+/// Remove one occurrence of the suffix bytes from a raw past token (the
+/// suffix inside `E`, before any repair `!` or second `=`).
+fn remove_suffix_text(raw: &str, suffix_raw: &str) -> String {
+    if suffix_raw.is_empty() {
+        return raw.to_string();
+    }
+    if let Some(split) = split_past_token(raw) {
+        // The suffix ends at `e_end` for a valid suffix with no leftover.
+        let suffix_len = suffix_raw.len();
+        if split.e_end >= suffix_len {
+            let seg_start = split.e_end - suffix_len;
+            if raw.get(seg_start..split.e_end) == Some(suffix_raw) {
+                let mut out = String::with_capacity(raw.len() - suffix_len);
+                out.push_str(&raw[..seg_start]);
+                out.push_str(&raw[split.e_end..]);
+                return out;
+            }
+        }
+    }
+    // Fallback: remove the first occurrence.
+    if let Some(pos) = raw.find(suffix_raw) {
+        let mut out = String::with_capacity(raw.len() - suffix_raw.len());
+        out.push_str(&raw[..pos]);
+        out.push_str(&raw[pos + suffix_raw.len()..]);
+        out
+    } else {
+        raw.to_string()
+    }
+}
+
+/// Insert suffix bytes at the end of `E` (before any repair `!` or second
+/// `=`), preserving the target's own repair and close part.
+fn insert_suffix_text(raw: &str, suffix_raw: &str) -> String {
+    if suffix_raw.is_empty() {
+        return raw.to_string();
+    }
+    if let Some(split) = split_past_token(raw) {
+        let mut out = String::with_capacity(raw.len() + suffix_raw.len());
+        out.push_str(&raw[..split.e_end]);
+        out.push_str(suffix_raw);
+        out.push_str(&raw[split.e_end..]);
+        return out;
+    }
+    format!("{raw}{suffix_raw}")
 }

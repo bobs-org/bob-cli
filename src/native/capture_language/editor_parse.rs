@@ -447,22 +447,50 @@ pub(crate) fn parse_for_editor_with(
         .map(|outcome| outcome.item)
         .collect::<Vec<_>>();
     // Past stacks: maximal runs of consecutive valid Past items. Invalid
-    // or unfinished items break runs and never fabricate durations.
+    // or unfinished items break runs and never fabricate durations. Pin
+    // diagnostics become `invalid_pomodoro_past` diagnostics on the
+    // offending item; every other item's parse is unchanged.
     {
-        let blocks: Vec<Option<u32>> = items
+        let members: Vec<super::past::PastStackMember<'_>> = items
             .iter()
             .map(|it| {
-                if it.mode == EditorMode::PomodoroPast {
-                    it.pomodoro_past.as_ref().map(|s| s.blocks)
-                } else {
-                    None
+                if it.mode == EditorMode::PomodoroPast
+                    && let Some(spec) = it.pomodoro_past.as_ref()
+                {
+                    return super::past::PastStackMember {
+                        blocks: Some(spec.blocks),
+                        edge: spec.segment.as_ref().map(|s| s.edge),
+                        segment_raw: spec
+                            .segment
+                            .as_ref()
+                            .map(|s| s.raw.as_str()),
+                        raw_token: spec.raw.as_str(),
+                    };
+                }
+                super::past::PastStackMember {
+                    blocks: None,
+                    edge: None,
+                    segment_raw: None,
+                    raw_token: "",
                 }
             })
             .collect();
-        let stacks = super::past::compute_past_stacks(&blocks);
+        let (stacks, diagnostics) = super::past::compute_past_stacks(&members);
         for (it, st) in items.iter_mut().zip(stacks) {
             if let Some(spec) = it.pomodoro_past.as_mut() {
                 spec.stack = st;
+            }
+        }
+        for (idx, message) in diagnostics {
+            if let Some(item) = items.get_mut(idx) {
+                let range = Some((item.start, item.end));
+                item.diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    code: "invalid_pomodoro_past",
+                    message,
+                    range,
+                });
+                item.pomodoro_past = None;
             }
         }
     }

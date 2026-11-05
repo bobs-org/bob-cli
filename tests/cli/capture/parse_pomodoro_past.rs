@@ -151,7 +151,6 @@ fn past_parse_teaching_errors_and_incomplete() {
         ("x=3fix2", "x=3fix"),
         ("x=3fix2", "x=fix2"),
         ("x=deep-work", "x=#deep-work"),
-        ("x=~2", "x==~2"),
         ("x=*3", "x==*3"),
         ("x=0", "x=1"),
         ("x=fix0", "x=fix1"),
@@ -192,6 +191,149 @@ fn past_parse_teaching_errors_and_incomplete() {
             "{typed}"
         );
     }
+}
+
+#[test]
+fn past_parse_segment_suffix_json_spans_and_runs() {
+    // Valid suffix shapes report segment, pin, and lead blocks.
+    let tail = parse("x=~");
+    assert_eq!(
+        tail["pomodoro_past"]["segment"],
+        serde_json::json!({"raw": "~", "kind": "tail", "edge": "start"})
+    );
+    let head = parse("x=~~");
+    assert_eq!(
+        head["pomodoro_past"]["segment"],
+        serde_json::json!({"raw": "~~", "kind": "head", "edge": "end"})
+    );
+    let indexed = parse("x=fix~2");
+    assert_eq!(
+        indexed["pomodoro_past"]["segment"],
+        serde_json::json!({"raw": "~2", "kind": "index", "index": 2, "edge": "start"})
+    );
+    let indexed_end = parse("x=fix2~2+");
+    assert_eq!(
+        indexed_end["pomodoro_past"]["segment"],
+        serde_json::json!({"raw": "~2+", "kind": "index", "index": 2, "edge": "end"})
+    );
+    // Segment span covers the suffix bytes: `x=fix~2` names 5..7.
+    let kinds: Vec<(i64, i64, &str)> = indexed["spans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| {
+            (
+                s["start"].as_i64().unwrap(),
+                s["end"].as_i64().unwrap(),
+                s["kind"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert!(
+        kinds.contains(&(5, 7, "pomodoro_past_segment")),
+        "{kinds:?}"
+    );
+    assert!(kinds.contains(&(2, 5, "pomodoro_name")), "{kinds:?}");
+    // Repair split is unchanged: `x=2~1!=!1` keeps `E=2~1`.
+    let split = parse("x=2~1!=!1");
+    assert_eq!(
+        split["pomodoro_past"]["segment"],
+        serde_json::json!({"raw": "~1", "kind": "index", "index": 1, "edge": "start"})
+    );
+    assert_eq!(split["pomodoro_past"]["repair"], true);
+    assert_eq!(
+        split["pomodoro_past"]["close"]["complete"],
+        serde_json::json!([1])
+    );
+    let split_kinds: Vec<&str> = split["spans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["kind"].as_str().unwrap())
+        .collect();
+    assert!(split_kinds.contains(&"pomodoro_past_segment"));
+
+    // Pinned runs carry pin and lead blocks.
+    let pinned = parse("x=a~2 x=b");
+    assert_eq!(pinned["items"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        pinned["items"][0]["pomodoro_past"]["stack"]["pin"],
+        serde_json::json!("start")
+    );
+    assert_eq!(
+        pinned["items"][0]["pomodoro_past"]["stack"]["lead_blocks"],
+        serde_json::json!(0)
+    );
+    assert_eq!(
+        pinned["items"][1]["pomodoro_past"]["stack"]["pin"],
+        serde_json::json!("start")
+    );
+    assert_eq!(
+        pinned["items"][1]["pomodoro_past"]["stack"]["lead_blocks"],
+        serde_json::json!(5)
+    );
+
+    // Misplaced start suffix reports the run rule with a moved rewrite.
+    let misplaced = parse("x=a x=b~2");
+    let misplaced_text = serde_json::to_string(&misplaced).unwrap();
+    assert!(
+        misplaced_text.contains("can't place this run"),
+        "{misplaced_text}"
+    );
+    assert!(misplaced_text.contains("x=a~2 x=b"), "{misplaced_text}");
+
+    // A second suffix in one run reports the second place.
+    let double = parse("x=a~2 x=b~1");
+    let double_text = serde_json::to_string(&double).unwrap();
+    assert!(double_text.contains("adds a second place"), "{double_text}");
+
+    // Unsuffixed JSON stays byte-identical: no segment, pin, or lead blocks.
+    let plain = parse("x=3");
+    assert!(plain["pomodoro_past"].get("segment").is_none(), "{plain}");
+    assert!(
+        plain["pomodoro_past"]["stack"].get("pin").is_none(),
+        "{plain}"
+    );
+    assert!(
+        plain["pomodoro_past"]["stack"].get("lead_blocks").is_none(),
+        "{plain}"
+    );
+    let plain_run = parse("x=build2 x=fix3");
+    for item in plain_run["items"].as_array().unwrap() {
+        assert!(item["pomodoro_past"].get("segment").is_none());
+        assert!(item["pomodoro_past"]["stack"].get("pin").is_none());
+        assert!(item["pomodoro_past"]["stack"].get("lead_blocks").is_none());
+    }
+}
+
+#[test]
+fn past_capture_refuses_suffixed_until_record() {
+    // Execution refuses suffixed tokens until the record phase lands.
+    let temp = TempDir::new("bob-cli-past-suffix-refusal");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let day = vault.join("day.md");
+    write_file(&day, "## Pomodoros\n- [ ] ()\n");
+    let output = bob_command()
+        .env("BOB_NOW", "2026-11-04 09:21:00")
+        .env("BOB_DAY_FILE", &day)
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("x=2~1")
+        .output()
+        .expect("run bob capture");
+    assert!(!output.status.success(), "suffixed capture refuses");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{stdout}\n{stderr}");
+    assert!(
+        combined.contains("x=2~1 places a past Pomodoro"),
+        "{combined}"
+    );
 }
 
 #[test]

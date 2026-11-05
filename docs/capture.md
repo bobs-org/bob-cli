@@ -5332,13 +5332,23 @@ Common teaching errors show the exact rewrite:
 
 | Typed | Rewrite |
 | --- | --- |
-| `x=3-1`, `x=-2`, `x=3-`, `x=fix-`, `x=fix3-1`, `x=3-1fix`, `x=build@3-1` | Past work has no offset; remove the offset-shaped dash (`x=3-1` → `x=3`, `x=-2` → `x=`, `x=fix3-1` → `x=fix3`) |
+| `x=3-1`, `x=-2`, `x=3-`, `x=fix-`, `x=fix3-1`, `x=3-1fix`, `x=build@3-1` | `x=` takes no offset; to start at a segment write the suffix, to end now drop the dash (`x=3-1` → `x=3~1` or `x=3`, `x=-2` → `x=~2` or `x=`, `x=fix3-1` → `x=fix3~1` or `x=fix3`, `x=-` → `x=~` or `x=`, `x=3-` → `x=3~` or `x=3`) |
 | `x=3#fix@2` | Give the count once: `x=3fix` or `x=fix2` |
 | `x=fix@3`, `x=build@` | Retired timing separator: write `x=fix3` or `x=build3` |
 | `x=3#fix`, `x=#fix` | `#` is only for names a bare start cannot spell: write `x=3fix` or `x=fix` |
 | `x=3#build` | Redundant `#`: write `x=3build` |
-| `x=deep-work` | A bare name cannot contain `-`; write `x=#deep-work` |
-| `x=~2`, `x=3~2`, `x=build~2` | Put link drops after a second equals: `x==~2`, `x=3=~2`, `x=build=~2` |
+| `x=deep-work`, `x=deep~work` | A bare name cannot contain `-`; write `x=#deep-work` |
+| `x=~0`, `x=3~0` | `~` already names the tail: write `x=~`, `x=3~` |
+| `x=~+`, `x=~0+` | To end now write `x=`, `x=3`; to fill since your last Pomodoro write `x=~`, `x=3~` |
+| `x=~~+`, `x=~~2` | `~~` already ends at your first Pomodoro and takes no number: write `x=~~` |
+| `x=2~01` | No leading zero: write `x=2~1` |
+| `x=2~123`, `x=2~0800` | Three-or-more-digit suffixes are reserved for a future clock suffix; segments are 1–99 |
+| `x=~2fix`, `x=~2#deep-work` | The suffix comes last in `E`: write `x=fix~2`, `x=#deep-work~2` |
+| `x=2~1~2`, `x=2~~1` | One segment suffix per item |
+| `x=3~1!+` | `+` belongs to the suffix, before `!`: write `x=3~1+!` |
+| `x=2~1,3` | A comma list is a drop: write `x=2=~1,3` |
+| `x=b~2` in `x=a x=b~2` | A run hangs from one place: a start suffix goes on its first item, an end suffix on its last; write `x=a~2 x=b` or capture them separately |
+| `x=b~1!` in `x=a~2 x=b~1!` | A run hangs from one place; keep one suffix or capture them separately |
 | `x=*3`, `x=build*3` | Put the task selection after a second equals: `x==*3`, `x=build=*3` |
 | `x=0`, `x=build@0` | Use at least one block: `x=1`, `x=build1` |
 | `x=/build`, `x=*build` | `x=` records one session; it cannot split or merge |

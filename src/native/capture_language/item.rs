@@ -4661,11 +4661,14 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     blocks: valid.blocks,
                     blocks_typed: valid.blocks_typed,
                     repair: split.repair,
+                    segment: valid.segment.clone(),
                     close,
                     stack: PastStackPos {
                         index: 1,
                         size: 1,
                         offset_blocks: 0,
+                        pin: None,
+                        lead_blocks: None,
                     },
                 };
                 let body = parent_trimmed.to_string();
@@ -4738,11 +4741,14 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                             blocks: valid.blocks,
                             blocks_typed: valid.blocks_typed,
                             repair: split.repair,
+                            segment: valid.segment.clone(),
                             close,
                             stack: PastStackPos {
                                 index: 1,
                                 size: 1,
                                 offset_blocks: 0,
+                                pin: None,
+                                lead_blocks: None,
                             },
                         };
                         let body = parent_trimmed.to_string();
@@ -4846,11 +4852,14 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                         blocks: valid.blocks,
                         blocks_typed: valid.blocks_typed,
                         repair: split.repair,
+                        segment: valid.segment.clone(),
                         close,
                         stack: PastStackPos {
                             index: 1,
                             size: 1,
                             offset_blocks: 0,
+                            pin: None,
+                            lead_blocks: None,
                         },
                     };
                     let body = raw_token.to_string();
