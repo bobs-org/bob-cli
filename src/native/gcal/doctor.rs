@@ -17,37 +17,7 @@ use super::{
     root::validate_root_candidate,
     ui, DoctorArgs, GcalError,
 };
-
-struct Check {
-    id: &'static str,
-    status: CheckStatus,
-    summary: String,
-    fix: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CheckStatus {
-    Ok,
-    #[allow(dead_code)]
-    Warn,
-    Fail,
-    Skip,
-}
-
-impl CheckStatus {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Ok => "ok",
-            Self::Warn => "warn",
-            Self::Fail => "fail",
-            Self::Skip => "skip",
-        }
-    }
-
-    fn label(self) -> &'static str {
-        self.as_str()
-    }
-}
+use crate::native::google::doctor::{Check, CheckStatus};
 
 pub(crate) fn run(args: &DoctorArgs) -> i32 {
     let bob_dir = args.bob_dir();
@@ -78,7 +48,8 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
     };
 
     let mut checks = Vec::new();
-    let gog = match Gog::resolve(config.timeout()) {
+    let gog = match Gog::resolve(crate::native::google::GCAL, config.timeout())
+    {
         Ok(gog) => match gog.require_version() {
             Ok(version) => {
                 checks.push(Check {
@@ -140,14 +111,16 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
                 Err(error) => checks.push(fail_from(&error, "client")),
             }
 
-            match account::resolve_command(gog, &config) {
+            match account::resolve_command(gog, config.account()) {
                 Ok(email) => {
                     selected_account = Some(email.clone());
                     match gog.accounts(Some(CLIENT)) {
                         Ok(entries) => {
                             let connected = entries.iter().any(|entry| {
                                 entry.email.eq_ignore_ascii_case(&email)
-                                    && entry.has_calendar_readonly()
+                                    && entry.has_service_scope(
+                                        &crate::native::google::GCAL,
+                                    )
                             });
                             if connected {
                                 checks.push(Check {

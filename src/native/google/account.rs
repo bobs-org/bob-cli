@@ -1,10 +1,9 @@
-//! One account resolver shared by login, Calendar commands, and doctor.
+//! Account selection shared by Google integrations.
 
 use super::{
-    config::GcalConfig,
-    gog::{Gog, GogAccount, CLIENT},
+    gog::{Gog, GogAccount},
     login_ui::LoginUi,
-    GcalError,
+    GoogleError,
 };
 
 /// Resolve the account for login, honoring explicit and configured choices
@@ -12,17 +11,18 @@ use super::{
 pub(crate) fn resolve_login(
     gog: &Gog,
     override_email: Option<&str>,
-    config: &GcalConfig,
+    configured_account: Option<&str>,
     ui: &LoginUi,
-) -> Result<String, GcalError> {
+) -> Result<String, GoogleError> {
     if let Some(email) = override_email.filter(|email| !email.is_empty()) {
         return require_email(email);
     }
-    if let Some(email) = config.account() {
+    if let Some(email) = configured_account {
         return require_email(email);
     }
 
-    let bob_emails = unique_emails(&gog.accounts(Some(CLIENT))?);
+    let service = gog.service();
+    let bob_emails = unique_emails(&gog.accounts(Some(service.client_bucket))?);
     if let [email] = bob_emails.as_slice() {
         return Ok(email.clone());
     }
@@ -33,10 +33,10 @@ pub(crate) fn resolve_login(
     }
 
     if !ui.is_tty() {
-        return Err(account_choice_needed(all_emails.len() > 1));
+        return Err(account_choice_needed(all_emails.len() > 1, service));
     }
 
-    // Put Bob's existing Calendar grants first, then other gog accounts.
+    // Prefer Bob's existing service grant, then other gog accounts.
     let mut candidates = bob_emails;
     for email in all_emails {
         push_unique(&mut candidates, email);
@@ -47,13 +47,14 @@ pub(crate) fn resolve_login(
 /// Resolve the account for commands that must not prompt.
 pub(crate) fn resolve_command(
     gog: &Gog,
-    config: &GcalConfig,
-) -> Result<String, GcalError> {
-    if let Some(email) = config.account() {
+    configured_account: Option<&str>,
+) -> Result<String, GoogleError> {
+    if let Some(email) = configured_account {
         return require_email(email);
     }
 
-    let bob_emails = unique_emails(&gog.accounts(Some(CLIENT))?);
+    let service = gog.service();
+    let bob_emails = unique_emails(&gog.accounts(Some(service.client_bucket))?);
     if let [email] = bob_emails.as_slice() {
         return Ok(email.clone());
     }
@@ -61,21 +62,74 @@ pub(crate) fn resolve_command(
     let all_emails = unique_emails(&gog.accounts(None)?);
     match all_emails.as_slice() {
         [email] => Ok(email.clone()),
-        [] => Err(GcalError::setup(
+        [] => Err(GoogleError::setup(
             "not_logged_in",
             "no Google account is configured".to_string(),
         )
-        .with_hint("run `bob gcal login` or set gcal.account")),
-        _ => Err(GcalError::setup(
+        .with_hint(&format!(
+            "run `{} login` or set {}.account",
+            service.command,
+            service
+                .command
+                .strip_prefix("bob ")
+                .unwrap_or(service.command)
+        ))),
+        _ => Err(GoogleError::setup(
             "account_ambiguous",
             "more than one Google account is available".to_string(),
         )
-        .with_hint("set gcal.account to the address Bob should use")),
+        .with_hint(&format!(
+            "set {}.account to the address Bob should use",
+            service
+                .command
+                .strip_prefix("bob ")
+                .unwrap_or(service.command)
+        ))),
     }
 }
 
-pub(crate) fn would_be_ambiguous(gog: &Gog, config: &GcalConfig) -> bool {
-    resolve_command(gog, config)
+/// Resolve an account for logout without prompting or touching other buckets.
+pub(crate) fn resolve_logout(
+    gog: &Gog,
+    override_email: Option<&str>,
+    configured_account: Option<&str>,
+) -> Result<String, GoogleError> {
+    // Logout passes explicit account identifiers through to gog, as Calendar
+    // did before this extraction; it does not apply login's email validation.
+    if let Some(email) = override_email.filter(|email| !email.is_empty()) {
+        return Ok(email.to_string());
+    }
+    if let Some(email) = configured_account {
+        return Ok(email.to_string());
+    }
+
+    let service = gog.service();
+    let emails = unique_emails(&gog.accounts(Some(service.client_bucket))?);
+    match emails.as_slice() {
+        [email] => Ok(email.clone()),
+        [] => Err(GoogleError::setup(
+            "not_logged_in",
+            format!(
+                "no {} {} grant is stored",
+                service.client_bucket, service.service_name
+            ),
+        )
+        .with_hint("nothing to remove")),
+        _ => Err(GoogleError::setup(
+            "not_logged_in",
+            format!(
+                "gog holds more than one {} account; pass -a EMAIL",
+                service.client_bucket
+            ),
+        )),
+    }
+}
+
+pub(crate) fn would_be_ambiguous(
+    gog: &Gog,
+    configured_account: Option<&str>,
+) -> bool {
+    resolve_command(gog, configured_account)
         .err()
         .is_some_and(|error| error.kind() == "account_ambiguous")
 }
@@ -83,20 +137,20 @@ pub(crate) fn would_be_ambiguous(gog: &Gog, config: &GcalConfig) -> bool {
 fn choose_account(
     ui: &LoginUi,
     candidates: &[String],
-) -> Result<String, GcalError> {
-    ui.note_interactive("Which Google account should Bob read?");
+) -> Result<String, GoogleError> {
+    ui.note_interactive(ui.service().account_question);
     for (index, email) in candidates.iter().enumerate() {
         ui.note_interactive(&format!("  {}  {email}", index + 1));
     }
     loop {
         let Some(line) = ui.prompt("Number or email › ")? else {
-            return Err(cancelled());
+            return Err(cancelled(ui));
         };
         let answer = line.trim();
         if answer.eq_ignore_ascii_case("q")
             || answer.eq_ignore_ascii_case("quit")
         {
-            return Err(cancelled());
+            return Err(cancelled(ui));
         }
         if let Ok(number) = answer.parse::<usize>()
             && let Some(email) = candidates.get(number.saturating_sub(1))
@@ -131,41 +185,50 @@ fn push_unique(emails: &mut Vec<String>, candidate: String) {
     }
 }
 
-fn require_email(email: &str) -> Result<String, GcalError> {
+fn require_email(email: &str) -> Result<String, GoogleError> {
     if email.contains('@') {
         Ok(email.to_string())
     } else {
-        Err(GcalError::setup(
+        Err(GoogleError::setup(
             "config",
             format!("account {email:?} must contain '@'"),
         ))
     }
 }
 
-fn account_choice_needed(ambiguous: bool) -> GcalError {
+fn account_choice_needed(
+    ambiguous: bool,
+    service: super::GoogleService,
+) -> GoogleError {
+    let settings = service
+        .command
+        .strip_prefix("bob ")
+        .unwrap_or(service.command);
+    let hint = format!(
+        "pass `-a EMAIL`, set {settings}.account, or run login in a terminal"
+    );
     if ambiguous {
-        GcalError::setup(
+        GoogleError::setup(
             "needs_tty",
             "gog has more than one account and login needs a choice"
                 .to_string(),
         )
-        .with_hint(
-            "pass `-a EMAIL`, set gcal.account, or run login in a terminal",
-        )
+        .with_hint(&hint)
     } else {
-        GcalError::setup(
+        GoogleError::setup(
             "needs_tty",
             "login needs a Google account address".to_string(),
         )
-        .with_hint(
-            "pass `-a EMAIL`, set gcal.account, or run login in a terminal",
-        )
+        .with_hint(&hint)
     }
 }
 
-fn cancelled() -> GcalError {
-    GcalError::setup("cancelled", "account choice cancelled".to_string())
-        .with_hint("rerun `bob gcal login` to choose an account")
+fn cancelled(ui: &LoginUi) -> GoogleError {
+    GoogleError::setup("cancelled", "account choice cancelled".to_string())
+        .with_hint(&format!(
+            "rerun `{} login` to choose an account",
+            ui.service().command
+        ))
 }
 
 #[cfg(test)]

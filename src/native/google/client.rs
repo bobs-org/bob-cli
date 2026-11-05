@@ -1,4 +1,4 @@
-//! OAuth client JSON parsing and normalization for `bob gcal login`.
+//! OAuth client JSON parsing and normalization shared by Google logins.
 //!
 //! Real Google downloads are `{"installed": {...}}`; gog's own stored
 //! legacy clients are flat `{"client_id": ..., "client_secret": ...}`.
@@ -6,7 +6,10 @@
 //! `authorized_user` files are rejected with a fix. Secrets never appear
 //! in error text.
 
-use super::GcalError;
+use super::{GoogleError, GoogleService};
+
+#[cfg(test)]
+use super::profile::GCAL;
 
 /// Where an [`OAuthClient`] came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,8 +84,8 @@ impl ClientProblem {
     }
 
     /// Attach the file path and convert to a `client_invalid` setup error.
-    pub(crate) fn into_error(self, file: &str) -> GcalError {
-        GcalError::setup(
+    pub(crate) fn into_error(self, file: &str) -> GoogleError {
+        GoogleError::setup(
             "client_invalid",
             format!("{}: {}", file, self.message),
         )
@@ -91,33 +94,48 @@ impl ClientProblem {
 
     /// Convert without a file (for stdin or already-read buffers).
     #[allow(dead_code)]
-    pub(crate) fn into_error_no_file(self) -> GcalError {
-        GcalError::setup("client_invalid", self.message).with_hint(&self.hint)
+    pub(crate) fn into_error_no_file(self) -> GoogleError {
+        GoogleError::setup("client_invalid", self.message).with_hint(&self.hint)
     }
 }
 
-const DESKTOP_HINT: &str = "download a Desktop app client JSON from \
-    https://console.cloud.google.com/auth/clients/create \
-    (OAuth client type Desktop app), then run `bob gcal login -c PATH`";
+fn desktop_hint(service: GoogleService) -> String {
+    format!(
+        "download a Desktop app client JSON from \
+         https://console.cloud.google.com/auth/clients/create \
+         (OAuth client type Desktop app), then run `{} login -c PATH`",
+        service.command
+    )
+}
 
 /// Parse Google-download or legacy-flat client JSON.
-pub(crate) fn parse_client_json(
+#[cfg(test)]
+fn parse_client_json(
     bytes: &[u8],
     origin: ClientOrigin,
+) -> Result<OAuthClient, ClientProblem> {
+    parse_client_json_for(bytes, origin, GCAL)
+}
+
+pub(crate) fn parse_client_json_for(
+    bytes: &[u8],
+    origin: ClientOrigin,
+    service: GoogleService,
 ) -> Result<OAuthClient, ClientProblem> {
     let value: serde_json::Value =
         serde_json::from_slice(bytes).map_err(|_| {
             ClientProblem::new(
                 "not valid JSON; expected a Google OAuth client download",
-                DESKTOP_HINT,
+                desktop_hint(service),
             )
         })?;
-    parse_client_value(&value, origin)
+    parse_client_value(&value, origin, service)
 }
 
 fn parse_client_value(
     value: &serde_json::Value,
     origin: ClientOrigin,
+    service: GoogleService,
 ) -> Result<OAuthClient, ClientProblem> {
     if let Some(obj) = value.as_object()
         && let Some(kind) = obj.get("type").and_then(|v| v.as_str())
@@ -126,14 +144,14 @@ fn parse_client_value(
             return Err(ClientProblem::new(
                 "service account JSON is not an OAuth client; \
                  Bob needs a Desktop app OAuth client",
-                DESKTOP_HINT,
+                desktop_hint(service),
             ));
         }
         if kind == "authorized_user" {
             return Err(ClientProblem::new(
                 "gcloud credentials (authorized_user) are not an \
                  OAuth client; Bob needs a Desktop app OAuth client",
-                DESKTOP_HINT,
+                desktop_hint(service),
             ));
         }
     }
@@ -145,7 +163,7 @@ fn parse_client_value(
         return Err(ClientProblem::new(
             "Bob needs a Desktop app client; Google only allows \
              any-port loopback redirects for Desktop apps",
-            DESKTOP_HINT,
+            desktop_hint(service),
         ));
     }
 
@@ -179,7 +197,7 @@ fn parse_client_value(
         return Err(ClientProblem::new(
             "missing client_id or client_secret; expected a Google \
              OAuth client download",
-            DESKTOP_HINT,
+            desktop_hint(service),
         ));
     };
 
@@ -191,7 +209,7 @@ fn parse_client_value(
         .ok_or_else(|| {
             ClientProblem::new(
                 "missing client_id; expected a Google OAuth client download",
-                DESKTOP_HINT,
+                desktop_hint(service),
             )
         })?;
     let client_secret = candidate
@@ -203,7 +221,7 @@ fn parse_client_value(
             ClientProblem::new(
                 "missing client_secret; expected a Google OAuth client \
                  download",
-                DESKTOP_HINT,
+                desktop_hint(service),
             )
         })?;
 
@@ -212,7 +230,7 @@ fn parse_client_value(
             "client_id does not end with \
              .apps.googleusercontent.com; expected a Google OAuth client \
              download",
-            DESKTOP_HINT,
+            desktop_hint(service),
         ));
     }
 

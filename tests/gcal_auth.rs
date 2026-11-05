@@ -1018,6 +1018,35 @@ fn logout_force_removes_the_grant_and_prints_revoke_url() {
 }
 
 #[test]
+fn logout_explicit_account_is_passed_through_without_login_validation() {
+    let env = GcalEnv::new("bob-cli-gcal-logout-account-passthrough");
+    let fake = FakeGog::new(&env, "gog");
+    let account = "stale-account";
+    let output =
+        run_gcal(&env, &fake, &["logout", "-a", account, "-y", "-f", "json"]);
+    assert_success(&output, "logout explicit account");
+    assert_eq!(json_stdout(&output)["account"], account);
+    assert!(fake.called_with(&["auth", "remove", account]));
+    assert!(!fake.called_with(&["auth", "list"]));
+}
+
+#[test]
+fn logout_explicit_account_still_requires_confirmation() {
+    let env = GcalEnv::new("bob-cli-gcal-logout-account-confirmation");
+    let fake = FakeGog::new(&env, "gog");
+    let output = run_gcal(
+        &env,
+        &fake,
+        &["logout", "-a", "stale-account", "-f", "json"],
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    let doc = json_stdout(&output);
+    assert_eq!(doc["error"]["kind"], "not_logged_in");
+    assert_eq!(doc["error"]["hint"], "rerun `bob gcal logout -y`");
+    assert!(!fake.called_with(&["auth", "remove"]));
+}
+
+#[test]
 fn logout_without_force_on_a_pipe_exits_2() {
     let env = GcalEnv::new("bob-cli-gcal-logout-nontty");
     let fake = FakeGog::new(&env, "gog");

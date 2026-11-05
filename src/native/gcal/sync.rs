@@ -759,7 +759,10 @@ fn resolve_absent(
             None => {
                 if transport.is_none() {
                     let config = GcalConfig::resolve()?;
-                    transport = Some(Gog::resolve(config.timeout())?);
+                    transport = Some(Gog::resolve(
+                        crate::native::google::GCAL,
+                        config.timeout(),
+                    )?);
                 }
                 let gog = transport.as_ref().expect("gog resolved");
                 lookup_verdict(gog, snapshot, &calendar_id, &event_id, day)?

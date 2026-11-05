@@ -1,4 +1,4 @@
-//! Stderr step renderer for `bob gcal login`.
+//! Stderr step renderer for service-specific Google login ceremonies.
 //!
 //! Layout: `N/3`, two spaces, a 15-character label, then content (column
 //! 20). Continuation lines indent to that column. Long URLs print
@@ -9,7 +9,7 @@ use std::io::{self, BufRead, IsTerminal, Write};
 
 use super::super::spinner::Spinner;
 use super::super::style::Styler;
-use super::{config::assume_tty, GcalError};
+use super::{GoogleError, GoogleService};
 
 const CONTENT_COL: usize = 20;
 
@@ -17,14 +17,20 @@ const CONTENT_COL: usize = 20;
 pub(crate) struct LoginUi {
     styler: Styler,
     json: bool,
+    service: GoogleService,
 }
 
 impl LoginUi {
-    pub(crate) fn new(json: bool) -> Self {
+    pub(crate) fn new(service: GoogleService, json: bool) -> Self {
         Self {
             styler: Styler::detect_stderr(),
             json,
+            service,
         }
+    }
+
+    pub(crate) fn service(&self) -> GoogleService {
+        self.service
     }
 
     pub(crate) fn json(&self) -> bool {
@@ -37,8 +43,10 @@ impl LoginUi {
         }
         eprintln!(
             "{}",
-            self.styler
-                .cyan("Google Calendar · read-only · one-time setup")
+            self.styler.cyan(&format!(
+                "{} · read-only · one-time setup",
+                self.service.product_name
+            ))
         );
         eprintln!();
     }
@@ -122,7 +130,7 @@ impl LoginUi {
     pub(crate) fn prompt(
         &self,
         text: &str,
-    ) -> Result<Option<String>, GcalError> {
+    ) -> Result<Option<String>, GoogleError> {
         eprint!("{:content$}{text}", "", content = CONTENT_COL);
         let _ = io::stderr().flush();
         let echo_on_stderr = io::stdin().is_terminal();
@@ -140,11 +148,14 @@ impl LoginUi {
                 }
                 Ok(Some(line))
             }
-            Err(error) => Err(GcalError::setup(
+            Err(error) => Err(GoogleError::setup(
                 "needs_tty",
                 format!("read a prompt: {error}"),
             )
-            .with_hint("run `bob gcal login` in a terminal")),
+            .with_hint(&format!(
+                "run `{} login` in a terminal",
+                self.service.command
+            ))),
         }
     }
 
@@ -153,18 +164,24 @@ impl LoginUi {
             return;
         }
         eprintln!();
-        eprintln!(
-            "{} Connected. Bob can read, never change, {account}'s calendars.",
-            self.styler.green("✓")
-        );
-        eprintln!();
-        eprintln!("  Next  bob gcal sync -d     preview today's Events");
-        eprintln!(
-            "        bob gcal calendars   choose which calendars to sync"
-        );
-        eprintln!(
-            "  Undo  bob gcal logout      removes only Bob's Calendar grant"
-        );
+        if self.service.client_bucket == "bob-gcal" {
+            eprintln!(
+                "{} Connected. Bob can read, never change, {account}'s calendars.",
+                self.styler.green("✓")
+            );
+            eprintln!();
+            eprintln!("  Next  bob gcal sync -d     preview today's Events");
+            eprintln!(
+                "        bob gcal calendars   choose which calendars to sync"
+            );
+            eprintln!("  Undo  bob gcal logout      removes only Bob's Calendar grant");
+        } else {
+            eprintln!(
+                "{} Connected. Bob can read, never change, {account}'s {}.",
+                self.styler.green("✓"),
+                self.service.product_name
+            );
+        }
     }
 
     pub(crate) fn writer_note(&self, writer: &str) {
@@ -172,7 +189,9 @@ impl LoginUi {
             return;
         }
         eprintln!(
-            "  Note  sync runs on {writer} (gcal.writer); run `bob gcal login` there too."
+            "  Note  sync runs on {writer} ({}.writer); run `{} login` there too.",
+            self.service.command.strip_prefix("bob ").unwrap_or(self.service.command),
+            self.service.command
         );
     }
 
@@ -182,7 +201,13 @@ impl LoginUi {
         }
         eprintln!();
         eprintln!("  Tip   add this to ~/.config/bob/config.yml:");
-        eprintln!("        gcal:");
+        eprintln!(
+            "        {}:",
+            self.service
+                .command
+                .strip_prefix("bob ")
+                .unwrap_or(self.service.command)
+        );
         eprintln!("          account: {account}");
     }
 
@@ -197,7 +222,7 @@ impl LoginUi {
     }
 
     pub(crate) fn is_tty(&self) -> bool {
-        is_tty()
+        is_tty(self.service)
     }
 }
 
@@ -205,9 +230,11 @@ fn step_prefix(n: u8, label: &str) -> String {
     format!("{n}/3  {label:<15}")
 }
 
-/// Stdin is a terminal, or tests set `BOB_GCAL_ASSUME_TTY`.
-pub(crate) fn is_tty() -> bool {
-    assume_tty() || io::stdin().is_terminal()
+/// Stdin is a terminal, or tests set the service-specific assume-TTY variable.
+pub(crate) fn is_tty(service: GoogleService) -> bool {
+    crate::native::env::var_os(service.assume_tty_env)
+        .is_some_and(|value| matches!(value.to_str(), Some("1") | Some("true")))
+        || io::stdin().is_terminal()
 }
 
 #[cfg(test)]

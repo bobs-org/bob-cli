@@ -12,7 +12,6 @@ pub(crate) const DEFAULT_TIMEOUT_SECS: u64 = 60;
 pub(crate) const DEFAULT_DESCRIPTION_LINES: u64 = 8;
 /// One content line plus the overflow line.
 pub(crate) const MIN_DESCRIPTION_LINES: u64 = 2;
-pub(crate) const GOG_ENV_VAR: &str = "BOB_GCAL_GOG";
 pub(crate) const ASSUME_TTY_ENV: &str = "BOB_GCAL_ASSUME_TTY";
 
 /// Resolved `bob gcal` configuration.
@@ -203,13 +202,6 @@ impl GcalConfig {
                     && (calendar_id == "primary" || primary))
         })
     }
-
-    /// The test hook: an executable replacing `gog` on PATH.
-    pub(crate) fn gog_override() -> Option<std::path::PathBuf> {
-        bob_env::var_os(GOG_ENV_VAR)
-            .filter(|value| !value.is_empty())
-            .map(std::path::PathBuf::from)
-    }
 }
 
 /// Whether stdin should be treated as a TTY for login prompts.
@@ -218,12 +210,6 @@ pub(crate) fn assume_tty() -> bool {
         bob_env::var(ASSUME_TTY_ENV).ok().as_deref(),
         Some("1") | Some("true")
     )
-}
-
-/// Stdin is a terminal, or tests set [`ASSUME_TTY_ENV`].
-pub(crate) fn stdin_is_tty() -> bool {
-    use std::io::IsTerminal;
-    assume_tty() || std::io::stdin().is_terminal()
 }
 
 #[cfg(test)]

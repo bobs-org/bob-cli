@@ -3,12 +3,13 @@
 //! The read-only `list` command previews the event snapshot and its roots;
 //! `sync` writes the rows above today's Pomodoros, idempotently.
 
-mod account;
 mod bullet_block;
 mod calendars;
 mod classify;
 pub(crate) mod cli;
-pub(crate) mod client;
+pub(crate) use crate::native::google::{
+    account, client, client_setup, login_ui, signin,
+};
 mod clock;
 mod config;
 mod description;
@@ -20,14 +21,12 @@ pub(crate) mod lifecycle;
 mod link_order;
 mod list;
 mod login;
-mod login_ui;
 mod logout;
 mod model;
 mod plan;
 mod refile;
 mod render;
 mod root;
-mod signin;
 mod snapshot;
 pub(crate) mod stamp;
 mod sync;
@@ -35,68 +34,14 @@ mod ui;
 
 use std::{ffi::OsString, iter};
 
+/// Calendar-facing name for the shared error type.
+pub(crate) use crate::native::google::GoogleError as GcalError;
+
 pub(crate) use cli::{
     CalendarsArgs, DoctorArgs, ListArgs, LoginArgs, LogoutArgs, SyncArgs,
 };
 
 const COMMAND_NAME: &str = "bob gcal";
-
-/// A typed `bob gcal` failure with its process exit code.
-///
-/// Exit codes (all subcommands): 0 is success; 1 is a runtime failure
-/// (gog, network, timeout, token); 2 is a usage or setup error (clap
-/// errors, bad config, missing gog, no client, not logged in).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GcalError {
-    kind: String,
-    message: String,
-    hint: Option<String>,
-    exit_code: i32,
-}
-
-impl GcalError {
-    /// A runtime failure (exit 1).
-    pub(crate) fn runtime(kind: &str, message: String) -> Self {
-        Self {
-            kind: kind.to_string(),
-            message,
-            hint: None,
-            exit_code: 1,
-        }
-    }
-
-    /// A usage or setup error (exit 2).
-    pub(crate) fn setup(kind: &str, message: String) -> Self {
-        Self {
-            kind: kind.to_string(),
-            message,
-            hint: None,
-            exit_code: 2,
-        }
-    }
-
-    /// Attach a `hint: …` line to the report.
-    pub(crate) fn with_hint(mut self, hint: &str) -> Self {
-        self.hint = Some(hint.to_string());
-        self
-    }
-
-    pub(crate) fn kind(&self) -> &str {
-        &self.kind
-    }
-
-    pub(crate) fn message(&self) -> &str {
-        &self.message
-    }
-
-    pub(crate) fn hint(&self) -> Option<&str> {
-        self.hint.as_deref()
-    }
-
-    pub(crate) fn exit_code(&self) -> i32 {
-        self.exit_code
-    }
-}
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let command = cli::build_cli();

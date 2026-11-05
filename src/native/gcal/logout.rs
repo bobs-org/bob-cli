@@ -28,41 +28,18 @@ pub(crate) fn run(args: &LogoutArgs) -> i32 {
 }
 
 fn logout(args: &LogoutArgs, config: &GcalConfig) -> Result<String, GcalError> {
-    let gog = Gog::resolve(config.timeout())?;
+    let gog = Gog::resolve(crate::native::google::GCAL, config.timeout())?;
     let _ = gog.require_version()?;
-    let account = resolve_account(&gog, args.account.as_deref(), config)?;
+    let account = account::resolve_logout(
+        &gog,
+        args.account.as_deref(),
+        config.account(),
+    )?;
     if !args.force {
         confirm_logout(&account)?;
     }
     gog.auth_remove(&account)?;
     Ok(account)
-}
-
-fn resolve_account(
-    gog: &Gog,
-    override_email: Option<&str>,
-    config: &GcalConfig,
-) -> Result<String, GcalError> {
-    if let Some(email) = override_email.filter(|email| !email.is_empty()) {
-        return Ok(email.to_string());
-    }
-    if let Some(email) = config.account() {
-        return Ok(email.to_string());
-    }
-    let emails = account::unique_emails(&gog.accounts(Some(CLIENT))?);
-    match emails.as_slice() {
-        [email] => Ok(email.clone()),
-        [] => Err(GcalError::setup(
-            "not_logged_in",
-            "no bob-gcal Calendar grant is stored".to_string(),
-        )
-        .with_hint("nothing to remove")),
-        _ => Err(GcalError::setup(
-            "not_logged_in",
-            "gog holds more than one bob-gcal account; pass -a EMAIL"
-                .to_string(),
-        )),
-    }
 }
 
 fn confirm_logout(account: &str) -> Result<(), GcalError> {

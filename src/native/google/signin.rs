@@ -15,10 +15,9 @@ use url::Url;
 use crate::native::env as bob_env;
 
 use super::{
-    config::stdin_is_tty,
-    gog::{self, Gog, CLIENT},
+    gog::{self, Gog},
     login_ui::{self, LoginUi},
-    GcalError,
+    GoogleError, GoogleService,
 };
 
 const CONSENT_WINDOW: Duration = Duration::from_secs(600);
@@ -53,9 +52,9 @@ pub(crate) struct FlowEnv {
 }
 
 impl FlowEnv {
-    pub(crate) fn detect() -> Self {
+    pub(crate) fn detect(service: GoogleService) -> Self {
         Self {
-            browser_override: non_empty("BOB_GCAL_BROWSER"),
+            browser_override: non_empty(service.browser_override_env),
             ssh: non_empty("SSH_CONNECTION") || non_empty("SSH_TTY"),
             has_display: non_empty("DISPLAY") || non_empty("WAYLAND_DISPLAY"),
             is_macos: cfg!(target_os = "macos"),
@@ -189,9 +188,9 @@ fn not_the_address() -> String {
 pub(crate) fn inject_login_hint(
     auth_url: &str,
     email: &str,
-) -> Result<String, GcalError> {
+) -> Result<String, GoogleError> {
     let mut url = Url::parse(auth_url).map_err(|error| {
-        GcalError::runtime(
+        GoogleError::runtime(
             "bad_json",
             format!("gog auth_url is not a URL: {error}"),
         )
@@ -200,7 +199,7 @@ pub(crate) fn inject_login_hint(
     url.query_pairs_mut().append_pair("login_hint", email);
     let after = gog::state_from_auth_url(url.as_str());
     if before != after {
-        return Err(GcalError::runtime(
+        return Err(GoogleError::runtime(
             "bad_json",
             "adding login_hint changed the OAuth state".to_string(),
         ));
@@ -225,18 +224,27 @@ pub(crate) fn html_escape(text: &str) -> String {
 }
 
 /// Outcome page: success (connected) or failure (didn't finish).
-pub(crate) fn page(success: bool, email: &str, reason: &str) -> String {
+pub(crate) fn page(
+    service: GoogleService,
+    success: bool,
+    email: &str,
+    reason: &str,
+) -> String {
     let (mark, headline, detail) = if success {
         (
             "✓",
-            "Bob can read your Google Calendar",
+            format!("Bob can read your {}", service.product_name),
             format!(
                 "read-only access for {} · you can close this tab",
                 html_escape(email)
             ),
         )
     } else {
-        ("✗", "Sign-in didn't finish", html_escape(reason))
+        (
+            "✗",
+            "Sign-in didn't finish".to_string(),
+            html_escape(reason),
+        )
     };
     format!(
         "<!DOCTYPE html>\n\
@@ -285,7 +293,7 @@ pub(crate) fn run(
     flow: Flow,
     reason: &str,
     project: Option<&str>,
-) -> Result<Flow, GcalError> {
+) -> Result<Flow, GoogleError> {
     match flow {
         Flow::Paste => paste_flow(gog, ui, account, reason, project),
         Flow::Browser => browser_flow(gog, ui, account, project),
@@ -299,9 +307,9 @@ fn paste_flow(
     account: &str,
     reason: &str,
     project: Option<&str>,
-) -> Result<(), GcalError> {
-    if !stdin_is_tty() {
-        return Err(needs_tty());
+) -> Result<(), GoogleError> {
+    if !ui.is_tty() {
+        return Err(needs_tty(ui.service()));
     }
     let mut auto_retries = 0;
     let mut previous_redirect = None;
@@ -328,17 +336,23 @@ fn paste_flow(
             project,
         )? {
             PasteOutcome::SignedIn => {
-                ui.note("✓ signed in · read-only Calendar access granted");
+                ui.note(&format!(
+                    "✓ signed in · read-only {} access granted",
+                    ui.service().service_name
+                ));
                 return Ok(());
             }
             PasteOutcome::RetryFresh => continue,
             PasteOutcome::RetryAuto => {
                 if auto_retries >= 1 {
-                    return Err(GcalError::runtime(
+                    return Err(GoogleError::runtime(
                         "stale_link",
                         "that sign-in link is out of date".to_string(),
                     )
-                    .with_hint("rerun `bob gcal login` for a fresh link"));
+                    .with_hint(&format!(
+                        "rerun `{} login` for a fresh link",
+                        ui.service().command
+                    )));
                 }
                 auto_retries += 1;
                 ui.note_interactive(
@@ -363,19 +377,22 @@ fn paste_prompt_loop(
     redirect_uri: &str,
     auth_url: &str,
     project: Option<&str>,
-) -> Result<PasteOutcome, GcalError> {
+) -> Result<PasteOutcome, GoogleError> {
     loop {
         let Some(line) = ui.prompt("Paste the address (? for help) › ")?
         else {
-            return Err(cancelled());
+            return Err(cancelled(ui.service()));
         };
         match parse_redirect(&line, expected_state) {
             RedirectParse::Help => print_paste_help(ui, project),
-            RedirectParse::Quit => return Err(cancelled()),
+            RedirectParse::Quit => return Err(cancelled(ui.service())),
             RedirectParse::Empty => {}
             RedirectParse::Denied => {
                 ui.note_interactive("Google denied access.");
-                return retry_or_quit(ui, cancelled_or_denied(true));
+                return retry_or_quit(
+                    ui,
+                    cancelled_or_denied(true, ui.service()),
+                );
             }
             RedirectParse::Error(message) => {
                 ui.note_interactive(&message);
@@ -399,10 +416,10 @@ fn paste_prompt_loop(
 
 fn retry_or_quit(
     ui: &LoginUi,
-    on_quit: GcalError,
-) -> Result<PasteOutcome, GcalError> {
+    on_quit: GoogleError,
+) -> Result<PasteOutcome, GoogleError> {
     match ui.prompt("Press Enter to try again, or q to stop › ")? {
-        None => Err(cancelled()),
+        None => Err(cancelled(ui.service())),
         Some(line) => {
             let trimmed = line.trim();
             if trimmed.eq_ignore_ascii_case("q")
@@ -416,16 +433,19 @@ fn retry_or_quit(
     }
 }
 
-fn cancelled_or_denied(_from_denied: bool) -> GcalError {
+fn cancelled_or_denied(
+    _from_denied: bool,
+    service: GoogleService,
+) -> GoogleError {
     // The phase tests pin `access_denied` then `q` as exit 2 `cancelled`.
-    cancelled()
+    cancelled(service)
 }
 
 fn print_paste_instructions(ui: &LoginUi, account: &str) {
     ui.note_interactive(&format!(
         "1. Open the link, choose {account}, and allow"
     ));
-    ui.note_interactive("   \"See and download any calendar you can access\".");
+    ui.note_interactive(&format!("   \"{}\".", ui.service().scope_prompt));
     ui.note_interactive(
         "2. \"Google hasn't verified this app\"? It's your own client:",
     );
@@ -458,9 +478,10 @@ fn print_paste_help(ui: &LoginUi, project: Option<&str>) {
     ui.note_interactive(
         "\"Error 400: redirect_uri_mismatch\": the client isn't a Desktop app.",
     );
-    ui.note_interactive(
-        "  Rerun with `bob gcal login -c` and a Desktop app JSON.",
-    );
+    ui.note_interactive(&format!(
+        "  Rerun with `{} login -c` and a Desktop app JSON.",
+        ui.service().command
+    ));
     ui.note_interactive(
         "\"This site can't be reached\" after Allow: expected. Copy that",
     );
@@ -472,7 +493,7 @@ fn browser_flow(
     ui: &LoginUi,
     account: &str,
     _project: Option<&str>,
-) -> Result<(), GcalError> {
+) -> Result<(), GoogleError> {
     let mut auto_retries = 0;
     let mut previous_redirect = None;
     loop {
@@ -486,12 +507,13 @@ fn browser_flow(
             "Sign in",
             &format!("{account} · opening your browser…"),
         );
-        ui.note_interactive(
-            "Allow \"See and download any calendar you can access\".",
-        );
+        ui.note_interactive(&format!(
+            "Allow \"{}\".",
+            ui.service().scope_prompt
+        ));
         ui.note_interactive("Browser didn't open? Use this link:");
         ui.link(&auth_url);
-        let opener = match spawn_opener(&auth_url) {
+        let opener = match spawn_opener(&auth_url, ui.service()) {
             Ok(child) => Some(child),
             Err(_) => {
                 ui.dim_note("couldn't open a browser; use the link above");
@@ -511,7 +533,10 @@ fn browser_flow(
         drop(wait);
         match result {
             Ok(BrowserWait::SignedIn) => {
-                ui.note("✓ signed in · read-only Calendar access granted");
+                ui.note(&format!(
+                    "✓ signed in · read-only {} access granted",
+                    ui.service().service_name
+                ));
                 return Ok(());
             }
             Ok(BrowserWait::Denied) => match browser_denied(ui) {
@@ -535,7 +560,7 @@ fn browser_flow(
 /// the same manual-auth state when the allocator returns the same port.
 fn bind_redirect(
     previous: Option<&str>,
-) -> Result<(TcpListener, String), GcalError> {
+) -> Result<(TcpListener, String), GoogleError> {
     let mut held = Vec::new();
     let mut last_error = None;
     for _ in 0..32 {
@@ -559,7 +584,7 @@ fn bind_redirect(
             Err(error) => last_error = Some(error),
         }
     }
-    Err(GcalError::runtime(
+    Err(GoogleError::runtime(
         "gog",
         format!(
             "bind a loopback listener: {}",
@@ -588,25 +613,26 @@ fn wait_for_callback(
     expected_state: &str,
     redirect_uri: &str,
     opener: Option<Child>,
-) -> Result<BrowserWait, GcalError> {
+) -> Result<BrowserWait, GoogleError> {
     let mut opener = OpenerGuard(opener);
     listener.set_nonblocking(true).map_err(|error| {
-        GcalError::runtime(
+        GoogleError::runtime(
             "gog",
             format!("set the listener non-blocking: {error}"),
         )
     })?;
-    let deadline = Instant::now() + consent_window();
+    let deadline = Instant::now() + consent_window(ui.service());
     let mut opener_failed_noted = false;
     loop {
         if Instant::now() >= deadline {
-            return Err(GcalError::runtime(
+            return Err(GoogleError::runtime(
                 "browser_timeout",
                 "no callback within the 10-minute consent window".to_string(),
             )
-            .with_hint(
-                "run `bob gcal login -m` to paste the address instead",
-            ));
+            .with_hint(&format!(
+                "run `{} login -m` to paste the address instead",
+                ui.service().command
+            )));
         }
         if let Some(child) = opener.0.as_mut()
             && let Ok(Some(status)) = child.try_wait()
@@ -621,6 +647,7 @@ fn wait_for_callback(
             Ok((mut stream, _)) => {
                 match handle_connection(
                     gog,
+                    gog.service(),
                     account,
                     &mut stream,
                     expected_state,
@@ -641,7 +668,7 @@ fn wait_for_callback(
                 thread::sleep(ACCEPT_POLL);
             }
             Err(error) => {
-                return Err(GcalError::runtime(
+                return Err(GoogleError::runtime(
                     "gog",
                     format!("accept the OAuth callback: {error}"),
                 ));
@@ -663,11 +690,12 @@ enum ConnResult {
 
 fn handle_connection(
     gog: &Gog,
+    service: GoogleService,
     account: &str,
     stream: &mut TcpStream,
     expected_state: &str,
     redirect_uri: &str,
-) -> Result<ConnResult, GcalError> {
+) -> Result<ConnResult, GoogleError> {
     let headers = match read_headers(stream) {
         Ok(bytes) => bytes,
         Err(_) => return Ok(ConnResult::Continue),
@@ -677,7 +705,7 @@ fn handle_connection(
             stream,
             400,
             "Bad Request",
-            &page(false, account, "this sign-in link is out of date"),
+            &page(service, false, account, "this sign-in link is out of date"),
         );
         return Ok(ConnResult::Continue);
     };
@@ -686,7 +714,7 @@ fn handle_connection(
             stream,
             404,
             "Not Found",
-            &page(false, account, "this is not the sign-in page"),
+            &page(service, false, account, "this is not the sign-in page"),
         );
         return Ok(ConnResult::Continue);
     }
@@ -696,7 +724,7 @@ fn handle_connection(
             stream,
             404,
             "Not Found",
-            &page(false, account, "this is not the sign-in page"),
+            &page(service, false, account, "this is not the sign-in page"),
         );
         return Ok(ConnResult::Continue);
     };
@@ -705,7 +733,7 @@ fn handle_connection(
             stream,
             404,
             "Not Found",
-            &page(false, account, "this is not the sign-in page"),
+            &page(service, false, account, "this is not the sign-in page"),
         );
         return Ok(ConnResult::Continue);
     }
@@ -725,7 +753,7 @@ fn handle_connection(
             stream,
             400,
             "Bad Request",
-            &page(false, account, "this sign-in link is out of date"),
+            &page(service, false, account, "this sign-in link is out of date"),
         );
         return Ok(ConnResult::Continue);
     }
@@ -735,7 +763,12 @@ fn handle_connection(
         } else {
             kind.as_str()
         };
-        let _ = write_http(stream, 200, "OK", &page(false, account, reason));
+        let _ = write_http(
+            stream,
+            200,
+            "OK",
+            &page(service, false, account, reason),
+        );
         return Ok(ConnResult::Denied);
     }
     if code.as_deref().is_none_or(str::is_empty) {
@@ -743,14 +776,19 @@ fn handle_connection(
             stream,
             400,
             "Bad Request",
-            &page(false, account, "this sign-in link is out of date"),
+            &page(service, false, account, "this sign-in link is out of date"),
         );
         return Ok(ConnResult::Continue);
     }
     let redirect = callback_from_request(redirect_uri, &target);
     match finish_and_confirm(gog, account, &redirect, redirect_uri) {
         Ok(()) => {
-            let _ = write_http(stream, 200, "OK", &page(true, account, ""));
+            let _ = write_http(
+                stream,
+                200,
+                "OK",
+                &page(service, true, account, ""),
+            );
             Ok(ConnResult::SignedIn)
         }
         Err(error) if is_auto_retry(&error) => {
@@ -758,7 +796,7 @@ fn handle_connection(
                 stream,
                 200,
                 "OK",
-                &page(false, account, error.message()),
+                &page(service, false, account, error.message()),
             );
             Err(error)
         }
@@ -767,24 +805,25 @@ fn handle_connection(
                 stream,
                 200,
                 "OK",
-                &page(false, account, error.message()),
+                &page(service, false, account, error.message()),
             );
             Err(error)
         }
     }
 }
 
-fn browser_denied(ui: &LoginUi) -> Result<PasteOutcome, GcalError> {
-    if !login_ui::is_tty() {
-        return Err(consent_denied());
+fn browser_denied(ui: &LoginUi) -> Result<PasteOutcome, GoogleError> {
+    if !login_ui::is_tty(ui.service()) {
+        return Err(consent_denied(ui.service()));
     }
     ui.note_interactive("Google denied access.");
-    retry_or_quit(ui, consent_denied())
+    retry_or_quit(ui, consent_denied(ui.service()))
 }
 
-fn spawn_opener(url: &str) -> io::Result<Child> {
+fn spawn_opener(url: &str, service: GoogleService) -> io::Result<Child> {
     let program: PathBuf = if let Some(override_cmd) =
-        bob_env::var_os("BOB_GCAL_BROWSER").filter(|value| !value.is_empty())
+        bob_env::var_os(service.browser_override_env)
+            .filter(|value| !value.is_empty())
     {
         PathBuf::from(override_cmd)
     } else if cfg!(target_os = "macos") {
@@ -800,8 +839,8 @@ fn spawn_opener(url: &str) -> io::Result<Child> {
         .spawn()
 }
 
-fn consent_window() -> Duration {
-    if let Ok(raw) = bob_env::var("BOB_GCAL_CONSENT_SECS")
+fn consent_window(service: GoogleService) -> Duration {
+    if let Ok(raw) = bob_env::var(service.consent_secs_env)
         && let Ok(secs) = raw.parse::<u64>()
         && secs > 0
     {
@@ -896,56 +935,66 @@ fn finish_and_confirm(
     account: &str,
     redirect: &str,
     redirect_uri: &str,
-) -> Result<(), GcalError> {
+) -> Result<(), GoogleError> {
     gog.auth_finish(account, redirect, redirect_uri)?;
     confirm_account(gog, account)
 }
 
-fn confirm_account(gog: &Gog, account: &str) -> Result<(), GcalError> {
-    let accounts = gog.accounts(Some(CLIENT))?;
-    if accounts
-        .iter()
-        .any(|entry| entry.email == account && entry.has_calendar_readonly())
-    {
+fn confirm_account(gog: &Gog, account: &str) -> Result<(), GoogleError> {
+    let service = gog.service();
+    let accounts = gog.accounts(Some(service.client_bucket))?;
+    if accounts.iter().any(|entry| {
+        entry.email == account && entry.has_service_scope(&service)
+    }) {
         return Ok(());
     }
     if let Some(other) = accounts.iter().find(|entry| entry.email != account) {
-        return Err(GcalError::runtime(
+        return Err(GoogleError::runtime(
             "wrong_account",
             format!("signed in as {} instead of {account}", other.email),
         )
         .with_hint("choose the right account on Google's picker, or pass -a"));
     }
-    Err(GcalError::runtime(
+    Err(GoogleError::runtime(
         "gog",
-        "sign-in finished but Calendar access is missing".to_string(),
+        format!(
+            "sign-in finished but {} access is missing",
+            service.service_name
+        ),
     )
-    .with_hint("run `bob gcal login` again"))
+    .with_hint(&format!("run `{} login` again", service.command)))
 }
 
-fn is_auto_retry(error: &GcalError) -> bool {
+fn is_auto_retry(error: &GoogleError) -> bool {
     matches!(error.kind(), "stale_link" | "invalid_grant")
 }
 
-fn needs_tty() -> GcalError {
-    GcalError::setup(
+fn needs_tty(service: GoogleService) -> GoogleError {
+    GoogleError::setup(
         "needs_tty",
         "the paste sign-in flow needs a terminal".to_string(),
     )
-    .with_hint("run `bob gcal login` in a terminal")
+    .with_hint(&format!("run `{} login` in a terminal", service.command))
 }
 
-fn cancelled() -> GcalError {
-    GcalError::setup("cancelled", "sign-in cancelled".to_string())
-        .with_hint("a stored client stays stored; rerun `bob gcal login`")
-}
-
-fn consent_denied() -> GcalError {
-    GcalError::runtime(
-        "consent_denied",
-        "Google denied Calendar access".to_string(),
+fn cancelled(service: GoogleService) -> GoogleError {
+    GoogleError::setup("cancelled", "sign-in cancelled".to_string()).with_hint(
+        &format!(
+            "a stored client stays stored; rerun `{} login`",
+            service.command
+        ),
     )
-    .with_hint("rerun `bob gcal login` and allow access")
+}
+
+fn consent_denied(service: GoogleService) -> GoogleError {
+    GoogleError::runtime(
+        "consent_denied",
+        format!("Google denied {} access", service.service_name),
+    )
+    .with_hint(&format!(
+        "rerun `{} login` and allow access",
+        service.command
+    ))
 }
 
 #[cfg(test)]
@@ -1096,15 +1145,26 @@ mod tests {
     fn html_escape_and_page() {
         let escaped = html_escape(r#"<script>"&'"#);
         assert_eq!(escaped, "&lt;script&gt;&quot;&amp;&#39;");
-        let success = page(true, "you@example.com", "");
+        let success =
+            page(super::super::profile::GCAL, true, "you@example.com", "");
         assert!(success.contains("Bob can read your Google Calendar"));
         assert!(success.contains("you@example.com"));
         assert!(success.contains("prefers-color-scheme"));
         assert!(!success.contains("<script"));
-        let fail = page(false, "you@example.com", "Google denied access");
+        let fail = page(
+            super::super::profile::GCAL,
+            false,
+            "you@example.com",
+            "Google denied access",
+        );
         assert!(fail.contains("Sign-in didn't finish"));
         assert!(fail.contains("Google denied access"));
-        let injected = page(false, "x", "<script>alert(1)</script>");
+        let injected = page(
+            super::super::profile::GCAL,
+            false,
+            "x",
+            "<script>alert(1)</script>",
+        );
         assert!(!injected.contains("<script>alert"));
         assert!(injected.contains("&lt;script&gt;"));
     }

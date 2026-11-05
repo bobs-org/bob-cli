@@ -66,6 +66,7 @@ mod gkeep;
 // Offline Gmail URL identity; no command consumes it yet.
 #[allow(dead_code)]
 pub(crate) mod gmail;
+pub(crate) mod google;
 mod highlights_ref;
 mod ledger_place;
 mod markdown;
