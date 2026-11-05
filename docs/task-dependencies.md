@@ -1331,6 +1331,15 @@ when the row was linked; clients must not expect `"not_linked": null`.
 `breaker` and `not_planned_today` are never emitted again (clients keep their copy
 for older bobs). CLI selection is `-p, --pull-in` (§12.14).
 
+Offer-close support is additive. A supported response includes
+`pull_in.close: {"supported": true}` and adds a `close` descriptor to each
+offer row. An older response omits both fields. Each descriptor is
+`{complete: boolean, cancel: boolean, why?: string, scope_note?: string,
+unblocks?: integer}`: the booleans report the two independently supported
+actions, `why` is Bob-authored refusal copy, `scope_note` explains work that
+root-only resolution leaves open, and `unblocks` counts dependents the close
+would recover. Descriptors never authorize a presenter to infer eligibility.
+
 Both `task_complete` and `pomodoro_close` objects carry the same three
 fields. Offered rows are emitted even when the status did not change (a
 stale `[ ]` resident).
@@ -1413,6 +1422,17 @@ stale `[ ]` resident).
   - The cycler-only model adds `failed` and `cancelled`; Rust never
     emits them.
   - `breaker` and `not_planned_today` are never emitted again.
+- When `pull_in.close.supported` is true, `offer_closes[]` reports every
+  applied card verdict. Each row has the original offer number `n`, stable
+  pre-write `key`, `outcome: "done" | "cancelled"`, `note_path`,
+  `block_id` (empty when the task has no block ID), and
+  `previous_status`; a nonblank Cancel reason is returned as `reason`.
+  `recovered[]` uses the existing recovered-task row shape. A dependent
+  recovered by a card verdict has `not_linked: "resolved_in_card"`: it is
+  written and reported, but is not offered again in this gesture.
+- A verdict refusal is a write-free `ok: false` response with a stable
+  `code`, Bob-authored error text, and the current offer rows with their
+  eligibility descriptors. Existing error exit and JSON conventions apply.
 
 **Project-created rows (`project_note.successors`)**
 
@@ -2551,6 +2571,15 @@ The cycler offers relation groups only when
 relation group is planned; the managed Done or park gesture still
 succeeds.
 
+**Picker API v4 (offer verdicts).** Nav bumps `api.successors.version` to
+`4`. Offer rows may include Bob's `close` descriptor. `pick()` resolves
+`{picks: [{key, destination?}], closes: [{key, outcome: "done"|"cancelled",
+reason?}]}` or `null`. `null` still means no commit. A result with no picks
+and one or more closes is a commit, not `null`; the cycler applies both
+arrays in the same gesture. Rows without `close` keep the v3 presentation
+and cannot receive a verdict. The cycler attaches descriptors only when
+`api.successors.version >= 4`; an older picker keeps today's behavior.
+
 **Notice API v2 (keep-moving).** `api.notice.version` is `2`.
 `buildUnblockedNoticeModel` reads an optional `keep_moving` row array.
 When every row is keep-moving, the card title is `Keep ‹N› moving` with
@@ -2575,6 +2604,23 @@ numbered offers the same command reports without a selection. An
 unknown, stale, or out-of-range pick is a teaching error that writes
 nothing and lists current offers. `all` / `none` with zero offers is a
 no-op.
+
+Offer verdict flags are additive to `-p`:
+
+```text
+  -X, --cancel-offer <N|KEY>[=REASON]  Cancel one offer; REASON goes to its Cancel Log.
+  -x, --complete-offer <PICKS>         Mark offer(s) Done; PICKS is a comma list.
+```
+
+Both options are repeatable and accept the numbered offers or stable offer
+keys. `-X` addresses one offer per occurrence and splits on the first `=`;
+commas in its reason are literal. A verdict is an explicit pull-in choice for
+`--require-pull-in-choice`. `-p all` selects every selectable offer that has
+no verdict. Selecting one row for pull-in and Done/Cancel, or selecting it
+for both Done and Cancel, is the write-free teaching refusal
+`offer_verdict_conflict`; the refusal lists current rows and eligibility.
+Unknown, stale, or ineligible verdict targets are also refused before any
+capture write.
 
 Hidden internal `--require-pull-in-choice` (no short alias; internal
 subprocess argument, absent from `--help`): when offers exist and no
@@ -3550,6 +3596,117 @@ entry, and fixed `BOB_NOW`. Select-all applies unless a row says otherwise.
 | NP26 | `@dev` directly followed by `@cash` then `- b` | `@dev` is a note pull; `@cash` is a task list |
 | NP27 | `bob capture-parse -f json -- @sase` | Mode `note_pull`, `needs: []`, list `count: 0`, `grammar: 9` |
 | NP28 | Same vault and flags, dry run vs real run | Identical JSON apart from `dry_run` and preview wording |
+
+### 12.22 Resolving offers
+
+A successor card can stage one verdict per offer row: **Leave**, **Pull in**,
+**Done**, or **Cancel**. Leave is the default and only lets ordinary recovery
+stand. Pull in keeps the existing selection behavior (§12.13–§12.14). Done and
+Cancel resolve that task as part of the same gesture. A row cannot be both
+pulled in and resolved.
+
+**Eligibility belongs to Bob.** Bob returns the per-row `close` descriptor
+(§12.5), including its reason and scope note. Presenters render those fields;
+they do not infer eligibility or consequence copy. New tasks from the same
+capture, recurring tasks, muted rows (including blocked, folded, and already
+planned offers), unsupported statuses, and rows whose identity cannot be
+revalidated cannot be resolved. A close key addresses the pre-write offer
+identity: `<path>#^<id>` when it has an ID, otherwise the stable description
+digest key. A look-alike task is never substituted when that identity changes.
+
+**Staging and commit.** Done and Cancel act on the highlighted row only,
+never on the marked pull-in set. The same verdict key toggles its row back to
+Leave; a different verdict replaces the current one. `Ctrl+X` stages Done;
+`Ctrl+Shift+X` opens an optional inline Cancel reason, whose Return confirms
+the reason (blank is allowed). Both advance to the next eligible row. The
+chords use literal Control, are scoped to the successor card, and ignore key
+repeat and input composition. Cmd+X remains Cut; on Linux, Ctrl+X in a
+selected filter span remains Cut. Obsidian also offers hover buttons that stage
+the same highlighted-row verdict. Until Apply, rows show ✓ or ⊘ and their
+consequence without strikethrough.
+
+Return applies every staged verdict with the gesture's existing write pass.
+Once any verdict is staged, Return never falls back to the highlighted row.
+With pending verdicts, the first Esc says `Esc again to discard {N} closes`;
+the second discards them. Obsidian's
+`Ctrl+Shift+Enter` destination override applies to pull-in rows only. On Mac,
+`⇧↩` applies verdicts and skips pull-ins; `⌃↩` applies both and opens notes.
+The footer reports nonzero counts as `pull in {P} · ✓ {D} done · ⊘ {C} cancel`;
+the plan meter counts pull-ins only. The task-merge picker does not use these
+chords.
+
+**Task writes and recovery.** Done uses the existing completion writer:
+root-only `[x]` plus `[completion:: today]`, with no Work Log prompt. Cancel
+uses the Task Card cancel writer: root-only `[-]` plus `[cancelled:: today]`.
+A nonblank reason is prepended to the Cancel Log, creating it when needed. A
+blank reason creates no log when none exists; when a Cancel Log already exists,
+it prepends the existing `🤷 no reason given` entry. Embedded children stay
+open and the descriptor's `scope_note` reports them. Neither outcome stamps
+freshness or changes the keep count.
+
+Dependents recover through the ordinary recovery rules, including the
+`[unblocked:: today]` WRITE stamp when applicable. Card-resolved rows do not
+produce a second offer round in v1. Recovered dependents are included in the
+receipt and marked `not_linked: "resolved_in_card"`; they return through the
+existing review rules, normally as tomorrow's TICKLER. This applies to both
+Done and Cancel. A `project_finished` offer may resolve its existing `^prj`
+task as Done in the same gesture that completes the project's last task.
+
+**Canonical consequence and receipt copy** is authored by Bob and shared by
+all presenters. `{S}` is the resolved task text, `{Status}` its prior lane,
+and counts use singular/plural forms:
+
+| Situation | Text |
+| --- | --- |
+| Done consequence | `✓ Completes “{S}” · {Status} → Done` |
+| Cancel consequence | `⊘ Cancels “{S}” · {Status} → Cancelled` |
+| Root-only scope | `· its {N} embedded tasks stay open` |
+| Done on a `project_finished` row | `✓ Finishes ‹project›` |
+| Recovered dependent | `↳ also unblocked “{D}” · back tomorrow as a tickler` |
+
+The descriptor's `why` supplies the muted ineligible-row explanation. ✓ uses
+the existing Done green and ⊘ the existing Cancelled tint; amber is for
+caveats and red for errors, following relation complete/cancel. A task is
+never struck through before its write. Obsidian's post-write Undo is guarded
+by the exact postimages and restores only rows the pass wrote that remain
+untouched. Reopening the predecessor does not reopen resolved rows.
+
+**Write failures differ by surface.** Capture is all-or-nothing: if a verdict
+target is stale, the batch writes nothing and the card can reopen with its
+staged choices. Obsidian remains best-effort: a changed row is refused alone,
+other valid rows may apply, and the predecessor close is not rolled back.
+Both bind the verdict to the preimage shown in the card. A review-walk
+gesture advances once for its original landing and never lands on a row
+resolved by the same commit.
+
+### 12.23 SV — successor verdict vectors
+
+These vectors are the shared contract for Bob's capture engine and the
+Obsidian cycler. Bob-cli owns
+`tests/fixtures/offer_close/vectors.json`; bob-plugins copies it byte for
+byte. The cases pin eligibility, exact Done and Cancel task bytes, Cancel
+Log behavior, recovery without cascading offers, selection conflicts, and
+preimage refusals. Surface-only interaction cases are covered by the
+surface that owns them and are marked UI-only in the fixture.
+
+| # | Situation | Outcome |
+| --- | --- | --- |
+| SV1 | Eligible existing Ready task resolved Done | Root becomes `[x]`; `[completion:: today]` is written; no Work Log or freshness stamp |
+| SV2 | Eligible task Cancelled with a nonblank reason | Root becomes `[-]`; `[cancelled:: today]` is written; dated reason is prepended to the Cancel Log |
+| SV3 | Cancelled with a blank reason and no Cancel Log | Root becomes `[-]`; no Cancel Log is created |
+| SV4 | Cancelled with a blank reason and an existing Cancel Log | Root becomes `[-]`; dated `🤷 no reason given` is prepended |
+| SV5 | Resolved root has embedded task children | Only the root closes; children stay byte-identical and the close descriptor reports scope |
+| SV6 | Eligible offer has no block ID | Its digest offer key revalidates and resolves the same row without minting an ID |
+| SV7 | `project_finished` offer resolves its `^prj` as Done | Project task completes in the same write pass; no child task is closed by the root-only verdict |
+| SV8 | New-in-capture, recurring, muted, unsupported-status, or changed-identity row | Done and Cancel are unavailable with Bob-authored `why`; no write |
+| SV9 | Done recovers a dependent | Dependent receives ordinary recovery and `[unblocked:: today]` when WRITE applies; it is reported `resolved_in_card`, never re-offered |
+| SV10 | Cancel recovers a dependent | Same recovery and no-cascade behavior as SV9 |
+| SV11 | A verdict key is also selected by `-p` or the other verdict flag | `offer_verdict_conflict`; write-free refusal lists current eligibility |
+| SV12 | `-p all` with one resolved row and one unmarked row | Only the unmarked selectable row is pulled in |
+| SV13 | Capture verdict target changes before apply | Entire capture batch aborts without writes |
+| SV14 | One Obsidian verdict target changes before apply | That row is refused; unchanged rows may apply; predecessor stays closed |
+| SV15 | A review-walk landing resolves a row that would otherwise be next | The original gesture advances once and skips the resolved row |
+| SV16 | Same initial vault, verdicts, and picks in dry-run and real capture | Planned JSON is identical apart from `dry_run` and preview wording |
 
 ## 13. Project dependencies
 
