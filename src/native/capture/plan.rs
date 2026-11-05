@@ -2339,7 +2339,7 @@ pub(super) fn plan_capture_item(
             Some(
                 capture_clip::plan_history_with_reservations(
                     &request.bob_dir,
-                    &clipboards.values,
+                    &clipboards,
                     now,
                     clip_indent,
                     clip_reservations,

@@ -326,6 +326,7 @@ fn capture_percent_c1_is_an_exact_single_clip_alias() {
     assert_eq!(json["clip"]["mode"], "inline");
     assert_eq!(json["clip"]["lines"], serde_json::json!(["\t- live value"]));
     assert_eq!(json["clip"]["entries"], serde_json::json!([]));
+    assert!(json["clip"].get("history").is_none(), "{json}");
     assert_eq!(
         fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
         concat!(
@@ -369,6 +370,19 @@ fn capture_history_is_headerless_structured_and_composes_with_routes() {
         serde_json::from_str(stdout(&output).trim()).expect("history JSON");
     assert_eq!(json["clip"]["status"], "read");
     assert_eq!(json["clip"]["mode"], "history");
+    assert_eq!(json["clip"]["history"]["provider"], "command");
+    assert_eq!(
+        json["clip"]["history"]["entries"].as_array().unwrap().len(),
+        3
+    );
+    assert_eq!(
+        json["clip"]["history"]["entries"][0]["age_seconds"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        json["clip"]["history"]["entries"][0]["app"],
+        serde_json::Value::Null
+    );
     assert_eq!(
         json["clip"]["lines"],
         serde_json::json!([
@@ -464,6 +478,43 @@ fn capture_history_is_headerless_structured_and_composes_with_routes() {
     assert_eq!(
         fs::read_to_string(day_file).expect("read day"),
         "## Pomodoros\n- [ ] Current\n  - [[dev#^history-id]]\n"
+    );
+}
+
+#[test]
+fn capture_history_human_output_reports_provider_and_unknown_ages() {
+    let temp = TempDir::new("bob-cli-capture-history-provenance-human");
+    let vault = temp.path().join("vault");
+    let clipboard = temp.path().join("clipboard");
+    let history = temp.path().join("history");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_executable(&clipboard, "#!/bin/sh\nprintf 'live value\\n'\n");
+    write_executable(
+        &history,
+        "#!/bin/sh\nprintf '%s\\n' '[\"live value\",\"older value\"]'\n",
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--dry-run")
+        .args(["research links", "%c2"])
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_CLIPBOARD_HISTORY_CMD", &history)
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("capture clipboard history");
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("clip  from command"),
+        "{}",
+        format_output(&output)
+    );
+    assert!(
+        !stdout(&output).contains("newest"),
+        "{}",
+        format_output(&output)
     );
 }
 

@@ -24,9 +24,11 @@ pub(crate) use clipboard::{
     ClipboardHistoryError,
 };
 pub(crate) use files::{attachment_reference, sha256_hex};
+#[cfg(test)]
+pub(crate) use model::ClipHistoryEntryOutput;
 pub(crate) use model::{
-    AttachmentKind, AttachmentOutput, ClipMode, ClipOutput, ClipPlan,
-    ClipReservations, ClipStatus,
+    AttachmentKind, AttachmentOutput, ClipHistoryOutput, ClipMode, ClipOutput,
+    ClipPlan, ClipReservations, ClipStatus,
 };
 pub(crate) use persist::{append_cleanup_message, cleanup_created};
 #[cfg(test)]

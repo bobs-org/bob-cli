@@ -793,7 +793,7 @@ fn relative_time(timestamp: Option<&str>, now: &str) -> Option<String> {
     Some(format!("{} ago", age_unit(seconds as u64)))
 }
 
-fn age_unit(seconds: u64) -> String {
+pub(crate) fn age_unit(seconds: u64) -> String {
     match seconds {
         0..=59 => format!("{seconds}s"),
         60..=3_599 => format!("{}m", seconds / 60),

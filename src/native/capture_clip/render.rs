@@ -16,6 +16,7 @@ pub(super) fn inline_output(text: &str, indent: &str) -> ClipOutput {
         attachments: Vec::new(),
         snippet: None,
         entries: Vec::new(),
+        history: None,
     }
 }
 
@@ -35,5 +36,6 @@ pub(super) fn lines_output(
         attachments: Vec::new(),
         snippet: None,
         entries: Vec::new(),
+        history: None,
     }
 }

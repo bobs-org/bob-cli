@@ -8,7 +8,8 @@ use super::{
     },
     model::FileReservations,
     render::{inline_output, lines_output},
-    ClipMode, ClipOutput, ClipPlan, ClipReservations, ClipStatus,
+    AgreedClipboardHistory, ClipHistoryOutput, ClipMode, ClipOutput, ClipPlan,
+    ClipReservations, ClipStatus,
 };
 
 pub(super) const MAX_ATTACHMENT_COUNT: usize = 10;
@@ -127,21 +128,44 @@ pub(crate) fn plan_history(
     indent: &str,
 ) -> Result<ClipPlan, String> {
     let mut reservations = ClipReservations::default();
-    plan_history_with_reservations(
+    plan_history_values_with_reservations(
         bob_dir,
         clipboards,
         now,
         indent,
         &mut reservations,
+        None,
     )
 }
 
 pub(crate) fn plan_history_with_reservations(
     bob_dir: &Path,
+    history: &AgreedClipboardHistory,
+    now: NaiveDateTime,
+    indent: &str,
+    reservations: &mut ClipReservations,
+) -> Result<ClipPlan, String> {
+    plan_history_values_with_reservations(
+        bob_dir,
+        &history.values,
+        now,
+        indent,
+        reservations,
+        Some(ClipHistoryOutput::from_rows(
+            history.provider,
+            &history.entries,
+            std::time::SystemTime::now(),
+        )),
+    )
+}
+
+fn plan_history_values_with_reservations(
+    bob_dir: &Path,
     clipboards: &[String],
     now: NaiveDateTime,
     indent: &str,
     reservations: &mut ClipReservations,
+    history: Option<ClipHistoryOutput>,
 ) -> Result<ClipPlan, String> {
     let start = reservations.files.files.len();
     let entries = clipboards
@@ -171,6 +195,7 @@ pub(crate) fn plan_history_with_reservations(
             attachments,
             snippet: None,
             entries,
+            history,
         },
         files: reservations.files.files[start..].to_vec(),
     })

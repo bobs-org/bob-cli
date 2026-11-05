@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
+    time::{Duration, SystemTime},
 };
 
 use serde::ser::SerializeStruct;
@@ -54,6 +55,44 @@ pub(crate) struct ClipOutput {
     // bob-mac-capture decodes clip collections as required fields; omitting
     // empty entries broke every `%c` capture in the app.
     pub(crate) entries: Vec<ClipOutput>,
+    /// Provenance belongs to the aggregate history result only. Ordinary
+    /// `%c` output intentionally keeps its existing JSON shape.
+    pub(crate) history: Option<ClipHistoryOutput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ClipHistoryOutput {
+    pub(crate) provider: String,
+    pub(crate) entries: Vec<ClipHistoryEntryOutput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ClipHistoryEntryOutput {
+    pub(crate) age_seconds: Option<u64>,
+    pub(crate) app: Option<String>,
+}
+
+impl ClipHistoryOutput {
+    pub(crate) fn from_rows(
+        provider: &str,
+        rows: &[super::history::HistoryEntry],
+        now: SystemTime,
+    ) -> Self {
+        Self {
+            provider: provider.to_string(),
+            entries: rows
+                .iter()
+                .map(|row| ClipHistoryEntryOutput {
+                    age_seconds: row.at.map(|at| {
+                        now.duration_since(at)
+                            .unwrap_or(Duration::ZERO)
+                            .as_secs()
+                    }),
+                    app: row.app.clone(),
+                })
+                .collect(),
+        }
+    }
 }
 
 impl ClipOutput {
@@ -66,6 +105,7 @@ impl ClipOutput {
             attachments: Vec::new(),
             snippet: None,
             entries: Vec::new(),
+            history: None,
         }
     }
 }
@@ -96,6 +136,9 @@ impl Serialize for ClipOutput {
                 if self.snippet.is_some() {
                     field_count += 1;
                 }
+                if self.history.is_some() {
+                    field_count += 1;
+                }
                 let mut state =
                     serializer.serialize_struct("ClipOutput", field_count)?;
                 state.serialize_field("status", &self.status)?;
@@ -106,6 +149,9 @@ impl Serialize for ClipOutput {
                     state.serialize_field("snippet", snippet)?;
                 }
                 state.serialize_field("entries", &self.entries)?;
+                if let Some(history) = &self.history {
+                    state.serialize_field("history", history)?;
+                }
                 state.end()
             }
         }
@@ -195,5 +241,45 @@ impl FileReservations {
             reused,
             kind,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clipboard_history_ages_are_clamped_and_unknowns_stay_null() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
+        let rows = vec![
+            super::super::history::HistoryEntry::text(
+                "newest".to_string(),
+                Some(SystemTime::UNIX_EPOCH + Duration::from_secs(97)),
+                Some("Safari".to_string()),
+            ),
+            super::super::history::HistoryEntry::text(
+                "older".to_string(),
+                Some(SystemTime::UNIX_EPOCH + Duration::from_secs(101)),
+                None,
+            ),
+            super::super::history::HistoryEntry::text(
+                "unknown".to_string(),
+                None,
+                None,
+            ),
+        ];
+
+        let history = ClipHistoryOutput::from_rows("alfred", &rows, now);
+        assert_eq!(history.provider, "alfred");
+        assert_eq!(history.entries[0].age_seconds, Some(3));
+        assert_eq!(history.entries[0].app.as_deref(), Some("Safari"));
+        assert_eq!(history.entries[1].age_seconds, Some(0));
+        assert_eq!(history.entries[1].app, None);
+        assert_eq!(history.entries[2].age_seconds, None);
+        assert_eq!(history.entries[2].app, None);
+        let json = serde_json::to_value(history).expect("serialize provenance");
+        assert_eq!(json["entries"][1]["age_seconds"], 0);
+        assert_eq!(json["entries"][2]["age_seconds"], serde_json::Value::Null);
+        assert_eq!(json["entries"][2]["app"], serde_json::Value::Null);
     }
 }

@@ -3755,6 +3755,9 @@ pub(super) fn print_human_item_success(
     print_human_dependency_updates(result, &styler);
     print_human_relation_updates(result, &styler);
     if let Some(clip) = &result.clip {
+        if let Some(history) = &clip.history {
+            println!("  {}", styler.dim(&format_clip_history_summary(history)));
+        }
         for line in &clip.lines {
             println!("  {}", styler.dim(line));
         }
@@ -3851,6 +3854,32 @@ pub(super) fn print_human_item_success(
         );
     }
     print_consumed_links(result, &styler);
+}
+
+fn format_clip_history_summary(
+    history: &capture_clip::ClipHistoryOutput,
+) -> String {
+    let provider = match history.provider.as_str() {
+        "alfred" => "Alfred",
+        "clipy" => "Clipy",
+        other => other,
+    };
+    let Some(first) = history.entries.first() else {
+        return format!("clip  from {provider}");
+    };
+    let Some(newest) = first.age_seconds else {
+        return format!("clip  from {provider}");
+    };
+    let Some(oldest) =
+        history.entries.last().and_then(|entry| entry.age_seconds)
+    else {
+        return format!("clip  from {provider}");
+    };
+    format!(
+        "clip  from {provider} · newest {} · oldest {}",
+        crate::native::capture_templates::command::age_unit(newest),
+        crate::native::capture_templates::command::age_unit(oldest),
+    )
 }
 
 fn print_human_project_note_moves(
@@ -7595,5 +7624,34 @@ mod tests {
         });
         let value = to_value(&result).expect("serialize");
         assert!(value.get("relation_completes").is_none(), "{value}");
+    }
+
+    #[test]
+    fn clipboard_history_summary_uses_provider_and_known_endpoint_ages() {
+        let history = capture_clip::ClipHistoryOutput {
+            provider: "alfred".to_string(),
+            entries: vec![
+                capture_clip::ClipHistoryEntryOutput {
+                    age_seconds: Some(3),
+                    app: Some("Safari".to_string()),
+                },
+                capture_clip::ClipHistoryEntryOutput {
+                    age_seconds: Some(240),
+                    app: None,
+                },
+            ],
+        };
+        assert_eq!(
+            format_clip_history_summary(&history),
+            "clip  from Alfred · newest 3s · oldest 4m"
+        );
+        let command = capture_clip::ClipHistoryOutput {
+            provider: "command".to_string(),
+            entries: vec![capture_clip::ClipHistoryEntryOutput {
+                age_seconds: None,
+                app: None,
+            }],
+        };
+        assert_eq!(format_clip_history_summary(&command), "clip  from command");
     }
 }

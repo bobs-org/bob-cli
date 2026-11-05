@@ -174,6 +174,7 @@ pub(super) fn plan_attachments<'a>(
         attachments,
         snippet: None,
         entries: Vec::new(),
+        history: None,
     })
 }
 
@@ -349,6 +350,7 @@ pub(super) fn plan_snippet(
             attachments: Vec::new(),
             snippet: Some(saved),
             entries: Vec::new(),
+            history: None,
         });
     }
     let slug = snippet_slug(clipboard);
@@ -396,6 +398,7 @@ pub(super) fn plan_snippet(
         attachments: Vec::new(),
         snippet: Some(saved),
         entries: Vec::new(),
+        history: None,
     })
 }
 

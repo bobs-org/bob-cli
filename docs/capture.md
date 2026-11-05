@@ -6896,8 +6896,13 @@ Counted histories above one use `mode: "history"`, flattened `lines`, and
 attachment records aggregated in entry order. Their `entries` array contains
 one ordinary clip object per requested value, keeping entry boundaries and
 any owning `snippet` path explicit. The aggregate omits a singular `snippet`
-field. `%c1` uses the single-capture shape. `task_line` remains the parent
-line only, and non-clipboard JSON omits `clip`.
+field and adds `history: {provider, entries}`. The provenance entries align
+with the requested clip entries and contain `age_seconds` and `app`, each
+`null` when the provider does not report that value. Ages are nonnegative
+integer seconds measured against the real wall clock. The human result prints
+one provider line with the newest and oldest known ages. `%c1` uses the
+single-capture shape. `task_line` remains the parent line only, and
+non-clipboard JSON omits `clip`.
 
 ID-only task results use kind `"task"` and additionally include `block_id`.
 They omit `day_file`, `block_link`, and `pomodoro_link_placement`.
