@@ -6,6 +6,8 @@
 //! link, runs `routing::relocate`, applies the winning edit, and reports
 //! the ledger relocation for JSON and human output.
 
+use std::collections::BTreeSet;
+
 use crate::native::capture::{
     line_spans, list_item_body, nearest_shallower_list_item_parent,
 };
@@ -14,7 +16,10 @@ use crate::native::capture_task_toggle::{
     child_block_end_line, move_subtree_to_entry,
 };
 use crate::native::config::themes::ThemeSources;
-use crate::native::pomodoro_themes::routing;
+use crate::native::pomodoro_themes::{
+    agree_apply::{self, TaskTypeLookup},
+    routing,
+};
 
 /// One ledger relocation applied to the daily note.
 ///
@@ -58,10 +63,44 @@ pub(crate) fn apply_to_day_contents(
     type_name: &str,
     sources: &ThemeSources,
 ) -> Option<(String, TypeRelocation)> {
+    apply_inner(day_contents, block_id, type_key, type_name, sources, None)
+}
+
+/// Same as [`apply_to_day_contents`] but the live link must resolve to
+/// `(expected_path, block_id)`. A same-ID link into another note never
+/// matches; several open matches for the same task are ambiguous and
+/// leave the ledger unchanged.
+pub(crate) fn apply_to_day_contents_for_task(
+    day_contents: &str,
+    daily_path: &std::path::Path,
+    expected_path: &std::path::Path,
+    block_id: &str,
+    type_key: &str,
+    type_name: &str,
+    sources: &ThemeSources,
+) -> Option<(String, TypeRelocation)> {
+    apply_inner(
+        day_contents,
+        block_id,
+        type_key,
+        type_name,
+        sources,
+        Some((daily_path, expected_path)),
+    )
+}
+
+fn apply_inner(
+    day_contents: &str,
+    block_id: &str,
+    type_key: &str,
+    type_name: &str,
+    sources: &ThemeSources,
+    expected: Option<(&std::path::Path, &std::path::Path)>,
+) -> Option<(String, TypeRelocation)> {
     if !capture_pomodoros::scan(day_contents).has_section {
         return None;
     }
-    let found = find_live_link(day_contents, block_id)?;
+    let found = find_live_link_filtered(day_contents, block_id, expected)?;
     let scan = capture_pomodoros::scan(day_contents);
     let mut entries = Vec::new();
     for entry in &scan.entries {
@@ -161,7 +200,8 @@ pub(crate) fn apply_to_day_contents(
                 .name
                 .clone()
                 .unwrap_or_else(|| type_name.to_string());
-            let link = find_live_link(day_contents, block_id)?;
+            let link =
+                find_live_link_filtered(day_contents, block_id, expected)?;
             let dest_before = dest_entry.line.saturating_sub(1);
             let dest_after = dest_headline_after_removing_source(
                 dest_before,
@@ -192,7 +232,8 @@ pub(crate) fn apply_to_day_contents(
         routing::RelocateOutcome::CreateBelow { from, name } => {
             let source_entry = scan.entries.get(from)?;
             let from_name = source_entry.name.clone();
-            let link = find_live_link(day_contents, block_id)?;
+            let link =
+                find_live_link_filtered(day_contents, block_id, expected)?;
             let spans = line_spans(day_contents);
             let source_index = source_entry.line.saturating_sub(1);
             let source_end = child_block_end_line(&spans, source_index);
@@ -227,15 +268,70 @@ pub(crate) fn apply_to_day_contents(
     }
 }
 
+/// Agree one touched source entry after a D8 `MoveTo`.
+///
+/// `source_entry_line` is the 1-based entry line in `day_contents` (the
+/// `source_before + 1` that [`TypeRelocation`] reports). Only that entry
+/// is agreed; when type inputs are incomplete the lookup resolves
+/// everything as unresolved, which blocks drops but never writes.
+pub(crate) fn agree_source_entry<L: TaskTypeLookup>(
+    day_contents: &str,
+    daily_path: &std::path::Path,
+    source_entry_line: usize,
+    lookup: &mut L,
+    sources: &ThemeSources,
+) -> Option<String> {
+    let mut lines = BTreeSet::new();
+    lines.insert(source_entry_line);
+    let outcome = agree_apply::agree_ledger_entries(
+        day_contents,
+        daily_path,
+        &agree_apply::EntrySelector::Lines(lines),
+        lookup,
+        sources,
+    );
+    outcome.changed.then_some(outcome.contents)
+}
+
 pub(crate) struct LiveLink {
     pub(crate) entry_line: usize,
     pub(crate) line_index: usize,
     pub(crate) subtree_end: usize,
 }
 
+#[cfg(test)]
 pub(crate) fn find_live_link(
     day_contents: &str,
     block_id: &str,
+) -> Option<LiveLink> {
+    find_live_link_filtered(day_contents, block_id, None)
+}
+
+/// Find a dedicated live link to `(expected_path, block_id)`.
+///
+/// Links resolve to a vault-relative path: an empty target means the
+/// daily note itself, otherwise `target_to_markdown_path`. A same-ID
+/// link into another note never matches and never poisons ambiguity.
+/// Two or more open matches for the same task are ambiguous and leave
+/// the ledger unchanged.
+#[cfg(test)]
+pub(crate) fn find_live_link_for_task(
+    day_contents: &str,
+    daily_path: &std::path::Path,
+    expected_path: &std::path::Path,
+    block_id: &str,
+) -> Option<LiveLink> {
+    find_live_link_filtered(
+        day_contents,
+        block_id,
+        Some((daily_path, expected_path)),
+    )
+}
+
+fn find_live_link_filtered(
+    day_contents: &str,
+    block_id: &str,
+    expected: Option<(&std::path::Path, &std::path::Path)>,
 ) -> Option<LiveLink> {
     let spans = line_spans(day_contents);
     let scan = capture_pomodoros::scan(day_contents);
@@ -267,6 +363,23 @@ pub(crate) fn find_live_link(
                     continue;
                 }
                 if span.block_id == block_id {
+                    if let Some((daily_path, expected_path)) = expected
+                        && {
+                            let resolved = if span.target.is_empty() {
+                                daily_path.to_path_buf()
+                            } else {
+                                match crate::native::vault_links::target_to_markdown_path(
+                                    &span.target,
+                                ) {
+                                    Some(path) => path,
+                                    None => continue,
+                                }
+                            };
+                            resolved != expected_path
+                        }
+                    {
+                        continue;
+                    }
                     let token = &text[span.token_start..span.end];
                     let trimmed_body = body.trim();
                     if trimmed_body == token.trim()
@@ -564,5 +677,96 @@ mod tests {
         let result =
             apply_to_day_contents(day, "fix-x", "fix", "FIX", &sources());
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn live_link_matches_resolved_path_not_block_id_alone() {
+        use std::path::Path;
+        // Same block ID in another note never matches the expected task.
+        let day = "## Pomodoros\n- [ ] () — BUILD\n  - [[other#^dup]]\n";
+        let daily = Path::new("2026/20261105.md");
+        let expected = Path::new("sase.md");
+        assert!(find_live_link_for_task(day, daily, expected, "dup").is_none());
+        // Same block ID under the expected home matches.
+        let day = "## Pomodoros\n- [ ] () — BUILD\n  - [[sase#^dup]]\n";
+        assert!(find_live_link_for_task(day, daily, expected, "dup").is_some());
+        // An empty target resolves to the daily note itself.
+        let daily_task = Path::new("2026/20261105.md");
+        let day = "## Pomodoros\n- [ ] () — BUILD\n  - [[#^dup]]\n";
+        assert!(
+            find_live_link_for_task(day, daily, daily_task, "dup").is_some()
+        );
+        assert!(find_live_link_for_task(day, daily, expected, "dup").is_none());
+    }
+
+    #[test]
+    fn duplicate_open_matches_are_ambiguous() {
+        use std::path::Path;
+        let day = "## Pomodoros\n- [ ] () — BUILD\n  - [[sase#^dup]]\n- [ ] () — FIX\n  - [[sase#^dup]]\n";
+        let daily = Path::new("2026/20261105.md");
+        let expected = Path::new("sase.md");
+        assert!(find_live_link_for_task(day, daily, expected, "dup").is_none());
+        // The legacy block-ID-only lookup is also ambiguous here.
+        assert!(find_live_link(day, "dup").is_none());
+    }
+
+    #[test]
+    fn move_to_source_agrees_in_same_write() {
+        use std::path::PathBuf;
+
+        use crate::native::pomodoro_themes::agree_apply::{
+            self, EntrySelector, MapLookup,
+        };
+        // Post-`MoveTo` state: the FIX link moved to `— FIX`, leaving the
+        // source `— BUILD + FIX` with only its BUILD link. Agreeing the
+        // source entry drops the extra type so the write is a fixed point.
+        let moved = "## Pomodoros\n- [ ] () — BUILD + FIX\n  - [[sase#^build1]]\n- [ ] () — FIX\n  - [[sase#^fix1]]\n";
+        let daily = PathBuf::from("2026/20261105.md");
+        let source_line = 2usize;
+        let mut lookup = MapLookup {
+            entries: [(
+                ("sase".to_string(), "build1".to_string()),
+                agree_apply::TaskResolution::Typed {
+                    key: "build".to_string(),
+                    name: "BUILD".to_string(),
+                    is_open: true,
+                    has_repair: false,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let agreed = agree_source_entry(
+            moved,
+            &daily,
+            source_line,
+            &mut lookup,
+            &sources(),
+        )
+        .expect("agrees source");
+        assert!(agreed.contains("— BUILD\n"));
+        assert!(!agreed.contains("— BUILD + FIX"));
+        // The agreed output is a fixed point over the touched entry.
+        let mut second_lookup = MapLookup {
+            entries: [(
+                ("sase".to_string(), "build1".to_string()),
+                agree_apply::TaskResolution::Typed {
+                    key: "build".to_string(),
+                    name: "BUILD".to_string(),
+                    is_open: true,
+                    has_repair: false,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let second = agree_apply::agree_ledger_entries(
+            &agreed,
+            &daily,
+            &EntrySelector::Lines([source_line].into_iter().collect()),
+            &mut second_lookup,
+            &sources(),
+        );
+        assert!(!second.changed);
     }
 }

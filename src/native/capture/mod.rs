@@ -383,6 +383,7 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         pull_in,
         batch.inbox_route,
         batch.move_choice,
+        batch.type_agreement,
     );
     result.warnings.extend(hide_failures);
     result.warnings.extend(origin_failures);

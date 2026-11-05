@@ -492,6 +492,21 @@ pub(super) struct CaptureResult {
     pub(super) inbox_route: InboxRouteReport,
     /// Move-choice report. Present on every success.
     pub(super) move_choice: super::move_choice::MoveChoiceReport,
+    /// Pomodoro name agreements this batch applied to today's daily note.
+    /// Additive and omitted when empty, so older decoders stay valid.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) type_agreement: Vec<TypeAgreementJson>,
+}
+
+/// One Pomodoro name agreement applied to today's daily note.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct TypeAgreementJson {
+    pub(super) line: usize,
+    pub(super) before: String,
+    pub(super) after: String,
+    pub(super) added: Vec<String>,
+    pub(super) removed: Vec<String>,
+    pub(super) reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -514,6 +529,7 @@ impl CaptureResult {
         pull_in: PullInJson,
         inbox_route: InboxRouteReport,
         move_choice: super::move_choice::MoveChoiceReport,
+        type_agreement: Vec<TypeAgreementJson>,
     ) -> Self {
         let item = items
             .first()
@@ -539,6 +555,7 @@ impl CaptureResult {
             pull_in,
             inbox_route,
             move_choice,
+            type_agreement,
         }
     }
 }
@@ -2064,6 +2081,7 @@ pub(super) fn print_human_success(result: &CaptureResult) {
         print_pull_in_hint(result);
         print_inbox_route_hint(result);
         print_move_choice_report(result);
+        print_type_agreement(result);
         return;
     }
 
@@ -2097,6 +2115,24 @@ pub(super) fn print_human_success(result: &CaptureResult) {
     print_pull_in_hint(result);
     print_inbox_route_hint(result);
     print_move_choice_report(result);
+    print_type_agreement(result);
+}
+
+fn print_type_agreement(result: &CaptureResult) {
+    if result.type_agreement.is_empty() {
+        return;
+    }
+    let verb = if result.dry_run {
+        "would rename"
+    } else {
+        "renamed"
+    };
+    for row in &result.type_agreement {
+        println!(
+            "  ≈ {} — {} → — {} ({})",
+            verb, row.before, row.after, row.reason
+        );
+    }
 }
 
 fn print_move_choice_report(result: &CaptureResult) {

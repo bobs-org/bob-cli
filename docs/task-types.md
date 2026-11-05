@@ -852,8 +852,11 @@ vector sections are the Ledger Tools JS mirror's contract.
 | Gesture | Changes | Bob restores agreement by |
 | --- | --- | --- |
 | Task Card Type stage, Use default, Ctrl+D on Type | the type | relocating the live link (D8) |
-| Task move to another note | the inherited type, if no field | relocating the live link (D8) |
+| Task move to another note | the inherited type, if no field | relocating the live link (D8), then agreeing the source entry |
 | Capture `#<type>` on an existing task | the type | relocating the live link (D8) via the shared applier |
+| Capture unlink, drop, Ensure Next, link into running, dependency drops, consumed links | the entry's links | agreeing each touched entry via the shared applier |
+| `bob task cancel`, `bob task complete` ledger edits | the entry's links | agreeing each touched entry via the shared applier |
+| D8 `MoveTo` source | the entry's links | agreeing the source entry in the same write |
 | Naming or renaming an entry that holds links | the entry's types | retyping its tasks, count previewed (D6) |
 | `bob task reconcile` | today's open entry names | repairing names through the shared applier; never writes task fields |
 
@@ -996,7 +999,8 @@ rule here ever renames, merges, or splits it.
   never had a link stay; labels stay. Single-type entries, MEET, `x0`,
   and a close that points at an existing later entry never rename.
 - **Shedding on move (R7).** When Task Links move out of an open merged
-  Pomodoro, the source sheds by the same rule. When the move empties
+  Pomodoro, the source agrees via the shared applier over its touched
+  entry (the guarded shed as the no-link special case). When the move empties
   the source, the existing delete rule still wins.
 
 ## JSON contract

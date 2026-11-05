@@ -105,6 +105,7 @@ pub(crate) fn link_existing_task(
             routed_landings: Vec::new(),
             template: None,
             template_rows: Vec::new(),
+            type_agreement: Vec::new(),
             staged_jobs: Vec::new(),
             #[cfg(test)]
             catalog_walks: 0,

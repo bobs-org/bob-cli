@@ -52,6 +52,232 @@ pub(crate) trait TaskTypeLookup {
     fn resolve(&mut self, target: &str, block_id: &str) -> TaskResolution;
 }
 
+/// Task-type lookup over an in-memory snapshot with disk fallback.
+///
+/// Staged postimages win; anything absent falls back to the vault on disk.
+/// When the catalog, config, or vault read is unavailable the lookup
+/// resolves everything as unresolved, which blocks drops but never writes.
+pub(crate) struct SnapshotTaskTypeLookup {
+    vault: PathBuf,
+    daily_path: PathBuf,
+    daily_contents: String,
+    staged: std::collections::BTreeMap<PathBuf, String>,
+    catalog: Option<crate::native::pomodoro_themes::Catalog>,
+    config: config::PlanConfig,
+    resolver: HomeResolver<DiskHomeSource>,
+    settings: note_tasks::NoteTaskSettings,
+}
+
+impl SnapshotTaskTypeLookup {
+    pub(crate) fn new(
+        vault: &Path,
+        daily_path: &Path,
+        daily_contents: &str,
+        staged: std::collections::BTreeMap<PathBuf, String>,
+    ) -> Self {
+        let today = daily_path
+            .to_string_lossy()
+            .rsplit('/')
+            .next()
+            .and_then(|file| file.strip_suffix(".md"))
+            .and_then(|stem| {
+                chrono::NaiveDate::parse_from_str(stem, "%Y%m%d").ok()
+            })
+            .unwrap_or_else(|| chrono::Local::now().date_naive());
+        let catalog =
+            crate::native::pomodoro_themes::Catalog::load(vault, today, false)
+                .ok();
+        let config = config::load_plan_config(&config::config_path())
+            .unwrap_or_default();
+        let settings = note_tasks::read_settings(vault);
+        Self {
+            vault: vault.to_path_buf(),
+            daily_path: daily_path.to_path_buf(),
+            daily_contents: daily_contents.to_string(),
+            staged,
+            catalog,
+            config,
+            resolver: HomeResolver::new(DiskHomeSource::new(vault)),
+            settings,
+        }
+    }
+
+    fn file_contents(&self, residence: &Path) -> Option<String> {
+        if residence == self.daily_path {
+            return Some(self.daily_contents.clone());
+        }
+        if let Some(staged) = self.staged.get(residence) {
+            return Some(staged.clone());
+        }
+        // Staged keys may be absolute while residence is vault-relative.
+        let absolute = self.vault.join(residence);
+        if let Some(staged) = self.staged.get(&absolute) {
+            return Some(staged.clone());
+        }
+        std::fs::read_to_string(self.vault.join(residence)).ok()
+    }
+}
+
+impl TaskTypeLookup for SnapshotTaskTypeLookup {
+    fn resolve(&mut self, target: &str, block_id: &str) -> TaskResolution {
+        let Some(catalog) = self.catalog.as_ref() else {
+            return TaskResolution::Unresolved;
+        };
+        let residence: PathBuf = if target.is_empty() {
+            self.daily_path.clone()
+        } else {
+            match self.resolver.resolve_target(&self.daily_path, target) {
+                LinkResolution::Found(path) => path,
+                LinkResolution::Ambiguous => {
+                    return TaskResolution::Ambiguous;
+                }
+                LinkResolution::Missing => {
+                    return TaskResolution::Unresolved;
+                }
+            }
+        };
+        let contents = match self.file_contents(&residence) {
+            Some(contents) => contents,
+            None => return TaskResolution::Unresolved,
+        };
+        let scan = note_tasks::scan(&contents, &self.settings);
+        let found = match scan.by_block_id(block_id) {
+            note_tasks::BlockIdLookup::Found(task) => task,
+            note_tasks::BlockIdLookup::Duplicate(_) => {
+                return TaskResolution::Ambiguous;
+            }
+            note_tasks::BlockIdLookup::NotATask { .. }
+            | note_tasks::BlockIdLookup::Missing => {
+                return TaskResolution::Unresolved;
+            }
+        };
+        let Some(line) = contents.lines().nth(found.line_index) else {
+            return TaskResolution::Unresolved;
+        };
+        let is_open = !is_closed_line(line);
+        let result =
+            crate::native::pomodoro_themes::suggest::suggest_for_task_as_if_open(
+                &mut self.resolver,
+                catalog,
+                &self.config,
+                &residence,
+                line,
+            );
+        let has_repair = result
+            .suggestion
+            .as_ref()
+            .is_some_and(|suggestion| suggestion.repair.is_some());
+        match result.suggestion {
+            None => TaskResolution::Untyped { is_open },
+            Some(suggestion) => TaskResolution::Typed {
+                key: suggestion.theme.key,
+                name: suggestion.theme.name,
+                is_open,
+                has_repair,
+            },
+        }
+    }
+}
+
+/// Short human reason for one agreed rename, e.g. `BUILD has no link`.
+pub(crate) fn agree_reason(added: &[String], removed: &[String]) -> String {
+    match (added, removed) {
+        ([], [single]) => format!("{single} has no link"),
+        ([], many) => format!("{} have no link", many.join(" + ")),
+        ([single], []) => format!("adds {single}"),
+        (many, []) => format!("adds {}", many.join(" + ")),
+        ([add], [remove]) => format!("{remove} → {add}"),
+        _ => format!("-{} +{}", removed.join(" + "), added.join(" + ")),
+    }
+}
+
+/// Open entries whose direct children differ between two day texts.
+///
+/// Identity is the entry header base ([`relocation_apply::rename_entry`]'s
+/// `without_name_tail` remainder) plus the entry name, with an ordinal for
+/// duplicate headers — never the raw line number, so inserted or deleted
+/// entries above never misalign the comparison. A staged entry whose
+/// children differ from its original match is touched. Newly created
+/// entries are skipped: writers create them correctly named, so there is
+/// nothing for agreement to repair.
+pub(crate) fn touched_open_entry_lines(
+    original: &str,
+    staged: &str,
+) -> BTreeSet<usize> {
+    use std::collections::HashMap;
+    let original_children = open_entry_children(original);
+    let staged_children = open_entry_children(staged);
+    let mut by_identity: HashMap<(String, String), Vec<Vec<String>>> =
+        HashMap::new();
+    for (_, base, name, children) in &original_children {
+        by_identity
+            .entry((base.clone(), name.clone()))
+            .or_default()
+            .push(children.clone());
+    }
+    let mut seen: HashMap<(String, String), usize> = HashMap::new();
+    let mut touched = BTreeSet::new();
+    for (line, base, name, children) in &staged_children {
+        let key = (base.clone(), name.clone());
+        let ordinal = seen.entry(key.clone()).or_insert(0);
+        let index = *ordinal;
+        *ordinal += 1;
+        match by_identity.get(&key).and_then(|group| group.get(index)) {
+            Some(before) if before == children => {}
+            Some(_) => {
+                touched.insert(*line);
+            }
+            None => {}
+        }
+    }
+    touched
+}
+
+fn open_entry_children(
+    day_contents: &str,
+) -> Vec<(usize, String, String, Vec<String>)> {
+    let scan = capture_pomodoros::scan(day_contents);
+    if !scan.has_section {
+        return Vec::new();
+    }
+    let spans = line_spans(day_contents);
+    let mut out = Vec::new();
+    for entry in &scan.entries {
+        if entry.state != PomodoroState::Open {
+            continue;
+        }
+        let entry_index = entry.line.saturating_sub(1);
+        let Some(header) = spans.get(entry_index).map(|span| span.text) else {
+            continue;
+        };
+        let base = capture_pomodoros::without_name_tail(header)
+            .trim_end()
+            .to_string();
+        let end = crate::native::capture_task_toggle::child_block_end_line(
+            &spans,
+            entry_index,
+        );
+        let mut children = Vec::new();
+        for line_index in
+            entry_index + 1..=end.min(spans.len().saturating_sub(1))
+        {
+            if nearest_shallower_list_item_parent(&spans, line_index)
+                != Some(entry_index)
+            {
+                continue;
+            }
+            children.push(spans[line_index].text.to_string());
+        }
+        out.push((
+            entry.line,
+            base,
+            entry.name.clone().unwrap_or_default(),
+            children,
+        ));
+    }
+    out
+}
+
 /// Which entries the applier agrees.
 #[derive(Debug, Clone)]
 pub(crate) enum EntrySelector {
@@ -613,5 +839,87 @@ mod tests {
         assert_eq!(out.entries[0].line, 2);
         assert!(out.contents.contains("— BUILD\n  - [[sase#^aaa111]]"));
         assert!(out.contents.contains("— FIX\n  - [[sase#^bbb222]]"));
+    }
+
+    #[test]
+    fn capture_unlink_drops_last_fix_type() {
+        // A capture unlink removes the last FIX link from `— BUILD + FIX`,
+        // leaving only a BUILD live link. Agreement drops FIX so the
+        // writer output is a fixed point.
+        let day =
+            "## Pomodoros\n- [ ] () — BUILD + FIX\n  - [[sase#^build1]]\n";
+        let mut look =
+            lookup(&[(("sase", "build1"), typed("build", "BUILD", true))]);
+        let out = agree_ledger_entries(
+            day,
+            &daily_path(),
+            &EntrySelector::AllOpen,
+            &mut look,
+            &sources(),
+        );
+        assert!(out.changed);
+        assert_eq!(out.entries.len(), 1);
+        assert_eq!(out.entries[0].before, "BUILD + FIX");
+        assert_eq!(out.entries[0].after, "BUILD");
+        assert_eq!(out.entries[0].removed, vec!["fix".to_string()]);
+        let second = agree_ledger_entries(
+            &out.contents,
+            &daily_path(),
+            &EntrySelector::AllOpen,
+            &mut lookup(&[(("sase", "build1"), typed("build", "BUILD", true))]),
+            &sources(),
+        );
+        assert!(!second.changed);
+        assert_eq!(second.contents, out.contents);
+    }
+
+    #[test]
+    fn cancel_prune_drops_last_fix_type() {
+        // `bob task cancel` prunes the FIX link; the surviving BUILD link
+        // no longer supports FIX, so agreement drops it in the same write.
+        let day =
+            "## Pomodoros\n- [ ] () — BUILD + FIX\n  - [[sase#^build1]]\n";
+        let mut look =
+            lookup(&[(("sase", "build1"), typed("build", "BUILD", true))]);
+        let out = agree_ledger_entries(
+            day,
+            &daily_path(),
+            &EntrySelector::AllOpen,
+            &mut look,
+            &sources(),
+        );
+        assert!(out.changed);
+        assert!(out.contents.contains("— BUILD\n"));
+        assert!(!out.contents.contains("— BUILD + FIX"));
+        let second = agree_ledger_entries(
+            &out.contents,
+            &daily_path(),
+            &EntrySelector::AllOpen,
+            &mut lookup(&[(("sase", "build1"), typed("build", "BUILD", true))]),
+            &sources(),
+        );
+        assert!(!second.changed);
+    }
+
+    #[test]
+    fn touched_entries_map_by_identity_not_line_number() {
+        // Inserting an entry above shifts raw line numbers; identity is
+        // the header base plus the ordinal among same-base entries.
+        let before = "## Pomodoros\n- [ ] () — BUILD\n  - [[sase#^aaa111]]\n- [ ] () — FIX\n  - [[sase#^bbb222]]\n";
+        let after = "## Pomodoros\n- [ ] () — LATER\n- [ ] () — BUILD\n  - [[sase#^aaa111]]\n- [ ] () — FIX\n  - [[sase#^bbb222]]\n  - [[sase#^ccc333]]\n";
+        let touched = touched_open_entry_lines(before, after);
+        // Only the FIX entry gained a child; the container insert above
+        // never counts, and the unchanged BUILD entry stays untouched
+        // despite its shifted line number.
+        assert_eq!(touched, BTreeSet::from([5usize]));
+    }
+
+    #[test]
+    fn agree_reason_phrases_removal() {
+        assert_eq!(agree_reason(&[], &["FIX".to_string()]), "FIX has no link");
+        assert_eq!(
+            agree_reason(&["BUILD".to_string()], &["FIX".to_string()]),
+            "FIX → BUILD"
+        );
     }
 }

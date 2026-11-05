@@ -3348,6 +3348,29 @@ text unchanged.
 `--pull-in` was given), `nothing_to_pull_in`, and `pull_note_missing`;
 every other capture failure omits it.
 
+### Pomodoro type agreement
+
+After every other planner runs, the batch agrees each open entry whose
+direct child lines changed (capture unlink and drop, Ensure Next, link
+into running, dependency drops, consumed links, cancel/complete pruning
+and retirement, and every future writer). Entries map by header
+identity, never by raw line number. Type inputs come from the planner's
+staged files; when they are unavailable or incomplete the stage skips
+and never blocks the gesture. Dry run and apply plan identical edits.
+
+The result carries an additive top-level `type_agreement` array, omitted
+when empty, with one row per renamed entry:
+
+```json
+"type_agreement": [{"line": 12, "before": "BUILD + FIX",
+  "after": "BUILD", "added": [], "removed": ["fix"],
+  "reason": "FIX has no link"}]
+```
+
+Human output prints one line per rename after the result
+(`≈ renamed — BUILD + FIX → — BUILD (FIX has no link)`),
+with `would rename` under `--dry-run`.
+
 Every `pomodoro_link_destination` carries a `role` naming how the entry
 was chosen: `current` (the running timed entry), `next_up` (implicitly
 chosen and not running), `named` (an existing entry matched by `#NAME`),

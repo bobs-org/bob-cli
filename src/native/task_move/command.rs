@@ -1144,9 +1144,14 @@ fn compute_move_relocation(
         // Shared D8 applier keeps the live link agreeing with the moved
         // task's new type; capture `#<type>` retypes call the same helper.
         // Types are listed, never budgeted, so the applier never refuses.
+        // The live link must resolve to the moved task's own home: a
+        // same-ID link into another note never matches, and several open
+        // matches are ambiguous and leave the ledger unchanged.
         if let Some((updated, info)) =
-            crate::native::pomodoro_themes::relocation_apply::apply_to_day_contents(
+            crate::native::pomodoro_themes::relocation_apply::apply_to_day_contents_for_task(
                 &day_contents,
+                &day_rel,
+                &mv.source_path,
                 &block_id,
                 &after_key,
                 &after_name,
@@ -1155,6 +1160,32 @@ fn compute_move_relocation(
         {
             day_contents = updated;
             changed = true;
+            // A MoveTo (or CreateBelow) leaves the source with an extra
+            // type: agree the source entry in the same write so the
+            // ledger output is a fixed point of the agreement rule.
+            if matches!(info.outcome, "move_to" | "create_below") {
+                let mut staged =
+                    plan.postimages.clone();
+                staged.insert(day_rel.clone(), day_contents.clone());
+                let mut lookup =
+                    crate::native::pomodoro_themes::agree_apply::SnapshotTaskTypeLookup::new(
+                        vault,
+                        &day_rel,
+                        &day_contents,
+                        staged,
+                    );
+                if let Some(agreed) =
+                    crate::native::pomodoro_themes::relocation_apply::agree_source_entry(
+                        &day_contents,
+                        &day_rel,
+                        info.source_before + 1,
+                        &mut lookup,
+                        &sources,
+                    )
+                {
+                    day_contents = agreed;
+                }
+            }
             relocated.push(RelocatedInfo {
                 route: mv
                     .dest_path

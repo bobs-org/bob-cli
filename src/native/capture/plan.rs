@@ -15,6 +15,7 @@ pub(super) struct PlannedCaptureBatch {
     pub(super) section_blocks: Vec<SectionBlockJson>,
     pub(super) inbox_route: InboxRouteReport,
     pub(super) move_choice: super::move_choice::MoveChoiceReport,
+    pub(super) type_agreement: Vec<TypeAgreementJson>,
     /// Routed tasks' source→destination landings, in move order. The
     /// block trackers and `open_notes` forward entries through these.
     pub(super) routed_landings: Vec<RoutedTaskMove>,
@@ -137,7 +138,7 @@ pub(super) fn plan_capture_batch_with_config_path(
     let day_file = pomodoro::day_file_for(&request.bob_dir);
     let day_relative =
         capture_pomodoros::relative_day_file(&day_file, &request.bob_dir);
-    let mut block_tracker = PomodoroBlockTracker::new(day_relative);
+    let mut block_tracker = PomodoroBlockTracker::new(day_relative.clone());
     let task_settings = note_tasks::read_settings(&request.bob_dir);
     let mut task_tracker = TaskBlockTracker::new(task_settings.clone());
     let mut section_tracker = SectionBlockTracker::new();
@@ -645,6 +646,13 @@ pub(super) fn plan_capture_batch_with_config_path(
         &mut items,
         &mut warnings,
     )?;
+    let type_agreement = apply_type_agreement(
+        &mut planner,
+        &request.bob_dir,
+        &day_file,
+        Path::new(&day_relative),
+        today,
+    );
     let final_day = planner.peek_text(&day_file);
     let successor_reasons = surviving_successor_link_reasons(&items);
     let pomodoro_blocks = block_tracker.finish_with_successor_reasons(
@@ -702,12 +710,107 @@ pub(super) fn plan_capture_batch_with_config_path(
         routed_landings: applied.moves,
         template,
         template_rows,
+        type_agreement,
         staged_jobs,
         #[cfg(test)]
         catalog_walks: dependency_ctx.catalog_walk_count(),
         #[cfg(test)]
         snapshot_read_counts: dependency_ctx.snapshot_read_counts(),
     })
+}
+
+/// Final agreement stage: run the shared applier over every open entry
+/// whose direct children differ between the batch's original daily
+/// snapshot and its staged daily. Entries map by header-base identity,
+/// never by raw line number. Type inputs come from the planner's staged
+/// files; when they are unavailable or incomplete the stage skips and
+/// never blocks the gesture. Dry run and apply plan identical edits.
+fn apply_type_agreement(
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    day_file: &Path,
+    day_relative: &Path,
+    today: NaiveDate,
+) -> Vec<TypeAgreementJson> {
+    let Some((original, staged)) = planner.loaded_texts(day_file) else {
+        return Vec::new();
+    };
+    if original == staged {
+        return Vec::new();
+    }
+    let touched =
+        crate::native::pomodoro_themes::agree_apply::touched_open_entry_lines(
+            &original, &staged,
+        );
+    if touched.is_empty() {
+        return Vec::new();
+    }
+    let catalog = match crate::native::pomodoro_themes::Catalog::load(
+        bob_dir, today, false,
+    ) {
+        Ok(catalog) => catalog,
+        Err(_) => return Vec::new(),
+    };
+    let sources = catalog.theme_sources();
+    let mut staged_map = std::collections::BTreeMap::new();
+    for (path, contents) in planner.staged_snapshot() {
+        let Some(text) = contents else { continue };
+        if let Ok(relative) = path.strip_prefix(bob_dir) {
+            staged_map.insert(relative.to_path_buf(), text.clone());
+        }
+        staged_map.insert(path, text);
+    }
+    let mut lookup =
+        crate::native::pomodoro_themes::agree_apply::SnapshotTaskTypeLookup::new(
+            bob_dir,
+            day_relative,
+            &staged,
+            staged_map,
+        );
+    let outcome =
+        crate::native::pomodoro_themes::agree_apply::agree_ledger_entries(
+            &staged,
+            day_relative,
+            &crate::native::pomodoro_themes::agree_apply::EntrySelector::Lines(
+                touched,
+            ),
+            &mut lookup,
+            &sources,
+        );
+    if !outcome.changed {
+        return Vec::new();
+    }
+    if planner.stage(day_file, outcome.contents.clone()).is_err() {
+        return Vec::new();
+    }
+    outcome
+        .entries
+        .into_iter()
+        .map(|rename| {
+            let added_names: Vec<String> = rename
+                .added
+                .iter()
+                .map(|key| catalog.display_name(key, key))
+                .collect();
+            let removed_names: Vec<String> = rename
+                .removed
+                .iter()
+                .map(|key| catalog.display_name(key, key))
+                .collect();
+            TypeAgreementJson {
+                line: rename.line,
+                before: rename.before,
+                after: rename.after.clone(),
+                reason:
+                    crate::native::pomodoro_themes::agree_apply::agree_reason(
+                        &added_names,
+                        &removed_names,
+                    ),
+                added: rename.added,
+                removed: rename.removed,
+            }
+        })
+        .collect()
 }
 
 /// One reference item's verdict plus the display fields its result
