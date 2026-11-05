@@ -92,6 +92,7 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | `@route+block-id` | Child bullet under an existing task | [`@route+block-id`](#plus-child) |
 | `@route+id @route+id` | Target run | [Target run](#plus-child-target-run) |
 | `@a+x @b+y > @c` / `@a+x @b+y > @c+id` / `@a+x > @c+id#drawer` / `@a+x > @c#section` | Move or merge tasks with `>` | [`>` transfer](#transfer) |
+| `T < @a+x @b+y` | Merge into the new task | [`<` merge-in](#merge-in) |
 | `@route+block-id#drawer` | Child inside a task drawer | [`@route+block-id#drawer`](#plus-child-section) |
 | `- #drawer` with nested notes | First-level drawer bullet | [Drawer bullets](#drawer-bullets) |
 | `@route+block-id` with no other text | Ensure Next and move its Task Link | [Ensure Next](#plus-ensure-next) |
@@ -128,21 +129,20 @@ Contract: [Grammar at a glance](../capture.md#grammar-at-a-glance).
 
 ## Incomplete input versus executable syntax
 
-A picker token is a draft state, not a capture. `bob capture` and
-`bob capture-parse` refuse it with a teaching error until the selection
-becomes a concrete `@route:id`, `!note:id`, `&note:id`, `*note:id`,
+A picker token is draft state. `bob capture` and
+`bob capture-parse` refuse it until the selection
+becomes `@route:id`, `!note:id`, `&note:id`, `*note:id`,
 `~note:id`, `~~note:id`, or
-`@route+id`. Session tokens that still need a number or name (`x~`, `=~`, `x@`,
-`=#`) are the same kind of incomplete input. A bare `=name` start is complete (`=bugs`); an empty `=#` is an editing state needing a non-bare name (`pomodoro_name`).
+`@route+id`. Session tokens needing a number or name (`x~`, `=~`, `x@`,
+`=#`) are incomplete too. A bare `=name` start is complete (`=bugs`); an empty `=#` needs a non-bare name (`pomodoro_name`).
 
-A signed count with extra prose (`+2 more`, `=3 more`) is an error, not a
-task. A sign or `=` followed by prose (`Plan +5`, `= foo`) stays ordinary
-task text. Capital `X` never closes; `X *job:cleanup` is how you capture a
+A signed count with extra prose (`+2 more`, `=3 more`) is an error.
+A sign or `=` followed by prose (`Plan +5`, `= foo`) stays task text. Capital `X` never closes; `X *job:cleanup` is how you capture a
 task that must start with the word `x`.
 
 ## Retired and rejected forms
 
-These are not valid commands. Bob teaches the replacement.
+Bob teaches the replacement.
 
 | Typed | What happens |
 | --- | --- |
@@ -1274,6 +1274,23 @@ bob capture '@mac_inbox+ws-proto > @dev#future-work'
 ```
 
 Contract: [Moving and merging tasks with `>`](../capture.md#moving-and-merging-tasks-with).
+
+### `<` merge-in {#merge-in}
+
+*Status: contract only.*
+
+`T < @a+x @b+y` creates T, then merges each source into it.
+
+```bash
+bob capture 'Some great new task! @foo^great < @foo+f @bar+b'
+```
+
+```text { .no-copy title="Shapes" }
+T < @a+x @b+y   merge sources into the new task T
+T <             pick tasks to merge in (needs `merge_in_source`)
+```
+
+Contract: [Merging tasks into a new task with `<`](../capture.md#merging-tasks-into-a-new-task-with).
 
 ### `@route+block-id#drawer` {#plus-child-section}
 

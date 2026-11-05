@@ -249,3 +249,5 @@
   location: /guides/recover-mac-capture/
 - query: "block-id-focus-claimed"
   location: /guides/recover-mac-capture/
+- query: T < @a+x @b+y
+  location: /reference/capture-syntax/#merge-in

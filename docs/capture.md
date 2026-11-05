@@ -60,6 +60,7 @@ workflow guide.
     - [Offer a new project's tasks](#offer-a-new-projects-tasks)
   - [Sub-bullets under existing tasks](#sub-bullets-under-existing-tasks)
     - [Moving and merging tasks with `>`](#moving-and-merging-tasks-with)
+    - [Merging tasks into a new task with `<`](#merging-tasks-into-a-new-task-with)
   - [Task Link toggle](#task-link-toggle)
   - [Pomodoro notes](#pomodoro-notes)
   - [Section bullets](#section-bullets)
@@ -169,6 +170,8 @@ anything is written, and any failure rolls the whole batch back.
 | `@route+block-id` with no other text | Ensure the task is Next and relocate its existing open-Pomodoro Task Link to the Pomodoro the task's type places; a task Blocked only by its own prerequisites drops them first |
 | `@route+block-id #<type>` with no other text | Retype that existing task, then Ensure Next and relocate its existing Task Link in today's open Pomodoros; refuses if no link exists |
 | `@route+block-id!` with no other text | Toggle that task's Pomodoro Task Link: link it when unlinked (Ready and own-prerequisite Blocked rise to Next; other Blocked stay unlinked) or unlink it when linked (lane unchanged) |
+| `T < @a+x [@b+y …]` | Create task T, then merge each listed task into it through the explicit merge engine (see [Merging tasks into a new task with `<`](#merging-tasks-into-a-new-task-with)) |
+| `T <` / `T < @r` / `T < @r+` / `T < +q` | Incomplete merge-in: pick tasks to merge in (`capture-parse` needs `merge_in_source`); `bob capture` refuses until the picker resolves |
 | `%n` | Plain-text note on a Pomodoro; `%n` does not open task-type completion |
 | `s:<N>` | `[scheduled::]` N days from today; checkbox-bearing captures start Blocked (`[?]`) |
 | `$` / `$<N>` | Write priority level N (bare `$` = 1) and roll a scheduled date in that level's window |
@@ -6462,7 +6465,9 @@ in the batch-level `task_blocks` array; see
 Move or merge whole tasks without retyping them. A transfer line names one or
 more complete `@route+id` sources, a standalone `>` arrow, and one
 destination. Always quote the draft so the shell keeps the `>`: an unquoted
-`bob capture @a+x > @c` is a shell redirect, and bob sees only `@a+x`.
+`bob capture @a+x > @c` is a shell redirect, and bob sees only `@a+x`. To
+fold existing tasks into the task a line creates, use `<` instead; see
+[Merging tasks into a new task with `<`](#merging-tasks-into-a-new-task-with).
 
 ```bash
 bob capture '@inbox+bench @work+pgdump > @db'
@@ -6560,6 +6565,155 @@ When stdout is a regular file whose basename starts with `@`, capture refuses
 before planning with `shell_ate_transfer_arrow`: `your shell ate “>”: quote
 the draft (bob capture '@a+x > @c') and delete the empty file “@c”`. Pipes,
 TTYs, and the Mac panel are unaffected.
+
+#### Merging tasks into a new task with `<`
+
+*Status: contract only.*
+
+`T < @a+x @b+y` creates one open task T exactly as its left side says, then
+runs the existing explicit task merge of `S₁ … Sₙ` into T, in typed order,
+inside the same all-or-nothing capture. It is the complement of
+[Moving and merging tasks with `>`](#moving-and-merging-tasks-with): `>`
+folds sources into an existing task, drawer, or section, while `<` folds
+them into the task this line creates. The label is the first configured
+`relations.merge_labels` entry, falling back to `merged into`; an empty
+`merge_labels` list never disables `<`. T owns its fields: nothing is
+inherited from sources (status, type, priority, schedule, prerequisites);
+lost prerequisites are warned as `prerequisites_left`. Equivalence:
+`T @n^t < @a+x @b+y` writes the same vault bytes as the two-item draft
+`T @n^t` plus `@a+x @b+y > @n+t`. A bad source, a refusal, or a later
+failing item in a bulk draft leaves no T and no retired source.
+`--dry-run` equals the commit except `dry_run`, and `bob task reconcile`
+afterwards is a no-op. T gets a block ID automatically when none is typed
+(existing minting), shown in the preview; a dry run persists nothing. T's
+route is never inferred from the sources.
+
+A standalone arrow is a token that is exactly `<` with whitespace on both
+sides. Scanning left to right, the first standalone `<` whose following
+token is claimable claims the line. Claimable means: nothing (terminal
+`<`), a source-like token (`@…` containing `+`, `:`, or `^`), a bare route
+`@route`, or a `+`/`+query` parent-task selector. Anything else (a word,
+number, or operator) leaves that `<` as prose and the scan continues. After
+the first source token, every following token must be a complete source,
+except that the final token may be a partial (`+query`, `@route`,
+`@route+`); anything else is `merge_in_extra_text`. Glued spacing errors
+are claimed only when the glued `<` touches a source-like token, so `<=`,
+`=>`, and autolinks stay prose.
+
+| Draft | Result |
+| --- | --- |
+| `New outcome @foo^great < @foo+f @bar+b` | Valid: create one task, merge two sources in typed order |
+| `New outcome < @foo+f` | Valid: T routes normally (inbox) and gets a minted ID |
+| `New outcome @foo^great <` | Incomplete (`merge_in_source`): calm hint “type + to pick tasks to merge in”; submit refused with `incomplete_merge_in` |
+| `New outcome < +fla`, `< +`, `< @foo+`, `< @foo+f @bar+` | Incomplete: vault or note-scoped picker; complete sources stay listed |
+| `New outcome < @foo` | Incomplete: a note is never a source; type `+` to pick a task from it |
+| `New outcome < @foo:f`, `< @foo^f`, `< @foo+f#d`, `< @foo+f!` | Invalid: reused transfer source marker/suffix codes |
+| `New outcome < @foo+f @foo+f` | Invalid: `duplicate_capture_target` on the second occurrence |
+| `New outcome < @foo+f s:3`, a second `<` | Invalid `merge_in_extra_text`; rewrite moves the extra tokens before `<` (a stray `<` is dropped) |
+| `text<@a+x`, `text <@a+x`, `text< @a+x` | Invalid `merge_in_arrow_spacing`; rewrite adds the spaces |
+| `@foo+t < @bar+b` | Invalid `merge_in_needs_new_task`; rewrite to `@bar+b > @foo+t` |
+| `< @a+x` (nothing before the arrow) | Invalid `merge_in_needs_new_task`: “name the new task before <” |
+| `Latency < 50ms`, `a < b`, `<=`, `<<`, `<https://…>`, `` `a < @b+x` `` | Unclaimed: unchanged prose |
+| `Escaped \< @foo+f @work` | Escaped: the backslash is dropped and everything from `<` to the end of the parent line stays literal task text |
+
+Escape: `\<` at the arrow position escapes the whole clause. Everything
+before it parses exactly as it would alone; everything from `<` to the end
+of the parent line stays literal, so nothing after it routes or fans out.
+`Escaped \< @foo+f @work` creates the inbox task `Escaped < @foo+f @work`.
+
+The left side is parsed as an ordinary item from a masked view of the draft
+(the clause bytes from the arrow to the end of the parent line replaced by
+spaces, so every byte offset is preserved). The clause is valid only when
+that left parse yields exactly one item that creates one task still open at
+commit:
+
+| Left side | `<` |
+| --- | --- |
+| Plain text, `@route` text, `@@`-inherited route, `@route^id` text, `%c` clip, `%t` row as expanded | Valid (`task` / `task with block ID`) |
+| `text @route:id` (Pomodoro-linked new task) | Valid (`pomodoro_task` with no start and no close; the merge offer is then suppressed) |
+| First-level bullets under a lone `@route` task-list header | Valid per bullet (unlike `>`, which refuses there with `list_bullet_marker`) |
+| T with authored child bullets or drawers, `&`, `*`, `~`, `s:N`, `$N`, `#type` | Valid; T's authored notes land first, merged groups after |
+| `:id=` start or `=x` born closed | Refused `merge_in_needs_new_task`: “the new task must stay open to take in other tasks; start or close it in a later item” |
+| Project-note creation `@r^id@` / `@r:id@` and its bullets | Refused `merge_in_needs_new_task`: “a new project keeps tasks as tasks: list them as - ^id bullets to move them in” |
+| Existing-task lines (`@c+id` toggles, sub-bullets, target runs, dependency-only items) | Refused `merge_in_needs_new_task`, plus the `>` rewrite when the left is exactly one valid `>` destination token |
+| Note/section bullets, URLs/refs, Pomodoro operators, everything else | Refused `merge_in_needs_new_task`: “this line creates no task” |
+
+The `>` rewrite applies whenever the whole left side is one token the
+destination parser accepts (`@c`, `@c+id`, `@c+id#drawer`, `@c#section`):
+`@foo+t < @a+x @b+y` rewrites to `@a+x @b+y > @foo+t`, and `@db < @a+x`
+rewrites to `@a+x > @db`.
+
+Bob authors every refusal string. Each refusal carries the item number and
+the offending UTF-8 byte span.
+
+| Code | When | Copy |
+| --- | --- | --- |
+| `merge_in_needs_new_task` | Left names an existing task, creates no task, is empty, starts/closes a session, or creates a project | “< merges into the task this line creates” plus the context-table copy above |
+| `merge_in_extra_text` | Tokens after the sources, or a second `<` | “everything about the new task goes before <; only @note+id tasks follow it” |
+| `merge_in_arrow_spacing` | Glued arrow next to a source | “put spaces around <: New task < @a+x” |
+| `incomplete_merge_in` | Submit with a terminal `<`, a bare `@route`, or an unresolved picker | “pick tasks to merge in after <, or write \< to keep it” |
+| `merge_in_source_also_marked` | `&`/`*`/`~`/`~~` on the item names a source, or the item carries any merge-label `~~` | “that source merges into the new task; it can't also be its prerequisite/dependent/relation” |
+| `merge_in_unavailable` | Transitional only (grammar phase to execute phase) | “merging into a new task with < needs a newer bob” |
+| reused | `transfer_source_suffix`, `transfer_source_marker`, `duplicate_capture_target`, `transfer_overlapping_sources`, `merge_source_closed`, `merge_source_recurring`, `merge_source_project`, `merge_source_open_subtasks`, `merge_dependency_cycle` | Unchanged, except `merge_source_closed` names an existing merge |
+
+Structured rewrites: `capture-parse` diagnostics gain one additive,
+optional key, omitted when absent:
+`"rewrite": {"start": N, "end": M, "replacement": "…", "label": "…"}` — a
+half-open UTF-8 byte range in the exact draft, Bob's replacement text, and
+Bob's button label. This is emitted for `merge_in_needs_new_task` (label
+`Use >`, only for the one-destination-token case),
+`merge_in_extra_text` (label `Move before <`), and
+`merge_in_arrow_spacing` (label `Add spaces`). Clients apply it only as an
+explicit draft edit; Return never changes it.
+
+Editor contracts: `capture-parse` keeps the item's own `task` /
+`pomodoro_task` mode whenever the clause is valid or pending. A pending
+clause adds need `merge_in_source` plus the usual
+`interactive_placeholder` span on the partial token and no error
+diagnostic. New span kinds are `merge_in_arrow` and `merge_in_source`
+(one span per whole source token; `transfer_*` spans are never reused).
+One additive item object appears only when the line has a clause, with
+`arrow: {start, end}` and `sources[]: {start, end, marker, route,
+block_id}`. Grammar stays 14 in this contract; `schema_version` stays 1.
+`capture-complete` in a `<` source slot opens the vault-wide `task_parent`
+picker in a new merge-in source role (`< +` / `< +query`), or the
+note-scoped task context for `< @route+`; `< @` completes routes. Rows are
+mergeable only, excluding already-typed sources and aliases. ID-less
+mergeable rows stay, with `requires_block_id: true` and their `route`, so
+the existing Add block ID flow returns `parent_replacement`
+(`@route+id`). Accepted rows return `continuation: " +"` so `,` opens the
+next picker. Each row carries Bob-authored detail `⤵ merge in · 2 notes`
+(`· title only` when no notes would move). `capture-rewrite` in a `<`
+source slot switches `+` typed right after `@route:id` or `@route^id` to
+`@route+id`, exactly as on a `>` line; `:`/`^` after a source `+id` stays
+literal. `capture-related` lists every task named in the item's `<` clause
+under `linked` with `link: "merge_in"` and never in `matches`; the
+similarity query uses the left side's body only; `marker_at` sits before
+the arrow.
+
+JSON and human output: a `<` item keeps `kind: "task"` /
+`"pomodoro_task"` and gains the existing flattened `merges[]`,
+`merge_offers`, and `repaired_files[]`; offers join the draft-level
+`pull_in` and its numbering. `merges[].target.created` means “the
+container did not exist before this capture”: a created drawer or section,
+or a task created by this item or an earlier item of the same draft.
+`task_blocks`: T appears with roles `["merge_target"]` and `created:
+true`; each source appears with `merge_source`. New additive `origin` on
+`task_blocks[].lines[]` rows names the source identity
+`"<relative_path>#^<block_id>"` on every row a merge in this capture
+landed under its target (also for `>` merges); omitted elsewhere. New
+additive `merge_in_pending` on dry-run JSON failures whose code is
+`incomplete_merge_in` mirrors `transfer_pending` (`item`, `need`, and
+`sources[]` with resolved `path`, `line`, `title`, status, mergeability,
+or `error: {code, message}`). Human output prints the merge block whenever
+`merges[]` is non-empty; for a capture-born target the header reads
+`⤵ Merged 2 tasks into new “T” · foo.md` (`⤵ Would merge … into new “T”`
+on dry run).
+
+Shell guard: when draft arguments are present and stdin is a regular file
+whose basename starts with `@`, capture refuses with
+`shell_ate_merge_in_arrow`: “your shell ate “<”: quote the draft (bob
+capture 'New task < @a+x')”. Pipes, TTYs, and the Mac panel are unaffected.
 
 ### Task Link toggle
 
@@ -7494,10 +7648,11 @@ Field rules:
   final state, with the same meanings as the per-item `parent_text`,
   `parent_status_symbol`, and `parent_status_name`.
 - `created` is true only when the parent task did not exist before the
-  batch. This happens when an earlier item in the same draft created it,
-  as in `Task @sase^new` followed by `note @sase+new`. A created block's
-  lines are all `added`. A transferred task keeps `created: false`; its
-  source before-image is used even when the destination note never held it.
+  batch. This happens when this item or an earlier item in the same draft
+  created it, as in `Task @sase^new` followed by `note @sase+new`, and for
+  every `<` merge-in target (contract-only). A created block's lines are
+  all `added`. A `>` transferred task keeps `created: false`; its source
+  before-image is used even when the destination note never held it.
 - `moved_from` appears on moved tasks as `{relative_target, line}`, naming
   the source note and 1-based source line before the move.
 - `roles` is informational and deduplicated: `"sub_bullet"` for captured
@@ -7520,6 +7675,15 @@ Field rules:
   draft also rewrites the parent's task line (for example, a task toggle
   of the same task), the task line shows as `changed` with its `before`
   text.
+- Additive `origin` (contract-only): on every row a merge in this capture
+  landed under its target, `lines[]` rows carry
+  `origin: "<relative_path>#^<block_id>"` matching `merges[].source`;
+  omitted on every other row. Applies to `>` and `<` merges alike.
+- Additive `merge_in_pending` (contract-only): on dry-run JSON failures
+  whose code is `incomplete_merge_in`, the failure envelope also carries
+  `merge_in_pending: {item, need, sources[]}`, mirroring
+  `transfer_pending`. See
+  [Merging tasks into a new task with `<`](#merging-tasks-into-a-new-task-with).
 - Dry-run JSON equals real-run JSON except for `dry_run`. Human output
   does not change. Per-item `parent_*` fields stay as they are.
 
@@ -7782,7 +7946,13 @@ target runs. Grammar 10 adds `>` transfer lines: a complete transfer reports
 mode `task_move` or `task_merge` with the `transfer` object and the
 `transfer_source`, `transfer_arrow`, and `transfer_destination` spans, and the
 legacy `route`/`block_id` fields describe the destination (see [Moving and
-merging tasks with `>`](#moving-and-merging-tasks-with)). `targets` is present only for two or more selected members and
+merging tasks with `>`](#moving-and-merging-tasks-with)). A `<` merge-in
+clause is contract-only and keeps the item's own `task` / `pomodoro_task`
+mode, with an additive `merge_in` object (`arrow`, `sources[]`), new
+`merge_in_arrow` / `merge_in_source` spans, need `merge_in_source` on
+pending clauses, and an additive `rewrite` diagnostic key; see
+[Merging tasks into a new task with `<`](#merging-tasks-into-a-new-task-with).
+`targets` is present only for two or more selected members and
 contains `[{start, end, marker, mode, route, block_id, section}, ...]` with
 absolute UTF-8 byte ranges. The legacy `mode`, `route`, `section`, and
 `block_id` describe the first member; `needs` is the ordered union of member
@@ -8365,7 +8535,9 @@ otherwise suppress. It is invalid in draft mode; no file is edited.
 - `mode`: its task-creating capture mode;
 - `range`: the item's half-open UTF-8 byte range in the original draft;
 - `marker_at`: the UTF-8 byte offset where an action marker can be inserted
-  on the parent line before a trailing Pomodoro suffix;
+  on the parent line before a trailing Pomodoro suffix (for a `<` clause,
+  contract-only, it sits before the arrow so verified splices land on the
+  left side and stay valid);
 - `route_range`: the item's own destination-token range, omitted when absent;
 - `discard_range`: the item and one adjacent blank-line separator. Ordinary
   items with authored children omit it; task-list items always get one for
@@ -8373,7 +8545,9 @@ otherwise suppress. It is invalid in draft mode; no file is edited.
   discard removes the whole list safely;
 - `matches`: ranked candidate rows;
 - `linked`: resolved candidate keys already referenced by this item, with
-  `link` set to `relation`, `dependency`, `blocked_task`, or `parent`.
+  `link` set to `relation`, `dependency`, `blocked_task`, `parent`, or
+  `merge_in` (contract-only: every task named in the item's `<` clause;
+  never in `matches`; the similarity query uses the left side's body only).
 
 Every range is half-open and indexes UTF-8 bytes in the exact draft passed to
 Bob. `marker_at` and ranges are splice anchors for that draft only; clients
@@ -8458,7 +8632,11 @@ or to `@route^block-id` with `^`. On a `>` transfer line, `+` after
 `@route:id` or `@route^id` in a source or destination slot switches to
 `@route+id` (`@inbox:bench+ > @db` becomes `@inbox+bench > @db`, and
 `@a+x > @c:tid+` becomes `@a+x > @c+tid`); `:` or `^` after a transfer
-`+id` stays literal, since it would break the transfer. A sealed
+`+id` stays literal, since it would break the transfer. In a `<` source
+slot (contract-only), `+` after `@route:id` or `@route^id` switches to
+`@route+id` exactly as on a `>` line; see
+[Merging tasks into a new task with `<`](#merging-tasks-into-a-new-task-with).
+A sealed
 project-note marker toggles
 between its two forms instead: `:` typed right after `@route^block-id@` gives
 `@route:block-id@` (create becomes offer), and `^` after `@route:block-id@`
@@ -8672,6 +8850,16 @@ prints a dim `no rewrite` line plus the notices.
 ```bash
 bob capture-complete --cursor BYTE [-a|--all-tasks] [-b|--bob-dir DIR] [-f|--format human|json] [--] [TEXT]...
 ```
+
+In a `<` source slot (contract-only), `< +` / `< +query` opens the
+vault-wide `task_parent` picker in a new merge-in source role and
+`< @route+` uses the note-scoped task context; `< @` completes routes.
+Rows are mergeable only (open, not `^prj`, not recurring, no open
+subtasks), excluding already-typed sources and aliases. ID-less mergeable
+rows stay, with `requires_block_id: true` and their `route`, and accepted
+rows return `continuation: " +"`; each row carries Bob-authored detail
+`⤵ merge in · 2 notes`. See
+[Merging tasks into a new task with `<`](#merging-tasks-into-a-new-task-with).
 
 Returns cursor-aware completion candidates for in-progress capture `TEXT`. It
 shares the phase-grammar tokenizer and `@token` classification with

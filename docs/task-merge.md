@@ -4,10 +4,15 @@ Merging folds one or more source tasks into a destination-shaped container:
 another task, one of its drawers, or a note's H2 section. The destination
 decides the shape: a bare note holds tasks, so `>` to a bare note moves them
 (see [Move open tasks between notes](task-move.md)); `>` to a task, drawer,
-or section merges the sources into it. Split is the inverse: it turns notes
-back into tasks (see [Split bullets out into tasks](task-split.md)). Merge
-labels committed through capture `~` / `~~` or the Obsidian Links stage run
-this same engine (see [Task relations](task-relations.md#21-merge-labels)).
+or section merges the sources into it. Capture `<` merges sources into the
+task its own line creates (see
+[Capture](../capture.md#merging-tasks-into-a-new-task-with)). Split is the
+inverse: it turns notes back into tasks (see [Split bullets out into
+tasks](task-split.md)). Merge labels committed through capture `~` / `~~`
+or the Obsidian Links stage run this same engine (see [Task
+relations](task-relations.md#21-merge-labels)).
+
+*Status: contract only for `<` merge-in.*
 
 This file is the contract every implementation cites. The pure planner is
 `plan_task_merge` in `src/native/task_merge/`; capture `>` transfer lines,
@@ -159,8 +164,8 @@ write-plan ranking.
 ## 8. Merge labels (summary)
 
 Configurable merge labels live in `relations.merge_labels` (default `[]`;
-the `>` and `bob task merge` gestures always write the first configured
-label, falling back to `merged into`). Committing a merge label through
+the `>`, `<` (contract-only), and `bob task merge` gestures always write
+the first configured label, falling back to `merged into`). Committing a merge label through
 capture `~` / `~~` or the Links stage merges the source into the target at
 commit time. The one-effect-per-label overlap rule spans all four lists;
 a key in more than one list is dropped from all of them with a warning.
@@ -208,8 +213,11 @@ bob task merge [OPTIONS] -i <TASK|NOTE> [-D TITLE | -s TITLE] <TASK>...
     - `source{path, block_id, line, title}`;
     - `target{path, block_id?, title?, drawer?, section?, kind, line?, created, status_symbol?, status_name?}`;
       `line` is the 1-based post-merge line, `created` is true when the merge
-      created the drawer or section, and `status_symbol`/`status_name` report
-      the target's final status for `task` and `drawer` kinds;
+      created the drawer or section, or when the container is a task created
+      by this item or an earlier item of the same draft (so the two-item `>`
+      equivalent reports it too; contract-only for `<`), and
+      `status_symbol`/`status_name` report the target's final status for
+      `task` and `drawer` kinds;
     - `label`, `outcome` (`merged`, `unchanged`, or `already_closed`),
       `previous_status`, `previous_status_name`, `status_symbol`, `status_name`
       (the source's status after the merge: `-`, Cancelled, using the vault's names);
@@ -242,10 +250,13 @@ The `contract` phase records this table here and in
 use these strings verbatim. Bob authors `message`/`detail` fields, and
 clients render them.
 
+*Status: contract only for the `<` rows below.*
+
 | Key | Text |
 | --- | --- |
 | merge header | `⤵ Merged N task(s) into “T” · c.md[ › CONTAINER]` / `Would merge …` |
-| source row | `⊘ S  path:line · Prev → Cancelled · N notes moved` (or `· title only`) |
+| merge header (new target) | `⤵ Merged N tasks into new “T” · c.md` / `⤵ Would merge N tasks into new “T” · c.md` |
+| source row | `⊘ S  path:line · Prev → Cancelled · N notes moved` (or `· title only`; singular `1 note moved`) |
 | dependent row | `⛓ “D” now waits on “T”` (from `consequences[]`, titles never keys) |
 | prune/offer row | `◌ ENTRY link removed  offer N: link “T” under ENTRY` |
 | link leaves row | `“S” leaves ENTRY` (one per open Pomodoro entry that lost S's link) |
@@ -260,6 +271,14 @@ clients render them.
 | merge_source_open_subtasks | `“S” has N open subtasks; move or close ^sub first` |
 | merge_dependency_cycle | `“D” would wait on “T”, which already waits on it` |
 | merge_target_inside_source | `^t is nested under ^s; merge ^s elsewhere or move ^t out first` |
+| merge_source_closed | `“S” is already merged into “T” (foo.md)` (names the existing merge target) |
+| merge_in_needs_new_task | `“< merges into the task this line creates”` plus the context-table copy |
+| merge_in_extra_text | `“everything about the new task goes before <; only @note+id tasks follow it”` |
+| merge_in_arrow_spacing | `“put spaces around <: New task < @a+x”` |
+| incomplete_merge_in | `“pick tasks to merge in after <, or write \< to keep it”` |
+| merge_in_source_also_marked | `“S merges into the new task; it can't also be its prerequisite / dependent / relation”` |
+| merge_in_unavailable | `“merging into a new task with < needs a newer bob”` |
+| shell_ate_merge_in_arrow | `your shell ate “<”: quote the draft (bob capture 'New task < @a+x')` |
 | transfer_extra_text | `a > line takes one destination and nothing else; put notes in a separate @c+id item` |
 | transfer_source_suffix | `sources are whole tasks; drop #drawer from @a+x` |
 | transfer_arrow_spacing | `put spaces around >: @a+x > @c` |
@@ -349,3 +368,31 @@ The current test names for those vectors are:
 
 The JSON wire shape is pinned by
 `merge_record_and_offer_json_use_snake_case_and_omit_absent_fields`.
+
+## 13. MI vector index
+
+*Status: contract only.*
+
+Each MI row names the preimage, the `<` gesture, and the byte-exact
+postimage expectation. Test names are filled in by the implementing phases.
+
+| ID | Covers | Phase |
+| --- | --- | --- |
+| MI1 | `T @n^t < @a+x`: T created; x's title bullet and notes land under T; x is `[-]` with `merged into [[n#^t]]`; T has LINKED FROM | execute |
+| MI2 | Several sources keep typed order after T's authored children and drawers | execute |
+| MI3 | Equivalence: `<` item identical to two-item `>` draft, vault bytes identical | execute |
+| MI4 | Same-note T and source stage one postimage; same-note descendant-anchor collisions | execute |
+| MI5 | Dependents re-point to T; a cycle through T's own `&` refuses; shared dependents counted once | execute |
+| MI6 | Closed, recurring, `^prj`, open-subtask, duplicate, alias, overlapping, and missing sources refuse; vault byte-identical | execute |
+| MI7 | Every context-table refusal row with its code; `@n+t < @a+x` and `@db < @a+x` carry the `>` rewrite | grammar |
+| MI8 | Lexical: prose `<`, `<=`, `<<`, autolinks, code, glued (rewrite), `\<` whole-clause escape, terminal `<`, `< +q`, `< @r`, `< @r+`, extra text (rewrite), second `<`, Unicode and multi-line spans, editor/execution agreement | grammar |
+| MI9 | Offers: plain T offered at the earliest vacated slot; `:id` T gets no offer; `s:N`/`&` T gets no offer while the prune lands | execute |
+| MI10 | `merge_labels: []` still merges and writes `merged into` | execute |
+| MI11 | Re-submit: explicit-ID collision refuses; auto-ID retry refuses with “already merged into …”; zero writes | execute |
+| MI12 | Atomicity: a bad second source or later bulk item leaves no T and no retired source; guarded-write rollback | execute |
+| MI13 | Task-list header with `- T < @a+x` bullets works per bullet | grammar (parse), execute (write) |
+| MI14 | `&`/`*`/`~`/merge-label `~~` naming a source, or any merge-label `~~`, refuses `merge_in_source_also_marked` | grammar, execute |
+| MI15 | ID-less T mints an ID; dry run persists nothing; preview and `merges[]` show it | execute |
+| MI16 | Dry run identical to commit under a fixed clock and snapshot; `bob task reconcile` is a no-op afterwards | execute |
+| MI17 | JSON: kind stays `task`; `target.created: true`; task-block roles and `origin`; `merge_in_pending` | execute |
+| MI18 | Pickers: merge-only rows, ID-less rows, exclusions, continuation, `+` toggle, capture-related exclusion and `marker_at` | assist |
