@@ -1212,6 +1212,20 @@ content beneath the new task or bullet:
   `bob capture research links %c3` captures three values. `%c1` is
   equivalent to `%c`.
 
+Counted history comes from one clipboard manager, newest first, in the
+manager's own most-recently-used order — matching what its viewer shows —
+never "the last N copy keystrokes". On macOS `auto` reads Alfred's
+clipboard history, falling back to Clipy when Alfred's store is absent;
+both stores open read-only. Which source `%c<N>` reads is selected by
+`capture.clipboard_history` in the config file: `auto` (the default),
+`alfred`, `clipy`, `command` (which reads
+`capture.clipboard_history_command`, a non-empty list of argv strings with
+the same newest-first JSON-array contract as `BOB_CLIPBOARD_HISTORY_CMD`),
+or `off` (which refuses `%c<N>` while `%c` keeps working). A non-blank
+`BOB_CLIPBOARD_HISTORY_CMD` still overrides every config value. An invalid
+value refuses the counted capture with a config error instead of falling
+back silently.
+
 The marker composes with `s:<N>`, `$<N>`, `#<type>`, ordinary routes, bullet
 routes, ID-only task routes, and Pomodoro routes in either terminal order. A
 counted capture requires every requested entry to read, normalize, classify,

@@ -17,7 +17,10 @@ pub(crate) mod relations;
 pub(crate) mod stats;
 pub(crate) mod themes;
 
-pub(crate) use capture::{load_capture_config, DEFAULT_MAX_SAVED_TEMPLATES};
+pub(crate) use capture::{
+    load_capture_config, load_clipboard_history_config, ClipboardHistoryConfig,
+    ClipboardHistorySetting, DEFAULT_MAX_SAVED_TEMPLATES,
+};
 pub(crate) use day_timezone::load_day_timezone;
 pub(crate) use dependencies::load_dependencies_config;
 pub(crate) use freshness::{load_freshness_config, FreshnessConfig};

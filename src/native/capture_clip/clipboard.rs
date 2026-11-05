@@ -3,9 +3,8 @@ use std::{
     process::{Command, Output},
 };
 
-#[cfg(target_os = "macos")]
-use super::clipy::read_clipy_history;
-use crate::native::env as bob_env;
+use super::history::{select_history_providers, EntryKind, HistoryEntry};
+use crate::native::{config, env as bob_env};
 
 pub(crate) fn read_clipboard() -> Result<String, String> {
     let output = clipboard_command_output()?;
@@ -20,16 +19,43 @@ pub(crate) fn read_clipboard_history(
         return Ok(vec![current]);
     }
 
-    let candidates = read_history_candidates(count)?
+    // Interim wiring until the agreement check replaces the merge: read
+    // `count` entries from the first selected candidate and keep today's
+    // lag-tolerant merge. A non-text entry at a used position maps to the
+    // indexed file-or-image error.
+    let candidates = read_history_entries(count)?
         .into_iter()
         .enumerate()
-        .map(|(index, value)| {
-            normalize_clipboard_output(value.into_bytes()).map_err(|error| {
-                format!("clipboard history entry {}: {error}", index + 1)
+        .map(|(index, entry)| {
+            let entry_number = index + 1;
+            history_entry_text(entry, entry_number).and_then(|value| {
+                normalize_clipboard_output(value.into_bytes()).map_err(
+                    |error| {
+                        format!(
+                            "clipboard history entry {entry_number}: {error}"
+                        )
+                    },
+                )
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
     merge_history_candidates(current, candidates, count)
+}
+
+fn history_entry_text(
+    entry: HistoryEntry,
+    entry_number: usize,
+) -> Result<String, String> {
+    match entry.kind {
+        EntryKind::Text => entry.text.ok_or_else(|| {
+            format!(
+                "clipboard history entry {entry_number} has no stored text"
+            )
+        }),
+        EntryKind::NotText(detail) => Err(format!(
+            "clipboard history entry {entry_number} is a file or image ({detail}); counted capture supports text history"
+        )),
+    }
 }
 
 pub(super) fn merge_history_candidates(
@@ -54,47 +80,31 @@ pub(super) fn merge_history_candidates(
     Ok(values)
 }
 
-fn read_history_candidates(count: usize) -> Result<Vec<String>, String> {
-    if let Some(command) = bob_env::var("BOB_CLIPBOARD_HISTORY_CMD")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-    {
-        return read_history_command(&command, count);
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let database = bob_env::home_dir()
-            .join("Library/Application Support/com.clipy-app.Clipy/sqlite.db");
-        read_clipy_history(&database, count)
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    Err("clipboard history is unavailable on this platform; set \
-BOB_CLIPBOARD_HISTORY_CMD to a command that accepts the requested count and \
-prints a newest-first JSON array of clipboard strings"
-        .to_string())
-}
-
-fn read_history_command(
-    command: &str,
-    count: usize,
-) -> Result<Vec<String>, String> {
-    let parts = command.split_whitespace().collect::<Vec<_>>();
-    let (program, args) = parts.split_first().ok_or_else(|| {
-        "BOB_CLIPBOARD_HISTORY_CMD must name a command".to_string()
-    })?;
-    let output = Command::new(program)
-        .args(args)
-        .arg(count.to_string())
-        .output()
-        .map_err(|error| format!("run BOB_CLIPBOARD_HISTORY_CMD: {error}"))?;
-    let output = require_success(output, "BOB_CLIPBOARD_HISTORY_CMD")?;
-    serde_json::from_slice::<Vec<String>>(&output.stdout).map_err(|error| {
-        format!(
-            "BOB_CLIPBOARD_HISTORY_CMD must print a UTF-8 JSON array of strings ordered newest first: {error}"
-        )
-    })
+fn read_history_entries(count: usize) -> Result<Vec<HistoryEntry>, String> {
+    let history: config::ClipboardHistoryConfig =
+        config::load_clipboard_history_config(&config::config_path()).map_err(
+            |error| match error {
+                config::ConfigError::Read(message)
+                | config::ConfigError::Invalid(message) => message,
+            },
+        )?;
+    let env_command = bob_env::var("BOB_CLIPBOARD_HISTORY_CMD").ok();
+    let (candidates, _) = select_history_providers(
+        env_command.as_deref(),
+        &history.setting,
+        &history.command,
+        cfg!(target_os = "macos"),
+        &bob_env::home_dir(),
+    )?;
+    // The agreement phase polls every candidate; this interim wiring reads
+    // the first one and keeps today's merge.
+    let mut candidates = candidates.into_iter();
+    let Some(provider) = candidates.next() else {
+        return Err("no clipboard history provider is available".to_string());
+    };
+    provider
+        .read(count)
+        .map_err(|error| error.message().to_string())
 }
 
 fn clipboard_command_output() -> Result<Output, String> {

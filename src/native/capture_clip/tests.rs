@@ -8,12 +8,14 @@ use chrono::NaiveDateTime;
 use rusqlite::Connection;
 
 use super::{
+    alfred::read_alfred_history,
     clipboard::{merge_history_candidates, normalize_clipboard_output},
     clipy::read_clipy_history,
     files::{
         classify_path_candidate, percent_decode, sanitize_file_name,
         sha256_hex, snippet_slug, PathState,
     },
+    history::{EntryKind, HistoryEntry, ProviderError},
     persist::TEMP_COUNTER,
     plan::{
         is_structural_line, MAX_ATTACHMENT_COUNT, MAX_INLINE_CHARACTERS,
@@ -128,22 +130,25 @@ fn reads_clipy_sqlite_assets_in_deterministic_order() {
             ("older", 1_i64),
         )
         .expect("older history");
-    connection
-        .execute(
-            "INSERT INTO pasteboardHistories (id, updateAt) VALUES (?1, ?2)",
-            ("same-a", 2_i64),
-        )
-        .expect("tie history a");
+    // Inserted "same-b" first so its `id` sorts after "same-a" while its
+    // `rowid` sorts before it: the old `id DESC` tie-break would return
+    // "same-a" first, the fixed `rowid DESC` tie-break returns "same-b".
     connection
         .execute(
             "INSERT INTO pasteboardHistories (id, updateAt) VALUES (?1, ?2)",
             ("same-b", 2_i64),
         )
         .expect("tie history b");
+    connection
+        .execute(
+            "INSERT INTO pasteboardHistories (id, updateAt) VALUES (?1, ?2)",
+            ("same-a", 2_i64),
+        )
+        .expect("tie history a");
     insert_clipy_asset(
         &connection,
         "asset-1",
-        "same-b",
+        "same-a",
         0,
         "public.utf8-plain-text",
         b"newest\r\ntext",
@@ -151,7 +156,7 @@ fn reads_clipy_sqlite_assets_in_deterministic_order() {
     insert_clipy_asset(
         &connection,
         "asset-2",
-        "same-a",
+        "same-b",
         0,
         "public.file-url",
         b"file:///tmp/first.txt",
@@ -159,7 +164,7 @@ fn reads_clipy_sqlite_assets_in_deterministic_order() {
     insert_clipy_asset(
         &connection,
         "asset-3",
-        "same-a",
+        "same-b",
         1,
         "public.file-url",
         b"file:///tmp/second.txt",
@@ -183,16 +188,22 @@ fn reads_clipy_sqlite_assets_in_deterministic_order() {
 
     let history = read_clipy_history(&database, 4).expect("read Clipy fixture");
     assert_eq!(
-        history,
+        entry_texts(&history),
         [
             "newest\r\ntext",
             "file:///tmp/first.txt\nfile:///tmp/second.txt",
             "/tmp/legacy one.txt\n/tmp/legacy two.txt",
         ]
     );
-    let normalized = history
+    // `updateAt` becomes the entry timestamp as Unix seconds.
+    assert_eq!(
+        history[0].at,
+        Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(2))
+    );
+    assert!(history.iter().all(|entry| entry.app.is_none()));
+    let normalized = entry_texts(&history)
         .into_iter()
-        .map(|value| normalize_clipboard_output(value.into_bytes()))
+        .map(|value| normalize_clipboard_output(value.as_bytes().to_vec()))
         .collect::<Result<Vec<_>, _>>()
         .expect("normalize fixture history");
     let error =
@@ -203,10 +214,110 @@ fn reads_clipy_sqlite_assets_in_deterministic_order() {
 }
 
 #[test]
-fn rejects_unsupported_and_unmigrated_clipy_databases() {
-    let root = test_root("clipy-errors");
-    let unsupported = root.join("unsupported.db");
-    let connection = Connection::open(&unsupported).expect("fixture");
+fn clipy_decodes_one_canonical_flavor_per_entry() {
+    let root = test_root("clipy-flavors");
+    let database = root.join("sqlite.db");
+    let connection = Connection::open(&database).expect("fixture database");
+    create_clipy_fixture_schema(&connection);
+    connection
+        .execute(
+            "INSERT INTO pasteboardHistories (id, updateAt) VALUES ('safari', 5)",
+            [],
+        )
+        .expect("history");
+    // A Safari URL copy carries text plus public.url: only the text survives,
+    // so the entry still equals the live clipboard instead of two lines.
+    insert_clipy_asset(
+        &connection,
+        "asset-text",
+        "safari",
+        0,
+        "public.utf8-plain-text",
+        b"https://example.com/note",
+    );
+    insert_clipy_asset(
+        &connection,
+        "asset-url",
+        "safari",
+        1,
+        "public.url",
+        b"https://example.com/note",
+    );
+    drop(connection);
+
+    let history = read_clipy_history(&database, 1).expect("read fixture");
+    assert_eq!(entry_texts(&history), ["https://example.com/note"]);
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn clipy_skips_concealed_and_transient_rows_without_counting_them() {
+    let root = test_root("clipy-hidden");
+    let database = root.join("sqlite.db");
+    let connection = Connection::open(&database).expect("fixture database");
+    create_clipy_fixture_schema(&connection);
+    for (id, update_at) in [
+        ("visible-new", 3_i64),
+        ("hidden", 2_i64),
+        ("visible-old", 1_i64),
+    ] {
+        connection
+            .execute(
+                "INSERT INTO pasteboardHistories (id, updateAt) VALUES (?1, ?2)",
+                (id, update_at),
+            )
+            .expect("history");
+    }
+    insert_clipy_asset(
+        &connection,
+        "asset-new",
+        "visible-new",
+        0,
+        "public.utf8-plain-text",
+        b"newest",
+    );
+    insert_clipy_asset(
+        &connection,
+        "asset-hidden-text",
+        "hidden",
+        0,
+        "public.utf8-plain-text",
+        b"password",
+    );
+    insert_clipy_asset(
+        &connection,
+        "asset-hidden-flag",
+        "hidden",
+        1,
+        "org.nspasteboard.ConcealedType",
+        b"",
+    );
+    insert_clipy_asset(
+        &connection,
+        "asset-old",
+        "visible-old",
+        0,
+        "NSStringPboardType",
+        b"oldest",
+    );
+    drop(connection);
+
+    // The concealed row is skipped and never counted: two visible entries
+    // come back for a count of two.
+    let history = read_clipy_history(&database, 2).expect("read fixture");
+    assert_eq!(entry_texts(&history), ["newest", "oldest"]);
+    assert!(
+        entry_texts(&history).iter().all(|text| *text != "password"),
+        "concealed text must not leak"
+    );
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn clipy_reports_binary_only_rows_as_not_text() {
+    let root = test_root("clipy-not-text");
+    let database = root.join("sqlite.db");
+    let connection = Connection::open(&database).expect("fixture database");
     create_clipy_fixture_schema(&connection);
     connection
         .execute(
@@ -223,13 +334,20 @@ fn rejects_unsupported_and_unmigrated_clipy_databases() {
         b"binary",
     );
     drop(connection);
-    let error = read_clipy_history(&unsupported, 1)
-        .expect_err("binary-only entry must fail");
-    assert!(
-        error.contains("entry 1") && error.contains("public.png"),
-        "{error}"
-    );
+    let history = read_clipy_history(&database, 1).expect("read fixture");
+    assert_eq!(history.len(), 1);
+    assert!(matches!(history[0].kind, EntryKind::NotText(_)));
+    assert_eq!(history[0].text, None);
+    match &history[0].kind {
+        EntryKind::NotText(detail) => assert!(detail.contains("public.png")),
+        EntryKind::Text => panic!("binary-only row must be NotText"),
+    }
+    fs::remove_dir_all(root).expect("cleanup");
+}
 
+#[test]
+fn rejects_unsupported_and_unmigrated_clipy_databases() {
+    let root = test_root("clipy-errors");
     let unmigrated = root.join("unmigrated.db");
     let connection = Connection::open(&unmigrated).expect("fixture");
     connection
@@ -238,12 +356,153 @@ fn rejects_unsupported_and_unmigrated_clipy_databases() {
     drop(connection);
     let error = read_clipy_history(&unmigrated, 1)
         .expect_err("unmigrated database must fail");
+    assert!(matches!(error, ProviderError::Unsupported(_)));
+    let message = error.message();
     assert!(
-        error.contains("unsupported or unmigrated")
-            && error.contains("updateAt"),
-        "{error}"
+        message.contains("unsupported or unmigrated")
+            && message.contains("updateAt"),
+        "{message}"
     );
+
+    let missing = root.join("missing.db");
+    let error = read_clipy_history(&missing, 1)
+        .expect_err("missing database must fail");
+    assert!(matches!(error, ProviderError::Missing(_)));
     fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn reads_alfred_history_newest_first_with_cocoa_epoch() {
+    let root = test_root("alfred-database");
+    let database = root.join("clipboard.alfdb");
+    let connection = Connection::open(&database).expect("fixture database");
+    create_alfred_fixture_schema(&connection);
+    // `ts` counts seconds since 2001-01-01 UTC: 790_000_000 here is
+    // 2026-01-12, not the 1995 date a missed offset would produce.
+    insert_alfred_row(&connection, Some("first"), 790_000_000.0, "Safari", 0);
+    insert_alfred_row(&connection, Some("second"), 790_000_100_i64, "Notes", 0);
+    // Same-second re-copy sorts by rowid: inserted later, reads first.
+    insert_alfred_row(&connection, Some("third"), 790_000_100_i64, "", 0);
+    // Non-text rows are kept as NotText, never decoded.
+    insert_alfred_row(&connection, None, 790_000_200.5, "Preview", 1);
+    drop(connection);
+
+    let history = read_alfred_history(&database, 10).expect("read fixture");
+    assert_eq!(history.len(), 4);
+    assert!(matches!(history[0].kind, EntryKind::NotText(_)));
+    assert_eq!(history[0].text, None);
+    assert_eq!(history[0].app.as_deref(), Some("Preview"));
+    // Real-valued `ts` keeps its sub-second half second.
+    let age = history[0]
+        .at
+        .expect("image timestamp")
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("after epoch");
+    assert_eq!(age.as_secs(), 790_000_200 + 978_307_200);
+    assert_eq!(age.subsec_nanos(), 500_000_000);
+
+    assert_eq!(history[1].text.as_deref(), Some("third"));
+    assert_eq!(history[1].app, None);
+    assert_eq!(history[2].text.as_deref(), Some("second"));
+    assert_eq!(history[2].app.as_deref(), Some("Notes"));
+    assert_eq!(history[3].text.as_deref(), Some("first"));
+    // Integer `ts` converts to the exact Unix second.
+    assert_eq!(
+        history[3].at,
+        Some(
+            std::time::UNIX_EPOCH
+                + std::time::Duration::from_secs(790_000_000 + 978_307_200)
+        )
+    );
+
+    // The count caps the newest-first view.
+    let history = read_alfred_history(&database, 2).expect("read two");
+    assert_eq!(history.len(), 2);
+    assert!(matches!(history[0].kind, EntryKind::NotText(_)));
+    assert_eq!(history[1].text.as_deref(), Some("third"));
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn rejects_missing_locked_and_mismatched_alfred_databases() {
+    let root = test_root("alfred-errors");
+    let missing = root.join("clipboard.alfdb");
+    let error = read_alfred_history(&missing, 1)
+        .expect_err("missing database must fail");
+    assert!(matches!(error, ProviderError::Missing(_)));
+    assert!(
+        error.message().contains("clipboard.alfdb"),
+        "{}",
+        error.message()
+    );
+
+    let mismatched = root.join("mismatched.alfdb");
+    let connection = Connection::open(&mismatched).expect("fixture");
+    connection
+        .execute("CREATE TABLE clipboard (item BLOB)", [])
+        .expect("partial schema");
+    drop(connection);
+    let error = read_alfred_history(&mismatched, 1)
+        .expect_err("mismatched schema must fail");
+    assert!(matches!(error, ProviderError::Unsupported(_)));
+    assert!(
+        error.message().contains("unsupported Alfred"),
+        "{}",
+        error.message()
+    );
+
+    let locked = root.join("locked.alfdb");
+    let setup = Connection::open(&locked).expect("fixture");
+    create_alfred_fixture_schema(&setup);
+    insert_alfred_row(&setup, Some("held"), 1.0, "Safari", 0);
+    drop(setup);
+    let writer = Connection::open(&locked).expect("lock holder");
+    writer
+        .execute_batch("BEGIN EXCLUSIVE")
+        .expect("take exclusive lock");
+    let error = read_alfred_history(&locked, 1)
+        .expect_err("locked database must be busy");
+    assert!(matches!(error, ProviderError::Busy(_)), "{error:?}");
+    writer.execute_batch("ROLLBACK").expect("release lock");
+    drop(writer);
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+fn create_alfred_fixture_schema(connection: &Connection) {
+    connection
+        .execute_batch(
+            "CREATE TABLE clipboard (\
+               item BLOB, ts REAL, app TEXT, apppath TEXT, \
+               dataType INTEGER, dataHash TEXT\
+             );",
+        )
+        .expect("Alfred fixture schema");
+}
+
+fn insert_alfred_row(
+    connection: &Connection,
+    item: Option<&str>,
+    ts: impl rusqlite::ToSql,
+    app: &str,
+    data_type: i64,
+) {
+    connection
+        .execute(
+            "INSERT INTO clipboard (item, ts, app, apppath, dataType, dataHash) \
+             VALUES (?1, ?2, ?3, '', ?4, '')",
+            rusqlite::params![item, ts, app, data_type],
+        )
+        .expect("Alfred fixture row");
+}
+
+fn entry_texts(history: &[HistoryEntry]) -> Vec<&str> {
+    history
+        .iter()
+        .map(|entry| {
+            assert!(matches!(entry.kind, EntryKind::Text));
+            entry.text.as_deref().expect("text entry has text")
+        })
+        .collect()
 }
 
 #[test]
