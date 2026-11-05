@@ -29,11 +29,11 @@ fn parse_human(text: &str) -> String {
 }
 
 #[test]
-fn past_parse_reports_full_contract_and_grammar_13() {
+fn past_parse_reports_full_contract_and_grammar_14() {
     // Single unnamed past.
     let one = parse("x=3");
     assert_eq!(one["schema_version"], 1);
-    assert_eq!(one["grammar"], 13);
+    assert_eq!(one["grammar"], 14);
     assert_eq!(one["mode"], "pomodoro_past");
     assert_eq!(one["body"], "x=3");
     assert_eq!(one["section"], serde_json::Value::Null);
@@ -304,36 +304,6 @@ fn past_parse_segment_suffix_json_spans_and_runs() {
         assert!(item["pomodoro_past"]["stack"].get("pin").is_none());
         assert!(item["pomodoro_past"]["stack"].get("lead_blocks").is_none());
     }
-}
-
-#[test]
-fn past_capture_refuses_suffixed_until_record() {
-    // Execution refuses suffixed tokens until the record phase lands.
-    let temp = TempDir::new("bob-cli-past-suffix-refusal");
-    let vault = temp.path().join("vault");
-    fs::create_dir_all(&vault).expect("create vault");
-    let day = vault.join("day.md");
-    write_file(&day, "## Pomodoros\n- [ ] ()\n");
-    let output = bob_command()
-        .env("BOB_NOW", "2026-11-04 09:21:00")
-        .env("BOB_DAY_FILE", &day)
-        .arg("capture")
-        .arg("-b")
-        .arg(&vault)
-        .arg("-f")
-        .arg("json")
-        .arg("--")
-        .arg("x=2~1")
-        .output()
-        .expect("run bob capture");
-    assert!(!output.status.success(), "suffixed capture refuses");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let combined = format!("{stdout}\n{stderr}");
-    assert!(
-        combined.contains("x=2~1 places a past Pomodoro"),
-        "{combined}"
-    );
 }
 
 #[test]

@@ -18,7 +18,10 @@ use super::{
         self, map_close_plan_error, plan_close_successors, stage_close_plan,
         SnapshotCloseVault,
     },
-    pomodoro_timeline::{collect_timed_rows, TimedRow},
+    pomodoro_timeline::{
+        collect_timed_rows, LayoutError, LimitKind, MemberLength, Pin,
+        SegmentQuery, TimedRow, Timeline, TimelineError,
+    },
     task_theme::CaptureTaskThemeContext,
 };
 use crate::native::{
@@ -66,6 +69,8 @@ pub(super) struct MemberWindow {
     pub(super) anchor: String,
     pub(super) time_range_text: String,
     pub(super) range_text: String,
+    pub(super) cut: Option<super::pomodoro_timeline::Cut>,
+    pub(super) requested_minutes: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -76,6 +81,9 @@ pub(super) struct PastPreflight {
     pub(super) anchor: String,
     pub(super) t_minutes: i64,
     pub(super) members: Vec<MemberWindow>,
+    pub(super) pin: Option<super::pomodoro_timeline::Pin>,
+    pub(super) segment_member: Option<usize>,
+    pub(super) suffix_raw: Option<String>,
 }
 
 fn format_hhmm(minutes: i64) -> String {
@@ -180,29 +188,10 @@ pub(super) fn compute_preflight(
                 "past Pomodoro block count is too large; use a smaller count",
             ));
         }
-        let window_start = format_hhmm(start);
-        let window_end = format_hhmm(end);
-        let closed_min = std::cmp::min(end, now_min);
-        let closed_at = format_hhmm(closed_min);
-        let range_text = format!("{window_start}-{window_end}");
-        let time_range_text =
-            format!("(**{window_start}-{window_end}** [t:: {minutes}m])");
-        members.push(MemberWindow {
-            index: idx,
-            spec: spec.clone(),
-            blocks,
-            offset_blocks: offset,
-            start_min: start,
-            end_min: end,
-            window_start,
-            window_end,
-            minutes,
-            closed_at_min: closed_min,
-            closed_at,
-            anchor: anchor.clone(),
-            time_range_text,
-            range_text,
-        });
+        members.push(make_member_window(
+            idx, spec, blocks, offset, start, end, minutes, None, None,
+            &anchor, now_min,
+        ));
         let _ = idx;
     }
     // Keep T as computed (may be 1440).
@@ -213,6 +202,435 @@ pub(super) fn compute_preflight(
         anchor,
         t_minutes: t,
         members,
+        pin: None,
+        segment_member: None,
+        suffix_raw: None,
+    })
+}
+
+fn make_member_window(
+    idx: usize,
+    spec: &PomodoroPastSpec,
+    blocks: u32,
+    offset_blocks: u32,
+    start: i64,
+    end: i64,
+    minutes: u64,
+    cut: Option<super::pomodoro_timeline::Cut>,
+    requested_minutes: Option<u64>,
+    anchor: &str,
+    now_min: i64,
+) -> MemberWindow {
+    let window_start = format_hhmm(start);
+    let window_end = format_hhmm(end);
+    let closed_min = std::cmp::min(end, now_min);
+    let closed_at = format_hhmm(closed_min);
+    let range_text = format!("{window_start}-{window_end}");
+    let time_range_text =
+        format!("(**{window_start}-{window_end}** [t:: {minutes}m])");
+    MemberWindow {
+        index: idx,
+        spec: spec.clone(),
+        blocks,
+        offset_blocks,
+        start_min: start,
+        end_min: end,
+        window_start,
+        window_end,
+        minutes,
+        closed_at_min: closed_min,
+        closed_at,
+        anchor: anchor.to_string(),
+        time_range_text,
+        range_text,
+        cut,
+        requested_minutes,
+    }
+}
+
+/// Map a lexical segment suffix to the timeline's own query type.
+fn segment_to_query(
+    segment: &crate::native::capture_language::PastSegment,
+) -> SegmentQuery {
+    use crate::native::capture_language::{PastEdge, PastSegmentKind};
+    match segment.kind {
+        PastSegmentKind::Tail => SegmentQuery::Tail,
+        PastSegmentKind::Head => SegmentQuery::Head,
+        PastSegmentKind::Index => {
+            let index = segment.index.unwrap_or(1);
+            match segment.edge {
+                PastEdge::Start => SegmentQuery::Start(index),
+                PastEdge::End => SegmentQuery::End(index),
+            }
+        }
+    }
+}
+
+/// Rebuild a past token with a new `E` body, preserving repair `!` and the
+/// second `=X` close part via the past splitter (so `!`/`=` inside `#"…"`
+/// literals stay name content).
+fn rebuild_past_token(raw: &str, new_e: &str) -> String {
+    use crate::native::capture_language::past::split_past_token;
+    let Some(split) = split_past_token(raw) else {
+        return raw.to_string();
+    };
+    let mut out = String::from("x=");
+    out.push_str(new_e);
+    if split.repair {
+        out.push('!');
+    }
+    if split.has_second_eq {
+        out.push('=');
+        out.push_str(&split.close_text);
+    }
+    out
+}
+
+/// Strip the suffix from a suffixed token, keeping count, name, repair, and
+/// close. Falls back to a byte replace when splitting fails.
+fn strip_segment_rewrite(raw: &str, segment_raw: &str) -> String {
+    use crate::native::capture_language::past::split_past_token;
+    let Some(split) = split_past_token(raw) else {
+        return raw.replacen(segment_raw, "", 1);
+    };
+    let new_e = split.e_raw.replacen(segment_raw, "", 1);
+    // `e_raw` always ends with the suffix; `replacen` removes its first
+    // occurrence which is the suffix for well-formed tokens. When the
+    // suffix bytes also appear inside a literal, prefer the suffix strip.
+    let new_e = if let Some(stripped) = split.e_raw.strip_suffix(segment_raw) {
+        stripped.to_string()
+    } else {
+        new_e
+    };
+    rebuild_past_token(raw, &new_e)
+}
+
+/// Replace the suffix with `~~` (for the no-closed-rows head hint).
+fn head_rewrite(raw: &str, segment_raw: &str) -> String {
+    use crate::native::capture_language::past::split_past_token;
+    let Some(split) = split_past_token(raw) else {
+        return raw.replacen(segment_raw, "~~", 1);
+    };
+    let new_e = if let Some(stripped) = split.e_raw.strip_suffix(segment_raw) {
+        format!("{stripped}~~")
+    } else {
+        split.e_raw.replacen(segment_raw, "~~", 1)
+    };
+    rebuild_past_token(raw, &new_e)
+}
+
+/// Replace the typed count in `e_raw` (leading or trailing digits) with
+/// `new_count`, keeping name and suffix bytes.
+fn replace_count_in_e(e_raw: &str, old_count: u32, new_count: u32) -> String {
+    let old = old_count.to_string();
+    let new = new_count.to_string();
+    if e_raw.starts_with(&old) {
+        format!("{new}{}", &e_raw[old.len()..])
+    } else if let Some(base) = e_raw.strip_suffix(&old) {
+        // Trailing count (e.g. `fix2~2` strips the count before the suffix
+        // only when the suffix does not also end with the same digits).
+        // When the suffix shares the digits, strip the count that precedes
+        // the suffix instead.
+        format!("{base}{new}")
+    } else {
+        // The count precedes a suffix sharing its digits (e.g. `2~2` with
+        // old `2`): replace the first occurrence.
+        e_raw.replacen(&old, &new, 1)
+    }
+}
+
+/// Build a hint that replaces the typed count while preserving name,
+/// suffix, repair, and close.
+fn hint_with_count(spec: &PomodoroPastSpec, new_count: u32) -> String {
+    use crate::native::capture_language::past::split_past_token;
+    let Some(split) = split_past_token(&spec.raw) else {
+        return spec.raw.clone();
+    };
+    // Remove the suffix to isolate the count+name base, replace the count,
+    // then reattach the suffix.
+    let segment_raw =
+        spec.segment.as_ref().map(|s| s.raw.as_str()).unwrap_or("");
+    let base = if !segment_raw.is_empty() {
+        split
+            .e_raw
+            .strip_suffix(segment_raw)
+            .unwrap_or(&split.e_raw)
+    } else {
+        split.e_raw.as_str()
+    };
+    let new_base = if base.starts_with(&spec.blocks.to_string()) {
+        replace_count_in_e(base, spec.blocks, new_count)
+    } else if base.ends_with(&spec.blocks.to_string()) && !base.is_empty() {
+        let stripped =
+            base.strip_suffix(&spec.blocks.to_string()).unwrap_or(base);
+        format!("{stripped}{new_count}")
+    } else {
+        replace_count_in_e(&split.e_raw, spec.blocks, new_count)
+    };
+    let new_e = if !segment_raw.is_empty() {
+        // `new_base` already excludes the suffix; reattach it. When the
+        // count replace touched the full `e_raw` (shared digits), it
+        // already contains the suffix.
+        if new_base.ends_with(segment_raw) {
+            new_base
+        } else {
+            format!("{new_base}{segment_raw}")
+        }
+    } else {
+        new_base
+    };
+    // When the fallback replaced inside the full `e_raw`, prefer it.
+    let new_e = if new_e == base || new_e.is_empty() {
+        replace_count_in_e(&split.e_raw, spec.blocks, new_count)
+    } else {
+        new_e
+    };
+    rebuild_past_token(&spec.raw, &new_e)
+}
+
+/// Add an explicit count (`2`) to an untyped token for the no-room hint.
+fn hint_add_count_two(spec: &PomodoroPastSpec) -> String {
+    use crate::native::capture_language::past::split_past_token;
+    let Some(split) = split_past_token(&spec.raw) else {
+        return format!("{}2", spec.raw);
+    };
+    let new_e = format!("{}2", split.e_raw);
+    rebuild_past_token(&spec.raw, &new_e)
+}
+
+fn format_timeline_error(
+    raw: &str,
+    spec: &PomodoroPastSpec,
+    timeline: &Timeline,
+    error: &TimelineError,
+) -> String {
+    match error {
+        TimelineError::NothingClosed { first_row } => {
+            let segment_raw =
+                spec.segment.as_ref().map(|s| s.raw.as_str()).unwrap_or("");
+            let plain = strip_segment_rewrite(raw, segment_raw);
+            let mut message = format!(
+                "{raw} counts back from your last closed Pomodoro, but nothing is closed today yet; write {plain} to end now"
+            );
+            if let Some((name, _)) = first_row {
+                let head = head_rewrite(raw, segment_raw);
+                message.push_str(&format!(
+                    ", or {head} to end where {} starts",
+                    display_name(name.as_deref())
+                ));
+            }
+            message
+        }
+        TimelineError::EmptyTail { after, wall } => {
+            let after_name = display_name(after.name.as_deref());
+            let after_end = format_hhmm(after.end);
+            let tail = if let Some(wall) = wall {
+                format!(
+                    "{} (running since {})",
+                    display_name(wall.name.as_deref()),
+                    format_hhmm(wall.start)
+                )
+            } else {
+                format!("now ({})", format_hhmm(timeline.t))
+            };
+            format!(
+                "{raw}: nothing to record between {after_name} (ended {after_end}) and {tail}"
+            )
+        }
+        TimelineError::NoHead { first } => {
+            let (name, start) = first;
+            format!(
+                "{raw}: {} starts at {}, so there is no time before your first Pomodoro",
+                display_name(name.as_deref()),
+                format_hhmm(*start)
+            )
+        }
+        TimelineError::NoRows => {
+            "nothing is on today's timeline yet; write x= to end now"
+                .to_string()
+        }
+        TimelineError::OutOfRange { .. } => {
+            format!("{raw}: {}", timeline.listing())
+        }
+    }
+}
+
+fn format_layout_error(
+    specs: &[PomodoroPastSpec],
+    timeline: &Timeline,
+    pin: &Pin,
+    error: &LayoutError,
+) -> String {
+    match error {
+        LayoutError::NoRoom { member } => {
+            let spec = specs
+                .get(*member)
+                .or_else(|| specs.first())
+                .expect("member");
+            let label = pin.segment.label();
+            let rewrite = hint_add_count_two(spec);
+            format!(
+                "{} has no room left in {label}; give it a count ({rewrite}) or capture it separately",
+                spec.raw
+            )
+        }
+        LayoutError::PastLimit { member } => {
+            let spec = specs
+                .get(*member)
+                .or_else(|| specs.first())
+                .expect("member");
+            let at = format_hhmm(pin.forward_limit.unwrap_or(timeline.t));
+            let after = match &pin.limit {
+                LimitKind::Now => "after now".to_string(),
+                LimitKind::Wall(wall) => {
+                    format!(
+                        "after {} started ({})",
+                        display_name(wall.name.as_deref()),
+                        format_hhmm(wall.start)
+                    )
+                }
+            };
+            format!(
+                "{} would start at {at}, {after}; shorten the run",
+                spec.raw
+            )
+        }
+        LayoutError::BeforeMidnight { member, max_blocks } => {
+            let spec = specs
+                .get(*member)
+                .or_else(|| specs.first())
+                .expect("member");
+            let rewrite = hint_with_count(spec, (*max_blocks).max(1));
+            // Estimate the wrapped start for the copy: end pins flow
+            // backward from the pin through later members.
+            let mut cursor = pin.at;
+            for later in specs.iter().skip(member + 1) {
+                cursor -= u64::from(later.blocks) as i64 * 5;
+            }
+            let start_est = cursor - u64::from(spec.blocks) as i64 * 5;
+            let start_fmt = format_hhmm(start_est);
+            if specs.len() == 1 {
+                format!(
+                    "{} would start before midnight ({start_fmt}); record at most {max_blocks} blocks: {rewrite}",
+                    spec.raw
+                )
+            } else {
+                format!(
+                    "{} (member {} of {}) would start before midnight ({start_fmt}); record at most {max_blocks} blocks: {rewrite}",
+                    spec.raw,
+                    member + 1,
+                    specs.len()
+                )
+            }
+        }
+        LayoutError::EndPinAfterNow => {
+            let raw = specs
+                .iter()
+                .find_map(|spec| {
+                    spec.segment.as_ref().map(|_| spec.raw.clone())
+                })
+                .unwrap_or_else(|| {
+                    specs.first().map(|s| s.raw.clone()).unwrap_or_default()
+                });
+            format!(
+                "{raw} ends at {}, after now ({}); shorten the run",
+                format_hhmm(pin.at),
+                format_hhmm(timeline.t)
+            )
+        }
+    }
+}
+
+/// Pinned preflight: resolve the run's one suffix against the pre-stack
+/// snapshot and lay every member out from the pin with exact, capped, and
+/// cut lengths. Unpinned runs keep `compute_preflight`.
+pub(super) fn compute_pinned_preflight(
+    specs: &[PomodoroPastSpec],
+    now: NaiveDateTime,
+    today: NaiveDate,
+    pre_stack_contents: &str,
+) -> Result<PastPreflight, CaptureError> {
+    let truncated = now
+        .date()
+        .and_hms_opt(now.hour(), now.minute(), 0)
+        .ok_or_else(|| CaptureError::io("record clock invariant failed"))?;
+    let now_min = truncated.hour() as i64 * 60 + truncated.minute() as i64;
+    let t = ceil5(now_min);
+    let anchor = if t == 1440 {
+        "0000".to_string()
+    } else {
+        format_hhmm(t)
+    };
+    let timeline = Timeline::build(pre_stack_contents, now_min, t);
+    let suffix_idx =
+        specs.iter().position(|s| s.segment.is_some()).unwrap_or(0);
+    let suffix_spec = &specs[suffix_idx];
+    let segment = suffix_spec.segment.as_ref().ok_or_else(|| {
+        CaptureError::io("record stack invariant failed: missing segment")
+    })?;
+    let query = segment_to_query(segment);
+    let pin = timeline.resolve(query).map_err(|error| {
+        CaptureError::usage(format_timeline_error(
+            &suffix_spec.raw,
+            suffix_spec,
+            &timeline,
+            &error,
+        ))
+    })?;
+    let lengths: Vec<MemberLength> = specs
+        .iter()
+        .map(|spec| MemberLength {
+            requested_minutes: u64::from(spec.blocks) * 5,
+            typed: spec.blocks_typed,
+        })
+        .collect();
+    let laid = super::pomodoro_timeline::layout_run(&pin, &lengths).map_err(
+        |error| {
+            CaptureError::usage(format_layout_error(
+                specs, &timeline, &pin, &error,
+            ))
+        },
+    )?;
+    let mut members = Vec::with_capacity(specs.len());
+    for (idx, (spec, window)) in specs.iter().zip(laid.iter()).enumerate() {
+        let minutes = (window.end - window.start).max(0) as u64;
+        if minutes == 0 {
+            return Err(CaptureError::usage(format_layout_error(
+                specs,
+                &timeline,
+                &pin,
+                &LayoutError::NoRoom { member: idx },
+            )));
+        }
+        let requested = if window.cut.is_some() {
+            Some(window.requested_minutes)
+        } else {
+            None
+        };
+        members.push(make_member_window(
+            idx,
+            spec,
+            spec.blocks,
+            spec.stack.offset_blocks,
+            window.start,
+            window.end,
+            minutes,
+            window.cut,
+            requested,
+            &anchor,
+            now_min,
+        ));
+    }
+    let suffix_raw = suffix_spec.segment.as_ref().map(|s| s.raw.clone());
+    Ok(PastPreflight {
+        now_truncated: truncated,
+        today,
+        anchor,
+        t_minutes: t,
+        members,
+        pin: Some(pin),
+        segment_member: Some(suffix_idx),
+        suffix_raw,
     })
 }
 
@@ -353,10 +771,16 @@ fn classify_closed_row(
 /// against history as it stood before the stack, all members at once, and
 /// returns the edge trims to stage before any member records. One refusal
 /// lists every offending member so a single retry fixes the whole draft.
+/// `pin` enables the pinned-run fit/carve hints, and `recorded` holds
+/// `(start, end)` windows earlier runs in this capture already recorded: a
+/// closed row whose span equals one of them refuses any trim, erase, or
+/// split with the same-capture copy.
 pub(super) fn preflight_overlaps(
     preflight: &PastPreflight,
     pre_stack_contents: &str,
     specs: &[PomodoroPastSpec],
+    pin: Option<&Pin>,
+    recorded: &[(i64, i64)],
 ) -> Result<Vec<TrimPlan>, CaptureError> {
     // Require Pomodoros section.
     let scan = capture_pomodoros::scan(pre_stack_contents);
@@ -435,12 +859,75 @@ pub(super) fn preflight_overlaps(
                 .find(|(idx, _)| *idx == ri)
                 .map(|(_, fate)| *fate)
                 .unwrap_or(ClosedFate::Untouched);
+            // Same-capture rule: `!` never trims a row this capture
+            // already recorded.
+            let recorded_hit = recorded.iter().any(|(s, e)| {
+                let rs = row.start;
+                let mut re = row.end;
+                if re == 0 && rs != 0 {
+                    re = 1440;
+                }
+                let ws = *s;
+                let mut we = *e;
+                if we == 0 && ws != 0 {
+                    we = 1440;
+                }
+                rs == ws && re == we
+            });
+            if recorded_hit {
+                match fate {
+                    ClosedFate::Trimmable { .. } => {
+                        offending.push(format!(
+                            "{} would trim {name} {}, which this capture just recorded; capture them separately",
+                            spec.raw, row.range,
+                        ));
+                    }
+                    ClosedFate::Erased => {
+                        offending.push(format!(
+                            "{} would erase {name} {}, which this capture just recorded; capture them separately",
+                            spec.raw, row.range,
+                        ));
+                    }
+                    ClosedFate::Split => {
+                        offending.push(format!(
+                            "{} would split {name} {}, which this capture just recorded; capture them separately",
+                            spec.raw, row.range,
+                        ));
+                    }
+                    ClosedFate::Untouched => {}
+                }
+                continue;
+            }
             match fate {
                 ClosedFate::Erased => {
-                    offending.push(format!(
+                    let mut message = format!(
                         "{} would take all of {name} {} (line {}); ! only trims a session's edge",
                         spec.raw, row.range, row.line,
-                    ));
+                    );
+                    // Pinned-run hint: carving the pinned Pomodoro leaves a
+                    // nonempty piece.
+                    if let Some(pin) = pin {
+                        use super::pomodoro_timeline::SegmentKind;
+                        let is_pinned_row = pin.segment.kind
+                            == SegmentKind::Pomodoro
+                            && pin.segment.line == Some(row.line)
+                            && pin.segment.start == row.start
+                            && pin.segment.end.min(1440) == row.end.min(1440);
+                        if is_pinned_row && spec.blocks_typed {
+                            let seg_minutes =
+                                (pin.segment.end - pin.segment.start).max(0);
+                            let carve = (seg_minutes - 1).div_euclid(5);
+                            if carve >= 1
+                                && carve < u64::from(spec.blocks) as i64
+                            {
+                                let hint = hint_with_count(spec, carve as u32);
+                                message.push_str(&format!(
+                                    "; carve at most {carve} blocks: {hint}"
+                                ));
+                            }
+                        }
+                    }
+                    offending.push(message);
                 }
                 ClosedFate::Split => {
                     offending.push(format!(
@@ -461,10 +948,25 @@ pub(super) fn preflight_overlaps(
                             (new_end.rem_euclid(1440)) % 60,
                         );
                         let rewrite = with_repair(&spec.raw, true);
-                        offending.push(format!(
+                        let mut message = format!(
                             "{} would take {taken}m from {name} {} (line {}); add ! to take it: {rewrite} ({name} becomes {after})",
                             spec.raw, row.range, row.line,
-                        ));
+                        );
+                        // Pinned-run hint: a typed overflow can fit the gap.
+                        if let Some(pin) = pin
+                            && spec.blocks_typed
+                        {
+                            let seg_minutes =
+                                (pin.segment.end - pin.segment.start).max(0);
+                            let fit = seg_minutes.div_euclid(5);
+                            if fit >= 1 && fit < u64::from(spec.blocks) as i64 {
+                                let hint = hint_with_count(spec, fit as u32);
+                                message.push_str(&format!(
+                                    "; or fit the gap: {hint}"
+                                ));
+                            }
+                        }
+                        offending.push(message);
                     }
                 }
                 ClosedFate::Untouched => {}
@@ -1098,6 +1600,85 @@ pub(super) fn record_one_member(
             new_headline_idx,
         );
     }
+    let stack_pin = member.spec.stack.pin.map(|edge| match edge {
+        crate::native::capture_language::PastEdge::Start => "start".to_string(),
+        crate::native::capture_language::PastEdge::End => "end".to_string(),
+    });
+    let (cut_str, wall_name, fit_raw) = match member.cut {
+        None => (None, None, None),
+        Some(cut) => {
+            let cut_str = match cut {
+                super::pomodoro_timeline::Cut::Now => "now".to_string(),
+                super::pomodoro_timeline::Cut::Wall => "wall".to_string(),
+                super::pomodoro_timeline::Cut::Segment => "segment".to_string(),
+            };
+            let wall_name = match cut {
+                super::pomodoro_timeline::Cut::Wall => {
+                    preflight.pin.as_ref().and_then(|pin| match &pin.limit {
+                        super::pomodoro_timeline::LimitKind::Wall(wall) => {
+                            Some(display_name(wall.name.as_deref()))
+                        }
+                        _ => None,
+                    })
+                }
+                _ => None,
+            };
+            let fit_raw = match cut {
+                super::pomodoro_timeline::Cut::Segment => {
+                    // Carrier members name the fit through their own
+                    // `segment.raw`; other members borrow the run suffix.
+                    if member.spec.segment.is_some() {
+                        None
+                    } else {
+                        preflight.suffix_raw.clone()
+                    }
+                }
+                _ => None,
+            };
+            (Some(cut_str), wall_name, fit_raw)
+        }
+    };
+    let segment_json = if preflight.segment_member == Some(member.index) {
+        preflight.pin.as_ref().and_then(|pin| {
+            member.spec.segment.as_ref().map(|lex| {
+                let kind = match pin.segment.kind {
+                    super::pomodoro_timeline::SegmentKind::Pomodoro => {
+                        "pomodoro".to_string()
+                    }
+                    super::pomodoro_timeline::SegmentKind::Gap => {
+                        "gap".to_string()
+                    }
+                    super::pomodoro_timeline::SegmentKind::Tail => {
+                        "tail".to_string()
+                    }
+                    super::pomodoro_timeline::SegmentKind::Head => {
+                        "head".to_string()
+                    }
+                };
+                let edge = match pin.edge {
+                    super::pomodoro_timeline::Edge::Start => {
+                        "start".to_string()
+                    }
+                    super::pomodoro_timeline::Edge::End => "end".to_string(),
+                };
+                let minutes =
+                    (pin.segment.end - pin.segment.start).max(0) as u64;
+                super::output::PomodoroPastSegmentJson {
+                    raw: lex.raw.clone(),
+                    kind,
+                    index: pin.segment.index,
+                    edge,
+                    start: format_hhmm(pin.segment.start),
+                    end: format_hhmm(pin.segment.end),
+                    minutes,
+                    name: pin.segment.name.clone(),
+                    line: pin.segment.line,
+                }
+            })
+        })
+    } else {
+        None
+    };
     let past_json = super::output::PomodoroPastSummaryJson {
         raw: member.spec.raw.clone(),
         name: entry_name.clone(),
@@ -1110,16 +1691,22 @@ pub(super) fn record_one_member(
         stack: super::output::PomodoroPastStackJson {
             index: member.spec.stack.index,
             size: member.spec.stack.size,
+            pin: stack_pin,
         },
         anchor: member.anchor.clone(),
         window: super::output::PomodoroPastWindowJson {
             start: member.window_start.clone(),
             end: member.window_end.clone(),
             minutes: member.minutes,
+            requested_minutes: member.requested_minutes,
+            cut: cut_str,
+            wall: wall_name,
+            fit: fit_raw,
         },
         closed_at: member.closed_at.clone(),
         line: summary.pomodoro_line,
         trims,
+        segment: segment_json,
         close: Box::new(summary),
     };
     let task_line = filed_text

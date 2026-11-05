@@ -1,9 +1,7 @@
 //! Pure catalog and placement engine for today's past-Pomodoro timeline.
 //!
-//! The next capture phase wires this module into recording and completion. Keep
-//! its model self-contained so those callers share exactly the same segment
-//! boundaries and labels.
-#![cfg_attr(not(test), allow(dead_code))]
+//! The model stays self-contained so recording and completion share exactly
+//! the same segment boundaries and labels.
 
 use super::line_spans;
 use crate::native::capture_pomodoros::{self, PomodoroState};
@@ -441,6 +439,8 @@ impl Timeline {
         listing
     }
 
+    // Used by the segment picker (assists phase) and unit tests.
+    #[allow(dead_code)]
     pub(super) fn picker_rows(&self) -> Vec<Segment> {
         self.tail
             .iter()

@@ -219,6 +219,9 @@ pub(super) fn plan_capture_batch_with_config_path(
     )?;
 
     let mut item_start = 0;
+    // Windows earlier past runs in this capture already recorded, for the
+    // same-capture trim/erase/split refusal.
+    let mut recorded_past_windows: Vec<(i64, i64)> = Vec::new();
     while item_start < parsed_items.len() {
         let first = &parsed_items[item_start];
         let group_key = first.fanout.as_ref().map(|_| first.index);
@@ -289,53 +292,57 @@ pub(super) fn plan_capture_batch_with_config_path(
                     _ => unreachable!(),
                 }
             }
-            if let Some(suffixed) =
-                stack_specs.iter().find(|spec| spec.segment.is_some())
-            {
-                return Err(CaptureError::usage(format!(
-                    "{} places a past Pomodoro on today's timeline, which this build cannot record yet",
-                    suffixed.raw,
-                )));
-            }
-            let preflight = super::pomodoro_past::compute_preflight(
-                &stack_specs,
-                now,
-                today,
-            )
-            .map_err(|mut error| {
-                let item_number = parsed_items[item_start].index + 1;
-                let ctx = capture_error_context(
-                    item_number,
-                    &parsed_items[item_start],
-                );
-                error.message = format!("{}: {}", ctx, error.message);
-                error
-            })?;
-            // Pre-stack snapshot for the guard (earlier batch items staged).
-            if !planner.currently_exists(&day_file).map_err(|mut error| {
-                let item_number = parsed_items[item_start].index + 1;
-                let ctx = capture_error_context(
-                    item_number,
-                    &parsed_items[item_start],
-                );
-                error.message = format!("{}: {}", ctx, error.message);
-                error
-            })? {
-                let item_number = parsed_items[item_start].index + 1;
-                let ctx = capture_error_context(
-                    item_number,
-                    &parsed_items[item_start],
-                );
-                let rel = super::pomodoro_close::close_day_relative(
-                    &request.bob_dir,
-                    &super::pomodoro::day_file_for(&request.bob_dir),
-                );
-                return Err(CaptureError::io(format!(
-                    "{ctx}: no future Pomodoro to record: today's daily note `{rel}` does not exist"
-                )));
-            }
-            let pre_stack_contents =
-                planner.read_existing(&day_file).map_err(|mut error| {
+            let pinned = stack_specs
+                .first()
+                .and_then(|spec| spec.stack.pin)
+                .is_some();
+            // Pinned runs resolve against the staged snapshot just before
+            // the run; unpinned runs keep the current order and code path
+            // exactly (preflight before the snapshot, same errors/bytes).
+            let (preflight, pre_stack_contents) = if pinned {
+                // Pre-stack snapshot first, using the existing daily-note
+                // error path.
+                if !planner.currently_exists(&day_file).map_err(
+                    |mut error| {
+                        let item_number = parsed_items[item_start].index + 1;
+                        let ctx = capture_error_context(
+                            item_number,
+                            &parsed_items[item_start],
+                        );
+                        error.message = format!("{}: {}", ctx, error.message);
+                        error
+                    },
+                )? {
+                    let item_number = parsed_items[item_start].index + 1;
+                    let ctx = capture_error_context(
+                        item_number,
+                        &parsed_items[item_start],
+                    );
+                    let rel = super::pomodoro_close::close_day_relative(
+                        &request.bob_dir,
+                        &super::pomodoro::day_file_for(&request.bob_dir),
+                    );
+                    return Err(CaptureError::io(format!(
+                        "{ctx}: no future Pomodoro to record: today's daily note `{rel}` does not exist"
+                    )));
+                }
+                let pre_stack_contents =
+                    planner.read_existing(&day_file).map_err(|mut error| {
+                        let item_number = parsed_items[item_start].index + 1;
+                        let ctx = capture_error_context(
+                            item_number,
+                            &parsed_items[item_start],
+                        );
+                        error.message = format!("{}: {}", ctx, error.message);
+                        error
+                    })?;
+                let preflight = super::pomodoro_past::compute_pinned_preflight(
+                    &stack_specs,
+                    now,
+                    today,
+                    &pre_stack_contents,
+                )
+                .map_err(|mut error| {
                     let item_number = parsed_items[item_start].index + 1;
                     let ctx = capture_error_context(
                         item_number,
@@ -344,10 +351,66 @@ pub(super) fn plan_capture_batch_with_config_path(
                     error.message = format!("{}: {}", ctx, error.message);
                     error
                 })?;
+                (preflight, pre_stack_contents)
+            } else {
+                let preflight = super::pomodoro_past::compute_preflight(
+                    &stack_specs,
+                    now,
+                    today,
+                )
+                .map_err(|mut error| {
+                    let item_number = parsed_items[item_start].index + 1;
+                    let ctx = capture_error_context(
+                        item_number,
+                        &parsed_items[item_start],
+                    );
+                    error.message = format!("{}: {}", ctx, error.message);
+                    error
+                })?;
+                // Pre-stack snapshot for the guard (earlier batch items staged).
+                if !planner.currently_exists(&day_file).map_err(
+                    |mut error| {
+                        let item_number = parsed_items[item_start].index + 1;
+                        let ctx = capture_error_context(
+                            item_number,
+                            &parsed_items[item_start],
+                        );
+                        error.message = format!("{}: {}", ctx, error.message);
+                        error
+                    },
+                )? {
+                    let item_number = parsed_items[item_start].index + 1;
+                    let ctx = capture_error_context(
+                        item_number,
+                        &parsed_items[item_start],
+                    );
+                    let rel = super::pomodoro_close::close_day_relative(
+                        &request.bob_dir,
+                        &super::pomodoro::day_file_for(&request.bob_dir),
+                    );
+                    return Err(CaptureError::io(format!(
+                        "{ctx}: no future Pomodoro to record: today's daily note `{rel}` does not exist"
+                    )));
+                }
+                let pre_stack_contents =
+                    planner.read_existing(&day_file).map_err(|mut error| {
+                        let item_number = parsed_items[item_start].index + 1;
+                        let ctx = capture_error_context(
+                            item_number,
+                            &parsed_items[item_start],
+                        );
+                        error.message = format!("{}: {}", ctx, error.message);
+                        error
+                    })?;
+                (preflight, pre_stack_contents)
+            };
+            let pin_ref = preflight.pin.as_ref();
             let trim_plans = super::pomodoro_past::preflight_overlaps(
                 &preflight,
                 &pre_stack_contents,
                 &stack_specs,
+                pin_ref,
+                &recorded_past_windows,
             )
             .map_err(|mut error| {
                 let item_number = parsed_items[item_start].index + 1;
@@ -539,6 +602,9 @@ pub(super) fn plan_capture_batch_with_config_path(
                     &day_file,
                 );
                 items.push(planned);
+            }
+            for member in &preflight.members {
+                recorded_past_windows.push((member.start_min, member.end_min));
             }
             item_start += size;
             continue;

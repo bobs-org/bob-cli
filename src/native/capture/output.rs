@@ -278,7 +278,9 @@ pub(super) struct PomodoroCloseSummaryJson {
 
 /// Recorded past session: the nested close summary plus record identity.
 /// `trims` holds the edge trims attributed to the first overlapping member
-/// in typed order; empty on members that report no trim.
+/// in typed order; empty on members that report no trim. `segment` is the
+/// resolved timeline segment, present only on the run member that carries
+/// the suffix.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct PomodoroPastSummaryJson {
     pub(super) raw: String,
@@ -294,7 +296,30 @@ pub(super) struct PomodoroPastSummaryJson {
     pub(super) line: usize,
     #[serde(default)]
     pub(super) trims: Vec<PomodoroPastTrimJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) segment: Option<PomodoroPastSegmentJson>,
     pub(super) close: Box<PomodoroCloseSummaryJson>,
+}
+
+/// Resolved timeline segment for the suffix-carrying member: `raw` is the
+/// typed suffix (`~`, `~2`, `~2+`, `~~`); `kind` is `pomodoro`/`gap`/`tail`/
+/// `head`; `edge` is `start`/`end`; `start`/`end` are `HHMM`; `minutes` is
+/// the true segment length. `index`, `name`, and `line` appear only when
+/// they apply.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PomodoroPastSegmentJson {
+    pub(super) raw: String,
+    pub(super) kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) index: Option<u32>,
+    pub(super) edge: String,
+    pub(super) start: String,
+    pub(super) end: String,
+    pub(super) minutes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) line: Option<usize>,
 }
 
 /// One trimmed closed edge: the span rewrite staged before any member
@@ -322,6 +347,8 @@ pub(super) struct PomodoroPastTargetJson {
 pub(super) struct PomodoroPastStackJson {
     pub(super) index: u32,
     pub(super) size: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) pin: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -329,6 +356,19 @@ pub(super) struct PomodoroPastWindowJson {
     pub(super) start: String,
     pub(super) end: String,
     pub(super) minutes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) requested_minutes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) cut: Option<String>,
+    /// Wall name for `wall` cuts (supports the human `cut at WORK` note).
+    /// Omitted otherwise, so unsuffixed JSON stays byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) wall: Option<String>,
+    /// Pinned suffix raw (e.g. `~2`) for `segment` cuts on run members that
+    /// do not carry the suffix themselves (supports `cut to fit ~2`).
+    /// Omitted when the member's own `segment.raw` already names it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) fit: Option<String>,
 }
 
 /// One note-free `x0` reset: the current Pomodoro returned to the
@@ -4491,6 +4531,50 @@ fn print_close_body(
     }
 }
 
+/// Segment clause for the past human header, shared by dry-run and real
+/// runs: `at the start/end of <label>` for numbered segments, `since NAME`
+/// for the tail, and `before NAME` for the head. `None` when the member
+/// carries no suffix (unpinned runs and non-carrier members of pinned runs).
+fn past_segment_clause(past: &PomodoroPastSummaryJson) -> Option<String> {
+    let segment = past.segment.as_ref()?;
+    match segment.kind.as_str() {
+        "pomodoro" => {
+            let index = segment.index.unwrap_or(0);
+            let name = segment.name.as_deref().unwrap_or("session");
+            let edge = if segment.edge == "end" {
+                "end"
+            } else {
+                "start"
+            };
+            Some(format!(
+                "at the {edge} of ~{index} {name} {}-{}",
+                segment.start, segment.end
+            ))
+        }
+        "gap" => {
+            let index = segment.index.unwrap_or(0);
+            let edge = if segment.edge == "end" {
+                "end"
+            } else {
+                "start"
+            };
+            Some(format!(
+                "at the {edge} of ~{index} gap {}-{}",
+                segment.start, segment.end
+            ))
+        }
+        "tail" => {
+            let name = segment.name.as_deref().unwrap_or("session");
+            Some(format!("since {name}"))
+        }
+        "head" => {
+            let name = segment.name.as_deref().unwrap_or("session");
+            Some(format!("before {name}"))
+        }
+        _ => None,
+    }
+}
+
 pub(super) fn print_human_pomodoro_past_success(
     result: &CaptureItemResult,
     past: &PomodoroPastSummaryJson,
@@ -4520,14 +4604,43 @@ pub(super) fn print_human_pomodoro_past_success(
         close.off_clock,
         close.clock_note.as_deref(),
     );
-    let range_text = format!(
-        "{}-{} ({}m{})",
-        past.window.start, past.window.end, past.window.minutes, off_clock
-    );
+    let range_text = if let Some(cut) = past.window.cut.as_deref() {
+        let requested =
+            past.window.requested_minutes.unwrap_or(past.window.minutes);
+        let cut_phrase = match cut {
+            "now" => "at now".to_string(),
+            "wall" => past
+                .window
+                .wall
+                .as_deref()
+                .map(|wall| format!("at {wall}"))
+                .unwrap_or_else(|| "at wall".to_string()),
+            "segment" => past
+                .segment
+                .as_ref()
+                .map(|segment| segment.raw.clone())
+                .or_else(|| past.window.fit.clone())
+                .map(|raw| format!("to fit {raw}"))
+                .unwrap_or_else(|| "to fit segment".to_string()),
+            _ => format!("at {cut}"),
+        };
+        format!(
+            "{}-{} ({}m{}, {requested}m cut {cut_phrase})",
+            past.window.start, past.window.end, past.window.minutes, off_clock
+        )
+    } else {
+        format!(
+            "{}-{} ({}m{})",
+            past.window.start, past.window.end, past.window.minutes, off_clock
+        )
+    };
     let mut header = format!(
         "{verb} {name} {range_text}{narrowed_from} · {} line {}",
         close.day_relative, past.line
     );
+    if let Some(clause) = past_segment_clause(past) {
+        header.push_str(&format!(" · {clause}"));
+    }
     if past.stack.size > 1 {
         header.push_str(&format!(
             " · {} of {}",

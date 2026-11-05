@@ -68,7 +68,7 @@ Old top-level spellings remain as hidden aliases. See
 ## Capture-language revision
 
 `capture-parse` and `capture-complete` keep `schema_version: 1` and report the
-additive top-level `grammar: 13` revision. Clients can use it to distinguish
+additive top-level `grammar: 14` revision. Clients can use it to distinguish
 capture-language updates while continuing to read the same versioned JSON
 envelope. Grammar 8 kept grammar 7's note-pull behavior: an exactly lone
 `@route` task-list header is a note pull, `@route` with bullets remains a
@@ -118,6 +118,15 @@ Grammar 13 glues start and past timing to bare Pomodoro names, permits timing
 on either side of a bare start name, and retires `@` timing separators and
 redundant `#` prefixes. Bare names contain no `-` and do not end in an ASCII
 digit; `#` remains for names that cannot be spelled bare.
+
+Grammar 14 records past Pomodoros with an optional segment suffix
+(`x=E[s][!][=X]`): `~` starts where the last closed Pomodoro ended, `~n`
+starts at segment `n`, `~n+` ends at segment `n`, and `~~` ends where the
+first Pomodoro starts. A run hangs from one pin, typed counts stay exact,
+untyped counts stop at the segment's far edge, nothing records past now, and
+`!` still only trims one edge. Capture JSON gains `pomodoro_past.segment`,
+`stack.pin`, and `window.requested_minutes`/`cut`/`wall`/`fit`, all omitted
+for unsuffixed drafts.
 
 ## Runtime dependencies
 
