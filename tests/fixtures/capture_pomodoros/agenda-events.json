@@ -115,6 +115,7 @@
     "start_hint": "=meet",
     "synced_at": "2026-08-28T08:02"
   },
+  "max_task_link_count": 2,
   "ok": true,
   "plan_budget": {
     "links": {

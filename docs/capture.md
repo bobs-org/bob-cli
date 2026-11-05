@@ -9267,6 +9267,11 @@ object with `ok`, `schema_version` `1`, `day_file`, `relative_day_file`,
 nullable `name`, `slug`, `selectable`, nullable `time_range`, `placeholder`,
 `is_current`, `child_count`, and `task_link_count`. `task_link_count` is the size of the numbered Task Link lineup that a plain `x` close indexes, the same count as `pomodoro_close.task_links`, present as an integer only on the `is_current` entry and `null` elsewhere. Editors use it to know whether close task numbers can be multi-digit. The ref is stale-safe: a later write command
 can resolve exact line plus digest first, then a unique shifted digest match.
+The top-level `max_task_link_count` is the largest numbered Task Link lineup among
+today's open entries (the running session and every placeholder), or `0` when none is
+open. It is always an integer, including without `--tasks`. An `x=` record closes one of
+those rows or a fresh row with no links, so editors use this bound to decide whether an
+`x=` close task number can be multi-digit.
 Named Pomodoros use the same slug rules as task drawers — ASCII-lowercase,
 whitespace collapsed to `-`, whole-slug matching before the first slug-prefix
 match — with `+` also allowed in the selector. Entries whose names produce

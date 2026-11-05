@@ -233,6 +233,100 @@ fn capture_pomodoros_task_link_count_matches_dry_run_lineup() {
         !name_stdout.contains("task_link_count"),
         "capture-pomodoro-name JSON is unchanged:\n{name_stdout}"
     );
+    assert!(
+        !name_stdout.contains("max_task_link_count"),
+        "capture-pomodoro-name JSON has no capture-pomodoros lineup bound:\n{name_stdout}"
+    );
+}
+
+#[test]
+fn capture_pomodoros_max_task_link_count_matches_past_placeholder_lineup() {
+    let temp = TempDir::new("bob-cli-capture-pomodoros-past-parity");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20260828.md");
+    write_file(
+        &day_file,
+        concat!(
+            "# Day\n",
+            "## Pomodoros\n",
+            "- [ ] () — FIRST FUTURE\n",
+            "\t- [[sase#^first-1]]\n",
+            "\t- [[sase#^first-2]]\n",
+            "\t- [[sase#^first-3]]\n",
+            "- [ ] () — SECOND FUTURE\n",
+            "\t- [[sase#^second-1]]\n",
+            "\t- [[sase#^second-2]]\n",
+        ),
+    );
+    write_file(
+        &vault.join("sase.md"),
+        concat!(
+            "## Tasks\n",
+            "- [ ] #task First one ^first-1\n",
+            "- [ ] #task First two ^first-2\n",
+            "- [ ] #task First three ^first-3\n",
+            "- [ ] #task Second one ^second-1\n",
+            "- [ ] #task Second two ^second-2\n",
+        ),
+    );
+
+    let run_pomodoros = |tasks: bool| {
+        let mut command = bob_command();
+        command
+            .arg("capture-pomodoros")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json");
+        if tasks {
+            command.arg("-t");
+        }
+        command
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-08-28 09:10:00")
+            .output()
+            .expect("run capture-pomodoros json")
+    };
+
+    let plain_output = run_pomodoros(false);
+    assert_success(&plain_output);
+    let plain_json: serde_json::Value =
+        serde_json::from_str(stdout(&plain_output).trim()).expect("plain json");
+    let plain_bound = plain_json["max_task_link_count"]
+        .as_u64()
+        .expect("max_task_link_count without --tasks");
+    assert_eq!(plain_bound, 3);
+
+    let tasks_output = run_pomodoros(true);
+    assert_success(&tasks_output);
+    let tasks_json: serde_json::Value =
+        serde_json::from_str(stdout(&tasks_output).trim()).expect("tasks json");
+    assert_eq!(
+        tasks_json["max_task_link_count"].as_u64(),
+        Some(plain_bound)
+    );
+
+    let close_output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--dry-run")
+        .arg("--no-clip")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("x==")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-08-28 09:10:00")
+        .output()
+        .expect("run capture dry-run x==");
+    assert_success(&close_output);
+    let close_json: serde_json::Value =
+        serde_json::from_str(stdout(&close_output).trim()).expect("close json");
+    let task_links = close_json["pomodoro_past"]["close"]["task_links"]
+        .as_array()
+        .expect("past close task_links");
+    assert_eq!(plain_bound, task_links.len() as u64);
 }
 
 #[test]

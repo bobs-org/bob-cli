@@ -123,6 +123,7 @@
     "start_hint": "x =meet",
     "synced_at": null
   },
+  "max_task_link_count": 2,
   "ok": true,
   "plan_budget": {
     "links": {

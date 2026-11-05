@@ -876,7 +876,7 @@ Contract: [Starting the next Pomodoro](../capture.md#starting-the-next-pomodoro)
 
 ### `=name` / `=<X>#pomodoro` {#equals-named}
 
-Start the named Pomodoro now (`=focus`, same token as `=#focus`; equivalent spellings `=<X>#pomodoro`, `=name@<X>`). An open match (whole slug, else prefix)
+Start a named Pomodoro with `=focus`; use `#` when the bare name needs it (`=#2fa`). An open match (whole slug, else prefix)
 starts in place; a completed match starts a new session with that name
 ("again"); otherwise a new named session is created and started. While
 another session runs, a different named target swaps in. Empty `<X>` keeps

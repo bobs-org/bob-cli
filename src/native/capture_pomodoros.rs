@@ -79,7 +79,9 @@ pub(crate) fn build_cli() -> ClapCommand {
             "List Pomodoro entries from today's Bob daily note.\n\n\
 The command is read-only and reports Pomodoros in document order with stable \
 refs, names, selector slugs, time ranges, current-session status, child \
-link counts, and the current entry's numbered Task Link count for picker callers. Open entries are listed by default; use \
+link counts, and the current entry's numbered Task Link count for picker callers. \
+It also reports max_task_link_count, the largest numbered Task Link lineup among \
+open entries. Open entries are listed by default; use \
 --all to include completed entries. A missing daily note or missing \
 Pomodoros section returns a successful empty list with a warning.\n\n\
 With --tasks, each listed entry also carries its agenda payload: the entry \
@@ -203,6 +205,7 @@ struct CapturePomodorosResult {
     day_file: String,
     relative_day_file: String,
     count: usize,
+    max_task_link_count: usize,
     pomodoros: Vec<CapturePomodorosOutputEntry>,
     warnings: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -296,6 +299,7 @@ fn list_capture_pomodoros(
                 day_file: day_file.display().to_string(),
                 relative_day_file,
                 count: 0,
+                max_task_link_count: 0,
                 pomodoros: Vec::new(),
                 warnings,
                 date: request.include_tasks.then(|| agenda_date.to_string()),
@@ -373,6 +377,13 @@ fn list_capture_pomodoros(
         None
     };
     let current_count = current_task_link_count(&contents, &scan.entries);
+    let max_task_link_count = scan
+        .entries
+        .iter()
+        .filter(|entry| entry.state == PomodoroState::Open)
+        .map(|entry| task_link_count(&contents, entry))
+        .max()
+        .unwrap_or(0);
     let listed: Vec<PomodoroEntry> = scan
         .entries
         .iter()
@@ -497,6 +508,7 @@ fn list_capture_pomodoros(
         day_file: day_file.display().to_string(),
         relative_day_file,
         count: pomodoros.len(),
+        max_task_link_count,
         pomodoros,
         warnings,
         date: request.include_tasks.then(|| agenda_date.to_string()),
@@ -574,12 +586,16 @@ fn current_task_link_count(
     entries: &[PomodoroEntry],
 ) -> Option<usize> {
     let current = entries.iter().find(|entry| entry.is_current)?;
+    Some(task_link_count(contents, current))
+}
+
+fn task_link_count(contents: &str, entry: &PomodoroEntry) -> usize {
     let running = capture_pomodoro_close::RunningPomodoro {
-        line: current.line,
-        name: current.name.clone(),
-        time_range: current.time_range.clone().unwrap_or_default(),
+        line: entry.line,
+        name: entry.name.clone(),
+        time_range: entry.time_range.clone().unwrap_or_default(),
     };
-    Some(capture_pomodoro_close::number_task_links(contents, &running).len())
+    capture_pomodoro_close::number_task_links(contents, &running).len()
 }
 
 pub(crate) fn relative_day_file(day_file: &Path, bob_dir: &Path) -> String {
@@ -1948,6 +1964,7 @@ mod tests {
             day_file: "/tmp/bob/2026/20260828.md".to_string(),
             relative_day_file: "2026/20260828.md".to_string(),
             count: 1,
+            max_task_link_count: 3,
             pomodoros: vec![CapturePomodorosOutputEntry {
                 entry: PomodoroEntry {
                     pomodoro_ref: PomodoroRef {
@@ -1992,6 +2009,7 @@ mod tests {
         assert_eq!(value["day_file"], "/tmp/bob/2026/20260828.md");
         assert_eq!(value["relative_day_file"], "2026/20260828.md");
         assert_eq!(value["count"], 1);
+        assert_eq!(value["max_task_link_count"], 3);
         assert_eq!(value["pomodoros"][0]["ref"], "31:1a2b3c4d");
         assert_eq!(value["pomodoros"][0]["line"], 31);
         assert_eq!(value["pomodoros"][0]["state"], "open");
@@ -2039,6 +2057,7 @@ mod tests {
         })
         .expect("missing note success");
         assert_eq!(missing.count, 0);
+        assert_eq!(missing.max_task_link_count, 0);
         assert!(missing.warnings[0].contains("does not exist"));
 
         write_file(&temp.path().join("2026/20260828.md"), "# Day\n");
@@ -2055,6 +2074,7 @@ mod tests {
         )
         .expect("missing section success");
         assert_eq!(sectionless.count, 0);
+        assert_eq!(sectionless.max_task_link_count, 0);
         assert!(sectionless.warnings[0].contains("no Pomodoros section"));
     }
 
@@ -2066,6 +2086,7 @@ mod tests {
             day_file: "/tmp/bob/2026/20260828.md".to_string(),
             relative_day_file: "2026/20260828.md".to_string(),
             count: 2,
+            max_task_link_count: 1,
             pomodoros: vec![
                 CapturePomodorosOutputEntry {
                     entry: PomodoroEntry {
@@ -2217,6 +2238,142 @@ mod tests {
             .pomodoros
             .iter()
             .all(|output| output.task_link_count.is_none()));
+    }
+
+    #[test]
+    fn max_task_link_count_uses_the_largest_placeholder_lineup() {
+        let temp = TempDir::new("bob-cli-capture-pomodoros-max-placeholders");
+        let day_path = temp.path().join("2026/20260828.md");
+        write_file(
+            &day_path,
+            concat!(
+                "## Pomodoros\n",
+                "- [ ] () — SMALL\n",
+                "\t- [[bob#^small-1]]\n",
+                "\t- [[bob#^small-2]]\n",
+                "\t- ~~[[bob#^struck]]~~\n",
+                "\t- prose note\n",
+                "- [ ] () — LARGE\n",
+                "\t- [[bob#^large-1]]\n",
+                "\t- [[bob#^large-2]]\n",
+                "\t- [[bob#^large-3]]\n",
+            ),
+        );
+        let result =
+            crate::native::env::with_var("BOB_DAY_FILE", &day_path, || {
+                list_capture_pomodoros(&CapturePomodorosRequest {
+                    bob_dir: temp.path().to_path_buf(),
+                    include_all: false,
+                    include_tasks: false,
+                })
+            })
+            .expect("placeholder lineups success");
+        assert!(result
+            .pomodoros
+            .iter()
+            .all(|output| !output.entry.is_current));
+        assert_eq!(result.max_task_link_count, 3);
+    }
+
+    #[test]
+    fn max_task_link_count_includes_running_and_placeholder_entries() {
+        let temp = TempDir::new("bob-cli-capture-pomodoros-max-running");
+        let day_path = temp.path().join("2026/20260828.md");
+        write_file(
+            &day_path,
+            concat!(
+                "## Pomodoros\n",
+                "- [ ] (0900-0930) — RUNNING\n",
+                "\t- [[bob#^running-1]]\n",
+                "\t- [[bob#^running-2]]\n",
+                "\t- [[bob#^running-3]]\n",
+                "\t- [[bob#^running-4]]\n",
+                "- [ ] () — LATER\n",
+                "\t- [[bob#^later-1]]\n",
+                "\t- [[bob#^later-2]]\n",
+            ),
+        );
+        let result =
+            crate::native::env::with_var("BOB_DAY_FILE", &day_path, || {
+                list_capture_pomodoros(&CapturePomodorosRequest {
+                    bob_dir: temp.path().to_path_buf(),
+                    include_all: false,
+                    include_tasks: false,
+                })
+            })
+            .expect("running and placeholder success");
+        assert_eq!(result.max_task_link_count, 4);
+    }
+
+    #[test]
+    fn max_task_link_count_ignores_completed_entries_with_or_without_all() {
+        let temp = TempDir::new("bob-cli-capture-pomodoros-max-completed");
+        let day_path = temp.path().join("2026/20260828.md");
+        let mut contents =
+            String::from("## Pomodoros\n- [x] (0800-0830) — DONE\n");
+        for index in 1..=12 {
+            contents.push_str(&format!("\t- [[bob#^done-{index}]]\n"));
+        }
+        contents.push_str(
+            "- [ ] () — LATER\n\t- [[bob#^later-1]]\n\t- [[bob#^later-2]]\n",
+        );
+        write_file(&day_path, &contents);
+
+        for include_all in [false, true] {
+            let result =
+                crate::native::env::with_var("BOB_DAY_FILE", &day_path, || {
+                    list_capture_pomodoros(&CapturePomodorosRequest {
+                        bob_dir: temp.path().to_path_buf(),
+                        include_all,
+                        include_tasks: false,
+                    })
+                })
+                .expect("completed entry success");
+            assert_eq!(result.max_task_link_count, 2);
+        }
+    }
+
+    #[test]
+    fn max_task_link_count_is_zero_without_open_entries() {
+        let temp = TempDir::new("bob-cli-capture-pomodoros-max-empty");
+        let day_path = temp.path().join("2026/20260828.md");
+        let mut contents =
+            String::from("## Pomodoros\n- [x] (0800-0830) — DONE\n");
+        for index in 1..=12 {
+            contents.push_str(&format!("\t- [[bob#^done-{index}]]\n"));
+        }
+        write_file(&day_path, &contents);
+        let result =
+            crate::native::env::with_var("BOB_DAY_FILE", &day_path, || {
+                list_capture_pomodoros(&CapturePomodorosRequest {
+                    bob_dir: temp.path().to_path_buf(),
+                    include_all: true,
+                    include_tasks: false,
+                })
+            })
+            .expect("completed-only success");
+        assert_eq!(result.max_task_link_count, 0);
+    }
+
+    #[test]
+    fn max_task_link_count_reports_twelve_for_an_open_placeholder() {
+        let temp = TempDir::new("bob-cli-capture-pomodoros-max-twelve");
+        let day_path = temp.path().join("2026/20260828.md");
+        let mut contents = String::from("## Pomodoros\n- [ ] () — LATER\n");
+        for index in 1..=12 {
+            contents.push_str(&format!("\t- [[bob#^later-{index}]]\n"));
+        }
+        write_file(&day_path, &contents);
+        let result =
+            crate::native::env::with_var("BOB_DAY_FILE", &day_path, || {
+                list_capture_pomodoros(&CapturePomodorosRequest {
+                    bob_dir: temp.path().to_path_buf(),
+                    include_all: false,
+                    include_tasks: false,
+                })
+            })
+            .expect("large placeholder success");
+        assert_eq!(result.max_task_link_count, 12);
     }
 
     #[test]

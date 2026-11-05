@@ -115,7 +115,7 @@ section before it can add today's work.
 ## 6. Start a named Pomodoro
 
 ```bash
-bob capture '=#focus'
+bob capture '=focus'
 ```
 <!-- tutorial-test: checkpoint pomodoro-started -->
 

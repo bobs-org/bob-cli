@@ -384,7 +384,7 @@ def _checkpoint_pomodoro_started(sandbox: BobSandbox) -> None:
     daily = vault / day[:4] / f"{day.replace('-', '')}.md"
     text = daily.read_text(encoding="utf-8")
     if not re.search(r"(?m)^- \[ \] \(.*\) — FOCUS\s*$", text):
-        raise DocsError("bob capture '=#focus' did not leave an open named FOCUS Pomodoro")
+        raise DocsError("bob capture '=focus' did not leave an open named FOCUS Pomodoro")
     plan = _load_plan(sandbox)
     if (plan.get("today") or {}).get("count") != 0 or plan.get("today_tasks") != []:
         raise DocsError("starting a Pomodoro alone must not add a Today Task Link")

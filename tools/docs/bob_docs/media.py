@@ -450,7 +450,7 @@ def _run_bob_pty(sandbox: BobSandbox, args: tuple[str, ...]) -> str:
 def _prepare_plan(sandbox: BobSandbox, vault: Path) -> None:
     _run_bob_plain(sandbox, ("capture", "Water the seedlings @garden^seedlings"))
     _write_daily_note(sandbox, vault)
-    _run_bob_plain(sandbox, ("capture", "=#focus"))
+    _run_bob_plain(sandbox, ("capture", "=focus"))
     _run_bob_plain(sandbox, ("capture", "@garden:seedlings"))
 
 
