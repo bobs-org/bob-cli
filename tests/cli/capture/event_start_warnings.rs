@@ -117,7 +117,7 @@ fn meet_sessions_do_not_warn() {
         ),
     );
     let json =
-        capture_json(&vault, &day_file, "2026-11-01 11:50:00", &["=5#meet"]);
+        capture_json(&vault, &day_file, "2026-11-01 11:50:00", &["=5meet"]);
     assert!(json.get("event_conflict").is_none(), "{json}");
     assert!(
         json["pomodoro_start"].get("event_conflict").is_none(),
@@ -187,21 +187,21 @@ fn swap_with_fresh_timing_warns_on_a_new_crossing() {
         ),
     );
     let json =
-        capture_json(&vault, &day_file, "2026-11-01 11:50:00", &["=5#bugs"]);
+        capture_json(&vault, &day_file, "2026-11-01 11:50:00", &["=5bugs"]);
     let conflict = &json["pomodoro_start"]["event_conflict"];
     assert_eq!(conflict["event"]["title"], "Standup");
-    assert_eq!(conflict["fit"], "=2#bugs");
+    assert_eq!(conflict["fit"], "=2bugs");
 }
 
 #[test]
-fn named_start_fit_keeps_the_hash() {
+fn named_start_fit_uses_a_bare_name() {
     let (_temp, vault, day_file) =
         write_day("bob-cli-event-warn-named", STANDUP_DAY);
     let json =
-        capture_json(&vault, &day_file, "2026-11-01 11:50:00", &["=#bob"]);
-    // STANDUP_DAY already has a BOB placeholder; =#bob starts it.
+        capture_json(&vault, &day_file, "2026-11-01 11:50:00", &["=bob"]);
+    // STANDUP_DAY already has a BOB placeholder; =bob starts it.
     let conflict = &json["pomodoro_start"]["event_conflict"];
-    assert_eq!(conflict["fit"], "=2#bob");
+    assert_eq!(conflict["fit"], "=2bob");
 }
 
 #[test]
@@ -531,7 +531,7 @@ fn buffered_events_are_exempt_for_meet_and_the_own_lineup() {
         ),
     );
     let json =
-        capture_json(&vault, &day_file, "2026-11-01 11:10:00", &["=5#meet"]);
+        capture_json(&vault, &day_file, "2026-11-01 11:10:00", &["=5meet"]);
     assert!(
         json["pomodoro_start"].get("event_conflict").is_none(),
         "{json}"

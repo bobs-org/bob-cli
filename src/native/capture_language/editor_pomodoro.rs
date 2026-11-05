@@ -362,6 +362,46 @@ pub(super) fn parse_editor_named_start_item<'a>(
     let token_text = parent_trimmed.get(..len).unwrap_or(parent_trimmed);
     let drop_text = drop.as_ref().map(|(_, text)| text.as_str());
     let timing_text = timing.as_ref().map(|(_, text)| text.as_str());
+    if let Some(message) = super::item::retired_at_start_error(
+        token_text,
+        &suffix,
+        Some(&name),
+        Some(spelling),
+        is_literal,
+        drop_text,
+        timing.as_ref(),
+    ) {
+        let range = timing.as_ref().map(|(offset, text)| {
+            (token_start + offset, token_start + offset + 1 + text.len())
+        });
+        return Some(editor_named_invalid_outcome(
+            item,
+            parent_trimmed,
+            spans,
+            message,
+            range,
+        ));
+    }
+    if is_literal
+        && let Some(message) =
+            super::item::retired_literal_trailing_timing_error(
+                token_text,
+                &suffix,
+                drop_text,
+                timing.as_ref(),
+            )
+    {
+        let range = timing.as_ref().map(|(offset, text)| {
+            (token_start + offset, token_start + offset + text.len())
+        });
+        return Some(editor_named_invalid_outcome(
+            item,
+            parent_trimmed,
+            spans,
+            message,
+            range,
+        ));
+    }
     let first_opt = drop
         .as_ref()
         .map(|(offset, _)| *offset)
@@ -466,17 +506,15 @@ pub(super) fn parse_editor_named_start_item<'a>(
         if !suffix.is_empty()
             && let Some((timing_offset, timing_after)) = timing.as_ref()
         {
-            let sigil = "=";
-            let effective = if !timing_after.is_empty() {
-                timing_after.as_str()
-            } else {
-                suffix.as_str()
-            };
-            let message =
-                start_timing_twice_error(token_text, sigil, effective, &name);
+            let message = start_timing_twice_error(
+                token_text,
+                &suffix,
+                timing_after,
+                &name,
+            );
             let range = (
                 token_start + timing_offset,
-                token_start + timing_offset + 1 + timing_after.len(),
+                token_start + timing_offset + timing_after.len(),
             );
             return Some(editor_named_invalid_outcome(
                 item,
@@ -486,14 +524,14 @@ pub(super) fn parse_editor_named_start_item<'a>(
                 Some(range),
             ));
         }
-        // Dangling `@`: incomplete needing `pomodoro_start_timing`, no spec.
+        // A trailing X is a start span without an intervening sigil.
         if let Some((timing_offset, timing_after)) = timing.as_ref()
             && timing_after.is_empty()
         {
             let mut timing_spans = spans.clone();
             timing_spans.push(Span {
                 start: token_start + timing_offset,
-                end: token_start + timing_offset + 1,
+                end: token_start + timing_offset + timing_after.len(),
                 kind: SpanKind::InteractivePlaceholder,
                 project_note: None,
                 title: None,
@@ -521,10 +559,10 @@ pub(super) fn parse_editor_named_start_item<'a>(
         let effective = super::item::effective_start_timing(&suffix, &timing);
         let mut spec = parse_pomodoro_start_suffix(&effective)
             .expect("named token checked before spec");
-        // Second `pomodoro_start` span over `@<X>` including the `@`.
+        // Trailing X receives its own start span, separate from the name.
         if let Some((timing_offset, timing_after)) = timing.as_ref() {
             let start = token_start + timing_offset;
-            let end = start + 1 + timing_after.len();
+            let end = start + timing_after.len();
             spans.push(Span {
                 start,
                 end,
@@ -649,21 +687,27 @@ pub(super) fn parse_editor_named_start_item<'a>(
             range,
         ));
     }
+    if has_extra
+        && let Some((message, (start, end))) =
+            glued_timing_diagnostic(parent_trimmed, len, &suffix)
+    {
+        return Some(editor_named_invalid_outcome(
+            item,
+            parent_trimmed,
+            spans,
+            message,
+            Some((token_start + start, token_start + end)),
+        ));
+    }
     // Both timings win over dangling-`@`, like execution.
     if !suffix.is_empty()
         && let Some((timing_offset, timing_after)) = timing.as_ref()
     {
-        let sigil = "=";
-        let effective = if !timing_after.is_empty() {
-            timing_after.as_str()
-        } else {
-            suffix.as_str()
-        };
         let message =
-            start_timing_twice_error(token_text, sigil, effective, &name);
+            start_timing_twice_error(token_text, &suffix, timing_after, &name);
         let range = (
             token_start + timing_offset,
-            token_start + timing_offset + 1 + timing_after.len(),
+            token_start + timing_offset + timing_after.len(),
         );
         return Some(editor_named_invalid_outcome(
             item,
@@ -679,15 +723,14 @@ pub(super) fn parse_editor_named_start_item<'a>(
         let mut timing_spans = spans.clone();
         timing_spans.push(Span {
             start: token_start + timing_offset,
-            end: token_start + timing_offset + 1,
+            end: token_start + timing_offset + timing_after.len(),
             kind: SpanKind::InteractivePlaceholder,
             project_note: None,
             title: None,
             key: None,
         });
         timing_spans.sort_by_key(|span| span.start);
-        // With extra text or child lines, a dangling `@` still reports the
-        // timing incomplete state (never a takeover).
+        // With extra text or child lines, a trailing X remains incomplete.
         return Some(editor_start_timing_incomplete_outcome(
             item,
             parent_trimmed,
@@ -978,6 +1021,19 @@ fn named_start_token_diagnostic(
             ),
             (name_start, name_end),
         ));
+    } else if spelling == NameSpelling::Hash && can_spell_bare(name) {
+        let drop_suffix =
+            drop_text.map(|text| format!("~{text}")).unwrap_or_default();
+        let suggestion = format!("={suffix}{name}{drop_suffix}");
+        let typed = format!("{token}{drop_suffix}");
+        return Some((
+            retired_start_spelling_error(
+                &typed,
+                "`#` is only for names a bare start cannot spell",
+                &suggestion,
+            ),
+            (name_start.saturating_sub(1), name_start),
+        ));
     } else if !is_pomodoro_selector_component(name) {
         return Some((
             pomodoro_named_start_name_error(name, token),
@@ -1138,6 +1194,26 @@ pub(super) fn parse_editor_start_item<'a>(
             }
         }
     };
+    if let Some(message) = super::item::retired_at_start_error(
+        token_text,
+        &suffix,
+        None,
+        None,
+        false,
+        drop.as_ref().map(|(_, text)| text.as_str()),
+        timing.as_ref(),
+    ) {
+        let range = timing.as_ref().map(|(offset, text)| {
+            (token_start + offset, token_start + offset + 1 + text.len())
+        });
+        return Some(editor_start_invalid_outcome(
+            item,
+            parent_trimmed,
+            base_span,
+            message,
+            range,
+        ));
+    }
     let mut valid_spans = vec![base_span.clone()];
     if let DropLex::Valid(_, range) = &drop_lex {
         valid_spans.push(Span {
@@ -1154,7 +1230,7 @@ pub(super) fn parse_editor_start_item<'a>(
     {
         valid_spans.push(Span {
             start: token_start + timing_offset,
-            end: token_start + timing_offset + 1 + timing_after.len(),
+            end: token_start + timing_offset + timing_after.len(),
             kind: SpanKind::PomodoroStart,
             project_note: None,
             title: None,
@@ -1194,7 +1270,7 @@ pub(super) fn parse_editor_start_item<'a>(
                 );
                 let range = (
                     token_start + timing_offset,
-                    token_start + timing_offset + 1 + timing_after.len(),
+                    token_start + timing_offset + timing_after.len(),
                 );
                 return Some(editor_start_invalid_outcome(
                     item,
@@ -1210,7 +1286,7 @@ pub(super) fn parse_editor_start_item<'a>(
                 let mut timing_spans = vec![base_span.clone()];
                 timing_spans.push(Span {
                     start: token_start + timing_offset,
-                    end: token_start + timing_offset + 1,
+                    end: token_start + timing_offset + timing_after.len(),
                     kind: SpanKind::InteractivePlaceholder,
                     project_note: None,
                     title: None,
@@ -1307,7 +1383,7 @@ pub(super) fn parse_editor_start_item<'a>(
         );
         let range = (
             token_start + timing_offset,
-            token_start + timing_offset + 1 + timing_after.len(),
+            token_start + timing_offset + timing_after.len(),
         );
         return Some(editor_start_invalid_outcome(
             item,
@@ -1323,7 +1399,7 @@ pub(super) fn parse_editor_start_item<'a>(
         let mut timing_spans = vec![base_span.clone()];
         timing_spans.push(Span {
             start: token_start + timing_offset,
-            end: token_start + timing_offset + 1,
+            end: token_start + timing_offset + timing_after.len(),
             kind: SpanKind::InteractivePlaceholder,
             project_note: None,
             title: None,
@@ -1352,8 +1428,8 @@ pub(super) fn parse_editor_start_item<'a>(
     };
     match drop_lex {
         DropLex::None => {
-            // A timing-only start (`=#bugs@3`, `=~2@3`) is valid with the
-            // second `pomodoro_start` span; otherwise the base span alone.
+            // A trailing timing start such as `=bugs3` gets a second
+            // `pomodoro_start` span; otherwise the base span alone.
             let spans = if timing.is_some() {
                 valid_spans.clone()
             } else {

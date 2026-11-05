@@ -247,7 +247,7 @@ fn json_shape_is_stable() {
 
     assert_eq!(pomodoro_json["context"], "pomodoro_name");
     assert_eq!(pomodoro_json["schema_version"], 1);
-    assert_eq!(pomodoro_json["grammar"], 12);
+    assert_eq!(pomodoro_json["grammar"], 13);
     assert_eq!(pomodoro_json["candidates"][0]["replacement"], "memory");
     assert_eq!(pomodoro_json["candidates"][0]["name"], "MEMORY");
     assert_eq!(pomodoro_json["candidates"][0]["requires_name"], false);
@@ -402,7 +402,7 @@ fn named_start_completion_carries_keeps_ledger_and_running() {
     assert_eq!(fresh_json["override"]["keeps_ledger"], false);
 
     // A complete plain named start carries the same state-based context.
-    let plain = complete("=#bugs");
+    let plain = complete("=bugs");
     assert_eq!(plain.context, Some(CompletionContext::PomodoroStartName));
     let plain_override = plain.r#override.as_ref().expect("override object");
     assert!(plain_override.keeps_ledger);

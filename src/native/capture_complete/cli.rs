@@ -150,11 +150,12 @@ hidden or similar_to to explain an existing preference or nearby name. \
 Replacements preserve the displayed name, using an exact-name quoted literal \
 when a plain selector would change it or select another theme. Partial quoted \
 names match theme-key prefixes; plain names also match slug substrings.\n\n\
-Pomodoro-start-name completion covers the name part of a `=<X>#name` named \
-start and the `=<X>#` incomplete state. A planned placeholder that a bare \
+Pomodoro-start-name completion covers `=name`, `=<X>name`, `=name<X>`, \
+`=<X>#name`, and the `=<X>#` incomplete state. A planned placeholder that a bare \
 `=` would start carries next_up. Nameable utility rows set requires_name \
 and use an empty replacement that clients must not insert; the running entry \
-is last in start-name completion. A missing daily note, a missing Pomodoros \
+is last in start-name completion. Hashed-name replacements include `#`, \
+and candidate formatting keeps it only for names that need it. A missing daily note, a missing Pomodoros \
 section, and multiple open timed Pomodoros stay write-free warnings without \
 a create row. On a `@<route>:<block-id>[#<name>]=<X>` marker the `=<X>` start suffix is \
 never completable: block and Pomodoro-name replacement ranges end before \
@@ -163,7 +164,7 @@ a candidate preserves the typed suffix. The `=x[<N>][*<P>][!<M>][~<K>]` close su
 same way: it is never a completion field, replacements still stop before \
 `#`/`=`, and a cursor anywhere inside the suffix, including the task-number \
 lists and a dangling `,`/`~` separator, returns an empty success. A whole-item \
-`+[N]`/`-[N]` Pomodoro adjustment, `++[N]`/`--[N]` Pomodoro shift (a bare `+`, `-`, `++`, or `--` is one unit), `x[<N>][*<P>][!<M>][~<K>][@<N>]` close, or a bare `=`/`=<X>` start (a bare `=` starts 25 minutes) is an action and requests no route or task completion candidates: a cursor on such an item returns an empty success. Work Log text completes like a bullet line whether it sits below the close or on it: inline entry text requests no marker, `:`/`^`, or `wikilink_block` candidates, while note and heading wikilinks keep completing. A `=<X>#name` named start instead completes the name after `#` as `pomodoro_start_name`, per token inside chains; a cursor on `=<X>` or at the `#` byte itself returns an empty success, the `pomodoro_start_name` replacement range ends before a trailing `~<K>` drop part so accepting a name keeps the typed list, and a cursor anywhere inside the drop part, including a dangling `~`/`,` separator, returns an empty success. A whole-item `x=` past record completes its name as `pomodoro_past_name` after `x=`, `x=#`, and `x=<D>#` and inside `x=#\"…`, per token inside chains: open placeholders and completed names are offered with the next untimed placeholder marked next_up, the running session (or a row resolving to it) is never offered, no `override` object is reported, and the replacement covers only the name, ending before the repair `!`, a second `=`, or `@<D>`; a cursor on the count, the `!`, or the close part after the second `=` returns an empty success. Pomodoro block-ID \
+`+[N]`/`-[N]` Pomodoro adjustment, `++[N]`/`--[N]` Pomodoro shift (a bare `+`, `-`, `++`, or `--` is one unit), `x[<N>][*<P>][!<M>][~<K>][@<N>]` close, or a bare `=`/`=<X>` start (a bare `=` starts 25 minutes) is an action and requests no route or task completion candidates: a cursor on such an item returns an empty success. Work Log text completes like a bullet line whether it sits below the close or on it: inline entry text requests no marker, `:`/`^`, or `wikilink_block` candidates, while note and heading wikilinks keep completing. A `=<X>#name` or `=name` named start instead completes its name as `pomodoro_start_name`, per token inside chains; a cursor on timing or at the `#` byte itself returns an empty success, hashed-name replacements include `#`, candidate formatting keeps it only for names that need it, and the replacement ends before trailing timing or a `~<K>` drop part. A cursor inside either suffix, including a dangling `~`/`,` separator, returns an empty success. A whole-item `x=` past record completes its name as `pomodoro_past_name` after `x=`, `x=#`, and `x=<D>#` and inside `x=#\"…`, per token inside chains: open placeholders and completed names are offered with the next untimed placeholder marked next_up, the running session (or a row resolving to it) is never offered, no `override` object is reported, and the replacement covers only the name, ending before the repair `!`, a second `=`, or `@<D>`; a cursor on the count, the `!`, or the close part after the second `=` returns an empty success. Pomodoro block-ID \
 completion covers '@route:prefix' and parent-task completion covers \
 '@route+prefix', both backed by the same open-task scan as \
 `bob capture-tasks` and, by default, only offer tasks that already carry a \
@@ -243,7 +244,7 @@ A bare `%` opens the `directive` context with Bob-authored Clip, Pomodoro \
 note, and Template rows; bare-URL items also offer Listen. A typed letter \
 filters the rows, and opening the menu never reads the clipboard. Bare `#` \
 opens `task_type` with no row preselected. Every success response reports \
-`grammar: 12` while `schema_version` stays 1; an empty bare `#` or `%` \
+`grammar: 13` while `schema_version` stays 1; an empty bare `#` or `%` \
 query, an empty `=*` merge source, or an empty drawer query after `@route+id#`, adds \
 `initial_selection: \"none\"`. \
 A solo leading `:` token \

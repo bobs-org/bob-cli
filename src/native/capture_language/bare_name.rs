@@ -2,12 +2,13 @@
 //!
 //! Every position (lexer, link suffix, completion, hints) calls these
 //! helpers instead of re-deriving when a word after `=` is a Pomodoro
-//! name. A name can be bare when it starts with an ASCII letter and is
-//! not close-shaped (`x`, `x2`, `x!`, `*`, `!`). Digit-led names and
-//! close lookalikes keep the `#` spelling (`=#2fa`, `=#x`).
+//! name. A bare name starts with an ASCII letter, contains no dash, and
+//! does not end in an ASCII digit. Close-shaped names keep the `#` spelling.
 
 use super::close_selection::close_after_eq_parts;
-use super::tokens::is_pomodoro_selector_component;
+use super::tokens::{
+    is_pomodoro_selector_byte, is_pomodoro_selector_component,
+};
 
 /// How a named start spelled the name after `=`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,20 +19,20 @@ pub(crate) enum NameSpelling {
     Bare,
 }
 
-/// Byte length of a `#name` / bare-name part: ends at whitespace, `~`, or
+/// Byte length of a `#name` part: ends at whitespace, `~`, `=`, `!`, or
 /// `@`, or at the end of `text`.
 pub(crate) fn start_name_extent(text: &str) -> usize {
     text.find(|character: char| {
-        character.is_ascii_whitespace() || character == '~' || character == '@'
+        character.is_ascii_whitespace()
+            || matches!(character, '~' | '=' | '!' | '@')
     })
     .unwrap_or(text.len())
 }
 
 /// `Some` when the text right after a single `=` begins a bare name.
 ///
-/// That means its first byte is an ASCII letter,
-/// [`close_after_eq_parts`] does not claim it, and it does not start with
-/// `x#`/`X#`. The returned length is the name's extent.
+/// That means its first byte is an ASCII letter. The returned length omits
+/// a maximal trailing digit run, which belongs to the trailing timing.
 pub(crate) fn bare_start_name_len(after_eq: &str) -> Option<usize> {
     if !after_eq
         .as_bytes()
@@ -40,20 +41,34 @@ pub(crate) fn bare_start_name_len(after_eq: &str) -> Option<usize> {
     {
         return None;
     }
-    if close_after_eq_parts(after_eq).is_some() {
-        return None;
-    }
     if after_eq.starts_with("x#") || after_eq.starts_with("X#") {
         return None;
     }
-    let len = start_name_extent(after_eq);
-    (len > 0).then_some(len)
+    let len = after_eq
+        .bytes()
+        .take_while(|byte| is_pomodoro_selector_byte(*byte) && *byte != b'-')
+        .count();
+    let candidate = after_eq.get(..len)?;
+    let mut name_len = candidate.len();
+    while name_len > 0 && candidate.as_bytes()[name_len - 1].is_ascii_digit() {
+        name_len -= 1;
+    }
+    if name_len == 0 {
+        return None;
+    }
+    let name = &candidate[..name_len];
+    if close_after_eq_parts(name).is_some() {
+        return None;
+    }
+    Some(name_len)
 }
 
 /// Whether `name` can be written after `=` without `#`.
 pub(crate) fn can_spell_bare(name: &str) -> bool {
     is_pomodoro_selector_component(name)
         && name.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+        && !name.contains('-')
+        && !name.as_bytes().last().is_some_and(u8::is_ascii_digit)
         && close_after_eq_parts(name).is_none()
 }
 
@@ -83,7 +98,7 @@ pub(crate) fn echo_named_start(
     name: &str,
 ) -> String {
     match spelling {
-        NameSpelling::Bare => format!("={name}"),
+        NameSpelling::Bare => format!("={suffix}{name}"),
         NameSpelling::Hash => format!("={suffix}#{name}"),
     }
 }
@@ -97,6 +112,11 @@ mod tests {
         assert_eq!(bare_start_name_len("bugs"), Some(4));
         assert_eq!(bare_start_name_len("bugs@3"), Some(4));
         assert_eq!(bare_start_name_len("bugs~2"), Some(4));
+        assert_eq!(bare_start_name_len("fix3"), Some(3));
+        assert_eq!(bare_start_name_len("fix10-3"), Some(3));
+        assert_eq!(bare_start_name_len("b2b"), Some(3));
+        assert_eq!(bare_start_name_len("xmas3"), Some(4));
+        assert_eq!(bare_start_name_len("bob+decks2"), Some(9));
         assert_eq!(bare_start_name_len("xx"), Some(2));
         assert_eq!(bare_start_name_len("xmas"), Some(4));
         assert_eq!(bare_start_name_len("Bugs"), Some(4));
@@ -117,7 +137,10 @@ mod tests {
         assert!(can_spell_bare("bugs"));
         assert!(can_spell_bare("xx"));
         assert!(can_spell_bare("xmas"));
-        assert!(can_spell_bare("deep-work"));
+        assert!(!can_spell_bare("deep-work"));
+        assert!(!can_spell_bare("fix3"));
+        assert!(can_spell_bare("b2b"));
+        assert!(!can_spell_bare("bob+decks2"));
         assert!(!can_spell_bare("2fa"));
         assert!(!can_spell_bare("x"));
         assert!(!can_spell_bare("x2"));
@@ -131,14 +154,16 @@ mod tests {
         assert_eq!(start_name_spelling("bugs"), "bugs");
         assert_eq!(start_name_spelling(""), "#");
         assert_eq!(start_name_spelling("2fa"), "#2fa");
+        assert_eq!(start_name_spelling("deep-work"), "#deep-work");
+        assert_eq!(start_name_spelling("fix3"), "#fix3");
         assert_eq!(start_name_spelling("x"), "#x");
         assert_eq!(named_start_token("bugs"), "=bugs");
         assert_eq!(named_start_token(""), "=#");
         assert_eq!(named_start_token("2fa"), "=#2fa");
         assert_eq!(echo_named_start(NameSpelling::Bare, "", "bugs"), "=bugs");
         assert_eq!(
-            echo_named_start(NameSpelling::Hash, "3", "bugs"),
-            "=3#bugs"
+            echo_named_start(NameSpelling::Hash, "3", "deep-work"),
+            "=3#deep-work"
         );
     }
 }

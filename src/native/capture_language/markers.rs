@@ -658,23 +658,32 @@ pub(super) fn pomodoro_start_shape_error(token: &str, suffix: &str) -> String {
     )
 }
 
-/// Counted start whose `<X>` runs into a following name (`=3bugs`, `=2fa`).
-/// `digit_name_token` is the `#` spelling of the whole `suffix+name` when
-/// that text is a digit-led Pomodoro name.
+/// A dash continued into letters is a bare-name spelling that must use `#`.
 pub(super) fn pomodoro_glued_timing_error(
     token: &str,
-    at_form: &str,
     hash_form: &str,
-    digit_name_token: Option<&str>,
 ) -> String {
-    match digit_name_token {
-        Some(hash_name) => format!(
-            "`{token}` runs the duration into the name; write `{at_form}` or `{hash_form}`; a name that starts with a digit takes `#` (`{hash_name}`)"
-        ),
-        None => format!(
-            "`{token}` runs the duration into the name; write `{at_form}` or `{hash_form}`"
-        ),
-    }
+    format!(
+        "`{token}` puts `-` inside a bare Pomodoro name; write `{hash_form}` (bare names cannot contain `-`)"
+    )
+}
+
+pub(super) fn pomodoro_named_start_close_error(
+    token: &str,
+    suggestion: &str,
+) -> String {
+    format!(
+        "`{token}` has a close-shaped name; write `{suggestion}` to select it"
+    )
+}
+
+/// Retired `@` timing separator or redundant `#` on a bare-spellable name.
+pub(super) fn retired_start_spelling_error(
+    token: &str,
+    reason: &str,
+    suggestion: &str,
+) -> String {
+    format!("`{token}` is retired: {reason}; write `{suggestion}`")
 }
 
 /// Named-start E1: `=#` / `=3#` with an empty name part.
@@ -736,7 +745,35 @@ pub(super) fn pomodoro_named_start_nospace_error(
 /// A claimed doubled start spelling. The single `=` rewrite is computed by
 /// removing one leading `=` from the typed token.
 pub(super) fn pomodoro_double_start_error(token: &str) -> String {
-    let rewrite = token.strip_prefix('=').unwrap_or(token);
+    let single = token.strip_prefix('=').unwrap_or(token);
+    let rewrite = match super::item::session_equals_token(single) {
+        Some(super::item::EqualsToken::Start {
+            suffix,
+            len,
+            name: Some(name),
+            name_spelling: Some(super::bare_name::NameSpelling::Hash),
+            name_is_literal: false,
+            ..
+        }) if super::bare_name::can_spell_bare(&name) => {
+            let trailing = single
+                .get(len..)
+                .and_then(|rest| rest.strip_prefix('='))
+                .filter(|rest| {
+                    !rest.is_empty()
+                        && rest
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || byte == b'-')
+                });
+            if suffix.is_empty() {
+                format!("={name}{}", trailing.unwrap_or_default())
+            } else if trailing.is_none() {
+                format!("={suffix}{name}")
+            } else {
+                single.to_string()
+            }
+        }
+        _ => single.to_string(),
+    };
     format!(
         "`{token}` is retired: `=` restarts or swaps the running Pomodoro by itself; write `{rewrite}`"
     )
@@ -1161,7 +1198,7 @@ pub(super) fn start_drop_bang_error() -> String {
 }
 
 /// A `#name` typed after the drop list belongs before it. `suggestion` keeps
-/// the typed `<X>` (for example `=3#bugs~2`).
+/// the typed `<X>` (for example `=3#deep-work~2`).
 pub(super) fn start_drop_hash_error(suggestion: &str, token: &str) -> String {
     format!(
         "write the drop list after the name: `{suggestion}` instead of `{token}`"
@@ -1191,15 +1228,15 @@ pub(super) fn close_selection_expected_number_after_at_error() -> String {
     "expected a task number after `@`".to_string()
 }
 
-/// Both timings typed: leading `<X>` plus `@<X>`.
+/// Both timings typed around a bare name.
 pub(super) fn start_timing_twice_error(
     token: &str,
-    sigil: &str,
-    effective: &str,
+    leading: &str,
+    trailing: &str,
     name: &str,
 ) -> String {
     format!(
-        "`{token}` gives the timing twice; write `{sigil}{effective}#{name}` or `{sigil}#{name}@{effective}`"
+        "`{token}` gives the timing twice; keep one: `={leading}{name}` or `={name}{trailing}`"
     )
 }
 
@@ -1215,14 +1252,12 @@ pub(super) fn start_timing_twice_unnamed_error(
     } else {
         format!("~{drop_text}")
     };
-    format!(
-        "`{token}` gives the timing twice; write `{sigil}{effective}{drop_suffix}`"
-    )
+    format!("`{token}` gives the timing twice; write `{sigil}{effective}{drop_suffix}`")
 }
 
-/// A dangling `@` with no timing after it.
+/// A dangling `@` is retired and teaches the glued spelling.
 pub(super) fn start_timing_incomplete_error(token: &str) -> String {
-    format!("`{token}` is incomplete: type the timing after `@` (for example `{token}3`)")
+    format!("`{token}` is retired: put the timing directly after the name (for example `=name3`)")
 }
 
 /// A spaceless join that lexes as a start timing gets this hint instead of

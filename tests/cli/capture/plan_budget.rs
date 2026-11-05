@@ -605,7 +605,7 @@ fn capture_stale_strict_key_allows_named_starts() {
     write_file(&config, "plan:\n  strict: true\n");
 
     let output =
-        capture_json(&vault, &day_file, &["--", "=#fresh"], Some(&config));
+        capture_json(&vault, &day_file, &["--", "=fresh"], Some(&config));
     assert_success(&output);
     let json = parse_json(&output);
     assert_eq!(json["ok"], true);

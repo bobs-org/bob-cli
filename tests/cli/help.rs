@@ -563,8 +563,8 @@ fn capture_named_start_help_mentions_start_forms() {
     for needle in [
         "=name",
         "bob capture '=bugs'",
-        "bob capture '=3#bugs'",
-        "bob capture '=bugs@3'",
+        "bob capture '=3bugs'",
+        "bob capture '=bugs3'",
         "bob capture 'x =bugs'",
         "bob capture '@sase:deep-fix=bugs'",
     ] {

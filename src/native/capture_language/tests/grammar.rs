@@ -970,7 +970,6 @@ fn execution_parses_equals_family_starts_alongside_close() {
     for (raw, token, suffix) in [
         ("=3 more", "=3", "3"),
         ("=-2 @work", "=-2", "-2"),
-        ("=3s:1", "=3", "3"),
         ("=2-1-", "=2-1", "2-1"),
         ("=\n- child", "=", ""),
         ("=2\n- child", "=2", "2"),
@@ -984,28 +983,49 @@ fn execution_parses_equals_family_starts_alongside_close() {
             "{raw}"
         );
     }
-    // Counted timing glued to a following name is a teaching error, not
-    // extra-text shape (`=3s:1` stays shape because `s:1` is not a name).
-    for (raw, message) in [
-        (
-            "=3bugs",
-            "`=3bugs` runs the duration into the name; write `=bugs@3` or `=3#bugs`; a name that starts with a digit takes `#` (`=#3bugs`)",
-        ),
-        (
-            "=-2bugs",
-            "`=-2bugs` runs the duration into the name; write `=bugs@-2` or `=-2#bugs`",
-        ),
-        (
-            "=2fa",
-            "`=2fa` runs the duration into the name; write `=fa@2` or `=2#fa`; a name that starts with a digit takes `#` (`=#2fa`)",
-        ),
-        (
-            "=3x",
-            "`=3x` runs the duration into the name; write `=#x@3` or `=3#x`; a name that starts with a digit takes `#` (`=#3x`)",
-        ),
+    assert_eq!(
+        execute("=3s:1").expect_err("named start with extra text"),
+        "Pomodoro start `=3s` must be the whole capture item; remove extra text, markers, or child lines (to start a task's session in a named Pomodoro instead, use `^route:block-id#s=3`)"
+    );
+    // A bare name may follow a leading timing, or carry timing as its
+    // trailing digit run. Hash remains for names with an initial digit or
+    // a dash; hash names cannot carry trailing timing.
+    for (raw, name, timing, duration) in [
+        ("=bugs", "bugs", "", 5),
+        ("=3bugs", "bugs", "3", 3),
+        ("=bugs3", "bugs", "3", 3),
+        ("=fix10", "fix", "10", 10),
+        ("=3#deep-work", "deep-work", "3", 3),
+        ("=#2fa", "2fa", "", 5),
+        ("=3#2fa", "2fa", "3", 3),
+        ("=3#\"DEEP WORK\"", "DEEP WORK", "3", 3),
     ] {
-        assert_eq!(execute(raw).expect_err(raw), message, "{raw}");
+        let parsed =
+            execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
+        match parsed.kind {
+            CaptureKind::PomodoroStart {
+                pomodoro_name,
+                spec,
+                ..
+            } => {
+                assert_eq!(pomodoro_name.as_deref(), Some(name), "{raw}");
+                assert_eq!(spec.raw, timing, "{raw}");
+                assert_eq!(spec.duration_units, duration, "{raw}");
+            }
+            other => panic!("{raw}: expected named start, got {other:?}"),
+        }
     }
+    for (raw, suggestion) in [
+        ("=#bugs", "=bugs"),
+        ("=3#bugs", "=3bugs"),
+        ("=bugs@3", "=bugs3"),
+        ("=bugs~2@3", "=bugs3~2"),
+    ] {
+        let error = execute(raw).expect_err(raw);
+        assert!(error.contains(suggestion), "{raw}: {error}");
+    }
+    let close_shaped = execute("=3x").expect_err("close-shaped name");
+    assert!(close_shaped.contains("=3#x"), "{close_shaped}");
     // Oversized values fail the shared start overflow before any write.
     let overflow = execute("=99999999999999999999999").expect_err("overflow");
     assert_eq!(overflow, POMODORO_START_OVERFLOW_ERROR, "{overflow}");
@@ -1092,7 +1112,7 @@ fn execution_parses_equals_family_starts_alongside_close() {
 }
 
 #[test]
-fn execution_treats_bare_named_starts_as_hash_equivalents() {
+fn execution_treats_leading_and_trailing_timing_as_equivalent() {
     fn assert_equivalent(bare: &str, hashed: &str) {
         match (execute_draft(bare), execute_draft(hashed)) {
             (Ok(left), Ok(right)) => {
@@ -1180,27 +1200,14 @@ fn execution_treats_bare_named_starts_as_hash_equivalents() {
             );
         }
     }
-    for (bare, hashed) in [
-        ("=bugs", "=#bugs"),
-        ("=bugs@3", "=#bugs@3"),
-        ("=bugs@3~2", "=#bugs@3~2"),
-        ("=bugs~2", "=#bugs~2"),
-        ("=bugs~2@3", "=#bugs~2@3"),
-        ("=xx", "=#xx"),
-        ("=xa", "=#xa"),
-        ("=xmas", "=#xmas"),
-        ("=Xmas", "=#Xmas"),
-        ("=Bugs", "=#Bugs"),
-        ("=c++", "=#c++"),
-        ("x =bugs", "x =#bugs"),
-        ("=bugs +2", "=#bugs +2"),
-        ("x wired it =bugs", "x wired it =#bugs"),
-        ("=bugs more", "=#bugs more"),
-        ("=deep work", "=#deep work"),
-        ("=bugs=3", "=#bugs=3"),
-        ("=bugs@", "=#bugs@"),
+    for (before, after) in [
+        ("=3bugs", "=bugs3"),
+        ("=3bugs~2", "=bugs3~2"),
+        ("x =3bugs", "x =bugs3"),
+        ("=3bugs +2", "=bugs3 +2"),
+        ("x wired it =3bugs", "x wired it =bugs3"),
     ] {
-        assert_equivalent(bare, hashed);
+        assert_equivalent(before, after);
     }
 }
 
@@ -1211,20 +1218,15 @@ fn execution_teaches_bare_named_start_shape_in_the_typed_spelling() {
         "Pomodoro start `=deep` must be the whole capture item; remove extra text, markers, or child lines (to start a task's session in a named Pomodoro instead, use `^route:block-id#deep=`); to name a multi-word Pomodoro, join the words with `-`: `=deep-work`"
     );
     assert_eq!(
-        execute("=#deep work").expect_err("hashed multi-word"),
-        "Pomodoro start `=#deep` must be the whole capture item; remove extra text, markers, or child lines (to start a task's session in a named Pomodoro instead, use `^route:block-id#deep=`); to name a multi-word Pomodoro, join the words with `-`: `=#deep-work`"
+        execute("=#deep").expect_err("retired bare-name hash"),
+        "`=#deep` is retired: `#` is only for names a bare start cannot spell; write `=deep`"
     );
-    assert_eq!(
-        execute("=bugs=3").expect_err("order"),
-        "write the duration after `@` or before the name: `=bugs@3` or `=3#bugs` instead of `=bugs=3`"
-    );
-    assert!(
-        execute("=bugs@")
-            .expect_err("incomplete timing")
-            .contains("incomplete"),
-        "{}",
-        execute("=bugs@").expect_err("incomplete timing")
-    );
+    assert!(execute("=bugs=3")
+        .expect_err("extra equals timing")
+        .contains("whole capture item"));
+    assert!(execute("=bugs@")
+        .expect_err("retired at timing")
+        .contains("retired"));
     assert_eq!(
         execute("=x#bugs").expect_err("retired close-hash"),
         "`=x#bugs` is retired: close the running Pomodoro with a bare `x`, without the `=`; write `x =bugs`"
@@ -1236,12 +1238,12 @@ fn execution_retires_claimed_doubled_start_family() {
     for raw in [
         "==",
         "==3",
-        "==#bugs",
-        "==3#bugs~2",
-        "==#bugs@3",
+        "==#deep-work",
+        "==3bugs~2",
+        "==3bugs",
         "==#",
         "==~",
-        "==#bugs=3",
+        "==3bugs",
         "==3 more",
         "==~2,",
     ] {
@@ -1262,11 +1264,10 @@ fn execution_retires_claimed_doubled_start_family() {
             "{raw}"
         );
     }
-    assert_eq!(
-        execute("==#deep work").expect_err("named token plus prose"),
-        "`==#deep` is retired: `=` restarts or swaps the running Pomodoro by itself; write `=#deep`",
-    );
-    for prose in ["== foo", "==foo", "==xyz", "==important== thing"] {
+    assert!(execute("==3deep")
+        .expect_err("double start")
+        .contains("write `=3deep`"),);
+    for prose in ["== foo", "==foo", "==deep", "==xyz", "==important== thing"] {
         assert_eq!(
             execute(prose).expect(prose).kind,
             CaptureKind::Task,
@@ -1795,7 +1796,7 @@ fn execution_route_less_sealed_guard_agrees_across_destination_paths() {
 }
 
 #[test]
-fn pomodoro_link_suffix_names_match_the_existing_hash_spelling() {
+fn pomodoro_link_suffix_names_match_standalone_start_grammar() {
     for (short, established) in [
         ("@work:outline=bugs", "@work:outline#bugs="),
         ("^work:outline=bugs", "^work:outline#bugs="),
@@ -1803,12 +1804,14 @@ fn pomodoro_link_suffix_names_match_the_existing_hash_spelling() {
             "Write outline @work:outline=bugs",
             "Write outline @work:outline#bugs=",
         ),
-        ("@work:outline=bugs@3", "@work:outline#bugs=3"),
-        ("@work:outline=3#bugs", "@work:outline#bugs=3"),
-        ("@work:outline=#bugs", "@work:outline#bugs="),
-        ("^work:outline=bugs@3", "^work:outline#bugs=3"),
-        ("^work:outline=3#bugs", "^work:outline#bugs=3"),
-        ("^work:outline=#bugs", "^work:outline#bugs="),
+        ("@work:outline=bugs3", "@work:outline#bugs=3"),
+        ("@work:outline=3bugs", "@work:outline#bugs=3"),
+        ("@work:outline=3#deep-work", "@work:outline#deep-work=3"),
+        ("@work:outline=#2fa", "@work:outline#2fa="),
+        ("^work:outline=bugs3", "^work:outline#bugs=3"),
+        ("^work:outline=3bugs", "^work:outline#bugs=3"),
+        ("^work:outline=3#deep-work", "^work:outline#deep-work=3"),
+        ("^work:outline=#2fa", "^work:outline#2fa="),
     ] {
         assert_eq!(
             execute(short).expect(short),
@@ -1825,36 +1828,29 @@ fn pomodoro_link_suffixes_teach_about_drops_duplicate_names_and_glued_timing() {
         assert!(error.contains("not a `~` drop list"), "{raw}: {error}");
     }
 
-    let duplicate = execute("@work:outline#bugs=3#focus")
+    let duplicate = execute("@work:outline#bugs=3focus")
         .expect_err("a link names the Pomodoro only once");
     assert!(duplicate.contains("names the Pomodoro both before and after `=`"));
 
-    let glued = execute("@work:outline=3bugs")
-        .expect_err("a counted timing cannot run into a bare name");
-    assert!(glued.contains("runs the duration into the name"), "{glued}");
+    let dashed = execute("@work:outline=3deep-work")
+        .expect_err("a bare name cannot contain a dash");
+    assert!(dashed.contains("=3#deep-work"), "{dashed}");
+
+    let retired = execute("@work:outline=bugs@3")
+        .expect_err("the old timing separator is retired");
+    assert!(retired.contains("is retired"), "{retired}");
 }
 
 #[test]
 fn pomodoro_link_suffix_shared_timing_validation_matches_standalone() {
-    // Duplicate timing in both positions refuses like `=3#bugs@2`, for both
-    // sigils and legacy `@!` where shared.
+    // A digit run on both sides of a bare name duplicates timing.
     for raw in [
-        "@work:outline=3#bugs@2",
-        "^work:outline=3#bugs@2",
-        "@!work:outline=3#bugs@2",
-        "@work:outline=3#bugs@",
-        "^work:outline=3#bugs@",
+        "@work:outline=3bugs2",
+        "^work:outline=3bugs2",
+        "@!work:outline=3bugs2",
     ] {
         let error = execute(raw).expect_err(raw);
         assert!(error.contains("gives the timing twice"), "{raw}: {error}");
-    }
-    // Dangling timing refuses execution (the editor reports incomplete).
-    for raw in ["@work:outline=bugs@", "^work:outline=bugs@"] {
-        let error = execute(raw).expect_err(raw);
-        assert!(
-            error.contains("is incomplete: type the timing after `@`"),
-            "{raw}: {error}"
-        );
     }
     // Name-once suggestions use the shared spelling helper and preserve
     // start intent: digit-led and close-like names keep `#`.

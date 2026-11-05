@@ -1196,12 +1196,12 @@ mod drop_tests {
             &StartOwner::Created {
                 name: "PLAN".to_string(),
             },
-            "=#plan~1",
+            "=plan~1",
         )
         .expect_err("created sessions start empty");
         assert_eq!(
             error.to_string(),
-            "`=#plan~1` names task 1, but PLAN starts as a new session with no queued Task Links; start it with `=#plan`"
+            "`=plan~1` names task 1, but PLAN starts as a new session with no queued Task Links; start it with `=plan`"
         );
     }
 

@@ -935,11 +935,12 @@ pub(super) struct ColonLinkParts {
     pub(super) name_range: Option<(usize, usize)>,
     /// Token-relative start of the `=` suffix.
     pub(super) start_offset: Option<usize>,
-    /// True when the suffix name is written as bare `=name` rather than
-    /// `=#name` / `=3#name`.
+    /// True when the suffix name is written bare, or when a hash name is
+    /// being completed so an accepted bare-spellable candidate can remove
+    /// the `#`.
     pub(super) bare_name: bool,
     /// The start operator's disjoint editor spans. A name in the suffix can
-    /// split the start into a prefix (`=3`) and trailing timing (`@3`).
+    /// split the start into a prefix (`=3`) and trailing timing (`3`).
     pub(super) start_ranges: Vec<(usize, usize)>,
 }
 
@@ -986,6 +987,28 @@ fn parse_link_start_suffix(
         }
         return Err(POMODORO_START_SHAPE_ERROR.to_string());
     }
+    if let Some(message) = super::item::retired_at_start_error(
+        &start_token,
+        &suffix,
+        name.as_deref(),
+        name_spelling,
+        name_is_literal,
+        drop.as_ref().map(|(_, text)| text.as_str()),
+        timing.as_ref(),
+    ) {
+        return Err(message);
+    }
+    if name_is_literal
+        && let Some(message) =
+            super::item::retired_literal_trailing_timing_error(
+                &start_token,
+                &suffix,
+                drop.as_ref().map(|(_, text)| text.as_str()),
+                timing.as_ref(),
+            )
+    {
+        return Err(message);
+    }
     if name.as_deref() == Some("") {
         return Err(POMODORO_NAME_REQUIRED_ERROR.to_string());
     }
@@ -1004,6 +1027,19 @@ fn parse_link_start_suffix(
     {
         return Err(POMODORO_NAME_ERROR.to_string());
     }
+    if !name_is_literal
+        && name_spelling == Some(NameSpelling::Hash)
+        && name
+            .as_deref()
+            .is_some_and(super::bare_name::can_spell_bare)
+    {
+        let name = name.as_deref().expect("hash spelling has a name");
+        return Err(super::markers::retired_start_spelling_error(
+            &start_token,
+            "`#` is only for names a bare start cannot spell",
+            &format!("={suffix}{name}"),
+        ));
+    }
 
     let effective = effective_start_timing(&suffix, &timing);
     // Overflow and invalid timing win over duplicate/dangling checks,
@@ -1017,23 +1053,18 @@ fn parse_link_start_suffix(
     if !suffix.is_empty()
         && let Some((_, timing_text)) = timing.as_ref()
     {
-        let effective_twice = if !timing_text.is_empty() {
-            timing_text.as_str()
-        } else {
-            suffix.as_str()
-        };
         if let Some(name_str) = name.as_deref() {
             return Err(start_timing_twice_error(
                 typed_token,
-                "=",
-                effective_twice,
+                &suffix,
+                timing_text,
                 name_str,
             ));
         }
         return Err(start_timing_twice_unnamed_error(
             typed_token,
             "=",
-            effective_twice,
+            timing_text,
             "",
         ));
     }
@@ -2027,7 +2058,7 @@ pub(super) fn classify_caret_token(text: &str) -> CaretTokenShape {
                         {
                             start_ranges.push((
                                 offset + timing_offset,
-                                offset + timing_offset + 1 + timing_text.len(),
+                                offset + timing_offset + timing_text.len(),
                             ));
                         }
                         // Prefix-empty `#=3` with a plain numeric suffix

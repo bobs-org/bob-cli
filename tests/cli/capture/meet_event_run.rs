@@ -248,7 +248,7 @@ fn far_run_warning_names_the_event_and_the_escape_hatch() {
         .expect("far-run warning");
     assert_eq!(
         warning["message"],
-        "MEET's next event, Lunch with Kelly, starts at 1200 (2h 10m from now) · capture `=5#meet` to start 25 minutes now"
+        "MEET's next event, Lunch with Kelly, starts at 1200 (2h 10m from now) · capture `=5meet` to start 25 minutes now"
     );
 }
 
@@ -416,7 +416,7 @@ fn far_run_warning_measures_from_the_buffered_start() {
         .expect("far-run warning");
     assert_eq!(
         warning["message"],
-        "MEET's next event, Lunch with Kelly (1200-1300 −30m +15m), starts at 1130 (2h 10m from now) · capture `=5#meet` to start 25 minutes now"
+        "MEET's next event, Lunch with Kelly (1200-1300 −30m +15m), starts at 1130 (2h 10m from now) · capture `=5meet` to start 25 minutes now"
     );
 }
 
@@ -427,7 +427,7 @@ fn a_lead_out_in_progress_is_still_a_run_and_a_counted_start_keeps_its_span() {
     let day_file = vault.join("2026/20261101.md");
     write_file(&day_file, BUFFERED_LUNCH_DAY);
     // 13:10 is lead-out: the meeting ended at 1300, the run lasts to 1315.
-    let json = run_start(&vault, &day_file, "2026-11-01 13:10:00", "=5#meet");
+    let json = run_start(&vault, &day_file, "2026-11-01 13:10:00", "=5meet");
     let start = &json["pomodoro_start"];
     assert_eq!(start["tracked"], false, "{start}");
     assert_eq!(start["event_run"]["source"], "explicit", "{start}");

@@ -175,7 +175,7 @@ command also best-effort reads the configured vault's theme catalog and adds \
 theme refs; if the catalog is unavailable, parsing still succeeds without \
 those refs. It never writes to the vault or reads the clipboard, and takes no \
 --bob-dir. A '%c' directive still succeeds without reading the clipboard.\n\n\
-Success JSON reports `grammar: 12` for the capture-language revision while \
+Success JSON reports `grammar: 13` for the capture-language revision while \
 `schema_version` stays 1.\n\n\
 A lone task-list header `@route` with no section, bullets, or other text \
 reports mode `note_pull`; `@route` with bullets remains a task list, and a \
@@ -252,11 +252,12 @@ start (for example `=` starts 25 minutes, `=3` starts 15 minutes, `=-2` \
 starts 25 minutes with a 10-minute offset) reports mode 'pomodoro_start' \
 with a `pomodoro_start` object (`raw` excludes `=`, plus 5-minute \
 `duration_units`/`offset_units` and the additive `drop` list) and a \
-`pomodoro_start` span covering the whole token (only `=<X>` when a `~<K>` \
-drop part is present, with a `pomodoro_start_drop` span covering `~<K>` \
-including the `~`); the human `start` line reads `=3#bugs~1,3 (15m, \
-offset 0u · drop 1, 3)`. Every claimed doubled start (`==`, `==3#bugs`, \
-`==#`, `==~`, `==#bugs=3`) reports mode 'pomodoro_start' with an \
+`pomodoro_start` span covering the `=` and leading X, plus a separate span \
+for trailing X (only timing spans when a `~<K>` drop is present, with a \
+`pomodoro_start_drop` span covering `~<K>` including the `~`); the human \
+`start` line reads `=3bugs~1,3 (15m, offset 0u · drop 1, 3)`. Every claimed \
+doubled start (`==`, `==3#deep-work`, \
+`==#`, `==~`, `==#deep-work=3`) reports mode 'pomodoro_start' with an \
 `invalid_pomodoro_start` diagnostic over the token and a message naming its \
 single-`=` rewrite. The `==x` family reports that it is not a close and \
 teaches the bare `x` rewrite. Bare `==` followed by prose stays ordinary \
@@ -275,16 +276,21 @@ one `interactive_placeholder` span over the separator, and every malformed \
 list (a `0`, a duplicate, a second `~`, a `!`, a `#name` after the list, a \
 bad character, an oversized number, or a space inside the list, which gets \
 the no-spaces hint) reports `invalid_pomodoro_start` on the precise range. \
-A named whole-item start (`=bugs`, `=3#bugs`) starts that Pomodoro: \
+A named whole-item start (`=bugs`, `=3bugs`, `=bugs3`, `=3#deep-work`) starts that Pomodoro: \
 `section` carries the typed name with a `pomodoro_name` span over the name \
-bytes only (the `#` is in no span; `=bugs` emits `pomodoro_start [0,1)` and `pomodoro_name [1,5)`), `=<X>#` with no name reports mode \
-'incomplete' needing `pomodoro_name` with an `interactive_placeholder` \
-span over `#` and the partial `pomodoro_start` spec, and `x#name` reports \
-mode 'pomodoro_close' with an `invalid_pomodoro_close` diagnostic over \
-`#name`. A trailing `@<X>` timing (`=bugs@3` means `=3#bugs`, \
-`=~2@3` means `=3~2`) reports the canonical spec with a second \
-`pomodoro_start` span over `@<X>`; a dangling `@` reports `incomplete` \
-needing `pomodoro_start_timing` with no spec. A whole-item \
+bytes only (the `#` is in no span); leading `=<X>` and trailing X each have \
+a separate `pomodoro_start` span. Bare names start with an ASCII letter, have \
+no `-`, do not end in an ASCII digit, and cannot be close-shaped; `#` is \
+only needed for names a bare spelling cannot express, such as `deep-work`, \
+`2fa`, or `x2`. `=<X>#` with no name reports mode 'incomplete' needing \
+`pomodoro_name` with an `interactive_placeholder` span over `#` and the partial \
+`pomodoro_start` spec, and `x#name` reports mode 'pomodoro_close' with an \
+`invalid_pomodoro_close` diagnostic over `#name`. Retired separators and \
+redundant hashes (`=bugs@3`, `=3#bugs`) report `invalid_pomodoro_start` \
+with a teaching rewrite (`=bugs3`, `=3bugs`); a dashed bare name such as \
+`=deep-work` teaches `=#deep-work`. A trailing timing follows a bare name \
+(`=bugs3`); timing for a `#` name stays before it (`=3#deep-work`). \
+A whole-item \
 `x[<N>][*<P>][!<M>][~<K>][@<N>]` close (lowercase `x` only, with `*`, `!`, `~`, and `@` in \
 any order; a capitalized `X…` stays prose) reports mode 'pomodoro_close' with a `pomodoro_close` object \
 (`raw` exactly as typed plus the additive `in_progress` list, null when no `<N>` was typed, \
@@ -468,7 +474,7 @@ If TEXT is omitted and stdin is piped, it reads the complete piped stdin \
 stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-parse --format json -- 'Call bank @cash+'\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  bob capture-parse -f json -- '+5'\n  bob capture-parse -f json -- '-2'\n  bob capture-parse -f json -- '++3'\n  bob capture-parse -f json -- '--'\n  bob capture-parse -f json -- '+'\n  printf '++3\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n  bob capture-parse -f json -- 'x'\n  bob capture-parse -f json -- 'x1,3!2'\n  bob capture-parse -f json -- 'x1~2'\n  bob capture-parse -f json -- 'x0!2'\n  printf 'x\\n- 1 wired the lexer\\n' | bob capture-parse -f json\n  printf 'x\\n- 1\\n' | bob capture-parse -f json\n  printf 'x =\\n- 1 wired it\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '='\n  bob capture-parse -f json -- '=3'\n  bob capture-parse -f json -- '=~2'\n  bob capture-parse -f json -- '=bugs'\n  bob capture-parse -f json -- '=3#bugs~1'\n  bob capture-parse -f json -- 'x =~2'\n  bob capture-parse -f json -- '@r:id=x'\n  bob capture-parse -f json -- '^r:id=x1'\n  printf 'x\\n\\n=\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '+2 x'\n  bob capture-parse -f json -- 'Buy Groceries! &foo:bar'\n  bob capture-parse -f json -- 'Ask Kelly *job:cleanup'\n  bob capture-parse -f json -- '&foo:bar @body+excercise'\n  bob capture-parse -f json -- '^r:id &foo:bar'\n  bob capture-parse -f json -- '&foo:bar +'\n  bob capture-parse -f json -- '&foo:bar'\n  bob capture-parse -f json -- 'Buy Groceries! &fo'\n  bob capture-parse -f json -- 'Fix trip ~work:foo'\n  bob capture-parse -f json -- 'Fix trip ~~work:foo|see'\n  bob capture-parse -f json -- '/fix'\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_shift, pomodoro_link, pomodoro_close, pomodoro_past, pomodoro_start, task_dependency, task_complete, ref, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, drawer, active_task, task_link, task_goto, task_parent, pomodoro_close_task, pomodoro_close_log_text, pomodoro_start_task, task_dependency, blocked_task, relation_target, relation_label, dependency_target, task_complete, task_type",
+            "Examples:\n  bob capture-parse --format json -- 'Call bank @cash+'\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  bob capture-parse -f json -- '+5'\n  bob capture-parse -f json -- '-2'\n  bob capture-parse -f json -- '++3'\n  bob capture-parse -f json -- '--'\n  bob capture-parse -f json -- '+'\n  printf '++3\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n  bob capture-parse -f json -- 'x'\n  bob capture-parse -f json -- 'x1,3!2'\n  bob capture-parse -f json -- 'x1~2'\n  bob capture-parse -f json -- 'x0!2'\n  printf 'x\\n- 1 wired the lexer\\n' | bob capture-parse -f json\n  printf 'x\\n- 1\\n' | bob capture-parse -f json\n  printf 'x =\\n- 1 wired it\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '='\n  bob capture-parse -f json -- '=3'\n  bob capture-parse -f json -- '=~2'\n  bob capture-parse -f json -- '=bugs'\n  bob capture-parse -f json -- '=3bugs~1'\n  bob capture-parse -f json -- 'x =~2'\n  bob capture-parse -f json -- '@r:id=x'\n  bob capture-parse -f json -- '^r:id=x1'\n  printf 'x\\n\\n=\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '+2 x'\n  bob capture-parse -f json -- 'Buy Groceries! &foo:bar'\n  bob capture-parse -f json -- 'Ask Kelly *job:cleanup'\n  bob capture-parse -f json -- '&foo:bar @body+excercise'\n  bob capture-parse -f json -- '^r:id &foo:bar'\n  bob capture-parse -f json -- '&foo:bar +'\n  bob capture-parse -f json -- '&foo:bar'\n  bob capture-parse -f json -- 'Buy Groceries! &fo'\n  bob capture-parse -f json -- 'Fix trip ~work:foo'\n  bob capture-parse -f json -- 'Fix trip ~~work:foo|see'\n  bob capture-parse -f json -- '/fix'\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_shift, pomodoro_link, pomodoro_close, pomodoro_past, pomodoro_start, task_dependency, task_complete, ref, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, drawer, active_task, task_link, task_goto, task_parent, pomodoro_close_task, pomodoro_close_log_text, pomodoro_start_task, task_dependency, blocked_task, relation_target, relation_label, dependency_target, task_complete, task_type",
         )
         .disable_help_flag(true)
         .arg(format_arg())
@@ -2734,8 +2740,9 @@ fn print_human_success_with_styler(
         print_field(styler, "block id", block_id);
     }
     if let Some(start) = result.pomodoro_start.as_ref() {
-        // Only a whole-item named start (`=<X>#name`) folds its name
-        // into the start line; a `@<route>:<block-id>[#<name>]=<X>`
+        // A whole-item named start (`=name`, `=<X>name`, or
+        // `=<X>#name` when needed) folds its name into the start line;
+        // a `@<route>:<block-id>=<X><name>`
         // marker keeps `section` on its own line.
         let section = (result.mode == EditorMode::PomodoroStart)
             .then_some(result.section.as_deref())
@@ -2887,7 +2894,7 @@ fn print_human_success_with_styler(
 }
 
 /// Render a validated whole-item start for human output: the whole
-/// typed token (`=` plus `<X>`, plus `#name` for a named start plus
+/// token (`=` plus `<X>`, plus the shortest valid name spelling and
 /// `~<K>` for a drop list) plus its resolved 5-minute duration and offset
 /// units.
 fn format_pomodoro_start(
@@ -2896,6 +2903,9 @@ fn format_pomodoro_start(
 ) -> String {
     let sigil = "=";
     let mut token = match section {
+        Some(name) if capture_language::can_spell_bare(name) => {
+            format!("{sigil}{}{name}", start.raw)
+        }
         Some(name) => format!("{sigil}{}#{name}", start.raw),
         None => format!("{sigil}{}", start.raw),
     };
@@ -3516,7 +3526,7 @@ mod tests {
         let value = json("Call bank @Cash+");
         assert_eq!(value["ok"], true);
         assert_eq!(value["schema_version"], 1);
-        assert_eq!(value["grammar"], 12);
+        assert_eq!(value["grammar"], 13);
         assert_eq!(value["input"], "Call bank @Cash+");
         assert_eq!(value["body"], "Call bank");
         assert_eq!(value["mode"], "incomplete");
@@ -3574,12 +3584,12 @@ mod tests {
     fn lone_route_reports_note_pull_mode() {
         // NP27: `bob capture-parse -f json -- @sase` reports mode
         // `note_pull` with no needs, the route, and the ordinary list
-        // summary (`kind: "tasks"`, `count: 0`) under grammar 12. A lone
+        // summary (`kind: "tasks"`, `count: 0`) under grammar 13. A lone
         // header keeps its task-list metadata so clients can still offer
         // "start a list" from it.
         let value = json("@sase");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 12);
+        assert_eq!(value["grammar"], 13);
         assert_eq!(value["mode"], "note_pull");
         assert_eq!(value["route"], "sase");
         assert!(value["section"].is_null());
@@ -3790,10 +3800,11 @@ mod tests {
     }
 
     #[test]
-    fn json_reports_invalid_start_suffixes_as_diagnostics() {
+    fn json_reports_glued_start_suffix_names() {
         let value = json("Do work @sase:outline=3abc");
-        assert!(value.get("pomodoro_start").is_none(), "{value}");
-        assert_eq!(value["diagnostics"][0]["code"], "invalid_pomodoro_start");
+        assert_eq!(value["pomodoro_start"]["raw"], "3");
+        assert_eq!(value["section"], "abc");
+        assert_eq!(value["diagnostics"], serde_json::json!([]));
 
         let project_note = json("note @sase^outline+=3");
         assert!(
@@ -3911,10 +3922,10 @@ mod tests {
 
     #[test]
     fn json_reports_named_pomodoro_starts() {
-        let value = json("=#bugs");
+        let value = json("=bugs");
         assert_eq!(value["schema_version"], 1);
         assert_eq!(value["mode"], "pomodoro_start");
-        assert_eq!(value["body"], "=#bugs");
+        assert_eq!(value["body"], "=bugs");
         assert_eq!(value["section"], "bugs");
         assert_eq!(
             value["pomodoro_start"],
@@ -3928,13 +3939,13 @@ mod tests {
             value["spans"],
             serde_json::json!([
                 { "start": 0, "end": 1, "kind": "pomodoro_start" },
-                { "start": 2, "end": 6, "kind": "pomodoro_name" },
+                { "start": 1, "end": 5, "kind": "pomodoro_name" },
             ])
         );
         assert_eq!(value["diagnostics"], serde_json::json!([]));
         assert!(value.get("items").is_none(), "{value}");
 
-        let counted = json("=3#bugs");
+        let counted = json("=3bugs");
         assert_eq!(counted["mode"], "pomodoro_start");
         assert_eq!(counted["section"], "bugs");
         assert_eq!(
@@ -3949,7 +3960,7 @@ mod tests {
             counted["spans"],
             serde_json::json!([
                 { "start": 0, "end": 2, "kind": "pomodoro_start" },
-                { "start": 3, "end": 7, "kind": "pomodoro_name" },
+                { "start": 2, "end": 6, "kind": "pomodoro_name" },
             ])
         );
 
@@ -3977,16 +3988,16 @@ mod tests {
         assert_eq!(order["mode"], "pomodoro_start");
         assert!(order.get("pomodoro_start").is_none(), "{order}");
         assert_eq!(order["diagnostics"][0]["code"], "invalid_pomodoro_start");
-        assert_eq!(order["diagnostics"][0]["range"], serde_json::json!([2, 8]));
+        assert_eq!(order["diagnostics"][0]["range"], serde_json::json!([1, 2]));
 
-        let multiword = json("=#deep work");
+        let multiword = json("=deep work");
         assert_eq!(
             multiword["diagnostics"][0]["code"],
             "invalid_pomodoro_start"
         );
         assert_eq!(
             multiword["diagnostics"][0]["range"],
-            serde_json::json!([7, 11])
+            serde_json::json!([6, 10])
         );
 
         let close_hash = json("x#bugs");
@@ -4006,16 +4017,16 @@ mod tests {
             ])
         );
 
-        let chain = json("x =#bugs");
+        let chain = json("x =bugs");
         assert_eq!(chain["mode"], "pomodoro_close");
         assert_eq!(chain["items"].as_array().expect("items").len(), 2);
         assert_eq!(chain["items"][0]["mode"], "pomodoro_close");
         assert_eq!(chain["items"][1]["mode"], "pomodoro_start");
         assert_eq!(chain["items"][1]["section"], "bugs");
-        assert_eq!(chain["items"][1]["body"], "=#bugs");
+        assert_eq!(chain["items"][1]["body"], "=bugs");
         assert_eq!(
             chain["items"][1]["range"],
-            serde_json::json!({ "start": 2, "end": 8 })
+            serde_json::json!({ "start": 2, "end": 7 })
         );
 
         let bare = json("=bugs");
@@ -4061,7 +4072,11 @@ mod tests {
                 ]),
                 "{raw}: {value}"
             );
-            let rewrite = raw.strip_prefix('=').expect("doubled token");
+            let rewrite = match raw {
+                "==3#bugs" => "=3bugs",
+                "==#bugs=3" => "=bugs3",
+                _ => raw.strip_prefix('=').expect("doubled token"),
+            };
             assert_eq!(
                 value["diagnostics"][0]["message"],
                 format!("`{raw}` is retired: `=` restarts or swaps the running Pomodoro by itself; write `{rewrite}`"),

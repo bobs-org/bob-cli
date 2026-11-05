@@ -780,8 +780,8 @@ fn capture_parse_named_pomodoro_start_protocol() {
             .expect("capture-parse JSON")
     };
 
-    // Exact named starts: `section` carries the typed selector, the spec
-    // mirrors `se<X>` timing, and `#` sits in no span.
+    // Exact named starts: `section` carries the typed selector, timing can
+    // precede the name, and `#` sits in no span when the name needs it.
     for (
         text,
         section,
@@ -791,11 +791,22 @@ fn capture_parse_named_pomodoro_start_protocol() {
         duration,
         offset,
         prefix_end,
+        name_start,
         name_end,
     ) in [
-        ("=#bugs", "bugs", "bugs", "aqua", "", 5, 0, 1, 6),
-        ("=3#bugs", "bugs", "bugs", "aqua", "3", 3, 0, 2, 7),
-        ("=-2#bugs", "bugs", "bugs", "aqua", "-2", 5, 2, 3, 8),
+        (
+            "=3#deep-work",
+            "deep-work",
+            "deep-work",
+            "yellow",
+            "3",
+            3,
+            0,
+            2,
+            3,
+            12,
+        ),
+        ("=3#2fa", "2fa", "2fa", "blue", "3", 3, 0, 2, 3, 6),
         (
             "=#deep-work",
             "deep-work",
@@ -805,6 +816,7 @@ fn capture_parse_named_pomodoro_start_protocol() {
             5,
             0,
             1,
+            2,
             11,
         ),
     ] {
@@ -819,7 +831,7 @@ fn capture_parse_named_pomodoro_start_protocol() {
             serde_json::json!([
                 { "start": 0, "end": prefix_end, "kind": "pomodoro_start" },
                 {
-                    "start": prefix_end + 1,
+                    "start": name_start,
                     "end": name_end,
                     "kind": "pomodoro_name",
                     "themes": [
@@ -829,7 +841,7 @@ fn capture_parse_named_pomodoro_start_protocol() {
                             "hue": hue,
                             "hue_source": "hash",
                             "known": false,
-                            "start": prefix_end + 1,
+                            "start": name_start,
                             "end": name_end,
                         },
                     ],
@@ -892,7 +904,7 @@ fn capture_parse_named_pomodoro_start_protocol() {
             "{text}: {value}"
         );
     }
-    let glued = parse("=3bugs");
+    let glued = parse("=3deep-work");
     assert_eq!(glued["mode"], "pomodoro_start", "{glued}");
     assert_eq!(
         glued["diagnostics"][0]["code"], "invalid_pomodoro_start",
@@ -900,7 +912,7 @@ fn capture_parse_named_pomodoro_start_protocol() {
     );
     assert_eq!(
         glued["diagnostics"][0]["range"],
-        serde_json::json!([2, 6]),
+        serde_json::json!([6, 11]),
         "{glued}"
     );
 
@@ -934,26 +946,26 @@ fn capture_parse_named_pomodoro_start_protocol() {
     }
 
     // Near misses keep `pomodoro_start` mode with one diagnostic.
-    let order = parse("=#bugs=3");
+    let order = parse("=bugs@3");
     assert_eq!(order["mode"], "pomodoro_start");
     assert_eq!(order["diagnostics"][0]["code"], "invalid_pomodoro_start");
-    assert_eq!(order["diagnostics"][0]["range"], serde_json::json!([2, 8]));
+    assert_eq!(order["diagnostics"][0]["range"], serde_json::json!([5, 7]));
     assert!(
         order["diagnostics"][0]["message"]
             .as_str()
             .expect("message")
-            .contains("`=3#bugs` instead of `=#bugs=3`"),
+            .contains("write `=bugs3`"),
         "{order}"
     );
 
-    let multiword = parse("=#deep work");
+    let multiword = parse("=deep work");
     assert_eq!(
         multiword["diagnostics"][0]["code"],
         "invalid_pomodoro_start"
     );
     assert_eq!(
         multiword["diagnostics"][0]["range"],
-        serde_json::json!([7, 11])
+        serde_json::json!([6, 10])
     );
 
     let close_hash = parse("x#bugs");
@@ -968,15 +980,15 @@ fn capture_parse_named_pomodoro_start_protocol() {
     );
 
     // Chains split per token with absolute ranges.
-    let chain = parse_stdin("x =#bugs\n");
+    let chain = parse_stdin("x =bugs\n");
     assert_eq!(chain["items"].as_array().expect("items").len(), 2);
     assert_eq!(chain["items"][0]["mode"], "pomodoro_close");
     assert_eq!(chain["items"][1]["mode"], "pomodoro_start");
     assert_eq!(chain["items"][1]["section"], "bugs");
-    assert_eq!(chain["items"][1]["body"], "=#bugs");
+    assert_eq!(chain["items"][1]["body"], "=bugs");
     assert_eq!(
         chain["items"][1]["range"],
-        serde_json::json!({ "start": 2, "end": 8 })
+        serde_json::json!({ "start": 2, "end": 7 })
     );
 
     // A `@@` declaration never applies to an incomplete named start.
@@ -1014,17 +1026,17 @@ fn capture_parse_pomodoro_start_human_and_help() {
     );
 
     // A named start line shows the whole token; `section` keeps its own
-    // line. A `@<route>:<block-id>[#<name>]=<X>` marker start keeps the
+    // line. A `@<route>:<block-id>=<X><name>` marker start keeps the
     // suffix-only line.
     let named = bob_command()
         .arg("capture-parse")
         .arg("--")
-        .arg("=3#bugs")
+        .arg("=3bugs")
         .output()
         .expect("run named human");
     assert_success(&named);
     assert!(
-        stdout(&named).contains("=3#bugs (15m, offset 0u)"),
+        stdout(&named).contains("=3bugs (15m, offset 0u)"),
         "{}",
         stdout(&named)
     );
@@ -1033,18 +1045,18 @@ fn capture_parse_pomodoro_start_human_and_help() {
     let retired = bob_command()
         .arg("capture-parse")
         .arg("--")
-        .arg("==3#bugs")
+        .arg("==3bugs")
         .output()
         .expect("run retired-form human");
     assert_success(&retired);
     assert!(
         stdout(&retired).contains(
-            "`==3#bugs` is retired: `=` restarts or swaps the running Pomodoro by itself; write `=3#bugs`"
+            "`==3bugs` is retired: `=` restarts or swaps the running Pomodoro by itself; write `=3bugs`"
         ),
         "{}",
         stdout(&retired)
     );
-    assert!(!stdout(&retired).contains("==3#bugs (15m, offset 0u)"));
+    assert!(!stdout(&retired).contains("==3bugs (15m, offset 0u)"));
 
     let marked = bob_command()
         .arg("capture-parse")

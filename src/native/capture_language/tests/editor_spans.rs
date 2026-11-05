@@ -686,7 +686,7 @@ fn editor_spans_pomodoro_link_names_after_the_equal_suffix() {
         ]
     );
 
-    let caret = editor("^work:outline=bugs@3");
+    let caret = editor("^work:outline=bugs3");
     assert_eq!(caret.mode, EditorMode::PomodoroLink);
     assert_eq!(caret.section.as_deref(), Some("bugs"));
     assert_eq!(
@@ -703,11 +703,11 @@ fn editor_spans_pomodoro_link_names_after_the_equal_suffix() {
             (6, 13, SpanKind::ActiveTaskBlockId),
             (13, 14, SpanKind::PomodoroStart),
             (14, 18, SpanKind::PomodoroName),
-            (18, 20, SpanKind::PomodoroStart),
+            (18, 19, SpanKind::PomodoroStart),
         ]
     );
 
-    let timed = editor("@work:outline=3#bugs");
+    let timed = editor("@work:outline=3bugs");
     assert_eq!(timed.mode, EditorMode::PomodoroLink);
     assert_eq!(timed.section.as_deref(), Some("bugs"));
     assert_eq!(
@@ -716,40 +716,20 @@ fn editor_spans_pomodoro_link_names_after_the_equal_suffix() {
             (0, 5, SpanKind::PomodoroRoute),
             (6, 13, SpanKind::PomodoroBlockId),
             (13, 15, SpanKind::PomodoroStart),
-            (16, 20, SpanKind::PomodoroName),
+            (15, 19, SpanKind::PomodoroName),
         ]
     );
 }
 
 #[test]
 fn editor_link_suffix_incomplete_states_keep_timing_and_placeholders() {
-    // Dangling timing reports incomplete with no spec, like `=bugs@`.
-    for raw in ["@work:outline=bugs@", "^work:outline=bugs@"] {
-        let parse = editor(raw);
-        assert_eq!(parse.mode, EditorMode::Incomplete, "{raw}");
-        assert_eq!(parse.needs, vec![Need::PomodoroStartTiming], "{raw}");
-        assert!(parse.pomodoro_start.is_none(), "{raw}");
-        assert_eq!(parse.section.as_deref(), Some("bugs"), "{raw}");
-        assert!(parse.diagnostics.is_empty(), "{raw}");
-        let spans = ranges(&parse);
-        assert!(
-            spans.contains(&(18, 19, SpanKind::InteractivePlaceholder)),
-            "{raw}: {spans:?}"
-        );
-        assert!(
-            spans
-                .iter()
-                .any(|(_, _, kind)| *kind == SpanKind::PomodoroName),
-            "{raw}: {spans:?}"
-        );
-    }
+    // A trailing digit run after a bare name is timing; a dash remains
+    // part of the name and is claimed as a start only through the hash form.
     // Empty names keep valid timing visible with a partial spec.
     for (raw, timing) in [
         ("@work:outline#=3", "3"),
-        ("@work:outline=#@3", "3"),
         ("@work:outline=3#", "3"),
         ("^work:outline#=3", "3"),
-        ("^work:outline=#@3", "3"),
         ("^work:outline=3#", "3"),
         ("@!work:outline#=3", "3"),
     ] {
@@ -1034,7 +1014,7 @@ fn editor_spans_cover_task_complete_tokens() {
 
 #[test]
 fn editor_spans_a_bare_named_start_without_a_hash_gap() {
-    let parse = editor("=bugs@3~2");
+    let parse = editor("=bugs3~2");
     assert_eq!(parse.mode, EditorMode::PomodoroStart);
     assert_eq!(parse.section.as_deref(), Some("bugs"));
     assert_eq!(
@@ -1042,21 +1022,19 @@ fn editor_spans_a_bare_named_start_without_a_hash_gap() {
         vec![
             (0, 1, SpanKind::PomodoroStart),
             (1, 5, SpanKind::PomodoroName),
-            (5, 7, SpanKind::PomodoroStart),
-            (7, 9, SpanKind::PomodoroStartDrop),
+            (5, 6, SpanKind::PomodoroStart),
+            (6, 8, SpanKind::PomodoroStartDrop),
         ]
     );
-    let hashed = editor("=#bugs@3~2");
-    assert_eq!(hashed.mode, parse.mode);
-    assert_eq!(hashed.section, parse.section);
-    assert_eq!(hashed.pomodoro_start, parse.pomodoro_start);
+    let hashed = editor("=3#deep-work~2");
+    assert_eq!(hashed.mode, EditorMode::PomodoroStart);
+    assert_eq!(hashed.section.as_deref(), Some("deep-work"));
     assert_eq!(
         ranges(&hashed),
         vec![
-            (0, 1, SpanKind::PomodoroStart),
-            (2, 6, SpanKind::PomodoroName),
-            (6, 8, SpanKind::PomodoroStart),
-            (8, 10, SpanKind::PomodoroStartDrop),
+            (0, 2, SpanKind::PomodoroStart),
+            (3, 12, SpanKind::PomodoroName),
+            (12, 14, SpanKind::PomodoroStartDrop),
         ]
     );
 }

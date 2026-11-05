@@ -235,6 +235,9 @@ fn start_fit_token(
         format!("{units}-{}", spec.offset_units)
     };
     match name.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(name) if capture_language::can_spell_bare(name) => {
+            format!("={duration}{name}")
+        }
         Some(name) => format!("={duration}#{name}"),
         None => format!("={duration}"),
     }
@@ -725,7 +728,7 @@ mod tests {
         )
         .expect("conflict");
         assert!(conflict.event.off_clock);
-        assert_eq!(conflict.fit.as_deref(), Some("=2#bugs"));
+        assert_eq!(conflict.fit.as_deref(), Some("=2bugs"));
     }
 
     #[test]

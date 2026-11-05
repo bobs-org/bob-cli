@@ -1674,7 +1674,7 @@ fn classify_pomodoro_offer_token(
 }
 
 /// Classify a Pomodoro link's non-close `=` suffix with the shared start
-/// lexer. Names may sit after `=` (`=bugs`, `=3#bugs`) or before it
+/// lexer. Names may sit after `=` (`=bugs`, `=3#deep-work`) or before it
 /// (`#bugs=3`); the returned token-relative offsets keep their spans and
 /// completion fields aligned with execution.
 fn classify_pomodoro_link_start_suffix(
@@ -1823,7 +1823,7 @@ fn classify_pomodoro_link_start_suffix(
                             });
                         }
                     }
-                    // Trailing `@<X>` timing stays visible.
+                    // Trailing X stays visible as its own start span.
                     if let Some((timing_offset, timing_text)) = timing.as_ref()
                         && !timing_text.is_empty()
                     {
@@ -1832,7 +1832,6 @@ fn classify_pomodoro_link_start_suffix(
                             end: token.start
                                 + equals_rel
                                 + timing_offset
-                                + 1
                                 + timing_text.len(),
                             kind: SpanKind::PomodoroStart,
                             project_note: None,

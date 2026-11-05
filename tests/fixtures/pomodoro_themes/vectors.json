@@ -734,7 +734,7 @@
   "menu": [
     {
       "name": "today-prefix-create-substring",
-      "draft": "=#bo",
+      "draft": "=bo",
       "today": [
         "- [ ] () — ROBOT"
       ],
@@ -775,7 +775,7 @@
     },
     {
       "name": "prefix-shadowing",
-      "draft": "=#sase",
+      "draft": "=sase",
       "today": [
         "- [ ] () — SASE V18"
       ],
@@ -788,18 +788,18 @@
       "expected": [
         {
           "name": "SASE V18",
-          "replacement": "sase-v18"
+          "replacement": "#sase-v18"
         },
         {
           "name": "SASE",
-          "replacement": "\"SASE\"",
+          "replacement": "#\"SASE\"",
           "origin": "history"
         }
       ]
     },
     {
       "name": "again-prefix-shadowing",
-      "draft": "=#sase",
+      "draft": "=sase",
       "today": [
         "- [x] () — SASE",
         "- [ ] () — SASE V18"
@@ -809,11 +809,11 @@
       "expected": [
         {
           "name": "SASE V18",
-          "replacement": "sase-v18"
+          "replacement": "#sase-v18"
         },
         {
           "name": "SASE",
-          "replacement": "\"SASE\"",
+          "replacement": "#\"SASE\"",
           "creates_pomodoro": true,
           "state": "completed"
         }
@@ -821,7 +821,7 @@
     },
     {
       "name": "hidden-exact",
-      "draft": "=#fixes",
+      "draft": "=fixes",
       "today": [],
       "history": {
         "2026-10-23": [
@@ -862,7 +862,7 @@
     },
     {
       "name": "completed-start-context",
-      "draft": "=#bob",
+      "draft": "=bob",
       "today": [
         "- [x] () — BOB"
       ],
@@ -923,7 +923,7 @@
     },
     {
       "name": "nonempty-query-cap",
-      "draft": "=#theme",
+      "draft": "=theme",
       "today": [],
       "history": {
         "2026-10-23": [
@@ -948,62 +948,62 @@
       "expected": [
         {
           "name": "THEME0",
-          "replacement": "theme0",
+          "replacement": "#theme0",
           "origin": "history"
         },
         {
           "name": "THEME1",
-          "replacement": "theme1",
+          "replacement": "#theme1",
           "origin": "history"
         },
         {
           "name": "THEME10",
-          "replacement": "theme10",
+          "replacement": "#theme10",
           "origin": "history"
         },
         {
           "name": "THEME11",
-          "replacement": "theme11",
+          "replacement": "#theme11",
           "origin": "history"
         },
         {
           "name": "THEME12",
-          "replacement": "theme12",
+          "replacement": "#theme12",
           "origin": "history"
         },
         {
           "name": "THEME13",
-          "replacement": "theme13",
+          "replacement": "#theme13",
           "origin": "history"
         },
         {
           "name": "THEME14",
-          "replacement": "theme14",
+          "replacement": "#theme14",
           "origin": "history"
         },
         {
           "name": "THEME2",
-          "replacement": "theme2",
+          "replacement": "#theme2",
           "origin": "history"
         },
         {
           "name": "THEME3",
-          "replacement": "theme3",
+          "replacement": "#theme3",
           "origin": "history"
         },
         {
           "name": "THEME4",
-          "replacement": "theme4",
+          "replacement": "#theme4",
           "origin": "history"
         },
         {
           "name": "THEME5",
-          "replacement": "theme5",
+          "replacement": "#theme5",
           "origin": "history"
         },
         {
           "name": "THEME6",
-          "replacement": "theme6",
+          "replacement": "#theme6",
           "origin": "history"
         },
         {
@@ -1015,7 +1015,7 @@
     },
     {
       "name": "create-before-utilities",
-      "draft": "=#zzz",
+      "draft": "=zzz",
       "today": [
         "- [ ] (0900-0930) — RUN",
         "- [ ] ()"
@@ -1045,7 +1045,7 @@
     },
     {
       "name": "today-component-exclusion-before-query",
-      "draft": "=#decks",
+      "draft": "=decks",
       "today": [
         "- [ ] () — BOB + DECKS"
       ],
@@ -1059,7 +1059,7 @@
       "expected": [
         {
           "name": "BOB + DECKS",
-          "replacement": "bob-+-decks"
+          "replacement": "#bob-+-decks"
         },
         {
           "name": "DECKS",
@@ -1092,7 +1092,7 @@
     },
     {
       "name": "hidden-today-stays",
-      "draft": "=#bob",
+      "draft": "=bob",
       "today": [
         "- [ ] () — BOB"
       ],
@@ -1193,7 +1193,7 @@
     },
     {
       "name": "configured-unconfigured-create-row",
-      "draft": "=#snack",
+      "draft": "=snack",
       "today": [],
       "history": {
         "2026-10-23": [
@@ -1221,15 +1221,15 @@
       "name": "deep-work-0",
       "theme": "DEEP WORK",
       "today": [],
-      "draft": "=#deep",
-      "replacement": "\"DEEP WORK\""
+      "draft": "=deep",
+      "replacement": "#\"DEEP WORK\""
     },
     {
       "name": "sase-v18-1",
       "theme": "SASE V18",
       "today": [],
-      "draft": "=#sase",
-      "replacement": "\"SASE V18\""
+      "draft": "=sase",
+      "replacement": "#\"SASE V18\""
     },
     {
       "name": "bob-2",
@@ -1237,8 +1237,8 @@
       "today": [
         "- [ ] () — BOB BUILD"
       ],
-      "draft": "=#bo",
-      "replacement": "\"BOB\""
+      "draft": "=bo",
+      "replacement": "#\"BOB\""
     },
     {
       "name": "bob-3",
@@ -1267,15 +1267,15 @@
       "name": "sase.md-6",
       "theme": "SASE.MD",
       "today": [],
-      "draft": "=#sase",
+      "draft": "=sase",
       "replacement": "sase.md"
     },
     {
       "name": "fix-apollo-7",
       "theme": "FIX-APOLLO",
       "today": [],
-      "draft": "=#fix",
-      "replacement": "fix-apollo"
+      "draft": "=fix",
+      "replacement": "#fix-apollo"
     },
     {
       "name": "sase-v18-8",
@@ -1298,8 +1298,8 @@
         "- [x] () — SASE",
         "- [ ] () — SASE V18"
       ],
-      "draft": "=#sase",
-      "replacement": "\"SASE\""
+      "draft": "=sase",
+      "replacement": "#\"SASE\""
     }
   ],
   "suggest": {

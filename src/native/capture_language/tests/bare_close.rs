@@ -149,7 +149,7 @@ fn bare_close_heads_session_chains_and_inline_trails() {
     for raw in [
         "+2 x",
         "x =",
-        "x =#bugs",
+        "x =bugs",
         "x =~2",
         "x~2 =",
         "x wired the lexer =",

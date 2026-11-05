@@ -113,7 +113,7 @@
     {
       "id": "counted-suffix-keeps-clock-classification",
       "now": "2026-11-01 11:55:00",
-      "token": "=5#meet",
+      "token": "=5meet",
       "day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] () — MEET\n  - [[#^lunch]]\n",
       "expected_day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] (**1155-1220** [off:: 25m]) — MEET\n  - [[#^lunch]]\n",
       "expected_span": "1155-1220",

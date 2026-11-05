@@ -137,7 +137,7 @@ fn pomodoro_past_name_menu_excludes_running_targets_without_override() {
         }
         assert!(rows.iter().all(|row| row.name.as_deref() != Some("BUILD")));
         assert!(rows.iter().any(|row| row.replacement == "#2fa"));
-        assert!(rows.iter().any(|row| row.replacement == "deep-work"));
+        assert!(rows.iter().any(|row| row.replacement == "#deep-work"));
         assert!(rows
             .iter()
             .any(|row| row.name.as_deref() == Some("READ")

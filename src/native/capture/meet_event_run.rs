@@ -676,7 +676,7 @@ pub(super) fn finalize_session_clock(
                     label: None,
                     count: None,
                     message: format!(
-                        "MEET's next event, {title}, starts at {} ({} from now) · capture `=5#meet` to start 25 minutes now",
+                        "MEET's next event, {title}, starts at {} ({} from now) · capture `=5meet` to start 25 minutes now",
                         hhmm(clamped_start),
                         humanize_minutes(clamped_start - now_min),
                     ),

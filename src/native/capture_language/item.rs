@@ -3402,17 +3402,14 @@ pub(crate) enum EqualsToken {
     /// instead of falling through to prose. Detailed `E` validation lives in
     /// the shared past lexer used by both execution and editor adapters.
     Past { len: usize },
-    /// `=` plus the longest `[0-9]*(-[0-9]*)?` run, plus an optional
-    /// `#name` or bare `name` part, plus optional `@<X>` timing and `~<K>`
-    /// drop parts in either order. `suffix` excludes the sigil (the leading
-    /// `<X>`), `counted` is true when the effective `<X>` (leading or `@`)
-    /// holds at least one digit, `name` is `Some` when a `#` immediately
-    /// follows the suffix (possibly empty, as in `=#`) or a bare name
-    /// follows an empty suffix, `name_spelling` records Hash vs Bare so
-    /// callers do not recompute `1 + suffix.len() + 1`, `drop` holds the
-    /// `~` offset inside the token plus the text after it, `timing` holds
-    /// the `@` offset plus the text after it, `len` is the token's byte
-    /// length including the sigil, the name, and both optional parts, and
+    /// `=` plus a leading timing, an optional `#name` or bare name, an optional
+    /// trailing timing for bare/literal names, and an optional `~<K>` drop.
+    /// `suffix` excludes the sigil (the leading `<X>`), `timing` records a
+    /// trailing timing or a retired `@` timing, `name_spelling` records Hash
+    /// vs Bare, `drop` holds the `~` offset and text, and `len` is the token's
+    /// byte length including every claimed part. A bare name's trailing digit
+    /// run is timing; a `#name` keeps its digits as name bytes. The `@` field is
+    /// retained only so the parser can issue a teaching error.
     /// `doubled` is true when the token used the doubled `==` sigil, which
     /// is now retired. A name ends at the first ASCII whitespace, `~`, or
     /// `@`. A `#"NAME"` / `#“NAME”` exact-name literal instead runs through
@@ -3479,7 +3476,13 @@ fn split_base_len(after_slash: &str) -> Option<usize> {
         return None;
     }
     let candidate = &after_slash[..end];
-    bare_start_name_len(candidate).filter(|len| *len == end)
+    (candidate
+        .as_bytes()
+        .first()
+        .is_some_and(u8::is_ascii_alphabetic)
+        && is_pomodoro_selector_component(candidate)
+        && close_after_eq_parts(candidate).is_none())
+    .then_some(end)
 }
 
 fn lex_split_after_slash(
@@ -3647,19 +3650,14 @@ fn lex_merge_after_star(
 /// lex the `=`-family token at the start of trimmed item text, mirroring
 /// [`session_operator_token`]. Returns `None` for ordinary prose. A retired
 /// `=x`/`=*`/`=!` close lexes as `Close` too, so it reports its teaching
-/// error. A bare start token (`=`, `=-`) has
-/// an empty or digit-free suffix; a counted token (`=3`, `=-2`, `=3-`,
-/// `=2-1`, `=0`) carries at least one digit. An optional `#name` part
-/// immediately after the suffix, or a bare `name` after an empty suffix,
-/// ends at the first ASCII whitespace, `~`, or `@`; the `#` must come
-/// immediately after the suffix. After the name, two optional parts may
-/// follow, each at most once and in either order: an `@<X>` timing part
-/// and a `~<K>` drop part. An unnamed token whose `~<K>` part is present
-/// may also take an `@<X>` part after it. A token with no name and no
-/// `~<K>` never reads an `@`, so `=@3` stays prose and `=3@2` keeps its
-/// shape error. Whichever optional part comes first ends at whitespace or
-/// at the other part's sigil; the second runs to whitespace. `len` covers
-/// every part.
+/// error. A bare start token (`=`, `=-`) has an empty or digit-free suffix;
+/// a counted token (`=3`, `=-2`, `=3-`, `=2-1`, `=0`) carries timing before
+/// a name. Bare names start with a letter, contain no dash, and may carry a
+/// trailing timing digit run (`=bugs3`). Hash names (`=#2fa`,
+/// `=3#deep-work`) and exact-name literals take timing before `#`; trailing
+/// digits belong to the hash name. `~<K>` may follow the start name. The old
+/// `@<X>` timing separator remains claimed so it can return a teaching
+/// error. `len` covers every part.
 pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
     // Bare `x` closes only at the start of a whole-item token. Keep this
     // strict classifier ahead of the `=`-family lexer so starts and all
@@ -3729,22 +3727,14 @@ pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
             len: split_len,
         });
     }
-    let bytes = rest.as_bytes();
-    let mut len = 0;
-    while len < bytes.len() && bytes[len].is_ascii_digit() {
-        len += 1;
-    }
-    if bytes.get(len) == Some(&b'-') {
-        len += 1;
-        while len < bytes.len() && bytes[len].is_ascii_digit() {
-            len += 1;
-        }
-    }
+    let len = start_timing_len(rest);
     let suffix = rest[..len].to_string();
     let mut token_len = len + sigil_len;
     let mut name: Option<String> = None;
     let mut name_spelling: Option<NameSpelling> = None;
     let mut name_is_literal = false;
+    let mut drop: Option<(usize, String)> = None;
+    let mut timing: Option<(usize, String)> = None;
     if rest.as_bytes().get(len) == Some(&b'#') {
         let after_hash = &rest[len + 1..];
         if opens_exact_name(after_hash)
@@ -3773,71 +3763,80 @@ pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
             name_spelling = Some(NameSpelling::Hash);
             token_len += 1 + name_len;
         }
-    } else if !doubled
-        && suffix.is_empty()
-        && let Some(name_len) = bare_start_name_len(rest)
-    {
-        name = Some(rest[..name_len].to_string());
-        name_spelling = Some(NameSpelling::Bare);
-        token_len += name_len;
-    }
-    let mut drop: Option<(usize, String)> = None;
-    let mut timing: Option<(usize, String)> = None;
-    // After the suffix/name, an optional `@<X>` timing part and an optional
-    // `~<K>` drop part may follow in either order (named), or a `~<K>` part
-    // followed by an `@<X>` part (unnamed with a drop). A token with no
-    // `#name` and no `~<K>` never reads an `@`.
-    let mut rest_pos = token_len - sigil_len;
-    let first = rest.as_bytes().get(rest_pos).copied();
-    match (name.is_some(), first) {
-        (true, Some(b'~')) | (true, Some(b'@')) | (false, Some(b'~')) => {
-            let first_sigil = first.expect("sigil") as char;
-            let after_first = &rest[rest_pos + 1..];
-            let other = if first_sigil == '~' { '@' } else { '~' };
-            // Named: first part ends at whitespace or the other sigil.
-            // Unnamed (no name): only `~` can come first, ending at `@`.
-            let first_len = if name.is_some() {
-                after_first
-                    .find(|c: char| c.is_ascii_whitespace() || c == other)
-                    .unwrap_or(after_first.len())
-            } else {
-                // Unnamed: `~` part ends at whitespace or `@`.
-                after_first
-                    .find(|c: char| c.is_ascii_whitespace() || c == '@')
-                    .unwrap_or(after_first.len())
-            };
-            let first_text = after_first[..first_len].to_string();
-            let first_offset = token_len;
-            token_len += 1 + first_len;
-            rest_pos += 1 + first_len;
-            if first_sigil == '~' {
-                drop = Some((first_offset, first_text));
-            } else {
-                timing = Some((first_offset, first_text));
-            }
-            // Second part, if present, runs to whitespace.
-            let second = rest.as_bytes().get(rest_pos).copied();
-            let want_second = match (name.is_some(), first_sigil, second) {
-                (true, '~', Some(b'@')) | (true, '@', Some(b'~')) => true,
-                (false, '~', Some(b'@')) => true,
-                _ => false,
-            };
-            if want_second {
-                let after_second = &rest[rest_pos + 1..];
-                let second_len = after_second
-                    .find(|c: char| c.is_ascii_whitespace())
-                    .unwrap_or(after_second.len());
-                let second_text = after_second[..second_len].to_string();
-                let second_offset = token_len;
-                token_len += 1 + second_len;
-                if first_sigil == '~' {
-                    timing = Some((second_offset, second_text));
-                } else {
-                    drop = Some((second_offset, second_text));
-                }
+        // Exact-name literals are unambiguous, but a suffix after their
+        // closing quote is the retired timing-after-name spelling.
+        if name_is_literal {
+            let after_name = &rest[token_len - sigil_len..];
+            let timing_len = start_timing_len(after_name);
+            if timing_len > 0 {
+                timing =
+                    Some((token_len, after_name[..timing_len].to_string()));
+                token_len += timing_len;
             }
         }
-        _ => {}
+    } else if (!doubled || !suffix.is_empty())
+        && let Some(name_len) = bare_start_name_len(&rest[len..])
+    {
+        let name_start = len;
+        name = Some(rest[name_start..name_start + name_len].to_string());
+        name_spelling = Some(NameSpelling::Bare);
+        token_len += name_len;
+        let after_name = &rest[name_start + name_len..];
+        let trailing_len = start_timing_len(after_name);
+        if trailing_len > 0 {
+            timing = Some((token_len, after_name[..trailing_len].to_string()));
+            token_len += trailing_len;
+        }
+    }
+    // Only `~<K>` remains in the grammar. Keep the old `@<X>` shape claimed
+    // as a retired spelling, including after a drop list.
+    let mut rest_pos = token_len - sigil_len;
+    if rest.as_bytes().get(rest_pos) == Some(&b'~') {
+        let after_tilde = &rest[rest_pos + 1..];
+        let drop_len = after_tilde
+            .find(|character: char| {
+                character.is_ascii_whitespace() || character == '@'
+            })
+            .unwrap_or(after_tilde.len());
+        drop = Some((token_len, after_tilde[..drop_len].to_string()));
+        token_len += 1 + drop_len;
+        rest_pos += 1 + drop_len;
+    }
+    if rest.as_bytes().get(rest_pos) == Some(&b'@') {
+        let after_at = &rest[rest_pos + 1..];
+        let timing_len = after_at
+            .find(|character: char| {
+                character.is_ascii_whitespace() || character == '~'
+            })
+            .unwrap_or(after_at.len());
+        // A real trailing X was already recorded above. Preserve the @ part
+        // as the diagnostic timing when present; it is always retired.
+        timing = Some((token_len, after_at[..timing_len].to_string()));
+        token_len += 1 + timing_len;
+        rest_pos += 1 + timing_len;
+        if rest.as_bytes().get(rest_pos) == Some(&b'~') && drop.is_none() {
+            let after_tilde = &rest[rest_pos + 1..];
+            let drop_len = after_tilde
+                .find(|character: char| character.is_ascii_whitespace())
+                .unwrap_or(after_tilde.len());
+            drop = Some((token_len, after_tilde[..drop_len].to_string()));
+            token_len += 1 + drop_len;
+        }
+    }
+    // A doubled start is retired as one complete token. Preserve the old
+    // hash-name timing suffix (`==#bugs=3`) in its teaching range so the
+    // diagnostic claims the whole spelling instead of leaving `=3` behind.
+    if doubled
+        && timing.is_none()
+        && rest.as_bytes().get(rest_pos) == Some(&b'=')
+    {
+        let after_equals = &rest[rest_pos + 1..];
+        let trailing_len = start_timing_len(after_equals);
+        if trailing_len > 0 {
+            timing =
+                Some((token_len, after_equals[..trailing_len].to_string()));
+            token_len += 1 + trailing_len;
+        }
     }
     let effective = if let Some((_, text)) = timing.as_ref() {
         text.clone()
@@ -3857,6 +3856,23 @@ pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
         timing,
         doubled,
     })
+}
+
+/// Byte length of the timing grammar `[0-9]*(-[0-9]*)?`, allowing a lone
+/// `-` as the useful incomplete editing state.
+fn start_timing_len(text: &str) -> usize {
+    let bytes = text.as_bytes();
+    let mut len = 0;
+    while len < bytes.len() && bytes[len].is_ascii_digit() {
+        len += 1;
+    }
+    if bytes.get(len) == Some(&b'-') {
+        len += 1;
+        while len < bytes.len() && bytes[len].is_ascii_digit() {
+            len += 1;
+        }
+    }
+    len
 }
 
 /// Absolute byte offset of a named start's name inside the token: after
@@ -4094,6 +4110,16 @@ fn named_token_error(
         if canonicalize_exact_name(name).is_none() {
             return Some(pomodoro_named_start_name_error(name, token));
         }
+    } else if spelling == NameSpelling::Hash && can_spell_bare(name) {
+        let drop_suffix =
+            drop_text.map(|text| format!("~{text}")).unwrap_or_default();
+        let suggestion = format!("={suffix}{name}{drop_suffix}");
+        let typed = format!("{token}{drop_suffix}");
+        return Some(retired_start_spelling_error(
+            &typed,
+            "`#` is only for names a bare start cannot spell",
+            &suggestion,
+        ));
     } else if let Some((before, after)) = name.split_once('=')
         && suffix.is_empty()
         && timing_text.is_none()
@@ -4131,9 +4157,79 @@ fn named_timing_twice_error(
     if suffix.is_empty() {
         return None;
     }
-    let sigil = "=";
-    let effective = if !timing.is_empty() { timing } else { suffix };
-    Some(start_timing_twice_error(token, sigil, effective, name))
+    Some(start_timing_twice_error(token, suffix, timing, name))
+}
+
+/// Retired `@X` start spelling. The typed name bytes are retained for exact
+/// literals so the rewrite remains directly pasteable.
+pub(super) fn retired_at_start_error(
+    token: &str,
+    suffix: &str,
+    name: Option<&str>,
+    spelling: Option<NameSpelling>,
+    is_literal: bool,
+    drop_text: Option<&str>,
+    timing: Option<&(usize, String)>,
+) -> Option<String> {
+    let (offset, raw_timing) = timing?;
+    if token.as_bytes().get(*offset) != Some(&b'@') {
+        return None;
+    }
+    let timing_text = if raw_timing.is_empty() {
+        "3"
+    } else {
+        raw_timing
+    };
+    let drop_suffix = drop_text
+        .filter(|text| !text.is_empty())
+        .map(|text| format!("~{text}"))
+        .unwrap_or_default();
+    let suggestion = match (name, spelling) {
+        (Some(_), Some(NameSpelling::Hash)) if is_literal => {
+            let name_start =
+                named_start_name_offset(suffix.len(), NameSpelling::Hash);
+            let raw_name = token.get(name_start..*offset).unwrap_or_default();
+            format!("={timing_text}#{raw_name}{drop_suffix}")
+        }
+        (Some(name), Some(NameSpelling::Hash)) => {
+            format!("={timing_text}#{name}{drop_suffix}")
+        }
+        (Some(name), Some(NameSpelling::Bare)) => {
+            format!("={name}{timing_text}{drop_suffix}")
+        }
+        _ => format!("={timing_text}{drop_suffix}"),
+    };
+    Some(retired_start_spelling_error(
+        token,
+        "`@` no longer separates a name from its timing",
+        &suggestion,
+    ))
+}
+
+/// A quoted `#` name may be followed by a trailing X only in retired
+/// spelling; its duration belongs before the `#`.
+pub(super) fn retired_literal_trailing_timing_error(
+    token: &str,
+    suffix: &str,
+    drop_text: Option<&str>,
+    timing: Option<&(usize, String)>,
+) -> Option<String> {
+    let (offset, timing_text) = timing?;
+    if token.as_bytes().get(*offset) == Some(&b'@') || timing_text.is_empty() {
+        return None;
+    }
+    let name_start = named_start_name_offset(suffix.len(), NameSpelling::Hash);
+    let raw_name = token.get(name_start.saturating_sub(1)..*offset)?;
+    let drop_suffix = drop_text
+        .filter(|text| !text.is_empty())
+        .map(|text| format!("~{text}"))
+        .unwrap_or_default();
+    let suggestion = format!("={timing_text}{raw_name}{drop_suffix}");
+    Some(retired_start_spelling_error(
+        token,
+        "a `#` name takes its timing before the name",
+        &suggestion,
+    ))
 }
 
 /// E4 for a well-formed named token with extra text or child lines.
@@ -4180,46 +4276,54 @@ pub(super) fn named_shape_error_with_drop(
     message
 }
 
-/// Teaching error when a counted unnamed start's `<X>` runs into a following
-/// letter (`=3bugs`, `=2fa`). `None` when the byte after the suffix is not
-/// an ASCII letter. The range is token-relative over the glued name.
+/// Teaching error when a dash continues a bare name (`=deep-work`).
 pub(super) fn glued_timing_diagnostic(
     parent_trimmed: &str,
     len: usize,
     suffix: &str,
 ) -> Option<(String, (usize, usize))> {
-    if suffix.is_empty() || !suffix.bytes().any(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
     let rest = parent_trimmed.get(len..)?;
-    if !rest.as_bytes().first().is_some_and(u8::is_ascii_alphabetic) {
-        return None;
-    }
-    let name_len = start_name_extent(rest);
-    let name = rest.get(..name_len)?;
-    if name.is_empty() || !is_pomodoro_selector_component(name) {
+    if rest.is_empty()
+        || !rest.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+    {
         return None;
     }
     let token = parent_trimmed
-        .get(..len + name_len)
+        .split_whitespace()
+        .next()
         .unwrap_or(parent_trimmed);
-    let at_form = format!("{}@{suffix}", named_start_token(name));
-    let hash_form = format!("={suffix}#{name}");
-    let combined = format!("{suffix}{name}");
-    let digit_name = if suffix.bytes().all(|byte| byte.is_ascii_digit())
-        && is_pomodoro_selector_component(&combined)
+    if let Some(EqualsToken::Start {
+        name: Some(name),
+        name_spelling: Some(NameSpelling::Bare),
+        timing: Some((_, timing)),
+        ..
+    }) = session_equals_token(parent_trimmed)
+        && let Some(dash) = timing.find('-')
     {
-        Some(named_start_token(&combined))
-    } else {
-        None
-    };
+        let before_dash = &timing[..dash];
+        let full_name = format!("{name}{before_dash}-{}", rest);
+        if is_pomodoro_selector_component(&full_name) {
+            let hash_form = format!("={suffix}#{full_name}");
+            return Some((
+                pomodoro_glued_timing_error(token, &hash_form),
+                (len.saturating_sub(1), len + rest.len()),
+            ));
+        }
+    }
+    let name_len = rest
+        .bytes()
+        .take_while(|byte| is_pomodoro_selector_byte(*byte) && *byte != b'-')
+        .count();
+    let candidate = rest.get(..name_len)?;
+    if candidate.is_empty()
+        || close_after_eq_parts(candidate).is_none()
+        || !is_pomodoro_selector_component(candidate)
+    {
+        return None;
+    }
+    let suggestion = format!("={suffix}#{candidate}");
     Some((
-        pomodoro_glued_timing_error(
-            token,
-            &at_form,
-            &hash_form,
-            digit_name.as_deref(),
-        ),
+        pomodoro_named_start_close_error(token, &suggestion),
         (len, len + name_len),
     ))
 }
@@ -4297,17 +4401,18 @@ pub(super) fn spaceless_start_drop_is_valid(nospace: &str) -> bool {
     true
 }
 
-/// Whether the spaceless join's first extra word starts with `@`, in which
+/// Whether the spaceless join's first extra word starts a timing, in which
 /// case the timing no-space hint wins over the drop hint.
 pub(super) fn spaceless_extra_is_timing(
     parent_trimmed: &str,
     len: usize,
 ) -> bool {
     let extra = parent_trimmed.get(len..).unwrap_or("").trim_start();
-    extra
-        .split_whitespace()
-        .next()
-        .is_some_and(|word| word.starts_with('@'))
+    extra.split_whitespace().next().is_some_and(|word| {
+        word.as_bytes()
+            .first()
+            .is_some_and(|byte| byte.is_ascii_digit() || *byte == b'-')
+    })
 }
 
 /// E4 no-space variant for `=# <word>`: the name must follow `#` directly.
@@ -5112,6 +5217,27 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                 let drop_text = drop.as_ref().map(|(_, text)| text.as_str());
                 let timing_text =
                     timing.as_ref().map(|(_, text)| text.as_str());
+                if let Some(error) = retired_at_start_error(
+                    token_text,
+                    &suffix,
+                    Some(&selector),
+                    Some(spelling),
+                    name_is_literal,
+                    drop_text,
+                    timing.as_ref(),
+                ) {
+                    return Err(error);
+                }
+                if name_is_literal
+                    && let Some(error) = retired_literal_trailing_timing_error(
+                        token_text,
+                        &suffix,
+                        drop_text,
+                        timing.as_ref(),
+                    )
+                {
+                    return Err(error);
+                }
                 // Named diagnostics interpolate the token without the
                 // optional parts; `=#~2` reports the empty-name error on
                 // `=#`, and `=#@3` the same way.
@@ -5174,6 +5300,13 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     let has_extra = parent_trimmed.len() > len;
                     let has_children = item.lines.len() > 1;
                     if has_extra || has_children {
+                        if let Some((message, _)) = glued_timing_diagnostic(
+                            parent_trimmed,
+                            len,
+                            &suffix,
+                        ) {
+                            return Err(message);
+                        }
                         // A broken drop list reports its own error first; a
                         // dangling separator with extra text falls through
                         // to the no-spaces hint or the shape error.
@@ -5257,6 +5390,18 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
             // token does. It is never prose, near misses included. A bare `=`
             // followed by separate text (`= ~2`, `= foo`) stays prose.
             let claims = counted || drop.is_some() || timing.is_some();
+            let drop_text = drop.as_ref().map(|(_, text)| text.as_str());
+            if let Some(error) = retired_at_start_error(
+                parent_trimmed,
+                &suffix,
+                None,
+                None,
+                false,
+                drop_text,
+                timing.as_ref(),
+            ) {
+                return Err(error);
+            }
             let exact = parent_trimmed.len() == len && item.lines.len() == 1;
             if !exact {
                 if claims

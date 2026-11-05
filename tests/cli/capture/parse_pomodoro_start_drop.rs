@@ -1,4 +1,4 @@
-//! `capture-parse` JSON for the `=[<X>][#name]~<K>` start-drop grammar:
+//! `capture-parse` JSON for the `=[<X>]name~<K>` start-drop grammar:
 //! modes, specs, spans, needs, placeholders, diagnostics and ranges, and
 //! chain items.
 
@@ -51,7 +51,7 @@ fn parse_start_drop_valid_spec_and_spans() {
     assert_eq!(parsed["diagnostics"], serde_json::json!([]), "{parsed}");
 
     // Lists sort ascending; the human start line carries the drop summary.
-    let parsed = parse("=3#bugs~3,1");
+    let parsed = parse("=3bugs~3,1");
     assert_eq!(parsed["mode"], "pomodoro_start", "{parsed}");
     assert_eq!(parsed["section"], "bugs", "{parsed}");
     assert_eq!(
@@ -171,13 +171,13 @@ fn parse_start_drop_human_line() {
     let output = bob_command()
         .arg("capture-parse")
         .arg("--")
-        .arg("=3#bugs~1,3")
+        .arg("=3bugs~1,3")
         .output()
         .expect("run capture-parse human");
     assert_success(&output);
     let out = stdout(&output);
     assert!(
-        out.contains("=3#bugs~1,3 (15m, offset 0u · drop 1, 3)"),
+        out.contains("=3bugs~1,3 (15m, offset 0u · drop 1, 3)"),
         "{out}"
     );
 }

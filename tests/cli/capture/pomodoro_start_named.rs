@@ -1,4 +1,4 @@
-//! Named Pomodoro starts (`=<X>#name`) in `bob capture`.
+//! Named Pomodoro starts (`=name<X>`) in `bob capture`.
 
 use crate::support::*;
 use std::fs;
@@ -84,7 +84,7 @@ fn named_start_existing_reports_json_and_moves_to_current_slot() {
 fn named_start_prefix_and_duration_forms() {
     let (_temp, vault, day_file) = named_vault("bob-cli-named-prefix", WORKED);
     let output =
-        run_capture(&vault, &day_file, &["=#deep"], "2026-07-10 09:02:00");
+        run_capture(&vault, &day_file, &["=deep"], "2026-07-10 09:02:00");
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("prefix JSON");
@@ -92,7 +92,7 @@ fn named_start_prefix_and_duration_forms() {
 
     let (_temp, vault, day_file) = named_vault("bob-cli-named-dur", WORKED);
     let output =
-        run_capture(&vault, &day_file, &["=3#bugs"], "2026-07-10 09:02:00");
+        run_capture(&vault, &day_file, &["=3bugs"], "2026-07-10 09:02:00");
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("dur JSON");
@@ -106,7 +106,7 @@ fn named_start_prefix_and_duration_forms() {
 fn named_start_again_creates_from_completed_name() {
     let (_temp, vault, day_file) = named_vault("bob-cli-named-again", WORKED);
     let output =
-        run_capture(&vault, &day_file, &["=#plan"], "2026-07-10 09:02:00");
+        run_capture(&vault, &day_file, &["=plan"], "2026-07-10 09:02:00");
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("again JSON");
@@ -128,7 +128,7 @@ fn named_start_again_creates_from_completed_name() {
 fn named_start_missing_creates_and_warns_on_near_miss() {
     let (_temp, vault, day_file) = named_vault("bob-cli-named-new", WORKED);
     let output =
-        run_capture(&vault, &day_file, &["=#review"], "2026-07-10 09:02:00");
+        run_capture(&vault, &day_file, &["=review"], "2026-07-10 09:02:00");
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("new JSON");
@@ -137,7 +137,7 @@ fn named_start_missing_creates_and_warns_on_near_miss() {
 
     let (_temp, vault, day_file) = named_vault("bob-cli-named-suggest", WORKED);
     let output =
-        run_capture(&vault, &day_file, &["=#bgus"], "2026-07-10 09:02:00");
+        run_capture(&vault, &day_file, &["=bgus"], "2026-07-10 09:02:00");
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("suggest JSON");
@@ -157,9 +157,10 @@ fn named_start_grammar_errors_are_precise() {
     let (_temp, vault, day_file) = named_vault("bob-cli-named-errors", WORKED);
     for (token, needle) in [
         ("=#", "is incomplete: type a Pomodoro name after `#`"),
-        ("=#bugs=3", "write the duration after `@` or before the name: `=#bugs@3` or `=3#bugs`"),
+        ("=#bugs", "write `=bugs`"),
+        ("=bugs@3", "write `=bugs3`"),
         ("x#bugs", "`x` always closes the running Pomodoro"),
-        ("=#deep work", "must be the whole capture item"),
+        ("=deep work", "must be the whole capture item"),
     ] {
         let output =
             run_capture(&vault, &day_file, &[token], "2026-07-10 09:02:00");
@@ -192,7 +193,7 @@ fn named_start_running_guards_and_switch_chain() {
     let (_temp, vault, day_file) =
         named_vault("bob-cli-named-already", running);
     let output =
-        run_capture(&vault, &day_file, &["=#bugs"], "2026-07-10 09:02:00");
+        run_capture(&vault, &day_file, &["=bugs"], "2026-07-10 09:02:00");
     assert!(!output.status.success());
     assert!(
         stdout(&output).contains("is already running")
@@ -229,7 +230,7 @@ fn named_start_human_created_dry_run_and_forced_flags() {
         .arg("-b")
         .arg(&vault)
         .arg("--dry-run")
-        .arg("=#plan")
+        .arg("=plan")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 09:02:00")
         .output()
@@ -251,7 +252,7 @@ fn named_start_human_created_dry_run_and_forced_flags() {
         .arg("--route")
         .arg("foo")
         .arg("--")
-        .arg("=#bugs")
+        .arg("=bugs")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 09:02:00")
         .output()
@@ -276,7 +277,7 @@ fn named_start_created_reports_added_block() {
         &vault,
         &day_file,
         "2026-09-30 07:20:00",
-        &["=#focus"],
+        &["=focus"],
     );
     let day_after = fs::read_to_string(&day_file).expect("read day after");
     assert_pomodoro_blocks_cover_changes(&day_before, &day_after, &json);
@@ -304,22 +305,24 @@ fn named_start_created_reports_added_block() {
 }
 
 #[test]
-fn named_start_bare_spelling_writes_the_same_as_hash() {
+fn named_start_timing_can_precede_or_follow_a_bare_name() {
     let (_temp_a, vault_a, day_a) =
         named_vault("bob-cli-named-bare-equiv-a", WORKED);
     let (_temp_b, vault_b, day_b) =
         named_vault("bob-cli-named-bare-equiv-b", WORKED);
     let now = "2026-07-10 09:02:00";
-    let bare = run_capture(&vault_a, &day_a, &["=bugs"], now);
-    let hashed = run_capture(&vault_b, &day_b, &["=#bugs"], now);
-    assert_success(&bare);
-    assert_success(&hashed);
+    let before = run_capture(&vault_a, &day_a, &["=3bugs"], now);
+    let after = run_capture(&vault_b, &day_b, &["=bugs3"], now);
+    assert_success(&before);
+    assert_success(&after);
     let bare_json: serde_json::Value =
-        serde_json::from_str(stdout(&bare).trim()).expect("bare JSON");
+        serde_json::from_str(stdout(&before).trim())
+            .expect("leading timing JSON");
     let hashed_json: serde_json::Value =
-        serde_json::from_str(stdout(&hashed).trim()).expect("hash JSON");
-    assert_eq!(bare_json["text"], "=bugs", "{bare_json}");
-    assert_eq!(hashed_json["text"], "=#bugs", "{hashed_json}");
+        serde_json::from_str(stdout(&after).trim())
+            .expect("trailing timing JSON");
+    assert_eq!(bare_json["text"], "=3bugs", "{bare_json}");
+    assert_eq!(hashed_json["text"], "=bugs3", "{hashed_json}");
     assert_eq!(bare_json["kind"], hashed_json["kind"]);
     assert_eq!(bare_json["pomodoro_name"], hashed_json["pomodoro_name"]);
     assert_eq!(
@@ -327,7 +330,7 @@ fn named_start_bare_spelling_writes_the_same_as_hash() {
         "{bare_json} vs {hashed_json}"
     );
     assert_eq!(
-        fs::read_to_string(&day_a).expect("bare day"),
-        fs::read_to_string(&day_b).expect("hash day")
+        fs::read_to_string(&day_a).expect("leading timing day"),
+        fs::read_to_string(&day_b).expect("trailing timing day")
     );
 }

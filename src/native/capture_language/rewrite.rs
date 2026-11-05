@@ -340,10 +340,13 @@ fn expand_hash_alias(
         }
         CompletionContext::Section
         | CompletionContext::PomodoroName
-        | CompletionContext::PomodoroStartName
         | CompletionContext::PomodoroPastName
         | CompletionContext::PomodoroSplitType
         | CompletionContext::PomodoroMergeDest => field.replacement.0 == cursor,
+        CompletionContext::PomodoroStartName => {
+            field.replacement.0 == cursor
+                || field.replacement == (start, cursor)
+        }
         _ => false,
     };
     if !allowed {

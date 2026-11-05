@@ -265,7 +265,7 @@ fn theme_recent_shell_description_and_quoted_replacement() {
             "--",
             "bob",
             "capture",
-            "=#deep",
+            "=deep",
         ])
         .output()
         .unwrap();
@@ -323,7 +323,7 @@ fn configured_shell_describes_never_used_and_unconfigured_create() {
             "--",
             "bob",
             "capture",
-            "=#snack",
+            "=snack",
         ])
         .output()
         .unwrap();
@@ -344,7 +344,7 @@ fn accepting_hidden_theme_keeps_preferences_and_today_row() {
     );
     let journal = temp.path().join("vault/.bob/themes/test.jsonl");
     let before = fs::read(&journal).unwrap();
-    let draft = "=#fixes";
+    let draft = "=fixes";
     let result = complete(temp.path(), draft);
     assert_eq!(result["candidates"][0]["hidden"], true);
     let output = command(temp.path())

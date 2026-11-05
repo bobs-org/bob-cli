@@ -522,7 +522,8 @@ fn is_chain_close_token(token: &str) -> bool {
 }
 
 /// Whether a token starts a new session: a whole-item start (`=`, `=<X>`,
-/// `=#name`, `=~K` with its drop part) or a whole-item close (`x…`).
+/// `=name`, `=<X>name`, `=<X>#name` when needed, `=~K` with its drop part)
+/// or a whole-item close (`x…`).
 /// Adjust/shift tokens (`+1`, `-`, `--`) never start a session, so they
 /// stay entry text unless a start or close precedes them in the trail.
 fn is_trail_head_token(token: &str) -> bool {

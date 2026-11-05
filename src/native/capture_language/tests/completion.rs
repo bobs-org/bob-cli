@@ -239,8 +239,8 @@ fn pomodoro_link_suffix_names_complete_without_replacing_the_link_start() {
         assert!(completion.bare_name, "{raw}");
     }
 
-    let timed = "@work:outline=bu@3";
-    let name_end = timed.find("@3").expect("timing suffix");
+    let timed = "@work:outline=bu3";
+    let name_end = timed.find('3').expect("timing suffix");
     let completion = field(timed, name_end).expect("name before timing");
     assert_eq!(completion.context, CompletionContext::PomodoroName);
     assert_eq!(completion.query, "bu");
@@ -253,14 +253,18 @@ fn pomodoro_link_suffix_names_complete_without_replacing_the_link_start() {
     let completion = field(hash, hash.len()).expect("hash suffix name");
     assert_eq!(completion.context, CompletionContext::PomodoroName);
     assert_eq!(completion.query, "bu");
-    assert_eq!(completion.replacement, (hash.len() - 2, hash.len()));
-    assert!(!completion.bare_name);
+    assert_eq!(
+        completion.replacement,
+        (hash.find('#').unwrap(), hash.len())
+    );
+    assert!(completion.bare_name);
 
     let empty = "^work:outline=3#";
     let completion = field(empty, empty.len()).expect("empty suffix name");
     assert_eq!(completion.context, CompletionContext::PomodoroName);
     assert_eq!(completion.query, "");
-    assert_eq!(completion.replacement, (empty.len(), empty.len()));
+    assert_eq!(completion.replacement, (empty.len() - 1, empty.len()));
+    assert!(completion.bare_name);
 }
 
 #[test]
@@ -287,7 +291,7 @@ fn caret_suffix_names_preserve_the_link_part_for_completion() {
     for (raw, cursor) in [
         ("^work:outline=3#bugs", 14),
         ("^work:outline=3#bugs", 15),
-        ("^work:outline=bugs@", 19),
+        ("^work:outline=bugs3", 19),
     ] {
         assert_eq!(field(raw, cursor), None, "{raw}@{cursor}");
     }
@@ -1034,19 +1038,21 @@ fn project_task_id_before_a_child_line_route_marker_still_completes() {
 
 #[test]
 fn pomodoro_start_name_completes_after_hash_on_a_named_start() {
-    // `=#` offers an empty insertion point at the cursor; `#` itself is
-    // never inside the replacement.
+    // `=#` offers an empty name field whose replacement includes `#`, so
+    // accepting a bare-spellable candidate removes the marker.
     let empty = field("=#", 2).expect("start name field");
     assert_eq!(empty.context, CompletionContext::PomodoroStartName);
     assert_eq!(empty.route, None);
     assert_eq!(empty.block_id, None);
     assert_eq!(empty.query, "");
-    assert_eq!(empty.replacement, (2, 2));
+    assert_eq!(empty.replacement, (1, 2));
+    assert!(empty.bare_name);
 
     let counted = field("=3#", 3).expect("counted start name field");
     assert_eq!(counted.context, CompletionContext::PomodoroStartName);
     assert_eq!(counted.query, "");
-    assert_eq!(counted.replacement, (3, 3));
+    assert_eq!(counted.replacement, (2, 3));
+    assert!(counted.bare_name);
 
     // A mid-name cursor reports the typed prefix but replaces the whole
     // name part.
@@ -1054,11 +1060,13 @@ fn pomodoro_start_name_completes_after_hash_on_a_named_start() {
     let mid = field(raw, 4).expect("mid-name field");
     assert_eq!(mid.context, CompletionContext::PomodoroStartName);
     assert_eq!(mid.query, "de");
-    assert_eq!(mid.replacement, (2, 6));
+    assert_eq!(mid.replacement, (1, 6));
+    assert!(mid.bare_name);
 
     let end = field(raw, raw.len()).expect("end-of-name field");
     assert_eq!(end.query, "deep");
-    assert_eq!(end.replacement, (2, 6));
+    assert_eq!(end.replacement, (1, 6));
+    assert!(end.bare_name);
 
     // A cursor on `=<X>` or at the `#` byte itself offers nothing.
     assert_eq!(field("=#bugs", 0), None);
@@ -1075,9 +1083,10 @@ fn pomodoro_start_name_completes_after_hash_on_a_named_start() {
 }
 
 #[test]
-fn pomodoro_start_name_completes_a_bare_name_with_the_bare_flag() {
+fn pomodoro_start_name_completes_to_bare_or_hashed_spellings() {
     let empty_hash = field("=#", 2).expect("hash empty");
-    assert!(!empty_hash.bare_name);
+    assert!(empty_hash.bare_name);
+    assert_eq!(empty_hash.replacement, (1, 2));
 
     let mid = field("=bu", 3).expect("bare mid");
     assert_eq!(mid.context, CompletionContext::PomodoroStartName);
@@ -1155,7 +1164,8 @@ fn pomodoro_start_name_completes_per_token_inside_chains() {
     let completion = field(chain, chain.len()).expect("chain name field");
     assert_eq!(completion.context, CompletionContext::PomodoroStartName);
     assert_eq!(completion.query, "de");
-    assert_eq!(completion.replacement, (4, 6));
+    assert_eq!(completion.replacement, (3, 6));
+    assert!(completion.bare_name);
 
     // A cursor inside the close token stays an empty success.
     assert_eq!(field(chain, 1), None);

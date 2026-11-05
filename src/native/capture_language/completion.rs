@@ -651,7 +651,13 @@ pub(super) fn caret_completion_field_at(
         return None;
     }
     let relative = cursor - first.start;
-    match classify_caret_token(first.text) {
+    let shape = classify_caret_token(first.text);
+    if let CaretTokenShape::Invalid(message) = &shape
+        && message.contains("`#` is only for names a bare start cannot spell")
+    {
+        return retired_caret_hash_start_field(first, cursor);
+    }
+    match shape {
         CaretTokenShape::Prose
         | CaretTokenShape::Invalid(_)
         | CaretTokenShape::CloseInvalid { .. } => None,
@@ -699,13 +705,19 @@ pub(super) fn caret_completion_field_at(
             if item.lines.len() != 1 {
                 return None;
             }
+            let (name_range, bare_name) = caret_suffix_name_completion_range(
+                first,
+                start_offset,
+                Some(name_range),
+            );
+            let name_range = name_range?;
             caret_link_field(
                 first,
                 route,
                 block_id,
                 link_end,
                 Some(name_range),
-                false,
+                bare_name,
                 cursor,
             )
             .filter(|_| {
@@ -728,33 +740,42 @@ pub(super) fn caret_completion_field_at(
             start_offset,
             bare_name,
             ..
-        } => caret_link_field(
-            first,
-            route,
-            block_id,
-            link_end,
-            name_range.or(Some((link_end, link_end))),
-            bare_name,
-            cursor,
-        )
-        .filter(|_| {
-            // A suffix name used to discard the link part: admit cursors in
-            // the link part as well as the suffix name, while keeping
-            // timing bytes (`=`, `=3`, `@3`) non-completable.
-            if cursor <= first.start + link_end {
-                return true;
-            }
-            start_offset.is_none_or(|offset| {
-                if let Some((name_start, name_end)) = name_range
-                    && first.start + name_start >= first.start + offset
-                {
-                    cursor >= first.start + name_start
-                        && cursor <= first.start + name_end
-                } else {
-                    cursor <= first.start + offset
+        } => {
+            let (completion_name_range, completion_bare_name) =
+                caret_suffix_name_completion_range(
+                    first,
+                    start_offset,
+                    name_range,
+                );
+            caret_link_field(
+                first,
+                route,
+                block_id,
+                link_end,
+                completion_name_range.or(Some((link_end, link_end))),
+                completion_bare_name || bare_name,
+                cursor,
+            )
+            .filter(|_| {
+                // A suffix name used to discard the link part: admit cursors in
+                // the link part as well as the suffix name, while keeping
+                // timing bytes (`=`, `=3`, or the trailing `3` in `=bugs3`)
+                // non-completable.
+                if cursor <= first.start + link_end {
+                    return true;
                 }
+                start_offset.is_none_or(|offset| {
+                    if let Some((name_start, name_end)) = completion_name_range
+                        && first.start + name_start >= first.start + offset
+                    {
+                        cursor >= first.start + name_start
+                            && cursor <= first.start + name_end
+                    } else {
+                        cursor <= first.start + offset
+                    }
+                })
             })
-        }),
+        }
         CaretTokenShape::TimingIncomplete {
             route,
             block_id,
@@ -785,6 +806,80 @@ pub(super) fn caret_completion_field_at(
             })
         }
     }
+}
+
+/// Include a hash-start suffix's delimiter in its completion replacement.
+/// This lets the candidate formatter keep `#` for names that need it and
+/// remove it for names that can be written bare.
+fn caret_suffix_name_completion_range(
+    token: &Token<'_>,
+    start_offset: Option<usize>,
+    name_range: Option<(usize, usize)>,
+) -> (Option<(usize, usize)>, bool) {
+    let (Some(offset), Some((name_start, name_end))) =
+        (start_offset, name_range)
+    else {
+        return (name_range, false);
+    };
+    if name_start <= offset
+        || token.text.as_bytes().get(name_start.saturating_sub(1))
+            != Some(&b'#')
+        || token
+            .text
+            .get(name_start..name_end)
+            .is_some_and(super::pomodoro_literal::opens_exact_name)
+    {
+        return (Some((name_start, name_end)), false);
+    }
+    (Some((name_start - 1, name_end)), true)
+}
+
+/// A bare-spellable hash name is intentionally invalid for execution, but
+/// completion still needs to offer its candidate so acceptance can remove
+/// the retired `#`.
+fn retired_caret_hash_start_field(
+    token: &Token<'_>,
+    cursor: usize,
+) -> Option<CompletionField> {
+    let marker = token.text.strip_prefix('^')?;
+    let (route_part, tail) = marker.split_once(':')?;
+    let (block_id, raw_start) = tail.split_once('=')?;
+    if !is_route_token(route_part)
+        || !is_block_id(block_id)
+        || block_id.contains('#')
+    {
+        return None;
+    }
+    let start_token = format!("={raw_start}");
+    let Some(EqualsToken::Start {
+        suffix,
+        len,
+        name: Some(name),
+        name_spelling: Some(NameSpelling::Hash),
+        name_is_literal: false,
+        doubled: false,
+        ..
+    }) = session_equals_token(&start_token)
+    else {
+        return None;
+    };
+    if len != start_token.len() || !super::bare_name::can_spell_bare(&name) {
+        return None;
+    }
+    let link_end = 1 + route_part.len() + 1 + block_id.len();
+    let suffix_offset = link_end;
+    let name_start = suffix_offset
+        + named_start_name_offset(suffix.len(), NameSpelling::Hash);
+    let name_range = (name_start - 1, name_start + name.len());
+    caret_link_field(
+        token,
+        route_part.to_ascii_lowercase(),
+        block_id.to_string(),
+        link_end,
+        Some(name_range),
+        true,
+        cursor,
+    )
 }
 
 /// Build the completion field for the `route:block-id[#name]` portion of a
@@ -820,6 +915,16 @@ pub(super) fn caret_link_field(
     if cursor < name_start_abs || cursor > token.end {
         return None;
     }
+    let content_start = if bare_name
+        && token
+            .text
+            .get(name_start..name_end)
+            .is_some_and(|text| text.starts_with('#'))
+    {
+        name_start + 1
+    } else {
+        name_start
+    };
     // A partial literal completes on the literal's decoded text; the
     // replacement still covers the whole partial literal.
     if let Some(after_hash) = token.text.get(name_start..)
@@ -843,7 +948,7 @@ pub(super) fn caret_link_field(
     }
     let query = token
         .text
-        .get(name_start..cursor - token.start)?
+        .get(content_start..cursor - token.start)?
         .to_string();
     Some(CompletionField {
         context: CompletionContext::PomodoroName,
@@ -861,8 +966,9 @@ pub(super) fn caret_link_field(
 /// doubled starts never offer completion. `None` when the cursor is not
 /// inside such a name part: just after `#` (hash) or just after `=`
 /// (bare) through the end of the name part. A cursor on `=<X>` or at the
-/// `#` byte itself yields nothing, and `#` is never inside the span. The
-/// lexer decides what counts as a named start; validity never matters
+/// `#` byte itself yields nothing. A hash-delimited selector includes `#`
+/// in its replacement unless it is a quoted exact-name literal, which keeps
+/// its typed delimiter. The lexer decides what counts as a named start; validity never matters
 /// here, so near misses lex the same way valid tokens do.
 fn named_start_name_at(
     item: &CaptureItem<'_>,
@@ -911,21 +1017,27 @@ fn named_start_name_at(
     if cursor < name_start || cursor > name_end {
         return None;
     }
+    let hash_start = if spelling == super::bare_name::NameSpelling::Hash {
+        name_start.saturating_sub(1)
+    } else {
+        name_start
+    };
     Some((
         suffix,
         name.get(..cursor - name_start)?.to_string(),
-        (name_start, name_end),
-        spelling == super::bare_name::NameSpelling::Bare,
+        (hash_start, name_end),
+        true,
     ))
 }
 
 /// Completion field for the name part of a `=<X>#name` / `=name` named
 /// Pomodoro start. The cursor must lie inside `[name_start, name_end]`:
 /// just after `#` (hash) or just after `=` (bare) through the end of the
-/// name part. A cursor on `=<X>` or at the `#` byte itself yields
-/// nothing, and `#` is never inside the replacement. The replacement
-/// covers the whole name part regardless of where the cursor sits inside
-/// it.
+/// name part. A cursor on timing or at the `#` byte itself yields nothing.
+/// The replacement includes `#` for selector names so candidate formatting
+/// can keep it only when the selected name needs it; quoted exact-name
+/// literals keep their typed delimiter. The replacement covers the whole
+/// name part regardless of where the cursor sits inside it.
 fn pomodoro_start_name_field(
     item: &CaptureItem<'_>,
     cursor: usize,
@@ -1872,6 +1984,14 @@ pub(crate) fn completion_field_at(
     {
         return Some(field);
     }
+    // A named start owns its `#` delimiter before generic task-type
+    // completion can claim it. The full name replacement lets candidate
+    // formatting preserve `#` only when the selected name needs it.
+    if line_index == 0
+        && let Some(field) = pomodoro_start_name_field(item, cursor)
+    {
+        return Some(field);
+    }
     // Type markers and directives are transparent to route-run detection.
     // Their specialized completion claims have already run, so mask both
     // on a same-length view before selecting a run. Returned ranges still
@@ -1908,13 +2028,6 @@ pub(crate) fn completion_field_at(
             (&masked_item, masked_line)
         }
     };
-    // The name part of a `=<X>#name` named Pomodoro start completes
-    // start-aware session rows, whether the token is valid, a near miss,
-    // or the `=<X>#` incomplete state. This runs before the session-item
-    // early return below so named starts keep their name completion.
-    if let Some(field) = pomodoro_start_name_field(item, cursor) {
-        return Some(field);
-    }
     // Bare-plus task search is checked before the adjustment early return:
     // a literal `+` is both the existing +5m action and a task-picker
     // gesture, while numeric/double-plus operator tokens remain actions.
@@ -3137,8 +3250,19 @@ fn pomodoro_link_suffix_name_field(
             .text
             .get(name_start..cursor - token.start)?
             .to_string(),
-        replacement: (token.start + name_start, token.start + name_end),
-        bare_name: spelling == NameSpelling::Bare,
+        replacement: (
+            token.start
+                + if spelling == NameSpelling::Hash {
+                    name_start.saturating_sub(1)
+                } else {
+                    name_start
+                },
+            token.start + name_end,
+        ),
+        // The replacement includes a typed `#` when present, so candidate
+        // generation emits the shortest spelling and adds `#` only when the
+        // selected name needs it.
+        bare_name: true,
     })
 }
 

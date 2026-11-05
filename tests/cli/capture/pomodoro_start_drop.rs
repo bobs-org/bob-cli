@@ -148,7 +148,7 @@ fn start_lineup_counted_and_named() {
 
     let (_temp, vault, day_file) =
         start_lineup_vault("bob-cli-start-lineup-named");
-    let named = run_start_json(&vault, &day_file, "=#capture");
+    let named = run_start_json(&vault, &day_file, "=capture");
     let start = &named["pomodoro_start"];
     assert_eq!(start["pomodoro_name"], "CAPTURE", "{named}");
     assert_eq!(start["created_pomodoro"], false, "{named}");
@@ -321,7 +321,7 @@ fn start_drop_counted_offset_named_and_empty_session() {
 
     let (_temp, vault, day_file) =
         start_lineup_vault("bob-cli-start-drop-named");
-    let named = run_start_json(&vault, &day_file, "=#capture~1,3");
+    let named = run_start_json(&vault, &day_file, "=capture~1,3");
     let start = &named["pomodoro_start"];
     assert_eq!(start["pomodoro_name"], "CAPTURE", "{named}");
     assert_eq!(start["drop"], serde_json::json!([1, 3]), "{named}");
@@ -348,18 +348,18 @@ fn start_drop_out_of_range_and_empty_lineup() {
 
     let (_temp, vault, day_file) =
         start_lineup_vault("bob-cli-start-drop-sase");
-    let error = run_start_expect_error(&vault, &day_file, &["=#sase~1"]);
+    let error = run_start_expect_error(&vault, &day_file, &["=sase~1"]);
     assert!(
-        error.contains("`=#sase~1` names task 1, but SASE has no queued Task Links; start it with `=#sase`"),
+        error.contains("`=sase~1` names task 1, but SASE has no queued Task Links; start it with `=sase`"),
         "{error}"
     );
 
     // A named start that creates its session has an empty lineup.
     let (_temp, vault, day_file) =
         start_lineup_vault("bob-cli-start-drop-created");
-    let error = run_start_expect_error(&vault, &day_file, &["=#plan~1"]);
+    let error = run_start_expect_error(&vault, &day_file, &["=plan~1"]);
     assert!(
-        error.contains("`=#plan~1` names task 1, but PLAN starts as a new session with no queued Task Links; start it with `=#plan`"),
+        error.contains("`=plan~1` names task 1, but PLAN starts as a new session with no queued Task Links; start it with `=plan`"),
         "{error}"
     );
 }
@@ -383,7 +383,7 @@ fn start_drop_lexical_errors() {
         ),
         (
             "=~2#bugs",
-            "write the drop list after the name: `=#bugs~2` instead of `=~2#bugs`",
+            "write the drop list after the name: `=bugs~2` instead of `=~2#bugs`",
         ),
         (
             "=~2a",

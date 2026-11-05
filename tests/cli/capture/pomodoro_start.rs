@@ -361,7 +361,7 @@ fn capture_pomodoro_start_rejects_invalid_and_conflicting_syntax() {
     fs::create_dir_all(&vault).expect("create vault");
     for marker in [
         "@sase:b1==3",
-        "@sase:b1=3a",
+        "@sase:b1=3deep-work",
         "@sase:b1=3--",
         "@sase:b1=3-2-",
     ] {

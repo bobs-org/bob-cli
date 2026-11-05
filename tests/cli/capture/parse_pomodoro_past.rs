@@ -29,11 +29,11 @@ fn parse_human(text: &str) -> String {
 }
 
 #[test]
-fn past_parse_reports_full_contract_and_grammar_12() {
+fn past_parse_reports_full_contract_and_grammar_13() {
     // Single unnamed past.
     let one = parse("x=3");
     assert_eq!(one["schema_version"], 1);
-    assert_eq!(one["grammar"], 12);
+    assert_eq!(one["grammar"], 13);
     assert_eq!(one["mode"], "pomodoro_past");
     assert_eq!(one["body"], "x=3");
     assert_eq!(one["section"], serde_json::Value::Null);

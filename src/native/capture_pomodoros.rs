@@ -89,6 +89,8 @@ statuses, task-block lines, event chips for links to today's Event Tasks, and \
 ledger notes, and a derived homes object from those Task Links. When the day \
 has an `## Events` section, the response also includes its calendar rows and \
 timing hints. Every named entry carries its component ThemeRefs in `themes`. \
+Each selectable entry with a non-empty slug also carries Bob's canonical \
+`start_token` so clients can render its start hint without composing the grammar. \
 Human output appends a dim home chip with its forecast or attributed dot \
 after each entry name. Its optional plan_budget is computed from the saved \
 daily note and the configured plan limits.",
@@ -226,6 +228,8 @@ struct CapturePomodorosPlanBudget {
 struct CapturePomodorosOutputEntry {
     #[serde(flatten)]
     entry: PomodoroEntry,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    start_token: Option<String>,
     themes: Vec<ThemeRef>,
     task_link_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -460,6 +464,8 @@ fn list_capture_pomodoros(
             (None, false)
         };
         pomodoros.push(CapturePomodorosOutputEntry {
+            start_token: (entry.selectable && !entry.slug.is_empty())
+                .then(|| capture_language::named_start_token(&entry.slug)),
             entry,
             themes,
             task_link_count,
@@ -1950,6 +1956,7 @@ mod tests {
                     is_current: true,
                     child_count: 5,
                 },
+                start_token: Some("=memory".to_string()),
                 themes: Vec::new(),
                 task_link_count: Some(3),
                 role: None,
@@ -1981,6 +1988,7 @@ mod tests {
         assert_eq!(value["pomodoros"][0]["state"], "open");
         assert_eq!(value["pomodoros"][0]["status_symbol"], " ");
         assert_eq!(value["pomodoros"][0]["name"], "MEMORY");
+        assert_eq!(value["pomodoros"][0]["start_token"], "=memory");
         assert_eq!(value["pomodoros"][0]["themes"], serde_json::json!([]));
         assert_eq!(value["pomodoros"][0]["slug"], "memory");
         assert_eq!(value["pomodoros"][0]["selectable"], true);
@@ -2067,6 +2075,7 @@ mod tests {
                         is_current: true,
                         child_count: 1,
                     },
+                    start_token: Some("=memory".to_string()),
                     themes: Vec::new(),
                     task_link_count: Some(1),
                     role: None,
@@ -2096,6 +2105,7 @@ mod tests {
                         is_current: false,
                         child_count: 0,
                     },
+                    start_token: None,
                     themes: Vec::new(),
                     task_link_count: None,
                     role: None,

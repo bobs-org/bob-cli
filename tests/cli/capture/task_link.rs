@@ -110,10 +110,10 @@ fn capture_colon_query_json_failure_reports_ok_false() {
 }
 
 #[test]
-fn bare_caret_link_suffix_writes_the_same_result_as_hash_before_equals() {
+fn caret_link_suffix_timing_orders_write_the_same_result() {
     let mut results = Vec::new();
     let mut snapshots = Vec::new();
-    for (index, token) in ["^cash:work=focus@5", "^cash:work#focus=5"]
+    for (index, token) in ["^cash:work=focus5", "^cash:work=5focus"]
         .into_iter()
         .enumerate()
     {

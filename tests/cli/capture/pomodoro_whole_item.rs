@@ -457,11 +457,11 @@ fn capture_pomodoro_whole_item_start_rejects_shape_and_forced_flags() {
 
     // Counted tokens with extra text echo the typed token and point at the
     // task-session start instead. Never tasks, never writes.
-    for (text, token, suffix) in [
-        ("=3 more", "=3", "3"),
-        ("=3s:1", "=3", "3"),
-        ("=2-1-", "=2-1", "2-1"),
-        ("=-2 @work", "=-2", "-2"),
+    for (text, token, suffix, named_link) in [
+        ("=3 more", "=3", "3", false),
+        ("=3s:1", "=3s", "3", true),
+        ("=2-1-", "=2-1", "2-1", false),
+        ("=-2 @work", "=-2", "-2", false),
     ] {
         let (output, before, after) = run(text);
         assert_ne!(output.status.code(), Some(0), "{text} should fail");
@@ -469,7 +469,10 @@ fn capture_pomodoro_whole_item_start_rejects_shape_and_forced_flags() {
         assert!(
             error.contains(&format!(
                 "Pomodoro start `{token}` must be the whole capture item"
-            )) && error.contains(&format!("`^route:block-id={suffix}`")),
+            )) && error.contains(&format!(
+                "`^route:block-id{}={suffix}`",
+                if named_link { "#s" } else { "" }
+            )),
             "{text}: {error}"
         );
         assert_eq!(before, after, "{text} must not write");
@@ -478,9 +481,7 @@ fn capture_pomodoro_whole_item_start_rejects_shape_and_forced_flags() {
     assert_ne!(output.status.code(), Some(0), "=3x should fail");
     let error = stdout(&output);
     assert!(
-        error.contains("runs the duration into the name")
-            && error.contains("`=#x@3`")
-            && error.contains("`=3#x`"),
+        error.contains("has a close-shaped name") && error.contains("`=3#x`"),
         "=3x: {error}"
     );
     assert_eq!(before, after, "=3x must not write");

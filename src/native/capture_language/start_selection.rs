@@ -43,7 +43,7 @@ pub(crate) enum StartDropOutcome {
 
 /// Lex the text after a start's first `~` (`after_tilde`), where
 /// `base_offset` is the absolute byte offset of `after_tilde`'s first byte
-/// and `token` is the display token (for example `=3#bugs~1,3`)
+/// and `token` is the display token (for example `=3#deep-work~1,3`)
 /// interpolated into diagnostics.
 ///
 /// A trailing `~` or `,` is an [`StartDropOutcome::Incomplete`] editing
@@ -71,19 +71,25 @@ pub(crate) fn lex_start_drop(
         });
     }
     // A `#name` after the drop list belongs before it. Keep the typed `<X>`
-    // in the suggestion (for example `=3~2#bugs` teaches `=3#bugs~2`),
+    // in the suggestion (for example `=3~2#deep-work` teaches
+    // `=3#deep-work~2`),
     // spelling the typed `=` sigil.
     if let Some(hash) = after_tilde.find('#') {
         let numbers = &after_tilde[..hash];
         let name = &after_tilde[hash + 1..];
         let suffix = start_token_suffix(token);
-        let suggestion = format!("={suffix}#{name}~{numbers}");
+        let name_spelling = if super::bare_name::can_spell_bare(name) {
+            name.to_string()
+        } else {
+            format!("#{name}")
+        };
+        let suggestion = format!("={suffix}{name_spelling}~{numbers}");
         return Err(StartDropError {
             message: start_drop_hash_error(&suggestion, token),
             range: (base_offset + hash, token_end),
         });
     }
-    // A dangling `~` with nothing after it (`=~`, `=3~`, `=#bugs~`).
+    // A dangling `~` with nothing after it (`=~`, `=3~`, `=#deep-work~`).
     if after_tilde.is_empty() {
         return Ok(StartDropOutcome::Incomplete(StartDropIncomplete {
             drop: Vec::new(),
@@ -275,9 +281,9 @@ mod tests {
         let sorted = valid("=3~2,4");
         assert_eq!(sorted.drop, vec![2, 4]);
 
-        let unsorted = valid("=3#bugs~3,1");
+        let unsorted = valid("=3#deep-work~3,1");
         assert_eq!(unsorted.drop, vec![1, 3]);
-        assert_eq!(unsorted.drop_range, (7, 11));
+        assert_eq!(unsorted.drop_range, (12, 16));
     }
 
     #[test]
@@ -322,7 +328,7 @@ mod tests {
         let hash = error("=~2#bugs");
         assert_eq!(
             hash.message,
-            "write the drop list after the name: `=#bugs~2` instead of `=~2#bugs`"
+            "write the drop list after the name: `=bugs~2` instead of `=~2#bugs`"
         );
 
         let bad = error("=~2a");

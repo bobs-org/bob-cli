@@ -1256,14 +1256,14 @@ fn capture_complete_pomodoro_start_name_json_covers_empty_and_new_queries() {
     assert_eq!(empty_json["context"], "pomodoro_start_name");
     assert_eq!(
         empty_json["replacement"],
-        serde_json::json!({ "start": 2, "end": 2 })
+        serde_json::json!({ "start": 1, "end": 2 })
     );
     let rows = empty_json["candidates"].as_array().expect("candidates");
     let replacements = rows
         .iter()
         .map(|row| row["replacement"].as_str().expect("replacement"))
         .collect::<Vec<_>>();
-    assert_eq!(replacements, vec!["bugs", "deep-work", "plan", ""]);
+    assert_eq!(replacements, vec!["bugs", "#deep-work", "plan", ""]);
     assert_eq!(rows[0]["next_up"], true);
     assert_eq!(rows[0]["name"], "BUGS");
     assert_eq!(rows[2]["state"], "completed");
@@ -1272,14 +1272,14 @@ fn capture_complete_pomodoro_start_name_json_covers_empty_and_new_queries() {
     assert_eq!(rows[3]["requires_name"], true);
     assert!(empty_json.get("warnings").is_none(), "{empty_json}");
 
-    let novel = complete("=#rev");
+    let novel = complete("=rev");
     assert_success(&novel);
     let novel_json: serde_json::Value =
         serde_json::from_str(stdout(&novel).trim()).expect("json");
     assert_eq!(novel_json["context"], "pomodoro_start_name");
     assert_eq!(
         novel_json["replacement"],
-        serde_json::json!({ "start": 2, "end": 5 })
+        serde_json::json!({ "start": 1, "end": 4 })
     );
     let novel_rows = novel_json["candidates"].as_array().expect("candidates");
     assert_eq!(novel_rows[0]["replacement"], "rev");
@@ -1437,7 +1437,7 @@ fn capture_complete_override_name_json_carries_keeps_ledger_and_running() {
     assert_eq!(fresh_empty_json["context"], "pomodoro_start_name");
     assert_eq!(fresh_empty_json["override"]["keeps_ledger"], false);
 
-    let kept = complete("=#CAPTURE");
+    let kept = complete("=CAPTURE");
     assert_success(&kept);
     let kept_json: serde_json::Value =
         serde_json::from_str(stdout(&kept).trim()).expect("json");
@@ -1468,7 +1468,7 @@ fn capture_complete_override_name_json_carries_keeps_ledger_and_running() {
     );
 
     // A complete plain named start carries the same state-based context.
-    let plain = complete("=#bugs");
+    let plain = complete("=bugs");
     assert_success(&plain);
     let plain_json: serde_json::Value =
         serde_json::from_str(stdout(&plain).trim()).expect("json");
@@ -1589,6 +1589,8 @@ fn capture_complete_pomodoro_start_drop_protocol() {
         ("=~2,", 4),
         ("=3#bugs~1", 9),
         ("=3#bugs~", 8),
+        ("=3bugs~1", 8),
+        ("=3bugs~", 7),
     ] {
         let output = bob_command()
             .arg("capture-complete")
@@ -1630,7 +1632,7 @@ fn capture_complete_pomodoro_start_drop_protocol() {
     assert_eq!(json["context"], "pomodoro_start_name", "{json}");
     assert_eq!(
         json["replacement"],
-        serde_json::json!({ "start": 3, "end": 7 }),
+        serde_json::json!({ "start": 2, "end": 7 }),
         "{json}"
     );
 }

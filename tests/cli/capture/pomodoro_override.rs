@@ -219,12 +219,12 @@ fn retired_doubled_starts_teach_the_single_equals_rewrite() {
     for raw in [
         "==",
         "==3",
-        "==#bugs",
-        "==3#bugs~2",
-        "==#bugs@3",
+        "==#deep-work",
+        "==3bugs~2",
+        "==3bugs",
         "==#",
         "==~",
-        "==#bugs=3",
+        "==3bugs",
         "==3 more",
     ] {
         let (_temp, vault, day_file) = worked_vault("bob-cli-retired-double");
@@ -418,9 +418,9 @@ fn run_json_err(
 #[test]
 fn override_swap_kept_ledger_worked_example() {
     let (_temp, vault, day_file) = worked_vault("bob-cli-override-swap-kept");
-    let json = run_json(&vault, &day_file, &["=#bugs"]);
+    let json = run_json(&vault, &day_file, &["=bugs"]);
     assert_eq!(json["kind"], "pomodoro_start", "{json}");
-    assert_eq!(json["text"], "=#bugs", "{json}");
+    assert_eq!(json["text"], "=bugs", "{json}");
     assert_eq!(json["placement"], "started", "{json}");
     let start = &json["pomodoro_start"];
     assert_eq!(start["pomodoro_name"], "BUGS", "{json}");
@@ -493,7 +493,7 @@ fn override_swap_kept_ledger_worked_example() {
 #[test]
 fn override_swap_fresh_timing_worked_example() {
     let (_temp, vault, day_file) = worked_vault("bob-cli-override-swap-fresh");
-    let json = run_json(&vault, &day_file, &["=3#bugs"]);
+    let json = run_json(&vault, &day_file, &["=3bugs"]);
     let start = &json["pomodoro_start"];
     assert_eq!(start["pomodoro_name"], "BUGS", "{json}");
     assert_eq!(start["start"], "0935", "{json}");
@@ -518,9 +518,9 @@ fn override_swap_fresh_timing_worked_example() {
 
 #[test]
 fn override_swap_again_and_created_targets() {
-    // `=#plan` reopens completed PLAN, taking over the running ledger.
+    // `=plan` reopens completed PLAN, taking over the running ledger.
     let (_temp, vault, day_file) = worked_vault("bob-cli-override-swap-again");
-    let json = run_json(&vault, &day_file, &["=#plan"]);
+    let json = run_json(&vault, &day_file, &["=plan"]);
     let start = &json["pomodoro_start"];
     assert_eq!(start["pomodoro_name"], "PLAN", "{json}");
     assert_eq!(start["created_pomodoro"], true, "{json}");
@@ -533,10 +533,10 @@ fn override_swap_again_and_created_targets() {
     );
     assert!(day_after.contains("- [ ] () — CAPTURE"), "{day_after}");
 
-    // `=#fresh` creates a brand-new session with the kept ledger.
+    // `=fresh` creates a brand-new session with the kept ledger.
     let (_temp, vault, day_file) =
         worked_vault("bob-cli-override-swap-created");
-    let json = run_json(&vault, &day_file, &["=#fresh"]);
+    let json = run_json(&vault, &day_file, &["=fresh"]);
     let start = &json["pomodoro_start"];
     assert_eq!(start["pomodoro_name"], "FRESH", "{json}");
     assert_eq!(start["created_pomodoro"], true, "{json}");
@@ -552,11 +552,11 @@ fn override_swap_again_and_created_targets() {
 fn override_swap_naming_running_refuses() {
     let (_temp, vault, day_file) = worked_vault("bob-cli-override-swap-self");
     let before = fs::read_to_string(&day_file).expect("read before");
-    let output = run_json_err(&vault, &day_file, &["=#capture"]);
+    let output = run_json_err(&vault, &day_file, &["=capture"]);
     assert!(!output.status.success(), "{}", format_output(&output));
     assert!(
         format_output(&output).contains(
-            "`=#capture` names CAPTURE, which is already running (0920-0945, line 5): restart it with `=` or `=<X>`, close it with `x`, or name another Pomodoro to swap in"
+            "`=capture` names CAPTURE, which is already running (0920-0945, line 5): restart it with `=` or `=<X>`, close it with `x`, or name another Pomodoro to swap in"
         ),
         "{}",
         format_output(&output)
@@ -566,11 +566,11 @@ fn override_swap_naming_running_refuses() {
 
 #[test]
 fn override_swap_named_restart_matches_plain_restart() {
-    // `=3#capture` resolves to the running session with fresh timing:
+    // `=3capture` resolves to the running session with fresh timing:
     // a restart, byte-identical to `=3` on a note-free ledger.
     let (_temp, vault, day_file) =
         worked_vault("bob-cli-override-swap-restart-a");
-    let json = run_json(&vault, &day_file, &["=3#capture"]);
+    let json = run_json(&vault, &day_file, &["=3capture"]);
     assert_eq!(
         json["pomodoro_start"]["override"]["action"], "restart",
         "{json}"
@@ -588,24 +588,24 @@ fn override_swap_named_restart_matches_plain_restart() {
 fn override_swap_matches_reset_then_start() {
     // Fresh-timing swaps equal `x0` then `=` on a note-free ledger.
     let (_temp, vault, day_file) = worked_vault("bob-cli-override-swap-eq-a");
-    run_json(&vault, &day_file, &["=3#bugs"]);
+    run_json(&vault, &day_file, &["=3bugs"]);
     let swap_day = fs::read_to_string(&day_file).expect("read day");
 
     let (_temp, vault, day_file) = worked_vault("bob-cli-override-swap-eq-b");
     run_json(&vault, &day_file, &["x0"]);
-    run_json(&vault, &day_file, &["=3#bugs"]);
+    run_json(&vault, &day_file, &["=3bugs"]);
     let reset_start_day = fs::read_to_string(&day_file).expect("read day");
     assert_eq!(swap_day, reset_start_day);
 
-    // A kept ledger differs from `x0 =#bugs` only in the target ledger:
+    // A kept ledger differs from `x0 =bugs` only in the target ledger:
     // the running clock carries over instead of the 25-minute default.
     let (_temp, vault, day_file) = worked_vault("bob-cli-override-swap-eq-c");
-    run_json(&vault, &day_file, &["=#bugs"]);
+    run_json(&vault, &day_file, &["=bugs"]);
     let kept_day = fs::read_to_string(&day_file).expect("read day");
 
     let (_temp, vault, day_file) = worked_vault("bob-cli-override-swap-eq-d");
     run_json(&vault, &day_file, &["x0"]);
-    run_json(&vault, &day_file, &["=#bugs"]);
+    run_json(&vault, &day_file, &["=bugs"]);
     let default_day = fs::read_to_string(&day_file).expect("read day");
     assert_eq!(
         kept_day.replace(
@@ -621,7 +621,7 @@ fn override_swap_drops_target_lineup() {
     // Drops number the target's lineup exactly like `=` starts (BUGS
     // queues the worked example's one Task Link; SASE queues none).
     let (_temp, vault, day_file) = worked_vault("bob-cli-override-swap-drop");
-    let json = run_json(&vault, &day_file, &["=#bugs~1"]);
+    let json = run_json(&vault, &day_file, &["=bugs~1"]);
     let start = &json["pomodoro_start"];
     assert_eq!(start["override"]["action"], "swap", "{json}");
     assert_eq!(start["override"]["ledger"], "kept", "{json}");
@@ -640,7 +640,7 @@ fn override_swap_drops_target_lineup() {
     let (_temp, vault, day_file) =
         worked_vault("bob-cli-override-swap-drop-created");
     let before = fs::read_to_string(&day_file).expect("read before");
-    let output = run_json_err(&vault, &day_file, &["=#fresh~1"]);
+    let output = run_json_err(&vault, &day_file, &["=fresh~1"]);
     assert!(!output.status.success(), "{}", format_output(&output));
     assert!(
         format_output(&output).contains("no queued Task Links"),
@@ -672,7 +672,7 @@ fn override_swap_placeholder_above_stays_first_future() {
         &vault.join("bob.md"),
         "## Tasks\n\n- [*] #task Stop [created::2026-10-01] ^capture-stop\n",
     );
-    let json = run_json(&vault, &day_file, &["=#bugs"]);
+    let json = run_json(&vault, &day_file, &["=bugs"]);
     assert_eq!(
         json["pomodoro_start"]["override"]["action"], "swap",
         "{json}"
@@ -716,7 +716,7 @@ fn override_swap_unnamed_running() {
         &vault.join("bob.md"),
         "## Tasks\n\n- [*] #task Stop [created::2026-10-01] ^capture-stop\n",
     );
-    let json = run_json(&vault, &day_file, &["=#bugs"]);
+    let json = run_json(&vault, &day_file, &["=bugs"]);
     let start = &json["pomodoro_start"];
     assert_eq!(start["override"]["action"], "swap", "{json}");
     assert_eq!(start["override"]["ledger"], "kept", "{json}");
@@ -759,7 +759,7 @@ fn override_swap_keeps_annotated_ledger_verbatim() {
             "- [ ] () — BUGS\n",
         ),
     );
-    let json = run_json(&vault, &day_file, &["=#bugs"]);
+    let json = run_json(&vault, &day_file, &["=bugs"]);
     assert_eq!(
         json["pomodoro_start"]["time_range"],
         "(**0920-0945** [t:: 25m] [k:: v])",
@@ -780,14 +780,14 @@ fn override_swap_chains() {
             .as_array()
             .expect("chain captures")
             .iter()
-            .find(|entry| entry["text"] == "=#bugs")
+            .find(|entry| entry["text"] == "=bugs")
             .cloned()
             .expect("swap entry")
     };
-    // `=#bugs +2`: swap, then BUGS extends to 0920-0955.
+    // `=bugs +2`: swap, then BUGS extends to 0920-0955.
     let (_temp, vault, day_file) =
         worked_vault("bob-cli-override-swap-chain-after");
-    let json = run_json(&vault, &day_file, &["=#bugs +2"]);
+    let json = run_json(&vault, &day_file, &["=bugs +2"]);
     let swap = swap_entry(&json);
     assert_eq!(
         swap["pomodoro_start"]["time_range"], "(**0920-0945** [t:: 25m])",
@@ -799,10 +799,10 @@ fn override_swap_chains() {
         "{day_after}"
     );
 
-    // `+2 =#bugs`: the swap inherits the extended ledger.
+    // `+2 =bugs`: the swap inherits the extended ledger.
     let (_temp, vault, day_file) =
         worked_vault("bob-cli-override-swap-chain-before");
-    let json = run_json(&vault, &day_file, &["+2 =#bugs"]);
+    let json = run_json(&vault, &day_file, &["+2 =bugs"]);
     let swap = swap_entry(&json);
     assert_eq!(
         swap["pomodoro_start"]["override"]["ledger"], "kept",
@@ -828,7 +828,7 @@ fn override_swap_human_output() {
         .arg(&vault)
         .arg("--dry-run")
         .arg("--")
-        .arg("=#bugs")
+        .arg("=bugs")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", NOW)
         .output()
@@ -855,7 +855,7 @@ fn override_swap_human_output() {
         .arg(&vault)
         .arg("--dry-run")
         .arg("--")
-        .arg("=3#bugs")
+        .arg("=3bugs")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", NOW)
         .output()
@@ -893,7 +893,7 @@ fn override_swap_reports_notes() {
         "## Tasks\n\n- [*] #task Stop [created::2026-10-01] ^capture-stop\n",
     );
     // No note gate: the swap demotes a note-bearing session intact.
-    let json = run_json(&vault, &day_file, &["=#bugs"]);
+    let json = run_json(&vault, &day_file, &["=bugs"]);
     assert_eq!(
         json["pomodoro_start"]["override"]["demoted"]["has_notes"], true,
         "{json}"
@@ -929,7 +929,7 @@ fn override_swap_reports_notes() {
         .arg(&vault)
         .arg("--dry-run")
         .arg("--")
-        .arg("=#bugs")
+        .arg("=bugs")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", NOW)
         .output()
@@ -947,11 +947,11 @@ fn override_swap_teaching_errors() {
     let (_temp, vault, day_file) = worked_vault("bob-cli-override-swap-teach");
     let before = fs::read_to_string(&day_file).expect("read before");
     // Naming the running session with an empty timing still refuses.
-    let output = run_json_err(&vault, &day_file, &["=#capture"]);
+    let output = run_json_err(&vault, &day_file, &["=capture"]);
     assert!(!output.status.success(), "{}", format_output(&output));
     assert!(
         format_output(&output).contains(
-            "`=#capture` names CAPTURE, which is already running (0920-0945, line 5): restart it with `=` or `=<X>`, close it with `x`, or name another Pomodoro to swap in"
+            "`=capture` names CAPTURE, which is already running (0920-0945, line 5): restart it with `=` or `=<X>`, close it with `x`, or name another Pomodoro to swap in"
         ),
         "{}",
         format_output(&output)
@@ -983,7 +983,7 @@ fn override_swap_teaching_errors() {
 fn override_swap_did_you_mean_spells_override() {
     let (_temp, vault, day_file) =
         worked_vault("bob-cli-override-swap-suggest");
-    let json = run_json(&vault, &day_file, &["=#bugz"]);
+    let json = run_json(&vault, &day_file, &["=bugz"]);
     let start = &json["pomodoro_start"];
     assert_eq!(start["created_pomodoro"], true, "{json}");
     assert_eq!(start["override"]["action"], "swap", "{json}");
@@ -1031,7 +1031,7 @@ fn override_swap_stale_strict_key_allows_created_target() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("=#fresh")
+        .arg("=fresh")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", NOW)
         .env("BOB_CONFIG_FILE", &config)
@@ -1056,10 +1056,10 @@ fn override_swap_stale_strict_key_allows_created_target() {
 #[test]
 fn override_swap_dry_run_matches_real() {
     let (_temp, vault, day_file) = worked_vault("bob-cli-override-swap-dry");
-    capture_json_dry_run_matches_real(&vault, &day_file, NOW, &["=#bugs"]);
+    capture_json_dry_run_matches_real(&vault, &day_file, NOW, &["=bugs"]);
     let (_temp, vault, day_file) =
         worked_vault("bob-cli-override-swap-dry-fresh");
-    capture_json_dry_run_matches_real(&vault, &day_file, NOW, &["=3#bugs"]);
+    capture_json_dry_run_matches_real(&vault, &day_file, NOW, &["=3bugs"]);
 }
 
 #[test]
@@ -1076,7 +1076,7 @@ fn override_swap_batch_rollback() {
             .arg("json")
             .env("BOB_DAY_FILE", &day_file)
             .env("BOB_NOW", NOW),
-        "=#bugs\n\n=3 more\n",
+        "=bugs\n\n=3 more\n",
     );
     assert_eq!(bad.status.code(), Some(2), "{}", format_output(&bad));
     assert_eq!(
@@ -1097,7 +1097,7 @@ fn override_swap_preserves_crlf_and_missing_newline() {
         &vault.join("bob.md"),
         "## Tasks\n\n- [*] #task Stop [created::2026-10-01] ^capture-stop\n",
     );
-    run_json(&vault, &day_file, &["=#bugs"]);
+    run_json(&vault, &day_file, &["=bugs"]);
     let after = fs::read_to_string(&day_file).expect("read day");
     assert!(after.contains("\r\n"), "{after:?}");
     assert!(after.contains("- [ ] (**0920-0945** [t:: 25m]) — BUGS"));
@@ -1112,7 +1112,7 @@ fn override_swap_preserves_crlf_and_missing_newline() {
         &vault2.join("bob.md"),
         "## Tasks\n\n- [*] #task Stop [created::2026-10-01] ^capture-stop\n",
     );
-    run_json(&vault2, &day2, &["=#bugs"]);
+    run_json(&vault2, &day2, &["=bugs"]);
     let after2 = fs::read_to_string(&day2).expect("read day");
     assert!(!after2.ends_with('\n'), "{after2:?}");
     assert!(after2.contains("- [ ] (**0920-0945** [t:: 25m]) — BUGS"));
@@ -1185,9 +1185,9 @@ fn eq_override_human_warning_lines() {
             "⚠ overrides the running CAPTURE 0920-0945 · capture `x =` to close it first",
         ),
         (
-            "=#bugs",
+            "=bugs",
             NOW,
-            "⚠ overrides the running CAPTURE 0920-0945 · capture `x =#bugs` to close it first",
+            "⚠ overrides the running CAPTURE 0920-0945 · capture `x =bugs` to close it first",
         ),
     ];
     for (token, now, warning) in warning_cases {
@@ -1359,7 +1359,7 @@ fn override_unnamed_running_session_carries_derived_homes() {
 
     let (_temp, vault, day_file) =
         unnamed_homes_vault("bob-cli-override-unnamed-swap");
-    let json = run_json(&vault, &day_file, &["=3#bugs"]);
+    let json = run_json(&vault, &day_file, &["=3bugs"]);
     let swap = &json["pomodoro_start"]["override"];
     assert_eq!(swap["action"], "swap", "{json}");
     assert_eq!(swap["previous"]["homes"]["chip"], "sase", "{json}");
@@ -1370,12 +1370,12 @@ fn override_unnamed_running_session_carries_derived_homes() {
 
     let (_temp, vault, day_file) =
         unnamed_homes_vault("bob-cli-override-unnamed-swap-human");
-    let output = run_human(&vault, &day_file, &["--dry-run"], &["=3#bugs"]);
+    let output = run_human(&vault, &day_file, &["--dry-run"], &["=3bugs"]);
     assert_success(&output);
     let out = stdout(&output);
     assert!(
         out.contains(
-            "⚠ overrides the running session 0920-0945 ○ sase · capture `x =3#bugs` to close it first"
+            "⚠ overrides the running session 0920-0945 ○ sase · capture `x =3bugs` to close it first"
         ),
         "{out}"
     );
@@ -1387,7 +1387,7 @@ fn override_unnamed_running_session_carries_derived_homes() {
 
     let (_temp, vault, day_file) =
         unnamed_homes_vault("bob-cli-override-unnamed-kept");
-    let output = run_human(&vault, &day_file, &["--dry-run"], &["=#bugs"]);
+    let output = run_human(&vault, &day_file, &["--dry-run"], &["=bugs"]);
     assert_success(&output);
     let out = stdout(&output);
     assert!(
@@ -1457,7 +1457,7 @@ fn refuse_override_guard() {
         &vault,
         &day_file,
         &["--refuse-override"],
-        &["=#bugs"],
+        &["=bugs"],
     );
     assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
     let json: serde_json::Value =

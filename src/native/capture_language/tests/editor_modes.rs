@@ -1123,16 +1123,16 @@ fn editor_agrees_with_execution_for_resolved_captures() {
         "=0",
         "=03",
         "  =3  ",
-        "=#bugs",
-        "=3#bugs",
-        "=-2#bugs",
+        "=bugs",
+        "=3bugs",
+        "=-2bugs",
         "=#deep-work",
-        "=#c++",
+        "=c++",
         "=bugs",
         "=xx",
         "=xa",
         "=xmas",
-        "=bugs@3",
+        "=bugs3",
         "=c++",
     ];
 
@@ -1599,12 +1599,12 @@ fn editor_reports_retired_doubled_start_forms_over_the_token() {
     for raw in [
         "==",
         "==3",
-        "==#bugs",
-        "==3#bugs~2",
-        "==#bugs@3",
+        "==#deep-work",
+        "==3bugs~2",
+        "==3bugs",
         "==#",
         "==~",
-        "==#bugs=3",
+        "==3bugs",
         "==3 more",
         "==~2,",
     ] {
@@ -1651,14 +1651,13 @@ fn editor_reports_retired_doubled_start_forms_over_the_token() {
 
 #[test]
 fn editor_reports_named_pomodoro_start_modes_spans_and_diagnostics() {
-    // Exact named starts: mode, `section`, spec, and two spans with the
-    // `#` in no span.
+    // Hash remains for names that need it, with the `#` in no span.
     for (raw, section, suffix, duration, offset, prefix_end, name_end) in [
-        ("=#bugs", "bugs", "", 5, 0, 1, 6),
-        ("=3#bugs", "bugs", "3", 3, 0, 2, 7),
-        ("=-2#bugs", "bugs", "-2", 5, 2, 3, 8),
         ("=#deep-work", "deep-work", "", 5, 0, 1, 11),
-        ("  =3#bugs  ", "bugs", "3", 3, 0, 2, 7),
+        ("=3#deep-work", "deep-work", "3", 3, 0, 2, 12),
+        ("=-2#deep-work", "deep-work", "-2", 5, 2, 3, 13),
+        ("=3#2fa", "2fa", "3", 3, 0, 2, 6),
+        ("  =3#deep-work  ", "deep-work", "3", 3, 0, 2, 12),
     ] {
         let parse = editor(raw);
         assert_eq!(parse.mode, EditorMode::PomodoroStart, "{raw}");
@@ -1690,10 +1689,9 @@ fn editor_reports_named_pomodoro_start_modes_spans_and_diagnostics() {
         assert!(parse.pomodoro_close.is_none(), "{raw}");
     }
     // Bare names skip the `#` gap: `pomodoro_start` covers `=`, then the
-    // name starts at byte 1. Modes, needs, and specs match the hash form.
+    // name starts at byte 1.
     for (raw, section, name_end) in [
         ("=bugs", "bugs", 5),
-        ("=deep-work", "deep-work", 10),
         ("=xx", "xx", 3),
         ("=xa", "xa", 3),
         ("=xmas", "xmas", 5),
@@ -1722,22 +1720,32 @@ fn editor_reports_named_pomodoro_start_modes_spans_and_diagnostics() {
         );
         assert!(parse.diagnostics.is_empty(), "{raw}");
     }
-    let timed = editor("=bugs@3");
-    assert_eq!(timed.mode, EditorMode::PomodoroStart, "=bugs@3");
-    assert_eq!(timed.section.as_deref(), Some("bugs"), "=bugs@3");
+    let timed = editor("=bugs3");
+    assert_eq!(timed.mode, EditorMode::PomodoroStart, "=bugs3");
+    assert_eq!(timed.section.as_deref(), Some("bugs"), "=bugs3");
     assert_eq!(
         timed.pomodoro_start.as_ref().expect("spec").duration_units,
         3,
-        "=bugs@3"
+        "=bugs3"
     );
     assert_eq!(
         ranges(&timed),
         vec![
             (0, 1, SpanKind::PomodoroStart),
             (1, 5, SpanKind::PomodoroName),
-            (5, 7, SpanKind::PomodoroStart),
+            (5, 6, SpanKind::PomodoroStart),
         ],
-        "=bugs@3"
+        "=bugs3"
+    );
+    let trailing = editor("=bugs3");
+    assert_eq!(trailing.section.as_deref(), Some("bugs"));
+    assert_eq!(
+        ranges(&trailing),
+        vec![
+            (0, 1, SpanKind::PomodoroStart),
+            (1, 5, SpanKind::PomodoroName),
+            (5, 6, SpanKind::PomodoroStart),
+        ]
     );
     let dropped = editor("=bugs~2");
     assert_eq!(
@@ -1756,28 +1764,23 @@ fn editor_reports_named_pomodoro_start_modes_spans_and_diagnostics() {
         "{}",
         shape.diagnostics[0].message
     );
-    let order = editor("=bugs=3");
+    let retired = editor("=bugs@3");
+    assert_eq!(codes(&retired), vec!["invalid_pomodoro_start"], "=bugs@3");
+    assert!(
+        retired.diagnostics[0].message.contains("write `=bugs3`"),
+        "{}",
+        retired.diagnostics[0].message
+    );
+    let dashed = editor("=3deep-work");
     assert_eq!(
-        order.diagnostics[0].message,
-        "write the duration after `@` or before the name: `=bugs@3` or `=3#bugs` instead of `=bugs=3`",
-        "=bugs=3"
+        codes(&dashed),
+        vec!["invalid_pomodoro_start"],
+        "=3deep-work"
     );
-    let glued = editor("=3bugs");
-    assert_eq!(codes(&glued), vec!["invalid_pomodoro_start"], "=3bugs");
-    assert_eq!(glued.diagnostics[0].range, Some((2, 6)), "=3bugs");
     assert!(
-        glued.diagnostics[0]
-            .message
-            .contains("write `=bugs@3` or `=3#bugs`"),
+        dashed.diagnostics[0].message.contains("=3#deep-work"),
         "{}",
-        glued.diagnostics[0].message
-    );
-    let digit = editor("=2fa");
-    assert_eq!(digit.diagnostics[0].range, Some((2, 4)), "=2fa");
-    assert!(
-        digit.diagnostics[0].message.contains("`=#2fa`"),
-        "{}",
-        digit.diagnostics[0].message
+        dashed.diagnostics[0].message
     );
     // `=<X>#` with an empty name is an editing state, never a mistake.
     for (raw, suffix, duration, offset) in
@@ -1812,48 +1815,52 @@ fn editor_reports_named_pomodoro_start_modes_spans_and_diagnostics() {
         assert!(parse.diagnostics.is_empty(), "{raw}");
     }
     // E2 names report `invalid_pomodoro_start` over the name.
-    let bad_name = editor("=#b!");
-    assert_eq!(bad_name.mode, EditorMode::PomodoroStart, "=#b!");
-    assert_eq!(codes(&bad_name), vec!["invalid_pomodoro_start"], "=#b!");
+    let bad_name = editor("=#2?");
+    assert_eq!(bad_name.mode, EditorMode::PomodoroStart, "=#2?");
+    assert_eq!(codes(&bad_name), vec!["invalid_pomodoro_start"], "=#2?");
     assert_eq!(
         bad_name.diagnostics[0].message,
-        "Pomodoro name `b!` in `=#b!` may contain only A-Z, a-z, 0-9 or `& ' ( ) + , . / -`; write spaces as `-`",
-        "=#b!"
+        "Pomodoro name `2?` in `=#2?` may contain only A-Z, a-z, 0-9 or `& ' ( ) + , . / -`; write spaces as `-`",
+        "=#2?"
     );
-    assert_eq!(bad_name.diagnostics[0].range, Some((2, 4)), "=#b!");
-    assert!(bad_name.pomodoro_start.is_none(), "=#b!");
+    assert_eq!(bad_name.diagnostics[0].range, Some((2, 4)), "=#2?");
+    assert!(bad_name.pomodoro_start.is_none(), "=#2?");
     assert_eq!(
         ranges(&bad_name),
         vec![
             (0, 1, SpanKind::PomodoroStart),
             (2, 4, SpanKind::PomodoroName),
         ],
-        "=#b!"
+        "=#2?"
     );
-    // E3 link-form order reports over the name.
-    let order = editor("=#bugs=3");
-    assert_eq!(codes(&order), vec!["invalid_pomodoro_start"], "=#bugs=3");
+    // Hash before a bare-spellable name is now a teaching error.
+    let retired_hash = editor("=#bugs");
     assert_eq!(
-        order.diagnostics[0].message,
-        "write the duration after `@` or before the name: `=#bugs@3` or `=3#bugs` instead of `=#bugs=3`",
-        "=#bugs=3"
+        codes(&retired_hash),
+        vec!["invalid_pomodoro_start"],
+        "=#bugs"
     );
-    assert_eq!(order.diagnostics[0].range, Some((2, 8)), "=#bugs=3");
-    assert!(order.pomodoro_start.is_none(), "=#bugs=3");
+    assert!(
+        retired_hash.diagnostics[0]
+            .message
+            .contains("write `=bugs`"),
+        "{}",
+        retired_hash.diagnostics[0].message
+    );
     // E4 extra text reports over the extra text, with the join hint when
     // every extra word is a valid name component.
-    let shape = editor("=#deep work");
-    assert_eq!(shape.mode, EditorMode::PomodoroStart, "=#deep work");
-    assert_eq!(codes(&shape), vec!["invalid_pomodoro_start"], "=#deep work");
-    assert_eq!(
-        shape.diagnostics[0].message,
-        "Pomodoro start `=#deep` must be the whole capture item; remove extra text, markers, or child lines (to start a task's session in a named Pomodoro instead, use `^route:block-id#deep=`); to name a multi-word Pomodoro, join the words with `-`: `=#deep-work`",
-        "=#deep work"
+    let shape = editor("=deep work");
+    assert_eq!(shape.mode, EditorMode::PomodoroStart, "=deep work");
+    assert_eq!(codes(&shape), vec!["invalid_pomodoro_start"], "=deep work");
+    assert!(
+        shape.diagnostics[0].message.contains("=deep-work"),
+        "{}",
+        shape.diagnostics[0].message
     );
-    assert_eq!(shape.diagnostics[0].range, Some((7, 11)), "=#deep work");
-    assert!(shape.pomodoro_start.is_none(), "=#deep work");
+    assert_eq!(shape.diagnostics[0].range, Some((6, 10)), "=deep work");
+    assert!(shape.pomodoro_start.is_none(), "=deep work");
     // E4 without the hint when the extra text is not name-shaped.
-    let marked = editor("=#bugs +2 s:1");
+    let marked = editor("=bugs +2 s:1");
     assert_eq!(codes(&marked), vec!["invalid_pomodoro_start"], "marked");
     assert!(
         !marked.diagnostics[0].message.contains("join the words"),
@@ -1869,13 +1876,13 @@ fn editor_reports_named_pomodoro_start_modes_spans_and_diagnostics() {
     );
     assert_eq!(nospace.diagnostics[0].range, Some((3, 7)), "=# bugs");
     // A named token with child lines reports on the child line.
-    let child = editor("=#bugs\n- child");
+    let child = editor("=bugs\n- child");
     assert_eq!(child.mode, EditorMode::PomodoroStart, "named child");
     assert_eq!(codes(&child), vec!["invalid_pomodoro_start"], "named child");
-    assert_eq!(child.diagnostics[0].range, Some((7, 14)), "named child");
+    assert_eq!(child.diagnostics[0].range, Some((6, 13)), "named child");
     assert!(child.pomodoro_start.is_none(), "named child");
     // Overflow reports on `=<X>`.
-    let overflow = editor("=99999999999999999999999#bugs");
+    let overflow = editor("=99999999999999999999999bugs");
     assert_eq!(codes(&overflow), vec!["invalid_pomodoro_start"], "overflow");
     assert_eq!(
         overflow.diagnostics[0].message, POMODORO_START_OVERFLOW_ERROR,
@@ -2040,7 +2047,7 @@ fn pomodoro_start_suffix_reports_spec_and_non_overlapping_spans() {
     assert_eq!(incomplete_start.raw, "3");
     assert!(incomplete.diagnostics.is_empty());
 
-    let invalid = editor("Do work @sase:outline=3abc");
+    let invalid = editor("Do work @sase:outline=3deep-work");
     assert!(invalid.pomodoro_start.is_none());
     assert_eq!(codes(&invalid), vec!["invalid_pomodoro_start"]);
 

@@ -82,7 +82,7 @@ fn capture_pomodoro_linked_task_updates_both_notes_and_reports_json() {
 fn bare_named_link_suffix_writes_the_same_result_as_hash_before_equals() {
     let mut results = Vec::new();
     let mut snapshots = Vec::new();
-    for (index, token) in ["@cash:work=focus@5", "@cash:work#focus=5"]
+    for (index, token) in ["@cash:work=focus5", "@cash:work#focus=5"]
         .into_iter()
         .enumerate()
     {
@@ -146,9 +146,9 @@ fn bare_named_link_suffix_writes_the_same_result_as_hash_before_equals() {
 #[test]
 fn link_suffix_timing_errors_leave_notes_byte_identical() {
     for invalid in [
-        "@cash:work=3#focus@2",
+        "@cash:work=3focus2",
         "@cash:work=focus@",
-        "^cash:work=3#focus@2",
+        "^cash:work=3focus2",
         "^cash:work=focus@",
     ] {
         let temp = TempDir::new("bob-cli-capture-link-timing-no-write");
@@ -205,9 +205,9 @@ fn link_suffix_timing_errors_leave_notes_byte_identical() {
         .arg(&vault)
         .arg("-f")
         .arg("json")
-        .arg("@cash:work=focus@5")
+        .arg("@cash:work=focus5")
         .arg("")
-        .arg("@cash:work=3#focus@2")
+        .arg("@cash:work=3focus2")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 09:00:00")
         .output()

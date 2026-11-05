@@ -1,11 +1,13 @@
 //! Pomodoro start planning and placement.
 use super::*;
 
-/// Composed start token for a suggested existing Pomodoro: `=name` when
-/// the name can be bare and no leading `<X>` was typed, otherwise `=<X>#name`.
+/// Composed start token for a suggested existing Pomodoro, with timing
+/// glued to bare names and before `#` names.
 fn named_start_suggestion(raw: &str, slug: &str) -> String {
     if raw.is_empty() {
         crate::native::capture_language::named_start_token(slug)
+    } else if crate::native::capture_language::can_spell_bare(slug) {
+        format!("={raw}{slug}")
     } else {
         format!("={raw}#{slug}")
     }

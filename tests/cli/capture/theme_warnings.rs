@@ -91,7 +91,7 @@ fn capture_warns_on_unconfigured_start_again_and_name_field() {
         "{start}"
     );
 
-    let again = capture_json(&vault, &day_file, &config, &["=#snack"]);
+    let again = capture_json(&vault, &day_file, &config, &["=snack"]);
     assert_eq!(warning_codes(&again), ["theme_not_configured"]);
 
     let named = capture_json(&vault, &day_file, &config, &["@sase:foo1#SNACK"]);
