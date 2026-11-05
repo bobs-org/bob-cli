@@ -166,7 +166,7 @@ a separate crate.
 
 ## Bob Gcal Is Read-Only And Proposes Once {#bob-gcal-is-read-only-and-proposes-once}
 
-**Status:** Superseded in part by [Gcal Root Follows Google Until Edited](#gcal-root-follows-google-until-edited)
+**Status:** Superseded in part by [Gcal Root Follows Google Until Edited](#gcal-root-follows-google-until-edited), [meet-filing-follows-google-until-edited](#meet-filing-follows-google-until-edited)
 
 Google Calendar stays read-only; Bob writes each row and link once, updates only untouched Google spans, tombstones deletions, and cancels only untouched tasks.
 
@@ -208,6 +208,8 @@ your edit, nested note, or deletion makes them yours, with one notice only if
 Google later changes them. Other child notes remain yours. Evidence:
 `plan:202611/gcal_description_bullets.md`, `docs/gcal.md` § Description bullets
 and § Who owns each part of a row, and `tests/gcal_lifecycle.rs`.
+
+Superseded in part: a qualifying Google time or buffer move can re-file Bob-owned MEET links; the rule that each link is written once is retired. See [meet-filing-follows-google-until-edited](#meet-filing-follows-google-until-edited).
 
 ## Buffer Reasons Ride The Description Bullets {#buffer-reasons-ride-description-bullets}
 
@@ -654,7 +656,7 @@ Evidence: `plan:202611/off_clock_pomodoros.md`; `docs/task-status-hooks.md`;
 
 ## ended-synced-meetings-are-born-done {#ended-synced-meetings-are-born-done}
 
-**Status:** Accepted
+**Status:** Superseded in part by [meet-filing-follows-google-until-edited](#meet-filing-follows-google-until-edited)
 
 Event Tasks first synced after their buffered span ends are born `[x]` with the note-day completion date and a struck 🍅 link under their closed MEET.
 
@@ -693,6 +695,8 @@ Evidence: `plan:202611/gcal_past_events_born_done.md`; `docs/gcal.md` § Sync;
 [Ended Off-Clock Events Settle Into Closed Sessions](#ended-off-clock-events-settle)
 
 [Event Task](../reference/glossary.md#event-task)
+
+Superseded in part: a born-done Event Task moved into Current or Future can be reopened and re-filed; the rule that sync never changes an existing row checkbox is retired for that move. See [meet-filing-follows-google-until-edited](#meet-filing-follows-google-until-edited).
 
 ## Event Buffers Widen The Occupied Span {#event-buffers-widen-the-span}
 
@@ -979,6 +983,65 @@ new fields with `decodeIfPresent` so an older `bob` still works, yet it rejects 
 **Reopens when.** Spawn latency measured on the Mac breaks live preview, or a second
 frontend needs an in-process library. Even then exactly one semantic implementation must
 remain: reopening can change the transport (a daemon, FFI), never add a second grammar.
+
+## meet-filing-follows-google-until-edited {#meet-filing-follows-google-until-edited}
+
+**Status:** Accepted
+
+Google time or parsed buffer moves refile an Event Task under a new MEET when its existing filing remains Bob-owned; edited filing stays put.
+
+# MEET Filing Follows Google Until Edited
+
+**Applies to.** bob-cli and the vault.
+
+**Claim.** When sync applies a Google change to a journaled Event Task's
+meeting time or parsed buffer, it re-files that row's same-note MEET link by
+the new buffered phase, but only when the old filing is Bob-owned. An
+untouched link under an open untimed MEET placeholder moves only when the row
+remains untouched; a move into Past completes the row and writes a struck
+link under a closed MEET. A Bob-shaped closed MEET may be retimed, split, or
+merged when every member is a same-note Event Task in its born-done state,
+the dedicated struck links are its only children, and the header exactly
+matches the members' buffered-span cluster using the header's clock key. A
+Past re-file keeps rows done; a moved row entering Current or Future reopens
+and follows the ordinary birth placement rules. A link under an open timed
+entry is left alone. Other filing is kept and reported once as `kept_meet`.
+Clock-tag-only, title, root, or description changes, a kept time or buffer
+edit, and the clock passing without a Google change never trigger re-filing.
+Refiled links do not append another `gcal.link` journal record.
+
+**Why.** On 2026-11-05, Google moved `^swings` from 08:15–08:30 to
+08:00–08:15 after sync had filed it under an untimed placeholder. At 08:17,
+sync updated the task's bold span but left the link in the plan and the row
+open. Reconcile later settled this love-rooted, off-clock row, while an
+on-clock meeting had no such correction. The stale filing came from
+write-once MEET links, not from a safety rule. A moved event gives Bob new
+evidence for its occupied time, while a session Bryan started, closed, or
+edited remains his record.
+
+Rejected alternatives:
+
+- **Write-once filing.** Leaves stale MEET entries and requires hand fixes.
+- **Re-file on every run.** Could auto-close an on-clock meeting nobody
+  attended even though Google made no change.
+- **Re-file from journaled MEET records.** Misses settle-written MEETs and
+  adds another journal record kind.
+- **Move links out of Bryan-edited sessions.** Rewrites his record of work.
+
+**Cost.** A born-done row moved into Current or Future is reopened. A hand
+reorder or hand-written MEET that still exactly matches Bob's closed shape is
+treated as Bob's; trimmed settle MEETs do not match and are kept.
+
+**Reopens when.** Attendance becomes knowable, or Bryan wants moved meetings
+to keep their original filing.
+
+Evidence: `plan:202611/gcal_refile_moved_meetings.md`; `docs/gcal.md` § Sync
+and § Reconciling Google-side changes; `tests/gcal_sync.rs`; the 2026-11-05
+`^swings` event move and follow-up reconcile.
+
+[Ended Off-Clock Events Settle Into Closed Sessions](#ended-off-clock-events-settle)
+
+[Event Task](../reference/glossary.md#event-task)
 
 ## Next Keeps Ask For An Optional Rotten Log Reason {#next-keeps-ask-an-optional-rotten-reason}
 
@@ -2451,7 +2514,7 @@ Evidence: `plan:202611/gcal_sort_event_task_links.md`; `docs/gcal.md` § Sync;
 
 ## Synced Meetings Are Linked By Phase At Birth {#synced-meetings-link-by-phase}
 
-**Status:** Superseded in part by [Untracked Sessions Omit T Field](#untracked-sessions-omit-t-field), [Event Buffers Widen The Occupied Span](#event-buffers-widen-the-span), [sync-sorts-event-task-links](#sync-sorts-event-task-links), [ended-synced-meetings-are-born-done](#ended-synced-meetings-are-born-done)
+**Status:** Superseded in part by [Untracked Sessions Omit T Field](#untracked-sessions-omit-t-field), [Event Buffers Widen The Occupied Span](#event-buffers-widen-the-span), [sync-sorts-event-task-links](#sync-sorts-event-task-links), [ended-synced-meetings-are-born-done](#ended-synced-meetings-are-born-done), [meet-filing-follows-google-until-edited](#meet-filing-follows-google-until-edited)
 
 A new Event Task is filed under a past, running, or planned MEET at birth: closed clusters for ended meetings, one open MEET for current and future.
 
@@ -2532,6 +2595,8 @@ struck 🍅 link, and the `[x]` rejection is retired. See
 [Event Task Links Close By The Clock](#event-task-links-close-by-the-clock)
 
 [Event Task](../reference/glossary.md#event-task)
+
+Superseded in part: sync can retime or move Bob-shaped closed MEETs and re-file Bob-owned placeholder links after qualifying Google time or buffer changes; the rule that sync never retimes or moves an existing entry is retired. See [meet-filing-follows-google-until-edited](#meet-filing-follows-google-until-edited).
 
 ## Task Decay Is One Ladder {#task-decay-is-one-ladder}
 

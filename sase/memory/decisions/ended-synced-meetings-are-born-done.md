@@ -4,7 +4,9 @@ aliases:
   - past meetings born done
 summary: Event Tasks first synced after their buffered span ends are born `[x]` with the note-day completion date and a struck 🍅 link under their closed MEET.
 metadata:
-  status: accepted
+  status: superseded-in-part
+  superseded_by:
+    - decisions:meet-filing-follows-google-until-edited
   decided: 2026-11-04
 title: Ended Synced Meetings Are Born Done
 ---
@@ -44,3 +46,5 @@ Evidence: `plan:202611/gcal_past_events_born_done.md`; `docs/gcal.md` § Sync;
 [[decisions:ended-off-clock-events-settle]]
 
 [[glossary:event-task]]
+
+Superseded in part: a born-done Event Task moved into Current or Future can be reopened and re-filed; the rule that sync never changes an existing row checkbox is retired for that move. See [[decisions:meet-filing-follows-google-until-edited]].

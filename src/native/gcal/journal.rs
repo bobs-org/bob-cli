@@ -557,6 +557,7 @@ pub(crate) struct SyncStatus {
     pub tasks_added: usize,
     pub context_added: usize,
     pub links_added: usize,
+    pub links_refiled: usize,
     pub error: Option<String>,
 }
 
@@ -581,6 +582,7 @@ pub(crate) fn write_status(status: &SyncStatus) -> std::io::Result<()> {
         "tasks_added": status.tasks_added,
         "context_added": status.context_added,
         "links_added": status.links_added,
+        "links_refiled": status.links_refiled,
         "error": status.error,
     });
     fs::write(path, serde_json::to_string(&value).unwrap_or_default())
@@ -621,6 +623,10 @@ pub(crate) fn read_status() -> Option<SyncStatus> {
             .unwrap_or(0) as usize,
         links_added: object
             .get("links_added")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize,
+        links_refiled: object
+            .get("links_refiled")
             .and_then(Value::as_u64)
             .unwrap_or(0) as usize,
         error: object

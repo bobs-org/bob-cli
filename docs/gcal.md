@@ -380,7 +380,9 @@ new rows in time order (never reordering existing lines), adopts rows whose
 `📅` URL is already in the note without a journal record (crash recovery),
 tombstones journaled rows whose line is gone (never re-created), and files
 each created Event Task under a past, running, or planned MEET Pomodoro in
-the same write. A removed or moved link is never re-added. An unchanged
+the same write. A removed link is never re-added. A moved event can re-file
+its existing link when Google changes its occupied span and the filing is
+still Bob-owned. An unchanged
 calendar can still write the Events stamp when the stamp is due (missing,
 malformed, edited, misplaced, duplicated, later than now, or from an
 earlier minute). The stamp shows the last sync run, and every run at a
@@ -421,11 +423,18 @@ an existing MEET placeholder if one is open, otherwise they create a running
 MEET; future meetings go under the running MEET when that running entry is
 named MEET, otherwise under the placeholder (created when missing). Sync
 never creates a running entry while any open timed Pomodoro exists; those
-current meetings go under the placeholder with a warning. Sync never starts,
-closes, retimes, renames, or moves an existing Pomodoro: it only creates
-entries, adds links, and reorders Event Task links within an entry. Existing
-unlinked rows still earn an open-MEET link only on today's note, and only
-when the event has not ended.
+current meetings go under the placeholder with a warning. Sync never starts a
+session or changes a MEET Bryan edited. When Google changes a journaled row's
+meeting time or parsed buffer, sync re-files only an untouched placeholder
+link or a Bob-shaped closed MEET whose Event Task rows are still in their
+born-done state. A past move closes a row that was under the placeholder; a
+Bob-written closed MEET can be retimed or split, and a row moved into the
+current or future phase is reopened. Running entries and other filing are
+left alone; a kept MEET edit is reported once as `kept_meet`. A clock-tag-only
+change, title or description update, a kept span edit, and the clock passing
+without a Google change never trigger re-filing. Existing unlinked rows still
+earn an open-MEET link only on today's note, and only when the event has not
+ended.
 
 A past day (`-D yesterday`) gains closed MEET entries and `[x]` rows completed
 on that note's day. A
@@ -453,7 +462,7 @@ diagnostics.
 `untracked`, `buffer` as `{"before_minutes", "after_minutes"}` or
 `null`, and `description_lines`, the bullet lines this run wrote for the
 row, reasons included, 0 otherwise), `pomodoro`
-(`entry_line`, `created`, `links_added`, `links_sorted`, `entries`),
+(`entry_line`, `created`, `links_added`, `links_refiled`, `links_sorted`, `entries`),
 `warnings`, `deprecations`, and `stamp`
 (`account`, `synced_at`, `refreshed`, or `null` when there is no Events
 section and for `waiting`). Human rows append the buffer label to the time
@@ -466,10 +475,13 @@ created or appended links into (`state` `closed`/`running`/`planned`,
 1-based `line`, `time` as `HHMM-HHMM` or null, `created`, `links`) in
 ledger order. `entry_line` and `created` describe the first open entry in
 that list (`null` / `false` when the run linked only under closed entries).
-`links_added` counts every link, closed entries included. `links_sorted` counts
-Event Task link lines moved into meeting-time order. A sort-only human summary
-looks like `✓ Events unchanged · Pomodoros ↕2 links sorted`; other Pomodoro
-summaries append `, ↕2 sorted` when links moved.
+`links_added` counts new links, closed entries included. `links_refiled` counts
+existing links moved after a Google span change; those do not append another
+`gcal.link` journal record. `links_sorted` counts Event Task link lines moved
+into meeting-time order. A sort-only human summary looks like
+`✓ Events unchanged · Pomodoros ↕2 links sorted`; a refile-only summary looks
+like `✓ Events updated · Pomodoros ↪1 refiled`; other Pomodoro summaries append
+`, ↕2 sorted` or `, ↪1 refiled` when applicable.
 
 ### Events stamp
 
@@ -518,8 +530,8 @@ account, or set `gcal.account` to the stamp's account.
 | `[root::]` | Google until you edit it | Follows the chosen root (not series memory) until you edit it, and adds `[type:: MEET]` when needed. Your edits win, are reported once when Google later routes elsewhere, and teach the series |
 | `[type::]`, block ID | Bob, once | `[type:: MEET]` is added on a root reroute only when the line has none; an existing `[type::]` and the block ID are never rewritten |
 | Other child bullets (your notes) | You | Never touched |
-| MEET Task Link | Bob, once | Never re-added; kept in Event Task time order within its entry, so a hand reorder is undone; removed only by a cancel |
-| MEET Pomodoro entries | Bob, once | Created only in the write that adds their first link; never started, closed, retimed, renamed, or moved afterwards |
+| MEET Task Link | Google until you edit it | A Google time or buffer change re-files Bob's untouched placeholder or Bob-shaped closed filing; a hand-edited filing is kept and reported once |
+| MEET Pomodoro entries | Google until you edit them | Created with their first link; only Bob-shaped closed entries are retimed or regrouped after a Google time or buffer change |
 | The whole row | You | Deleted or moved away: tombstoned, never re-added |
 | Events stamp | Bob | Re-rendered when the note is written or the stamp is due; a deleted or edited line is restored |
 
@@ -531,11 +543,12 @@ Badges are plain title-free links (`[📅](url)`), so link-hint plugins such as 
 "Untouched" means not done, not In Progress, never linked under a closed
 Pomodoro, and with no 🍅 history. A worked task is never cancelled; it is
 left alone and reported once. A Past row is born done (`[x]`, a completion
-date, and a struck 🍅 link under its closed MEET), so a later Google decline,
-delete, or move leaves it alone and reports it once. Sync cannot learn
-attendance, so uncheck or cancel a skipped meeting by hand. MEET placeholders
-and running MEET entries are created only in the same write that adds their
-first link, so sync never leaves a second open MEET.
+date, and a struck 🍅 link under its closed MEET). A later Google decline or
+delete leaves it alone. A time or buffer move can re-file Bob-shaped closed
+filing; if the new phase is current or future, sync reopens the moved row. Sync
+cannot learn attendance, so uncheck or cancel a skipped meeting by hand. MEET
+placeholders and running MEET entries are created only in the same write that
+adds their first link, so sync never leaves a second open MEET.
 
 <a id="off-clock-events"></a><a id="untracked-events"></a>
 
@@ -593,8 +606,9 @@ The tag is Google-owned exactly like the badges: updated in place while the
 row is untouched, and your vault edit (adding or deleting it) wins and is
 reported once. Context rows strip the token and carry no tag; a Maybe context
 row upgraded to a task renders the tag. A tag flip after the session closed
-is reported once and left for a hand edit — sync never retimes existing MEET
-entries. Untouched legacy `#offclock` spans migrate to `#off` without
+is reported once as `kept_off_clock` and left for a hand edit. A time or buffer
+change can still re-file Bob-owned MEET links; a clock-tag-only change cannot.
+Untouched legacy `#offclock` spans migrate to `#off` without
 changing row IDs, roots, children, or ledger stamps. Alias normalization is
 not a clock flip, including on a worked row.
 
@@ -787,6 +801,19 @@ render of its event:
   later changes. Rows synced before this feature get their bullets on
   the next sync of their day; matching existing content is adopted,
   never duplicated.
+- When Google changes a journaled Event Task's meeting time or parsed
+  buffer, sync classifies its same-note MEET links before changing the
+  ledger. It moves a row out of an untouched untimed MEET placeholder only
+  when the row remains untouched; a Past move completes it and writes a
+  struck link under a closed MEET. A closed entry is Bob-shaped only when
+  its header matches the buffered cluster of its members, it contains only
+  dedicated struck 🍅 links, and every member remains born done with no
+  other ledger link. Bob-shaped closed entries are removed and rebuilt from
+  the members' current spans; a moved row entering Current or Future is
+  reopened and routed by the normal birth rules. A running entry is left
+  alone. Other filing is kept and reported once as `kept_meet`. A
+  clock-tag-only change, title/root/description-only change, kept span edit,
+  or a passing clock does not trigger this re-file.
 - A Maybe context row whose RSVP went Yes upgrades in place to an Event
   Task and is filed under a MEET by phase. A Yes task row whose RSVP went
   Maybe stays a task and is reported once.
@@ -914,7 +941,7 @@ attendee list, and carries `clock`, `clock_source`, `clock_note`,
 `sync -f json`: `ok`, `day`, `path`, `status`, `rows`, `pomodoro`,
 `warnings`, `deprecations`, and `stamp`. `stamp` is
 `{account, synced_at, refreshed}` or `null`. `pomodoro` carries
-`entry_line`, `created`, `links_added`, `links_sorted`, and
+`entry_line`, `created`, `links_added`, `links_refiled`, `links_sorted`, and
 `entries` as in [Sync](#sync). Row actions add `updated`, `cancelled`,
 `removed` (context), `upgraded`, and `learned` to the sync-phase `added`,
 `adopted`, and `removed` (task) actions; lifecycle notices also arrive as
@@ -963,6 +990,9 @@ immediately. The `bob-gcal` client is a separate bucket from Gmail. Tests use
   worked.
 - An off-clock tag flip after the session closed is left for a hand edit and
   reported once as `kept_off_clock`.
+- A moved meeting is re-filed only while its old filing still matches Bob's
+  placeholder or closed-MEET shape. Edited MEET entries and trimmed settle
+  MEETs are kept and reported once as `kept_meet`.
 - Buffers stop at midnight: a pre-buffer never crosses into the previous
   day, and the total stays below 24h. The first value per side wins. A
   description you cannot edit cannot take a Google-owned buffer: a

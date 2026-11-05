@@ -139,7 +139,8 @@ fn span_updates_rewrite_clean_spans_and_reslot() {
     let note = today_note(&env);
     let row = dentist_row(&note);
     assert!(row.contains("**0730-0800** Dentist deep clean"), "{row}");
-    assert!(row.starts_with("- [*] #task"), "{row}");
+    assert!(row.starts_with("- [x] #task"), "{row}");
+    assert!(row.contains("[completion:: 2026-10-30]"), "{row}");
     assert!(row.contains("[root:: body]"), "{row}");
     assert!(row.ends_with("^dentist"), "{row}");
     assert!(row.contains("query=New%20Venue"), "{row}");

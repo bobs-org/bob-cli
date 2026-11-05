@@ -245,6 +245,17 @@ pub(crate) struct PlannedLink {
     pub block_id: String,
 }
 
+/// A journaled Event Task whose Google-owned occupied span changed during
+/// this plan. `old_line` is the pre-update task line used to validate any
+/// Bob-written closed MEET that currently files it.
+#[derive(Debug, Clone)]
+pub(super) struct MovedRow {
+    pub calendar_id: String,
+    pub event_id: String,
+    pub block_id: String,
+    pub old_line: String,
+}
+
 /// The pure plan outcome.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SyncPlan {
@@ -254,6 +265,10 @@ pub(crate) struct SyncPlan {
     pub rows_adopted: Vec<AdoptedRow>,
     pub rows_gone: Vec<GoneRow>,
     pub links_added: Vec<PlannedLink>,
+    /// Existing MEET links moved after a Google-side span update.
+    pub links_refiled: Vec<PlannedLink>,
+    /// Rows whose Google-owned occupied span changed this run.
+    pub(super) moved_rows: Vec<MovedRow>,
     /// Event Task link lines this run moved into meeting-time order.
     pub links_sorted: usize,
     /// Google-owned spans and unedited `[root::]` values replaced in place.
@@ -540,10 +555,19 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
         apply_effective_clocks(clock, daily_rel, &working, &mut plan);
     }
 
+    let refile_wants = super::refile::plan_refile(
+        input,
+        &mut working,
+        &mut plan,
+        daily_rel,
+        reborrow_clock(&mut clock),
+    );
+
     plan_meet_pomodoros(
         input,
         &mut working,
         &mut plan,
+        refile_wants,
         daily_rel,
         reborrow_clock(&mut clock),
     );
@@ -570,6 +594,7 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
         && plan.rows_gone.is_empty()
         && plan.rows_removed.is_empty()
         && plan.links_added.is_empty()
+        && plan.links_refiled.is_empty()
         && plan.rows_updated.is_empty()
         && plan.rows_cancelled.is_empty()
         && plan.rows_upgraded.is_empty()
@@ -582,6 +607,8 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
         plan.rows_gone.clear();
         plan.rows_removed.clear();
         plan.links_added.clear();
+        plan.links_refiled.clear();
+        plan.moved_rows.clear();
         plan.links_sorted = 0;
         plan.rows_updated.clear();
         plan.rows_cancelled.clear();
@@ -788,6 +815,7 @@ fn apply_span_updates(
         return;
     }
     let current = spans.hashes();
+    let original_buffer = event_task::parse_event_buffer(&current_line);
     // Context rows strip the token, so only task rows hash the tag.
     // The badges span covers explicit `#off`/`#on` and `[buffer::]`, so flips
     // and buffer changes update in place while untouched.
@@ -902,7 +930,7 @@ fn apply_span_updates(
     let mut line = if apply_spans {
         spans.rebuild()
     } else {
-        current_line
+        current_line.clone()
     };
     let (root, source) =
         if let RootAction::Reroute { value, source } = &root_action {
@@ -918,6 +946,16 @@ fn apply_span_updates(
         } else {
             (journaled.root.clone(), journaled.source.clone())
         };
+    let buffer_changed =
+        apply_spans && event_task::parse_event_buffer(&line) != original_buffer;
+    if journaled.row_kind == "task" && (replaced_time || buffer_changed) {
+        plan.moved_rows.push(MovedRow {
+            calendar_id: occurrence.calendar_id.clone(),
+            event_id: occurrence.event_id.clone(),
+            block_id: journaled.block_id.clone(),
+            old_line: current_line.clone(),
+        });
+    }
     working.lines[line_index] = line;
     if apply_spans && replaced_time {
         reslot_block(
@@ -1410,7 +1448,7 @@ fn remove_lifecycle_context(
 }
 
 /// Report one lifecycle notice once per (occurrence, day).
-fn push_kept_once(
+pub(super) fn push_kept_once(
     input: &SyncPlanInput<'_>,
     plan: &mut SyncPlan,
     calendar_id: &str,
@@ -1535,8 +1573,8 @@ fn buffer_for_row(
 
 /// Owned working copy of the note: owned lines plus the input's
 /// trailing-newline state, so an unchanged plan is byte-identical.
-struct WorkingNote {
-    lines: Vec<String>,
+pub(super) struct WorkingNote {
+    pub(super) lines: Vec<String>,
     trailing_newline: bool,
 }
 
@@ -1548,12 +1586,12 @@ impl WorkingNote {
         }
     }
 
-    fn replace(&mut self, contents: &str) {
+    pub(super) fn replace(&mut self, contents: &str) {
         self.lines = contents.lines().map(str::to_string).collect();
         self.trailing_newline = contents.ends_with('\n');
     }
 
-    fn as_string(&self) -> String {
+    pub(super) fn as_string(&self) -> String {
         self.finish()
     }
 
@@ -2007,10 +2045,19 @@ fn plan_meet_pomodoros<C: ClockLookup + ?Sized>(
     input: &SyncPlanInput<'_>,
     working: &mut WorkingNote,
     plan: &mut SyncPlan,
+    refile_wants: Vec<WantedLink>,
     daily_rel: Option<&Path>,
     clock: Option<&mut C>,
 ) {
-    let wanted = collect_wanted_links(input, working, plan, daily_rel, clock);
+    let mut wanted =
+        collect_wanted_links(input, working, plan, daily_rel, clock);
+    let birth_ids: HashSet<String> =
+        wanted.iter().map(|link| link.block_id.clone()).collect();
+    wanted.extend(
+        refile_wants
+            .into_iter()
+            .filter(|link| !birth_ids.contains(&link.block_id)),
+    );
     if wanted.is_empty() {
         return;
     }
@@ -2171,7 +2218,7 @@ fn plan_meet_pomodoros<C: ClockLookup + ?Sized>(
         record_or_bump(&mut touched, state, entry_line, time, created, added);
     }
 
-    if !plan.links_added.is_empty() {
+    if !plan.links_added.is_empty() || !plan.links_refiled.is_empty() {
         working.replace(&contents);
         touched.sort_by_key(|entry| entry.line_0);
         plan.pomodoro_entries = touched
@@ -2189,15 +2236,16 @@ fn plan_meet_pomodoros<C: ClockLookup + ?Sized>(
 }
 
 #[derive(Debug, Clone)]
-struct WantedLink {
-    calendar_id: String,
-    event_id: String,
-    block_id: String,
-    phase: LinkPhase,
-    start_min: i32,
-    end_min: i32,
-    title: String,
-    off_clock: bool,
+pub(super) struct WantedLink {
+    pub calendar_id: String,
+    pub event_id: String,
+    pub block_id: String,
+    pub phase: LinkPhase,
+    pub start_min: i32,
+    pub end_min: i32,
+    pub title: String,
+    pub off_clock: bool,
+    pub refiled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -2394,7 +2442,7 @@ fn reborrow_clock<'a, C: ClockLookup + ?Sized>(
     clock.as_mut().map(|clock| &mut **clock)
 }
 
-fn resolved_off_clock<C: ClockLookup + ?Sized>(
+pub(super) fn resolved_off_clock<C: ClockLookup + ?Sized>(
     clock: &mut Option<&mut C>,
     daily_rel: Option<&Path>,
     line: Option<&str>,
@@ -2431,6 +2479,7 @@ fn wanted_link(
         end_min,
         title: occurrence.title.clone(),
         off_clock,
+        refiled: false,
     }
 }
 
@@ -2445,7 +2494,7 @@ fn row_was_created(plan: &SyncPlan, occurrence: &PlannedOccurrence) -> bool {
     })
 }
 
-fn cluster_past(mut items: Vec<WantedLink>) -> Vec<Vec<WantedLink>> {
+pub(super) fn cluster_past(mut items: Vec<WantedLink>) -> Vec<Vec<WantedLink>> {
     items.sort_by(|left, right| {
         (left.start_min, left.end_min, left.block_id.as_str()).cmp(&(
             right.start_min,
@@ -2474,7 +2523,7 @@ fn cluster_past(mut items: Vec<WantedLink>) -> Vec<Vec<WantedLink>> {
     clusters
 }
 
-fn format_meet_span(
+pub(super) fn format_meet_span(
     start_min: i32,
     end_min: i32,
     off_clock: bool,
@@ -2589,11 +2638,16 @@ fn append_links(
         }
         *contents = updated;
         shift_touched(touched, end + 1);
-        plan.links_added.push(PlannedLink {
+        let planned = PlannedLink {
             calendar_id: link.calendar_id.clone(),
             event_id: link.event_id.clone(),
             block_id: link.block_id.clone(),
-        });
+        };
+        if link.refiled {
+            plan.links_refiled.push(planned);
+        } else {
+            plan.links_added.push(planned);
+        }
         added += 1;
     }
     added

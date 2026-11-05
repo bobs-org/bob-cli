@@ -9,6 +9,7 @@ metadata:
   status: superseded-in-part
   superseded_by:
     - decisions:gcal-root-follows-google-until-edited
+    - decisions:meet-filing-follows-google-until-edited
 ---
 
 # Bob Gcal Is Read-Only And Proposes Once
@@ -51,3 +52,5 @@ your edit, nested note, or deletion makes them yours, with one notice only if
 Google later changes them. Other child notes remain yours. Evidence:
 `plan:202611/gcal_description_bullets.md`, `docs/gcal.md` § Description bullets
 and § Who owns each part of a row, and `tests/gcal_lifecycle.rs`.
+
+Superseded in part: a qualifying Google time or buffer move can re-file Bob-owned MEET links; the rule that each link is written once is retired. See [[decisions:meet-filing-follows-google-until-edited]].

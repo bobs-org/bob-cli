@@ -369,6 +369,39 @@ fn seed_task(
     (first.contents, journal, occ, block_id)
 }
 
+fn seed_linked_rows(
+    occurrences: Vec<PlannedOccurrence>,
+) -> (String, BTreeMap<(String, String), OccurrenceState>) {
+    let first =
+        run_at(empty_ledger(), occurrences, ACCOUNT, now_at(12, 0), true);
+    let mut journal = journal_from_added(&first);
+    for state in journal.values_mut() {
+        state.link = true;
+    }
+    (first.contents, journal)
+}
+
+fn run_journaled_at(
+    contents: &str,
+    occurrences: Vec<PlannedOccurrence>,
+    journal: &BTreeMap<(String, String), OccurrenceState>,
+    now: NaiveDateTime,
+    is_today: bool,
+) -> SyncPlan {
+    plan_sync(&SyncPlanInput {
+        contents,
+        is_today,
+        occurrences,
+        journal,
+        day_string: "2026-10-30".to_string(),
+        today: note_day(),
+        lifecycle: Vec::new(),
+        series_roots: &BTreeMap::new(),
+        account: ACCOUNT,
+        now,
+    })
+}
+
 fn run(contents: &str, occurrences: Vec<PlannedOccurrence>) -> SyncPlan {
     run_at(contents, occurrences, ACCOUNT, now_at(12, 0), false)
 }
@@ -3049,4 +3082,242 @@ fn trimmed_closed_meet_survives_later_sync() {
             .count(),
         "no duplicate MEET: {second_pomodoros}"
     );
+}
+
+#[test]
+fn moved_past_meeting_refiles_bob_closed_meet() {
+    let original = with_phase(
+        occurrence("swing", "Swings", true, "0815-0830", 495),
+        LinkPhase::Past,
+    );
+    let (contents, journal) = seed_linked_rows(vec![original]);
+
+    let moved = with_phase(
+        occurrence("swing", "Swings", true, "0800-0815", 480),
+        LinkPhase::Past,
+    );
+    let plan =
+        run_journaled_at(&contents, vec![moved], &journal, now_at(12, 0), true);
+
+    assert!(
+        plan.contents.contains(
+            "- [x] (**0800-0815** [t:: 15m]) — MEET\n\t- 🍅 ~~[[#^swings]]~~"
+        ),
+        "{}",
+        plan.contents
+    );
+    assert!(!plan.contents.contains("(**0815-0830** [t:: 15m]) — MEET"));
+    assert!(row_line(&plan.contents, "swings").starts_with("- [x] #task"));
+    assert_eq!(plan.links_added.len(), 0);
+    assert_eq!(plan.links_refiled.len(), 1);
+    assert_eq!(plan.links_refiled[0].block_id, "swings");
+    assert_eq!(plan.pomodoro_entries.len(), 1);
+}
+
+#[test]
+fn moved_past_meeting_refiles_with_its_inherited_off_clock() {
+    let home = HomeFixture::love_tree();
+    let original = with_phase(
+        with_root(
+            occurrence("swing", "Swings", true, "0815-0830", 495),
+            "love",
+            "@love",
+            RootSourceKind::Token,
+            true,
+        ),
+        LinkPhase::Past,
+    );
+    let mut resolver = home.resolver();
+    let first = plan_clocked(
+        empty_ledger(),
+        vec![original],
+        &BTreeMap::new(),
+        true,
+        &mut resolver,
+    );
+    let mut journal = journal_from_added(&first);
+    for state in journal.values_mut() {
+        state.link = true;
+    }
+
+    let moved = with_phase(
+        with_root(
+            occurrence("swing", "Swings", true, "0800-0815", 480),
+            "love",
+            "@love",
+            RootSourceKind::Token,
+            true,
+        ),
+        LinkPhase::Past,
+    );
+    let mut resolver = home.resolver();
+    let plan = plan_clocked(
+        &first.contents,
+        vec![moved],
+        &journal,
+        true,
+        &mut resolver,
+    );
+
+    assert!(plan.contents.contains(
+        "- [x] (**0800-0815** [off:: 15m]) — MEET\n\t- 🍅 ~~[[#^swings]]~~"
+    ));
+    assert_eq!(plan.links_refiled.len(), 1);
+    assert!(row_line(&plan.contents, "swings").contains("[root:: love]"));
+}
+
+#[test]
+fn moved_member_splits_a_bob_closed_cluster_and_refiles_every_link() {
+    let original = vec![
+        with_phase(
+            occurrence("first", "First", true, "0800-0830", 480),
+            LinkPhase::Past,
+        ),
+        with_phase(
+            occurrence("second", "Second", true, "0830-0900", 510),
+            LinkPhase::Past,
+        ),
+    ];
+    let (contents, journal) = seed_linked_rows(original);
+    let moved = vec![
+        with_phase(
+            occurrence("first", "First", true, "0700-0730", 420),
+            LinkPhase::Past,
+        ),
+        with_phase(
+            occurrence("second", "Second", true, "0830-0900", 510),
+            LinkPhase::Past,
+        ),
+    ];
+    let plan =
+        run_journaled_at(&contents, moved, &journal, now_at(12, 0), true);
+
+    assert!(plan.contents.contains("(**0700-0730** [t:: 30m]) — MEET"));
+    assert!(plan.contents.contains("(**0830-0900** [t:: 30m]) — MEET"));
+    assert!(!plan.contents.contains("(**0800-0900** [t:: 60m]) — MEET"));
+    assert_eq!(plan.links_added.len(), 0);
+    assert_eq!(plan.links_refiled.len(), 2);
+    assert_eq!(plan.pomodoro_entries.len(), 2);
+}
+
+#[test]
+fn moved_bob_closed_meeting_to_future_reopens_the_row() {
+    let original = with_phase(
+        occurrence("swing", "Swings", true, "0815-0830", 495),
+        LinkPhase::Past,
+    );
+    let (contents, journal) = seed_linked_rows(vec![original]);
+    let moved = with_phase(
+        occurrence("swing", "Swings", true, "1830-1900", 1110),
+        LinkPhase::Future,
+    );
+    let plan =
+        run_journaled_at(&contents, vec![moved], &journal, now_at(12, 0), true);
+
+    let row = row_line(&plan.contents, "swings");
+    assert!(row.starts_with("- [*] #task"), "{row}");
+    assert!(!row.contains("[completion::"), "{row}");
+    assert!(plan.contents.contains("- [ ] () — MEET\n\t- [[#^swings]]"));
+    assert!(!plan.contents.contains("(**0815-0830** [t:: 15m]) — MEET"));
+    assert_eq!(plan.links_refiled.len(), 1);
+    assert_eq!(plan.links_added.len(), 0);
+}
+
+#[test]
+fn moved_future_meeting_keeps_its_planned_link() {
+    let original = with_phase(
+        occurrence("later", "Later", true, "1830-1900", 1110),
+        LinkPhase::Future,
+    );
+    let (contents, journal) = seed_linked_rows(vec![original]);
+    let moved = with_phase(
+        occurrence("later", "Later", true, "1900-1930", 1140),
+        LinkPhase::Future,
+    );
+    let plan =
+        run_journaled_at(&contents, vec![moved], &journal, now_at(12, 0), true);
+
+    assert!(plan.contents.contains("- [ ] () — MEET\n\t- [[#^later]]"));
+    assert_eq!(plan.links_refiled.len(), 0);
+    assert!(plan.kept.iter().all(|notice| notice.flag != "kept_meet"));
+}
+
+#[test]
+fn edited_closed_meet_is_kept_and_reported_once_when_google_moves_it() {
+    let original = with_phase(
+        occurrence("swing", "Swings", true, "0815-0830", 495),
+        LinkPhase::Past,
+    );
+    let (contents, mut journal) = seed_linked_rows(vec![original]);
+    let edited = contents.replace(
+        "(**0815-0830** [t:: 15m]) — MEET",
+        "(**0810-0840** [t:: 30m]) — MEET",
+    );
+    let moved = with_phase(
+        occurrence("swing", "Swings", true, "0800-0815", 480),
+        LinkPhase::Past,
+    );
+    let first = run_journaled_at(
+        &edited,
+        vec![moved.clone()],
+        &journal,
+        now_at(12, 0),
+        true,
+    );
+    assert!(first.contents.contains("(**0810-0840** [t:: 30m]) — MEET"));
+    assert_eq!(
+        first
+            .kept
+            .iter()
+            .filter(|notice| notice.flag == "kept_meet")
+            .count(),
+        1
+    );
+    journal = overlay_updated(journal, &first);
+
+    let moved_again = with_phase(
+        occurrence("swing", "Swings", true, "0745-0800", 465),
+        LinkPhase::Past,
+    );
+    let second = run_journaled_at(
+        &first.contents,
+        vec![moved_again],
+        &journal,
+        now_at(12, 0),
+        true,
+    );
+    assert!(second.kept.iter().all(|notice| notice.flag != "kept_meet"));
+    assert_eq!(second.links_refiled.len(), 0);
+}
+
+#[test]
+fn moved_meeting_under_a_running_entry_is_left_silently() {
+    let original = with_phase(
+        occurrence("current", "Current", true, "0800-0830", 480),
+        LinkPhase::Current,
+    );
+    let first =
+        run_at(empty_ledger(), vec![original], ACCOUNT, now_at(8, 15), true);
+    let mut journal = journal_from_added(&first);
+    for state in journal.values_mut() {
+        state.link = true;
+    }
+    let moved = with_phase(
+        occurrence("current", "Current", true, "0810-0840", 490),
+        LinkPhase::Current,
+    );
+    let plan = run_journaled_at(
+        &first.contents,
+        vec![moved],
+        &journal,
+        now_at(8, 15),
+        true,
+    );
+
+    assert_eq!(plan.contents.matches("— MEET").count(), 1);
+    assert!(plan
+        .contents
+        .contains("- [ ] (**0800-0830** [t:: 30m]) — MEET"));
+    assert_eq!(plan.links_refiled.len(), 0);
+    assert!(plan.kept.iter().all(|notice| notice.flag != "kept_meet"));
 }

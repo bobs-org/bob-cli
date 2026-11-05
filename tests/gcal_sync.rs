@@ -753,6 +753,88 @@ fn sync_json_reports_rows_and_pomodoro() {
 }
 
 #[test]
+fn moved_past_event_refiles_its_bob_written_closed_meet() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-refile");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&buffer_envelope(vec![buffer_event(
+        "moved-meeting",
+        "Moved meeting",
+        None,
+        "2026-10-30T08:15:00-04:00",
+        "2026-10-30T08:30:00-04:00",
+    )]));
+
+    let first = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    let original_note = today_note(&env);
+    assert!(original_note.contains(
+        "- [x] (**0815-0830** [t:: 15m]) — MEET\n\t- 🍅 ~~[[#^moved-meeting]]~~"
+    ), "{original_note}");
+    let links_before = journal_lines(&env)
+        .iter()
+        .filter(|line| {
+            line["kind"] == "gcal.link"
+                && line["key"]["event_id"] == "moved-meeting"
+        })
+        .count();
+    assert_eq!(links_before, 1);
+
+    fake.events_json(&buffer_envelope(vec![buffer_event(
+        "moved-meeting",
+        "Moved meeting",
+        None,
+        "2026-10-30T08:00:00-04:00",
+        "2026-10-30T08:15:00-04:00",
+    )]));
+    let moved = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(moved.status.code(), Some(0), "{}", stderr(&moved));
+    let report: Value =
+        serde_json::from_str(&stdout(&moved)).expect("JSON report");
+    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["status"], "written");
+    assert_eq!(report["pomodoro"]["links_added"], 0);
+    assert_eq!(report["pomodoro"]["links_refiled"], 1);
+    let rows = report["rows"].as_array().expect("rows");
+    let moved_row = rows
+        .iter()
+        .find(|row| row["title"] == "Moved meeting")
+        .expect("moved row");
+    assert_eq!(moved_row["action"], "updated");
+
+    let moved_note = today_note(&env);
+    assert!(moved_note.contains(
+        "- [x] (**0800-0815** [t:: 15m]) — MEET\n\t- 🍅 ~~[[#^moved-meeting]]~~"
+    ), "{moved_note}");
+    assert!(
+        !moved_note.contains("(**0815-0830** [t:: 15m]) — MEET"),
+        "old closed MEET is removed:\n{moved_note}"
+    );
+    assert!(event_row(&moved_note, "**0800-0815**").starts_with("- [x] #task"));
+
+    let journal = journal_lines(&env);
+    let links_after = journal
+        .iter()
+        .filter(|line| {
+            line["kind"] == "gcal.link"
+                && line["key"]["event_id"] == "moved-meeting"
+        })
+        .count();
+    assert_eq!(
+        links_after, links_before,
+        "refiling does not add a link mark"
+    );
+    assert_eq!(status(&env)["links_refiled"], 1);
+
+    let repeated = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(repeated.status.code(), Some(0), "{}", stderr(&repeated));
+    let repeated_report: Value =
+        serde_json::from_str(&stdout(&repeated)).expect("JSON report");
+    assert_eq!(repeated_report["pomodoro"]["links_refiled"], 0);
+    assert_eq!(today_note(&env), moved_note);
+}
+
+#[test]
 fn sync_sorts_event_task_links_and_reports_sort_only_runs() {
     let env = GcalEnv::new("bob-cli-gcal-sync-link-order");
     prepare(&env);

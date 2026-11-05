@@ -611,7 +611,7 @@ fn context_row_from_line(
 
 /// First `[buffer::]` field outside code spans and Markdown links.
 /// An invalid value means no buffer.
-fn parse_event_buffer(line: &str) -> EventBuffer {
+pub(crate) fn parse_event_buffer(line: &str) -> EventBuffer {
     let masked = mask_code_and_markdown_links(line);
     task_fields::inline_fields(&masked, "buffer")
         .into_iter()

@@ -10,6 +10,7 @@ metadata:
     - decisions:event-buffers-widen-the-span
     - decisions:sync-sorts-event-task-links
     - decisions:ended-synced-meetings-are-born-done
+    - decisions:meet-filing-follows-google-until-edited
 title: Synced Meetings Are Linked By Phase At Birth
 aliases:
   - synced-meetings-link-by-phase
@@ -93,3 +94,5 @@ struck 🍅 link, and the `[x]` rejection is retired. See
 [[decisions:event-task-links-close-by-the-clock]]
 
 [[glossary:event-task]]
+
+Superseded in part: sync can retime or move Bob-shaped closed MEETs and re-file Bob-owned placeholder links after qualifying Google time or buffer changes; the rule that sync never retimes or moves an existing entry is retired. See [[decisions:meet-filing-follows-google-until-edited]].

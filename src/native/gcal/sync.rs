@@ -67,6 +67,7 @@ fn record_last_error(args: &SyncArgs, error: &GcalError) {
             rows: Vec::new(),
             entries: Vec::new(),
             links_added: 0,
+            links_refiled: 0,
             links_sorted: 0,
             warnings: Vec::new(),
             deprecations: Vec::new(),
@@ -101,6 +102,7 @@ struct SyncReport {
     rows: Vec<ReportRow>,
     entries: Vec<MeetPomodoroEntry>,
     links_added: usize,
+    links_refiled: usize,
     links_sorted: usize,
     warnings: Vec<String>,
     deprecations: Vec<diagnostics::Deprecation>,
@@ -257,6 +259,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
             rows: report_rows(&plan),
             entries: plan.pomodoro_entries.clone(),
             links_added: plan.links_added.len(),
+            links_refiled: plan.links_refiled.len(),
             links_sorted: plan.links_sorted,
             warnings: merge_warnings(warnings, &plan.warnings),
             deprecations,
@@ -276,6 +279,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
             rows: Vec::new(),
             entries: Vec::new(),
             links_added: 0,
+            links_refiled: 0,
             links_sorted: 0,
             warnings,
             deprecations,
@@ -365,6 +369,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
                         rows: Vec::new(),
                         entries: Vec::new(),
                         links_added: 0,
+                        links_refiled: 0,
                         links_sorted: 0,
                         warnings: warnings.clone(),
                         deprecations: deprecations.clone(),
@@ -402,6 +407,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
         rows: report_rows(&plan),
         entries: plan.pomodoro_entries.clone(),
         links_added: plan.links_added.len(),
+        links_refiled: plan.links_refiled.len(),
         links_sorted: plan.links_sorted,
         warnings,
         deprecations,
@@ -433,6 +439,7 @@ fn waiting(
         rows: Vec::new(),
         entries: Vec::new(),
         links_added: 0,
+        links_refiled: 0,
         links_sorted: 0,
         warnings: merged,
         deprecations,
@@ -1241,6 +1248,7 @@ fn record_status(
         tasks_added,
         context_added,
         links_added: report.links_added,
+        links_refiled: report.links_refiled,
         error,
     });
 }
@@ -1322,6 +1330,7 @@ fn print_json(report: &SyncReport) {
                 "created": first_open_entry(report)
                     .is_some_and(|entry| entry.created),
                 "links_added": report.links_added,
+                "links_refiled": report.links_refiled,
                 "links_sorted": report.links_sorted,
                 "entries": json_entries(report),
             },
@@ -1414,15 +1423,29 @@ fn print_human(report: &SyncReport) {
     let stamp_only = report.status == "written"
         && report.rows.is_empty()
         && report.links_added == 0
+        && report.links_refiled == 0
         && report.links_sorted == 0
         && created_entries == 0;
     let sort_only = report.status == "written"
         && report.rows.is_empty()
         && report.links_added == 0
+        && report.links_refiled == 0
         && report.links_sorted > 0
         && created_entries == 0;
+    let refile_only = report.status == "written"
+        && report.links_refiled > 0
+        && report.links_added == 0
+        && report.links_sorted == 0
+        && created_entries == 0
+        && !report.rows.is_empty()
+        && report.rows.iter().all(|row| row.action == "updated");
     let summary = if report.status == "unchanged" {
         "✓ Events unchanged · Pomodoros unchanged".to_string()
+    } else if refile_only {
+        format!(
+            "✓ Events updated · Pomodoros ↪{} refiled",
+            report.links_refiled
+        )
     } else if sort_only {
         format!(
             "✓ Events unchanged · Pomodoros ↕{} links sorted",
@@ -1462,6 +1485,9 @@ fn print_human(report: &SyncReport) {
         );
         if report.links_sorted > 0 {
             pomodoros.push_str(&format!(", ↕{} sorted", report.links_sorted));
+        }
+        if report.links_refiled > 0 {
+            pomodoros.push_str(&format!(", ↪{} refiled", report.links_refiled));
         }
         pomodoros
     };
