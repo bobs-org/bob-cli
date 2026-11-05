@@ -1597,6 +1597,7 @@ mod tests {
             task_theme_context: CaptureTaskThemeContext::new(
                 &request.bob_dir,
                 today_date,
+                today_date.and_hms_opt(9, 0, 0).expect("test time"),
                 None,
             ),
             warnings: Vec::new(),

@@ -1574,7 +1574,9 @@ destination: the task keeps its type and the destination Pomodoro gains
 it. When the same capture run created the destination entry, the task
 instead takes the retype path (A10): the field is set to the matching
 type component of the new name (or cleared on an inherited match), and
-`task_theme` reports the change. For a new task, the type comes
+`task_theme` reports the change. That retype is part of the start or add,
+so the open timed entry is re-stamped from the staged post-retype links in
+the same transaction. For a new task, the type comes
 from its staged line and destination note (a free `#<type>` marker sets X
 first). For an existing task, its staged pre-edit line and destination note
 resolve the effective type. When that type is missing from the resolved name,
@@ -4152,6 +4154,7 @@ clock. Off-clock rows write `[off:: Nm]`; worked rows write `[t:: Nm]`.
 | --- | --- |
 | Start of a `MEET` with a non-empty [event run](#meet-starts-follow-the-calendar) | The run's events. Later lineup events are queue and do not mix the run. |
 | Any other start (plain, named, created, restart, kept-ledger swap, link start) | The started entry's counted Task Links, resolved against the staged vault. Same-note Event Tasks read the note being rewritten. |
+| Landing retype during a start or running-lineup add | Recompute after the type field is written, from the staged post-retype Task Links. A started `MEET` still follows its event run. |
 | Close | The links the closed row keeps after by-the-clock classification and the selection. Deferred and dropped lines are gone; a worked link that is also carried still counts. The key switches even when remaining time is under five minutes and the span does not retime. |
 | Running lineup edit (`^route:id`, a new-task link, `~K` on a start, merge `=*`, split `=/`, capture blocked-link consumption) | The running entry's counted Task Links after the add, move, or drop, so the Now card stays honest. Open rows never count toward stats. |
 | Naming a timed open entry, or a `#type` relocation that renames or moves its running entry | Recompute from its counted Task Links after the linked tasks are retyped, even when the child lines stay the same. |

@@ -196,7 +196,7 @@ pub(super) fn plan_capture_batch_with_config_path(
     let mut section_tracker = SectionBlockTracker::new();
     let mut dependency_ctx = DependencyContext::new(&request.bob_dir, today);
     let mut task_theme_context =
-        CaptureTaskThemeContext::new(&request.bob_dir, today, config_path);
+        CaptureTaskThemeContext::new(&request.bob_dir, today, now, config_path);
     let mut all_project_moves: Vec<ProjectMoveLanding> = Vec::new();
     let mut ref_assignments = assign_ref_verdicts(request, &parsed_items);
     let mut staged_jobs = Vec::new();
@@ -2131,7 +2131,7 @@ pub(super) fn plan_capture_item(
                 .pomodoro_link_destination
                 .as_ref()
                 .is_some_and(|destination| destination.role == Some("created"));
-            if let Some(applied) = task_theme_context.apply_existing_task(
+            if let Some(mut applied) = task_theme_context.apply_existing_task(
                 planner,
                 &target,
                 route,
@@ -2140,8 +2140,17 @@ pub(super) fn plan_capture_item(
                 resolved_name,
                 pomodoro_name.as_deref(),
                 destination_is_new,
+                planned.result.pomodoro_start.is_some(),
                 warnings,
             )? {
+                if let Some(clock) = applied.clock.take() {
+                    super::meet_event_run::apply_landing_finish(
+                        clock,
+                        planned.result.pomodoro_start.as_mut(),
+                        planned.result.pomodoro_link_destination.as_mut(),
+                        warnings,
+                    );
+                }
                 planned.result.task_line = applied.task_line.clone();
                 if let Some(theme) = applied.theme {
                     planned.result.task_theme = Some(theme);
@@ -3603,6 +3612,10 @@ pub(super) fn plan_capture_item(
                     .pomodoro
                     .as_ref()
                     .is_some_and(|edit| edit.details.creates_pomodoro);
+                let started = note_plan
+                    .pomodoro
+                    .as_ref()
+                    .is_some_and(|edit| edit.start.is_some());
                 let landing = task_theme_context.apply_new_task(
                     planner,
                     &target,
@@ -3611,9 +3624,30 @@ pub(super) fn plan_capture_item(
                     destination_name.as_deref(),
                     Some(selector.as_str()),
                     destination_is_new,
+                    started,
                     warnings,
                 )?;
-                if let Some(landing) = landing {
+                if let Some(mut landing) = landing {
+                    if let Some(clock) = landing.clock.take() {
+                        let (start, destination) = note_plan
+                            .pomodoro
+                            .as_mut()
+                            .map(|edit| {
+                                (
+                                    edit.start.as_mut(),
+                                    edit.details
+                                        .pomodoro_link_destination
+                                        .as_mut(),
+                                )
+                            })
+                            .unwrap_or((None, None));
+                        super::meet_event_run::apply_landing_finish(
+                            clock,
+                            start,
+                            destination,
+                            warnings,
+                        );
+                    }
                     if landing.merge.is_some() && marker_theme.is_some() {
                         // Marker authority: keep the marker's field report.
                         if let Some(merge) = landing.merge {

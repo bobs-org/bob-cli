@@ -716,6 +716,7 @@ pub(super) fn plan_pomodoro_split_item(
                 Path::new(&day_rel),
                 line,
                 now,
+                false,
                 warnings,
             )?;
         }

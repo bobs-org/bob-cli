@@ -29,6 +29,7 @@ use std::{
 pub(crate) struct CaptureTaskThemeContext {
     root: PathBuf,
     today: NaiveDate,
+    now: chrono::NaiveDateTime,
     config_path: PathBuf,
     config_loaded: bool,
     cfg: Option<config::PlanConfig>,
@@ -74,6 +75,7 @@ pub(super) struct AppliedLanding {
     pub(super) task_line: String,
     pub(super) theme: Option<CaptureTaskThemeChange>,
     pub(super) merge: Option<AppliedMerge>,
+    pub(super) clock: Option<super::meet_event_run::MeetFinish>,
 }
 
 pub(super) struct ExistingTypeMarkerApplication {
@@ -126,11 +128,13 @@ impl CaptureTaskThemeContext {
     pub(crate) fn new(
         root: &Path,
         today: NaiveDate,
+        now: chrono::NaiveDateTime,
         config_path: Option<&Path>,
     ) -> Self {
         Self {
             root: root.to_path_buf(),
             today,
+            now,
             config_path: config_path
                 .map(Path::to_path_buf)
                 .unwrap_or_else(config::config_path),
@@ -154,6 +158,7 @@ impl CaptureTaskThemeContext {
         destination_name: Option<&str>,
         selector: Option<&str>,
         destination_is_new: bool,
+        started: bool,
         warnings: &mut Vec<CaptureWarning>,
     ) -> Result<Option<AppliedLanding>, CaptureError> {
         let Some(destination_name) = destination_name else {
@@ -180,6 +185,7 @@ impl CaptureTaskThemeContext {
             destination_name,
             selector,
             destination_is_new,
+            started,
             warnings,
         )
     }
@@ -317,6 +323,7 @@ impl CaptureTaskThemeContext {
         destination_name: Option<&str>,
         selector: Option<&str>,
         destination_is_new: bool,
+        started: bool,
         warnings: &mut Vec<CaptureWarning>,
     ) -> Result<Option<AppliedLanding>, CaptureError> {
         let Some(destination_name) = destination_name else {
@@ -331,6 +338,7 @@ impl CaptureTaskThemeContext {
             destination_name,
             selector,
             destination_is_new,
+            started,
             warnings,
         )
     }
@@ -658,6 +666,7 @@ impl CaptureTaskThemeContext {
         destination_name: &str,
         selector: Option<&str>,
         destination_is_new: bool,
+        started: bool,
         warnings: &mut Vec<CaptureWarning>,
     ) -> Result<Option<AppliedLanding>, CaptureError> {
         // A10: a `#NAME` / `=name` destination created by the same capture
@@ -767,6 +776,7 @@ impl CaptureTaskThemeContext {
                         added,
                         dest_index,
                     }),
+                    clock: None,
                 }))
             }
             routing::LandOutcome::Set { name, key } => {
@@ -778,6 +788,7 @@ impl CaptureTaskThemeContext {
                     source_line,
                     change,
                     inherited,
+                    started,
                 )
             }
             routing::LandOutcome::Clear => match field {
@@ -789,6 +800,7 @@ impl CaptureTaskThemeContext {
                     source_line,
                     ThemeChange::Clear,
                     inherited,
+                    started,
                 ),
             },
         }
@@ -802,6 +814,7 @@ impl CaptureTaskThemeContext {
         source_line: &str,
         change: ThemeChange,
         inherited: Option<ThemeSuggestion>,
+        started: bool,
     ) -> Result<Option<AppliedLanding>, CaptureError> {
         let catalog = self.catalog.as_ref().expect("loaded theme catalog");
         let field = parse_task_theme(source_line);
@@ -832,11 +845,63 @@ impl CaptureTaskThemeContext {
             previous,
             inherited,
         };
+        let clock = self.restamp_landing_entry(planner, block_id, started)?;
         Ok(Some(AppliedLanding {
             task_line,
             theme: Some(summary),
             merge: None,
+            clock,
         }))
+    }
+
+    /// Recompute the landing entry after its task's type field has been
+    /// written. The entry is resolved from the staged live Task Link, so an
+    /// unrelated timed entry or an old closed link cannot be restamped.
+    fn restamp_landing_entry(
+        &self,
+        planner: &mut CaptureBatchPlanner,
+        block_id: &str,
+        started: bool,
+    ) -> Result<Option<super::meet_event_run::MeetFinish>, CaptureError> {
+        let day_file = crate::native::pomodoro::day_file_for(&self.root);
+        let day_contents = planner.read_existing(&day_file)?;
+        let scan = crate::native::capture_pomodoros::scan(&day_contents);
+        if !scan.has_section {
+            return Ok(None);
+        }
+        let needle = format!("#^{block_id}]]");
+        let Some(link_line) = day_contents
+            .lines()
+            .position(|line| line.contains(needle.as_str()))
+        else {
+            return Ok(None);
+        };
+        let link_one_based = link_line + 1;
+        let Some(entry) = scan
+            .entries
+            .iter()
+            .filter(|entry| entry.line <= link_one_based)
+            .last()
+        else {
+            return Ok(None);
+        };
+        if entry.state != crate::native::capture_pomodoros::PomodoroState::Open
+            || entry.time_range.is_none()
+        {
+            return Ok(None);
+        }
+        let day_relative = day_file
+            .strip_prefix(&self.root)
+            .unwrap_or(day_file.as_path());
+        super::meet_event_run::restamp_session_clock_with_finish(
+            planner,
+            &self.root,
+            &day_file,
+            day_relative,
+            entry.line,
+            self.now,
+            started,
+        )
     }
 
     /// Stage an R2 destination rename for `block_id`'s landing entry.

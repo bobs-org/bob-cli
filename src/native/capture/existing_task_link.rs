@@ -63,7 +63,7 @@ pub(crate) fn link_existing_task(
     let mut warnings = Vec::new();
     let mut dependency_ctx = DependencyContext::new(bob_dir, today);
     let mut task_theme_context =
-        CaptureTaskThemeContext::new(bob_dir, today, None);
+        CaptureTaskThemeContext::new(bob_dir, today, now, None);
     planner.begin_item(None);
     let planned = plan_existing_task_pomodoro_link_item(
         &mut planner,

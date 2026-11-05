@@ -340,6 +340,314 @@ fn assert_dry_run_matches_write(
     );
 }
 
+fn landing_retype_vault(
+    temp: &Path,
+    vault: &Path,
+    offclock_types: &str,
+    task_type: &str,
+    day: &str,
+) -> (PathBuf, PathBuf) {
+    write_toggle_task_settings(vault);
+    write_file(
+        &vault.join("love.md"),
+        &format!(
+            "---\ntype: [[area]]\noffclock_types: [{offclock_types}]\n---\n\n## Tasks\n- [ ] #task Dinner with Kelly [type:: {task_type}] ^dinner\n"
+        ),
+    );
+    let config = temp.join("config.yml");
+    write_file(&config, r#"{"types":{"MEET":"red","CHORE":"magenta"}}"#);
+    let day_file = vault.join("2026/20261101.md");
+    write_file(&day_file, day);
+    (config, day_file)
+}
+
+fn assert_landing_retype(
+    vault: &Path,
+    day_file: &Path,
+    config: &Path,
+    token: &str,
+    now: &str,
+    expected_off_clock: bool,
+    expected_range: &str,
+    expected_day_fragment: &str,
+    expected_task_type: &str,
+    started: bool,
+) -> Value {
+    let before = fs::read_to_string(day_file).expect("day before");
+    let dry =
+        run_capture_with_config(vault, day_file, config, now, token, true);
+    assert_eq!(
+        fs::read_to_string(day_file).expect("day after dry-run"),
+        before,
+        "{token} dry-run wrote the daily note"
+    );
+    let written =
+        run_capture_with_config(vault, day_file, config, now, token, false);
+    assert_eq!(
+        dry["pomodoro_blocks"], written["pomodoro_blocks"],
+        "{token}: dry-run and write blocks differ\ndry: {dry}\nwrite: {written}"
+    );
+    assert_eq!(
+        dry["pomodoro_start"], written["pomodoro_start"],
+        "{token}: dry-run and write start reports differ\ndry: {dry}\nwrite: {written}"
+    );
+    assert_eq!(
+        dry["warnings"], written["warnings"],
+        "{token}: {dry} / {written}"
+    );
+    assert_eq!(session_off_clock(&dry), expected_off_clock, "{dry}");
+    assert_eq!(session_off_clock(&written), expected_off_clock, "{written}");
+    let expected_block_range =
+        expected_range.split("**").nth(1).unwrap_or(expected_range);
+    if started {
+        assert_eq!(
+            dry["pomodoro_start"]["off_clock"]
+                .as_bool()
+                .unwrap_or(false),
+            expected_off_clock,
+            "{dry}"
+        );
+        assert_eq!(
+            dry["pomodoro_start"]["time_range"], expected_range,
+            "{dry}"
+        );
+        assert_eq!(
+            dry["pomodoro_link_destination"]["time_range"],
+            expected_block_range,
+            "{dry}"
+        );
+    }
+    let block = written["pomodoro_blocks"]
+        .as_array()
+        .expect("pomodoro blocks")
+        .iter()
+        .find(|block| block["removed"] != true)
+        .expect("surviving Pomodoro block");
+    assert_eq!(
+        block["off_clock"].as_bool().unwrap_or(false),
+        expected_off_clock,
+        "{block}"
+    );
+    assert_eq!(block["time_range"], expected_block_range, "{block}");
+    assert!(
+        block["lines"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.ends_with(expected_day_fragment)),
+        "{block}"
+    );
+    assert!(
+        fs::read_to_string(day_file)
+            .expect("written day")
+            .contains(expected_day_fragment),
+        "expected {expected_day_fragment:?} in the written day"
+    );
+    assert!(
+        fs::read_to_string(vault.join("love.md"))
+            .expect("written task note")
+            .contains(&format!("[type:: {expected_task_type}]")),
+        "landing did not write type {expected_task_type}"
+    );
+    written
+}
+
+#[test]
+fn landing_retype_restamps_an_existing_meet_start_and_dry_run() {
+    let temp = TempDir::new("bob-cli-pomodoro-clock-landing-existing-meet");
+    let vault = temp.path().join("vault");
+    let (config, day_file) = landing_retype_vault(
+        temp.path(),
+        &vault,
+        "MEET",
+        "CHORE",
+        "## Pomodoros\n- [ ] () — MEET\n",
+    );
+    assert_landing_retype(
+        &vault,
+        &day_file,
+        &config,
+        "^love:dinner=meet",
+        "2026-11-01 09:02:00",
+        true,
+        "(**0905-0930** [off:: 25m])",
+        "(**0905-0930** [off:: 25m]) — MEET",
+        "MEET",
+        true,
+    );
+}
+
+#[test]
+fn landing_retype_restamps_a_created_meet_start_and_dry_run() {
+    let temp = TempDir::new("bob-cli-pomodoro-clock-landing-created-meet");
+    let vault = temp.path().join("vault");
+    let (config, day_file) = landing_retype_vault(
+        temp.path(),
+        &vault,
+        "MEET",
+        "CHORE",
+        "## Pomodoros\n- [ ] () — LATER\n",
+    );
+    assert_landing_retype(
+        &vault,
+        &day_file,
+        &config,
+        "^love:dinner=meet",
+        "2026-11-01 09:02:00",
+        true,
+        "(**0905-0930** [off:: 25m])",
+        "(**0905-0930** [off:: 25m]) — MEET",
+        "MEET",
+        true,
+    );
+}
+
+#[test]
+fn landing_retype_a10_restamps_a_created_off_clock_chore_start_and_dry_run() {
+    let temp = TempDir::new("bob-cli-pomodoro-clock-landing-a10-chore");
+    let vault = temp.path().join("vault");
+    let (config, day_file) = landing_retype_vault(
+        temp.path(),
+        &vault,
+        "CHORE",
+        "MEET",
+        "## Pomodoros\n- [ ] () — LATER\n",
+    );
+    assert_landing_retype(
+        &vault,
+        &day_file,
+        &config,
+        "^love:dinner=chore",
+        "2026-11-01 09:02:00",
+        true,
+        "(**0905-0930** [off:: 25m])",
+        "(**0905-0930** [off:: 25m]) — CHORE",
+        "CHORE",
+        true,
+    );
+}
+
+#[test]
+fn landing_retype_running_lineup_add_restamps_and_dry_run() {
+    let temp = TempDir::new("bob-cli-pomodoro-clock-landing-lineup");
+    let vault = temp.path().join("vault");
+    let (config, day_file) = landing_retype_vault(
+        temp.path(),
+        &vault,
+        "MEET",
+        "CHORE",
+        concat!("## Pomodoros\n", "- [ ] (**0900-0925** [t:: 25m]) — MEET\n",),
+    );
+    let json = assert_landing_retype(
+        &vault,
+        &day_file,
+        &config,
+        "^love:dinner#meet",
+        "2026-11-01 09:05:00",
+        true,
+        "0900-0925",
+        "(**0900-0925** [off:: 25m]) — MEET",
+        "MEET",
+        false,
+    );
+    assert!(json.get("pomodoro_start").is_none(), "{json}");
+}
+
+#[test]
+fn landing_retype_a10_can_restore_the_work_clock_and_dry_run() {
+    let temp = TempDir::new("bob-cli-pomodoro-clock-landing-a10-work");
+    let vault = temp.path().join("vault");
+    let (config, day_file) = landing_retype_vault(
+        temp.path(),
+        &vault,
+        "MEET",
+        "MEET",
+        "## Pomodoros\n- [ ] () — LATER\n",
+    );
+    assert_landing_retype(
+        &vault,
+        &day_file,
+        &config,
+        "^love:dinner=chore",
+        "2026-11-01 09:02:00",
+        false,
+        "(**0905-0930** [t:: 25m])",
+        "(**0905-0930** [t:: 25m]) — CHORE",
+        "CHORE",
+        true,
+    );
+}
+
+#[test]
+fn landing_retype_start_preserves_the_event_run_clock_and_dry_run() {
+    let temp = TempDir::new("bob-cli-pomodoro-clock-landing-event-run");
+    let vault = temp.path().join("vault");
+    let (config, day_file) = landing_retype_vault(
+        temp.path(),
+        &vault,
+        "CHORE",
+        "CHORE",
+        concat!(
+            "## Events\n",
+            "- [ ] #task **1200-1300** Lunch with Kelly #off ^lunch\n",
+            "\n## Pomodoros\n",
+            "- [ ] () — MEET\n",
+            "  - [[#^lunch]]\n",
+        ),
+    );
+    let json = assert_landing_retype(
+        &vault,
+        &day_file,
+        &config,
+        "^love:dinner=meet",
+        "2026-11-01 11:55:00",
+        true,
+        "(**1155-1220** [off:: 25m])",
+        "(**1155-1220** [off:: 25m]) — MEET",
+        "MEET",
+        true,
+    );
+    assert_eq!(
+        json["pomodoro_start"]["event_run"]["time_range"], "1200-1300",
+        "{json}"
+    );
+    let warnings = json["warnings"].as_array().cloned().unwrap_or_default();
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| warning["code"] != "pomodoro_clock_mixed"),
+        "{json}"
+    );
+}
+
+#[test]
+fn marker_retype_outside_a_landing_keeps_the_running_clock_until_close() {
+    let temp = TempDir::new("bob-cli-pomodoro-clock-marker-without-landing");
+    let vault = temp.path().join("vault");
+    let (config, day_file) = landing_retype_vault(
+        temp.path(),
+        &vault,
+        "MEET",
+        "CHORE",
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0925** [t:: 25m]) — MEET\n",
+            "  - [[love#^dinner]]\n",
+        ),
+    );
+    let json = assert_landing_retype(
+        &vault,
+        &day_file,
+        &config,
+        "@love+dinner #meet",
+        "2026-11-01 09:05:00",
+        false,
+        "0900-0925",
+        "(**0900-0925** [t:: 25m]) — MEET",
+        "MEET",
+        false,
+    );
+    assert!(json.get("pomodoro_start").is_none(), "{json}");
+}
+
 fn write_merge_clock_vault(
     vault: &Path,
     running_line: &str,

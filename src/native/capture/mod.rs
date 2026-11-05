@@ -213,6 +213,7 @@ pub(crate) fn restamp_named_pomodoro_clock(
         day_relative,
         entry_line,
         now,
+        false,
         &mut warnings,
     )?;
     planner.read_existing(day_file)

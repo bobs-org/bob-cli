@@ -843,6 +843,7 @@ pub(super) fn plan_pomodoro_merge_item(
         Path::new(&day_rel),
         entry_line,
         now,
+        false,
         warnings,
     )?;
     current = planner.read_existing(&day_file)?;

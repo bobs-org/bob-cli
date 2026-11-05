@@ -1131,7 +1131,10 @@ pub(super) fn pomodoro_split_type_candidates(
             crate::native::capture::CaptureBatchPlanner::default();
         let mut theme_ctx =
             crate::native::capture::CaptureTaskThemeContext::new(
-                bob_dir, today, None,
+                bob_dir,
+                today,
+                today.and_hms_opt(9, 0, 0).expect("valid time"),
+                None,
             );
         let mut counts = std::collections::BTreeMap::new();
         for link in numbered {

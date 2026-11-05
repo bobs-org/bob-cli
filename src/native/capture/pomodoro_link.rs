@@ -146,6 +146,7 @@ pub(super) fn plan_capture_with_pomodoro_link(
         day_relative,
         insertion.destination.line,
         now,
+        false,
         warnings,
     )?;
     // Restamping `[t::]` / `[off::]` changes the headline bytes, so
@@ -585,6 +586,7 @@ pub(super) fn plan_pomodoro_link_capture(
             day_relative,
             relocation.destination.line,
             now,
+            false,
             warnings,
         )?;
         if relocation.action
@@ -605,6 +607,7 @@ pub(super) fn plan_pomodoro_link_capture(
                     day_relative,
                     source_line,
                     now,
+                    false,
                     warnings,
                 )?;
             }
@@ -741,9 +744,18 @@ pub(super) fn plan_existing_task_pomodoro_link_item(
             Some(link.pomodoro_name.as_deref().unwrap_or_default()),
             None,
             link.creates_pomodoro,
+            link.pomodoro_start.is_some(),
             warnings,
         )?;
-        if let Some(applied) = applied {
+        if let Some(mut applied) = applied {
+            if let Some(clock) = applied.clock.take() {
+                super::meet_event_run::apply_landing_finish(
+                    clock,
+                    link.pomodoro_start.as_mut(),
+                    link.pomodoro_link_destination.as_mut(),
+                    warnings,
+                );
+            }
             link.task_line = applied.task_line;
             task_theme = applied.theme;
             if let Some(merge) = applied.merge {

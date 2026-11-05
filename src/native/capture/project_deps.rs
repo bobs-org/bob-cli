@@ -651,6 +651,7 @@ fn restamp_changed_or_retyped_timed_entries(
             day_relative,
             after_index + 1,
             now,
+            false,
             warnings,
         )?;
         refs.push(PomodoroBlockRef::at(

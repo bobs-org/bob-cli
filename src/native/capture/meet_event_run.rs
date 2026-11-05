@@ -519,6 +519,28 @@ impl MeetFinish {
     }
 }
 
+pub(super) fn apply_landing_finish(
+    finish: MeetFinish,
+    summary: Option<&mut PomodoroStartSummary>,
+    destination: Option<&mut PomodoroLinkEndpoint>,
+    warnings: &mut Vec<CaptureWarning>,
+) {
+    if let (Some(start), Some(end), Some(destination)) =
+        (finish.start.as_ref(), finish.end.as_ref(), destination)
+    {
+        destination.time_range = Some(format!("{start}-{end}"));
+    }
+    let added_warnings = match summary {
+        Some(summary) => finish.apply(summary),
+        None => finish.warnings,
+    };
+    for warning in added_warnings {
+        if !warnings.contains(&warning) {
+            warnings.push(warning);
+        }
+    }
+}
+
 /// Re-stamp the running session's clock key from its current counted
 /// lineup. Used after a link is added to or dropped from an already-timed
 /// session so the Now card stays honest. Does not rewrite the span.
@@ -529,8 +551,32 @@ pub(super) fn restamp_session_clock(
     day_relative: &Path,
     entry_line: usize,
     now: chrono::NaiveDateTime,
+    use_event_run: bool,
     warnings: &mut Vec<CaptureWarning>,
 ) -> Result<(), CaptureError> {
+    if let Some(finish) = restamp_session_clock_with_finish(
+        planner,
+        bob_dir,
+        day_file,
+        day_relative,
+        entry_line,
+        now,
+        use_event_run,
+    )? {
+        warnings.extend(finish.warnings);
+    }
+    Ok(())
+}
+
+pub(super) fn restamp_session_clock_with_finish(
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    day_file: &Path,
+    day_relative: &Path,
+    entry_line: usize,
+    now: chrono::NaiveDateTime,
+    use_event_run: bool,
+) -> Result<Option<MeetFinish>, CaptureError> {
     let contents = planner.read_existing(day_file)?;
     let entry_index = entry_line.saturating_sub(1);
     let headline = line_spans(&contents)
@@ -538,7 +584,7 @@ pub(super) fn restamp_session_clock(
         .map(|line| line.text)
         .unwrap_or("");
     if parse_adjustment_range(headline).is_none() {
-        return Ok(());
+        return Ok(None);
     }
     let spec = PomodoroStartSpec {
         raw: String::new(),
@@ -558,18 +604,17 @@ pub(super) fn restamp_session_clock(
                 numbers: None,
                 now,
                 vault: Some(&vault),
-                use_event_run: false,
+                use_event_run,
             },
         )?
     };
-    if let Some(finish) = finish {
-        let rewritten = finish.time_range.is_some();
-        warnings.extend(finish.warnings);
-        if rewritten {
-            planner.stage(day_file, updated)?;
-        }
+    let Some(finish) = finish else {
+        return Ok(None);
+    };
+    if finish.time_range.is_some() {
+        planner.stage(day_file, updated)?;
     }
-    Ok(())
+    Ok(Some(finish))
 }
 
 /// [`finalize_session_clock`] that hands back the final contents, taking

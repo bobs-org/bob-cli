@@ -933,7 +933,7 @@ pub(super) fn plan_project_note_item(
     {
         let mut current_destination = initial_destination;
         for task in &linked {
-            if let Some(applied) = task_theme_context.apply_new_task(
+            if let Some(mut applied) = task_theme_context.apply_new_task(
                 planner,
                 &new_target,
                 note_route,
@@ -943,8 +943,14 @@ pub(super) fn plan_project_note_item(
                 // A10: `place_project_task_links` above may have created
                 // this destination in the same run.
                 creates_pomodoro.unwrap_or(false),
+                false,
                 warnings,
             )? {
+                if let Some(clock) = applied.clock.take() {
+                    super::meet_event_run::apply_landing_finish(
+                        clock, None, None, warnings,
+                    );
+                }
                 if let Some(link) = task_links
                     .iter_mut()
                     .find(|link| link.block_id == task.block_id)
@@ -1177,17 +1183,24 @@ pub(super) fn plan_project_note_item(
                 if project_link_guard.is_none()
                     && let Some(dest_name) = current_destination.clone()
                     && let Some(selector) = pomodoro_name.as_deref()
-                    && let Some(applied) = task_theme_context.apply_new_task(
-                        planner,
-                        &new_target,
-                        note_route,
-                        &named.block_id,
-                        Some(dest_name.as_str()),
-                        Some(selector),
-                        insertion.creates_pomodoro,
-                        warnings,
-                    )?
+                    && let Some(mut applied) = task_theme_context
+                        .apply_new_task(
+                            planner,
+                            &new_target,
+                            note_route,
+                            &named.block_id,
+                            Some(dest_name.as_str()),
+                            Some(selector),
+                            insertion.creates_pomodoro,
+                            false,
+                            warnings,
+                        )?
                 {
+                    if let Some(clock) = applied.clock.take() {
+                        super::meet_event_run::apply_landing_finish(
+                            clock, None, None, warnings,
+                        );
+                    }
                     if let Some(link) = task_links
                         .iter_mut()
                         .find(|link| link.block_id == named.block_id)
@@ -1306,7 +1319,7 @@ pub(super) fn plan_project_note_item(
                         .as_ref()
                         .and_then(|dest| dest.name.clone())
                     && let Some(selector) = pomodoro_name.as_deref()
-                    && let Some(applied) = task_theme_context
+                    && let Some(mut applied) = task_theme_context
                         .apply_existing_task(
                             planner,
                             &new_target,
@@ -1316,9 +1329,18 @@ pub(super) fn plan_project_note_item(
                             Some(resolved_name.as_str()),
                             Some(selector),
                             nested_created,
+                            nested_result.pomodoro_start.is_some(),
                             warnings,
                         )?
                 {
+                    if let Some(clock) = applied.clock.take() {
+                        super::meet_event_run::apply_landing_finish(
+                            clock,
+                            nested_result.pomodoro_start.as_mut(),
+                            nested_result.pomodoro_link_destination.as_mut(),
+                            warnings,
+                        );
+                    }
                     nested_result.task_line = applied.task_line.clone();
                     if task_theme.is_none() {
                         task_theme = applied.theme;
@@ -3156,6 +3178,7 @@ mod tests {
             task_theme_context: CaptureTaskThemeContext::new(
                 &request.bob_dir,
                 today,
+                test_now(),
                 None,
             ),
             warnings: Vec::new(),
