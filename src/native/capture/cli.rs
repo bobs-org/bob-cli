@@ -271,7 +271,7 @@ Pomodoro sessions form a lifecycle: `=`/`=<X>` starts the next session, \
 running session, `++[N]`/`--[N]` shifts it, and `x` stops the running one. \
 Mnemonic: `=` starts now, `x` stops now, and `x=` records what already \
 happened. A whole-item `x=` token records past work (`x=3`, `x=build`, \
-`x=build@2 x=fix@3`) ending at the next five-minute boundary; stack members \
+`x=build2 x=fix3`) ending at the next five-minute boundary; stack members \
 fill earlier windows backward. It never changes a running session, and `!` \
 only permits trimming one edge of a closed row. Session operators may share one line when whitespace \
 separates them: `+2 x` means `+2`, blank line, `x`, and `x =` closes \

@@ -405,12 +405,13 @@ fn push_list_items<'a>(
     }
 }
 
-/// Merge spaced exact-name past tokens (`x=#"DEEP WORK"@3`) that
+/// Merge spaced exact-name past tokens (`x=3#"DEEP WORK"`) that
 /// `masked_tokens` split on whitespace. Only `x=` tokens with an
 /// unterminated literal in their first whitespace piece expand through the
-/// closing quote plus glued `@D`, `!`, and `=X` suffixes (up to the next
-/// whitespace), preserving absolute offsets. The following inline entry or
-/// next session token is never swallowed.
+/// closing quote plus glued `!` and `=X` suffixes (up to the next
+/// whitespace), preserving absolute offsets. A retired `@D` after the
+/// literal stays claimed with the token so it teaches its rewrite. The
+/// following inline entry or next session token is never swallowed.
 fn merge_past_literal_tokens<'a>(
     raw: &RawLine<'a>,
     mut tokens: Vec<Token<'a>>,

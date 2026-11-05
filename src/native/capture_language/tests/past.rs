@@ -25,19 +25,25 @@ fn past_token_table_reports_expected_specs() {
         ("x=3", 3, true, None, false, ""),
         ("x=3!", 3, true, None, true, ""),
         ("x=build", 5, false, Some("BUILD"), false, ""),
-        ("x=#build", 5, false, Some("BUILD"), false, ""),
         ("x=build=", 5, false, Some("BUILD"), false, ""),
-        ("x=2#fix", 2, true, Some("FIX"), false, ""),
-        ("x=fix@2", 2, true, Some("FIX"), false, ""),
-        ("x=2#fix=*3", 2, true, Some("FIX"), false, "*3"),
-        ("x=fix@2=*3", 2, true, Some("FIX"), false, "*3"),
+        ("x=fix3", 3, true, Some("FIX"), false, ""),
+        ("x=3fix", 3, true, Some("FIX"), false, ""),
+        ("x=build2", 2, true, Some("BUILD"), false, ""),
+        ("x=2fa", 2, true, Some("FA"), false, ""),
+        ("x=2#deep-work", 2, true, Some("DEEP-WORK"), false, ""),
+        ("x=3fix=*3", 3, true, Some("FIX"), false, "*3"),
+        ("x=fix3=*3", 3, true, Some("FIX"), false, "*3"),
+        ("x=3fix!", 3, true, Some("FIX"), true, ""),
+        ("x=fix3!=*3", 3, true, Some("FIX"), true, "*3"),
+        ("x=#deep-work", 5, false, Some("DEEP-WORK"), false, ""),
+        ("x=3#sase-v18", 3, true, Some("SASE-V18"), false, ""),
+        ("x=3#\"DEEP WORK\"", 3, true, Some("DEEP WORK"), false, ""),
         ("x==1!2", 5, false, None, false, "1!2"),
         ("x==!", 5, false, None, false, "!"),
         ("x=!", 5, false, None, true, ""),
         ("x=!=!", 5, false, None, true, "!"),
         ("x=3!=1", 3, true, None, true, "1"),
         ("x==0", 5, false, None, false, "0"),
-        ("x=#\"DEEP WORK\"@3", 3, true, Some("DEEP WORK"), false, ""),
     ];
     for (typed, blocks, blocks_typed, name, repair, close_raw) in rows {
         let parsed = execute(typed).unwrap_or_else(|e| panic!("{typed}: {e}"));
@@ -72,8 +78,8 @@ fn past_token_table_reports_expected_specs() {
 
 #[test]
 fn past_both_spellings_produce_equal_specs() {
-    let a = execute("x=2#fix=*3").expect("first");
-    let b = execute("x=fix@2=*3").expect("second");
+    let a = execute("x=3fix=*3").expect("first");
+    let b = execute("x=fix3=*3").expect("second");
     let sa = past_spec(&a);
     let sb = past_spec(&b);
     assert_ne!(sa.raw, sb.raw);
@@ -82,7 +88,7 @@ fn past_both_spellings_produce_equal_specs() {
     assert_eq!(sa.repair, sb.repair);
     assert_eq!(sa.close.raw, sb.close.raw);
     // Minutes are blocks * 5; stacks are single.
-    assert_eq!(sa.blocks * 5, 10);
+    assert_eq!(sa.blocks * 5, 15);
     assert_eq!(sa.stack, sb.stack);
 }
 
@@ -92,33 +98,48 @@ fn past_teaching_errors_name_token_and_rewrite() {
         ("x=3-1", "x=3"),
         ("x=-2", "x="),
         ("x=3-", "x=3"),
-        ("x=build@3-1", "x=build@3"),
-        ("x=3#fix@2", "x=3#fix"),
+        ("x=fix-", "x=fix"),
+        ("x=fix3-1", "x=fix3"),
+        ("x=3-1fix", "x=3fix"),
+        ("x=fix@3", "x=fix3"),
+        ("x=build@3", "x=build3"),
+        ("x=build@", "x=build3"),
+        ("x=build@0", "x=build1"),
+        ("x=@3", "x=3"),
+        ("x=@", "x=3"),
+        ("x=3@2", "x=3"),
+        ("x=3#fix", "x=3fix"),
+        ("x=#fix", "x=fix"),
+        ("x=#build", "x=build"),
+        ("x=2#build@4", "x=2build"),
+        ("x=3#fix@2", "x=3fix"),
+        ("x=2#\"DEEP WORK\"@4", "x=2#\"DEEP WORK\""),
+        ("x=#\"DEEP WORK\"@3", "x=3#\"DEEP WORK\""),
         ("x=~2", "x==~2"),
         ("x=3~2", "x=3=~2"),
         ("x=build~2", "x=build=~2"),
+        ("x=fix3~2", "x=fix3=~2"),
         ("x=*3", "x==*3"),
         ("x=0", "x=1"),
-        ("x=build@0", "x=build@1"),
+        ("x=fix0", "x=fix1"),
+        ("x=0fix", "x=1fix"),
+        ("x=0!=1", "x=1!=1"),
         ("x=1!2", "x==1!2"),
         ("x=!2", "x==!2"),
         ("x=fix!2", "x=fix=!2"),
         ("x=3x", "x=3#x"),
-        ("x=3build", "x=3#build"),
+        ("x=deep-work", "x=#deep-work"),
+        ("x=3deep-work", "x=3#deep-work"),
         // Rewrites come from the typed parts, never from the table rows.
         ("x=*5", "x==*5"),
         ("x=build*5", "x=build=*5"),
-        ("x=2#build@4", "x=2#build"),
-        ("x=2#build@4", "x=build@2"),
-        ("x=2#\"DEEP WORK\"@4", "x=#\"DEEP WORK\"@2"),
-        ("x=3@2", "x=3"),
-        ("x=fix@0", "x=fix@1"),
-        ("x=0#fix", "x=1#fix"),
-        ("x=0!=1", "x=1!=1"),
         ("x=3!5", "x==3!5"),
         ("x=build!2", "x=build!=!2"),
-        ("x=3#fix!2", "x=3#fix=!2"),
-        ("x=build@3~2", "x=build@3=~2"),
+        ("x=3fix!2", "x=3fix=!2"),
+        ("x=build@3~2", "x=build3=~2"),
+        ("x=fix3!2", "x=fix3=!2"),
+        ("x=3fix2", "x=3fix"),
+        ("x=3fix2", "x=fix2"),
         ("x=4-2=1", "x=4=1"),
     ];
     for (typed, rewrite) in rows {
@@ -161,10 +182,17 @@ fn past_unfinished_uses_existing_needs() {
         assert_eq!(edit.needs, vec![Need::PomodoroName], "{typed}");
         assert!(execute(typed).is_err(), "{typed}");
     }
-    let edit = editor("x=build@");
-    assert_eq!(edit.mode, EditorMode::Incomplete);
-    assert_eq!(edit.needs, vec![Need::PomodoroStartTiming]);
-    assert!(execute("x=build@").is_err());
+    // A dangling `@` is retired, not unfinished: timing glues to the name.
+    for typed in ["x=build@", "x=@"] {
+        let edit = editor(typed);
+        assert_eq!(edit.mode, EditorMode::PomodoroPast, "{typed}");
+        assert_eq!(edit.diagnostics.len(), 1, "{typed}");
+        assert_eq!(
+            edit.diagnostics[0].code, "invalid_pomodoro_past",
+            "{typed}"
+        );
+        assert!(execute(typed).is_err(), "{typed}");
+    }
     for typed in ["x=3=1,", "x==~"] {
         let edit = editor(typed);
         assert_eq!(edit.mode, EditorMode::Incomplete, "{typed}");
@@ -209,13 +237,14 @@ fn past_names_stop_at_operators_and_literals_hold_them() {
 
 #[test]
 fn past_names_follow_start_name_rules() {
-    // `-` is a name byte (the slug spelling of a space), never an offset.
+    // A bare name cannot contain `-`: it teaches the `#` spelling, while
+    // `#` names and literals keep their dashes.
     for (typed, name, blocks) in [
-        ("x=deep-work", "DEEP-WORK", 5),
         ("x=#deep-work", "DEEP-WORK", 5),
-        ("x=deep-work@2", "DEEP-WORK", 2),
         ("x=2#deep-work", "DEEP-WORK", 2),
+        ("x=3#deep-work", "DEEP-WORK", 3),
         ("x=#\"A-B\"", "A-B", 5),
+        ("x=3#\"DEEP WORK\"", "DEEP WORK", 3),
     ] {
         let parsed = execute(typed).unwrap_or_else(|e| panic!("{typed}: {e}"));
         let spec = past_spec(&parsed);
@@ -277,7 +306,7 @@ fn past_compatibility_breaks_parse_as_chains() {
 #[test]
 fn past_chain_ownership_and_stacks() {
     // Same-line chain tokens become consecutive items in one stack.
-    let draft = execute_draft("x=build@2 x=fix@3").expect("stack");
+    let draft = execute_draft("x=build2 x=fix3").expect("stack");
     assert_eq!(draft.items.len(), 2);
     let a = match &draft.items[0].parsed.kind {
         CaptureKind::PomodoroPast { spec } => spec,

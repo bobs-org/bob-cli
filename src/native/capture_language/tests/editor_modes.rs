@@ -2243,7 +2243,10 @@ fn editor_reports_pomodoro_past_mode() {
     assert_eq!(parsed.section.as_deref(), None);
     assert!(parsed.pomodoro_past.is_some());
     assert!(parsed.diagnostics.is_empty());
-    let named = editor("x=fix@2");
+    let named = editor("x=fix3");
     assert_eq!(named.mode, EditorMode::PomodoroPast);
     assert_eq!(named.section.as_deref(), Some("FIX"));
+    let led = editor("x=3fix");
+    assert_eq!(led.mode, EditorMode::PomodoroPast);
+    assert_eq!(led.section.as_deref(), Some("FIX"));
 }

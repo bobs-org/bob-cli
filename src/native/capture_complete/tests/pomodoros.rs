@@ -40,11 +40,13 @@ fn named_start_ledger() -> capture_pomodoros::PomodoroScan {
 fn pomodoro_past_name_fields_preserve_suffixes_and_chain_siblings() {
     for (marked, query, replaced, bare) in [
         ("x=|", "", "", true),
-        ("x=#|", "", "", false),
-        ("x=3#|", "", "", false),
+        ("x=#|", "", "#", true),
+        ("x=3#|", "", "#", true),
+        ("x=3|", "", "", true),
         ("x=fi|x!", "fi", "fix", true),
-        ("x=#fi|x=*3", "fi", "fix", false),
-        ("x=3#fi|x!=1!2", "fi", "fix", false),
+        ("x=3fi|x", "fi", "fix", true),
+        ("x=#fi|x=*3", "fi", "#fix", true),
+        ("x=3#fi|x!=1!2", "fi", "#fix", true),
         ("x=fi|x@2!=*3", "fi", "fix", true),
         ("x=fi|x~2", "fi", "fix", true),
         ("x=#\"DEEP |WORK\"@3!", "DEEP ", "\"DEEP WORK\"", false),
@@ -52,7 +54,7 @@ fn pomodoro_past_name_fields_preserve_suffixes_and_chain_siblings() {
         ("x=#\"FIX!=@|\"=1", "FIX!=@", "\"FIX!=@\"", false),
         ("x=#“CAFÉ”|@3", "CAFÉ", "“CAFÉ”", false),
         ("=3 x=fi|x@2 x=build", "fi", "fix", true),
-        ("x=build\n\nx=3#fi|x!", "fi", "fix", false),
+        ("x=build\n\nx=3#fi|x!", "fi", "#fix", true),
         ("  x=fi|x entry", "fi", "fix", true),
     ] {
         let cursor = marked.find('|').unwrap();
@@ -81,7 +83,6 @@ fn pomodoro_past_name_fields_preserve_suffixes_and_chain_siblings() {
         "x|=fix",
         "x=|3#fix",
         "x=3|#fix",
-        "x=3|",
         "x=fix!|",
         "x=fix@|3",
         "x=fix@3|",

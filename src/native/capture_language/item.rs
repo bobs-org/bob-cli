@@ -3329,11 +3329,12 @@ pub(crate) fn past_name_extent(text: &str) -> usize {
 }
 
 /// Byte length of the `x=` past token at the start of `text`, including a
-/// spaced exact-name literal through its closing quote plus glued `@D`,
-/// `!`, and `=X` suffixes. Returns `None` when `text` does not start with
-/// lowercase `x=`. Otherwise claims the token up to whitespace (or through
-/// the literal), even when malformed, so every `x=` prefix becomes a past
-/// token instead of prose.
+/// spaced exact-name literal through its closing quote plus glued count,
+/// `!`, and `=X` suffixes (a retired `@D` stays claimed so it teaches its
+/// rewrite). Returns `None` when `text` does not start with lowercase `x=`.
+/// Otherwise claims the token up to whitespace (or through the literal),
+/// even when malformed, so every `x=` prefix becomes a past token instead
+/// of prose.
 pub(crate) fn past_token_len(text: &str) -> Option<usize> {
     if !text.starts_with("x=") {
         return None;
@@ -3397,7 +3398,7 @@ pub(crate) enum EqualsToken {
     /// including `x=`, the `E` part, an optional repair `!`, and an optional
     /// second `=` plus its close selection. The length runs through a quoted
     /// exact-name literal's closing quote (spaces inside included) plus any
-    /// glued `@D`, `!`, and `=X` suffixes. Every `x=` prefix is claimed,
+    /// glued count, `!`, and `=X` suffixes. Every `x=` prefix is claimed,
     /// valid or not, so the whole-item parser reports `invalid_pomodoro_past`
     /// instead of falling through to prose. Detailed `E` validation lives in
     /// the shared past lexer used by both execution and editor adapters.

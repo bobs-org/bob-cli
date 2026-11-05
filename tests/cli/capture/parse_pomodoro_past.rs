@@ -62,10 +62,10 @@ fn past_parse_reports_full_contract_and_grammar_13() {
     assert!(human.contains("15m"), "{human}");
 
     // Named with close selection, repair, and stack of two.
-    let two = parse("x=fix@3!=*3");
+    let two = parse("x=fix3!=*3");
     assert_eq!(two["mode"], "pomodoro_past");
     assert_eq!(two["section"], "FIX");
-    assert_eq!(two["pomodoro_past"]["raw"], "x=fix@3!=*3");
+    assert_eq!(two["pomodoro_past"]["raw"], "x=fix3!=*3");
     assert_eq!(two["pomodoro_past"]["name"], "FIX");
     assert_eq!(two["pomodoro_past"]["blocks"], 3);
     assert_eq!(two["pomodoro_past"]["minutes"], 15);
@@ -74,7 +74,8 @@ fn past_parse_reports_full_contract_and_grammar_13() {
         two["pomodoro_past"]["close"]["park"],
         serde_json::json!([3])
     );
-    // Both `pomodoro_past` spans: `x=` and `@3`, plus name/repair/close.
+    // Both `pomodoro_past` spans: `x=` and the trailing `3`, plus
+    // name/repair/close.
     let kinds: Vec<&str> = two["spans"]
         .as_array()
         .unwrap()
@@ -90,21 +91,21 @@ fn past_parse_reports_full_contract_and_grammar_13() {
     ] {
         assert!(kinds.contains(&kind), "{kinds:?}");
     }
-    let human = parse_human("x=fix@3!=*3");
+    let human = parse_human("x=fix3!=*3");
     assert!(human.contains("past"), "{human}");
-    assert!(human.contains("x=fix@3!=*3"), "{human}");
+    assert!(human.contains("x=fix3!=*3"), "{human}");
     assert!(human.contains("FIX"), "{human}");
     assert!(human.contains("repair"), "{human}");
 
     // Both spellings give byte-identical vault semantics (raw differs).
-    let a = parse("x=2#fix=*3");
-    let b = parse("x=fix@2=*3");
+    let a = parse("x=3fix=*3");
+    let b = parse("x=fix3=*3");
     assert_eq!(a["pomodoro_past"]["blocks"], b["pomodoro_past"]["blocks"]);
     assert_eq!(a["pomodoro_past"]["name"], b["pomodoro_past"]["name"]);
     assert_ne!(a["pomodoro_past"]["raw"], b["pomodoro_past"]["raw"]);
 
     // Stacks across one line.
-    let stack = parse("x=build@2 x=fix@3");
+    let stack = parse("x=build2 x=fix3");
     assert_eq!(stack["items"].as_array().unwrap().len(), 2);
     assert_eq!(
         stack["items"][0]["pomodoro_past"]["stack"],
@@ -129,10 +130,20 @@ fn past_parse_teaching_errors_and_incomplete() {
         ("x=3-1", "x=3"),
         ("x=-2", "x="),
         ("x=3-", "x=3"),
-        ("x=3#fix@2", "x=3#fix"),
+        ("x=fix-", "x=fix"),
+        ("x=fix3-1", "x=fix3"),
+        ("x=3-1fix", "x=3fix"),
+        ("x=fix@3", "x=fix3"),
+        ("x=build@", "x=build3"),
+        ("x=3#fix", "x=3fix"),
+        ("x=#fix", "x=fix"),
+        ("x=3fix2", "x=3fix"),
+        ("x=3fix2", "x=fix2"),
+        ("x=deep-work", "x=#deep-work"),
         ("x=~2", "x==~2"),
         ("x=*3", "x==*3"),
         ("x=0", "x=1"),
+        ("x=fix0", "x=fix1"),
         ("x=1!2", "x==1!2"),
         ("x=fix!2", "x=fix=!2"),
         ("x=3x", "x=3#"),
@@ -153,7 +164,7 @@ fn past_parse_teaching_errors_and_incomplete() {
         assert!(message.contains(typed), "{typed}: {message}");
         assert!(message.contains(rewrite), "{typed}: {message}");
     }
-    for typed in ["x=#", "x=3#", "x=build@"] {
+    for typed in ["x=#", "x=3#"] {
         let value = parse(typed);
         assert_eq!(value["mode"], "incomplete", "{typed}");
         assert!(!value["needs"].as_array().unwrap().is_empty(), "{typed}");

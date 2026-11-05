@@ -162,7 +162,7 @@ fn record_two_member_stack_windows_and_identical_spellings() {
         &vault,
         &day,
         "2026-11-04 09:21:00",
-        &["x=build@2 x=fix@3"],
+        &["x=build2 x=fix3"],
     );
     let items = record_items(&value);
     assert_eq!(items.len(), 2);
@@ -204,8 +204,8 @@ fn record_two_member_stack_windows_and_identical_spellings() {
     // use named FIX with parked task 3 on quiet ledgers with a task link.
     // Minimal: both spellings parse to same blocks/name; check JSON blocks/name
     // and that vault writes are byte-identical for the same ledger.
-    let ja = run_record_json(&va, &da, "2026-11-04 09:21:00", &["x=2#fix"]);
-    let jb = run_record_json(&vb, &db, "2026-11-04 09:21:00", &["x=fix@2"]);
+    let ja = run_record_json(&va, &da, "2026-11-04 09:21:00", &["x=2fix"]);
+    let jb = run_record_json(&vb, &db, "2026-11-04 09:21:00", &["x=fix2"]);
     assert_eq!(ja["pomodoro_past"]["blocks"], jb["pomodoro_past"]["blocks"]);
     assert_eq!(ja["pomodoro_past"]["name"], jb["pomodoro_past"]["name"]);
     let aa = fs::read_to_string(&da).expect("read a");
@@ -291,7 +291,7 @@ fn record_overlaps_and_repair_refuse_and_touching_ok() {
         "bob-cli-past-touch",
         "## Pomodoros\n- [ ] (**0925-0950** [t:: 25m]) — WORK\n- [ ] () — BUILD\n",
     );
-    let v = run_record_json(&v2, &d2, "2026-11-04 09:21:00", &["x=build@2"]);
+    let v = run_record_json(&v2, &d2, "2026-11-04 09:21:00", &["x=build2"]);
     assert_eq!(v["kind"], "pomodoro_past");
     let after = fs::read_to_string(&d2).unwrap();
     // Record filed before running, running bytes preserved.
@@ -384,7 +384,7 @@ fn record_blank_line_stack_and_broken_stack() {
         &vault,
         &day,
         "2026-11-04 09:21:00",
-        &["x=build@2\n\nx=fix@3"],
+        &["x=build2\n\nx=fix3"],
     );
     let items = record_items(&v);
     assert_eq!(items.len(), 2, "{v}");
@@ -393,7 +393,7 @@ fn record_blank_line_stack_and_broken_stack() {
         "bob-cli-past-broken",
         "## Pomodoros\n- [ ] () — BUILD\n- [ ] () — FIX\n",
     );
-    // `x=build@2 =` should record first then start next (no error for past part).
+    // `x=build2 =` should record first then start next (no error for past part).
     let out = bob_command()
         .env("BOB_NOW", "2026-11-04 09:21:00")
         .env("BOB_DAY_FILE", &d2)
@@ -403,7 +403,7 @@ fn record_blank_line_stack_and_broken_stack() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("x=build@2")
+        .arg("x=build2")
         .arg("=")
         .output()
         .expect("broken stack");
@@ -417,8 +417,7 @@ fn record_chronological_insertion_and_block_roles() {
         "bob-cli-past-chrono",
         "## Pomodoros\n- [x] (**0700-0725** [t:: 25m]) — EARLY\n- [x] (**0830-0855** [t:: 25m]) — MID\n- [ ] () — BUILD\n- [ ] () — FIX\n",
     );
-    let v =
-        run_record_json(&vault, &day, "2026-11-04 09:21:00", &["x=build@2"]);
+    let v = run_record_json(&vault, &day, "2026-11-04 09:21:00", &["x=build2"]);
     assert_eq!(v["kind"], "pomodoro_past");
     let after = fs::read_to_string(&day).unwrap();
     // New 0915-0925 filed after MID (0830) and before any later completed.
@@ -451,7 +450,7 @@ fn record_later_member_conflict_aborts_batch() {
         &vault,
         &day,
         "2026-11-04 09:21:00",
-        &["x=build@2 x=fix@3"],
+        &["x=build2 x=fix3"],
     );
     assert!(err.contains("PLAN") || err.contains("overlap"), "{err}");
     let after = fs::read_to_string(&day).unwrap();
@@ -554,7 +553,7 @@ fn guard_erase_and_split_refuse_even_with_repair() {
         &v2,
         &d2,
         "2026-11-04 09:21:00",
-        &["x=build@2!"],
+        &["x=build2!"],
     );
     assert!(err.contains("would split PLAN"), "{err}");
     assert!(err.contains("only trims"), "{err}");
@@ -562,7 +561,7 @@ fn guard_erase_and_split_refuse_even_with_repair() {
 
 #[test]
 fn guard_whole_stack_trims_where_one_member_would_split() {
-    // Taken alone `x=build@2!` splits PLAN 0855-0920; as part of the stack
+    // Taken alone `x=build2!` splits PLAN 0855-0920; as part of the stack
     // it only trims PLAN to 0855-0900. Minutes are conserved: PLAN loses
     // 20m (25m → 5m) and the stack records 25m (10m + 15m).
     let (_t, vault, day) = basic_vault(
@@ -573,7 +572,7 @@ fn guard_whole_stack_trims_where_one_member_would_split() {
         &vault,
         &day,
         "2026-11-04 09:21:00",
-        &["x=build@2! x=fix@3!"],
+        &["x=build2! x=fix3!"],
     );
     let items = record_items(&value);
     assert_eq!(items.len(), 2, "{value}");
@@ -619,7 +618,7 @@ fn guard_whole_stack_trims_where_one_member_would_split() {
         &hv,
         &hd,
         "2026-11-04 09:21:00",
-        &["x=build@2! x=fix@3!"],
+        &["x=build2! x=fix3!"],
     );
     assert!(human.contains("recorded BUILD 0900-0910"), "{human}");
     assert!(human.contains("recorded FIX 0910-0925"), "{human}");
@@ -638,7 +637,7 @@ fn guard_off_clock_victims_keep_off_and_meet_is_calendar() {
         &vault,
         &day,
         "2026-11-04 09:21:00",
-        &["x=build@2! x=fix@3!"],
+        &["x=build2! x=fix3!"],
     );
     let items = record_items(&value);
     let trims = items[0]["pomodoro_past"]["trims"]
@@ -680,14 +679,14 @@ fn guard_mixed_needed_and_unneeded_repair_lists_every_member() {
         "bob-cli-past-mixed",
         "## Pomodoros\n- [x] (**0855-0920** [t:: 25m]) — PLAN\n- [ ] () — BUILD\n- [ ] () — FIX\n",
     );
-    // Stack x=build@2 x=fix@1!: total 3 blocks, S=0910, T=0925.
+    // Stack x=build2 x=fix1!: total 3 blocks, S=0910, T=0925.
     // build@2 = 0910-0920 overlaps PLAN 0855-0920 (needs !);
     // fix@1! = 0920-0925 touches PLAN at 0920 (unneeded !).
     let err = run_record_expect_error(
         &vault,
         &day,
         "2026-11-04 09:21:00",
-        &["x=build@2 x=fix@1!"],
+        &["x=build2 x=fix1!"],
     );
     assert!(err.contains("add !"), "{err}");
     assert!(err.contains("takes no time from another session"), "{err}");
@@ -695,7 +694,7 @@ fn guard_mixed_needed_and_unneeded_repair_lists_every_member() {
 
 #[test]
 fn guard_composition_close_then_trim() {
-    // `x x=fix@3!` while WORK runs: close WORK, then trim it.
+    // `x x=fix3!` while WORK runs: close WORK, then trim it.
     let (_t, vault, day) = basic_vault(
         "bob-cli-past-compose",
         "## Pomodoros\n- [ ] (**0900-0925** [t:: 25m]) — WORK\n- [ ] () — FIX\n",
@@ -710,7 +709,7 @@ fn guard_composition_close_then_trim() {
         .arg("json")
         .arg("--")
         .arg("x")
-        .arg("x=fix@3!")
+        .arg("x=fix3!")
         .output()
         .expect("compose");
     assert_success(&output);
@@ -735,17 +734,13 @@ fn guard_user_five_examples_end_to_end() {
         serde_json::json!({"start": "0900", "end": "0925", "minutes": 25})
     );
     assert_eq!(v1["pomodoro_past"]["closed_at"], "0921");
-    // 2. `x=build@2 x=fix@3` stacks back to back.
+    // 2. `x=build2 x=fix3` stacks back to back.
     let (_b, vb, db) = basic_vault(
         "bob-cli-past-ex2",
         "## Pomodoros\n- [ ] () — BUILD\n- [ ] () — FIX\n",
     );
-    let v2 = run_record_json(
-        &vb,
-        &db,
-        "2026-11-04 09:21:00",
-        &["x=build@2 x=fix@3"],
-    );
+    let v2 =
+        run_record_json(&vb, &db, "2026-11-04 09:21:00", &["x=build2 x=fix3"]);
     let items = record_items(&v2);
     assert_eq!(items[0]["pomodoro_past"]["window"]["start"], "0900");
     assert_eq!(items[1]["pomodoro_past"]["window"]["start"], "0910");
@@ -754,8 +749,8 @@ fn guard_user_five_examples_end_to_end() {
         basic_vault("bob-cli-past-ex3a", "## Pomodoros\n- [ ] () — FIX\n");
     let (_d, vd, dd) =
         basic_vault("bob-cli-past-ex3b", "## Pomodoros\n- [ ] () — FIX\n");
-    let _ = run_record_json(&vc, &dc, "2026-11-04 09:21:00", &["x=2#fix"]);
-    let _ = run_record_json(&vd, &dd, "2026-11-04 09:21:00", &["x=fix@2"]);
+    let _ = run_record_json(&vc, &dc, "2026-11-04 09:21:00", &["x=2fix"]);
+    let _ = run_record_json(&vd, &dd, "2026-11-04 09:21:00", &["x=fix2"]);
     assert_eq!(
         fs::read_to_string(&dc).unwrap(),
         fs::read_to_string(&dd).unwrap()
@@ -902,7 +897,7 @@ fn record_earlier_member_classifies_event_tasks_at_its_own_end() {
         &vault,
         &day,
         "2026-11-04 09:21:00",
-        &["x=build@2=! x=fix@3"],
+        &["x=build2=! x=fix3"],
     );
     let items = record_items(&value);
     let build = &items[0]["pomodoro_past"];

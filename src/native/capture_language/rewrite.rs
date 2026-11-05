@@ -369,9 +369,12 @@ fn expand_hash_alias(
         }
         CompletionContext::Section
         | CompletionContext::PomodoroName
-        | CompletionContext::PomodoroPastName
         | CompletionContext::PomodoroSplitType
         | CompletionContext::PomodoroMergeDest => field.replacement.0 == cursor,
+        CompletionContext::PomodoroPastName => {
+            field.replacement.0 == cursor
+                || field.replacement == (start, cursor)
+        }
         CompletionContext::PomodoroStartName => {
             field.replacement.0 == cursor
                 || field.replacement == (start, cursor)

@@ -1041,7 +1041,7 @@ fn editor_spans_a_bare_named_start_without_a_hash_gap() {
 
 #[test]
 fn editor_spans_cover_past_tokens() {
-    let parse = editor("x=fix@3!=*3");
+    let parse = editor("x=fix3!=*3");
     assert_eq!(parse.mode, EditorMode::PomodoroPast);
     let kinds: Vec<SpanKind> = span_kinds(&parse);
     for kind in [

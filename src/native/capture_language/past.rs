@@ -5,9 +5,10 @@
 //! The token split respects quoted exact-name literals: `!` and `=` inside
 //! quotes are name content, never repair/close delimiters.
 
-use super::bare_name::can_spell_bare;
+use super::bare_name::{bare_start_name_len, can_spell_bare};
 use super::markers::{
-    pomodoro_named_start_name_error, POMODORO_START_OVERFLOW_ERROR,
+    pomodoro_glued_timing_error, pomodoro_named_start_name_error,
+    retired_start_spelling_error, POMODORO_START_OVERFLOW_ERROR,
 };
 use super::pomodoro_literal::{
     canonicalize_exact_name, lex_exact_name_after_hash, opens_exact_name,
@@ -143,18 +144,18 @@ pub(crate) enum PastEOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PastNeed {
     Name,
-    Timing,
 }
 
 /// Validate the `E` part of a past token. `raw_token` is the full past token
 /// (named in every teaching error); `split` is its [`split_past_token`]
 /// result. Ranges are relative to the token start.
 ///
-/// `E` is scanned left to right: an optional count `D`, then a `#` name or
-/// literal (or, with no `D`, a bare name), then an optional `@D` count.
-/// Names follow the `=name` rules, so `-` is a name byte; a dash is an offset
-/// only where a count ends. Every rewrite is built from the typed parts and
-/// keeps the typed repair `!` and close part.
+/// `E` is scanned left to right: an optional leading count `N`, then a `#`
+/// name or literal or a bare name with an optional trailing count `N`
+/// (`x=3fix`, `x=fix3`). `@D` is retired: timing glues to the name
+/// (`x=fix@3` teaches `x=fix3`). A dash after a bare name starts a
+/// teaching error, never a name byte. Every rewrite is built from the typed
+/// parts and keeps the typed repair `!` and close part.
 pub(crate) fn validate_past_e(
     raw_token: &str,
     split: &PastSplit,
@@ -180,53 +181,95 @@ pub(crate) fn validate_past_e(
             "`{raw_token}` records one past session; it can't split (`=/`) or merge (`=*`)"
         ));
     }
-    // Leading `D` block count.
+    // Leading `N` block count (past takes no offset).
     let d_end = e.bytes().take_while(u8::is_ascii_digit).count();
     let d_text = &e[..d_end];
     let mut pos = d_end;
-    // `#` name or literal, or (with no `D`) a bare name.
+    // `#` name or literal, or a bare name with an optional trailing count.
     let mut name: Option<PastName> = None;
+    let mut trailing: Option<(usize, usize)> = None;
     if e[pos..].starts_with('#') {
         match lex_past_hash_name(raw_token, e, pos) {
             Ok(lexed) => {
+                // Retire `#` before names a bare spelling can express.
+                if !lexed.is_literal {
+                    let typed = &e[lexed.start..lexed.end];
+                    if can_spell_bare(typed) {
+                        let rewrite =
+                            format!("x={d_text}{typed}{}", past_suffix(split));
+                        return PastEOutcome::Invalid(
+                            retired_start_spelling_error(
+                                raw_token,
+                                "`#` is only for names a bare spelling cannot express",
+                                &rewrite,
+                            ),
+                        );
+                    }
+                }
                 pos = lexed.end;
                 name = Some(lexed);
             }
             Err(outcome) => return outcome,
         }
-    } else if d_end == 0 && super::bare_name::bare_start_name_len(e).is_some() {
-        let len = past_e_name_extent(e);
-        let text = &e[..len];
-        if !is_pomodoro_selector_component(text) {
+    } else if let Some(name_len) = bare_start_name_len(&e[pos..]) {
+        // Reject bytes `=name` rejects before peeling the trailing count,
+        // so `x=a$b` and `x=build#2` keep the start-family wording.
+        let full = past_e_name_extent(&e[pos..]);
+        let full_text = &e[pos..pos + full];
+        if !is_pomodoro_selector_component(full_text) {
             return PastEOutcome::Invalid(pomodoro_named_start_name_error(
-                text, raw_token,
+                full_text, raw_token,
             ));
         }
+        let text = &e[pos..pos + name_len];
         name = Some(PastName {
             canonical: text.to_ascii_uppercase(),
             is_literal: false,
-            start: 0,
-            end: len,
+            start: pos,
+            end: pos + name_len,
         });
-        pos = len;
+        pos += name_len;
+        // A trailing `N` block count glues to the bare name.
+        let digits = e[pos..].bytes().take_while(u8::is_ascii_digit).count();
+        if digits > 0 {
+            trailing = Some((pos, pos + digits));
+            pos += digits;
+        }
     }
-    // `@D` block count.
-    let mut at: Option<(usize, usize)> = None;
+    // Retired `@D`: timing glues to the name now.
     if let Some(after_at) = e[pos..].strip_prefix('@') {
-        if after_at.is_empty() {
-            return PastEOutcome::Incomplete {
-                need: PastNeed::Timing,
-                message: format!("`{raw_token}` needs a block count after `@`"),
-            };
-        }
         let digits = after_at.bytes().take_while(u8::is_ascii_digit).count();
-        if digits == 0 {
-            return PastEOutcome::Invalid(format!(
-                "`{raw_token}` needs a block count after `@`"
-            ));
-        }
-        at = Some((pos + 1, pos + 1 + digits));
-        pos += 1 + digits;
+        let at_count = if digits == 0 {
+            "3"
+        } else if after_at[..digits].trim_start_matches('0').is_empty() {
+            "1"
+        } else {
+            &after_at[..digits]
+        };
+        let base = &e[..pos];
+        // A `~`/`*` tail after the retired `@D` moves to the close part.
+        let tail = &after_at[digits..];
+        let moved = (!tail.is_empty()).then_some(format!("={tail}"));
+        let glued = if d_end > 0 {
+            // A leading count already sets the blocks: drop the `@D`.
+            base.to_string()
+        } else if let Some(lexed) = name.as_ref().filter(|n| n.is_literal) {
+            // Literals take timing before the `#`.
+            let raw = &e[lexed.start..lexed.end];
+            format!("{at_count}#{raw}")
+        } else {
+            format!("{base}{at_count}")
+        };
+        let rewrite = format!(
+            "x={glued}{}{}",
+            moved.unwrap_or_default(),
+            past_suffix(split)
+        );
+        return PastEOutcome::Invalid(retired_start_spelling_error(
+            raw_token,
+            "`@` no longer separates a name from its timing",
+            &rewrite,
+        ));
     }
     // Anything left in `E` is a teaching error.
     let rest = &e[pos..];
@@ -237,43 +280,29 @@ pub(crate) fn validate_past_e(
             &e[..pos],
             rest,
             PastRestContext {
-                has_count: d_end > 0,
+                has_leading: d_end > 0,
                 has_name: name.is_some(),
-                has_at: at.is_some(),
+                name_is_bare: name.as_ref().is_some_and(|n| !n.is_literal),
             },
         ));
     }
     let suffix = past_suffix(split);
-    if at.is_some() && (d_end > 0 || name.is_none()) {
-        if d_end == 0 {
-            // `x=@3`: a count needs a name before `@`.
-            return PastEOutcome::Invalid(format!(
-                "`{raw_token}` is not a past Pomodoro"
-            ));
-        }
-        // `x=3#fix@2` or `x=3@2`: blocks given twice.
-        let rewrite = match &name {
-            Some(lexed) => {
-                let hash_spelling = &e[d_end..lexed.end];
-                let typed = &e[lexed.start..lexed.end];
-                let at_spelling = if !lexed.is_literal && can_spell_bare(typed)
-                {
-                    typed
-                } else {
-                    hash_spelling
-                };
-                format!(
-                    "`x={d_text}{hash_spelling}{suffix}` or `x={at_spelling}@{d_text}{suffix}`"
-                )
-            }
-            None => format!("`x={d_text}{suffix}`"),
-        };
+    if d_end > 0
+        && let Some((trail_start, trail_end)) = trailing
+    {
+        // `x=3fix2`: blocks given twice.
+        let raw_name = name
+            .as_ref()
+            .map(|lexed| &e[lexed.start..lexed.end])
+            .unwrap_or("");
+        let leading = &e[..d_end];
+        let trailing_text = &e[trail_start..trail_end];
         return PastEOutcome::Invalid(format!(
-            "give the block count once: `{raw_token}` counts twice, write {rewrite}"
+            "`{raw_token}` gives the timing twice; keep one: `x={leading}{raw_name}{suffix}` or `x={raw_name}{trailing_text}{suffix}`"
         ));
     }
-    // Effective block count: `@D` or the leading `D`.
-    let count_range = at.or((d_end > 0).then_some((0, d_end)));
+    // Effective block count: the leading `N` or the trailing `N`.
+    let count_range = trailing.or((d_end > 0).then_some((0, d_end)));
     let blocks = match count_range {
         None => 5,
         Some((start, end)) => match e[start..end].parse::<u64>() {
@@ -387,12 +416,12 @@ fn past_e_name_extent(text: &str) -> usize {
 /// What `E` held before its unparsed rest.
 #[derive(Clone, Copy)]
 struct PastRestContext {
-    has_count: bool,
+    has_leading: bool,
     has_name: bool,
-    has_at: bool,
+    name_is_bare: bool,
 }
 
-/// Teaching error for text left in `E` after its count/name/`@D` prefix
+/// Teaching error for text left in `E` after its count/name prefix
 /// (`parsed`). Close-part text moves after a second `=`.
 fn past_rest_error(
     raw_token: &str,
@@ -403,8 +432,30 @@ fn past_rest_error(
 ) -> String {
     let suffix = past_suffix(split);
     if let Some(after_dash) = rest.strip_prefix('-') {
-        // A dash after a count (or at the start) is an offset: drop it and
-        // its digits.
+        // A dash continued into letters is a bare-name spelling that must
+        // use `#`; any other dash is an offset, which past work never takes.
+        if context.name_is_bare
+            && after_dash
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphabetic)
+        {
+            let leading = if context.has_leading {
+                parsed
+                    .bytes()
+                    .take_while(u8::is_ascii_digit)
+                    .count()
+                    .min(parsed.len())
+            } else {
+                0
+            };
+            let (leading_text, name_text) = parsed.split_at(leading);
+            let full_name = format!("{name_text}-{after_dash}");
+            if is_pomodoro_selector_component(&full_name) {
+                let hash_form = format!("x={leading_text}#{full_name}");
+                return pomodoro_glued_timing_error(raw_token, &hash_form);
+            }
+        }
         let kept = after_dash.trim_start_matches(|c: char| c.is_ascii_digit());
         let rewrite = format!("x={parsed}{kept}{suffix}");
         return format!(
@@ -452,19 +503,13 @@ fn past_rest_error(
             "write the task selection after a second `=`: `{raw_token}` selects tasks, write `{rewrite}`{repair_hint}"
         );
     }
-    if context.has_count
+    if context.has_leading
         && !context.has_name
-        && !context.has_at
         && rest.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
     {
         let rewrite = format!("x={parsed}#{rest}{suffix}");
         return format!(
             "write `#` between the count and the name: `{raw_token}` counts blocks, write `{rewrite}`"
-        );
-    }
-    if context.has_at {
-        return format!(
-            "`{raw_token}` is not a past Pomodoro; check the `@` block count"
         );
     }
     format!("`{raw_token}` is not a past Pomodoro")

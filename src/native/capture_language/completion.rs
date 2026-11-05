@@ -1057,7 +1057,10 @@ fn pomodoro_start_name_field(
 }
 
 /// The name in `x=<E>` owns only its own bytes, including a quoted
-/// literal but excluding counts, repair, timing, and close selections.
+/// literal but excluding counts, repair, timing, and close selections. A
+/// leading count still leaves a name field (`x=3bu|`), and a plain `#`
+/// name keeps its `#` in the replacement so accepting a bare-spellable
+/// row drops it (`x=#bo|` plus `robot` gives `x=robot`).
 fn pomodoro_past_name_field(
     item: &CaptureItem<'_>,
     cursor: usize,
@@ -1069,42 +1072,78 @@ fn pomodoro_past_name_field(
     let token_start = parent.raw.start + parent.raw.text.len() - text.len();
     let after_eq = &token[2..];
     let digits = after_eq.bytes().take_while(u8::is_ascii_digit).count();
-    let hash = after_eq[digits..].starts_with('#');
-    if digits > 0 && !hash {
-        return None;
-    }
-    let name_offset = 2 + digits + usize::from(hash);
-    let name = &token[name_offset..];
-    let literal = hash && super::pomodoro_literal::opens_exact_name(name);
-    let name_len = if literal {
-        super::pomodoro_literal::lex_exact_name_after_hash(name, name.len())?
+    let after_digits = &after_eq[digits..];
+    if let Some(after_hash) = after_digits.strip_prefix('#') {
+        let literal = super::pomodoro_literal::opens_exact_name(after_hash);
+        let name_len = if literal {
+            super::pomodoro_literal::lex_exact_name_after_hash(
+                after_hash,
+                after_hash.len(),
+            )?
             .literal_len
-    } else {
-        super::item::past_name_extent(name)
-    };
-    if !hash
-        && !name.is_empty()
-        && super::bare_name::bare_start_name_len(&name[..name_len]).is_none()
-    {
-        return None;
+        } else {
+            let extent = super::item::past_name_extent(after_hash);
+            after_hash[..extent].find('*').unwrap_or(extent)
+        };
+        // A plain `#` name keeps its `#` in the replacement unless it is
+        // a quoted literal, which keeps its typed delimiter instead.
+        let hash_len = usize::from(!literal);
+        let start = token_start + 2 + digits + usize::from(literal);
+        let end = start + hash_len + name_len;
+        if cursor < start || cursor > end {
+            return None;
+        }
+        // A cursor on the `#` byte itself yields nothing.
+        if !literal && cursor == start {
+            return None;
+        }
+        let query = if literal {
+            exact_name_query(
+                &after_hash[..name_len],
+                cursor - start - hash_len,
+                true,
+            )
+        } else {
+            after_hash.get(..cursor - start - hash_len)?.to_string()
+        };
+        return Some(CompletionField {
+            context: CompletionContext::PomodoroPastName,
+            route: None,
+            block_id: None,
+            query,
+            replacement: (start, end),
+            bare_name: !literal,
+        });
     }
-    let start = token_start + name_offset;
+    // A bare name may follow a leading count (`x=3bu|`); the field covers
+    // the bare name only, never the trailing count.
+    if after_digits.is_empty() {
+        let start = token_start + 2 + digits;
+        if cursor != start {
+            return None;
+        }
+        return Some(CompletionField {
+            context: CompletionContext::PomodoroPastName,
+            route: None,
+            block_id: None,
+            query: String::new(),
+            replacement: (start, start),
+            bare_name: true,
+        });
+    }
+    let name_len = super::bare_name::bare_start_name_len(after_digits)?;
+    let start = token_start + 2 + digits;
     let end = start + name_len;
     if cursor < start || cursor > end {
         return None;
     }
-    let query = if literal {
-        exact_name_query(&name[..name_len], cursor - start, true)
-    } else {
-        name.get(..cursor - start)?.to_string()
-    };
     Some(CompletionField {
         context: CompletionContext::PomodoroPastName,
         route: None,
         block_id: None,
-        query,
+        query: after_digits.get(..cursor - start)?.to_string(),
         replacement: (start, end),
-        bare_name: !hash,
+        bare_name: true,
     })
 }
 

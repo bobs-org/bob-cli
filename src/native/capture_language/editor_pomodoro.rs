@@ -3297,9 +3297,9 @@ fn editor_past_outcome<'a>(
 /// `pomodoro_past` plus one `invalid_pomodoro_past` diagnostic, and unfinished
 /// input reports `incomplete` with the existing needs. Spans cover exactly
 /// the table in the plan: `pomodoro_past` over `x=` plus a leading count and
-/// over `@D`, `pomodoro_name` over the name only, `pomodoro_past_repair`
-/// over the repair `!`, `pomodoro_close` over the second `=`, plus the
-/// existing close selection/log spans.
+/// over a trailing count, `pomodoro_name` over the name only,
+/// `pomodoro_past_repair` over the repair `!`, `pomodoro_close` over the
+/// second `=`, plus the existing close selection/log spans.
 fn parse_editor_past_item<'a>(
     item: &CaptureItem<'a>,
     parent_trimmed: &str,
@@ -3340,13 +3340,12 @@ fn parse_editor_past_item<'a>(
             token_start + 2
         };
         spans.push(mk_span(token_start, leading_end, SpanKind::PomodoroPast));
-        // `@D` timing suffix as a second `pomodoro_past`.
+        // Trailing count as a second `pomodoro_past` (glued digits only).
         if let Some((s, e)) = valid.blocks_range
             && s != 2
         {
-            // `@D` range covers digits only; include the `@`.
             spans.push(mk_span(
-                token_start + s - 1,
+                token_start + s,
                 token_start + e,
                 SpanKind::PomodoroPast,
             ));
@@ -3404,12 +3403,10 @@ fn parse_editor_past_item<'a>(
         PastEOutcome::Incomplete { need, message: _ } => {
             let needs = match need {
                 PastNeed::Name => vec![Need::PomodoroName],
-                PastNeed::Timing => vec![Need::PomodoroStartTiming],
             };
             // Placeholder treatment mirrors named starts: an empty `#`
-            // gets an interactive placeholder over `#`, an unterminated
-            // literal gets spans for what was typed, and a dangling `@`
-            // gets a placeholder over `@`.
+            // gets an interactive placeholder over `#`, and an unterminated
+            // literal gets spans for what was typed.
             let mut spans =
                 vec![mk_span(token_start, token_end, SpanKind::PomodoroPast)];
             if raw_token.ends_with('#') {
@@ -3419,49 +3416,14 @@ fn parse_editor_past_item<'a>(
                     hash_at + 1,
                     SpanKind::InteractivePlaceholder,
                 ));
-            } else if raw_token.ends_with('@') {
-                let at_at = token_end - 1;
-                spans.push(mk_span(
-                    at_at,
-                    at_at + 1,
-                    SpanKind::InteractivePlaceholder,
-                ));
             }
-            // Timing incomplete keeps the typed name as section.
-            let section = match need {
-                PastNeed::Timing => {
-                    // Re-derive the bare name (if any) for section.
-                    // `validate` already rejected malformed names, so the
-                    // prefix before `@` is the typed name when present.
-                    let e = split.e_raw.as_str();
-                    if let Some(at) = e.find('@') {
-                        let name_part = &e[..at];
-                        if name_part.is_empty() || name_part == "#" {
-                            None
-                        } else if let Some(stripped) =
-                            name_part.strip_prefix('#')
-                        {
-                            if stripped.is_empty() {
-                                None
-                            } else {
-                                Some(stripped.to_ascii_uppercase())
-                            }
-                        } else {
-                            Some(name_part.to_ascii_uppercase())
-                        }
-                    } else {
-                        None
-                    }
-                }
-                PastNeed::Name => None,
-            };
             spans.sort_by_key(|s| (s.start, s.end));
             return Some(editor_past_outcome(
                 item,
                 parent_trimmed,
                 EditorMode::Incomplete,
                 None,
-                section,
+                None,
                 spans,
                 needs,
                 Vec::new(),
