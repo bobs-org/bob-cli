@@ -362,6 +362,77 @@ fn move_destination_is_rolled_back_when_source_replace_fails() {
 }
 
 #[test]
+fn move_choice_capture_rolls_back_every_file_when_source_replace_fails() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = dir.path().join("cash.md");
+    let day = dir.path().join("day.md");
+    let source_before = "---\ntype: [[area]]\n---\n- [ ] #task Alpha ^a\n";
+    let day_before = "## Pomodoros\n- [ ] (1400-1500) WORK\n";
+    fs::write(&source, source_before).expect("write source");
+    fs::write(&day, day_before).expect("write day");
+    let _env = crate::native::env::TestEnvGuard::set(&[
+        ("BOB_DAY_FILE", Some(day.as_os_str())),
+        ("BOB_NOW", Some(std::ffi::OsStr::new("2026-09-20 14:31:07"))),
+        ("TZ", Some(std::ffi::OsStr::new("UTC0"))),
+    ]);
+    let request = CaptureRequest {
+        bob_dir: dir.path().to_path_buf(),
+        dry_run: false,
+        forced_clip: None,
+        forced_destination_flags: Vec::new(),
+        forced_route: None,
+        forced_section: None,
+        forced_sub_bullet_target: None,
+        forced_drawer: None,
+        inbox_routes: Vec::new(),
+        move_in: Some(super::super::move_choice::MoveInPicks::Tokens(vec![
+            super::super::move_choice::MoveInPick {
+                sigil: ':',
+                selector: "1".to_string(),
+                is_number: true,
+            },
+        ])),
+        no_clip: true,
+        no_ref: true,
+        pull_in: None,
+        refuse_override: false,
+        require_inbox_route_choice: false,
+        require_pull_in_choice: false,
+        template_origin: None,
+        raw_text: "Finish @cash^x@\n- ^^\n".to_string(),
+        selection: crate::native::task_complete::SuccessorSelection::None,
+    };
+    let mut batch = plan_capture_batch(&request, None)
+        .expect("full move-choice capture plans");
+    let destination = dir.path().join("cash_x.md");
+    let destination_index = batch
+        .text_files
+        .iter()
+        .position(|file| file.target == destination)
+        .expect("destination staged");
+    let source_index = batch
+        .text_files
+        .iter()
+        .position(|file| file.target == source)
+        .expect("source staged");
+    assert!(destination_index < source_index, "destination writes first");
+
+    RENAME_FAIL_TARGET
+        .with(|target| *target.borrow_mut() = Some(source.clone()));
+    let result = commit_capture_batch(&mut batch, dir.path());
+    RENAME_FAIL_TARGET.with(|target| *target.borrow_mut() = None);
+    let error = result.expect_err("source replace fails");
+    assert!(error.message.contains("rolled back"), "{error:?}");
+    assert_eq!(
+        fs::read_to_string(&source).expect("source restored"),
+        source_before
+    );
+    assert_eq!(fs::read_to_string(&day).expect("day restored"), day_before);
+    assert!(!destination.exists(), "new destination removed by rollback");
+    no_capture_litter(dir.path());
+}
+
+#[test]
 fn cumulative_stages_into_one_note_commit() {
     let dir = tempfile::tempdir().expect("tempdir");
     let note = dir.path().join("note.md");

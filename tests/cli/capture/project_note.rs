@@ -3048,6 +3048,21 @@ fn capture_project_note_choice_report_lists_rows_and_refuses_real() {
     assert_eq!(slot["rows"][0]["n"], 1);
     assert_eq!(slot["rows"][0]["key"], "cash.md#^a");
     assert_eq!(slot["rows"][2]["mint"], "gamma");
+    for field in [
+        "section",
+        "block_id",
+        "mint",
+        "scheduled",
+        "pomodoro",
+        "locked",
+        "disabled_reason",
+        "answer",
+    ] {
+        assert!(slot["rows"][2].get(field).is_some(), "missing {field}");
+    }
+    assert!(slot["rows"][2]["section"].is_null());
+    assert!(slot["rows"][2]["block_id"].is_null());
+    assert!(slot["rows"][2]["pomodoro"].is_null());
     assert!(slot["rows"][2]["choices"][0]["consequence"]
         .as_str()
         .unwrap()
@@ -3326,4 +3341,598 @@ fn capture_project_note_choice_unanswered_lists_all_rows() {
         assert!(out.contains(&format!("{n} [ ]")), "{out} missing row {n}");
     }
     assert!(out.contains("choose with -m"), "{out}");
+}
+
+fn project_note_choice_capture(
+    vault: &Path,
+    input: &str,
+    dry_run: bool,
+    day_file: Option<&Path>,
+    move_picks: &[&str],
+    pull_picks: &[&str],
+) -> std::process::Output {
+    let mut command = bob_command();
+    command
+        .arg("capture")
+        .arg("-b")
+        .arg(vault)
+        .arg("-f")
+        .arg("json");
+    if dry_run {
+        command.arg("--dry-run");
+    }
+    if let Some(day_file) = day_file {
+        command.env("BOB_DAY_FILE", day_file);
+    }
+    for pick in move_picks {
+        command.arg("-m").arg(pick);
+    }
+    for pick in pull_picks {
+        command.arg("-p").arg(pick);
+    }
+    command
+        .env("BOB_NOW", "2026-09-20 14:31:07")
+        .env("TZ", "UTC0");
+    run_with_stdin(&mut command, input)
+}
+
+fn choice_vault(
+    name: &str,
+    parent: &str,
+    day: &str,
+) -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let temp = TempDir::new(name);
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&vault.join("cash.md"), parent);
+    write_file(&day_file, day);
+    (temp, vault, day_file)
+}
+
+fn choice_parent(rows: &[&str]) -> String {
+    let mut parent = String::from("---\ntype: \"[[area]]\"\n---\n");
+    for row in rows {
+        parent.push_str(row);
+        parent.push('\n');
+    }
+    parent
+}
+
+#[test]
+fn capture_project_note_choice_answers_match_authored_bullets() {
+    // MQ13/MQ18: picks expand to authored moves at the ^^ slot, in parent
+    // order; repeated flags union, keys and numbers resolve identically.
+    let parent = choice_parent(&[
+        "- [ ] #task Alpha ^a",
+        "- [ ] #task Beta ^b",
+        "- [ ] #task Gamma ^c",
+        "- [ ] #task Delta ^d",
+    ]);
+    let day = "## Pomodoros\n- [ ] (1400-1500) WORK\n";
+    let choice_input =
+        "Finish packet @cash^x@#work\n- New item\n- ^^\n- Other item\n";
+    let authored_input = concat!(
+        "Finish packet @cash^x@#work\n",
+        "- New item\n",
+        "- :a\n",
+        "- ^d\n",
+        "- Other item\n",
+    );
+
+    let (_choice_temp, choice_real_vault, choice_day) =
+        choice_vault("bob-cli-choice-equivalence", &parent, day);
+    let dry = project_note_choice_capture(
+        &choice_real_vault,
+        choice_input,
+        true,
+        Some(&choice_day),
+        &["4", ":1"],
+        &[],
+    );
+    assert_success(&dry);
+    let dry_json: serde_json::Value =
+        serde_json::from_str(stdout(&dry).trim()).expect("dry JSON");
+    assert!(!choice_real_vault.join("cash_x.md").exists());
+    let real = project_note_choice_capture(
+        &choice_real_vault,
+        choice_input,
+        false,
+        Some(&choice_day),
+        &["4", ":1"],
+        &[],
+    );
+    assert_success(&real);
+    let real_json: serde_json::Value =
+        serde_json::from_str(stdout(&real).trim()).expect("real JSON");
+    let mut normalized_dry = dry_json.clone();
+    normalized_dry["dry_run"] = serde_json::json!(false);
+    assert_eq!(normalized_dry, real_json, "dry-run JSON equals real JSON");
+
+    let (_authored_temp, authored_vault, authored_day) =
+        choice_vault("bob-cli-choice-equivalence-authored", &parent, day);
+    let authored = project_note_choice_capture(
+        &authored_vault,
+        authored_input,
+        false,
+        Some(&authored_day),
+        &[],
+        &[],
+    );
+    assert_success(&authored);
+    for relative in ["cash.md", "cash_x.md", "day.md"] {
+        assert_eq!(
+            fs::read(choice_real_vault.join(relative)).expect("choice bytes"),
+            fs::read(authored_vault.join(relative)).expect("authored bytes"),
+            "choice and authored runs match {relative}"
+        );
+    }
+    let destination = fs::read_to_string(choice_real_vault.join("cash_x.md"))
+        .expect("destination");
+    let positions: Vec<usize> = ["New item", "Alpha", "Delta", "Other item"]
+        .iter()
+        .map(|needle| destination.find(needle).expect("task in destination"))
+        .collect();
+    assert!(
+        positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "{destination}"
+    );
+
+    let mut choice_moves = real_json["project_note"]["moved_tasks"].clone();
+    let authored_json: serde_json::Value =
+        serde_json::from_str(stdout(&authored).trim()).expect("authored JSON");
+    let mut authored_moves =
+        authored_json["project_note"]["moved_tasks"].clone();
+    for moves in [
+        choice_moves.as_array_mut().expect("choice moves"),
+        authored_moves.as_array_mut().expect("authored moves"),
+    ] {
+        for moved in moves {
+            let row = moved.as_object_mut().expect("moved row");
+            row.remove("via");
+            row.remove("draft_range");
+            // `item_line` points at the authored bullet or the ^^ slot,
+            // so source provenance differs even when the move outcome does not.
+            row.remove("item_line");
+        }
+    }
+    assert_eq!(choice_moves, authored_moves);
+    assert_eq!(real_json["move_choice"]["slots"][0]["moved_count"], 2);
+    assert_eq!(real_json["move_choice"]["slots"][0]["linked_count"], 1);
+
+    let (_order_temp, order_vault, order_day) =
+        choice_vault("bob-cli-choice-order", &parent, day);
+    let order_a = project_note_choice_capture(
+        &order_vault,
+        "Finish @cash^x@\n- ^^\n",
+        true,
+        Some(&order_day),
+        &["3,1"],
+        &[],
+    );
+    let order_b = project_note_choice_capture(
+        &order_vault,
+        "Finish @cash^x@\n- ^^\n",
+        true,
+        Some(&order_day),
+        &["1,3"],
+        &[],
+    );
+    let order_a_json: serde_json::Value =
+        serde_json::from_str(stdout(&order_a).trim()).expect("order A JSON");
+    let order_b_json: serde_json::Value =
+        serde_json::from_str(stdout(&order_b).trim()).expect("order B JSON");
+    assert_eq!(
+        order_a_json, order_b_json,
+        "pick order does not change result"
+    );
+
+    let (_key_temp, key_vault, key_day) =
+        choice_vault("bob-cli-choice-key-number", &parent, day);
+    let number = project_note_choice_capture(
+        &key_vault,
+        "Finish @cash^x@\n- ^^\n",
+        true,
+        Some(&key_day),
+        &[":1"],
+        &[],
+    );
+    let key = project_note_choice_capture(
+        &key_vault,
+        "Finish @cash^x@\n- ^^\n",
+        true,
+        Some(&key_day),
+        &[":cash.md#^a"],
+        &[],
+    );
+    let number_json: serde_json::Value =
+        serde_json::from_str(stdout(&number).trim()).expect("number JSON");
+    let key_json: serde_json::Value =
+        serde_json::from_str(stdout(&key).trim()).expect("key JSON");
+    assert_eq!(
+        number_json, key_json,
+        "row keys and numbers resolve equally"
+    );
+}
+
+#[test]
+fn capture_project_note_choice_mints_and_guards_idless_rows() {
+    // MQ12: suggestions avoid authored IDs, are written with the move, and
+    // a collision with a moved descendant refuses the entire capture.
+    let parent = choice_parent(&["- [ ] #task Idless"]);
+    let (_mint_temp, mint_vault, mint_day) = choice_vault(
+        "bob-cli-choice-mint-dry",
+        &parent,
+        "## Pomodoros\n- [ ] (1400-1500) WORK\n",
+    );
+    let dry = project_note_choice_capture(
+        &mint_vault,
+        "Finish @cash^x@\n- Existing ^idless\n- ^^\n",
+        true,
+        Some(&mint_day),
+        &["1"],
+        &[],
+    );
+    assert_success(&dry);
+    let dry_json: serde_json::Value =
+        serde_json::from_str(stdout(&dry).trim()).expect("mint dry JSON");
+    let mint = dry_json["move_choice"]["slots"][0]["rows"][0]["mint"]
+        .as_str()
+        .expect("mint suggestion");
+    assert_ne!(mint, "idless", "new-note authored ID is reserved");
+    assert!(!mint_vault.join("cash_x.md").exists());
+    let real = project_note_choice_capture(
+        &mint_vault,
+        "Finish @cash^x@\n- Existing ^idless\n- ^^\n",
+        false,
+        Some(&mint_day),
+        &["1"],
+        &[],
+    );
+    assert_success(&real);
+    let real_json: serde_json::Value =
+        serde_json::from_str(stdout(&real).trim()).expect("mint real JSON");
+    assert!(real_json["project_note"]["moved_tasks"][0]["detail"]
+        .as_str()
+        .unwrap()
+        .ends_with(&format!("adds ^{mint}")));
+    let destination = fs::read_to_string(mint_vault.join("cash_x.md"))
+        .expect("minted destination");
+    assert!(destination.contains(&format!("^{mint}")), "{destination}");
+    let mut normalized_dry = dry_json;
+    normalized_dry["dry_run"] = serde_json::json!(false);
+    assert_eq!(normalized_dry, real_json);
+
+    let descendant_parent = choice_parent(&[
+        "- [ ] #task Parent ^parent",
+        "  - [ ] #task Child ^prj",
+    ]);
+    let (_collision_temp, collision_vault, collision_day) = choice_vault(
+        "bob-cli-choice-mint-descendant-collision",
+        &descendant_parent,
+        "## Pomodoros\n- [ ] (1400-1500) WORK\n",
+    );
+    let source_before = fs::read(collision_vault.join("cash.md"))
+        .expect("source before collision");
+    let collision = project_note_choice_capture(
+        &collision_vault,
+        "Finish @cash^x@\n- ^^\n",
+        false,
+        Some(&collision_day),
+        &["1"],
+        &[],
+    );
+    assert!(!collision.status.success());
+    let collision_json: serde_json::Value =
+        serde_json::from_str(stdout(&collision).trim())
+            .expect("collision refusal JSON");
+    assert_eq!(
+        collision_json["code"], "move_task_id_collision",
+        "{collision_json}"
+    );
+    assert_eq!(
+        fs::read(collision_vault.join("cash.md")).expect("unchanged source"),
+        source_before
+    );
+    assert!(!collision_vault.join("cash_x.md").exists());
+}
+
+#[test]
+fn capture_project_note_choice_moves_are_not_successor_offers() {
+    // MQ16: choice moves are excluded from successor offers, regardless of
+    // sigil; newly authored project tasks remain eligible for -p.
+    let parent = choice_parent(&["- [ ] #task Parent ^a"]);
+    let day = "## Pomodoros\n- [ ] (1400-1500) WORK\n";
+    let input = "Finish @cash:x@\n- New task\n- ^^\n";
+
+    let (_move_temp, move_vault, move_day) =
+        choice_vault("bob-cli-choice-offers-move", &parent, day);
+    let moved = project_note_choice_capture(
+        &move_vault,
+        input,
+        false,
+        Some(&move_day),
+        &["1"],
+        &[],
+    );
+    assert_success(&moved);
+    let moved_json: serde_json::Value =
+        serde_json::from_str(stdout(&moved).trim()).expect("move JSON");
+    let offers = moved_json["project_note"]["successors"]
+        .as_array()
+        .expect("successor offers");
+    assert_eq!(offers.len(), 1, "{moved_json}");
+    assert_eq!(offers[0]["text"], "New task");
+    assert!(
+        offers.iter().all(|row| row["text"] != "Parent"),
+        "{offers:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(move_day).expect("day without offer selection"),
+        day
+    );
+
+    let (_offer_temp, offer_vault, offer_day) =
+        choice_vault("bob-cli-choice-offers-pick", &parent, day);
+    let offer_pick = project_note_choice_capture(
+        &offer_vault,
+        input,
+        false,
+        Some(&offer_day),
+        &["1"],
+        &["all"],
+    );
+    assert_success(&offer_pick);
+    let day_after = fs::read_to_string(offer_day).expect("selected offer day");
+    assert!(day_after.contains("[[cash_x#^task]]"), "{day_after}");
+    assert!(!day_after.contains("[[cash_x#^a]]"), "{day_after}");
+
+    let (_colon_temp, colon_vault, colon_day) =
+        choice_vault("bob-cli-choice-offers-colon", &parent, day);
+    let colon_pick = project_note_choice_capture(
+        &colon_vault,
+        input,
+        false,
+        Some(&colon_day),
+        &[":1"],
+        &["all"],
+    );
+    assert_success(&colon_pick);
+    let day_after = fs::read_to_string(colon_day).expect("both links day");
+    assert!(day_after.contains("[[cash_x#^a]]"), "{day_after}");
+    assert!(day_after.contains("[[cash_x#^task]]"), "{day_after}");
+}
+
+#[test]
+fn capture_project_note_choice_matches_dated_project_and_name_guards() {
+    // MQ14/MQ15: a future project keeps a Blocked pick unlinked until its
+    // start, rejects Ready rows, and a : pick satisfies a required #name.
+    let day = "## Pomodoros\n- [ ] (1400-1500) WORK\n";
+    let blocked_parent = choice_parent(&["- [?] #task Blocked ^blocked"]);
+    let (_blocked_temp, blocked_vault, blocked_day) =
+        choice_vault("bob-cli-choice-dated-blocked", &blocked_parent, day);
+    let blocked = project_note_choice_capture(
+        &blocked_vault,
+        "Finish @cash^x@ s:3\n- ^^\n",
+        false,
+        Some(&blocked_day),
+        &[":1"],
+        &[],
+    );
+    assert_success(&blocked);
+    let blocked_json: serde_json::Value =
+        serde_json::from_str(stdout(&blocked).trim()).expect("blocked JSON");
+    let moved = &blocked_json["project_note"]["moved_tasks"][0];
+    assert!(moved["link"].is_null(), "{blocked_json}");
+    assert_eq!(
+        moved["detail"],
+        "stays unlinked until the project starts Sep 23"
+    );
+    assert_eq!(
+        blocked_json["move_choice"]["slots"][0]["rows"][0]["answer"],
+        ":"
+    );
+
+    let ready_parent = choice_parent(&[
+        "- [ ] #task Ready ^ready",
+        "- [?] #task Blocked ^blocked",
+    ]);
+    let (_ready_temp, ready_vault, ready_day) =
+        choice_vault("bob-cli-choice-dated-ready", &ready_parent, day);
+    let ready = project_note_choice_capture(
+        &ready_vault,
+        "Finish @cash^x@ s:3\n- ^^\n",
+        false,
+        Some(&ready_day),
+        &[":1"],
+        &[],
+    );
+    assert!(!ready.status.success());
+    let ready_json: serde_json::Value =
+        serde_json::from_str(stdout(&ready).trim()).expect("ready refusal");
+    assert_eq!(ready_json["code"], "move_choice_refused");
+    assert!(!ready_vault.join("cash_x.md").exists());
+
+    let name_parent = choice_parent(&["- [ ] #task Named ^named"]);
+    let (_name_temp, name_vault, name_day) =
+        choice_vault("bob-cli-choice-name-success", &name_parent, day);
+    let named = project_note_choice_capture(
+        &name_vault,
+        "Finish @cash^x@#work\n- ^^\n",
+        false,
+        Some(&name_day),
+        &[":1"],
+        &[],
+    );
+    assert_success(&named);
+    let named_json: serde_json::Value =
+        serde_json::from_str(stdout(&named).trim()).expect("name JSON");
+    assert_eq!(
+        named_json["move_choice"]["slots"][0]["name_needs_link"],
+        true
+    );
+    assert_eq!(
+        named_json["project_note"]["task_links"][0]["block_id"],
+        "named"
+    );
+    assert!(fs::read_to_string(name_day)
+        .expect("name linked day")
+        .contains("[[cash_x#^named]]"));
+}
+
+#[test]
+fn capture_project_note_choice_prediction_matches_each_execution_guard() {
+    // MQ17: run every consequence-table state through ^^ for both sigils;
+    // the preview suffix, link count, and answered row mirror execution.
+    let day_work = "## Pomodoros\n- [ ] (1400-1500) WORK\n";
+    let day_named_link =
+        "## Pomodoros\n- [ ] (1400-1500) — WORK\n  - [[cash#^a]]\n";
+    let day_unnamed_link = "## Pomodoros\n- [ ] (1400-1500)\n  - [[cash#^a]]\n";
+    let parent_blocked_deps = choice_parent(&[
+        "- [?] #task Blocked [dependsOn:: cash__b] [id:: cash__a] ^a",
+        "  - ⛓️ **DEPENDS ON:** [[#^b]]",
+        "- [ ] #task Prerequisite ^b",
+    ]);
+    let parent_blocked_date =
+        choice_parent(&["- [?] #task Scheduled [scheduled:: 2026-09-25] ^a"]);
+    let parent_other_reason = choice_parent(&[
+        "- [?] #task Waiting [dependsOn:: cash__b] [id:: cash__a] [scheduled:: 2026-09-25] [scheduled:: 2026-09-26] ^a",
+        "  - ⛓️ **DEPENDS ON:** [[#^b]]",
+        "- [ ] #task Prerequisite ^b",
+    ]);
+    let parent_blocked_project = choice_parent(&["- [?] #task Blocked ^a"]);
+    let parent_idless_ready = choice_parent(&["- [ ] #task Idless"]);
+    let parent_idless_blocked = choice_parent(&["- [?] #task Idless"]);
+    let parent_ready = choice_parent(&["- [ ] #task Row ^a"]);
+    let parent_next = choice_parent(&["- [*] #task Row ^a"]);
+    let parent_in_progress = choice_parent(&["- [/] #task Row ^a"]);
+    let parent_named = choice_parent(&["- [ ] #task Row ^a"]);
+    let parent_unnamed = choice_parent(&["- [ ] #task Row ^a"]);
+
+    let cases: Vec<(&str, String, &str)> = vec![
+        ("ready", parent_ready, "day"),
+        ("next", parent_next, "day"),
+        ("in-progress", parent_in_progress, "day"),
+        ("linked-named", parent_named, "named"),
+        ("linked-unnamed", parent_unnamed, "unnamed"),
+        ("own-prerequisite", parent_blocked_deps, "day"),
+        ("own-date", parent_blocked_date, "day"),
+        ("other-reason", parent_other_reason, "day"),
+        ("future-project", parent_blocked_project, "project"),
+        ("idless-ready", parent_idless_ready, "day"),
+        ("idless-blocked", parent_idless_blocked, "day"),
+    ];
+
+    for (case_name, parent, day_kind) in cases {
+        for sigil in ['^', ':'] {
+            let day = match day_kind {
+                "named" => day_named_link,
+                "unnamed" => day_unnamed_link,
+                _ => day_work,
+            };
+            let (_temp, vault, day_file) = choice_vault(
+                &format!("bob-cli-choice-matrix-{case_name}-{sigil}"),
+                &parent,
+                day,
+            );
+            let draft = if day_kind == "project" {
+                "Finish @cash^x@ s:3\n- ^^\n"
+            } else {
+                "Finish @cash^x@\n- ^^\n"
+            };
+            let preview = project_note_choice_capture(
+                &vault,
+                draft,
+                true,
+                Some(&day_file),
+                &[],
+                &[],
+            );
+            assert_success(&preview);
+            let preview_json: serde_json::Value =
+                serde_json::from_str(stdout(&preview).trim())
+                    .expect("preview JSON");
+            let row = &preview_json["move_choice"]["slots"][0]["rows"][0];
+            let choice = row["choices"]
+                .as_array()
+                .expect("choice options")
+                .iter()
+                .find(|option| option["sigil"] == sigil.to_string())
+                .unwrap_or_else(|| panic!("{case_name} {sigil}: {row}"));
+            let pick = format!("{sigil}1");
+            let outcome = project_note_choice_capture(
+                &vault,
+                draft,
+                false,
+                Some(&day_file),
+                &[&pick],
+                &[],
+            );
+            assert_success(&outcome);
+            let outcome_json: serde_json::Value =
+                serde_json::from_str(stdout(&outcome).trim())
+                    .expect("answered JSON");
+            let moved = &outcome_json["project_note"]["moved_tasks"][0];
+            let consequence =
+                choice["consequence"].as_str().expect("consequence");
+            let head = if sigil == '^' {
+                "Moves into cash_x.md"
+            } else {
+                "Moves in"
+            };
+            let predicted = consequence
+                .strip_prefix(head)
+                .expect("consequence head")
+                .trim_start_matches(" · ");
+            let actual = moved["detail"].as_str();
+            if predicted.is_empty() {
+                assert!(
+                    actual.is_none(),
+                    "{case_name} {sigil}: {outcome_json}"
+                );
+            } else if case_name == "linked-named" && sigil == '^' {
+                assert_eq!(
+                    predicted.strip_prefix("its "),
+                    actual,
+                    "{outcome_json}"
+                );
+            } else {
+                assert_eq!(
+                    Some(predicted),
+                    actual,
+                    "{case_name} {sigil}: {outcome_json}"
+                );
+            }
+
+            let minted_id = row["mint"].as_str();
+            let moved_id = moved["block_id"].as_str().expect("moved block ID");
+            if let Some(mint) = minted_id {
+                assert_eq!(
+                    moved_id, mint,
+                    "{case_name} {sigil}: {outcome_json}"
+                );
+            }
+            let link_added = outcome_json["project_note"]["task_links"]
+                .as_array()
+                .is_some_and(|links| {
+                    links.iter().any(|link| link["block_id"] == moved_id)
+                });
+            assert_eq!(
+                choice["adds_link"], link_added,
+                "{case_name} {sigil}: {outcome_json}"
+            );
+            let slot = &outcome_json["move_choice"]["slots"][0];
+            assert_eq!(slot["answered"], true, "{outcome_json}");
+            assert_eq!(slot["moved_count"], 1, "{outcome_json}");
+            assert_eq!(
+                slot["linked_count"].as_u64(),
+                Some(u64::from(link_added)),
+                "{outcome_json}"
+            );
+            assert_eq!(
+                slot["rows"][0]["answer"],
+                sigil.to_string(),
+                "{outcome_json}"
+            );
+        }
+    }
 }

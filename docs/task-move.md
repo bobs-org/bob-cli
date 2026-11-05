@@ -109,7 +109,9 @@ an incoming task or descendant ID collision instead of applying the command's
 suffix-renaming rule. The shared movable-root eligibility check exposes open,
 top-level `#task` rows (including rows without IDs) and excludes closed,
 nested, ambiguous, and `^prj` tasks. A blocked-at-birth project accepts only
-Blocked tasks.
+Blocked tasks. Answers to `- ^^` expand server-side into those same move
+bullets at the `^^` slot in parent order, and ID-less picks gain their minted
+ID in the same guarded batch.
 
 ## Identity and reference repair
 

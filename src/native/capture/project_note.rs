@@ -2494,7 +2494,7 @@ fn scheduled_field(line: &str) -> Option<String> {
         })
 }
 
-fn display_move_date(value: &str) -> String {
+pub(super) fn display_move_date(value: &str) -> String {
     NaiveDate::parse_from_str(value, "%Y-%m-%d")
         .map(|date| date.format("%b %-d").to_string())
         .unwrap_or_else(|_| value.to_string())
@@ -2503,7 +2503,7 @@ fn display_move_date(value: &str) -> String {
 /// Link-guard detail is written for reports (`not linked (...) · promoted…`).
 /// Move copy keeps the blocking reason while removing the report wrapper and
 /// reducing task wikilinks to their short block IDs.
-fn move_guard_reason(detail: &str) -> String {
+pub(super) fn move_guard_reason(detail: &str) -> String {
     let mut reason = detail.trim();
     if let Some(rest) = reason.strip_prefix("not linked (") {
         reason = rest

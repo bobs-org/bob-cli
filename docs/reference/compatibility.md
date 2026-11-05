@@ -90,8 +90,24 @@ note `> @dest` now claims a transfer directive, so clients must handle the
 new modes before enabling the grammar.
 
 Grammar 11 adds the `^^` project-task move choice to sealed project-note
-items. It reports `project_task_move_choice_marker` and per-child
-`sub_bullet_move_choices[]` while keeping the capture parse complete.
+items. A whole first-level `- ^^` bullet is a move-choice slot, not a
+literal task named `^^`. `capture-parse` reports
+`project_task_move_choice_marker` and `sub_bullet_move_choices[]`, keeps the
+parse complete, and leaves the corresponding `sub_bullet_moves` entry null
+so an older client never sees an unfinished `- ^`. `capture-complete` adds
+`action_continuation_keys: ["^"]` on a lone `- ^`. `bob capture` adds
+`-m/--move-in`, and every capture JSON result carries
+`move_choice.supported: true` for capability detection.
+
+The old-bob and old-Mac combinations behave as follows:
+
+| Mac × bob | Behavior |
+| --- | --- |
+| new × new | Full move-choice flow. |
+| old Mac × new bob | The app sends no `--move-in`; bob refuses `move_choice_required` without writing. |
+| new Mac × old bob | On the first ⌘↩ for a whole-line `- ^^`, warn `This bob predates - ^^; it would capture a task named ^^ · update bob`. Send `--move-in` only after a preview advertised support. |
+| old × old | Unchanged; `^^` remains a literal task. |
+
 Grammar 12 claims whole-item `x=` as a past Pomodoro record: stacks end at
 the next five-minute boundary and fill backward, while `!` can trim only an
 edge of an older closed row. It adds the `pomodoro_past` mode and object;

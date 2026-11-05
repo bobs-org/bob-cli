@@ -75,13 +75,21 @@ pub(crate) fn predict(input: &PredictionInput) -> Prediction {
     };
     for component in components.copy {
         let component = match component {
+            CopyComponent::ExistingLink(name)
+                if name.trim().is_empty() && input.sigil == '^' =>
+            {
+                "today's link follows".to_string()
+            }
+            CopyComponent::ExistingLink(name) if name.trim().is_empty() => {
+                "keeps today's link".to_string()
+            }
             CopyComponent::ExistingLink(name) if input.sigil == '^' => {
                 format!("its {} link follows", name.to_uppercase())
             }
             CopyComponent::ExistingLink(name) => {
                 format!("keeps its {} link", name.to_uppercase())
             }
-            component => component.as_text(),
+            component => component.into_text(),
         };
         consequence.push_str(" · ");
         consequence.push_str(&component);
@@ -100,7 +108,11 @@ pub(crate) fn predict(input: &PredictionInput) -> Prediction {
 pub(crate) fn describe(outcome: &Outcome) -> Option<String> {
     let mut parts = Vec::new();
     if let Some(name) = outcome.existing_today_link.as_deref() {
-        if outcome.sigil == '^' {
+        if name.trim().is_empty() && outcome.sigil == '^' {
+            parts.push("today's link follows".to_string());
+        } else if name.trim().is_empty() {
+            parts.push("keeps today's link".to_string());
+        } else if outcome.sigil == '^' {
             // Preserve the established terminal/JSON detail wording. The
             // picker adds the grammatical "its" after the move head.
             parts.push(format!("{} link follows", name.to_uppercase()));
@@ -168,7 +180,7 @@ enum CopyComponent {
 }
 
 impl CopyComponent {
-    fn as_text(self) -> String {
+    fn into_text(self) -> String {
         match self {
             Self::Text(text) => text,
             Self::ExistingLink(name) => {
@@ -424,5 +436,70 @@ mod tests {
             id_added: None,
         };
         assert_eq!(describe(&followed).as_deref(), Some("WORK link follows"));
+    }
+
+    #[test]
+    fn unnamed_existing_link_uses_today_wording() {
+        let mut caret = input('^', ' ', LinkGuard::Link);
+        caret.today_link = Some(String::new());
+        let prediction = predict(&caret);
+        assert_eq!(
+            prediction.consequence,
+            "Moves into cash_exit.md · today's link follows"
+        );
+        assert!(!prediction.adds_link);
+
+        let mut colon = input(':', ' ', LinkGuard::Link);
+        colon.today_link = Some(String::new());
+        let prediction = predict(&colon);
+        assert_eq!(prediction.consequence, "Moves in · keeps today's link");
+        assert!(!prediction.adds_link);
+
+        for (sigil, expected) in
+            [('^', "today's link follows"), (':', "keeps today's link")]
+        {
+            let outcome = Outcome {
+                sigil,
+                previous_status: ' ',
+                status: ' ',
+                existing_today_link: Some(String::new()),
+                added_today_link: None,
+                own_scheduled: None,
+                project_starts: None,
+                guard: LinkGuard::Link,
+                id_added: None,
+            };
+            assert_eq!(describe(&outcome).as_deref(), Some(expected));
+        }
+    }
+
+    #[test]
+    fn pull_forward_and_dependency_drop_keep_the_date() {
+        let mut pull = input(
+            ':',
+            '?',
+            LinkGuard::PullForward {
+                date: "Sep 25".to_string(),
+            },
+        );
+        pull.own_scheduled = Some("Sep 25".to_string());
+        assert_eq!(
+            predict(&pull).consequence,
+            "Moves in · pulls Sep 25 forward · becomes Next · links under ADMIN"
+        );
+
+        let mut drop = input(
+            ':',
+            '?',
+            LinkGuard::DropPrerequisites {
+                count: 1,
+                pulled_forward: Some("Sep 25".to_string()),
+            },
+        );
+        drop.own_scheduled = Some("Sep 25".to_string());
+        assert_eq!(
+            predict(&drop).consequence,
+            "Moves in · drops 1 prerequisite · pulls Sep 25 forward · becomes Next · links under ADMIN"
+        );
     }
 }

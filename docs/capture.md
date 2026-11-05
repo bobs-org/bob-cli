@@ -5744,6 +5744,8 @@ answer hint reads `choose with -m 1,3 (move), -m :2 (move & link), or -m none`.
 An answered preview and a real capture use the existing `would move` and
 `moved` lines in draft order. The suffix following the consequence head matches
 `project_note.moved_tasks[].detail`; it is null when there is no suffix.
+For a named existing link, the `^` consequence adds `its` after the move head
+while the detail remains `WORK link follows`; every other suffix is byte-identical.
 
 The consequences reported for a choice use the planner's actual move and link
 guard results. A `:` choice on a Ready or Blocked-by-own-prerequisites task
@@ -5761,7 +5763,8 @@ it is picked. The table pins the card and planner copy:
 | In Progress, unlinked | `Moves into cash_goog_exit.md` | `Moves in · links under ADMIN` |
 | Linked today under WORK | `Moves into cash_goog_exit.md · its WORK link follows` | `Moves in · keeps its WORK link` (`adds_link: false`) |
 | Blocked only by its own open prerequisites | `Moves into cash_goog_exit.md · stays Blocked` | `Moves in · drops 1 prerequisite · becomes Next · links under ADMIN` |
-| Blocked only by its own future date | `Moves into cash_goog_exit.md · stays Blocked` | `Moves in · pulls Nov 9 forward · becomes Next · links under ADMIN` |
+| Blocked only by its own future date | `Moves into cash_goog_exit.md · stays Blocked until Nov 9` | `Moves in · pulls Nov 9 forward · becomes Next · links under ADMIN` |
+| Linked today under an unnamed Pomodoro | `Moves into cash_goog_exit.md · today's link follows` | `Moves in · keeps today's link` (`adds_link: false`) |
 | Blocked for another reason | `Moves into cash_goog_exit.md · stays Blocked` | `Moves in · stays unlinked: waits on ^lawyer-call` (`adds_link: false`) |
 | `[?]` into a project with a future `s:N` | `Moves into cash_goog_exit.md · stays Blocked` | `Moves in · stays unlinked until the project starts Nov 6` (`adds_link: false`) |
 | ID-less row (either choice) | Append `· adds ^renew-the-passport` | Append `· adds ^renew-the-passport` |
@@ -5920,7 +5923,9 @@ then offers that note's open tasks as **successors** of its new `^prj` task. It
 is the same pull-in protocol a managed Done gesture uses
 ([task-dependencies.md §12](task-dependencies.md#12-successor-offers)): the
 offers are numbered, keyed, and previewed, and **nothing is linked until you
-pick it**. Explicit ` :<id>` bullets keep linking exactly as they do under
+pick it**. Tasks moved in through a `- ^^` answer are never offered as
+successors, whatever their sigil; authored `- ^a` rows and the note's new
+tasks remain eligible. Explicit ` :<id>` bullets keep linking exactly as they do under
 `@<route>^<block-id>@`. For example, given an area `cash.md` and a daily note
 with a Pomodoro:
 

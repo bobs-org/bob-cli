@@ -272,26 +272,18 @@ pub(crate) struct MoveChoiceRow {
     pub(crate) key: String,
     pub(crate) n: usize,
     pub(crate) line: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) section: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) block_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) mint: Option<String>,
     pub(crate) text: String,
     pub(crate) status_symbol: char,
     pub(crate) status_name: String,
     pub(crate) hidden: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) scheduled: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) pomodoro: Option<MoveChoicePomodoro>,
     pub(crate) choices: Vec<MoveChoiceOption>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) locked: Option<MoveChoiceLock>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) disabled_reason: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) answer: Option<String>,
 }
 
@@ -358,29 +350,6 @@ fn draft_line_number(text: &str, offset: usize) -> usize {
     text.get(..offset.min(text.len()))
         .map(|prefix| prefix.bytes().filter(|byte| *byte == b'\n').count() + 1)
         .unwrap_or(1)
-}
-
-fn display_move_date(date: &str) -> String {
-    // `YYYY-MM-DD` -> `Mon D` like `Nov 6`.
-    if let Ok(parsed) = NaiveDate::parse_from_str(date, "%Y-%m-%d") {
-        let month = match parsed.format("%b").to_string().as_str() {
-            "Jan" => "Jan",
-            "Feb" => "Feb",
-            "Mar" => "Mar",
-            "Apr" => "Apr",
-            "May" => "May",
-            "Jun" => "Jun",
-            "Jul" => "Jul",
-            "Aug" => "Aug",
-            "Sep" => "Sep",
-            "Oct" => "Oct",
-            "Nov" => "Nov",
-            "Dec" => "Dec",
-            _ => return date.to_string(),
-        };
-        return format!("{} {}", month, parsed.format("%-d"));
-    }
-    date.to_string()
 }
 
 /// Build one slot from the staged parent. Returns `None` when the item
@@ -688,7 +657,7 @@ pub(super) fn build_slot(
                 if root.status != '?' {
                     Some(format!(
                         "the project starts {}, so only Blocked tasks can move in",
-                        display_move_date(date)
+                        super::project_note::display_move_date(date)
                     ))
                 } else {
                     None
@@ -710,19 +679,27 @@ pub(super) fn build_slot(
                 Vec::new()
             } else {
                 let mut opts = Vec::new();
+                let guard = guard_for_row(
+                    request_bob_dir,
+                    planner,
+                    dependency_ctx,
+                    &parent,
+                    GuardRow {
+                        block_id: root.block_id.as_deref(),
+                        mint: mint.as_deref(),
+                        line: root.line,
+                        status: root.status,
+                        own_scheduled: scheduled_field.as_deref(),
+                    },
+                    future_project_date.as_deref(),
+                    today,
+                );
                 for sigil in ['^', ':'] {
-                    let guard = guard_for_row(
-                        request_bob_dir,
-                        planner,
-                        dependency_ctx,
-                        &parent,
-                        root.block_id.as_deref(),
-                        root.status,
-                        future_project_date.as_deref(),
-                        today,
-                    );
-                    let today_link =
-                        pomodoro_chip.as_ref().and_then(|p| p.name.clone());
+                    // An unnamed Pomodoro still owns the link. An empty
+                    // name distinguishes that link from no link at all.
+                    let today_link = pomodoro_chip
+                        .as_ref()
+                        .map(|p| p.name.clone().unwrap_or_default());
                     let prediction = super::move_consequence::predict(
                         &super::move_consequence::PredictionInput {
                             sigil,
@@ -730,11 +707,13 @@ pub(super) fn build_slot(
                             destination: dest_label.clone(),
                             pomodoro_name: pomodoro_name.clone(),
                             today_link,
-                            own_scheduled: scheduled_field.clone(),
+                            own_scheduled: scheduled_field
+                                .as_deref()
+                                .map(super::project_note::display_move_date),
                             project_starts: future_project_date
                                 .as_deref()
-                                .map(display_move_date),
-                            guard,
+                                .map(super::project_note::display_move_date),
+                            guard: guard.clone(),
                             id_to_add: mint.clone(),
                         },
                     );
@@ -827,13 +806,20 @@ fn slot_neighbours(
     (before, after)
 }
 
+struct GuardRow<'a> {
+    block_id: Option<&'a str>,
+    mint: Option<&'a str>,
+    line: usize,
+    status: char,
+    own_scheduled: Option<&'a str>,
+}
+
 fn guard_for_row(
     bob_dir: &Path,
     planner: &mut super::batch::CaptureBatchPlanner,
     dependency_ctx: &mut super::dependencies::DependencyContext,
     parent: &str,
-    block_id: Option<&str>,
-    status: char,
+    row: GuardRow<'_>,
     future_project: Option<&str>,
     today: NaiveDate,
 ) -> super::move_consequence::LinkGuard {
@@ -844,78 +830,111 @@ fn guard_for_row(
         // guard stays Link so `^` keeps its Blocked copy.
         return LinkGuard::Link;
     }
-    let Some(block_id) = block_id else {
-        // ID-less rows: status-only, like capture-complete.
-        if status == '?' {
-            return LinkGuard::StatusOnly;
-        }
+    let is_idless = row.block_id.is_none();
+    let Some(resolved_id) = row.block_id.or(row.mint) else {
         return LinkGuard::Link;
     };
-    if status != '?' {
-        // Fast path: no local inputs means Link without a graph.
-        // Assess via the link guard; fall back to Link on error.
-        let target_rel = Path::new(parent);
-        match super::link_guard::assess_link_target(
-            dependency_ctx,
-            planner,
-            bob_dir,
-            target_rel,
-            block_id,
-            today,
-        ) {
-            Ok(super::link_guard::LinkGuardVerdict::Link) => LinkGuard::Link,
-            Ok(super::link_guard::LinkGuardVerdict::PullForward) => {
-                // Need the date: read scheduled field from parent line.
-                LinkGuard::Link
+    let target_rel = Path::new(parent);
+
+    // The link guard resolves targets by ID. For a selectable ID-less row,
+    // assess a scratch copy with the same collision-free ID the picker
+    // reports; the real staged batch remains untouched until selection.
+    let mut scratch_planner = super::batch::CaptureBatchPlanner::default();
+    let assessed_planner = if is_idless {
+        let Some(mint) = row.mint else {
+            return LinkGuard::Link;
+        };
+        let mut contents = planner
+            .current_contents(&bob_dir.join(target_rel))
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let had_trailing_newline = contents.ends_with('\n');
+        let mut lines: Vec<String> =
+            contents.lines().map(str::to_string).collect();
+        if let Some(task_line) = lines.get_mut(row.line.saturating_sub(1)) {
+            task_line.push_str(&format!(" ^{mint}"));
+            contents = lines.join("\n");
+            if had_trailing_newline {
+                contents.push('\n');
             }
-            Ok(super::link_guard::LinkGuardVerdict::DropDependencies(plan)) => {
-                LinkGuard::DropPrerequisites {
-                    count: plan.open_prerequisites.len(),
-                    pulled_forward: None,
-                }
+            if scratch_planner
+                .stage(&bob_dir.join(target_rel), contents)
+                .is_ok()
+            {
+                &mut scratch_planner
+            } else {
+                planner
             }
-            Ok(super::link_guard::LinkGuardVerdict::Consume(plan)) => {
-                let reason = plan
-                    .reasons
-                    .first()
-                    .map(|r| r.label.clone())
-                    .unwrap_or_else(|| "blocked".to_string());
-                LinkGuard::Consume { reason }
-            }
-            Err(_) => LinkGuard::Link,
+        } else {
+            planner
         }
     } else {
-        // Blocked: assess for real.
-        let target_rel = Path::new(parent);
-        match super::link_guard::assess_link_target(
-            dependency_ctx,
-            planner,
-            bob_dir,
-            target_rel,
-            block_id,
-            today,
-        ) {
-            Ok(super::link_guard::LinkGuardVerdict::Link) => LinkGuard::Link,
-            Ok(super::link_guard::LinkGuardVerdict::PullForward) => {
-                // Pull-forward date from the task's own scheduled field.
-                LinkGuard::Link
+        planner
+    };
+    let outcome = super::link_guard::assess_link_target(
+        dependency_ctx,
+        assessed_planner,
+        bob_dir,
+        target_rel,
+        resolved_id,
+        today,
+    );
+    let date = || {
+        row.own_scheduled.and_then(|value| {
+            crate::native::task_fields::parse_strict_calendar_date(value)
+                .filter(|scheduled| *scheduled > today)
+                .map(|_| super::project_note::display_move_date(value))
+        })
+    };
+    match outcome {
+        Ok(super::link_guard::LinkGuardVerdict::Link) => LinkGuard::Link,
+        Ok(super::link_guard::LinkGuardVerdict::PullForward) => date()
+            .map(|date| LinkGuard::PullForward { date })
+            .unwrap_or_else(|| LinkGuard::Consume {
+                reason: "future schedule cannot be pulled forward".to_string(),
+            }),
+        Ok(super::link_guard::LinkGuardVerdict::DropDependencies(plan)) => {
+            let pulled_forward = date().filter(|_| {
+                let contents = assessed_planner
+                    .current_contents(&bob_dir.join(target_rel))
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+                contents
+                    .lines()
+                    .nth(row.line.saturating_sub(1))
+                    .is_some_and(|task_line| {
+                        crate::native::capture_task_toggle::task_update_has_single_future_scheduled(
+                            task_line, today,
+                        )
+                    })
+            });
+            LinkGuard::DropPrerequisites {
+                count: plan.open_prerequisites.len(),
+                pulled_forward,
             }
-            Ok(super::link_guard::LinkGuardVerdict::DropDependencies(plan)) => {
-                LinkGuard::DropPrerequisites {
-                    count: plan.open_prerequisites.len(),
-                    pulled_forward: None,
-                }
-            }
-            Ok(super::link_guard::LinkGuardVerdict::Consume(plan)) => {
-                let reason = plan
-                    .reasons
-                    .first()
-                    .map(|r| r.label.clone())
-                    .unwrap_or_else(|| "blocked".to_string());
-                LinkGuard::Consume { reason }
-            }
-            Err(_) => LinkGuard::StatusOnly,
         }
+        Ok(super::link_guard::LinkGuardVerdict::Consume(plan)) => {
+            let detail = plan
+                .reasons
+                .iter()
+                .map(|reason| reason.label.as_str())
+                .collect::<Vec<_>>()
+                .join("; ");
+            let reason = if detail.is_empty() {
+                "blocked".to_string()
+            } else {
+                super::project_note::move_guard_reason(&format!(
+                    "not linked ({detail})"
+                ))
+            };
+            LinkGuard::Consume { reason }
+        }
+        Err(_) if row.status == '?' => LinkGuard::Consume {
+            reason: "cannot be linked".to_string(),
+        },
+        Err(_) => LinkGuard::Link,
     }
 }
 
@@ -1351,7 +1370,7 @@ fn apply_answers(slot: &mut MoveChoiceSlot, answers: &[Option<char>]) {
 #[allow(clippy::too_many_arguments)]
 pub(super) fn prepare_move_choice(
     request: &super::cli::CaptureRequest,
-    parsed_items: &mut Vec<crate::native::capture_language::ParsedCaptureItem>,
+    parsed_items: &mut [crate::native::capture_language::ParsedCaptureItem],
     planner: &mut super::batch::CaptureBatchPlanner,
     today: NaiveDate,
     dependency_ctx: &mut super::dependencies::DependencyContext,
@@ -1536,7 +1555,7 @@ fn mint_and_splice(
     request: &super::cli::CaptureRequest,
     slot: &MoveChoiceSlot,
     answers: &[Option<char>],
-    parsed_items: &mut Vec<crate::native::capture_language::ParsedCaptureItem>,
+    parsed_items: &mut [crate::native::capture_language::ParsedCaptureItem],
     planner: &mut super::batch::CaptureBatchPlanner,
 ) -> Result<(), super::output::CaptureError> {
     use super::output::CaptureError;

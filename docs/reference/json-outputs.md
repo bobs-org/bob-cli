@@ -239,9 +239,10 @@ the `draft_range` as a half-open UTF-8 byte pair for `^^`, `parent`,
 }
 ```
 
-Rows come from the shared movable-root eligibility in parent document order.
-They include ID-less and `#hide` roots; `^prj`, closed and nested tasks, and
-the project template placeholder are excluded. `open_count` is the number of
+Rows follow shared movable-root eligibility in parent order.
+Every listed row field is always present, with `null` where it does not apply.
+They include ID-less and `#hide` roots, excluding `^prj`, closed/nested tasks,
+and the template placeholder. `open_count` is the number of
 listed movable roots. `n` is the 1-based position among all rows, including
 rows that are locked or disabled, so answer numbers never shift around them.
 An identified row's key is `path#^id`; an ID-less
