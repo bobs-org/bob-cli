@@ -350,7 +350,16 @@ fn list_capture_pomodoros(
                 .map(|path| path.display().to_string())
                 .ok()
                 .or_else(|| plan_budget::daily_key_from_path(&day_file));
-            let budget = plan_budget::compute_for_daily(
+            let vault = plan_budget::off_clock::DiskCloseVault::new(
+                request.bob_dir.clone(),
+            );
+            let day_relative = day_file
+                .strip_prefix(&request.bob_dir)
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_else(|_| day_file.clone());
+            let budget = plan_budget::off_clock::compute_for_daily_in_vault(
+                &vault,
+                &day_relative,
                 &contents,
                 config,
                 daily_key.as_deref(),

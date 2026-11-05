@@ -170,7 +170,15 @@ pub(super) fn plan_budget_for_sync(
         .strip_prefix(bob_dir)
         .map(|path| path.display().to_string())
         .unwrap_or_else(|_| daily_path.display().to_string());
-    let ledger = plan_budget::compute_for_daily(
+    let vault =
+        plan_budget::off_clock::DiskCloseVault::new(bob_dir.to_path_buf());
+    let day_relative = daily_path
+        .strip_prefix(bob_dir)
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|_| daily_path.to_path_buf());
+    let ledger = plan_budget::off_clock::compute_for_daily_in_vault(
+        &vault,
+        &day_relative,
         daily_contents,
         &config,
         Some(&daily_file),

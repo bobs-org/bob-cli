@@ -255,7 +255,15 @@ fn budget_meter() -> Option<String> {
     let plan_config =
         config::load_plan_config(&config::config_path()).unwrap_or_default();
     let daily_key = plan_budget::daily_key_from_path(&day_file);
-    let ledger = plan_budget::compute_for_daily(
+    let bob_dir = bob_env::bob_dir();
+    let vault = plan_budget::off_clock::DiskCloseVault::new(bob_dir.clone());
+    let day_relative = day_file
+        .strip_prefix(&bob_dir)
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|_| day_file.clone());
+    let ledger = plan_budget::off_clock::compute_for_daily_in_vault(
+        &vault,
+        &day_relative,
         &contents,
         &plan_config,
         daily_key.as_deref(),

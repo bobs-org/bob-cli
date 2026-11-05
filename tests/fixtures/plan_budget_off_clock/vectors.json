@@ -1,0 +1,166 @@
+{
+  "cases": [
+    {
+      "id": "tag-off-link-uncapped",
+      "day": "## Pomodoros\n\n- [ ] () — FOCUS\n    - [[tasks#^off-one]]\n    - [[tasks#^on-one]]\n",
+      "notes": {
+        "tasks.md": "- [ ] #task Off one #off ^off-one\n- [ ] #task On one ^on-one\n"
+      },
+      "links_count": 1,
+      "links_off_clock": 1,
+      "status": "ok",
+      "entry_links": [1],
+      "today_count": 2
+    },
+    {
+      "id": "alias-off-link-uncapped",
+      "day": "## Pomodoros\n\n- [ ] () — FOCUS\n    - [[tasks#^alias-one]]\n    - [[tasks#^alias-two]]\n    - [[tasks#^on-one]]\n",
+      "notes": {
+        "tasks.md": "- [ ] #task Alias one #offclock ^alias-one\n- [ ] #task Alias two #untracked ^alias-two\n- [ ] #task On one ^on-one\n"
+      },
+      "links_count": 1,
+      "links_off_clock": 2,
+      "status": "ok",
+      "entry_links": [1],
+      "today_count": 3
+    },
+    {
+      "id": "note-default-off",
+      "day": "## Pomodoros\n\n- [ ] () — FOCUS\n    - [[rest#^nap]]\n    - [[tasks#^on-one]]\n",
+      "notes": {
+        "love.md": "---\ntype: [[area]]\noffclock: true\n---\n",
+        "rest.md": "---\ntype: [[project]]\nparent: [[love]]\n---\n- [ ] #task Nap ^nap\n",
+        "tasks.md": "- [ ] #task On one ^on-one\n"
+      },
+      "links_count": 1,
+      "links_off_clock": 1,
+      "status": "ok",
+      "entry_links": [1],
+      "today_count": 2
+    },
+    {
+      "id": "on-overrides-note-default",
+      "day": "## Pomodoros\n\n- [ ] () — FOCUS\n    - [[rest#^nap]]\n",
+      "notes": {
+        "love.md": "---\ntype: [[area]]\noffclock: true\n---\n",
+        "rest.md": "---\ntype: [[project]]\nparent: [[love]]\n---\n- [ ] #task Nap #on ^nap\n"
+      },
+      "links_count": 1,
+      "links_off_clock": 0,
+      "status": "ok",
+      "entry_links": [1],
+      "today_count": 1
+    },
+    {
+      "id": "root-field-inherits-off",
+      "day": "## Pomodoros\n\n- [ ] () — FOCUS\n    - [[tasks#^rooted]]\n    - [[tasks#^on-one]]\n",
+      "notes": {
+        "love.md": "---\ntype: [[area]]\noffclock: true\n---\n",
+        "tasks.md": "- [ ] #task Rooted [root:: love] ^rooted\n- [ ] #task On one ^on-one\n"
+      },
+      "links_count": 1,
+      "links_off_clock": 1,
+      "status": "ok",
+      "entry_links": [1],
+      "today_count": 2
+    },
+    {
+      "id": "event-task-same-note",
+      "day": "## Events\n- [ ] #task **1100-1130** Lunch #off ^lunch\n\n## Pomodoros\n\n- [ ] () — FOCUS\n    - [[#^lunch]]\n    - [[tasks#^on-one]]\n",
+      "notes": {
+        "tasks.md": "- [ ] #task On one ^on-one\n"
+      },
+      "links_count": 1,
+      "links_off_clock": 1,
+      "status": "ok",
+      "entry_links": [1],
+      "today_count": 2
+    },
+    {
+      "id": "unresolved-stays-counted",
+      "day": "## Pomodoros\n\n- [ ] () — FOCUS\n    - [[missing#^q]]\n    - [[tasks#^on-one]]\n",
+      "notes": {
+        "tasks.md": "- [ ] #task On one ^on-one\n"
+      },
+      "links_count": 2,
+      "links_off_clock": 0,
+      "status": "ok",
+      "entry_links": [2],
+      "today_count": 1
+    },
+    {
+      "id": "mixed-session-counts-only-on-clock",
+      "day": "## Pomodoros\n\n- [ ] () — FOCUS\n    - [[tasks#^off-one]]\n    - [[tasks#^on-one]]\n",
+      "notes": {
+        "tasks.md": "- [ ] #task Off one #off ^off-one\n- [ ] #task On one ^on-one\n"
+      },
+      "links_count": 1,
+      "links_off_clock": 1,
+      "status": "ok",
+      "entry_links": [1],
+      "today_count": 2
+    },
+    {
+      "id": "off-clock-never-over",
+      "max_links": 1,
+      "day": "## Pomodoros\n\n- [ ] () — FOCUS\n    - [[tasks#^on-one]]\n    - [[tasks#^off-one]]\n    - [[tasks#^off-two]]\n",
+      "notes": {
+        "tasks.md": "- [ ] #task On one ^on-one\n- [ ] #task Off one #off ^off-one\n- [ ] #task Off two #off ^off-two\n"
+      },
+      "links_count": 1,
+      "links_off_clock": 2,
+      "status": "ok",
+      "entry_links": [1],
+      "today_count": 3
+    },
+    {
+      "id": "on-clock-still-over",
+      "max_links": 1,
+      "day": "## Pomodoros\n\n- [ ] () — FOCUS\n    - [[tasks#^on-one]]\n    - [[tasks#^on-two]]\n    - [[tasks#^off-one]]\n",
+      "notes": {
+        "tasks.md": "- [ ] #task On one ^on-one\n- [ ] #task On two ^on-two\n- [ ] #task Off one #off ^off-one\n"
+      },
+      "links_count": 2,
+      "links_off_clock": 1,
+      "status": "over",
+      "entry_links": [2],
+      "today_count": 3
+    },
+    {
+      "id": "dedupe-across-entries",
+      "day": "## Pomodoros\n\n- [ ] () — ONE\n    - [[tasks#^off-one]]\n- [ ] () — TWO\n    - [[tasks#^off-one]]\n    - [[tasks#^on-one]]\n",
+      "notes": {
+        "tasks.md": "- [ ] #task Off one #off ^off-one\n- [ ] #task On one ^on-one\n"
+      },
+      "links_count": 1,
+      "links_off_clock": 1,
+      "status": "ok",
+      "entry_links": [0, 1],
+      "today_count": 2
+    },
+    {
+      "id": "exempt-entry-unchanged",
+      "day": "## Pomodoros\n\n- [ ] () — PLAN\n    - [[tasks#^off-one]]\n- [ ] () — FOCUS\n    - [[tasks#^on-one]]\n",
+      "notes": {
+        "tasks.md": "- [ ] #task Off one #off ^off-one\n- [ ] #task On one ^on-one\n"
+      },
+      "links_count": 1,
+      "links_off_clock": 0,
+      "status": "ok",
+      "entry_links": [0, 1],
+      "today_count": 2
+    },
+    {
+      "id": "done-off-clock-task",
+      "day": "## Pomodoros\n\n- [ ] () — FOCUS\n    - [[tasks#^off-one]]\n    - [[tasks#^on-one]]\n",
+      "notes": {
+        "tasks.md": "- [x] #task Off one #off ^off-one\n- [ ] #task On one ^on-one\n"
+      },
+      "links_count": 1,
+      "links_off_clock": 1,
+      "status": "ok",
+      "entry_links": [1],
+      "today_count": 1
+    }
+  ]
+}

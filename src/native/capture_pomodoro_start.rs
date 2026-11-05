@@ -10,7 +10,7 @@ use std::{
     cmp::Reverse,
     collections::{BTreeMap, BTreeSet},
     fmt,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use super::{
@@ -305,6 +305,88 @@ pub(crate) struct CountedLinkFact {
     pub resolution: Option<ClockResolution>,
 }
 
+/// Shared per-run link-clock setup so the budget and the session clock
+/// can never disagree about a link. Same-note links read `contents`;
+/// other-note links go through `vault` when one is present.
+pub(crate) struct LinkClockContext<'a, V: CloseVault + ?Sized> {
+    vault: Option<&'a V>,
+    day_relative: PathBuf,
+    contents: &'a str,
+    settings: note_tasks::NoteTaskSettings,
+    all_settings: note_tasks::NoteTaskSettings,
+    events: Vec<EventNoteRow>,
+    resolver: Option<
+        HomeResolver<
+            super::capture_pomodoro_close::CloseVaultHomeSource<'a, V>,
+        >,
+    >,
+}
+
+impl<'a, V: CloseVault + ?Sized> LinkClockContext<'a, V> {
+    pub(crate) fn new(
+        vault: Option<&'a V>,
+        day_relative: &Path,
+        contents: &'a str,
+    ) -> Self {
+        let settings = vault
+            .map(|vault| note_tasks::read_settings(vault.bob_dir()))
+            .unwrap_or_else(|| note_tasks::read_settings(Path::new("")));
+        let mut all_settings = settings.clone();
+        all_settings.global_filter.clear();
+        let mut event_rows = canonical_daily_date(day_relative)
+            .map(|date| events_in_note(contents, date))
+            .unwrap_or_default();
+        let mut resolver = vault.map(clock_resolver);
+        if let Some(resolver) = resolver.as_mut() {
+            enrich_event_clocks(
+                day_relative,
+                contents,
+                &mut event_rows,
+                resolver,
+            );
+        }
+        Self {
+            vault,
+            day_relative: day_relative.to_path_buf(),
+            contents,
+            settings,
+            all_settings,
+            events: event_rows,
+            resolver,
+        }
+    }
+
+    pub(crate) fn resolve_link(&mut self, link: &StartLink) -> CountedLinkFact {
+        resolve_clock_fact(
+            self.vault,
+            self.resolver.as_mut(),
+            &self.events,
+            &self.day_relative,
+            self.contents,
+            link,
+            &self.settings,
+            &self.all_settings,
+        )
+    }
+
+    pub(crate) fn resolve(
+        &mut self,
+        path_part: &str,
+        block_id: &str,
+        embedded: bool,
+    ) -> CountedLinkFact {
+        let link = StartLink {
+            index: 0,
+            ledger_line: 0,
+            embedded,
+            path_part: path_part.to_string(),
+            block_id: block_id.to_string(),
+            block_link: String::new(),
+        };
+        self.resolve_link(&link)
+    }
+}
+
 /// Resolve the counted Task Links under `entry_index` to clock facts.
 /// Same-note links read `contents` (the note being rewritten). Other-note
 /// links go through `vault` when one is present, and fail toward worked
@@ -317,32 +399,10 @@ pub(crate) fn resolve_session_clock_links<V: CloseVault + ?Sized>(
     entry_index: usize,
 ) -> Vec<CountedLinkFact> {
     let links = session_links(contents, entry_index);
-    let settings = vault
-        .map(|vault| note_tasks::read_settings(vault.bob_dir()))
-        .unwrap_or_else(|| note_tasks::read_settings(Path::new("")));
-    let mut all_settings = settings.clone();
-    all_settings.global_filter.clear();
-    let mut event_rows = canonical_daily_date(day_relative)
-        .map(|date| events_in_note(contents, date))
-        .unwrap_or_default();
-    let mut resolver = vault.map(clock_resolver);
-    if let Some(resolver) = resolver.as_mut() {
-        enrich_event_clocks(day_relative, contents, &mut event_rows, resolver);
-    }
+    let mut context = LinkClockContext::new(vault, day_relative, contents);
     links
         .iter()
-        .map(|link| {
-            resolve_clock_fact(
-                vault,
-                resolver.as_mut(),
-                &event_rows,
-                day_relative,
-                contents,
-                link,
-                &settings,
-                &all_settings,
-            )
-        })
+        .map(|link| context.resolve_link(link))
         .collect()
 }
 

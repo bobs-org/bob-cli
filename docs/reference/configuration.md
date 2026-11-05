@@ -102,7 +102,7 @@ exit 2; capture and hook surfaces warn and use their established fallback.
 
 | Key | Type | Default | Effect |
 | --- | --- | --- | --- |
-| `plan.max_links` | Positive integer | `10` | Maximum distinct Task Links in today's open Pomodoros before the plan reports over budget. |
+| `plan.max_links` | Positive integer | `10` | Maximum distinct on-clock Task Links in today's open Pomodoros before the plan reports over budget; off-clock links are uncapped. |
 | `plan.max_next` | Positive integer | `15` | NEXT lane count cap. It is reported; it does not refuse work. |
 | `plan.max_pending` | Positive integer | `10` | PENDING lane count cap. It is reported; it does not refuse work. |
 | `plan.max_ready` | Positive integer | `100` | Dashboard READY backlog cap. |

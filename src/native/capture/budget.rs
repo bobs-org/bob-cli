@@ -33,6 +33,8 @@ pub(super) struct PlanBudgetMeter {
     pub(super) cap: u32,
     pub(super) over: bool,
     pub(super) before: usize,
+    #[serde(default)]
+    pub(super) off_clock: usize,
 }
 
 /// Top-level `plan_budget` on [`CaptureResult`]: present only when the
@@ -358,12 +360,31 @@ pub(super) fn append_plan_budget(
         .map(|path| path.display().to_string())
         .ok()
         .or_else(|| plan_budget::daily_key_from_path(&day_file));
-    let before = plan_budget::compute_for_daily(
+    let day_relative: std::path::PathBuf = day_file
+        .strip_prefix(&request.bob_dir)
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|_| day_file.clone());
+    let before_vault =
+        plan_budget::off_clock::DiskCloseVault::new(request.bob_dir.clone());
+    let before = plan_budget::off_clock::compute_for_daily_in_vault(
+        &before_vault,
+        &day_relative,
         &staged.original_target,
         &config,
         daily_key.as_deref(),
     );
-    let after = plan_budget::compute_for_daily(
+    let mut staged_map = BTreeMap::new();
+    for file in &batch.text_files {
+        staged_map
+            .insert(file.target.clone(), Some(file.updated_target.clone()));
+    }
+    let after_vault = super::pomodoro_close::SnapshotCloseVault::from_staged(
+        request.bob_dir.clone(),
+        staged_map,
+    );
+    let after = plan_budget::off_clock::compute_for_daily_in_vault(
+        &after_vault,
+        &day_relative,
         &staged.updated_target,
         &config,
         daily_key.as_deref(),
@@ -398,6 +419,7 @@ pub(super) fn append_plan_budget(
             cap: after.links.cap,
             over: after.links.over,
             before: before.links.count,
+            off_clock: after.links.off_clock,
         },
         added_themes,
         added_theme_refs: Vec::new(),

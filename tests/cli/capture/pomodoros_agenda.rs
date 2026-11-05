@@ -590,7 +590,7 @@ fn agenda_budget_uses_configured_link_cap() {
         at_cap["plan_budget"],
         serde_json::json!({
             "status": "ok",
-            "links": {"count": 4, "cap": 4, "over": false}
+            "links": {"count": 4, "cap": 4, "over": false, "off_clock": 0}
         })
     );
 
@@ -600,7 +600,7 @@ fn agenda_budget_uses_configured_link_cap() {
         over["plan_budget"],
         serde_json::json!({
             "status": "over",
-            "links": {"count": 4, "cap": 3, "over": true}
+            "links": {"count": 4, "cap": 3, "over": true, "off_clock": 0}
         })
     );
 }
@@ -805,7 +805,7 @@ fn agenda_numbers_match_operator_lineups() {
         start_json["plan_budget"]["links"]["before"],
         idle_agenda["plan_budget"]["links"]["count"]
     );
-    for field in ["count", "cap", "over"] {
+    for field in ["count", "cap", "over", "off_clock"] {
         assert_eq!(
             start_json["plan_budget"]["links"][field],
             idle_agenda["plan_budget"]["links"][field],
@@ -875,10 +875,36 @@ fn agenda_budget_matches_plan_for_merged_exempt_alias_and_prose_links() {
         let field = "status";
         assert_eq!(agenda["plan_budget"][field], plan[field]);
     }
-    for field in ["count", "cap", "over"] {
+    for field in ["count", "cap", "over", "off_clock"] {
         assert_eq!(
             agenda["plan_budget"]["links"][field], plan["links"][field],
             "links.{field}"
         );
     }
+}
+
+#[test]
+fn agenda_plan_budget_leaves_out_off_clock_links() {
+    let temp = TempDir::new("bob-cli-pomodoros-agenda-off-clock");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20260828.md");
+    write_blocked_tasks_settings(&vault);
+    write_file(
+        &vault.join("tasks.md"),
+        "- [ ] #task Off one #off ^off01\n- [ ] #task On one ^on01\n",
+    );
+    write_file(
+        &day_file,
+        concat!(
+            "# Day\n",
+            "## Pomodoros\n",
+            "- [ ] () — FOCUS\n",
+            "\t- [[tasks#^off01]]\n",
+            "\t- [[tasks#^on01]]\n",
+        ),
+    );
+    let json = agenda_json(&vault, &day_file, &[]);
+    assert_eq!(json["plan_budget"]["links"]["count"], 1);
+    assert_eq!(json["plan_budget"]["links"]["off_clock"], 1);
+    assert_eq!(json["plan_budget"]["status"], "ok");
 }

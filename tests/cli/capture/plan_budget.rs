@@ -842,3 +842,57 @@ fn capture_unknown_now_type_refuses_without_writing() {
         "task line should carry #task and created stamp:\n{task_line}"
     );
 }
+
+#[test]
+fn capture_queues_existing_off_clock_task_without_warning() {
+    let temp = TempDir::new("bob-cli-capture-budget-off-clock-existing");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20261105.md");
+    write_blocked_tasks_settings(&vault);
+    let mut tasks = String::from("- [ ] #task Off one #off ^off01\n");
+    for index in 0..10 {
+        tasks.push_str(&format!("- [ ] #task On {index} ^on{index:02}\n"));
+    }
+    write_file(&vault.join("tasks.md"), &tasks);
+    let mut day = String::from("## Pomodoros\n\n- [ ] () — FOCUS\n");
+    for index in 0..10 {
+        day.push_str(&format!("    - [[tasks#^on{index:02}]]\n"));
+    }
+    write_file(&day_file, &day);
+
+    let output = capture_json(&vault, &day_file, &["@tasks:off01"], None);
+    assert_success(&output);
+    let json = parse_json(&output);
+    let budget = &json["plan_budget"];
+    assert_eq!(budget["status"], "ok");
+    assert_eq!(budget["links"]["count"], 10);
+    assert_eq!(budget["links"]["before"], 10);
+    assert_eq!(budget["links"]["off_clock"], 1);
+    assert!(budget.get("warnings").is_none(), "{budget}");
+}
+
+#[test]
+fn capture_creates_off_clock_task_in_the_same_draft() {
+    let temp = TempDir::new("bob-cli-capture-budget-off-clock-staged");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20261105.md");
+    write_blocked_tasks_settings(&vault);
+    write_file(&vault.join("tasks.md"), "- [ ] #task On one ^on01\n");
+    write_file(
+        &day_file,
+        "## Pomodoros\n\n- [ ] () — FOCUS\n    - [[tasks#^on01]]\n",
+    );
+
+    let output = capture_json(
+        &vault,
+        &day_file,
+        &["@tasks:newoff", "New", "off", "task", "#off"],
+        None,
+    );
+    assert_success(&output);
+    let json = parse_json(&output);
+    let budget = &json["plan_budget"];
+    assert_eq!(budget["links"]["count"], 1, "{budget}");
+    assert_eq!(budget["links"]["off_clock"], 1, "{budget}");
+    assert!(budget.get("warnings").is_none(), "{budget}");
+}

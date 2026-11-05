@@ -6,6 +6,7 @@
 //! task-status hooks, and capture.
 
 pub(crate) mod cli;
+pub(crate) mod off_clock;
 pub(crate) mod roots;
 pub(crate) mod today;
 
@@ -57,6 +58,8 @@ pub(crate) struct PlanMeter {
     pub(crate) count: usize,
     pub(crate) cap: u32,
     pub(crate) over: bool,
+    #[serde(default)]
+    pub(crate) off_clock: usize,
 }
 
 /// One lane meter: the whole NEXT or PENDING lane, Today
@@ -496,10 +499,20 @@ fn count_lane(
 /// and its basename all mean the daily note itself (rule 6). Callers
 /// that know the day file must pass it; `compute` keeps the old
 /// behaviour for callers that do not.
+#[allow(dead_code)]
 pub(crate) fn compute_for_daily(
     contents: &str,
     config: &PlanConfig,
     daily_file: Option<&str>,
+) -> LedgerBudget {
+    compute_for_daily_with(contents, config, daily_file, &mut |_, _| false)
+}
+
+pub(crate) fn compute_for_daily_with(
+    contents: &str,
+    config: &PlanConfig,
+    daily_file: Option<&str>,
+    is_off_clock: &mut dyn FnMut(&str, &str) -> bool,
 ) -> LedgerBudget {
     let lines: Vec<&str> = contents.lines().collect();
     let Some(section) = pomodoro::pomodoros_section_range(&lines) else {
@@ -553,6 +566,8 @@ pub(crate) fn compute_for_daily(
     let mut seen_themes: BTreeMap<String, usize> = BTreeMap::new();
     let mut inventory_warned: BTreeSet<String> = BTreeSet::new();
     let mut seen_links: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut seen_off_clock: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut clock_cache: BTreeMap<(String, String), bool> = BTreeMap::new();
     let mut unnamed_counted = false;
 
     for entry in &scan.entries {
@@ -588,8 +603,15 @@ pub(crate) fn compute_for_daily(
         let mut distinct_links = BTreeSet::new();
         if !exempt_entry {
             for link in &entry_links {
-                distinct_links.insert(link.clone());
-                seen_links.insert(link.clone());
+                let off_clock = *clock_cache
+                    .entry(link.clone())
+                    .or_insert_with(|| is_off_clock(&link.0, &link.1));
+                if off_clock {
+                    seen_off_clock.insert(link.clone());
+                } else {
+                    distinct_links.insert(link.clone());
+                    seen_links.insert(link.clone());
+                }
             }
         }
 
@@ -665,7 +687,8 @@ pub(crate) fn compute_for_daily(
         entries[first].highlight = true;
     }
 
-    let links = meter(seen_links.len(), config.max_links());
+    let mut links = meter(seen_links.len(), config.max_links());
+    links.off_clock = seen_off_clock.len();
     let status = if links.over {
         PlanStatus::Over
     } else {
@@ -710,7 +733,12 @@ fn empty_budget(config: &PlanConfig) -> LedgerBudget {
 
 fn meter(count: usize, cap: u32) -> PlanMeter {
     let over = u64::try_from(count).unwrap_or(u64::MAX) > u64::from(cap);
-    PlanMeter { count, cap, over }
+    PlanMeter {
+        count,
+        cap,
+        over,
+        off_clock: 0,
+    }
 }
 
 /// Split a merged entry name (`BOB + DECKS`) into components.
@@ -1192,5 +1220,69 @@ mod tests {
         assert_eq!(ledger.entries[0].links, 1);
         let without_daily = budget(contents);
         assert_eq!(without_daily.links.count, 3);
+    }
+
+    #[test]
+    fn off_clock_callback_runs_once_per_distinct_pair() {
+        let contents = "## Pomodoros\n\
+            \n\
+            - [ ] () — ONE\n\
+            \x20   - [[task#^aaa]]\n\
+            - [ ] () — TWO\n\
+            \x20   - [[task#^aaa]]\n\
+            \x20   - [[other#^bbb]]\n";
+        let mut calls: Vec<(String, String)> = Vec::new();
+        let ledger = compute_for_daily_with(
+            contents,
+            &PlanConfig::default(),
+            None,
+            &mut |target: &str, block_id: &str| {
+                calls.push((target.to_string(), block_id.to_string()));
+                target == "other"
+            },
+        );
+        assert_eq!(ledger.links.count, 1);
+        assert_eq!(ledger.links.off_clock, 1);
+        assert_eq!(ledger.entries[0].links, 1);
+        assert_eq!(ledger.entries[1].links, 1);
+        calls.sort();
+        assert_eq!(
+            calls,
+            vec![
+                ("other".to_string(), "bbb".to_string()),
+                ("task".to_string(), "aaa".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn pure_compute_leaves_off_clock_at_zero() {
+        let ledger = budget(
+            "## Pomodoros\n\
+            \n\
+            - [ ] () — GOALS\n\
+            \x20   - [[task#^aaa]]\n",
+        );
+        assert_eq!(ledger.links.count, 1);
+        assert_eq!(ledger.links.off_clock, 0);
+    }
+
+    #[test]
+    fn off_clock_serializes_additively() {
+        let ledger = compute_for_daily_with(
+            "## Pomodoros\n\
+            \n\
+            - [ ] () — GOALS\n\
+            \x20   - [[task#^aaa]]\n",
+            &PlanConfig::default(),
+            None,
+            &mut |_, _| true,
+        );
+        assert_eq!(ledger.links.count, 0);
+        assert_eq!(ledger.links.off_clock, 1);
+        let value =
+            serde_json::to_value(&ledger.links).expect("meter serializes");
+        assert_eq!(value["count"], serde_json::json!(0));
+        assert_eq!(value["off_clock"], serde_json::json!(1));
     }
 }

@@ -19,6 +19,7 @@ mod move_done;
 mod note_walkers;
 mod periods;
 mod plan;
+mod plan_off_clock;
 mod plugins;
 mod pomodoro;
 mod projects;

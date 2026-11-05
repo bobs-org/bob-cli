@@ -639,3 +639,36 @@ fn run_pomodoro_fixture(
         panic!("run bob pomodoro {args:?} with {fixture_relative}: {error}")
     })
 }
+
+#[test]
+fn tmux_pomodoro_meter_leaves_out_off_clock_links() {
+    let temp = TempDir::new("bob-cli-tmux-off-clock");
+    let vault = temp.path().join("vault");
+    write_blocked_tasks_settings(&vault);
+    write_file(
+        &vault.join("2026/20260601.md"),
+        concat!(
+            "# Daily\n\n",
+            "## Pomodoros\n\n",
+            "- [ ] () — GOALS\n",
+            "  - [[tasks#^off01]]\n",
+            "  - [[tasks#^on01]]\n",
+        ),
+    );
+    write_file(
+        &vault.join("tasks.md"),
+        "- [ ] #task Off one #off ^off01\n- [ ] #task On one ^on01\n",
+    );
+
+    let output = bob_command()
+        .args(["pomodoro", "tmux"])
+        .env("BOB_DIR", &vault)
+        .env("BOB_DAY_FILE", vault.join("2026/20260601.md"))
+        .env("BOB_NOW", "2026-06-01 09:10:01")
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob pomodoro tmux with an off-clock link");
+
+    assert_success(&output);
+    assert_eq!(stdout(&output), "plan 1/10 | ");
+}

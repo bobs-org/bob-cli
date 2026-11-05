@@ -3307,14 +3307,16 @@ never budgeted: new types never warn and never refuse:
 
 ```json
 "plan_budget": {"status": "ok",
-  "links": {"count": 8, "cap": 10, "over": false, "before": 7},
+  "links": {"count": 8, "cap": 10, "over": false, "before": 7, "off_clock": 0},
   "added_themes": ["BOB"],
   "added_theme_refs": [{"key": "bob", "name": "BOB", "hue": "magenta",
     "hue_source": "hash"}]}
 ```
 
-The link-cap warning fires only while the batch grows the meter past
-its cap (`after > cap` and `after > before`). A capture that leaves an
+Off-clock links never grow the meter or warn: linking an off-clock task
+leaves `count` unchanged and reports it in `links.off_clock`. The
+link-cap warning fires only while the batch grows the on-clock meter
+past its cap (`after > cap` and `after > before`). A capture that leaves an
 over-cap plan alone stays quiet. Human output prints one meter line
 after the result (`plan 8/10 links`) and
 one `bob capture: warning: …` stderr line per fired warning; the
@@ -9362,7 +9364,7 @@ becomes that item's `resolution` and `warning` while a missing daily note or
 missing `## Pomodoros` section keeps the successful empty list with a warning.
 When the daily note has a `## Pomodoros` section, the top level also adds
 `plan_budget` with `status`, `themes`, and `links`. Each meter contains the saved
-open-ledger `count`, configured `cap`, and `over` flag (`count > cap`). It uses
+open-ledger on-clock `count`, `off_clock`, configured `cap`, and `over` flag (`count > cap`). It uses
 the same `plan:` limits loaded by capture (defaults are 3 themes and 10 links),
 and the counting rules in [Plan budgets](plan.md); it does not include capture
 growth, destination, or warning details. Empty and completed-only ledgers include

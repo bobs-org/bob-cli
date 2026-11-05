@@ -1499,7 +1499,7 @@ fn task_status_hooks_reports_plan_budget_in_json_and_human() {
     assert!(json["plan_budget"].get("themes").is_none());
     assert_eq!(
         json["plan_budget"]["links"],
-        serde_json::json!({"count": 3, "cap": 10, "over": false})
+        serde_json::json!({"count": 3, "cap": 10, "over": false, "off_clock": 0})
     );
     assert_eq!(json["plan_budget"]["today"]["count"], 3);
     assert_eq!(

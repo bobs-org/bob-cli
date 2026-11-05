@@ -23,7 +23,7 @@ use super::{
         pomodoro_themes::Catalog as ThemeCatalog,
         style::Styler,
     },
-    assemble_report, compute_for_daily, count_lanes,
+    assemble_report, count_lanes,
     roots::human_roots,
     today::{today_tasks, TodayResult},
     with_configured_theme_lints, with_entry_homes, with_theme_refs,
@@ -214,8 +214,18 @@ fn show_plan(request: &PlanRequest) -> Result<PlanSuccess, PlanError> {
         }
     };
 
-    let ledger =
-        compute_for_daily(&contents, &config, Some(&relative_day_file));
+    let vault = super::off_clock::DiskCloseVault::new(request.bob_dir.clone());
+    let day_relative = day_file
+        .strip_prefix(&request.bob_dir)
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|_| day_file.clone());
+    let ledger = super::off_clock::compute_for_daily_in_vault(
+        &vault,
+        &day_relative,
+        &contents,
+        &config,
+        Some(&relative_day_file),
+    );
     let has_section = ledger.has_section;
     let today_result = if has_section {
         today_tasks(&request.bob_dir, &relative_day_file, &contents)
@@ -301,6 +311,7 @@ fn report_without_ledger(
             count: 0,
             cap: config.max_links(),
             over: false,
+            off_clock: 0,
         },
         status: PlanStatus::Ok,
         theme_names: Vec::new(),
@@ -367,12 +378,6 @@ fn human_success(result: &PlanSuccess, styler: &Styler) -> String {
     }
     output.push('\n');
 
-    let links_meter =
-        format!("{}/{} links", report.links.count, report.links.cap);
-    let today_meter = format!("TODAY {}", report.today.count);
-    let pending_meter =
-        format!("{}/{}", report.pending.count, report.pending.cap);
-    let next_meter = format!("{}/{}", report.next.count, report.next.cap);
     let paint_meter = |styler: &Styler, text: &str, over: bool| {
         if over {
             styler.red(text)
@@ -380,9 +385,27 @@ fn human_success(result: &PlanSuccess, styler: &Styler) -> String {
             styler.green(text)
         }
     };
+    let links_base =
+        format!("{}/{} links", report.links.count, report.links.cap);
+    let links_meter = format!(
+        "{}{}",
+        paint_meter(styler, &links_base, report.links.over),
+        if report.links.off_clock > 0 {
+            format!(
+                " {}",
+                styler.dim(&format!("· {} off-clock", report.links.off_clock))
+            )
+        } else {
+            String::new()
+        }
+    );
+    let today_meter = format!("TODAY {}", report.today.count);
+    let pending_meter =
+        format!("{}/{}", report.pending.count, report.pending.cap);
+    let next_meter = format!("{}/{}", report.next.count, report.next.cap);
     output.push_str(&format!(
         "  PLAN  {}      {} {sep} PENDING {} {sep} NEXT {}\n",
-        paint_meter(styler, &links_meter, report.links.over),
+        links_meter,
         paint_meter(styler, &today_meter, false),
         paint_meter(styler, &pending_meter, report.pending.over),
         paint_meter(styler, &next_meter, report.next.over),

@@ -22,6 +22,17 @@ impl SnapshotCloseVault {
         }
     }
 
+    pub(super) fn from_staged(
+        bob_dir: PathBuf,
+        staged: BTreeMap<PathBuf, Option<String>>,
+    ) -> Self {
+        Self {
+            resolver: vault_links::VaultLinkResolver::new(bob_dir.clone()),
+            bob_dir,
+            staged,
+        }
+    }
+
     pub(super) fn read_filesystem(
         path: &Path,
     ) -> Result<Option<String>, String> {
