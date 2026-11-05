@@ -1,5 +1,6 @@
 //! Private MIME candidate collection and the stable body result boundary.
 
+pub(super) mod inert;
 pub(super) mod mime;
 
 use std::collections::BTreeMap;
@@ -7,6 +8,15 @@ use std::collections::BTreeMap;
 // Consumer: the later body-integration phase uses this public-to-crate boundary.
 #[allow(unused_imports)]
 pub(crate) use mime::{collect_message_bodies, MimeInventory};
+
+// Consumer: the html-body and body-integration phases render sender content
+// through this inert boundary.
+#[allow(unused_imports)]
+pub(crate) use inert::{
+    inert_label, inert_multiline, inert_single_line, inert_yaml_value,
+    prose_blocks, remote_image_link, render_blocks, verified_local_image_embed,
+    Block, Inline, SafeUrl,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BodySource {
