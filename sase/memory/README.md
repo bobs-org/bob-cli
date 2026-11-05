@@ -101,8 +101,8 @@ strand inherits no `type:` of its own and never inlines into `AGENTS.md`.
 - Description: Accepted architecture and policy decisions for bob-cli, bob-plugins, Bob
   Mac Capture, and the Bob vault — the choice, its rejected alternatives, and what would
   reopen it.
-- Lines: 304
-- Approx. tokens: 5346
+- Lines: 306
+- Approx. tokens: 5387
 
 ### `sase/memory/glossary.md`
 
@@ -170,8 +170,8 @@ strand inherits no `type:` of its own and never inlines into `AGENTS.md`.
 - Core notes: 1
 - Reference notes: 5
 - Web descriptor notes: 3
-- Total lines: 817
-- Total approx. tokens: 11737
+- Total lines: 819
+- Total approx. tokens: 11778
 
 ## Commands
 

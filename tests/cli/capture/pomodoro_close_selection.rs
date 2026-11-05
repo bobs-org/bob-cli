@@ -240,7 +240,7 @@ fn capture_pomodoro_close_selection_in_progress_and_complete() {
 
 #[test]
 fn capture_pomodoro_close_selection_complete_listed() {
-    // `x!1`: task 1 complete (listed), task 2 deferred (ledger).
+    // `x!1`: task 1 complete (listed), task 2 deferred (unlisted).
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-sel-c1");
     let json =
         run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x!1"]);
@@ -267,7 +267,7 @@ fn capture_pomodoro_close_selection_complete_listed() {
                 "block_id": "web-capture",
                 "marker": "deferred",
                 "outcome": "deferred",
-                "source": "ledger"
+                "source": "unlisted"
             }
         ])
     );
@@ -1538,7 +1538,7 @@ fn capture_pomodoro_close_selection_drop_human_output() {
 
 #[test]
 fn capture_pomodoro_close_selection_drop_only_forms() {
-    // `x~2` drops with unlisted links at their ledger outcome;
+    // `x~2` drops with unlisted links deferred;
     // `x0~2` drops while deferring everything else.
     let (_temp, vault, day_file) =
         drop_worked_vault("bob-cli-close-sel-drop-only");
@@ -1548,8 +1548,8 @@ fn capture_pomodoro_close_selection_drop_only_forms() {
     assert!(close["in_progress"].is_null());
     assert_eq!(close["complete"], serde_json::json!([]));
     assert_eq!(close["drop"], serde_json::json!([2]));
-    assert_eq!(close["task_links"][0]["outcome"], "in_progress");
-    assert_eq!(close["task_links"][0]["source"], "ledger");
+    assert_eq!(close["task_links"][0]["outcome"], "deferred");
+    assert_eq!(close["task_links"][0]["source"], "unlisted");
     assert_eq!(close["task_links"][1]["outcome"], "dropped");
 
     let (_temp, vault, day_file) =

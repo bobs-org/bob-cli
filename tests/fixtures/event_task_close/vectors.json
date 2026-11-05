@@ -96,6 +96,15 @@
       "expected_clock": ["ended_inside", "not_started"]
     },
     {
+      "id": "explicit-list-keeps-clock-outcome-for-unlisted-running-event",
+      "close_token": "x!2",
+      "rust_only": true,
+      "now": "2026-10-29 10:00:00",
+      "day": "## Events\n- [ ] #task **0930-1030** Running ^running\n- [ ] #task **0830-0900** Ended inside ^ended-inside\n\n## Pomodoros\n- [ ] (**0800-1000** [t:: 120m]) — MEET\n  - [[#^running]]\n  - [[#^ended-inside]]\n- [ ] () — PLAN\n",
+      "expected_outcomes": ["in_progress", "complete"],
+      "expected_clock": ["running", "ended_inside"]
+    },
+    {
       "id": "complete-wildcard-does-not-complete-not-started-event",
       "close_token": "x!",
       "rust_only": true,

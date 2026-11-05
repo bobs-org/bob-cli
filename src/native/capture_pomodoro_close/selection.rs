@@ -11,8 +11,9 @@ use super::super::{
         nearest_shallower_list_item_parent,
     },
     capture_language::{
-        assign_log_positions, lexical_worked_tasks_with_all, CloseLogEntry,
-        CloseLogOrigin, PositionalLogError,
+        assign_log_positions, close_selection_is_explicit,
+        lexical_worked_tasks_with_all, CloseLogEntry, CloseLogOrigin,
+        PositionalLogError,
     },
     event_task::{event_task_by_id, ClockClass, CloseClock, EventTaskClock},
     markdown,
@@ -66,12 +67,19 @@ impl CloseSelection {
         self
     }
 
-    /// Selection mode is active when `<N>` or a `*` group was typed.
+    /// A numbered list activates explicit mode; empty wildcards are handled
+    /// separately because they select the runtime lineup.
+    pub(crate) fn is_explicit(&self) -> bool {
+        close_selection_is_explicit(
+            self.in_progress.is_some(),
+            !self.park.is_empty(),
+            !self.complete.is_empty(),
+            !self.drop.is_empty(),
+        )
+    }
+
     pub(crate) fn has_work_selection(&self) -> bool {
-        self.in_progress.is_some()
-            || !self.park.is_empty()
-            || self.park_all
-            || self.complete_all
+        self.is_explicit() || self.park_all || self.complete_all
     }
 
     pub(crate) fn with_log(mut self, log: Vec<CloseLogEntry>) -> Self {
@@ -816,16 +824,7 @@ fn outcome_for(
         };
         return (clock_outcome(clock.class), source);
     }
-    if let Some(in_progress) = selection.in_progress.as_ref() {
-        if in_progress.contains(&index) {
-            return (TaskLinkOutcome::InProgress, TaskLinkSource::Listed);
-        }
-        if marker == TaskLinkMarker::Embedded {
-            return (TaskLinkOutcome::Complete, TaskLinkSource::Unlisted);
-        }
-        return (TaskLinkOutcome::Deferred, TaskLinkSource::Unlisted);
-    }
-    if !selection.park.is_empty() {
+    if selection.is_explicit() {
         if marker == TaskLinkMarker::Embedded {
             return (TaskLinkOutcome::Complete, TaskLinkSource::Unlisted);
         }
@@ -1094,10 +1093,12 @@ fn resolve_close_log_entries(
         .map(|set| set.iter().copied().collect::<Vec<_>>());
     let park: Vec<u32> = selection.park.iter().copied().collect();
     let complete: Vec<u32> = selection.complete.iter().copied().collect();
+    let drop: Vec<u32> = selection.drop.iter().copied().collect();
     let w_star = lexical_worked_tasks_with_all(
         in_progress.as_deref(),
         &park,
         &complete,
+        &drop,
         selection.park_all,
         selection.complete_all,
     )

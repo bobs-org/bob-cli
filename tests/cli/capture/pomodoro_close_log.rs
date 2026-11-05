@@ -222,14 +222,14 @@ fn capture_pomodoro_close_log_worked_table() {
 
 #[test]
 fn capture_pomodoro_close_log_complete_target() {
-    // `x1!2` plus `- 2 shipped it`: 2 completes and its entry lands in the
-    // completed task.
+    // `x!2` alone enters explicit mode; task 2 completes and receives the
+    // entry while the unlisted task defers.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-log-c");
     let json = run_close_json(
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["x1!2\n- 2 shipped it"],
+        &["x!2\n- 2 shipped it"],
     );
     assert_eq!(
         json["pomodoro_close"]["log"],
@@ -237,6 +237,11 @@ fn capture_pomodoro_close_log_complete_target() {
     );
     let bob_after = fs::read_to_string(vault.join("bob.md")).expect("read bob");
     assert!(bob_after.contains("shipped it"), "{bob_after}");
+    let day_after = fs::read_to_string(&day_file).expect("read day");
+    assert!(
+        day_after.contains("~~[[bob#^web-capture]]~~\n\t\t- shipped it"),
+        "{day_after}"
+    );
 }
 
 #[test]
@@ -299,6 +304,27 @@ fn capture_pomodoro_close_log_execution_errors() {
         );
         assert!(error.contains(phrase), "{args:?}: {error}");
     }
+
+    // `!` and `~` numbered lists alone are explicit. A completion list logs
+    // only to its listed task, and unlisted numbers retain every list in the
+    // correction suggestions.
+    let error = run_close_expect_error(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["x!2\n- 1 note"],
+    );
+    assert!(error.contains("isn't worked by `x!2`"), "{error}");
+    assert!(error.contains("`x1!2`"), "{error}");
+    assert!(error.contains("`x!1,2`"), "{error}");
+
+    let error = run_close_expect_error(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["x~2\n- wired the lexer"],
+    );
+    assert!(error.contains("works no task"), "{error}");
     assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
 
     // A dangling bullet stays incomplete, quoting its bullet head.

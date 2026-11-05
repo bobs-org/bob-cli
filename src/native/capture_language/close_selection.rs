@@ -10,8 +10,7 @@ use super::bare_name::start_name_spelling;
 use super::markers::*;
 use super::model::*;
 
-/// A fully typed selection: `<N>` (or `None` when omitted, so unlisted links
-/// keep their ledger outcome unless `*<P>` is present) plus the `*<P>`,
+/// A fully typed selection: `<N>` (or `None` when omitted) plus the `*<P>`,
 /// `!<M>`, `~<K>`, and `@<N>` lists. `<N>` may instead be typed last as
 /// `@<N>` in any order among `*`, `!`, `~`. Ranges are absolute byte offsets:
 /// `in_progress_range` covers `<N>` including its commas (or `@<N>`

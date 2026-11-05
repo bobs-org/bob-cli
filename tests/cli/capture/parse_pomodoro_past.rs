@@ -97,6 +97,17 @@ fn past_parse_reports_full_contract_and_grammar_13() {
     assert!(human.contains("FIX"), "{human}");
     assert!(human.contains("repair"), "{human}");
 
+    let explicit_complete = parse_human("x=fix=!2");
+    assert!(
+        explicit_complete.contains("close: complete 2 · defer the rest"),
+        "{explicit_complete}"
+    );
+    let explicit_drop = parse_human("x=fix=~2");
+    assert!(
+        explicit_drop.contains("close: drop 2 · defer the rest"),
+        "{explicit_drop}"
+    );
+
     // Both spellings give byte-identical vault semantics (raw differs).
     let a = parse("x=3fix=*3");
     let b = parse("x=fix3=*3");

@@ -84,7 +84,7 @@
   {
    "id": "close-mixed-after-dropping-on-clock",
    "now": "2026-11-01 09:00:00",
-   "token": "x~2",
+   "token": "x1~2",
    "notes": {
     "bob.md": "## Tasks\n- [*] #task Walk the dog #offclock ^walk\n- [*] #task Fix the parser ^parser\n"
    },

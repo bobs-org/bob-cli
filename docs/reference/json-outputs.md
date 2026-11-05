@@ -94,9 +94,8 @@ beside the usual `code`, `message`, and ledger `line`. See
 | `bob capture-templates delete` | `-f json` | Removed entries plus remaining count | `schema_version: 1` | [Capture](../capture.md#saved-templates) |
 | `bob capture-templates clear` | `-f json` | Cleared count | `schema_version: 1` | [Capture](../capture.md#saved-templates) |
 
-Past results return `kind: "pomodoro_past"`, `placement`, and `pomodoro_past`
-details. Batches mark `recorded`/`trimmed`, warn `pomodoro_past_trim`, and omit
-`pomodoro_close`.
+Past results include `kind: "pomodoro_past"`, `placement`, and details; batches
+report `recorded`/`trimmed`, warn `pomodoro_past_trim`, and omit `pomodoro_close`.
 
 For `bob capture-complete` in `relation_label` context, visible catalog rows include
 `label`, normalized `key`, `count`, `replacement`, and optional `inverse`. A nonempty

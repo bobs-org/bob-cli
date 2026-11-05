@@ -292,7 +292,8 @@ fn outcome_table_covers_every_row() {
         "\t- ![[a#^three]]",
     ]);
     let running = running_of(&contents);
-    // Listed complete beats everything.
+    // Listed complete wins, while unlisted plain links defer in explicit
+    // mode and authored markers retain their own outcomes.
     let applied =
         apply_close_selection(&contents, &running, &sel(None, vec![2], "x!2"))
             .expect("apply");
@@ -303,9 +304,9 @@ fn outcome_table_covers_every_row() {
             .map(|l| (l.index, l.outcome, l.source))
             .collect::<Vec<_>>(),
         vec![
-            (1, TaskLinkOutcome::InProgress, TaskLinkSource::Ledger),
+            (1, TaskLinkOutcome::Deferred, TaskLinkSource::Unlisted),
             (2, TaskLinkOutcome::Complete, TaskLinkSource::Listed),
-            (3, TaskLinkOutcome::Complete, TaskLinkSource::Ledger),
+            (3, TaskLinkOutcome::Complete, TaskLinkSource::Unlisted),
         ]
     );
     // Listed in-progress beats ledger.
@@ -326,7 +327,7 @@ fn outcome_table_covers_every_row() {
             (2, TaskLinkOutcome::InProgress, TaskLinkSource::Listed),
             (3, TaskLinkOutcome::Complete, TaskLinkSource::Unlisted),
         ],
-        "hand transclusion is kept when <N> is typed"
+        "an authored deferred marker stays deferred in explicit mode"
     );
     // No list: ledger outcomes and sources.
     let applied =
@@ -360,6 +361,75 @@ fn outcome_table_covers_every_row() {
         vec![
             (1, TaskLinkOutcome::Deferred, TaskLinkSource::Unlisted),
             (2, TaskLinkOutcome::Deferred, TaskLinkSource::Unlisted),
+            (3, TaskLinkOutcome::Complete, TaskLinkSource::Unlisted),
+        ]
+    );
+}
+
+#[test]
+fn any_numbered_list_defers_unlisted_links_and_preserves_authored_markers() {
+    let plain_contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]",
+        "\t- [[a#^two]]",
+        "\t- [[a#^three]]",
+    ]);
+    let running = running_of(&plain_contents);
+    for (selection, expected) in [
+        (
+            sel(None, vec![2], "x!2"),
+            vec![
+                (1, TaskLinkOutcome::Deferred, TaskLinkSource::Unlisted),
+                (2, TaskLinkOutcome::Complete, TaskLinkSource::Listed),
+                (3, TaskLinkOutcome::Deferred, TaskLinkSource::Unlisted),
+            ],
+        ),
+        (
+            sel_drop(None, vec![], vec![2], "x~2"),
+            vec![
+                (1, TaskLinkOutcome::Deferred, TaskLinkSource::Unlisted),
+                (2, TaskLinkOutcome::Dropped, TaskLinkSource::Listed),
+                (3, TaskLinkOutcome::Deferred, TaskLinkSource::Unlisted),
+            ],
+        ),
+    ] {
+        let applied =
+            apply_close_selection(&plain_contents, &running, &selection)
+                .expect("apply explicit list");
+        assert_eq!(
+            applied
+                .lineup
+                .iter()
+                .map(|link| (link.index, link.outcome, link.source))
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+
+    let authored_contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^deferred]]#",
+        "\t- [[a#^selected]]",
+        "\t- ![[a#^embedded]]",
+    ]);
+    let running = running_of(&authored_contents);
+    let applied = apply_close_selection(
+        &authored_contents,
+        &running,
+        &sel(None, vec![2], "x!2"),
+    )
+    .expect("apply while preserving authored markers");
+    assert_eq!(
+        applied
+            .lineup
+            .iter()
+            .map(|link| (link.index, link.outcome, link.source))
+            .collect::<Vec<_>>(),
+        vec![
+            (1, TaskLinkOutcome::Deferred, TaskLinkSource::Unlisted),
+            (2, TaskLinkOutcome::Complete, TaskLinkSource::Listed),
             (3, TaskLinkOutcome::Complete, TaskLinkSource::Unlisted),
         ]
     );
@@ -490,9 +560,9 @@ fn drop_removes_from_closed_session_without_carry() {
             .map(|l| (l.index, l.outcome, l.source))
             .collect::<Vec<_>>(),
         vec![
-            (1, TaskLinkOutcome::InProgress, TaskLinkSource::Ledger),
+            (1, TaskLinkOutcome::Deferred, TaskLinkSource::Unlisted),
             (2, TaskLinkOutcome::Dropped, TaskLinkSource::Listed),
-            (3, TaskLinkOutcome::Deferred, TaskLinkSource::Ledger),
+            (3, TaskLinkOutcome::Deferred, TaskLinkSource::Unlisted),
         ]
     );
     assert!(
@@ -1632,21 +1702,23 @@ fn positional_entries_follow_drop_and_complete_outcomes() {
         "\t- [[a#^two]]",
         "\t- [[a#^three]]",
     ]);
-    // `~2` drops link 2, so the bullets land on 1 and 3.
+    // A drop-only numeric list activates explicit mode but works no task, so
+    // positional Work Log bullets cannot be assigned.
     let running = running_of(&contents);
     let mut dropped = sel_positional(vec!["a", "b"], "x~2");
     dropped.drop = [2].into_iter().collect();
-    let applied =
-        apply_close_selection(&contents, &running, &dropped).expect("apply");
-    assert_eq!(positional_indices(&applied), vec![Some(1), Some(3)]);
-    // `!2` completes link 2, which stays worked: the bullets land on 1
-    // and 2.
+    assert!(matches!(
+        apply_close_selection(&contents, &running, &dropped),
+        Err(CloseSelectionError::LogPositionalNone { .. })
+    ));
+    // `!2` completes link 2 while the unlisted links defer, so both
+    // positional bullets resolve to the only worked link.
     let running = running_of(&contents);
     let mut completed = sel_positional(vec!["a", "b"], "x!2");
     completed.complete = [2].into_iter().collect();
     let applied =
         apply_close_selection(&contents, &running, &completed).expect("apply");
-    assert_eq!(positional_indices(&applied), vec![Some(1), Some(2)]);
+    assert_eq!(positional_indices(&applied), vec![Some(2), Some(2)]);
 }
 
 #[test]

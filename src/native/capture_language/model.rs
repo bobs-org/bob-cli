@@ -263,15 +263,15 @@ pub(crate) enum SessionOperator {
 ///
 /// A selection (`x[<N>][*<P>][!<M>][~<K>]`, with `*`/`!`/`~` in any order)
 /// names numbered Task Links: `in_progress` is `None` when no `<N>` list was
-/// typed (unlisted links keep their ledger outcome unless `*<P>` is present,
-/// which activates selection mode like `<N>`) and `Some` (possibly empty for
-/// `x0`) when one was; `park` holds the `*<P>` list, `complete` the `!<M>`
-/// list, and `drop` the `~<K>` list, each empty when none was typed. `park_all`
-/// and `complete_all` retain a present group with no numbers; execution
-/// expands its outcome over the remaining numbered Task Links. All concrete
-/// lists are sorted ascending. Plain `x` reports `in_progress: None` and
-/// empty `park`/`complete`/`drop`, so version-tolerant readers see only
-/// additive fields.
+/// typed and `Some` (possibly empty for `x0`) when one was; `park` holds the
+/// `*<P>` list, `complete` the `!<M>` list, and `drop` the `~<K>` list, each
+/// empty when none was typed. Any typed task number makes the close explicit:
+/// only listed links are included and other plain links defer. `park_all` and
+/// `complete_all` retain a present group with no numbers; execution expands its
+/// outcome over the remaining numbered Task Links. All concrete lists are
+/// sorted ascending. Plain `x` reports `in_progress: None` and empty
+/// `park`/`complete`/`drop`, so version-tolerant readers see only additive
+/// fields.
 ///
 /// Work Log bullets (`- [<n>] <text>` child lines under
 /// `x[<N>][*<P>][!<M>][~<K>]`) append `log` entries: each names a
@@ -318,13 +318,25 @@ fn is_false(value: &bool) -> bool {
     !value
 }
 
+/// A close is explicit when any numbered task list contains a number, or
+/// when `<N>` was typed (including an empty `x0` list).
+pub(crate) fn close_selection_is_explicit(
+    in_progress: bool,
+    park: bool,
+    complete: bool,
+    drop: bool,
+) -> bool {
+    in_progress || park || complete || drop
+}
+
 /// One typed Work Log entry on a close: the numbered Task Link it logs to
 /// plus the literal, unescaped entry text and its nested detail lines.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct CloseLogEntry {
     /// Numbered Task Link the entry is logged under. `None` means an
-    /// unnumbered bullet under a close without `<N>`/`*<P>`, which
-    /// `bob capture` resolves against the running session; omitted from
+    /// unnumbered bullet under a close without a numbered list or under
+    /// wildcard intent, which `bob capture` resolves against the running
+    /// session; omitted from
     /// JSON so `capture-parse` leaves it out until execution fills it.
     /// Star bullets keep `None` in `capture-parse` and expand to real
     /// indices in `bob capture`.
@@ -397,6 +409,16 @@ impl PomodoroCloseSpec {
             || !self.complete.is_empty()
             || self.complete_all
             || !self.drop.is_empty()
+    }
+
+    /// `true` when any numbered list switches this close to explicit mode.
+    pub(crate) fn is_explicit(&self) -> bool {
+        close_selection_is_explicit(
+            self.in_progress.is_some(),
+            !self.park.is_empty(),
+            !self.complete.is_empty(),
+            !self.drop.is_empty(),
+        )
     }
 
     /// `true` when the spec carries at least one typed Work Log entry.

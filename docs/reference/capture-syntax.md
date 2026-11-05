@@ -985,10 +985,9 @@ Contract: [Starting the next Pomodoro](../capture.md#starting-the-next-pomodoro)
 
 ### `x` {#x-close}
 
-Close today's running timed Pomodoro. Lowercase `x` only. Selection pieces
-`*`, `!`, `~`, and `@` may appear in any order. `<N>` keeps those numbered
-Task Links in progress; a lone `0` means none. `@<N>` is the same keep-list
-typed last (`x!1@2` means `x2!1`).
+Standalone lowercase `x` closes today's timed Pomodoro. Numbered lists make
+selection explicit; other plain links defer. Markers may appear in any order.
+`0` means none; `@<N>` types the keep-list last.
 
 ```bash
 bob capture --dry-run 'x'
@@ -1007,8 +1006,8 @@ Contract: [Closing the running Pomodoro](../capture.md#closing-the-running-pomod
 
 ### `x!<M>` {#x-complete-links}
 
-Complete those numbered Task Links. A present-but-empty `!` completes every
-remaining numbered link (`x!`). `x!1` narrows to task 1.
+Complete those numbered Task Links. Empty `!` completes all remaining;
+`x!1` completes task 1 and defers others.
 
 ```bash
 bob capture --dry-run 'x!'
@@ -1043,8 +1042,8 @@ Contract: [Choosing each Task Link's outcome](../capture.md#choosing-each-task-l
 
 ### `x~<K>` {#x-drop-links}
 
-Drop those links (removed, not carried, not started). `x~` is incomplete
-(`pomodoro_close_task`).
+Drop those links (removed, not carried, not started); a numbered `~` list
+defers other plain links. `x~` is incomplete (`pomodoro_close_task`).
 
 ```bash
 bob capture --dry-run 'x~1'
@@ -1067,10 +1066,11 @@ Contract: [Choosing each Task Link's outcome](../capture.md#choosing-each-task-l
 
 ### Work Log {#x-work-log}
 
-One entry may sit on the close line; several use child bullets. With no
-number, the line logs to the first task the close works. A leading number
-names the task (`x 1 3 bugs fixed` logs `3 bugs fixed` to task 1). `x 1`
-without text is incomplete (`pomodoro_close_log_text`). Entries receive
+One inline entry or several child bullets may log work. Unnumbered entries go
+to the first worked task, or first listed in explicit mode (`x!2` logs to 2;
+`x~2` works none). A leading number names a task (`x 1 3 bugs fixed` logs
+`3 bugs fixed` to task 1); `x 1` without text is incomplete
+(`pomodoro_close_log_text`). Entries receive
 `*YYYY-MM-DD HH:MM* —` timestamps. Bullets are numbered all or none;
 `- * summary` copies a summary to each worked task without a task-specific
 entry in this close. A two-space bullet nests an undated detail.

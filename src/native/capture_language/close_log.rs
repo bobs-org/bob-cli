@@ -22,20 +22,19 @@
 //! as numbered or star heads.
 //!
 //! Unnumbered bullets log in order to the close's worked tasks `W`: without
-//! wildcard intent, selection mode (`<N>` typed, including `x0`, or a
-//! non-empty `*<P>`) uses the lexical `sorted(<N> ∪ *<P> ∪ !<M>)`; otherwise
-//! positions stay `None` for `bob capture` to resolve against the running
-//! session. Wildcard positions always wait for that staged lineup. The assignment rule
+//! wildcard intent, any numbered list makes the close explicit and uses the
+//! lexical `sorted(<N> ∪ *<P> ∪ !<M>)`; otherwise positions stay `None` for
+//! `bob capture` to resolve against the running session. Wildcard positions
+//! always wait for that staged lineup. The assignment rule
 //! ([`assign_log_positions`]) is: no worked task is an error, one worked
 //! task takes every bullet, otherwise bullet `i` logs to `W[i]`, and more
 //! bullets than worked tasks is an error.
 //!
 //! A two-space nested bullet is a detail of the nearest preceding entry,
 //! numbered or not, and its text is entirely literal. Loggability of
-//! numbered bullets is purely lexical: with `<N>` typed (including `x0`)
-//! or `*<P>` present only the numbers in `<N>`, `*<P>`, or `!<M>` start
-//! entries, otherwise every number `>= 1` starts one except those in
-//! `~<K>`. Every backslash is literal.
+//! numbered bullets is purely lexical: in explicit mode only the numbers
+//! in `<N>`, `*<P>`, or `!<M>` start entries; otherwise every number `>= 1`
+//! starts one except those in `~<K>`. Every backslash is literal.
 
 use super::close_selection::*;
 use super::draft::*;
@@ -90,10 +89,10 @@ pub(crate) struct CloseLogError {
 }
 
 /// `true` when `index` can start a Work Log entry under these lists.
-/// Without wildcard intent, selection mode is active when `<N>` was typed
-/// (including `x0`) or a nonempty `*<P>` group is present: only `<N>`,
-/// `*<P>`, and `!<M>` start entries. Otherwise every number starts one
-/// except those in `~<K>`. Wildcard loggability is deferred to the lineup.
+/// Without wildcard intent, any numbered list makes the close explicit:
+/// only `<N>`, `*<P>`, and `!<M>` start entries. Otherwise every number
+/// starts one except those in `~<K>`. Wildcard loggability is deferred to
+/// the lineup.
 fn is_loggable(
     index: u32,
     in_progress: Option<&[u32]>,
@@ -106,7 +105,12 @@ fn is_loggable(
     if park_all || complete_all {
         return !drop.contains(&index);
     }
-    if in_progress.is_some() || !park.is_empty() {
+    if close_selection_is_explicit(
+        in_progress.is_some(),
+        !park.is_empty(),
+        !complete.is_empty(),
+        !drop.is_empty(),
+    ) {
         in_progress.is_some_and(|list| list.contains(&index))
             || park.contains(&index)
             || complete.contains(&index)
@@ -116,8 +120,8 @@ fn is_loggable(
 }
 
 /// The default task number for an inline Work Log entry: the first task the
-/// close works. With `<N>` typed (including `x0`) or `*<P>` present, the
-/// smallest of `<N>` union `*<P>` union `!<M>`; otherwise the smallest `n`
+/// close works. In explicit mode, the smallest of `<N>` union `*<P>` union
+/// `!<M>`; otherwise the smallest `n`
 /// at or above 1 not in `~<K>`. `None` when the close works no task (for
 /// example `x0`, `x0~2`). Whenever task 1 can take an entry, the default
 /// is 1; in every case where a default of 1 would always fail, the default
@@ -129,7 +133,12 @@ pub(crate) fn default_log_index(
     complete: &[u32],
     drop: &[u32],
 ) -> Option<u32> {
-    if in_progress.is_some() || !park.is_empty() {
+    if close_selection_is_explicit(
+        in_progress.is_some(),
+        !park.is_empty(),
+        !complete.is_empty(),
+        !drop.is_empty(),
+    ) {
         in_progress
             .iter()
             .flat_map(|list| list.iter())
@@ -307,7 +316,24 @@ fn not_worked_suggestions(
                 ),
             )
         }
-        None => (format!("x{index}"), format!("x!{index}")),
+        None => {
+            let mut completed: Vec<u32> = complete.to_vec();
+            if !completed.contains(&index) {
+                completed.push(index);
+            }
+            completed.sort_unstable();
+            (
+                format!("x{index}{}{drop_suffix}", complete_suffix(complete)),
+                format!(
+                    "x!{}{drop_suffix}",
+                    completed
+                        .iter()
+                        .map(u32::to_string)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                ),
+            )
+        }
     }
 }
 
@@ -347,15 +373,21 @@ pub(crate) fn assign_log_positions(
 }
 
 /// The close's lexical worked tasks `W = sorted(<N> ∪ *<P> ∪ !<M>)` when a
-/// non-wildcard selection is active (`<N>` typed, including `x0`, or a
-/// non-empty `*<P>`); `None` otherwise, including wildcard intent, when
-/// positions resolve against the staged running session at execution.
+/// non-wildcard selection is active (any numbered list or an empty `x0`);
+/// `None` otherwise, including wildcard intent, when positions resolve
+/// against the staged running session at execution.
 pub(crate) fn lexical_worked_tasks(
     in_progress: Option<&[u32]>,
     park: &[u32],
     complete: &[u32],
+    drop: &[u32],
 ) -> Option<Vec<u32>> {
-    if in_progress.is_none() && park.is_empty() {
+    if !close_selection_is_explicit(
+        in_progress.is_some(),
+        !park.is_empty(),
+        !complete.is_empty(),
+        !drop.is_empty(),
+    ) {
         return None;
     }
     let mut worked: Vec<u32> = in_progress
@@ -374,13 +406,14 @@ pub(crate) fn lexical_worked_tasks_with_all(
     in_progress: Option<&[u32]>,
     park: &[u32],
     complete: &[u32],
+    drop: &[u32],
     park_all: bool,
     complete_all: bool,
 ) -> Option<Vec<u32>> {
     if park_all || complete_all {
         return None;
     }
-    lexical_worked_tasks(in_progress, park, complete)
+    lexical_worked_tasks(in_progress, park, complete, drop)
 }
 
 /// `true` when the bullet's first token is all ASCII digits, making it a
@@ -1124,8 +1157,8 @@ pub(crate) fn lex_close_log_bullets_with_all(
         last_entry = Some(Some(entries.len() - 1));
     }
 
-    // Unnumbered (non-star) bullets resolve positions lexically in
-    // selection mode; otherwise every positional index stays `None` for
+    // Unnumbered (non-star) bullets resolve positions lexically for explicit
+    // numbered lists; otherwise every positional index stays `None` for
     // execution to resolve against the running session. Star bullets stay
     // unexpanded (`index: None`) through parsing.
     let positional: Vec<usize> = entries
@@ -1138,6 +1171,7 @@ pub(crate) fn lex_close_log_bullets_with_all(
         in_progress,
         park,
         complete,
+        drop,
         park_all,
         complete_all,
     );
@@ -1233,7 +1267,7 @@ pub(crate) fn lex_close_log_bullets_with_all(
 /// Numbered entries (an authored index range exists) use
 /// [`CloseLogOrigin::Bullet`]; unnumbered entries use
 /// [`CloseLogOrigin::PositionalBullet`] with their 1-based typed position,
-/// whether the lexer already resolved an index (selection mode) or left it
+/// whether the lexer already resolved an index (explicit numbered lists) or left it
 /// `None` for execution to resolve. Star entries use
 /// [`CloseLogOrigin::StarBullet`] with `all: true` and keep `index: None`.
 pub(crate) fn log_entries_from_lex(
@@ -1503,8 +1537,9 @@ mod tests {
             ("x3,4", Some(3)),
             ("x*2", Some(2)),
             ("x0!2", Some(2)),
-            ("x~1", Some(2)),
-            ("x!2", Some(1)),
+            ("x~1", None),
+            ("x!2", Some(2)),
+            ("x!2~3", Some(2)),
             ("x0", None),
             ("x0~2", None),
         ] {
@@ -1520,10 +1555,12 @@ mod tests {
                 "{close}"
             );
         }
-        // The bullet missing-number example now follows drops too.
-        match lex_bullets("x~1", "x~1\n- 2 ok\n- wired").expect_err("missing") {
+        // A numbered worked task still supplies the positional suggestion
+        // while preserving a separate drop list.
+        match lex_bullets("x1~2", "x1~2\n- 1 ok\n- wired").expect_err("missing")
+        {
             error => assert!(
-                error.message.contains("- 2 wired"),
+                error.message.contains("- 1 wired"),
                 "{}",
                 error.message
             ),
@@ -1539,6 +1576,10 @@ mod tests {
         assert_eq!(
             inline_entry("x1,3,4", "3 boom"),
             (3, Some((0, 1)), "boom".to_string())
+        );
+        assert_eq!(
+            inline_entry("x!2", "wired it"),
+            (2, None, "wired it".to_string())
         );
         // Only the first token is an index; later numbers stay text.
         assert_eq!(
@@ -1720,15 +1761,29 @@ mod tests {
     }
 
     #[test]
-    fn unnumbered_bullets_stay_unresolved_without_a_selection() {
-        // Plain `x`, `x!2`, and `x~2` leave positions for execution.
-        for close in ["x", "x!2", "x~2"] {
-            let entries = positional_entries(close, &format!("{close}\n- foo"));
-            assert_eq!(entries.len(), 1, "{close}");
-            assert_eq!(entries[0].index, None, "{close}");
-            assert_eq!(entries[0].index_range, None, "{close}");
-            assert_eq!(entries[0].text, "foo", "{close}");
-        }
+    fn unnumbered_bullets_resolve_for_explicit_lists() {
+        let entries = positional_entries("x", "x\n- foo");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].index, None);
+        assert_eq!(entries[0].index_range, None);
+        assert_eq!(entries[0].text, "foo");
+
+        let entries = positional_entries("x!2", "x!2\n- foo");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].index, Some(2));
+        assert_eq!(entries[0].text, "foo");
+
+        let no_work = lex_bullets("x~2", "x~2\n- foo")
+            .expect_err("drop-only close has no worked task");
+        assert!(no_work.message.contains("works no task"), "{no_work:?}");
+    }
+
+    #[test]
+    fn not_worked_suggestions_keep_complete_and_drop_lists() {
+        let error = lex_bullets("x!2~3", "x!2~3\n- 1 note")
+            .expect_err("task 1 is not worked");
+        assert!(error.message.contains("`x1!2~3`"), "{error:?}");
+        assert!(error.message.contains("`x!1,2~3`"), "{error:?}");
     }
 
     #[test]

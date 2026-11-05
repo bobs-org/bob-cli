@@ -804,6 +804,28 @@ fn capture_parse_pomodoro_close_drop_protocol() {
         stdout(&human)
     );
 
+    for (token, summary) in [
+        ("x!2", "complete 2 · defer the rest"),
+        ("x0!2", "complete 2 · defer the rest"),
+        ("x~2", "drop 2 · defer the rest"),
+        ("x0~2", "drop 2 · defer the rest"),
+        ("x*2", "parked 2 · defer the rest"),
+        ("x0*2", "parked 2 · defer the rest"),
+    ] {
+        let output = bob_command()
+            .arg("capture-parse")
+            .arg("--")
+            .arg(token)
+            .output()
+            .expect("run capture-parse human");
+        assert_success(&output);
+        assert!(
+            stdout(&output).contains(&format!("{token} ({summary})")),
+            "{}",
+            stdout(&output)
+        );
+    }
+
     let bare_human = bob_command()
         .arg("capture-parse")
         .arg("--")

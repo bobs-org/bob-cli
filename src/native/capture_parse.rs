@@ -295,7 +295,7 @@ A whole-item \
 any order; a capitalized `X…` stays prose) reports mode 'pomodoro_close' with a `pomodoro_close` object \
 (`raw` exactly as typed plus the additive `in_progress` list, null when no `<N>` was typed, \
 the `park` list, the `complete` list, the `drop` list, the additive `park_all` and `complete_all` flags, and the `log` entries (`index`, \
-`text`, `details`, and an `all` flag on unexpanded star bullets) in typed order (`index` is omitted for unnumbered bullets under a close without `<N>`/`*<P>` or with wildcard intent, and for star bullets, which `bob capture` resolves after staging the running session lineup); and spans covering the `x` token (`pomodoro_close`), the `<N>` list \
+`text`, `details`, and an `all` flag on unexpanded star bullets) in typed order (`index` is omitted for unnumbered bullets under a close with no numbered lists or with wildcard intent, and for star bullets, which `bob capture` resolves after staging the running session lineup); and spans covering the `x` token (`pomodoro_close`), the `<N>` list \
 including its commas (`pomodoro_close_in_progress`), the `*<P>` list \
 including the `*` (`pomodoro_close_park`), the `!<M>` list \
 including the `!` (`pomodoro_close_complete`), the `~<K>` list including \
@@ -309,7 +309,7 @@ its wikilink spans); the human `close` line reads \
 (`log 'wired the lexer'` with no number for entries resolved at execution, `* 'code review'` for a star bullet). \
 One entry may sit on the close line itself (`bob capture-parse -f json -- \
 'x wired it'`): it logs to the first task the close works, or to the \
-leading number when one is typed. Under wildcard intent, the default index is \
+first listed worked task when numbered lists are typed. Under wildcard intent, the default index is \
 omitted and Bob resolves it to the first eligible top-level worked Task Link. The item `body` stays the close token \
 (`x`), the spec `log` carries the entry with an index only when lexically resolved, an \
 explicit number gets a `pomodoro_close_log_index` span on the close line \
@@ -3020,7 +3020,7 @@ fn unit_noun(units: u64) -> &'static str {
 /// Render a validated `x[<N>][*<P>][!<M>][~<K>]` close for human output: the
 /// typed token exactly as entered plus the outcome summary. A plain close
 /// prints alone; a typed
-/// `<N>` list without a wildcard ends with `defer the rest`, and `x0` reads
+/// any numbered list without a wildcard ends with `defer the rest`, and `x0` reads
 /// `in progress none`. Typed Work Log entries render as
 /// `log 2 "wired the lexer"`, one per entry in typed order, each followed
 /// by `(+N detail)`/`(+N details)` when it carries details. Entries whose
@@ -3060,10 +3060,8 @@ fn format_pomodoro_close(close: &PomodoroCloseSpec) -> String {
     // `park_all`/`complete_all` are lexical intent. They select the
     // remaining links after explicit assignments, so their human summary
     // must not imply an ordinary deferred remainder.
-    let has_work_selection = close.in_progress.is_some()
-        || !close.park.is_empty()
-        || close.park_all
-        || close.complete_all;
+    let has_work_selection =
+        close.is_explicit() || close.park_all || close.complete_all;
     if !has_work_selection {
         let mut parts = Vec::new();
         if !close.complete.is_empty() {
@@ -3083,9 +3081,13 @@ fn format_pomodoro_close(close: &PomodoroCloseSpec) -> String {
     let mut parts = Vec::new();
     if let Some(in_progress) = close.in_progress.as_ref() {
         if in_progress.is_empty() {
-            // `x0*2` records work via parking: do not claim
-            // `in progress none` while a parked task is being worked.
-            if close.park.is_empty() && !close.park_all && !close.complete_all {
+            // A modifier list after `x0` makes the empty `<N>` redundant.
+            if close.park.is_empty()
+                && close.complete.is_empty()
+                && close.drop.is_empty()
+                && !close.park_all
+                && !close.complete_all
+            {
                 parts.push("in progress none".to_string());
             }
         } else {
@@ -3189,10 +3191,8 @@ fn format_past_close_summary(close: &PomodoroCloseSpec) -> Option<String> {
             .join(", ");
         Some(format!("log {entries}"))
     };
-    let has_work_selection = close.in_progress.is_some()
-        || !close.park.is_empty()
-        || close.park_all
-        || close.complete_all;
+    let has_work_selection =
+        close.is_explicit() || close.park_all || close.complete_all;
     if !has_work_selection {
         let mut parts = Vec::new();
         if !close.complete.is_empty() {
@@ -3212,7 +3212,12 @@ fn format_past_close_summary(close: &PomodoroCloseSpec) -> Option<String> {
     let mut parts = Vec::new();
     if let Some(in_progress) = close.in_progress.as_ref() {
         if in_progress.is_empty() {
-            if close.park.is_empty() && !close.park_all && !close.complete_all {
+            if close.park.is_empty()
+                && close.complete.is_empty()
+                && close.drop.is_empty()
+                && !close.park_all
+                && !close.complete_all
+            {
                 parts.push("in progress none".to_string());
             }
         } else {
@@ -4322,6 +4327,46 @@ mod tests {
             log: Vec::new(),
         };
         assert_eq!(format_pomodoro_close(&bare_complete), "x! (complete all)");
+
+        let complete_one = PomodoroCloseSpec {
+            raw: "x!2".to_string(),
+            in_progress: None,
+            park: Vec::new(),
+            park_all: false,
+            complete: vec![2],
+            complete_all: false,
+            drop: Vec::new(),
+            log: Vec::new(),
+        };
+        assert_eq!(
+            format_pomodoro_close(&complete_one),
+            "x!2 (complete 2 · defer the rest)"
+        );
+
+        let complete_one_with_zero = PomodoroCloseSpec {
+            raw: "x0!2".to_string(),
+            in_progress: Some(Vec::new()),
+            ..complete_one.clone()
+        };
+        assert_eq!(
+            format_pomodoro_close(&complete_one_with_zero),
+            "x0!2 (complete 2 · defer the rest)"
+        );
+
+        let drop_one = PomodoroCloseSpec {
+            raw: "x~2".to_string(),
+            in_progress: None,
+            park: Vec::new(),
+            park_all: false,
+            complete: Vec::new(),
+            complete_all: false,
+            drop: vec![2],
+            log: Vec::new(),
+        };
+        assert_eq!(
+            format_pomodoro_close(&drop_one),
+            "x~2 (drop 2 · defer the rest)"
+        );
     }
 
     #[test]
