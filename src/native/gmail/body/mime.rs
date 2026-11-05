@@ -15,25 +15,13 @@ use crate::native::gmail::model::{
 pub(crate) const MAX_MIME_DEPTH: usize = 64;
 pub(crate) const MAX_MIME_NODES: usize = 4096;
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub(crate) struct MimeInventory {
     pub(crate) html_candidates: Vec<BodyCandidate>,
     pub(crate) plain_candidates: Vec<BodyCandidate>,
     pub(crate) inline_images: Vec<InlineImage>,
     pub(crate) attachments: Vec<Attachment>,
     pub(crate) needs_fetch: Vec<FetchNeed>,
-}
-
-impl Default for MimeInventory {
-    fn default() -> Self {
-        Self {
-            html_candidates: Vec::new(),
-            plain_candidates: Vec::new(),
-            inline_images: Vec::new(),
-            attachments: Vec::new(),
-            needs_fetch: Vec::new(),
-        }
-    }
 }
 
 pub(crate) fn collect_message_bodies(

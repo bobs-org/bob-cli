@@ -9,10 +9,12 @@ use tempfile::TempDir;
 use super::super::vault_links::LinkResolution;
 use super::linked_tasks::CloseVault;
 use super::selection::{
-    apply_close_selection, number_task_links, CloseSelection,
-    CloseSelectionError, TaskLinkMarker, TaskLinkOutcome, TaskLinkSource,
+    apply_close_selection, apply_close_selection_with_clock, number_task_links,
+    CloseSelection, CloseSelectionError, TaskLinkMarker, TaskLinkOutcome,
+    TaskLinkSource,
 };
 use super::{find_running_pomodoro, plan_ledger_close, plan_pomodoro_close};
+use crate::native::event_task::CloseClock;
 
 fn at(hour: u32, minute: u32) -> NaiveDateTime {
     NaiveDate::from_ymd_opt(2026, 9, 28)
@@ -362,6 +364,48 @@ fn outcome_table_covers_every_row() {
             (1, TaskLinkOutcome::Deferred, TaskLinkSource::Unlisted),
             (2, TaskLinkOutcome::Deferred, TaskLinkSource::Unlisted),
             (3, TaskLinkOutcome::Complete, TaskLinkSource::Unlisted),
+        ]
+    );
+}
+
+#[test]
+fn complete_only_selection_keeps_unlisted_event_clock_outcomes() {
+    let contents = note(&[
+        "## Events",
+        "- [ ] #task **0920-0930** Ended ^ended",
+        "- [ ] #task **0930-1000** Running ^running",
+        "",
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — MEET",
+        "\t- [[#^ended]]",
+        "\t- [[#^running]]",
+        "\t- [[tasks#^selected]]",
+        "\t- [[tasks#^deferred]]",
+    ]);
+    let running = running_of(&contents);
+    let clock = CloseClock {
+        day_relative: PathBuf::from("2026/20260928.md"),
+        session_start_min: 9 * 60 + 20,
+        close_at_min: 9 * 60 + 40,
+    };
+    let applied = apply_close_selection_with_clock(
+        &contents,
+        &running,
+        &sel(None, vec![3], "x!3"),
+        Some(&clock),
+    )
+    .expect("apply explicit list with Event Task clocks");
+    assert_eq!(
+        applied
+            .lineup
+            .iter()
+            .map(|link| (link.outcome, link.source))
+            .collect::<Vec<_>>(),
+        vec![
+            (TaskLinkOutcome::Complete, TaskLinkSource::Unlisted),
+            (TaskLinkOutcome::InProgress, TaskLinkSource::Unlisted),
+            (TaskLinkOutcome::Complete, TaskLinkSource::Listed),
+            (TaskLinkOutcome::Deferred, TaskLinkSource::Unlisted),
         ]
     );
 }

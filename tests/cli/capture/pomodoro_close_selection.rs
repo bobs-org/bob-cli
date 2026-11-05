@@ -2,6 +2,7 @@
 
 use super::pomodoro_close::{
     close_worked_vault, run_close_expect_error, run_close_json,
+    run_close_json_flags,
 };
 use crate::support::*;
 use std::fs;
@@ -672,6 +673,93 @@ fn capture_pomodoro_close_selection_dry_run_matches_real_run() {
     assert_eq!(dry_json, real_json);
     let day_after = fs::read_to_string(&day_file).expect("read day after");
     assert_pomodoro_blocks_cover_changes(&before_day, &day_after, &real_json);
+}
+
+#[test]
+fn numeric_complete_and_drop_defer_unlisted_links_in_every_close_form() {
+    for (marker, outcome) in [("!", "complete"), ("~", "dropped")] {
+        for (draft, selected, past) in [
+            (format!("x{marker}2"), 2, false),
+            (format!("^tasks:third=x{marker}3"), 3, false),
+            (format!("@tasks:third=x{marker}3"), 3, false),
+            (format!("New task @tasks:new-task=x{marker}3"), 3, false),
+            (format!("x=fix={marker}2"), 2, true),
+        ] {
+            let temp = TempDir::new("bob-cli-close-explicit-forms");
+            let vault = temp.path().join("vault");
+            let day_file = vault.join("2026/20260928.md");
+            let tasks_file = vault.join("tasks.md");
+            write_toggle_task_settings(&vault);
+            let span = if past { "" } else { "**0920-0950** [t:: 30m]" };
+            let before_day = format!(
+                "## Pomodoros\n- [ ] ({span}) — FIX\n\t- [[tasks#^first]]\n\t- [[tasks#^second]]\n"
+            );
+            let before_tasks = concat!(
+                "## Tasks\n",
+                "- [*] #task First ^first\n",
+                "- [*] #task Second ^second\n",
+                "- [ ] #task Third ^third\n",
+            );
+            write_file(&day_file, &before_day);
+            write_file(&tasks_file, before_tasks);
+
+            let mut preview = run_close_json_flags(
+                &vault,
+                &day_file,
+                "2026-09-28 09:37:00",
+                &["--dry-run"],
+                &[&draft],
+            );
+            assert_eq!(preview["dry_run"], true, "{draft}: {preview}");
+            assert_eq!(fs::read_to_string(&day_file).unwrap(), before_day);
+            assert_eq!(fs::read_to_string(&tasks_file).unwrap(), before_tasks);
+            let close = if past {
+                &preview["pomodoro_past"]["close"]
+            } else {
+                &preview["pomodoro_close"]
+            };
+            let links = close["task_links"].as_array().expect("task links");
+            assert_eq!(links.len(), selected, "{draft}: {close}");
+            for (index, link) in links.iter().enumerate() {
+                let listed = index + 1 == selected;
+                assert_eq!(
+                    link["outcome"],
+                    if listed { outcome } else { "deferred" },
+                    "{draft}: {link}"
+                );
+                assert_eq!(
+                    link["source"],
+                    if listed { "listed" } else { "unlisted" },
+                    "{draft}: {link}"
+                );
+            }
+            let carried = close["carried"].as_array().expect("carried links");
+            assert_eq!(carried.len(), selected - 1, "{draft}: {close}");
+            for (link, carry) in links.iter().zip(carried) {
+                assert_eq!(carry["kind"], "deferred", "{draft}: {carry}");
+                assert_eq!(carry["text"], link["block_link"], "{draft}");
+            }
+            let result = run_close_json(
+                &vault,
+                &day_file,
+                "2026-09-28 09:37:00",
+                &[&draft],
+            );
+            preview["dry_run"] = serde_json::json!(false);
+            assert_eq!(preview, result, "{draft}: preview matches execution");
+            let tasks = fs::read_to_string(&tasks_file).unwrap();
+            assert!(
+                tasks.contains("- [*] #task First ^first"),
+                "{draft}: {tasks}"
+            );
+            if selected == 3 {
+                assert!(
+                    tasks.contains("- [*] #task Second ^second"),
+                    "{draft}: {tasks}"
+                );
+            }
+        }
+    }
 }
 
 #[test]

@@ -352,7 +352,12 @@ Progress work without carrying them forward), `x!<M>` completes the links in `<M
 `x~<K>` drops the links in `<K>` (removed from the closed session, not \
 carried and not started; a dropped task keeps its lane), and combined \
 forms do each part at \
-once; completing planned tasks also links what they unblocked into the \
+once. Any numbered list, including `!<M>` or `~<K>` alone, makes the close \
+explicit: unlisted plain Task Links defer without being started and carry \
+to the continuation. Unlisted Event Tasks keep their clock outcomes; authored \
+markers and wildcards keep their meanings. Thus `x!2` completes 2 and defers \
+other plain links, while `x~2` drops 2 and defers them. `x0!2`, `x0~2`, and \
+`x0*2` behave like `x!2`, `x~2`, and `x*2`. Completing planned tasks also links what they unblocked into the \
 closed session's continuation (docs/task-dependencies.md §12; \
 `plan.link_unblocked: false` turns linking off). `<N>`, `<P>`, `<M>`, and `<K>` are comma-separated task numbers in ledger \
 order starting at 1 (the numbers `bob capture` shows, in human output, in \
@@ -384,9 +389,11 @@ For explicitly numbered selections without wildcards, positions resolve lexicall
 and `capture-parse` agrees with `bob capture`. With wildcard intent, numbered \
 entries can target resolved worked links except explicit drops; unnumbered \
 bullets wait for the staged top-level worked lineup, and an unnumbered inline \
-entry logs once to its first eligible link. Without wildcard intent, only the \
+entry logs once to its first eligible link. With a numbered list and no wildcard, only the \
 explicit numbers in `<N>`, `*<P>`, or `!<M>` take entries; otherwise every \
-number starting at 1 takes one except `~<K>`. Only the first token is an \
+number starting at 1 is lexically eligible except `~<K>`, with actual outcomes \
+checked at execution. `x!2 note` logs to task 2; `x~2 note` fails because \
+the selection works no task. Only the first token is an \
 index, so `- 1 fixed 3 bugs` logs `fixed 3 bugs` and every backslash \
 stays literal. The outcome is exactly the sub-bullets the user would type \
 by hand under that Task Link, followed by the unchanged close. A close's child lines are Work \

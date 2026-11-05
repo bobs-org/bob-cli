@@ -92,6 +92,11 @@ const TABLE: &[Entry] = &[
         arg: "block-id",
         kind: Kind::Task,
     },
+    Entry {
+        path: &["clipboard"],
+        arg: "count",
+        kind: Kind::FreeText,
+    },
     // A choice here ...
     Entry {
         path: &["gkeep", "list"],

@@ -1125,6 +1125,10 @@ pub(crate) const ENTRIES: &[Row] = &[
 /// member are added automatically at assemble time.
 pub(crate) const EXCLUDED: &[Excluded] = &[
     Excluded {
+        path: &["clipboard"],
+        reason: "Clipboard history diagnostics; run it from a terminal",
+    },
+    Excluded {
         path: &["capture"],
         reason: "Capture text from Bob Mac Capture or a terminal; command \
                  mode runs its named capture rows",

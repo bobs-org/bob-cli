@@ -114,6 +114,38 @@ fn carried_types_keep_the_name_and_report_nothing_shed() {
 }
 
 #[test]
+fn complete_only_selection_names_the_work_and_deferred_continuation() {
+    let (_temp, vault, day_file, config_file) = vault_with(
+        "bob-cli-close-names-complete-only",
+        "BUILD + FIX",
+        &["[[tasks#^fix1]]", "[[tasks#^build1]]"],
+    );
+    let json = close(&vault, &day_file, &config_file, &["x!2"]);
+    let close = &json["pomodoro_close"];
+    assert_eq!(close["closed_name"], "BUILD", "{json}");
+    assert_eq!(close["next_pomodoro"]["name"], "FIX", "{json}");
+    assert_eq!(close["task_links"][0]["outcome"], "deferred", "{json}");
+    assert_eq!(close["task_links"][0]["source"], "unlisted", "{json}");
+    assert_eq!(
+        close["carried"],
+        serde_json::json!([{"kind": "deferred", "text": "[[tasks#^fix1]]"}]),
+        "{json}"
+    );
+    let day = fs::read_to_string(&day_file).expect("read day");
+    assert!(
+        day.contains("- [x] (**0920-0940** [t:: 20m]) — BUILD\n"),
+        "{day}"
+    );
+    assert!(
+        day.contains("- [ ] () — FIX\n\t- [[tasks#^fix1]]\n"),
+        "{day}"
+    );
+    let tasks = fs::read_to_string(vault.join("tasks.md")).expect("read tasks");
+    assert!(tasks.contains("- [*] #task Fix it"), "{tasks}");
+    assert!(tasks.contains("- [x] #task Build it"), "{tasks}");
+}
+
+#[test]
 fn labels_stay_and_a_parked_type_is_not_carried() {
     let (_temp, vault, day_file, config_file) = vault_with(
         "bob-cli-close-names-labels",

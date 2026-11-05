@@ -4864,7 +4864,8 @@ and carries only link 1 into the new placeholder. Parked rows read
 whitespace. With no numbered list, unlisted links keep their ledger outcome.
 Any task number typed in `<N>` (including `0`), `*<P>`, `!<M>`, or `~<K>`
 makes the close explicit: only listed links are included, and other plain
-links defer. A present `*` or `!` group without numbers is a wildcard for
+links defer. Unlisted Event Tasks keep their clock outcomes, and authored
+markers keep their meaning. A present `*` or `!` group without numbers is a wildcard for
 every numbered link left after explicit in-progress, park, complete, and drop
 assignments. Thus `x*` parks all links, `x1*` keeps task 1 in progress and
 parks the rest, and `x*!2` parks the rest while completing task 2. Numbered
@@ -4916,6 +4917,8 @@ wins:
 | _i_ ∈ `<M>` | complete | listed |
 | _i_ ∈ `<K>` | dropped | listed |
 | _i_ ∈ `<N>` | in progress | listed |
+| Remaining link selected by `*` / `!` wildcard (except a not-started Event Task) | parked / complete | listed |
+| _m_ = plain and same-day Event Task | clock outcome (see Event Task links close by the clock) | unlisted with a numbered list or wildcard, otherwise ledger |
 | Explicit mode and _m_ = embedded | complete (a hand transclusion is kept) | unlisted |
 | Explicit mode | deferred | unlisted |
 | otherwise | the ledger outcome of _m_ | ledger |
@@ -4942,8 +4945,9 @@ Parking is a close outcome, not a new task status: `[/]` keeps its In
 Progress name, and the existing sticky-lane PENDING behavior provides the
 waiting place. Carry suppression is explicit planner metadata, not a durable
 Markdown marker. Unlisted plain links defer whenever any numbered list is
-present, and unlisted embedded links complete. For example, `x!2~3` defers
-every unlisted plain link. Dropped links count as "not carried" when the close
+present, except Event Tasks, which keep their clock outcomes; unlisted embedded
+links complete. For example, `x!2~3` defers every unlisted ordinary plain link.
+Dropped links count as "not carried" when the close
 decides whether to create a placeholder.
 
 **Worked selections.** On the fixture above, the numbered Task Links are 1 =
