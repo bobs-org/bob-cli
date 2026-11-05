@@ -667,39 +667,11 @@ fn kept_notes_display_text(
     global_filter: &str,
     block_id: Option<&str>,
 ) -> String {
-    let display =
-        task_complete_display_text(task_line, global_filter, block_id);
-    strip_kept_notes_markup(&flatten_block_wikilinks(&display))
-}
-
-fn strip_kept_notes_markup(text: &str) -> String {
-    text.split_whitespace()
-        .filter(|token| !token.starts_with('#') && !token.starts_with('^'))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn flatten_block_wikilinks(text: &str) -> String {
-    let mut flattened = text.to_string();
-    let spans = crate::native::task_dependencies::raw_wikilink_spans(text);
-    for span in spans.into_iter().rev() {
-        let inside = &text[span.open + 2..span.end - 2];
-        let alias = inside.split_once('|').map(|(_, alias)| alias);
-        let Some((target, block_id)) =
-            crate::native::task_dependencies::parse_block_link_inside(inside)
-        else {
-            continue;
-        };
-        let display = if let Some(alias) = alias {
-            alias.to_string()
-        } else if target.is_empty() {
-            block_id
-        } else {
-            target.rsplit('/').next().unwrap_or(&target).to_string()
-        };
-        flattened.replace_range(span.open..span.end, &display);
-    }
-    flattened
+    task_status_hooks::kept_notes_display_text(
+        task_line,
+        global_filter,
+        block_id,
+    )
 }
 
 #[cfg(test)]
@@ -739,15 +711,21 @@ mod tests {
     }
 
     #[test]
-    fn flatten_block_links_uses_plain_alias_or_target_text() {
+    fn kept_notes_text_flattens_block_links() {
         assert_eq!(
-            flatten_block_wikilinks(
-                "Read [[projects/other#^x|the handoff]] and [[#^local]]"
+            task_status_hooks::kept_notes_display_text(
+                "- [ ] #task Read [[projects/other#^x|the handoff]] and [[#^local]] ^source",
+                "#task",
+                Some("source"),
             ),
             "Read the handoff and local"
         );
         assert_eq!(
-            flatten_block_wikilinks("See [[plain-note]] and [[plain|alias]]"),
+            task_status_hooks::kept_notes_display_text(
+                "- [ ] #task See [[plain-note]] and [[plain|alias]] ^source",
+                "#task",
+                Some("source"),
+            ),
             "See [[plain-note]] and [[plain|alias]]"
         );
     }

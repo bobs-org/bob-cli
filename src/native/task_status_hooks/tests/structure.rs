@@ -817,15 +817,42 @@ fn empty_pomodoro_deletion_removes_full_blocks_and_preserves_crlf_eof() {
                 line_number: 5,
                 line: "- [ ] (**0900-0930** [t:: 30m])".to_string(),
             },
-            RemovedEmptyPomodoro {
-                line_number: 6,
-                line: "- [x] Done (0800-0830)".to_string(),
-            },
         ]
     );
     assert_eq!(
         apply_empty_pomodoro_plan(contents, &plan),
-        "## Pomodoros\r\n\r\n- [ ] Kept\r\n  - child without a link"
+        "## Pomodoros\r\n\r\n- [x] Done (0800-0830)\r\n- [ ] Kept\r\n  - child without a link"
+    );
+}
+
+#[test]
+fn empty_cleanup_keeps_closed_pomodoros_that_record_time() {
+    let contents = concat!(
+        "## Pomodoros\n\n",
+        "- [x] Recorded span (0800-0830)\n",
+        "- [x] Recorded work [t:: 30m]\n",
+        "- [x] Recorded off-clock [off:: 30m]\n",
+        "- [x] Done without time\n",
+    );
+    let lines = logical_lines(contents);
+    let model = scan_pomodoros(&lines, 0..lines.len());
+    let plan = plan_empty_pomodoro_removals(contents, &model);
+
+    assert_eq!(
+        plan.removed,
+        vec![RemovedEmptyPomodoro {
+            line_number: 6,
+            line: "- [x] Done without time".to_string(),
+        }]
+    );
+    assert_eq!(
+        apply_empty_pomodoro_plan(contents, &plan),
+        concat!(
+            "## Pomodoros\n\n",
+            "- [x] Recorded span (0800-0830)\n",
+            "- [x] Recorded work [t:: 30m]\n",
+            "- [x] Recorded off-clock [off:: 30m]\n",
+        )
     );
 }
 
@@ -1221,6 +1248,73 @@ fn capture_only_removes_pomodoros_emptied_by_this_consumption() {
         consumption.removed_empty[0].line,
         "- [ ] Current (0900-0930)"
     );
+}
+
+#[test]
+fn consumption_parity_keeps_notes_matches_aliases_and_removes_only_emptied_entries(
+) {
+    let contents = concat!(
+        "## Pomodoros\n\n",
+        "- [ ] Current\n",
+        "  - [[tasks#^blocked]]\n",
+        "    - authored child note\n",
+        "- [ ] Emptied\n",
+        "  - [[tasks.md#^blocked|alias]]\n",
+        "- [ ] Unrelated placeholder\n",
+        "- [x] Recorded work [t:: 30m]\n",
+    );
+    let resolved = BTreeMap::from([
+        (
+            reference("tasks", "blocked"),
+            ResolvedReference {
+                path: PathBuf::from("tasks.md"),
+                statuses: vec!['?'],
+            },
+        ),
+        (
+            reference("tasks.md", "blocked"),
+            ResolvedReference {
+                path: PathBuf::from("tasks.md"),
+                statuses: vec!['?'],
+            },
+        ),
+    ]);
+    let options = BlockedConsumptionOptions {
+        keep_notes: true,
+        only_emptied: true,
+        display_texts: BTreeMap::from([(
+            (PathBuf::from("tasks.md"), "blocked".to_string()),
+            "Blocked task".to_string(),
+        )]),
+    };
+    let blocked = blocked_set(&["blocked"]);
+    let consumption = apply_blocked_consumption_with_options(
+        contents, &resolved, &blocked, &options,
+    );
+
+    assert_eq!(consumption.consumed.len(), 2);
+    assert_eq!(consumption.removed_empty.len(), 1);
+    assert_eq!(consumption.removed_empty[0].line, "- [ ] Emptied");
+    assert_eq!(
+        consumption.contents,
+        concat!(
+            "## Pomodoros\n\n",
+            "- [ ] Current\n",
+            "  - Blocked task\n",
+            "    - authored child note\n",
+            "- [ ] Unrelated placeholder\n",
+            "- [x] Recorded work [t:: 30m]\n",
+        )
+    );
+
+    let second = apply_blocked_consumption_with_options(
+        &consumption.contents,
+        &resolved,
+        &blocked,
+        &options,
+    );
+    assert!(second.consumed.is_empty());
+    assert_eq!(second.contents, consumption.contents);
 }
 
 // Never key removal off `'?'`: an empty Blocked set leaves `[?]` links

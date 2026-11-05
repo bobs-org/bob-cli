@@ -139,7 +139,7 @@ anything is written, and any failure rolls the whole batch back.
 | `~note:block-id` with no owner | Incomplete: a relation target is selected but no owner is named (`capture-parse` needs `dependency_target`); type task text or `+` to choose an existing owner |
 | `!` | Incomplete: pick an open task to complete (`capture-parse` needs `task_complete`); accepting inserts `!<note>:<block-id>`, and execution never captures it |
 | `!fix`, `!sase:`, `!"Shopping List` | Incomplete: still typing the completion query (`capture-parse` needs `task_complete`) |
-| `!note:block-id` with no other text | Complete an existing open task (`capture-parse` mode `task_complete`); `bob capture` closes it exactly as `x!N` would, retires its Task Links, and unblocks dependents |
+| `!note:block-id` with no other text | Complete an existing open task (`capture-parse` mode `task_complete`); `bob capture` closes it exactly as `x!N` would, retires its Task Links, removes only Pomodoro entries this completion empties, preserves closed rows with recorded time, and unblocks dependents |
 | `!note:block-id` plus anything extra | Claimed and invalid (`invalid_task_complete`); a completion must be the whole capture item, never a junk inbox task |
 | `+[N]` / `-[N]` | Adjust today's current timed Pomodoro by N five-minute units (`+5` extends by 25 minutes, `-` shortens by 5 minutes; the count defaults to 1); the item must contain only the signed count |
 | `++[N]` / `--[N]` | Shift today's running timed Pomodoro N five-minute units later/earlier, keeping its duration (`++3` moves 15 minutes later, `--` moves 5 minutes earlier; the count defaults to 1); the item must contain only the operator |

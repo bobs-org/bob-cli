@@ -17,8 +17,11 @@ fn reconcile_consumes_blocked_resident_links_and_keeps_the_entry() {
         "## Pomodoros\n\n",
         "- [ ] Current (0900-0930) — JOB\n",
         "  - [[proj#^r1]]\n",
+        "    - authored child note\n",
+        "  - [[proj.md#^r1|same resident]]\n",
         "  - [[proj#^r2]]\n",
         "  - [[tasks#^other]]\n",
+        "- [ ] Unrelated placeholder\n",
         "- [x] Closed (0800-0830)\n",
         "  - [[proj#^r1]]\n",
     );
@@ -60,7 +63,7 @@ fn reconcile_consumes_blocked_resident_links_and_keeps_the_entry() {
     let json: serde_json::Value =
         serde_json::from_str(stdout(&dry_run).trim()).unwrap();
     let consumed = json["consumed_blocked_references"].as_array().unwrap();
-    assert_eq!(consumed.len(), 2, "{consumed:?}");
+    assert_eq!(consumed.len(), 3, "{consumed:?}");
     for block_id in ["r1", "r2"] {
         assert!(
             consumed.iter().any(|item| {
@@ -93,6 +96,14 @@ fn reconcile_consumes_blocked_resident_links_and_keeps_the_entry() {
     assert!(
         daily_after.contains("- [x] Closed (0800-0830)\n  - 🍅 [[proj#^r1]]"),
         "closed-entry history is kept; first-pass marker repair adds 🍅:\n{daily_after}"
+    );
+    assert!(
+        daily_after.contains("- [ ] Unrelated placeholder\n"),
+        "an untouched empty placeholder stays:\n{daily_after}"
+    );
+    assert!(
+        daily_after.contains("  - Resident one\n    - authored child note\n"),
+        "authored child notes stay under plain task text:\n{daily_after}"
     );
     assert!(daily_after.contains("[[tasks#^other]]"), "{daily_after}");
     let open_section = daily_after
@@ -238,6 +249,9 @@ fn reconcile_deletes_a_pomodoro_emptied_by_blocked_consumption() {
         "  - [[tasks#^blocked]]\n",
         "- [ ] Later\n",
         "  - later child\n",
+        "- [ ] Unrelated placeholder\n",
+        "- [x] Recorded work [t:: 30m]\n",
+        "- [x] Recorded off-clock [off:: 30m]\n",
     );
     write_file(&daily, daily_before);
     write_file(
@@ -292,6 +306,18 @@ fn reconcile_deletes_a_pomodoro_emptied_by_blocked_consumption() {
     );
     assert!(
         daily_after.contains("- [ ] Later\n  - later child"),
+        "{daily_after}"
+    );
+    assert!(
+        daily_after.contains("- [ ] Unrelated placeholder\n"),
+        "{daily_after}"
+    );
+    assert!(
+        daily_after.contains("- [x] Recorded work [t:: 30m]\n"),
+        "{daily_after}"
+    );
+    assert!(
+        daily_after.contains("- [x] Recorded off-clock [off:: 30m]\n"),
         "{daily_after}"
     );
 }

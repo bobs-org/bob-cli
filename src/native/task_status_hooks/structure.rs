@@ -530,6 +530,54 @@ fn is_link_only_bullet(line: &str, link: &LinkOccurrence) -> bool {
     !token.is_empty() && body == token
 }
 
+/// Clean task text used when a consumed Task Link keeps authored child notes.
+/// This is shared by capture and reconcile so neither leaves a live link or
+/// task metadata in front of those notes.
+pub(crate) fn kept_notes_display_text(
+    task_line: &str,
+    global_filter: &str,
+    block_id: Option<&str>,
+) -> String {
+    let body = task_line
+        .find("] ")
+        .map(|index| &task_line[index + 2..])
+        .unwrap_or(task_line);
+    let display = super::super::note_tasks::clean_description(
+        body,
+        global_filter,
+        block_id,
+    );
+    let display = flatten_block_wikilinks(&display);
+    display
+        .split_whitespace()
+        .filter(|token| !token.starts_with('#') && !token.starts_with('^'))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn flatten_block_wikilinks(text: &str) -> String {
+    let mut flattened = text.to_string();
+    let spans = super::super::task_dependencies::raw_wikilink_spans(text);
+    for span in spans.into_iter().rev() {
+        let inside = &text[span.open + 2..span.end - 2];
+        let alias = inside.split_once('|').map(|(_, alias)| alias);
+        let Some((target, block_id)) =
+            super::super::task_dependencies::parse_block_link_inside(inside)
+        else {
+            continue;
+        };
+        let plain = if let Some(alias) = alias {
+            alias.to_string()
+        } else if target.is_empty() {
+            block_id
+        } else {
+            target.rsplit('/').next().unwrap_or(&target).to_string()
+        };
+        flattened.replace_range(span.open..span.end, &plain);
+    }
+    flattened
+}
+
 fn raw_link_token(line: &str, link: &LinkOccurrence) -> String {
     let token = line.get(link.edit_start..link.edit_end).unwrap_or_default();
     let Some(start) = token.find("[[") else {
@@ -558,6 +606,7 @@ pub(crate) struct BlockedConsumptionOptions {
     pub(crate) display_texts: BTreeMap<(PathBuf, String), String>,
 }
 
+#[cfg(test)]
 pub(crate) fn apply_blocked_consumption(
     contents: &str,
     resolved: &BTreeMap<RawReference, ResolvedReference>,

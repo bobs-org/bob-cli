@@ -206,24 +206,30 @@ prune is the gesture's feedback.
 After duplicate-line removal, canceled-reference subtree removal, blocked-link
 consumption, completed-reference retirement or relocation, and marker repair
 have been composed, the command removes childless Pomodoro entries from the
-selected current daily note. The cleanup is limited to recognized column-zero open or
-completed ledger entries in the real `## Pomodoros` section; nested checkbox
+selected current daily note only when this pass emptied them. An entry must
+have had a list-item child before the pass and none after it; an
+already-childless placeholder stays. The cleanup is limited to recognized
+column-zero open or completed ledger entries in the real `## Pomodoros`
+section; nested checkbox
 lookalikes, fenced examples, entries outside the section, and statuses that
 the Pomodoro parser does not recognize are left alone.
 
 A Pomodoro is kept when it has at least one real direct Markdown list-item
 child, even when that child is plain prose and contains no resolvable task
-block link. Fenced-example bullets do not count. If an empty entry owns
-indented continuation text but no list-item child, its whole entry block is
-removed so no orphaned text remains. Line endings and the original final
-newline state are preserved.
+block link. A closed row with a recorded span, `[t::]`, or `[off::]` is
+also kept, preserving recorded session time. Fenced-example bullets do not
+count. If this pass empties an entry that owns indented continuation text but
+no list-item child, its whole entry block is removed so no orphaned text
+remains. Line endings and the original final newline state are preserved.
 
 Empty entries do not count toward the multiple-open-timed-Pomodoro guard and
 are not selected as current or completed fallback destinations for completed
 reference relocation. Multiple non-empty open timed entries still fail before
 any write. Because empty cleanup runs after the other structural rewrites, it
-also removes entries whose last child was removed or moved away during the same
-invocation, while retaining an entry that receives a moved child.
+removes entries whose last child was removed or moved away during the same
+invocation, while retaining an entry that receives a moved child. Completion
+retirement uses the same only-emptied rule; a second run after successful
+cleanup is a no-op.
 
 Dry-run reports the same deterministic removals without changing the vault.
 Live runs write through the normal guarded snapshot, recovery, and retry path.

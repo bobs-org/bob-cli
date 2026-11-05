@@ -488,9 +488,10 @@ pub(super) fn sync_task_statuses(
         &pomodoro_model,
         &structural_plan,
     );
-    let empty_pomodoro_plan = plan_empty_pomodoro_removals(
+    let empty_pomodoro_plan = plan_empty_pomodoro_removals_with_options(
         &structurally_updated_daily,
         &pomodoro_model,
+        true,
     );
     let mut normalized_daily = apply_empty_pomodoro_plan(
         &structurally_updated_daily,
@@ -1458,8 +1459,43 @@ fn consume_blocked_links_after_compose(
             }
         }
     }
-    let consumption =
-        apply_blocked_consumption(&daily_text, &consume_resolved, blocked);
+    let mut display_texts = BTreeMap::new();
+    for (reference, resolved) in &consume_resolved {
+        let Some(file) = files
+            .iter()
+            .find(|file| file.relative_path == resolved.path)
+        else {
+            continue;
+        };
+        let Some(task) = file.tasks.iter().find(|task| {
+            task.block_id.as_deref() == Some(reference.block_id.as_str())
+        }) else {
+            continue;
+        };
+        let task_lines = logical_lines(&file.contents);
+        let Some(task_line) = task_lines.get(task.line_index).copied() else {
+            continue;
+        };
+        display_texts
+            .entry((resolved.path.clone(), reference.block_id.clone()))
+            .or_insert_with(|| {
+                kept_notes_display_text(
+                    task_line,
+                    &settings.global_filter,
+                    Some(&reference.block_id),
+                )
+            });
+    }
+    let consumption = apply_blocked_consumption_with_options(
+        &daily_text,
+        &consume_resolved,
+        blocked,
+        &BlockedConsumptionOptions {
+            keep_notes: true,
+            only_emptied: true,
+            display_texts,
+        },
+    );
     if consumption.contents != daily_text {
         if let Some(index) = daily_output_index {
             compose.outputs[index].contents = consumption.contents;

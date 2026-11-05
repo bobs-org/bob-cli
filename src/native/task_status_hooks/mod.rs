@@ -479,13 +479,18 @@ pub(crate) fn reconcile_merge_snapshot_for_tests(
         .map(|file| (file.relative_path, file.contents))
         .collect()
 }
+#[cfg(test)]
+pub(crate) use pomodoro::plan_empty_pomodoro_removals;
 pub(crate) use pomodoro::{
-    apply_empty_pomodoro_plan, plan_empty_pomodoro_removals,
-    plan_empty_pomodoro_removals_with_options, scan_pomodoros,
+    apply_empty_pomodoro_plan, plan_empty_pomodoro_removals_with_options,
+    scan_pomodoros,
 };
 pub(crate) use settle::plan_settle;
+#[cfg(test)]
+pub(crate) use structure::apply_blocked_consumption;
 pub(crate) use structure::{
-    apply_blocked_consumption, apply_blocked_consumption_with_options,
-    apply_structural_plan, plan_structural_changes, BlockedConsumptionOptions,
+    apply_blocked_consumption_with_options, apply_structural_plan,
+    kept_notes_display_text, plan_structural_changes,
+    BlockedConsumptionOptions,
 };
 pub(crate) use sync::{task_dependency_states, TaskDependencyState};

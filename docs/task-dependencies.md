@@ -230,11 +230,13 @@ with no R0 or D3.
   along those edges and then drops the link, except the own-schedule
   pull-forward in §13 and capture's own-prerequisite drop in §13.5.
   `bob task reconcile` does the same for stale links. Capture
-  consumption (`&`, `*`, and the link-guard Consume branches) matches
-  by identity, keeps authored notes under a consumed link-only
-  bullet, deletes only the Pomodoro entries this capture emptied, and
-  reports `consumed_links[]` plus `removed` blocks (PDL8–PDL11,
-  §13.5). Reconcile and plugins keep PDL7 (whole subtree removed).
+  and reconcile consumption match by resolved identity, keep authored
+  notes under a consumed link-only bullet, and remove only entries their
+  own pass emptied (PDL8–PDL10, §13.5). Capture also reports
+  `consumed_links[]` and `removed` blocks (PDL11). Task completion
+  retirement removes only entries its batch emptied. Closed Pomodoros
+  with recorded time stay as history. bob-plugins still follows PDL7
+  until its parity phase lands.
 - **Not edges:** `#^ref` embeds and archived targets.
 - **Visibility.** An open prerequisite that other open tasks depend on
   carries a generated `🧱 **BLOCKS:**` child listing those dependents
@@ -3735,12 +3737,20 @@ Only live (unstruck) Task Links under **today's open** Pomodoros.
 Closed entries, `🍅` history, other days, and dependency links are
 never touched.
 
-**Removal (reconcile and plugins).** A link-only bullet is removed
-with its subtree (PDL7); otherwise only the link token is removed
-(PDL6). Then the existing empty-Pomodoro rule runs; it may delete a
-running timed entry and every already-childless placeholder
-(accepted; matches cancel). Match is by the literal `[[route#^id]]`
-text.
+**Removal (reconcile).** Reconcile matches by resolved identity —
+vault-relative path plus block ID. A childless link-only bullet is
+removed. A link-only bullet with authored children keeps its marker,
+indentation, and children, replacing the link with the task's clean
+display text (PDL8). A prose bullet loses only the link token (PDL6).
+Reconcile deletes an entry only when that pass started with a child
+and removed its last child; an already-childless placeholder stays
+(PDL9). Alias, basename, path, case, and local-link spellings that
+resolve to one identity are all consumed (PDL10).
+
+**Removal (plugins).** A link-only bullet is removed with its subtree
+(PDL7); otherwise only the link token is removed (PDL6). Plugins
+continue to match their current literal route form until the plugin
+parity phase lands.
 
 **Removal (capture).** Capture matches live links by resolved
 identity — vault-relative path plus block id — so aliases,
@@ -3756,7 +3766,14 @@ judged after all of the item's edits, including a running timed
 entry (PDL9). Unrelated childless placeholders stay. Every consumed
 link is a `consumed_links[]` row; every deleted entry appears in
 `pomodoro_blocks` with `removed: true` (PDL11). Reconcile keeps
-passing today's PDL7 behaviour.
+the same PDL8–PDL10 behavior.
+
+**Completion retirement.** `task_complete` uses resolved
+`(path, block ID)` identity for its completed set and link statuses.
+It removes an entry only when that completion batch removes its last
+child; unrelated childless placeholders stay. A closed Pomodoro with
+a recorded span, `[t::]`, or `[off::]` is retained even when empty, so
+its recorded time remains in the ledger.
 
 **Promotion seed.** Before removal, the link seeds promotion exactly
 as a surviving link would, along `edges(T)`, so the task's open
@@ -4106,11 +4123,14 @@ Only today's open Pomodoros. `promoted[]` is the consumption seed.
 | PDL4 | closed entries in the same day file | byte-identical |
 | PDL5 | struck link under an open entry | untouched |
 | PDL6 | prose bullet whose only Task Link token is the Blocked target | token removed; the rest of the bullet kept |
-| PDL7 | planned link-only bullet with authored child notes | whole subtree removed. Reconcile and plugin consumption keep this row |
-| PDL8 | capture: planned link-only bullet with authored child notes | bullet becomes the task's clean display text; children and entry kept (`notes_kept`) |
-| PDL9 | capture: an entry that had children before this consumption and none after | that entry deleted (including a running timed entry); already-childless placeholders stay |
-| PDL10 | capture: ledger link is an alias, basename, path, case, or `[[#^local]]` spelling of the Blocked target | consumed by resolved identity |
+| PDL7 | plugin: planned link-only bullet with authored child notes | whole subtree removed; reconcile and capture use PDL8 |
+| PDL8 | capture or reconcile: planned link-only bullet with authored child notes | bullet becomes the task's clean display text; children and entry kept (`notes_kept`) |
+| PDL9 | capture or reconcile: an entry had children before this pass and none after | that entry is deleted (including a running timed entry); already-childless placeholders stay |
+| PDL10 | capture or reconcile: ledger links use alias, basename, path, case, or `[[#^local]]` spellings of the same Blocked target | every spelling consumed by resolved identity |
 | PDL11 | capture: any consumed link and any entry this capture emptied | `consumed_links[]` row (`removed` / `token_removed` / `notes_kept`); deleted entry in `pomodoro_blocks` with `removed: true` |
+| PDL12 | `task_complete` retires links from an entry and an unrelated placeholder is already childless | completion removes only the entry it emptied; the placeholder stays |
+| PDL13 | any cleanup sees an empty closed entry with a recorded span, `[t::]`, or `[off::]` | retain the closed row and its recorded time |
+| PDL14 | reconcile consumes aliased links, keeps nested notes, and removes an emptied entry beside a childless placeholder | second reconcile consumes or removes nothing; bytes stay unchanged |
 
 ### 13.15 PDG — gesture vectors
 

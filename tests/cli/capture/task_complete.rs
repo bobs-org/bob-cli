@@ -807,7 +807,14 @@ fn exact_human_output_for_strike_move_dedupe_and_done() {
     assert_success(&output);
     assert_eq!(
         stdout(&output),
-        "\u{2713} completed [*] \u{2192} [x] Plan task  sase.md ^plantask\n  ledger  Task Link struck in PLAN (completed) \u{00B7} removed empty CAPTURE \u{00B7} 20261005.md\nplan 0/10 links\n"
+        "\u{2713} completed [*] \u{2192} [x] Plan task  sase.md ^plantask\n  ledger  Task Link struck in PLAN (completed) \u{00B7} 20261005.md\nplan 0/10 links\n"
+    );
+
+    assert!(
+        std::fs::read_to_string(&day2)
+            .unwrap()
+            .contains("- [ ] (**0920-0950**) \u{2014} CAPTURE\n"),
+        "the untouched empty timed Pomodoro remains in the ledger"
     );
 
     // Placeholder move with removal.

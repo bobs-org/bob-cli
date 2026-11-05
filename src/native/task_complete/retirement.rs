@@ -15,8 +15,8 @@ use super::super::{
     pomodoro as native_pomodoro,
     task_status_hooks::{
         apply_empty_pomodoro_plan, apply_structural_plan, logical_lines,
-        plan_empty_pomodoro_removals, plan_structural_changes, scan_pomodoros,
-        RemovedEmptyPomodoro, TasksSettings,
+        plan_empty_pomodoro_removals_with_options, plan_structural_changes,
+        scan_pomodoros, RemovedEmptyPomodoro, TasksSettings,
     },
     task_status_hooks::{PomodoroModel, RawReference, ResolvedReference},
 };
@@ -165,7 +165,8 @@ pub(crate) fn retire_completed_links(
         true,
     );
     let updated = apply_structural_plan(day_text, &model, &plan);
-    let empty_plan = plan_empty_pomodoro_removals(&updated, &model);
+    let empty_plan =
+        plan_empty_pomodoro_removals_with_options(&updated, &model, true);
     let text = apply_empty_pomodoro_plan(&updated, &empty_plan);
     let moved = plan
         .moved

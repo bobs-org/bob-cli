@@ -258,6 +258,9 @@ fn dedupe_drops_carried_copy_when_completed_fallback_already_links_task() {
         "  - 🍅 [[sase#^done]]\n",
         "- [ ] SASE\n",
         "  - [[sase#^done]]\n",
+        "- [ ] Unrelated placeholder\n",
+        "- [x] Recorded work [t:: 30m]\n",
+        "- [x] Recorded off-clock [off:: 30m]\n",
     );
     let retirement = retire_completed_links(
         day,
@@ -272,6 +275,34 @@ fn dedupe_drops_carried_copy_when_completed_fallback_already_links_task() {
     assert_eq!(retirement.text.matches("sase#^done").count(), 1);
     assert!(retirement.text.contains("🍅 ~~[[sase#^done]]~~\n"));
     assert!(!retirement.text.contains("- [ ] SASE"));
+    assert!(retirement.text.contains("- [ ] Unrelated placeholder\n"));
+    assert!(retirement.text.contains("- [x] Recorded work [t:: 30m]\n"));
+    assert!(retirement
+        .text
+        .contains("- [x] Recorded off-clock [off:: 30m]\n"));
+}
+
+#[test]
+fn aliases_to_one_completed_identity_are_both_retired() {
+    let day = concat!(
+        "## Pomodoros\n\n",
+        "- [ ] CAPTURE\n",
+        "  - [[sase#^done]]\n",
+        "  - [[sase.md#^done|same task]]\n",
+    );
+    let retirement = retire_completed_links(
+        day,
+        &completed(&[("sase.md", "done")]),
+        &statuses(&[
+            ("sase", "done", done("sase.md")),
+            ("sase.md", "done", done("sase.md")),
+        ]),
+        &test_settings(),
+    );
+
+    assert_eq!(retirement.struck, 2);
+    assert!(retirement.text.contains("~~[[sase#^done]]~~"));
+    assert!(retirement.text.contains("~~[[sase.md#^done|same task]]~~"));
 }
 
 #[test]

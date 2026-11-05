@@ -284,6 +284,7 @@ pub(super) fn marker_expected_for_occurrence(
     entry.completed && completed_pomodoro_marker_expected(link)
 }
 
+#[cfg(test)]
 pub(crate) fn plan_empty_pomodoro_removals(
     contents: &str,
     original_model: &PomodoroModel,
@@ -311,6 +312,14 @@ pub(crate) fn plan_empty_pomodoro_removals_with_options(
         if only_emptied && !original.has_child {
             continue;
         }
+        if entry.completed
+            && lines
+                .get(entry.line_index)
+                .and_then(|line| native_pomodoro::completed_ledger_task(line))
+                .is_some_and(has_recorded_time)
+        {
+            continue;
+        }
         plan.deleted_lines.extend(entry.line_index..entry.end_line);
         plan.removed.push(RemovedEmptyPomodoro {
             line_number: original.line_index + 1,
@@ -319,6 +328,11 @@ pub(crate) fn plan_empty_pomodoro_removals_with_options(
     }
 
     plan
+}
+
+fn has_recorded_time(task: &str) -> bool {
+    native_pomodoro::task_time_range(task).is_some()
+        || super::super::task_fields::has_any_field(task, &["t", "off"])
 }
 
 pub(crate) fn apply_empty_pomodoro_plan(

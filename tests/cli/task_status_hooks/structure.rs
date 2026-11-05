@@ -4,7 +4,7 @@ use crate::support::*;
 use std::fs;
 
 #[test]
-fn task_status_hooks_removes_empty_pomodoros_and_reports_them() {
+fn task_status_hooks_keeps_preexisting_empty_pomodoros() {
     let temp = TempDir::new("bob-cli-task-status-hooks-empty-pomodoros");
     let vault = temp.path().join("vault");
     let daily = vault.join("2026/20260717.md");
@@ -15,16 +15,6 @@ fn task_status_hooks_removes_empty_pomodoros_and_reports_them() {
         "- [ ] () — GTD\n",
         "  - [[tasks#^keep]]\n",
         "- [ ] () — GTD\n",
-        "- [ ] Current (0900-0930)\n",
-        "  - current child without a link\n",
-        "- [x] Completed (0800-0830)\n",
-        "  - completed child without a link\n",
-    );
-    let daily_after = concat!(
-        "# Daily\n\n",
-        "## Pomodoros\n\n",
-        "- [ ] () — GTD\n",
-        "  - [[tasks#^keep]]\n",
         "- [ ] Current (0900-0930)\n",
         "  - current child without a link\n",
         "- [x] Completed (0800-0830)\n",
@@ -49,12 +39,7 @@ fn task_status_hooks_removes_empty_pomodoros_and_reports_them() {
         .expect("empty Pomodoro dry-run JSON");
     assert_eq!(json["open_pomodoros"], 3);
     assert_eq!(json["references"], 1);
-    assert_eq!(
-        json["removed_empty_pomodoros"],
-        serde_json::json!([
-            {"line_number": 7, "line": "- [ ] () — GTD"}
-        ])
-    );
+    assert_eq!(json["removed_empty_pomodoros"], serde_json::json!([]));
 
     let human_dry_run = bob_command()
         .args(["task", "reconcile"])
@@ -66,9 +51,9 @@ fn task_status_hooks_removes_empty_pomodoros_and_reports_them() {
         .expect("human dry-run empty Pomodoro cleanup");
     assert_success(&human_dry_run);
     assert!(
-        stdout(&human_dry_run).contains("would remove empty Pomodoros"),
-        "unexpected empty Pomodoro dry-run report:\n{}",
-        format_output(&human_dry_run)
+        !stdout(&human_dry_run).contains("would remove empty Pomodoros"),
+        "pre-existing empty Pomodoros should not be reported as removed:\n{}",
+        format_output(&human_dry_run),
     );
     assert_eq!(fs::read_to_string(&daily).unwrap(), daily_before);
 
@@ -81,13 +66,11 @@ fn task_status_hooks_removes_empty_pomodoros_and_reports_them() {
         .expect("apply empty Pomodoro cleanup");
     assert_success(&applied);
     assert!(
-        stdout(&applied).contains("removed empty Pomodoros")
-            && stdout(&applied).contains("1 empty Pomodoros removed")
-            && stdout(&applied).contains("recovery copies:"),
-        "unexpected empty Pomodoro live report:\n{}",
+        !stdout(&applied).contains("removed empty Pomodoros"),
+        "pre-existing empty Pomodoros should not be removed:\n{}",
         format_output(&applied)
     );
-    assert_eq!(fs::read_to_string(&daily).unwrap(), daily_after);
+    assert_eq!(fs::read_to_string(&daily).unwrap(), daily_before);
 
     let second = bob_command()
         .args(["task", "reconcile"])
@@ -102,7 +85,7 @@ fn task_status_hooks_removes_empty_pomodoros_and_reports_them() {
         "expected idempotent no-op:\n{}",
         format_output(&second)
     );
-    assert_eq!(fs::read_to_string(&daily).unwrap(), daily_after);
+    assert_eq!(fs::read_to_string(&daily).unwrap(), daily_before);
 }
 
 #[test]
@@ -232,15 +215,13 @@ fn task_status_hooks_guard_rails_leave_tasks_unchanged() {
     );
 
     let empty_timed = vault.join("empty-timed.md");
-    write_file(
-        &empty_timed,
-        concat!(
-            "## Pomodoros\n\n",
-            "- [ ] First (0900-0930)\n",
-            "  - [[tasks#^keep]]\n",
-            "- [ ] Second (0930-1000)\n",
-        ),
+    let empty_timed_before = concat!(
+        "## Pomodoros\n\n",
+        "- [ ] First (0900-0930)\n",
+        "  - [[tasks#^keep]]\n",
+        "- [ ] Second (0930-1000)\n",
     );
+    write_file(&empty_timed, empty_timed_before);
     let empty_timed_output = bob_command()
         .args(["task", "reconcile"])
         .arg("--format")
@@ -256,9 +237,11 @@ fn task_status_hooks_guard_rails_leave_tasks_unchanged() {
             .expect("empty timed JSON");
     assert_eq!(
         empty_timed_json["removed_empty_pomodoros"],
-        serde_json::json!([
-            {"line_number": 5, "line": "- [ ] Second (0930-1000)"}
-        ])
+        serde_json::json!([])
+    );
+    assert_eq!(
+        fs::read_to_string(&empty_timed).unwrap(),
+        empty_timed_before
     );
     assert_eq!(
         fs::read_to_string(&task_file).unwrap(),
