@@ -831,6 +831,15 @@ const SUBCOMMANDS: &[Subcommand] = &[
         }),
     },
     Subcommand {
+        name: "clipboard",
+        about: "Diagnose clipboard history for counted capture",
+        section: Section::Integrations,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::ClipboardStatus,
+            script_command: None,
+        }),
+    },
+    Subcommand {
         name: "gcal",
         about: "Project Google Calendar events onto today's daily note",
         section: Section::Integrations,

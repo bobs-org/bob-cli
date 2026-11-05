@@ -48,6 +48,7 @@ mod capture_tasks;
 mod capture_templates;
 mod capture_work_log;
 pub(crate) mod catalog;
+mod clipboard_status;
 mod clock_tags;
 mod collect_done;
 pub(crate) mod completion;
@@ -144,6 +145,7 @@ pub(crate) enum NativeCommand {
     CaptureTemplatesList,
     CaptureTemplatesSave,
     CaptureTemplatesShow,
+    ClipboardStatus,
     Completion,
     Freshness,
     Gcal,
@@ -231,6 +233,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::CaptureTemplatesShow => {
             capture_templates::command::run_show(args)
         }
+        NativeCommand::ClipboardStatus => clipboard_status::run(args),
         NativeCommand::Completion => completion::run(args),
         NativeCommand::Freshness => freshness::cli::run(args),
         NativeCommand::Gcal => gcal::run(args),

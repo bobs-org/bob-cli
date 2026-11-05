@@ -232,6 +232,7 @@ nav:
               - "bob ref": reference/cli/ref.md
               - "bob vault-sync": reference/cli/vault-sync.md
           - "Integrations":
+              - "bob clipboard": reference/cli/clipboard.md
               - "bob gcal": reference/cli/gcal.md
               - "bob gkeep": reference/cli/gkeep.md
           - "Setup":

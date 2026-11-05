@@ -62,7 +62,8 @@ fn empty_root_offers_commands_then_capture_protocol_without_options() {
     assert_success(&output);
     assert!(stderr(&output).is_empty());
     let names = values(&output);
-    for command in ["capture", "freshness", "query", "vault-sync"] {
+    for command in ["capture", "clipboard", "freshness", "query", "vault-sync"]
+    {
         assert!(
             names.contains(&command.to_string()),
             "missing {command}: {names:?}"

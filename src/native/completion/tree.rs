@@ -77,6 +77,9 @@ impl NativeCommand {
             NativeCommand::CaptureTemplatesShow => {
                 crate::native::capture_templates::command::build_cli_show()
             }
+            NativeCommand::ClipboardStatus => {
+                crate::native::clipboard_status::build_cli()
+            }
             NativeCommand::Completion => {
                 crate::native::completion::cli::completion_command()
             }
@@ -314,6 +317,7 @@ mod tests {
     fn parse_smoke() {
         assert!(parses(&["bob", "capture", "--route", "cash", "fix", "it"]));
         assert!(parses(&["bob", "capture", "--", "--2"]));
+        assert!(parses(&["bob", "clipboard", "-c", "4", "-f", "json"]));
         assert!(parses(&["bob", "freshness", "-f", "json"]));
         assert!(parses(&["bob", "freshness", "list", "-f", "json"]));
         assert!(parses(&["bob", "vault-sync", "--dry-run"]));

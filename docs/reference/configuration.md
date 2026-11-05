@@ -93,7 +93,8 @@ its `scheduled` date. `BOB_PRIORITY_ROLL_SEED` can make a roll repeatable. See
 | `capture.clipboard_history` | `auto`, `alfred`, `clipy`, `command`, or `off` | `auto` | Which clipboard manager `%c<N>` (N ≥ 2) reads: `auto` reads read-only Alfred history, then Clipy, on macOS; `alfred`/`clipy` read only that manager on macOS and refuse elsewhere; `command` reads `capture.clipboard_history_command`; `off` refuses `%c<N>` while `%c` keeps working. |
 | `capture.clipboard_history_command` | Non-empty list of non-empty strings | Unset | Argv of the history command used when `capture.clipboard_history` is `command`; receives the requested count as its final argument and prints a newest-first JSON array of strings. Ignored under any other value. |
 
-See [capture templates](../capture.md#saved-templates).
+See [capture templates](../capture.md#saved-templates). Use [`bob clipboard`](cli/clipboard.md)
+to diagnose the active history provider and whether a counted capture would succeed.
 
 ### `plan`
 

@@ -1240,6 +1240,9 @@ also have N text entries; a short history or a file/image entry at a requested
 position refuses the whole capture. `%c` still reads the live clipboard alone.
 If the manager skips the current copy because it was concealed, transient, or
 from an ignored app, counted capture refuses rather than adding older history.
+To troubleshoot that refusal, run [`bob clipboard`](reference/cli/clipboard.md)
+for the selected provider, its health, entry ages, and a content-free
+`%c<N>` verdict.
 
 One capture invocation shares a single live read and a single history read:
 every `%c` item sees the same live value, and every `%c<N>` item takes the

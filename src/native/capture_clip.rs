@@ -20,8 +20,9 @@ mod render;
 mod tests;
 
 pub(crate) use clipboard::{
-    read_clipboard, read_clipboard_history_with_current,
-    AgreedClipboardHistory, ClipboardHistoryError,
+    clipboard_status, read_clipboard, read_clipboard_history_with_current,
+    AgreedClipboardHistory, ClipboardHistoryError, ClipboardProviderStatus,
+    ClipboardStatusReport,
 };
 pub(crate) use files::{attachment_reference, sha256_hex};
 #[cfg(test)]

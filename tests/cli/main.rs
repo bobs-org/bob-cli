@@ -6,6 +6,7 @@ mod attachments;
 mod capture;
 mod capture_templates;
 mod catalog;
+mod clipboard_status;
 mod completion;
 mod dataview;
 mod dataview_oom;

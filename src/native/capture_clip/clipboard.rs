@@ -52,6 +52,31 @@ pub(crate) struct AgreedClipboardHistory {
     pub(crate) entries: Vec<HistoryEntry>,
 }
 
+/// Content-free diagnostics for the read-only `bob clipboard` report.
+#[derive(Debug)]
+pub(crate) struct ClipboardStatusReport {
+    pub(crate) count: usize,
+    pub(crate) live_source: String,
+    pub(crate) selection: String,
+    pub(crate) selection_source: String,
+    pub(crate) config_path: Option<String>,
+    pub(crate) providers: Vec<ClipboardProviderStatus>,
+    pub(crate) result: Result<AgreedClipboardHistory, ClipboardHistoryError>,
+}
+
+#[derive(Debug)]
+pub(crate) struct ClipboardProviderStatus {
+    pub(crate) name: &'static str,
+    pub(crate) selected: bool,
+    pub(crate) store_path: Option<String>,
+    pub(crate) exists: Option<bool>,
+    pub(crate) schema_ok: Option<bool>,
+    pub(crate) running: Option<bool>,
+    pub(crate) newest_entry_age_seconds: Option<u64>,
+    pub(crate) head_agrees_with_live: bool,
+    pub(crate) error: Option<String>,
+}
+
 pub(crate) fn read_clipboard() -> Result<String, String> {
     let bytes = clipboard_command_output()?;
     normalize_clipboard_output(bytes)
@@ -69,6 +94,236 @@ pub(crate) fn read_clipboard_history(
             message,
         })?;
     read_clipboard_history_with_current(current, count)
+}
+
+/// Inspect the exact configured history path used by `%c<N>`, then add a
+/// one-row diagnostic read for every history provider known on this host.
+/// The returned report deliberately contains only booleans, paths, ages,
+/// and errors; clipboard bytes and history text never leave this module.
+pub(crate) fn clipboard_status(count: usize) -> ClipboardStatusReport {
+    let live_source = live_source_name();
+    let path = config::config_path();
+    let config_result = config::load_clipboard_history_config(&path);
+    let env_command = bob_env::var("BOB_CLIPBOARD_HISTORY_CMD").ok();
+
+    let (selection_source, selection, config_path) = match &config_result {
+        Ok(history) => {
+            if env_command
+                .as_deref()
+                .is_some_and(|command| !command.trim().is_empty())
+            {
+                ("environment".to_string(), "command".to_string(), None)
+            } else if history.setting_configured {
+                (
+                    "config".to_string(),
+                    history.setting.as_str().to_string(),
+                    Some(path.display().to_string()),
+                )
+            } else {
+                (
+                    "default".to_string(),
+                    history.setting.as_str().to_string(),
+                    None,
+                )
+            }
+        }
+        Err(_) => (
+            if env_command
+                .as_deref()
+                .is_some_and(|command| !command.trim().is_empty())
+            {
+                "environment".to_string()
+            } else {
+                "config".to_string()
+            },
+            "unavailable".to_string(),
+            Some(path.display().to_string()),
+        ),
+    };
+
+    let live = read_clipboard();
+    let selection_result = config_result.map_err(|error| match error {
+        config::ConfigError::Read(message)
+        | config::ConfigError::Invalid(message) => message,
+    });
+    let mut selected = Vec::new();
+    let mut source = SelectionSource::DefaultAuto;
+    let selection_error = match selection_result {
+        Ok(history) => match select_history_providers(
+            env_command.as_deref(),
+            &history.setting,
+            &history.command,
+            cfg!(target_os = "macos"),
+            &bob_env::home_dir(),
+        ) {
+            Ok((candidates, selected_source)) => {
+                selected = candidates;
+                source = selected_source;
+                None
+            }
+            Err(message) => Some(message),
+        },
+        Err(message) => Some(message),
+    };
+
+    let live_value = live.as_ref().ok().cloned();
+    let result = match live {
+        Err(_) => Err(ClipboardHistoryError::coded(
+            "clipboard_live_unavailable",
+            "the live clipboard could not be read",
+        )),
+        Ok(current) => match selection_error {
+            Some(message) => Err(ClipboardHistoryError::coded(
+                "clipboard_history_unavailable",
+                message,
+            )),
+            None => read_agreed_history(
+                current,
+                &selected,
+                &source,
+                count,
+                |provider, requested| provider.read(requested),
+                SystemTime::now,
+                thread::sleep,
+                provider_running,
+            ),
+        },
+    };
+
+    let diagnostic_providers = status_providers(&selected);
+    let providers = diagnostic_providers
+        .iter()
+        .map(|provider| {
+            diagnose_provider(provider, &selected, live_value.as_ref())
+        })
+        .collect();
+
+    let selected_names = selected
+        .iter()
+        .map(provider_provenance_name)
+        .collect::<Vec<_>>();
+    let selection = if selection == "auto" && !selected_names.is_empty() {
+        format!("auto → {}", selected_names.join(", "))
+    } else {
+        selection
+    };
+
+    ClipboardStatusReport {
+        count,
+        live_source,
+        selection,
+        selection_source,
+        config_path,
+        providers,
+        result,
+    }
+}
+
+fn status_providers(selected: &[HistoryProvider]) -> Vec<HistoryProvider> {
+    let mut providers = Vec::new();
+    #[cfg(target_os = "macos")]
+    {
+        let home = bob_env::home_dir();
+        providers.push(HistoryProvider::Alfred(
+            super::history::alfred_database(&home),
+        ));
+        providers.push(HistoryProvider::Clipy(super::history::clipy_database(
+            &home,
+        )));
+    }
+    providers.extend(
+        selected
+            .iter()
+            .filter(|provider| {
+                matches!(provider, HistoryProvider::Command { .. })
+            })
+            .cloned(),
+    );
+    providers
+}
+
+fn diagnose_provider(
+    provider: &HistoryProvider,
+    selected: &[HistoryProvider],
+    live: Option<&String>,
+) -> ClipboardProviderStatus {
+    let store_path =
+        provider_path(provider).map(|path| path.display().to_string());
+    let exists = provider_path(provider).map(std::path::Path::is_file);
+    let running = provider_running(provider);
+    let mut schema_ok = None;
+    let mut newest_entry_age_seconds = None;
+    let mut head_agrees_with_live = false;
+    let mut error = None;
+
+    match provider.read(1) {
+        Ok(entries) => {
+            if store_path.is_some() {
+                schema_ok = Some(true);
+            }
+            if let Some(entry) = entries.first() {
+                if let Some(at) = entry.at {
+                    newest_entry_age_seconds = Some(
+                        SystemTime::now()
+                            .duration_since(at)
+                            .unwrap_or_default()
+                            .as_secs(),
+                    );
+                }
+                head_agrees_with_live = live.is_some_and(|current| {
+                    normalize_history_entry(entry)
+                        .is_ok_and(|head| head == *current)
+                });
+            }
+        }
+        Err(provider_error) => {
+            if matches!(&provider_error, ProviderError::Unsupported(_)) {
+                schema_ok = Some(false);
+            }
+            error =
+                Some(if matches!(provider, HistoryProvider::Command { .. }) {
+                    "command provider unavailable".to_string()
+                } else {
+                    provider_error.message().to_string()
+                });
+        }
+    }
+
+    ClipboardProviderStatus {
+        name: provider_name(provider),
+        selected: selected.contains(provider),
+        store_path,
+        exists,
+        schema_ok,
+        running,
+        newest_entry_age_seconds,
+        head_agrees_with_live,
+        error,
+    }
+}
+
+fn live_source_name() -> String {
+    if bob_env::var("BOB_CLIPBOARD_CMD")
+        .ok()
+        .is_some_and(|command| !command.trim().is_empty())
+    {
+        return "BOB_CLIPBOARD_CMD".to_string();
+    }
+    #[cfg(target_os = "macos")]
+    return "pbpaste".to_string();
+    #[cfg(target_os = "linux")]
+    {
+        if bob_env::var_os("WAYLAND_DISPLAY").is_some() {
+            return "wl-paste".to_string();
+        }
+        if bob_env::var_os("DISPLAY").is_some() {
+            return "xclip or xsel".to_string();
+        }
+        if bob_env::var_os("TMUX").is_some() {
+            return "tmux show-buffer".to_string();
+        }
+    }
+    "unavailable".to_string()
 }
 
 /// The agreement read over an already-read live value, so one capture

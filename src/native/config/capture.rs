@@ -52,6 +52,10 @@ impl ClipboardHistorySetting {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ClipboardHistoryConfig {
     pub(crate) setting: ClipboardHistorySetting,
+    /// Whether `capture.clipboard_history` was authored in the config.
+    /// Status reports use this to distinguish the `auto` default from an
+    /// explicit config selection.
+    pub(crate) setting_configured: bool,
     pub(crate) command: Vec<String>,
 }
 
@@ -59,6 +63,7 @@ impl Default for ClipboardHistoryConfig {
     fn default() -> Self {
         Self {
             setting: ClipboardHistorySetting::Auto,
+            setting_configured: false,
             command: Vec::new(),
         }
     }
@@ -197,10 +202,12 @@ fn parse_clipboard_history_config(
         )));
     };
 
-    let setting = match mapping
+    let raw_setting = mapping
         .get(serde_yaml::Value::String("clipboard_history".to_string()))
-        .cloned()
-    {
+        .cloned();
+    let setting_configured =
+        raw_setting.as_ref().is_some_and(|value| !value.is_null());
+    let setting = match raw_setting {
         None => ClipboardHistorySetting::Auto,
         Some(value) if value.is_null() => ClipboardHistorySetting::Auto,
         Some(serde_yaml::Value::String(text)) => match text.as_str() {
@@ -227,6 +234,7 @@ fn parse_clipboard_history_config(
     if setting != ClipboardHistorySetting::Command {
         return Ok(ClipboardHistoryConfig {
             setting,
+            setting_configured,
             command: Vec::new(),
         });
     }
@@ -264,7 +272,11 @@ fn parse_clipboard_history_config(
         }
         command.push(arg);
     }
-    Ok(ClipboardHistoryConfig { setting, command })
+    Ok(ClipboardHistoryConfig {
+        setting,
+        setting_configured,
+        command,
+    })
 }
 
 fn render_scalar(value: &serde_yaml::Value) -> String {
