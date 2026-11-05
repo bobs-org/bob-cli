@@ -33,6 +33,9 @@ In practice it:
   placeholder into closed `[off:: Nm]` MEETs, trimmed around on-clock
   sessions, and completes their task rows (see
   [Settled off-clock events](#settled-off-clock-events))
+- Coalesces eligible closed, continuous, same-type Pomodoros in the selected
+  daily ledger when task and type attribution stays exact (see
+  [Coalesced continuous sessions](#coalesced-continuous-sessions))
 
 The latest existing earlier daily note is a read-only recent-activity source:
 it supplies the rank an otherwise-unblocked Blocked task recovers to and the
@@ -57,6 +60,7 @@ subtree from an open Pomodoro without changing the canceled task itself.
 - [Guard rails](#guard-rails)
 - [Retries](#retries)
 - [Output](#output)
+- [Coalesced continuous sessions](#coalesced-continuous-sessions)
 
 ## Usage
 
@@ -249,6 +253,48 @@ Human output prints `◌ settled {title} {span} off the clock` per event
 (`would settle` under `--dry-run`); JSON adds a `settled[]` array with the
 event `title`, one-based `line_number`, `span`, `block_id`, created
 `entry_line`, and `minutes`.
+
+### Coalesced continuous sessions
+
+After settling, reconcile coalesces runs only in the selected current daily
+ledger when it is under the vault. It never edits an earlier daily note. A row
+is eligible when it is a closed, child-bearing Pomodoro with the canonical
+`- [x] (**SSSS-EEEE** [t:: Nm]) — NAME` or
+`- [x] (**SSSS-EEEE** [off:: Nm]) — NAME` header. The bounds are four-digit
+same-day times, the duration is plain minutes, and the non-empty name has no
+trailing block ID. Open rows, placeholders, legacy bare spans, stopwatch or
+extra metadata, childless rows, and MEET rows stay unchanged.
+
+Adjacent eligible rows coalesce only when no other Pomodoro or nonblank
+column-zero line intervenes, the first end time exactly touches the next start,
+both rows use the same clock, their ordered type components match after case
+and whitespace normalization, and their direct children use the same
+indentation. Any gap or change in type, clock, or indentation ends the run.
+Children move verbatim and stay in order; blank lines between sessions are
+removed, while blank lines inside a session's child block remain. Reconcile
+repeats its greedy pass to a fixed point, so a second run is a no-op.
+
+Every accepted join preserves the minutes Stats and period briefs attribute to
+each resolved Task Link and each type component. Each closed session splits its
+minutes evenly across deduplicated counted links, with any remainder assigned
+to the first link; component minutes use the same split rule. A join that would
+change any task or component share stays separate. Sessions counts still drop
+by one for each pair of rows joined.
+
+For example, three 5-minute FIX sessions with one distinct Task Link each
+coalesce into one 15-minute row when the links remain distinct:
+
+```markdown
+- [x] (**0840-0855** [t:: 15m]) — FIX
+  - 🍅 [[bob#^first]]
+  - 🍅 [[bob#^second]]
+  - 🍅 [[bob#^third]]
+```
+
+The JSON `coalesced_pomodoros` array reports the resulting `name`, `span`,
+`clock` (`worked` or `off`), `minutes`, and ordered source spans and minutes.
+Human output prints a `coalesced continuous Pomodoros` section, or
+`would coalesce` under `--dry-run`.
 
 ### Plugin keymap cleanup
 
@@ -1220,6 +1266,19 @@ JSON mode prints one object on stdout with these stable fields:
       "minutes": 60
     }
   ],
+  "coalesced_pomodoros": [
+    {
+      "name": "FIX",
+      "span": "0840-0855",
+      "clock": "worked",
+      "minutes": 15,
+      "sources": [
+        { "span": "0840-0845", "minutes": 5 },
+        { "span": "0845-0850", "minutes": 5 },
+        { "span": "0850-0855", "minutes": 5 }
+      ]
+    }
+  ],
   "grouped_task_sections": [
     {
       "path": "Projects/Alpha.md",
@@ -1390,7 +1449,10 @@ counters such as
 `open_pomodoros` and `references` keep their input-count meaning and are not
 decremented by this cleanup. `settled` contains one item per settled
 off-clock Event Task with its `title`, one-based event `line_number`, `span`,
-`block_id`, created closed-MEET `entry_line`, and `minutes`. Each unresolved reference
+`block_id`, created closed-MEET `entry_line`, and `minutes`.
+`coalesced_pomodoros` is always present and contains one item per final
+coalesced row with its original `name`, resulting `span`, `clock`, summed
+`minutes`, and ordered `sources[]` (`span` and `minutes`). Each unresolved reference
 contains `target`, `block_id`, and `reason`; marker-reference entries contain
 `target`, `block_id`, and the owning `pomodoro` line.
 `grouped_task_sections` contains only containers whose bytes changed for

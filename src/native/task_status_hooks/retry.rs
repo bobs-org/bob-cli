@@ -294,6 +294,7 @@ mod tests {
             unblocked_fields_pruned: Vec::new(),
             plan_budget: None,
             settled: Vec::new(),
+            coalesced_pomodoros: Vec::new(),
         }
     }
 

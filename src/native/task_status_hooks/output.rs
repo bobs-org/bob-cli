@@ -43,7 +43,8 @@ pub(super) fn print_human_result(result: &SyncResult) {
         + result.minted_dependent_block_ids.len()
         + result.linked_from_line_updates.len()
         + result.minted_relation_source_block_ids.len()
-        + result.settled.len();
+        + result.settled.len()
+        + result.coalesced_pomodoros.len();
     let prefix = if result.dry_run {
         styler.success_prefix(true)
     } else {
@@ -151,6 +152,7 @@ pub(super) fn print_human_result(result: &SyncResult) {
     print_duplicate_line_section(result);
     print_empty_pomodoro_section(result);
     print_settled_section(result);
+    print_coalesced_section(result);
     print_dependency_projection_sections(&styler, result);
     print_blocks_line_sections(&styler, result);
     print_relation_line_sections(&styler, result);
@@ -197,7 +199,7 @@ pub(super) fn print_human_result(result: &SyncResult) {
         );
     }
     println!(
-        "Summary: {} marked next, {} marked in progress, {} cleared, {} cleared in progress, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} canceled-reference triggers, {} duplicate-line removals, {} empty Pomodoros removed, {} grouped sections, {} dependency projected, {} adopted, {} healed, {} canonicalized, {} warnings, {} \u{1F9F1} BLOCKS, {} minted, {} \u{1FAA2} LINKED FROM, {} relation minted, {} relation warnings, {} project-blocked tags added, {} stripped, {} unblocked fields written, {} pruned, {} blocked-reference consumptions, {} settled",
+        "Summary: {} marked next, {} marked in progress, {} cleared, {} cleared in progress, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} canceled-reference triggers, {} duplicate-line removals, {} empty Pomodoros removed, {} grouped sections, {} dependency projected, {} adopted, {} healed, {} canonicalized, {} warnings, {} \u{1F9F1} BLOCKS, {} minted, {} \u{1FAA2} LINKED FROM, {} relation minted, {} relation warnings, {} project-blocked tags added, {} stripped, {} unblocked fields written, {} pruned, {} blocked-reference consumptions, {} settled, {} coalesced",
         result.marked_next.len(),
         result.marked_in_progress.len(),
         result.cleared.len(),
@@ -227,7 +229,8 @@ pub(super) fn print_human_result(result: &SyncResult) {
         result.unblocked_fields_written.len(),
         result.unblocked_fields_pruned.len(),
         result.consumed_blocked_references.len(),
-        result.settled.len()
+        result.settled.len(),
+        result.coalesced_pomodoros.len()
     );
 }
 
@@ -256,6 +259,33 @@ pub(super) fn print_settled_section(result: &SyncResult) {
                 item.title, item.span
             );
         }
+    }
+}
+
+pub(super) fn print_coalesced_section(result: &SyncResult) {
+    if result.coalesced_pomodoros.is_empty() {
+        return;
+    }
+    println!();
+    println!(
+        "  {} continuous Pomodoros",
+        if result.dry_run {
+            "would coalesce"
+        } else {
+            "coalesced"
+        }
+    );
+    for item in &result.coalesced_pomodoros {
+        let sources = item
+            .sources
+            .iter()
+            .map(|source| source.span.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!(
+            "    ⧉ {} {} {}m ← {}",
+            item.span, item.name, item.minutes, sources
+        );
     }
 }
 

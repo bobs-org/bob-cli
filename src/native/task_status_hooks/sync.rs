@@ -561,6 +561,25 @@ pub(super) fn sync_task_statuses(
                 scan_pomodoros(&updated_lines, updated_section.clone());
         }
     }
+    // Coalesce credit-neutral continuous sessions after settle has produced
+    // the final structural ledger and before any later stage reads it.
+    let mut coalesced_pomodoros = Vec::new();
+    if let Some(daily_rel) = daily_relative {
+        let mut coalesce_resolver =
+            HomeResolver::new(DiskHomeSource::new(&request.bob_dir));
+        let coalesced =
+            plan_coalesce(&normalized_daily, daily_rel, &mut coalesce_resolver);
+        if coalesced.contents != normalized_daily {
+            normalized_daily = coalesced.contents;
+            updated_lines = logical_lines(&normalized_daily);
+            updated_section =
+                native_pomodoro::pomodoros_section_range(&updated_lines)
+                    .expect("coalescing preserves the Pomodoros section");
+            updated_pomodoro_model =
+                scan_pomodoros(&updated_lines, updated_section.clone());
+        }
+        coalesced_pomodoros = coalesced.coalesced;
+    }
     let mut files = files;
     let canonical_daily_path = daily_path.canonicalize().ok();
     if let Some(file) = files.iter_mut().find(|file| {
@@ -1107,6 +1126,7 @@ pub(super) fn sync_task_statuses(
         unblocked_fields_pruned,
         plan_budget,
         settled: settled_events,
+        coalesced_pomodoros,
     })
 }
 

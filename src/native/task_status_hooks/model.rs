@@ -319,6 +319,24 @@ pub(super) struct SyncResult {
     pub(super) unblocked_fields_pruned: Vec<UnblockedFieldChange>,
     pub(super) plan_budget: Option<plan_budget::PlanReport>,
     pub(super) settled: Vec<SettledEvent>,
+    pub(super) coalesced_pomodoros: Vec<CoalescedPomodoro>,
+}
+
+/// One coalesced run of continuous same-type Pomodoro sessions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct CoalescedPomodoro {
+    pub(super) name: String,
+    pub(super) span: String,
+    pub(super) clock: String,
+    pub(super) minutes: u32,
+    pub(super) sources: Vec<CoalescedPomodoroSource>,
+}
+
+/// One original row represented by a coalesced Pomodoro.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct CoalescedPomodoroSource {
+    pub(super) span: String,
+    pub(super) minutes: u32,
 }
 
 /// One settled off-clock Event Task: the completed event row plus the

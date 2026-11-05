@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     path::Path,
 };
 
@@ -332,6 +332,42 @@ fn deduplicated_links<S: HomeSource>(
         }
     }
     resolved
+}
+
+/// Minutes a closed session attributes to each counted task identity.
+///
+/// This uses the same resolved-path-plus-block identity, deduplication order,
+/// and first-link remainder rule as `attribute_session`. A session with no
+/// counted links is represented by one `unlinked` identity. Unresolved links
+/// cannot be compared safely, so they make the result unavailable.
+pub(crate) fn closed_session_task_credit<S: HomeSource>(
+    links: &[SessionLink],
+    minutes: u32,
+    daily_path: &Path,
+    resolver: &HomeResolver<S>,
+) -> Option<BTreeMap<String, u32>> {
+    let resolved = deduplicated_links(links, daily_path, resolver);
+    if resolved.is_empty() {
+        return Some(BTreeMap::from([("unlinked".to_string(), minutes)]));
+    }
+
+    if resolved
+        .iter()
+        .any(|link| !matches!(&link.resolution, LinkResolution::Found(_)))
+    {
+        return None;
+    }
+
+    let shares = split_minutes(minutes, resolved.len());
+    let mut credit = BTreeMap::new();
+    for (link, share) in resolved.into_iter().zip(shares) {
+        let LinkResolution::Found(path) = link.resolution else {
+            return None;
+        };
+        let identity = format!("{}#^{}", path_string(&path), link.block_id);
+        credit.insert(identity, share);
+    }
+    Some(credit)
 }
 
 fn home_part(

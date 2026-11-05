@@ -16,9 +16,9 @@ use crate::native::{
 
 use super::facts::{NoteFacts, NoteOffClock, NoteTheme};
 use super::{
-    attribute_session, effective_clock, fallback_hue, session_links,
-    split_minutes, ClockSource, DiskHomeSource, HomeResolver, HomeSource, Hue,
-    IndexedHomeSource,
+    attribute_session, closed_session_task_credit, effective_clock,
+    fallback_hue, session_links, split_minutes, ClockSource, DiskHomeSource,
+    HomeResolver, HomeSource, Hue, IndexedHomeSource, SessionLink,
 };
 
 #[derive(Debug, Deserialize)]
@@ -101,6 +101,116 @@ fn shared_vectors_match_indexed_and_disk_sources() {
     }
 
     assert_eq!(fallback_hue("job"), Hue::Magenta);
+}
+
+#[test]
+fn closed_session_task_credit_uses_stats_split_and_link_identity() {
+    let notes = BTreeMap::from([
+        (PathBuf::from("bob.md"), "- [ ] First ^first\n".to_string()),
+        (
+            PathBuf::from("area.md"),
+            "- [ ] Second ^second\n".to_string(),
+        ),
+    ]);
+    let index = NoteIndex::from_paths(notes.keys().cloned());
+    let source = IndexedHomeSource::new(&index, &notes);
+    let resolver = HomeResolver::new(source);
+    let links = vec![link("bob", "first"), link("area", "second")];
+
+    assert_eq!(
+        closed_session_task_credit(
+            &links,
+            12,
+            Path::new("2026/20261105.md"),
+            &resolver
+        ),
+        Some(BTreeMap::from([
+            ("area.md#^second".to_string(), 6),
+            ("bob.md#^first".to_string(), 6),
+        ]))
+    );
+    assert_eq!(
+        closed_session_task_credit(
+            &links,
+            5,
+            Path::new("2026/20261105.md"),
+            &resolver
+        ),
+        Some(BTreeMap::from([
+            ("area.md#^second".to_string(), 2),
+            ("bob.md#^first".to_string(), 3),
+        ]))
+    );
+}
+
+#[test]
+fn closed_session_task_credit_deduplicates_aliases_and_handles_unlinked_rows() {
+    let notes = BTreeMap::from([(
+        PathBuf::from("bob.md"),
+        "- [ ] First ^first\n".to_string(),
+    )]);
+    let index = NoteIndex::from_paths(notes.keys().cloned());
+    let source = IndexedHomeSource::new(&index, &notes);
+    let resolver = HomeResolver::new(source);
+    let duplicate = vec![link("bob", "first"), link("bob.md", "first")];
+
+    assert_eq!(
+        closed_session_task_credit(
+            &duplicate,
+            9,
+            Path::new("2026/20261105.md"),
+            &resolver
+        ),
+        Some(BTreeMap::from([("bob.md#^first".to_string(), 9)]))
+    );
+    assert_eq!(
+        closed_session_task_credit(
+            &[],
+            7,
+            Path::new("2026/20261105.md"),
+            &resolver
+        ),
+        Some(BTreeMap::from([("unlinked".to_string(), 7)]))
+    );
+}
+
+#[test]
+fn closed_session_task_credit_refuses_missing_and_ambiguous_links() {
+    let notes = BTreeMap::from([
+        (PathBuf::from("one/foo.md"), "- [ ] One ^one\n".to_string()),
+        (PathBuf::from("two/foo.md"), "- [ ] Two ^two\n".to_string()),
+    ]);
+    let index = NoteIndex::from_paths(notes.keys().cloned());
+    let source = IndexedHomeSource::new(&index, &notes);
+    let resolver = HomeResolver::new(source);
+
+    assert_eq!(
+        closed_session_task_credit(
+            &[link("missing", "task")],
+            5,
+            Path::new("2026/20261105.md"),
+            &resolver
+        ),
+        None
+    );
+    assert_eq!(
+        closed_session_task_credit(
+            &[link("foo", "one")],
+            5,
+            Path::new("2026/20261105.md"),
+            &resolver
+        ),
+        None
+    );
+}
+
+fn link(target: &str, block_id: &str) -> SessionLink {
+    SessionLink {
+        target: target.to_string(),
+        block_id: block_id.to_string(),
+        line: 1,
+        embedded: false,
+    }
 }
 
 #[test]

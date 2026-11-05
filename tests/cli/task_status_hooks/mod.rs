@@ -2,6 +2,7 @@
 
 mod blocked;
 mod blocks;
+mod coalesce;
 mod consume;
 mod dependency_line_writes;
 mod dependency_lines;

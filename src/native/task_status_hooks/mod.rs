@@ -115,6 +115,12 @@ tasks inherit ancestor reasons and carry `#prj_is_blocked`; every open \
 resident of a blocked project carries the same tag, and every \
 automatic Blocked-to-Ready recovery writes `[unblocked::]` (see \
 docs/task-dependencies.md §13). \
+Closed, child-bearing rows in the selected daily ledger coalesce when they \
+are adjacent, continuous, on the same clock, and have the same normalized \
+type components and child indentation; MEET rows never coalesce. A join is \
+accepted only when it preserves every linked task's and type component's \
+credited minutes, and reconcile repeats the pass to a fixed point for an \
+idempotent result. \
 Completed linked-task references \
 are retired as struck, non-embedded links. References found under open \
 Pomodoros keep the existing policy of moving their containing bullets beneath \
@@ -254,6 +260,7 @@ impl Request {
 }
 
 mod blocks;
+mod coalesce;
 mod compose;
 mod model;
 mod output;
@@ -271,6 +278,7 @@ mod sync;
 mod tests;
 
 use blocks::*;
+use coalesce::*;
 use compose::*;
 use model::*;
 use output::*;

@@ -200,7 +200,7 @@ count in `done`, `created`, and `dropped` and appear as the `ref` kind part.
 | `habits` | checklist, tags gtd+pre, ratio | ratio / green / up | `#gtd #pre` chores met on D over chores due on D. |
 | `keep_rate` | journal, keep_rate, pending+next | ratio / violet / neutral | Keep share of PENDING/NEXT answers on D. |
 | `review_time` | pomodoro, minutes, `in: [gtd_daily]` | minutes / orange / neutral | Minutes attributed to tasks in, or rooted at, `gtd_daily`, the morning review's area; redefine `stats.metrics.review_time` if your review lives elsewhere. |
-| `sessions` | pomodoro, count | count / orange / neutral | Closed Pomodoro rows on D. |
+| `sessions` | pomodoro, count | count / orange / neutral | Closed Pomodoro rows on D; a credit-neutral coalesced row counts as one session and preserves each task's minutes. |
 
 ## Clocks
 
