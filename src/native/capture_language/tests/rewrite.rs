@@ -1543,3 +1543,135 @@ fn rewrite_draft_reports_transfer_for_bare_at_at() {
         );
     }
 }
+
+#[test]
+fn rewrite_draft_expands_relation_flip_alias() {
+    for (raw, expected) in [
+        ("Fix it ~=", "Fix it ~~"),
+        ("Fix it\t~=", "Fix it\t~~"),
+        ("@bob+fix-retries ~=", "@bob+fix-retries ~~"),
+        ("Fix it &dev:build ~=", "Fix it &dev:build ~~"),
+        ("Buy milk\n- note ~=", "Buy milk\n- note ~~"),
+        ("Fix [[note]] ~=", "Fix [[note]] ~~"),
+        ("Fix it `code` ~=", "Fix it `code` ~~"),
+        ("Café run ~=", "Café run ~~"),
+        ("- ~=", "- ~~"),
+        ("~=", "~~"),
+    ] {
+        let cursor = raw.len();
+        assert!(raw.is_char_boundary(cursor), "{raw:?}");
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(
+            rewrite.rule,
+            Some(RewriteRule::ExpandSigilAlias),
+            "{raw:?}"
+        );
+        assert_eq!(rewrite.text, expected, "{raw:?}");
+        assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
+        assert_eq!(
+            rewrite.summary.as_deref(),
+            Some("Typed ~ for ="),
+            "{raw:?}"
+        );
+        assert_eq!(
+            rewrite.edits,
+            vec![TextEdit {
+                start: cursor - 1,
+                end: cursor,
+                replacement: "~".to_string(),
+            }],
+            "{raw:?}"
+        );
+        assert!(raw.is_char_boundary(rewrite.edits[0].start), "{raw:?}");
+
+        let again = rewrite_draft(&rewrite.text, rewrite.cursor);
+        assert_eq!(again.rule, None, "idempotent {raw:?}");
+        assert_eq!(again.text, expected, "idempotent {raw:?}");
+    }
+}
+
+#[test]
+fn rewrite_draft_expands_relation_dash_flip_alias() {
+    for (raw, expected) in [
+        ("Fix it -=", "Fix it ~~"),
+        ("Fix it\t-=", "Fix it\t~~"),
+        ("@bob+fix-retries -=", "@bob+fix-retries ~~"),
+        ("Buy milk\n- note -=", "Buy milk\n- note ~~"),
+        ("Café run -=", "Café run ~~"),
+    ] {
+        let cursor = raw.len();
+        assert!(raw.is_char_boundary(cursor), "{raw:?}");
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(
+            rewrite.rule,
+            Some(RewriteRule::ExpandSigilAlias),
+            "{raw:?}"
+        );
+        assert_eq!(rewrite.text, expected, "{raw:?}");
+        assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
+        assert_eq!(
+            rewrite.summary.as_deref(),
+            Some("Typed ~~ for -="),
+            "{raw:?}"
+        );
+        assert_eq!(
+            rewrite.edits,
+            vec![TextEdit {
+                start: cursor - 2,
+                end: cursor,
+                replacement: "~~".to_string(),
+            }],
+            "{raw:?}"
+        );
+        assert!(raw.is_char_boundary(rewrite.edits[0].start), "{raw:?}");
+
+        let again = rewrite_draft(&rewrite.text, rewrite.cursor);
+        assert_eq!(again.rule, None, "idempotent {raw:?}");
+        assert_eq!(again.text, expected, "idempotent {raw:?}");
+    }
+}
+
+#[test]
+fn rewrite_draft_relation_flip_alias_stays_literal() {
+    let mut cases = vec![
+        ("=", 1),
+        ("Fix it =", 8),
+        ("Fix it~=", 8),
+        ("Fix it ~~=", 10),
+        ("x ~=", 4),
+        ("=bugs ~=", 8),
+        ("+5 ~=", 5),
+        ("see [[foo ~=", 12),
+        ("Fix ((foo ~=", 12),
+        ("Fix it ~tar=", 12),
+        ("-=", 2),
+        ("- -=", 4),
+        ("* -=", 4),
+        ("fix-=", 5),
+        ("Fix it --=", 10),
+        ("x -=", 4),
+        ("=bugs -=", 8),
+        ("see [[foo -=", 12),
+        ("Fix ((foo -=", 12),
+        ("run `cargo -=", 13),
+    ];
+    for raw in ["Fix it ~= about", "Fix it ~=about"] {
+        cases.push((raw, raw.find('=').expect("equals") + 1));
+    }
+    cases.push(("Fix it -= about", "Fix it -=".len()));
+    for (raw, cursor) in cases {
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(rewrite.rule, None, "{raw:?} at {cursor}");
+        assert_eq!(rewrite.text, raw, "{raw:?} at {cursor}");
+    }
+
+    let raw = "Fix it ~=";
+    let rewrite = rewrite_draft(raw, None);
+    assert_eq!(rewrite.rule, None);
+    assert_eq!(rewrite.text, raw);
+
+    let raw = "Task {0} %t\n\nFix it ~=";
+    let rewrite = rewrite_draft(raw, Some(raw.len()));
+    assert_eq!(rewrite.rule, None);
+    assert_eq!(rewrite.text, raw);
+}

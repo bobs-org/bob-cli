@@ -107,18 +107,25 @@ pub(crate) fn rewrite_draft(
     absorb_bare_declaration(raw_text, cursor)
 }
 
-/// Typing `.`, `;`, `,`, `-`, `\`, or `/` in a position where its real sigil would
-/// open a picker swaps that byte to `^`, `:`, `+`, `~`, or `#`. The candidate is
-/// checked by the ordinary completion grammar, keeping the assist lexical and
+/// Typing `.`, `;`, `,`, `-`, `\`, `/`, or `=` in a position where its real sigil
+/// would open a picker swaps that byte to `^`, `:`, `+`, `~`, or `#`. The candidate
+/// is checked by the ordinary completion grammar, keeping the assist lexical and
 /// aligned with picker eligibility. Route-scope contexts plus lone
 /// move-bullet sigils are accepted; a `.` that completes a `- ^^` choice
 /// marker is also accepted. A comma glued to a complete target-run member
-/// instead inserts ` +` to open the next parent-task picker.
+/// instead inserts ` +` to open the next parent-task picker. Typing `=` right
+/// after a bare `~` that opens the Links To picker turns it into `~~` (Linked
+/// From); typing `=` right after a `-` that would alias `~` turns the pair into
+/// `~~`. Everywhere else `=` stays literal, including after `~~` and inside a
+/// wikilink.
 fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
     let start = cursor.checked_sub(1)?;
     let alias = raw_text.get(start..cursor)?;
     if alias == "-" {
         return expand_relation_dash_alias(raw_text, start, cursor);
+    }
+    if alias == "=" {
+        return expand_relation_flip_alias(raw_text, start, cursor);
     }
     if alias == "\\" || alias == "/" {
         return expand_hash_alias(raw_text, start, cursor, alias);
@@ -219,43 +226,13 @@ fn expand_relation_dash_alias(
     start: usize,
     cursor: usize,
 ) -> Option<DraftRewrite> {
-    if start == 0
-        || !matches!(raw_text.as_bytes().get(start - 1), Some(b' ' | b'\t'))
-    {
-        return None;
-    }
-
-    let line_start = raw_text[..start].rfind('\n').map_or(0, |index| index + 1);
-    let mut prefix = raw_text.get(line_start..start)?;
-    prefix = prefix.trim_start_matches([' ', '\t']);
-    let bytes = prefix.as_bytes();
-    if bytes.len() >= 2
-        && matches!(bytes[0], b'-' | b'*' | b'+')
-        && matches!(bytes[1], b' ' | b'\t')
-    {
-        prefix = prefix[1..].trim_start_matches([' ', '\t']);
-    }
-    if prefix.trim().is_empty()
-        || prefix.bytes().filter(|byte| *byte == b'`').count() % 2 != 0
-    {
+    if !relation_dash_position_ok(raw_text, start) {
         return None;
     }
 
     let mut candidate = raw_text.to_string();
     candidate.replace_range(start..cursor, "~");
-    if crate::native::capture_links::completion_field_at(
-        &candidate,
-        cursor,
-        String::new(),
-    )
-    .is_some()
-        || crate::native::capture_task_wikilinks::completion_field_at(
-            &candidate,
-            cursor,
-            "mac_inbox.md",
-        )
-        .is_some()
-    {
+    if wikilink_claims(&candidate, cursor) {
         return None;
     }
     let field = super::completion::completion_field_at(&candidate, cursor)?;
@@ -268,6 +245,140 @@ fn expand_relation_dash_alias(
     Some(finish_sigil_alias(
         raw_text, &candidate, start, cursor, '~', "-",
     ))
+}
+
+fn relation_dash_position_ok(raw_text: &str, dash_start: usize) -> bool {
+    if dash_start == 0
+        || !matches!(
+            raw_text.as_bytes().get(dash_start - 1),
+            Some(b' ' | b'\t')
+        )
+    {
+        return false;
+    }
+
+    let line_start = raw_text[..dash_start]
+        .rfind('\n')
+        .map_or(0, |index| index + 1);
+    let mut prefix = match raw_text.get(line_start..dash_start) {
+        Some(prefix) => prefix,
+        None => return false,
+    };
+    prefix = prefix.trim_start_matches([' ', '\t']);
+    let bytes = prefix.as_bytes();
+    if bytes.len() >= 2
+        && matches!(bytes[0], b'-' | b'*' | b'+')
+        && matches!(bytes[1], b' ' | b'\t')
+    {
+        prefix = prefix[1..].trim_start_matches([' ', '\t']);
+    }
+    if prefix.trim().is_empty()
+        || prefix.bytes().filter(|byte| *byte == b'`').count() % 2 != 0
+    {
+        return false;
+    }
+    true
+}
+
+fn wikilink_claims(candidate: &str, cursor: usize) -> bool {
+    crate::native::capture_links::completion_field_at(
+        candidate,
+        cursor,
+        String::new(),
+    )
+    .is_some()
+        || crate::native::capture_task_wikilinks::completion_field_at(
+            candidate,
+            cursor,
+            "mac_inbox.md",
+        )
+        .is_some()
+}
+
+/// Typing `=` right after a bare `~` (or right after a `-` that would alias
+/// `~`) flips a Links To relation into Linked From (`~~`). The candidate is
+/// checked by the ordinary completion grammar: it must open an empty
+/// `RelationFrom` target ending at the caret. `~~=`, glued text after the
+/// caret, mid-line prose, and wikilink fields stay literal. No backtick guard:
+/// the user typed the `~` themselves and Bob already opens the picker for it.
+fn expand_relation_flip_alias(
+    raw_text: &str,
+    start: usize,
+    cursor: usize,
+) -> Option<DraftRewrite> {
+    if start == 0 || !raw_text.is_char_boundary(start) {
+        return None;
+    }
+    let bytes = raw_text.as_bytes();
+    match bytes.get(start - 1) {
+        Some(b'~') => {
+            if start >= 2 && matches!(bytes.get(start - 2), Some(b'~')) {
+                return None;
+            }
+            let mut candidate = raw_text.to_string();
+            candidate.replace_range(start..cursor, "~");
+            if wikilink_claims(&candidate, cursor) {
+                return None;
+            }
+            let field =
+                super::completion::completion_field_at(&candidate, cursor)?;
+            if field.context
+                != super::completion::CompletionContext::RelationFrom
+                || field.replacement != (start - 1, cursor)
+            {
+                return None;
+            }
+            Some(finish_sigil_alias(
+                raw_text, &candidate, start, cursor, '~', "=",
+            ))
+        }
+        Some(b'-') => {
+            if !relation_dash_position_ok(raw_text, start - 1) {
+                return None;
+            }
+            let edit_start = start - 1;
+            let mut candidate = raw_text.to_string();
+            candidate.replace_range(edit_start..cursor, "~~");
+            if wikilink_claims(&candidate, cursor) {
+                return None;
+            }
+            let field =
+                super::completion::completion_field_at(&candidate, cursor)?;
+            if field.context
+                != super::completion::CompletionContext::RelationFrom
+                || field.replacement != (edit_start, cursor)
+            {
+                return None;
+            }
+            Some(finish_relation_flip_dash_alias(
+                raw_text, &candidate, edit_start, cursor,
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn finish_relation_flip_dash_alias(
+    raw_text: &str,
+    candidate: &str,
+    edit_start: usize,
+    cursor: usize,
+) -> DraftRewrite {
+    let edits = vec![TextEdit {
+        start: edit_start,
+        end: cursor,
+        replacement: "~~".to_string(),
+    }];
+    let text = apply_text_edits(raw_text, &edits);
+    debug_assert_eq!(text, candidate);
+    DraftRewrite {
+        rule: Some(RewriteRule::ExpandSigilAlias),
+        edits,
+        text,
+        cursor: Some(cursor),
+        summary: Some("Typed ~~ for -=".to_string()),
+        notices: Vec::new(),
+    }
 }
 
 /// Typing `,` where `+` would open a Parent Task picker aliases it to `+`.

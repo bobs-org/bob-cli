@@ -8537,6 +8537,12 @@ the Links To relation picker. It stays literal at a line or bullet-body start,
 glued to a word, after another `-`, inside an unclosed backtick span, or inside
 a wikilink. For example, `Fix it -` becomes `Fix it ~`.
 
+Typing `=` right after a bare `~` that opens the Links To picker turns it into
+`~~` (Linked From). Typing `=` right after a `-` that would alias `~` turns the
+pair into `~~`. Everywhere else `=` stays literal, including after `~~` and
+inside a wikilink. For example, `Fix it ~=` becomes `Fix it ~~` and `Fix it -=`
+becomes `Fix it ~~`.
+
 **Relation-label pipe attach.** Typing `|` after whitespace that follows a
 relation token deletes that whitespace so the pipe glues to the token.
 `--cursor` is required: only the `|` token ending at that caret is examined,
