@@ -30,7 +30,8 @@ types of its worked links, in entry order. It appends missing worked types in ca
 spelling and substitutes in place when one type is removed and one is added;
 single-type names can rename. The continuation first sheds unsupported merged types,
 keeping the base when needed, then agrees with its carried links so it is an
-`agree_entry` fixed point. A name that normalizes to MEET is never merged, split,
-settled, shed, or renamed.
+`agree_entry` fixed point. Open entry names stay in agreement through writers, the
+close settle, and reconcile ([[decisions:open-pomodoro-names-follow-task-links]]).
+A name that normalizes to MEET is never merged, split, settled, shed, or renamed.
 
 This is not a container, not a Pomodoro home, and not a D6 rename.
