@@ -601,7 +601,9 @@ fn clipboard_runs_share_each_read_and_reuse_one_snippet_file() {
     assert_eq!(json["captures"][1]["clip"]["snippet"], first_snippet);
     assert_eq!(json["captures"][2]["clip"]["snippet"], first_snippet);
     assert_eq!(json["captures"][3]["clip"]["snippet"], first_snippet);
-    assert_eq!(fs::read_to_string(&calls).expect("read call count"), "xx");
+    // One live read per capture invocation, shared by both items and all
+    // four members.
+    assert_eq!(fs::read_to_string(&calls).expect("read call count"), "x");
     assert_eq!(
         fs::read_dir(vault.join("file"))
             .expect("read file dir")

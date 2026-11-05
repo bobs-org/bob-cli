@@ -1294,3 +1294,192 @@ fn capture_sub_bullet_task_ref_recovers_shift_and_nests_clipboard() {
         )
     );
 }
+
+#[test]
+fn capture_clipboard_reads_once_per_invocation() {
+    let temp = TempDir::new("bob-cli-capture-clipboard-once");
+    let vault = temp.path().join("vault");
+    let clipboard = temp.path().join("clipboard");
+    let history = temp.path().join("history");
+    let live_calls = temp.path().join("live-calls");
+    let history_calls = temp.path().join("history-calls");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_executable(
+        &clipboard,
+        &format!(
+            "#!/bin/sh\necho x >> {}\nprintf 'live value\\n'\n",
+            live_calls.display()
+        ),
+    );
+    write_executable(
+        &history,
+        &format!(
+            concat!(
+                "#!/bin/sh\n",
+                "echo x >> {}\n",
+                "[ \"$1\" = 3 ] || {{ echo wrong-count >&2; exit 42; }}\n",
+                "printf '%s\\n' '[\"live value\",\"older\",\"oldest\"]'\n",
+            ),
+            history_calls.display()
+        ),
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("first %c3\n\nsecond %c2\n\nthird %c")
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_CLIPBOARD_HISTORY_CMD", &history)
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("shared clipboard capture");
+    assert_success(&output);
+    // One live read shared by all three items, and one history read at
+    // the largest requested count.
+    assert_eq!(
+        fs::read_to_string(&live_calls)
+            .expect("read live counter")
+            .lines()
+            .count(),
+        1
+    );
+    assert_eq!(
+        fs::read_to_string(&history_calls)
+            .expect("read history counter")
+            .lines()
+            .count(),
+        1
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    let captures = json["captures"].as_array().expect("captures array");
+    assert_eq!(captures.len(), 3);
+    // Each counted item takes the first N values and provenance entries
+    // of the shared largest-count read.
+    assert_eq!(
+        captures[0]["clip"]["lines"],
+        serde_json::json!(["\t- live value", "\t- older", "\t- oldest"])
+    );
+    assert_eq!(
+        captures[0]["clip"]["history"]["entries"]
+            .as_array()
+            .expect("history entries")
+            .len(),
+        3
+    );
+    assert_eq!(
+        captures[1]["clip"]["lines"],
+        serde_json::json!(["\t- live value", "\t- older"])
+    );
+    assert_eq!(
+        captures[1]["clip"]["history"]["entries"]
+            .as_array()
+            .expect("history entries")
+            .len(),
+        2
+    );
+    assert_eq!(
+        captures[2]["clip"]["lines"],
+        serde_json::json!(["\t- live value"])
+    );
+}
+
+#[test]
+fn capture_hung_history_command_refuses_near_the_deadline() {
+    let temp = TempDir::new("bob-cli-hung-history-command");
+    let vault = temp.path().join("vault");
+    let inbox = vault.join("mac_inbox.md");
+    let clipboard = temp.path().join("clipboard");
+    let history = temp.path().join("history");
+    write_file(&inbox, "sentinel\n");
+    write_executable(&clipboard, "#!/bin/sh\nprintf 'live value\\n'\n");
+    write_executable(&history, "#!/bin/sh\nsleep 60\n");
+
+    let started = std::time::Instant::now();
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("task %c3")
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_CLIPBOARD_HISTORY_CMD", &history)
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("hung history capture");
+    let elapsed = started.elapsed();
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("error JSON");
+    assert_eq!(json["code"], "clipboard_history_unavailable", "{json}");
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap()
+            .contains("timed out after 5 seconds"),
+        "{json}"
+    );
+    // Bounded by the command deadline, not by the hung child's own sleep.
+    assert!(
+        elapsed >= std::time::Duration::from_secs(4)
+            && elapsed < std::time::Duration::from_secs(30),
+        "refusal took {elapsed:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(&inbox).expect("read inbox"),
+        "sentinel\n"
+    );
+    assert!(!vault.join("img").exists());
+    assert!(!vault.join("file").exists());
+    // The timed-out process group leaves no surviving child behind.
+    let survivors = std::process::Command::new("pgrep")
+        .arg("-f")
+        .arg(history.display().to_string())
+        .output()
+        .expect("pgrep runs");
+    assert!(
+        !survivors.status.success(),
+        "hung history command survived the timeout kill"
+    );
+}
+
+#[test]
+fn capture_oversized_clipboard_refuses_without_writing() {
+    let temp = TempDir::new("bob-cli-oversized-clipboard");
+    let vault = temp.path().join("vault");
+    let inbox = vault.join("mac_inbox.md");
+    let clipboard = temp.path().join("clipboard");
+    write_file(&inbox, "sentinel\n");
+    write_executable(
+        &clipboard,
+        "#!/bin/sh\nhead -c 16777217 /dev/zero | tr '\\000' 'a'\n",
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("task %c")
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("oversized clipboard capture");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains(
+            "clipboard output exceeds 16 MiB; copy a file path instead"
+        ),
+        "{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(&inbox).expect("read inbox"),
+        "sentinel\n"
+    );
+    assert!(!vault.join("img").exists());
+    assert!(!vault.join("file").exists());
+}

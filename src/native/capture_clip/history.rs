@@ -9,7 +9,6 @@
 
 use std::{
     path::{Path, PathBuf},
-    process::Command,
     time::SystemTime,
 };
 
@@ -313,31 +312,19 @@ fn read_command_history(
     let (program, args) = argv.split_first().ok_or_else(|| {
         ProviderError::Failed(format!("{label} must name a command"))
     })?;
-    let output = Command::new(program)
-        .args(args)
-        .arg(count.to_string())
-        .output()
+    let mut full_args = args
+        .iter()
+        .map(std::ffi::OsString::from)
+        .collect::<Vec<_>>();
+    full_args.push(std::ffi::OsString::from(count.to_string()));
+    let output = super::clipboard::run_bounded_argv(program, full_args)
         .map_err(|error| {
             ProviderError::Failed(format!("run {label}: {error}"))
         })?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let detail = stderr.trim();
-        let suffix = if detail.is_empty() {
-            String::new()
-        } else {
-            format!(": {detail}")
-        };
-        return Err(ProviderError::Failed(format!(
-            "clipboard command {label} exited with {}{suffix}",
-            output.status.code().map_or_else(
-                || "a signal".to_string(),
-                |code| code.to_string()
-            )
-        )));
-    }
-    let values = serde_json::from_slice::<Vec<String>>(&output.stdout)
-        .map_err(|error| {
+    let stdout = super::clipboard::require_clipboard_success(output, label)
+        .map_err(ProviderError::Failed)?;
+    let values =
+        serde_json::from_slice::<Vec<String>>(&stdout).map_err(|error| {
             ProviderError::Failed(format!(
                 "{label} must print a UTF-8 JSON array of strings ordered \
                  newest first: {error}"

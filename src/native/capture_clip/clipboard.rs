@@ -1,6 +1,8 @@
 use std::{
+    ffi::OsString,
     io,
-    process::{Command, Output},
+    path::PathBuf,
+    process::Command,
     thread,
     time::{Duration, SystemTime},
 };
@@ -9,11 +11,20 @@ use super::history::{
     select_history_providers, EntryKind, HistoryEntry, HistoryProvider,
     ProviderError, SelectionSource,
 };
-use crate::native::{config, env as bob_env};
+use crate::native::{
+    config, env as bob_env,
+    subprocess_runner::{self, RawRunOutput, RawRunSpec},
+};
 
 const AGREEMENT_TIMEOUT: Duration = Duration::from_millis(1_500);
 const AGREEMENT_POLL_INTERVAL: Duration = Duration::from_millis(150);
 const FRESH_HISTORY_AGE: Duration = Duration::from_secs(60);
+
+/// Every clipboard subprocess (live reads and history commands) shares
+/// this deadline, stdout cap, and stderr cap.
+pub(super) const CLIPBOARD_TIMEOUT: Duration = Duration::from_secs(5);
+pub(super) const CLIPBOARD_STDOUT_CAP: usize = 16 * 1024 * 1024;
+pub(super) const CLIPBOARD_STDERR_CAP: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ClipboardHistoryError {
@@ -22,13 +33,6 @@ pub(crate) struct ClipboardHistoryError {
 }
 
 impl ClipboardHistoryError {
-    fn io(message: String) -> Self {
-        Self {
-            code: None,
-            message,
-        }
-    }
-
     fn coded(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             code: Some(code),
@@ -49,14 +53,31 @@ pub(crate) struct AgreedClipboardHistory {
 }
 
 pub(crate) fn read_clipboard() -> Result<String, String> {
-    let output = clipboard_command_output()?;
-    normalize_clipboard_output(output.stdout)
+    let bytes = clipboard_command_output()?;
+    normalize_clipboard_output(bytes)
 }
 
+// Shared by the status-command phase: the single-shot entry that reads
+// the live value itself before running agreement.
+#[allow(dead_code)]
 pub(crate) fn read_clipboard_history(
     count: usize,
 ) -> Result<AgreedClipboardHistory, ClipboardHistoryError> {
-    let current = read_clipboard().map_err(ClipboardHistoryError::io)?;
+    let current =
+        read_clipboard().map_err(|message| ClipboardHistoryError {
+            code: None,
+            message,
+        })?;
+    read_clipboard_history_with_current(current, count)
+}
+
+/// The agreement read over an already-read live value, so one capture
+/// invocation shares a single live read between `%c` items and `%c<N>`
+/// history agreement.
+pub(crate) fn read_clipboard_history_with_current(
+    current: String,
+    count: usize,
+) -> Result<AgreedClipboardHistory, ClipboardHistoryError> {
     if count == 1 {
         return Ok(AgreedClipboardHistory {
             values: vec![current],
@@ -457,7 +478,7 @@ fn format_age(age: Duration) -> String {
     }
 }
 
-fn clipboard_command_output() -> Result<Output, String> {
+fn clipboard_command_output() -> Result<Vec<u8>, String> {
     if let Some(command) = bob_env::var("BOB_CLIPBOARD_CMD")
         .ok()
         .filter(|value| !value.trim().is_empty())
@@ -485,8 +506,13 @@ fn clipboard_command_output() -> Result<Output, String> {
         }
 
         if bob_env::var_os("DISPLAY").is_some() {
-            match run_command("xclip", &["-selection", "clipboard", "-o"]) {
-                Ok(output) => return require_success(output, "xclip"),
+            match run_bounded_command(
+                "xclip",
+                &["-selection", "clipboard", "-o"],
+            ) {
+                Ok(output) => {
+                    return require_clipboard_success(output, "xclip")
+                }
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
                     return run_required_command(
                         "xsel",
@@ -525,39 +551,82 @@ BOB_CLIPBOARD_CMD to a command that prints clipboard text"
     ))
 }
 
+/// Run a clipboard subprocess with the shared deadline, output cap, and
+/// process-group reaping.
+pub(super) fn run_bounded_command(
+    program: &str,
+    args: &[&str],
+) -> io::Result<RawRunOutput> {
+    run_bounded_argv(
+        program,
+        args.iter().map(OsString::from).collect::<Vec<_>>(),
+    )
+}
+
+/// The same bound for argv built at runtime (history commands).
+pub(super) fn run_bounded_argv(
+    program: &str,
+    args: Vec<OsString>,
+) -> io::Result<RawRunOutput> {
+    subprocess_runner::run_raw(&RawRunSpec {
+        program: PathBuf::from(program),
+        args,
+        env: Vec::new(),
+        env_remove: Vec::new(),
+        timeout: CLIPBOARD_TIMEOUT,
+        stdout_cap: CLIPBOARD_STDOUT_CAP,
+        stderr_cap: CLIPBOARD_STDERR_CAP,
+    })
+}
+
 fn run_required_command(
     program: &str,
     args: &[&str],
     label: &str,
-) -> Result<Output, String> {
-    let output = run_command(program, args)
+) -> Result<Vec<u8>, String> {
+    let output = run_bounded_command(program, args)
         .map_err(|error| format!("run {label}: {error}"))?;
-    require_success(output, label)
+    require_clipboard_success(output, label)
 }
 
-fn run_command(program: &str, args: &[&str]) -> io::Result<Output> {
-    Command::new(program).args(args).output()
-}
-
-fn require_success(output: Output, label: &str) -> Result<Output, String> {
-    if output.status.success() {
-        return Ok(output);
+/// Timeout, over-cap, and failure checks shared by every clipboard
+/// command. Returns the raw bytes: NUL and UTF-8 detection need them.
+pub(super) fn require_clipboard_success(
+    output: RawRunOutput,
+    label: &str,
+) -> Result<Vec<u8>, String> {
+    if output.timed_out {
+        return Err(format!(
+            "clipboard command {label} timed out after {} seconds",
+            CLIPBOARD_TIMEOUT.as_secs()
+        ));
     }
+    if output.stdout_truncated {
+        return Err(format!(
+            "{label}: clipboard output exceeds 16 MiB; copy a file path instead"
+        ));
+    }
+    match output.status {
+        Some(0) => Ok(output.stdout),
+        Some(code) => Err(format!(
+            "clipboard command {label} exited with {code}{}",
+            stderr_suffix(&output.stderr)
+        )),
+        None => Err(format!(
+            "clipboard command {label} exited with a signal{}",
+            stderr_suffix(&output.stderr)
+        )),
+    }
+}
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let detail = stderr.trim();
-    let suffix = if detail.is_empty() {
+fn stderr_suffix(stderr: &[u8]) -> String {
+    let detail = String::from_utf8_lossy(stderr);
+    let detail = detail.trim();
+    if detail.is_empty() {
         String::new()
     } else {
         format!(": {detail}")
-    };
-    Err(format!(
-        "clipboard command {label} exited with {}{suffix}",
-        output
-            .status
-            .code()
-            .map_or_else(|| "a signal".to_string(), |code| code.to_string())
-    ))
+    }
 }
 
 pub(super) fn normalize_clipboard_output(

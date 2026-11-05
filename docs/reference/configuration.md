@@ -313,8 +313,8 @@ interpret shell quotes unless their contract says otherwise.
 
 | Variable | Default or unset behavior | Effect |
 | --- | --- | --- |
-| `BOB_CLIPBOARD_CMD` | Platform clipboard discovery | Whitespace-split command that prints live clipboard text; takes precedence over `pbpaste`, Linux clipboard tools, and tmux buffer fallback. |
-| `BOB_CLIPBOARD_HISTORY_CMD` | `capture.clipboard_history`, whose `auto` reads Alfred, then Clipy, on macOS; no automatic provider elsewhere | Command receives the requested total count as its final argument and prints a newest-first JSON array of clipboard strings. |
+| `BOB_CLIPBOARD_CMD` | Platform clipboard discovery | Whitespace-split command that prints live clipboard text; takes precedence over `pbpaste`, Linux clipboard tools, and tmux buffer fallback. Runs with a 5-second deadline and a 16 MiB stdout cap. |
+| `BOB_CLIPBOARD_HISTORY_CMD` | `capture.clipboard_history`, whose `auto` reads Alfred, then Clipy, on macOS; no automatic provider elsewhere | Command receives the requested total count as its final argument and prints a newest-first JSON array of clipboard strings. Runs with a 5-second deadline and a 16 MiB stdout cap. |
 | `BOB_DATAVIEW_OBSIDIAN_COMMAND` | `obsidian` found on `PATH` | Executable used for `bob query --engine obsidian`. |
 | `BOB_DATAVIEW_VAULT` | Obsidian's default vault selection | Vault name or ID forwarded to `obsidian eval`. |
 

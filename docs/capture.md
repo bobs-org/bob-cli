@@ -217,7 +217,7 @@ semantics for every member.
 Bob validates the whole run before staging it, including duplicate task
 identities reached through normalized paths or symlink aliases. Members then
 plan in marker order against the same transaction snapshots; any refusal rolls
-back the entire capture. A clipboard value is read once per target run, and
+back the entire capture. A clipboard value is read once per capture invocation, and
 each `$<N>` priority date is rolled once and reused for all members. Identical
 warnings from the members are shown once. Errors include the marker that
 failed. Human output prints a `targets  @a+x · @b+y` line, and JSON adds
@@ -1240,6 +1240,15 @@ also have N text entries; a short history or a file/image entry at a requested
 position refuses the whole capture. `%c` still reads the live clipboard alone.
 If the manager skips the current copy because it was concealed, transient, or
 from an ignored app, counted capture refuses rather than adding older history.
+
+One capture invocation shares a single live read and a single history read:
+every `%c` item sees the same live value, and every `%c<N>` item takes the
+first N values of one history read at the largest requested count. A draft
+with only `%c` items never reads history. Every clipboard command — the live
+read and both history-command sources — runs with a 5-second deadline, a
+16 MiB stdout cap, and process-group reaping. A command that exceeds the
+deadline refuses naming the command and the deadline; output past the cap
+refuses with "clipboard output exceeds 16 MiB; copy a file path instead".
 
 Clipboard history refusals keep exit status 1 and expose these stable JSON
 codes:

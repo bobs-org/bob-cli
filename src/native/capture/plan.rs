@@ -61,6 +61,59 @@ pub(super) enum FanoutClipboardRead {
     History(capture_clip::AgreedClipboardHistory),
 }
 
+/// One live read and one largest-count history read shared by every item
+/// in the capture invocation. A draft with only `%c` items never reads
+/// history; dry runs share the same snapshot as real runs.
+pub(super) struct ClipSnapshot {
+    max_history_count: Option<usize>,
+    live: Option<Result<String, String>>,
+    history: Option<
+        Result<
+            capture_clip::AgreedClipboardHistory,
+            capture_clip::ClipboardHistoryError,
+        >,
+    >,
+}
+
+impl ClipSnapshot {
+    fn for_batch(
+        request: &CaptureRequest,
+        parsed_items: &[ParsedCaptureItem],
+    ) -> Self {
+        // The largest effective count after `--clip` injection; none under
+        // `--no-clip`, where nothing is read at all.
+        let max_history_count = if request.no_clip {
+            None
+        } else {
+            parsed_items
+                .iter()
+                .filter_map(|item| {
+                    item.parsed.clip.as_ref().or(request.forced_clip.as_ref())
+                })
+                .filter_map(|clip| match clip {
+                    ClipRequest::History { count } => Some(count.get()),
+                    ClipRequest::Current => None,
+                })
+                .max()
+        };
+        Self {
+            max_history_count,
+            live: None,
+            history: None,
+        }
+    }
+
+    fn live_value(&mut self) -> Result<String, String> {
+        if self.live.is_none() {
+            self.live = Some(capture_clip::read_clipboard());
+        }
+        self.live
+            .as_ref()
+            .expect("live clipboard read just cached")
+            .clone()
+    }
+}
+
 pub(super) fn plan_capture_batch(
     request: &CaptureRequest,
     routing: Option<&UrlRoutingPolicy>,
@@ -130,8 +183,7 @@ pub(super) fn plan_capture_batch_with_config_path(
     let roll_seed = config::roll_seed();
     let mut planner = CaptureBatchPlanner::default();
     let mut clip_reservations = capture_clip::ClipReservations::default();
-    let mut fanout_clip_reads: HashMap<usize, FanoutClipboardRead> =
-        HashMap::new();
+    let mut clip_snapshot = ClipSnapshot::for_batch(request, &parsed_items);
     let mut fanout_warning_messages: HashMap<usize, HashSet<String>> =
         HashMap::new();
     let mut items = Vec::new();
@@ -534,7 +586,7 @@ pub(super) fn plan_capture_batch_with_config_path(
                 roll_seed,
                 &mut planner,
                 &mut clip_reservations,
-                &mut fanout_clip_reads,
+                &mut clip_snapshot,
                 &mut warnings,
                 &mut dependency_ctx,
                 config_path,
@@ -1003,31 +1055,57 @@ fn dedupe_fanout_group_warnings(
 }
 
 fn read_capture_clipboard(
-    item_index: usize,
-    fanout_item: bool,
+    snapshot: &mut ClipSnapshot,
     request: &ClipRequest,
-    memo: &mut HashMap<usize, FanoutClipboardRead>,
 ) -> Result<FanoutClipboardRead, CaptureError> {
-    if fanout_item && let Some(read) = memo.get(&item_index) {
-        return Ok(read.clone());
+    match request {
+        ClipRequest::Current => Ok(FanoutClipboardRead::Current(
+            snapshot.live_value().map_err(CaptureError::io)?,
+        )),
+        ClipRequest::History { count } => {
+            let count = count.get();
+            let live = snapshot.live_value().map_err(CaptureError::io)?;
+            if snapshot.history.is_none() {
+                let largest =
+                    snapshot.max_history_count.unwrap_or(count).max(count);
+                snapshot.history =
+                    Some(capture_clip::read_clipboard_history_with_current(
+                        live, largest,
+                    ));
+            }
+            let stored =
+                snapshot.history.as_ref().expect("history read just cached");
+            match stored {
+                Ok(agreed) => {
+                    // Each item takes the first N values and the first N
+                    // provenance entries of the shared largest-count read.
+                    Ok(FanoutClipboardRead::History(
+                        capture_clip::AgreedClipboardHistory {
+                            values: agreed
+                                .values
+                                .iter()
+                                .take(count)
+                                .cloned()
+                                .collect(),
+                            provider: agreed.provider,
+                            entries: agreed
+                                .entries
+                                .iter()
+                                .take(count)
+                                .cloned()
+                                .collect(),
+                        },
+                    ))
+                }
+                Err(error) => Err(match error.code {
+                    Some(code) => {
+                        CaptureError::io_code(error.message.clone(), code)
+                    }
+                    None => CaptureError::io(error.message.clone()),
+                }),
+            }
+        }
     }
-    let read = match request {
-        ClipRequest::Current => FanoutClipboardRead::Current(
-            capture_clip::read_clipboard().map_err(CaptureError::io)?,
-        ),
-        ClipRequest::History { count } => FanoutClipboardRead::History(
-            capture_clip::read_clipboard_history(count.get()).map_err(
-                |error: capture_clip::ClipboardHistoryError| match error.code {
-                    Some(code) => CaptureError::io_code(error.message, code),
-                    None => CaptureError::io(error.message),
-                },
-            )?,
-        ),
-    };
-    if fanout_item {
-        memo.insert(item_index, read.clone());
-    }
-    Ok(read)
 }
 
 /// Plan one reference item: resolve the canonical parent with
@@ -1381,7 +1459,7 @@ pub(super) fn plan_capture_item(
     roll_seed: u64,
     planner: &mut CaptureBatchPlanner,
     clip_reservations: &mut capture_clip::ClipReservations,
-    fanout_clip_reads: &mut HashMap<usize, FanoutClipboardRead>,
+    clip_snapshot: &mut ClipSnapshot,
     warnings: &mut Vec<CaptureWarning>,
     dependency_ctx: &mut DependencyContext,
     config_path: Option<&Path>,
@@ -1389,8 +1467,6 @@ pub(super) fn plan_capture_item(
     earlier_items: &[PlannedCaptureItem],
     project_moves: &[ProjectMoveLanding],
 ) -> Result<PlannedCaptureItem, CaptureError> {
-    let item_index = parsed_item.index;
-    let fanout_item = parsed_item.fanout.is_some();
     // Staged `>` transfers run before every other planner: a bare-note
     // destination moves through `batch_move`; other destinations merge.
     if matches!(parsed_item.parsed.kind, CaptureKind::Transfer { .. }) {
@@ -1979,9 +2055,7 @@ pub(super) fn plan_capture_item(
                 .result
                 .pomodoro_link_destination
                 .as_ref()
-                .is_some_and(|destination| {
-                    destination.role == Some("created")
-                });
+                .is_some_and(|destination| destination.role == Some("created"));
             if let Some(applied) = task_theme_context.apply_existing_task(
                 planner,
                 &target,
@@ -2302,12 +2376,7 @@ pub(super) fn plan_capture_item(
             }
         }
         Some(clip @ ClipRequest::Current) => {
-            let read = read_capture_clipboard(
-                item_index,
-                fanout_item,
-                clip,
-                fanout_clip_reads,
-            )?;
+            let read = read_capture_clipboard(clip_snapshot, clip)?;
             let FanoutClipboardRead::Current(clipboard) = read else {
                 return Err(CaptureError::io(
                     "clipboard capture invariant failed: current clipboard read expected",
@@ -2325,12 +2394,7 @@ pub(super) fn plan_capture_item(
             )
         }
         Some(clip @ ClipRequest::History { .. }) => {
-            let read = read_capture_clipboard(
-                item_index,
-                fanout_item,
-                clip,
-                fanout_clip_reads,
-            )?;
+            let read = read_capture_clipboard(clip_snapshot, clip)?;
             let FanoutClipboardRead::History(clipboards) = read else {
                 return Err(CaptureError::io(
                     "clipboard capture invariant failed: history clipboard read expected",
