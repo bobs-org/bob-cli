@@ -119,6 +119,15 @@ impl GmailConfig {
                 "gmail.pull.inbox must not be empty".to_string(),
             ));
         }
+        if super::note::path::validate_folder(std::path::Path::new(&pull_inbox))
+            .is_err()
+        {
+            return Err(GmailError::setup(
+                "config",
+                "gmail.pull.inbox must be a relative path without parent segments"
+                    .to_string(),
+            ));
+        }
         Ok(Self {
             account: settings.account,
             writer: settings.writer,

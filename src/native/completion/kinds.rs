@@ -117,6 +117,12 @@ const TABLE: &[Entry] = &[
         kind: Kind::Route,
     },
     // Gmail compose recipients and subject are literal draft values.
+    // `gmail attach` selects an attachment by its displayed number.
+    Entry {
+        path: &["gmail", "attach"],
+        arg: "number",
+        kind: Kind::FreeText,
+    },
     Entry {
         path: &["gmail", "new"],
         arg: "bcc",

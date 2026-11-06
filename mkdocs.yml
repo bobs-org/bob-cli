@@ -175,6 +175,7 @@ nav:
       - Capture:
           - Capture a task from anywhere on your Mac: guides/capture-from-your-mac.md
           - Drain Google Keep into tasks: guides/drain-google-keep.md
+          - File email from your phone: guides/file-email-from-your-phone.md
           - Connect Google Calendar: guides/connect-google-calendar.md
           - Connect Google Mail: guides/connect-google-mail.md
           - Link emails to tasks: guides/link-emails-to-tasks.md

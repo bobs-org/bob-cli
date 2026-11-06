@@ -1095,6 +1095,18 @@ pub(crate) const ENTRIES: &[Row] = &[
     },
     Row {
         network: true,
+        ..writes(
+            "gmail-attach",
+            &["gmail", "attach"],
+            "Import Gmail attachment",
+            &["gmail", "google", "mail", "attachment", "import"],
+            Policy::PreviewFirst,
+            Some(DRY_RUN),
+            180,
+        )
+    },
+    Row {
+        network: true,
         ..reads(
             "gmail-doctor",
             &["gmail", "doctor"],
@@ -1127,6 +1139,19 @@ pub(crate) const ENTRIES: &[Row] = &[
             &["gmail", "google", "mail", "search", "thread", "picker"],
             Presentation::Report,
             60,
+        )
+    },
+    Row {
+        network: true,
+        invalidates: &["tasks"],
+        ..writes(
+            "gmail-pull",
+            &["gmail", "pull"],
+            "Pull Gmail label",
+            &["gmail", "google", "mail", "label", "pull", "inbox", "tasks"],
+            Policy::PreviewFirst,
+            Some(DRY_RUN),
+            180,
         )
     },
     Row {

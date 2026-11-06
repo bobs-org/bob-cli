@@ -5,6 +5,7 @@
 
 // Owned by mail-body (hg.3.1 landing now, hg.3 closing in this turn); allow
 // dead code until outer mail-note, gmail-save, and search-peek consumers land.
+mod attach;
 #[allow(dead_code)]
 pub(crate) mod body;
 pub(crate) mod capture;
@@ -22,6 +23,7 @@ mod journal;
 pub(crate) mod link;
 mod login;
 mod logout;
+mod pull;
 mod save;
 pub(crate) mod search_peek;
 // Owned by mail-note (bob-cli-hg.5); the save and capture phases consume it.
@@ -49,8 +51,8 @@ use std::{ffi::OsString, iter};
 pub(crate) use crate::native::google::GoogleError as GmailError;
 
 pub(crate) use cli::{
-    DoctorArgs, LinkArgs, ListArgs, LoginArgs, LogoutArgs, NewArgs, PeekArgs,
-    ReplyArgs, SaveArgs, SearchArgs, TopArgs,
+    AttachArgs, DoctorArgs, LinkArgs, ListArgs, LoginArgs, LogoutArgs, NewArgs,
+    PeekArgs, PullArgs, ReplyArgs, SaveArgs, SearchArgs, TopArgs,
 };
 
 const COMMAND_NAME: &str = "bob gmail";
@@ -76,6 +78,9 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
     };
 
     match matches.subcommand() {
+        Some(("attach", sub_matches)) => {
+            attach::run(&AttachArgs::from_matches(sub_matches))
+        }
         Some(("doctor", sub_matches)) => {
             doctor::run(&DoctorArgs::from_matches(sub_matches))
         }
@@ -100,6 +105,9 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         }
         Some(("reply", sub_matches)) => {
             compose::run_reply(&ReplyArgs::from_matches(sub_matches))
+        }
+        Some(("pull", sub_matches)) => {
+            pull::run(&PullArgs::from_matches(sub_matches))
         }
         Some(("save", sub_matches)) => {
             save::run(&SaveArgs::from_matches(sub_matches))

@@ -83,12 +83,21 @@ pub(crate) struct AuxiliaryFiles {
 /// before a real invocation acquires the vault lock.
 pub(crate) fn run(args: &SaveArgs) -> i32 {
     match run_inner(args) {
-        Ok(()) => 0,
+        Ok(_) => 0,
         Err(error) => ui::report_error("save", &error, args.format.as_str()),
     }
 }
 
-fn run_inner(args: &SaveArgs) -> Result<(), GmailError> {
+/// Run the normal save path and return its rendered structural plans. The
+/// Gmail label pull uses this boundary so every thread is saved by the same
+/// policy, writer gate, and transaction as an explicit `save` command.
+pub(crate) fn run_internal(
+    args: &SaveArgs,
+) -> Result<Vec<StagedSaveNote>, GmailError> {
+    run_inner(args)
+}
+
+fn run_inner(args: &SaveArgs) -> Result<Vec<StagedSaveNote>, GmailError> {
     if args.inputs.is_empty() {
         return Err(GmailError::setup(
             "usage",
@@ -183,7 +192,7 @@ fn run_inner(args: &SaveArgs) -> Result<(), GmailError> {
             timezone,
         )?;
         print_report(args, &vault, &plans, &input_keys, true, &[]);
-        return Ok(());
+        return Ok(plans);
     }
 
     let styler = Styler::detect();
@@ -432,7 +441,7 @@ fn run_inner(args: &SaveArgs) -> Result<(), GmailError> {
         ));
     }
     print_report(args, &vault, &plans, &input_keys, false, &warnings);
-    Ok(())
+    Ok(plans)
 }
 
 /// Plan already resolved and prepared threads against one vault snapshot.

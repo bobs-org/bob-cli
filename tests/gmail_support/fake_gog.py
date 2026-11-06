@@ -481,7 +481,18 @@ if op == "auth_remove":
 if op == "search":
     query = pos[2] if len(pos) > 2 else ""
     page = flag_value("--page")
-    if scenario == "search_zero" or "zero@example.test" in query:
+    if scenario in {"gmail_pull_one", "gmail_pull_many"} and query.startswith("label:"):
+        ids = ["0123456789abcdef"]
+        if scenario == "gmail_pull_many":
+            ids.append("aaaaaaaaaaaaaaaa")
+        dump(
+            {
+                "threads": [{"id": thread_id} for thread_id in ids],
+                "nextPageToken": None,
+                "resultSizeEstimate": len(ids),
+            }
+        )
+    elif scenario == "search_zero" or "zero@example.test" in query:
         dump({"threads": [], "nextPageToken": None, "resultSizeEstimate": 0})
     elif scenario == "search_many" or "many@example.test" in query:
         dump(
@@ -604,9 +615,56 @@ if op == "thread_get":
             )
         dump({"thread": {"id": hex_id, "historyId": "2", "messages": messages}})
         raise SystemExit(0)
-    if scenario in {"thread_nonempty", "poison", "poison_error"}:
+    if scenario in {
+        "thread_nonempty",
+        "poison",
+        "poison_error",
+        "gmail_pull_one",
+        "gmail_pull_many",
+        "gmail_attachment",
+        "gmail_attachment_large",
+    }:
         body = "U2Vuc2l0aXZlIHBvaXNvbiBib2R5" if scenario == "poison" else "SGVsbG8="
         from_value = "PRIVATE_SENTINEL <sender@example.com>" if scenario == "poison" else "Ada <ada@example.com>"
+        if scenario in {"gmail_attachment", "gmail_attachment_large"}:
+            attachment_size = 26 * 1024 * 1024 if scenario == "gmail_attachment_large" else 5
+            payload = {
+                "mimeType": "multipart/mixed",
+                "headers": [
+                    {"name": "From", "value": from_value},
+                    {"name": "To", "value": EMAIL},
+                    {"name": "Subject", "value": "Attachment sample"},
+                    {"name": "Message-ID", "value": "<message@example.test>"},
+                ],
+                "parts": [
+                    {
+                        "partId": "body-1",
+                        "mimeType": "text/plain",
+                        "headers": [],
+                        "body": {"size": 5, "data": body},
+                    },
+                    {
+                        "partId": "att-1",
+                        "mimeType": "application/pdf",
+                        "filename": "offer.pdf",
+                        "headers": [
+                            {"name": "Content-Disposition", "value": "attachment; filename=offer.pdf"}
+                        ],
+                        "body": {"size": attachment_size, "attachmentId": "att-1"},
+                    },
+                ],
+            }
+        else:
+            payload = {
+                "mimeType": "text/plain",
+                "headers": [
+                    {"name": "From", "value": from_value},
+                    {"name": "To", "value": EMAIL},
+                    {"name": "Subject", "value": "Pull sample"},
+                    {"name": "Message-ID", "value": "<message@example.test>"},
+                ],
+                "body": {"size": 5, "data": body},
+            }
         dump(
             {
                 "thread": {
@@ -619,14 +677,7 @@ if op == "thread_get":
                             "labelIds": ["INBOX", "Label_1"],
                             "internalDate": "1793908800000",
                             "snippet": "PRIVATE_SENTINEL snippet" if scenario == "poison" else "hello",
-                            "payload": {
-                                "mimeType": "text/plain",
-                                "headers": [
-                                    {"name": "From", "value": from_value},
-                                    {"name": "Message-ID", "value": "<message@example.test>"},
-                                ],
-                                "body": {"size": 5, "data": body},
-                            },
+                            "payload": payload,
                         }
                     ],
                 }

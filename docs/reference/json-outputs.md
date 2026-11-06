@@ -5,22 +5,17 @@ description: Every bob machine-readable output, its flag, envelope shape, schema
 
 # JSON outputs
 
-This page maps each JSON command and flag to its envelope, schema version,
-and behavior contract. Generated CLI pages own exact flags; contracts own
-semantics.
-
-Run examples with this checkout's `bob`, isolated `HOME`/`XDG_*`, a synthetic
+Fixtures use this checkout's `bob`, isolated `HOME`/`XDG_*`, a synthetic
 vault, `BOB_NOW=2026-10-20 12:00:00`, `TZ=UTC`, `BOB_REF_JOBS_KICK=off`, and
-`BOB_GMAIL_KICK=off`. Stub network, clipboard, sync, and hooks. Versions below
-are stdout `schema_version` values; stored files have independent versions.
+`BOB_GMAIL_KICK=off`; network, clipboard, sync, and hooks are stubbed. Stored
+freshness/review versions differ; only stdout `schema_version` counts.
 
 ## Framing
 
 JSON reports print to stdout. Warnings, progress, and hook chatter print to
 stderr so a JSON pipe stays parseable. Usage errors exit 2.
 
-Success and failure envelopes are per command family. Commands do not share
-one `ok` / `error` / `schema_version` shape:
+Envelopes vary by command family:
 
 - Versioned helpers such as `capture-parse`, `plan`, `freshness`, and most
   `ref` commands print `ok: true` plus a payload on success. Many of those
@@ -54,10 +49,9 @@ bob plan -f json -b /path/to/synthetic-vault
 {"ok":true,"schema_version":3,"date":"2026-10-20","daily_file":"2026/20261020.md","status":"ok","caps":{"max_links":…,"max_next":…,"max_pending":…,"max_ready":…},"today":{"count":0},"today_tasks":[],"today_roots":[],"links":{"count":0,"cap":…,"over":false,"off_clock":0},"next":{"count":0,"cap":…,"over":false},"pending":{"count":0,"cap":…,"over":false},"theme_names":[],"entries":[],"warnings":[]}
 ```
 
-`today_roots` are `{"key","label","hue","tasks"}` rows (`hue` null for
-`@unfiled`); `tasks` sum to `today.count`. See [Today roots](../plan.md#today-roots).
-`type_mismatch` warnings add `link`, `entry`, `task_type`, `entry_types` to
-`code`/`message`/`line`. See [Plan](../plan.md#lints).
+`today_roots` tasks sum to `today.count`; `hue` is null for `@unfiled`.
+`type_mismatch` adds `link`, `entry`, `task_type`, and `entry_types`. See
+[Plan](../plan.md#lints).
 
 ## Capture and protocol helpers
 
@@ -456,6 +450,8 @@ checkout: they expose no `--format json` or `--json` flag.
 | `bob gkeep migrate-tasks` | `-f json` | Link-repair plan for open tasks | `schema_version: 1` | [Bob Gkeep](../gkeep.md) |
 | `bob gkeep pull` | `-f json` | Inbox import report | `schema_version: 1` | [Bob Gkeep](../gkeep.md) |
 | `bob gkeep status` | `-f json` (default is `human`) | Cached Keep pull count, check state, and open inbox count | `schema_version: 1` | [Bob Gkeep](../gkeep.md#states-and-the-json-document) |
+| `bob gmail`, `bob gmail list`, `bob gmail link`, `bob gmail pull`, `bob gmail attach` | `-f json` (`list` defaults to `table`) | Saved-note list; link report; pull results; attachment path, size, status | `schema_version: 1` | [Bob Gmail](../gmail.md#json-output) |
+| `bob gmail doctor`, `bob gmail login`, `bob gmail logout` | `-f json` | Setup checks, account, sign-in, and revocation results | `schema_version: 1` | [Bob Gmail](../gmail.md#json-output) |
 | `bob plugins` and `bob plugins list` | `-f json` (default is `table`) | Repo plugins with version, sync, vault state, and optional deployment provenance | Unversioned (`ok`, no `schema_version`) | [Bob Plugins](../plugins.md) |
 | `bob plugins sync` | `-f json` | Copied, skipped, and unchanged files with backups and optional deployment provenance | Unversioned (`ok`, no `schema_version`) | [Bob Plugins](../plugins.md) |
 | `bob vault-sync status` | `--json` / `-j` | Direct `StatusRecord`: `last_attempt_at`, `last_success_at`, `local_sha`, `remote_sha`, `files_committed`, `push_retries`, `duration_ms`, `conflicts`, `interrupted_merge_recovered`, `aborted_merge_head`, `halted_merge_head`, `interrupted_fast_forward_recovered`, `last_error`, `clobbers`, `recent_clobbers` | Unversioned (no `ok`, no `schema_version`) | [Vault Git sync](../vault-git-sync.md) |

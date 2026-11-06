@@ -14,6 +14,7 @@ Gmail threads you choose become inert, append-only mail notes: one read-only log
 Usage: bob gmail [OPTIONS] [COMMAND]
 
 Commands:
+  attach  Import one listed Gmail attachment into the vault
   doctor  Check the Gmail setup: gog, client, account, token, scopes, config, writer, and journal
   link    Swap Gmail URLs for labelled links to saved mail notes
   list    List saved Gmail threads (offline unless --remote)
@@ -22,6 +23,7 @@ Commands:
   new     Create a local Gmail compose note
   peek    Preview Gmail thread metadata without saving it
   reply   Add a Reply section to a saved Gmail note
+  pull    Save threads with the configured Gmail label as inbox tasks
   save    Save or refresh Gmail threads as inert mail notes
   search  Search Gmail threads for a picker
   help    Print this message or the help of the given subcommand(s)
@@ -60,6 +62,9 @@ Examples:
   bob gmail save ID -d        Preview a save without writing
   bob gmail link tasks.md     Swap Gmail URLs for labelled links
   bob gmail link -a -d        Preview a backfill of old URLs
+  bob gmail pull              Save threads labelled bob and file inbox tasks
+  bob gmail pull -d           Preview the label pull
+  bob gmail attach NOTE 1     Import the first listed attachment
   bob gmail login             Connect Gmail in one guided step
   bob gmail login -a EMAIL    Sign in as this account
   bob gmail login -s compose  Also grant the compose scope (Mac only)

@@ -17,6 +17,7 @@ uses more than one surface appears in each matching group.
 - [Connect Google Mail](../guides/connect-google-mail.md)
 - [Deploy the Obsidian plugins](../guides/deploy-obsidian-plugins.md)
 - [Drain Google Keep into tasks](../guides/drain-google-keep.md)
+- [File email from your phone](../guides/file-email-from-your-phone.md)
 - [Fix Mac Capture when bob is not resolved](../guides/fix-mac-capture-bob-resolution.md)
 - [Freshness and the review walk](../concepts/freshness-and-the-review-walk.md)
 - [How Bob fits together](../concepts/how-bob-fits-together.md)

@@ -1,12 +1,14 @@
 # Bob Gmail
 
 `bob gmail` saves Gmail threads you choose as inert, append-only mail notes in
-the vault, linked from tasks with a readable label, and creates local
-compose and reply notes. This page covers one-time setup through
-[gog](https://github.com/openclaw/gogcli) (≥ v0.44.0), the `gmail` command
-group, config, login, logout, doctor, saving, linking, listing, search,
-metadata previews, live message counts, and compose-note creation. Sending and
-label pulls remain later work.
+the vault, swaps Gmail URLs in notes for readable links, and creates local
+compose and reply notes. It also pulls labelled threads into inbox tasks and
+imports selected attachments. This page covers one-time setup through
+[gog](https://github.com/openclaw/gogcli) (≥ v0.44.0), config, login/logout,
+doctor, saving, linking, listing, search, previews, label pulls, attachment
+imports, and compose-note creation. `new` and `reply` write local notes without
+sending mail; sending remains later work. Bare `bob gmail` lists saved threads
+offline.
 
 Typical order: `bob gmail login` once, `bob gmail doctor` until every check is
 `ok` or an explained skip. Tests never touch Google: set `BOB_GMAIL_GOG` to a
@@ -28,6 +30,8 @@ fake executable.
 - [Link](#link)
 - [Search](#search)
 - [Peek](#peek)
+- [Pull](#pull)
+- [Attachments](#attachments)
 - [Try it](#try-it)
 - [Doctor](#doctor)
 - [Where it runs](#where-it-runs)
@@ -41,12 +45,14 @@ fake executable.
 
 ```bash
 bob gmail [list] [-a|--all] [-b|--bob-dir DIR] [-f|--format table|json] [-r|--remote]
+bob gmail attach NOTE N [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json]
 bob gmail doctor [-b|--bob-dir DIR] [-f|--format human|json]
 bob gmail link NOTE... [-a|--all] [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-q|--quiet]
 bob gmail login [-a|--account EMAIL] [-c|--credentials FILE] [-f|--format human|json] [-m|--manual] [-s|--scope readonly|compose]
 bob gmail logout [-a|--account EMAIL] [-f|--format human|json] [-y|--force]
 bob gmail new [-b|--bob-dir DIR] [-B|--bcc LIST] [-c|--cc LIST] [-f|--format human|json] [-s|--subject TEXT] [-t|--to LIST]
 bob gmail peek URL|ID [-f|--format human|json]
+bob gmail pull [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-l|--limit N] [-q|--quiet]
 bob gmail reply NOTE [-a|--all] [-b|--bob-dir DIR] [-f|--format human|json]
 bob gmail save URL|ID|NOTE... [-b|--bob-dir DIR] [-B|--body full|headers] [-d|--dry-run] [-f|--format human|json] [-P|--parent ROUTE] [-q|--quiet] [-R|--rerender]
 bob gmail search [QUERY] [-f|--format table|json] [-l|--limit N]
@@ -55,13 +61,15 @@ bob gmail search [QUERY] [-f|--format table|json] [-l|--limit N]
 Running `bob gmail` with no subcommand lists saved threads, exactly like the
 explicit `bob gmail list`. Listing is offline and read-only by default; `-r`
 fetches live message counts for the rows shown. `save` reads Gmail and writes
-selected threads to the vault. `new` and `reply` write local Markdown
-notes without login or network access. `link` finds Gmail URLs in notes,
-saves each confirmed thread, and swaps the URLs for labelled links. `doctor`,
-`search`, and `peek` are read-only. `login` and `logout` are excluded from
-the command catalog because they need a terminal and handle credentials;
-`new` and `reply` are excluded because the compose flow is owned by the Bob
-Mail plugin.
+selected threads to the vault. `link` finds Gmail URLs in notes, saves each
+confirmed thread, and replaces those URL tokens with labelled wikilinks.
+`pull` reads the configured label and files saved threads as inbox tasks
+without changing Gmail labels. `attach` reads one listed attachment and writes
+its bytes into the vault. `new` and `reply` write local Markdown notes without
+login or network access. `doctor`, `search`, and `peek` are read-only. `login`
+and `logout` are excluded from the command catalog because they need a terminal
+and handle credentials; `new` and `reply` are excluded because the compose
+flow is owned by Bob Mail.
 
 ## How it works
 
@@ -175,7 +183,10 @@ gmail:
 - `never_save.from` lists addresses or `@domains`; `never_save.labels`
   lists Gmail label names. `save` refuses matching threads with a reason.
 - `pull.label` unset or empty disables pull. Default `bob`; inbox default
-  `gmail_inbox.md`.
+  `gmail_inbox.md`. See the [phone filing guide](guides/file-email-from-your-phone.md).
+- `pull.inbox` must be a safe relative path inside the vault. If it is
+  missing, Bob creates it with `parent: "[[inbox]]"`, `type: "[[area]]"`,
+  `ready_cap: off`, and a `## Tasks` section.
 - `signature` is `gmail` (default) or `none`; the later send flow honors it.
 - `timeout_secs` must be an integer greater than 0. Default 60.
 - The host label is the same slug vault-sync uses in commit subjects.
@@ -435,6 +446,52 @@ Successful previews use a private, metadata-only cache at
 `$XDG_CACHE_HOME/bob-cli/gmail/peek.json` (or `~/.cache/bob-cli/gmail/peek.json`)
 for ten minutes. It stores no snippets, message bodies, MIME, or attachments.
 
+## Pull
+
+`bob gmail pull` searches `label:<gmail.pull.label>` (default `label:bob`),
+up to 20 threads by default and at most 500 per invocation. Each thread that
+has not already been pulled is saved through the normal save path, then one
+`- [ ] #task` row linking its mail note is appended under `## Tasks` in
+`gmail.pull.inbox`. New task rows carry no freshness stamp. If the inbox file
+is missing, Bob creates it as an inbox area note. A missing or empty
+`pull.label` disables the command.
+
+Pull identity is `(account, Gmail thread id)`. The `.bob/gmail/*.jsonl`
+`gmail.pulled` events prevent repeat filing; Bob also checks for an existing
+task link so it can recover if an inbox write succeeded before its journal
+append. `-d` reads and plans the save and inbox task without writing. The
+label stays in Gmail: pull uses read-only access and never unlabels, archives,
+marks read, or changes a message.
+
+```bash
+bob gmail pull -d
+bob gmail pull -l 5 -f json
+bob gmail pull
+```
+
+The [phone filing guide](guides/file-email-from-your-phone.md) explains how
+to apply the label in Gmail and set up a `+bob` forwarding filter.
+
+## Attachments
+
+Mail notes list downloadable attachments in conversation order with a
+thread-wide number. `bob gmail attach NOTE N` fetches one selected file and
+rewrites only that attachment row. Its vault path is
+`file/mail/<thread id>/<sanitized filename>`; conflicting names get a short
+content-hash suffix. Bob refuses files above 25 MiB, checking both Gmail's
+declared size and the received bytes. The origin is recorded in
+`.bob/attachments/<host>.jsonl` with `via: "gmail"` and the canonical Gmail
+thread URL as its source.
+
+`-d` previews the path and size without writing. Repeating an import whose
+file and origin are already present is a no-op. Attachment bytes stay in
+memory until the vault write and never appear in logs or journals.
+
+```bash
+bob gmail attach mail/2026/lease_renewal.md 1 -d
+bob gmail attach mail/2026/lease_renewal.md 1
+```
+
 ## Try it
 
 1. `bob gmail save <URL> -f json` saves one thread and prints its note path.
@@ -445,7 +502,10 @@ for ten minutes. It stores no snippets, message bodies, MIME, or attachments.
    `bob gmail link <note> -f json`: the URL becomes the labelled link.
 5. `bob gmail link -a -d` previews a backfill of old URLs without writing.
 6. `bob gmail list -f json` shows the same rows with identities and links.
-7. `bob gmail doctor` checks decoder health and duplicate identities.
+7. `bob gmail pull -d` previews the configured label pull; `bob gmail pull`
+   files it into `gmail_inbox.md`.
+8. `bob gmail attach <note path> 1 -d` previews the first attachment import.
+9. `bob gmail doctor` checks decoder health and duplicate identities.
 
 ## Doctor
 
@@ -474,8 +534,9 @@ host, and the typed checks.
 
 ## Where it runs
 
-Any logged-in host may read Gmail. Save writes run only on `gmail.writer`
-when that key is set; the docs recommend the Mac. Agent hosts stay read-only:
+Any logged-in host may read Gmail. Save, pull, and attachment writes run only
+on `gmail.writer` when that key is set; the docs recommend the Mac. Agent
+hosts stay read-only:
 the compose scope is granted only on the Mac. `doctor` reports the writer pin
 and the current host.
 
@@ -493,10 +554,12 @@ Every `-f json` output carries `schema_version: 1` and `ok`. Errors are typed
 
 - Tokens never appear in argv, logs, journals, diagnostics, caches, or JSON
   errors. Client JSON travels to gog over stdin.
-- Bodies, raw MIME, and attachment bytes never appear outside mail notes.
-  Search shows only a capped, inert Gmail snippet. Peek and list `--remote`
-  fetch headers and dates only. The preview cache stores no snippets. Reads
-  never pass `--sanitize-content` or `--wrap-untrusted`.
+- Bodies and raw MIME appear only in mail notes. Attachment bytes stay in
+  memory until Bob writes the imported vault file; they never appear in argv,
+  logs, the Gmail journal, or JSON errors. Search shows only a capped, inert
+  snippet. Peek and list `--remote` fetch headers and dates only. The preview
+  cache stores no snippets. Reads never pass `--sanitize-content` or
+  `--wrap-untrusted`.
 - `gmail.compose` also permits sending. Bob never sends without a Gmail draft
   plus a digest-bound confirmation, and keeps that grant off agent hosts.
 - Tests use a fake gog and temp vaults. Committed fixtures are synthetic.
@@ -513,5 +576,5 @@ Every `-f json` output carries `schema_version: 1` and `ok`. Errors are typed
 
 ## Known limits
 
-Sending compose and reply notes as Gmail drafts and pulling Gmail labels into
-an inbox note remain later phases.
+Sending compose and reply notes as Gmail drafts and dedicated task
+linking remain later work.

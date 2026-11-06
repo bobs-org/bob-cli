@@ -5,13 +5,14 @@ aliases:
 ---
 
 A Bob vault Markdown file whose tasks await triage: `inbox.md` at the vault root, or an
-[[area-note]] whose frontmatter `parent` resolves to `inbox.md` (today `mac_inbox.md`
-and `gkeep_inbox.md`). Only direct area children count, and the filename is irrelevant:
+[[area-note]] whose frontmatter `parent` resolves to `inbox.md` (today `mac_inbox.md`,
+`gkeep_inbox.md`, and `gmail_inbox.md`). Only direct area children count, and the filename is irrelevant:
 a [[project-note]] filed under one (`gkeep_gdocs_inbox_dump`) or an untyped child
 (`inbox_overflow`) is not an inbox file. Classification reads live frontmatter on every
 gesture, and `inbox.md` counts by design though it holds no `#task` lines today. By
-default, `bob capture` and Bob Mac Capture file new tasks in `mac_inbox.md`, and
-`bob gkeep pull` drains Google Keep into `gkeep_inbox.md`. New tasks carry no `fresh`
+default, `bob capture` and Bob Mac Capture file new tasks in `mac_inbox.md`,
+`bob gkeep pull` drains Google Keep into `gkeep_inbox.md`, and `bob gmail pull`
+files labelled Gmail threads in `gmail_inbox.md`. New tasks carry no `fresh`
 stamp, so most surface for triage in the NEW tier of the `]s` walk. On an open task in
 an inbox file, every non-closing Ctrl+Shift+P answer and Alt+N ask where the task goes
 just before writing; a Ctrl+Shift+Enter link on the task line asks first, so the

@@ -24,7 +24,7 @@ pub(crate) use clipboard::{
     AgreedClipboardHistory, ClipboardHistoryError, ClipboardProviderStatus,
     ClipboardStatusReport,
 };
-pub(crate) use files::{attachment_reference, sha256_hex};
+pub(crate) use files::{attachment_reference, sanitize_file_name, sha256_hex};
 #[cfg(test)]
 pub(crate) use model::ClipHistoryEntryOutput;
 pub(crate) use model::{

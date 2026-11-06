@@ -28,7 +28,7 @@ groups:
       - stem: gmail
         summary: "`bob gmail` Gmail threads as inert mail notes, linked from tasks"
         order: 12
-        reader: guides/connect-google-mail.md
+        reader: guides/file-email-from-your-phone.md
       - stem: highlights-clip
         summary: "Web article and collection capture into Highlights intake PDFs"
         order: 13

@@ -29,12 +29,14 @@ attachment:
 ```
 
 - `source`: the absolute path `%c` resolved (it handles quotes,
-  `file://`, and `~/`).
+  `file://`, and `~/`), or the canonical Gmail thread URL when
+  `via: "gmail"`.
 - `display`: `source` with the writer's home-directory prefix written
-  as `~` (otherwise identical to `source`).
+  as `~` for local paths (otherwise identical to `source`).
 - `sha256`: hash of the copied bytes.
 - `via`: `capture` for `%c`, otherwise the import command's `--via`
-  value (default `cli`; the viewer passes `zoom`).
+  value (default `cli`; the viewer passes `zoom`). Gmail imports use
+  `gmail` and record a Gmail thread URL as an external origin.
 
 Reused destinations still get an event, because the new source is still
 this embed's origin. Snippet files (`file/clip-*.md`) get none, because
@@ -57,6 +59,7 @@ P. If P does not exist, it fails with `not_found`.
    - Source missing → `missing`.
    - Source bytes differ from the event's `sha256` → `changed`.
    - Otherwise → `present`.
+   - Gmail thread URL → `external` (the URL is never probed as a local path).
 
 ## `bob attachments`
 

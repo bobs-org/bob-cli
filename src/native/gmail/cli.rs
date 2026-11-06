@@ -29,6 +29,7 @@ pub(crate) fn build_cli() -> ClapCommand {
         .arg(list_format_arg())
         .arg(remote_arg())
         .arg(help_arg())
+        .subcommand(attach_command())
         .subcommand(doctor_command())
         .subcommand(link_command())
         .subcommand(list_command())
@@ -37,12 +38,69 @@ pub(crate) fn build_cli() -> ClapCommand {
         .subcommand(new_command())
         .subcommand(peek_command())
         .subcommand(reply_command())
+        .subcommand(pull_command())
         .subcommand(save_command())
         .subcommand(search_command())
 }
 
 fn top_after_help() -> &'static str {
-    "Running `bob gmail` with no command lists saved threads (offline, read-only). `-r` adds live message counts.\n\nExamples:\n  bob gmail                   List saved threads\n  bob gmail -a                List every saved thread\n  bob gmail -r                Fetch live new-message counts\n  bob gmail -f json           List saved threads as JSON\n  bob gmail new -t EMAIL      Create a local compose note\n  bob gmail peek URL          Preview a Gmail link\n  bob gmail reply NOTE        Add a Reply section\n  bob gmail save URL          Save a Gmail thread\n  bob gmail search            Search recent inbox threads\n  bob gmail save ID -d        Preview a save without writing\n  bob gmail link tasks.md     Swap Gmail URLs for labelled links\n  bob gmail link -a -d        Preview a backfill of old URLs\n  bob gmail login             Connect Gmail in one guided step\n  bob gmail login -a EMAIL    Sign in as this account\n  bob gmail login -s compose  Also grant the compose scope (Mac only)\n  bob gmail doctor            Diagnose gog, the client, and the vault\n  bob gmail logout -y         Remove Bob's Gmail grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH\n  BOB_GMAIL_BROWSER  Browser executable; selects browser sign-in (otherwise automatic)"
+    "Running `bob gmail` with no command lists saved threads (offline, read-only). `-r` adds live message counts.\n\nExamples:\n  bob gmail                   List saved threads\n  bob gmail -a                List every saved thread\n  bob gmail -r                Fetch live new-message counts\n  bob gmail -f json           List saved threads as JSON\n  bob gmail new -t EMAIL      Create a local compose note\n  bob gmail peek URL          Preview a Gmail link\n  bob gmail reply NOTE        Add a Reply section\n  bob gmail save URL          Save a Gmail thread\n  bob gmail search            Search recent inbox threads\n  bob gmail save ID -d        Preview a save without writing\n  bob gmail link tasks.md     Swap Gmail URLs for labelled links\n  bob gmail link -a -d        Preview a backfill of old URLs\n  bob gmail pull              Save threads labelled bob and file inbox tasks\n  bob gmail pull -d           Preview the label pull\n  bob gmail attach NOTE 1     Import the first listed attachment\n  bob gmail login             Connect Gmail in one guided step\n  bob gmail login -a EMAIL    Sign in as this account\n  bob gmail login -s compose  Also grant the compose scope (Mac only)\n  bob gmail doctor            Diagnose gog, the client, and the vault\n  bob gmail logout -y         Remove Bob's Gmail grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH\n  BOB_GMAIL_BROWSER  Browser executable; selects browser sign-in (otherwise automatic)"
+}
+fn attach_command() -> ClapCommand {
+    ClapCommand::new("attach")
+        .about("Import one listed Gmail attachment into the vault")
+        .long_about(
+            "Download one attachment listed in a saved mail note and replace only its attachment row with a local file link. Gmail is read-only; attachment bytes are kept in memory until written to the vault. Repeating an import is a no-op.",
+        )
+        .disable_help_flag(true)
+        .arg(bob_dir_arg())
+        .arg(dry_run_arg())
+        .arg(save_format_arg())
+        .arg(help_arg())
+        .arg(
+            Arg::new("note")
+                .value_name("NOTE")
+                .value_parser(OsStringValueParser::new())
+                .required(true)
+                .help("Path to a saved mail note"),
+        )
+        .arg(
+            Arg::new("number")
+                .value_name("N")
+                .value_parser(clap::value_parser!(u32))
+                .required(true)
+                .help("1-based attachment number shown in the note"),
+        )
+        .after_help(
+            "Examples:\n  bob gmail attach mail/2026/lease.md 1\n  bob gmail attach mail/2026/lease.md 2 -d -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH",
+        )
+}
+
+fn pull_command() -> ClapCommand {
+    ClapCommand::new("pull")
+        .about("Save threads with the configured Gmail label as inbox tasks")
+        .long_about(
+            "Read the configured Gmail label (default: bob), save each new thread as a mail note, and append one task linking it from the configured inbox file (default: gmail_inbox.md). Pull is read-only in Gmail and idempotent by thread identity.",
+        )
+        .disable_help_flag(true)
+        .arg(bob_dir_arg())
+        .arg(dry_run_arg())
+        .arg(save_format_arg())
+        .arg(help_arg())
+        .arg(pull_limit_arg())
+        .arg(quiet_arg())
+        .after_help(
+            "Examples:\n  bob gmail pull\n  bob gmail pull -l 5\n  bob gmail pull -d -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH",
+        )
+}
+
+fn pull_limit_arg() -> Arg {
+    Arg::new("limit")
+        .long("limit")
+        .short('l')
+        .value_name("N")
+        .value_parser(clap::value_parser!(u32))
+        .help("Maximum label threads to inspect (default 20; maximum 500)")
 }
 
 fn save_command() -> ClapCommand {
@@ -676,6 +734,61 @@ pub(crate) struct SaveArgs {
     pub parent: Option<String>,
     pub quiet: bool,
     pub rerender: bool,
+}
+
+/// `attach` arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AttachArgs {
+    pub bob_dir: Option<PathBuf>,
+    pub dry_run: bool,
+    pub format: HumanFormat,
+    pub note: String,
+    pub number: u32,
+}
+
+impl AttachArgs {
+    pub(crate) fn from_matches(matches: &ArgMatches) -> Self {
+        Self {
+            bob_dir: raw_bob_dir(matches),
+            dry_run: matches.get_flag("dry-run"),
+            format: HumanFormat::from_matches(matches),
+            note: matches
+                .get_one::<OsString>("note")
+                .map(|value| value.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            number: matches.get_one::<u32>("number").copied().unwrap_or(0),
+        }
+    }
+
+    pub(crate) fn bob_dir(&self) -> PathBuf {
+        self.bob_dir.clone().unwrap_or_else(bob_env::bob_dir)
+    }
+}
+
+/// `pull` arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PullArgs {
+    pub bob_dir: Option<PathBuf>,
+    pub dry_run: bool,
+    pub format: HumanFormat,
+    pub limit: u32,
+    pub quiet: bool,
+}
+
+impl PullArgs {
+    pub(crate) fn from_matches(matches: &ArgMatches) -> Self {
+        Self {
+            bob_dir: raw_bob_dir(matches),
+            dry_run: matches.get_flag("dry-run"),
+            format: HumanFormat::from_matches(matches),
+            limit: matches.get_one::<u32>("limit").copied().unwrap_or(20),
+            quiet: matches.get_flag("quiet"),
+        }
+    }
+
+    pub(crate) fn bob_dir(&self) -> PathBuf {
+        self.bob_dir.clone().unwrap_or_else(bob_env::bob_dir)
+    }
 }
 
 impl SaveArgs {

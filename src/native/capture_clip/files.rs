@@ -296,7 +296,7 @@ fn with_hash_suffix(path: &Path, hash: &str) -> PathBuf {
     path.with_file_name(name)
 }
 
-pub(super) fn sanitize_file_name(name: &str) -> String {
+pub(crate) fn sanitize_file_name(name: &str) -> String {
     let mut sanitized = String::new();
     let mut replacing = false;
     for character in name.chars() {

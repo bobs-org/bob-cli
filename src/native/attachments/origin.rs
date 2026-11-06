@@ -36,6 +36,7 @@ pub(crate) enum OriginState {
     Missing,
     Changed,
     Elsewhere,
+    External,
 }
 
 impl OriginState {
@@ -45,6 +46,7 @@ impl OriginState {
             Self::Missing => "missing",
             Self::Changed => "changed",
             Self::Elsewhere => "elsewhere",
+            Self::External => "external",
         }
     }
 }
@@ -147,7 +149,9 @@ fn pick_candidate<'a>(
 }
 
 fn report_for(event: &OriginEvent, current_host: &str) -> OriginReport {
-    let state = if event.host != current_host {
+    let state = if event.via == "gmail" {
+        OriginState::External
+    } else if event.host != current_host {
         OriginState::Elsewhere
     } else {
         match fs::read(&event.source) {

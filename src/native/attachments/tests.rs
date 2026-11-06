@@ -313,6 +313,37 @@ fn resolve_reports_missing_changed_and_elsewhere() {
 }
 
 #[test]
+fn resolve_reports_gmail_thread_urls_as_external_origins() {
+    let root = test_root("gmail-external");
+    let vault = root.join("vault");
+    fs::create_dir_all(vault.join("file/mail/thread-id")).expect("folders");
+    fs::write(vault.join("file/mail/thread-id/offer.pdf"), b"offer")
+        .expect("vault copy");
+    let digest = crate::native::capture_clip::sha256_hex(b"offer");
+    let source = "https://mail.google.com/mail/u/0/#all/thread-id";
+    record(
+        &vault,
+        "apollo",
+        "2026-11-03T14:28:40-05:00",
+        "file/mail/thread-id/offer.pdf",
+        source,
+        source,
+        &digest,
+        "gmail",
+    );
+
+    let (report, warnings) =
+        resolve_origin(&vault, "file/mail/thread-id/offer.pdf", "apollo")
+            .expect("resolve Gmail origin");
+    assert!(warnings.is_empty());
+    let report = report.expect("origin");
+    assert_eq!(report.source, source);
+    assert_eq!(report.via, "gmail");
+    assert_eq!(report.state, OriginState::External);
+    assert_eq!(report.state.as_str(), "external");
+}
+
+#[test]
 fn resolve_survives_rename_through_content_hash() {
     let root = test_root("rename");
     let vault = root.join("vault");

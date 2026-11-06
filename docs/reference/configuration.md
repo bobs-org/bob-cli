@@ -272,14 +272,14 @@ breaks other config loaders. `BOB_GCAL_GOG` replaces `gog` on `PATH`. See the
 | --- | --- | --- | --- |
 | `gmail.account` | String containing `@` | Optional when the isolated `bob-gmail` bucket holds exactly one unique email, else when gog as a whole holds exactly one | Account identity; `bob gmail login -a` can override it for that invocation. Commands prefer the Bob bucket before gog's default accounts. |
 | `gmail.writer` | Hostname slug | Unset (this host may write) | The one host label allowed to write; `doctor` compares it to vault-sync's hostname slug. |
-| `gmail.body` | `full` or `headers` | `full` | Later `save` keeps full bodies or headers plus snippet; `doctor` reports the mode. |
+| `gmail.body` | `full` or `headers` | `full` | `save` keeps full bodies or headers plus snippet; `doctor` reports the mode. |
 | `gmail.folder` | Nonempty string | `mail` | Vault folder for mail notes. |
-| `gmail.link_label` | String containing `{subject}` | `✉️ {subject} · {who}` | Later link label template. |
-| `gmail.never_save.from` | Sequence of strings | `[]` | Addresses or `@domains` that later `save` refuses. |
-| `gmail.never_save.labels` | Sequence of strings | `[]` | Gmail label names that later `save` refuses. |
-| `gmail.pull.inbox` | Nonempty string | `gmail_inbox.md` | Task file for later label pulls. |
-| `gmail.pull.label` | String or unset | `bob` | Gmail label for later pulls; unset or empty disables pull. |
-| `gmail.signature` | `gmail` or `none` | `gmail` | Later `compose` signature mode. |
+| `gmail.link_label` | String containing `{subject}` | `✉️ {subject} · {who}` | Link label template used by save and pull. |
+| `gmail.never_save.from` | Sequence of strings | `[]` | Addresses or `@domains` that `save` refuses. |
+| `gmail.never_save.labels` | Sequence of strings | `[]` | Gmail label names that `save` refuses. |
+| `gmail.pull.inbox` | Safe relative path inside the vault | `gmail_inbox.md` | Task file receiving one linked task per newly pulled thread. |
+| `gmail.pull.label` | String or unset | `bob` | Gmail label searched by `pull`; unset or empty disables pull. |
+| `gmail.signature` | `gmail` or `none` | `gmail` | Signature mode for the later compose command. |
 | `gmail.timeout_secs` | Integer greater than 0 | `60` | gog request timeout in seconds. |
 
 A missing `gmail:` block uses those defaults. Unknown keys are ignored. A
