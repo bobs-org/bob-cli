@@ -61,9 +61,13 @@ use crate::native::gmail::model::{
 
 /// Render one message into inert Markdown with folded history.
 ///
-/// Selection, in order: usable HTML wins; otherwise the plain candidate;
-/// otherwise the inert snippet. A missing fetchable part keeps its
-/// `needs_fetch` entry even while a provisional fallback is shown.
+/// Selection, in stable MIME order: the last usable HTML candidate wins;
+/// otherwise the last usable plain candidate; otherwise the inert snippet.
+/// Candidates are tried last-to-first (the inventory keeps stable DFS order,
+/// so the richest alternative is last) until one renders readable main,
+/// quote, or signature content. A missing fetchable part keeps its
+/// `needs_fetch` entry even while a provisional fallback is shown, and
+/// alternatives are never concatenated.
 /// Returns [`BodyErrorKind::DraftRefused`] for `DRAFT` messages.
 pub(crate) fn render_message(
     message: &GmailMessage,
@@ -74,15 +78,26 @@ pub(crate) fn render_message(
     }
     let inventory = collect_message_bodies(message, fetched)?;
     let bulletin = is_bulletin(message);
-    let plain_text = inventory
-        .plain_candidates
-        .last()
-        .map(|candidate| candidate.text.as_str());
+    // Best plain fallback in the same last-to-first order, so an empty or
+    // sanitized-to-nothing trailing candidate never erases a readable
+    // earlier one. Kept for HTML comparison and as the plain fallback.
+    let mut best_plain: Option<crate::native::gmail::body::plain::PlainRender> =
+        None;
+    for candidate in inventory.plain_candidates.iter().rev() {
+        let rendered = render_plain(&candidate.text);
+        if !rendered.markdown.is_empty()
+            || rendered.quoted.is_some()
+            || rendered.signature.is_some()
+        {
+            best_plain = Some(rendered);
+            break;
+        }
+    }
 
-    if let Some(candidate) = inventory.html_candidates.last() {
+    for candidate in inventory.html_candidates.iter().rev() {
         let html =
             render_html(&candidate.text, &inventory.inline_images, bulletin);
-        if html_is_useful(&html, plain_text) {
+        if html_is_useful(&html, best_plain.as_ref()) {
             return Ok(RenderedBody {
                 markdown: html.markdown,
                 quoted: html.quoted,
@@ -96,23 +111,17 @@ pub(crate) fn render_message(
         }
     }
 
-    if let Some(text) = plain_text {
-        let plain = render_plain(text);
-        if !plain.markdown.is_empty()
-            || plain.quoted.is_some()
-            || plain.signature.is_some()
-        {
-            return Ok(RenderedBody {
-                markdown: plain.markdown,
-                quoted: plain.quoted,
-                signature: plain.signature,
-                source: BodySource::Plain,
-                bulletin,
-                inline_images: Vec::new(),
-                attachments: index_attachments(inventory.attachments),
-                needs_fetch: inventory.needs_fetch,
-            });
-        }
+    if let Some(plain) = best_plain {
+        return Ok(RenderedBody {
+            markdown: plain.markdown,
+            quoted: plain.quoted,
+            signature: plain.signature,
+            source: BodySource::Plain,
+            bulletin,
+            inline_images: Vec::new(),
+            attachments: index_attachments(inventory.attachments),
+            needs_fetch: inventory.needs_fetch,
+        });
     }
 
     Ok(RenderedBody {
@@ -184,38 +193,79 @@ pub(crate) fn inert_metadata(
         .join("; ")
 }
 
-/// HTML wins when it is non-empty and either carries renderer-owned structure
-/// (links, tables, referenced images) or says something the plain candidate
-/// does not. Both sides are compared after inert rendering so escaping cannot
-/// manufacture a difference. A bare tag wrapper around identical text falls
-/// back to plain; sanitization that leaves no useful HTML does the same.
-fn html_is_useful(html: &HtmlRender, plain_text: Option<&str>) -> bool {
-    if html.markdown.is_empty() {
+/// HTML wins when any segment holds readable content and either carries
+/// explicit renderer-owned structure (safe links, semantic tables,
+/// referenced images) or says something the plain fallback does not.
+/// Quote-only and signature-only HTML count as readable: an empty main field
+/// with folded history still preserves content. Both sides are compared
+/// after inert rendering across all three segments, so escaping cannot
+/// manufacture a difference and distinct punctuation, word boundaries, or
+/// folded history compare different. A bare tag wrapper around identical
+/// text falls back to plain; sanitization that leaves no useful HTML does
+/// the same. Tables are tracked explicitly via [`HtmlRender::has_table`],
+/// never inferred from a literal `|` in serialized text.
+fn html_is_useful(
+    html: &HtmlRender,
+    plain: Option<&crate::native::gmail::body::plain::PlainRender>,
+) -> bool {
+    let has_content = !html.markdown.is_empty()
+        || html.quoted.is_some()
+        || html.signature.is_some();
+    if !has_content {
         return false;
     }
-    if !html.inline_images.is_empty()
-        || html.markdown.contains("](")
-        || html.markdown.contains('|')
-    {
+    if !html.inline_images.is_empty() || html.has_link || html.has_table {
         return true;
     }
-    match plain_text {
-        None => true,
-        Some(plain) => {
-            normalize_visible(&html.markdown)
-                != normalize_visible(&render_plain(plain).markdown)
-        }
-    }
+    let Some(plain) = plain else {
+        return true;
+    };
+    normalize_full(
+        &html.markdown,
+        html.quoted.as_deref(),
+        html.signature.as_deref(),
+    ) != normalize_full(
+        &plain.markdown,
+        plain.quoted.as_deref(),
+        plain.signature.as_deref(),
+    )
 }
 
-/// Lowercase alphanumeric skeleton for the HTML/plain equivalence check.
-/// Escaping inserts punctuation but never letters, so equal visible text
-/// compares equal across the two render paths.
-fn normalize_visible(text: &str) -> String {
-    text.chars()
-        .filter(|c| c.is_alphanumeric())
-        .flat_map(|c| c.to_lowercase())
-        .collect()
+/// Lowercase, whitespace-collapsed full-text skeleton across main, quote,
+/// and signature. Punctuation and word boundaries are preserved (unlike a
+/// pure alphanumeric skeleton), so `Hello, world` differs from
+/// `Hello world` and `a b` differs from `ab`, while genuinely equivalent
+/// wrappers still compare equal.
+fn normalize_full(
+    markdown: &str,
+    quoted: Option<&str>,
+    signature: Option<&str>,
+) -> String {
+    let mut combined = String::new();
+    combined.push_str(markdown);
+    if let Some(quoted) = quoted {
+        combined.push_str("\n\n");
+        combined.push_str(quoted);
+    }
+    if let Some(signature) = signature {
+        combined.push_str("\n\n");
+        combined.push_str(signature);
+    }
+    let lower = combined.to_lowercase();
+    let mut out = String::with_capacity(lower.len());
+    let mut pending_space = false;
+    for c in lower.chars() {
+        if c.is_whitespace() {
+            pending_space = true;
+        } else {
+            if pending_space && !out.is_empty() {
+                out.push(' ');
+            }
+            pending_space = false;
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Number attachment descriptors 1-based in stable MIME order.
@@ -1003,5 +1053,89 @@ mod tests {
         assert!(body.quoted.is_none());
         assert!(body.signature.is_none());
         assert_inert_doc(&body.markdown);
+    }
+
+    #[test]
+    fn quote_only_and_signature_only_html_are_useful() {
+        let quote_only = test_message(Some(text_part(
+            "text/html",
+            "<blockquote type='cite'>History only</blockquote>",
+        )));
+        let body = render(&quote_only, &FetchedBodies::default());
+        assert_eq!(body.source, BodySource::Html);
+        assert!(body.markdown.is_empty());
+        assert!(body
+            .quoted
+            .as_deref()
+            .is_some_and(|q| q.contains("History")));
+
+        let sig_only = test_message(Some(text_part(
+            "text/html",
+            "<div class='gmail_signature'>Cheers, Pat</div>",
+        )));
+        let body = render(&sig_only, &FetchedBodies::default());
+        assert_eq!(body.source, BodySource::Html);
+        assert!(body.signature.as_deref().is_some_and(|s| s.contains("Pat")));
+    }
+
+    #[test]
+    fn later_empty_candidate_never_erases_readable_body() {
+        let message = test_message(Some(wrapped_part(
+            vec![
+                text_part("text/plain", "Readable body"),
+                text_part("text/plain", ""),
+            ],
+            "multipart/mixed",
+        )));
+        let body = render(&message, &FetchedBodies::default());
+        assert!(body.markdown.contains("Readable body"));
+        assert!(body.needs_fetch.is_empty());
+    }
+
+    #[test]
+    fn equal_main_with_different_history_stays_html() {
+        let message = test_message(Some(wrapped_part(
+            vec![
+                text_part("text/plain", "Same text"),
+                text_part(
+                    "text/html",
+                    "<p>Same text</p><div class='gmail_quote'>Extra history</div>",
+                ),
+            ],
+            "multipart/alternative",
+        )));
+        let body = render(&message, &FetchedBodies::default());
+        assert_eq!(body.source, BodySource::Html);
+        assert!(body.quoted.as_deref().is_some_and(|q| q.contains("Extra")));
+    }
+
+    #[test]
+    fn punctuation_and_structure_differences_win_over_plain() {
+        // Distinct punctuation is not a trivial wrapper.
+        let punct = test_message(Some(wrapped_part(
+            vec![
+                text_part("text/plain", "Hello world"),
+                text_part("text/html", "<p>Hello, world!</p>"),
+            ],
+            "multipart/alternative",
+        )));
+        assert_eq!(
+            render(&punct, &FetchedBodies::default()).source,
+            BodySource::Html
+        );
+        // Meaningful links/tables/images win even when visible text matches.
+        let linked = test_message(Some(wrapped_part(
+            vec![
+                text_part("text/plain", "Read the report"),
+                text_part(
+                    "text/html",
+                    "<p>Read the <a href=\"https://example.test/r\">report</a></p>",
+                ),
+            ],
+            "multipart/alternative",
+        )));
+        let body = render(&linked, &FetchedBodies::default());
+        assert_eq!(body.source, BodySource::Html);
+        assert!(body.markdown.contains("](<https://example.test/r>)"));
     }
 }

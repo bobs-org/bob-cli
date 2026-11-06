@@ -112,6 +112,10 @@ fn collect_resources(
                 .as_ref()
                 .and_then(|body| body.attachment_id.clone()),
         });
+        // Attachment boundaries are opaque: descendants stay out of the outer
+        // CID namespace and never become separate resources. The parent
+        // descriptor above is the only record for this subtree.
+        return Ok(());
     } else if mime.starts_with("image/") && content_id(part).is_some() {
         let body = part.body.as_ref();
         let attachment_id = body.and_then(|body| body.attachment_id.as_deref());
@@ -154,6 +158,13 @@ fn collect_candidates(
     path: &mut Vec<usize>,
     is_body_root: bool,
 ) -> Result<(), BodyError> {
+    // Attachment subtrees never donate descendants as main-body candidates:
+    // a `message/rfc822` forward or a named/disposition multipart attachment
+    // keeps its own descriptor (via `collect_resources`) but its children
+    // stay out of candidates, fetch needs, and the outer CID namespace.
+    if is_attachment(part) {
+        return Ok(());
+    }
     let mime = base_mime_type(&part.mime_type);
     if !part.parts.is_empty() {
         let selected_related_root = if mime == "multipart/related" {
@@ -554,5 +565,52 @@ mod tests {
         )
         .unwrap();
         assert_eq!(text, "�");
+    }
+
+    #[test]
+    fn nested_rfc822_and_named_multipart_never_donate_body() {
+        // Mixed `Outer text` plus a `forward.eml` whose child is plain
+        // `Attached history`: the attachment keeps its descriptor but its
+        // descendants never become main-body candidates.
+        let result = collect(
+            r#"{"mimeType":"multipart/mixed","parts":[{"mimeType":"text/plain","body":{"size":10,"data":"T3V0ZXIgdGV4dA"}},{"mimeType":"message/rfc822","filename":"forward.eml","parts":[{"mimeType":"text/plain","body":{"size":16,"data":"QXR0YWNoZWQgaGlzdG9yeQ"}}]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(result.plain_candidates.len(), 1);
+        assert_eq!(result.plain_candidates[0].text, "Outer text");
+        assert_eq!(result.attachments.len(), 1);
+        assert_eq!(
+            result.attachments[0].filename.as_deref(),
+            Some("forward.eml")
+        );
+
+        // Named/disposition multipart attachment with a text descendant.
+        let result = collect(
+            r#"{"mimeType":"multipart/mixed","parts":[{"mimeType":"text/plain","body":{"size":10,"data":"T3V0ZXIgdGV4dA"}},{"mimeType":"multipart/mixed","filename":"bundle","headers":[{"name":"Content-Disposition","value":"attachment; filename=\"bundle\""}],"parts":[{"mimeType":"text/plain","body":{"size":11,"data":"aW5uZXIgdGV4dA"}}]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(result.plain_candidates.len(), 1);
+        assert_eq!(result.plain_candidates[0].text, "Outer text");
+    }
+
+    #[test]
+    fn attachment_cid_does_not_pollute_outer_namespace_and_nested_unresolved_stays_unresolved(
+    ) {
+        // Outer CID resource plus an attachment subtree carrying a matching
+        // CID: the outer namespace keeps only its own resource, and the nested
+        // unresolved text body never becomes a fetch need for the outer
+        // message.
+        let result = collect(
+            r#"{"mimeType":"multipart/related","parts":[{"mimeType":"text/html","headers":[{"name":"Content-ID","value":"<root>"}],"body":{"size":2,"data":"aGk"}},{"mimeType":"image/png","headers":[{"name":"Content-ID","value":"<logo>"}],"body":{"size":1,"data":"AA"}},{"mimeType":"message/rfc822","filename":"forward.eml","parts":[{"mimeType":"image/png","headers":[{"name":"Content-ID","value":"<logo>"}],"body":{"size":1,"data":"AA"}},{"mimeType":"text/plain","body":{"size":8,"attachmentId":"nested-body"}}]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(result.html_candidates.len(), 1);
+        assert_eq!(result.inline_images.len(), 1);
+        assert_eq!(
+            result.inline_images[0].content_id.as_deref(),
+            Some("<logo>")
+        );
+        assert!(result.needs_fetch.is_empty());
+        assert_eq!(result.attachments.len(), 1);
     }
 }

@@ -22,6 +22,12 @@ pub(crate) struct HtmlRender {
     pub(crate) quoted: Option<String>,
     pub(crate) signature: Option<String>,
     pub(crate) inline_images: Vec<InlineImage>,
+    /// Explicit structure flags so selection never infers tables from a
+    /// literal `|` in serialized text. True when any segment holds a
+    /// semantic `Block::Table`; true when any segment holds a renderer-owned
+    /// safe link (`Inline::Link` with a validated destination).
+    pub(crate) has_table: bool,
+    pub(crate) has_link: bool,
 }
 
 /// Parse an HTML candidate with an HTML5 parser, fold history and signatures
@@ -43,11 +49,19 @@ pub(crate) fn render_html(
     let nodes = parse_container(document.root_element(), &mut context);
     let mut segments = Segments::default();
     split_segments(&nodes, Segment::Main, &mut segments);
+    let has_table = [&segments.main, &segments.quoted, &segments.signature]
+        .iter()
+        .any(|blocks| blocks_have_table(blocks));
+    let has_link = [&segments.main, &segments.quoted, &segments.signature]
+        .iter()
+        .any(|blocks| blocks_have_link(blocks));
     HtmlRender {
         markdown: render_optional(&segments.main),
         quoted: render_nonempty(&segments.quoted),
         signature: render_nonempty(&segments.signature),
         inline_images: context.referenced_images,
+        has_table,
+        has_link,
     }
 }
 
@@ -103,6 +117,43 @@ fn split_segments(nodes: &[RenderNode], target: Segment, out: &mut Segments) {
             }
         }
     }
+}
+
+fn blocks_have_table(blocks: &[Block]) -> bool {
+    blocks.iter().any(|block| match block {
+        Block::Table { .. } => true,
+        Block::List { items, .. } => {
+            items.iter().any(|item| blocks_have_table(item))
+        }
+        _ => false,
+    })
+}
+
+fn inlines_have_link(inlines: &[Inline]) -> bool {
+    inlines.iter().any(|inline| match inline {
+        Inline::Link { url: Some(_), .. } => true,
+        Inline::Emphasis(children) | Inline::Strong(children) => {
+            inlines_have_link(children)
+        }
+        Inline::Link { label, url: None } => inlines_have_link(label),
+        _ => false,
+    })
+}
+
+fn blocks_have_link(blocks: &[Block]) -> bool {
+    blocks.iter().any(|block| match block {
+        Block::Paragraph(inlines) => inlines_have_link(inlines),
+        Block::List { items, .. } => {
+            items.iter().any(|item| blocks_have_link(item))
+        }
+        Block::Heading { .. } | Block::Code(_) => false,
+        Block::Table { headers, rows } => {
+            headers.iter().any(|cell| inlines_have_link(cell))
+                || rows
+                    .iter()
+                    .any(|row| row.iter().any(|cell| inlines_have_link(cell)))
+        }
+    })
 }
 
 fn parse_container(
@@ -233,38 +284,48 @@ fn parse_list(
     context: &mut WalkContext<'_>,
 ) -> Vec<RenderNode> {
     let mut items = Vec::new();
+    let mut extra = Vec::new();
     for child in element.child_elements() {
         if child.value().name() != "li" || is_hidden(child, context) {
             continue;
         }
         let nodes = parse_container(child, context);
         let mut blocks = Vec::new();
-        append_nodes_as_blocks(&nodes, &mut blocks);
-        items.push(blocks);
+        for node in nodes {
+            match node {
+                RenderNode::Block(block) => blocks.push(block),
+                // Preserve quote/signature segmentation through lists:
+                // quoted history inside an `<li>` belongs in the folded
+                // history segment, not in the list item's main text.
+                RenderNode::Quote(children) => {
+                    extra.push(RenderNode::Quote(children));
+                }
+                RenderNode::Signature(children) => {
+                    extra.push(RenderNode::Signature(children));
+                }
+            }
+        }
+        if !blocks.is_empty() {
+            items.push(blocks);
+        }
     }
     if items.is_empty() {
-        return parse_container(element, context);
+        if extra.is_empty() {
+            return parse_container(element, context);
+        }
+        return extra;
     }
     let start = element
         .attr("start")
         .and_then(|value| value.parse::<u32>().ok())
         .unwrap_or(1);
-    vec![RenderNode::Block(Block::List {
+    let mut out = vec![RenderNode::Block(Block::List {
         ordered: element.value().name() == "ol",
         start,
         items,
-    })]
-}
-
-fn append_nodes_as_blocks(nodes: &[RenderNode], out: &mut Vec<Block>) {
-    for node in nodes {
-        match node {
-            RenderNode::Block(block) => out.push(block.clone()),
-            RenderNode::Quote(children) | RenderNode::Signature(children) => {
-                append_nodes_as_blocks(children, out);
-            }
-        }
-    }
+    })];
+    out.extend(extra);
+    out
 }
 
 fn parse_inline_children(
@@ -433,7 +494,9 @@ fn parse_table(
 ) -> Vec<RenderNode> {
     let scan = scan_table(table, context);
     if context.bulletin || scan.unsupported || !scan.semantic {
-        return linear_table(&scan);
+        let mut out = linear_table(&scan);
+        out.extend(scan.extra);
+        return out;
     }
     let header_index = scan
         .rows
@@ -443,11 +506,15 @@ fn parse_table(
     let Some(header_index) =
         header_index.filter(|index| *index < scan.rows.len())
     else {
-        return linear_table(&scan);
+        let mut out = linear_table(&scan);
+        out.extend(scan.extra);
+        return out;
     };
     let headers = scan.rows[header_index].cells.clone();
-    if headers.is_empty() || headers.iter().all(|cell| cell.is_empty()) {
-        return linear_table(&scan);
+    if headers.is_empty() || headers.iter().all(|cell| cell_is_empty(cell)) {
+        let mut out = linear_table(&scan);
+        out.extend(scan.extra);
+        return out;
     }
     let rows = scan
         .rows
@@ -457,26 +524,31 @@ fn parse_table(
         .map(|(_, row)| row.cells.clone())
         .collect();
     let mut output = Vec::new();
-    if let Some(caption) = scan.caption.filter(|caption| !caption.is_empty()) {
-        output.push(RenderNode::Block(Block::Paragraph(vec![Inline::Text(
-            caption,
-        )])));
+    if let Some(caption) =
+        scan.caption.filter(|caption| !cell_is_empty(caption))
+    {
+        output.push(RenderNode::Block(Block::Paragraph(caption)));
     }
     output.push(RenderNode::Block(Block::Table { headers, rows }));
+    output.extend(scan.extra);
     output
 }
 
 struct TableRow {
-    cells: Vec<String>,
+    cells: Vec<Vec<Inline>>,
     has_header_cells: bool,
 }
 
 struct TableScan {
     rows: Vec<TableRow>,
     has_thead: bool,
-    caption: Option<String>,
+    caption: Option<Vec<Inline>>,
     semantic: bool,
     unsupported: bool,
+    /// Quote/signature segments found inside layout/semantic table cells.
+    /// Returned alongside the table so folded history never stays in main
+    /// text when a Gmail quote or signature is wrapped in a table.
+    extra: Vec<RenderNode>,
 }
 
 fn scan_table(
@@ -489,6 +561,7 @@ fn scan_table(
         caption: None,
         semantic: false,
         unsupported: false,
+        extra: Vec::new(),
     };
     scan_table_children(table, &mut scan, context);
     scan.semantic = scan.has_thead
@@ -515,10 +588,12 @@ fn scan_table_children(
                 scan_table_children(child, scan, context);
             }
             "caption" => {
-                let caption =
-                    inlines_to_text(&parse_inline_children(child, context));
-                if !caption.trim().is_empty() {
-                    scan.caption = Some(collapse_space(&caption));
+                // Keep structured inlines so safe links survive layout
+                // flattening and semantic rendering with final escaping owned
+                // by the inert serializer.
+                let caption = parse_inline_children(child, context);
+                if !cell_is_empty(&caption) {
+                    scan.caption = Some(caption);
                 }
             }
             "tr" => {
@@ -534,9 +609,25 @@ fn scan_table_children(
                         scan.unsupported = true;
                     }
                     has_header_cells |= name == "th";
-                    let text =
-                        inlines_to_text(&parse_inline_children(cell, context));
-                    cells.push(collapse_space(&text));
+                    // Block-aware cell parsing so a Gmail quote/signature
+                    // wrapped in a layout table stays folded: main Blocks
+                    // become the cell's inlines, Quote/Signature nodes go to
+                    // `scan.extra` and are returned outside the table.
+                    let nodes = parse_container(cell, context);
+                    let mut main_blocks = Vec::new();
+                    for node in nodes {
+                        match node {
+                            RenderNode::Block(block) => main_blocks.push(block),
+                            RenderNode::Quote(children) => {
+                                scan.extra.push(RenderNode::Quote(children));
+                            }
+                            RenderNode::Signature(children) => {
+                                scan.extra
+                                    .push(RenderNode::Signature(children));
+                            }
+                        }
+                    }
+                    cells.push(blocks_to_cell_inlines(&main_blocks));
                 }
                 if !cells.is_empty() {
                     scan.rows.push(TableRow {
@@ -552,49 +643,113 @@ fn scan_table_children(
 
 fn linear_table(scan: &TableScan) -> Vec<RenderNode> {
     let mut output = Vec::new();
-    if let Some(caption) =
-        scan.caption.as_ref().filter(|caption| !caption.is_empty())
+    if let Some(caption) = scan.caption.as_ref()
+        && !cell_is_empty(caption)
     {
-        output.push(RenderNode::Block(Block::Paragraph(vec![Inline::Text(
-            caption.clone(),
-        )])));
+        output.push(RenderNode::Block(Block::Paragraph(caption.clone())));
     }
-    output.extend(
-        scan.rows
-            .iter()
-            .filter_map(|row| {
-                let text = row
-                    .cells
-                    .iter()
-                    .filter(|cell| !cell.is_empty())
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(" · ");
-                (!text.is_empty()).then(|| {
-                    RenderNode::Block(Block::Paragraph(vec![Inline::Text(
-                        text,
-                    )]))
-                })
-            })
-            .collect::<Vec<_>>(),
-    );
+    for row in &scan.rows {
+        let mut combined: Vec<Inline> = Vec::new();
+        for cell in &row.cells {
+            if cell_is_empty(cell) {
+                continue;
+            }
+            if !combined.is_empty() {
+                combined.push(Inline::Text(" · ".to_string()));
+            }
+            combined.extend(cell.clone());
+        }
+        if combined.is_empty() {
+            continue;
+        }
+        output.push(RenderNode::Block(Block::Paragraph(combined)));
+    }
     output
 }
 
-fn inlines_to_text(inlines: &[Inline]) -> String {
-    let mut output = String::new();
-    for inline in inlines {
-        match inline {
-            Inline::Text(text) | Inline::Code(text) => output.push_str(text),
-            Inline::Emphasis(children) | Inline::Strong(children) => {
-                output.push_str(&inlines_to_text(children));
+/// True when a table cell's inlines hold no readable content: empty, or only
+/// whitespace text with no structure (links, code, emphasis).
+fn cell_is_empty(inlines: &[Inline]) -> bool {
+    inlines.iter().all(|inline| match inline {
+        Inline::Text(text) => text.trim().is_empty(),
+        Inline::Emphasis(children) | Inline::Strong(children) => {
+            cell_is_empty(children)
+        }
+        Inline::Code(text) => text.trim().is_empty(),
+        Inline::Link { label, url } => url.is_none() && cell_is_empty(label),
+    })
+}
+
+/// Flatten a table cell's main Blocks into inline content. Paragraphs
+/// contribute their inlines; headings, lists, and nested tables are linearized
+/// with readable separators so no cell text is lost when a layout table wraps
+/// ordinary prose. Quote/Signature nodes never reach here: the caller splits
+/// them into `scan.extra` before calling this.
+fn blocks_to_cell_inlines(blocks: &[Block]) -> Vec<Inline> {
+    let mut out = Vec::new();
+    for block in blocks {
+        match block {
+            Block::Paragraph(inlines) => {
+                if !out.is_empty() && !inlines.is_empty() {
+                    out.push(Inline::Text(" ".to_string()));
+                }
+                out.extend(inlines.clone());
             }
-            Inline::Link { label, .. } => {
-                output.push_str(&inlines_to_text(label))
+            Block::Heading { text, .. } => {
+                if text.trim().is_empty() {
+                    continue;
+                }
+                if !out.is_empty() {
+                    out.push(Inline::Text(" ".to_string()));
+                }
+                out.push(Inline::Text(text.clone()));
+            }
+            Block::List { items, .. } => {
+                for item in items {
+                    let item_inlines = blocks_to_cell_inlines(item);
+                    if cell_is_empty(&item_inlines) {
+                        continue;
+                    }
+                    if !out.is_empty() {
+                        out.push(Inline::Text("; ".to_string()));
+                    }
+                    out.extend(item_inlines);
+                }
+            }
+            Block::Code(content) => {
+                if content.trim().is_empty() {
+                    continue;
+                }
+                if !out.is_empty() {
+                    out.push(Inline::Text(" ".to_string()));
+                }
+                out.push(Inline::Code(content.clone()));
+            }
+            Block::Table { headers, rows } => {
+                for header in headers {
+                    if cell_is_empty(header) {
+                        continue;
+                    }
+                    if !out.is_empty() {
+                        out.push(Inline::Text(" ".to_string()));
+                    }
+                    out.extend(header.clone());
+                }
+                for row in rows {
+                    for cell in row {
+                        if cell_is_empty(cell) {
+                            continue;
+                        }
+                        if !out.is_empty() {
+                            out.push(Inline::Text(" ".to_string()));
+                        }
+                        out.extend(cell.clone());
+                    }
+                }
             }
         }
     }
-    output
+    out
 }
 
 fn collapse_space(text: &str) -> String {
@@ -631,7 +786,16 @@ fn is_quote_divider(
     element: ElementRef<'_>,
     context: &WalkContext<'_>,
 ) -> bool {
-    if has_class(element, "divRplyFwdMsg") {
+    // Outlook's reply separator uses `id`, not `class`: `<div
+    // id='divRplyFwdMsg'>`. The existing test passed only via the bold-header
+    // fallback, so check the id explicitly. Keep the class check for
+    // forward-compatibility and require strong header evidence otherwise, so
+    // ordinary prose mentioning From never folds.
+    if element
+        .attr("id")
+        .is_some_and(|id| id.eq_ignore_ascii_case("divRplyFwdMsg"))
+        || has_class(element, "divRplyFwdMsg")
+    {
         return true;
     }
     if !matches!(element.value().name(), "div" | "p" | "section") {
@@ -1181,5 +1345,71 @@ mod tests {
         assert!(result.markdown.contains("chart"));
         assert!(!result.markdown.contains("[🖼"));
         assert!(result.inline_images.is_empty());
+    }
+
+    #[test]
+    fn layout_table_keeps_article_link_and_boundaries() {
+        let result = render_html(
+            "<table><tr><td><a href='https://example.test/article'>Read article</a></td></tr></table>",
+            &[],
+            true,
+        );
+        assert!(
+            result.markdown.contains("https://example.test/article"),
+            "article URL lost in:\n{}",
+            result.markdown
+        );
+        assert!(result.has_link, "semantic link flag missing");
+    }
+
+    #[test]
+    fn table_wrapped_quote_and_signature_stay_folded_with_new_reply_main() {
+        let result = render(
+            "<p>My reply</p><table><tr><td><div class='gmail_quote'>Old history</div></td></tr></table><p>After table</p>",
+        );
+        assert!(result.markdown.contains("My reply"));
+        // Quote inside the layout table belongs in folded history, not main.
+        assert!(!result.markdown.contains("Old history"));
+        assert!(
+            result.quoted.as_deref().is_some_and(|q| q.contains("Old")),
+            "table-wrapped quote lost: main={:?} quoted={:?}",
+            result.markdown,
+            result.quoted
+        );
+        let sig = render(
+            "<p>New reply</p><table><tr><td><div class='gmail_signature'>Best, Pat</div></td></tr></table>",
+        );
+        assert!(sig.markdown.contains("New reply"));
+        assert!(
+            sig.signature.as_deref().is_some_and(|s| s.contains("Pat")),
+            "table-wrapped signature lost: main={:?} sig={:?}",
+            sig.markdown,
+            sig.signature
+        );
+    }
+
+    #[test]
+    fn outlook_id_divider_folds_without_bold_headers() {
+        let result = render(
+            "<p>My reply</p><div id='divRplyFwdMsg'>Earlier email</div><p>Old history</p>",
+        );
+        assert!(result.markdown.contains("My reply"));
+        assert!(
+            result.quoted.as_deref().is_some_and(|q| q.contains("Old")),
+            "id-only Outlook divider did not fold: main={:?} quoted={:?}",
+            result.markdown,
+            result.quoted
+        );
+    }
+
+    #[test]
+    fn semantic_table_keeps_all_cells_without_truncation() {
+        let result = render(
+            "<table><thead><tr><th>A</th><th>B</th></tr></thead><tbody><tr><td>1</td><td>2</td><td>3</td></tr></tbody></table>",
+        );
+        assert!(result.markdown.contains('1'));
+        assert!(result.markdown.contains('2'));
+        assert!(result.markdown.contains('3'), "extra cell truncated");
+        assert!(result.has_table);
     }
 }

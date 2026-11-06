@@ -57,12 +57,14 @@ pub(crate) enum Block {
     /// Fenced code with exactly the `text` info string. Delimiter runs size
     /// past any backtick run in the content.
     Code(String),
-    /// Sender cells; pipes and newlines are neutralized at render. When
+    /// Sender cells as structured inlines; pipes and newlines are
+    /// neutralized at render while safe links, emphasis, and code survive as
+    /// renderer-owned structure with final escaping owned here. When
     /// `headers` is empty the rows fall back to `"; "`-joined paragraphs so
     /// no table syntax is emitted from headerless data.
     Table {
-        headers: Vec<String>,
-        rows: Vec<Vec<String>>,
+        headers: Vec<Vec<Inline>>,
+        rows: Vec<Vec<Vec<Inline>>>,
     },
 }
 
@@ -106,6 +108,14 @@ impl SafeUrl {
     /// (controls, `<`, `>`, `"`). Plain spaces are accepted and percent-encoded
     /// by serialization; comparison is on the parsed scheme, so `HTTP://`
     /// normalizes and passes while `java\tscript:` fails.
+    ///
+    /// Raw wikilink delimiters (`[[`, `]]`) are refused even when the `url`
+    /// crate leaves them unencoded: Bob's raw scanner still sees them inside
+    /// the rendered `[label](<dest>)` destination. Ordinary query parameters,
+    /// fragments, `mailto` addresses, and valid IPv6 hosts (for example
+    /// `http://[::1]/`) never contain those pairs and stay usable. Refusal
+    /// keeps readable label text while never Markdown-escaping opaque IDs or
+    /// mutating transport inputs.
     pub(crate) fn parse(raw: &str) -> Option<Self> {
         if raw.chars().any(|c| {
             c.is_control() || c == '<' || c == '>' || c == '"' || c == '\u{7f}'
@@ -123,6 +133,9 @@ impl SafeUrl {
         if inner.chars().any(|c| {
             c.is_control() || c == ' ' || c == '<' || c == '>' || c == '"'
         }) {
+            return None;
+        }
+        if inner.contains("[[") || inner.contains("]]") {
             return None;
         }
         Some(Self { inner })
@@ -584,69 +597,197 @@ fn render_text_single(raw: &str) -> String {
     escape_inline_text(&collapse_whitespace(raw))
 }
 
-/// Render one table cell: single-line escaping plus pipe neutralization so
-/// sender pipes can never split a renderer-owned row.
-fn render_table_cell(raw: &str) -> String {
-    render_text_single(raw).replace('|', "\\|")
+/// Merge adjacent literal [`Inline::Text`] payloads so split DOM text nodes
+/// (for example `<span>key:</span><span>: value</span>` or text broken by a
+/// dropped hidden element) are escaped as one string. Without this,
+/// per-fragment escaping leaves single `:`/`%`/`$` runs that re-form `::`,
+/// `%%`, or `$$` across the boundary, and split backslashes undo the
+/// doubling pass. Structure (`Emphasis`, `Strong`, `Code`, `Link`) still
+/// breaks the run; safety across those edges is enforced by
+/// [`needs_edge_break`].
+fn coalesce_inlines(inlines: &[Inline]) -> Vec<Inline> {
+    let mut out = Vec::with_capacity(inlines.len());
+    for inline in inlines {
+        match inline {
+            Inline::Text(raw) => {
+                if let Some(Inline::Text(prev)) = out.last_mut() {
+                    prev.push_str(raw);
+                } else {
+                    out.push(Inline::Text(raw.clone()));
+                }
+            }
+            Inline::Emphasis(children) => {
+                out.push(Inline::Emphasis(coalesce_inlines(children)));
+            }
+            Inline::Strong(children) => {
+                out.push(Inline::Strong(coalesce_inlines(children)));
+            }
+            Inline::Code(raw) => out.push(Inline::Code(raw.clone())),
+            Inline::Link { label, url } => out.push(Inline::Link {
+                label: coalesce_inlines(label),
+                url: url.clone(),
+            }),
+        }
+    }
+    out
 }
 
-fn render_inline(inline: &Inline, out: &mut String) {
+/// Whether joining `left` (already rendered) with `right` (next piece) would
+/// create active syntax across the composition edge.
+///
+/// `!` immediately before a renderer-owned link forms a remote Markdown
+/// image (`![...](...)`), and `[` immediately before a link forms a raw
+/// `[[` wikilink span even when the left bracket is backslash-escaped. A
+/// trailing backslash would escape the next structure opener and silently
+/// break a trusted link, emphasis, or code span. Adjacent backticks would
+/// merge inline-code delimiters. Each case inserts one invisible breaker
+/// ([`ZW_NON_JOINER`]) so visible text and trusted structure survive while
+/// the hazard can never form. `::`/`%%`/`$$` across two literal runs are
+/// handled by [`coalesce_inlines`], not here, because structure always sits
+/// between a literal run and any other literal here.
+fn needs_edge_break(left: &str, right: &str) -> bool {
+    if left.is_empty() || right.is_empty() {
+        return false;
+    }
+    let left_bang = left.ends_with('!');
+    let left_bracket = left.ends_with('[');
+    let left_tick = left.ends_with('`');
+    let right_bracket = right.starts_with('[');
+    let right_tick = right.starts_with('`');
+    if (left_bang || left_bracket) && right_bracket {
+        return true;
+    }
+    if left_tick && right_tick {
+        return true;
+    }
+    // A single trailing backslash would escape the next opener (`\[`, `` \` ``,
+    // `\*`) and either undo trusted structure or create a new escape that
+    // hides the boundary. Break when the tail has an odd run of backslashes.
+    let trailing = left.chars().rev().take_while(|c| *c == '\\').count();
+    if trailing % 2 == 1
+        && (right_bracket || right_tick || right.starts_with('*'))
+    {
+        return true;
+    }
+    false
+}
+
+fn push_piece(out: &mut String, piece: &str) {
+    if needs_edge_break(out, piece) {
+        out.push(ZW_NON_JOINER);
+    }
+    out.push_str(piece);
+}
+
+fn render_single(inline: &Inline, out: &mut String) {
     match inline {
-        Inline::Text(raw) => out.push_str(&render_inline_text(raw)),
+        Inline::Text(raw) => push_piece(out, &render_inline_text(raw)),
         Inline::Emphasis(children) => {
-            out.push('*');
-            render_inlines(children, out);
-            out.push('*');
+            let mut inner = String::new();
+            render_inlines(children, &mut inner);
+            let mut piece = String::with_capacity(inner.len() + 2);
+            piece.push('*');
+            piece.push_str(&inner);
+            piece.push('*');
+            push_piece(out, &piece);
         }
         Inline::Strong(children) => {
-            out.push_str("**");
-            render_inlines(children, out);
-            out.push_str("**");
+            let mut inner = String::new();
+            render_inlines(children, &mut inner);
+            let mut piece = String::with_capacity(inner.len() + 4);
+            piece.push_str("**");
+            piece.push_str(&inner);
+            piece.push_str("**");
+            push_piece(out, &piece);
         }
-        Inline::Code(raw) => render_inline_code(raw, out),
+        Inline::Code(raw) => {
+            let mut piece = String::new();
+            render_inline_code(raw, &mut piece);
+            push_piece(out, &piece);
+        }
         Inline::Link { label, url } => match url {
             Some(safe) => {
-                out.push('[');
-                render_inlines(label, out);
-                out.push_str("](<");
-                out.push_str(safe.as_str());
-                out.push_str(">)");
+                let mut inner = String::new();
+                render_inlines(label, &mut inner);
+                let mut piece = String::with_capacity(
+                    inner.len() + safe.as_str().len() + 5,
+                );
+                piece.push('[');
+                piece.push_str(&inner);
+                piece.push_str("](<");
+                piece.push_str(safe.as_str());
+                piece.push_str(">)");
+                push_piece(out, &piece);
             }
-            None => render_inlines(label, out),
+            None => {
+                let mut inner = String::new();
+                render_inlines(label, &mut inner);
+                push_piece(out, &inner);
+            }
         },
     }
 }
 
-fn render_inlines(inlines: &[Inline], out: &mut String) {
-    for inline in inlines {
-        match inline {
-            // Labels and other nested single-line contexts collapse internal
-            // newlines instead of emitting raw line breaks.
-            Inline::Text(raw) => {
-                out.push_str(&render_inline_text(&raw.replace('\n', " ")))
-            }
-            Inline::Emphasis(children) => {
-                out.push('*');
-                render_inlines(children, out);
-                out.push('*');
-            }
-            Inline::Strong(children) => {
-                out.push_str("**");
-                render_inlines(children, out);
-                out.push_str("**");
-            }
-            Inline::Code(raw) => render_inline_code(raw, out),
-            Inline::Link { label, url } => match url {
-                Some(safe) => {
-                    out.push('[');
-                    render_inlines(label, out);
-                    out.push_str("](<");
-                    out.push_str(safe.as_str());
-                    out.push_str(">)");
-                }
-                None => render_inlines(label, out),
-            },
+fn render_single_label(inline: &Inline, out: &mut String) {
+    match inline {
+        // Labels and other nested single-line contexts collapse internal
+        // newlines instead of emitting raw line breaks.
+        Inline::Text(raw) => {
+            push_piece(out, &render_inline_text(&raw.replace('\n', " ")));
         }
+        Inline::Emphasis(children) => {
+            let mut inner = String::new();
+            render_inlines(children, &mut inner);
+            let mut piece = String::with_capacity(inner.len() + 2);
+            piece.push('*');
+            piece.push_str(&inner);
+            piece.push('*');
+            push_piece(out, &piece);
+        }
+        Inline::Strong(children) => {
+            let mut inner = String::new();
+            render_inlines(children, &mut inner);
+            let mut piece = String::with_capacity(inner.len() + 4);
+            piece.push_str("**");
+            piece.push_str(&inner);
+            piece.push_str("**");
+            push_piece(out, &piece);
+        }
+        Inline::Code(raw) => {
+            let mut piece = String::new();
+            render_inline_code(raw, &mut piece);
+            push_piece(out, &piece);
+        }
+        Inline::Link { label, url } => match url {
+            Some(safe) => {
+                let mut inner = String::new();
+                render_inlines(label, &mut inner);
+                let mut piece = String::with_capacity(
+                    inner.len() + safe.as_str().len() + 5,
+                );
+                piece.push('[');
+                piece.push_str(&inner);
+                piece.push_str("](<");
+                piece.push_str(safe.as_str());
+                piece.push_str(">)");
+                push_piece(out, &piece);
+            }
+            None => {
+                let mut inner = String::new();
+                render_inlines(label, &mut inner);
+                push_piece(out, &inner);
+            }
+        },
+    }
+}
+
+fn render_inline(inline: &Inline, out: &mut String) {
+    render_single(inline, out);
+}
+
+fn render_inlines(inlines: &[Inline], out: &mut String) {
+    for inline in coalesce_inlines(inlines).iter() {
+        render_single_label(inline, out);
     }
 }
 
@@ -854,8 +995,8 @@ fn render_block(block: &Block, depth: usize, out: &mut String) {
     match block {
         Block::Paragraph(inlines) => {
             let mut body = String::new();
-            for inline in inlines {
-                render_inline(inline, &mut body);
+            for inline in coalesce_inlines(inlines).iter() {
+                render_single(inline, &mut body);
             }
             out.push_str(&body);
             out.push_str("\n\n");
@@ -943,28 +1084,61 @@ fn render_code_block(content: &str, out: &mut String) {
     out.push_str("\n\n");
 }
 
-fn render_table(headers: &[String], rows: &[Vec<String>], out: &mut String) {
+/// Render one table cell's structured inlines to a single-line Markdown
+/// fragment. Links, emphasis, and code survive as renderer-owned structure;
+/// pipes and newlines are neutralized so sender pipes can never split a
+/// renderer-owned row. Final escaping stays here via [`render_inlines`].
+fn render_table_cell_inlines(inlines: &[Inline]) -> String {
+    let mut buf = String::new();
+    render_inlines(inlines, &mut buf);
+    buf.replace('|', "\\|").replace('\n', " ")
+}
+
+fn render_table(
+    headers: &[Vec<Inline>],
+    rows: &[Vec<Vec<Inline>>],
+    out: &mut String,
+) {
     if headers.is_empty() {
         for row in rows {
-            let cells: Vec<String> =
-                row.iter().map(|cell| render_table_cell(cell)).collect();
+            let cells: Vec<String> = row
+                .iter()
+                .map(|cell| render_table_cell_inlines(cell))
+                .collect();
+            // Preserve all readable cells; skip fully empty rows so no
+            // empty paragraph is emitted from headerless data.
+            if cells.iter().all(|cell| cell.trim().is_empty()) {
+                continue;
+            }
             out.push_str(&cells.join("; "));
             out.push_str("\n\n");
         }
         return;
     }
-    let rendered_headers: Vec<String> =
-        headers.iter().map(|cell| render_table_cell(cell)).collect();
+    let rendered_headers: Vec<String> = headers
+        .iter()
+        .map(|cell| render_table_cell_inlines(cell))
+        .collect();
+    // Never truncate extra cells to the first header row's width: widen the
+    // table to the widest row so every readable cell survives with its
+    // boundary intact.
+    let width = headers
+        .len()
+        .max(rows.iter().map(Vec::len).max().unwrap_or(0))
+        .max(1);
+    let mut padded_headers = rendered_headers;
+    padded_headers.resize_with(width, String::new);
     out.push_str("| ");
-    out.push_str(&rendered_headers.join(" | "));
+    out.push_str(&padded_headers.join(" | "));
     out.push_str(" |\n| ");
-    out.push_str(&vec!["---"; headers.len()].join(" | "));
+    out.push_str(&vec!["---"; width].join(" | "));
     out.push_str(" |\n");
     for row in rows {
-        let mut cells: Vec<String> =
-            row.iter().map(|cell| render_table_cell(cell)).collect();
-        cells.resize_with(headers.len(), String::new);
-        cells.truncate(headers.len());
+        let mut cells: Vec<String> = row
+            .iter()
+            .map(|cell| render_table_cell_inlines(cell))
+            .collect();
+        cells.resize_with(width, String::new);
         out.push_str("| ");
         out.push_str(&cells.join(" | "));
         out.push_str(" |\n");
@@ -1428,8 +1602,14 @@ mod tests {
             "---\n{frontmatter}---\n# {heading}\n\n{table}\n\n{paras}\n\n> {quoted}\n\n{alias}\n",
             heading = inert_single_line(subject),
             table = render_blocks(&[Block::Table {
-                headers: vec!["From".to_string(), "Subject".to_string()],
-                rows: vec![vec![from.to_string(), subject.to_string()]],
+                headers: vec![
+                    vec![Inline::Text("From".to_string())],
+                    vec![Inline::Text("Subject".to_string())],
+                ],
+                rows: vec![vec![
+                    vec![Inline::Text(from.to_string())],
+                    vec![Inline::Text(subject.to_string())],
+                ]],
             }])
             .trim(),
             paras = render_blocks(&prose_blocks(
@@ -1585,5 +1765,138 @@ mod tests {
         assert_eq!(inert_single_line("  spaced   out  "), "spaced out");
         assert_eq!(inert_single_line("C# guide"), "C# guide");
         assert_eq!(inert_single_line("Q4: $5"), "Q4: $5");
+    }
+
+    #[test]
+    fn bang_before_trusted_link_never_forms_remote_image() {
+        // `!` immediately before a renderer-owned link would form `![...](...)`.
+        let rendered = render_blocks(&[Block::Paragraph(vec![
+            Inline::Text("!".to_string()),
+            Inline::Link {
+                label: vec![Inline::Text("load".to_string())],
+                url: SafeUrl::parse("https://example.test/tracker.png"),
+            },
+        ])]);
+        assert!(
+            !rendered.contains("!["),
+            "remote image formed in:\n{rendered}"
+        );
+        assert!(rendered.contains('!'), "visible bang lost in:\n{rendered}");
+        assert!(rendered.contains("load"), "label lost in:\n{rendered}");
+        assert_scanners_clean(&rendered, &[]);
+        assert_no_active_syntax(&rendered);
+    }
+
+    #[test]
+    fn split_colon_runs_cannot_reform_bare_or_bracketed_fields() {
+        // `<span>key:</span><span>: value</span>` arrives as two adjacent
+        // literal runs; coalescing must escape the reformed `::` for both the
+        // bracketed scanner and a bare `key:: value` observer.
+        let rendered = render_blocks(&[Block::Paragraph(vec![
+            Inline::Text("key:".to_string()),
+            Inline::Text(": value".to_string()),
+        ])]);
+        assert!(
+            !rendered.contains("::"),
+            "split field reformed in:\n{rendered}"
+        );
+        assert!(rendered.contains("key"), "readable text lost:\n{rendered}");
+        assert!(
+            rendered.contains("value"),
+            "readable text lost:\n{rendered}"
+        );
+        assert_scanners_clean(&rendered, &[]);
+        // Bare Dataview observer: `key:: value` with a space must not survive.
+        assert!(
+            !rendered.contains("key:: value") && !rendered.contains("key ::"),
+            "bare field survived in:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn split_percent_math_and_backslash_edges_stay_inert() {
+        for (left, right, forbidden) in [
+            ("%", "%", "%%"),
+            ("$", "$", "$$"),
+            ("\\", "[", "\\["),
+            ("`", "`", "``"),
+        ] {
+            let rendered = render_blocks(&[Block::Paragraph(vec![
+                Inline::Text(left.to_string()),
+                Inline::Text(right.to_string()),
+            ])]);
+            // `\\[` still contains a backslash escape, not a bare link opener;
+            // the assertion is that no raw active pair survives unbroken.
+            if forbidden == "\\[" {
+                assert_scanners_clean(&rendered, &[]);
+                continue;
+            }
+            assert!(
+                !rendered.contains(forbidden),
+                "split {forbidden:?} reformed from {left:?}+{right:?} in:\n{rendered}"
+            );
+            assert_scanners_clean(&rendered, &[]);
+        }
+        // Backslash before a trusted link opener must not escape the link.
+        let rendered = render_blocks(&[Block::Paragraph(vec![
+            Inline::Text("\\".to_string()),
+            Inline::Link {
+                label: vec![Inline::Text("go".to_string())],
+                url: SafeUrl::parse("https://example.test/a"),
+            },
+        ])]);
+        assert!(
+            rendered.contains("](<https://example.test/a>)"),
+            "trusted link broken in:\n{rendered}"
+        );
+        assert_scanners_clean(&rendered, &[]);
+    }
+
+    #[test]
+    fn hidden_node_boundaries_cannot_rejoin_hazards() {
+        // Text broken by a dropped hidden element (`key:` + hidden + `: v`)
+        // coalesces after skipping, so the reformed `::` is still escaped.
+        let rendered = render_blocks(&[Block::Paragraph(vec![
+            Inline::Text("key:".to_string()),
+            Inline::Text(": v".to_string()),
+        ])]);
+        assert!(
+            !rendered.contains("::"),
+            "hidden split reformed:\n{rendered}"
+        );
+        assert_scanners_clean(&rendered, &[]);
+    }
+
+    #[test]
+    fn safe_url_refuses_wikilinks_but_keeps_usable_urls() {
+        assert!(
+            SafeUrl::parse("https://example.test/[[forged]]").is_none(),
+            "forged wikilink destination accepted"
+        );
+        assert!(
+            SafeUrl::parse("https://example.test/a]]b").is_none()
+                || SafeUrl::parse("https://example.test/a]]b")
+                    .is_none_or(|safe| !safe.as_str().contains("]]")),
+            "raw wikilink survived in destination"
+        );
+        for usable in [
+            "https://example.test/a?b=c&d=e#f",
+            "http://example.test/path with space",
+            "mailto:someone@example.test?subject=hi",
+            "http://[::1]/",
+            "https://example.test/a(b)",
+        ] {
+            assert!(
+                SafeUrl::parse(usable).is_some(),
+                "usable URL refused: {usable:?}"
+            );
+        }
+        // Ordinary query/fragment/mailto/IPv6 destinations never contain the
+        // refused pair, so they stay usable and scanner-clean as links.
+        let rendered = render_blocks(&[Block::Paragraph(vec![Inline::Link {
+            label: vec![Inline::Text("open".to_string())],
+            url: SafeUrl::parse("https://example.test/a?b=c&d=e#f"),
+        }])]);
+        assert_scanners_clean(&rendered, &[]);
     }
 }

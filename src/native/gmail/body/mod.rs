@@ -8,12 +8,13 @@ pub(super) mod render;
 
 use std::collections::BTreeMap;
 
-// Consumer: the later body-integration phase uses this public-to-crate boundary.
+// Consumer: mail-note, gmail-save, and search-peek (outer hg phases) use
+// this public-to-crate boundary once they land.
 #[allow(unused_imports)]
 pub(crate) use mime::{collect_message_bodies, MimeInventory};
 
-// Consumer: the html-body and body-integration phases render sender content
-// through this inert boundary.
+// Consumer: outer mail-note, gmail-save, and search-peek phases render sender
+// content through this inert boundary.
 #[allow(unused_imports)]
 pub(crate) use inert::{
     inert_label, inert_multiline, inert_single_line, inert_yaml_value,
@@ -21,8 +22,9 @@ pub(crate) use inert::{
     Block, Inline, SafeUrl,
 };
 
-// Consumer: body-integration (bob-cli-hg.3.1.4) assembles HTML selection and
-// the public RenderedBody from this sanitized HTML result.
+// Consumer: render_message (used by outer mail-note, gmail-save, and
+// search-peek) assembles HTML selection and the public RenderedBody from this
+// sanitized HTML result.
 #[allow(unused_imports)]
 pub(crate) use html::{render_html, HtmlRender};
 

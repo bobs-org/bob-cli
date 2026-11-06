@@ -1,10 +1,17 @@
 //! Gmail API methods layered on the shared Google gog transport.
+//!
+//! Thread reads return the typed [`GmailThread`] envelope directly: the
+//! transport's original response bytes go through
+//! [`GmailThread::from_gog_json`] so every thread consumer shares one
+//! explicit adapter. Errors stay body-free and never embed serde input
+//! values or raw responses.
 
 use std::ffi::OsString;
 
 use super::GmailError;
 pub(crate) use crate::native::google::Gog;
 
+use super::model::GmailThread;
 use crate::native::google::parse_json;
 
 pub(crate) const CLIENT: &str = crate::native::google::GMAIL.client_bucket;
@@ -39,14 +46,20 @@ impl Gog {
         Ok(output.stdout)
     }
 
-    // Consumed by gmail-save; shell check uses `search` only.
+    // Consumed by gmail-save and search-peek; shell check uses `search` only.
     #[allow(dead_code)]
-    /// Fetch one thread with all messages.
+    /// Fetch one thread with all messages as a typed envelope.
+    ///
+    /// The transport's original response bytes go straight through the typed
+    /// [`GmailThread::from_gog_json`] parser: every thread consumer shares
+    /// this adapter instead of stripping the outer `thread` field into an
+    /// untyped value. Failures are body-free redaction (`bad_json` with no
+    /// input bytes or raw response).
     pub(crate) fn thread_get(
         &self,
         account: &str,
         hex: &str,
-    ) -> Result<serde_json::Value, GmailError> {
+    ) -> Result<GmailThread, GmailError> {
         let stdout = self.gmail_run(
             account,
             vec![
@@ -57,10 +70,11 @@ impl Gog {
                 OsString::from("--full"),
             ],
         )?;
-        let value = parse_json(&stdout)?;
-        Ok(value.get("thread").cloned().unwrap_or(value))
+        GmailThread::from_gog_json(stdout.as_bytes())
+            .map_err(|error| GmailError::runtime("bad_json", error.to_string()))
     }
 
+    // Consumed by outer gmail-save and search-peek once they land.
     #[allow(dead_code)]
     /// Fetch one message.
     pub(crate) fn message_get(
@@ -102,6 +116,7 @@ impl Gog {
         parse_json(&stdout)
     }
 
+    // Consumed by outer mail-note link resolution once it lands.
     #[allow(dead_code)]
     /// Print Gmail web URLs for threads.
     pub(crate) fn url(
@@ -120,8 +135,16 @@ impl Gog {
         parse_json(&stdout)
     }
 
+    // Consumed by outer gmail-save attachment hydration once it lands.
     #[allow(dead_code)]
     /// Download one attachment as bytes via `--inline` base64.
+    ///
+    /// Strict decoding via the shared `base64` crate accepts standard and
+    /// base64url alphabets in padded and unpadded forms; malformed padding
+    /// or trailing data fails deterministically without echoing content.
+    /// Returned bytes are raw attachment bytes for [`FetchedBodies`]: callers
+    /// must not base64-decode them again (MIME hydration decodes charset
+    /// only).
     pub(crate) fn attachment(
         &self,
         account: &str,
@@ -151,7 +174,7 @@ impl Gog {
             })?;
         let cleaned: String =
             encoded.chars().filter(|ch| !ch.is_whitespace()).collect();
-        base64_decode(&cleaned).ok_or_else(|| {
+        decode_attachment_base64(&cleaned).ok_or_else(|| {
             GmailError::runtime(
                 "bad_json",
                 "gog attachment content is not base64".to_string(),
@@ -160,38 +183,24 @@ impl Gog {
     }
 }
 
+/// Strict attachment decoding: standard and base64url alphabets, padded and
+/// unpadded. Each engine rejects malformed padding and trailing data, so only
+/// a fully valid encoding succeeds. Body-free: returns `None` without
+/// echoing input on failure.
 #[allow(dead_code)]
-fn base64_decode(input: &str) -> Option<Vec<u8>> {
-    let mut out = Vec::with_capacity(input.len() * 3 / 4);
-    let mut buffer: u32 = 0;
-    let mut bits: u8 = 0;
-    for ch in input.chars() {
-        if ch == '=' {
-            break;
-        }
-        let value = base64_value(ch)?;
-        buffer = (buffer << 6) | value as u32;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push(((buffer >> bits) & 0xFF) as u8);
-        }
-    }
-    Some(out)
-}
-
-#[allow(dead_code)]
-fn base64_value(ch: char) -> Option<u8> {
-    match ch {
-        'A'..='Z' => Some(ch as u8 - b'A'),
-        'a'..='z' => Some(ch as u8 - b'a' + 26),
-        '0'..='9' => Some(ch as u8 - b'0' + 52),
-        '+' => Some(62),
-        '/' => Some(63),
-        '-' => Some(62),
-        '_' => Some(63),
-        _ => None,
-    }
+fn decode_attachment_base64(cleaned: &str) -> Option<Vec<u8>> {
+    use base64::engine::general_purpose::{
+        STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD,
+    };
+    use base64::Engine as _;
+    // Padded forms first (strict padding), then unpadded. Both alphabets are
+    // accepted to retain the transport's historical standard/base64url forms.
+    STANDARD
+        .decode(cleaned)
+        .or_else(|_| URL_SAFE.decode(cleaned))
+        .or_else(|_| STANDARD_NO_PAD.decode(cleaned))
+        .or_else(|_| URL_SAFE_NO_PAD.decode(cleaned))
+        .ok()
 }
 
 #[cfg(test)]
@@ -199,8 +208,74 @@ mod tests {
     use super::*;
 
     #[test]
-    fn decodes_url_safe_base64() {
-        let bytes = base64_decode("aGVsbG8td29ybGQ_").expect("decode");
-        assert_eq!(bytes, b"hello-world?");
+    fn decodes_standard_and_url_safe_padded_and_unpadded() {
+        // "hello-world?" in standard padded, url-safe unpadded, and standard
+        // unpadded forms.
+        assert_eq!(
+            decode_attachment_base64("aGVsbG8td29ybGQ/").as_deref(),
+            Some(b"hello-world?".as_slice())
+        );
+        assert_eq!(
+            decode_attachment_base64("aGVsbG8td29ybGQ_").as_deref(),
+            Some(b"hello-world?".as_slice())
+        );
+        assert_eq!(
+            decode_attachment_base64("aGVsbG8td29ybGQ/".trim_end_matches('='))
+                .as_deref(),
+            Some(b"hello-world?".as_slice())
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_padding_and_trailing_data_without_echo() {
+        for bad in ["aGVsbG8===", "aGVsbG8td29ybGQ/!!!", "!!!"] {
+            let cleaned: String =
+                bad.chars().filter(|ch| !ch.is_whitespace()).collect();
+            assert!(
+                decode_attachment_base64(&cleaned).is_none(),
+                "accepted malformed {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_thread_parse_hydration_and_redaction_stay_body_free() {
+        use crate::native::gmail::body::{render_message, FetchedBodies};
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use base64::Engine as _;
+
+        // Envelope that looks like `gog thread get --full --json`: outer
+        // `thread` plus an attachment-backed body needing hydration.
+        let plain = URL_SAFE_NO_PAD.encode(b"Hi");
+        let envelope = format!(
+            r#"{{"thread":{{"id":"t9","messages":[{{"id":"m3","threadId":"t9","labelIds":["INBOX"],"payload":{{"mimeType":"text/plain","body":{{"size":8,"attachmentId":"body-3"}}}}}},{{"id":"m1","threadId":"t9","labelIds":["INBOX"],"payload":{{"mimeType":"text/plain","body":{{"size":2,"data":"{plain}"}}}}}}]}}}}"#
+        );
+        let thread = GmailThread::from_gog_json(envelope.as_bytes())
+            .expect("typed envelope must parse");
+        assert_eq!(thread.id, "t9");
+        // Missing body stays a fetch need with provisional fallback, then
+        // hydrates without double base64-decoding fetched bytes.
+        let pending =
+            render_message(&thread.messages[0], &FetchedBodies::default())
+                .expect("pending must render");
+        assert_eq!(pending.needs_fetch.len(), 1);
+        let raw = decode_attachment_base64(&URL_SAFE_NO_PAD.encode(b"fetched"))
+            .expect("attachment bytes decode");
+        let mut fetched = FetchedBodies::default();
+        fetched.insert("m3", "body-3", raw);
+        let resolved = render_message(&thread.messages[0], &fetched)
+            .expect("hydrated must render");
+        assert!(resolved.needs_fetch.is_empty());
+        assert_eq!(resolved.markdown, "fetched");
+
+        // Malformed responses redact without echoing input bytes.
+        let secret = "SECRET-THREAD-BYTES";
+        let error = GmailThread::from_gog_json(secret.as_bytes())
+            .err()
+            .expect("fail");
+        assert!(!error.to_string().contains(secret));
+        assert!(!format!("{error:?}").contains(secret));
+        let mapped = GmailError::runtime("bad_json", error.to_string());
+        assert!(!mapped.message().contains(secret));
     }
 }

@@ -3,8 +3,8 @@
 //! The identity helpers do no I/O; later save/link consumers confirm decoded IDs
 //! against Gmail before writing.
 
-// Owned by mail-body (hg.3, still landing); allow dead code until its
-// consumers land.
+// Owned by mail-body (hg.3.1 landing now, hg.3 closing in this turn); allow
+// dead code until outer mail-note, gmail-save, and search-peek consumers land.
 #[allow(dead_code)]
 pub(crate) mod body;
 pub(crate) mod cli;
@@ -18,8 +18,8 @@ mod journal;
 mod login;
 mod logout;
 pub(crate) mod ui;
-// Owned by gmail-ids (hg.2, closed) and mail-body (hg.3, landing); later
-// save/link phases consume them.
+// Owned by gmail-ids (hg.2, closed) and mail-body (hg.3.1 landing now);
+// outer mail-note, gmail-save, and search-peek phases consume them.
 #[allow(dead_code)]
 pub(crate) mod ids;
 #[allow(dead_code)]

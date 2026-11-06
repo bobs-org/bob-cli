@@ -8,18 +8,20 @@
 //!
 //! Segmentation rules, applied top to bottom:
 //!
-//! * The exact `-- ` signature delimiter (a line that trims to `--`, with or
-//!   without the trailing space transports often strip) switches the rest of
-//!   the pre-history text into the signature segment. A second delimiter
-//!   inside quoted history does not start a new signature: history stays
-//!   history.
+//! * The exact `-- ` signature delimiter (two dashes plus one trailing
+//!   space, nothing else) switches the rest of the pre-history text into the
+//!   signature segment. A bare `--` or an unrelated dash rule never delimits,
+//!   so ambiguous prose stays in its segment. A second delimiter inside
+//!   quoted history does not start a new signature: history stays history.
 //! * A `>`-prefixed line is a quoted run line: one leading `>` (plus one
 //!   optional space) is stripped and the remainder joins the quoted segment.
 //!   Inline replies outside quoted runs stay in main text.
-//! * An `On ... wrote:` line starts a quote tail when at least one
-//!   `>`-quoted line follows it; without quoted evidence the line is ordinary
-//!   prose, so a sentence like `On second thought, I wrote:` is never
-//!   treated as history on its own. The divider line itself is dropped.
+//! * An `On ... wrote:` line never switches segments on its own: it drops its
+//!   own attribution line when a later `>` run proves history, and lets those
+//!   `>` runs fold while following unquoted inline replies stay in main.
+//!   Without quoted evidence the line is ordinary prose, so a sentence like
+//!   `On second thought, I wrote:` is never treated as history on its own.
+//!   The divider line itself is dropped.
 //! * A strong Outlook divider (a `--`/`__` rule naming the original or
 //!   forwarded message) starts a quote tail unconditionally: forwards carry
 //!   no `>` prefixes. The divider line itself is dropped; the `From:`/`Sent:`
@@ -76,16 +78,28 @@ pub(crate) fn render_plain(text: &str) -> PlainRender {
                 segment = Segment::Signature;
                 continue;
             }
-            if segment == Segment::Main && is_quote_line(line) {
+            // Quoted runs fold from Main and from Signature (a signature
+            // before history): `>` lines always join the quoted segment
+            // without switching, so new unquoted inline replies stay in main.
+            if (segment == Segment::Main || segment == Segment::Signature)
+                && is_quote_line(line)
+            {
                 quoted.push(strip_quote_prefix(line));
                 continue;
             }
-            // A quote tail can follow the signature: the replier signs
-            // above the history their client appended.
-            if is_outlook_divider(line)
-                || (is_on_wrote(line) && later_quote[index + 1])
-            {
+            // Unprefixed forwarded-message tails (strong Outlook dividers)
+            // switch permanently: forwards carry no `>` prefixes, so every
+            // following line is history. `On ... wrote:` never switches: it
+            // only drops its own attribution line and lets following `>`
+            // runs fold via the quoted-run path above, so new unquoted
+            // inline replies stay in main text. A quote tail can follow the
+            // signature: the replier signs above the history their client
+            // appended.
+            if is_outlook_divider(line) {
                 segment = Segment::Quoted;
+                continue;
+            }
+            if is_on_wrote(line) && later_quote[index + 1] {
                 continue;
             }
         }
@@ -109,10 +123,12 @@ fn normalize(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
-/// A line that is exactly the `-- ` signature delimiter, tolerating the
-/// stripped trailing space. `---` thematic breaks never match.
+/// The exact `-- ` signature delimiter (two dashes plus one trailing
+/// space). A bare `--` or an unrelated dash rule (`---`, `-- foo`) never
+/// delimits: ambiguous content stays in its segment rather than silently
+/// moving ordinary prose into a signature.
 fn is_signature_delimiter(line: &str) -> bool {
-    line.trim_end() == "--"
+    line == "-- "
 }
 
 /// A `>`-quoted run line: the first non-blank character is `>`.
@@ -399,11 +415,17 @@ mod tests {
         assert!(result.quoted.is_none());
         assert!(result.markdown.contains("On second thought"));
 
-        // A bare `--` (trailing space stripped by the transport) still
-        // delimits the signature; only longer runs like `---` stay prose.
-        let dashes = render_plain("Section one\n--\nSection two\n");
-        assert!(dashes.signature.as_deref() == Some("Section two"));
-        assert!(dashes.markdown.contains("Section one"));
+        // Only the exact `-- ` (two dashes plus one trailing space)
+        // delimits. A bare `--` stays in main text so stripped transports
+        // never silently move ordinary prose into a signature.
+        let exact = render_plain("Section one\n-- \nSection two\n");
+        assert!(exact.signature.as_deref() == Some("Section two"));
+        assert!(exact.markdown.contains("Section one"));
+
+        let bare = render_plain("Section one\n--\nSection two\n");
+        assert!(bare.signature.is_none());
+        assert!(bare.markdown.contains("Section one"));
+        assert!(bare.markdown.contains("Section two"));
 
         // Dashes that are not the exact delimiter stay in main text.
         let rule = render_plain("Part one\n---\nPart two\n");
@@ -421,6 +443,38 @@ mod tests {
         assert!(result.markdown.contains("- milk"));
         assert!(result.markdown.contains("1. first"));
         assert_inert(&result.markdown);
+    }
+
+    #[test]
+    fn inline_answer_after_on_wrote_stays_main() {
+        let result = render_plain(
+            "On Tue, Pat wrote:\n> old question\nNew inline answer\n",
+        );
+        assert!(result.markdown.contains("New inline answer"));
+        assert!(!result
+            .quoted
+            .as_deref()
+            .unwrap_or("")
+            .contains("New inline"));
+        assert!(result.quoted.as_deref().unwrap().contains("old question"));
+    }
+
+    #[test]
+    fn signature_before_history_and_strong_outlook_headers_fold() {
+        let sig_first = render_plain(
+            "Thanks!\n-- \nPat\nOn Tue, Sam wrote:\n> Prior work\n",
+        );
+        assert!(sig_first.markdown.contains("Thanks!"));
+        assert_eq!(sig_first.signature.as_deref(), Some("Pat"));
+        assert!(sig_first.quoted.as_deref().unwrap().contains("Prior"));
+
+        let outlook = render_plain(
+            "See below.\n---------- Forwarded message ---------\nFrom: Dana <d@example.test>\nSent: Monday\nTo: You\nSubject: Hi\n\nForwarded text\n",
+        );
+        assert_eq!(outlook.markdown, "See below.");
+        let quoted = outlook.quoted.as_deref().unwrap();
+        assert!(quoted.contains("Forwarded text"));
+        assert!(quoted.contains("From: Dana"));
     }
 
     #[test]
