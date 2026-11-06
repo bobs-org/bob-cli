@@ -38,6 +38,67 @@ struct RawPayload {
     contents: String,
 }
 
+/// Refuse a source row that no merge can retire: a recurring task or a
+/// project's `^prj` row. The engine checks this before structure; capture's
+/// read-only `<` picker and `merge_in_pending` share it so a row they call
+/// mergeable is one execution accepts.
+pub(crate) fn source_identity_refusal(
+    source_line: &str,
+    task: &note_tasks::NoteTask,
+    block_id: &str,
+) -> Option<MergeError> {
+    if task_complete::is_recurring_task_line(source_line) {
+        return Some(MergeError::new(
+            "merge_source_recurring",
+            format!("^{block_id} is recurring"),
+        ));
+    }
+    if task.block_id.as_deref() == Some("prj") {
+        return Some(MergeError::new(
+            "merge_source_project",
+            "the ^prj task cannot be merged",
+        ));
+    }
+    None
+}
+
+/// Count the open tasks nested inside `source`'s block. `tasks` and `lines`
+/// come from one scan of the source note, so callers that check every row of
+/// a note scan it once.
+pub(crate) fn open_subtask_count(
+    tasks: &[note_tasks::NoteTask],
+    lines: &[capture::LineSpan<'_>],
+    source: &note_tasks::NoteTask,
+) -> usize {
+    tasks
+        .iter()
+        .filter(|task| task.line_index > source.line_index)
+        .filter(|task| task.status_type.is_open())
+        .filter(|task| {
+            lines
+                .get(task.line_index)
+                .is_some_and(|line| line.end <= source.block_end)
+        })
+        .count()
+}
+
+/// The refusal for a source that still has open subtasks, if it has any.
+pub(crate) fn open_subtasks_refusal(
+    source: &note_tasks::NoteTask,
+    open_nested: usize,
+) -> Option<MergeError> {
+    (open_nested > 0).then(|| {
+        MergeError::new(
+            "merge_source_open_subtasks",
+            format!(
+                "“{}” has {open_nested} open subtasks; move or close ^{} first",
+                source.description,
+                source.block_id.as_deref().unwrap_or("?")
+            ),
+        )
+    })
+}
+
 /// Validate source identities and structural relationships for the complete
 /// request, including sources that are already closed. This deliberately does
 /// not resolve or create the destination container, so an unchanged retry can
@@ -91,17 +152,12 @@ pub(crate) fn validate_merge_request(
                     ),
                 )
             })?;
-        if task_complete::is_recurring_task_line(source_line) {
-            return Err(MergeError::new(
-                "merge_source_recurring",
-                format!("^{} is recurring", locator.block_id),
-            ));
-        }
-        if located.task.block_id.as_deref() == Some("prj") {
-            return Err(MergeError::new(
-                "merge_source_project",
-                "the ^prj task cannot be merged",
-            ));
+        if let Some(refusal) = source_identity_refusal(
+            source_line,
+            &located.task,
+            &locator.block_id,
+        ) {
+            return Err(refusal);
         }
         sources.push(SourceWork {
             prepared: PreparedSource {
@@ -186,17 +242,12 @@ pub(crate) fn prepare_task_merge(
                     ),
                 )
             })?;
-        if task_complete::is_recurring_task_line(source_line) {
-            return Err(MergeError::new(
-                "merge_source_recurring",
-                format!("^{} is recurring", locator.block_id),
-            ));
-        }
-        if located.task.block_id.as_deref() == Some("prj") {
-            return Err(MergeError::new(
-                "merge_source_project",
-                "the ^prj task cannot be merged",
-            ));
+        if let Some(refusal) = source_identity_refusal(
+            source_line,
+            &located.task,
+            &locator.block_id,
+        ) {
+            return Err(refusal);
         }
         let disposition = SourceDisposition::from(&located);
         let prepared = PreparedSource {
@@ -511,26 +562,11 @@ fn source_payload(
 ) -> Result<(Vec<LineRange>, Vec<(String, String)>, usize), MergeError> {
     let lines = capture::line_spans(contents);
     let tasks = note_tasks::scan(contents, context.task_settings);
-    let open_nested = tasks
-        .tasks()
-        .iter()
-        .filter(|task| task.line_index > source.task.line_index)
-        .filter(|task| task.status_type.is_open())
-        .filter(|task| {
-            lines
-                .get(task.line_index)
-                .is_some_and(|line| line.end <= source.task.block_end)
-        })
-        .count();
-    if open_nested > 0 {
-        return Err(MergeError::new(
-            "merge_source_open_subtasks",
-            format!(
-                "“{}” has {open_nested} open subtasks; move or close ^{} first",
-                source.task.description,
-                source.task.block_id.as_deref().unwrap_or("?")
-            ),
-        ));
+    if let Some(refusal) = open_subtasks_refusal(
+        &source.task,
+        open_subtask_count(tasks.tasks(), &lines, &source.task),
+    ) {
+        return Err(refusal);
     }
 
     let children = task_children::classify_direct_children(

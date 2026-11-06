@@ -17,6 +17,10 @@ mod tests;
 pub(crate) use command::{build_cli, run};
 #[allow(unused_imports)]
 pub(crate) use payload::prepare_task_merge;
+// Source eligibility shared with capture's `<` picker and pending context.
+pub(crate) use payload::{
+    open_subtask_count, open_subtasks_refusal, source_identity_refusal,
+};
 // The parent merge-label phase will call the planner through this module.
 #[allow(unused_imports)]
 pub(crate) use plan::{
@@ -25,10 +29,10 @@ pub(crate) use plan::{
 // Later planner phases consume these crate-internal preparation records.
 #[allow(unused_imports)]
 pub(crate) use retirement::{
-    apply_retirement, classify_source, find_open_dependents,
-    normalize_merge_label, overlapping_effect_keys, repoint_dependents,
-    section_provenance_reason, validate_repoint_cycles, OpenDependent,
-    RetirementReports, SourceOutcome,
+    apply_retirement, classify_source, closed_source_refusal,
+    find_open_dependents, normalize_merge_label, overlapping_effect_keys,
+    repoint_dependents, section_provenance_reason, validate_repoint_cycles,
+    OpenDependent, RetirementReports, SourceOutcome,
 };
 #[allow(unused_imports)]
 pub(crate) use types::{

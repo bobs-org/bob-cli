@@ -6759,9 +6759,11 @@ true`; each source appears with `merge_source`. New additive `origin` on
 landed under its target (also for `>` merges); omitted elsewhere. New
 additive `merge_in_pending` on dry-run JSON failures whose code is
 `incomplete_merge_in` mirrors `transfer_pending` (`item`, `need`, and
-`sources[]` with resolved `path`, `line`, `title`, status, mergeability,
-or `error: {code, message}`). Human output prints the merge block whenever
-`merges[]` is non-empty; for a capture-born target the header reads
+`sources[]` with resolved `path`, `line`, `title`, status, and
+`mergeable` — an unmergeable row adds the refusal execution would give as
+`mergeable_code` and `mergeable_message` — or `error: {code, message}`).
+Human output prints the merge block whenever `merges[]` is non-empty; for
+a capture-born target the header reads
 `⤵ Merged 2 tasks into new “T” · foo.md` (`⤵ Would merge … into new “T”`
 on dry run).
 

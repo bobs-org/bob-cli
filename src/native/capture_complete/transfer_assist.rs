@@ -15,7 +15,7 @@ use std::path::Path;
 use super::model::{Candidates, CompleteError};
 use crate::native::{
     capture, capture_drawers, capture_language, capture_project_note,
-    note_tasks, task_children, task_complete, task_move,
+    note_tasks, task_children, task_merge, task_move,
 };
 
 /// Narrow `candidates` (and extend `warnings`) for `role` on a `>`
@@ -244,8 +244,8 @@ fn filter_source_tasks(
 }
 
 /// Mergeable task lines and the number of notes each merge would move.
-/// This mirrors the task-merge planner's open/project/recurring/subtask
-/// guards and payload count without staging any writes.
+/// Open rows pass the task-merge planner's own recurring/project/subtask
+/// source refusals; the payload count stages no writes.
 fn mergeable_source_details(
     contents: &str,
     bob_dir: &Path,
@@ -253,7 +253,6 @@ fn mergeable_source_details(
     let settings = note_tasks::read_settings(bob_dir);
     let scan = note_tasks::scan(contents, &settings);
     let open: Vec<&note_tasks::NoteTask> = scan.open_tasks().collect();
-    let lines: Vec<&str> = contents.lines().collect();
     let spans = capture::line_spans(contents);
     let mut id_counts = HashMap::<&str, usize>::new();
     for task in &open {
@@ -263,27 +262,20 @@ fn mergeable_source_details(
     }
     let mut details = HashMap::new();
     for task in &open {
-        if task.block_id.as_deref() == Some("prj")
-            || task.block_id.as_deref().is_some_and(|id| {
-                id_counts.get(id).copied().unwrap_or_default() > 1
-            })
-        {
+        if task.block_id.as_deref().is_some_and(|id| {
+            id_counts.get(id).copied().unwrap_or_default() > 1
+        }) {
             continue;
         }
-        if let Some(line) = lines.get(task.line_index)
-            && task_complete::is_recurring_task_line(line)
+        let source_line = spans
+            .get(task.line_index)
+            .map(|span| span.text)
+            .unwrap_or_default();
+        let block_id = task.block_id.as_deref().unwrap_or_default();
+        if task_merge::source_identity_refusal(source_line, task, block_id)
+            .is_some()
+            || task_merge::open_subtask_count(scan.tasks(), &spans, task) > 0
         {
-            continue;
-        }
-        // An open subtask is any open task inside this task's block range:
-        // the same rule the merge planner refuses on.
-        let nested_open = open.iter().any(|other| {
-            other.line_index > task.line_index
-                && spans
-                    .get(other.line_index)
-                    .is_some_and(|span| span.end <= task.block_end)
-        });
-        if nested_open {
             continue;
         }
         let moved_notes = moved_note_count(contents, task, &settings);

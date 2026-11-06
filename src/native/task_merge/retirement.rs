@@ -18,7 +18,9 @@ use std::{
 
 use super::{
     super::{
-        capture_pomodoros, note_tasks, pomodoro,
+        capture_pomodoros,
+        note_tasks::{self, NoteTaskSettings},
+        pomodoro,
         relation_labels::relation_label_key,
         task_cancel,
         task_dependencies::{
@@ -886,26 +888,49 @@ pub(crate) fn classify_source(
     Ok((SourceOutcome::AlreadyClosed, SourceDisposition::Closed))
 }
 
+/// The `merge_source_closed` refusal for an explicit merge of a closed
+/// source: the already-merged teaching copy when an existing managed merge
+/// relation resolves, otherwise a truthful generic closed-source message.
+/// Capture's read-only `merge_in_pending` shares it with execution.
+pub(crate) fn closed_source_refusal(
+    snapshot: &VaultSnapshot,
+    source_path: &Path,
+    source_block_id: &str,
+    task_settings: &NoteTaskSettings,
+    note_index: &NoteIndex,
+) -> MergeError {
+    let message = existing_merge_target_message(
+        snapshot,
+        source_path,
+        source_block_id,
+        task_settings,
+        note_index,
+    )
+    .unwrap_or_else(|| format!("^{source_block_id} is closed"));
+    MergeError::new("merge_source_closed", message)
+}
+
 /// Teaching copy for an already-merged closed source: name its cleaned
 /// title, the existing merge target title, and the target note. Returns
 /// `None` when no existing managed merge relation resolves, so callers
 /// keep a truthful generic closed-source error. Uses the normal parser
 /// and index with configured label normalization; never mints IDs.
-pub(crate) fn existing_merge_target_message(
+fn existing_merge_target_message(
     snapshot: &VaultSnapshot,
     source_path: &Path,
     source_block_id: &str,
-    context: &MergeContext<'_>,
+    task_settings: &NoteTaskSettings,
+    note_index: &NoteIndex,
 ) -> Option<String> {
     let contents = snapshot.notes.get(source_path)?;
-    let scan = note_tasks::scan(contents, context.task_settings);
+    let scan = note_tasks::scan(contents, task_settings);
     let source_task = scan
         .tasks()
         .iter()
         .find(|task| task.block_id.as_deref() == Some(source_block_id))?;
     let source_title = note_tasks::clean_description(
         &source_task.description,
-        &context.task_settings.global_filter,
+        &task_settings.global_filter,
         source_task.block_id.as_deref(),
     );
     let lines: Vec<&str> = contents.lines().collect();
@@ -915,9 +940,7 @@ pub(crate) fn existing_merge_target_message(
         &fenced,
         source_task.line_index,
     );
-    let index = context
-        .note_index
-        .with_additional(snapshot.notes.keys().cloned());
+    let index = note_index.with_additional(snapshot.notes.keys().cloned());
     for child in &children {
         let task_relations::LinksLine::Accepted { entries, .. } = &child.parsed
         else {
@@ -940,8 +963,7 @@ pub(crate) fn existing_merge_target_message(
             let Some(target_contents) = snapshot.notes.get(&target_path) else {
                 continue;
             };
-            let target_scan =
-                note_tasks::scan(target_contents, context.task_settings);
+            let target_scan = note_tasks::scan(target_contents, task_settings);
             let Some(target_task) = target_scan.tasks().iter().find(|task| {
                 task.block_id.as_deref() == Some(target_block.as_str())
             }) else {
@@ -949,7 +971,7 @@ pub(crate) fn existing_merge_target_message(
             };
             let target_title = note_tasks::clean_description(
                 &target_task.description,
-                &context.task_settings.global_filter,
+                &task_settings.global_filter,
                 target_task.block_id.as_deref(),
             );
             if target_title.is_empty() {
@@ -1791,14 +1813,13 @@ pub(crate) fn apply_retirement(
     if request.gesture == MergeGesture::Explicit {
         for source in &prepared.sources {
             if source.disposition != SourceDisposition::Open {
-                let message = existing_merge_target_message(
+                return Err(closed_source_refusal(
                     snapshot,
                     &source.path,
                     &source.block_id,
-                    context,
-                )
-                .unwrap_or_else(|| format!("^{} is closed", source.block_id));
-                return Err(MergeError::new("merge_source_closed", message));
+                    context.task_settings,
+                    context.note_index,
+                ));
             }
         }
     }

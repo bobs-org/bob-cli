@@ -83,14 +83,13 @@ pub(crate) fn plan_task_merge_with_selected_freshness(
         if request.gesture == MergeGesture::Explicit
             && outcome == SourceOutcome::AlreadyClosed
         {
-            let message = retirement::existing_merge_target_message(
+            return Err(retirement::closed_source_refusal(
                 snapshot,
                 &located.path,
                 &locator.block_id,
-                context,
-            )
-            .unwrap_or_else(|| format!("^{} is closed", locator.block_id));
-            return Err(MergeError::new("merge_source_closed", message));
+                context.task_settings,
+                context.note_index,
+            ));
         }
         if target_identity.as_ref()
             == Some(&(

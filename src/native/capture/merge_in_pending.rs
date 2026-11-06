@@ -3,6 +3,8 @@
 use super::*;
 use crate::native::capture_language::merge_in::{self as lexer, MergeInScan};
 use crate::native::note_tasks::BlockIdLookup;
+use crate::native::task_merge;
+use crate::native::vault_links::NoteIndex;
 use serde_json::{json, Value};
 
 pub(super) fn attach(error: &mut CaptureError, request: &CaptureRequest) {
@@ -87,8 +89,14 @@ fn source_json(
     match scan.by_block_id(&source.block_id) {
         BlockIdLookup::Found(task) => {
             let title = task.description.clone();
-            let mergeability =
-                mergeability_json(contents, task, settings, &source.block_id);
+            let mergeability = mergeability_json(
+                snapshot,
+                &path,
+                contents,
+                task,
+                settings,
+                &source.block_id,
+            );
             let mut row = json!({
                 "marker": source.marker,
                 "block_id": source.block_id,
@@ -121,63 +129,49 @@ fn source_json(
     }
 }
 
-/// Mergeability for a successfully located source row. Open status,
-/// recurrence, project identity, and open subtasks decide; every
-/// successfully located row is not reported as mergeable. Reads only,
-/// never mints IDs or writes.
+/// Mergeability for a successfully located source row, decided by the merge
+/// engine's own source refusals in execution order: recurring or `^prj`,
+/// open subtasks, then closed (with the already-merged teaching copy). Reads
+/// only; never mints IDs or writes.
 fn mergeability_json(
+    snapshot: &crate::native::task_move::VaultSnapshot,
+    path: &Path,
     contents: &str,
     task: &note_tasks::NoteTask,
     settings: &note_tasks::NoteTaskSettings,
     block_id: &str,
 ) -> Value {
-    if !task.status_type.is_open() {
-        return json!({
-            "mergeable": false,
-            "mergeable_code": "merge_source_closed",
-            "mergeable_message": format!("^{block_id} is closed"),
-        });
-    }
     let lines = line_spans(contents);
-    if let Some(line) = lines.get(task.line_index)
-        && crate::native::task_complete::is_recurring_task_line(line.text)
-    {
-        return json!({
-            "mergeable": false,
-            "mergeable_code": "merge_source_recurring",
-            "mergeable_message": format!("^{block_id} is recurring"),
-        });
-    }
-    if task.block_id.as_deref() == Some("prj") {
-        return json!({
-            "mergeable": false,
-            "mergeable_code": "merge_source_project",
-            "mergeable_message": "the ^prj task cannot be merged".to_string(),
-        });
-    }
+    let source_line = lines
+        .get(task.line_index)
+        .map(|line| line.text)
+        .unwrap_or_default();
     let scan = note_tasks::scan(contents, settings);
-    let open_nested = scan
-        .tasks()
-        .iter()
-        .filter(|candidate| candidate.line_index > task.line_index)
-        .filter(|candidate| candidate.status_type.is_open())
-        .filter(|candidate| {
-            lines
-                .get(candidate.line_index)
-                .is_some_and(|line| line.end <= task.block_end)
-        })
-        .count();
-    if open_nested > 0 {
-        return json!({
+    let refusal =
+        task_merge::source_identity_refusal(source_line, task, block_id)
+            .or_else(|| {
+                task_merge::open_subtasks_refusal(
+                    task,
+                    task_merge::open_subtask_count(scan.tasks(), &lines, task),
+                )
+            })
+            .or_else(|| {
+                (!task.status_type.is_open()).then(|| {
+                    let index =
+                        NoteIndex::from_paths(snapshot.notes.keys().cloned());
+                    task_merge::closed_source_refusal(
+                        snapshot, path, block_id, settings, &index,
+                    )
+                })
+            });
+    match refusal {
+        Some(refusal) => json!({
             "mergeable": false,
-            "mergeable_code": "merge_source_open_subtasks",
-            "mergeable_message": format!(
-                "“{}” has {open_nested} open subtasks; move or close ^{block_id} first",
-                task.description,
-            ),
-        });
+            "mergeable_code": refusal.code,
+            "mergeable_message": refusal.message,
+        }),
+        None => json!({ "mergeable": true }),
     }
-    json!({ "mergeable": true })
 }
 
 fn source_error(

@@ -472,8 +472,10 @@ fn merge_in_same_note_anchor_collision_repairs_payload_and_inbound_link() {
         })
         .expect("source child row carries its merge origin");
     let moved_text = moved["text"].as_str().unwrap();
-    let moved_anchor =
-        moved_text.split('^').last().expect("source child anchor");
+    let moved_anchor = moved_text
+        .split('^')
+        .next_back()
+        .expect("source child anchor");
     assert!(!moved_anchor.is_empty(), "{moved_text}");
     let target_note = fs::read_to_string(vault.join("a.md")).unwrap();
     assert_eq!(target_note.matches("^detail\n").count(), 1, "{target_note}");
@@ -795,8 +797,21 @@ fn merge_in_task_list_bullets_write_each_target_and_source() {
 
 #[test]
 fn merge_in_dry_run_matches_commit_and_reconcile_is_a_noop() {
-    for pick in ["none", "all"] {
+    // Offer choices, then targets that suppress the offer: scheduled and
+    // dependency-Blocked new targets, and a `:id` target the capture links.
+    for (case, draft, pick) in [
+        ("offer none", "New target @inbox^target < @a+f", "none"),
+        ("offer all", "New target @inbox^target < @a+f", "all"),
+        ("scheduled", "New target @inbox^target s:3 < @a+f", "all"),
+        (
+            "dependency blocked",
+            "New target @inbox^target &b:b < @a+f",
+            "all",
+        ),
+        ("already linked", "New target @inbox:target < @a+f", "all"),
+    ] {
         let (_temp, vault, day_file) = setup_merge_vault("merge_in_reconcile");
+        enable_blocked_status(&vault);
         for (path, contents) in [
             (
                 "a.md",
@@ -818,28 +833,29 @@ fn merge_in_dry_run_matches_commit_and_reconcile_is_a_noop() {
             "## Pomodoros\n\n- [ ] () — BUILD\n  - [[a#^f]]\n  - keep this slot\n",
         );
         let before = snapshot(&vault);
-        let dry = capture_with(
-            &vault,
-            &day_file,
-            "New target @inbox^target < @a+f",
-            true,
-            Some(pick),
-            None,
-        );
+        let dry =
+            capture_with(&vault, &day_file, draft, true, Some(pick), None);
         assert_success(&dry);
-        assert_eq!(snapshot(&vault), before, "dry-run writes nothing");
-        let live = capture_with(
-            &vault,
-            &day_file,
-            "New target @inbox^target < @a+f",
-            false,
-            Some(pick),
-            None,
-        );
+        assert_eq!(snapshot(&vault), before, "{case}: dry-run writes nothing");
+        let live =
+            capture_with(&vault, &day_file, draft, false, Some(pick), None);
         assert_success(&live);
         let mut dry_json = output_json(&dry);
         dry_json["dry_run"] = false.into();
-        assert_eq!(dry_json, output_json(&live));
+        let live_json = output_json(&live);
+        assert_eq!(dry_json, live_json, "{case}");
+        if !case.starts_with("offer") {
+            assert!(
+                item(&live_json)["merges"][0]["offers"]
+                    .as_array()
+                    .is_some_and(Vec::is_empty),
+                "{case}: target gets no replacement offer: {live_json}"
+            );
+            assert!(
+                !fs::read_to_string(&day_file).unwrap().contains("[[a#^f]]"),
+                "{case}: the source link is still pruned"
+            );
+        }
 
         let after_capture = snapshot(&vault);
         let reconcile = bob_command()
@@ -851,7 +867,11 @@ fn merge_in_dry_run_matches_commit_and_reconcile_is_a_noop() {
             .output()
             .expect("run bob task reconcile");
         assert_success(&reconcile);
-        assert_eq!(snapshot(&vault), after_capture, "reconcile is a no-op");
+        assert_eq!(
+            snapshot(&vault),
+            after_capture,
+            "{case}: reconcile is a no-op"
+        );
     }
 }
 
@@ -1102,6 +1122,99 @@ fn merge_in_pending_reports_closed_source_as_unmergeable() {
         sources[0]["mergeable_code"], "merge_source_closed",
         "{json}"
     );
+}
+
+#[test]
+fn merge_in_human_output_prints_new_target_header_once() {
+    let (_temp, vault, day_file) = setup_merge_vault("merge_in_human_header");
+    let before = snapshot(&vault);
+    let dry = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--dry-run")
+        .arg("--")
+        .arg("New target @inbox^target < @a+f @b+b")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", NOW)
+        .output()
+        .expect("run dry-run capture");
+    assert_success(&dry);
+    assert_eq!(snapshot(&vault), before, "dry run writes nothing");
+    let dry_text = String::from_utf8_lossy(&dry.stdout);
+    assert!(dry_text.contains("- [ ] #task New target"), "{dry_text}");
+    assert_eq!(
+        dry_text
+            .matches("⤵ Would merge 2 tasks into new “New target” · inbox.md")
+            .count(),
+        1,
+        "{dry_text}"
+    );
+
+    let live =
+        capture_human(&vault, &day_file, "New target @inbox^target < @a+f");
+    assert_success(&live);
+    let text = String::from_utf8_lossy(&live.stdout);
+    assert!(text.contains("- [ ] #task New target"), "{text}");
+    assert_eq!(text.matches('⤵').count(), 1, "one merge block: {text}");
+    assert!(
+        text.contains("⤵ Merged 1 task into new “New target” · inbox.md"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Fix the flaky login test")
+            && text.contains("→ Cancelled · 1 note moved"),
+        "{text}"
+    );
+}
+
+#[test]
+fn merge_in_pending_mergeability_matches_execution_refusals() {
+    let (_temp, vault, day_file) =
+        setup_merge_vault("merge-in-pending-engine-parity");
+    let first =
+        capture_json(&vault, &day_file, "First target @inbox < @a+f", false);
+    assert_success(&first);
+    write_file(
+        &vault.join("b.md"),
+        &area_with_tasks(
+            "- [ ] #task Login timeout too short ^b\n\t- [ ] #task Open child\n",
+        ),
+    );
+
+    let json = pending_json(&vault, &day_file, "Second < @a+f @b+b @c");
+    let sources = json["merge_in_pending"]["sources"]
+        .as_array()
+        .expect("sources array")
+        .clone();
+    assert_eq!(sources.len(), 2, "{json}");
+    for (source, draft) in [
+        (&sources[0], "Second @inbox < @a+f"),
+        (&sources[1], "Second @inbox < @b+b"),
+    ] {
+        assert_eq!(source["mergeable"], false, "{json}");
+        let execution = capture_json(&vault, &day_file, draft, true);
+        assert!(!execution.status.success(), "{}", format_output(&execution));
+        let refusal = output_json(&execution);
+        assert_eq!(source["mergeable_code"], refusal["code"], "{refusal}");
+        let message = source["mergeable_message"].as_str().unwrap_or_default();
+        assert!(!message.is_empty(), "{json}");
+        assert!(
+            refusal["error"]
+                .as_str()
+                .unwrap_or_default()
+                .ends_with(message),
+            "pending copy matches execution: {message} vs {refusal}"
+        );
+    }
+    assert!(
+        sources[0]["mergeable_message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("already merged into “First target”"),
+        "{json}"
+    );
+    assert_eq!(sources[1]["mergeable_code"], "merge_source_open_subtasks");
 }
 
 #[test]
