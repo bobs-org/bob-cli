@@ -55,8 +55,22 @@ pub(crate) struct DraftCompose<'a> {
 }
 
 /// Opaque ID returned by the remote draft create/update call.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DraftReceipt {
     pub(crate) id: String,
+}
+
+/// Sent message identity returned by `drafts send`.
+///
+/// gog v0.44.0 `gmail drafts send <draftId>` submits only the recorded draft
+/// ID. Google deletes the sent draft and creates a different message with the
+/// SENT label, so the returned message ID never equals the draft ID. The
+/// decoder accepts both the bare message envelope and the nested
+/// `{"message": ...}` shape without echoing response bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SentReceipt {
+    pub(crate) message_id: String,
+    pub(crate) thread_id: String,
 }
 
 fn read_flags(account: &str) -> Vec<OsString> {
@@ -168,6 +182,36 @@ impl Gog {
         let output = self.run(args).map_err(redact_gmail_draft_error)?;
         GmailDraft::from_gog_json(output.stdout.as_bytes())
             .map_err(|_| bad_draft_response("gog returned an invalid draft"))
+    }
+
+    /// Submit exactly the recorded draft ID.
+    ///
+    /// This is the only mutating Gmail send in the compose boundary. It
+    /// enables solely `gmail.drafts.send` through an exact-command allowlist
+    /// and intentionally omits both `--readonly` and `--gmail-no-send` only
+    /// here, after the caller has validated an approved confirmation. There
+    /// is no general mutating runner and no direct `messages.send` path.
+    /// The draft ID travels as a positional argument, never as message text.
+    pub(crate) fn draft_send(
+        &self,
+        account: &str,
+        draft_id: &str,
+    ) -> Result<SentReceipt, GmailError> {
+        if !valid_draft_id(draft_id) {
+            return Err(GmailError::setup(
+                "draft_id",
+                "the recorded Gmail draft id is invalid".to_string(),
+            ));
+        }
+        let mut args = draft_send_flags(account);
+        args.extend([
+            OsString::from("gmail"),
+            OsString::from("drafts"),
+            OsString::from("send"),
+            OsString::from(draft_id),
+        ]);
+        let output = self.run(args).map_err(redact_gmail_send_error)?;
+        parse_sent_receipt(&output.stdout)
     }
 
     /// Fetch a thread's headers and message dates without requesting bodies.
@@ -390,6 +434,21 @@ fn draft_base_flags(account: &str) -> Vec<OsString> {
     ]
 }
 
+fn draft_send_flags(account: &str) -> Vec<OsString> {
+    vec![
+        OsString::from("--no-input"),
+        OsString::from("--json"),
+        OsString::from("--color"),
+        OsString::from("never"),
+        OsString::from("--client"),
+        OsString::from(CLIENT),
+        OsString::from("--account"),
+        OsString::from(account),
+        OsString::from("--enable-commands-exact"),
+        OsString::from("gmail.drafts.send"),
+    ]
+}
+
 fn append_draft_compose(
     args: &mut Vec<OsString>,
     compose: &DraftCompose<'_>,
@@ -472,8 +531,74 @@ fn valid_draft_id(value: &str) -> bool {
         })
 }
 
+fn valid_sent_id(value: &str) -> bool {
+    valid_draft_id(value)
+}
+
+fn parse_sent_receipt(stdout: &str) -> Result<SentReceipt, GmailError> {
+    let value: serde_json::Value = serde_json::from_str(stdout.trim())
+        .map_err(|_| {
+            bad_draft_response("gog returned an invalid send receipt")
+        })?;
+    let envelope = value.get("message").unwrap_or(&value);
+    let message_id = envelope
+        .get("id")
+        .or_else(|| envelope.get("messageId"))
+        .or_else(|| value.get("messageId"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|id| valid_sent_id(id))
+        .ok_or_else(|| {
+            bad_draft_response("gog returned no valid sent message id")
+        })?;
+    let thread_id = envelope
+        .get("threadId")
+        .or_else(|| envelope.get("thread_id"))
+        .or_else(|| value.get("threadId"))
+        .or_else(|| value.get("thread_id"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|id| valid_sent_id(id))
+        .ok_or_else(|| {
+            bad_draft_response("gog returned no valid sent thread id")
+        })?;
+    Ok(SentReceipt {
+        message_id: message_id.to_string(),
+        thread_id: thread_id.to_string(),
+    })
+}
+
 fn bad_draft_response(message: &str) -> GmailError {
     GmailError::runtime("bad_json", message.to_string())
+}
+
+fn redact_gmail_send_error(error: GmailError) -> GmailError {
+    let (message, hint) = match error.kind() {
+        "not_found" => (
+            "the recorded Gmail draft no longer exists; recovery will determine whether it was sent",
+            None,
+        ),
+        "invalid_grant" => ("the bob-gmail sign-in needs renewal", None),
+        "not_logged_in" => ("no bob-gmail Gmail grant is stored", None),
+        "insufficient_scope" => (
+            "the bob-gmail grant lacks the compose scope",
+            Some(
+                "run `bob gmail login -s compose` on the approved compose host",
+            ),
+        ),
+        "network" => (
+            "gog could not reach Google while sending the draft",
+            None,
+        ),
+        "timeout" => ("gog timed out while sending the draft", None),
+        "api_disabled" => {
+            ("the Gmail API is not enabled for this Cloud project", None)
+        }
+        _ => ("gog could not complete the Gmail send operation", None),
+    };
+    let mut redacted = GmailError::runtime(error.kind(), message.to_string());
+    if let Some(hint) = hint {
+        redacted = redacted.with_hint(hint);
+    }
+    redacted
 }
 
 fn redact_gmail_draft_error(error: GmailError) -> GmailError {
@@ -836,6 +961,66 @@ mod tests {
             "PRIVATE_SENTINEL gone".to_string(),
         ));
         assert_eq!(error.kind(), "not_found");
+        assert!(!error.message().contains("PRIVATE_SENTINEL"));
+    }
+
+    #[test]
+    fn send_flags_enable_only_drafts_send_without_read_guards() {
+        let argv = draft_send_flags("you@example.com");
+        let args: Vec<String> = argv
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        for flag in ["--no-input", "--json", "--client", "--account"] {
+            assert!(
+                args.iter().any(|arg| arg == flag),
+                "missing {flag}: {args:?}"
+            );
+        }
+        assert!(
+            !args.iter().any(|arg| arg == "--readonly"),
+            "send must omit --readonly: {args:?}"
+        );
+        assert!(
+            !args.iter().any(|arg| arg == "--gmail-no-send"),
+            "send must omit --gmail-no-send: {args:?}"
+        );
+        let exact = args
+            .windows(2)
+            .find(|pair| pair[0] == "--enable-commands-exact")
+            .map(|pair| pair[1].clone())
+            .expect("exact allowlist must be present");
+        assert_eq!(exact, "gmail.drafts.send");
+        assert!(args.iter().any(|arg| arg == "you@example.com"));
+    }
+
+    #[test]
+    fn send_receipt_accepts_bare_and_nested_shapes_body_free() {
+        let bare =
+            parse_sent_receipt(r#"{"id":"sent-1","threadId":"thread-1"}"#)
+                .expect("bare shape");
+        assert_eq!(bare.message_id, "sent-1");
+        assert_eq!(bare.thread_id, "thread-1");
+        let nested = parse_sent_receipt(
+            r#"{"message":{"id":"sent-2","threadId":"thread-2"}}"#,
+        )
+        .expect("nested shape");
+        assert_eq!(nested.message_id, "sent-2");
+        assert_eq!(nested.thread_id, "thread-2");
+        for bad in [
+            r#"{"id":"","threadId":"thread-1"}"#.to_string(),
+            r#"{"message":{"id":"sent-1"}}"#.to_string(),
+            "SECRET-SEND-BYTES {{{".to_string(),
+        ] {
+            let error = parse_sent_receipt(&bad).err().expect("fail");
+            assert_eq!(error.kind(), "bad_json");
+            assert!(!error.message().contains("SECRET"));
+        }
+        let error = redact_gmail_send_error(GmailError::runtime(
+            "timeout",
+            "PRIVATE_SENTINEL slow".to_string(),
+        ));
+        assert_eq!(error.kind(), "timeout");
         assert!(!error.message().contains("PRIVATE_SENTINEL"));
     }
 

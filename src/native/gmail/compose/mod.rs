@@ -27,6 +27,12 @@ pub(super) mod draft;
 // The draft transport phase consumes the render and attachment boundaries.
 #[allow(dead_code)]
 pub(crate) mod render;
+// The send-recovery engine stays internal until the confirmed send lands.
+#[allow(dead_code)]
+pub(crate) mod send;
+// Durable send state transitions shared by recovery and the confirmed send.
+#[allow(dead_code)]
+pub(crate) mod state;
 // The following compose and draft phases consume the full source model.
 #[allow(dead_code)]
 pub(crate) mod source;

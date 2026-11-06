@@ -66,6 +66,7 @@ pub(crate) enum SourceError {
     InvalidDraftId,
     MissingReplyTarget,
     MissingComposeHeading,
+    InvalidSendState,
 }
 
 impl std::fmt::Display for SourceError {
@@ -100,6 +101,9 @@ impl std::fmt::Display for SourceError {
             }
             Self::MissingComposeHeading => {
                 "compose note has no level-one title heading"
+            }
+            Self::InvalidSendState => {
+                "compose note has an invalid durable send state"
             }
         })
     }

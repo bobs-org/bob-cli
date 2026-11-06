@@ -301,6 +301,8 @@ def op_name() -> str:
     if pos[:2] == ["gmail", "drafts"]:
         if len(pos) > 2 and pos[2] in {"create", "update", "get"}:
             return "draft_" + pos[2]
+        if len(pos) > 2 and pos[2] == "send":
+            return "draft_send"
         return "forbidden_send"
     if pos[:3] == ["gmail", "thread", "get"]:
         return "thread_get"
@@ -635,6 +637,65 @@ if op in {"draft_create", "draft_update", "draft_get"}:
     dump({"draft": {"id": draft_id, "message": draft.get("message")}})
     raise SystemExit(0)
 
+if op == "draft_send":
+    if "--gmail-no-send" in args:
+        fail("fake gog: drafts send must omit --gmail-no-send", 2)
+    if "--readonly" in args:
+        fail("fake gog: drafts send must omit --readonly", 2)
+    if flag_value("--enable-commands-exact") != "gmail.drafts.send":
+        fail("fake gog: drafts send has an unexpected exact-command allowlist", 2)
+    draft_id = pos[3] if len(pos) > 3 else ""
+    drafts = state.setdefault("drafts", {})
+    draft = drafts.get(draft_id)
+    if draft is None:
+        fail("notFound: synthetic draft missing", 1)
+    previous = draft.get("message") or {}
+    thread_id = previous.get("threadId") or "thread-draft-1"
+    to = list(draft.get("to") or [])
+    cc = list(draft.get("cc") or [])
+    bcc = list(draft.get("bcc") or [])
+    subject = draft.get("subject") or ""
+    in_reply_to = draft.get("in_reply_to")
+    references = draft.get("references")
+    seq = int(state.get("sent_seq") or 0) + 1
+    state["sent_seq"] = seq
+    sent_id = f"sent-{seq}"
+    rfc = f"<sent-{seq}@example.test>"
+    headers = [
+        {"name": "From", "value": EMAIL},
+        {"name": "Subject", "value": subject},
+    ]
+    if to:
+        headers.append({"name": "To", "value": ", ".join(to)})
+    if cc:
+        headers.append({"name": "Cc", "value": ", ".join(cc)})
+    if bcc:
+        headers.append({"name": "Bcc", "value": ", ".join(bcc)})
+    headers.append({"name": "Message-ID", "value": rfc})
+    if in_reply_to:
+        headers.append({"name": "In-Reply-To", "value": in_reply_to})
+    if references:
+        headers.append({"name": "References", "value": references})
+    message = {
+        "id": sent_id,
+        "threadId": thread_id,
+        "labelIds": ["SENT"],
+        "internalDate": str(int(time.time() * 1000)),
+        "payload": {
+            "mimeType": "text/plain",
+            "headers": headers,
+            "body": {"size": 5, "data": b64url(b"hello")},
+        },
+    }
+    sent_threads = state.setdefault("sent_threads", {})
+    entry = sent_threads.get(thread_id) or {"id": thread_id, "messages": []}
+    entry["messages"].append(message)
+    sent_threads[thread_id] = entry
+    del drafts[draft_id]
+    save_state(state)
+    dump({"message": {"id": sent_id, "threadId": thread_id}})
+    raise SystemExit(0)
+
 if op == "forbidden_send":
     fail("fake gog: direct send commands are forbidden", 2)
 
@@ -752,7 +813,27 @@ if op == "auth_remove":
 if op == "search":
     query = pos[2] if len(pos) > 2 else ""
     page = flag_value("--page")
-    if scenario in {"gmail_pull_one", "gmail_pull_many"} and query.startswith("label:"):
+    if "in:sent" in query:
+        sent_threads = state.get("sent_threads") or {}
+        ids = []
+        if "rfc822msgid:" in query:
+            rfc = query.split("rfc822msgid:", 1)[1].split()[0]
+            for thread_id, entry in sent_threads.items():
+                for item in entry.get("messages", []):
+                    for header in (item.get("payload") or {}).get("headers", []):
+                        if header.get("name", "").lower() == "message-id" and header.get("value", "").strip() == rfc.strip():
+                            ids.append(thread_id)
+                            break
+        else:
+            ids = list(sent_threads.keys())
+        dump(
+            {
+                "threads": [{"id": thread_id} for thread_id in ids],
+                "nextPageToken": None,
+                "resultSizeEstimate": len(ids),
+            }
+        )
+    elif scenario in {"gmail_pull_one", "gmail_pull_many"} and query.startswith("label:"):
         ids = ["0123456789abcdef"]
         if scenario == "gmail_pull_many":
             ids.append("aaaaaaaaaaaaaaaa")
@@ -855,6 +936,11 @@ if op == "thread_get":
         dump(state["thread"])
         raise SystemExit(0)
     hex_id = pos[3] if len(pos) > 3 else "1a0b9eb2cc26ab96"
+    sent_threads = state.get("sent_threads") or {}
+    if hex_id in sent_threads:
+        entry = sent_threads[hex_id]
+        dump({"thread": {"id": hex_id, "historyId": "1", "messages": entry.get("messages", [])}})
+        raise SystemExit(0)
     if scenario == "thread_mismatch":
         hex_id = "aaaaaaaaaaaaaaaa"
     if flag_value("--format") == "metadata":
