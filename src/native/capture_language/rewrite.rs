@@ -43,6 +43,7 @@ pub(crate) enum RewriteRule {
     AbsorbDeclaration,
     SwitchBlockIdSeparator,
     AttachRelationLabel,
+    ToggleRelationDirection,
     ExpandSigilAlias,
 }
 
@@ -53,6 +54,7 @@ impl RewriteRule {
             Self::AbsorbDeclaration => "absorb_declaration",
             Self::SwitchBlockIdSeparator => "switch_block_id_separator",
             Self::AttachRelationLabel => "attach_relation_label",
+            Self::ToggleRelationDirection => "toggle_relation_direction",
             Self::ExpandSigilAlias => "expand_sigil_alias",
         }
     }
@@ -99,6 +101,11 @@ pub(crate) fn rewrite_draft(
         return rewrite;
     }
     if let Some(position) = cursor
+        && let Some(rewrite) = toggle_relation_direction(raw_text, position)
+    {
+        return rewrite;
+    }
+    if let Some(position) = cursor
         && let Some(rewrite) = expand_sigil_alias(raw_text, position)
     {
         return rewrite;
@@ -115,22 +122,18 @@ pub(crate) fn rewrite_draft(
 /// marker is also accepted. A comma glued to a complete target-run member
 /// instead inserts ` +` to open the next parent-task picker. Typing `=` right
 /// after a bare `~` that opens the Links To picker turns it into `~~` (Linked
-/// From); typing `=` right after a `-` that would alias `~` turns the pair into
-/// `~~`. Everywhere else `=` stays literal, including after `~~` and inside a
-/// wikilink.
+/// From), while `~~=` turns back into `~`. A spaced `=` aliases `~` only where
+/// a bare relation sigil would open Links To. Everywhere else `=` stays literal,
+/// including inside a wikilink.
 fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
     let start = cursor.checked_sub(1)?;
     let alias = raw_text.get(start..cursor)?;
     if alias == "-" {
-        if let Some(rewrite) =
-            expand_past_segment_dash_alias(raw_text, start, cursor)
-        {
-            return Some(rewrite);
-        }
-        return expand_relation_dash_alias(raw_text, start, cursor);
+        return expand_past_segment_dash_alias(raw_text, start, cursor);
     }
     if alias == "=" {
-        return expand_relation_flip_alias(raw_text, start, cursor);
+        return expand_relation_flip_alias(raw_text, start, cursor)
+            .or_else(|| expand_relation_equals_alias(raw_text, start, cursor));
     }
     if alias == "\\" || alias == "/" {
         return expand_hash_alias(raw_text, start, cursor, alias);
@@ -302,15 +305,15 @@ fn expand_past_segment_dash_alias(
     ))
 }
 
-/// Typing `-` after whitespace aliases `~` only where a bare relation sigil
+/// Typing `=` after whitespace aliases `~` only where a bare relation sigil
 /// would open the Links To picker. Line and bullet starts, code spans, and
 /// wikilink fields stay literal.
-fn expand_relation_dash_alias(
+fn expand_relation_equals_alias(
     raw_text: &str,
     start: usize,
     cursor: usize,
 ) -> Option<DraftRewrite> {
-    if !relation_dash_position_ok(raw_text, start) {
+    if !relation_alias_position_ok(raw_text, start) {
         return None;
     }
 
@@ -327,24 +330,24 @@ fn expand_relation_dash_alias(
     }
 
     Some(finish_sigil_alias(
-        raw_text, &candidate, start, cursor, '~', "-",
+        raw_text, &candidate, start, cursor, '~', "=",
     ))
 }
 
-fn relation_dash_position_ok(raw_text: &str, dash_start: usize) -> bool {
-    if dash_start == 0
+fn relation_alias_position_ok(raw_text: &str, alias_start: usize) -> bool {
+    if alias_start == 0
         || !matches!(
-            raw_text.as_bytes().get(dash_start - 1),
+            raw_text.as_bytes().get(alias_start - 1),
             Some(b' ' | b'\t')
         )
     {
         return false;
     }
 
-    let line_start = raw_text[..dash_start]
+    let line_start = raw_text[..alias_start]
         .rfind('\n')
         .map_or(0, |index| index + 1);
-    let mut prefix = match raw_text.get(line_start..dash_start) {
+    let mut prefix = match raw_text.get(line_start..alias_start) {
         Some(prefix) => prefix,
         None => return false,
     };
@@ -379,12 +382,10 @@ fn wikilink_claims(candidate: &str, cursor: usize) -> bool {
         .is_some()
 }
 
-/// Typing `=` right after a bare `~` (or right after a `-` that would alias
-/// `~`) flips a Links To relation into Linked From (`~~`). The candidate is
-/// checked by the ordinary completion grammar: it must open an empty
-/// `RelationFrom` target ending at the caret. `~~=`, glued text after the
-/// caret, mid-line prose, and wikilink fields stay literal. No backtick guard:
-/// the user typed the `~` themselves and Bob already opens the picker for it.
+/// Typing `=` right after `~` flips a Links To relation into Linked From;
+/// typing it after `~~` flips back to Links To. Both candidates are checked by
+/// Bob's ordinary completion grammar, so `~~=` only becomes `~` where that
+/// leaves an empty `RelationTo` field.
 fn expand_relation_flip_alias(
     raw_text: &str,
     start: usize,
@@ -397,7 +398,30 @@ fn expand_relation_flip_alias(
     match bytes.get(start - 1) {
         Some(b'~') => {
             if start >= 2 && matches!(bytes.get(start - 2), Some(b'~')) {
-                return None;
+                let remove_start = start - 1;
+                let mut candidate = raw_text.to_string();
+                candidate.replace_range(remove_start..cursor, "");
+                let candidate_cursor = cursor - 2;
+                if wikilink_claims(&candidate, candidate_cursor) {
+                    return None;
+                }
+                let field = super::completion::completion_field_at(
+                    &candidate,
+                    candidate_cursor,
+                )?;
+                if field.context
+                    != super::completion::CompletionContext::RelationTo
+                    || field.replacement != (start - 2, candidate_cursor)
+                {
+                    return None;
+                }
+                return Some(finish_relation_double_flip_alias(
+                    raw_text,
+                    &candidate,
+                    remove_start,
+                    cursor,
+                    candidate_cursor,
+                ));
             }
             let mut candidate = raw_text.to_string();
             candidate.replace_range(start..cursor, "~");
@@ -416,42 +440,21 @@ fn expand_relation_flip_alias(
                 raw_text, &candidate, start, cursor, '~', "=",
             ))
         }
-        Some(b'-') => {
-            if !relation_dash_position_ok(raw_text, start - 1) {
-                return None;
-            }
-            let edit_start = start - 1;
-            let mut candidate = raw_text.to_string();
-            candidate.replace_range(edit_start..cursor, "~~");
-            if wikilink_claims(&candidate, cursor) {
-                return None;
-            }
-            let field =
-                super::completion::completion_field_at(&candidate, cursor)?;
-            if field.context
-                != super::completion::CompletionContext::RelationFrom
-                || field.replacement != (edit_start, cursor)
-            {
-                return None;
-            }
-            Some(finish_relation_flip_dash_alias(
-                raw_text, &candidate, edit_start, cursor,
-            ))
-        }
         _ => None,
     }
 }
 
-fn finish_relation_flip_dash_alias(
+fn finish_relation_double_flip_alias(
     raw_text: &str,
     candidate: &str,
     edit_start: usize,
     cursor: usize,
+    candidate_cursor: usize,
 ) -> DraftRewrite {
     let edits = vec![TextEdit {
         start: edit_start,
         end: cursor,
-        replacement: "~~".to_string(),
+        replacement: String::new(),
     }];
     let text = apply_text_edits(raw_text, &edits);
     debug_assert_eq!(text, candidate);
@@ -459,8 +462,8 @@ fn finish_relation_flip_dash_alias(
         rule: Some(RewriteRule::ExpandSigilAlias),
         edits,
         text,
-        cursor: Some(cursor),
-        summary: Some("Typed ~~ for -=".to_string()),
+        cursor: Some(candidate_cursor),
+        summary: Some("Typed ~ for ~~=".to_string()),
         notices: Vec::new(),
     }
 }
@@ -1337,6 +1340,150 @@ fn attach_relation_label(
         text,
         cursor: Some(candidate_cursor),
         summary: Some(format!("Attached {} to {token_text}", token.text)),
+        notices: Vec::new(),
+    })
+}
+
+/// A glued `~` or `=` after a complete relation token flips its direction.
+/// The scan runs with the trigger removed, then Bob's completion grammar must
+/// agree that the caret is in that relation target or label field. This keeps
+/// syntax decisions out of weaker token lexing and leaves pasted text literal.
+fn toggle_relation_direction(
+    raw_text: &str,
+    cursor: usize,
+) -> Option<DraftRewrite> {
+    let trigger_start = cursor.checked_sub(1)?;
+    let trigger = *raw_text.as_bytes().get(trigger_start)?;
+    if !matches!(trigger, b'~' | b'=')
+        || cursor > raw_text.len()
+        || !raw_text.is_char_boundary(trigger_start)
+        || !raw_text.is_char_boundary(cursor)
+    {
+        return None;
+    }
+
+    let mut stripped = raw_text.to_string();
+    stripped.replace_range(trigger_start..cursor, "");
+    let line_start = stripped[..trigger_start]
+        .rfind('\n')
+        .map_or(0, |index| index + 1);
+    let line_end = stripped[trigger_start..]
+        .find('\n')
+        .map_or(stripped.len(), |offset| trigger_start + offset);
+    let line = stripped.get(line_start..line_end)?;
+    let relation = super::relations::scan_line_relations(line, line_start)
+        .into_iter()
+        .find_map(|scanned| match scanned {
+            super::relations::ScannedRelation::Complete(relation)
+                if relation.end == trigger_start =>
+            {
+                Some(relation)
+            }
+            _ => None,
+        })?;
+
+    // `=` is valid relation-label text. Only `~` is an unambiguous flip
+    // after a label.
+    if trigger == b'=' && relation.label.is_some() {
+        return None;
+    }
+
+    let field =
+        super::completion::completion_field_at(&stripped, trigger_start)?;
+    let eligible = if let Some((separator, _)) = relation.separator {
+        relation.label.is_some()
+            && field.context
+                == super::completion::CompletionContext::RelationLabel
+            && field.replacement == (separator, relation.end)
+    } else {
+        let context = match relation.direction {
+            RelationDirection::To => {
+                super::completion::CompletionContext::RelationTo
+            }
+            RelationDirection::From => {
+                super::completion::CompletionContext::RelationFrom
+            }
+        };
+        relation.label.is_none()
+            && field.context == context
+            && field.replacement == (relation.start, relation.end)
+    };
+    if !eligible {
+        return None;
+    }
+
+    let (edits, new_cursor, new_direction) = match relation.direction {
+        RelationDirection::To => (
+            vec![
+                TextEdit {
+                    start: relation.start + 1,
+                    end: relation.start + 1,
+                    replacement: "~".to_string(),
+                },
+                TextEdit {
+                    start: trigger_start,
+                    end: cursor,
+                    replacement: String::new(),
+                },
+            ],
+            relation.end + 1,
+            RelationDirection::From,
+        ),
+        RelationDirection::From => (
+            vec![
+                TextEdit {
+                    start: relation.start + 1,
+                    end: relation.start + 2,
+                    replacement: String::new(),
+                },
+                TextEdit {
+                    start: trigger_start,
+                    end: cursor,
+                    replacement: String::new(),
+                },
+            ],
+            relation.end - 1,
+            RelationDirection::To,
+        ),
+    };
+    let text = apply_text_edits(raw_text, &edits);
+    let result_line_start =
+        text[..new_cursor].rfind('\n').map_or(0, |index| index + 1);
+    let result_line_end = text[new_cursor..]
+        .find('\n')
+        .map_or(text.len(), |offset| new_cursor + offset);
+    let result_line = text.get(result_line_start..result_line_end)?;
+    let validated =
+        super::relations::scan_line_relations(result_line, result_line_start)
+            .into_iter()
+            .find_map(|scanned| match scanned {
+                super::relations::ScannedRelation::Complete(candidate)
+                    if candidate.start == relation.start
+                        && candidate.end == new_cursor =>
+                {
+                    Some(candidate)
+                }
+                _ => None,
+            })?;
+    if validated.direction != new_direction
+        || validated.note != relation.note
+        || validated.block_id != relation.block_id
+        || validated.label != relation.label
+        || validated.hidden != relation.hidden
+    {
+        return None;
+    }
+
+    let summary = match new_direction {
+        RelationDirection::To => "Flipped to Links To",
+        RelationDirection::From => "Flipped to Linked From",
+    };
+    Some(DraftRewrite {
+        rule: Some(RewriteRule::ToggleRelationDirection),
+        edits,
+        text,
+        cursor: Some(new_cursor),
+        summary: Some(summary.to_string()),
         notices: Vec::new(),
     })
 }

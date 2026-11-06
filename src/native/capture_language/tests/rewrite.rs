@@ -775,17 +775,17 @@ fn rewrite_draft_expands_sigil_aliases_in_route_picker_positions() {
 }
 
 #[test]
-fn rewrite_draft_expands_relation_dash_alias() {
+fn rewrite_draft_expands_relation_equals_alias() {
     for (raw, expected) in [
-        ("Fix it -", "Fix it ~"),
-        ("Fix it\t-", "Fix it\t~"),
-        ("@bob+fix-retries -", "@bob+fix-retries ~"),
-        ("Fix it &dev:build -", "Fix it &dev:build ~"),
-        ("Buy milk\n- note -", "Buy milk\n- note ~"),
-        ("Buy milk\n\nFix it -", "Buy milk\n\nFix it ~"),
-        ("Fix [[note]] -", "Fix [[note]] ~"),
-        ("Fix it `code` -", "Fix it `code` ~"),
-        ("Café run -", "Café run ~"),
+        ("Fix it =", "Fix it ~"),
+        ("Fix it\t=", "Fix it\t~"),
+        ("@bob+fix-retries =", "@bob+fix-retries ~"),
+        ("Fix it &dev:build =", "Fix it &dev:build ~"),
+        ("Buy milk\n- note =", "Buy milk\n- note ~"),
+        ("Buy milk\n\nFix it =", "Buy milk\n\nFix it ~"),
+        ("Fix [[note]] =", "Fix [[note]] ~"),
+        ("Fix it `code` =", "Fix it `code` ~"),
+        ("Café run =", "Café run ~"),
     ] {
         let cursor = raw.len();
         let rewrite = rewrite_draft(raw, Some(cursor));
@@ -798,7 +798,7 @@ fn rewrite_draft_expands_relation_dash_alias() {
         assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
         assert_eq!(
             rewrite.summary.as_deref(),
-            Some("Typed ~ for -"),
+            Some("Typed ~ for ="),
             "{raw:?}"
         );
         assert_eq!(rewrite.edits.len(), 1, "{raw:?}");
@@ -814,28 +814,31 @@ fn rewrite_draft_expands_relation_dash_alias() {
 }
 
 #[test]
-fn rewrite_draft_relation_dash_alias_stays_literal() {
+fn rewrite_draft_relation_equals_alias_stays_literal() {
     let mut cases = vec![
-        ("-", 1),
-        ("  -", 3),
-        ("Buy milk\n-", 10),
-        ("Buy milk\n  -", 12),
-        ("- -", 3),
-        ("* -", 3),
-        ("+ -", 3),
-        ("Fix it\n\n- -", 11),
-        ("fix-", 4),
-        ("Fix it --", 9),
-        ("x -", 3),
-        ("=bugs -", 7),
-        ("+5 -", 4),
-        ("x\n- 1 work -", 12),
-        ("see [[foo -", 11),
-        ("Fix ((foo -", 11),
-        ("run `cargo -", 12),
+        ("=", 1),
+        ("=3", 1),
+        ("  =", 3),
+        ("Buy milk\n=", 10),
+        ("Buy milk\n  =", 12),
+        ("- =", 3),
+        ("* =", 3),
+        ("+ =", 3),
+        ("Fix it\n\n- =", 11),
+        ("fix=", 4),
+        ("Fix it ==", 9),
+        ("x =", 3),
+        ("x=2 =", 5),
+        ("=/ =", 4),
+        ("=bugs =", 7),
+        ("+5 =", 4),
+        ("x\n- 1 work =", 12),
+        ("see [[foo =", 11),
+        ("Fix ((foo =", 11),
+        ("run `cargo =", 12),
     ];
-    for raw in ["Fix it - about", "Fix it -foo"] {
-        cases.push((raw, raw.find('-').expect("dash") + 1));
+    for raw in ["Fix it = about", "Fix it =foo"] {
+        cases.push((raw, raw.find('=').expect("equals") + 1));
     }
     for (raw, cursor) in cases {
         let rewrite = rewrite_draft(raw, Some(cursor));
@@ -843,12 +846,12 @@ fn rewrite_draft_relation_dash_alias_stays_literal() {
         assert_eq!(rewrite.text, raw, "{raw:?} at {cursor}");
     }
 
-    let raw = "Fix it -";
+    let raw = "Fix it =";
     let rewrite = rewrite_draft(raw, None);
     assert_eq!(rewrite.rule, None);
     assert_eq!(rewrite.text, raw);
 
-    let raw = "Task {0} %t\n\nFix it -";
+    let raw = "Task {0} %t\n\nFix it =";
     let rewrite = rewrite_draft(raw, Some(raw.len()));
     assert_eq!(rewrite.rule, None);
     assert_eq!(rewrite.text, raw);
@@ -1613,13 +1616,13 @@ fn rewrite_draft_expands_relation_flip_alias() {
 }
 
 #[test]
-fn rewrite_draft_expands_relation_dash_flip_alias() {
+fn rewrite_draft_expands_relation_reverse_flip_alias() {
     for (raw, expected) in [
-        ("Fix it -=", "Fix it ~~"),
-        ("Fix it\t-=", "Fix it\t~~"),
-        ("@bob+fix-retries -=", "@bob+fix-retries ~~"),
-        ("Buy milk\n- note -=", "Buy milk\n- note ~~"),
-        ("Café run -=", "Café run ~~"),
+        ("Fix it ~~=", "Fix it ~"),
+        ("Fix it\t~~=", "Fix it\t~"),
+        ("@bob+fix-retries ~~=", "@bob+fix-retries ~"),
+        ("Buy milk\n- note ~~=", "Buy milk\n- note ~"),
+        ("Café run ~~=", "Café run ~"),
     ] {
         let cursor = raw.len();
         assert!(raw.is_char_boundary(cursor), "{raw:?}");
@@ -1630,10 +1633,10 @@ fn rewrite_draft_expands_relation_dash_flip_alias() {
             "{raw:?}"
         );
         assert_eq!(rewrite.text, expected, "{raw:?}");
-        assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
+        assert_eq!(rewrite.cursor, Some(cursor - 2), "{raw:?}");
         assert_eq!(
             rewrite.summary.as_deref(),
-            Some("Typed ~~ for -="),
+            Some("Typed ~ for ~~="),
             "{raw:?}"
         );
         assert_eq!(
@@ -1641,7 +1644,7 @@ fn rewrite_draft_expands_relation_dash_flip_alias() {
             vec![TextEdit {
                 start: cursor - 2,
                 end: cursor,
-                replacement: "~~".to_string(),
+                replacement: String::new(),
             }],
             "{raw:?}"
         );
@@ -1654,12 +1657,140 @@ fn rewrite_draft_expands_relation_dash_flip_alias() {
 }
 
 #[test]
+fn rewrite_draft_toggles_complete_relation_direction() {
+    for (raw, trigger, expected, summary) in [
+        (
+            "Fix it ~tasks:target~",
+            '~',
+            "Fix it ~~tasks:target",
+            "Flipped to Linked From",
+        ),
+        (
+            "Fix it ~tasks:target=",
+            '=',
+            "Fix it ~~tasks:target",
+            "Flipped to Linked From",
+        ),
+        (
+            "Fix it ~~tasks:source~",
+            '~',
+            "Fix it ~tasks:source",
+            "Flipped to Links To",
+        ),
+        (
+            "Fix it ~~tasks:source=",
+            '=',
+            "Fix it ~tasks:source",
+            "Flipped to Links To",
+        ),
+        (
+            "Fix it ~\"My Note\":target=",
+            '=',
+            "Fix it ~~\"My Note\":target",
+            "Flipped to Linked From",
+        ),
+        (
+            "Fix it ~café:target~",
+            '~',
+            "Fix it ~~café:target",
+            "Flipped to Linked From",
+        ),
+        (
+            "Fix it ~tasks:target|see~",
+            '~',
+            "Fix it ~~tasks:target|see",
+            "Flipped to Linked From",
+        ),
+        (
+            "Fix it ~~tasks:source||see~",
+            '~',
+            "Fix it ~tasks:source||see",
+            "Flipped to Links To",
+        ),
+        (
+            "Fix it ~tasks:target= ~tasks:other",
+            '=',
+            "Fix it ~~tasks:target ~tasks:other",
+            "Flipped to Linked From",
+        ),
+    ] {
+        let trigger_start = raw.rfind(trigger).expect("trigger");
+        let cursor = trigger_start + trigger.len_utf8();
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(
+            rewrite.rule,
+            Some(RewriteRule::ToggleRelationDirection),
+            "{raw:?}"
+        );
+        assert_eq!(rewrite.text, expected, "{raw:?}");
+        let expected_cursor = expected
+            .find(" and later")
+            .or_else(|| expected.find(" ~tasks:other"))
+            .unwrap_or(expected.len());
+        assert_eq!(rewrite.cursor, Some(expected_cursor), "{raw:?}");
+        assert_eq!(rewrite.summary.as_deref(), Some(summary), "{raw:?}");
+        assert_eq!(rewrite.edits.len(), 2, "{raw:?}");
+        assert!(
+            rewrite
+                .edits
+                .windows(2)
+                .all(|pair| pair[0].end <= pair[1].start),
+            "{raw:?}: {:?}",
+            rewrite.edits
+        );
+        for edit in &rewrite.edits {
+            assert!(raw.is_char_boundary(edit.start), "{raw:?}");
+            assert!(raw.is_char_boundary(edit.end), "{raw:?}");
+        }
+
+        let again = rewrite_draft(&rewrite.text, rewrite.cursor);
+        assert_eq!(again.rule, None, "idempotent {raw:?}");
+        assert_eq!(again.text, expected, "idempotent {raw:?}");
+    }
+}
+
+#[test]
+fn rewrite_draft_relation_direction_toggle_exclusions() {
+    let glued_after = "Fix it ~tasks:target~tail";
+    let glued_cursor = glued_after.find("~tail").expect("trigger") + 1;
+    let cases = [
+        ("Fix it ~tasks:target ~", "Fix it ~tasks:target ~".len()),
+        (glued_after, glued_cursor),
+        (
+            "Fix it ~tasks:target|see=",
+            "Fix it ~tasks:target|see=".len(),
+        ),
+        (r"Fix it \~tasks:target~", r"Fix it \~tasks:target~".len()),
+        ("Fix `~tasks:target` ~", "Fix `~tasks:target` ~".len()),
+        ("Fix [[~tasks:target]] ~", "Fix [[~tasks:target]] ~".len()),
+        ("Fix it ~tasks:~", "Fix it ~tasks:~".len()),
+        (
+            "Fix it ~tasks:bad|||label~",
+            "Fix it ~tasks:bad|||label~".len(),
+        ),
+        ("Fix it ~~struck~~=", "Fix it ~~struck~~=".len()),
+        ("x=~~=", "x=~~=".len()),
+    ];
+    for (raw, cursor) in cases {
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(rewrite.rule, None, "{raw:?} at {cursor}");
+        assert_eq!(rewrite.text, raw, "{raw:?} at {cursor}");
+    }
+
+    let raw = "Fix it ~tasks:target~";
+    let rewrite = rewrite_draft(raw, None);
+    assert_eq!(rewrite.rule, None);
+    assert_eq!(rewrite.text, raw);
+}
+
+#[test]
 fn rewrite_draft_relation_flip_alias_stays_literal() {
     let mut cases = vec![
         ("=", 1),
-        ("Fix it =", 8),
+        ("Fix it -", 8),
+        ("Fix it -=", 9),
         ("Fix it~=", 8),
-        ("Fix it ~~=", 10),
+        ("x=~~=", 5),
         ("x ~=", 4),
         ("=bugs ~=", 8),
         ("+5 ~=", 5),
@@ -1692,7 +1823,7 @@ fn rewrite_draft_relation_flip_alias_stays_literal() {
     assert_eq!(rewrite.rule, None);
     assert_eq!(rewrite.text, raw);
 
-    let raw = "Task {0} %t\n\nFix it ~=";
+    let raw = "Task {0} %t\n\nFix it ~~=";
     let rewrite = rewrite_draft(raw, Some(raw.len()));
     assert_eq!(rewrite.rule, None);
     assert_eq!(rewrite.text, raw);

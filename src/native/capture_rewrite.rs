@@ -95,7 +95,7 @@ pub(crate) fn build_cli() -> ClapCommand {
 report the resulting edits, cursor, and a human summary.\n\n\
 The command is purely lexical and completely read-only: it never opens the \
 vault, never reads the clipboard, never touches the filesystem, and takes no \
---bob-dir. It implements four rules.\n\n\
+--bob-dir. It implements five rules.\n\n\
 Block-ID separator toggle (requires --cursor): typing '^' immediately after \
 a complete plain '@route:id' or '@route+id', ':' after '@route^id' or \
 '@route+id', or '+' after '@route:id' or '@route^id' consumes that character \
@@ -146,17 +146,25 @@ becomes '@cash+', '@cash+goog-exit,' becomes '@cash+goog-exit +', and \
 'Buy milk ,' becomes 'Buy milk +'; '@errands.' and '@errands;' still become \
 '@errands^' and '@errands:'. Bob's completion grammar decides when a \
 comma is eligible; prose and other picker contexts keep it literal. The \
-aliases use the same picker behavior as the real sigils. Typing '-' after a \
-space or tab becomes '~' only where a bare '~' would open the Links To \
+aliases use the same picker behavior as the real sigils. Typing '=' after a \
+space or tab aliases '~' only where a bare '~' would open the Links To \
 relation picker. It stays literal at a line or bullet-body start, glued to a \
-word, after another '-', inside an unclosed backtick span, or inside a \
-wikilink. Typing '=' right after a bare '~' that opens the Links To picker \
-turns it into '~~' (Linked From). Typing '=' right after a '-' that would \
-alias '~' turns the pair into '~~'. Everywhere else '=' stays literal, \
-including after '~~' and inside a wikilink. For example, 'bob capture-rewrite \
--c 9 -f json -- \'Fix it ~='\'' turns 'Fix it ~=' into 'Fix it ~~'. 'bob capture' and \
+word, inside an unclosed backtick span, or inside a wikilink; 'Fix it =' \
+becomes 'Fix it ~', while 'Fix it -' stays literal. Typing '=' after a bare \
+'~' flips it to '~~' (Linked From), and '~~=' flips it back to '~' only \
+where the result opens an empty Links To target. The past-session dash alias \
+still works inside x= tokens, such as 'x=2-' to 'x=2~'. 'bob capture' and \
 'bob capture-parse' keep the literal text. Without --cursor this rule is \
 skipped rather than searching the draft.\n\n\
+Relation direction toggle (requires --cursor): typing '~' or '=' immediately \
+after a complete '~note:id' or '~~note:id' flips the direction and consumes \
+the trigger. After a labelled relation, only '~' flips, because '=' is valid \
+label text. The token must be glued to the trigger, be complete, and open a \
+relation target or label in bob's completion grammar; spaced keys, protected or \
+escaped tokens, partial or invalid relations, and text glued after the caret \
+stay unchanged. The cursor lands just past the flipped relation, and the rule \
+is 'toggle_relation_direction'. Without --cursor this rule is skipped rather \
+than searching the draft.\n\n\
 Bare '@@' absorption: typing a bare '@@' inside an item that already \
 carries a local destination marker (or, absent that, when the draft already \
 carries exactly one other '@@' declaration) rewrites the bare token to \
@@ -183,7 +191,7 @@ missing TEXT or a bad flag is an error; every other input succeeds with \
 stdin is piped, it reads the complete piped stdin stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id^'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id+'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file^id+'\n  bob capture-rewrite -c 20 -f json -- 'Fix trip ~work:foo |'\n  bob capture-rewrite -c 9 -f json -- '@errands.'\n  bob capture-rewrite -c 8 -f json -- 'Fix it -'\n  bob capture-rewrite -c 9 -f json -- 'Fix it ~='\n  bob capture-rewrite -c 6 -f json -- '@cash,'\n  bob capture-rewrite -c 16 -f json -- '@cash+goog-exit,'\n  bob capture-rewrite -c 1 -f json -- ';'\n  bob capture-rewrite -c 10 -f json -- 'Buy milk \\'\n  printf '@cash^goog-exit@\\n- .' | bob capture-rewrite -c 20 -f json\n  bob capture-rewrite -c 10 -f json -- 'Buy milk /'\n  bob capture-rewrite -c 16 -f json -- 'Buy milk @dev @@'\n  bob capture-rewrite -- 'Called Morgan Stanley @cash+goog-exit @@'\n  bob capture-rewrite -c 13 -f json -- '@inbox:bench+ > @db'\n  bob capture-rewrite -f json -- '@a+x > @c @@'\n  printf 'Buy milk @dev @@' | bob capture-rewrite -f json\n  printf '@@foo\\nBuy milk @@\\n' | bob capture-rewrite -f json\n  printf 'Buy milk @dev\\n- more detail @@\\n' | bob capture-rewrite -f json",
+            "Examples:\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id^'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id+'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file^id+'\n  bob capture-rewrite -c 20 -f json -- 'Fix trip ~work:foo |'\n  bob capture-rewrite -c 9 -f json -- '@errands.'\n  bob capture-rewrite -c 8 -f json -- 'Fix it ='\n  bob capture-rewrite -c 9 -f json -- 'Fix it ~='\n  bob capture-rewrite -c 21 -f json -- 'Fix it ~tasks:target='\n  bob capture-rewrite -c 6 -f json -- '@cash,'\n  bob capture-rewrite -c 16 -f json -- '@cash+goog-exit,'\n  bob capture-rewrite -c 1 -f json -- ';'\n  bob capture-rewrite -c 10 -f json -- 'Buy milk \\'\n  printf '@cash^goog-exit@\\n- .' | bob capture-rewrite -c 20 -f json\n  bob capture-rewrite -c 10 -f json -- 'Buy milk /'\n  bob capture-rewrite -c 16 -f json -- 'Buy milk @dev @@'\n  bob capture-rewrite -- 'Called Morgan Stanley @cash+goog-exit @@'\n  bob capture-rewrite -c 13 -f json -- '@inbox:bench+ > @db'\n  bob capture-rewrite -f json -- '@a+x > @c @@'\n  printf 'Buy milk @dev @@' | bob capture-rewrite -f json\n  printf '@@foo\\nBuy milk @@\\n' | bob capture-rewrite -f json\n  printf 'Buy milk @dev\\n- more detail @@\\n' | bob capture-rewrite -f json",
         )
         .disable_help_flag(true)
         .arg(cursor_arg())

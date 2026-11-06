@@ -13,7 +13,7 @@ fn capture_rewrite_help_describes_only_the_remaining_rules() {
     assert_success(&output);
     let out = stdout(&output);
     assert!(
-        out.contains("It implements four rules."),
+        out.contains("It implements five rules."),
         "capture-rewrite help miscounts its rules:\n{out}"
     );
     assert!(
@@ -129,7 +129,7 @@ fn capture_rewrite_json_expands_a_route_sigil_alias() {
 }
 
 #[test]
-fn capture_rewrite_json_expands_a_relation_dash_alias() {
+fn capture_rewrite_json_expands_a_relation_equals_alias() {
     let output = bob_command()
         .arg("capture-rewrite")
         .arg("-c")
@@ -137,9 +137,9 @@ fn capture_rewrite_json_expands_a_relation_dash_alias() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("Fix it -")
+        .arg("Fix it =")
         .output()
-        .expect("run bob capture-rewrite relation dash alias");
+        .expect("run bob capture-rewrite relation equals alias");
 
     assert_success(&output);
     assert!(stderr(&output).is_empty(), "{}", format_output(&output));
@@ -147,7 +147,7 @@ fn capture_rewrite_json_expands_a_relation_dash_alias() {
         .expect("capture-rewrite JSON");
     assert_eq!(json["ok"], true);
     assert_eq!(json["schema_version"], 1);
-    assert_eq!(json["input"], "Fix it -");
+    assert_eq!(json["input"], "Fix it =");
     assert_eq!(json["text"], "Fix it ~");
     assert_eq!(json["changed"], true);
     assert_eq!(json["cursor"], 8);
@@ -158,7 +158,7 @@ fn capture_rewrite_json_expands_a_relation_dash_alias() {
             { "range": { "start": 7, "end": 8 }, "replacement": "~" },
         ])
     );
-    assert_eq!(json["summary"], "Typed ~ for -");
+    assert_eq!(json["summary"], "Typed ~ for =");
 }
 
 #[test]
@@ -195,17 +195,17 @@ fn capture_rewrite_json_expands_a_relation_flip_alias() {
 }
 
 #[test]
-fn capture_rewrite_json_expands_a_relation_dash_flip_alias() {
+fn capture_rewrite_json_expands_a_relation_reverse_flip_alias() {
     let output = bob_command()
         .arg("capture-rewrite")
         .arg("-c")
-        .arg("9")
+        .arg("10")
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("Fix it -=")
+        .arg("Fix it ~~=")
         .output()
-        .expect("run bob capture-rewrite relation dash flip alias");
+        .expect("run bob capture-rewrite reverse relation flip alias");
 
     assert_success(&output);
     assert!(stderr(&output).is_empty(), "{}", format_output(&output));
@@ -213,18 +213,78 @@ fn capture_rewrite_json_expands_a_relation_dash_flip_alias() {
         .expect("capture-rewrite JSON");
     assert_eq!(json["ok"], true);
     assert_eq!(json["schema_version"], 1);
-    assert_eq!(json["input"], "Fix it -=");
-    assert_eq!(json["text"], "Fix it ~~");
+    assert_eq!(json["input"], "Fix it ~~=");
+    assert_eq!(json["text"], "Fix it ~");
     assert_eq!(json["changed"], true);
-    assert_eq!(json["cursor"], 9);
+    assert_eq!(json["cursor"], 8);
     assert_eq!(json["rule"], "expand_sigil_alias");
     assert_eq!(
         json["edits"],
         serde_json::json!([
-            { "range": { "start": 7, "end": 9 }, "replacement": "~~" },
+            { "range": { "start": 8, "end": 10 }, "replacement": "" },
         ])
     );
-    assert_eq!(json["summary"], "Typed ~~ for -=");
+    assert_eq!(json["summary"], "Typed ~ for ~~=");
+}
+
+#[test]
+fn capture_rewrite_json_toggles_complete_relation_direction() {
+    let draft = "Fix it ~tasks:target=";
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg(draft.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .output()
+        .expect("run bob capture-rewrite relation direction toggle");
+
+    assert_success(&output);
+    assert!(stderr(&output).is_empty(), "{}", format_output(&output));
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["input"], draft);
+    assert_eq!(json["text"], "Fix it ~~tasks:target");
+    assert_eq!(json["changed"], true);
+    assert_eq!(json["cursor"], 21);
+    assert_eq!(json["rule"], "toggle_relation_direction");
+    assert_eq!(
+        json["edits"],
+        serde_json::json!([
+            { "range": { "start": 8, "end": 8 }, "replacement": "~" },
+            { "range": { "start": 20, "end": 21 }, "replacement": "" },
+        ])
+    );
+    assert_eq!(json["summary"], "Flipped to Linked From");
+}
+
+#[test]
+fn capture_rewrite_keeps_relation_dash_literal() {
+    let draft = "Fix it -";
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg(draft.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .output()
+        .expect("run bob capture-rewrite with literal dash");
+
+    assert_success(&output);
+    assert!(stderr(&output).is_empty(), "{}", format_output(&output));
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["input"], draft);
+    assert_eq!(json["text"], draft);
+    assert_eq!(json["changed"], false);
+    assert!(json["rule"].is_null());
+    assert_eq!(json["edits"], serde_json::json!([]));
 }
 
 #[test]

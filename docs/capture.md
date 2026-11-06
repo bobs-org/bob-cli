@@ -8725,8 +8725,8 @@ bob capture-rewrite [-c|--cursor N] [-f|--format human|json] [--] [TEXT]...
 ```
 
 Applies the capture grammar's automatic draft rewrites -- the
-block-ID separator toggle, the relation-label pipe attach, the sigil alias,
-and the bare `@@` absorption rule -- and reports the
+block-ID separator toggle, relation-label pipe attach, sigil aliases, relation
+direction toggle, and bare `@@` absorption -- and reports the
 resulting edits, cursor, and a human summary. It is purely lexical and
 completely read-only: it never opens the vault, never reads the clipboard
 or the URL routing config, never touches the filesystem, and takes no
@@ -8835,16 +8835,26 @@ editor assist:
 `bob capture` and `bob capture-parse` keep the literal text. Feeding the
 result back through the command is a no-op.
 
-Typing `-` after a space or tab aliases `~` only where a bare `~` would open
+Typing `=` after a space or tab aliases `~` only where a bare `~` would open
 the Links To relation picker. It stays literal at a line or bullet-body start,
-glued to a word, after another `-`, inside an unclosed backtick span, or inside
-a wikilink. For example, `Fix it -` becomes `Fix it ~`.
+glued to a word, inside an unclosed backtick span, or inside a wikilink. For
+example, `Fix it =` becomes `Fix it ~`, while `Fix it -` stays literal.
 
-Typing `=` right after a bare `~` that opens the Links To picker turns it into
-`~~` (Linked From). Typing `=` right after a `-` that would alias `~` turns the
-pair into `~~`. Everywhere else `=` stays literal, including after `~~` and
-inside a wikilink. For example, `Fix it ~=` becomes `Fix it ~~` and `Fix it -=`
-becomes `Fix it ~~`.
+Typing `=` after a bare `~` flips it to `~~` (Linked From), and `~~=` flips it
+back to `~` only where the result opens an empty Links To target. The past-session
+dash alias remains inside `x=` tokens: `x=2-` still becomes `x=2~`, while
+`x=~~=` stays literal.
+
+**Relation direction toggle.** With `--cursor`, typing `~` or `=` immediately
+after a complete `~note:id` or `~~note:id` flips the direction and consumes the
+trigger. After a labelled relation, only `~` flips because `=` is valid label
+text. The relation and trigger must be glued, and Bob's completion grammar must
+recognize a complete target or label at the caret; spaced keys, protected or
+escaped tokens, incomplete and invalid relations, or text glued after the caret
+stay unchanged. The rewrite preserves the target and any label, including the
+`||` one-off marker, and leaves the cursor just past the flipped token. Its rule
+value is `toggle_relation_direction`. `bob capture` and `bob capture-parse`
+keep typed relation text literal.
 
 **Relation-label pipe attach.** Typing `|` after whitespace that follows a
 relation token deletes that whitespace so the pipe glues to the token.
@@ -8956,13 +8966,15 @@ JSON output is a single versioned object:
 }
 ```
 
-`rule` is `switch_block_id_separator`,
-`attach_relation_label`, `expand_sigil_alias`, `absorb_local_marker`, or `absorb_declaration`,
+`rule` is `switch_block_id_separator`, `attach_relation_label`,
+`toggle_relation_direction`, `expand_sigil_alias`, `absorb_local_marker`, or
+`absorb_declaration`,
 omitted when nothing changed. `cursor` is present only when `--cursor` was
 supplied and is mapped through every edit. Separator toggles land
 just past the unchanged ID, sigil aliases keep the caret just past the sigil,
 pipe attaches land just past the glued `|`, and
-absorption lands just past the rewritten `@@<payload>` token.
+relation direction toggles land just past the flipped relation, and absorption
+lands just past the rewritten `@@<payload>` token.
 `edits` index `input`, are sorted by `start`, never overlap, and applying
 them left-to-right yields `text`; `text` always equals `input` when
 `changed` is `false`. `summary` is omitted when nothing changed; `notices`
