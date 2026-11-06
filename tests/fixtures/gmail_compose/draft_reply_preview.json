@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "status": "preview",
+  "note": "mail/2026/261105_reply_thread.md",
+  "draft_id": "draft-1",
+  "digest": "c540b334fc2f5cd90b0e83cf19a292076aa16c4e72f65f80b667785a6d0603ef",
+  "preview": {
+    "account": "you@example.com",
+    "from": "you@example.com",
+    "to": [
+      "Dana <dana@example.test>"
+    ],
+    "cc": [],
+    "bcc": [],
+    "subject": "Re: Lease renewal",
+    "reply_target": {
+      "thread_id": "0123456789abcdef",
+      "message_id": "0123456789abcdef",
+      "rfc_message_id": "<lease@example.test>",
+      "mode": "reply"
+    },
+    "text_body": "Thanks Dana, confirmed.\n\n-- \nTest signature",
+    "html_sha256": "e8a0c4721a973d4d7fe72d2f48ca2890653860d71342587873c6206af4aeac7c",
+    "signature": "gmail",
+    "attachments": [],
+    "flattened_links": []
+  }
+}

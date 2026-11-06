@@ -1,0 +1,9 @@
+{
+  "error": {
+    "hint": "confirm this exact preview with: bob gmail send 'mail/2026/261105_lease_renewal.md' --confirm '856df9a2c283145b6a9b668a3567c97a311e2ae233386a0086ec343218e7a901' --format json",
+    "kind": "confirmation_required",
+    "message": "sending requires a TTY confirmation or the exact preview digest"
+  },
+  "ok": false,
+  "schema_version": 1
+}

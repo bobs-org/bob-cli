@@ -1,0 +1,9 @@
+{
+  "error": {
+    "hint": "task checkboxes never send; delete the checkbox or move the task out of the message",
+    "kind": "render",
+    "message": "outgoing message refuses task_checkbox at line 1"
+  },
+  "ok": false,
+  "schema_version": 1
+}

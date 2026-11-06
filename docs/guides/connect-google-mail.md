@@ -17,8 +17,10 @@ This page gets you through sign-in and doctor. `bob gmail new` and
 selected threads with the commands in [Bob Gmail](../gmail.md), then link saved
 threads to tasks with their labelled wikilinks. `bob gmail draft NOTE` requires
 the optional compose grant from `bob gmail login -s compose`; it creates or
-updates a Gmail draft and shows its stored preview without sending. Bare
-`bob gmail` lists saved threads locally.
+updates a Gmail draft and shows its stored preview without sending.
+`bob gmail send` transmits only that stored draft after a confirmation bound
+to its preview; see [Send email from Obsidian](send-email-from-obsidian.md).
+Bare `bob gmail` lists saved threads locally.
 
 ## Before you start
 

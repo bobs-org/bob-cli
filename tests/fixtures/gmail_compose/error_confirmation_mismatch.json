@@ -1,0 +1,9 @@
+{
+  "error": {
+    "hint": "run `bob gmail send NOTE --dry-run` to obtain the current digest",
+    "kind": "confirmation_mismatch",
+    "message": "the confirmation digest does not match the current Gmail preview"
+  },
+  "ok": false,
+  "schema_version": 1
+}

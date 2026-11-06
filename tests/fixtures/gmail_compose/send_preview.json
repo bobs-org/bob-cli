@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "status": "preview",
+  "note": "mail/2026/261105_lease_renewal.md",
+  "draft_id": "draft-1",
+  "digest": "856df9a2c283145b6a9b668a3567c97a311e2ae233386a0086ec343218e7a901",
+  "preview": {
+    "account": "you@example.com",
+    "from": "you@example.com",
+    "to": [
+      "ada@example.com"
+    ],
+    "cc": [
+      "boe@example.com"
+    ],
+    "bcc": [],
+    "subject": "Lease renewal",
+    "reply_target": null,
+    "text_body": "Hello Ada, see the lease.\n\nreport.pdf\n\n-- \nTest signature",
+    "html_sha256": "faee45e4d66115015610d6d214bd54e08eaa12146e23ab87f5bc6f62090eb071",
+    "signature": "gmail",
+    "attachments": [
+      {
+        "vault_path": "report.pdf",
+        "filename": "report.pdf",
+        "byte_length": 32,
+        "sha256": "e2bc9069e5ff8bc22ac75ff9981bd7f09fdc516fb818243feda285b4889593e4"
+      }
+    ],
+    "flattened_links": [
+      {
+        "original_target": "[[lease|the lease]]",
+        "text": "the lease"
+      },
+      {
+        "original_target": "![[report.pdf]]",
+        "text": "report.pdf"
+      }
+    ]
+  }
+}

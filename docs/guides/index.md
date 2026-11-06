@@ -24,6 +24,7 @@ and rules. Filter the same pages by CLI, Obsidian, or macOS on
 - [Drain Google Keep into tasks](drain-google-keep.md)
 - [Link emails to tasks](link-emails-to-tasks.md)
 - [File email from your phone](file-email-from-your-phone.md)
+- [Send email from Obsidian](send-email-from-obsidian.md)
 
 ## Plan the day
 

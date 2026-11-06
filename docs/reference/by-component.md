@@ -34,6 +34,7 @@ uses more than one surface appears in each matching group.
 - [Run the morning review walk](../guides/run-morning-review.md)
 - [Save a link to your reading queue](../guides/save-link-to-reading-queue.md)
 - [See which tasks mention a task](../guides/see-task-mentions.md)
+- [Send email from Obsidian](../guides/send-email-from-obsidian.md)
 - [Sync the vault across machines](../guides/sync-vault-across-machines.md)
 - [Tasks and lanes](../concepts/tasks-and-lanes.md)
 - [The reference library](../concepts/reference-library.md)
@@ -72,6 +73,7 @@ uses more than one surface appears in each matching group.
 - [Resolve a Mac Capture hotkey conflict](../guides/resolve-mac-capture-hotkey-conflict.md)
 - [Restore Mac Capture permissions](../guides/restore-mac-capture-permissions.md)
 - [Save a link to your reading queue](../guides/save-link-to-reading-queue.md)
+- [Send email from Obsidian](../guides/send-email-from-obsidian.md)
 - [Why the vault syncs through git](../concepts/why-the-vault-syncs-through-git.md)
 
 ## Related

@@ -3,12 +3,14 @@
 `bob gmail` saves Gmail threads you choose as inert, append-only mail notes in
 the vault, swaps Gmail URLs in notes for readable links, and creates local
 compose and reply notes. It also pulls labelled threads into inbox tasks and
-imports selected attachments. This page covers one-time setup through
-[gog](https://github.com/openclaw/gogcli) (≥ v0.44.0), config, login/logout,
-doctor, saving, linking, listing, search, previews, label pulls, attachment
-imports, and compose-note creation. `new` and `reply` write local notes without
-sending mail; sending remains later work. Bare `bob gmail` lists saved threads
-offline.
+imports selected attachments. Sending goes through a previewed Gmail draft:
+`draft` stores the draft and shows its exact preview, and `send` transmits it
+only after a confirmation bound to that preview. This page covers one-time
+setup through [gog](https://github.com/openclaw/gogcli) (≥ v0.44.0), config,
+login/logout, doctor, saving, linking, listing, search, previews, label pulls,
+attachment imports, compose notes, drafts, and confirmed sends. `new` and
+`reply` write local notes without sending mail. Bare `bob gmail` lists saved
+threads offline.
 
 Typical order: `bob gmail login` once, `bob gmail doctor` until every check is
 `ok` or an explained skip. Tests never touch Google: set `BOB_GMAIL_GOG` to a
@@ -25,7 +27,9 @@ fake executable.
 - [Logout](#logout)
 - [Save](#save)
 - [Compose notes](#compose-notes)
+- [Gmail drafts](#gmail-drafts)
 - [Outgoing message rendering](#outgoing-message-rendering)
+- [Writing and sending](#writing-and-sending)
 - [List](#list)
 - [Link](#link)
 - [Search](#search)
@@ -57,6 +61,7 @@ bob gmail pull [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-l|--
 bob gmail reply NOTE [-a|--all] [-b|--bob-dir DIR] [-f|--format human|json]
 bob gmail save URL|ID|NOTE... [-b|--bob-dir DIR] [-B|--body full|headers] [-d|--dry-run] [-f|--format human|json] [-P|--parent ROUTE] [-q|--quiet] [-R|--rerender]
 bob gmail search [QUERY] [-f|--format table|json] [-l|--limit N]
+bob gmail send NOTE [-b|--bob-dir DIR] [-c|--confirm DIGEST] [-d|--dry-run] [-f|--format human|json]
 ```
 
 Running `bob gmail` with no subcommand lists saved threads, exactly like the
@@ -67,10 +72,12 @@ confirmed thread, and replaces those URL tokens with labelled wikilinks.
 `pull` reads the configured label and files saved threads as inbox tasks
 without changing Gmail labels. `attach` reads one listed attachment and writes
 its bytes into the vault. `new` and `reply` write local Markdown notes without
-login or network access. `doctor`, `search`, and `peek` are read-only. `login`
-and `logout` are excluded from the command catalog because they need a terminal
-and handle credentials; `new` and `reply` are excluded because the compose
-flow is owned by Bob Mail.
+login or network access. `draft` stores a Gmail draft and shows its exact
+preview without sending. `send` transmits only the stored draft after a
+confirmation bound to that preview. `doctor`, `search`, and `peek` are
+read-only. `login` and `logout` are excluded from the command catalog because
+they need a terminal and handle credentials; `new` and `reply` are excluded
+because the compose flow is owned by Bob Mail.
 
 ## How it works
 
@@ -407,6 +414,84 @@ that is removed when the operation finishes; transport reads the snapshots so
 a later vault edit cannot change the sent bytes. Each attachment records its
 vault path, transmitted filename, byte length, and SHA-256 of the snapshot.
 
+## Writing and sending
+
+`bob gmail send NOTE` previews the stored Gmail draft, then sends only that
+draft after a confirmation bound to the exact preview. `NOTE` is a compose
+note or a saved thread with one Reply section, as a vault-relative path with
+or without `.md` or a unique note basename. Like `draft`, it requires the
+configured `gmail.writer` host and the isolated `bob-gmail` grant with the
+compose scope; on a read-only grant it fails with the
+`bob gmail login -s compose` hint instead of sending.
+
+`-d` always wins over a confirmation digest: it creates or updates the draft,
+reads it back, and prints the intentional preview without sending anything.
+That differs from `save -d`, which only prints what it would write. A non-TTY
+`send` without `-c` leaves the draft intact, exits 2 with
+`confirmation_required`, and prints the exact confirmation command. On a TTY,
+Bob shows the colored preview and asks `[y/N]`; anything but an affirmative
+answer keeps the draft.
+
+With `-f json`, dry-run and confirmation success share one schema-1 preview
+document: `status: preview`, `note`, `draft_id`, `digest`, and `preview`. The
+preview carries the account, actual From, ordered To/Cc/Bcc, subject, reply
+target (null, or thread id, Gmail message id, RFC Message-ID, and mode),
+exact text body, HTML SHA-256, signature mode, attachments (vault path,
+transmitted filename, byte length, SHA-256), and flattened links (original
+target and resulting text). The Bob Mail plugin renders exactly these fields.
+Synthetic examples live under `tests/fixtures/gmail_compose/` and are checked
+against CLI output so they cannot drift from the implementation.
+
+```bash
+bob gmail send mail/2026/261105_lease_renewal.md -d
+bob gmail send mail/2026/261105_lease_renewal.md -c 0123abcd... -f json
+```
+
+The `digest` is the SHA-256 of the canonical preview. Any change to the
+message body, recipients, subject, signature mode, attachments, flattened
+links, or the remote draft invalidates it: an HTML-only edit invalidates the
+digest even when the plain text is unchanged. A stale digest exits 2 with
+`confirmation_mismatch` and a re-preview hint. There is no force flag or
+environment bypass. A remote edit to the Gmail draft between preview and
+confirmation is reported as a conflict instead of being silently replaced.
+
+Immediately before dispatch, Bob rechecks the authored inputs, the attachment
+snapshots, and the stored draft contents, then sends with
+`drafts send <recorded id>` only — never `gmail send`, `messages send`, SMTP,
+or a replacement draft. On success it refreshes the thread through the save
+path so the sent card appears. A standalone compose note is promoted in place
+at its original path: thread identity and the managed block are added, the
+submitted body is replaced with the conversation, and compose-only
+`status`/recipient/draft fields are removed. Parent, unknown frontmatter,
+Notes, and other authored sections survive. A reply send removes only the
+exact submitted Reply section and its draft marker. Your sent messages render
+as `[!mail-sent]` callouts; inbound mail stays `[!mail]`.
+
+Recovery runs before any render, update, or create whenever a previous send
+is unresolved:
+
+- Draft still present → back to draft; the run reports `recovered_to_draft`
+  and a fresh preview/confirmation is required before another attempt. A
+  recovery run never sends by itself.
+- Draft gone and exactly one matching SENT message proven → the send is
+  recorded as acknowledged and only local finalization runs.
+- Missing, ambiguous, failed lookup, or no matching SENT evidence → reports
+  `outcome_unknown`, retains the state, and never creates, updates, or sends
+  a replacement.
+
+An acknowledged send whose local refresh fails stays acknowledged and is
+retried for local finalization only. A completed operation is a no-op on
+repeated send (`already_sent`); starting a later explicit Reply starts a new
+operation. Crash recovery restarts from the note's durable frontmatter state,
+so it is not lost with one host's cache. There is no atomic
+compare-and-send precondition in the Gmail API: an external Gmail edit after
+the final readback remains possible, and Bob does not claim exactly-once
+delivery across hosts.
+
+Only body-free metadata reaches the journal and errors: note path, draft id,
+digest, thread and sent message ids, recipient counts, and a subject hash.
+Message bodies, MIME, and attachment bytes never appear there.
+
 ## List
 
 `bob gmail list` (or bare `bob gmail`) lists saved mail notes newest first by
@@ -549,6 +634,9 @@ bob gmail attach mail/2026/lease_renewal.md 1
    files it into `gmail_inbox.md`.
 8. `bob gmail attach <note path> 1 -d` previews the first attachment import.
 9. `bob gmail doctor` checks decoder health and duplicate identities.
+10. To send a real message, follow
+    [Send email from Obsidian](guides/send-email-from-obsidian.md): `new`,
+    `draft`, then a confirmed `send` to an address you choose.
 
 ## Doctor
 
@@ -619,5 +707,7 @@ Every `-f json` output carries `schema_version: 1` and `ok`. Errors are typed
 
 ## Known limits
 
-Sending compose and reply notes as Gmail drafts and dedicated task
-linking remain later work.
+Dedicated task linking remains later work. Confirmed sends need the compose
+grant on the writer host, one explicit confirmation per preview, and a Gmail
+draft that still exists; outcome-unknown states require Bryan to inspect the
+draft and SENT folder before retrying.
