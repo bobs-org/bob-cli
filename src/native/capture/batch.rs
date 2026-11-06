@@ -1,5 +1,6 @@
 //! Staged batch planning and shared plan/detail types.
 use super::*;
+use std::collections::HashSet;
 
 #[derive(Default)]
 pub(crate) struct CaptureBatchPlanner {
@@ -7,6 +8,7 @@ pub(crate) struct CaptureBatchPlanner {
     pub(super) by_path: HashMap<PathBuf, usize>,
     move_edges: Vec<(PathBuf, PathBuf)>,
     moved_origins: HashMap<(PathBuf, String), MovedOrigin>,
+    created_tasks: HashSet<(PathBuf, String)>,
     item_pre_day: Option<Option<String>>,
     item_consumed_links: Vec<ConsumedLinkJson>,
     pub(super) read_guards: BatchReadGuards,
@@ -362,6 +364,36 @@ impl CaptureBatchPlanner {
                 item_number,
             },
         );
+    }
+
+    /// Record a task that this capture draft created after its canonical
+    /// note path and block ID are both known.
+    pub(super) fn record_created_task(&mut self, path: &Path, block_id: &str) {
+        self.created_tasks
+            .insert((path.to_path_buf(), block_id.to_string()));
+    }
+
+    pub(super) fn task_was_created(&self, path: &Path, block_id: &str) -> bool {
+        self.created_tasks
+            .contains(&(path.to_path_buf(), block_id.to_string()))
+    }
+
+    /// Carry capture birth identity through a task move. Existing tasks do
+    /// not enter the set merely because their path or block ID changes.
+    pub(super) fn remap_created_task(
+        &mut self,
+        source: &Path,
+        old_block_id: &str,
+        destination: &Path,
+        new_block_id: Option<&str>,
+    ) {
+        if self
+            .created_tasks
+            .remove(&(source.to_path_buf(), old_block_id.to_string()))
+            && let Some(new_block_id) = new_block_id
+        {
+            self.record_created_task(destination, new_block_id);
+        }
     }
 
     pub(super) fn ensure_loaded(

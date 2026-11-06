@@ -156,6 +156,11 @@ pub(super) fn plan_relation_merges(
                 .map_err(|error| {
                     CaptureError::usage_code(error.message, error.code)
                 })?;
+        super::transfer::mark_created_merge_targets(
+            planner,
+            &request.bob_dir,
+            &mut plan.records,
+        );
         let edge_was_written = group.iter().any(|edge| {
             matches!(
                 updates[edge.update_index].action,

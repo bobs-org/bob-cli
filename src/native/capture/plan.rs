@@ -607,6 +607,17 @@ pub(super) fn plan_capture_batch_with_config_path(
                 let task_refs = std::mem::take(&mut planned.task_block_refs);
                 let move_landings =
                     std::mem::take(&mut planned.project_move_landings);
+                for landing in &move_landings {
+                    if let Some(old_block_id) = landing.old_block_id.as_deref()
+                    {
+                        planner.remap_created_task(
+                            &landing.source,
+                            old_block_id,
+                            &landing.dest,
+                            landing.new_block_id.as_deref(),
+                        );
+                    }
+                }
                 all_project_moves.extend(move_landings.iter().cloned());
                 task_tracker.remap_project_moves(&planner, &move_landings);
                 task_tracker.remap_transfer_moves(
@@ -729,6 +740,16 @@ pub(super) fn plan_capture_batch_with_config_path(
             // Transfer moves relocate tracked note-pull picks the same way.
             let move_landings =
                 std::mem::take(&mut planned.project_move_landings);
+            for landing in &move_landings {
+                if let Some(old_block_id) = landing.old_block_id.as_deref() {
+                    planner.remap_created_task(
+                        &landing.source,
+                        old_block_id,
+                        &landing.dest,
+                        landing.new_block_id.as_deref(),
+                    );
+                }
+            }
             all_project_moves.extend(move_landings.iter().cloned());
             task_tracker.remap_project_moves(&planner, &move_landings);
             task_tracker.remap_transfer_moves(
@@ -1629,6 +1650,12 @@ pub(super) fn plan_capture_item(
         ));
     }
     let mut parsed = parsed_item.parsed;
+    let is_new_task_capture = matches!(
+        &parsed.kind,
+        CaptureKind::Task
+            | CaptureKind::TaskWithBlockId { .. }
+            | CaptureKind::Pomodoro { .. }
+    );
     // A dependency-only capture updates an explicitly selected existing
     // task: no new task, empty child, link toggle, or Pomodoro action.
     // It never flows through the toggle/link planners below.
@@ -3568,6 +3595,15 @@ pub(super) fn plan_capture_item(
             parsed.dependency_target.as_ref().map(|target| target.kind),
             Some(ParsedDependencyTargetKind::ExistingTask)
         );
+        if is_new_task_capture
+            && !existing_owner
+            && let Some(block_id) = owner.block_id.as_deref()
+        {
+            planner.record_created_task(
+                &request.bob_dir.join(&owner.relative),
+                block_id,
+            );
+        }
         let staged = plan_item_relations(
             dependency_ctx,
             planner,
@@ -3837,6 +3873,13 @@ pub(super) fn plan_capture_item(
         }
         _ => Vec::new(),
     };
+
+    // Keep birth identity separate from task IDs seen only after assigning an
+    // ID to an existing task or moving one. The kind guard is the planner's
+    // explicit evidence that this item created the task.
+    if is_new_task_capture && let Some(block_id) = task_block_id.as_deref() {
+        planner.record_created_task(&target, block_id);
+    }
 
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {

@@ -1222,6 +1222,64 @@ fn transfer_merge_offers_follow_later_draft_actions() {
 }
 
 #[test]
+fn transfer_merge_marks_an_earlier_capture_born_target() {
+    let (_temp, vault, day) = setup_merge_vault("transfer-created-target");
+    let output = capture_json(
+        &vault,
+        &day,
+        "New target @db^created\n\n@inbox+bench > @db+created",
+        true,
+    );
+    assert_success(&output);
+    let json = json_body(&output);
+    assert_eq!(
+        json["captures"][1]["merges"][0]["target"]["created"], true,
+        "{json}"
+    );
+}
+
+#[test]
+fn transfer_merge_does_not_mark_id_assigned_or_moved_existing_targets_created()
+{
+    // Note-Pull assigns a stable ID to this existing ID-less task before the
+    // later merge targets it. The task's ID is absent from the preimage, but
+    // the task itself was not born in this capture.
+    let (_temp, vault, day) = setup_merge_vault("transfer-id-assigned-target");
+    write_file(
+        &vault.join("inbox.md"),
+        &area_with_tasks("- [ ] #task Existing target\n"),
+    );
+    let output = capture_picked(
+        &vault,
+        &day,
+        "@inbox\n\n@work+pgdump > @inbox+existing-target",
+        "all",
+    );
+    assert_success(&output);
+    let json = json_body(&output);
+    assert_eq!(
+        json["captures"][1]["merges"][0]["target"]["created"], false,
+        "{json}"
+    );
+
+    // Moving an existing target earlier in the same batch also preserves its
+    // existing identity instead of turning it into a capture-born task.
+    let (_temp, vault, day) = setup_merge_vault("transfer-moved-target");
+    let output = capture_json(
+        &vault,
+        &day,
+        "@inbox+bench > @db\n\n@work+pgdump > @db+bench",
+        true,
+    );
+    assert_success(&output);
+    let json = json_body(&output);
+    assert_eq!(
+        json["captures"][1]["merges"][0]["target"]["created"], false,
+        "{json}"
+    );
+}
+
+#[test]
 fn transfer_records_serialize_merge_offers_top_copy_and_move_fields() {
     let (_temp, vault, day) = setup_merge_vault("transfer-merge-records");
     write_file(

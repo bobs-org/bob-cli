@@ -190,6 +190,12 @@ pub(super) fn plan_transfer_item(
             // above instead of the engine's missing-selector refusal.
             for movement in &plan.moves {
                 if let Some(old) = movement.old_block_id.as_deref() {
+                    planner.remap_created_task(
+                        &request.bob_dir.join(&movement.source_path),
+                        old,
+                        &request.bob_dir.join(&movement.dest_path),
+                        movement.new_block_id.as_deref(),
+                    );
                     planner.record_moved_origin(
                         &request.bob_dir.join(&movement.source_path),
                         old,
@@ -200,14 +206,71 @@ pub(super) fn plan_transfer_item(
             }
         }
     } else {
-        let (output, repairs) = plan_transfer_merge(
+        use crate::native::{
+            task_locator::TaskLocator, task_merge::MergeContainer,
+        };
+
+        let locator = |path: &Path, id: &str| TaskLocator {
+            note: path.with_extension("").to_string_lossy().replace('\\', "/"),
+            block_id: id.to_string(),
+        };
+        // The transfer adapter owns `>` destination parsing and its special
+        // refusal. The explicit engine below only receives a resolved
+        // container, which lets `<` share the same merge behavior later.
+        let target = match destination.kind {
+            lexer::TransferDestinationKind::Task
+            | lexer::TransferDestinationKind::Drawer => {
+                let id = destination
+                    .block_id
+                    .as_deref()
+                    .expect("complete task destination");
+                if resolved_sources.iter().any(|(source, path)| {
+                    path == &dest_path && source.block_id == id
+                }) {
+                    return Err(CaptureError::usage_code(
+                        "a transfer destination cannot also be a source",
+                        "transfer_destination_is_source",
+                    ));
+                }
+                let task = locator(&dest_path, id);
+                if let Some(drawer) = &destination.drawer {
+                    MergeContainer::Drawer(
+                        task,
+                        capture_language::DrawerSelector {
+                            text: drawer.clone(),
+                            exact: destination.drawer_exact,
+                        },
+                    )
+                } else {
+                    MergeContainer::Task(task)
+                }
+            }
+            lexer::TransferDestinationKind::Section => {
+                MergeContainer::Section {
+                    note: dest_path
+                        .with_extension("")
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                    selector: capture_language::DrawerSelector {
+                        text: destination
+                            .section
+                            .clone()
+                            .expect("complete section destination"),
+                        exact: destination.section_exact,
+                    },
+                }
+            }
+            lexer::TransferDestinationKind::Note => {
+                unreachable!("moves dispatch separately")
+            }
+        };
+        let (output, repairs) = plan_explicit_merge(
             request,
             planner,
             ctx,
             &snapshot,
             &resolved_sources,
-            &destination,
-            &dest_path,
+            target,
             warnings,
         )?;
         relation_merge_output = output;
@@ -366,41 +429,54 @@ fn transfer_task_block_refs(
     moves: &[TransferMoveJson],
     merge_output: &RelationMergeOutput,
 ) -> Vec<TaskBlockRef> {
+    if !is_move {
+        return merge_task_block_refs(planner, bob_dir, settings, merge_output);
+    }
+    let mut scans: HashMap<PathBuf, note_tasks::NoteTaskScan> = HashMap::new();
+    let mut refs = Vec::new();
+    for movement in moves {
+        let Some(block_id) = movement.new_block_id.as_deref() else {
+            continue;
+        };
+        let path = PathBuf::from(&movement.destination_path);
+        let target = bob_dir.join(&path);
+        let Some(text) = planner.peek_text(&target) else {
+            continue;
+        };
+        let scan = scans
+            .entry(target.clone())
+            .or_insert_with(|| note_tasks::scan(&text, settings));
+        let BlockIdLookup::Found(task) = scan.by_block_id(block_id) else {
+            debug_assert!(
+                false,
+                "moved task is missing from staged destination"
+            );
+            continue;
+        };
+        refs.push(TaskBlockRef {
+            target,
+            relative_target: movement.destination_path.clone(),
+            route: transfer_route(&path),
+            line: task.line_index,
+            block_id: Some(block_id.to_string()),
+            role: TaskBlockRole::Moved,
+        });
+    }
+    refs
+}
+
+/// Build final-state tracker refs for a task merge, usable by both capture
+/// `>` and capture `<` adapters.
+pub(super) fn merge_task_block_refs(
+    planner: &CaptureBatchPlanner,
+    bob_dir: &Path,
+    settings: &note_tasks::NoteTaskSettings,
+    merge_output: &RelationMergeOutput,
+) -> Vec<TaskBlockRef> {
     use crate::native::task_merge::MergeOutcome;
 
     let mut scans: HashMap<PathBuf, note_tasks::NoteTaskScan> = HashMap::new();
     let mut refs = Vec::new();
-    if is_move {
-        for movement in moves {
-            let Some(block_id) = movement.new_block_id.as_deref() else {
-                continue;
-            };
-            let path = PathBuf::from(&movement.destination_path);
-            let target = bob_dir.join(&path);
-            let Some(text) = planner.peek_text(&target) else {
-                continue;
-            };
-            let scan = scans
-                .entry(target.clone())
-                .or_insert_with(|| note_tasks::scan(&text, settings));
-            let BlockIdLookup::Found(task) = scan.by_block_id(block_id) else {
-                debug_assert!(
-                    false,
-                    "moved task is missing from staged destination"
-                );
-                continue;
-            };
-            refs.push(TaskBlockRef {
-                target,
-                relative_target: movement.destination_path.clone(),
-                route: transfer_route(&path),
-                line: task.line_index,
-                block_id: Some(block_id.to_string()),
-                role: TaskBlockRole::Moved,
-            });
-        }
-        return refs;
-    }
 
     let merged = merge_output
         .merges
@@ -467,6 +543,25 @@ fn transfer_task_block_refs(
 
 fn transfer_route(path: &Path) -> String {
     path.with_extension("").to_string_lossy().replace('\\', "/")
+}
+
+/// Mark task targets born in this capture draft. Drawer and section creation
+/// keeps the engine's own `created` meaning and is additive to task birth.
+pub(super) fn mark_created_merge_targets(
+    planner: &CaptureBatchPlanner,
+    bob_dir: &Path,
+    records: &mut [crate::native::task_merge::MergeRecord],
+) {
+    for record in records {
+        let Some(block_id) = record.target.block_id.as_deref() else {
+            continue;
+        };
+        if planner
+            .task_was_created(&bob_dir.join(&record.target.path), block_id)
+        {
+            record.target.created = true;
+        }
+    }
 }
 
 /// Resolve one transfer route against the staged snapshot's vault
@@ -544,7 +639,7 @@ pub(super) fn resolve_transfer_note(
 
 /// Refuse resolved duplicate source identities, catching aliases the
 /// lexical lower-cased route check cannot see.
-fn refuse_resolved_duplicates(
+pub(super) fn refuse_resolved_duplicates(
     resolved: &[(lexer::TransferSource, PathBuf)],
 ) -> Result<(), CaptureError> {
     let mut seen: HashMap<(PathBuf, String), &lexer::TransferSource> =
@@ -568,7 +663,7 @@ fn refuse_resolved_duplicates(
 /// Refuse a source nested inside another source's task block before
 /// any source stages. Column-zero siblings never overlap; a hit means
 /// one source names a parent and another names its descendant.
-fn refuse_overlapping_sources(
+pub(super) fn refuse_overlapping_sources(
     snapshot: &VaultSnapshot,
     resolved: &[(lexer::TransferSource, PathBuf)],
     settings: &note_tasks::NoteTaskSettings,
@@ -629,14 +724,13 @@ fn refuse_overlapping_sources(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn plan_transfer_merge(
+pub(super) fn plan_explicit_merge(
     request: &CaptureRequest,
     planner: &mut CaptureBatchPlanner,
     ctx: &DependencyContext,
     snapshot: &VaultSnapshot,
     sources: &[(lexer::TransferSource, PathBuf)],
-    destination: &lexer::TransferDestination,
-    dest_path: &Path,
+    target: crate::native::task_merge::MergeContainer,
     warnings: &mut Vec<CaptureWarning>,
 ) -> Result<
     (
@@ -648,58 +742,13 @@ fn plan_transfer_merge(
     use crate::native::{
         task_locator::TaskLocator,
         task_merge::{
-            plan_task_merge, DailyNoteReadState, MergeContainer, MergeContext,
-            MergeGesture, MergeRelationPolicy, MergeRequest,
+            plan_task_merge, DailyNoteReadState, MergeContext, MergeGesture,
+            MergeRelationPolicy, MergeRequest,
         },
     };
     let locator = |path: &Path, id: &str| TaskLocator {
         note: path.with_extension("").to_string_lossy().replace('\\', "/"),
         block_id: id.to_string(),
-    };
-    let target = match destination.kind {
-        lexer::TransferDestinationKind::Task
-        | lexer::TransferDestinationKind::Drawer => {
-            let id = destination
-                .block_id
-                .as_deref()
-                .expect("complete task destination");
-            if sources.iter().any(|(source, path)| {
-                path == dest_path && source.block_id == id
-            }) {
-                return Err(CaptureError::usage_code(
-                    "a transfer destination cannot also be a source",
-                    "transfer_destination_is_source",
-                ));
-            }
-            let task = locator(dest_path, id);
-            if let Some(drawer) = &destination.drawer {
-                MergeContainer::Drawer(
-                    task,
-                    capture_language::DrawerSelector {
-                        text: drawer.clone(),
-                        exact: destination.drawer_exact,
-                    },
-                )
-            } else {
-                MergeContainer::Task(task)
-            }
-        }
-        lexer::TransferDestinationKind::Section => MergeContainer::Section {
-            note: dest_path
-                .with_extension("")
-                .to_string_lossy()
-                .replace('\\', "/"),
-            selector: capture_language::DrawerSelector {
-                text: destination
-                    .section
-                    .clone()
-                    .expect("complete section destination"),
-                exact: destination.section_exact,
-            },
-        },
-        lexer::TransferDestinationKind::Note => {
-            unreachable!("moves dispatch separately")
-        }
     };
     let daily_abs = pomodoro::day_file_for(&request.bob_dir);
     let daily_path = daily_abs
@@ -743,8 +792,9 @@ fn plan_transfer_merge(
         // The engine alone applies the selected target once at its lost-link slot.
         selection: request.selection.clone(),
     };
-    let plan = plan_task_merge(snapshot, &merge_request, &context)
+    let mut plan = plan_task_merge(snapshot, &merge_request, &context)
         .map_err(|error| CaptureError::usage_code(error.message, error.code))?;
+    mark_created_merge_targets(planner, &request.bob_dir, &mut plan.records);
     super::relations_merge::stage_merge_plan(
         planner,
         &request.bob_dir,

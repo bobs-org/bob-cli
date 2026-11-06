@@ -119,6 +119,7 @@ fn from_relation_merges_a_picked_task_into_a_new_capture_task() {
     );
     let result_item = item(&result);
     assert_eq!(result_item["merges"][0]["outcome"], "merged");
+    assert_eq!(result_item["merges"][0]["target"]["created"], true);
     assert_eq!(result_item["relation_updates"][0]["direction"], "from");
     assert_eq!(result_item["relation_updates"][0]["merge_effect"], "merged");
     let source = fs::read_to_string(vault.join("source.md"))
