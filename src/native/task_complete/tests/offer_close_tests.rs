@@ -374,7 +374,10 @@ fn fixture_lists_all_shared_scenarios_without_renumbering() {
     ))
     .expect("valid offer-close vectors");
     let cases = vectors["cases"].as_array().expect("case list");
-    assert_eq!(cases.len(), 22);
+    assert!(
+        cases.len() >= 22,
+        "the shared vector set retains its original scenarios"
+    );
     for (index, case) in cases.iter().enumerate() {
         assert_eq!(case["id"], format!("SV{}", index + 1));
     }
@@ -571,7 +574,7 @@ fn fixture_rust_vectors_match_engine() {
         assert!(!descriptor.complete && !descriptor.cancel, "{name} refused");
     }
 
-    for id in ["SV9", "SV10", "SV19"] {
+    for id in ["SV9", "SV10", "SV19", "SV23"] {
         let case = fixture_case(&vectors, id);
         assert_eq!(case["kind"], "recover");
         let path = PathBuf::from(case["path"].as_str().expect("path"));
@@ -634,22 +637,34 @@ fn fixture_rust_vectors_match_engine() {
             .changed_files
             .get(&path)
             .expect("dependent note changes");
+        let recovered_lines: Vec<&str> = plan
+            .recovery
+            .unblocked
+            .iter()
+            .map(|row| {
+                changed
+                    .lines()
+                    .nth(row.source_line_index)
+                    .expect("recovered line exists")
+            })
+            .collect();
+        assert_eq!(recovered_lines.len(), descriptor.unblocks);
         match stamped {
-            Some(date) => assert!(
-                changed.contains(&format!("[unblocked:: {date}]")),
-                "{id} stamped"
-            ),
+            Some(date) => assert!(recovered_lines
+                .iter()
+                .all(|line| line.contains(&format!("[unblocked:: {date}]"))),
+                "{id} recovered rows stamped"),
             None => assert!(
-                !changed.contains(&format!(
+                recovered_lines.iter().all(|line| !line.contains(&format!(
                     "[unblocked:: {}]",
                     today.format("%Y-%m-%d")
-                )),
-                "{id} unstamped"
+                ))),
+                "{id} recovered rows unstamped"
             ),
         }
     }
 
-    for id in ["SV20", "SV21"] {
+    for id in ["SV20", "SV21", "SV24"] {
         let case = fixture_case(&vectors, id);
         assert_eq!(case["kind"], "recover-unstamped");
         let path = PathBuf::from(case["path"].as_str().expect("path"));
@@ -702,13 +717,34 @@ fn fixture_rust_vectors_match_engine() {
             .changed_files
             .get(&path)
             .expect("dependent note changes");
+        let recovered_lines: Vec<&str> = plan
+            .recovery
+            .unblocked
+            .iter()
+            .map(|row| {
+                changed
+                    .lines()
+                    .nth(row.source_line_index)
+                    .expect("recovered line exists")
+            })
+            .collect();
+        assert_eq!(recovered_lines.len(), descriptor.unblocks);
         assert!(
-            !changed.contains(&format!(
+            recovered_lines.iter().all(|line| !line.contains(&format!(
                 "[unblocked:: {}]",
                 today.format("%Y-%m-%d")
-            )),
-            "{id} WRITE skip leaves no stamp"
+            ))),
+            "{id} recovered row WRITE skip leaves no stamp"
         );
+        if id == "SV24" {
+            assert!(
+                changed.contains(&format!(
+                    "[unblocked:: {}]",
+                    today.format("%Y-%m-%d")
+                )),
+                "unrelated row keeps its existing stamp"
+            );
+        }
         assert!(expected["dependent_unblocked"].is_null(), "{id} null stamp");
     }
 }

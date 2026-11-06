@@ -408,7 +408,7 @@ fn done_verdict_resolves_root_only_with_scope_note() {
         .as_str()
         .expect("scope note")
         .to_string();
-    assert_eq!(scope, "· its 2 embedded tasks stay open", "{scope}");
+    assert_eq!(scope, "· its 2 open subtasks stay open", "{scope}");
     let json = capture_json(&vault, &day_file, &["-x", "1"], "!sase:bar");
     assert_eq!(json["offer_closes"][0]["outcome"], "done");
     let deps = fs::read_to_string(vault.join("deps.md")).expect("deps");
@@ -592,7 +592,7 @@ fn ineligible_verdicts_refuse_with_why() {
             "key": "deps.md#^weekly",
             "n": 2,
             "outcome": "done",
-            "why": "recurring",
+            "why": "“Weekly” repeats — close it in Obsidian so Tasks writes the next one",
         }),
         "{json}",
     );
@@ -661,7 +661,10 @@ fn new_task_verdicts_refuse_write_free() {
         capture_json_failing(&vault, &day_file, &["-x", "1"], draft);
     assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
     assert_eq!(json["code"], "offer_close_refused");
-    assert_eq!(json["refused"]["why"], "new_task");
+    assert_eq!(
+        json["refused"]["why"],
+        "“Draft memo” is new in this capture — drop it from the draft instead",
+    );
     assert_eq!(json["refused"]["outcome"], "done");
     assert_eq!(vault_bytes(&vault), before, "refusal writes nothing");
 }

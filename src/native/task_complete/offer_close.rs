@@ -232,11 +232,21 @@ fn consequence_suffix(
         suffix.push_str(&format!(" · unblocks {} tasks", plan.unblocked.len()));
     }
     let stamp = format!("[unblocked:: {}]", today.format("%Y-%m-%d"));
+    // Count stamps on the rows this recovery actually changed. Other rows in
+    // the same note may already carry today's stamp and must not affect the
+    // consequence for this close.
     let stamped = plan
-        .changed_files
-        .values()
-        .map(|contents| contents.matches(stamp.as_str()).count())
-        .sum::<usize>();
+        .unblocked
+        .iter()
+        .filter(|row| {
+            plan.changed_files
+                .get(&row.note_path)
+                .and_then(|contents| {
+                    contents.lines().nth(row.source_line_index)
+                })
+                .is_some_and(|line| line.contains(stamp.as_str()))
+        })
+        .count();
     if stamped == plan.unblocked.len() {
         if plan.unblocked.len() == 1 {
             suffix.push_str(" · back tomorrow as a tickler");

@@ -319,6 +319,42 @@
         "dependent_unblocked": "2026-11-05",
         "dependent_offer_round": false
       }
+    },
+    {
+      "id": "SV23",
+      "kind": "recover",
+      "path": "Tasks.md",
+      "key": "Tasks.md#^root",
+      "line": 0,
+      "today": "2026-11-05",
+      "source": "- [ ] #task Root [id:: root] ^root\n- [ ] #task Unrelated [fresh:: 2026-11-01] [unblocked:: 2026-11-05] [id:: unrelated] ^unrelated\n- [?] #task Waiting [fresh:: 2026-11-01] [dependsOn:: root] [id:: waiting] ^waiting\n",
+      "action": "done",
+      "expected": {
+        "root": "- [x] #task Root [id:: root]  [completion:: 2026-11-05] ^root",
+        "dependent_status": " ",
+        "dependent_unblocked": "2026-11-05",
+        "dependent_offer_round": false,
+        "consequence": "✓ Completes “Root” · Ready → Done · unblocks “Waiting” · back tomorrow as a tickler",
+        "unblocks": 1
+      }
+    },
+    {
+      "id": "SV24",
+      "kind": "recover-unstamped",
+      "path": "Tasks.md",
+      "key": "Tasks.md#^root",
+      "line": 0,
+      "today": "2026-11-05",
+      "source": "- [ ] #task Root [id:: root] ^root\n- [ ] #task Unrelated [fresh:: 2026-11-01] [unblocked:: 2026-11-05] [id:: unrelated] ^unrelated\n- [?] #task New waiting [dependsOn:: root] [id:: waiting] ^waiting\n",
+      "action": "done",
+      "expected": {
+        "root": "- [x] #task Root [id:: root]  [completion:: 2026-11-05] ^root",
+        "dependent_status": " ",
+        "dependent_unblocked": null,
+        "dependent_offer_round": false,
+        "consequence": "✓ Completes “Root” · Ready → Done · unblocks “New waiting”",
+        "unblocks": 1
+      }
     }
   ]
 }

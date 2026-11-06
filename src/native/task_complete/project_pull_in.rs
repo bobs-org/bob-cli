@@ -644,6 +644,7 @@ pub(crate) fn emit_rows(plan: &mut SuccessorPlan, ctx: RowEmit<'_>) {
         let row = UnblockedRow {
             note_path: file.relative_path.clone(),
             block_id,
+            source_line_index: task.line_index,
             line,
             text,
             previous_status_symbol: task.status,
@@ -845,6 +846,7 @@ pub(crate) fn emit_rows(plan: &mut SuccessorPlan, ctx: RowEmit<'_>) {
                 let row = UnblockedRow {
                     note_path: file.relative_path.clone(),
                     block_id,
+                    source_line_index: task.line_index,
                     line,
                     text: task.description.clone(),
                     previous_status_symbol: task.status,
@@ -951,6 +953,7 @@ fn emit_keep_moving_recover(
     plan.keep_moving.push(UnblockedRow {
         note_path: file.relative_path.clone(),
         block_id,
+        source_line_index: task.line_index,
         line,
         text: task.description.clone(),
         previous_status_symbol: task.status,
@@ -1054,6 +1057,7 @@ fn emit_pull_in_recover(
     let row = UnblockedRow {
         note_path: file.relative_path.clone(),
         block_id,
+        source_line_index: task.line_index,
         line,
         text: pull_in_display_text(&task.description),
         previous_status_symbol: task.status,

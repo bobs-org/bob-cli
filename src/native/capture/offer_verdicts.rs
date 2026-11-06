@@ -917,9 +917,8 @@ fn verdict_message(
     message
 }
 
-/// `↳` tickler lines for dependents a verdict recovered: only stamped
-/// rows come back as ticklers, so only they print. One line per
-/// dependent, or a single plural line.
+/// `↳` tickler receipt for dependents a verdict recovered: only stamped
+/// rows come back as ticklers, with the approved singular/plural copy.
 fn tickler_lines(
     recovered: &[super::output::OfferCloseRecoveredJson],
 ) -> Vec<String> {
@@ -930,11 +929,11 @@ fn tickler_lines(
     match stamped.len() {
         0 => Vec::new(),
         1 => vec![format!(
-            "↳ also unblocked “{}” · back tomorrow as a tickler",
+            "↳ “{}” back tomorrow as a tickler",
             stamped[0].text
         )],
         count => vec![format!(
-            "↳ also unblocked {count} tasks · back tomorrow as ticklers"
+            "↳ {count} unblocked tasks back tomorrow as ticklers"
         )],
     }
 }
@@ -1042,8 +1041,7 @@ mod verdict_copy_tests {
         );
         assert_eq!(
             tickler_lines(&[recovered("Gamma", true)]),
-            vec!["↳ also unblocked “Gamma” · back tomorrow as a tickler"
-                .to_string()],
+            vec!["↳ “Gamma” back tomorrow as a tickler".to_string()],
         );
         assert_eq!(
             tickler_lines(&[
@@ -1051,8 +1049,7 @@ mod verdict_copy_tests {
                 recovered("Delta", false),
                 recovered("Epsilon", true),
             ]),
-            vec!["↳ also unblocked 2 tasks · back tomorrow as ticklers"
-                .to_string()],
+            vec!["↳ 2 unblocked tasks back tomorrow as ticklers".to_string()],
         );
     }
 }

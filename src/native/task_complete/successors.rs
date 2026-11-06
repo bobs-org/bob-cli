@@ -331,6 +331,9 @@ pub(crate) struct SuccessorLinkReport {
 pub(crate) struct UnblockedRow {
     pub note_path: PathBuf,
     pub block_id: String,
+    /// Zero-based position of this task row in its source note. `line` below
+    /// is the display/ledger placement line, not a source-row index.
+    pub source_line_index: usize,
     pub line: usize,
     pub text: String,
     pub previous_status_symbol: char,
