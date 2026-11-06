@@ -42,12 +42,10 @@ fn calendar_scope(value: &str) -> bool {
         || value.ends_with("/calendar")
 }
 
-#[allow(dead_code)]
 fn gmail_service(value: &str) -> bool {
     value == "gmail"
 }
 
-#[allow(dead_code)]
 fn gmail_scope(value: &str) -> bool {
     value == "https://www.googleapis.com/auth/gmail.readonly"
         || value.contains("gmail.readonly")
@@ -74,7 +72,6 @@ pub(crate) const GCAL: GoogleService = GoogleService {
     scope_matches: calendar_scope,
 };
 
-#[allow(dead_code)]
 pub(crate) const GMAIL: GoogleService = GoogleService {
     command: "bob gmail",
     client_bucket: "bob-gmail",

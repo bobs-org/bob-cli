@@ -38,10 +38,12 @@ selectors in the pasted URL do not override Bob's configured account.
 
 ## Paste or pick inside Obsidian
 
-The Bob Mail plugin's **Link email…** picker and automatic paste-to-link
-gesture are coming in bob-mail. Until installed, save explicitly with
-`bob gmail save 'GMAIL_URL' -f json` and paste the returned `link` into your
-task. Existing Markdown links keep the words you chose for their label.
+With the Bob Mail plugin enabled, run **Bob Mail: Link email…** to pick a
+recent or searched thread; Bob saves it and inserts its link at the cursor.
+Pasting one Gmail URL into a note does the same in place, and a failed save
+leaves the URL as pasted. Without the plugin, run
+`bob gmail save 'GMAIL_URL' -f json` and paste the returned `link`. Existing
+Markdown links keep the words you chose for their label.
 
 ## Link older tasks
 
@@ -66,4 +68,5 @@ excluded from whole-vault backfill; see [Bob Gmail](../gmail.md) for details.
    URL stays, then retry with `bob gmail link mac_inbox.md`.
 
 The exact preview fields and worker behavior are in
-[Capture: Gmail links](../capture.md#gmail-links).
+[Capture: Gmail links](../capture.md#gmail-links); the picker and paste
+settings are in [Bob Mail](../reference/plugins/bob-mail.md).

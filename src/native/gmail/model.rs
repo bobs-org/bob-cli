@@ -63,9 +63,6 @@ pub(crate) enum HeaderKind {
     ListId,
     ListUnsubscribe,
     Precedence,
-    ContentType,
-    ContentDisposition,
-    ContentId,
 }
 
 impl HeaderKind {
@@ -80,9 +77,6 @@ impl HeaderKind {
             Self::ListId => "List-Id",
             Self::ListUnsubscribe => "List-Unsubscribe",
             Self::Precedence => "Precedence",
-            Self::ContentType => "Content-Type",
-            Self::ContentDisposition => "Content-Disposition",
-            Self::ContentId => "Content-ID",
         }
     }
 }

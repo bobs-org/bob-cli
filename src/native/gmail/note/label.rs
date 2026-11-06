@@ -1,15 +1,15 @@
 //! Task-safe, alias-safe labels for mail-note wikilinks.
 
-use crate::native::task_text_escape;
-
-use super::text::subject_without_prefixes;
-
 const SUBJECT_LABEL_CHARS: usize = 60;
 const WHO_LABEL_CHARS: usize = 24;
 
 /// Build a label using the configured template. The selected epic branch is
 /// `subject_who`, whose default is `✉️ {subject} · {who}`.
+#[cfg(test)]
 pub(crate) fn render(template: &str, subject: &str, who: &str) -> String {
+    use super::text::subject_without_prefixes;
+    use crate::native::task_text_escape;
+
     let subject =
         truncate_label(&subject_without_prefixes(subject), SUBJECT_LABEL_CHARS);
     let subject = if subject.is_empty() {

@@ -159,23 +159,18 @@ impl GmailConfig {
         &self.folder
     }
 
-    // Consumed by mail-note / save / pull-attach; parsed in full by shell.
-    #[allow(dead_code)]
     pub(crate) fn link_label(&self) -> &str {
         &self.link_label
     }
 
-    #[allow(dead_code)]
     pub(crate) fn never_save_from(&self) -> &[String] {
         &self.never_save_from
     }
 
-    #[allow(dead_code)]
     pub(crate) fn never_save_labels(&self) -> &[String] {
         &self.never_save_labels
     }
 
-    #[allow(dead_code)]
     pub(crate) fn pull_inbox(&self) -> &str {
         &self.pull_inbox
     }

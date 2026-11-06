@@ -150,8 +150,8 @@ bob gmail
 bob gmail logout -y
 ```
 
-`bob gmail` should list no saved threads yet until `save` lands. `doctor`
-should be green before you continue to saving.
+`bob gmail` lists your saved threads; a new vault has none yet. `doctor`
+should be green before you save one with `bob gmail save 'GMAIL_URL'`.
 
 ## Related
 

@@ -206,12 +206,6 @@ fn canonical_percent_encode(text: &str) -> String {
     encoded
 }
 
-/// Format a decimal thread/message number as lowercase hex, or `None` when
-/// the decimal does not fit in a `u64`.
-pub(crate) fn dec_to_hex(dec: &str) -> Option<String> {
-    parse_dec_to_hex(dec)
-}
-
 /// The date hint for a thread hex id: `id >> 20` is epoch milliseconds.
 pub(crate) fn thread_date_hint(hex: &str) -> Option<DateTime<Utc>> {
     let trimmed = hex.trim();

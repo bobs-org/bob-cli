@@ -56,7 +56,8 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
                     id: "gog",
                     status: CheckStatus::Ok,
                     summary: format!(
-                        "v{version} · {}",
+                        "v{} · {}",
+                        version.trim_start_matches('v'),
                         gog.program().display()
                     ),
                     fix: None,

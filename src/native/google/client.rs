@@ -13,7 +13,6 @@ use super::profile::GCAL;
 
 /// Where an [`OAuthClient`] came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum ClientOrigin {
     File,
     Stored,
@@ -23,7 +22,6 @@ pub(crate) enum ClientOrigin {
 }
 
 impl ClientOrigin {
-    #[allow(dead_code)]
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::File => "file",
@@ -73,12 +71,10 @@ impl ClientProblem {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn message(&self) -> &str {
         &self.message
     }
 
-    #[allow(dead_code)]
     pub(crate) fn hint(&self) -> &str {
         &self.hint
     }
@@ -90,12 +86,6 @@ impl ClientProblem {
             format!("{}: {}", file, self.message),
         )
         .with_hint(&self.hint)
-    }
-
-    /// Convert without a file (for stdin or already-read buffers).
-    #[allow(dead_code)]
-    pub(crate) fn into_error_no_file(self) -> GoogleError {
-        GoogleError::setup("client_invalid", self.message).with_hint(&self.hint)
     }
 }
 

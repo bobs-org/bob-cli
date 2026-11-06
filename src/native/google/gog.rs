@@ -632,7 +632,9 @@ pub(crate) fn classify_gog_failure(
         .with_hint(&format!("run `{} login`", service.command));
     }
     if blob.contains("credentials")
-        && (blob.contains("not found") || blob.contains("no oauth client"))
+        && (blob.contains("not found")
+            || blob.contains("no oauth client")
+            || blob.contains("credentials missing"))
         || blob.contains("no client")
     {
         return GoogleError::setup(
@@ -740,6 +742,21 @@ mod tests {
             classify_gog_failure(GCAL, "", "Error 400: redirect_uri_mismatch");
         assert_eq!(error.kind(), "client_invalid");
         assert_eq!(error.exit_code(), 2);
+    }
+
+    #[test]
+    fn maps_missing_client_credentials_to_no_client() {
+        // gog v0.44.0 wording when the client bucket has no OAuth client.
+        let error = classify_gog_failure(
+            GMAIL,
+            "",
+            "OAuth client credentials missing (OAuth client ID JSON).\n\
+             Then run: gog auth credentials <credentials.json>",
+        );
+        assert_eq!(error.kind(), "no_client");
+        assert_eq!(error.exit_code(), 2);
+        assert!(error.message().contains("bob-gmail"));
+        assert!(error.hint().unwrap_or_default().contains("bob gmail login"));
     }
 
     #[test]

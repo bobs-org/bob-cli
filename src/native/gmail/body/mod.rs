@@ -8,34 +8,9 @@ pub(super) mod render;
 
 use std::collections::BTreeMap;
 
-// Consumer: mail-note, gmail-save, and search-peek (outer hg phases) use
-// this public-to-crate boundary once they land.
-#[allow(unused_imports)]
-pub(crate) use mime::{collect_message_bodies, MimeInventory};
-
-// Consumer: outer mail-note, gmail-save, and search-peek phases render sender
-// content through this inert boundary.
-#[allow(unused_imports)]
-pub(crate) use inert::{
-    inert_label, inert_multiline, inert_single_line, inert_yaml_value,
-    prose_blocks, remote_image_link, render_blocks, verified_local_image_embed,
-    verified_local_image_wikilink, Block, Inline, SafeUrl,
-};
-
-// Consumer: render_message (used by outer mail-note, gmail-save, and
-// search-peek) assembles HTML selection and the public RenderedBody from this
-// sanitized HTML result.
-#[allow(unused_imports)]
-pub(crate) use html::{render_html, HtmlRender};
-
-// Consumer: mail-note and gmail-save (outer hg phases) segment plain replies
-// and render whole messages through this boundary.
-#[allow(unused_imports)]
-pub(crate) use plain::{render_plain, PlainRender};
-#[allow(unused_imports)]
-pub(crate) use render::{
-    importable_messages, inert_metadata, is_bulletin, is_draft, render_message,
-};
+pub(crate) use inert::{inert_single_line, verified_local_image_wikilink};
+pub(crate) use mime::collect_message_bodies;
+pub(crate) use render::{importable_messages, render_message};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BodySource {

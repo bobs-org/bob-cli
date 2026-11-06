@@ -247,19 +247,6 @@ pub(crate) fn fetch_confirmed_thread<R: GmailRead>(
     Ok(ConfirmedThread { identity, thread })
 }
 
-pub(crate) fn resolve_and_fetch<R: GmailRead>(
-    reader: &R,
-    account: &str,
-    vault: &Path,
-    folder: &Path,
-    index: &MailIndex,
-    input: &str,
-) -> Result<ConfirmedThread, GmailError> {
-    let identity =
-        resolve_identity(reader, account, vault, folder, index, input)?;
-    fetch_confirmed_thread(reader, identity)
-}
-
 fn parse_locator(input: &str) -> Result<Option<GmailRef>, GmailError> {
     if let Some(parsed) = ids::parse_gmail_url(input) {
         return match parsed.verdict {
@@ -616,18 +603,21 @@ fn is_hex_id(value: &str) -> bool {
     value.len() == 16 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+/// Fallback when the classified failure carried no hint of its own.
+const SIGN_IN_HINT: &str = "run `bob gmail login`";
+
 fn resolution_remote_error(error: GmailError) -> GmailError {
     match error.kind() {
         "not_found" => GmailError::runtime(
             "gone",
             "Google has no matching Gmail item".to_string(),
         ),
-        "invalid_grant" | "not_logged_in" | "insufficient_scope" => {
-            GmailError::runtime(
-                "awaiting_sign_in",
-                "the bob-gmail read grant needs attention".to_string(),
-            )
-        }
+        "invalid_grant" | "not_logged_in" | "insufficient_scope"
+        | "no_client" | "invalid_client" => GmailError::runtime(
+            "awaiting_sign_in",
+            "the bob-gmail read grant needs attention".to_string(),
+        )
+        .with_hint(error.hint().unwrap_or(SIGN_IN_HINT)),
         "network" | "timeout" | "api_disabled" | "bad_json" => error,
         _ => error,
     }
@@ -638,7 +628,8 @@ fn account_error(error: GmailError) -> GmailError {
         "not_logged_in" => GmailError::runtime(
             "awaiting_sign_in",
             "no bob-gmail Gmail grant is available".to_string(),
-        ),
+        )
+        .with_hint(error.hint().unwrap_or(SIGN_IN_HINT)),
         _ => error,
     }
 }

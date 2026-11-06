@@ -12,7 +12,6 @@ pub(crate) mod signin;
 
 pub(crate) use error::GoogleError;
 pub(crate) use gog::{parse_json, Gog};
-#[allow(unused_imports)]
 pub(crate) use profile::{GoogleService, GCAL, GMAIL};
 
 pub(crate) const REVOKE_URL: &str = "https://myaccount.google.com/permissions";

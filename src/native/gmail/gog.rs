@@ -96,8 +96,6 @@ impl Gog {
         Ok(output.stdout)
     }
 
-    // Consumed by gmail-save and search-peek; shell check uses `search` only.
-    #[allow(dead_code)]
     /// Fetch one thread with all messages as a typed envelope.
     ///
     /// The transport's original response bytes go straight through the typed
@@ -235,28 +233,6 @@ impl Gog {
             .map_err(|error| GmailError::runtime("bad_json", error.to_string()))
     }
 
-    // Consumed by outer gmail-save and search-peek once they land.
-    #[allow(dead_code)]
-    /// Fetch one message.
-    pub(crate) fn message_get(
-        &self,
-        account: &str,
-        hex: &str,
-    ) -> Result<serde_json::Value, GmailError> {
-        let stdout = self.gmail_run(
-            account,
-            vec![
-                OsString::from("gmail"),
-                OsString::from("get"),
-                OsString::from(hex),
-                OsString::from("--format"),
-                OsString::from("full"),
-            ],
-        )?;
-        let value = parse_json(&stdout)?;
-        Ok(value.get("message").cloned().unwrap_or(value))
-    }
-
     /// Fetch message identity and headers without requesting the message body.
     pub(crate) fn message_metadata(
         &self,
@@ -348,27 +324,6 @@ impl Gog {
         })
     }
 
-    // Consumed by outer mail-note link resolution once it lands.
-    #[allow(dead_code)]
-    /// Print Gmail web URLs for threads.
-    pub(crate) fn url(
-        &self,
-        account: &str,
-        hex: &str,
-    ) -> Result<serde_json::Value, GmailError> {
-        let stdout = self.gmail_run(
-            account,
-            vec![
-                OsString::from("gmail"),
-                OsString::from("url"),
-                OsString::from(hex),
-            ],
-        )?;
-        parse_json(&stdout)
-    }
-
-    // Consumed by gmail-save attachment hydration (prepare-content).
-    #[allow(dead_code)]
     /// Download one attachment's bytes through the narrowly allowed
     /// Discovery read
     /// (`api call gmail v1 gmail.users.messages.attachments.get`).
@@ -592,13 +547,9 @@ fn redact_gmail_send_error(error: GmailError) -> GmailError {
         "api_disabled" => {
             ("the Gmail API is not enabled for this Cloud project", None)
         }
-        _ => ("gog could not complete the Gmail send operation", None),
+        _ => return redact_gmail_setup_error(error, "Gmail send operation"),
     };
-    let mut redacted = GmailError::runtime(error.kind(), message.to_string());
-    if let Some(hint) = hint {
-        redacted = redacted.with_hint(hint);
-    }
-    redacted
+    redact_keeping_hint(&error, message, hint)
 }
 
 fn redact_gmail_draft_error(error: GmailError) -> GmailError {
@@ -622,13 +573,9 @@ fn redact_gmail_draft_error(error: GmailError) -> GmailError {
         "api_disabled" => {
             ("the Gmail API is not enabled for this Cloud project", None)
         }
-        _ => ("gog could not complete the Gmail draft operation", None),
+        _ => return redact_gmail_setup_error(error, "Gmail draft operation"),
     };
-    let mut redacted = GmailError::runtime(error.kind(), message.to_string());
-    if let Some(hint) = hint {
-        redacted = redacted.with_hint(hint);
-    }
-    redacted
+    redact_keeping_hint(&error, message, hint)
 }
 
 /// Build the exact argv for one Discovery attachment read: shared read-only
@@ -730,16 +677,59 @@ fn redact_gmail_read_error(error: GmailError) -> GmailError {
         "network" => "gog could not reach Google",
         "timeout" => "gog timed out while reading Gmail",
         "api_disabled" => "the Gmail API is not enabled for this Cloud project",
-        _ => "gog could not complete a read-only Gmail request",
+        _ => return redact_gmail_setup_error(error, "read-only Gmail request"),
     };
-    GmailError::runtime(error.kind(), message.to_string())
+    redact_keeping_hint(&error, message, None)
+}
+
+/// Failures every Gmail operation shares: a missing or unknown OAuth client
+/// and an unreadable keyring mean this host is not signed in, so they keep
+/// the classifier's sign-in hint. Anything unclassified stays a fixed,
+/// body-free message naming only the operation.
+fn redact_gmail_setup_error(error: GmailError, operation: &str) -> GmailError {
+    let message = match error.kind() {
+        "no_client" => "no bob-gmail OAuth client is stored on this host",
+        "invalid_client" => {
+            "Google does not know the stored bob-gmail OAuth client"
+        }
+        "keyring" => {
+            "gog could not read the bob-gmail sign-in from the system keyring"
+        }
+        _ => {
+            return GmailError::runtime(
+                error.kind(),
+                format!("gog could not complete the {operation}"),
+            );
+        }
+    };
+    redact_keeping_hint(&error, message, None)
+}
+
+/// Replace a classified gog failure's message with a fixed, body-free one.
+///
+/// The classifier's hint is a fixed string built from the service profile,
+/// never from gog's output, so it survives unless the operation supplies a
+/// more specific hint. Setup failures keep exit status 2.
+fn redact_keeping_hint(
+    error: &GmailError,
+    message: &str,
+    hint: Option<&str>,
+) -> GmailError {
+    let redacted = if error.exit_code() == 2 {
+        GmailError::setup(error.kind(), message.to_string())
+    } else {
+        GmailError::runtime(error.kind(), message.to_string())
+    };
+    match hint.or_else(|| error.hint()) {
+        Some(hint) => redacted.with_hint(hint),
+        None => redacted,
+    }
 }
 
 /// Strict attachment decoding: standard and base64url alphabets, padded and
 /// unpadded. Each engine rejects malformed padding and trailing data, so only
 /// a fully valid encoding succeeds. Body-free: returns `None` without
 /// echoing input on failure.
-#[allow(dead_code)]
 fn decode_attachment_base64(cleaned: &str) -> Option<Vec<u8>> {
     use base64::engine::general_purpose::{
         STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD,
@@ -786,6 +776,40 @@ mod tests {
             assert!(
                 decode_attachment_base64(&cleaned).is_none(),
                 "accepted malformed {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn read_errors_keep_sign_in_hints_and_setup_status() {
+        use crate::native::google::{gog::classify_gog_failure, GMAIL};
+
+        for (stderr, kind, exit_code) in [
+            (
+                "OAuth client credentials missing (OAuth client ID JSON)",
+                "no_client",
+                2,
+            ),
+            ("no token stored for PRIVATE_SENTINEL", "not_logged_in", 2),
+            (
+                "invalid_grant: PRIVATE_SENTINEL expired",
+                "invalid_grant",
+                1,
+            ),
+            ("keyring: PRIVATE_SENTINEL locked", "keyring", 1),
+        ] {
+            let error = redact_gmail_read_error(classify_gog_failure(
+                GMAIL, "", stderr,
+            ));
+            assert_eq!(error.kind(), kind, "{stderr}");
+            assert_eq!(error.exit_code(), exit_code, "{stderr}");
+            assert!(!error.message().contains("PRIVATE_SENTINEL"));
+            assert!(
+                error
+                    .hint()
+                    .is_some_and(|hint| hint.contains("bob gmail login")),
+                "{kind} must point at login: {:?}",
+                error.hint()
             );
         }
     }

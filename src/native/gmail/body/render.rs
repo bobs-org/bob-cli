@@ -182,6 +182,7 @@ pub(crate) fn importable_messages(
 /// Format one header kind for safe display: every value passes through the
 /// inert single-line helper exactly once, joined with `; `. Empty when the
 /// header is absent. Filesystem slug/path policy stays with the save phase.
+#[cfg(test)]
 pub(crate) fn inert_metadata(
     message: &GmailMessage,
     kind: HeaderKind,

@@ -164,6 +164,7 @@ pub(crate) fn render_blocks(blocks: &[Block]) -> String {
 /// Each physical line is trimmed of surrounding indentation (sender
 /// indentation never becomes a list level or an indented code block) and
 /// escaped for both inline and line-start hazards at render time.
+#[cfg(test)]
 pub(crate) fn prose_blocks(text: &str) -> Vec<Block> {
     let normalized = normalize_sender(text);
     let mut blocks = Vec::new();
@@ -202,6 +203,7 @@ pub(crate) fn inert_single_line(text: &str) -> String {
 /// Keeps one output line per input line and applies both inline and
 /// line-start escaping to each. Prefer [`prose_blocks`] plus [`render_blocks`]
 /// when block structure is available.
+#[cfg(test)]
 pub(crate) fn inert_multiline(text: &str) -> String {
     render_text_multiline(&normalize_sender(text))
 }
@@ -209,6 +211,7 @@ pub(crate) fn inert_multiline(text: &str) -> String {
 /// Neutralize raw sender text for use as a Markdown link label or wikilink
 /// alias. Same neutralization as [`inert_single_line`]; the separate name
 /// records the caller's contract (label text, never a destination).
+#[cfg(test)]
 pub(crate) fn inert_label(text: &str) -> String {
     inert_single_line(text)
 }
@@ -218,6 +221,7 @@ pub(crate) fn inert_label(text: &str) -> String {
 /// Applies the same syntax neutralization as [`inert_single_line`]; YAML
 /// quoting itself stays with `serde_yaml` in the note layer. The serialized
 /// document and the decoded value both stay free of executable structure.
+#[cfg(test)]
 pub(crate) fn inert_yaml_value(text: &str) -> String {
     inert_single_line(text)
 }
@@ -252,6 +256,7 @@ pub(crate) fn remote_image_link(alt_or_host: &str, url: &str) -> Inline {
 /// forged `cid:` or `file:` reference can never become a local embed through
 /// this function. Returns `None` for anything outside the narrow accepted
 /// shape (`name`, `dir/name`, vault-safe characters only).
+#[cfg(test)]
 pub(crate) fn verified_local_image_embed(
     relative_path: &str,
     alt: &str,
@@ -580,6 +585,7 @@ fn collapse_whitespace(text: &str) -> String {
 
 /// Render one raw sender string that may span lines: escape inline hazards
 /// on every line, then line-start hazards, and rejoin with newlines.
+#[cfg(test)]
 fn render_text_multiline(raw: &str) -> String {
     normalize_sender(raw)
         .split('\n')
@@ -809,6 +815,7 @@ fn render_single_label(inline: &Inline, out: &mut String) {
     }
 }
 
+#[cfg(test)]
 fn render_inline(inline: &Inline, out: &mut String) {
     render_single(inline, out);
 }

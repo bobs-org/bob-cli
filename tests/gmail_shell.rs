@@ -777,6 +777,18 @@ fn doctor_reports_healthy_setup() {
 }
 
 #[test]
+fn doctor_prints_a_v_prefixed_gog_version_once() {
+    let env = GmailEnv::new("bob-cli-gmail-doctor-version");
+    env.write_journal_rules();
+    let fake = FakeGog::new(&env, "gog").scenario("v_prefixed_version");
+    let output = run_gmail(&env, &fake, &["doctor", "-f", "json"]);
+    assert_success(&output, "doctor ok");
+    let doc = json_stdout(&output);
+    let summary = check(&doc, "gog")["summary"].as_str().unwrap_or_default();
+    assert!(summary.starts_with("v0.44.0 · "), "{summary}");
+}
+
+#[test]
 fn doctor_maps_invalid_grant() {
     let env = GmailEnv::new("bob-cli-gmail-doctor-grant");
     env.write_journal_rules();

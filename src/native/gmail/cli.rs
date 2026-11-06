@@ -629,15 +629,6 @@ impl ListFormat {
         }
     }
 
-    // Consumed by gmail-save's list; shell bare only needs `is_json`.
-    #[allow(dead_code)]
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Table => "table",
-            Self::Json => "json",
-        }
-    }
-
     pub(crate) fn is_json(self) -> bool {
         matches!(self, Self::Json)
     }

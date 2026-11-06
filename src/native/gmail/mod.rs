@@ -1,12 +1,11 @@
-//! Pure Gmail identity, message data, and body decoding shared by mail consumers.
+//! `bob gmail`: saved mail notes, Gmail links, label pull, and draft-first
+//! compose.
 //!
-//! The identity helpers do no I/O; later save/link consumers confirm decoded IDs
-//! against Gmail before writing.
+//! Gmail stays the system of record. Reads go through the read-only gog
+//! transport; vault writes are inert, append-only mail notes; sends happen
+//! only through a previewed, confirmed Gmail draft.
 
-// Owned by mail-body (hg.3.1 landing now, hg.3 closing in this turn); allow
-// dead code until outer mail-note, gmail-save, and search-peek consumers land.
 mod attach;
-#[allow(dead_code)]
 pub(crate) mod body;
 pub(crate) mod capture;
 pub(crate) mod cli;
@@ -14,36 +13,25 @@ mod compose;
 mod config;
 mod doctor;
 mod gog;
+pub(crate) mod ids;
+mod journal;
+pub(crate) mod link;
 pub(crate) mod list;
+mod login;
+mod logout;
+pub(crate) mod model;
+pub(crate) mod note;
+pub(crate) mod policy;
+pub(crate) mod prepare;
+mod pull;
+pub(crate) mod resolve;
+mod save;
+pub(crate) mod search_peek;
+pub(crate) mod ui;
 pub(crate) mod worker;
 pub(crate) use crate::native::google::{
     account, client, client_setup, login_ui, signin,
 };
-mod journal;
-pub(crate) mod link;
-mod login;
-mod logout;
-mod pull;
-mod save;
-pub(crate) mod search_peek;
-// Owned by mail-note (bob-cli-hg.5); the save and capture phases consume it.
-#[allow(dead_code)]
-pub(crate) mod note;
-#[allow(dead_code)]
-pub(crate) mod policy;
-// Owned by gmail-save prepare-content (bob-cli-hg.6.1.2); the save
-// transaction consumes it.
-#[allow(dead_code)]
-pub(crate) mod prepare;
-#[allow(dead_code)]
-pub(crate) mod resolve;
-pub(crate) mod ui;
-// Owned by gmail-ids (hg.2, closed) and mail-body (hg.3.1 landing now);
-// outer mail-note, gmail-save, and search-peek phases consume them.
-#[allow(dead_code)]
-pub(crate) mod ids;
-#[allow(dead_code)]
-pub(crate) mod model;
 
 use std::{ffi::OsString, iter};
 

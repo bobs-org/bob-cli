@@ -135,23 +135,3 @@ pub(crate) fn malformed_count(vault: &Path) -> usize {
     }
     count
 }
-
-/// Whether the vault journal directory is readable.
-#[allow(dead_code)]
-pub(crate) fn journal_dir_readable(vault: &Path) -> bool {
-    let dir = vault.join(NAMESPACE.dir);
-    match std::fs::read_dir(&dir) {
-        Ok(_) => true,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
-        Err(_) => false,
-    }
-}
-
-/// Count stored events (for future phases; shell doctor ignores the total).
-#[allow(dead_code)]
-pub(crate) fn event_count(vault: &Path) -> usize {
-    let Ok((stored, _)) = pref_journal::read_raw(vault, NAMESPACE) else {
-        return 0;
-    };
-    stored.len()
-}

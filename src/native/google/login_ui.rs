@@ -55,12 +55,10 @@ impl LoginUi {
         self.step_line(n, label, &self.styler.green("✓"), detail);
     }
 
-    #[allow(dead_code)]
     pub(crate) fn step_warn(&self, n: u8, label: &str, detail: &str) {
         self.step_line(n, label, &self.styler.yellow("!"), detail);
     }
 
-    #[allow(dead_code)]
     pub(crate) fn step_fail(&self, n: u8, label: &str, detail: &str) {
         self.step_line(n, label, &self.styler.red("✗"), detail);
     }

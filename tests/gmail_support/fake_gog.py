@@ -158,6 +158,9 @@ def scenario_defaults(name: str) -> dict:
     }
     if name == "too_old":
         defaults["version"] = "0.43.0"
+    elif name == "v_prefixed_version":
+        # Real gog reports its version token with a leading `v`.
+        defaults["version"] = "v0.44.0"
     elif name == "no_client":
         defaults["clients"] = []
         defaults["accounts"] = []
