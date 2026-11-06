@@ -373,6 +373,76 @@ between the glyph and the title. The existing task-tag-marks toggle
 restores the three source pills everywhere. Pickers, notices, the review
 footer, CLI/TUI, `bob query`, and Bob Mac Capture are unchanged.
 
+### Checklist stage labels
+
+A configured stage tag written immediately after the checklist identity
+run renders as a quiet small-caps label after the sunrise or flag
+(after a type name when one is shown, TI5), in the identity teal,
+slightly quieter than the glyph:
+
+```text
+before: - [?] ☀ #terminal Clean up SASE agents on athena and apollo: …
+after:  - [?] ☀ terminal  Clean up SASE agents on athena and apollo: …   (small caps)
+        - [?] ⚑ periods   Weekly review: …
+        - [?] ☀ #brower   Check weather                                   (typo: stays a pill)
+```
+
+Eligibility is the identity run plus one slot. The existing PRE/POST
+identity run must be recognized, followed by one whitespace run and one
+exact whole-token tag equal to `stage(t)` as the evaluator resolves it
+from the configured list (`freshness.pre_stages` / `post_stages`).
+Matching is case-insensitive. Anything else keeps the native pill, and
+that plain look is the typo signal: an unknown or mistyped tag, a tag
+elsewhere on the line, a conflict whose adjacent tag is not the winner,
+a name from the other tier's list, or no configured list.
+
+The label's tooltip names the tag and its position: line 1
+`#terminal · PRE stage 1 of 3`; line 2 the tier's order with the
+current stage capitalized (`TERMINAL → periods → browser → unstaged`).
+The accessible label is `PRE stage 1 of 3: terminal`. Neither line ever
+contains `::`, so Dataview re-scans stay clean.
+
+Live Preview extends the existing run widget over the stage tag;
+touching any part of it reveals all raw tags for editing. Reading view
+hides the stage anchor in place (it stays in the DOM for copy and
+Dataview round trips) and renders the label. Tasks query rows keep the
+native pill: CSS cannot know the config, and no JavaScript touches
+Tasks' DOM. The existing "Toggle task tag marks" command restores the
+raw pill. Closed rows fade exactly like the glyph. The label refreshes
+when the cached freshness config changes; no reload is required beyond
+what the config cache already needs.
+
+The label is small capitals (`font-variant-caps: all-small-caps`), the
+identity teal at reduced emphasis, with gentle letter-spacing and a
+stable left edge so stacked staged rows align. It stays legible on the
+red Blocked `[?]` tint and in light and dark themes.
+
+| #    | Line                                            | Expected                                                                                                                                    |
+| ---- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| SL1  | `- [?] #task #gtd #pre #terminal Clean up`      | ☀ + `terminal` label; tooltip `#terminal · PRE stage 1 of 3` / `TERMINAL → periods → browser → unstaged`; aria `PRE stage 1 of 3: terminal` |
+| SL2  | `- [?] #task #gtd #post #periods Weekly review` | ⚑ + `periods`; `POST stage 1 of 1`; `PERIODS → unstaged`                                                                                    |
+| SL3  | `- [?] #task #gtd #pre #brower Weather`         | ☀ + native `#brower` pill                                                                                                                   |
+| SL4  | `- [?] #task #gtd #pre Weather #browser`        | ☀ only; native pill at the end                                                                                                              |
+| SL5  | `- [?] #task #gtd #pre #browser #terminal X`    | ☀ only; both pills native (adjacent tag is not the winner)                                                                                  |
+| SL6  | SL1 with no stage config                        | ☀ + native `#terminal` pill                                                                                                                 |
+| SL7  | SL1 plus `[type:: GTD]`                         | ☀ + `GTD` type name + `terminal` label                                                                                                      |
+| SL8  | "Toggle task tag marks" off                     | raw `#task #gtd #pre #terminal` pills                                                                                                       |
+| SL9  | SL1 as `[x]`                                    | label fades with the glyph                                                                                                                  |
+| SL10 | Live Preview cursor touches the run             | all four raw tags revealed                                                                                                                  |
+| SL11 | SL1 inside a Tasks query result                 | native `#terminal` pill                                                                                                                     |
+| SL12 | `#task #gtd #post #terminal`                    | ⚑ + native pill (terminal is a PRE stage only)                                                                                              |
+
+Config for the vectors: `pre_stages: [terminal, periods, browser]`,
+`post_stages: [periods]`.
+
+Verification: SL1–SL12 are covered by `scripts/test-ledger-tools-task-tag-marks.cjs`
+in bob-plugins (core resolution, tooltips, Live Preview range extension and
+reveal, Reading-view hide-in-place and label, toggle restore, Tasks-row
+exclusion, and the CSS contract). Light and dark legibility rides the
+theme-aware identity hue with reduced emphasis; the closed-row fade reuses
+the glyph's resting mix. No live Obsidian session was available in this
+phase; the rollout phase confirms the footer and labels on open rows.
+
 ## Toggle and lifecycle
 
 The command "Toggle task tag marks" (id `toggle-task-tag-marks`) is
