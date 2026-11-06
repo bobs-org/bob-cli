@@ -1,5 +1,5 @@
 # bash 3.2-safe loader for scripts/lib/install_ui.
-# Sourced by the justfile `install` recipe (and later by scripts/install_all).
+# Sourced by the justfile `install` recipe and by scripts/install_all.
 
 _install_ui_lib_dir="$(CDPATH= cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 _install_ui_repo_root="$(CDPATH= cd "${_install_ui_lib_dir}/../.." && pwd)"

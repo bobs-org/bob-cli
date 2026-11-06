@@ -47,20 +47,57 @@ else
 fi
 self_pull_state="${BOB_INSTALL_ALL_SELF_PULL:-}"
 self_pull_detail="${BOB_INSTALL_ALL_SELF_PULL_DETAIL:-}"
+self_pull_old="${BOB_INSTALL_ALL_SELF_PULL_OLD:-}"
+self_pull_new="${BOB_INSTALL_ALL_SELF_PULL_NEW:-}"
+self_pull_protocol="${BOB_INSTALL_ALL_PROTOCOL:-}"
 header_done="${BOB_INSTALL_ALL_HEADER_DONE:-}"
 clones_offered="${BOB_INSTALL_ALL_CLONES_OFFERED:-}"
 plugins_clone_state="${BOB_INSTALL_ALL_PLUGINS_CLONE:-}"
 mac_capture_clone_state="${BOB_INSTALL_ALL_MAC_CAPTURE_CLONE:-}"
+run_id="${BOB_INSTALL_RUN_ID:-}"
 unset BOB_INSTALL_ALL_ELAPSED BOB_INSTALL_ALL_SELF_PULL \
-  BOB_INSTALL_ALL_SELF_PULL_DETAIL BOB_INSTALL_ALL_HEADER_DONE \
+  BOB_INSTALL_ALL_SELF_PULL_DETAIL BOB_INSTALL_ALL_SELF_PULL_OLD \
+  BOB_INSTALL_ALL_SELF_PULL_NEW BOB_INSTALL_ALL_PROTOCOL \
+  BOB_INSTALL_ALL_HEADER_DONE \
   BOB_INSTALL_ALL_CLONES_OFFERED BOB_INSTALL_ALL_PLUGINS_CLONE \
   BOB_INSTALL_ALL_MAC_CAPTURE_CLONE
+if [[ -z "$run_id" ]]; then
+  run_id="$(date +%Y%m%d-%H%M%S)-$$"
+fi
+export BOB_INSTALL_RUN_ID="$run_id"
+export BOB_INSTALL_ALL_RUN_ID="$run_id"
+# Tells the justfile `install` recipe to skip its nested banner and quiet
+# shell completion; every helper call below shares the same run ID.
+export BOB_INSTALL_ALL=1
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$script_dir/.." && pwd)"
 parent="$(dirname "$root")"
+# Best-effort UI helper; every call site below treats a nonzero status as
+# "feature unavailable" and continues with today's behavior.
+if [[ -f "$root/scripts/lib/install_ui.sh" ]]; then
+  # shellcheck disable=SC1091
+  source "$root/scripts/lib/install_ui.sh"
+fi
+# A missing loader degrades to today's behavior: every helper call below
+# fails silently and the install continues.
+if ! command -v install_ui >/dev/null 2>&1; then
+  install_ui() { return 1; }
+fi
+if ! command -v install_ui_mark_installed >/dev/null 2>&1; then
+  install_ui_mark_installed() { return 1; }
+fi
 plugins_dir="$parent/bob-plugins"
 mac_capture_dir="$parent/bob-mac-capture"
+# Recorded pull results, one set per repo. The header pulls fill them in and
+# the steps and the digest consume them; steps never pull again.
+cli_pull_state=""; cli_pull_detail=""; cli_pull_output=""
+cli_pull_pre=""; cli_pull_post=""
+plugins_pull_state=""; plugins_pull_detail=""; plugins_pull_output=""
+plugins_pull_pre=""; plugins_pull_post=""
+maccap_pull_state=""; maccap_pull_detail=""; maccap_pull_output=""
+maccap_pull_pre=""; maccap_pull_post=""
+legacy_digest_unavailable=0
 clone_base='git@github.com:bobs-org'
 obsidian_dir="${BOB_DIR:-$HOME/bob}/.obsidian"
 total_start=0
@@ -218,20 +255,25 @@ print_summary() {
 
 pull_repo() {
   local dir="$1"
-  local old_sha new_sha count pull_status
+  local old_sha new_sha count pull_status pre_full post_full
   PULL_OUTPUT=""
+  PULL_PRE=""
+  PULL_POST=""
   if ! git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     PULL_STATE=none
     PULL_DETAIL='not a git checkout'
     return 0
   fi
-  if ! old_sha="$(git -C "$dir" rev-parse --short HEAD 2>/dev/null)"; then
+  if ! pre_full="$(git -C "$dir" rev-parse --verify HEAD 2>/dev/null)"; then
     PULL_STATE=none
     PULL_DETAIL='not a git checkout'
     return 0
   fi
+  if ! old_sha="$(git -C "$dir" rev-parse --short HEAD 2>/dev/null)"; then
+    old_sha="${pre_full:0:7}"
+  fi
+  PULL_PRE="$pre_full"
   pull_tmp_file="$(mktemp "${TMPDIR:-/tmp}/bob-install-all.XXXXXX")"
-  command_line "git -C $(display_path "$dir") pull --ff-only --no-rebase"
   if git -C "$dir" pull --ff-only --no-rebase >"$pull_tmp_file" 2>&1; then
     pull_status=0
   else
@@ -241,10 +283,13 @@ pull_repo() {
     PULL_STATE=warn
     PULL_DETAIL='pull failed — using local checkout'
     PULL_OUTPUT="$(cat "$pull_tmp_file")"
+    PULL_POST="$pre_full"
   else
+    post_full="$(git -C "$dir" rev-parse --verify HEAD 2>/dev/null || printf '%s' "$pre_full")"
+    PULL_POST="$post_full"
     new_sha="$(git -C "$dir" rev-parse --short HEAD 2>/dev/null || printf '%s' "$old_sha")"
-    if [[ "$old_sha" != "$new_sha" ]]; then
-      count="$(git -C "$dir" rev-list --count "$old_sha..$new_sha" 2>/dev/null || printf '0')"
+    if [[ "$pre_full" != "$post_full" ]]; then
+      count="$(git -C "$dir" rev-list --count "$pre_full..$post_full" 2>/dev/null || printf '0')"
       PULL_STATE=updated
       if [[ "$count" == 1 ]]; then
         PULL_DETAIL="1 new commit · $old_sha → $new_sha"
@@ -260,22 +305,48 @@ pull_repo() {
   pull_tmp_file=""
 }
 
-show_pull_result() {
+show_pull_row() {
+  local name="$1" padded
+  padded="$(printf '%-16s' "$name")"
   case "$PULL_STATE" in
-    cloned)
-      glyph_line 32 '  ⇣  clone  ' '✓' "$PULL_DETAIL"
-      ;;
-    updated|current)
-      glyph_line 32 '  ⇣  pull   ' '✓' "$PULL_DETAIL"
+    cloned|updated|current)
+      printf '  ⇣  %s ' "$padded"
+      paint 32 '✓'
+      printf '  %s\n' "$PULL_DETAIL"
       ;;
     warn)
-      glyph_line 33 '  ⇣  pull   ' '⚠' "$PULL_DETAIL"
+      printf '  ⇣  %s ' "$padded"
+      paint 33 '⚠'
+      printf '  %s\n' "$PULL_DETAIL"
       dim_diagnostics "$PULL_OUTPUT"
       ;;
     *)
-      glyph_line 2 '  ⇣  pull   ' '–' "$PULL_DETAIL"
+      printf '  ⇣  %s ' "$padded"
+      paint 2 '–'
+      printf '  %s\n' "$PULL_DETAIL"
       ;;
   esac
+}
+
+dim_row() {
+  if [[ "$use_color" -eq 1 ]]; then
+    printf '  \033[2m%s\033[0m\n' "$1"
+  else
+    printf '  %s\n' "$1"
+  fi
+}
+
+# Today's pre-pull checks, shared by the header pulls and the steps.
+plugins_eligible() {
+  [[ -d "$plugins_dir" && -d "$plugins_dir/plugins" && -d "$obsidian_dir" ]]
+}
+
+mac_capture_eligible() {
+  [[ "$(uname -s)" == Darwin && -d "$mac_capture_dir" && -f "$mac_capture_dir/Scripts/install.sh" ]]
+}
+
+is_work_tree() {
+  git -C "$1" rev-parse --is-inside-work-tree >/dev/null 2>&1
 }
 
 # Asks [y/N] and clones on yes. Sets CLONE_STATE to cloned, failed, or "".
@@ -329,11 +400,40 @@ offer_missing_clones() {
 fresh_clone_result() {
   PULL_OUTPUT=''
   PULL_STATE=cloned
+  PULL_PRE=''
+  PULL_POST="$(git -C "$1" rev-parse --verify HEAD 2>/dev/null || printf '')"
   PULL_DETAIL="cloned · $(git -C "$1" rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
 }
 
-pull_detail_for_summary() {
-  printf '%s' "$PULL_DETAIL"
+# Resolve the legacy upgrade range: the previous script re-exec'd this one
+# with only BOB_INSTALL_ALL_SELF_PULL_DETAIL ("N new commit(s) · old → new").
+# Both short SHAs must resolve and the old one must be an ancestor; otherwise
+# the digest gets no invented range.
+resolve_legacy_pull_detail() {
+  local detail="$1" pair old_short new_short old_full new_full
+  legacy_digest_unavailable=0
+  cli_pull_pre=""; cli_pull_post=""
+  pair="${detail##*· }"
+  old_short="${pair%% → *}"
+  new_short="${pair##*→ }"
+  if [[ -z "$old_short" || -z "$new_short" || "$old_short" == "$pair" || "$new_short" == "$pair" ]]; then
+    legacy_digest_unavailable=1
+    return 0
+  fi
+  if ! old_full="$(git -C "$root" rev-parse --verify "${old_short}^{commit}" 2>/dev/null)"; then
+    legacy_digest_unavailable=1
+    return 0
+  fi
+  if ! new_full="$(git -C "$root" rev-parse --verify "${new_short}^{commit}" 2>/dev/null)"; then
+    legacy_digest_unavailable=1
+    return 0
+  fi
+  if ! git -C "$root" merge-base --is-ancestor "$old_full" "$new_full" 2>/dev/null; then
+    legacy_digest_unavailable=1
+    return 0
+  fi
+  cli_pull_pre="$old_full"
+  cli_pull_post="$new_full"
 }
 
 extract_json_integer() {
@@ -385,14 +485,9 @@ plugin_step() {
     return 0
   fi
 
-  if [[ "$plugins_clone_state" == cloned ]]; then
-    fresh_clone_result "$plugins_dir"
-  else
-    pull_repo "$plugins_dir"
-  fi
-  show_pull_result
-  pull_detail="$(pull_detail_for_summary)"
-  if [[ "$PULL_STATE" == warn ]]; then
+  # The header already pulled; consume the recorded result, never pull again.
+  pull_detail="$plugins_pull_detail"
+  if [[ "$plugins_pull_state" == warn ]]; then
     step_warning=$((step_warning + 1))
   fi
   if [[ -x "${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin/bob" ]]; then
@@ -464,6 +559,7 @@ plugin_step() {
   fi
   if (( drift == 0 )); then
     plugin_detail="$pull_detail$copied_clause · $synced/$count plugins in sync"
+    install_ui_mark_installed bob-plugins "$plugins_dir"
     if (( step_warning > 0 )); then
       glyph_line 33 '  ' '⚠' "$plugin_detail"
       add_summary 'bob-plugins' warn "$plugin_detail" "$(format_duration "$((SECONDS - step_start))")"
@@ -511,25 +607,22 @@ mac_capture_step() {
     add_summary 'bob-mac-capture' fail "$detail" "$(format_duration "$((SECONDS - step_start))")"
     return 0
   fi
-  if [[ "$mac_capture_clone_state" == cloned ]]; then
-    fresh_clone_result "$mac_capture_dir"
-  else
-    pull_repo "$mac_capture_dir"
-  fi
-  show_pull_result
-  pull_detail="$(pull_detail_for_summary)"
-  if [[ "$PULL_STATE" == warn ]]; then
+  # The header already pulled; consume the recorded result, never pull again.
+  pull_detail="$maccap_pull_detail"
+  if [[ "$maccap_pull_state" == warn ]]; then
     step_warning=$((step_warning + 1))
   fi
   command_line "just --justfile $(display_path "$mac_capture_dir/justfile") install $(display_path "$HOME/Applications")"
   if (cd "$mac_capture_dir" && just --justfile "$mac_capture_dir/justfile" install "$HOME/Applications"); then
     status=ok
+    install_ui_mark_installed bob-mac-capture "$mac_capture_dir"
     detail="$pull_detail · installed $(display_path "$HOME/Applications/Bob Mac Capture.app")"
   else
     install_status=$?
     if (( install_status == 72 )); then
       status=warn
       step_warning=$((step_warning + 1))
+      install_ui_mark_installed bob-mac-capture "$mac_capture_dir"
       detail="$pull_detail · installed; restart it via the Bob Mac Capture menu-bar icon → Restart Bob Mac Capture"
     elif (( install_status == 78 )); then
       status=fail
@@ -735,29 +828,176 @@ obsidian_step() {
   esac
 }
 
+prune_run_dirs() {
+  local dir="$1" nlist total
+  [[ -d "$dir" ]] || return 0
+  nlist="$(ls -t "$dir" 2>/dev/null)" || return 0
+  [[ -n "$nlist" ]] || return 0
+  total="$(printf '%s\n' "$nlist" | wc -l | tr -d ' ')"
+  if [[ "$total" =~ ^[0-9]+$ ]] && (( total > 10 )); then
+    printf '%s\n' "$nlist" | tail -n +11 | while IFS= read -r old; do
+      [[ -n "$old" ]] || continue
+      rm -rf "$dir/$old"
+    done
+  fi
+}
+
+print_digest() {
+  local digest_out run_state_dir run_dir bob_bin nrepos
+  local -a dargs
+  if [[ "${BOB_INSTALL_UI:-}" == "0" ]]; then
+    return 0
+  fi
+  if (( legacy_digest_unavailable )); then
+    dim_row 'changes unavailable for this upgrade'
+  fi
+  run_state_dir="${BOB_INSTALL_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/bob-cli/install-all}"
+  run_dir="$run_state_dir/runs/$run_id"
+  if ! mkdir -p "$run_dir" 2>/dev/null; then
+    run_dir=""
+  fi
+  prune_run_dirs "$run_state_dir/runs"
+  dargs=()
+  nrepos=0
+  dargs[${#dargs[@]}]='--repo'
+  dargs[${#dargs[@]}]="bob-cli=$root"
+  dargs[${#dargs[@]}]='--pull'
+  dargs[${#dargs[@]}]="bob-cli=${cli_pull_state:-none}"
+  dargs[${#dargs[@]}]='--color'
+  dargs[${#dargs[@]}]='bob-cli=35'
+  if [[ -n "$cli_pull_pre" ]]; then
+    dargs[${#dargs[@]}]='--pre'
+    dargs[${#dargs[@]}]="bob-cli=$cli_pull_pre"
+  fi
+  if [[ -n "$cli_pull_post" ]]; then
+    dargs[${#dargs[@]}]='--post'
+    dargs[${#dargs[@]}]="bob-cli=$cli_pull_post"
+  fi
+  nrepos=$((nrepos + 1))
+  if is_work_tree "$plugins_dir"; then
+    dargs[${#dargs[@]}]='--repo'
+    dargs[${#dargs[@]}]="bob-plugins=$plugins_dir"
+    dargs[${#dargs[@]}]='--pull'
+    dargs[${#dargs[@]}]="bob-plugins=${plugins_pull_state:-none}"
+    dargs[${#dargs[@]}]='--color'
+    dargs[${#dargs[@]}]='bob-plugins=34'
+    if [[ -n "$plugins_pull_pre" ]]; then
+      dargs[${#dargs[@]}]='--pre'
+      dargs[${#dargs[@]}]="bob-plugins=$plugins_pull_pre"
+    fi
+    if [[ -n "$plugins_pull_post" ]]; then
+      dargs[${#dargs[@]}]='--post'
+      dargs[${#dargs[@]}]="bob-plugins=$plugins_pull_post"
+    fi
+    nrepos=$((nrepos + 1))
+  fi
+  if is_work_tree "$mac_capture_dir"; then
+    dargs[${#dargs[@]}]='--repo'
+    dargs[${#dargs[@]}]="bob-mac-capture=$mac_capture_dir"
+    dargs[${#dargs[@]}]='--pull'
+    dargs[${#dargs[@]}]="bob-mac-capture=${maccap_pull_state:-none}"
+    dargs[${#dargs[@]}]='--color'
+    dargs[${#dargs[@]}]='bob-mac-capture=32'
+    if [[ -n "$maccap_pull_pre" ]]; then
+      dargs[${#dargs[@]}]='--pre'
+      dargs[${#dargs[@]}]="bob-mac-capture=$maccap_pull_pre"
+    fi
+    if [[ -n "$maccap_pull_post" ]]; then
+      dargs[${#dargs[@]}]='--post'
+      dargs[${#dargs[@]}]="bob-mac-capture=$maccap_pull_post"
+    fi
+    nrepos=$((nrepos + 1))
+  fi
+  dargs[${#dargs[@]}]='--steps'
+  dargs[${#dargs[@]}]="$nrepos"
+  dargs[${#dargs[@]}]='--plugins'
+  dargs[${#dargs[@]}]='bob-plugins'
+  if [[ -x "${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin/bob" ]]; then
+    bob_bin="${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin/bob"
+  else
+    bob_bin="$(command -v bob || true)"
+  fi
+  if [[ -n "$bob_bin" ]]; then
+    dargs[${#dargs[@]}]='--bob-bin'
+    dargs[${#dargs[@]}]="$bob_bin"
+  fi
+  if [[ -n "$run_dir" ]]; then
+    dargs[${#dargs[@]}]='--record'
+    dargs[${#dargs[@]}]="$run_dir/digest.json"
+  fi
+  if digest_out="$(install_ui digest ${dargs[@]+"${dargs[@]}"} 2>/dev/null)"; then
+    if [[ -n "$digest_out" ]]; then
+      printf '%s\n' "$digest_out"
+    fi
+  else
+    dim_row "what's new unavailable"
+  fi
+}
+
+# Quiet completion banner: unlike notify_mac it never echoes the osascript
+# command, because it is a pure notification below the summary.
+completion_banner() {
+  local title="$1"
+  [[ "$(uname -s)" == Darwin ]] || return 0
+  command -v osascript >/dev/null 2>&1 || return 0
+  osascript - "$title" <<'APPLESCRIPT' || true
+on run argv
+  display notification "" with title (item 1 of argv) subtitle "bob install-all" sound name "default"
+  delay 0.5
+end run
+APPLESCRIPT
+}
+
+completion_cues() {
+  local final_text="$1" elapsed="$2"
+  local bell_after="${BOB_INSTALL_BELL_AFTER:-60}"
+  local banner_after="${BOB_INSTALL_NOTIFY_AFTER:-120}"
+  if [[ "${BOB_INSTALL_NOTIFY:-}" == "0" ]]; then
+    return 0
+  fi
+  case "$bell_after" in ''|*[!0-9]*) bell_after=60 ;; esac
+  case "$banner_after" in ''|*[!0-9]*) banner_after=120 ;; esac
+  if [[ -t 1 ]] && (( elapsed >= bell_after )); then
+    printf '\a'
+  fi
+  if (( elapsed >= banner_after )); then
+    completion_banner "$final_text"
+  fi
+}
+
 if [[ "$header_done" != 1 ]]; then
   banner 36 '🚀' 'INSTALL ALL'
   printf '  from     %s\n' "$(display_path "$parent")"
   printf '  then     restart Obsidian if the plugin sync changes the vault\n'
   offer_missing_clones
-  banner 35 '🦀' 'BOB-CLI  1/3'
 elif [[ "$clones_offered" != 1 ]]; then
   # Re-exec'd by an installer that predates the clone offer.
   offer_missing_clones
-  if (( CLONE_SECTION_SHOWN == 1 )); then
-    banner 35 '🦀' 'BOB-CLI  1/3'
-  fi
 fi
 
 cli_start=0
 if [[ -n "$self_pull_state" ]]; then
   PULL_STATE="$self_pull_state"
   PULL_DETAIL="$self_pull_detail"
+  PULL_OUTPUT=""
+  if [[ "$self_pull_protocol" == "2" ]]; then
+    PULL_PRE="$self_pull_old"
+    PULL_POST="$self_pull_new"
+  else
+    # Legacy upgrade: the previous script carried only the detail line.
+    resolve_legacy_pull_detail "$self_pull_detail"
+    PULL_PRE="$cli_pull_pre"
+    PULL_POST="$cli_pull_post"
+  fi
 else
   pull_repo "$root"
-  show_pull_result
+  show_pull_row bob-cli
 fi
+cli_pull_state="$PULL_STATE"
 cli_pull_detail="$PULL_DETAIL"
+cli_pull_output="$PULL_OUTPUT"
+cli_pull_pre="$PULL_PRE"
+cli_pull_post="$PULL_POST"
 cli_warning=0
 if [[ "$PULL_STATE" == warn ]]; then
   cli_warning=1
@@ -766,6 +1006,9 @@ fi
 if [[ "$PULL_STATE" == updated && -z "$self_pull_state" ]]; then
   export BOB_INSTALL_ALL_SELF_PULL="$PULL_STATE"
   export BOB_INSTALL_ALL_SELF_PULL_DETAIL="$PULL_DETAIL"
+  export BOB_INSTALL_ALL_PROTOCOL=2
+  export BOB_INSTALL_ALL_SELF_PULL_OLD="$PULL_PRE"
+  export BOB_INSTALL_ALL_SELF_PULL_NEW="$PULL_POST"
   export BOB_INSTALL_ALL_ELAPSED="$SECONDS"
   export BOB_INSTALL_ALL_HEADER_DONE=1
   export BOB_INSTALL_ALL_CLONES_OFFERED=1
@@ -774,6 +1017,39 @@ if [[ "$PULL_STATE" == updated && -z "$self_pull_state" ]]; then
   exec "$root/scripts/install_all" "$@"
 fi
 
+# All pulls finish before the first build, so the three source snapshots are
+# seconds apart and the digest can show every repo's changes up front.
+PULL_STATE=""; PULL_DETAIL=""; PULL_OUTPUT=""; PULL_PRE=""; PULL_POST=""
+if [[ "$plugins_clone_state" == cloned ]]; then
+  fresh_clone_result "$plugins_dir"
+  show_pull_row bob-plugins
+elif plugins_eligible; then
+  pull_repo "$plugins_dir"
+  show_pull_row bob-plugins
+fi
+plugins_pull_state="$PULL_STATE"
+plugins_pull_detail="$PULL_DETAIL"
+plugins_pull_output="$PULL_OUTPUT"
+plugins_pull_pre="$PULL_PRE"
+plugins_pull_post="$PULL_POST"
+
+PULL_STATE=""; PULL_DETAIL=""; PULL_OUTPUT=""; PULL_PRE=""; PULL_POST=""
+if [[ "$mac_capture_clone_state" == cloned ]]; then
+  fresh_clone_result "$mac_capture_dir"
+  show_pull_row bob-mac-capture
+elif mac_capture_eligible; then
+  pull_repo "$mac_capture_dir"
+  show_pull_row bob-mac-capture
+fi
+maccap_pull_state="$PULL_STATE"
+maccap_pull_detail="$PULL_DETAIL"
+maccap_pull_output="$PULL_OUTPUT"
+maccap_pull_pre="$PULL_PRE"
+maccap_pull_post="$PULL_POST"
+
+print_digest
+
+banner 35 '🦀' 'BOB-CLI  1/3'
 command_line "just --justfile $(display_path "$root/justfile") install"
 if (cd "$root" && just --justfile "$root/justfile" install); then
   cli_sha="$(git -C "$root" rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
@@ -802,26 +1078,29 @@ banner 1 '✨' 'SUMMARY'
 print_summary
 total_duration="$(format_duration "$((SECONDS - total_start))")"
 if (( FAILURES > 0 )); then
+  if [[ "$FAILURES" -eq 1 ]]; then plural=''; else plural='S'; fi
+  final_text="$FAILURES STEP$plural FAILED · $total_duration"
   if (( use_color )); then
-    printf '\n  \033[31m✗  %s STEP%s FAILED · %s\033[0m\n' \
-      "$FAILURES" "$([[ "$FAILURES" -eq 1 ]] && printf '' || printf 'S')" "$total_duration"
+    printf '\n  \033[31m✗  %s\033[0m\n' "$final_text"
   else
-    printf '\n  ✗  %s STEP%s FAILED · %s\n' \
-      "$FAILURES" "$([[ "$FAILURES" -eq 1 ]] && printf '' || printf 'S')" "$total_duration"
+    printf '\n  ✗  %s\n' "$final_text"
   fi
+  completion_cues "$final_text" "$SECONDS"
   exit 1
 elif (( WARNINGS > 0 )); then
+  if [[ "$WARNINGS" -eq 1 ]]; then plural=''; else plural='S'; fi
+  final_text="INSTALLED WITH $WARNINGS WARNING$plural · $total_duration"
   if (( use_color )); then
-    printf '\n  \033[33m⚠  INSTALLED WITH %s WARNING%s · %s\033[0m\n' \
-      "$WARNINGS" "$([[ "$WARNINGS" -eq 1 ]] && printf '' || printf 'S')" "$total_duration"
+    printf '\n  \033[33m⚠  %s\033[0m\n' "$final_text"
   else
-    printf '\n  ⚠  INSTALLED WITH %s WARNING%s · %s\n' \
-      "$WARNINGS" "$([[ "$WARNINGS" -eq 1 ]] && printf '' || printf 'S')" "$total_duration"
+    printf '\n  ⚠  %s\n' "$final_text"
   fi
 else
+  final_text="ALL INSTALLED · $total_duration"
   if (( use_color )); then
-    printf '\n  \033[32m✓  ALL INSTALLED · %s\033[0m\n' "$total_duration"
+    printf '\n  \033[32m✓  %s\033[0m\n' "$final_text"
   else
-    printf '\n  ✓  ALL INSTALLED · %s\n' "$total_duration"
+    printf '\n  ✓  %s\n' "$final_text"
   fi
 fi
+completion_cues "$final_text" "$SECONDS"

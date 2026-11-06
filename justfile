@@ -132,9 +132,17 @@ release-preview *args:
 # BOB_INSTALL_PROFILE=release installs the exact published-build profile
 # (useful for performance comparisons or when an incremental build looks suspect).
 [positional-arguments]
-install *shells: (_banner "35" "📦" "INSTALL")
+install *shells:
     #!/usr/bin/env bash
     set -euo pipefail
+    # Under `just install-all` the orchestrator owns the banners: skip the
+    # nested INSTALL banner and quiet shell completion.
+    if [[ -z "${BOB_INSTALL_ALL:-}" ]]; then
+        just _banner "35" "📦" "INSTALL"
+        completion_quiet=()
+    else
+        completion_quiet=(-q)
+    fi
     source scripts/lib/bob_shell.sh
     source scripts/lib/install_ui.sh
     root="${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}"
@@ -144,7 +152,7 @@ install *shells: (_banner "35" "📦" "INSTALL")
     # sase-rustc-wrapper), which would strip or refuse -C incremental. sccache
     # cannot cache the changed bob_cli crate on a reinstall anyway.
     RUSTC_WRAPPER= cargo install --path . --locked --profile "$profile" --root "$root"
-    if ! "$root/bin/bob" completion install "$@"; then
+    if ! "$root/bin/bob" completion install ${completion_quiet[@]+"${completion_quiet[@]}"} "$@"; then
         printf '\nbob is installed at %s; shell completion needs attention (see above).\n' \
             "$root/bin/bob" >&2
         exit 1
