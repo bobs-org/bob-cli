@@ -186,6 +186,7 @@ dependencies = [
  "similar",
  "tempfile",
  "ttf-parser",
+ "unicode-normalization",
  "url",
 ]
 
