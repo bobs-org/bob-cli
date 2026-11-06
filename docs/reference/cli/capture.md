@@ -85,8 +85,14 @@ Options:
   -b, --bob-dir <DIR>
           Bob vault root; defaults to BOB_DIR or ~/bob
 
+  -X, --cancel-offer <N|KEY[=REASON]>
+          Cancel one offer; REASON goes to its Cancel Log. Repeatable, one offer per flag
+
   -c, --clip
           Force a clipboard read as if %c were written
+
+  -x, --complete-offer <PICKS>
+          Mark offer(s) Done; PICKS is a comma list. Repeatable
 
   -D, --drawer <TITLE>
           Nest under the exact drawer TITLE; requires --route and --task

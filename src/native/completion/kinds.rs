@@ -734,6 +734,16 @@ const TABLE: &[Entry] = &[
     },
     Entry {
         path: &[],
+        arg: "complete-offer",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &[],
+        arg: "cancel-offer",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &[],
         arg: "move-in",
         kind: Kind::FreeText,
     },

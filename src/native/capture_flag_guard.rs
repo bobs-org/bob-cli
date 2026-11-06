@@ -73,6 +73,8 @@ pub(crate) fn capture_spec() -> GuardSpec {
         HELP,
         long("no-clip", false),
         long("no-ref", false),
+        long("cancel-offer", true),
+        long("complete-offer", true),
         long("inbox-route", true),
         long("move-in", true),
         long("pull-in", true),
@@ -89,7 +91,7 @@ pub(crate) fn capture_spec() -> GuardSpec {
     ];
     GuardSpec {
         longs: LONGS,
-        short_values: "bfimprstD",
+        short_values: "bfimprstDxX",
         short_flags: "cdEhnR",
         equals_only_shorts: "",
     }

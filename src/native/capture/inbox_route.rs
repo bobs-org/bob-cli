@@ -653,7 +653,7 @@ fn movement_fresh(
 
 /// Match one answer selector against the planned candidates: a
 /// 1-based number or an opaque key.
-fn resolve_route_selector(
+pub(super) fn resolve_route_selector(
     candidates: &[InboxRouteCandidate],
     selector: &str,
 ) -> Option<usize> {
@@ -1244,6 +1244,9 @@ mod tests {
             no_clip: true,
             no_ref: false,
             pull_in: None,
+            complete_offers: Vec::new(),
+            cancel_offers: Vec::new(),
+            offer_verdicts: Vec::new(),
             refuse_override: false,
             require_inbox_route_choice: false,
             require_pull_in_choice: false,

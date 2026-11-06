@@ -95,6 +95,7 @@ pub(crate) fn link_existing_task(
             text_files,
             read_guards,
             global_destination: None,
+            offer_closes: Vec::new(),
             warnings,
             plan_budget: None,
             pomodoro_blocks: Vec::new(),

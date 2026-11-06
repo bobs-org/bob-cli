@@ -85,7 +85,9 @@ fn capture_help_lists_options_alphabetically() {
         &help,
         &[
             "-b, --bob-dir",
+            "-X, --cancel-offer",
             "-c, --clip",
+            "-x, --complete-offer",
             "-D, --drawer",
             "-d, --dry-run",
             "-E, --expand",

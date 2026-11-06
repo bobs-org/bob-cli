@@ -393,6 +393,7 @@ fn json_success_shape_is_stable() {
         Vec::new(),
         Vec::new(),
         PullInJson::empty(),
+        Vec::new(),
         InboxRouteReport::empty(),
         crate::native::capture::move_choice::MoveChoiceReport::empty(),
         Vec::new(),

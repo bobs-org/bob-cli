@@ -72,6 +72,7 @@ mod meet_event_run;
 pub(crate) mod move_choice;
 pub(crate) mod move_consequence;
 mod note_pull;
+mod offer_verdicts;
 mod open_notes;
 mod output;
 mod plan;
@@ -424,6 +425,7 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         batch.section_blocks,
         open_notes,
         pull_in,
+        batch.offer_closes,
         batch.inbox_route,
         batch.move_choice,
         batch.type_agreement,

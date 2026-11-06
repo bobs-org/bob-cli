@@ -3178,6 +3178,36 @@ An unknown or stale pick is a teaching error that writes nothing and
 lists current offers. Without `-p`, capture recovers and reports
 numbered `offer N` rows as not pulled in.
 
+Card verdicts resolve offers in the same commit: `-x N` marks offer N
+Done, `-X N=reason` cancels it. A resolved row reports
+`offer.verdict` (`done`/`cancelled`), `selected: false`, and
+`not_linked: "resolved_in_card"`; top-level `offer_closes[]` reports
+each verdict with its pre-write identity, Cancel Log outcome, recovered
+dependents, and the canonical receipt message. `pull_in.close`
+(`supported: true`, `done_count`, `cancelled_count`) is the feature gate
+older clients omit. For example, closing a project's last task and its
+finished `^prj` row together:
+
+```text
+bob capture -x 1 -- '!proj:a'
+```
+
+```text
+✓ completed [ ] → [x] A  proj.md ^a
+  ledger  Task Link struck in FIX · 20261005.md
+  Project finished
+  offer 1  ✓ completed “Ship” · Ready → Done
+```
+
+Recovered dependents are reported under the verdict's `recovered[]`
+with their `[unblocked:: today]` stamp state, never re-offered, and
+come back as ticklers under the existing review rules. Conflicting
+answers (`offer_verdict_conflict`), stale selectors
+(`offer_close_stale`), and refused rows (`offer_close_refused`, with
+the engine's `why`) all write nothing and carry `pull_in` plus the flat
+offers list; see
+[task-dependencies.md §12.14](task-dependencies.md#1214-cli-selection).
+
 The `ledger` line names entries in this order, joined with `·`, and ends
 with the day file: one `Task Link struck in <NAME>` row per entry with an
 in-place strike (` (completed)` appended when that entry is completed),
@@ -5947,6 +5977,15 @@ row refuses with `move_choice_refused`. `-m` without a `- ^^` refuses with
 
 `-p, --pull-in` answers successor offers and never answers the move slot.
 
+`-x, --complete-offer` and `-X, --cancel-offer` resolve successor offers
+in the same commit instead of pulling them in: `-x` marks rows Done,
+`-X` cancels them with an optional inline reason (`-X 3=why`). Both are
+repeatable; `-x` accepts a comma list and `-X` addresses one offer per
+flag. A verdict counts as an explicit pull-in choice, `-p all` skips
+verdict rows, and one row in two of `-p`, `-x`, and `-X` (or `-X` twice
+for one row) is the write-free `offer_verdict_conflict` refusal. See
+[task-dependencies.md §12.14](task-dependencies.md#1214-cli-selection).
+
 A dry run without `-m` is valid: it treats the choice as `none` and lists the
 available rows. A real capture with `- ^^` always needs an answer, including
 `-m none`; without an answer it refuses with `move_choice_required`. There is
@@ -7048,6 +7087,11 @@ Useful options:
   `<N|KEY>=<NOTE>` moves it, `<N|KEY>=` keeps it in its inbox, `keep` keeps
   every otherwise unanswered candidate; repeatable. See
   [Routing inbox tasks out](#routing-inbox-tasks-out)
+- `-X, --cancel-offer N|KEY[=REASON]`: cancel one successor offer
+  (`REASON` goes to its Cancel Log); repeatable, one offer per flag
+- `-x, --complete-offer PICKS`: mark successor offer(s) Done
+  (`PICKS` is a comma list of offer numbers and/or keys); repeatable.
+  See [task-dependencies.md §12.14](task-dependencies.md#1214-cli-selection)
 - `-m, --move-in PICKS`: answer a `- ^^` move choice with `none`, `all`, or a
   comma list of row numbers and keys; a leading `:` also links the row;
   repeatable. See [Choosing parent tasks in](#choosing-parent-tasks-in)

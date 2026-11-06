@@ -193,6 +193,8 @@ fn double_dash_offers_long_forms_only() {
     let names = values(&output);
     assert!(names.contains(&"--bob-dir".to_string()));
     assert!(names.contains(&"--pull-in".to_string()));
+    assert!(names.contains(&"--complete-offer".to_string()));
+    assert!(names.contains(&"--cancel-offer".to_string()));
     assert!(
         !names.contains(&"--require-pull-in-choice".to_string()),
         "hidden --require-pull-in-choice must stay out of completion: {names:?}"
@@ -275,6 +277,25 @@ fn pull_in_value_is_free_text() {
         "{dirs:?}"
     );
     assert!(rows(&output).is_empty(), "{:?}", rows(&output));
+}
+
+#[test]
+fn offer_verdict_values_are_free_text() {
+    for (flag, value) in [
+        ("--complete-offer", "PICKS"),
+        ("--cancel-offer", "N|KEY[=REASON]"),
+    ] {
+        let output = complete(&["bob", "capture", flag, ""]);
+        assert_success(&output);
+        let dirs = directives(&output);
+        assert!(
+            dirs.iter()
+                .any(|line| line
+                    .starts_with(&format!("!message {value} \u{2014} "))),
+            "{flag}: {dirs:?}"
+        );
+        assert!(rows(&output).is_empty(), "{flag}");
+    }
 }
 
 #[test]

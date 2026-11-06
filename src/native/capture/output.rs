@@ -528,6 +528,9 @@ pub(super) struct CaptureResult {
     pub(super) open_notes: Vec<OpenNoteJson>,
     /// Draft-level successor-offer summary. Present on every success.
     pub(super) pull_in: PullInJson,
+    /// Applied card verdicts, in flag order. Omitted when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) offer_closes: Vec<OfferCloseJson>,
     /// Inbox tasks whose checkbox status changed during this batch.
     pub(super) inbox_route: InboxRouteReport,
     /// Move-choice report. Present on every success.
@@ -567,6 +570,7 @@ impl CaptureResult {
         section_blocks: Vec<SectionBlockJson>,
         open_notes: Vec<OpenNoteJson>,
         pull_in: PullInJson,
+        offer_closes: Vec<OfferCloseJson>,
         inbox_route: InboxRouteReport,
         move_choice: super::move_choice::MoveChoiceReport,
         type_agreement: Vec<TypeAgreementJson>,
@@ -593,6 +597,7 @@ impl CaptureResult {
             section_blocks,
             open_notes,
             pull_in,
+            offer_closes,
             inbox_route,
             move_choice,
             type_agreement,
@@ -1267,6 +1272,18 @@ pub(super) struct TaskCompleteOfferJson {
     pub(super) n: usize,
     pub(super) group: &'static str,
     pub(super) selected: bool,
+    /// Card verdict outcome (`done`/`cancelled`); present only on rows
+    /// this gesture resolved instead of pulling in (§12.5, §12.22).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) verdict: Option<&'static str>,
+    /// Human receipt line for a resolved row; never serialized. Human
+    /// output prints it in place of the linked / not-pulled-in line.
+    #[serde(skip)]
+    pub(super) verdict_message: Option<String>,
+    /// `↳` tickler lines for dependents a resolved row recovered;
+    /// never serialized.
+    #[serde(skip)]
+    pub(super) verdict_ticklers: Vec<String>,
     pub(super) block_id_needed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) project: Option<String>,
@@ -1318,6 +1335,10 @@ pub(super) struct PullInJson {
     pub(super) offer_count: usize,
     pub(super) choice: Option<String>,
     pub(super) picked_count: usize,
+    /// Offer-close capability and verdict counts. Present on every
+    /// success from a bob that accepts `-x`/`-X` (§12.5, §12.14); older
+    /// bobs omit it, which is the Mac's feature gate.
+    pub(super) close: PullInCloseJson,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) groups: Vec<PullInGroupJson>,
     /// Bob-authored picker title, capsule, and glyph. Omitted when there
@@ -1326,18 +1347,71 @@ pub(super) struct PullInJson {
     pub(super) copy: Option<PullInTopCopyJson>,
 }
 
+/// Offer-close support for `pull_in.close` (`docs/task-dependencies.md`
+/// §12.5): the feature gate plus how many rows each verdict resolved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PullInCloseJson {
+    pub(super) supported: bool,
+    pub(super) done_count: usize,
+    pub(super) cancelled_count: usize,
+}
+
 impl PullInJson {
-    #[cfg(test)]
     pub(super) fn empty() -> Self {
         Self {
             supported: true,
             offer_count: 0,
             choice: None,
             picked_count: 0,
+            close: PullInCloseJson {
+                supported: true,
+                done_count: 0,
+                cancelled_count: 0,
+            },
             groups: Vec::new(),
             copy: None,
         }
     }
+}
+
+/// One applied card verdict (`docs/task-dependencies.md` §12.5
+/// `offer_closes[]`): the pre-write offer identity plus the exact joint
+/// result, so a client can reopen the card with choices intact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct OfferCloseJson {
+    pub(super) n: usize,
+    pub(super) key: String,
+    pub(super) outcome: &'static str,
+    /// An authored Cancel reason only; omitted for Done and blank Cancel.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) reason: Option<String>,
+    pub(super) note_path: String,
+    /// 1-based line of the resolved row in the staged text.
+    pub(super) line: usize,
+    /// Empty when the task has no block ID.
+    pub(super) block_id: String,
+    pub(super) text: String,
+    pub(super) previous_status: char,
+    pub(super) previous_status_name: String,
+    /// Cancel Log write for Cancel rows: `written`, `created`,
+    /// `fallback`, or `none`. Omitted for Done.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) cancel_log: Option<&'static str>,
+    pub(super) recovered: Vec<OfferCloseRecoveredJson>,
+    /// The canonical receipt row human output prints for this verdict.
+    pub(super) message: String,
+}
+
+/// One dependent a card verdict recovered (`docs/task-dependencies.md`
+/// §12.5 `offer_closes[].recovered[]`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct OfferCloseRecoveredJson {
+    pub(super) note_path: String,
+    pub(super) block_id: String,
+    pub(super) text: String,
+    pub(super) previous_status_name: String,
+    pub(super) status_name: String,
+    pub(super) unblocked_stamped: bool,
 }
 
 /// Top-level `pull_in.copy` (`docs/task-dependencies.md` §12.5).
@@ -2385,6 +2459,13 @@ fn print_human_note_pull_row(
     let Some(offer) = row.offer.as_ref() else {
         return;
     };
+    if let Some(message) = offer.verdict_message.as_deref() {
+        println!("  offer {}  {message}", offer.n);
+        for tickler in &offer.verdict_ticklers {
+            println!("  {tickler}");
+        }
+        return;
+    }
     let text = if row.text.is_empty() {
         String::new()
     } else {
@@ -2605,6 +2686,9 @@ fn print_pull_in_hint(result: &CaptureResult) {
     if result.pull_in.offer_count == 0 || result.pull_in.picked_count > 0 {
         return;
     }
+    // A verdict is an explicit choice, but the hint still teaches the
+    // verdict flags on a verdict dry run.
+    let has_verdicts = !result.offer_closes.is_empty();
     let styler = Styler::detect();
     if result
         .pull_in
@@ -2638,11 +2722,12 @@ fn print_pull_in_hint(result: &CaptureResult) {
         println!("  {}", styler.dim(&hint));
         return;
     }
-    if result.pull_in.choice.is_some() {
+    if result.pull_in.choice.is_some() && !has_verdicts {
         return;
     }
     if result.dry_run {
         let mut numbers: Vec<usize> = Vec::new();
+        let mut verdict_numbers: Vec<usize> = Vec::new();
         let items = if result.captures.is_empty() {
             std::slice::from_ref(&result.item)
         } else {
@@ -2652,6 +2737,9 @@ fn print_pull_in_hint(result: &CaptureResult) {
             for row in all_offer_rows(item) {
                 if let Some(offer) = row.offer.as_ref() {
                     numbers.push(offer.n);
+                    if offer.verdict.is_some() {
+                        verdict_numbers.push(offer.n);
+                    }
                 }
             }
         }
@@ -2662,14 +2750,41 @@ fn print_pull_in_hint(result: &CaptureResult) {
             .map(usize::to_string)
             .collect::<Vec<_>>()
             .join(",");
-        println!("  {}", styler.dim(&format!("-p {list} · -p all")));
+        let mut hint = format!("-p {list} · -p all");
+        if !verdict_numbers.is_empty() {
+            verdict_numbers.sort_unstable();
+            verdict_numbers.dedup();
+            let verdicts = verdict_numbers
+                .iter()
+                .map(usize::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            hint.push_str(&format!(
+                " · -x {verdicts} done · -X N[=why] cancel"
+            ));
+        }
+        println!("  {}", styler.dim(&hint));
     } else {
-        println!(
-            "  {}",
-            styler.dim(
-                "offers were not pulled in; link later in Obsidian, Bob Mac Capture, or Ctrl+Shift+Enter"
-            )
-        );
+        // Card-resolved rows were handled; only remaining offers need
+        // the link-later pointer.
+        let items = if result.captures.is_empty() {
+            std::slice::from_ref(&result.item)
+        } else {
+            result.captures.as_slice()
+        };
+        let pending = items.iter().flat_map(all_offer_rows).any(|row| {
+            row.offer
+                .as_ref()
+                .is_some_and(|offer| offer.verdict.is_none())
+        });
+        if pending {
+            println!(
+                "  {}",
+                styler.dim(
+                    "offers were not pulled in; link later in Obsidian, Bob Mac Capture, or Ctrl+Shift+Enter"
+                )
+            );
+        }
     }
 }
 
@@ -6302,6 +6417,13 @@ fn print_human_relation_row(row: &TaskCompleteUnblockedJson, dry_run: bool) {
     let Some(offer) = row.offer.as_ref() else {
         return;
     };
+    if let Some(message) = offer.verdict_message.as_deref() {
+        println!("  offer {}  {message}", offer.n);
+        for tickler in &offer.verdict_ticklers {
+            println!("  {tickler}");
+        }
+        return;
+    }
     let locator = task_complete_locator(&row.note_path, &row.block_id);
     let text = if row.text.is_empty() {
         String::new()
@@ -6550,6 +6672,13 @@ fn print_human_keep_moving_row(
     let Some(offer) = row.offer.as_ref() else {
         return;
     };
+    if let Some(message) = offer.verdict_message.as_deref() {
+        println!("  offer {}  {message}", offer.n);
+        for tickler in &offer.verdict_ticklers {
+            println!("  {tickler}");
+        }
+        return;
+    }
     let locator = task_complete_locator(&row.note_path, &row.block_id);
     let text = if row.text.is_empty() {
         String::new()
@@ -6620,6 +6749,19 @@ fn print_human_unblocked_row(
     styler: &Styler,
     offer_n: Option<usize>,
 ) {
+    if let Some(offer) = unblocked.offer.as_ref()
+        && let Some(message) = offer.verdict_message.as_deref()
+    {
+        let prefix = match offer_n {
+            Some(n) => format!("  offer {n}  "),
+            None => "  ".to_string(),
+        };
+        println!("{prefix}{message}");
+        for tickler in &offer.verdict_ticklers {
+            println!("  {tickler}");
+        }
+        return;
+    }
     let previous =
         style_task_status_marker(styler, unblocked.previous_status_symbol);
     let current = style_task_status_marker(styler, unblocked.status_symbol);
@@ -6733,6 +6875,7 @@ fn not_linked_reason(reason: &str) -> &str {
         "hidden" => "hidden",
         "disabled" => "linking off",
         "not_selected" => "not pulled in",
+        "resolved_in_card" => "resolved in card",
         "no_destination" => "no open Pomodoro",
         _ => reason,
     }
@@ -7160,6 +7303,129 @@ impl CaptureError {
         }
     }
 
+    /// Conflicting card-verdict answers (the same row in two of `-p`,
+    /// `-x`, and `-X`; `-X` twice for one row; or an `-i` answer on a
+    /// card-resolved task): a usage error (exit 2) that writes nothing
+    /// and carries `pull_in` plus the flat offers list with each row's
+    /// close descriptor (`docs/task-dependencies.md` §12.14).
+    pub(super) fn offer_verdict_conflict(
+        pull_in: &PullInJson,
+        offers: &[TaskCompleteUnblockedJson],
+        message: String,
+    ) -> Self {
+        let mut lines = vec![message];
+        lines.extend(offer_list_lines(offers));
+        let mut extra = serde_json::Map::new();
+        extra.insert(
+            "pull_in".to_string(),
+            serde_json::to_value(pull_in).expect("serialize pull_in"),
+        );
+        extra.insert(
+            "offers".to_string(),
+            serde_json::to_value(offers).expect("serialize offers"),
+        );
+        Self {
+            kind: CaptureErrorKind::Usage,
+            message: lines.join("\n"),
+            code: Some("offer_verdict_conflict".to_string()),
+            extra: Some(extra),
+            human_unblocked: Vec::new(),
+            human_keep_moving_folds: Vec::new(),
+            human_relation_groups: Vec::new(),
+            human_relation_held: Vec::new(),
+            human_relation_check: None,
+            human_note_pull_rows: Vec::new(),
+            human_note_pull_groups: Vec::new(),
+            typed: None,
+        }
+    }
+
+    /// Unknown, stale, or out-of-range `-x`/`-X` selector: a usage error
+    /// (exit 2) that writes nothing and lists the current offers with
+    /// their close descriptors, as `inbox_route_stale` does.
+    pub(super) fn offer_close_stale(
+        pull_in: &PullInJson,
+        offers: &[TaskCompleteUnblockedJson],
+        bad: &[String],
+    ) -> Self {
+        let mut lines = vec![format!(
+            "stale, unknown, or out-of-range offer verdict pick: {}",
+            bad.join(", ")
+        )];
+        lines.extend(offer_list_lines(offers));
+        let mut extra = serde_json::Map::new();
+        extra.insert(
+            "pull_in".to_string(),
+            serde_json::to_value(pull_in).expect("serialize pull_in"),
+        );
+        extra.insert(
+            "offers".to_string(),
+            serde_json::to_value(offers).expect("serialize offers"),
+        );
+        Self {
+            kind: CaptureErrorKind::Usage,
+            message: lines.join("\n"),
+            code: Some("offer_close_stale".to_string()),
+            extra: Some(extra),
+            human_unblocked: Vec::new(),
+            human_keep_moving_folds: Vec::new(),
+            human_relation_groups: Vec::new(),
+            human_relation_held: Vec::new(),
+            human_relation_check: None,
+            human_note_pull_rows: Vec::new(),
+            human_note_pull_groups: Vec::new(),
+            typed: None,
+        }
+    }
+
+    /// A verdict the row's descriptor refuses: an I/O-class error
+    /// (exit 1) naming the row, the outcome, and the engine's `why`.
+    /// Writes nothing and carries the current offers for a reopen.
+    pub(super) fn offer_close_refused(
+        pull_in: &PullInJson,
+        offers: &[TaskCompleteUnblockedJson],
+        key: &str,
+        n: usize,
+        outcome: &str,
+        why: &str,
+        message: String,
+    ) -> Self {
+        let mut lines = vec![message];
+        lines.extend(offer_list_lines(offers));
+        let mut extra = serde_json::Map::new();
+        extra.insert(
+            "pull_in".to_string(),
+            serde_json::to_value(pull_in).expect("serialize pull_in"),
+        );
+        extra.insert(
+            "offers".to_string(),
+            serde_json::to_value(offers).expect("serialize offers"),
+        );
+        extra.insert(
+            "refused".to_string(),
+            serde_json::json!({
+                "key": key,
+                "n": n,
+                "outcome": outcome,
+                "why": why,
+            }),
+        );
+        Self {
+            kind: CaptureErrorKind::Io,
+            message: lines.join("\n"),
+            code: Some("offer_close_refused".to_string()),
+            extra: Some(extra),
+            human_unblocked: Vec::new(),
+            human_keep_moving_folds: Vec::new(),
+            human_relation_groups: Vec::new(),
+            human_relation_held: Vec::new(),
+            human_relation_check: None,
+            human_note_pull_rows: Vec::new(),
+            human_note_pull_groups: Vec::new(),
+            typed: None,
+        }
+    }
+
     /// Hidden `--refuse-override` guard: an I/O-class error (exit 1)
     /// carrying `pomodoro_override_refused` for subprocess callers.
     pub(super) fn override_refused(message: impl Into<String>) -> Self {
@@ -7178,7 +7444,24 @@ impl CaptureError {
             typed: None,
         }
     }
+}
 
+/// Current offer rows for verdict refusal messages: `n key text`
+/// in offer order, as `--pull-in` stale picks list them.
+fn offer_list_lines(offers: &[TaskCompleteUnblockedJson]) -> Vec<String> {
+    let mut rows: Vec<(usize, String, String)> = Vec::new();
+    for row in offers {
+        if let Some(offer) = row.offer.as_ref() {
+            rows.push((offer.n, offer.key.clone(), row.text.clone()));
+        }
+    }
+    rows.sort_by_key(|(n, _, _)| *n);
+    rows.into_iter()
+        .map(|(n, key, text)| format!("{n} {key} {text}"))
+        .collect()
+}
+
+impl CaptureError {
     /// Hidden `--expect-past-windows` guard: an I/O-class error (exit 1)
     /// carrying `pomodoro_past_windows_changed` for subprocess callers.
     pub(super) fn past_windows_changed(message: impl Into<String>) -> Self {
@@ -7441,6 +7724,9 @@ mod tests {
                 n,
                 group: "hand_off",
                 selected: false,
+                verdict: None,
+                verdict_message: None,
+                verdict_ticklers: Vec::new(),
                 block_id_needed: false,
                 project: None,
                 destination: TaskCompleteOfferDestinationJson {

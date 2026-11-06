@@ -565,7 +565,9 @@ In expansion mode all other capture options are accepted and ignored.",
   printf 'Finish the Google exit packet! @cash:goog-exit@\\n- Draft the resignation memo\\n- Collect paperwork\\n' | bob capture\n  bob capture -p all -- '@cash:goog-exit@' 'Finish the Google exit packet!'\n  printf 'Finish the Google exit packet! @cash^goog-exit@\\n- ^^\\n' | bob capture -m 1,:2\n  bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'\n  bob capture '@cash+goog-exit!'\n  bob capture +5\n  bob capture -- -2\n  bob capture +\n  bob capture ++3\n  bob capture -- --2\n  bob capture --1\n  bob capture -- --anything\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture\n  printf -- '--2\\n\\n+\\n' | bob capture\n  bob capture 'x'\n  bob capture 'x2'\n  bob capture 'x1!2'\n  bob capture 'x!1@2'\n  bob capture 'x1~2'\n  bob capture 'x0'\n  printf 'x2,3\\n- 2 wired the lexer\\n' | bob capture\n  printf 'x =\\n- 1 wired the lexer\\n' | bob capture\n  bob capture '='\n  bob capture '=3'\n  bob capture '=~2'\n  bob capture '=3bugs~1'\n  bob capture '=bugs'\n  bob capture '=3bugs'\n  bob capture '=bugs3'\n  bob capture 'x =bugs'\n  bob capture '@sase:deep-fix=bugs'\n  bob capture 'x =~2'\n  printf 'x\\n\\n=\\n' | bob capture\n  bob capture '+2 x'\n  bob capture 'x ='\n  bob capture '^bob:capture-stop=x'\n  bob capture '^bob:capture-stop=x!1'\n  bob capture -p 1 -- '!sase:fix'\n  bob capture -p all -- '!sase:fix'\n  bob capture -i 1=health -- '@mac_inbox:route-task'\n  printf -- '-2\\n\\nx\\n' | bob capture\n  bob capture 'Postgres 17 minimum @foo+bar#requirements'\n  bob capture --route foo --task bar --drawer REQUIREMENTS -- 'Postgres 17 minimum'\n  bob capture remembered to bump the timeout %n\n  bob capture paste the failing output %c %n\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture\n  printf 'Apply to {0}! @job^apply-{1} %%t\\n\\nFoobar foo\\n\"Two Sigma\" two-sigma\\n' | bob capture\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n\\nSend status @work\\n' | bob capture\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n  bob capture https://example.com/essay\n  bob capture 'Ask Kelly *job:cleanup'\n  bob capture '*job:cleanup @body+work'\n  bob capture '&foo:bar @body+excercise'\n  bob capture '^body:excercise &foo:bar'\n  bob capture '@inbox+bench @work+pgdump > @db'\n  bob capture '@inbox+bench @work+pgdump > @db+upgrade'\n  bob capture '@inbox+bench > @db+upgrade#future-work'\n  bob capture '@mac_inbox+ws-proto > @dev#future-work'\n\nEnvironment:\n  BOB_CAPTURE_TEMPLATES_FILE  exact saved-template shelf path; defaults to $XDG_STATE_HOME/bob-cli/capture/templates.json\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for $<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n  XDG_STATE_HOME             base state directory for the saved-template shelf; defaults to ~/.local/state\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise capture.clipboard_history (default auto: read-only Alfred, then Clipy, on macOS); no automatic provider elsewhere",        )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
+        .arg(cancel_offer_arg())
         .arg(clip_arg())
+        .arg(complete_offer_arg())
         .arg(drawer_arg())
         .arg(dry_run_arg())
         .arg(expand_arg())
@@ -588,6 +590,17 @@ In expansion mode all other capture options are accepted and ignored.",
         .arg(text_arg())
 }
 
+pub(super) fn cancel_offer_arg() -> Arg {
+    Arg::new("cancel-offer")
+        .long("cancel-offer")
+        .short('X')
+        .value_name("N|KEY[=REASON]")
+        .action(ArgAction::Append)
+        .help(
+            "Cancel one offer; REASON goes to its Cancel Log. Repeatable, one offer per flag",
+        )
+}
+
 pub(super) fn clip_arg() -> Arg {
     Arg::new("clip")
         .long("clip")
@@ -595,6 +608,15 @@ pub(super) fn clip_arg() -> Arg {
         .action(ArgAction::SetTrue)
         .conflicts_with("no-clip")
         .help("Force a clipboard read as if %c were written")
+}
+
+pub(super) fn complete_offer_arg() -> Arg {
+    Arg::new("complete-offer")
+        .long("complete-offer")
+        .short('x')
+        .value_name("PICKS")
+        .action(ArgAction::Append)
+        .help("Mark offer(s) Done; PICKS is a comma list. Repeatable")
 }
 
 pub(super) fn bob_dir_arg() -> Arg {
@@ -843,6 +865,11 @@ pub(super) struct CaptureRequest {
     pub(super) no_clip: bool,
     pub(super) no_ref: bool,
     pub(super) pull_in: Option<PullInPicks>,
+    pub(super) complete_offers: Vec<String>,
+    pub(super) cancel_offers: Vec<String>,
+    /// Staged card verdicts resolved against the probe offer list by
+    /// `plan_with_pull_in`. Empty when no `-x`/`-X` flag was given.
+    pub(super) offer_verdicts: Vec<super::offer_verdicts::OfferVerdictRequest>,
     pub(super) refuse_override: bool,
     pub(super) require_inbox_route_choice: bool,
     pub(super) require_pull_in_choice: bool,
@@ -925,6 +952,15 @@ impl CaptureRequest {
                 .get_one::<String>("pull-in")
                 .map(|raw| parse_pull_in_picks(raw))
                 .transpose()?,
+            complete_offers: matches
+                .get_many::<String>("complete-offer")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
+            cancel_offers: matches
+                .get_many::<String>("cancel-offer")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
+            offer_verdicts: Vec::new(),
             refuse_override: matches.get_flag("refuse-override"),
             require_inbox_route_choice: matches
                 .get_flag("require-inbox-route-choice"),

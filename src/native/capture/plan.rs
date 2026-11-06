@@ -8,6 +8,7 @@ pub(super) struct PlannedCaptureBatch {
     pub(super) text_files: Vec<StagedTextFile>,
     pub(super) read_guards: super::batch::BatchReadGuards,
     pub(super) global_destination: Option<GlobalDestinationSummary>,
+    pub(super) offer_closes: Vec<OfferCloseJson>,
     pub(super) warnings: Vec<CaptureWarning>,
     pub(super) plan_budget: Option<CapturePlanBudget>,
     pub(super) pomodoro_blocks: Vec<PomodoroBlockJson>,
@@ -811,6 +812,21 @@ pub(super) fn plan_capture_batch_with_config_path(
         &keep_moving_trace,
         &all_project_moves,
     );
+    // Card verdicts apply here: on the staged snapshot right after the
+    // successor net post-pass and before inbox-route detection, so the
+    // closed rows read as ordinary status changes downstream. The single
+    // `write_staged_files` commit still guards external edits.
+    let offer_closes = super::offer_verdicts::plan_offer_verdict_post_pass(
+        &request.offer_verdicts,
+        &mut items,
+        &mut planner,
+        &request.bob_dir,
+        &dependency_ctx,
+        today,
+        &day_file,
+        Path::new(&day_relative),
+        request.dry_run,
+    )?;
     // Move-choice report was precomputed before item planning (with mint
     // and splice); reuse it before pull-in and inbox-route refusals.
     let move_choice = move_choice_report;
@@ -819,6 +835,11 @@ pub(super) fn plan_capture_batch_with_config_path(
         &request.bob_dir,
         &task_settings,
         &dependency_ctx,
+    )?;
+    super::offer_verdicts::check_inbox_route_verdict_conflict(
+        &inbox_route,
+        &request.inbox_routes,
+        &super::offer_verdicts::verdict_row_identities(&items),
     )?;
     // Answered route moves run here: after every item, the successor
     // net post-pass, and candidate detection, but before the block
@@ -893,6 +914,7 @@ pub(super) fn plan_capture_batch_with_config_path(
         read_guards: std::mem::take(&mut planner.read_guards),
         text_files: planner.into_staged_files()?,
         global_destination,
+        offer_closes,
         warnings,
         plan_budget: None,
         pomodoro_blocks,

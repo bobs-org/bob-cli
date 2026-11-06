@@ -9,13 +9,17 @@ pub(super) fn plan_with_pull_in(
     request: &mut CaptureRequest,
     routing: Option<&UrlRoutingPolicy>,
 ) -> Result<(PlannedCaptureBatch, PullInJson), CaptureError> {
+    if !request.complete_offers.is_empty() || !request.cancel_offers.is_empty()
+    {
+        return plan_with_offer_verdicts(request, routing);
+    }
     let choice = pull_in_choice(request.pull_in.as_ref());
     match request.pull_in.clone() {
         None | Some(PullInPicks::None) => {
             request.selection = SuccessorSelection::None;
             let mut batch = plan_capture_batch(request, routing)?;
             number_draft_offers(&mut batch.items, None);
-            let pull_in = assemble_pull_in(&batch.items, choice);
+            let pull_in = assemble_pull_in(&batch.items, choice, &[]);
             if request.pull_in.is_none()
                 && request.require_pull_in_choice
                 && pull_in.offer_count > 0
@@ -32,7 +36,7 @@ pub(super) fn plan_with_pull_in(
             request.selection = SuccessorSelection::All;
             let mut batch = plan_capture_batch(request, routing)?;
             number_draft_offers(&mut batch.items, None);
-            let pull_in = assemble_pull_in(&batch.items, choice);
+            let pull_in = assemble_pull_in(&batch.items, choice, &[]);
             Ok((batch, pull_in))
         }
         Some(PullInPicks::Tokens { numbers, keys }) if numbers.is_empty() => {
@@ -42,7 +46,7 @@ pub(super) fn plan_with_pull_in(
             let mut batch = plan_capture_batch(request, routing)?;
             number_draft_offers(&mut batch.items, None);
             reject_unknown_keys(&batch.items, &requested)?;
-            let pull_in = assemble_pull_in(&batch.items, choice);
+            let pull_in = assemble_pull_in(&batch.items, choice, &[]);
             Ok((batch, pull_in))
         }
         Some(PullInPicks::Tokens { numbers, keys }) => {
@@ -75,10 +79,97 @@ pub(super) fn plan_with_pull_in(
             let mut batch = plan_capture_batch(request, routing)?;
             number_draft_offers(&mut batch.items, Some(&probe_map));
             reject_unknown_keys(&batch.items, &requested)?;
-            let pull_in = assemble_pull_in(&batch.items, choice);
+            let pull_in = assemble_pull_in(&batch.items, choice, &[]);
             Ok((batch, pull_in))
         }
     }
+}
+
+/// Plan a capture with staged card verdicts (`-x`/`-X`): probe first so
+/// numeric verdict selectors and `--pull-in` numbers share one mapping,
+/// resolve and validate the verdicts, then plan the final batch with the
+/// verdict-aware selection. A verdict counts as an explicit pull-in
+/// choice, and `-p all` skips verdict rows.
+fn plan_with_offer_verdicts(
+    request: &mut CaptureRequest,
+    routing: Option<&UrlRoutingPolicy>,
+) -> Result<(PlannedCaptureBatch, PullInJson), CaptureError> {
+    use super::offer_verdicts as verdicts;
+    let done_selectors =
+        verdicts::parse_complete_offer_args(&request.complete_offers)?;
+    let cancel_selectors =
+        verdicts::parse_cancel_offer_args(&request.cancel_offers)?;
+    // The probe exists to map numeric picks to keys and to validate
+    // verdict eligibility. Park the inbox-route answers while it plans,
+    // as the numeric-picks arm does.
+    request.selection = SuccessorSelection::None;
+    let parked_routes = std::mem::take(&mut request.inbox_routes);
+    let probe_result = plan_capture_batch(request, routing);
+    request.inbox_routes = parked_routes;
+    let mut probe = probe_result?;
+    number_draft_offers(&mut probe.items, None);
+    let probe_map = offer_n_map(&probe.items);
+    // Resolve `--pull-in` to keys against the probe numbering.
+    let mut pull_in_keys = BTreeSet::new();
+    match request.pull_in.clone() {
+        None | Some(PullInPicks::None) => {}
+        Some(PullInPicks::All) => {
+            pull_in_keys = surviving_keys(&probe.items);
+        }
+        Some(PullInPicks::Tokens { numbers, keys }) => {
+            let mut bad = Vec::new();
+            for number in &numbers {
+                match key_for_number(&probe.items, *number) {
+                    Some(key) => {
+                        pull_in_keys.insert(key);
+                    }
+                    None => bad.push(number.to_string()),
+                }
+            }
+            if !bad.is_empty() {
+                return Err(unknown_pick_error(&probe.items, &bad));
+            }
+            pull_in_keys.extend(keys.iter().cloned());
+        }
+    }
+    let resolved = verdicts::resolve_offer_verdicts(
+        &done_selectors,
+        &cancel_selectors,
+        request.pull_in.as_ref(),
+        &pull_in_keys,
+        &probe.items,
+    )?;
+    let verdict_keys: BTreeSet<String> =
+        resolved.iter().map(|verdict| verdict.key.clone()).collect();
+    // Verdict rows ride `apply_selection` as not-selected recover rows,
+    // so `-p all` selects every other offer and explicit picks keep
+    // their keys (any overlap already conflicted above).
+    request.selection = match request.pull_in.clone() {
+        Some(PullInPicks::All) => SuccessorSelection::Keys(
+            pull_in_keys.difference(&verdict_keys).cloned().collect(),
+        ),
+        Some(PullInPicks::Tokens { .. }) => {
+            SuccessorSelection::Keys(pull_in_keys.clone())
+        }
+        None | Some(PullInPicks::None) => SuccessorSelection::None,
+    };
+    request.offer_verdicts = resolved;
+    let mut batch = plan_capture_batch(request, routing)?;
+    number_draft_offers(&mut batch.items, Some(&probe_map));
+    if matches!(request.pull_in, Some(PullInPicks::Tokens { .. })) {
+        let requested: Vec<String> = pull_in_keys.into_iter().collect();
+        reject_unknown_keys(&batch.items, &requested)?;
+    }
+    verdicts::revalidate_offer_verdicts(&request.offer_verdicts, &batch.items)?;
+    // A verdict is an explicit pull-in choice: with verdicts and no
+    // `-p`, picks are `none` and `pull_in.choice` reports `"none"`.
+    let choice = match pull_in_choice(request.pull_in.as_ref()) {
+        None if !request.offer_verdicts.is_empty() => Some("none"),
+        choice => choice,
+    };
+    let pull_in =
+        assemble_pull_in(&batch.items, choice, &request.offer_verdicts);
+    Ok((batch, pull_in))
 }
 
 fn pull_in_choice(picks: Option<&PullInPicks>) -> Option<&'static str> {
@@ -243,7 +334,9 @@ fn completion_summary_count(
     count
 }
 
-fn offer_n_map(items: &[PlannedCaptureItem]) -> BTreeMap<String, usize> {
+pub(super) fn offer_n_map(
+    items: &[PlannedCaptureItem],
+) -> BTreeMap<String, usize> {
     let mut map = BTreeMap::new();
     for item in items {
         for row in super::output::all_offer_rows(&item.result) {
@@ -271,7 +364,7 @@ fn key_for_number(
     None
 }
 
-fn surviving_keys(items: &[PlannedCaptureItem]) -> BTreeSet<String> {
+pub(super) fn surviving_keys(items: &[PlannedCaptureItem]) -> BTreeSet<String> {
     let mut keys = BTreeSet::new();
     for item in items {
         for row in super::output::all_offer_rows(&item.result) {
@@ -407,6 +500,7 @@ fn choice_required_error(
 pub(super) fn assemble_pull_in(
     items: &[PlannedCaptureItem],
     choice: Option<&'static str>,
+    verdicts: &[super::offer_verdicts::OfferVerdictRequest],
 ) -> PullInJson {
     let mut offer_count = 0;
     let mut picked_count = 0;
@@ -421,11 +515,26 @@ pub(super) fn assemble_pull_in(
         }
     }
     let (groups, copy) = super::pull_in_copy::assemble_groups(items);
+    let mut done_count = 0;
+    let mut cancelled_count = 0;
+    for verdict in verdicts {
+        match verdict.outcome {
+            super::offer_verdicts::OfferVerdictOutcome::Done => done_count += 1,
+            super::offer_verdicts::OfferVerdictOutcome::Cancelled => {
+                cancelled_count += 1;
+            }
+        }
+    }
     PullInJson {
         supported: true,
         offer_count,
         choice: choice.map(str::to_string),
         picked_count,
+        close: super::output::PullInCloseJson {
+            supported: true,
+            done_count,
+            cancelled_count,
+        },
         groups,
         copy,
     }
@@ -440,6 +549,9 @@ pub(super) fn offer_json(
         n: offer.n,
         group: offer.group.as_str(),
         selected: offer.selected,
+        verdict: None,
+        verdict_message: None,
+        verdict_ticklers: Vec::new(),
         block_id_needed: offer.block_id_needed,
         project: matches!(
             offer.group,

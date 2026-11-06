@@ -101,6 +101,7 @@ mod sub_bullet;
 mod successor_compatibility;
 mod successor_integration;
 mod successor_offers;
+mod successor_verdicts;
 mod targets;
 mod task_blocks;
 mod task_complete;
