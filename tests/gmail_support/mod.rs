@@ -235,6 +235,30 @@ impl FakeGog {
             .expect("write fake failure state");
     }
 
+    /// Simulate an edit made in Gmail itself: replace one header on the
+    /// stored synthetic draft without going through Bob.
+    pub(crate) fn edit_draft_header(
+        &self,
+        draft_id: &str,
+        name: &str,
+        value: &str,
+    ) {
+        let mut state: serde_json::Value =
+            serde_json::from_slice(&fs::read(&self.state).expect("fake state"))
+                .expect("parse fake state");
+        let headers = state["drafts"][draft_id]["message"]["payload"]
+            ["headers"]
+            .as_array_mut()
+            .expect("stored draft headers");
+        let header = headers
+            .iter_mut()
+            .find(|header| header["name"] == name)
+            .expect("stored draft header");
+        header["value"] = serde_json::Value::String(value.to_string());
+        fs::write(&self.state, serde_json::to_vec(&state).unwrap())
+            .expect("write fake draft edit");
+    }
+
     pub(crate) fn install<'a>(
         &self,
         command: &'a mut Command,

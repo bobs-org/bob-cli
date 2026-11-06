@@ -680,6 +680,8 @@ key (for example `gmail.account`).
 
 Every `-f json` output carries `schema_version: 1` and `ok`. Errors are typed
 `{kind, message, hint?}` on stdout; human errors go to stderr with a dim hint.
+[Compose notes](#compose-notes), [Gmail drafts](#gmail-drafts), and
+[Writing and sending](#writing-and-sending) describe the compose documents.
 
 ## Security
 
@@ -707,7 +709,7 @@ Every `-f json` output carries `schema_version: 1` and `ok`. Errors are typed
 
 ## Known limits
 
-Dedicated task linking remains later work. Confirmed sends need the compose
-grant on the writer host, one explicit confirmation per preview, and a Gmail
-draft that still exists; outcome-unknown states require Bryan to inspect the
-draft and SENT folder before retrying.
+Confirmed sends need the compose grant on the writer host, one explicit
+confirmation per preview, and a Gmail draft that still exists;
+outcome-unknown states require Bryan to inspect the draft and SENT folder
+before retrying.

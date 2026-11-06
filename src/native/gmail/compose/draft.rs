@@ -1598,3 +1598,92 @@ fn path_to_slashes(path: &Path) -> String {
 fn bad_readback(message: &str) -> GmailError {
     GmailError::runtime("draft_readback", message.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn preview() -> Preview {
+        Preview {
+            account: "you@example.com".to_string(),
+            from: "You <you@example.com>".to_string(),
+            to: vec!["Ada <ada@example.com>".to_string()],
+            cc: vec!["lee@example.test".to_string()],
+            bcc: Vec::new(),
+            subject: "Lease renewal".to_string(),
+            reply_target: None,
+            text_body: "Hello Ada.\n\n-- \nTest signature".to_string(),
+            html_sha256: "a".repeat(64),
+            signature: "gmail",
+            attachments: vec![AttachmentPreview {
+                vault_path: "files/lease.pdf".to_string(),
+                filename: "lease.pdf".to_string(),
+                byte_length: 5,
+                sha256: "b".repeat(64),
+            }],
+            flattened_links: vec![FlattenedLinkPreview {
+                original_target: "Lease|the lease".to_string(),
+                text: "the lease".to_string(),
+            }],
+        }
+    }
+
+    #[test]
+    fn canonical_digest_is_stable_and_binds_every_preview_field() {
+        let note = "mail/2026/261106_lease_renewal.md";
+        let baseline = canonical_digest(note, &preview()).unwrap();
+        assert_eq!(baseline.len(), 64);
+        assert_eq!(
+            canonical_digest(note, &preview()).unwrap(),
+            baseline,
+            "unchanged content must confirm across invocations"
+        );
+
+        let mutations: Vec<(&str, fn(&mut Preview))> = vec![
+            ("account", |p| p.account = "other@example.com".to_string()),
+            ("from", |p| p.from = "Alias <you@example.com>".to_string()),
+            ("to", |p| p.to.push("bo@example.com".to_string())),
+            ("to order", |p| {
+                p.to.insert(0, "bo@example.com".to_string());
+            }),
+            ("cc", |p| p.cc.clear()),
+            ("bcc", |p| p.bcc.push("hidden@example.com".to_string())),
+            ("subject", |p| p.subject = "Lease renewal!".to_string()),
+            ("reply_target", |p| {
+                p.reply_target = Some(ReplyPreview {
+                    thread_id: "0123456789abcdef".to_string(),
+                    message_id: "0123456789abcdef".to_string(),
+                    rfc_message_id: Some("<lease@example.test>".to_string()),
+                    mode: "reply",
+                });
+            }),
+            ("text_body", |p| p.text_body.push('!')),
+            ("html-only", |p| p.html_sha256 = "c".repeat(64)),
+            ("signature", |p| p.signature = "none"),
+            ("attachment bytes", |p| {
+                p.attachments[0].sha256 = "d".repeat(64);
+            }),
+            ("attachment name", |p| {
+                p.attachments[0].filename = "lease-v2.pdf".to_string();
+            }),
+            ("attachment removed", |p| p.attachments.clear()),
+            ("flattened links", |p| {
+                p.flattened_links[0].text = "Lease".to_string();
+            }),
+        ];
+        for (field, mutate) in mutations {
+            let mut changed = preview();
+            mutate(&mut changed);
+            assert_ne!(
+                canonical_digest(note, &changed).unwrap(),
+                baseline,
+                "changing {field} must invalidate the confirmation digest"
+            );
+        }
+        assert_ne!(
+            canonical_digest("mail/2026/other.md", &preview()).unwrap(),
+            baseline,
+            "the note identity is digest-bound"
+        );
+    }
+}

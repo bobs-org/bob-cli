@@ -200,6 +200,25 @@ fn new_preview_requires_exact_digest_and_promotes_in_place() {
         1,
         "completed send journal replay must be idempotent: {repeated_journal}"
     );
+
+    // The promoted note is an ordinary saved thread for list, save, pull,
+    // and link: indexed at its original path and refreshed in place.
+    let listed = run_gmail(&env, &fake, &["list", "-f", "json"]);
+    assert_success(&listed, "list promoted note");
+    let listed_doc = json_stdout(&listed);
+    let listed_text = listed_doc.to_string();
+    assert!(
+        listed_text.contains(&note) && listed_text.contains("0123456789abcdef"),
+        "promoted note must be indexed as a saved thread: {listed_doc}"
+    );
+    let refreshed =
+        run_gmail(&env, &fake, &["save", "0123456789abcdef", "-f", "json"]);
+    assert_success(&refreshed, "refresh promoted note through save");
+    assert_eq!(json_stdout(&refreshed)["note"], note.as_str());
+    let refreshed_note = fs::read_to_string(&note_path).unwrap();
+    assert!(refreshed_note.contains("custom_owner: keep-me"));
+    assert!(refreshed_note.contains("Private note."));
+    assert!(refreshed_note.contains("> [!mail-sent"));
 }
 
 #[test]
@@ -270,4 +289,71 @@ fn tty_decline_keeps_the_draft_and_reply_section() {
     assert!(kept.contains("Maybe later."));
     assert!(kept.contains("bob:gmail:draft draft-1"));
     assert!(calls_for(&fake, "send").is_empty());
+}
+
+#[test]
+fn html_only_and_remote_draft_edits_invalidate_confirmation() {
+    let env = GmailEnv::new("bob-cli-gmail-send-edits");
+    let fake = FakeGog::new(&env, "gog").scenario("compose_grant");
+    let note = create_compose(&env, &fake, "Lease renewal");
+    let note_path = env.vault().join(&note);
+    let original = fs::read_to_string(&note_path).unwrap();
+    fs::write(&note_path, format!("{original}Hello Ada.\n")).unwrap();
+
+    let plain = run_gmail(&env, &fake, &["send", &note, "-d", "-f", "json"]);
+    assert_success(&plain, "preview plain body");
+    let plain_doc = json_stdout(&plain);
+    let plain_digest = plain_doc["digest"].as_str().unwrap().to_string();
+
+    // Bold changes only the HTML alternative; the plain text is identical.
+    fs::write(&note_path, format!("{original}Hello **Ada**.\n")).unwrap();
+    let stale = run_gmail(
+        &env,
+        &fake,
+        &["send", &note, "-c", &plain_digest, "-f", "json"],
+    );
+    assert_eq!(stale.status.code(), Some(2), "{}", stderr(&stale));
+    assert_eq!(
+        json_stdout(&stale)["error"]["kind"],
+        "confirmation_mismatch"
+    );
+    assert!(calls_for(&fake, "send").is_empty());
+
+    let bold = run_gmail(&env, &fake, &["send", &note, "-d", "-f", "json"]);
+    assert_success(&bold, "preview bold body");
+    let bold_doc = json_stdout(&bold);
+    assert_eq!(
+        bold_doc["preview"]["text_body"], plain_doc["preview"]["text_body"],
+        "the edit must be HTML-only"
+    );
+    assert_ne!(
+        bold_doc["preview"]["html_sha256"],
+        plain_doc["preview"]["html_sha256"]
+    );
+    let bold_digest = bold_doc["digest"].as_str().unwrap().to_string();
+    assert_ne!(bold_digest, plain_digest);
+
+    // An edit made in Gmail after the preview is a conflict, never silently
+    // overwritten by the confirmation run's draft update.
+    let updates_before = calls_for(&fake, "update").len();
+    fake.edit_draft_header(
+        bold_doc["draft_id"].as_str().unwrap(),
+        "Subject",
+        "Edited in Gmail",
+    );
+    let conflict = run_gmail(
+        &env,
+        &fake,
+        &["send", &note, "-c", &bold_digest, "-f", "json"],
+    );
+    assert_ne!(conflict.status.code(), Some(0), "{}", stdout(&conflict));
+    assert_eq!(
+        json_stdout(&conflict)["error"]["kind"],
+        "draft_remote_conflict"
+    );
+    assert_eq!(calls_for(&fake, "update").len(), updates_before);
+    assert!(calls_for(&fake, "send").is_empty());
+    assert!(fs::read_to_string(&note_path)
+        .unwrap()
+        .contains("status: draft"));
 }

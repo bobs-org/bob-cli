@@ -20,22 +20,13 @@ use crate::native::{
     env as bob_env, ob, vault_sync,
 };
 
-// The draft transport phase consumes the render and attachment boundaries.
-#[allow(dead_code)]
 pub(crate) mod attachments;
 pub(super) mod draft;
 pub(crate) mod finalize;
-// The draft transport phase consumes the render and attachment boundaries.
-#[allow(dead_code)]
 pub(crate) mod render;
-#[allow(dead_code)]
 pub(crate) mod send;
-// Durable send state transitions shared by recovery and the confirmed send.
-#[allow(dead_code)]
-pub(crate) mod state;
-// The following compose and draft phases consume the full source model.
-#[allow(dead_code)]
 pub(crate) mod source;
+pub(crate) mod state;
 
 pub(crate) fn run_new(args: &NewArgs) -> i32 {
     match run_new_inner(args) {

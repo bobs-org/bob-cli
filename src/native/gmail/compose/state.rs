@@ -77,12 +77,6 @@ pub(crate) struct SendState {
     pub(crate) completed_commit_paths: Vec<String>,
 }
 
-impl SendState {
-    pub(crate) fn is_terminal(&self) -> bool {
-        matches!(self.stage, SendStage::Complete)
-    }
-}
-
 /// Read the `gmail_send` object when present. Malformed state is a typed
 /// refusal, never a silent default.
 pub(crate) fn load_send_state(

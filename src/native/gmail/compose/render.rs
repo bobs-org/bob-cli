@@ -54,14 +54,6 @@ pub(crate) struct RenderRefusal {
 }
 
 impl RenderRefusal {
-    pub(crate) fn kind(&self) -> &'static str {
-        self.kind
-    }
-
-    pub(crate) fn line(&self) -> usize {
-        self.line
-    }
-
     pub(crate) fn hint(&self) -> &'static str {
         match self.kind {
             "task_checkbox" => {
@@ -912,7 +904,7 @@ mod tests {
     fn refusal_kind(body: &str, attachments: &[PathBuf]) -> (String, usize) {
         match render(body, attachments) {
             Ok(_) => panic!("expected a refusal for {body:?}"),
-            Err(refusal) => (refusal.kind().to_string(), refusal.line()),
+            Err(refusal) => (refusal.kind.to_string(), refusal.line),
         }
     }
 

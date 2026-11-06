@@ -37,7 +37,8 @@ pub(crate) struct PreparedAttachment {
 ///
 /// Dropping this value removes the staging directory and every snapshot.
 pub(crate) struct AttachmentStaging {
-    dir: tempfile::TempDir,
+    /// Held only so dropping the staging removes the private directory.
+    _dir: tempfile::TempDir,
     files: Vec<PreparedAttachment>,
 }
 
@@ -144,12 +145,13 @@ impl AttachmentStaging {
                 sha256,
             });
         }
-        Ok(Self { dir, files })
+        Ok(Self { _dir: dir, files })
     }
 
     /// Private staging directory holding the snapshots.
-    pub(crate) fn dir(&self) -> &Path {
-        self.dir.path()
+    #[cfg(test)]
+    fn dir(&self) -> &Path {
+        self._dir.path()
     }
 
     /// Snapshots in declared order.

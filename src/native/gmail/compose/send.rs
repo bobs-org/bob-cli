@@ -900,6 +900,9 @@ fn after_attempt(message: &model::GmailMessage, attempt_time: &str) -> bool {
 /// Dispatch exactly the recorded draft ID once, holding the host-local
 /// operation lock across the whole sequence so two processes race at most
 /// one send. The finalizer runs only after the acknowledgement is durable.
+/// Production holds the lock across preview and confirmation and calls
+/// [`dispatch_once_locked`] directly; fault tests use this wrapper.
+#[cfg(test)]
 pub(crate) fn dispatch_once<F>(
     vault: &Path,
     relative: &Path,

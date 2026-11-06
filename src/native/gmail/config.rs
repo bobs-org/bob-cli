@@ -184,7 +184,6 @@ impl GmailConfig {
         self.pull_label.as_deref()
     }
 
-    #[allow(dead_code)]
     pub(crate) fn signature(&self) -> bob_config::GmailSignature {
         self.signature
     }
