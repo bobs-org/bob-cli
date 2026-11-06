@@ -89,12 +89,13 @@ _banner color icon label:
     fi
 
 check-scripts:
-    bash -n scripts/bob_notify scripts/bob_pomodoro scripts/tmux_bob_pomodoro scripts/lib/bob_shell.sh scripts/install_all scripts/test_install_migration scripts/dev/note_snapshot_corpus_gate scripts/dev/note_snapshot_corpus_gate_test scripts/dev/capture_related_calibrate scripts/dev/capture_related_calibrate_test scripts/dev/highlights_coordination_acceptance
+    bash -n scripts/bob_notify scripts/bob_pomodoro scripts/tmux_bob_pomodoro scripts/lib/bob_shell.sh scripts/lib/install_ui.sh scripts/install_all scripts/test_install_migration scripts/dev/note_snapshot_corpus_gate scripts/dev/note_snapshot_corpus_gate_test scripts/dev/capture_related_calibrate scripts/dev/capture_related_calibrate_test scripts/dev/highlights_coordination_acceptance
     bash scripts/test_install_migration
     bash scripts/dev/note_snapshot_corpus_gate_test
     bash scripts/dev/capture_related_calibrate_test
     bash scripts/dev/highlights_coordination_acceptance --self-test
     python3 -B scripts/dev/test_macos_ci_check.py
+    python3 -B -m unittest discover -s scripts/lib/install_ui/tests -t scripts/lib
 
 # Type-check the pinned Keep adapter and run its offline self-test.
 # Not part of `all`: the first run fetches the pinned Python deps.
@@ -135,6 +136,7 @@ install *shells: (_banner "35" "📦" "INSTALL")
     #!/usr/bin/env bash
     set -euo pipefail
     source scripts/lib/bob_shell.sh
+    source scripts/lib/install_ui.sh
     root="${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}"
     bob_prepare_install_root "$root"
     profile="${BOB_INSTALL_PROFILE:-local-install}"
@@ -147,6 +149,8 @@ install *shells: (_banner "35" "📦" "INSTALL")
             "$root/bin/bob" >&2
         exit 1
     fi
+    # Best-effort watermark for install-all's What's new digest; never fails the install.
+    install_ui_mark_installed bob-cli "$PWD"
 
 # Offers to clone missing sibling checkouts over SSH; otherwise they are skipped.
 # Pull + install bob-cli, bob-plugins, and bob-mac-capture; restart Obsidian if plugins changed.
