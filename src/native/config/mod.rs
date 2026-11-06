@@ -12,6 +12,7 @@ pub(crate) mod day_timezone;
 pub(crate) mod dependencies;
 pub(crate) mod freshness;
 pub(crate) mod gcal;
+pub(crate) mod gmail;
 pub(crate) mod plan;
 pub(crate) mod relations;
 pub(crate) mod stats;
@@ -27,6 +28,9 @@ pub(crate) use freshness::{load_freshness_config, FreshnessConfig};
 pub(crate) use gcal::{
     color_id_for_key, color_name_for_id, load_gcal_config,
     GcalCalendarSettings, GcalDescriptionMode, GcalSettings, GcalTentative,
+};
+pub(crate) use gmail::{
+    load_gmail_config, GmailBodyMode, GmailSettings, GmailSignature,
 };
 pub(crate) use plan::{load_plan_config, parse_plan_config, PlanConfig};
 // Relation-successor authoring consumers use `LabelEffect`; this phase
@@ -436,6 +440,8 @@ pub(crate) struct RawConfig {
     gkeep: Option<RawGkeep>,
     #[serde(default)]
     pub(crate) gcal: Option<serde_yaml::Value>,
+    #[serde(default)]
+    pub(crate) gmail: Option<serde_yaml::Value>,
     #[serde(default)]
     pub(crate) capture: Option<serde_yaml::Value>,
     #[serde(default)]

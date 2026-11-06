@@ -264,6 +264,27 @@ wrong-typed value is a setup error (exit 2) that names the key and never
 breaks other config loaders. `BOB_GCAL_GOG` replaces `gog` on `PATH`. See the
 [Google Calendar contract](../gcal.md#configuration).
 
+### `gmail`
+
+| Key | Type and rules | Default | Effect |
+| --- | --- | --- | --- |
+| `gmail.account` | String containing `@` | Optional when the isolated `bob-gmail` bucket holds exactly one unique email, else when gog as a whole holds exactly one | Account identity; `bob gmail login -a` can override it for that invocation. Commands prefer the Bob bucket before gog's default accounts. |
+| `gmail.writer` | Hostname slug | Unset (this host may write) | The one host label allowed to write; `doctor` compares it to vault-sync's hostname slug. |
+| `gmail.body` | `full` or `headers` | `full` | Later `save` keeps full bodies or headers plus snippet; `doctor` reports the mode. |
+| `gmail.folder` | Nonempty string | `mail` | Vault folder for mail notes. |
+| `gmail.link_label` | String containing `{subject}` | `✉️ {subject} · {who}` | Later link label template. |
+| `gmail.never_save.from` | Sequence of strings | `[]` | Addresses or `@domains` that later `save` refuses. |
+| `gmail.never_save.labels` | Sequence of strings | `[]` | Gmail label names that later `save` refuses. |
+| `gmail.pull.inbox` | Nonempty string | `gmail_inbox.md` | Task file for later label pulls. |
+| `gmail.pull.label` | String or unset | `bob` | Gmail label for later pulls; unset or empty disables pull. |
+| `gmail.signature` | `gmail` or `none` | `gmail` | Later `compose` signature mode. |
+| `gmail.timeout_secs` | Integer greater than 0 | `60` | gog request timeout in seconds. |
+
+A missing `gmail:` block uses those defaults. Unknown keys are ignored. A
+wrong-typed value is a setup error (exit 2) that names the key and never
+breaks other config loaders. `BOB_GMAIL_GOG` replaces `gog` on `PATH`. See the
+[Bob Gmail contract](../gmail.md#configuration).
+
 ### `stats`
 
 | Key | Type and allowed values | Default | Effect |
@@ -356,11 +377,16 @@ See the [capture command reference](cli/capture.md) and
 | `BOB_GCAL_BROWSER` | `open` on macOS, `xdg-open` elsewhere | Non-empty value selects browser sign-in and names the browser opener executable. |
 | `BOB_GCAL_CONSENT_SECS` | 600 seconds | Positive integer override for the interactive Google consent window. |
 | `BOB_GCAL_GOG` | `gog` resolved through `PATH` | Executable used by `bob gcal`; tests point this at a fake. Must be gog ≥ v0.44.0. |
+| `BOB_GMAIL_ASSUME_TTY` | Unset (real TTY detection) | Test hook: `1` or `true` treats stdin as a TTY for login prompts and logout confirm. |
+| `BOB_GMAIL_BROWSER` | `open` on macOS, `xdg-open` elsewhere | Non-empty value selects browser sign-in and names the browser opener executable. |
+| `BOB_GMAIL_CONSENT_SECS` | 600 seconds | Positive integer override for the interactive Google consent window. |
+| `BOB_GMAIL_GOG` | `gog` resolved through `PATH` | Executable used by `bob gmail`; tests point this at a fake. Must be gog ≥ v0.44.0. |
 
 See [reference jobs](../ref-jobs.md), [reference intake](../highlights-ref-sync.md),
 [web article capture](../highlights-clip.md#hosts-and-browsers), and the
-[Keep adapter contract](../gkeep.md#configuration), and the
-[Google Calendar contract](../gcal.md#environment).
+[Keep adapter contract](../gkeep.md#configuration), the
+[Google Calendar contract](../gcal.md#environment), and the
+[Bob Gmail contract](../gmail.md#environment).
 
 ### Plugins and shell completion
 

@@ -63,8 +63,6 @@ mod freshness;
 mod gcal;
 // Consumer: the Gmail renderer phases bob-cli-hg.3.1.2–.4 consume this pure model.
 mod gkeep;
-// Offline Gmail URL identity; no command consumes it yet.
-#[allow(dead_code)]
 pub(crate) mod gmail;
 pub(crate) mod google;
 mod highlights_ref;
@@ -151,6 +149,7 @@ pub(crate) enum NativeCommand {
     Freshness,
     Gcal,
     Gkeep,
+    Gmail,
     Query,
     Highlights,
     MoveDoneTasks,
@@ -239,6 +238,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::Freshness => freshness::cli::run(args),
         NativeCommand::Gcal => gcal::run(args),
         NativeCommand::Gkeep => gkeep::run(args),
+        NativeCommand::Gmail => gmail::run(args),
         NativeCommand::Query => dataview::run(args),
         NativeCommand::Highlights => highlights_ref::run(args),
         NativeCommand::MoveDoneTasks => collect_done::run(args),

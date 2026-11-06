@@ -26,6 +26,7 @@ pub(crate) struct Gog {
     program: PathBuf,
     timeout: Duration,
     service: GoogleService,
+    extra_scopes: Vec<String>,
 }
 
 /// One stored OAuth client from `gog auth credentials list --json`.
@@ -107,7 +108,14 @@ impl Gog {
             program,
             timeout,
             service,
+            extra_scopes: Vec::new(),
         })
+    }
+
+    /// Extra OAuth scopes (e.g. Gmail compose) appended at sign-in.
+    pub(crate) fn with_extra_scopes(mut self, scopes: Vec<String>) -> Self {
+        self.extra_scopes = scopes;
+        self
     }
 
     pub(crate) fn service(&self) -> GoogleService {
@@ -316,7 +324,7 @@ impl Gog {
     }
 
     fn auth_add_prefix(&self, account: &str) -> Vec<OsString> {
-        vec![
+        let mut args = vec![
             OsString::from("--no-input"),
             OsString::from("--json"),
             OsString::from("--color"),
@@ -330,7 +338,16 @@ impl Gog {
             OsString::from("--services"),
             OsString::from(self.service.gog_service),
             OsString::from("--force-consent"),
-        ]
+        ];
+        if self.service.gog_service == "gmail" {
+            args.push(OsString::from("--gmail-scope"));
+            args.push(OsString::from("readonly"));
+        }
+        if !self.extra_scopes.is_empty() {
+            args.push(OsString::from("--extra-scopes"));
+            args.push(OsString::from(self.extra_scopes.join(",")));
+        }
+        args
     }
 
     pub(crate) fn auth_remove(&self, account: &str) -> Result<(), GoogleError> {

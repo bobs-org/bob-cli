@@ -1093,6 +1093,17 @@ pub(crate) const ENTRIES: &[Row] = &[
             60,
         )
     },
+    Row {
+        network: true,
+        ..reads(
+            "gmail-doctor",
+            &["gmail", "doctor"],
+            "Gmail setup check",
+            &["gmail", "google", "mail", "doctor", "setup", "gog"],
+            Presentation::Report,
+            60,
+        )
+    },
     // Setup
     Row {
         network: true,
@@ -1157,6 +1168,14 @@ pub(crate) const EXCLUDED: &[Excluded] = &[
     Excluded {
         path: &["gkeep", "login"],
         reason: "Needs an interactive terminal and handles credentials",
+    },
+    Excluded {
+        path: &["gmail", "login"],
+        reason: "Needs an interactive terminal and handles credentials",
+    },
+    Excluded {
+        path: &["gmail", "logout"],
+        reason: "Needs confirmation and handles credentials",
     },
     Excluded {
         path: &["gkeep", "migrate-markers"],

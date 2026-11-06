@@ -43,6 +43,7 @@ queued intake; full scans also synchronize annotations. The
 | [getting-started.md](getting-started.md) | Vault requirements, first capture/session, command effects, and troubleshooting |
 | [gcal.md](gcal.md) | `bob gcal` Google Calendar events as daily-note Event Tasks |
 | [gkeep.md](gkeep.md) | `bob gkeep` Keep inbox drain into tasks or inline reference clips |
+| [gmail.md](gmail.md) | `bob gmail` Gmail threads as inert mail notes, linked from tasks |
 | [highlights-clip.md](highlights-clip.md) | Web article and collection capture into Highlights intake PDFs |
 | [highlights-create.md](highlights-create.md) | `bob ref create` vault-note snapshots, Markdown, PDFs, and URL collections |
 | [highlights-ref-sync.md](highlights-ref-sync.md) | `bob ref` PDF intake and reference notes |

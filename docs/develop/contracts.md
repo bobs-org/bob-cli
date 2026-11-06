@@ -16,6 +16,7 @@ These pages specify behavior that Bob components and their tests must agree on.
 - [Getting started](../getting-started.md) — Vault requirements, first capture/session, command effects, and troubleshooting
 - [Bob Gcal](../gcal.md) — `bob gcal` Google Calendar events as daily-note Event Tasks
 - [Bob Gkeep](../gkeep.md) — `bob gkeep` Keep inbox drain into tasks or inline reference clips
+- [Bob Gmail](../gmail.md) — `bob gmail` Gmail threads as inert mail notes, linked from tasks
 - [Web article capture (`bob ref create <URL> [<URL>…]`)](../highlights-clip.md) — Web article and collection capture into Highlights intake PDFs
 - [`bob ref create` — vault notes, Markdown, PDF, and URL targets](../highlights-create.md) — `bob ref create` vault-note snapshots, Markdown, PDFs, and URL collections
 - [Highlights Reference Note Sync](../highlights-ref-sync.md) — `bob ref` PDF intake and reference notes

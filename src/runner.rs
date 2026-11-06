@@ -858,6 +858,15 @@ const SUBCOMMANDS: &[Subcommand] = &[
         }),
     },
     Subcommand {
+        name: "gmail",
+        about: "Save Gmail threads as inert mail notes, linked from tasks",
+        section: Section::Integrations,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::Gmail,
+            script_command: None,
+        }),
+    },
+    Subcommand {
         name: "completion",
         about: "Install and inspect shell completion for bob",
         section: Section::Setup,
@@ -2258,6 +2267,7 @@ mod tests {
             NativeCommand::Freshness,
             NativeCommand::Gcal,
             NativeCommand::Gkeep,
+            NativeCommand::Gmail,
             NativeCommand::Query,
             NativeCommand::Highlights,
             NativeCommand::MoveDoneTasks,

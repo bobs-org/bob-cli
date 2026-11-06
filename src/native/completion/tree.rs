@@ -88,6 +88,7 @@ impl NativeCommand {
             }
             NativeCommand::Gcal => crate::native::gcal::cli::build_cli(),
             NativeCommand::Gkeep => crate::native::gkeep::cli::build_cli(),
+            NativeCommand::Gmail => crate::native::gmail::cli::build_cli(),
             NativeCommand::Query => crate::native::dataview::cli::build_cli(),
             NativeCommand::Highlights => {
                 crate::native::highlights_ref::cli::build_cli()

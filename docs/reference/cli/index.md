@@ -79,6 +79,7 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob clipboard`](clipboard.md) | Diagnose clipboard history for counted capture |
 | [`bob gcal`](gcal.md) | Project Google Calendar events onto today's daily note |
 | [`bob gkeep`](gkeep.md) | Drain the Google Keep inbox into Obsidian tasks |
+| [`bob gmail`](gmail.md) | Save Gmail threads as inert mail notes, linked from tasks |
 
 ## Setup
 
@@ -151,6 +152,7 @@ Integrations:
   clipboard    Diagnose clipboard history for counted capture
   gcal         Project Google Calendar events onto today's daily note
   gkeep        Drain the Google Keep inbox into Obsidian tasks
+  gmail        Save Gmail threads as inert mail notes, linked from tasks
 
 Setup:
   completion   Install and inspect shell completion for bob

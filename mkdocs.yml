@@ -93,6 +93,7 @@ plugins:
           - getting-started.md
           - gcal.md
           - gkeep.md
+          - gmail.md
           - highlights-clip.md
           - highlights-create.md
           - highlights-ref-sync.md
@@ -175,6 +176,7 @@ nav:
           - Capture a task from anywhere on your Mac: guides/capture-from-your-mac.md
           - Drain Google Keep into tasks: guides/drain-google-keep.md
           - Connect Google Calendar: guides/connect-google-calendar.md
+          - Connect Google Mail: guides/connect-google-mail.md
       - Plan the day:
           - Run the morning review walk: guides/run-morning-review.md
           - Keep Ready lanes under their cap: guides/keep-ready-under-cap.md
@@ -235,6 +237,7 @@ nav:
               - "bob clipboard": reference/cli/clipboard.md
               - "bob gcal": reference/cli/gcal.md
               - "bob gkeep": reference/cli/gkeep.md
+              - "bob gmail": reference/cli/gmail.md
           - "Setup":
               - "bob completion": reference/cli/completion.md
               - "bob plugins": reference/cli/plugins.md
@@ -295,6 +298,7 @@ nav:
               - "Getting started": getting-started.md
               - "Bob Gcal": gcal.md
               - "Bob Gkeep": gkeep.md
+              - "Bob Gmail": gmail.md
               - "Web article capture (`bob ref create <URL> [<URL>…]`)": highlights-clip.md
               - "`bob ref create` — vault notes, Markdown, PDF, and URL targets": highlights-create.md
               - "Highlights Reference Note Sync": highlights-ref-sync.md
