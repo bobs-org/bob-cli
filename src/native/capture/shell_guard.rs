@@ -12,6 +12,11 @@
 //! `@`. With draft arguments present, that stdin redirect refuses before
 //! planning with `shell_ate_merge_in_arrow`.
 //!
+//! Unquoted, `bob capture x=~2!` can reach bob as `x=$HOME2!` when the shell
+//! expands the `~`. An argv token that starts with `x=` and the `$HOME` value
+//! refuses before planning with `shell_expanded_tilde`, quoting the draft
+//! with the `~` put back.
+//!
 //! Help (`--help`) and pure expansion (`--expand`) keep their existing
 //! behavior: the guards run only on the real capture path, after expansion
 //! handling. Pipes, TTYs, sockets, devices, and unsupported platforms never
@@ -35,42 +40,49 @@ pub(crate) const SHELL_ATE_MERGE_IN_ARROW_MESSAGE: &str =
 
 /// Machine-readable code for the shell-expanded-tilde refusal.
 pub(crate) const SHELL_EXPANDED_TILDE_CODE: &str = "shell_expanded_tilde";
-/// Canonical copy: the shell expanded an unquoted `~` before bob saw it.
-pub(crate) const SHELL_EXPANDED_TILDE_MESSAGE: &str =
-    "your shell expanded ~; quote the capture: bob capture 'x=~'";
+/// Canonical copy prefix: the shell expanded an unquoted `~` before bob saw
+/// it. The refusal appends the draft with every `~` put back, single-quoted.
+const SHELL_EXPANDED_TILDE_PREFIX: &str =
+    "your shell expanded ~; quote the capture: bob capture ";
 
-/// Whether an argv draft contains a token starting with `x=` followed by the
-/// non-empty `$HOME` value: the shell expanded an unquoted `~` before bob
-/// saw it. Only argv drafts are checked; piped stdin can carry a literal
-/// `$HOME` path on purpose. A `pushd`-style `x=~1` expansion cannot be
-/// detected and is documented instead.
-pub(crate) fn expanded_tilde_token(raw_text: &str) -> Option<String> {
+/// Refusal copy for an argv draft with a token starting with `x=` followed
+/// by the non-empty `$HOME` value: the shell expanded an unquoted `~` before
+/// bob saw it. The rewrite puts `~` back in place of `$HOME` in every such
+/// token (`x=$HOME2!` → `bob capture 'x=~2!'`). Only argv drafts are
+/// checked; piped stdin can carry a literal `$HOME` path on purpose. A
+/// `pushd`-style `x=~1` expansion cannot be detected and is documented
+/// instead.
+pub(crate) fn expanded_tilde_message(raw_text: &str) -> Option<String> {
     let home = std::env::var_os("HOME")?.to_string_lossy().into_owned();
-    if home.is_empty() {
-        return None;
-    }
-    for token in raw_text.split(|c: char| c.is_whitespace()) {
-        if token.len() <= 2 || !token.starts_with("x=") {
-            continue;
-        }
-        let after = &token[2..];
-        if after.starts_with(&home) {
-            return Some(token.to_string());
-        }
-    }
-    None
+    restore_expanded_tildes(raw_text, &home)
+        .map(|draft| format!("{SHELL_EXPANDED_TILDE_PREFIX}'{draft}'"))
 }
 
-/// Rewrite an expanded-tilde token by putting `~` back in place of `$HOME`.
-#[allow(dead_code)]
-pub(crate) fn unexpand_tilde_token(token: &str) -> Option<String> {
-    let home = std::env::var_os("HOME")?.to_string_lossy().into_owned();
+/// The draft with each whitespace-delimited `x=$HOME…` token rewritten to
+/// `x=~…`, or `None` when no token carries an expanded `$HOME`.
+fn restore_expanded_tildes(raw_text: &str, home: &str) -> Option<String> {
     if home.is_empty() {
         return None;
     }
-    let after = token.strip_prefix("x=")?;
-    let rest = after.strip_prefix(&home)?;
-    Some(format!("x=~{rest}"))
+    let mut restored = String::with_capacity(raw_text.len());
+    let mut found = false;
+    for piece in raw_text.split_inclusive(char::is_whitespace) {
+        let token_len = piece.trim_end_matches(char::is_whitespace).len();
+        let (token, separator) = piece.split_at(token_len);
+        match token
+            .strip_prefix("x=")
+            .and_then(|after| after.strip_prefix(home))
+        {
+            Some(rest) => {
+                found = true;
+                restored.push_str("x=~");
+                restored.push_str(rest);
+            }
+            None => restored.push_str(token),
+        }
+        restored.push_str(separator);
+    }
+    found.then_some(restored)
 }
 
 /// Whether `path` looks like a shell-ate-arrow redirect target: basename
@@ -252,5 +264,32 @@ mod tests {
     #[test]
     fn pipes_do_not_trigger() {
         assert!(!is_shell_redirect_target(Path::new("pipe:[12345]")));
+    }
+
+    #[test]
+    fn expanded_tildes_are_restored_in_place() {
+        let home = "/home/me";
+        assert_eq!(
+            restore_expanded_tildes("x=/home/me", home).as_deref(),
+            Some("x=~")
+        );
+        assert_eq!(
+            restore_expanded_tildes("x=/home/me2!=!1 log", home).as_deref(),
+            Some("x=~2!=!1 log")
+        );
+        assert_eq!(
+            restore_expanded_tildes("x x=read2/home/me x=/home/me", home)
+                .as_deref(),
+            Some("x x=read2/home/me x=~")
+        );
+    }
+
+    #[test]
+    fn drafts_without_an_expanded_home_are_not_refused() {
+        let home = "/home/me";
+        assert_eq!(restore_expanded_tildes("x=~2", home), None);
+        assert_eq!(restore_expanded_tildes("x=2 /home/me", home), None);
+        assert_eq!(restore_expanded_tildes("note x=", home), None);
+        assert_eq!(restore_expanded_tildes("x=/home/me", ""), None);
     }
 }

@@ -802,15 +802,48 @@ fn assists_dash_rewrite_and_stale_guard_and_shell_tilde() {
     assert!(status.success(), "{value}");
     assert_eq!(value["ok"], true);
 
-    // Shell-expanded tilde refuses with its own code (argv only).
+    // Shell-expanded tilde refuses with its own code (argv only), quoting
+    // the draft with `~` put back in place of `$HOME`.
     let (_t5, v5, d5) = segment_vault("bob-cli-seg-shell-tilde");
-    let home = std::env::var("HOME").unwrap_or_default();
-    if !home.is_empty() {
-        let token = format!("x={home}");
-        let (status, value) = run_capture_raw(&v5, &d5, &[], &[&token]);
-        assert!(!status.success(), "{value}");
-        assert_eq!(value["code"], "shell_expanded_tilde");
-    }
+    let before = fs::read_to_string(&d5).expect("read day");
+    let home = "/home/bob-cli-seg-tilde";
+    let tilde_capture = |args: &[&str]| {
+        let output = bob_command()
+            .env("BOB_NOW", NOW)
+            .env("BOB_DAY_FILE", &d5)
+            .env("HOME", home)
+            .arg("capture")
+            .arg("-b")
+            .arg(&v5)
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .args(args)
+            .output()
+            .expect("run bob capture");
+        let value =
+            serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+                .expect("capture JSON envelope");
+        (output.status, value)
+    };
+    let (status, value) = tilde_capture(&[&format!("x={home}")]);
+    assert!(!status.success(), "{value}");
+    assert_eq!(value["code"], "shell_expanded_tilde");
+    assert_eq!(
+        value["error"],
+        "your shell expanded ~; quote the capture: bob capture 'x=~'"
+    );
+    let (status, value) = tilde_capture(&[&format!("x={home}2!=!1"), "log"]);
+    assert!(!status.success(), "{value}");
+    assert_eq!(
+        value["error"],
+        "your shell expanded ~; quote the capture: bob capture 'x=~2!=!1 log'"
+    );
+    assert_eq!(fs::read_to_string(&d5).expect("read day"), before);
+    // A `$HOME` path outside an `x=` token is ordinary text.
+    let (status, value) = tilde_capture(&["x=2~2", home]);
+    assert!(status.success(), "{value}");
+    assert_ne!(value["code"], "shell_expanded_tilde");
 }
 
 #[test]

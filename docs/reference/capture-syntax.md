@@ -78,7 +78,7 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | `=*[source][#destination…]` | Merge the next planned Pomodoro or named destinations into one open session | [`=*`](#equals-merge) |
 | `~<K>` | Drop those queued Task Links from the start | [`~<K>`](#tilde-drop) |
 | `x` | Close today's running timed Pomodoro | [`x`](#x-close) |
-| `x=E[!][=X]` | Record a past Pomodoro ending at the next five-minute boundary | [Recording past Pomodoros](#recording-past-pomodoros) |
+| `x=E[s][!][=X]` | Record a past Pomodoro ending at the next five-minute boundary or segment | [Recording past Pomodoros](#recording-past-pomodoros) |
 | `x!<M>` | Close, completing those Task Links | [`x!<M>`](#x-complete-links) |
 | `x*<P>` | Close, parking those Task Links | [`x*<P>`](#x-park-links) |
 | `x~<K>` | Close, dropping those Task Links | [`x~<K>`](#x-drop-links) |
@@ -155,9 +155,9 @@ Bob teaches the replacement.
 | `#now` / a free `#tag` at an item edge | Refused with `type_not_configured` unless the name is configured; a bare `@route` adds the heading hint |
 | `t:fix` | Ordinary prose; `t:` is retired as a type marker |
 | `x#bugs` | Error: `x` always closes the running session; write `x =bugs` to close then start |
-| `x=3-1`, `x=-2`, `x=3-`, `x=build@3-1` | No past offsets; remove the offset-shaped dash (`x=3` or `x=`) |
+| `x=3-1`, `x=-2`, `x=3-` | No past offsets; write `x=3~1` or drop the dash (`x=3`) |
 | `x=NAME@N`, `x=<N>#BARE` | Retired past spellings; write `x=fix3` or `x=3fix` |
-| `x=~2`, `x=3~2`, `x=*3`, `x=1!2` | Put close modifiers after a second `=` (`x==~2`, `x=3=~2`, `x==*3`, `x==1!2`) |
+| `x=*3`, `x=1!2` | Put close modifiers after a second `=` (`x==*3`, `x==1!2`) |
 | `x=0`, `x=build@0` | Need at least one block: `x=1`, `x=build1` |
 | `x=/build`, `x=*build` | `x=` cannot split or merge a session |
 | `x=fix!2` | Use `x=fix=!2`; to repair too, use `x=fix!=!2` |
@@ -167,14 +167,15 @@ Contract: [Retired close spellings](../capture.md#retired-close-spellings).
 
 ## Recording past Pomodoros
 
-### `x=E[!][=X]` {#recording-past-pomodoros}
+### `x=E[s][!][=X]` {#recording-past-pomodoros}
 
-`x=E[!][=X]` records a past Pomodoro. `E` is empty (25 minutes), a positive
-count, or a name. Counts can go before or after bare names (`x=3fix`,
-`x=fix3`); names with `-`, a trailing digit, or close shape use `#` when
-needed. `@N` timing is retired. Records stack backward from the next
-five-minute boundary; `!` permits trimming an older closed edge. See the
-[past Pomodoro contract](../capture.md#recording-a-past-pomodoro).
+`x=E[s][!][=X]` records a past Pomodoro. `E` is empty (25 minutes), a
+positive count, or a name. Counts can go before or after bare names
+(`x=3fix`, `x=fix3`); names with `-`, a trailing digit, or close shape use
+`#` when needed. `@N` timing is retired. Records stack backward from the
+next five-minute boundary unless a segment suffix (`~…`) places them;
+`!` permits trimming an older closed edge. See the
+[past Pomodoro contract](../capture.md#placing-it-on-todays-timeline).
 
 ## Routes and destinations
 

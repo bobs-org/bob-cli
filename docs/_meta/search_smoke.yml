@@ -118,7 +118,7 @@
   location: /reference/capture-syntax/#tilde-drop
 - query: "x"
   location: /reference/capture-syntax/#x-close
-- query: "x=E[!][=X]"
+- query: "x=E[s][!][=X]"
   location: /reference/capture-syntax/#recording-past-pomodoros
 - query: "x!<M>"
   location: /reference/capture-syntax/#x-complete-links

@@ -5468,7 +5468,7 @@ Common teaching errors show the exact rewrite:
 
 | Typed | Rewrite |
 | --- | --- |
-| `x=3-1`, `x=-2`, `x=3-`, `x=fix-`, `x=fix3-1`, `x=3-1fix`, `x=build@3-1` | `x=` takes no offset; to start at a segment write the suffix, to end now drop the dash (`x=3-1` → `x=3~1` or `x=3`, `x=-2` → `x=~2` or `x=`, `x=fix3-1` → `x=fix3~1` or `x=fix3`, `x=-` → `x=~` or `x=`, `x=3-` → `x=3~` or `x=3`) |
+| `x=3-1`, `x=-2`, `x=3-`, `x=fix-`, `x=fix3-1`, `x=3-1fix` | `x=` takes no offset; to start at a segment write the suffix, to end now drop the dash (`x=3-1` → `x=3~1` or `x=3`, `x=-2` → `x=~2` or `x=`, `x=fix3-1` → `x=fix3~1` or `x=fix3`, `x=-` → `x=~` or `x=`, `x=3-` → `x=3~` or `x=3`) |
 | `x=3#fix@2` | Give the count once: `x=3fix` or `x=fix2` |
 | `x=fix@3`, `x=build@` | Retired timing separator: write `x=fix3` or `x=build3` |
 | `x=3#fix`, `x=#fix` | `#` is only for names a bare start cannot spell: write `x=3fix` or `x=fix` |

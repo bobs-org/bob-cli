@@ -439,8 +439,8 @@ impl Timeline {
         listing
     }
 
-    // Used by the segment picker (assists phase) and unit tests.
-    #[allow(dead_code)]
+    /// Segment picker rows in timeline order: tail (nonempty only), `~1…~N`,
+    /// then head.
     pub(crate) fn picker_rows(&self) -> Vec<Segment> {
         self.tail
             .iter()

@@ -255,11 +255,12 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         Err(error) => return print_capture_error(error, output_format),
     };
     if request.argv
-        && shell_guard::expanded_tilde_token(&request.raw_text).is_some()
+        && let Some(message) =
+            shell_guard::expanded_tilde_message(&request.raw_text)
     {
         return print_capture_error(
             CaptureError::usage_code(
-                shell_guard::SHELL_EXPANDED_TILDE_MESSAGE,
+                message,
                 shell_guard::SHELL_EXPANDED_TILDE_CODE,
             ),
             output_format,
