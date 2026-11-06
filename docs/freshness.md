@@ -22,9 +22,9 @@ This file is the contract both implementations cite. The Rust side is
 `src/native/freshness/` (`placement.rs`, `state.rs`) with the
 `freshness:` config block in `src/native/config/freshness.rs`; the
 JavaScript mirror is `api.freshness` in bob-ledger-tools (top-level
-api v3, freshness namespace v12 with the `recurringTier` capability
-and `markUnblockedLine`). The bob-ledger-tools JavaScript
-tests use the conformance vectors below verbatim.
+api v3, freshness namespace v14; it advertises the `recurringTier` and
+`checklistStages` capabilities plus the `markUnblockedLine` method). The
+bob-ledger-tools JavaScript tests use the conformance vectors below verbatim.
 
 The keep-streak contract (`keeps`, `decay`, introduced in schema 4) is specified
 here and implemented in Rust in the contract-rust phase. Its
@@ -590,7 +590,7 @@ Reference conformance compares tag-only #ref and legacy ^ref tasks against an ot
 
 Schema history is historical: schemas 6–12 accepted a project and/or reference cadence, and schemas 7–12 included a REFERENCES tier. Schema 16 adds checklist stages (`config.pre_stages` / `post_stages`; per-row `stage`, `stage_rank`, `stage_total`; PRE/POST sort by stage). Schema 15 adds per-rung decay limits and lane `decide`. Schema 14 adds `returned_by` / `unblocked_on` for the unblock tickler. Schema 13 removes the reference-specific fields and redistributes those tasks through the ordinary evaluator. Schema 12 re-keyed ref review identity from exact ^ref to the #ref tag; schema 11 added recurring, schema 10 renamed returned to tickler, schema 9 added PRE/POST, schema 8 removed the decay calendar gate, and earlier schemas introduced tracker and project fields. Those historical shapes do not describe current output. The shared seed envelope advances with the schema constant; seed behavior is unchanged.
 
-Bob-ledger-tools keeps top-level api v3 and advances api.freshness.version to 12. The current namespace advertises trackerReview, recurringTier, checklistTiers, and `markUnblockedLine`; it no longer advertises referenceReview or refTagIdentity. JS writers call `api.freshness.markUnblockedLine` (namespace ≥ v12). When it is missing, they recover without the field and `console.warn`. Its queue and footer use the nine current groups, and public config/count fallbacks match warm snapshots. Navigation may present a REFERENCES entry only when explicitly marked as legacy from a freshness namespace <=10; the new producer never creates one, and the compatibility path preserves old loaded-provider rows until plugin reload.
+Bob-ledger-tools keeps top-level api v3 and advances api.freshness.version to 14. The current namespace advertises trackerReview, recurringTier, checklistTiers, `checklistStages`, and `markUnblockedLine`; it no longer advertises referenceReview or refTagIdentity. Namespace v14 queue entries carry `stage`, `stageIndex`, `stageRank`, and `stageTotal`, while `config()` exposes normalized `preStages` and `postStages`. `reviewEntryView()` supplies the same uppercase stage detail to the footer and navigation landing toasts, with a stage-local count only for stages with multiple due rows; a narrow footer drops that count before shortening the stage name. JS writers call `api.freshness.markUnblockedLine` (namespace ≥ v12). When it is missing, they recover without the field and `console.warn`. Its queue and footer use the nine current groups, and public config/count fallbacks match warm snapshots. Navigation may present a REFERENCES entry only when explicitly marked as legacy from a freshness namespace <=10; the new producer never creates one, and the compatibility path preserves old loaded-provider rows until plugin reload.
 
 Dashboard freshness.reviewModel NEW/ROTTEN chips still project memoized evaluated states onto the existing visible Ready pool. Hidden review-only rows never feed a badge for a section that excludes them. The status bar footer, ]s, and CLI use the full review counts. The desktop footer shows nonempty groups in walk order with short labels WIP for PENDING, RECUR for RECURRING, and TICKS for TICKLER; it splits TICKLER from ROTTEN so the commitment/upkeep boundary is visible. The desktop footer paints each group and the current tier in that tier's own color, marks the commitments/upkeep boundary with a hairline divider, and drops groups from the end of the walk (marked `…`) when space runs out. Dashboard ROTTEN chips still fold TICKLER plus ROTTEN. Review r/N and TIER i/M are queue positions, not completed-task counts. Jump notices and CLI output use full tier names.
 
@@ -1775,13 +1775,15 @@ There is no freshness trial: no ritual change, release, or tuning waits on a tri
   `kept N× at <Level>`); early and Today-linked lane keeps stamp quietly;
   freshness gestures never write the Work Log; lane `decide` rows count
   and log until the rung-aware card ships.
-- 2026-11-06: checklist stages went live in `bob freshness` (schema
+- 2026-11-05: checklist stages went live in `bob freshness` (schema
   16): `freshness.pre_stages` / `post_stages` order PRE/POST rows by
   stage ahead of unstaged rows, with per-row `stage`, `stage_rank`,
   and `stage_total`, staged human details and tier headings, and the
   `freshness_stages_invalid`, `checklist_stage_conflict`, and
   `checklist_stage_unused` lints (Rust-only except the config-level
-  one, which the JS mirror adopts with the shared fixture).
+  one, which the JS mirror adopts with the shared fixture). bob-ledger-tools
+  1.100.0 / freshness namespace v14 mirrors the order, exposes
+  `checklistStages`, and shows stage details in the footer and landing toasts.
 
 ## 14. Keep-streak rollout, rollback, and calibration
 
