@@ -48,6 +48,17 @@ Confirm the `REVIEW N due` total and the tier groups. The walk order is PRE
 Empty tiers are omitted. `bob freshness list --limit 10` shortens the printed
 rows; counts still cover the whole vault.
 
+## 1a. Order PRE and POST with stages
+
+PRE and POST rows walk in file order unless you stage them. Tag a row with
+its stage right after the checklist tag (`#task #gtd #pre #browser`), list
+the stages in walk order under `freshness:` (`pre_stages: [terminal,
+periods, browser]`), and the walk follows the list: staged rows first, in
+list order, then everything unstaged. Reorder by editing the list, never by
+moving rows. Staged rows show their stage in `bob freshness` (`TERMINAL 1/2
+· complete to resolve`) and the tier heading names the order (`PRE 9 ·
+terminal → periods → browser`).
+
 ## 2. Enter the walk in Obsidian
 
 Press `]s` or `Ctrl+Alt+J` to land on the next due row (`[s` /

@@ -45,9 +45,15 @@ impl Default for DecayConfig {
 ///
 /// See `docs/freshness.md` for the full contract. The interval is the
 /// days before a confirmed Ready task is due for review; the budget is
-/// an optional daily goal meter that never hides tasks.
+/// an optional daily goal meter that never hides tasks. The stage
+/// lists order PRE/POST checklist rows; each `*_invalid` carries the
+/// first rejection reason when that list alone is ignored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FreshnessConfig {
+    pub(crate) pre_stages: Vec<String>,
+    pub(crate) post_stages: Vec<String>,
+    pub(crate) pre_stages_invalid: Option<String>,
+    pub(crate) post_stages_invalid: Option<String>,
     pub(crate) interval: u16,
     /// Daily review cadence for the `[/]` lane. `None` means the
     /// lane is not walked (`pending_interval: false`).
@@ -70,6 +76,10 @@ pub(crate) struct FreshnessConfig {
 impl Default for FreshnessConfig {
     fn default() -> Self {
         Self {
+            pre_stages: Vec::new(),
+            post_stages: Vec::new(),
+            pre_stages_invalid: None,
+            post_stages_invalid: None,
             interval: 7,
             pending_interval: Some(1),
             next_interval: Some(1),
@@ -216,8 +226,17 @@ pub(crate) fn parse_freshness_config(
     let decay =
         parse_decay_config(get("decay").as_ref(), &path_display.to_string())?;
 
+    let (pre_stages, pre_stages_invalid) =
+        parse_stage_list(get("pre_stages").as_ref(), "pre_stages");
+    let (post_stages, post_stages_invalid) =
+        parse_stage_list(get("post_stages").as_ref(), "post_stages");
+
     // Unknown keys are ignored, like every other config block.
     Ok(FreshnessConfig {
+        pre_stages,
+        post_stages,
+        pre_stages_invalid,
+        post_stages_invalid,
         interval,
         pending_interval,
         next_interval,
@@ -227,6 +246,99 @@ pub(crate) fn parse_freshness_config(
         stale_budget_deprecated,
         decay,
     })
+}
+
+/// Stage names that checklist membership tags may never use: they
+/// name the checklist identity itself.
+fn is_reserved_stage(name: &str) -> bool {
+    matches!(name, "task" | "gtd" | "pre" | "post")
+}
+
+fn stage_grammar() -> &'static regex::Regex {
+    static GRAMMAR: std::sync::OnceLock<regex::Regex> =
+        std::sync::OnceLock::new();
+    GRAMMAR.get_or_init(|| {
+        regex::Regex::new(r"^[\p{L}\p{N}_/-]+$")
+            .expect("stage grammar compiles")
+    })
+}
+
+/// Normalize one raw stage entry: strip a single leading `#` (so a
+/// quoted `"#browser"` works), then Unicode-lowercase. Returns the
+/// normalized name or the reason it is rejected.
+fn normalize_stage_entry(raw: &str) -> Result<String, String> {
+    let stripped = raw.strip_prefix('#').unwrap_or(raw);
+    if stripped.is_empty() {
+        return Err("is empty".to_string());
+    }
+    let name = stripped.to_lowercase();
+    if is_reserved_stage(&name) {
+        return Err(format!("{name:?} is reserved"));
+    }
+    if !stage_grammar().is_match(&name) {
+        return Err(format!("{raw:?} is not a valid tag name"));
+    }
+    Ok(name)
+}
+
+/// Parse one `freshness.pre_stages` / `post_stages` list
+/// (`docs/freshness.md` §4). Absent or null means `[]`, and any
+/// rejection ignores that list alone: the returned reason becomes one
+/// `freshness_stages_invalid` diagnostic while the other list and
+/// every other freshness key still apply. Never a config error.
+pub(crate) fn parse_stage_list(
+    value: Option<&serde_yaml::Value>,
+    key: &str,
+) -> (Vec<String>, Option<String>) {
+    let none = (Vec::new(), None);
+    let Some(value) = value else {
+        return none;
+    };
+    if value.is_null() {
+        return none;
+    }
+    let serde_yaml::Value::Sequence(entries) = value else {
+        return (
+            Vec::new(),
+            Some(format!(
+                "{key} must be a list of stage names, got {}",
+                render_scalar(value)
+            )),
+        );
+    };
+    let mut stages = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.iter().enumerate() {
+        let number = index + 1;
+        let serde_yaml::Value::String(raw) = entry else {
+            return (
+                Vec::new(),
+                Some(format!(
+                    "{key} entry {number} must be a string, got {}",
+                    render_scalar(entry)
+                )),
+            );
+        };
+        match normalize_stage_entry(raw) {
+            Ok(name) => {
+                if stages.contains(&name) {
+                    return (
+                        Vec::new(),
+                        Some(format!(
+                            "{key} entry {number} {name:?} duplicates an earlier stage"
+                        )),
+                    );
+                }
+                stages.push(name);
+            }
+            Err(problem) => {
+                return (
+                    Vec::new(),
+                    Some(format!("{key} entry {number} {problem}")),
+                );
+            }
+        }
+    }
+    (stages, None)
 }
 
 /// Normalize the `freshness.decay` value: absent, null, `true`, or an
@@ -980,6 +1092,132 @@ mod tests {
                 .expect_err("freshness loader must still reject the mistyped block");
             assert!(matches!(error, ConfigError::Invalid(_)));
         }
+    }
+
+    #[test]
+    fn stages_default_absent_and_null() {
+        for text in [
+            "properties: []\n",
+            "freshness:\n",
+            "freshness:\n  pre_stages:\n  post_stages:\n",
+            "freshness:\n  pre_stages: []\n  post_stages: []\n",
+        ] {
+            let config = parse_freshness_config(text, Path::new("/config.yml"))
+                .expect("absent stages give empty lists");
+            assert_eq!(config.pre_stages, Vec::<String>::new());
+            assert_eq!(config.post_stages, Vec::<String>::new());
+            assert_eq!(config.pre_stages_invalid, None);
+            assert_eq!(config.post_stages_invalid, None);
+        }
+    }
+
+    #[test]
+    fn stages_normalize_case_and_leading_hash() {
+        let config = parse_freshness_config(
+            "freshness:\n  pre_stages: [Terminal, \"#periods\", BROWSER]\n",
+            Path::new("/config.yml"),
+        )
+        .expect("normalized stages parse");
+        assert_eq!(config.pre_stages, vec!["terminal", "periods", "browser"]);
+        assert_eq!(config.pre_stages_invalid, None);
+    }
+
+    #[test]
+    fn stages_reject_reserved_names() {
+        for name in ["task", "gtd", "pre", "post", "#PRE", "Task"] {
+            // A leading `#` must be quoted: bare `#` starts a YAML
+            // comment, exactly as the stage contract documents.
+            let entry = if name.starts_with('#') {
+                format!("{name:?}")
+            } else {
+                name.to_string()
+            };
+            let text = format!("freshness:\n  pre_stages: [{entry}]\n");
+            let config =
+                parse_freshness_config(&text, Path::new("/config.yml"))
+                    .expect("reserved names ignore the list, never fail");
+            assert_eq!(config.pre_stages, Vec::<String>::new());
+            assert_eq!(
+                config.pre_stages_invalid,
+                Some(format!(
+                    "pre_stages entry 1 {:?} is reserved",
+                    name.strip_prefix('#').unwrap_or(name).to_lowercase()
+                )),
+                "name {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn stages_reject_bad_entries_without_failing() {
+        for (yaml_list, problem) in [
+            (
+                "browser",
+                "pre_stages must be a list of stage names, got \"browser\"",
+            ),
+            (
+                "[\"web browser\"]",
+                "pre_stages entry 1 \"web browser\" is not a valid tag name",
+            ),
+            ("[\"\"]", "pre_stages entry 1 is empty"),
+            ("[\"#\"]", "pre_stages entry 1 is empty"),
+            ("[3]", "pre_stages entry 1 must be a string, got 3"),
+            ("[null]", "pre_stages entry 1 must be a string, got null"),
+            (
+                "[{a: 1}]",
+                "pre_stages entry 1 must be a string, got mapping",
+            ),
+            (
+                "[browser, Browser]",
+                "pre_stages entry 2 \"browser\" duplicates an earlier stage",
+            ),
+            ("[true]", "pre_stages entry 1 must be a string, got true"),
+        ] {
+            let text = format!("freshness:\n  pre_stages: {yaml_list}\n");
+            let config =
+                parse_freshness_config(&text, Path::new("/config.yml"))
+                    .expect("bad stage lists ignore the list, never fail");
+            assert_eq!(config.pre_stages, Vec::<String>::new());
+            assert_eq!(
+                config.pre_stages_invalid.as_deref(),
+                Some(problem),
+                "list {yaml_list}"
+            );
+        }
+        // Non-list containers are rejected the same way.
+        for yaml_list in ["{a: 1}", "3"] {
+            let text = format!("freshness:\n  post_stages: {yaml_list}\n");
+            let config =
+                parse_freshness_config(&text, Path::new("/config.yml"))
+                    .expect("bad stage lists never fail");
+            assert_eq!(config.post_stages, Vec::<String>::new());
+            assert!(config.post_stages_invalid.is_some());
+        }
+    }
+
+    #[test]
+    fn stages_fail_one_list_only_and_keep_other_keys() {
+        let config = parse_freshness_config(
+            "freshness:\n  interval: 3\n  pre_stages: [gtd]\n  post_stages: [periods]\n",
+            Path::new("/config.yml"),
+        )
+        .expect("one bad list keeps the rest");
+        assert_eq!(config.interval, 3);
+        assert!(config.interval_from_config);
+        assert_eq!(config.pre_stages, Vec::<String>::new());
+        assert!(config.pre_stages_invalid.is_some());
+        assert_eq!(config.post_stages, vec!["periods".to_string()]);
+        assert_eq!(config.post_stages_invalid, None);
+    }
+
+    #[test]
+    fn stages_parse_beside_unknown_keys() {
+        let config = parse_freshness_config(
+            "freshness:\n  pre_stages: [terminal]\n  unknown_key: ignored\n",
+            Path::new("/config.yml"),
+        )
+        .expect("stages parse beside unknown keys");
+        assert_eq!(config.pre_stages, vec!["terminal".to_string()]);
     }
 
     fn expected_limit(value: &serde_json::Value, keeps: u16) -> DecayLimit {

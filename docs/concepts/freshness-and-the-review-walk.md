@@ -31,7 +31,7 @@ The morning walk visits one shared queue in explicit tiers:
 
 | Order | Tier | What it holds |
 | --- | --- | --- |
-| 1 | PRE | Opening `#gtd #pre` checklist rows, resolved only by completion. |
+| 1 | PRE | Opening `#gtd #pre` checklist rows, resolved only by completion. Staged rows walk in configured stage order ahead of unstaged rows. |
 | 2 | NEW | Unconfirmed tasks. |
 | 3 | PROJECTS | Visible `^prj` outcome trackers on their project cadence. |
 | 4 | PENDING | Started work due for its daily lane review. |
@@ -39,7 +39,7 @@ The morning walk visits one shared queue in explicit tiers:
 | 6 | RECURRING | Due recurring occurrences, never stamped. |
 | 7 | TICKLER | Scheduled returns and automatic unblock recoveries. |
 | 8 | ROTTEN | Expired confirmations. |
-| 9 | POST | Closing `#gtd #post` checklist rows, resolved only by completion. |
+| 9 | POST | Closing `#gtd #post` checklist rows, resolved only by completion. Staged rows walk in configured stage order ahead of unstaged rows, so the Morning review stays last. |
 
 Pending and Next come due daily under their lane intervals (default one day; turning an interval off walks that lane off). PROJECTS has its own project cadence and is never disabled by a lane switch. Due recurring occurrences walk in RECURRING and complete into their next occurrence instead of taking a stamp. References use ordinary tiers: a reading task is reviewed by the same freshness rules as any other task, with no reference-only group. Review order differs from dashboard grouping on purpose: the walk is a structural review sequence, while the dashboard groups work for doing.
 

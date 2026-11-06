@@ -201,6 +201,9 @@ pub(crate) struct FreshnessRow {
     pub(crate) tracker: Option<TrackerKind>,
     /// Exact `#gtd` + `#pre`/`#post` membership, if any.
     pub(crate) checklist: Option<ChecklistKind>,
+    /// Raw `#`-prefixed tag tokens from the line, for stage
+    /// resolution (`docs/freshness.md` §4).
+    pub(crate) tags: Vec<String>,
 }
 
 /// Per-note Ready-lane counting predicate shared with `note_ready`:
@@ -328,6 +331,87 @@ pub(crate) fn checklist_from_tags(tags: &[String]) -> Option<ChecklistKind> {
     } else {
         None
     }
+}
+
+/// The configured stage list for one checklist kind
+/// (`docs/freshness.md` §4): `[]` when absent or rejected.
+pub(crate) fn stages_for_kind(
+    config: &FreshnessConfig,
+    kind: ChecklistKind,
+) -> &[String] {
+    match kind {
+        ChecklistKind::Pre => &config.pre_stages,
+        ChecklistKind::Post => &config.post_stages,
+    }
+}
+
+/// Whether the row carries `stage` as an exact whole-token tag,
+/// case-insensitive (`#Browser` joins `browser`), anywhere on the
+/// line — the same tag tokens as `#pre`/`#post`.
+pub(crate) fn carries_stage(tags: &[String], stage: &str) -> bool {
+    let wanted = format!("#{stage}");
+    tags.iter().any(|tag| tag.to_lowercase() == wanted)
+}
+
+/// Resolve a checklist-scope row's stage: the FIRST name in its
+/// kind's configured list that the row carries, with its 0-based
+/// index. `None` for unstaged rows and outside PRE/POST.
+pub(crate) fn resolve_stage(
+    tags: &[String],
+    kind: ChecklistKind,
+    config: &FreshnessConfig,
+) -> Option<(String, usize)> {
+    stages_for_kind(config, kind)
+        .iter()
+        .enumerate()
+        .find(|(_, stage)| carries_stage(tags, stage))
+        .map(|(index, stage)| (stage.clone(), index))
+}
+
+/// The earliest-listed stage when an open checklist row carries two
+/// or more names from its kind's list; `None` otherwise. The winner
+/// is the row's stage; the rest is a `checklist_stage_conflict` lint.
+pub(crate) fn conflict_winner(
+    tags: &[String],
+    kind: ChecklistKind,
+    config: &FreshnessConfig,
+) -> Option<String> {
+    let mut matches = stages_for_kind(config, kind)
+        .iter()
+        .filter(|stage| carries_stage(tags, stage));
+    let first = matches.next()?.clone();
+    matches.next().is_some().then_some(first)
+}
+
+/// One abstracted open checklist row for the unused-stage check.
+pub(crate) struct StageMember {
+    pub(crate) kind: Option<ChecklistKind>,
+    pub(crate) open: bool,
+    pub(crate) tags: Vec<String>,
+}
+
+/// Every `(kind, stage)` with no open member row carrying its tag:
+/// each owes one `checklist_stage_unused` lint. Future-scheduled
+/// rows still count as members, so the lint fires only for a real
+/// typo on either side.
+pub(crate) fn unused_stages(
+    members: &[StageMember],
+    config: &FreshnessConfig,
+) -> Vec<(ChecklistKind, String)> {
+    let mut unused = Vec::new();
+    for kind in [ChecklistKind::Pre, ChecklistKind::Post] {
+        for stage in stages_for_kind(config, kind) {
+            let has_member = members.iter().any(|member| {
+                member.open
+                    && member.kind == Some(kind)
+                    && carries_stage(&member.tags, stage)
+            });
+            if !has_member {
+                unused.push((kind, stage.clone()));
+            }
+        }
+    }
+    unused
 }
 
 fn checklist_in_scope(row: &FreshnessRow) -> bool {
@@ -857,6 +941,15 @@ pub(crate) struct QueueEntry {
     pub(crate) lane: Option<Lane>,
     /// `None` for lane `pending`/`next` rows (S13).
     pub(crate) state: Option<FreshState>,
+    /// Resolved checklist stage (`None` when unstaged or outside
+    /// PRE/POST; `docs/freshness.md` §4).
+    pub(crate) stage: Option<String>,
+    /// 1-based position among queue rows of the same tier and stage;
+    /// `None` when unstaged.
+    pub(crate) stage_rank: Option<u32>,
+    /// Number of queue rows of the same tier and stage; `None` when
+    /// unstaged.
+    pub(crate) stage_total: Option<u32>,
     pub(crate) path: String,
     pub(crate) line: u32,
     pub(crate) due_on: Option<NaiveDate>,
@@ -903,11 +996,24 @@ pub(crate) fn queue(
         if evaluated.lane.is_none() && !tier.is_checklist() {
             continue;
         }
+        // Stage resolution is order-only and PRE/POST-only: the
+        // row's tags meet its tier's configured list.
+        let kind = match tier {
+            Tier::Pre => Some(ChecklistKind::Pre),
+            Tier::Post => Some(ChecklistKind::Post),
+            _ => None,
+        };
+        let stage = kind
+            .and_then(|kind| resolve_stage(&row.tags, kind, config))
+            .map(|(name, _)| name);
         entries.push(QueueEntry {
             rank: 0,
             tier,
             lane: evaluated.lane,
             state: evaluated.state,
+            stage,
+            stage_rank: None,
+            stage_total: None,
             path: row.path.clone(),
             line: row.line,
             due_on: evaluated.due_on,
@@ -925,9 +1031,27 @@ pub(crate) fn queue(
             return tier_order;
         }
         match a.tier {
-            Tier::Pre | Tier::Post | Tier::New => {
-                a.path.cmp(&b.path).then(a.line.cmp(&b.line))
+            Tier::Pre | Tier::Post => {
+                // Stage order first (unstaged last), then file order.
+                let kind = match a.tier {
+                    Tier::Pre => ChecklistKind::Pre,
+                    _ => ChecklistKind::Post,
+                };
+                let stages = stages_for_kind(config, kind);
+                let position = |entry: &QueueEntry| {
+                    entry
+                        .stage
+                        .as_ref()
+                        .and_then(|name| {
+                            stages.iter().position(|stage| stage == name)
+                        })
+                        .unwrap_or(usize::MAX)
+                };
+                position(a)
+                    .cmp(&position(b))
+                    .then(a.path.cmp(&b.path).then(a.line.cmp(&b.line)))
             }
+            Tier::New => a.path.cmp(&b.path).then(a.line.cmp(&b.line)),
             Tier::Recurring => a
                 .due_on
                 .cmp(&b.due_on)
@@ -959,6 +1083,27 @@ pub(crate) fn queue(
                 .then(a.line.cmp(&b.line)),
         }
     });
+
+    // Stage-local positions over the full queue, before any
+    // `--limit`: rank/total count the tier-and-stage batch, and stay
+    // null for unstaged rows.
+    let mut totals: std::collections::BTreeMap<(Tier, String), u32> =
+        std::collections::BTreeMap::new();
+    for entry in &entries {
+        if let Some(stage) = &entry.stage {
+            *totals.entry((entry.tier, stage.clone())).or_default() += 1;
+        }
+    }
+    let mut seen: std::collections::BTreeMap<(Tier, String), u32> =
+        std::collections::BTreeMap::new();
+    for entry in entries.iter_mut() {
+        if let Some(stage) = entry.stage.clone() {
+            let rank = seen.entry((entry.tier, stage.clone())).or_default();
+            *rank += 1;
+            entry.stage_rank = Some(*rank);
+            entry.stage_total = totals.get(&(entry.tier, stage)).copied();
+        }
+    }
 
     for (index, entry) in entries.iter_mut().enumerate() {
         entry.rank = index as u32 + 1;
@@ -1146,3 +1291,7 @@ fn push_lint(lints: &mut Vec<String>, code: &str) {
 #[cfg(test)]
 #[path = "state_tests.rs"]
 mod state_tests;
+
+#[cfg(test)]
+#[path = "stage_tests.rs"]
+mod stage_tests;

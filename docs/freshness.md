@@ -77,6 +77,8 @@ as NEW until a human confirms it.
 | `freshness.project_interval`   | `~/.config/bob/config.yml`                     | optional integer days, 1–365; absent/null inherits |
 | `freshness.rotten_daily_budget` | `~/.config/bob/config.yml`                    | optional integer ≥ 1, default off        |
 | `freshness.decay`              | `~/.config/bob/config.yml`                     | keep-streak policy: mapping, `true`, `false`, or null (§2a) |
+| `freshness.pre_stages`        | `~/.config/bob/config.yml`                     | PRE checklist stage names in walk order (§4)                |
+| `freshness.post_stages`       | `~/.config/bob/config.yml`                     | POST checklist stage names in walk order (§4)               |
 
 **Interval precedence.** A configured project_interval overrides every other level for ^prj rows (source project). References have no special cadence or grouping: Ready references use the ordinary chain refresh → task_refresh → freshness.interval → 7; Pending and Next references use their lane interval, like other tasks. Otherwise interval(t) for an ordinary task in a walked lane is that lane's interval (pending_interval for [/] with source pending, next_interval for [*] with source next), overriding the Ready chain below. The note override applies by residence, not through parent links. pending_interval: false / next_interval: false turns that lane's walk off for ordinary tasks, including references, but never ^prj review — PROJECTS walks even with the lane off; an absent or null lane value means the default 1. An absent/null project key inherits the Ready chain.
 
@@ -99,9 +101,24 @@ freshness:
   pending_interval: 1 # [/] lane daily review; false = not walked
   next_interval: 1 # [*] lane daily review; false = not walked
   # project_interval: 1 # ^prj review cadence; absent/null inherits
+  pre_stages: [terminal, periods, browser] # PRE stages in walk order; absent/null/[] = file order
+  post_stages: [periods] # POST stages in walk order; the Morning review stays unstaged, so last
 
   # rotten_daily_budget: 15 # counts upkeep outside the lanes; never hides tasks
 ```
+
+A stage list is a list of tag names without `#` (one leading `#`
+may be quoted: `"#browser"`). Each entry is lowercased
+(Unicode-aware) and must match `^[\p{L}\p{N}_/-]+$`, must not be a
+reserved checklist name (`task`, `gtd`, `pre`, `post`), and must be
+unique within its list. Absent, null, or `[]` means file order for
+that tier. A rejected list — a non-list value, a non-string entry,
+an empty or ungrammatical name, a reserved name, or a duplicate —
+ignores that list alone as `[]` and emits one
+`freshness_stages_invalid` diagnostic naming the key and the first
+problem; the other list and every other freshness key still apply,
+and the freshness block is never marked invalid. A typo can never
+break the walk.
 
 Booleans (including `false`), zero, negatives, values above 365,
 fractional numbers, strings, and containers are config errors for the
@@ -393,6 +410,17 @@ checklist_scope(t)
                 ∧ ¬hidden (the existing #hide predicate, case-insensitive substring, unchanged)
                 ∧ path has no _templates / _conflicts segment (existing predicate)
                 (recurring, canonical daily note, and Today-linked are NOT exclusions here)
+stages(k)      = normalized freshness.pre_stages (k = pre) | freshness.post_stages (k = post);
+                [] when absent, null, or rejected (§2)
+stage(t)       = for a row in checklist_scope with kind k: the FIRST name in stages(k)
+                that t carries as an exact whole-token tag (case-insensitive, the same
+                tag tokens as #pre/#post, anywhere on the line); none otherwise.
+                Always none outside PRE/POST.
+stage_index(t) = index of stage(t) in stages(k); +∞ when none
+stage_rank(t)  = 1-based position of t among queue rows of the same tier and stage;
+                none when unstaged
+stage_total(t) = number of queue rows of the same tier and stage; none when unstaged
+                (both computed over the full queue, before --limit)
 in_scope(t)   = status type TODO ("[ ]") ∧ lane-visible ∧ ¬recurring
                 ∧ ¬in a canonical daily note (YYYY/YYYYMMDD.md) ∧ ¬Today(t)
                   lane-visible = the NEXT/PENDING lane predicate on each side: not done,
@@ -471,11 +499,17 @@ overlay is a no-op whenever the row is a checklist member. It sets `tier`, `due_
 `days_overdue`, and `decide = false`, and leaves `state`, `lane`, `fresh`, interval,
 keeps, and lints alone.
 
-The queue holds every row with a tier, in order PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST. Within RECURRING the order is due_on ↑, path ↑, line ↑ (oldest occurrence first). Other tiers keep their existing comparator:
+The queue holds every row with a tier, in order PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST. Within RECURRING the order is due_on ↑, path ↑, line ↑ (oldest occurrence first). PRE/POST sort by stage first (unstaged last), then file order; other tiers keep their existing comparator:
+
+```text
+Order (pre)    = stage_index ↑, path ↑, line ↑
+Order (post)   = stage_index ↑, path ↑, line ↑
+Order (new)    = path ↑, line ↑                      (unchanged: split out of the shared arm)
+```
 
 | Tier | Order within the tier |
 | --- | --- |
-| pre | path ↑, line ↑ |
+| pre | stage_index ↑ (unstaged last), path ↑, line ↑ |
 | new | path ↑, line ↑ |
 | projects | never-confirmed first, due_on ↑, created ↑, path ↑, line ↑ |
 | pending | never-stamped first, due_on ↑, created ↑, path ↑, line ↑ |
@@ -483,7 +517,7 @@ The queue holds every row with a tier, in order PRE → NEW → PROJECTS → PEN
 | recurring | due_on ↑, path ↑, line ↑ |
 | tickler | due_on ↑, path ↑, line ↑ |
 | rotten | interval ↑, due_on ↑, created ↓, path ↑, line ↑ |
-| post | path ↑, line ↑ |
+| post | stage_index ↑ (unstaged last), path ↑, line ↑ |
 
 A missing created always sorts after dated peers. The commitment tiers are PRE, NEW, PROJECTS, PENDING, NEXT, RECURRING, and TICKLER. They sit before the Commitments done boundary. ROTTEN is upkeep, and POST is the closing tier after ROTTEN. A PROJECTS row never acquires a decay decision for being rotten underneath; ordinary rotten behavior applies to references. Checklist rows resolve only by completion through Tasks and are never stamped by the walk.
 
@@ -552,9 +586,9 @@ null.
 
 Reference conformance compares tag-only #ref and legacy ^ref tasks against an otherwise-identical ordinary task: interval/source, state, bucket, tier, due date, overdue days, keeps, and decision eligibility match. An unstamped Ready ref is NEW; a resurfaced ref is TICKLER; an expired Ready ref is ROTTEN and can decide at the keep limit. Lane refs use PENDING/NEXT cadence with null state/bucket; disabled lanes suppress them like ordinary lane tasks. Hidden, blocked, Today-linked, daily-note, template/conflict, and future-scheduled refs remain excluded. ^prj remains the only freshness tracker exception and keeps its project cadence and PROJECTS tier.
 
-**Machine vocabulary (schema 15).** Human and machine output use the nine current groups PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST. The current JSON contract is schema 15. `config.decay` reports `enabled`, `keeps`, `enter`, and `limits: {pending, next, ready}` (each an integer or `false`). `decide` can be true on due PENDING and NEXT rows as well as due Ready ROTTEN/TICKLER. Queue rows gain `returned_by` (`scheduled` | `unblocked`) and, when present, `unblocked_on`. It contains no reference cadence, interval source, tier, or convenience counter. The histogram has exactly these nine keys, including zero values; walk equals the sum of by_tier before --limit. References remain ordinary tasks in the existing state and tier counts.
+**Machine vocabulary (schema 16).** Human and machine output use the nine current groups PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST. The current JSON contract is schema 16. `config` echoes the effective normalized `pre_stages` and `post_stages` lists; every queue row gains `stage` (string or null), `stage_rank`, and `stage_total` (integers or null). `config.decay` reports `enabled`, `keeps`, `enter`, and `limits: {pending, next, ready}` (each an integer or `false`). `decide` can be true on due PENDING and NEXT rows as well as due Ready ROTTEN/TICKLER. Queue rows gain `returned_by` (`scheduled` | `unblocked`) and, when present, `unblocked_on`. It contains no reference cadence, interval source, tier, or convenience counter. The histogram has exactly these nine keys, including zero values; walk equals the sum of by_tier before --limit. References remain ordinary tasks in the existing state and tier counts.
 
-Schema history is historical: schemas 6–12 accepted a project and/or reference cadence, and schemas 7–12 included a REFERENCES tier. Schema 15 adds per-rung decay limits and lane `decide`. Schema 14 adds `returned_by` / `unblocked_on` for the unblock tickler. Schema 13 removes the reference-specific fields and redistributes those tasks through the ordinary evaluator. Schema 12 re-keyed ref review identity from exact ^ref to the #ref tag; schema 11 added recurring, schema 10 renamed returned to tickler, schema 9 added PRE/POST, schema 8 removed the decay calendar gate, and earlier schemas introduced tracker and project fields. Those historical shapes do not describe current output. The shared seed envelope advances with the schema constant; seed behavior is unchanged.
+Schema history is historical: schemas 6–12 accepted a project and/or reference cadence, and schemas 7–12 included a REFERENCES tier. Schema 16 adds checklist stages (`config.pre_stages` / `post_stages`; per-row `stage`, `stage_rank`, `stage_total`; PRE/POST sort by stage). Schema 15 adds per-rung decay limits and lane `decide`. Schema 14 adds `returned_by` / `unblocked_on` for the unblock tickler. Schema 13 removes the reference-specific fields and redistributes those tasks through the ordinary evaluator. Schema 12 re-keyed ref review identity from exact ^ref to the #ref tag; schema 11 added recurring, schema 10 renamed returned to tickler, schema 9 added PRE/POST, schema 8 removed the decay calendar gate, and earlier schemas introduced tracker and project fields. Those historical shapes do not describe current output. The shared seed envelope advances with the schema constant; seed behavior is unchanged.
 
 Bob-ledger-tools keeps top-level api v3 and advances api.freshness.version to 12. The current namespace advertises trackerReview, recurringTier, checklistTiers, and `markUnblockedLine`; it no longer advertises referenceReview or refTagIdentity. JS writers call `api.freshness.markUnblockedLine` (namespace ≥ v12). When it is missing, they recover without the field and `console.warn`. Its queue and footer use the nine current groups, and public config/count fallbacks match warm snapshots. Navigation may present a REFERENCES entry only when explicitly marked as legacy from a freshness namespace <=10; the new producer never creates one, and the compatibility path preserves old loaded-provider rows until plugin reload.
 
@@ -590,6 +624,18 @@ engine. Checklist lints apply only to open tasks: `checklist_tag_incomplete`
 (`#pre` or `#post` without `#gtd`), `checklist_tag_conflict`
 (`#gtd #pre #post`; PRE wins), and `checklist_repeat_not_when_done`
 (a checklist member whose `repeat` lacks `when done`).
+Checklist stage lints: `freshness_stages_invalid` (once per loaded
+config per rejected `pre_stages` / `post_stages` list:
+`freshness.<key> <problem>; list ignored, <TIER> keeps file order`),
+`checklist_stage_conflict` (an open checklist row carrying two or
+more names from its kind's list:
+`checklist row carries several stages; the earliest-listed (<name>) wins`;
+the winner is the row's stage), and `checklist_stage_unused`
+(a listed stage with no open member row, scheduled or not:
+`<pre|post> stage '<name>' has no open #gtd #<pre|post> row; check the tag or the list`).
+The conflict and unused lints run over every task, like the other
+checklist lints; a future-scheduled row still counts as a member,
+so the unused lint fires only for a real typo on either side.
 `recurring_undated` fires for an open recurring task with no
 checklist tags, a lane status, outside `_templates`/`_conflicts`, and
 no valid `scheduled`, `due`, or `start`: "recurring task has no
@@ -853,6 +899,14 @@ bob freshness · Thu 2026-10-08 · every 7d · pending 1d · next 1d · keeps 3
 - Human rows show `kept N×` when the streak is nonzero and
   `· decide` where the read-time choice is due.
 - Each tier heading carries its count and is omitted when empty.
+- A tier with a non-empty stage list names its configured order on the
+  heading (`PRE 9 · terminal → periods → browser`). A staged
+  row replaces the generic first word of its detail with the stage
+  (`TERMINAL 1/2 · complete to resolve`, or `PERIODS · complete to
+  resolve` when the stage holds one row); the count appears only for
+  stages with two or more due rows. Staged POST rows use the PRE action
+  (`complete to resolve`); unstaged rows keep `Checklist · complete to
+  resolve` and `Closeout · complete last`.
 - The dim divider appears only when rows exist on both sides.
 - Lane rows overdue by `n ≥ 1` days read `{n}d overdue`.
 - With a budget, the meter reads `✓ 12/15 today`.
@@ -869,7 +923,7 @@ render empty, and NEW/ROTTEN badges show `–` (never zero). Native
 and READY is ungated there; `bob freshness list` is the headless
 review interface.
 
-The current JSON contract is schema_version 15. It includes config interval, pending_interval/next_interval, project_interval, rotten_daily_budget, and normalized decay (`enabled`, `keeps`, `enter`, and `limits: {pending, next, ready}` as integer or `false`); counts due/new/resurfaced/rotten/fresh, pending_due/next_due/projects_due/pre_due/post_due/recurring_due, a nine-key by_tier histogram, walk, decide, refreshed_today, upkeep_today, budget, and budget_met; queue rows with the nine current tiers, lane/state/bucket, interval_source task/note/config/default/pending/next/project, due metadata, keeps, decide (true on due PENDING, NEXT, and Ready ROTTEN/TICKLER at the rung limit), `returned_by`, and `unblocked_on` when present; and warnings. It has no reference interval, references_due, references tier, or reference interval source. Counts cover the whole vault regardless of --limit. The Obsidian footer abbreviates PENDING as WIP, RECURRING as RECUR, and TICKLER as TICKS; it omits empty groups and the current group. A NEW project counts once in PROJECTS. References follow their ordinary state and lane groups.
+The current JSON contract is schema_version 16. It includes config interval, pending_interval/next_interval, project_interval, rotten_daily_budget, `pre_stages`, `post_stages`, and normalized decay (`enabled`, `keeps`, `enter`, and `limits: {pending, next, ready}` as integer or `false`); counts due/new/resurfaced/rotten/fresh, pending_due/next_due/projects_due/pre_due/post_due/recurring_due, a nine-key by_tier histogram, walk, decide, refreshed_today, upkeep_today, budget, and budget_met; queue rows with the nine current tiers, lane/state/bucket, interval_source task/note/config/default/pending/next/project, due metadata, keeps, decide (true on due PENDING, NEXT, and Ready ROTTEN/TICKLER at the rung limit), `returned_by`, `unblocked_on` when present, `stage`, `stage_rank`, and `stage_total`; and warnings. It has no reference interval, references_due, references tier, or reference interval source. Counts cover the whole vault regardless of --limit. The Obsidian footer abbreviates PENDING as WIP, RECURRING as RECUR, and TICKLER as TICKS; it omits empty groups and the current group. A NEW project counts once in PROJECTS. References follow their ordinary state and lane groups.
 
 Seed options: -d/--dry-run, -F/--force, -f/--format human|json. Ready tasks without a valid `fresh` are grouped by note
 and bin-packed largest-note-first into 7 buckets; a note bigger than
@@ -895,11 +949,11 @@ differently under either Rust parser. A writing run then re-reads all touched
 files before the first write and refuses if one changed; `--dry-run` stops
 after planning and parse validation, without that file recheck. Each file is
 written through a temp file plus rename. The JSON contract is
-`schema_version: 15` with `ok`, `date`, `dry_run`,
+`schema_version: 16` with `ok`, `date`, `dry_run`,
 `stamped` (`ready`, `other`), `buckets` (`fresh`, `due_on`, `count`,
 `notes`), `skipped` (`already_stamped`, `recurring`,
 `out_of_scope`), `files`, and `warnings`. The shared schema constant
-also moves the `seed` envelope to 10, with seed content unchanged. Seed
+also moves the `seed` envelope to 16, with seed content unchanged. Seed
 candidate selection is unchanged, and list stays read-only. The `buckets`
 dates describe the initial distribution: `fresh` is the unadjusted bucket
 date, and `due_on` adds the global interval. Per-task adjustments described
@@ -920,7 +974,7 @@ an invalid `freshness:` block or a non-Dataview task format.
 
 | Surface | Phase |
 | ------- | ----- |
-| bob freshness | fresh-cli: schema 15 tiered walk PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST; ordinary reference freshness, project cadence for ^prj, recurring occurrences, PRE/POST checklists, per-rung decay limits, lane `decide`, and `[unblocked::]` ticklers. |
+| bob freshness | fresh-cli: schema 16 tiered walk with checklist stages PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST; ordinary reference freshness, project cadence for ^prj, recurring occurrences, PRE/POST checklists, per-rung decay limits, lane `decide`, and `[unblocked::]` ticklers. |
 | `bob capture` | capture-stamps (landed: plan_task_link + `x` close stamp via `stamp_fresh`; existing-dependent `&` dependency stamp via the same helper; a `*` edit to T stamps T the same way; capture never stamps trackers, a new N, or an existing owner's target-ID and lane edits) |
 | bob-ledger-tools | ledger-freshness (landed: api v3 `api.freshness` + status bar in 1.8.0; tracking review under namespace v6 with the `trackerReview` capability; persistent review footer with additive `reviewEntryView` and the compact `api.quickRoll` preview in its hint slot) |
 | bob-navigation-hotkeys | nav-review, nav-stamps (landed: Alt+N + Ctrl+Shift+P/Ctrl+Shift+M/! stamping + refresh row in 1.44.0; PROJECTS tier walk with `trackerReview` capability and legacy v3/v4 fallback; `]s` landing notices append the Alt+P recommended-roll preview; additive `api.quickRoll` v1) |
@@ -1135,6 +1189,71 @@ The bob-ledger-tools JavaScript tests use these verbatim.
   Checklist beats lane tiers and trackers.
 - **CL12.** A `#gtd #pre` row with `[repeat:: every day]` and no `when done` → `pre`,
   lint `checklist_repeat_not_when_done`.
+
+**Checklist stages (CS1–CS16, SC1–SC10).** Today 2026-11-09,
+`pre_stages: [terminal, periods, browser]`, `post_stages: [periods]`
+unless a vector overrides them, rows are open recurring `when done`
+`[?]` rows scheduled on or before today unless noted. The
+machine-readable form is
+`tests/fixtures/freshness_stages/vectors.json`, which both languages
+cite (the Rust suite in `src/native/freshness/stage_tests.rs` is the
+source of truth; bob-ledger-tools keeps a byte-for-byte copy and runs
+every case whose `runners` include `js`). Lint assertions stay
+Rust-only; only the config-level lint is mirrored in JS.
+
+- **SC1.** No `freshness` block → `pre []`, `post []`, no diagnostic.
+- **SC2.** `pre_stages: null` → `[]`, no diagnostic.
+- **SC3.** `pre_stages: []` → `[]`, no diagnostic.
+- **SC4.** `pre_stages: [Terminal, "#periods", browser]` →
+  `[terminal, periods, browser]`.
+- **SC5.** `pre_stages: browser` → pre invalid → `[]` plus one
+  `freshness_stages_invalid`; post `[periods]` unaffected.
+- **SC6.** `pre_stages: [gtd]` (also `task`, `pre`, `post`, `#PRE`)
+  → invalid, reserved.
+- **SC7.** `pre_stages: [browser, Browser]` → invalid, duplicate.
+- **SC8.** `["web browser"]` (also `""`, `"#"`, `3`, `{a: 1}`)
+  → invalid (grammar / empty / non-string).
+- **SC9.** `pre_stages: [gtd]` + `post_stages: [periods]` → pre `[]`
+  plus one diagnostic; post `[periods]`.
+- **SC10.** Invalid `pre_stages` + `interval: 3` → interval 3 kept;
+  the freshness block is not invalid.
+- **CS1.** L1 `#gtd #pre Brush`; L9 `#gtd #pre #browser Weather`
+  → L9, L1.
+- **CS2.** L1 `#browser`; L2 `#terminal` → L2, L1 (config beats line).
+- **CS3.** `#gtd #pre #browser #terminal X` → stage `terminal`
+  (earliest-listed, not first-written); lint
+  `checklist_stage_conflict`.
+- **CS4.** CS2 rows, no stage config → L1, L2; every `stage` null
+  (regression).
+- **CS5.** `#Browser` / `#browsers` / `#browser/x` /
+  `#web/browser` / `#brower` → `browser` / none / none / none / none.
+- **CS6.** PRE `#periods`, POST `#periods`, POST `#terminal`
+  → PRE periods 1/1; POST periods 1/1; POST `#terminal`
+  unstaged (not in the post list).
+- **CS7.** `- [ ] #task #browser Ready thing` (no fresh)
+  → tier `new`, stage null, no lint; identical to the row
+  without the tag.
+- **CS8.** `pre_stages: [gtd]`, rows as CS2 → PRE in path/line
+  order; one diagnostic; POST stages still apply.
+- **CS9.** `#gtd #pre #terminal` scheduled 2026-11-10
+  → absent from the queue; still counts as a member (no
+  `checklist_stage_unused` for terminal).
+- **CS10.** NEW rows in `a.md`/`b.md` beside staged PRE rows
+  → NEW order byte-identical to the old comparator.
+- **CS11.** L2 periods, L3 terminal, L5 terminal, L4 and L6 unstaged
+  → L3 terminal 1/2, L5 terminal 2/2, L2 periods 1/1, L4, L6
+  (rank/total null).
+- **CS12.** `a.md:1` unstaged PRE; `b.md:9` `#browser` PRE
+  → `b.md:9` first (stage beats path).
+- **CS13.** L15 `#gtd #post Morning review`; L24 `#gtd #post #periods
+  Weekly review` → L24, L15.
+- **CS14.** `pre_stages: [terminal, periods, brower]`, no open row
+  carries `#brower` (a done row does) → one
+  `checklist_stage_unused` for pre `brower`.
+- **CS15.** Staged `[ ]`, `[*]`, and `[?]` PRE rows
+  → sorted by stage like each other; lanes unchanged.
+- **CS16.** `#task #gtd #pre Weather #browser` (tag at the end)
+  → stage `browser` in the walk.
 
 **Recurring tier (RC1–RC12).** Today `2026-10-08`, default config (interval 7, lanes 1), path `a.md` and Ready `[ ]`
 unless noted. "→ none" means no tier and `state` null.
@@ -1656,6 +1775,13 @@ There is no freshness trial: no ritual change, release, or tuning waits on a tri
   `kept N× at <Level>`); early and Today-linked lane keeps stamp quietly;
   freshness gestures never write the Work Log; lane `decide` rows count
   and log until the rung-aware card ships.
+- 2026-11-06: checklist stages went live in `bob freshness` (schema
+  16): `freshness.pre_stages` / `post_stages` order PRE/POST rows by
+  stage ahead of unstaged rows, with per-row `stage`, `stage_rank`,
+  and `stage_total`, staged human details and tier headings, and the
+  `freshness_stages_invalid`, `checklist_stage_conflict`, and
+  `checklist_stage_unused` lints (Rust-only except the config-level
+  one, which the JS mirror adopts with the shared fixture).
 
 ## 14. Keep-streak rollout, rollback, and calibration
 

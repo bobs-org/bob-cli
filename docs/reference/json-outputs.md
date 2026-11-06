@@ -352,13 +352,13 @@ candidate eligibility, and error behavior.
 | --- | --- | --- | --- | --- |
 | `bob plan` | `-f json` | Date, status, caps, Today tasks and root counts, lane counts, and `warnings` | `schema_version: 3` | [Plan](../plan.md) |
 | `bob ready` | `-f json` | Per-note Ready lane against `max_ready_per_note` | `schema_version: 1` | [Plan](../plan.md) |
-| `bob freshness` and `bob freshness list` | `-f json` | Review queue, `config.decay.limits: {pending, next, ready}` (integers or `false`), and per-row `keeps` / `decide` | `schema_version: 15` | [Freshness](../freshness.md) |
-| `bob freshness seed` | `-f json` | Seed dry-run report: stamped counts, buckets, skipped | `schema_version: 15` | [Freshness](../freshness.md) |
+| `bob freshness` and `bob freshness list` | `-f json` | Review queue (`config` stages/limits; per-row `keeps`/`decide`/`stage`/`stage_rank`/`stage_total`) | `schema_version: 16` | [Freshness](../freshness.md) |
+| `bob freshness seed` | `-f json` | Seed dry-run: stamped counts, buckets, skipped | `schema_version: 16` | [Freshness](../freshness.md) |
 | `bob stats overview` | `-f json` | Weekly glance report | `schema_version: 1` | [Stats](../stats.md) |
 | `bob stats show` | `-f json` | One or more metric details | `schema_version: 1` | [Stats](../stats.md) |
 | `bob stats metrics` | `-f json` | Metric id, kind, and definition catalog | `schema_version: 1` | [Stats](../stats.md) |
 
-Do not copy the freshness `15` onto stored files: it is the command
+Do not copy the freshness `16` onto stored files: it is the command
 envelope version. The freshness contract owns the stored review state.
 
 `summary.headline.display` is the formatted headline; optional `suffix` is

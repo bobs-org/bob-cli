@@ -80,7 +80,7 @@ fn list_json_reports_queue_counts_and_contract() {
     let (_, value) = list_json(&temp, &[]);
 
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 15);
+    assert_eq!(value["schema_version"], 16);
     assert_eq!(value["date"], NOW);
     assert_eq!(value["config"]["interval"], 7);
     assert_eq!(value["config"]["pending_interval"], 1);
@@ -553,7 +553,7 @@ fn seed_dry_run_writes_nothing_and_reports_buckets() {
     let (output, value) = seed_json(&temp, &["--dry-run"]);
     assert_success(&output);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 15);
+    assert_eq!(value["schema_version"], 16);
     assert_eq!(value["dry_run"], true);
     assert_eq!(value["stamped"]["ready"], 3);
     assert_eq!(value["stamped"]["other"], 1);
@@ -657,7 +657,7 @@ fn list_lane_rows_cover_pending_and_next() {
         - [*] #task Fresh next [fresh:: 2026-10-08]\n",
     );
     let (_, value) = list_json(&temp, &[]);
-    assert_eq!(value["schema_version"], 15);
+    assert_eq!(value["schema_version"], 16);
     let counts = &value["counts"];
     assert_eq!(counts["pending_due"], 1);
     assert_eq!(counts["next_due"], 1);
@@ -864,7 +864,7 @@ fn list_reports_keeps_and_decide_per_schema_9() {
     let temp = keeps_vault("bob-cli-freshness-keeps");
     let value = keeps_list_json(&temp, "2026-10-20", &[]);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 15);
+    assert_eq!(value["schema_version"], 16);
     assert_eq!(value["config"]["decay"]["enabled"], true);
     assert_eq!(value["config"]["decay"]["keeps"], 3);
     assert!(value["config"]["decay"]["enter"].is_null());
@@ -921,7 +921,7 @@ fn list_decides_on_early_dates() {
     let temp = keeps_vault("bob-cli-freshness-keeps-early");
     for now in ["2026-10-04", NOW, "2026-10-18", "2026-10-19", "2026-10-20"] {
         let value = keeps_list_json(&temp, now, &[]);
-        assert_eq!(value["schema_version"], 15, "{now}");
+        assert_eq!(value["schema_version"], 16, "{now}");
         assert_eq!(value["counts"]["decide"], 1, "{now}");
         let queue = value["queue"].as_array().expect("queue array");
         let at_limit = queue
@@ -1064,7 +1064,7 @@ fn list_reports_per_rung_limits_mixed_header_and_lane_decide() {
     assert_success(&output);
     let value: Value =
         serde_json::from_str(stdout(&output).trim()).expect("mixed JSON");
-    assert_eq!(value["schema_version"], 15);
+    assert_eq!(value["schema_version"], 16);
     assert_eq!(value["config"]["decay"]["keeps"], 3);
     assert_eq!(value["config"]["decay"]["limits"]["pending"], 2);
     assert_eq!(value["config"]["decay"]["limits"]["next"], 3);
@@ -1152,7 +1152,7 @@ fn seed_preserves_existing_keeps() {
     write_file(&vault.join("a.md"), "- [ ] #task Kept before [keeps:: 2]\n");
     let (output, value) = seed_json(&temp, &[]);
     assert_success(&output);
-    assert_eq!(value["schema_version"], 15);
+    assert_eq!(value["schema_version"], 16);
     assert_eq!(value["stamped"]["ready"], 1);
     let contents =
         fs::read_to_string(vault.join("a.md")).expect("read seeded line");
@@ -1229,7 +1229,7 @@ fn list_tracker_intervals_and_hide_gate() {
     assert_success(&output);
     let value: Value =
         serde_json::from_str(stdout(&output).trim()).expect("list JSON");
-    assert_eq!(value["schema_version"], 15);
+    assert_eq!(value["schema_version"], 16);
     assert_eq!(value["config"]["project_interval"], 1);
     assert!(value["config"].get("reference_interval").is_none());
     // Both visible projects walk, whatever their notes hold; the
@@ -1326,7 +1326,7 @@ fn list_walks_projects_after_new_with_decoupled_counts() {
         "---\nscheduled: someday\n---\n- [ ] #task Broken project ^prj\n",
     );
     let (_, value) = list_json(&temp, &[]);
-    assert_eq!(value["schema_version"], 15);
+    assert_eq!(value["schema_version"], 16);
     let tiers: Vec<&str> = value["queue"]
         .as_array()
         .expect("queue array")
@@ -1464,7 +1464,7 @@ fn list_json_and_human_cover_checklist_tiers() {
     let temp = checklist_vault("bob-cli-freshness-checklist");
     let (_, value) = list_json(&temp, &[]);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 15);
+    assert_eq!(value["schema_version"], 16);
 
     let queue = value["queue"].as_array().expect("queue array");
     let texts: Vec<&str> = queue
@@ -1583,6 +1583,112 @@ fn list_json_and_human_cover_checklist_tiers() {
     assert_text_order(&human, &["REVIEW", "PRE", "review closeout", "POST"]);
 }
 
+#[test]
+fn list_stages_order_rows_and_render() {
+    let temp = TempDir::new("bob-cli-freshness-stages");
+    let vault = vault_dir(&temp);
+    write_blocked_tasks_settings(&vault);
+    write_file(
+        &vault.join("gtd_daily.md"),
+        "\
+- [?] #task #gtd #pre Plain chore [scheduled:: 2026-10-08]\n\
+- [?] #task #gtd #pre #browser Check weather [scheduled:: 2026-10-08]\n\
+- [?] #task #gtd #pre #terminal Clean agents [scheduled:: 2026-10-08]\n\
+- [?] #task #gtd #post Morning review [scheduled:: 2026-10-08]\n\
+- [?] #task #gtd #post #periods Weekly review [scheduled:: 2026-10-08]\n",
+    );
+    let config = temp.path().join("config.yml");
+    write_file(
+        &config,
+        "freshness:\n  pre_stages: [terminal, browser]\n  post_stages: [periods]\n",
+    );
+    let mut command = bob_command();
+    command
+        .arg("freshness")
+        .arg("list")
+        .env("BOB_DIR", &vault)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", NOW)
+        .arg("-f")
+        .arg("json");
+    let output = command.output().expect("run staged list -f json");
+    assert_success(&output);
+    let value: Value =
+        serde_json::from_str(stdout(&output).trim()).expect("list JSON");
+    assert_eq!(value["schema_version"], 16);
+    assert_eq!(
+        value["config"]["pre_stages"],
+        serde_json::json!(["terminal", "browser"])
+    );
+    assert_eq!(
+        value["config"]["post_stages"],
+        serde_json::json!(["periods"])
+    );
+    // Config beats line order: terminal, browser, unstaged, then POST
+    // in the same stage-first order.
+    let queue = value["queue"].as_array().expect("queue array");
+    let texts: Vec<&str> = queue
+        .iter()
+        .map(|entry| entry["text"].as_str().unwrap_or("?"))
+        .collect();
+    assert_text_order(
+        &texts.join("\n"),
+        &[
+            "Clean agents",
+            "Check weather",
+            "Plain chore",
+            "Weekly review",
+            "Morning review",
+        ],
+    );
+    let stage_of = |text: &str| {
+        queue
+            .iter()
+            .find(|entry| {
+                entry["text"]
+                    .as_str()
+                    .is_some_and(|entry| entry.contains(text))
+            })
+            .unwrap_or_else(|| panic!("missing row {text}"))
+    };
+    assert_eq!(stage_of("Clean agents")["stage"], "terminal");
+    assert_eq!(stage_of("Clean agents")["stage_rank"], 1);
+    assert_eq!(stage_of("Clean agents")["stage_total"], 1);
+    assert_eq!(stage_of("Check weather")["stage"], "browser");
+    assert!(stage_of("Plain chore")["stage"].is_null());
+    assert!(stage_of("Plain chore")["stage_rank"].is_null());
+    assert_eq!(stage_of("Weekly review")["stage"], "periods");
+    assert!(stage_of("Morning review")["stage"].is_null());
+    assert!(
+        value["warnings"].as_array().expect("warnings").is_empty(),
+        "no stage lints on a clean staged vault:\n{value}"
+    );
+
+    let output = bob_command()
+        .arg("freshness")
+        .arg("list")
+        .env("BOB_DIR", &vault)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", NOW)
+        .output()
+        .expect("run staged bob freshness list");
+    assert_success(&output);
+    let human = stdout(&output);
+    // Non-TTY separators are `-`; the hardcoded `·` inside the
+    // unstaged details stays as written.
+    assert!(
+        human.contains("PRE 3 - terminal → browser")
+            && human.contains("TERMINAL - complete to resolve")
+            && human.contains("BROWSER - complete to resolve")
+            && human.contains("Plain chore")
+            && human.contains("Checklist · complete to resolve")
+            && human.contains("POST 2 - periods")
+            && human.contains("PERIODS - complete to resolve")
+            && human.contains("Closeout · complete last"),
+        "staged human headings and details:\n{human}"
+    );
+}
+
 fn recurring_vault(prefix: &str) -> TempDir {
     let temp = TempDir::new(prefix);
     let vault = vault_dir(&temp);
@@ -1616,7 +1722,7 @@ fn list_json_and_human_cover_recurring_tier() {
     let temp = recurring_vault("bob-cli-freshness-recurring");
     let (_, value) = list_json(&temp, &[]);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 15);
+    assert_eq!(value["schema_version"], 16);
 
     let queue = value["queue"].as_array().expect("queue array");
     let tier_of = |text: &str| {
@@ -1784,7 +1890,7 @@ fn list_unblocked_tickler_reports_return_source() {
     );
     let (_, value) = list_json(&temp, &[]);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 15);
+    assert_eq!(value["schema_version"], 16);
     let queue = value["queue"].as_array().expect("queue array");
     let row_of = |text: &str| {
         queue

@@ -33,6 +33,10 @@ fn config_with_interval(days: u16) -> FreshnessConfig {
         project_interval: None,
         rotten_daily_budget: None,
         interval_from_config: true,
+        pre_stages: Vec::new(),
+        post_stages: Vec::new(),
+        pre_stages_invalid: None,
+        post_stages_invalid: None,
         stale_budget_deprecated: false,
         decay: DecayConfig::default(),
     }
@@ -46,6 +50,10 @@ fn config_with_budget(budget: u32) -> FreshnessConfig {
         project_interval: None,
         rotten_daily_budget: Some(budget),
         interval_from_config: false,
+        pre_stages: Vec::new(),
+        post_stages: Vec::new(),
+        pre_stages_invalid: None,
+        post_stages_invalid: None,
         stale_budget_deprecated: false,
         decay: DecayConfig::default(),
     }
@@ -62,6 +70,10 @@ fn config_with_lanes(
         project_interval: None,
         rotten_daily_budget: None,
         interval_from_config: false,
+        pre_stages: Vec::new(),
+        post_stages: Vec::new(),
+        pre_stages_invalid: None,
+        post_stages_invalid: None,
         stale_budget_deprecated: false,
         decay: DecayConfig::default(),
     }
@@ -85,6 +97,7 @@ fn row(line: &str) -> FreshnessRow {
         note_refresh_raw: None,
         tracker: None,
         checklist: None,
+        tags: Vec::new(),
     }
 }
 
@@ -362,6 +375,7 @@ fn stamped_row(
         note_refresh_raw: None,
         tracker: None,
         checklist: None,
+        tags: Vec::new(),
     }
 }
 
@@ -485,6 +499,7 @@ fn lane_row(
         note_refresh_raw: None,
         tracker: None,
         checklist: None,
+        tags: Vec::new(),
     }
 }
 
@@ -747,6 +762,10 @@ fn b1_upkeep_counts_outside_the_lanes() {
         project_interval: None,
         rotten_daily_budget: Some(15),
         interval_from_config: false,
+        pre_stages: Vec::new(),
+        post_stages: Vec::new(),
+        pre_stages_invalid: None,
+        post_stages_invalid: None,
         stale_budget_deprecated: false,
         decay: DecayConfig::default(),
     };
@@ -776,6 +795,10 @@ fn decay_config(keeps: u16, enabled: bool) -> FreshnessConfig {
         project_interval: None,
         rotten_daily_budget: None,
         interval_from_config: false,
+        pre_stages: Vec::new(),
+        post_stages: Vec::new(),
+        pre_stages_invalid: None,
+        post_stages_invalid: None,
         stale_budget_deprecated: false,
         decay: DecayConfig {
             enabled,
@@ -1093,6 +1116,10 @@ fn config_with_project(project: Option<u16>) -> FreshnessConfig {
         project_interval: project,
         rotten_daily_budget: None,
         interval_from_config: false,
+        pre_stages: Vec::new(),
+        post_stages: Vec::new(),
+        pre_stages_invalid: None,
+        post_stages_invalid: None,
         stale_budget_deprecated: false,
         decay: DecayConfig::default(),
     }
@@ -1622,6 +1649,7 @@ fn recurring_row(
         note_refresh_raw: None,
         tracker: None,
         checklist: None,
+        tags: Vec::new(),
     }
 }
 

@@ -198,6 +198,8 @@ accepts an interval or `null` to inherit the Ready cadence.
 | `freshness.decay.next_keeps` | Integer, 0–999, or `false` | `keeps`, else `3` | Next (`[*]`) allowance; `false` counts and displays but never asks. |
 | `freshness.decay.ready_keeps` | Integer, 0–999, or `false` | `keeps`, else `3` | Ready (`[ ]`) and P-level allowance; `false` counts and displays but never asks. |
 | `freshness.decay.enter` | Nonempty priority label or `null` | `null` | Priority value to enter on an approved decay decision; null uses the interval-aware entry. |
+| `freshness.pre_stages` | List of tag names | `[]` (file order) | PRE checklist stages in walk order; staged rows walk first. |
+| `freshness.post_stages` | List of tag names | `[]` (file order) | POST checklist stages in walk order; unstaged rows walk last. |
 
 `decay: false` disables asking while retaining keep counts and display. A
 rung's effective allowance is its `*_keeps` key, then `keeps`, then 3. The

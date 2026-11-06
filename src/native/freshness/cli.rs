@@ -35,7 +35,10 @@ const COMMAND_NAME: &str = "bob freshness";
 /// Bump only for a breaking change to the JSON objects below; new
 /// optional fields keep the current version.
 ///
-/// Schema 15 adds per-rung decay limits (`config.decay.limits`) and
+/// Schema 16 adds checklist stages (`config.pre_stages` /
+/// `post_stages` plus per-row `stage`, `stage_rank`, `stage_total`;
+/// PRE/POST sort by stage, then path and line). Schema 15 adds
+/// per-rung decay limits (`config.decay.limits`) and
 /// lets `decide` be true on due PENDING and NEXT rows. Schema 14
 /// adds the `[unblocked::]` tickler: queue rows gain `returned_by`
 /// (`scheduled` | `unblocked`) and, when present, `unblocked_on`.
@@ -50,7 +53,7 @@ const COMMAND_NAME: &str = "bob freshness";
 /// calendar gate. Earlier versions introduced project tracking and decoupled
 /// state totals from tier totals. The seed envelope shares this constant;
 /// seed contents are otherwise unchanged.
-const SCHEMA_VERSION: u32 = 15;
+const SCHEMA_VERSION: u32 = 16;
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let argv: Vec<OsString> = iter::once(OsString::from(COMMAND_NAME))
@@ -298,6 +301,13 @@ struct ListedRow {
     tier: String,
     lane: Option<String>,
     state: Option<FreshState>,
+    /// Resolved checklist stage (`None` when unstaged or outside
+    /// PRE/POST).
+    stage: Option<String>,
+    /// 1-based position among rows of the same tier and stage.
+    stage_rank: Option<u32>,
+    /// Number of rows of the same tier and stage.
+    stage_total: Option<u32>,
     /// Stable read-time bucket (`new`, `rotten`, or null) for
     /// dashboard gating. Lane rows carry null.
     bucket: Option<&'static str>,
@@ -326,6 +336,8 @@ struct ListedRow {
 struct ListReport {
     date: String,
     weekday: String,
+    pre_stages: Vec<String>,
+    post_stages: Vec<String>,
     interval: u16,
     pending_interval: Option<u16>,
     next_interval: Option<u16>,
@@ -397,6 +409,9 @@ fn collect_list(snapshot: &Snapshot) -> ListReport {
                 tier: entry.tier.as_str().to_string(),
                 lane: entry.lane.map(|lane| lane.as_str().to_string()),
                 state: entry.state,
+                stage: entry.stage.clone(),
+                stage_rank: entry.stage_rank,
+                stage_total: entry.stage_total,
                 bucket: bucket_for_state(entry.state),
                 path: entry.path.clone(),
                 line: entry.line,
@@ -461,11 +476,20 @@ fn collect_list(snapshot: &Snapshot) -> ListReport {
             message: lint_message("freshness_stale_daily_budget_deprecated"),
         });
     }
+    let config_path = super::super::config::config_path().display().to_string();
+    warnings.extend(super::scan::stage_list_warnings(config, &config_path));
+    warnings.extend(super::scan::unused_stage_warnings(
+        &snapshot.all,
+        config,
+        &config_path,
+    ));
     warnings.extend(snapshot.today_warnings.clone());
 
     ListReport {
         date: today.format("%Y-%m-%d").to_string(),
         weekday: snapshot.weekday.clone(),
+        pre_stages: config.pre_stages.clone(),
+        post_stages: config.post_stages.clone(),
         interval: config.interval,
         pending_interval: config.pending_interval,
         next_interval: config.next_interval,
@@ -561,6 +585,30 @@ fn decay_meter(report: &ListReport) -> String {
     }
 }
 
+/// The configured stage order suffix for a PRE/POST tier heading
+/// (`PRE 9 · terminal → periods → browser`): empty when the tier has
+/// no configured stages.
+fn stage_heading_suffix(stages: &[String], styler: &Styler) -> String {
+    if stages.is_empty() {
+        return String::new();
+    }
+    format!(" {} {}", styler.separator(), stages.join(" → "))
+}
+
+/// Uppercase stage lead for a staged checklist row (`TERMINAL 1/2`,
+/// or `PERIODS` when the stage holds one row): `None` unstaged.
+/// The count appears only for stages with two or more due rows.
+fn stage_lead(row: &ListedRow) -> Option<String> {
+    let stage = row.stage.as_ref()?;
+    let mut lead = stage.to_uppercase();
+    if let (Some(rank), Some(total)) = (row.stage_rank, row.stage_total)
+        && total >= 2
+    {
+        lead.push_str(&format!(" {rank}/{total}"));
+    }
+    Some(lead)
+}
+
 fn human_list(report: &ListReport, styler: &Styler) -> String {
     let mut output = String::new();
     let _ = writeln!(
@@ -631,10 +679,17 @@ fn human_list(report: &ListReport, styler: &Styler) -> String {
         } else if *tier != "post" {
             commitment_rows += tier_rows.len();
         }
+        // Staged tiers name their configured order on the heading.
+        let suffix = match *tier {
+            "pre" => stage_heading_suffix(&report.pre_stages, styler),
+            "post" => stage_heading_suffix(&report.post_stages, styler),
+            _ => String::new(),
+        };
         output.push_str(&format!(
-            "\n  {} {}\n",
+            "\n  {} {}{}\n",
             styler.yellow(heading),
-            tier_rows.len()
+            tier_rows.len(),
+            suffix,
         ));
         for row in tier_rows {
             output.push_str(&human_row(row, styler));
@@ -668,9 +723,26 @@ fn human_row(row: &ListedRow, styler: &Styler) -> String {
         interval = row.interval,
         source = row.interval_source,
     );
+    // A staged row names its stage instead of the generic first
+    // word (`TERMINAL 1/2`, or `PERIODS` for a one-row stage);
+    // staged POST rows use the PRE action, unstaged rows keep the
+    // generic detail.
+    let lead = stage_lead(row);
     let detail = match row.tier.as_str() {
-        "pre" => "Checklist · complete to resolve".to_string(),
-        "post" => "Closeout · complete last".to_string(),
+        "pre" => {
+            if lead.is_some() {
+                "complete to resolve".to_string()
+            } else {
+                "Checklist · complete to resolve".to_string()
+            }
+        }
+        "post" => {
+            if lead.is_some() {
+                "complete to resolve".to_string()
+            } else {
+                "Closeout · complete last".to_string()
+            }
+        }
         "new" => match &row.created {
             Some(created) => format!("created {created}"),
             None => "never confirmed".to_string(),
@@ -759,11 +831,21 @@ fn human_row(row: &ListedRow, styler: &Styler) -> String {
     if row.decide {
         detail.push_str(&format!(" {sep} decide"));
     }
+    // The stage word stays bold against the dim remainder, so it is
+    // distinct with and without color (NO_COLOR-safe via uppercase).
+    let rendered = match lead {
+        Some(lead) => format!(
+            "{} {}",
+            styler.bold(&lead),
+            styler.dim(&format!("{sep} {detail}")),
+        ),
+        None => styler.dim(&detail),
+    };
     format!(
         "    {}  {}  {}\n",
         styler.cyan(&pad_right(&reference, 30)),
         pad_right(&row.text, 40),
-        styler.dim(&detail),
+        rendered,
     )
 }
 
@@ -799,6 +881,8 @@ fn json_list(report: &ListReport) -> serde_json::Value {
             "next_interval": lane_json(report.next_interval),
             "project_interval": tracker_json(report.project_interval),
             "rotten_daily_budget": report.budget,
+            "pre_stages": report.pre_stages,
+            "post_stages": report.post_stages,
             "decay": {
                 "enabled": report.decay_enabled,
                 "keeps": report.decay_keeps,
@@ -862,6 +946,9 @@ fn json_list(report: &ListReport) -> serde_json::Value {
             "decide": row.decide,
             "returned_by": row.returned_by,
             "unblocked_on": row.unblocked_on,
+            "stage": row.stage,
+            "stage_rank": row.stage_rank,
+            "stage_total": row.stage_total,
         })).collect::<Vec<_>>(),
         "warnings": report.warnings.iter().map(|warning| json!({
             "code": warning.code,

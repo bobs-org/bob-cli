@@ -1,0 +1,395 @@
+{
+ "defaults": {
+  "today": "2026-11-09",
+  "pre_stages": ["terminal", "periods", "browser"],
+  "post_stages": ["periods"]
+ },
+ "config": [
+  {
+   "id": "SC1",
+   "runners": ["rust", "js"],
+   "yaml": "properties: []\n",
+   "pre": [],
+   "post": [],
+   "interval": 7,
+   "diagnostics": []
+  },
+  {
+   "id": "SC2",
+   "runners": ["rust", "js"],
+   "yaml": "freshness:\n  pre_stages:\n",
+   "pre": [],
+   "post": [],
+   "diagnostics": []
+  },
+  {
+   "id": "SC3",
+   "runners": ["rust", "js"],
+   "yaml": "freshness:\n  pre_stages: []\n",
+   "pre": [],
+   "post": [],
+   "diagnostics": []
+  },
+  {
+   "id": "SC4",
+   "runners": ["rust", "js"],
+   "yaml": "freshness:\n  pre_stages: [Terminal, \"#periods\", browser]\n",
+   "pre": ["terminal", "periods", "browser"],
+   "post": [],
+   "diagnostics": []
+  },
+  {
+   "id": "SC5",
+   "runners": ["rust", "js"],
+   "yaml": "freshness:\n  pre_stages: browser\n  post_stages: [periods]\n",
+   "pre": [],
+   "post": ["periods"],
+   "diagnostics": [{"key": "pre_stages"}]
+  },
+  {
+   "id": "SC6",
+   "runners": ["rust", "js"],
+   "yaml": "freshness:\n  pre_stages: [gtd]\n",
+   "pre": [],
+   "post": [],
+   "diagnostics": [{"key": "pre_stages"}]
+  },
+  {
+   "id": "SC7",
+   "runners": ["rust", "js"],
+   "yaml": "freshness:\n  pre_stages: [browser, Browser]\n",
+   "pre": [],
+   "post": [],
+   "diagnostics": [{"key": "pre_stages"}]
+  },
+  {
+   "id": "SC8",
+   "runners": ["rust", "js"],
+   "yaml": "freshness:\n  pre_stages: [\"web browser\"]\n",
+   "pre": [],
+   "post": [],
+   "diagnostics": [{"key": "pre_stages"}]
+  },
+  {
+   "id": "SC9",
+   "runners": ["rust", "js"],
+   "yaml": "freshness:\n  pre_stages: [gtd]\n  post_stages: [periods]\n",
+   "pre": [],
+   "post": ["periods"],
+   "diagnostics": [{"key": "pre_stages"}]
+  },
+  {
+   "id": "SC10",
+   "runners": ["rust", "js"],
+   "yaml": "freshness:\n  interval: 3\n  pre_stages: [gtd]\n",
+   "pre": [],
+   "post": [],
+   "interval": 3,
+   "diagnostics": [{"key": "pre_stages"}]
+  }
+ ],
+ "queue": [
+  {
+   "id": "CS1",
+   "runners": ["rust", "js"],
+   "rows": [
+    {"path": "gtd_daily.md", "line": 1, "status": "?", "tags": ["#task", "#gtd", "#pre"], "scheduled": "2026-11-09", "recurring": false},
+    {"path": "gtd_daily.md", "line": 9, "status": "?", "tags": ["#task", "#gtd", "#pre", "#browser"], "scheduled": "2026-11-09", "recurring": false}
+   ],
+   "order": ["gtd_daily.md:9", "gtd_daily.md:1"],
+   "stages": {
+    "gtd_daily.md:9": {"stage": "browser", "rank": 1, "total": 1},
+    "gtd_daily.md:1": null
+   },
+   "lints": [
+    {"code": "checklist_stage_unused", "key": "pre_stages", "stage": "terminal"},
+    {"code": "checklist_stage_unused", "key": "pre_stages", "stage": "periods"},
+    {"code": "checklist_stage_unused", "key": "post_stages", "stage": "periods"}
+   ]
+  },
+  {
+   "id": "CS2",
+   "runners": ["rust", "js"],
+   "rows": [
+    {"path": "gtd_daily.md", "line": 1, "status": "?", "tags": ["#task", "#gtd", "#pre", "#browser"], "scheduled": "2026-11-09", "recurring": false},
+    {"path": "gtd_daily.md", "line": 2, "status": "?", "tags": ["#task", "#gtd", "#pre", "#terminal"], "scheduled": "2026-11-09", "recurring": false}
+   ],
+   "order": ["gtd_daily.md:2", "gtd_daily.md:1"],
+   "stages": {
+    "gtd_daily.md:2": {"stage": "terminal", "rank": 1, "total": 1},
+    "gtd_daily.md:1": {"stage": "browser", "rank": 1, "total": 1}
+   },
+   "lints": [
+    {"code": "checklist_stage_unused", "key": "pre_stages", "stage": "periods"},
+    {"code": "checklist_stage_unused", "key": "post_stages", "stage": "periods"}
+   ]
+  },
+  {
+   "id": "CS3",
+   "runners": ["rust", "js"],
+   "lint_runners": ["rust"],
+   "rows": [
+    {"path": "gtd_daily.md", "line": 3, "status": "?", "tags": ["#task", "#gtd", "#pre", "#browser", "#terminal"], "scheduled": "2026-11-09", "recurring": false}
+   ],
+   "order": ["gtd_daily.md:3"],
+   "stages": {
+    "gtd_daily.md:3": {"stage": "terminal", "rank": 1, "total": 1}
+   },
+   "lints": [
+    {"code": "checklist_stage_conflict", "path": "gtd_daily.md", "line": 3, "winner": "terminal"},
+    {"code": "checklist_stage_unused", "key": "pre_stages", "stage": "periods"},
+    {"code": "checklist_stage_unused", "key": "post_stages", "stage": "periods"}
+   ]
+  },
+  {
+   "id": "CS4",
+   "runners": ["rust", "js"],
+   "pre_stages": [],
+   "post_stages": [],
+   "rows": [
+    {"path": "gtd_daily.md", "line": 1, "status": "?", "tags": ["#task", "#gtd", "#pre", "#browser"], "scheduled": "2026-11-09", "recurring": false},
+    {"path": "gtd_daily.md", "line": 2, "status": "?", "tags": ["#task", "#gtd", "#pre", "#terminal"], "scheduled": "2026-11-09", "recurring": false}
+   ],
+   "order": ["gtd_daily.md:1", "gtd_daily.md:2"],
+   "stages": {
+    "gtd_daily.md:1": null,
+    "gtd_daily.md:2": null
+   },
+   "lints": []
+  },
+  {
+   "id": "CS5",
+   "runners": ["rust", "js"],
+   "rows": [
+    {"path": "gtd_daily.md", "line": 1, "status": "?", "tags": ["#task", "#gtd", "#pre", "#Browser"], "scheduled": "2026-11-09", "recurring": false},
+    {"path": "gtd_daily.md", "line": 2, "status": "?", "tags": ["#task", "#gtd", "#pre", "#browsers"], "scheduled": "2026-11-09", "recurring": false},
+    {"path": "gtd_daily.md", "line": 3, "status": "?", "tags": ["#task", "#gtd", "#pre", "#browser/x"], "scheduled": "2026-11-09", "recurring": false},
+    {"path": "gtd_daily.md", "line": 4, "status": "?", "tags": ["#task", "#gtd", "#pre", "#web/browser"], "scheduled": "2026-11-09", "recurring": false},
+    {"path": "gtd_daily.md", "line": 5, "status": "?", "tags": ["#task", "#gtd", "#pre", "#brower"], "scheduled": "2026-11-09", "recurring": false}
+   ],
+   "order": ["gtd_daily.md:1", "gtd_daily.md:2", "gtd_daily.md:3", "gtd_daily.md:4", "gtd_daily.md:5"],
+   "stages": {
+    "gtd_daily.md:1": {"stage": "browser", "rank": 1, "total": 1},
+    "gtd_daily.md:2": null,
+    "gtd_daily.md:3": null,
+    "gtd_daily.md:4": null,
+    "gtd_daily.md:5": null
+   },
+   "lints": [
+    {"code": "checklist_stage_unused", "key": "pre_stages", "stage": "terminal"},
+    {"code": "checklist_stage_unused", "key": "pre_stages", "stage": "periods"},
+    {"code": "checklist_stage_unused", "key": "post_stages", "stage": "periods"}
+   ]
+  },
+  {
+   "id": "CS6",
+   "runners": ["rust", "js"],
+   "rows": [
+    {"path": "gtd_daily.md", "line": 1, "status": "?", "tags": ["#task", "#gtd", "#pre", "#periods"], "scheduled": "2026-11-09", "recurring": false},
+    {"path": "gtd_daily.md", "line": 2, "status": "?", "tags": ["#task", "#gtd", "#post", "#periods"], "scheduled": "2026-11-09", "recurring": false},
+    {"path": "gtd_daily.md", "line": 3, "status": "?", "tags": ["#task", "#gtd", "#post", "#terminal"], "scheduled": "2026-11-09", "recurring": false}
+   ],
+   "order": ["gtd_daily.md:1", "gtd_daily.md:2", "gtd_daily.md:3"],
+   "stages": {
+    "gtd_daily.md:1": {"stage": "periods", "rank": 1, "total": 1},
+    "gtd_daily.md:2": {"stage": "periods", "rank": 1, "total": 1},
+    "gtd_daily.md:3": null
+   },
+   "lints": [
+    {"code": "checklist_stage_unused", "key": "pre_stages", "stage": "terminal"},
+    {"code": "checklist_stage_unused", "key": "pre_stages", "stage": "browser"}
+   ]
+  },
+  {
+   "id": "CS7",
+   "runners": ["rust", "js"],
+   "rows": [
+    {"path": "gtd_daily.md", "line": 1, "status": " ", "tags": ["#task", "#browser"], "scheduled": null, "recurring": false},
+    {"path": "gtd_daily.md", "line": 2, "status": " ", "tags": ["#task"], "scheduled": null, "recurring": false}
+   ],
+   "order": ["gtd_daily.md:1", "gtd_daily.md:2"],
+   "tiers": {"gtd_daily.md:1": "new", "gtd_daily.md:2": "new"},
+   "stages": {
+    "gtd_daily.md:1": null,
+    "gtd_daily.md:2": null
+   },
+   "lints": [
+    {"code": "checklist_stage_unused", "key": "pre_stages", "stage": "terminal"},
+    {"code": "checklist_stage_unused", "key": "pre_stages", "stage": "periods"},
+    {"code": "checklist_stage_unused", "key": "pre_stages", "stage": "browser"},
+    {"code": "checklist_stage_unused", "key": "post_stages", "stage": "periods"}
+   ]
+  },
+  {
+   "id": "CS8",
+   "runners": ["rust", "js"],
+   "pre_stages": ["gtd"],
+   "rows": [
+    {"path": "gtd_daily.md", "line": 1, "status": "?", "tags": ["#task", "#gtd", "#pre", "#browser"], "scheduled": "2026-11-09", "recurring": false},
+    {"path": "gtd_daily.md", "line": 2, "status": "?", "tags": ["#task", "#gtd", "#pre", "#terminal"], "scheduled": "2026-11-09", "recurring": false},
+    {"path": "gtd_daily.md", "line": 3, "status": "?", "tags": ["#task", "#gtd", "#post", "#periods"], "scheduled": "2026-11-09", "recurring": false}
+   ],
+   "order": ["gtd_daily.md:1", "gtd_daily.md:2", "gtd_daily.md:3"],
+   "stages": {
+    "gtd_daily.md:1": null,
+    "gtd_daily.md:2": null,
+    "gtd_daily.md:3": {"stage": "periods", "rank": 1, "total": 1}
+   },
+   "lints": [
+    {"code": "freshness_stages_invalid", "key": "pre_stages"}
+   ]
+  },
+  {
+   "id": "CS9",
+   "runners": ["rust", "js"],
+   "rows": [
+    {"path": "gtd_daily.md", "line": 1, "status": "?", "tags": ["#task", "#gtd", "#pre", "#terminal"], "scheduled": "2026-11-10", "recurring": false}
+   ],
+   "order": [],
+   "stages": {},
+   "lints": [
+    {"code": "checklist_stage_unused", "key": "pre_stages", "stage": "periods"},
+    {"code": "checklist_stage_unused", "key": "pre_stages", "stage": "browser"},
+    {"code": "checklist_stage_unused", "key": "post_stages", "stage": "periods"}
+   ]
+  },
+  {
+   "id": "CS10",
+   "runners": ["rust", "js"],
+   "rows": [
+    {"path": "a.md", "line": 1, "status": "?", "tags": ["#task", "#gtd", "#pre", "#browser"], "scheduled": "2026-11-09", "recurring": false},
+    {"path": "a.md", "line": 2, "status": " ", "tags": ["#task"], "scheduled": null, "recurring": false},
+    {"path": "b.md", "line": 1, "status": " ", "tags": ["#task"], "scheduled": null, "recurring": false}
+   ],
+   "order": ["a.md:1", "a.md:2", "b.md:1"],
+   "stages": {
+    "a.md:1": {"stage": "browser", "rank": 1, "total": 1},
+    "a.md:2": null,
+    "b.md:1": null
+   },
+   "lints": [
+    {"code": "checklist_stage_unused", "key": "pre_stages", "stage": "terminal"},
+    {"code": "checklist_stage_unused", "key": "pre_stages", "stage": "periods"},
+    {"code": "checklist_stage_unused", "key": "post_stages", "stage": "periods"}
+   ]
+  },
+  {
+   "id": "CS11",
+   "runners": ["rust", "js"],
+   "rows": [
+    {"path": "gtd_daily.md", "line": 2, "status": "?", "tags": ["#task", "#gtd", "#pre", "#periods"], "scheduled": "2026-11-09", "recurring": false},
+    {"path": "gtd_daily.md", "line": 3, "status": "?", "tags": ["#task", "#gtd", "#pre", "#terminal"], "scheduled": "2026-11-09", "recurring": false},
+    {"path": "gtd_daily.md", "line": 4, "status": "?", "tags": ["#task", "#gtd", "#pre"], "scheduled": "2026-11-09", "recurring": false},
+    {"path": "gtd_daily.md", "line": 5, "status": "?", "tags": ["#task", "#gtd", "#pre", "#terminal"], "scheduled": "2026-11-09", "recurring": false},
+    {"path": "gtd_daily.md", "line": 6, "status": "?", "tags": ["#task", "#gtd", "#pre"], "scheduled": "2026-11-09", "recurring": false}
+   ],
+   "order": ["gtd_daily.md:3", "gtd_daily.md:5", "gtd_daily.md:2", "gtd_daily.md:4", "gtd_daily.md:6"],
+   "stages": {
+    "gtd_daily.md:3": {"stage": "terminal", "rank": 1, "total": 2},
+    "gtd_daily.md:5": {"stage": "terminal", "rank": 2, "total": 2},
+    "gtd_daily.md:2": {"stage": "periods", "rank": 1, "total": 1},
+    "gtd_daily.md:4": null,
+    "gtd_daily.md:6": null
+   },
+   "lints": [
+    {"code": "checklist_stage_unused", "key": "pre_stages", "stage": "browser"},
+    {"code": "checklist_stage_unused", "key": "post_stages", "stage": "periods"}
+   ]
+  },
+  {
+   "id": "CS12",
+   "runners": ["rust", "js"],
+   "rows": [
+    {"path": "a.md", "line": 1, "status": "?", "tags": ["#task", "#gtd", "#pre"], "scheduled": "2026-11-09", "recurring": false},
+    {"path": "b.md", "line": 9, "status": "?", "tags": ["#task", "#gtd", "#pre", "#browser"], "scheduled": "2026-11-09", "recurring": false}
+   ],
+   "order": ["b.md:9", "a.md:1"],
+   "stages": {
+    "b.md:9": {"stage": "browser", "rank": 1, "total": 1},
+    "a.md:1": null
+   },
+   "lints": [
+    {"code": "checklist_stage_unused", "key": "pre_stages", "stage": "terminal"},
+    {"code": "checklist_stage_unused", "key": "pre_stages", "stage": "periods"},
+    {"code": "checklist_stage_unused", "key": "post_stages", "stage": "periods"}
+   ]
+  },
+  {
+   "id": "CS13",
+   "runners": ["rust", "js"],
+   "rows": [
+    {"path": "gtd_daily.md", "line": 15, "status": "?", "tags": ["#task", "#gtd", "#post"], "scheduled": "2026-11-09", "recurring": false},
+    {"path": "gtd_daily.md", "line": 24, "status": "?", "tags": ["#task", "#gtd", "#post", "#periods"], "scheduled": "2026-11-09", "recurring": false}
+   ],
+   "order": ["gtd_daily.md:24", "gtd_daily.md:15"],
+   "stages": {
+    "gtd_daily.md:24": {"stage": "periods", "rank": 1, "total": 1},
+    "gtd_daily.md:15": null
+   },
+   "lints": [
+    {"code": "checklist_stage_unused", "key": "pre_stages", "stage": "terminal"},
+    {"code": "checklist_stage_unused", "key": "pre_stages", "stage": "periods"},
+    {"code": "checklist_stage_unused", "key": "pre_stages", "stage": "browser"}
+   ]
+  },
+  {
+   "id": "CS14",
+   "runners": ["rust"],
+   "lint_runners": ["rust"],
+   "pre_stages": ["terminal", "periods", "brower"],
+   "rows": [
+    {"path": "gtd_daily.md", "line": 1, "status": "?", "tags": ["#task", "#gtd", "#pre", "#terminal"], "scheduled": "2026-11-09", "recurring": false},
+    {"path": "gtd_daily.md", "line": 2, "status": "x", "tags": ["#task", "#gtd", "#pre", "#brower"], "scheduled": null, "recurring": false},
+    {"path": "gtd_daily.md", "line": 3, "status": "?", "tags": ["#task", "#gtd", "#pre", "#periods"], "scheduled": "2026-11-09", "recurring": false},
+    {"path": "gtd_daily.md", "line": 4, "status": "?", "tags": ["#task", "#gtd", "#post", "#periods"], "scheduled": "2026-11-09", "recurring": false}
+   ],
+   "order": ["gtd_daily.md:1", "gtd_daily.md:3", "gtd_daily.md:4"],
+   "stages": {
+    "gtd_daily.md:1": {"stage": "terminal", "rank": 1, "total": 1},
+    "gtd_daily.md:3": {"stage": "periods", "rank": 1, "total": 1},
+    "gtd_daily.md:4": {"stage": "periods", "rank": 1, "total": 1}
+   },
+   "lints": [
+    {"code": "checklist_stage_unused", "key": "pre_stages", "stage": "brower"}
+   ]
+  },
+  {
+   "id": "CS15",
+   "runners": ["rust", "js"],
+   "rows": [
+    {"path": "gtd_daily.md", "line": 1, "status": " ", "tags": ["#task", "#gtd", "#pre", "#browser"], "scheduled": "2026-11-09", "recurring": false},
+    {"path": "gtd_daily.md", "line": 2, "status": "*", "tags": ["#task", "#gtd", "#pre", "#terminal"], "scheduled": "2026-11-09", "recurring": false},
+    {"path": "gtd_daily.md", "line": 3, "status": "?", "tags": ["#task", "#gtd", "#pre", "#periods"], "scheduled": "2026-11-09", "recurring": false}
+   ],
+   "order": ["gtd_daily.md:2", "gtd_daily.md:3", "gtd_daily.md:1"],
+   "tiers": {"gtd_daily.md:1": "pre", "gtd_daily.md:2": "pre", "gtd_daily.md:3": "pre"},
+   "lanes": {"gtd_daily.md:1": "ready", "gtd_daily.md:2": "next", "gtd_daily.md:3": null},
+   "stages": {
+    "gtd_daily.md:2": {"stage": "terminal", "rank": 1, "total": 1},
+    "gtd_daily.md:3": {"stage": "periods", "rank": 1, "total": 1},
+    "gtd_daily.md:1": {"stage": "browser", "rank": 1, "total": 1}
+   },
+   "lints": [
+    {"code": "checklist_stage_unused", "key": "post_stages", "stage": "periods"}
+   ]
+  },
+  {
+   "id": "CS16",
+   "runners": ["rust", "js"],
+   "rows": [
+    {"path": "gtd_daily.md", "line": 1, "status": "?", "tags": ["#task", "#gtd", "#pre", "#browser"], "scheduled": "2026-11-09", "recurring": false},
+    {"path": "gtd_daily.md", "line": 2, "status": "?", "tags": ["#task", "#gtd", "#pre"], "scheduled": "2026-11-09", "recurring": false}
+   ],
+   "order": ["gtd_daily.md:1", "gtd_daily.md:2"],
+   "stages": {
+    "gtd_daily.md:1": {"stage": "browser", "rank": 1, "total": 1},
+    "gtd_daily.md:2": null
+   },
+   "lints": [
+    {"code": "checklist_stage_unused", "key": "pre_stages", "stage": "terminal"},
+    {"code": "checklist_stage_unused", "key": "pre_stages", "stage": "periods"},
+    {"code": "checklist_stage_unused", "key": "post_stages", "stage": "periods"}
+   ]
+  }
+ ]
+}

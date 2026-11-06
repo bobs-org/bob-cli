@@ -24,7 +24,10 @@ use super::super::{
 };
 use super::{
     placement::read_freshness,
-    state::{checklist_from_tags, evaluate, FreshnessRow},
+    state::{
+        checklist_from_tags, conflict_winner, evaluate, unused_stages,
+        ChecklistKind, FreshnessRow, StageMember,
+    },
 };
 
 /// Today membership plus warnings for one daily note.
@@ -71,6 +74,7 @@ impl RowCtx {
                 self.task.block_id.as_deref(),
             ),
             checklist: checklist_from_tags(&self.task.tags),
+            tags: self.task.tags.clone(),
         }
     }
 }
@@ -458,6 +462,20 @@ pub(crate) fn collect_warnings(
                 message: lint_message(&lint),
             });
         }
+        // An open checklist row carrying two or more names from its
+        // kind's list walks in the earliest-listed stage; the rest is
+        // a lint on the row (`docs/freshness.md` §4).
+        if let Some(kind) = checklist_from_tags(&row.task.tags)
+            && is_open_for_checklist_lint(&row.task)
+            && let Some(winner) = conflict_winner(&row.task.tags, kind, config)
+        {
+            warnings.push(Warning {
+                code: "checklist_stage_conflict".to_string(),
+                path: row.task.path.clone(),
+                line: Some(row.task.line),
+                message: stage_conflict_message(&winner),
+            });
+        }
         if let Some(lint) = recurring_undated(&row.task) {
             warnings.push(Warning {
                 code: lint.clone(),
@@ -468,6 +486,83 @@ pub(crate) fn collect_warnings(
         }
     }
     warnings
+}
+
+/// One `freshness_stages_invalid` diagnostic per rejected stage
+/// list, beside the deprecation diagnostic in `collect_list`.
+/// Only the rejected list is ignored; the other list and every
+/// other freshness key still apply.
+pub(crate) fn stage_list_warnings(
+    config: &crate::native::config::FreshnessConfig,
+    config_path: &str,
+) -> Vec<Warning> {
+    let mut warnings = Vec::new();
+    for (key, problem) in [
+        ("pre_stages", config.pre_stages_invalid.as_ref()),
+        ("post_stages", config.post_stages_invalid.as_ref()),
+    ] {
+        if let Some(problem) = problem {
+            warnings.push(Warning {
+                code: "freshness_stages_invalid".to_string(),
+                path: config_path.to_string(),
+                line: None,
+                message: stages_invalid_message(key, problem),
+            });
+        }
+    }
+    warnings
+}
+
+/// One `checklist_stage_unused` warning per configured stage with no
+/// open member row, over every task like the other checklist lints.
+pub(crate) fn unused_stage_warnings(
+    rows: &[RowCtx],
+    config: &crate::native::config::FreshnessConfig,
+    config_path: &str,
+) -> Vec<Warning> {
+    let members: Vec<StageMember> = rows
+        .iter()
+        .map(|row| StageMember {
+            kind: checklist_from_tags(&row.task.tags),
+            open: is_open_for_checklist_lint(&row.task),
+            tags: row.task.tags.clone(),
+        })
+        .collect();
+    unused_stages(&members, config)
+        .into_iter()
+        .map(|(kind, stage)| Warning {
+            code: "checklist_stage_unused".to_string(),
+            path: config_path.to_string(),
+            line: None,
+            message: stage_unused_message(kind, &stage),
+        })
+        .collect()
+}
+
+/// Human text for a rejected stage list: names the key and the first
+/// problem; the tier keeps file order while that list is ignored.
+pub(crate) fn stages_invalid_message(key: &str, problem: &str) -> String {
+    let tier = if key == "pre_stages" { "PRE" } else { "POST" };
+    format!("freshness.{key} {problem}; list ignored, {tier} keeps file order")
+}
+
+/// Human text for a row carrying several stages: names the
+/// earliest-listed winner.
+pub(crate) fn stage_conflict_message(winner: &str) -> String {
+    format!(
+        "checklist row carries several stages; the earliest-listed ({winner}) wins"
+    )
+}
+
+/// Human text for a stage with no open member row.
+pub(crate) fn stage_unused_message(kind: ChecklistKind, stage: &str) -> String {
+    let (tier, tag) = match kind {
+        ChecklistKind::Pre => ("pre", "#pre"),
+        ChecklistKind::Post => ("post", "#post"),
+    };
+    format!(
+        "{tier} stage '{stage}' has no open #gtd {tag} row; check the tag or the list"
+    )
 }
 
 /// Human text for each lint code in `docs/freshness.md`.
