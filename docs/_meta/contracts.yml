@@ -56,7 +56,7 @@ groups:
         summary: "Blocked-reason marks: display contract for the reason a Blocked checkbox shows, plus conformance vectors"
         order: 7
       - stem: freshness
-        summary: "Task review queue, confirmation dates, recurring occurrences, returning tasks (ticklers), and JSON schema 15"
+        summary: "Task review queue, confirmation dates, recurring occurrences, returning tasks (ticklers), and JSON schema 16"
         order: 8
         reader: guides/run-morning-review.md
       - stem: plan

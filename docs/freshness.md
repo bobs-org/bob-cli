@@ -725,7 +725,11 @@ same default as any other generic stamp.
    live row of that group with a completion and landing toast. It never
    leaves PRE: the final chore stays put with `PRE done` and a `]s → …`
    hint. Ctrl+Alt+F also completes and advances, crossing from PRE into the
-   next tier; Alt+F completes in place. Checklist rows never stamp.
+   next tier; Alt+F completes in place. When Ctrl+Enter or Ctrl+Alt+F
+   finishes the last live due row of a checklist stage, the done line adds
+   `· <STAGE> ✓` after the task text, for example
+   `✓ Done · Read email · BROWSER ✓ · Ctrl+Enter → next PRE`. The walk never
+   pauses at a stage boundary. Checklist rows never stamp.
    Elsewhere, Ctrl+Enter on any landed row completes and advances, but it
    never crosses the PRE/POST boundary: on the last lane row before POST it
    stays with a `]s → POST` hint (Ctrl+Alt+F crosses).
@@ -771,7 +775,9 @@ same default as any other generic stamp.
    Morning review last with Ctrl+Enter or Alt+F. On a multi-row POST
    checklist, Ctrl+Enter and Ctrl+Alt+F move to the next row, Alt+F stays
    and counts remaining rows, and the review closes on the last row. POST
-   answer advancement never wraps; manual `[S` / `]S` still cycle occupied
+   answer advancement never wraps; a staged POST row (the `#periods` Weekly
+   review) walks before the unstaged Morning review and uses the `]s skip`
+   hint, not "closes the review". Manual `[S` / `]S` still cycle occupied
    groups.
 
 The Obsidian footer keeps a condensed version of that `]s` notice
@@ -1784,6 +1790,11 @@ There is no freshness trial: no ritual change, release, or tuning waits on a tri
   one, which the JS mirror adopts with the shared fixture). bob-ledger-tools
   1.100.0 / freshness namespace v14 mirrors the order, exposes
   `checklistStages`, and shows stage details in the footer and landing toasts.
+- 2026-11-05: staged POST rows use `Ctrl+Enter done · ]s skip` in bob-ledger-tools
+  1.101.1, while unstaged POST rows keep `Ctrl+Enter done · closes the review`;
+  bob-navigation-hotkeys 2.75.0 adds `· STAGE ✓` to completion lines that finish
+  a checklist stage. The nav and freshness docs describe the stage-end tick and
+  continuous walk across stage boundaries.
 
 ## 14. Keep-streak rollout, rollback, and calibration
 
