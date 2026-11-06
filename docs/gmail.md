@@ -47,7 +47,13 @@ command catalog (they need a terminal and handle credentials).
 Bob talks to Google only through `gog`. Read flags go before the subcommand
 and never include tokens:
 
-`--no-input --json --color never --readonly --client bob-gmail --account <email> --gmail-no-send --enable-commands gmail.thread.get,gmail.get,gmail.messages,gmail.search,gmail.url,gmail.attachment`
+`--no-input --json --color never --readonly --client bob-gmail --account <email> --gmail-no-send --enable-commands gmail.thread.get,gmail.get,gmail.messages,gmail.search,gmail.url,gmail.labels.list`
+
+Attachment bodies use a narrower Discovery read (`api call gmail v1
+gmail.users.messages.attachments.get --params … --scope
+https://www.googleapis.com/auth/gmail.readonly --no-cache`) with
+`--enable-commands api.call,api.gmail.users.messages.attachments.get`.
+The legacy `gmail attachment` command is never used: it writes a cache file.
 
 The isolated `--client bob-gmail` token bucket means removing or re-consenting
 Bob's Gmail grant never touches other gog tokens (Calendar included). Login

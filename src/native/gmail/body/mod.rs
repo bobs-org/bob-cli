@@ -19,7 +19,7 @@ pub(crate) use mime::{collect_message_bodies, MimeInventory};
 pub(crate) use inert::{
     inert_label, inert_multiline, inert_single_line, inert_yaml_value,
     prose_blocks, remote_image_link, render_blocks, verified_local_image_embed,
-    Block, Inline, SafeUrl,
+    verified_local_image_wikilink, Block, Inline, SafeUrl,
 };
 
 // Consumer: render_message (used by outer mail-note, gmail-save, and

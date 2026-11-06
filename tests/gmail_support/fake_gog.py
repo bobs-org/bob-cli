@@ -25,6 +25,8 @@ FLAGS_WITH_VALUE = {
     "--page",
     "--fields",
     "--format",
+    "--params",
+    "--scope",
     "--auth-url",
     "--step",
     "--redirect-uri",
@@ -182,7 +184,13 @@ def scenario_defaults(name: str) -> dict:
                 "stderr": "invalid_grant: PRIVATE_SENTINEL expired token",
                 "code": 1,
             }
-            for operation in ("search", "thread_get", "message_get", "labels_list")
+            for operation in (
+                "search",
+                "thread_get",
+                "message_get",
+                "labels_list",
+                "api_call",
+            )
         }
     elif name == "not_found":
         defaults["fail"] = {
@@ -190,7 +198,7 @@ def scenario_defaults(name: str) -> dict:
                 "stderr": "notFound: PRIVATE_SENTINEL Gmail item missing",
                 "code": 1,
             }
-            for operation in ("search", "thread_get", "message_get")
+            for operation in ("search", "thread_get", "message_get", "api_call")
         }
     elif name == "poison_error":
         defaults["fail"] = {
@@ -266,6 +274,8 @@ def op_name() -> str:
         return "message_get"
     if pos[:2] == ["gmail", "url"]:
         return "url"
+    if pos[:2] == ["api", "call"]:
+        return "api_call"
     if pos[:2] == ["gmail", "attachment"]:
         return "attachment"
     if pos[:3] == ["gmail", "labels", "list"]:
@@ -515,6 +525,48 @@ if op == "search":
         dump({"threads": [], "nextPageToken": None, "resultSizeEstimate": 0})
     raise SystemExit(0)
 
+if op == "api_call":
+    import base64
+
+    # The save path uses exactly one Discovery call shape for attachment
+    # bytes. Anything else is a regression in the narrow read contract.
+    if pos[2:5] != ["gmail", "v1", "gmail.users.messages.attachments.get"]:
+        fail(f"fake gog: unexpected api call {pos[2:5]}", 2)
+    if "--no-cache" not in args:
+        fail("fake gog: api call requires --no-cache", 2)
+    scope = flag_value("--scope")
+    if scope != READONLY_SCOPE:
+        fail(f"fake gog: api call requires readonly scope, got {scope}", 2)
+    allowlist = flag_value("--enable-commands") or ""
+    allowed = set(allowlist.split(","))
+    if {"api.call", "api.gmail.users.messages.attachments.get"} - allowed:
+        fail(
+            "fake gog: api call requires api.call and "
+            "api.gmail.users.messages.attachments.get in --enable-commands",
+            2,
+        )
+    try:
+        params = json.loads(flag_value("--params") or "{}")
+    except json.JSONDecodeError:
+        fail("fake gog: --params is not JSON", 2)
+    if params.get("userId") != "me":
+        fail("fake gog: --params userId must be me", 2)
+    message_id = params.get("messageId") or ""
+    attachment_id = params.get("id") or ""
+    if set(params) != {"userId", "messageId", "id"}:
+        fail("fake gog: --params must hold only userId/messageId/id", 2)
+    if scenario == "api_malformed":
+        sys.stdout.write("{malformed JSON\n")
+        raise SystemExit(0)
+    attachments = state.get("attachments") or {}
+    entry = attachments.get(f"{message_id}/{attachment_id}")
+    if entry is not None:
+        dump({"data": entry["data"], "size": entry["size"]})
+    else:
+        default = base64.urlsafe_b64encode(b"hello").decode("ascii")
+        dump({"data": default, "size": 5})
+    raise SystemExit(0)
+
 if op == "thread_get":
     hex_id = pos[3] if len(pos) > 3 else "1a0b9eb2cc26ab96"
     if scenario == "thread_mismatch":
@@ -579,10 +631,13 @@ if op == "url":
     raise SystemExit(0)
 
 if op == "attachment":
-    import base64
-
-    dump({"contentBase64": base64.b64encode(b"hello").decode("ascii")})
-    raise SystemExit(0)
+    # The cache-writing attachment command is forbidden in save tests: the
+    # memory-only Discovery read above is the only attachment transport.
+    fail(
+        "fake gog: gmail attachment writes a cache file and is forbidden; "
+        "use api call gmail.users.messages.attachments.get",
+        2,
+    )
 
 if op == "labels_list":
     if scenario == "labels_failure":

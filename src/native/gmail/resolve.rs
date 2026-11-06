@@ -18,9 +18,18 @@ use super::{
 const RFC_SEARCH_PAGE_SIZE: u32 = 500;
 const RFC_SEARCH_MAX_PAGES: usize = 10;
 
-/// The read-only part of gog used by the resolver. This small boundary keeps
-/// identity logic unit-testable without invoking OAuth or the Gmail service.
+/// The read-only part of gog used by the resolver and save preparation. This
+/// small boundary keeps identity and hydration logic unit-testable without
+/// invoking OAuth or the Gmail service.
 pub(crate) trait GmailRead {
+    /// Fetch one attachment's bytes through the narrowly allowed Discovery
+    /// read. Implementations return raw bytes once; errors stay body-free.
+    fn attachment_bytes(
+        &self,
+        account: &str,
+        message_id: &str,
+        attachment_id: &str,
+    ) -> Result<Vec<u8>, GmailError>;
     fn thread_get(
         &self,
         account: &str,
@@ -46,6 +55,15 @@ pub(crate) trait GmailRead {
 }
 
 impl GmailRead for Gog {
+    fn attachment_bytes(
+        &self,
+        account: &str,
+        message_id: &str,
+        attachment_id: &str,
+    ) -> Result<Vec<u8>, GmailError> {
+        Gog::attachment_bytes(self, account, message_id, attachment_id)
+    }
+
     fn thread_get(
         &self,
         account: &str,
@@ -656,6 +674,18 @@ mod tests {
     }
 
     impl GmailRead for MockRead {
+        fn attachment_bytes(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<Vec<u8>, GmailError> {
+            Err(GmailError::runtime(
+                "bad_json",
+                "mock transport has no attachment bytes".to_string(),
+            ))
+        }
+
         fn thread_get(
             &self,
             _: &str,

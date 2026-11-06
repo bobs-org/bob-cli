@@ -22,6 +22,10 @@ mod logout;
 pub(crate) mod note;
 #[allow(dead_code)]
 pub(crate) mod policy;
+// Owned by gmail-save prepare-content (bob-cli-hg.6.1.2); the save
+// transaction consumes it.
+#[allow(dead_code)]
+pub(crate) mod prepare;
 #[allow(dead_code)]
 pub(crate) mod resolve;
 pub(crate) mod ui;

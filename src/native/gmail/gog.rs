@@ -21,7 +21,16 @@ pub(crate) use crate::native::google::REVOKE_URL;
 
 /// Read-only Gmail commands Bob may invoke.
 const READ_COMMANDS: &str =
-    "gmail.thread.get,gmail.get,gmail.messages,gmail.search,gmail.url,gmail.attachment,gmail.labels.list";
+    "gmail.thread.get,gmail.get,gmail.messages,gmail.search,gmail.url,gmail.labels.list";
+
+/// Read-only Discovery commands Bob may invoke to fetch attachment bytes.
+/// The legacy `gmail.attachment` command is deliberately absent: it writes a
+/// cache file, which breaks the no-body-cache and dry-run contracts.
+const ATTACHMENT_API_COMMANDS: &str =
+    "api.call,api.gmail.users.messages.attachments.get";
+
+/// Explicit Gmail read-only OAuth scope for the Discovery attachment call.
+const READONLY_SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly";
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub(crate) struct GmailLabel {
@@ -212,52 +221,130 @@ impl Gog {
         parse_json(&stdout)
     }
 
-    // Consumed by outer gmail-save attachment hydration once it lands.
+    // Consumed by gmail-save attachment hydration (prepare-content).
     #[allow(dead_code)]
-    /// Download one attachment as bytes via `--inline` base64.
+    /// Download one attachment's bytes through the narrowly allowed
+    /// Discovery read
+    /// (`api call gmail v1 gmail.users.messages.attachments.get`).
     ///
-    /// Strict decoding via the shared `base64` crate accepts standard and
-    /// base64url alphabets in padded and unpadded forms; malformed padding
-    /// or trailing data fails deterministically without echoing content.
-    /// Returned bytes are raw attachment bytes for [`FetchedBodies`]: callers
-    /// must not base64-decode them again (MIME hydration decodes charset
-    /// only).
-    pub(crate) fn attachment(
+    /// `--params` is a serialized JSON argument holding only `userId: me`,
+    /// the message ID, and the attachment ID — never shell code. `--no-cache`
+    /// and the explicit read-only scope apply, and the allowlist for this
+    /// call is exactly `api.call` plus the attachments-get method. The
+    /// response `{data,size}` is strictly decoded (standard and base64url
+    /// alphabets, padded and unpadded); the declared size is validated
+    /// against the actual decoded length and raw bytes are returned once.
+    /// Callers must not base64-decode them again (MIME hydration decodes
+    /// charset only).
+    ///
+    /// A gog build that refuses this generic read surfaces a
+    /// setup/capability hint naming the minimum gog. There is deliberately no
+    /// fallback to the `gmail attachment` command: it writes a cache file,
+    /// which breaks the no-body-cache and dry-run contracts.
+    pub(crate) fn attachment_bytes(
         &self,
         account: &str,
-        message: &str,
-        attachment: &str,
+        message_id: &str,
+        attachment_id: &str,
     ) -> Result<Vec<u8>, GmailError> {
-        let stdout = self.gmail_run(
-            account,
-            vec![
-                OsString::from("gmail"),
-                OsString::from("attachment"),
-                OsString::from(message),
-                OsString::from(attachment),
-                OsString::from("--inline"),
-            ],
-        )?;
-        let value = parse_json(&stdout)?;
-        let encoded = value
-            .get("contentBase64")
-            .and_then(|v| v.as_str())
-            .or_else(|| value.get("data").and_then(|v| v.as_str()))
-            .ok_or_else(|| {
-                GmailError::runtime(
-                    "bad_json",
-                    "gog attachment printed no content".to_string(),
-                )
-            })?;
-        let cleaned: String =
-            encoded.chars().filter(|ch| !ch.is_whitespace()).collect();
-        decode_attachment_base64(&cleaned).ok_or_else(|| {
-            GmailError::runtime(
-                "bad_json",
-                "gog attachment content is not base64".to_string(),
-            )
+        let args = attachment_api_argv(account, message_id, attachment_id);
+        let output = self.run(args).map_err(redact_attachment_error)?;
+        parse_attachment_response(&output.stdout).map_err(|error| {
+            if error.kind() == "bad_json" {
+                error
+            } else {
+                redact_attachment_error(error)
+            }
         })
     }
+}
+
+/// Build the exact argv for one Discovery attachment read: shared read-only
+/// transport flags, the narrow command allowlist, and the serialized
+/// `--params` argument. Pure so tests pin the shape without a subprocess.
+fn attachment_api_argv(
+    account: &str,
+    message_id: &str,
+    attachment_id: &str,
+) -> Vec<OsString> {
+    let params = serde_json::json!({
+        "userId": "me",
+        "messageId": message_id,
+        "id": attachment_id,
+    })
+    .to_string();
+    vec![
+        OsString::from("--no-input"),
+        OsString::from("--json"),
+        OsString::from("--color"),
+        OsString::from("never"),
+        OsString::from("--readonly"),
+        OsString::from("--client"),
+        OsString::from(CLIENT),
+        OsString::from("--account"),
+        OsString::from(account),
+        OsString::from("--gmail-no-send"),
+        OsString::from("--enable-commands"),
+        OsString::from(ATTACHMENT_API_COMMANDS),
+        OsString::from("--account"),
+        OsString::from(account),
+        OsString::from("api"),
+        OsString::from("call"),
+        OsString::from("gmail"),
+        OsString::from("v1"),
+        OsString::from("gmail.users.messages.attachments.get"),
+        OsString::from("--params"),
+        OsString::from(params),
+        OsString::from("--scope"),
+        OsString::from(READONLY_SCOPE),
+        OsString::from("--no-cache"),
+    ]
+}
+
+/// Parse one Discovery attachments-get response. Body-free: failures never
+/// echo the response bytes.
+fn parse_attachment_response(stdout: &str) -> Result<Vec<u8>, GmailError> {
+    let bad =
+        |message: &str| GmailError::runtime("bad_json", message.to_string());
+    let value: serde_json::Value = serde_json::from_str(stdout.trim())
+        .map_err(|_| bad("gog attachment lookup returned invalid JSON"))?;
+    let encoded = value
+        .get("data")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| bad("gog attachment lookup returned no data"))?;
+    let cleaned: String =
+        encoded.chars().filter(|ch| !ch.is_whitespace()).collect();
+    let bytes = decode_attachment_base64(&cleaned).ok_or_else(|| {
+        bad("gog attachment lookup returned undecodable data")
+    })?;
+    if let Some(size) = value.get("size").and_then(|value| value.as_u64())
+        && size != bytes.len() as u64
+    {
+        return Err(bad("gog attachment lookup returned a size mismatch"));
+    }
+    Ok(bytes)
+}
+
+/// Keep attachment-read failures body-free. Classified transport and auth
+/// failures keep their kinds so later workers can tell transient failures
+/// from permanent ones; an unclassified failure of this fixed-shape
+/// read-only call means the gog build cannot perform generic reads, so it
+/// becomes a setup/capability error instead of falling back to a
+/// cache-writing command.
+fn redact_attachment_error(error: GmailError) -> GmailError {
+    let redacted = redact_gmail_read_error(error);
+    if redacted.kind() == "gog" {
+        return GmailError::setup(
+            "attachment_unsupported",
+            "this gog build refused the read-only Gmail attachment lookup"
+                .to_string(),
+        )
+        .with_hint(
+            "install gog ≥ v0.44.0 with `api call` support, or set \
+             BOB_GMAIL_GOG to a build that has it",
+        );
+    }
+    redacted
 }
 
 fn redact_gmail_read_error(error: GmailError) -> GmailError {
@@ -343,6 +430,163 @@ mod tests {
         let error = redact_gmail_read_error(GmailError::runtime(
             "not_found",
             "PRIVATE_SENTINEL raw remote response".to_string(),
+        ));
+        assert_eq!(error.kind(), "not_found");
+        assert!(!error.message().contains("PRIVATE_SENTINEL"));
+    }
+
+    #[test]
+    fn attachment_argv_is_a_narrow_discovery_read() {
+        let argv = attachment_api_argv("me@example.com", "msg-1", "att-9");
+        let args: Vec<String> = argv
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        // Read-only transport guards stay on.
+        for flag in [
+            "--no-input",
+            "--json",
+            "--readonly",
+            "--gmail-no-send",
+            "--no-cache",
+        ] {
+            assert!(
+                args.iter().any(|arg| arg == flag),
+                "missing {flag}: {args:?}"
+            );
+        }
+        // The allowlist is exactly the api call plus attachments-get.
+        let allowlist = args
+            .windows(2)
+            .find(|pair| pair[0] == "--enable-commands")
+            .map(|pair| pair[1].clone())
+            .expect("enable-commands must be present");
+        assert_eq!(
+            allowlist,
+            "api.call,api.gmail.users.messages.attachments.get"
+        );
+        // The cache-writing attachment command is never invoked.
+        assert!(
+            !args.windows(2).any(|pair| {
+                pair == ["gmail".to_string(), "attachment".to_string()]
+            }),
+            "must not invoke gmail attachment: {args:?}"
+        );
+        // Discovery method path in order.
+        let method = [
+            "api",
+            "call",
+            "gmail",
+            "v1",
+            "gmail.users.messages.attachments.get",
+        ];
+        let start = args
+            .windows(method.len())
+            .position(|window| {
+                window.iter().map(String::as_str).eq(method.iter().copied())
+            })
+            .expect("api call method path must be present");
+        let _ = start;
+        // --params is one serialized JSON argument with only the three IDs.
+        let params_raw = args
+            .windows(2)
+            .find(|pair| pair[0] == "--params")
+            .map(|pair| pair[1].clone())
+            .expect("--params must be present");
+        let params: serde_json::Value =
+            serde_json::from_str(&params_raw).expect("params must be JSON");
+        assert_eq!(
+            params,
+            serde_json::json!({
+                "userId": "me",
+                "messageId": "msg-1",
+                "id": "att-9",
+            })
+        );
+        // Explicit read-only scope, selected account, and client bucket.
+        let scope = args
+            .windows(2)
+            .find(|pair| pair[0] == "--scope")
+            .map(|pair| pair[1].clone())
+            .expect("--scope must be present");
+        assert_eq!(scope, "https://www.googleapis.com/auth/gmail.readonly");
+        assert!(args.iter().any(|arg| arg == "me@example.com"));
+        assert!(args
+            .windows(2)
+            .any(|pair| { pair[0] == "--client" && pair[1] == CLIENT }));
+    }
+
+    #[test]
+    fn attachment_response_parses_data_and_validates_size() {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use base64::Engine as _;
+
+        // Discovery `{data,size}` decodes once; no double decoding by callers.
+        let raw = URL_SAFE_NO_PAD.encode(b"fetched-bytes");
+        let stdout = format!(r#"{{"data":"{raw}","size":13}}"#);
+        assert_eq!(
+            parse_attachment_response(&stdout).as_deref(),
+            Ok(b"fetched-bytes".as_slice())
+        );
+        // Standard padded alphabet and surrounding whitespace are tolerated.
+        let stdout = "  {\"data\":\"aGVsbG8td29ybGQ/\",\"size\":12}  \n";
+        assert_eq!(
+            parse_attachment_response(stdout).as_deref(),
+            Ok(b"hello-world?".as_slice())
+        );
+        // Declared size is validated against the actual decoded length.
+        let error = parse_attachment_response(&format!(
+            r#"{{"data":"{raw}","size":14}}"#
+        ))
+        .err()
+        .expect("size mismatch must fail");
+        assert_eq!(error.kind(), "bad_json");
+        // Missing data, undecodable data, and malformed JSON stay body-free.
+        for stdout in [
+            r#"{"size":3}"#.to_string(),
+            r#"{"data":"!!!","size":3}"#.to_string(),
+            "SECRET-BYTES {{{".to_string(),
+        ] {
+            let error = parse_attachment_response(&stdout).err().expect("fail");
+            assert_eq!(error.kind(), "bad_json");
+            assert!(
+                !error.message().contains("SECRET"),
+                "echoed input: {}",
+                error.message()
+            );
+            assert!(
+                !error.message().contains("!!!"),
+                "echoed input: {}",
+                error.message()
+            );
+        }
+    }
+
+    #[test]
+    fn attachment_refusal_becomes_setup_hint_without_body_echo() {
+        let error = redact_attachment_error(GmailError::runtime(
+            "gog",
+            "PRIVATE_SENTINEL unknown command".to_string(),
+        ));
+        assert_eq!(error.kind(), "attachment_unsupported");
+        assert_eq!(error.exit_code(), 2);
+        assert!(!error.message().contains("PRIVATE_SENTINEL"));
+        assert!(
+            error.hint().is_some_and(|hint| hint.contains("v0.44.0")),
+            "hint must name the minimum gog: {:?}",
+            error.hint()
+        );
+
+        // Classified transport and auth failures keep their kinds.
+        let error = redact_attachment_error(GmailError::runtime(
+            "timeout",
+            "PRIVATE_SENTINEL slow".to_string(),
+        ));
+        assert_eq!(error.kind(), "timeout");
+        assert!(!error.message().contains("PRIVATE_SENTINEL"));
+        let error = redact_attachment_error(GmailError::runtime(
+            "not_found",
+            "PRIVATE_SENTINEL gone".to_string(),
         ));
         assert_eq!(error.kind(), "not_found");
         assert!(!error.message().contains("PRIVATE_SENTINEL"));

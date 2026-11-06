@@ -231,6 +231,14 @@ mod tests {
     struct FailLabels;
 
     impl GmailRead for NoLabels {
+        fn attachment_bytes(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<Vec<u8>, GmailError> {
+            unreachable!()
+        }
         fn thread_get(
             &self,
             _: &str,
@@ -260,6 +268,14 @@ mod tests {
     }
 
     impl GmailRead for LabelReader {
+        fn attachment_bytes(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<Vec<u8>, GmailError> {
+            unreachable!()
+        }
         fn thread_get(
             &self,
             _: &str,
@@ -292,6 +308,14 @@ mod tests {
     }
 
     impl GmailRead for FailLabels {
+        fn attachment_bytes(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<Vec<u8>, GmailError> {
+            unreachable!()
+        }
         fn thread_get(
             &self,
             _: &str,

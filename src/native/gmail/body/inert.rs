@@ -256,22 +256,50 @@ pub(crate) fn verified_local_image_embed(
     relative_path: &str,
     alt: &str,
 ) -> Option<String> {
+    if !is_writer_image_path(relative_path) {
+        return None;
+    }
+    Some(format!("![{}]({relative_path})", inert_single_line(alt)))
+}
+
+/// Display width for trusted local image wikilink embeds minted by the save
+/// phase. The width suffix keeps saved mail images at a readable size; it is
+/// a display hint, not a pixel rewrite of the imported bytes.
+pub(crate) const LOCAL_IMAGE_DISPLAY_WIDTH: u32 = 400;
+
+/// Emit a writer-owned local image wikilink embed (`![[path|400]]`).
+///
+/// Only the save phase calls this, with a path it has already copied into the
+/// vault under its image directory. The same writer-path gate as
+/// [`verified_local_image_embed`] applies, so a forged sender reference can
+/// never mint this syntax: only a validated writer-owned imported path
+/// produces an embed.
+pub(crate) fn verified_local_image_wikilink(
+    relative_path: &str,
+) -> Option<String> {
+    if !is_writer_image_path(relative_path) {
+        return None;
+    }
+    Some(format!("![[{relative_path}|{LOCAL_IMAGE_DISPLAY_WIDTH}]]"))
+}
+
+/// Vault-relative writer-image shape: `name` or `dir/name` with slug-safe
+/// characters only. Empty, absolute, parent-climbing, repeated-separator, and
+/// scheme/query/anchor/quoting shapes are all refused as sender shapes.
+fn is_writer_image_path(relative_path: &str) -> bool {
     if relative_path.is_empty()
         || relative_path.starts_with('/')
         || relative_path.contains("..")
         || relative_path.contains("//")
     {
-        return None;
+        return false;
     }
     // Writer paths are vault-relative slugs: letters, digits, and a small
     // set of safe separators. Anything else (schemes, queries, anchors,
     // quoting characters) is refused as a sender shape.
-    if !relative_path.chars().all(|c| {
+    relative_path.chars().all(|c| {
         c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/')
-    }) {
-        return None;
-    }
-    Some(format!("![{}]({relative_path})", inert_single_line(alt)))
+    })
 }
 
 /// Normalize sender text without changing its readable content: CRLF/CR and
@@ -1545,6 +1573,41 @@ mod tests {
         ] {
             assert!(
                 verified_local_image_embed(bad, "alt").is_none(),
+                "accepted sender path {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn verified_wikilink_mints_exact_resized_embed_for_writer_paths_only() {
+        assert_eq!(
+            verified_local_image_wikilink("img/mail/aabbcc/logo.png")
+                .as_deref(),
+            Some("![[img/mail/aabbcc/logo.png|400]]")
+        );
+        for bad in [
+            "https://example.test/i.png",
+            "cid:logo",
+            "/absolute.png",
+            "../escape.png",
+            "a..b/../../x.png",
+            "with space.png",
+            "semi;colon.png",
+            "back\\slash.png",
+            "par(en.png",
+            "br[ack.png",
+            "quo\"te.png",
+            "lt<gt.png",
+            "pipe|.png",
+            "star*.png",
+            "tick`.png",
+            "",
+            "a:b.png",
+            "dir//double.png",
+            "img/mail/aabbcc/evil|.png",
+        ] {
+            assert!(
+                verified_local_image_wikilink(bad).is_none(),
                 "accepted sender path {bad:?}"
             );
         }
