@@ -62,7 +62,14 @@ pub(crate) struct StagedSaveNote {
     pub(crate) status: &'static str,
     pub(crate) original: Option<String>,
     pub(crate) updated: String,
-    pub(crate) origins: Vec<(String, String, String)>,
+    pub(crate) preview: Vec<String>,
+    pub(crate) preview_noop: bool,
+}
+
+struct SaveEventFacts {
+    created: bool,
+    added_count: usize,
+    origins: Vec<(String, String, String)>,
 }
 
 struct AuxiliaryFiles {
@@ -216,6 +223,8 @@ fn run_inner(args: &SaveArgs) -> Result<(), GmailError> {
             saved_at,
             timezone,
         )?;
+        let event_facts =
+            save_event_facts(&vault, &child_env, is_worktree, &plans, &works)?;
         let auxiliary =
             plan_auxiliary_files(&vault, folder, is_worktree, &child_env)?;
         let mut staged: Vec<StagedTextFile> = plans
@@ -316,7 +325,7 @@ fn run_inner(args: &SaveArgs) -> Result<(), GmailError> {
 
         match capture::write_staged_files(&staged) {
             Ok(()) => {
-                completed = Some((plans, commit_paths));
+                completed = Some((plans, commit_paths, event_facts));
                 break;
             }
             Err(error)
@@ -338,7 +347,7 @@ fn run_inner(args: &SaveArgs) -> Result<(), GmailError> {
             }
         }
     }
-    let Some((plans, commit_paths)) = completed else {
+    let Some((plans, commit_paths, event_facts)) = completed else {
         return Err(GmailError::runtime(
             "note_changed",
             "the mail notes kept changing while save retried; no changes were written".to_string(),
@@ -348,27 +357,19 @@ fn run_inner(args: &SaveArgs) -> Result<(), GmailError> {
     let changed_notes: Vec<_> =
         plans.iter().filter(|plan| plan.changed).collect();
     let has_any_files = !commit_paths.is_empty();
-    let mut journal_notes = changed_notes.clone();
-    if is_worktree {
-        for plan in &plans {
-            if plan.changed {
-                continue;
-            }
-            let relative = plan.path.strip_prefix(&vault).unwrap_or(&plan.path);
-            if git_path_is_dirty(&vault, &child_env, relative).map_err(
-                |error| {
-                    GmailError::runtime(
-                        "git",
-                        format!(
-                            "could not inspect the saved mail path: {error}"
-                        ),
-                    )
-                },
-            )? {
-                journal_notes.push(plan);
-            }
-        }
-    }
+    // `commit_paths` records the dirty paths captured before the commit. Check
+    // that snapshot rather than git status afterward: a successful retry has
+    // just made those paths clean but still owes its journal events.
+    let mut journal_notes: Vec<_> = plans
+        .iter()
+        .filter(|plan| {
+            plan.changed
+                || plan.path.strip_prefix(&vault).ok().is_some_and(|relative| {
+                    commit_paths.iter().any(|path| path == relative)
+                })
+        })
+        .collect();
+    journal_notes.sort_by(|left, right| left.path.cmp(&right.path));
     if is_worktree && has_any_files {
         let subject = changed_notes
             .first()
@@ -404,27 +405,21 @@ fn run_inner(args: &SaveArgs) -> Result<(), GmailError> {
     // warnings: the mail note remains valid and can be retried by a later save.
     let mut warnings = Vec::new();
     for plan in &journal_notes {
-        if let Err(error) = append_save_event(&vault, &host, plan) {
+        let key = (plan.account.clone(), plan.thread_id.clone());
+        let facts = event_facts.get(&key);
+        if let Some(facts) = facts
+            && let Err(error) = append_save_event(&vault, &host, plan, facts)
+        {
             warnings
                 .push(format!("could not append Gmail save journal: {error}"));
         }
     }
     let mut origins = Vec::new();
     for plan in &journal_notes {
-        if plan.changed {
-            origins.extend(plan.origins.iter().cloned());
-            continue;
-        }
         let key = (plan.account.clone(), plan.thread_id.clone());
-        let Some(work) = works.get(&key) else {
-            continue;
-        };
-        let relative = plan.path.strip_prefix(&vault).unwrap_or(&plan.path);
-        let head_note = git_head_text(&vault, &child_env, relative);
-        origins.extend(newly_referenced_origins(
-            &work.prepared.origins,
-            head_note.as_deref(),
-        ));
+        if let Some(facts) = event_facts.get(&key) {
+            origins.extend(facts.origins.iter().cloned());
+        }
     }
     for failure in
         attachment_journal::append_origin_events(&vault, &origins, "gmail")
@@ -453,6 +448,7 @@ pub(crate) fn plan_prepared_saves(
     timezone: chrono_tz::Tz,
 ) -> Result<Vec<StagedSaveNote>, GmailError> {
     let mut occupied = collect_occupied(vault, folder)?;
+    let mut reserved_imports = BTreeMap::<String, String>::new();
     let mut plans = Vec::with_capacity(works.len());
     for (key, work) in works.iter_mut() {
         if index.duplicates.iter().any(|(account, thread, _)| {
@@ -524,7 +520,7 @@ pub(crate) fn plan_prepared_saves(
             vault,
             &mut work.prepared,
             original.as_deref(),
-            rerender,
+            &reserved_imports,
         )?;
 
         let thread = &work.confirmed.thread;
@@ -612,6 +608,34 @@ pub(crate) fn plan_prepared_saves(
                 )
             };
         let changed = original.as_deref() != Some(updated.as_str());
+        // A fresh rendering may contain imports for cards which append-only
+        // merge deliberately kept from the existing note. Only assets named
+        // by the final persisted text belong in the write plan.
+        work.prepared.imports.retain(|import| {
+            updated.contains(&format!("![[{}|400]]", import.relative_path))
+        });
+        let retained_paths: BTreeSet<_> = work
+            .prepared
+            .imports
+            .iter()
+            .map(|import| import.relative_path.as_str())
+            .collect();
+        work.prepared
+            .origins
+            .retain(|origin| retained_paths.contains(origin.saved.as_str()));
+        for import in &work.prepared.imports {
+            reserved_imports
+                .entry(import.relative_path.clone())
+                .or_insert_with(|| sha256(&import.bytes));
+        }
+        let preview = structural_preview(
+            vault,
+            &relative_path,
+            original.as_deref(),
+            &updated,
+            &work.prepared.imports,
+        );
+        let preview_noop = preview == ["No structural changes."];
         let label = note::label::render_saved(
             link_template,
             &rendered.metadata.title,
@@ -620,14 +644,6 @@ pub(crate) fn plan_prepared_saves(
         let note_without_extension = relative_path.with_extension("");
         let note_target = path_to_slashes(&note_without_extension);
         let link = format!("[[{note_target}|{label}]]");
-        let origins = if changed {
-            newly_referenced_origins(
-                &work.prepared.origins,
-                original.as_deref(),
-            )
-        } else {
-            Vec::new()
-        };
         plans.push(StagedSaveNote {
             account: work.confirmed.identity.account.clone(),
             thread_id: work.confirmed.identity.thread_id.clone(),
@@ -648,7 +664,8 @@ pub(crate) fn plan_prepared_saves(
             },
             original,
             updated,
-            origins,
+            preview,
+            preview_noop,
         });
     }
     Ok(plans)
@@ -670,48 +687,43 @@ fn adjust_image_collisions(
     vault: &Path,
     prepared: &mut PreparedThread,
     existing_note: Option<&str>,
-    rerender: bool,
+    reserved: &BTreeMap<String, String>,
 ) -> Result<(), GmailError> {
-    // The plan's own imports already deduplicate equal hashes. Existing files
-    // are reused only after verifying their bytes; different content gets a
-    // deterministic numbered path without overwriting the existing asset.
+    let mut local_reserved = BTreeMap::<String, String>::new();
     for index in 0..prepared.imports.len() {
         let old_path = prepared.imports[index].relative_path.clone();
         let expected_hash = sha256(&prepared.imports[index].bytes);
         let relative = safe_relative_path(&old_path)?;
-        let target = vault.join(&relative);
-        let Ok(metadata) = fs::symlink_metadata(&target) else {
-            continue;
-        };
-        if metadata.file_type().is_symlink() {
-            return Err(GmailError::runtime(
-                "refused",
-                "an image destination is a symlink".to_string(),
-            ));
-        }
-        if metadata.is_file() {
-            let existing = fs::read(&target).map_err(|error| {
-                GmailError::runtime(
-                    "image",
-                    format!(
-                        "could not read existing image {}: {error}",
-                        relative.display()
-                    ),
-                )
-            })?;
-            if sha256(&existing) == expected_hash {
-                continue;
-            }
-        }
         let old_embed = format!("![[{}|400]]", path_to_slashes(&relative));
-        if !rerender
-            && existing_note.is_some_and(|note| note.contains(&old_embed))
-        {
-            return Err(GmailError::runtime(
-                "image_conflict",
-                "an image already referenced by this mail note has different bytes".to_string(),
-            ));
-        }
+        let original_hash_conflict =
+            match fs::symlink_metadata(vault.join(&relative)) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(GmailError::runtime(
+                        "refused",
+                        "an image destination is a symlink".to_string(),
+                    ));
+                }
+                Ok(metadata) if metadata.is_file() => {
+                    fs::read(vault.join(&relative))
+                        .ok()
+                        .is_some_and(|bytes| sha256(&bytes) != expected_hash)
+                }
+                Ok(_) => true,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    false
+                }
+                Err(error) => {
+                    return Err(GmailError::runtime(
+                        "image",
+                        format!("could not inspect image path: {error}"),
+                    ));
+                }
+            } || reserved
+                .get(&old_path)
+                .or_else(|| local_reserved.get(&old_path))
+                .is_some_and(|hash| hash != &expected_hash);
+        let old_path_is_referenced =
+            existing_note.is_some_and(|note| note.contains(&old_embed));
         let parent = relative.parent().unwrap_or_else(|| Path::new(""));
         let stem = relative
             .file_stem()
@@ -722,37 +734,69 @@ fn adjust_image_collisions(
             .and_then(|s| s.to_str())
             .unwrap_or("img");
         let mut replacement = None;
-        for suffix in 2u32.. {
-            let candidate = parent.join(format!("{stem}-{suffix}.{extension}"));
-            let absolute = vault.join(&candidate);
-            match fs::symlink_metadata(&absolute) {
-                Ok(meta)
-                    if meta.is_file() && !meta.file_type().is_symlink() =>
-                {
-                    if fs::read(&absolute)
+        for suffix in 0..=u32::MAX {
+            let candidate = if suffix == 0 {
+                relative.clone()
+            } else {
+                parent.join(format!("{stem}-{suffix}.{extension}"))
+            };
+            let candidate_text = path_to_slashes(&candidate);
+            if candidate == relative
+                && old_path_is_referenced
+                && original_hash_conflict
+            {
+                // Keep a historical card's old asset stable, including when
+                // the referenced file is missing. A new version receives a
+                // deterministic sibling path instead of inheriting the slot.
+                continue;
+            }
+            let reserved_hash = reserved
+                .get(&candidate_text)
+                .or_else(|| local_reserved.get(&candidate_text));
+            if let Some(hash) = reserved_hash {
+                if hash == &expected_hash {
+                    replacement = Some(candidate_text);
+                    break;
+                }
+                continue;
+            }
+            match fs::symlink_metadata(vault.join(&candidate)) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    if candidate == relative {
+                        return Err(GmailError::runtime(
+                            "refused",
+                            "an image destination is a symlink".to_string(),
+                        ));
+                    }
+                }
+                Ok(metadata) if metadata.is_file() => {
+                    let same = fs::read(vault.join(&candidate))
                         .ok()
-                        .is_some_and(|bytes| sha256(&bytes) == expected_hash)
-                    {
-                        replacement = Some(path_to_slashes(&candidate));
+                        .is_some_and(|bytes| sha256(&bytes) == expected_hash);
+                    if same {
+                        replacement = Some(candidate_text);
                         break;
                     }
                 }
                 Ok(_) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    replacement = Some(path_to_slashes(&candidate));
+                    replacement = Some(candidate_text);
                     break;
                 }
                 Err(error) => {
                     return Err(GmailError::runtime(
                         "image",
                         format!("could not inspect image path: {error}"),
-                    ))
+                    ));
                 }
             }
         }
         if let Some(new_path) = replacement {
-            replace_import_path(prepared, &old_path, &new_path);
-            prepared.imports[index].relative_path = new_path;
+            local_reserved.insert(new_path.clone(), expected_hash);
+            if new_path != old_path {
+                replace_import_path(prepared, &old_path, &new_path);
+                prepared.imports[index].relative_path = new_path;
+            }
         } else {
             return Err(GmailError::runtime(
                 "image_conflict",
@@ -793,6 +837,245 @@ fn newly_referenced_origins(
         ));
     }
     tuples.into_iter().collect()
+}
+
+fn structural_preview(
+    vault: &Path,
+    note_path: &Path,
+    before: Option<&str>,
+    after: &str,
+    imports: &[BinaryImport],
+) -> Vec<String> {
+    let mut changes = Vec::new();
+    let note_path = path_to_slashes(note_path);
+    if before.is_none() {
+        changes.push(format!("+ note {note_path}"));
+    }
+    let old = before.and_then(|text| note::parse::parse(text).ok());
+    let new = note::parse::parse(after).ok();
+
+    if let (Some(before), Some(old), Some(new)) =
+        (before, old.as_ref(), new.as_ref())
+    {
+        if before == after {
+            // A missing previously referenced asset is still a planned file
+            // write, so retain that structural row below.
+        } else {
+            let changed_metadata = [
+                "title",
+                "who",
+                "started",
+                "updated",
+                "messages",
+                "gmail_account",
+                "gmail_thread_id",
+                "gmail_url",
+            ]
+            .into_iter()
+            .filter(|key| {
+                yaml_field(&old.frontmatter, key)
+                    != yaml_field(&new.frontmatter, key)
+            })
+            .collect::<Vec<_>>();
+            if !changed_metadata.is_empty() {
+                changes.push(format!(
+                    "~ owned metadata fields: {}",
+                    changed_metadata.join(", ")
+                ));
+            }
+            if old.heading != new.heading {
+                changes.push("~ title heading".to_string());
+            }
+            if old.summary != new.summary {
+                changes.push("~ message summary".to_string());
+            }
+
+            let old_cards = structural_cards(before, old);
+            let new_cards = structural_cards(after, new);
+            for id in new_cards.keys().filter(|id| !old_cards.contains_key(*id))
+            {
+                changes.push(format!("+ message card {id}"));
+            }
+            for id in old_cards.keys().filter(|id| !new_cards.contains_key(*id))
+            {
+                changes.push(format!("- historical card reference {id}"));
+            }
+            for (id, (folded, card)) in &new_cards {
+                let Some((old_folded, old_card)) = old_cards.get(id) else {
+                    continue;
+                };
+                if card != old_card {
+                    if folded != old_folded {
+                        changes.push(format!(
+                            "~ message card {id}: {}",
+                            if *folded { "folded" } else { "unfolded" }
+                        ));
+                    } else {
+                        changes.push(format!("~ message card {id}: refreshed"));
+                    }
+                }
+            }
+
+            let old_images = structural_images(before, old);
+            let new_images = structural_images(after, new);
+            for image in new_images.difference(&old_images) {
+                changes.push(format!("+ image reference {image}"));
+            }
+            for image in old_images.difference(&new_images) {
+                changes.push(format!("- image reference {image}"));
+            }
+        }
+    } else if let Some(new) = new.as_ref() {
+        changes.push(
+            "+ owned metadata fields: title, who, started, updated, messages, gmail_account, gmail_thread_id, gmail_url".to_string(),
+        );
+        for card in &new.cards {
+            changes.push(format!("+ message card {}", card.id));
+        }
+        for image in structural_images(after, new) {
+            changes.push(format!("+ image reference {image}"));
+        }
+        if !new.cards.is_empty() {
+            changes.push(format!("+ {} message card(s)", new.cards.len()));
+        }
+    }
+
+    let referenced_images = new
+        .as_ref()
+        .map(|parsed| structural_images(after, parsed))
+        .unwrap_or_default();
+    for import in imports {
+        if !referenced_images.contains(&import.relative_path) {
+            continue;
+        }
+        let target = vault.join(&import.relative_path);
+        let matches = fs::read(target)
+            .ok()
+            .is_some_and(|bytes| sha256(&bytes) == sha256(&import.bytes));
+        if !matches {
+            let row = format!("+ image file {}", import.relative_path);
+            if !changes.contains(&row) {
+                changes.push(row);
+            }
+        }
+    }
+    if changes.is_empty() {
+        changes.push("No structural changes.".to_string());
+    }
+    changes
+}
+
+fn yaml_field(
+    frontmatter: &serde_yaml::Value,
+    key: &str,
+) -> Option<serde_yaml::Value> {
+    frontmatter
+        .as_mapping()?
+        .get(serde_yaml::Value::String(key.to_string()))
+        .cloned()
+}
+
+fn structural_cards(
+    source: &str,
+    parsed: &note::parse::ParsedNote,
+) -> BTreeMap<String, (bool, String)> {
+    parsed
+        .cards
+        .iter()
+        .map(|card| {
+            (
+                card.id.clone(),
+                (
+                    card.header.contains("[!mail+]"),
+                    source[card.card_range.clone()].to_string(),
+                ),
+            )
+        })
+        .collect()
+}
+
+fn structural_images(
+    source: &str,
+    parsed: &note::parse::ParsedNote,
+) -> BTreeSet<String> {
+    let mut images = BTreeSet::new();
+    for card in &parsed.cards {
+        let text = &source[card.card_range.clone()];
+        let mut rest = text;
+        while let Some(start) = rest.find("![[img/mail/") {
+            let after_start = start + 3;
+            let Some(end) = rest[after_start..].find("|400]]") else {
+                break;
+            };
+            let path = &rest[after_start..after_start + end];
+            if safe_relative_path(path).is_ok() {
+                images.insert(path.to_string());
+            }
+            rest = &rest[after_start + end + 6..];
+        }
+    }
+    images
+}
+
+fn save_event_facts(
+    vault: &Path,
+    child_env: &ob::ChildEnv,
+    is_worktree: bool,
+    plans: &[StagedSaveNote],
+    works: &BTreeMap<(String, String), PreparedSave>,
+) -> Result<BTreeMap<(String, String), SaveEventFacts>, GmailError> {
+    let mut facts = BTreeMap::new();
+    for plan in plans {
+        let relative = plan.path.strip_prefix(vault).map_err(|_| {
+            GmailError::runtime(
+                "refused",
+                "a planned note escaped the vault".to_string(),
+            )
+        })?;
+        let baseline = if is_worktree {
+            git_head_text(vault, child_env, relative)
+        } else {
+            plan.original.clone()
+        };
+        let added_count = card_id_additions(&plan.updated, baseline.as_deref())
+            .unwrap_or(plan.added_count);
+        let created = plan.created
+            || (is_worktree && plan.original.is_some() && baseline.is_none());
+        let key = (plan.account.clone(), plan.thread_id.clone());
+        let origins = works
+            .get(&key)
+            .map(|work| {
+                newly_referenced_origins(
+                    &work.prepared.origins,
+                    baseline.as_deref(),
+                )
+            })
+            .unwrap_or_default();
+        facts.insert(
+            key,
+            SaveEventFacts {
+                created,
+                added_count,
+                origins,
+            },
+        );
+    }
+    Ok(facts)
+}
+
+fn card_id_additions(after: &str, before: Option<&str>) -> Option<usize> {
+    let after = note::parse::parse(after).ok()?;
+    let before_ids: BTreeSet<_> = before
+        .and_then(|text| note::parse::parse(text).ok())
+        .map(|parsed| parsed.cards.into_iter().map(|card| card.id).collect())
+        .unwrap_or_default();
+    Some(
+        after
+            .cards
+            .iter()
+            .filter(|card| !before_ids.contains(&card.id))
+            .count(),
+    )
 }
 
 fn staged_note(plan: &StagedSaveNote) -> Result<StagedTextFile, GmailError> {
@@ -1331,6 +1614,7 @@ fn append_save_event(
     vault: &Path,
     host: &str,
     plan: &StagedSaveNote,
+    facts: &SaveEventFacts,
 ) -> std::io::Result<()> {
     let ts = pref_journal::event_timestamp()
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
@@ -1338,8 +1622,8 @@ fn append_save_event(
         "account": plan.account,
         "thread_id": plan.thread_id,
         "note": path_to_slashes(plan.path.strip_prefix(vault).unwrap_or(&plan.path)),
-        "created": plan.created,
-        "added": plan.added_count,
+        "created": facts.created,
+        "added": facts.added_count,
     });
     let mut line = serde_json::to_string(&json!({
         "v": 1,
@@ -1410,15 +1694,22 @@ fn print_report(
                 } else {
                     plan.status
                 };
-                json!({
+                let mut result = json!({
                     "thread_id": plan.thread_id,
                     "account": plan.account,
-                "note": path_to_slashes(plan.path.strip_prefix(vault).unwrap_or(&plan.path)),
+                    "note": path_to_slashes(plan.path.strip_prefix(vault).unwrap_or(&plan.path)),
                     "link": plan.link,
                     "status": status,
                     "message_count": plan.message_count,
                     "added_count": plan.added_count,
-                })
+                });
+                if dry_run {
+                    result["preview"] = json!({
+                        "no_op": plan.preview_noop,
+                        "changes": plan.preview,
+                    });
+                }
+                result
             })
             .collect();
         let single_result = results.len() == 1;
@@ -1433,6 +1724,9 @@ fn print_report(
         if single_result && let Some(result) = single {
             output["note"] = result["note"].clone();
             output["link"] = result["link"].clone();
+            if dry_run {
+                output["preview"] = result["preview"].clone();
+            }
         }
         println!("{output}");
         ui::flush_stdout();
@@ -1448,35 +1742,45 @@ fn print_report(
         } else {
             plan.status.to_string()
         };
-        let line = match plan.status {
-            "created" => format!(
-                "✉️ Saved {} · {} → {} ({} messages)",
-                plan.title,
-                plan.who,
+        let line = if dry_run {
+            format!(
+                "{} · {} message card(s)",
                 path_to_slashes(
                     plan.path.strip_prefix(vault).unwrap_or(&plan.path)
                 ),
                 plan.message_count
-            ),
-            "refreshed" => format!(
-                "↻ {} new messages · {}",
-                plan.added_count,
-                path_to_slashes(
-                    plan.path.strip_prefix(vault).unwrap_or(&plan.path)
-                )
-            ),
-            _ => format!(
-                "· unchanged · {}",
-                path_to_slashes(
-                    plan.path.strip_prefix(vault).unwrap_or(&plan.path)
-                )
-            ),
+            )
+        } else {
+            match plan.status {
+                "created" => format!(
+                    "✉️ Saved {} · {} → {} ({} messages)",
+                    plan.title,
+                    plan.who,
+                    path_to_slashes(
+                        plan.path.strip_prefix(vault).unwrap_or(&plan.path)
+                    ),
+                    plan.message_count
+                ),
+                "refreshed" => format!(
+                    "↻ {} new messages · {}",
+                    plan.added_count,
+                    path_to_slashes(
+                        plan.path.strip_prefix(vault).unwrap_or(&plan.path)
+                    )
+                ),
+                _ => format!(
+                    "· unchanged · {}",
+                    path_to_slashes(
+                        plan.path.strip_prefix(vault).unwrap_or(&plan.path)
+                    )
+                ),
+            }
         };
         if dry_run {
-            println!(
-                "{}: {line} · structural preview (message text redacted)",
-                styler.cyan(&status)
-            );
+            println!("{}: {line}", styler.cyan(&status));
+            for change in &plan.preview {
+                println!("  {change}");
+            }
         } else {
             println!("{}", line);
         }

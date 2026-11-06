@@ -4,11 +4,13 @@ mod gmail_support;
 
 use std::{fs, process::Command};
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use gmail_support::{
     json_stdout, run_gmail, run_gmail_paste, run_gmail_stdin, stderr, stdout,
     FakeGog, GmailEnv, ACCOUNT,
 };
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 fn check<'a>(doc: &'a Value, id: &str) -> &'a Value {
     doc["checks"]
@@ -28,6 +30,71 @@ fn assert_success(output: &std::process::Output, label: &str) {
         stdout(output),
         stderr(output)
     );
+}
+
+fn synthetic_image_thread(
+    thread_id: &str,
+    messages: &[(&str, &str, &[u8])],
+) -> (Value, Value) {
+    let mut attachment_bodies = serde_json::Map::new();
+    let thread_messages: Vec<_> = messages
+        .iter()
+        .enumerate()
+        .map(|(index, (message_id, body, image_bytes))| {
+            let attachment_id = format!("att-{message_id}");
+            let html = format!(
+                "<p>{body}</p><img src=\"cid:photo\">"
+            );
+            let encoded_html = URL_SAFE_NO_PAD.encode(html.as_bytes());
+            let encoded_image = URL_SAFE_NO_PAD.encode(image_bytes);
+            attachment_bodies.insert(
+                format!("{message_id}/{attachment_id}"),
+                serde_json::json!({
+                    "data": encoded_image,
+                    "size": image_bytes.len(),
+                }),
+            );
+            serde_json::json!({
+                "id": message_id,
+                "threadId": thread_id,
+                "labelIds": ["INBOX"],
+                "internalDate": format!("{}", 1793908800000_i64 + index as i64 * 60_000),
+                "snippet": "SNIPPET_SENTINEL",
+                "payload": {
+                    "mimeType": "multipart/related",
+                    "headers": [
+                        {"name": "From", "value": "Ada <ada@example.com>"},
+                        {"name": "Subject", "value": "Synthetic image thread"}
+                    ],
+                    "parts": [
+                        {
+                            "mimeType": "text/html",
+                            "body": {"data": encoded_html}
+                        },
+                        {
+                            "mimeType": "image/png",
+                            "filename": "photo.png",
+                            "headers": [{"name": "Content-ID", "value": "<photo>"}],
+                            "body": {
+                                "attachmentId": attachment_id,
+                                "size": image_bytes.len(),
+                            }
+                        }
+                    ]
+                }
+            })
+        })
+        .collect();
+    (
+        serde_json::json!({
+            "thread": {
+                "id": thread_id,
+                "historyId": "1",
+                "messages": thread_messages,
+            }
+        }),
+        Value::Object(attachment_bodies),
+    )
 }
 
 #[test]
@@ -364,6 +431,304 @@ fn failed_git_commit_retries_without_duplicate_cards_and_logs_after_commit() {
         fs::read_to_string(env.vault().join(".bob/gmail/test-host.jsonl"))
             .unwrap();
     assert_eq!(journal.lines().count(), 1);
+}
+
+#[test]
+fn failed_image_commit_retry_records_create_and_origin_once() {
+    let env = GmailEnv::new("bob-cli-gmail-image-retry");
+    initialize_git_vault(env.vault());
+    let hook = env.vault().join(".git/hooks/pre-commit");
+    fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let image = b"synthetic image bytes".repeat(300);
+    let fake = FakeGog::new(&env, "gog");
+    let (thread, attachments) = synthetic_image_thread(
+        "0123456789abcdef",
+        &[("1111111111111111", "BODY_SENTINEL", &image)],
+    );
+    fake.set_thread(thread, attachments);
+
+    let failed =
+        run_gmail(&env, &fake, &["save", "0123456789abcdef", "-f", "json"]);
+    assert_eq!(failed.status.code(), Some(1), "{}", stdout(&failed));
+    assert_eq!(json_stdout(&failed)["error"]["kind"], "uncommitted");
+    assert!(!env.vault().join(".bob/gmail/test-host.jsonl").exists());
+    fs::remove_file(hook).unwrap();
+
+    let retry =
+        run_gmail(&env, &fake, &["save", "0123456789abcdef", "-f", "json"]);
+    assert_success(&retry, "image save retry");
+    let result = json_stdout(&retry);
+    let note_path = env.vault().join(result["note"].as_str().unwrap());
+    let note = fs::read_to_string(&note_path).unwrap();
+    assert!(note.contains("![[img/mail/"));
+    assert!(note.contains("BODY_SENTINEL"));
+
+    let save_lines =
+        fs::read_to_string(env.vault().join(".bob/gmail/test-host.jsonl"))
+            .unwrap();
+    assert_eq!(save_lines.lines().count(), 1);
+    let save_event: Value =
+        serde_json::from_str(save_lines.lines().next().unwrap()).unwrap();
+    assert_eq!(save_event["value"]["created"], true);
+    assert_eq!(save_event["value"]["added"], 1);
+    assert!(!save_lines.contains("BODY_SENTINEL"));
+
+    let origin_path = env.vault().join(".bob/attachments/test-host.jsonl");
+    let origin_lines = fs::read_to_string(origin_path).unwrap();
+    assert_eq!(origin_lines.lines().count(), 1);
+    let origin: Value =
+        serde_json::from_str(origin_lines.lines().next().unwrap()).unwrap();
+    assert_eq!(origin["via"], "gmail");
+    assert!(origin["source"]
+        .as_str()
+        .unwrap()
+        .starts_with("gmail:you@example.com/"));
+    let saved = origin["saved"].as_str().unwrap();
+    assert!(note.contains(&format!("![[{saved}|400]]")));
+    assert_eq!(origin["sha256"], hex::encode(Sha256::digest(&image)));
+    assert_eq!(fs::read(env.vault().join(saved)).unwrap(), image);
+    assert!(!origin_lines.contains("BODY_SENTINEL"));
+
+    let noop =
+        run_gmail(&env, &fake, &["save", "0123456789abcdef", "-f", "json"]);
+    assert_success(&noop, "image save no-op");
+    assert_eq!(
+        fs::read_to_string(env.vault().join(".bob/gmail/test-host.jsonl"))
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+    assert_eq!(
+        fs::read_to_string(
+            env.vault().join(".bob/attachments/test-host.jsonl")
+        )
+        .unwrap()
+        .lines()
+        .count(),
+        1
+    );
+}
+
+#[test]
+fn full_refresh_only_imports_images_when_rerender_keeps_them() {
+    let env = GmailEnv::new("bob-cli-gmail-headers-full-image");
+    let image = b"image bytes that look plausible enough to keep".repeat(140);
+    let fake = FakeGog::new(&env, "gog");
+    let (thread, attachments) = synthetic_image_thread(
+        "0123456789abcdef",
+        &[("1111111111111111", "BODY_SENTINEL", &image)],
+    );
+    fake.set_thread(thread, attachments);
+
+    let headers = run_gmail(
+        &env,
+        &fake,
+        &["save", "0123456789abcdef", "-B", "headers", "-f", "json"],
+    );
+    assert_success(&headers, "headers save");
+    assert!(!fake.called_with(&["api", "call"]));
+    let note_path = env
+        .vault()
+        .join(json_stdout(&headers)["note"].as_str().unwrap());
+    assert!(!fs::read_to_string(&note_path)
+        .unwrap()
+        .contains("![[img/mail/"));
+    assert!(!env.vault().join("img").exists());
+
+    let full = run_gmail(
+        &env,
+        &fake,
+        &["save", "0123456789abcdef", "-B", "full", "-f", "json"],
+    );
+    assert_success(&full, "full save without rerender");
+    assert!(fake.called_with(&["api", "call"]));
+    assert_eq!(json_stdout(&full)["results"][0]["status"], "unchanged");
+    assert!(!env.vault().join("img").exists());
+    assert!(!env
+        .vault()
+        .join(".bob/attachments/test-host.jsonl")
+        .exists());
+
+    let rerender = run_gmail(
+        &env,
+        &fake,
+        &["save", "0123456789abcdef", "-B", "full", "-R", "-f", "json"],
+    );
+    assert_success(&rerender, "full save with rerender");
+    assert_eq!(json_stdout(&rerender)["results"][0]["status"], "refreshed");
+    assert!(fs::read_to_string(&note_path)
+        .unwrap()
+        .contains("![[img/mail/"));
+    assert_eq!(
+        fs::read_dir(env.vault().join("img/mail/0123456789abcdef"))
+            .unwrap()
+            .count(),
+        1
+    );
+    assert_eq!(
+        fs::read_to_string(
+            env.vault().join(".bob/attachments/test-host.jsonl")
+        )
+        .unwrap()
+        .lines()
+        .count(),
+        1
+    );
+}
+
+#[test]
+fn save_case_only_account_change_reuses_the_existing_note() {
+    let env = GmailEnv::new("bob-cli-gmail-case-account");
+    let fake = FakeGog::new(&env, "gog").scenario("thread_nonempty");
+    let first =
+        run_gmail(&env, &fake, &["save", "0123456789abcdef", "-f", "json"]);
+    assert_success(&first, "initial save");
+    let path = json_stdout(&first)["note"].as_str().unwrap().to_string();
+    env.write_config(
+        "gmail:\n  account: YOU@example.com\n  writer: test-host\n",
+    );
+    let second =
+        run_gmail(&env, &fake, &["save", "0123456789abcdef", "-f", "json"]);
+    assert_success(&second, "case-only account refresh");
+    assert_eq!(json_stdout(&second)["note"], path);
+    let note = fs::read_to_string(env.vault().join(path)).unwrap();
+    assert!(note.contains("gmail_account: you@example.com"));
+}
+
+#[test]
+fn save_json_preview_is_structural_and_redacts_message_text() {
+    let env = GmailEnv::new("bob-cli-gmail-structural-preview");
+    let image = b"preview image bytes".repeat(300);
+    let fake = FakeGog::new(&env, "gog");
+    let (thread, attachments) = synthetic_image_thread(
+        "0123456789abcdef",
+        &[("1111111111111111", "BODY_SENTINEL", &image)],
+    );
+    fake.set_thread(thread, attachments);
+    let output = run_gmail(
+        &env,
+        &fake,
+        &["save", "0123456789abcdef", "-d", "-f", "json"],
+    );
+    assert_success(&output, "structural preview");
+    let stdout = stdout(&output);
+    assert!(!stdout.contains("BODY_SENTINEL"));
+    assert!(!stdout.contains("SNIPPET_SENTINEL"));
+    let doc = json_stdout(&output);
+    let changes = doc["preview"]["changes"].as_array().unwrap();
+    assert!(changes
+        .iter()
+        .any(|row| row.as_str().unwrap().contains("+ note ")));
+    assert!(changes.iter().any(|row| row
+        .as_str()
+        .unwrap()
+        .contains("message card 1111111111111111")));
+    assert!(changes
+        .iter()
+        .any(|row| row.as_str().unwrap().contains("image file img/mail/")));
+    assert_eq!(doc["preview"]["no_op"], false);
+    assert!(env.vault().read_dir().unwrap().next().is_none());
+    assert!(!env.root().join("bob_sync.lock").exists());
+}
+
+#[test]
+fn save_keeps_historical_cards_when_gmail_drops_messages() {
+    let env = GmailEnv::new("bob-cli-gmail-deleted-history");
+    let fake = FakeGog::new(&env, "gog");
+    let first_bytes = b"first image bytes".repeat(300);
+    let second_bytes = b"second image bytes".repeat(300);
+    let (first_thread, first_attachments) = synthetic_image_thread(
+        "0123456789abcdef",
+        &[
+            ("1111111111111111", "FIRST_BODY", &first_bytes),
+            ("2222222222222222", "SECOND_BODY", &second_bytes),
+        ],
+    );
+    fake.set_thread(first_thread, first_attachments);
+    let first =
+        run_gmail(&env, &fake, &["save", "0123456789abcdef", "-f", "json"]);
+    assert_success(&first, "initial two-message save");
+    let note_path = env
+        .vault()
+        .join(json_stdout(&first)["note"].as_str().unwrap());
+
+    let third_bytes = b"third image bytes".repeat(300);
+    let (later_thread, later_attachments) = synthetic_image_thread(
+        "0123456789abcdef",
+        &[("3333333333333333", "THIRD_BODY", &third_bytes)],
+    );
+    fake.set_thread(later_thread, later_attachments);
+    let later =
+        run_gmail(&env, &fake, &["save", "0123456789abcdef", "-f", "json"]);
+    assert_success(&later, "append after deleted historical messages");
+    let note = fs::read_to_string(note_path).unwrap();
+    for id in ["1111111111111111", "2222222222222222", "3333333333333333"] {
+        assert!(note.contains(&format!("<!-- bob:gmail:msg {id} - -->")));
+    }
+}
+
+#[test]
+fn writer_policy_and_mixed_batch_refusals_leave_the_vault_untouched() {
+    let writer_env = GmailEnv::new("bob-cli-gmail-writer-mismatch");
+    writer_env.write_config(
+        "gmail:\n  account: you@example.com\n  writer: other-host\n",
+    );
+    let writer_fake =
+        FakeGog::new(&writer_env, "gog").scenario("thread_nonempty");
+    let refused = run_gmail(
+        &writer_env,
+        &writer_fake,
+        &["save", "0123456789abcdef", "-f", "json"],
+    );
+    assert_eq!(refused.status.code(), Some(2));
+    assert_eq!(json_stdout(&refused)["error"]["kind"], "writer");
+    assert!(writer_env.vault().read_dir().unwrap().next().is_none());
+    let preview = run_gmail(
+        &writer_env,
+        &writer_fake,
+        &["save", "0123456789abcdef", "-d", "-f", "json"],
+    );
+    assert_success(&preview, "non-writer dry-run");
+    assert!(writer_env.vault().read_dir().unwrap().next().is_none());
+
+    let batch_env = GmailEnv::new("bob-cli-gmail-mixed-batch-refusal");
+    let batch_fake =
+        FakeGog::new(&batch_env, "gog").scenario("thread_nonempty");
+    let batch = run_gmail(
+        &batch_env,
+        &batch_fake,
+        &[
+            "save",
+            "0123456789abcdef",
+            "not-a-thread-or-mail-note",
+            "-f",
+            "json",
+        ],
+    );
+    assert_eq!(batch.status.code(), Some(1));
+    assert!(batch_env.vault().read_dir().unwrap().next().is_none());
+    assert!(!batch_env.root().join("bob_sync.lock").exists());
+
+    let policy_env = GmailEnv::new("bob-cli-gmail-never-save");
+    policy_env.write_config(
+        "gmail:\n  account: you@example.com\n  writer: test-host\n  never_save:\n    from:\n      - ada@example.com\n",
+    );
+    let policy_fake =
+        FakeGog::new(&policy_env, "gog").scenario("thread_nonempty");
+    let policy = run_gmail(
+        &policy_env,
+        &policy_fake,
+        &["save", "0123456789abcdef", "-f", "json"],
+    );
+    assert_eq!(policy.status.code(), Some(1));
+    assert_eq!(json_stdout(&policy)["error"]["kind"], "never_save");
+    assert!(policy_env.vault().read_dir().unwrap().next().is_none());
 }
 
 fn initialize_git_vault(vault: &std::path::Path) {

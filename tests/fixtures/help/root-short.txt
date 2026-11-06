@@ -33,6 +33,7 @@ Integrations:
   clipboard    Diagnose clipboard history for counted capture
   gcal         Project Google Calendar events onto today's daily note
   gkeep        Drain the Google Keep inbox into Obsidian tasks
+  gmail        Save Gmail threads as inert mail notes, linked from tasks
 
 Setup:
   completion   Install and inspect shell completion for bob

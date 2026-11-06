@@ -14,7 +14,7 @@ pub(crate) fn merge(
     rerender: bool,
 ) -> Result<Option<String>, NoteError> {
     let parsed = parse::parse(existing)?;
-    if parsed.account != fresh.metadata.account
+    if !parsed.account.eq_ignore_ascii_case(&fresh.metadata.account)
         || parsed.thread_id != fresh.metadata.gmail_thread_id
     {
         return Err(NoteError::Damaged {
@@ -65,7 +65,12 @@ pub(crate) fn merge(
     }
 
     let mut frontmatter = parsed.frontmatter.clone();
-    parse::set_owned_metadata(&mut frontmatter, &fresh.metadata)?;
+    let mut metadata = fresh.metadata.clone();
+    // Account addresses are case-insensitive identity. Keep the account
+    // spelling already authored into this note while refreshing its other
+    // Bob-owned metadata.
+    metadata.account = parsed.account.clone();
+    parse::set_owned_metadata(&mut frontmatter, &metadata)?;
     let serialized = serde_yaml::to_string(&frontmatter).map_err(|_| {
         NoteError::Damaged {
             reason: "frontmatter could not be serialized",

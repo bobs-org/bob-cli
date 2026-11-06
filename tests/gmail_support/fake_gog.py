@@ -568,6 +568,10 @@ if op == "api_call":
     raise SystemExit(0)
 
 if op == "thread_get":
+    state = load_state()
+    if "thread" in state:
+        dump(state["thread"])
+        raise SystemExit(0)
     hex_id = pos[3] if len(pos) > 3 else "1a0b9eb2cc26ab96"
     if scenario == "thread_mismatch":
         hex_id = "aaaaaaaaaaaaaaaa"

@@ -200,6 +200,24 @@ impl FakeGog {
         self
     }
 
+    /// Replace the thread response and attachment API bodies with explicit,
+    /// deterministic synthetic data for transaction tests.
+    pub(crate) fn set_thread(
+        &self,
+        thread: serde_json::Value,
+        attachments: serde_json::Value,
+    ) {
+        fs::write(
+            &self.state,
+            serde_json::to_vec(&serde_json::json!({
+                "thread": thread,
+                "attachments": attachments,
+            }))
+            .expect("serialize fake thread state"),
+        )
+        .expect("write fake thread state");
+    }
+
     pub(crate) fn install<'a>(
         &self,
         command: &'a mut Command,

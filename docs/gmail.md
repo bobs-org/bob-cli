@@ -237,6 +237,19 @@ images, and newly created `mail.md` / `mail.base` hubs. Save journals are
 appended after the commit (or after durable writes in a non-Git vault).
 `gmail.writer` blocks writes on other hosts; dry-run remains available there.
 
+The dry-run preview lists note paths, changed owned metadata field names,
+message-card identifiers, folding changes, and referenced or newly written
+image paths. It never includes message prose, snippets, or before/after body
+text. A byte-identical refresh reports `No structural changes.`
+
+If the scoped Git commit fails, Bob reports that the note and images were
+written but not committed and does not append success journals. Repeating the
+save finishes the scoped commit, then records the Gmail save and newly
+referenced image origins once. A later no-op save adds no journal rows. Image
+imports are selected from the final merged note, so a full-body fetch does not
+install images for existing header-only cards unless `-R` replaces those
+cards.
+
 Referenced CID images are copied under `img/mail/<thread id>/`, capped at
 2 MiB, content-hash deduplicated, and embedded only as local trusted images.
 Small images repeated across different messages are treated as signature

@@ -188,7 +188,8 @@ pub(crate) fn metadata_matches(
     frontmatter: &Value,
     metadata: &NoteMetadata,
 ) -> bool {
-    scalar(frontmatter, "gmail_account").as_deref() == Some(&metadata.account)
+    scalar(frontmatter, "gmail_account")
+        .is_some_and(|account| account.eq_ignore_ascii_case(&metadata.account))
         && scalar(frontmatter, "gmail_thread_id").as_deref()
             == Some(&metadata.gmail_thread_id)
         && scalar(frontmatter, "gmail_url").as_deref()
