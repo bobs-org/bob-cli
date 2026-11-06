@@ -82,6 +82,15 @@ def _touch_started(path_value: Optional[str]) -> None:
         pass
 
 
+def _rows_file_path(explicit: Optional[str], step: str) -> Optional[str]:
+    if explicit:
+        return explicit
+    run = os.environ.get("BOB_INSTALL_RUN_ID")
+    if not run:
+        return None
+    return str(state.state_dir() / "runs" / run / f"rows-{step}")
+
+
 def _write_rows_file(path_value: Optional[str], count: int) -> None:
     if not path_value:
         return
@@ -132,21 +141,35 @@ def _make_frame(
     kind: str,
     spinner_index: int,
     cols: int,
+    bar: str = "",
+    bar_color: str = "35",
+    eta_color: Optional[str] = None,
 ) -> str:
     label = _status_label(parser, phase, message, lock_wait, crate)
     if parser == "cargo" and phase == "deps" and counter:
         label += f" {counter[0]}/{counter[1]}"
-    parts = [SPINNER[spinner_index % len(SPINNER)], label, term.format_clock(elapsed)]
-    if eta_text:
-        parts.append(eta_text)
-    if kind == "deps":
-        parts.append("Cargo.lock changed, expect a longer build")
-    plain = " · ".join((parts[0], parts[1] + " · " + parts[2], *parts[3:]))
+    spinner = SPINNER[spinner_index % len(SPINNER)]
+    clock = term.format_clock(elapsed)
     width = max(1, min(cols - 1, 100))
+    show_bar = bool(bar) and width >= estimate.BAR_MIN_COLS
+    if show_bar:
+        body = f"{label}  {bar}  {clock}"
+    else:
+        body = f"{label} · {clock}"
+    tail = []
+    if eta_text:
+        tail.append(eta_text)
+    if kind == "deps":
+        tail.append("Cargo.lock changed, expect a longer build")
+    plain = " · ".join((f"{spinner} {body}", *tail))
     clipped = term.truncate_cells(plain, width)
-    spinner = parts[0]
-    if clipped.startswith(spinner) and term.use_color(sys.stdout):
+    colorize = term.use_color(sys.stdout)
+    if clipped.startswith(spinner) and colorize:
         clipped = term.paint("36", spinner) + clipped[len(spinner) :]
+    if show_bar and bar in clipped and colorize:
+        clipped = clipped.replace(bar, estimate.paint_bar(bar, bar_color, colorize=True), 1)
+    if eta_color and eta_text and eta_text in clipped and colorize:
+        clipped = clipped.replace(eta_text, term.paint(eta_color, eta_text), 1)
     return clipped
 
 
@@ -204,12 +227,18 @@ def run(args) -> int:
         "profile": profile,
         "incremental": incremental,
     }
-    learned = estimate.estimate(step, kind, key, 0.0, "")
+    detector = parsers.PhaseDetector(parser_name, crate=crate)
+    eta = estimate.estimate(
+        step, kind, key, 0.0, detector.phases[0], phases=detector.phases
+    )
+    eta_text = eta.text
+    eta_fill = eta.fill
+    eta_changed_at = 0.0
+    bar_color = estimate.STEP_COLORS.get(step, "35")
     child_env = os.environ.copy()
     if parser_name == "cargo":
         child_env["CARGO_TERM_PROGRESS_WHEN"] = "always"
         child_env["CARGO_TERM_PROGRESS_WIDTH"] = "80"
-    detector = parsers.PhaseDetector(parser_name, crate=crate)
     is_live = bool(sys.stdout.isatty()) and os.environ.get("TERM") != "dumb"
     requested_signal: Optional[int] = None
     original_handlers = {}
@@ -274,6 +303,7 @@ def run(args) -> int:
 
     run_started_mono = clock()
     run_started_wall = wall_clock()
+    eta_changed_at = run_started_mono
     phase_clock = _PhaseClock(detector.phases, run_started_mono)
     selector = selectors.DefaultSelector()
     assert proc.stdout is not None
@@ -385,12 +415,37 @@ def run(args) -> int:
             return
         _print_scrollback(line)
 
+    def _refresh_eta(now: float) -> estimate.Estimate:
+        nonlocal eta, eta_text, eta_fill, eta_changed_at
+        phase_started = phase_clock.starts.get(current_phase, run_started_mono)
+        refreshed = estimate.estimate(
+            step,
+            kind,
+            key,
+            now - run_started_mono,
+            current_phase,
+            phase_elapsed=now - phase_started,
+            phases=detector.phases,
+            prev_fill=eta_fill,
+        )
+        eta_fill = refreshed.fill
+        if estimate.should_update_eta_text(eta_text, refreshed.text, eta_changed_at, now):
+            eta_text = refreshed.text
+            eta_changed_at = now
+        eta = refreshed
+        return refreshed
+
     def _draw(now: float) -> None:
         nonlocal spinner_index, last_frame, cursor_hidden, display_broken, passthrough
         if not is_live or passthrough or display_broken or now - last_frame < 0.1:
             return
         try:
             cols, _ = term.terminal_size(sys.stdout)
+            _refresh_eta(now)
+            bar = ""
+            if eta_fill is not None and cols >= estimate.BAR_MIN_COLS:
+                bar = estimate.render_bar(eta_fill)
+            eta_color = "33" if eta.rung == "overtime" else None
             frame = _make_frame(
                 parser=parser_name,
                 crate=crate,
@@ -399,10 +454,13 @@ def run(args) -> int:
                 lock_wait=lock_wait,
                 elapsed=now - run_started_mono,
                 counter=current_counter,
-                eta_text=learned.text,
+                eta_text=eta_text,
                 kind=kind,
                 spinner_index=spinner_index,
                 cols=cols,
+                bar=bar,
+                bar_color=bar_color,
+                eta_color=eta_color,
             )
             sys.stdout.write("\r\033[K" + frame)
             sys.stdout.flush()
@@ -531,7 +589,20 @@ def run(args) -> int:
             except Exception:
                 pass
     elif successful:
+        done_est = estimate.estimate(
+            step,
+            kind,
+            key,
+            mono_elapsed,
+            detector.phases[-1],
+            phase_elapsed=durations.get(detector.phases[-1], 0.0),
+            phases=detector.phases,
+            prev_fill=eta_fill,
+        )
         line = f"✓ {term.sanitize(args.done or 'built')} · {term.format_duration(mono_elapsed)}"
+        suffix = estimate.final_suffix(mono_elapsed, done_est)
+        if suffix:
+            line += f" · {suffix}"
         try:
             sys.stdout.write(line + "\n")
             sys.stdout.flush()
@@ -555,7 +626,7 @@ def run(args) -> int:
             sys.stdout.flush()
         except Exception:
             pass
-    _write_rows_file(args.rows_file, lines_in_scrollback)
+    _write_rows_file(_rows_file_path(args.rows_file, step), lines_in_scrollback)
 
     if interrupted:
         signum = int(signal_num or signal.SIGINT)

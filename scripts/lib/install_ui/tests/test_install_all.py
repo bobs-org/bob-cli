@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import pty
 import select
 import signal
 import shutil
+import socket
+import struct
 import subprocess
 import tempfile
+import termios
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -366,11 +371,17 @@ def _run_install_all_pty(
     sbox: Sandbox,
     *args: str,
     interrupt_when: Optional[Path] = None,
+    cols: int = 80,
+    lines: int = 24,
     **overrides: str,
 ) -> tuple[int, bytes, bytes]:
     env = sbox.base_env()
     env.update(overrides)
     master, slave = pty.openpty()
+    try:
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", lines, cols, 0, 0))
+    except OSError:
+        pass
     proc = subprocess.Popen(
         [str(sbox.bobcli / "scripts" / "install_all"), *args],
         stdin=slave,
@@ -759,6 +770,89 @@ class BellTests(_InstallAllCase):
             BOB_INSTALL_BELL_AFTER="0", BOB_INSTALL_NOTIFY="0"
         )
         self.assertNotIn(b"\a", tty_out)
+
+
+def _seed_bobcli_history(sbox: Sandbox, *, n: int = 6, kind: str = "cold") -> None:
+    sbox._write_bin("rustc", "#!/bin/sh\necho 'rustc 1.95.0 (install-ui-test)'\n")
+    host = socket.gethostname()
+    path = sbox.state / "bob-cli" / "install-all"
+    path.mkdir(parents=True, exist_ok=True)
+    now = datetime.now(timezone.utc)
+    rows = []
+    crates = [12.0 + index for index in range(n)]
+    for index in range(n):
+        stamp = (now - timedelta(days=n - index)).isoformat()
+        run = f"seed-{index}"
+        for phase, secs in (
+            ("index", 1.0),
+            ("deps", 2.0),
+            ("crate", crates[index]),
+            ("finish", 1.0),
+        ):
+            rows.append(
+                json.dumps(
+                    {
+                        "v": 1,
+                        "run": run,
+                        "ts": stamp,
+                        "host": host,
+                        "step": "bob-cli",
+                        "phase": phase,
+                        "kind": kind,
+                        "secs": secs,
+                        "waited": 0.0,
+                        "outcome": "ok",
+                        "toolchain": "rustc 1.95.0 (install-ui-test)",
+                        "profile": "local-install",
+                        "incremental": True,
+                        "slept": False,
+                    }
+                )
+            )
+    (path / "runs.jsonl").write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+
+class EarnedEtaTests(_InstallAllCase):
+    def test_seeded_history_shows_bar_range_plan_and_summary(self) -> None:
+        _seed_bobcli_history(self.sbox)
+        self.sbox.commit_and_push(
+            "bob-cli", "feat(cli): glue start and past timing to Pomodoro names"
+        )
+        status, raw, err = _run_install_all_pty(
+            self.sbox,
+            cols=100,
+            lines=24,
+            FAKE_CARGO_SLEEP="0.8",
+        )
+        out = raw.decode("utf-8", "replace")
+        self.assertEqual(status, 0, err.decode("utf-8", "replace"))
+        self.assertIn("usually", out)
+        self.assertIn("done by about", out)
+        self.assertTrue("─" in out and ("╸" in out or "━" in out), out)
+        self.assertTrue(
+            "min left" in out or "under a minute" in out,
+            out,
+        )
+        self.assertRegex(out, r"(faster|about|slower) than usual|about usual")
+        self.assertIn("ALL INSTALLED", out)
+
+    def test_empty_history_shows_learning_text_without_plan(self) -> None:
+        self.sbox._write_bin(
+            "rustc", "#!/bin/sh\necho 'rustc 1.95.0 (install-ui-test)'\n"
+        )
+        status, raw, err = _run_install_all_pty(
+            self.sbox,
+            cols=100,
+            lines=24,
+            FAKE_CARGO_SLEEP="0.3",
+        )
+        out = raw.decode("utf-8", "replace")
+        self.assertEqual(status, 0, err.decode("utf-8", "replace"))
+        self.assertIn("first timed", out)
+        self.assertNotIn("usually", out)
+        self.assertNotIn(" · about usual", out)
+        self.assertNotIn("faster than usual", out)
+        self.assertNotIn("slower than usual", out)
 
 
 if __name__ == "__main__":

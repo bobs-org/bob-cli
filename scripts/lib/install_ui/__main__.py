@@ -14,7 +14,7 @@ if sys.path[:1] != [_LIB_S]:
         sys.path.remove(_LIB_S)
     sys.path.insert(0, _LIB_S)
 
-from install_ui import commits, digest, history, live, state, term  # noqa: E402
+from install_ui import commits, digest, estimate, history, live, state, term  # noqa: E402
 
 
 def _warn(message: str) -> None:
@@ -186,6 +186,92 @@ def cmd_kind(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_plan(args: argparse.Namespace) -> int:
+    if args.elapsed is not None:
+        if not args.record:
+            _warn("install_ui: --elapsed needs --record")
+            return 2
+        record = estimate.load_json(args.record)
+        if not record:
+            return 0
+        clause = estimate.summary_clause(args.elapsed, record)
+        if clause:
+            sys.stdout.write(clause)
+        return 0
+    try:
+        repos = _parse_name_value(args.step, "step")
+        profiles = _parse_name_value(args.profile, "profile")
+        parsers = _parse_name_value(args.parser, "parser")
+    except ValueError as exc:
+        _warn(f"install_ui: {exc}")
+        return 2
+    if not repos:
+        _warn("install_ui: plan needs at least one --step NAME=DIR")
+        return 2
+    steps = []
+    for name, directory in repos.items():
+        steps.append(
+            {
+                "name": name,
+                "directory": directory,
+                "profile": profiles.get(name, ""),
+                "parser": parsers.get(name, ""),
+            }
+        )
+    aux = []
+    for item in args.aux or []:
+        if item == "bob-plugins":
+            aux.append(("bob-plugins", "sync"))
+        elif item == "obsidian":
+            aux.append(("obsidian", "restart"))
+        else:
+            aux.append((item, item))
+    bounds = estimate.plan_estimate(steps, aux)
+    payload = {
+        "v": 1,
+        "shown": bool(bounds),
+        "low": None if bounds is None else bounds["low"],
+        "high": None if bounds is None else bounds["high"],
+        "label": None if bounds is None else estimate.format_minute_span(
+            bounds["low"], bounds["high"]
+        ),
+    }
+    if args.record:
+        estimate.write_json(args.record, payload)
+    if bounds is None:
+        return 0
+    sys.stdout.write(estimate.plan_line_text(bounds) + "\n")
+    return 0
+
+
+def cmd_replay(args: argparse.Namespace) -> int:
+    if not args.record:
+        _warn("install_ui: replay needs --record")
+        return 2
+    record = estimate.load_json(args.record)
+    if not record:
+        _warn("install_ui replay: could not read --record file")
+        return 1
+    try:
+        cols, lines = term.terminal_size(sys.stdout)
+    except Exception:
+        cols, lines = 80, 24
+    digest_rows = 0
+    try:
+        digest_rows = int(record.get("rows") or 0)
+    except (TypeError, ValueError):
+        digest_rows = 0
+    if not estimate.replay_needed(digest_rows, args.rows_after, args.summary_rows, lines):
+        return 0
+    if not record.get("repos"):
+        return 0
+    width = max(1, min(cols - 1, 100))
+    rows = estimate.replay_lines(record, width)
+    if rows:
+        sys.stdout.write("\n".join(rows) + "\n")
+    return 0
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     return live.run(args)
 
@@ -253,6 +339,48 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     mark.set_defaults(func=cmd_mark_installed)
 
+    plan = sub.add_parser(
+        "plan",
+        help="Print the pre-build duration plan line when history earns a range.",
+    )
+    plan.add_argument(
+        "--aux",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="Optional step whose median is added when known (bob-plugins, obsidian).",
+    )
+    plan.add_argument(
+        "--elapsed",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="Print the summary comparison clause for a recorded plan.",
+    )
+    plan.add_argument(
+        "--parser",
+        action="append",
+        default=[],
+        metavar="NAME=PARSER",
+        help="Build parser for a required step (cargo or swiftpm).",
+    )
+    plan.add_argument(
+        "--profile",
+        action="append",
+        default=[],
+        metavar="NAME=PROFILE",
+        help="Build profile for a required step.",
+    )
+    plan.add_argument("--record", default="", metavar="PATH", help="Write the plan record JSON.")
+    plan.add_argument(
+        "--step",
+        action="append",
+        default=[],
+        metavar="NAME=DIR",
+        help="Required long step; repeatable. A range is needed for every --step.",
+    )
+    plan.set_defaults(func=cmd_plan)
+
     record = sub.add_parser(
         "record",
         help="Append a timed install-step history row.",
@@ -267,6 +395,27 @@ def _build_parser() -> argparse.ArgumentParser:
     record.add_argument("-T", "--toolchain", default="unknown", metavar="TEXT", help="Toolchain identity.")
     record.add_argument("-w", "--waited", default=0.0, type=float, metavar="SECONDS", help="Time blocked on a build lock.")
     record.set_defaults(func=cmd_record)
+
+    replay = sub.add_parser(
+        "replay",
+        help="Replay a compact What's new recap when the digest has scrolled off.",
+    )
+    replay.add_argument("--record", required=True, metavar="PATH", help="digest.json from this run.")
+    replay.add_argument(
+        "--rows-after",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Rows printed after the digest and before the summary.",
+    )
+    replay.add_argument(
+        "--summary-rows",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Rows in the summary section.",
+    )
+    replay.set_defaults(func=cmd_replay)
 
     runner = sub.add_parser(
         "run",

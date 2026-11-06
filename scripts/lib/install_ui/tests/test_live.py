@@ -406,7 +406,7 @@ class RunnerPtyTests(unittest.TestCase):
         output = self._collect(proc, master).decode("utf-8", errors="replace")
         os.close(master)
         self.assertEqual(proc.returncode, 0)
-        self.assertIn("waiting for another build to rel…", output)
+        self.assertIn("waiting for another build to relea…", output)
         rows = {row["phase"]: row for row in state.read_history().value}
         self.assertGreater(rows["deps"]["waited"], 0.1)
         self.assertLess(rows["deps"]["secs"], 0.2)
