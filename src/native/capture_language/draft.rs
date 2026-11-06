@@ -1807,7 +1807,7 @@ fn parse_merge_valid<'a>(
         error.span = Some(span);
         return Err(error);
     }
-    let needs = classify_merge_left(&outcome.parsed, &parent, &sources);
+    let needs = classify_merge_left(&outcome.parsed);
     match needs {
         MergeNeeds::Allowed => {
             let clause = super::model::MergeInClause {
@@ -1844,22 +1844,9 @@ enum MergeNeeds {
     TargetRun,
 }
 
-fn classify_merge_left(
-    parsed: &ParsedCaptureText,
-    parent: &RawLine<'_>,
-    _sources: &[super::merge_in::MergeInSource],
-) -> MergeNeeds {
-    // Empty left side: nothing before the arrow.
-    let left_text = parent
-        .text
-        .get(..arrow_rel_start(parent, parsed))
-        .unwrap_or("")
-        .trim();
-    // Derive left text from the parent line up to the arrow by scanning
-    // for the first `<` claim position is complex here; instead use the
-    // parsed body plus route: an empty body with no route/markers is empty.
-    // A more direct check: if the masked left parse has empty body and no
-    // route/clip/markers, treat as empty.
+fn classify_merge_left(parsed: &ParsedCaptureText) -> MergeNeeds {
+    // `parsed` comes from the masked view (the clause is blanked), so an
+    // empty body with no route, clip, or markers means nothing precedes `<`.
     let is_empty = parsed.body.trim().is_empty()
         && parsed.route.is_none()
         && parsed.clip.is_none()
@@ -1872,7 +1859,7 @@ fn classify_merge_left(
             parsed.kind,
             CaptureKind::Task | CaptureKind::Bullet { .. }
         );
-    if is_empty && left_text.is_empty() {
+    if is_empty {
         return MergeNeeds::Empty;
     }
     match &parsed.kind {
@@ -1904,16 +1891,6 @@ fn classify_merge_left(
         | CaptureKind::PomodoroNote
         | CaptureKind::NotePull { .. } => MergeNeeds::NoTask,
     }
-}
-
-fn arrow_rel_start(
-    _parent: &RawLine<'_>,
-    _parsed: &ParsedCaptureText,
-) -> usize {
-    // The masked left parse already consumed the clause; emptiness is
-    // decided from the parsed body/route above, so only the trimmed left
-    // text matters. Return 0 to check the whole parent prefix via body.
-    0
 }
 
 fn merge_needs_new_task_message(
