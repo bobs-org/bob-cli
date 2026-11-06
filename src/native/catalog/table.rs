@@ -1132,6 +1132,18 @@ pub(crate) const ENTRIES: &[Row] = &[
     Row {
         network: true,
         ..writes(
+            "gmail-link",
+            &["gmail", "link"],
+            "Link Gmail URLs",
+            &["gmail", "google", "mail", "link", "backfill", "url"],
+            Policy::PreviewFirst,
+            Some(DRY_RUN),
+            180,
+        )
+    },
+    Row {
+        network: true,
+        ..writes(
             "gmail-save",
             &["gmail", "save"],
             "Save Gmail thread",

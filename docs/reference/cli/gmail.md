@@ -15,6 +15,7 @@ Usage: bob gmail [OPTIONS] [COMMAND]
 
 Commands:
   doctor  Check the Gmail setup: gog, client, account, token, scopes, config, writer, and journal
+  link    Swap Gmail URLs for labelled links to saved mail notes
   list    List saved Gmail threads (offline unless --remote)
   login   Connect Gmail (read-only) in one guided step
   logout  Remove Bob's Gmail grant only; prints the Google revoke URL
@@ -57,6 +58,8 @@ Examples:
   bob gmail save URL          Save a Gmail thread
   bob gmail search            Search recent inbox threads
   bob gmail save ID -d        Preview a save without writing
+  bob gmail link tasks.md     Swap Gmail URLs for labelled links
+  bob gmail link -a -d        Preview a backfill of old URLs
   bob gmail login             Connect Gmail in one guided step
   bob gmail login -a EMAIL    Sign in as this account
   bob gmail login -s compose  Also grant the compose scope (Mac only)

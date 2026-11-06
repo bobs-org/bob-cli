@@ -12,9 +12,10 @@
 //! self-links never count. Duplicate identities are never selected as
 //! canonical: they are reported as diagnostics instead.
 //!
-//! The footer is a seam for the outer `gmail-link` phase (hg.7), which owns
-//! waiting/gone counts and failure-journal folding. Until it populates the
-//! footer, list leaves it absent rather than claiming zero links.
+//! The footer is owned by the `gmail-link` phase: waiting links that still
+//! resolve offline plus remembered-dead links, folded from the failure
+//! journal. It stays absent when both are zero rather than claiming zero
+//! links.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -54,7 +55,7 @@ struct ListReport {
     truncated: bool,
     duplicates: Vec<(String, String, Vec<String>)>,
     skipped_malformed: usize,
-    /// Seam for the outer `gmail-link` phase (hg.7). Always `None` here.
+    /// Waiting/gone footer folded by the `gmail-link` phase.
     footer: Option<String>,
 }
 
@@ -118,7 +119,7 @@ fn report(args: &ListArgs) -> Result<ListReport, GmailError> {
         truncated,
         duplicates: index.duplicates.clone(),
         skipped_malformed: index.skipped_malformed,
-        footer: None,
+        footer: super::link::waiting_gone_footer(&vault, folder),
     })
 }
 
@@ -551,6 +552,9 @@ fn print_report(args: &ListArgs, report: &ListReport) {
                 }
             ))
         );
+    }
+    if let Some(footer) = &report.footer {
+        println!("{}", styler.dim(footer));
     }
     ui::flush_stdout();
 }

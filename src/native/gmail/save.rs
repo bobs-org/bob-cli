@@ -32,7 +32,7 @@ use crate::native::{
     vault_sync,
 };
 
-const GMAIL_JOURNAL: Namespace = Namespace {
+pub(crate) const GMAIL_JOURNAL: Namespace = Namespace {
     dir: ".bob/gmail",
     noun: "gmail",
 };
@@ -66,15 +66,17 @@ pub(crate) struct StagedSaveNote {
     pub(crate) preview_noop: bool,
 }
 
-struct SaveEventFacts {
-    created: bool,
-    added_count: usize,
-    origins: Vec<(String, String, String)>,
+pub(crate) struct SaveEventFacts {
+    pub(crate) created: bool,
+    pub(crate) added_count: usize,
+    pub(crate) origins: Vec<(String, String, String)>,
 }
 
-struct AuxiliaryFiles {
-    staged: Vec<StagedTextFile>,
-    commit_paths: Vec<PathBuf>,
+/// Hub and warning files staged alongside mail notes. Shared with `link`,
+/// which commits mail notes and rewritten sources together.
+pub(crate) struct AuxiliaryFiles {
+    pub(crate) staged: Vec<StagedTextFile>,
+    pub(crate) commit_paths: Vec<PathBuf>,
 }
 
 /// Run the standalone save command. All resolution and hydration complete
@@ -820,7 +822,7 @@ fn replace_import_path(prepared: &mut PreparedThread, old: &str, new: &str) {
     }
 }
 
-fn newly_referenced_origins(
+pub(crate) fn newly_referenced_origins(
     origins: &[OriginDescriptor],
     existing_note: Option<&str>,
 ) -> Vec<(String, String, String)> {
@@ -1017,7 +1019,7 @@ fn structural_images(
     images
 }
 
-fn save_event_facts(
+pub(crate) fn save_event_facts(
     vault: &Path,
     child_env: &ob::ChildEnv,
     is_worktree: bool,
@@ -1078,7 +1080,9 @@ fn card_id_additions(after: &str, before: Option<&str>) -> Option<usize> {
     )
 }
 
-fn staged_note(plan: &StagedSaveNote) -> Result<StagedTextFile, GmailError> {
+pub(crate) fn staged_note(
+    plan: &StagedSaveNote,
+) -> Result<StagedTextFile, GmailError> {
     let original = plan.original.as_ref().cloned().unwrap_or_default();
     Ok(StagedTextFile {
         target: plan.path.clone(),
@@ -1088,7 +1092,7 @@ fn staged_note(plan: &StagedSaveNote) -> Result<StagedTextFile, GmailError> {
     })
 }
 
-fn clone_staged(staged: &StagedTextFile) -> StagedTextFile {
+pub(crate) fn clone_staged(staged: &StagedTextFile) -> StagedTextFile {
     StagedTextFile {
         target: staged.target.clone(),
         target_existed: staged.target_existed,
@@ -1097,7 +1101,7 @@ fn clone_staged(staged: &StagedTextFile) -> StagedTextFile {
     }
 }
 
-fn plan_auxiliary_files(
+pub(crate) fn plan_auxiliary_files(
     vault: &Path,
     folder: &Path,
     is_worktree: bool,
@@ -1240,7 +1244,10 @@ fn collect_occupied(
     Ok(occupied)
 }
 
-fn validate_mail_folder(vault: &Path, folder: &Path) -> Result<(), GmailError> {
+pub(crate) fn validate_mail_folder(
+    vault: &Path,
+    folder: &Path,
+) -> Result<(), GmailError> {
     note::path::validate_folder(folder).map_err(|_| {
         GmailError::runtime(
             "refused",
@@ -1320,7 +1327,7 @@ fn collect_files(
     Ok(())
 }
 
-fn safe_relative_path(path: &str) -> Result<PathBuf, GmailError> {
+pub(crate) fn safe_relative_path(path: &str) -> Result<PathBuf, GmailError> {
     let relative = PathBuf::from(path);
     if relative.as_os_str().is_empty()
         || relative.is_absolute()
@@ -1336,7 +1343,7 @@ fn safe_relative_path(path: &str) -> Result<PathBuf, GmailError> {
     Ok(relative)
 }
 
-fn validate_write_targets(
+pub(crate) fn validate_write_targets(
     vault: &Path,
     plans: &[StagedSaveNote],
     works: &BTreeMap<(String, String), PreparedSave>,
@@ -1430,14 +1437,14 @@ fn validate_target_path(
     }
 }
 
-fn path_to_slashes(path: &Path) -> String {
+pub(crate) fn path_to_slashes(path: &Path) -> String {
     path.components()
         .map(|component| component.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()
         .join("/")
 }
 
-fn install_imports(
+pub(crate) fn install_imports(
     vault: &Path,
     imports: &[BinaryImport],
 ) -> Result<Vec<(PathBuf, String)>, GmailError> {
@@ -1555,7 +1562,10 @@ fn install_imports(
     Ok(created)
 }
 
-fn ensure_parent_dirs(vault: &Path, relative: &Path) -> Result<(), GmailError> {
+pub(crate) fn ensure_parent_dirs(
+    vault: &Path,
+    relative: &Path,
+) -> Result<(), GmailError> {
     let parent = relative.parent().unwrap_or_else(|| Path::new(""));
     let mut current = vault.to_path_buf();
     for component in parent.components() {
@@ -1594,7 +1604,10 @@ fn ensure_parent_dirs(vault: &Path, relative: &Path) -> Result<(), GmailError> {
     Ok(())
 }
 
-fn cleanup_created_images(vault: &Path, paths: &[(PathBuf, String)]) {
+pub(crate) fn cleanup_created_images(
+    vault: &Path,
+    paths: &[(PathBuf, String)],
+) {
     for (relative, expected_hash) in paths.iter().rev() {
         let target = vault.join(relative);
         if fs::read(&target)
@@ -1606,11 +1619,11 @@ fn cleanup_created_images(vault: &Path, paths: &[(PathBuf, String)]) {
     }
 }
 
-fn sha256(bytes: &[u8]) -> String {
+pub(crate) fn sha256(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-fn append_save_event(
+pub(crate) fn append_save_event(
     vault: &Path,
     host: &str,
     plan: &StagedSaveNote,
@@ -1637,7 +1650,7 @@ fn append_save_event(
     pref_journal::append_line(vault, GMAIL_JOURNAL, host, &line)
 }
 
-fn git_path_is_dirty(
+pub(crate) fn git_path_is_dirty(
     vault: &Path,
     child_env: &ob::ChildEnv,
     relative: &Path,
@@ -1655,7 +1668,7 @@ fn git_path_is_dirty(
     Ok(!output.stdout.is_empty())
 }
 
-fn git_head_text(
+pub(crate) fn git_head_text(
     vault: &Path,
     child_env: &ob::ChildEnv,
     relative: &Path,
@@ -1791,7 +1804,7 @@ fn print_report(
     ui::flush_stdout();
 }
 
-fn current_utc() -> DateTime<Utc> {
+pub(crate) fn current_utc() -> DateTime<Utc> {
     let naive = bob_env::current_datetime();
     if let Some(timezone) = bob_env::configured_timezone()
         && let Some(value) = timezone
@@ -1809,7 +1822,7 @@ fn current_utc() -> DateTime<Utc> {
         .unwrap_or_else(Utc::now)
 }
 
-fn commit_subject(subject: &str) -> String {
+pub(crate) fn commit_subject(subject: &str) -> String {
     let clean: String = subject
         .chars()
         .map(|character| {

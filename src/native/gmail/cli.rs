@@ -30,6 +30,7 @@ pub(crate) fn build_cli() -> ClapCommand {
         .arg(remote_arg())
         .arg(help_arg())
         .subcommand(doctor_command())
+        .subcommand(link_command())
         .subcommand(list_command())
         .subcommand(login_command())
         .subcommand(logout_command())
@@ -41,7 +42,7 @@ pub(crate) fn build_cli() -> ClapCommand {
 }
 
 fn top_after_help() -> &'static str {
-    "Running `bob gmail` with no command lists saved threads (offline, read-only). `-r` adds live message counts.\n\nExamples:\n  bob gmail                   List saved threads\n  bob gmail -a                List every saved thread\n  bob gmail -r                Fetch live new-message counts\n  bob gmail -f json           List saved threads as JSON\n  bob gmail new -t EMAIL      Create a local compose note\n  bob gmail peek URL          Preview a Gmail link\n  bob gmail reply NOTE        Add a Reply section\n  bob gmail save URL          Save a Gmail thread\n  bob gmail search            Search recent inbox threads\n  bob gmail save ID -d        Preview a save without writing\n  bob gmail login             Connect Gmail in one guided step\n  bob gmail login -a EMAIL    Sign in as this account\n  bob gmail login -s compose  Also grant the compose scope (Mac only)\n  bob gmail doctor            Diagnose gog, the client, and the vault\n  bob gmail logout -y         Remove Bob's Gmail grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH\n  BOB_GMAIL_BROWSER  Browser executable; selects browser sign-in (otherwise automatic)"
+    "Running `bob gmail` with no command lists saved threads (offline, read-only). `-r` adds live message counts.\n\nExamples:\n  bob gmail                   List saved threads\n  bob gmail -a                List every saved thread\n  bob gmail -r                Fetch live new-message counts\n  bob gmail -f json           List saved threads as JSON\n  bob gmail new -t EMAIL      Create a local compose note\n  bob gmail peek URL          Preview a Gmail link\n  bob gmail reply NOTE        Add a Reply section\n  bob gmail save URL          Save a Gmail thread\n  bob gmail search            Search recent inbox threads\n  bob gmail save ID -d        Preview a save without writing\n  bob gmail link tasks.md     Swap Gmail URLs for labelled links\n  bob gmail link -a -d        Preview a backfill of old URLs\n  bob gmail login             Connect Gmail in one guided step\n  bob gmail login -a EMAIL    Sign in as this account\n  bob gmail login -s compose  Also grant the compose scope (Mac only)\n  bob gmail doctor            Diagnose gog, the client, and the vault\n  bob gmail logout -y         Remove Bob's Gmail grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH\n  BOB_GMAIL_BROWSER  Browser executable; selects browser sign-in (otherwise automatic)"
 }
 
 fn save_command() -> ClapCommand {
@@ -85,6 +86,34 @@ fn doctor_command() -> ClapCommand {
 
 fn doctor_after_help() -> &'static str {
     "Examples:\n  bob gmail doctor\n  bob gmail doctor -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH"
+}
+
+fn link_command() -> ClapCommand {
+    ClapCommand::new("link")
+        .about("Swap Gmail URLs for labelled links to saved mail notes")
+        .long_about(
+            "Find Gmail URLs in the named notes (or the whole vault with \
+             `-a`), save each confirmed thread, and replace exactly those \
+             URL tokens with labelled wikilinks. Dead links are remembered \
+             so later sweeps skip them. Gmail is read-only; writes stay in \
+             the configured vault. All network work finishes before the \
+             vault lock is acquired.",
+        )
+        .disable_help_flag(true)
+        .arg(all_arg())
+        .arg(bob_dir_arg())
+        .arg(dry_run_arg())
+        .arg(save_format_arg())
+        .arg(quiet_arg())
+        .arg(Arg::new("note")
+            .value_name("NOTE")
+            .value_parser(OsStringValueParser::new())
+            .num_args(1..)
+            .help("Vault-relative mail note to scan for Gmail URLs"))
+        .arg(help_arg())
+        .after_help(
+            "Examples:\n  bob gmail link tasks.md\n  bob gmail link one.md two.md -q\n  bob gmail link -a -d\n  bob gmail link -a -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH",
+        )
 }
 
 fn list_command() -> ClapCommand {
@@ -603,6 +632,39 @@ impl PeekArgs {
     }
 }
 
+/// Typed `bob gmail link` arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LinkArgs {
+    pub all: bool,
+    pub bob_dir: Option<PathBuf>,
+    pub dry_run: bool,
+    pub format: HumanFormat,
+    pub notes: Vec<String>,
+    pub quiet: bool,
+}
+
+impl LinkArgs {
+    pub(crate) fn from_matches(matches: &ArgMatches) -> Self {
+        Self {
+            all: matches.get_flag("all"),
+            bob_dir: raw_bob_dir(matches),
+            dry_run: matches.get_flag("dry-run"),
+            format: HumanFormat::from_matches(matches),
+            notes: matches
+                .get_many::<OsString>("note")
+                .into_iter()
+                .flatten()
+                .map(|value| value.to_string_lossy().into_owned())
+                .collect(),
+            quiet: matches.get_flag("quiet"),
+        }
+    }
+
+    pub(crate) fn bob_dir(&self) -> PathBuf {
+        self.bob_dir.clone().unwrap_or_else(bob_env::bob_dir)
+    }
+}
+
 /// Typed `save` arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SaveArgs {
@@ -907,6 +969,41 @@ mod tests {
         assert_eq!(reply.note, PathBuf::from("mail/2026/thread.md"));
         assert!(reply.all);
         assert!(reply.format.is_json());
+    }
+
+    #[test]
+    fn link_args_pin_options() {
+        let args = LinkArgs::from_matches(&sub_matches_for(
+            &[
+                "bob gmail",
+                "link",
+                "one.md",
+                "two.md",
+                "-a",
+                "-b",
+                "~/vault",
+                "-d",
+                "-f",
+                "json",
+                "-q",
+            ],
+            "link",
+        ));
+        assert_eq!(args.notes, vec!["one.md", "two.md"]);
+        assert!(args.all);
+        assert!(args.dry_run);
+        assert!(args.format.is_json());
+        assert!(args.quiet);
+        assert_eq!(args.bob_dir(), bob_env::home_dir().join("vault"));
+
+        let bare = LinkArgs::from_matches(&sub_matches_for(
+            &["bob gmail", "link", "one.md"],
+            "link",
+        ));
+        assert!(!bare.all);
+        assert!(!bare.dry_run);
+        assert!(!bare.quiet);
+        assert_eq!(bare.format, HumanFormat::Human);
     }
 
     #[test]

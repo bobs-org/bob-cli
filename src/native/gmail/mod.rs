@@ -17,6 +17,7 @@ pub(crate) use crate::native::google::{
     account, client, client_setup, login_ui, signin,
 };
 mod journal;
+pub(crate) mod link;
 mod login;
 mod logout;
 mod save;
@@ -46,8 +47,8 @@ use std::{ffi::OsString, iter};
 pub(crate) use crate::native::google::GoogleError as GmailError;
 
 pub(crate) use cli::{
-    DoctorArgs, ListArgs, LoginArgs, LogoutArgs, NewArgs, PeekArgs, ReplyArgs,
-    SaveArgs, SearchArgs, TopArgs,
+    DoctorArgs, LinkArgs, ListArgs, LoginArgs, LogoutArgs, NewArgs, PeekArgs,
+    ReplyArgs, SaveArgs, SearchArgs, TopArgs,
 };
 
 const COMMAND_NAME: &str = "bob gmail";
@@ -75,6 +76,9 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
     match matches.subcommand() {
         Some(("doctor", sub_matches)) => {
             doctor::run(&DoctorArgs::from_matches(sub_matches))
+        }
+        Some(("link", sub_matches)) => {
+            link::run(&LinkArgs::from_matches(sub_matches))
         }
         Some(("list", sub_matches)) => {
             let args = ListArgs::from_matches(sub_matches);

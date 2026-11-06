@@ -1459,3 +1459,249 @@ fn saved_thread_note() -> String {
     "---\ntype: \"[[mail]]\"\ncontent: untrusted-email\ngmail_account: you@example.com\ngmail_thread_id: 0123456789abcdef\ntitle: Lease\nwho: Dana\nstarted: 2026-11-05T10:00:00+00:00\nupdated: 2026-11-05T10:00:00+00:00\nmessages: 1\n---\n# Lease\n\n· Dana ↔ you · 1 message · Nov 5\n\n## Notes\n\nAuthored note survives.\n\n## Conversation\n\n<!-- bob:gmail:begin v1 -->\n<!-- bob:gmail:msg 0123456789abcdef %3Cmail%40example.test%3E -->\n> [!mail+] **Dana** · Nov 5\n> Hello\n^m-0123456789abcdef\n<!-- bob:gmail:end -->\n"
         .to_string()
 }
+
+const LINK_URL: &str = "https://mail.google.com/mail/u/0/#all/0123456789abcdef";
+const DEAD_URL: &str = "https://mail.google.com/mail/u/0/#all/ffffffffffffffff";
+
+fn write_note(env: &GmailEnv, relative: &str, text: &str) {
+    let path = env.vault().join(relative);
+    fs::create_dir_all(path.parent().expect("note parent")).unwrap();
+    fs::write(path, text).unwrap();
+}
+
+fn link_journal(env: &GmailEnv) -> String {
+    fs::read_to_string(env.vault().join(".bob/gmail/test-host.jsonl"))
+        .unwrap_or_default()
+}
+
+#[test]
+fn link_swaps_a_bare_url_for_a_labelled_link() {
+    let env = GmailEnv::new("bob-cli-gmail-link-swap");
+    write_note(&env, "tasks.md", &format!("- [ ] Ask Dana {LINK_URL}\n"));
+    let fake = FakeGog::new(&env, "gog").scenario("thread_nonempty");
+    let output = run_gmail(&env, &fake, &["link", "tasks.md", "-f", "json"]);
+    assert_success(&output, "link swap");
+    let doc = json_stdout(&output);
+    assert_eq!(doc["ok"], true);
+    assert_eq!(doc["schema_version"], 1);
+    assert_eq!(doc["dry_run"], false);
+    assert_eq!(doc["swaps"].as_array().unwrap().len(), 1);
+    assert_eq!(doc["swaps"][0]["status"], "linked");
+    assert_eq!(doc["swaps"][0]["note"], "tasks.md");
+    assert_eq!(doc["failures"].as_array().unwrap().len(), 0);
+
+    let after =
+        fs::read_to_string(env.vault().join("tasks.md")).expect("rewritten");
+    assert!(!after.contains("mail.google.com"), "{after}");
+    let link = doc["swaps"][0]["link"].as_str().unwrap();
+    assert!(link.starts_with("[[mail/"), "{link}");
+    assert!(after.contains(link), "{after}");
+    assert!(env
+        .vault()
+        .join(doc["saved"][0]["note"].as_str().unwrap())
+        .is_file());
+
+    let journal = link_journal(&env);
+    assert!(journal.contains("gmail.save"));
+    assert!(!journal.contains("mail.google.com"), "{journal}");
+    assert!(!journal.contains("Hello"), "{journal}");
+}
+
+#[test]
+fn link_keeps_a_user_written_label() {
+    let env = GmailEnv::new("bob-cli-gmail-link-label");
+    write_note(
+        &env,
+        "tasks.md",
+        &format!("- [ ] Ask Dana [the renewal thread]({LINK_URL})\n"),
+    );
+    let fake = FakeGog::new(&env, "gog").scenario("thread_nonempty");
+    let output = run_gmail(&env, &fake, &["link", "tasks.md", "-f", "json"]);
+    assert_success(&output, "link label");
+    let after =
+        fs::read_to_string(env.vault().join("tasks.md")).expect("rewritten");
+    assert!(after.contains("|the renewal thread]]"), "{after}");
+    assert!(!after.contains("mail.google.com"), "{after}");
+}
+
+#[test]
+fn link_leaves_code_urls_untouched_and_saves_nothing() {
+    let env = GmailEnv::new("bob-cli-gmail-link-code");
+    let text = format!("```\n{LINK_URL}\n```\n\nInline `{LINK_URL}` stays.\n");
+    write_note(&env, "tasks.md", &text);
+    let fake = FakeGog::new(&env, "gog").scenario("thread_nonempty");
+    let output = run_gmail(&env, &fake, &["link", "tasks.md", "-f", "json"]);
+    assert_success(&output, "link code");
+    let doc = json_stdout(&output);
+    assert_eq!(doc["urls"], 0);
+    assert_eq!(doc["swaps"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        fs::read_to_string(env.vault().join("tasks.md")).unwrap(),
+        text
+    );
+    assert!(!env.vault().join("mail").exists());
+    assert!(
+        !fake.called_with(&["gmail", "thread", "get"]),
+        "code URLs must make no Gmail calls:\n{:?}",
+        fake.calls()
+    );
+}
+
+#[test]
+fn link_backfill_skips_excluded_folders_but_named_notes_are_scanned() {
+    let env = GmailEnv::new("bob-cli-gmail-link-scope");
+    write_note(&env, "done/old.md", &format!("old {LINK_URL}\n"));
+    write_note(&env, "tasks.md", "no urls here\n");
+    let fake = FakeGog::new(&env, "gog").scenario("thread_nonempty");
+    let output = run_gmail(&env, &fake, &["link", "-a", "-f", "json"]);
+    assert_success(&output, "link backfill");
+    let doc = json_stdout(&output);
+    assert_eq!(doc["urls"], 0);
+    assert!(fs::read_to_string(env.vault().join("done/old.md"))
+        .unwrap()
+        .contains("mail.google.com"));
+
+    let fake = FakeGog::new(&env, "gog2").scenario("thread_nonempty");
+    let named = run_gmail(&env, &fake, &["link", "done/old.md", "-f", "json"]);
+    assert_success(&named, "link named excluded note");
+    assert_eq!(json_stdout(&named)["swaps"].as_array().unwrap().len(), 1);
+    assert!(!fs::read_to_string(env.vault().join("done/old.md"))
+        .unwrap()
+        .contains("mail.google.com"));
+}
+
+#[test]
+fn link_remembers_dead_links_and_skips_them_next_time() {
+    let env = GmailEnv::new("bob-cli-gmail-link-dead");
+    write_note(&env, "tasks.md", &format!("- [ ] Old {DEAD_URL}\n"));
+    let fake = FakeGog::new(&env, "gog").scenario("not_found");
+    let output = run_gmail(&env, &fake, &["link", "tasks.md", "-f", "json"]);
+    assert_success(&output, "link dead");
+    let doc = json_stdout(&output);
+    assert_eq!(doc["swaps"].as_array().unwrap().len(), 0);
+    assert_eq!(doc["failures"].as_array().unwrap().len(), 1);
+    assert_eq!(doc["failures"][0]["kind"], "gone");
+    assert_eq!(doc["failures"][0]["remembered"], true);
+    assert!(
+        doc["failures"][0]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("no matching Gmail item"),
+        "{doc}"
+    );
+    let journal = link_journal(&env);
+    assert!(journal.contains("gmail.link_failed"), "{journal}");
+    assert!(journal.contains("\"reason\":\"gone\""), "{journal}");
+    assert!(!journal.contains("mail.google.com"), "{journal}");
+    assert!(
+        fs::read_to_string(env.vault().join("tasks.md"))
+            .unwrap()
+            .contains(DEAD_URL),
+        "dead links stay as typed"
+    );
+
+    let fake = FakeGog::new(&env, "gog2").scenario("not_found");
+    let again = run_gmail(&env, &fake, &["link", "tasks.md", "-f", "json"]);
+    assert_success(&again, "link dead again");
+    assert_eq!(json_stdout(&again)["skipped_dead"], 1);
+    assert!(
+        !fake.called_with(&["gmail", "thread", "get"]),
+        "remembered links must make no Gmail calls:\n{:?}",
+        fake.calls()
+    );
+}
+
+#[test]
+fn link_dry_run_prints_a_diff_and_touches_nothing() {
+    let env = GmailEnv::new("bob-cli-gmail-link-dry");
+    write_note(
+        &env,
+        "tasks.md",
+        &format!("- [ ] Ask Dana {LINK_URL}\n- [ ] Also {LINK_URL}\n"),
+    );
+    let fake = FakeGog::new(&env, "gog").scenario("thread_nonempty");
+    let output = run_gmail(&env, &fake, &["link", "-a", "-d", "-f", "json"]);
+    assert_success(&output, "link dry-run");
+    let doc = json_stdout(&output);
+    assert_eq!(doc["dry_run"], true);
+    assert_eq!(doc["swaps"].as_array().unwrap().len(), 2);
+    assert_eq!(doc["swaps"][0]["status"], "would_link");
+    assert_eq!(doc["diffs"].as_array().unwrap().len(), 1);
+    let diff = doc["diffs"][0]["diff"].as_str().unwrap();
+    assert!(diff.contains("--- tasks.md"), "{diff}");
+    assert!(diff.contains("[[mail/"), "{diff}");
+    assert!(
+        fs::read_to_string(env.vault().join("tasks.md"))
+            .unwrap()
+            .contains("mail.google.com"),
+        "dry-run must not rewrite"
+    );
+    assert!(!env.vault().join("mail").exists());
+    assert!(!env.vault().join(".bob").exists());
+    assert!(!env.root().join("bob_sync.lock").exists());
+}
+
+#[test]
+fn link_lists_waiting_and_gone_links_in_the_footer() {
+    let env = GmailEnv::new("bob-cli-gmail-link-footer");
+    write_note(&env, "dead.md", &format!("old {DEAD_URL}\n"));
+    let fake = FakeGog::new(&env, "gog").scenario("not_found");
+    let dead = run_gmail(&env, &fake, &["link", "dead.md", "-f", "json"]);
+    assert_success(&dead, "remember one dead link");
+
+    write_note(&env, "tasks.md", &format!("live {LINK_URL}\n"));
+    let fake = FakeGog::new(&env, "gog2");
+    let output = run_gmail(&env, &fake, &["list"]);
+    assert_success(&output, "list with footer");
+    assert!(
+        stdout(&output).contains("1 Gmail links waiting · 1 gone"),
+        "footer reports waiting and gone:\n{}",
+        stdout(&output)
+    );
+    let json = run_gmail(&env, &fake, &["list", "-f", "json"]);
+    assert_success(&json, "list json with footer");
+    assert_eq!(
+        json_stdout(&json)["footer"],
+        "1 Gmail links waiting · 1 gone"
+    );
+}
+
+#[test]
+fn link_quiet_prints_only_failures() {
+    let env = GmailEnv::new("bob-cli-gmail-link-quiet");
+    write_note(&env, "tasks.md", &format!("old {DEAD_URL}\n"));
+    let fake = FakeGog::new(&env, "gog").scenario("not_found");
+    let output = run_gmail(&env, &fake, &["link", "tasks.md", "-q"]);
+    assert_success(&output, "link quiet");
+    assert!(stdout(&output).is_empty(), "quiet prints no successes");
+    assert!(stderr(&output).contains("link "), "failures still print");
+}
+
+#[test]
+fn link_after_save_reuses_the_note_and_still_swaps() {
+    let env = GmailEnv::new("bob-cli-gmail-link-resume");
+    let fake = FakeGog::new(&env, "gog").scenario("thread_nonempty");
+    let saved =
+        run_gmail(&env, &fake, &["save", "0123456789abcdef", "-f", "json"]);
+    assert_success(&saved, "save first");
+    write_note(&env, "tasks.md", &format!("- [ ] Ask Dana {LINK_URL}\n"));
+    let linked = run_gmail(&env, &fake, &["link", "tasks.md", "-f", "json"]);
+    assert_success(&linked, "link after save");
+    let doc = json_stdout(&linked);
+    assert_eq!(doc["saved"][0]["status"], "unchanged");
+    assert_eq!(doc["swaps"].as_array().unwrap().len(), 1);
+    assert_eq!(doc["swaps"][0]["status"], "linked");
+    assert!(!fs::read_to_string(env.vault().join("tasks.md"))
+        .unwrap()
+        .contains("mail.google.com"));
+}
+
+#[test]
+fn link_needs_a_note_or_all() {
+    let env = GmailEnv::new("bob-cli-gmail-link-usage");
+    let fake = FakeGog::new(&env, "gog");
+    let output = run_gmail(&env, &fake, &["link", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(2));
+    let doc = json_stdout(&output);
+    assert_eq!(doc["ok"], false);
+}

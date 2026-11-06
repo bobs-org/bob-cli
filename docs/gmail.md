@@ -1,12 +1,12 @@
 # Bob Gmail
 
 `bob gmail` saves Gmail threads you choose as inert, append-only mail notes in
-the vault with readable task links, and creates local compose and reply notes.
-This page covers one-time setup through
+the vault, linked from tasks with a readable label, and creates local
+compose and reply notes. This page covers one-time setup through
 [gog](https://github.com/openclaw/gogcli) (≥ v0.44.0), the `gmail` command
-group, config, login, logout, doctor, saving, listing, search, metadata
-previews, live message counts, and compose-note creation. Sending and label
-pulls remain later work.
+group, config, login, logout, doctor, saving, linking, listing, search,
+metadata previews, live message counts, and compose-note creation. Sending and
+label pulls remain later work.
 
 Typical order: `bob gmail login` once, `bob gmail doctor` until every check is
 `ok` or an explained skip. Tests never touch Google: set `BOB_GMAIL_GOG` to a
@@ -24,6 +24,7 @@ fake executable.
 - [Save](#save)
 - [Compose notes](#compose-notes)
 - [List](#list)
+- [Link](#link)
 - [Search](#search)
 - [Peek](#peek)
 - [Try it](#try-it)
@@ -40,6 +41,7 @@ fake executable.
 ```bash
 bob gmail [list] [-a|--all] [-b|--bob-dir DIR] [-f|--format table|json] [-r|--remote]
 bob gmail doctor [-b|--bob-dir DIR] [-f|--format human|json]
+bob gmail link NOTE... [-a|--all] [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-q|--quiet]
 bob gmail login [-a|--account EMAIL] [-c|--credentials FILE] [-f|--format human|json] [-m|--manual] [-s|--scope readonly|compose]
 bob gmail logout [-a|--account EMAIL] [-f|--format human|json] [-y|--force]
 bob gmail new [-b|--bob-dir DIR] [-B|--bcc LIST] [-c|--cc LIST] [-f|--format human|json] [-s|--subject TEXT] [-t|--to LIST]
@@ -52,11 +54,13 @@ bob gmail search [QUERY] [-f|--format table|json] [-l|--limit N]
 Running `bob gmail` with no subcommand lists saved threads, exactly like the
 explicit `bob gmail list`. Listing is offline and read-only by default; `-r`
 fetches live message counts for the rows shown. `save` reads Gmail and writes
-selected threads to the vault. `new` and `reply` write local Markdown notes
-without login or network access. `doctor`, `search`, and `peek` are read-only.
-`login` and `logout` are excluded from the command catalog because they need a
-terminal and handle credentials; `new` and `reply` are excluded because the
-compose flow is owned by the Bob Mail plugin.
+selected threads to the vault. `new` and `reply` write local Markdown
+notes without login or network access. `link` finds Gmail URLs in notes,
+saves each confirmed thread, and swaps the URLs for labelled links. `doctor`,
+`search`, and `peek` are read-only. `login` and `logout` are excluded from
+the command catalog because they need a terminal and handle credentials;
+`new` and `reply` are excluded because the compose flow is owned by the Bob
+Mail plugin.
 
 ## How it works
 
@@ -327,8 +331,40 @@ A configured `gmail.account` scopes the list to that account; otherwise every
 locally indexed account is shown. Malformed mail notes are skipped with a
 count rather than crashing the list. Duplicate `(account, thread)` identities
 are never selected as canonical: they stay visible as diagnostics and are
-left out of the threads. The footer stays absent until link health lands in a
-later phase; it never claims zero links.
+left out of the threads. The footer reports `N Gmail links waiting · M gone`
+once `link` has something to count; it stays absent while both are zero, so it
+never claims zero links.
+
+## Link
+
+`bob gmail link NOTE...` scans the named notes for Gmail URLs, saves each
+confirmed thread through the save path, and replaces exactly those URL tokens
+with labelled wikilinks under the vault maintenance lock. `bob gmail link -a`
+scans the whole vault instead: mail notes, `_generated/`, `_conflicts/`,
+`.obsidian/`, `.bob/`, `done/`, dot directories, and zorg-era generated logs
+(frontmatter `generated_from_zorg: true`) are excluded.
+
+- Replacement is token-exact: only ranges that still hold the same text are
+  rewritten, so an edited line is never corrupted. Two identical URLs each
+  become links. URLs inside fenced/inline code, frontmatter, and existing
+  wikilinks are untouched, as are bare URLs inside titled `[label](url)`
+  destinations (untitled `[their words](url)` keeps its label as
+  `[[path|their words]]`).
+- A URL that Gmail confirms dead (`gone`), refuses, matches `never_save`, or
+  never resolves is remembered by URL digest in `.bob/gmail/<host>.jsonl`;
+  later sweeps skip it, and the raw URL never enters the journal. Sign-in and
+  network failures are not remembered: they set a host-local
+  `awaiting_sign_in` marker so the failure is reported once.
+- New mail notes and rewritten sources commit together with a
+  `gmail: link <subject>` message. A note that changed between planning and
+  writing is retried once; a thread whose swaps still cannot land is reported
+  as `saved; link needs review` and relinks on the next run.
+- `-d` prints the unified diff plus the notes it would create, and touches
+  nothing: no lock, directories, notes, images, journals, or commits.
+  `-f json` returns the saved threads, swaps (by URL digest, never the URL),
+  needs-review entries, failures, and warnings. `-q` prints only failures.
+- `gmail.writer` blocks writes on other hosts; dry-run remains available
+  there. `link` needs at least one NOTE or `-a`.
 
 Add `-r|--remote` to compare each displayed thread's current Gmail message
 count with its saved note; the table shows `+N new`, and JSON adds
@@ -362,8 +398,11 @@ for ten minutes. It stores no snippets, message bodies, MIME, or attachments.
 2. `bob gmail list` shows the saved thread with its backlink count.
 3. Add `[[<note path>|<label>]]` to a task note, then `bob gmail list` again
    to see the count rise.
-4. `bob gmail list -f json` shows the same rows with identities and links.
-5. `bob gmail doctor` checks decoder health and duplicate identities.
+4. Paste a Gmail URL into a task note and run
+   `bob gmail link <note> -f json`: the URL becomes the labelled link.
+5. `bob gmail link -a -d` previews a backfill of old URLs without writing.
+6. `bob gmail list -f json` shows the same rows with identities and links.
+7. `bob gmail doctor` checks decoder health and duplicate identities.
 
 ## Doctor
 
