@@ -13,6 +13,15 @@ pub(crate) mod parse;
 pub(crate) mod path;
 mod text;
 
+/// Extract mailbox addresses with the parser used by mail-note rendering.
+/// Display names without an address are deliberately omitted.
+pub(crate) fn mailbox_addresses(raw: &str) -> Vec<String> {
+    text::parse_mailboxes(raw)
+        .into_iter()
+        .filter_map(|mailbox| mailbox.address)
+        .collect()
+}
+
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

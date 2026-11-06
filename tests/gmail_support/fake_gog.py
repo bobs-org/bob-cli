@@ -22,6 +22,7 @@ FLAGS_WITH_VALUE = {
     "--from",
     "--to",
     "--max",
+    "--page",
     "--fields",
     "--format",
     "--auth-url",
@@ -175,6 +176,33 @@ def scenario_defaults(name: str) -> dict:
             connected_account(),
             connected_account("work@example.com"),
         ]
+    elif name == "auth_expiry":
+        defaults["fail"] = {
+            operation: {
+                "stderr": "invalid_grant: PRIVATE_SENTINEL expired token",
+                "code": 1,
+            }
+            for operation in ("search", "thread_get", "message_get", "labels_list")
+        }
+    elif name == "not_found":
+        defaults["fail"] = {
+            operation: {
+                "stderr": "notFound: PRIVATE_SENTINEL Gmail item missing",
+                "code": 1,
+            }
+            for operation in ("search", "thread_get", "message_get")
+        }
+    elif name == "poison_error":
+        defaults["fail"] = {
+            "thread_get": {
+                "stderr": "unclassified failure PRIVATE_SENTINEL body text",
+                "code": 1,
+            },
+            "labels_list": {
+                "stderr": "unclassified failure PRIVATE_SENTINEL label text",
+                "code": 1,
+            },
+        }
     return defaults
 
 
@@ -240,6 +268,8 @@ def op_name() -> str:
         return "url"
     if pos[:2] == ["gmail", "attachment"]:
         return "attachment"
+    if pos[:3] == ["gmail", "labels", "list"]:
+        return "labels_list"
     if pos[:3] == ["gmail", "messages", "search"]:
         return "search"
     if pos[:1] == ["gmail"]:
@@ -439,17 +469,102 @@ if op == "auth_remove":
     raise SystemExit(0)
 
 if op == "search":
-    dump({"threads": [], "nextPageToken": None, "resultSizeEstimate": 0})
+    query = pos[2] if len(pos) > 2 else ""
+    page = flag_value("--page")
+    if scenario == "search_zero" or "zero@example.test" in query:
+        dump({"threads": [], "nextPageToken": None, "resultSizeEstimate": 0})
+    elif scenario == "search_many" or "many@example.test" in query:
+        dump(
+            {
+                "threads": [
+                    {"id": "0123456789abcdef"},
+                    {"id": "aaaaaaaaaaaaaaaa"},
+                ],
+                "nextPageToken": None,
+                "resultSizeEstimate": 2,
+            }
+        )
+    elif scenario == "search_one" or "one@example.test" in query:
+        dump(
+            {
+                "threads": [{"id": "0123456789abcdef"}],
+                "nextPageToken": None,
+                "resultSizeEstimate": 1,
+            }
+        )
+    elif scenario == "search_paginated" or "paged@example.test" in query:
+        if page:
+            dump(
+                {
+                    "threads": [],
+                    "nextPageToken": None,
+                    "resultSizeEstimate": 1,
+                }
+            )
+        else:
+            dump(
+                {
+                    "threads": [{"id": "0123456789abcdef"}],
+                    "nextPageToken": "synthetic-page-2",
+                    "resultSizeEstimate": 1,
+                }
+            )
+    elif scenario in {"search_malformed", "malformed_json"}:
+        sys.stdout.write("{malformed JSON\n")
+    else:
+        dump({"threads": [], "nextPageToken": None, "resultSizeEstimate": 0})
     raise SystemExit(0)
 
 if op == "thread_get":
     hex_id = pos[3] if len(pos) > 3 else "1a0b9eb2cc26ab96"
-    dump({"thread": {"id": hex_id, "historyId": "1", "messages": []}})
+    if scenario == "thread_mismatch":
+        hex_id = "aaaaaaaaaaaaaaaa"
+    if scenario in {"thread_nonempty", "poison", "poison_error"}:
+        body = "U2Vuc2l0aXZlIHBvaXNvbiBib2R5" if scenario == "poison" else "SGVsbG8="
+        from_value = "PRIVATE_SENTINEL <sender@example.com>" if scenario == "poison" else "Ada <ada@example.com>"
+        dump(
+            {
+                "thread": {
+                    "id": hex_id,
+                    "historyId": "1",
+                    "messages": [
+                        {
+                            "id": "1111111111111111",
+                            "threadId": hex_id,
+                            "labelIds": ["INBOX", "Label_1"],
+                            "internalDate": "1793908800000",
+                            "snippet": "PRIVATE_SENTINEL snippet" if scenario == "poison" else "hello",
+                            "payload": {
+                                "mimeType": "text/plain",
+                                "headers": [
+                                    {"name": "From", "value": from_value},
+                                    {"name": "Message-ID", "value": "<message@example.test>"},
+                                ],
+                                "body": {"size": 5, "data": body},
+                            },
+                        }
+                    ],
+                }
+            }
+        )
+    elif scenario in {"thread_malformed", "malformed_json"}:
+        sys.stdout.write("{malformed JSON\n")
+    else:
+        dump({"thread": {"id": hex_id, "historyId": "1", "messages": []}})
     raise SystemExit(0)
 
 if op == "message_get":
     hex_id = pos[2] if len(pos) > 2 else "msg1"
-    dump({"message": {"id": hex_id, "threadId": "1a0b9eb2cc26ab96"}})
+    if scenario == "message_mismatch":
+        hex_id = "2222222222222222"
+    if scenario in {"message_malformed", "malformed_json"}:
+        sys.stdout.write("{malformed JSON\n")
+        raise SystemExit(0)
+    message = {"id": hex_id, "threadId": "0123456789abcdef", "labelIds": ["INBOX"]}
+    if "metadata" not in args and scenario == "poison":
+        message["snippet"] = "PRIVATE_SENTINEL message snippet"
+        message["payload"] = {"mimeType": "text/plain", "body": {"data": "PRIVATE_SENTINEL"}}
+    dump({"message": message})
     raise SystemExit(0)
 
 if op == "url":
@@ -467,6 +582,22 @@ if op == "attachment":
     import base64
 
     dump({"contentBase64": base64.b64encode(b"hello").decode("ascii")})
+    raise SystemExit(0)
+
+if op == "labels_list":
+    if scenario == "labels_failure":
+        fail("PRIVATE_SENTINEL label lookup failure", 1)
+    if scenario in {"labels_malformed", "malformed_json"}:
+        sys.stdout.write("{malformed JSON\n")
+    else:
+        dump(
+            {
+                "labels": [
+                    {"id": "Label_1", "name": "Promotions", "type": "user"},
+                    {"id": "INBOX", "name": "INBOX", "type": "system"},
+                ]
+            }
+        )
     raise SystemExit(0)
 
 fail(f"fake gog: unknown command {pos}", 2)

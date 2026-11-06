@@ -21,7 +21,13 @@ pub(crate) use crate::native::google::REVOKE_URL;
 
 /// Read-only Gmail commands Bob may invoke.
 const READ_COMMANDS: &str =
-    "gmail.thread.get,gmail.get,gmail.messages,gmail.search,gmail.url,gmail.attachment";
+    "gmail.thread.get,gmail.get,gmail.messages,gmail.search,gmail.url,gmail.attachment,gmail.labels.list";
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub(crate) struct GmailLabel {
+    pub(crate) id: String,
+    pub(crate) name: String,
+}
 
 fn read_flags(account: &str) -> Vec<OsString> {
     vec![
@@ -42,7 +48,7 @@ impl Gog {
         let mut args = self.common_flags(Some(account));
         args.extend(read_flags(account));
         args.extend(command);
-        let output = self.run(args)?;
+        let output = self.run(args).map_err(redact_gmail_read_error)?;
         Ok(output.stdout)
     }
 
@@ -96,6 +102,26 @@ impl Gog {
         Ok(value.get("message").cloned().unwrap_or(value))
     }
 
+    /// Fetch message identity and headers without requesting the message body.
+    pub(crate) fn message_metadata(
+        &self,
+        account: &str,
+        hex: &str,
+    ) -> Result<serde_json::Value, GmailError> {
+        let stdout = self.gmail_run(
+            account,
+            vec![
+                OsString::from("gmail"),
+                OsString::from("get"),
+                OsString::from(hex),
+                OsString::from("--format"),
+                OsString::from("metadata"),
+            ],
+        )?;
+        let value = parse_json(&stdout)?;
+        Ok(value.get("message").cloned().unwrap_or(value))
+    }
+
     /// Search threads with Gmail query syntax.
     pub(crate) fn search(
         &self,
@@ -114,6 +140,57 @@ impl Gog {
             ],
         )?;
         parse_json(&stdout)
+    }
+
+    /// Read one page of matching thread IDs. The `--ids-only` mode avoids
+    /// fetching per-thread message data while resolving an RFC message ID.
+    pub(crate) fn search_page(
+        &self,
+        account: &str,
+        query: &str,
+        max: u32,
+        page: Option<&str>,
+    ) -> Result<serde_json::Value, GmailError> {
+        let mut command = vec![
+            OsString::from("gmail"),
+            OsString::from("search"),
+            OsString::from(query),
+            OsString::from("--max"),
+            OsString::from(max.to_string()),
+            OsString::from("--ids-only"),
+        ];
+        if let Some(page) = page {
+            command.push(OsString::from("--page"));
+            command.push(OsString::from(page));
+        }
+        let stdout = self.gmail_run(account, command)?;
+        parse_json(&stdout)
+    }
+
+    /// Read Gmail label names and opaque IDs without changing labels.
+    pub(crate) fn labels_list(
+        &self,
+        account: &str,
+    ) -> Result<Vec<GmailLabel>, GmailError> {
+        let stdout = self.gmail_run(
+            account,
+            vec![
+                OsString::from("gmail"),
+                OsString::from("labels"),
+                OsString::from("list"),
+            ],
+        )?;
+        let value = parse_json(&stdout)?;
+        let labels = value
+            .get("labels")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        serde_json::from_value(labels).map_err(|_| {
+            GmailError::runtime(
+                "bad_json",
+                "gog returned an invalid Gmail label list".to_string(),
+            )
+        })
     }
 
     // Consumed by outer mail-note link resolution once it lands.
@@ -183,6 +260,22 @@ impl Gog {
     }
 }
 
+fn redact_gmail_read_error(error: GmailError) -> GmailError {
+    let message = match error.kind() {
+        "not_found" => "Google has no matching Gmail item",
+        "invalid_grant" => "the bob-gmail sign-in needs renewal",
+        "not_logged_in" => "no bob-gmail Gmail grant is stored",
+        "insufficient_scope" => {
+            "the bob-gmail grant lacks read-only Gmail access"
+        }
+        "network" => "gog could not reach Google",
+        "timeout" => "gog timed out while reading Gmail",
+        "api_disabled" => "the Gmail API is not enabled for this Cloud project",
+        _ => "gog could not complete a read-only Gmail request",
+    };
+    GmailError::runtime(error.kind(), message.to_string())
+}
+
 /// Strict attachment decoding: standard and base64url alphabets, padded and
 /// unpadded. Each engine rejects malformed padding and trailing data, so only
 /// a fully valid encoding succeeds. Body-free: returns `None` without
@@ -236,6 +329,23 @@ mod tests {
                 "accepted malformed {bad:?}"
             );
         }
+    }
+
+    #[test]
+    fn read_errors_keep_types_without_echoing_remote_output() {
+        let error = redact_gmail_read_error(GmailError::runtime(
+            "gog",
+            "PRIVATE_SENTINEL raw remote response".to_string(),
+        ));
+        assert_eq!(error.kind(), "gog");
+        assert!(!error.message().contains("PRIVATE_SENTINEL"));
+
+        let error = redact_gmail_read_error(GmailError::runtime(
+            "not_found",
+            "PRIVATE_SENTINEL raw remote response".to_string(),
+        ));
+        assert_eq!(error.kind(), "not_found");
+        assert!(!error.message().contains("PRIVATE_SENTINEL"));
     }
 
     #[test]

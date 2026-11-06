@@ -20,6 +20,10 @@ mod logout;
 // Owned by mail-note (bob-cli-hg.5); the save and capture phases consume it.
 #[allow(dead_code)]
 pub(crate) mod note;
+#[allow(dead_code)]
+pub(crate) mod policy;
+#[allow(dead_code)]
+pub(crate) mod resolve;
 pub(crate) mod ui;
 // Owned by gmail-ids (hg.2, closed) and mail-body (hg.3.1 landing now);
 // outer mail-note, gmail-save, and search-peek phases consume them.

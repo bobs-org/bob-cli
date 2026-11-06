@@ -92,6 +92,15 @@ impl GmailConfig {
                 "gmail.folder must not be empty".to_string(),
             ));
         }
+        if super::note::path::validate_folder(std::path::Path::new(&folder))
+            .is_err()
+        {
+            return Err(GmailError::setup(
+                "config",
+                "gmail.folder must be a relative path without parent segments"
+                    .to_string(),
+            ));
+        }
         let link_label = settings
             .link_label
             .unwrap_or_else(|| DEFAULT_LINK_LABEL.to_string());
@@ -234,5 +243,18 @@ mod tests {
         })
         .expect_err("label without subject");
         assert!(error.message().contains("gmail.link_label"));
+    }
+
+    #[test]
+    fn folder_must_be_relative_and_stay_inside_the_vault() {
+        for folder in ["/mail", "mail/../outside"] {
+            let error = GmailConfig::from_settings(bob_config::GmailSettings {
+                folder: Some(folder.to_string()),
+                ..settings()
+            })
+            .expect_err("invalid folder");
+            assert_eq!(error.exit_code(), 2);
+            assert_eq!(error.kind(), "config");
+        }
     }
 }
