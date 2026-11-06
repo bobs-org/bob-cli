@@ -23,6 +23,7 @@ fake executable.
 - [Logout](#logout)
 - [Save](#save)
 - [Compose notes](#compose-notes)
+- [Outgoing message rendering](#outgoing-message-rendering)
 - [List](#list)
 - [Link](#link)
 - [Search](#search)
@@ -309,6 +310,48 @@ section body.
 bob gmail new -t 'Ada <ada@example.com>' -s "Lease renewal" -f json
 bob gmail reply mail/2026/261105_lease_renewal.md --all -f json
 ```
+
+## Outgoing message rendering
+
+The message body excludes any authored `## Notes` section; Notes text never
+enters an outgoing message. The remaining body renders to two equivalent
+alternatives: an inline-styled HTML fragment and plain text carrying the same
+links and references. The supported subset is paragraphs, headings, emphasis,
+lists, safe links, blockquotes, and ordinary code. Anything outside that
+subset refuses with a kind and a 1-based line number, never with body text.
+
+| Refusal            | Meaning                                                                 |
+| ------------------ | ----------------------------------------------------------------------- |
+| `task_checkbox`    | Actual `- [ ]` / `- [x]` task syntax, including quoted tasks.            |
+| `block_id`         | A trailing `^id` block reference.                                       |
+| `inline_field`     | `[key:: value]` or `(key:: value)` inline fields.                       |
+| `inline_query`     | Inline `` `= ...` `` or `` `$= ...` `` queries.                         |
+| `dataview_fence`   | A ```` ```dataview ```` or ```` ```dataviewjs ```` fence.               |
+| `tasks_fence`      | A ```` ```tasks ```` fence.                                             |
+| `templater`        | `<% ... %>` syntax.                                                     |
+| `unsafe_link`      | A link whose destination is not `http`, `https`, or `mailto`.           |
+| `remote_image`     | A remote `![](url)` image, which never loads for recipients either.     |
+| `undeclared_embed` | An embed that names no declared attachment.                             |
+
+Refusals apply to active syntax only: the same text inside fenced code, inline
+code, or behind a backslash escape stays literal. Raw HTML shows literally
+instead of executing. No Dataview, Tasks, or Templater syntax runs, no URL is
+fetched, and no wikilink is traversed to gather content.
+
+`[[target|alias]]` flattens to its alias and unaliased links to their visible
+target; every flattening is recorded in document order. `![[embed]]` and local
+`![](image)` references are accepted only when they name a path from the note's
+`attachments` frontmatter (exact vault-relative match, bare filename, `#`/`^`
+suffixes ignored, `%20`-style escapes decoded). Accepted embeds become the
+transmitted filename — the original vault basename — plus the attachment, never
+expanded note content.
+
+Attachments validate as safe vault-relative paths: no absolute paths, parent
+references, control characters, symlinks, directories, or missing files. Valid
+bytes snapshot once into a private staging directory (mode 0700, files 0600)
+that is removed when the operation finishes; transport reads the snapshots so
+a later vault edit cannot change the sent bytes. Each attachment records its
+vault path, transmitted filename, byte length, and SHA-256 of the snapshot.
 
 ## List
 
