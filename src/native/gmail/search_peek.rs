@@ -274,11 +274,11 @@ pub(crate) fn remote_message_count(
     thread_id: &str,
 ) -> Result<usize, GmailError> {
     let thread = gog.thread_metadata(account, thread_id)?;
-    if thread.id.to_ascii_lowercase() != thread_id.to_ascii_lowercase()
-        || thread.messages.iter().any(|message| {
-            message.thread_id.to_ascii_lowercase()
-                != thread.id.to_ascii_lowercase()
-        })
+    if !thread.id.eq_ignore_ascii_case(thread_id)
+        || thread
+            .messages
+            .iter()
+            .any(|message| !message.thread_id.eq_ignore_ascii_case(&thread.id))
     {
         return Err(GmailError::runtime(
             "unresolvable",
@@ -292,9 +292,11 @@ fn summarize_thread(
     thread: &GmailThread,
     account: &str,
 ) -> Result<ThreadMetadata, GmailError> {
-    if thread.messages.iter().any(|message| {
-        message.thread_id.to_ascii_lowercase() != thread.id.to_ascii_lowercase()
-    }) {
+    if thread
+        .messages
+        .iter()
+        .any(|message| !message.thread_id.eq_ignore_ascii_case(&thread.id))
+    {
         return Err(GmailError::runtime(
             "unresolvable",
             "Gmail returned a different thread identity".to_string(),

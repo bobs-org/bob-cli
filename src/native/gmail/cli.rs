@@ -19,7 +19,8 @@ pub(crate) fn build_cli() -> ClapCommand {
             "Gmail threads you choose become inert, append-only mail notes: \
              one read-only login through gog, then save threads offline and \
              link them from tasks. Every send goes through a previewed Gmail \
-             draft. Bare `bob gmail` lists saved threads.",
+             draft. The `new` and `reply` commands create local notes without \
+             sending. Bare `bob gmail` lists saved threads.",
         )
         .after_help(top_after_help())
         .disable_help_flag(true)
@@ -32,13 +33,15 @@ pub(crate) fn build_cli() -> ClapCommand {
         .subcommand(list_command())
         .subcommand(login_command())
         .subcommand(logout_command())
+        .subcommand(new_command())
         .subcommand(peek_command())
+        .subcommand(reply_command())
         .subcommand(save_command())
         .subcommand(search_command())
 }
 
 fn top_after_help() -> &'static str {
-    "Running `bob gmail` with no command lists saved threads (offline, read-only). `-r` adds live message counts.\n\nExamples:\n  bob gmail                   List saved threads\n  bob gmail -a                List every saved thread\n  bob gmail -r                Fetch live new-message counts\n  bob gmail -f json           List saved threads as JSON\n  bob gmail search            Search recent inbox threads\n  bob gmail peek URL          Preview a Gmail link\n  bob gmail save URL          Save a Gmail thread\n  bob gmail save ID -d        Preview a save without writing\n  bob gmail login             Connect Gmail in one guided step\n  bob gmail login -a EMAIL    Sign in as this account\n  bob gmail login -s compose  Also grant the compose scope (Mac only)\n  bob gmail doctor            Diagnose gog, the client, and the vault\n  bob gmail logout -y         Remove Bob's Gmail grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH\n  BOB_GMAIL_BROWSER  Browser executable; selects browser sign-in (otherwise automatic)"
+    "Running `bob gmail` with no command lists saved threads (offline, read-only). `-r` adds live message counts.\n\nExamples:\n  bob gmail                   List saved threads\n  bob gmail -a                List every saved thread\n  bob gmail -r                Fetch live new-message counts\n  bob gmail -f json           List saved threads as JSON\n  bob gmail new -t EMAIL      Create a local compose note\n  bob gmail peek URL          Preview a Gmail link\n  bob gmail reply NOTE        Add a Reply section\n  bob gmail save URL          Save a Gmail thread\n  bob gmail search            Search recent inbox threads\n  bob gmail save ID -d        Preview a save without writing\n  bob gmail login             Connect Gmail in one guided step\n  bob gmail login -a EMAIL    Sign in as this account\n  bob gmail login -s compose  Also grant the compose scope (Mac only)\n  bob gmail doctor            Diagnose gog, the client, and the vault\n  bob gmail logout -y         Remove Bob's Gmail grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH\n  BOB_GMAIL_BROWSER  Browser executable; selects browser sign-in (otherwise automatic)"
 }
 
 fn save_command() -> ClapCommand {
@@ -184,6 +187,48 @@ fn logout_after_help() -> &'static str {
      https://myaccount.google.com/permissions.\n\nExamples:\n  bob gmail logout -y\n  bob gmail logout -a you@example.com -y\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH"
 }
 
+fn new_command() -> ClapCommand {
+    ClapCommand::new("new")
+        .about("Create a local Gmail compose note")
+        .long_about(
+            "Create a compose note in the configured Gmail folder. This is a local vault write: it does not log in or contact Gmail. The note opens with an empty message body; To and Subject may also be left empty while drafting.",
+        )
+        .disable_help_flag(true)
+        .arg(bcc_arg())
+        .arg(bob_dir_arg())
+        .arg(cc_arg())
+        .arg(human_format_arg())
+        .arg(subject_arg())
+        .arg(to_arg())
+        .arg(help_arg())
+        .after_help(
+            "Examples:\n  bob gmail new\n  bob gmail new -t ada@example.com -c lee@example.com -s \"Lease renewal\"\n  bob gmail new -t 'Ada <ada@example.com>, Lee <lee@example.com>' -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml",
+        )
+}
+
+fn reply_command() -> ClapCommand {
+    ClapCommand::new("reply")
+        .about("Add a Reply section to a saved Gmail note")
+        .long_about(
+            "Append one editable Reply section to a saved Gmail note. Use --all for Reply all. This is a local vault write: it does not log in or contact Gmail.",
+        )
+        .disable_help_flag(true)
+        .arg(reply_all_arg())
+        .arg(bob_dir_arg())
+        .arg(human_format_arg())
+        .arg(
+            Arg::new("note")
+                .value_name("NOTE")
+                .value_parser(OsStringValueParser::new())
+                .required(true)
+                .help("Vault-relative path to a saved Gmail note"),
+        )
+        .arg(help_arg())
+        .after_help(
+            "Examples:\n  bob gmail reply mail/2026/261105_lease_renewal.md\n  bob gmail reply mail/2026/261105_lease_renewal.md --all -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml",
+        )
+}
+
 fn account_arg() -> Arg {
     Arg::new("account")
         .long("account")
@@ -193,12 +238,52 @@ fn account_arg() -> Arg {
         .help("Google account email; overrides gmail.account")
 }
 
+fn bcc_arg() -> Arg {
+    Arg::new("bcc")
+        .long("bcc")
+        .short('B')
+        .value_name("LIST")
+        .help("Comma-separated Bcc recipients")
+}
+
+fn cc_arg() -> Arg {
+    Arg::new("cc")
+        .long("cc")
+        .short('c')
+        .value_name("LIST")
+        .help("Comma-separated Cc recipients")
+}
+
+fn subject_arg() -> Arg {
+    Arg::new("subject")
+        .long("subject")
+        .short('s')
+        .value_name("TEXT")
+        .help("Initial subject; may be empty while authoring")
+}
+
+fn to_arg() -> Arg {
+    Arg::new("to")
+        .long("to")
+        .short('t')
+        .value_name("LIST")
+        .help("Comma-separated To recipients")
+}
+
 fn all_arg() -> Arg {
     Arg::new("all")
         .long("all")
         .short('a')
         .action(ArgAction::SetTrue)
         .help("Show every saved thread instead of the newest 20")
+}
+
+fn reply_all_arg() -> Arg {
+    Arg::new("all")
+        .long("all")
+        .short('a')
+        .action(ArgAction::SetTrue)
+        .help("Include all thread participants in the Reply section")
 }
 
 fn bob_dir_arg() -> Arg {
@@ -561,6 +646,61 @@ impl SaveArgs {
     }
 }
 
+/// Typed `new` arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NewArgs {
+    pub bcc: Option<String>,
+    pub bob_dir: Option<PathBuf>,
+    pub cc: Option<String>,
+    pub format: HumanFormat,
+    pub subject: Option<String>,
+    pub to: Option<String>,
+}
+
+impl NewArgs {
+    pub(crate) fn from_matches(matches: &ArgMatches) -> Self {
+        Self {
+            bcc: matches.get_one::<String>("bcc").cloned(),
+            bob_dir: raw_bob_dir(matches),
+            cc: matches.get_one::<String>("cc").cloned(),
+            format: HumanFormat::from_matches(matches),
+            subject: matches.get_one::<String>("subject").cloned(),
+            to: matches.get_one::<String>("to").cloned(),
+        }
+    }
+
+    pub(crate) fn bob_dir(&self) -> PathBuf {
+        self.bob_dir.clone().unwrap_or_else(bob_env::bob_dir)
+    }
+}
+
+/// Typed `reply` arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReplyArgs {
+    pub all: bool,
+    pub bob_dir: Option<PathBuf>,
+    pub format: HumanFormat,
+    pub note: PathBuf,
+}
+
+impl ReplyArgs {
+    pub(crate) fn from_matches(matches: &ArgMatches) -> Self {
+        Self {
+            all: matches.get_flag("all"),
+            bob_dir: raw_bob_dir(matches),
+            format: HumanFormat::from_matches(matches),
+            note: matches
+                .get_one::<OsString>("note")
+                .map(PathBuf::from)
+                .unwrap_or_default(),
+        }
+    }
+
+    pub(crate) fn bob_dir(&self) -> PathBuf {
+        self.bob_dir.clone().unwrap_or_else(bob_env::bob_dir)
+    }
+}
+
 impl TopArgs {
     pub(crate) fn from_matches(matches: &ArgMatches) -> Self {
         Self {
@@ -723,6 +863,50 @@ mod tests {
         ));
         assert_eq!(args.bob_dir(), bob_env::home_dir().join("vault"));
         assert!(args.format.is_json());
+    }
+
+    #[test]
+    fn compose_command_args_match_public_flags() {
+        let new = NewArgs::from_matches(&sub_matches_for(
+            &[
+                "bob gmail",
+                "new",
+                "-b",
+                "~/vault",
+                "-B",
+                "bcc@example.com",
+                "-c",
+                "cc@example.com",
+                "-f",
+                "json",
+                "-s",
+                "Lease",
+                "-t",
+                "to@example.com",
+            ],
+            "new",
+        ));
+        assert_eq!(new.bob_dir, Some(bob_env::home_dir().join("vault")));
+        assert_eq!(new.bcc.as_deref(), Some("bcc@example.com"));
+        assert_eq!(new.cc.as_deref(), Some("cc@example.com"));
+        assert_eq!(new.subject.as_deref(), Some("Lease"));
+        assert_eq!(new.to.as_deref(), Some("to@example.com"));
+        assert!(new.format.is_json());
+
+        let reply = ReplyArgs::from_matches(&sub_matches_for(
+            &[
+                "bob gmail",
+                "reply",
+                "mail/2026/thread.md",
+                "--all",
+                "-f",
+                "json",
+            ],
+            "reply",
+        ));
+        assert_eq!(reply.note, PathBuf::from("mail/2026/thread.md"));
+        assert!(reply.all);
+        assert!(reply.format.is_json());
     }
 
     #[test]

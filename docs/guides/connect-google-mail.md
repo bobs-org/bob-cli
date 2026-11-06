@@ -12,8 +12,12 @@ token bucket, so removing Bob's grant never touches Calendar. Tests and this
 page use `you@example.com`; do not paste a live client secret into a log or
 ticket.
 
-This page gets you through sign-in and doctor. Saving, linking, and sending
-land in later phases; for now, bare `bob gmail` lists no saved threads yet.
+This page gets you through sign-in and doctor. `bob gmail new` and
+`bob gmail reply` create local compose notes without signing in. Save and list
+selected threads with the commands in [Bob Gmail](../gmail.md), then link saved
+threads to tasks with their labelled wikilinks. Sending compose or reply notes
+as Gmail drafts remains a later phase. Bare `bob gmail` lists saved threads
+locally.
 
 ## Before you start
 

@@ -8,6 +8,7 @@
 #[allow(dead_code)]
 pub(crate) mod body;
 pub(crate) mod cli;
+mod compose;
 mod config;
 mod doctor;
 mod gog;
@@ -45,8 +46,8 @@ use std::{ffi::OsString, iter};
 pub(crate) use crate::native::google::GoogleError as GmailError;
 
 pub(crate) use cli::{
-    DoctorArgs, ListArgs, LoginArgs, LogoutArgs, PeekArgs, SaveArgs,
-    SearchArgs, TopArgs,
+    DoctorArgs, ListArgs, LoginArgs, LogoutArgs, NewArgs, PeekArgs, ReplyArgs,
+    SaveArgs, SearchArgs, TopArgs,
 };
 
 const COMMAND_NAME: &str = "bob gmail";
@@ -85,8 +86,14 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         Some(("logout", sub_matches)) => {
             logout::run(&LogoutArgs::from_matches(sub_matches))
         }
+        Some(("new", sub_matches)) => {
+            compose::run_new(&NewArgs::from_matches(sub_matches))
+        }
         Some(("peek", sub_matches)) => {
             search_peek::peek(&PeekArgs::from_matches(sub_matches))
+        }
+        Some(("reply", sub_matches)) => {
+            compose::run_reply(&ReplyArgs::from_matches(sub_matches))
         }
         Some(("save", sub_matches)) => {
             save::run(&SaveArgs::from_matches(sub_matches))

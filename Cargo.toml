@@ -61,6 +61,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 libc = "0.2"
 memchr = "2.8"
 lopdf = { version = "0.40.0", default-features = false }
+pulldown-cmark = "0.13"
 regex = "1.12"
 rquickjs = "0.12.1"
 scraper = "0.29"

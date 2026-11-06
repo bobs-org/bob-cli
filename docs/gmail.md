@@ -1,11 +1,12 @@
 # Bob Gmail
 
 `bob gmail` saves Gmail threads you choose as inert, append-only mail notes in
-the vault, linked from tasks with a readable label. This page covers one-time
-setup through [gog](https://github.com/openclaw/gogcli) (≥ v0.44.0) and the
-shell: the `gmail` noun group, config, login, logout, doctor, saving, search,
-metadata previews, and live reply counts. Linking, composing, and pulling land
-in later phases.
+the vault with readable task links, and creates local compose and reply notes.
+This page covers one-time setup through
+[gog](https://github.com/openclaw/gogcli) (≥ v0.44.0), the `gmail` command
+group, config, login, logout, doctor, saving, listing, search, metadata
+previews, live message counts, and compose-note creation. Sending and label
+pulls remain later work.
 
 Typical order: `bob gmail login` once, `bob gmail doctor` until every check is
 `ok` or an explained skip. Tests never touch Google: set `BOB_GMAIL_GOG` to a
@@ -21,6 +22,7 @@ fake executable.
 - [Login](#login)
 - [Logout](#logout)
 - [Save](#save)
+- [Compose notes](#compose-notes)
 - [List](#list)
 - [Search](#search)
 - [Peek](#peek)
@@ -40,7 +42,9 @@ bob gmail [list] [-a|--all] [-b|--bob-dir DIR] [-f|--format table|json] [-r|--re
 bob gmail doctor [-b|--bob-dir DIR] [-f|--format human|json]
 bob gmail login [-a|--account EMAIL] [-c|--credentials FILE] [-f|--format human|json] [-m|--manual] [-s|--scope readonly|compose]
 bob gmail logout [-a|--account EMAIL] [-f|--format human|json] [-y|--force]
+bob gmail new [-b|--bob-dir DIR] [-B|--bcc LIST] [-c|--cc LIST] [-f|--format human|json] [-s|--subject TEXT] [-t|--to LIST]
 bob gmail peek URL|ID [-f|--format human|json]
+bob gmail reply NOTE [-a|--all] [-b|--bob-dir DIR] [-f|--format human|json]
 bob gmail save URL|ID|NOTE... [-b|--bob-dir DIR] [-B|--body full|headers] [-d|--dry-run] [-f|--format human|json] [-P|--parent ROUTE] [-q|--quiet] [-R|--rerender]
 bob gmail search [QUERY] [-f|--format table|json] [-l|--limit N]
 ```
@@ -48,9 +52,11 @@ bob gmail search [QUERY] [-f|--format table|json] [-l|--limit N]
 Running `bob gmail` with no subcommand lists saved threads, exactly like the
 explicit `bob gmail list`. Listing is offline and read-only by default; `-r`
 fetches live message counts for the rows shown. `save` reads Gmail and writes
-selected threads to the vault. `doctor`, `search`, and `peek` are read-only;
-`login` and `logout` are excluded from the command catalog (they need a
-terminal and handle credentials).
+selected threads to the vault. `new` and `reply` write local Markdown notes
+without login or network access. `doctor`, `search`, and `peek` are read-only.
+`login` and `logout` are excluded from the command catalog because they need a
+terminal and handle credentials; `new` and `reply` are excluded because the
+compose flow is owned by the Bob Mail plugin.
 
 ## How it works
 
@@ -165,7 +171,7 @@ gmail:
   lists Gmail label names. `save` refuses matching threads with a reason.
 - `pull.label` unset or empty disables pull. Default `bob`; inbox default
   `gmail_inbox.md`.
-- `signature` is `gmail` (default) or `none`. Later `compose` honors it.
+- `signature` is `gmail` (default) or `none`; the later send flow honors it.
 - `timeout_secs` must be an integer greater than 0. Default 60.
 - The host label is the same slug vault-sync uses in commit subjects.
   `doctor` prints it. Unset `writer` means this host may write; a mismatch
@@ -259,6 +265,46 @@ Referenced CID images are copied under `img/mail/<thread id>/`, capped at
 Small images repeated across different messages are treated as signature
 logos. Ordinary attachments remain listings. A one-line warning is added to
 the vault root `AGENTS.md` once; vault-sync owns committing that warning.
+
+## Compose notes
+
+`bob gmail new` creates a standalone compose note under `gmail.folder`, using
+the configured day timezone, the current date, the subject slug, and a numeric
+suffix if the path is occupied. The note's path stays fixed after creation.
+`--bob-dir` selects the vault. `--to`, `--cc`, and `--bcc` accept comma-separated
+mailboxes; quote a display name that contains a comma. The `to`, `cc`, and `bcc`
+frontmatter values are YAML sequences. An empty recipient list and an empty
+subject are valid while authoring. Subject and recipient values reject control
+characters and CR/LF injection.
+
+The new note has `parent: "[[mail]]"`, `type: "[[mail]]"`, the `bob-mail` CSS
+class, `status: draft`, recipient fields, `subject`, and an empty `attachments`
+list. Its message body starts empty below the H1. The note is not indexed as a
+saved Gmail thread until the send flow promotes it. `mail.md` and `mail.base`
+are created only when missing. Writes honor `gmail.writer`, the vault
+maintenance lock, symlink checks, staged preimage validation, and path-scoped
+Git commits; unrelated dirty vault paths remain outside the commit.
+
+`bob gmail reply NOTE` appends one `## Reply` section to a saved Gmail note;
+`--all` appends `## Reply all`. `NOTE` may be a vault-relative path in
+`gmail.folder` (with or without `.md`) or a unique note basename. The saved
+note's managed message markers supply the exact thread, Gmail message, and RFC
+message identities for later draft work. A second reply refuses without
+changing the note. Existing notes, including `## Notes`, are preserved byte for
+byte before the new section. Reply insertion is local and does not require a
+Gmail login.
+
+With `-f json`, both commands return schema 1 with `ok`, `status`, `note`, and
+`cursor`. `status` is `created` for `new` and `reply_added` for `reply`. The
+vault-relative note path is in `note`. Cursor `line` and `column` are both
+zero-based; `column` counts UTF-16 code units to match the editor position
+model. The cursor points to the start of the empty message body or Reply
+section body.
+
+```bash
+bob gmail new -t 'Ada <ada@example.com>' -s "Lease renewal" -f json
+bob gmail reply mail/2026/261105_lease_renewal.md --all -f json
+```
 
 ## List
 
@@ -385,4 +431,5 @@ Every `-f json` output carries `schema_version: 1` and `ok`. Errors are typed
 
 ## Known limits
 
-Linking, composing, and pulling land in later phases.
+Sending compose and reply notes as Gmail drafts and pulling Gmail labels into
+an inbox note remain later phases.

@@ -92,11 +92,6 @@ const TABLE: &[Entry] = &[
         arg: "block-id",
         kind: Kind::Task,
     },
-    Entry {
-        path: &["clipboard"],
-        arg: "count",
-        kind: Kind::FreeText,
-    },
     // A choice here ...
     Entry {
         path: &["gkeep", "list"],
@@ -121,14 +116,35 @@ const TABLE: &[Entry] = &[
         arg: "parent",
         kind: Kind::Route,
     },
-    // Gmail save accepts a URL, thread id, or saved mail-note link.
+    // Gmail compose recipients and subject are literal draft values.
     Entry {
-        path: &["gmail", "save"],
-        arg: "input",
+        path: &["gmail", "new"],
+        arg: "bcc",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["gmail", "new"],
+        arg: "cc",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["gmail", "new"],
+        arg: "subject",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["gmail", "new"],
+        arg: "to",
         kind: Kind::FreeText,
     },
     Entry {
         path: &["gmail", "peek"],
+        arg: "input",
+        kind: Kind::FreeText,
+    },
+    // Gmail save accepts a URL, thread id, or saved mail-note link.
+    Entry {
+        path: &["gmail", "save"],
         arg: "input",
         kind: Kind::FreeText,
     },

@@ -1173,10 +1173,6 @@ pub(crate) const ENTRIES: &[Row] = &[
 /// member are added automatically at assemble time.
 pub(crate) const EXCLUDED: &[Excluded] = &[
     Excluded {
-        path: &["clipboard"],
-        reason: "Clipboard history diagnostics; run it from a terminal",
-    },
-    Excluded {
         path: &["capture"],
         reason: "Capture text from Bob Mac Capture or a terminal; command \
                  mode runs its named capture rows",
@@ -1215,8 +1211,16 @@ pub(crate) const EXCLUDED: &[Excluded] = &[
         reason: "Needs confirmation and handles credentials",
     },
     Excluded {
+        path: &["gmail", "new"],
+        reason: "Compose flow is owned by the Bob Mail plugin",
+    },
+    Excluded {
         path: &["gmail", "peek"],
         reason: "Live metadata preview for editor and capture clients",
+    },
+    Excluded {
+        path: &["gmail", "reply"],
+        reason: "Reply flow is owned by the Bob Mail plugin",
     },
     Excluded {
         path: &["gkeep", "migrate-markers"],

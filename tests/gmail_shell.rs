@@ -1241,3 +1241,221 @@ fn gmail_reads_use_read_only_no_send_flags() {
         "reads must never pass --wrap-untrusted: {search:?}"
     );
 }
+
+#[test]
+fn compose_new_creates_collision_safe_note_and_json_cursor_without_gog() {
+    let env = GmailEnv::new("bob-cli-gmail-compose-new");
+    env.write_config(
+        "gmail:\n  account: you@example.com\n  writer: test-host\n  folder: archive\n",
+    );
+    let occupied = env.vault().join("archive/2026/261105_cafe_renewal.md");
+    fs::create_dir_all(occupied.parent().unwrap()).unwrap();
+    fs::write(&occupied, "occupied\n").unwrap();
+    let fake = FakeGog::new(&env, "gog");
+    let output = run_gmail(
+        &env,
+        &fake,
+        &[
+            "new",
+            "--to",
+            "\"Ada, A\" <ada@example.com>, Lee <lee@example.com>",
+            "--cc",
+            "cc@example.com",
+            "-B",
+            "bcc@example.com",
+            "--subject",
+            "Re: Café renewal",
+            "-f",
+            "json",
+        ],
+    );
+    assert_success(&output, "new compose note");
+    let doc = json_stdout(&output);
+    assert_eq!(doc["schema_version"], 1);
+    assert_eq!(doc["status"], "created");
+    assert_eq!(doc["note"], "archive/2026/261105_cafe_renewal_2.md");
+    assert_eq!(doc["cursor"]["column"], 0);
+    let note =
+        fs::read_to_string(env.vault().join(doc["note"].as_str().unwrap()))
+            .expect("compose note");
+    let frontmatter = note
+        .split_once("---\n")
+        .unwrap()
+        .1
+        .split_once("\n---\n")
+        .unwrap()
+        .0;
+    let frontmatter: serde_yaml::Value =
+        serde_yaml::from_str(frontmatter).unwrap();
+    assert_eq!(frontmatter["parent"].as_str(), Some("[[mail]]"));
+    assert_eq!(frontmatter["type"].as_str(), Some("[[mail]]"));
+    assert_eq!(frontmatter["status"].as_str(), Some("draft"));
+    assert_eq!(frontmatter["subject"].as_str(), Some("Re: Café renewal"));
+    assert_eq!(
+        frontmatter["to"],
+        serde_yaml::Value::Sequence(vec![
+            serde_yaml::Value::String(
+                "\"Ada, A\" <ada@example.com>".to_string()
+            ),
+            serde_yaml::Value::String("Lee <lee@example.com>".to_string()),
+        ])
+    );
+    assert_eq!(
+        frontmatter["cc"],
+        serde_yaml::Value::Sequence(vec![serde_yaml::Value::String(
+            "cc@example.com".to_string()
+        )])
+    );
+    assert!(frontmatter["attachments"].as_sequence().unwrap().is_empty());
+    assert!(note.ends_with("# Re: Café renewal\n\n"));
+    assert!(env.vault().join("mail.md").is_file());
+    assert!(env.vault().join("mail.base").is_file());
+    assert!(fake.calls().is_empty(), "new must not contact gog");
+}
+
+#[test]
+fn compose_new_allows_empty_headers_but_rejects_crlf_and_writer_mismatch() {
+    let env = GmailEnv::new("bob-cli-gmail-compose-empty");
+    let fake = FakeGog::new(&env, "gog");
+    let empty = run_gmail(&env, &fake, &["new", "-f", "json"]);
+    assert_success(&empty, "empty compose note");
+    let note_path = json_stdout(&empty)["note"].as_str().unwrap().to_string();
+    let note = fs::read_to_string(env.vault().join(note_path)).unwrap();
+    assert!(note.contains("to: []"), "{note}");
+    assert!(
+        note.contains("subject: ''") || note.contains("subject: \"\""),
+        "{note}"
+    );
+    assert!(fake.calls().is_empty());
+
+    let before = vault_files(&env);
+    let crlf = run_gmail(
+        &env,
+        &fake,
+        &["new", "-t", "ada@example.com\nBcc: attacker@example.com"],
+    );
+    assert_eq!(crlf.status.code(), Some(2));
+    assert_eq!(vault_files(&env), before);
+
+    env.write_config("gmail:\n  writer: another-host\n");
+    let refused = run_gmail(&env, &fake, &["new"]);
+    assert_eq!(refused.status.code(), Some(2));
+    assert_eq!(vault_files(&env), before);
+    assert!(fake.calls().is_empty());
+}
+
+#[test]
+fn compose_reply_appends_once_preserving_authored_text_and_avoids_gog() {
+    let env = GmailEnv::new("bob-cli-gmail-compose-reply");
+    let relative = "mail/2026/261105_lease.md";
+    let note_path = env.vault().join(relative);
+    fs::create_dir_all(note_path.parent().unwrap()).unwrap();
+    let original = saved_thread_note();
+    fs::write(&note_path, &original).unwrap();
+    let fake = FakeGog::new(&env, "gog");
+    let output =
+        run_gmail(&env, &fake, &["reply", relative, "--all", "-f", "json"]);
+    assert_success(&output, "reply all");
+    let doc = json_stdout(&output);
+    assert_eq!(doc["schema_version"], 1);
+    assert_eq!(doc["status"], "reply_added");
+    assert_eq!(doc["note"], relative);
+    assert_eq!(doc["cursor"]["column"], 0);
+    let updated = fs::read_to_string(&note_path).unwrap();
+    assert!(updated.starts_with(&original), "existing bytes changed");
+    assert!(updated.ends_with("## Reply all\n\n"));
+    assert!(env.vault().join("mail.md").is_file());
+    assert!(env.vault().join("mail.base").is_file());
+    assert!(fake.calls().is_empty(), "reply must not contact gog");
+
+    let second = run_gmail(&env, &fake, &["reply", relative]);
+    assert_eq!(second.status.code(), Some(2));
+    assert_eq!(fs::read_to_string(note_path).unwrap(), updated);
+    assert!(fake.calls().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn compose_reply_refuses_symlink_and_traversal_paths() {
+    use std::os::unix::fs::symlink;
+
+    let env = GmailEnv::new("bob-cli-gmail-compose-path-safety");
+    let outside = env.root().join("outside.md");
+    fs::write(&outside, saved_thread_note()).unwrap();
+    let mail_dir = env.vault().join("mail/2026");
+    fs::create_dir_all(&mail_dir).unwrap();
+    symlink(&outside, mail_dir.join("linked.md")).unwrap();
+    let fake = FakeGog::new(&env, "gog");
+
+    let symlinked = run_gmail(&env, &fake, &["reply", "mail/2026/linked.md"]);
+    assert_eq!(symlinked.status.code(), Some(1));
+    assert!(fs::read_to_string(&outside)
+        .unwrap()
+        .ends_with("<!-- bob:gmail:end -->\n"));
+    assert!(!env.vault().join("mail.md").exists());
+
+    let traversed = run_gmail(&env, &fake, &["reply", "../outside.md"]);
+    assert_eq!(traversed.status.code(), Some(2));
+    assert!(!env.vault().join("mail.md").exists());
+    assert!(fake.calls().is_empty());
+}
+
+#[test]
+fn compose_help_has_examples_and_environment_without_public_stubs() {
+    let env = GmailEnv::new("bob-cli-gmail-compose-help");
+    let fake = FakeGog::new(&env, "gog");
+    let new_help = run_gmail(&env, &fake, &["new", "--help"]);
+    assert_success(&new_help, "new help");
+    let new_text = stdout(&new_help);
+    for expected in [
+        "--bcc",
+        "--bob-dir",
+        "--subject",
+        "--to",
+        "Examples",
+        "Environment",
+    ] {
+        assert!(
+            new_text.contains(expected),
+            "missing {expected}: {new_text}"
+        );
+    }
+    let reply_help = run_gmail(&env, &fake, &["reply", "--help"]);
+    assert_success(&reply_help, "reply help");
+    let reply_text = stdout(&reply_help);
+    for expected in ["--all", "--bob-dir", "NOTE", "Examples", "Environment"] {
+        assert!(
+            reply_text.contains(expected),
+            "missing {expected}: {reply_text}"
+        );
+    }
+    assert!(!new_text.contains("gmail draft"));
+    assert!(!new_text.contains("gmail send"));
+    assert!(fake.calls().is_empty());
+}
+
+#[test]
+fn compose_new_scoped_commit_leaves_unrelated_dirty_vault_paths_alone() {
+    let env = GmailEnv::new("bob-cli-gmail-compose-git-scope");
+    initialize_git_vault(env.vault());
+    fs::write(env.vault().join("unrelated.md"), "keep dirty\n").unwrap();
+    let fake = FakeGog::new(&env, "gog");
+    let output = run_gmail(&env, &fake, &["new", "-s", "Scoped"]);
+    assert_success(&output, "scoped compose write");
+    let committed =
+        git_output(env.vault(), &["show", "--format=", "--name-only", "HEAD"]);
+    let committed = String::from_utf8_lossy(&committed.stdout);
+    assert!(committed.contains("mail.md"));
+    assert!(committed.contains("mail.base"));
+    assert!(committed.contains("mail/2026/261105_scoped.md"));
+    assert!(!committed.contains("unrelated.md"));
+    assert!(String::from_utf8_lossy(
+        &git_output(env.vault(), &["status", "--short"]).stdout
+    )
+    .contains("unrelated.md"));
+}
+
+fn saved_thread_note() -> String {
+    "---\ntype: \"[[mail]]\"\ncontent: untrusted-email\ngmail_account: you@example.com\ngmail_thread_id: 0123456789abcdef\ntitle: Lease\nwho: Dana\nstarted: 2026-11-05T10:00:00+00:00\nupdated: 2026-11-05T10:00:00+00:00\nmessages: 1\n---\n# Lease\n\n· Dana ↔ you · 1 message · Nov 5\n\n## Notes\n\nAuthored note survives.\n\n## Conversation\n\n<!-- bob:gmail:begin v1 -->\n<!-- bob:gmail:msg 0123456789abcdef %3Cmail%40example.test%3E -->\n> [!mail+] **Dana** · Nov 5\n> Hello\n^m-0123456789abcdef\n<!-- bob:gmail:end -->\n"
+        .to_string()
+}

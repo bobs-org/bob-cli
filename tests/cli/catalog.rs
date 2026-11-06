@@ -39,7 +39,7 @@ fn protocol_1_parses_with_schema_version_one() {
         serde_json::json!(["clicolor-force", "progress-env", "run-receipt"])
     );
     let entries = json["entries"].as_array().expect("entries");
-    assert_eq!(entries.len(), 75);
+    assert_eq!(entries.len(), 76);
     assert!(entries.iter().any(|entry| {
         entry["id"] == "clipboard"
             && entry["path"] == serde_json::json!(["clipboard"])
@@ -64,7 +64,7 @@ fn protocol_1_parses_with_schema_version_one() {
         entry["id"] == "gmail-list"
             && entry["path"] == serde_json::json!(["gmail", "list"])
             && entry["effect"] == "reads"
-            && entry["network"] == false
+            && entry["network"] == true
     }));
     assert!(entries.iter().any(|entry| {
         entry["id"] == "periods-show"

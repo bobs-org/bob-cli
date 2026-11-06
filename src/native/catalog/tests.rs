@@ -142,6 +142,28 @@ fn public_leaves_are_entries_or_excluded() {
 }
 
 #[test]
+fn gmail_compose_commands_are_explicitly_excluded() {
+    let catalog = document();
+    for command in ["new", "reply"] {
+        let path = ["gmail", command];
+        assert!(
+            catalog.excluded.iter().any(|row| {
+                row.path.iter().map(String::as_str).eq(path)
+                    && row.reason.contains("Bob Mail")
+            }),
+            "gmail {command} must be excluded for the Bob Mail flow"
+        );
+        assert!(
+            catalog
+                .entries
+                .iter()
+                .all(|row| { row.path.iter().map(String::as_str).ne(path) }),
+            "gmail {command} must not be a catalog entry"
+        );
+    }
+}
+
+#[test]
 fn ids_are_unique_kebab_case_and_keywords_are_lowercase() {
     let mut seen = HashSet::new();
     for row in ENTRIES {
