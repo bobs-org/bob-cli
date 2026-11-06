@@ -3,6 +3,8 @@
 pub(super) mod html;
 pub(super) mod inert;
 pub(super) mod mime;
+pub(super) mod plain;
+pub(super) mod render;
 
 use std::collections::BTreeMap;
 
@@ -24,7 +26,16 @@ pub(crate) use inert::{
 #[allow(unused_imports)]
 pub(crate) use html::{render_html, HtmlRender};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+// Consumer: mail-note and gmail-save (outer hg phases) segment plain replies
+// and render whole messages through this boundary.
+#[allow(unused_imports)]
+pub(crate) use plain::{render_plain, PlainRender};
+#[allow(unused_imports)]
+pub(crate) use render::{
+    importable_messages, inert_metadata, is_bulletin, is_draft, render_message,
+};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BodySource {
     Html,
     Plain,
@@ -68,6 +79,9 @@ pub(crate) struct InlineImage {
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Attachment {
+    /// 1-based position in stable MIME order within one message. The note
+    /// layer assigns thread-wide display numbers in document order.
+    pub(crate) index: u32,
     pub(crate) filename: Option<String>,
     pub(crate) mime_type: String,
     pub(crate) size: Option<u64>,

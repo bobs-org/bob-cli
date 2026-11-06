@@ -101,6 +101,9 @@ fn collect_resources(
     let mime = base_mime_type(&part.mime_type);
     if is_attachment(part) {
         inventory.attachments.push(Attachment {
+            // Numbered at assembly time in render.rs; zero here keeps the
+            // inventory a faithful pre-selection record.
+            index: 0,
             filename: part.filename.clone(),
             mime_type: part.mime_type.clone(),
             size: part.body.as_ref().and_then(|body| body.size),

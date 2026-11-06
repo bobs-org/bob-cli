@@ -15,6 +15,7 @@ fake executable.
 
 - [Commands](#commands)
 - [How it works](#how-it-works)
+- [Body rendering](#body-rendering)
 - [Setup](#setup)
 - [Configuration](#configuration)
 - [Login](#login)
@@ -60,6 +61,35 @@ Reads always pass `--readonly --gmail-no-send` plus `--enable-commands`
 restricted to the Gmail read commands, and never pass `--sanitize-content` or
 `--wrap-untrusted`. The bodies live only in mail notes, never in argv, logs,
 journals, or JSON errors.
+
+## Body rendering
+
+When `save` lands, each message's MIME tree renders to inert Markdown through
+a pure boundary with no network, filesystem, or clock access. The same rules
+already decide what the saved notes will contain:
+
+- HTML is preferred when it carries links, tables, or referenced images, or
+  when it says something the plain version does not. A bare tag wrapper
+  around identical text falls back to plain, then to the snippet. Both
+  alternatives are never concatenated.
+- Quoted history (`>` runs, `On ... wrote:` tails, Outlook forwards) and the
+  `-- ` signature fold into separate sections, so the note can hide them
+  behind one folded callout. Inline replies stay in the main text.
+- Bulk and list mail (a `List-Unsubscribe` or `List-Id` header, a `bulk`
+  precedence, or a Gmail promotion/update/forum category) renders in bulletin
+  mode: flattened text with safe links, no images, no import candidates.
+- Remote images never load and never become image syntax; a safe link labelled
+  `🖼` plus the alt text or host is the most a remote image becomes. Tracking
+  pixels are dropped. A `cid:` image resolves only against that message's own
+  MIME resources and stays a typed descriptor until `save` copies a validated
+  local file; nothing sender-controlled becomes a local embed on its own.
+- Body parts whose bytes were not fetched yet keep a fetch marker instead of
+  masquerading as empty bodies, and re-rendering with the fetched bytes fills
+  them in. `DRAFT` messages are never imported.
+- Every sender word is neutralized at render time: wikilinks, tags, Dataview
+  fields, checkboxes, Templater openers, and executable code fences cannot
+  survive in a body, a header, a snippet, or a filename shown in the note.
+  Raw filenames and IDs stay untrusted path inputs for the save phase.
 
 ## Setup
 

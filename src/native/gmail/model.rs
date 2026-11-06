@@ -318,6 +318,10 @@ pub(crate) enum BodyErrorKind {
     InvalidBase64,
     UnsupportedCharset,
     TraversalLimitExceeded,
+    /// The caller tried to render a `DRAFT`-labelled message. Drafts are never
+    /// imported; the caller must filter them with `importable_messages`.
+    /// Carries no sender bytes, only the refusal reason.
+    DraftRefused,
 }
 
 #[derive(Clone, PartialEq, Eq)]
