@@ -52,6 +52,11 @@ what changed. The first install after this change, or after the build directory 
 cleaned, is still a full build.
 For that build it ignores any configured `rustc-wrapper` (for example sccache).
 `BOB_INSTALL_PROFILE=release` installs with the plain release profile instead.
+When run in a terminal, the build shows a live status line with its activity
+and elapsed time. It shows an ETA only after this host has enough comparable
+build history. Build output goes to a log, whose path is printed if the build
+fails. Set `BOB_INSTALL_VERBOSE=1` to stream raw Cargo output and turn off the
+live status line; this is useful when diagnosing a build.
 Before it installs, `just install` removes a path or Git install registered as
 `bob-cli`. If `bob-cli` came from a registry, the recipe stops because that is
 another project. The recipe does not use `--force`. Ensure that `bin` directory

@@ -10,7 +10,9 @@ tags:
 # Install everything with one command
 
 This guide installs Bob from a source checkout, deploys the Obsidian plugins when a
-vault is present, and on macOS installs Mac Capture from a sibling checkout.
+vault is present, and on macOS installs Mac Capture from a sibling checkout. The
+installer pulls all available checkouts first, shows the commits since their last
+successful install, then runs each build with a live progress line.
 
 ## Before you start
 
@@ -37,9 +39,14 @@ cd /home/alex/src/bobs-org/bob-cli
 just install-all
 ```
 
-The recipe pulls this checkout with `--ff-only`, installs `bob`, then pulls and
-deploys `../bob-plugins` with `bob plugins sync --no-pull --repo`. On macOS it
-also pulls and installs `../bob-mac-capture`. Confirm each named row in the
+The recipe pulls this checkout with `--ff-only`, then pulls available sibling
+checkouts before it starts any build. It shows a compact “What’s new” digest for
+commits since each checkout's last successful install. It then installs `bob`,
+deploys `../bob-plugins` with `bob plugins sync --no-pull --repo`, and on macOS
+installs `../bob-mac-capture`. During a build, one live line reports the current
+activity and elapsed time. An ETA appears only after this host has enough
+comparable build history. Cargo output is saved to a log; if a build fails, the
+installer prints a short excerpt and the log path. Confirm each named row in the
 summary: `bob-cli`, `bob-plugins`, `bob-mac-capture`, and `obsidian`.
 
 ```text { .no-copy title="Output" }
@@ -50,7 +57,19 @@ summary: `bob-cli`, `bob-plugins`, `bob-mac-capture`, and `obsidian`.
 ```
 
 Glyphs mark `ok`, `warn`, `fail`, `skip`, or a restart. A failed row makes the
-command exit 1.
+command exit 1. At the end, the installer prints a summary, rings the terminal
+bell, and on macOS posts a completion notification.
+
+Pass `-v` to stream compiler and plugin-sync output instead of keeping that
+output in the step log:
+
+```bash
+just install-all -v
+```
+
+For `just install`, set `BOB_INSTALL_VERBOSE=1` to stream compiler output. This
+also disables the live status line. Without a terminal, or when the helper is
+unavailable, the install continues with ordinary command output.
 
 ## 2. Read skips and warnings
 
@@ -96,8 +115,10 @@ Obsidian is never launched. The pending marker lives under
 ## If it goes wrong
 
 A failed clone, a failed `just install`, or a failed plugin sync exits 1 and
-leaves earlier successful rows in place. Rerun `just install-all` after fixing
-the reported step. If plugins copied into the vault but Obsidian did not
+leaves earlier successful rows in place. For a build failure, inspect the log
+path printed below the error excerpt; rerun with `just install-all -v` to see
+raw build and plugin-sync output in the terminal. Rerun `just install-all` after
+fixing the reported step. If plugins copied into the vault but Obsidian did not
 reload, the next run retries that restart. Do not pass `--force` to the Cargo
 install.
 
