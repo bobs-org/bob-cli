@@ -19,7 +19,9 @@ pub(crate) use command::{build_cli, run};
 pub(crate) use payload::prepare_task_merge;
 // The parent merge-label phase will call the planner through this module.
 #[allow(unused_imports)]
-pub(crate) use plan::plan_task_merge;
+pub(crate) use plan::{
+    plan_task_merge, plan_task_merge_with_selected_freshness,
+};
 // Later planner phases consume these crate-internal preparation records.
 #[allow(unused_imports)]
 pub(crate) use retirement::{

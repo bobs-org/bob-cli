@@ -715,6 +715,9 @@ pub(crate) struct ParsedRelation {
     pub(crate) hidden: bool,
     /// Normalised label, when `|label` was typed.
     pub(crate) label: Option<String>,
+    /// Absolute UTF-8 byte range in the original capture draft. Absent for
+    /// relations synthesized by internal planning helpers.
+    pub(crate) span: Option<(usize, usize)>,
 }
 
 /// One complete `&note:block-id` modifier on an execution item, in typed
@@ -731,6 +734,9 @@ pub(crate) struct ParsedDependency {
     pub(crate) block_id: String,
     /// Whether the note was a `"quoted component"`.
     pub(crate) quoted: bool,
+    /// Absolute UTF-8 byte range in the original capture draft. Absent for
+    /// dependencies synthesized by internal planning helpers.
+    pub(crate) span: Option<(usize, usize)>,
 }
 
 /// Which task owns an execution item's dependency modifiers.

@@ -69,6 +69,7 @@ mod inbox_route;
 mod keep_moving_net;
 mod link_guard;
 mod meet_event_run;
+mod merge_in;
 mod merge_in_pending;
 pub(crate) mod move_choice;
 pub(crate) mod move_consequence;

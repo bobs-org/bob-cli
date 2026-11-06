@@ -50,9 +50,15 @@ pub(super) fn parse_capture_draft_with_options(
         forced_section,
         options,
     )
-    .map_err(|error| match error.code {
-        Some(code) => CaptureError::usage_code(error.message, code),
-        None => CaptureError::usage(error.message),
+    .map_err(|error| {
+        let mut capture_error = match error.code {
+            Some(code) => CaptureError::usage_code(error.message, code),
+            None => CaptureError::usage(error.message),
+        };
+        if let (Some(item), Some(span)) = (error.item, error.span) {
+            capture_error = capture_error.with_item_span(item, span);
+        }
+        capture_error
     })
 }
 

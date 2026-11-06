@@ -72,6 +72,10 @@ fn apply_target_run_terminal_markers(
 pub(super) struct CaptureItemParseError {
     pub(super) code: Option<&'static str>,
     pub(super) message: String,
+    /// One-based capture item plus the offending absolute UTF-8 byte span,
+    /// when a claimed merge-in conflict identifies a source token.
+    pub(super) item: Option<usize>,
+    pub(super) span: Option<(usize, usize)>,
 }
 
 impl CaptureItemParseError {
@@ -79,6 +83,8 @@ impl CaptureItemParseError {
         Self {
             code: None,
             message,
+            item: None,
+            span: None,
         }
     }
 
@@ -86,6 +92,8 @@ impl CaptureItemParseError {
         Self {
             code: Some(code),
             message,
+            item: None,
+            span: None,
         }
     }
 }

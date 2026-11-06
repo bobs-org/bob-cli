@@ -7521,6 +7521,23 @@ impl CaptureError {
         self.typed = Some(typed);
         self
     }
+
+    /// Attach a one-based capture item and an absolute half-open UTF-8 byte
+    /// range to a refusal that points at a token in the original draft.
+    pub(super) fn with_item_span(
+        mut self,
+        item: usize,
+        span: (usize, usize),
+    ) -> Self {
+        let mut extra = self.extra.take().unwrap_or_default();
+        extra.insert("item".to_string(), json!(item));
+        extra.insert(
+            "span".to_string(),
+            json!({"start": span.0, "end": span.1}),
+        );
+        self.extra = Some(extra);
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

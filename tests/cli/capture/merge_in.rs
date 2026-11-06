@@ -1,9 +1,5 @@
-//! Merge-in (`<`) transitional execution refusal: dry-run and commit write
-//! no files, including a later merge-in in a bulk draft.
-//!
-//! Feedback coverage: dry-run `merge_in_pending` context and the stdin
-//! `shell_ate_merge_in_arrow` guard. Complete `<` execution still refuses
-//! with `merge_in_unavailable` until the execute phase lands.
+//! Atomic capture merge-in (`<`) execution through the explicit merge engine,
+//! plus incomplete-source feedback and the stdin shell guard.
 
 use crate::support::*;
 use std::fs;
@@ -28,11 +24,15 @@ fn setup_merge_vault(
     );
     write_file(
         &vault.join("a.md"),
-        &area_with_tasks("- [ ] #task Fix the flaky login test ^f\n"),
+        &area_with_tasks(
+            "- [ ] #task Fix the flaky login test ^f\n\t- source note a\n",
+        ),
     );
     write_file(
         &vault.join("b.md"),
-        &area_with_tasks("- [ ] #task Login timeout too short ^b\n"),
+        &area_with_tasks(
+            "- [ ] #task Login timeout too short ^b\n\t- source note b\n",
+        ),
     );
     let day_file = vault.join("day.md");
     write_file(&day_file, "## Pomodoros\n\n- [ ] Current (0900-0930)\n");
@@ -40,21 +40,29 @@ fn setup_merge_vault(
 }
 
 fn snapshot(vault: &Path) -> Vec<(String, String)> {
-    let mut files: Vec<_> = std::fs::read_dir(vault)
-        .expect("read vault")
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "md"))
-        .map(|entry| {
-            let path = entry.path();
-            let name = path
-                .file_name()
-                .expect("file name")
-                .to_string_lossy()
-                .to_string();
-            let body = std::fs::read_to_string(&path).unwrap_or_default();
-            (name, body)
-        })
-        .collect();
+    fn collect(
+        root: &Path,
+        directory: &Path,
+        files: &mut Vec<(String, String)>,
+    ) {
+        for entry in std::fs::read_dir(directory).expect("read vault directory")
+        {
+            let path = entry.expect("read directory entry").path();
+            if path.is_dir() {
+                collect(root, &path, files);
+            } else if path.extension().is_some_and(|ext| ext == "md") {
+                let name = path
+                    .strip_prefix(root)
+                    .expect("path stays under vault")
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let body = std::fs::read_to_string(&path).unwrap_or_default();
+                files.push((name, body));
+            }
+        }
+    }
+    let mut files = Vec::new();
+    collect(vault, vault, &mut files);
     files.sort();
     files
 }
@@ -64,6 +72,17 @@ fn capture_json(
     day_file: &Path,
     draft: &str,
     dry_run: bool,
+) -> std::process::Output {
+    capture_with(vault, day_file, draft, dry_run, None, None)
+}
+
+fn capture_with(
+    vault: &Path,
+    day_file: &Path,
+    draft: &str,
+    dry_run: bool,
+    pull_in: Option<&str>,
+    config: Option<&Path>,
 ) -> std::process::Output {
     let mut command = bob_command();
     command
@@ -75,67 +94,280 @@ fn capture_json(
     if dry_run {
         command.arg("--dry-run");
     }
+    if let Some(pull_in) = pull_in {
+        command.arg("--pull-in").arg(pull_in);
+    }
     command
         .arg("--")
         .arg(draft)
         .env("BOB_DAY_FILE", day_file)
-        .env("BOB_NOW", NOW)
-        .output()
-        .expect("run capture")
+        .env("BOB_NOW", NOW);
+    if let Some(config) = config {
+        command.env("BOB_CONFIG_FILE", config);
+    }
+    command.output().expect("run capture")
+}
+
+fn output_json(output: &std::process::Output) -> serde_json::Value {
+    serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim())
+        .unwrap_or_else(|error| {
+            panic!("stdout should be JSON: {error}\n{}", format_output(output))
+        })
+}
+
+fn item(result: &serde_json::Value) -> &serde_json::Value {
+    result
+        .get("captures")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|captures| captures.first())
+        .unwrap_or(result)
 }
 
 #[test]
-fn merge_in_is_refused_in_dry_run_and_commit_without_writes() {
-    for dry_run in [true, false] {
-        let (_temp, vault, day_file) = setup_merge_vault("merge_in_refusal");
-        let before = snapshot(&vault);
-        let output =
-            capture_json(&vault, &day_file, "New task < @a+f @b+b", dry_run);
+fn merge_in_creates_target_and_appends_sources_after_authored_notes() {
+    let (_temp, vault, day_file) = setup_merge_vault("merge_in_execute");
+    let draft = "New target @inbox < @a+f @b+b\n- authored note";
+    let before = snapshot(&vault);
+
+    let dry = capture_json(&vault, &day_file, draft, true);
+    assert_success(&dry);
+    let dry_json = output_json(&dry);
+    let dry_item = item(&dry_json);
+    assert_eq!(dry_item["kind"], "task", "{dry_json}");
+    let dry_id = dry_item["block_id"]
+        .as_str()
+        .expect("merge-in preview has a target ID");
+    assert_eq!(
+        dry_item["block_link"],
+        format!("[[inbox#^{dry_id}]]"),
+        "{dry_json}"
+    );
+    assert!(dry_item["task_line"].as_str().unwrap().contains(dry_id));
+    assert_eq!(
+        dry_item["merges"].as_array().unwrap().len(),
+        2,
+        "{dry_json}"
+    );
+    assert!(
+        dry_item["merges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|record| record["target"]["created"] == true),
+        "{dry_json}"
+    );
+    assert_eq!(
+        snapshot(&vault),
+        before,
+        "dry-run must not write the target"
+    );
+
+    let real = capture_json(&vault, &day_file, draft, false);
+    assert_success(&real);
+    let real_json = output_json(&real);
+    let real_item = item(&real_json);
+    assert_eq!(real_item["block_id"], dry_id, "preview ID is deterministic");
+    assert_eq!(
+        real_item["merges"].as_array().unwrap().len(),
+        2,
+        "{real_json}"
+    );
+
+    let inbox = std::fs::read_to_string(vault.join("inbox.md")).unwrap();
+    let authored = inbox.find("authored note").expect("authored child lands");
+    let source_a = inbox.find("source note a").expect("source A payload lands");
+    let source_b = inbox.find("source note b").expect("source B payload lands");
+    assert!(authored < source_a && source_a < source_b, "{inbox}");
+    for (path, id) in [("a.md", "f"), ("b.md", "b")] {
+        let source = std::fs::read_to_string(vault.join(path)).unwrap();
         assert!(
-            !output.status.success(),
-            "merge-in should refuse: {}",
-            format_output(&output)
+            source.contains("#task"),
+            "source tombstone remains: {source}"
         );
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let combined = format!("{stdout}\n{stderr}");
         assert!(
-            combined.contains("merge_in_unavailable"),
-            "expected merge_in_unavailable, got: {combined}"
-        );
-        assert_eq!(
-            snapshot(&vault),
-            before,
-            "vault must be unchanged (dry_run={dry_run})"
+            source.contains(&format!("merged into [[inbox#^{dry_id}]]")),
+            "source {id} points to the new target: {source}"
         );
     }
+    let blocks = real_json["task_blocks"].as_array().unwrap();
+    assert!(
+        blocks.iter().any(|block| {
+            block["block_id"] == dry_id
+                && block["roles"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&serde_json::json!("merge_target"))
+        }),
+        "{real_json}"
+    );
 }
 
 #[test]
-fn later_merge_in_bulk_item_leaves_vault_unchanged() {
-    let (_temp, vault, day_file) = setup_merge_vault("merge_in_bulk");
+fn merge_in_bytes_match_the_equivalent_two_item_transfer() {
+    let (_temp_left, left_vault, left_day) =
+        setup_merge_vault("merge_in_equiv_left");
+    let (_temp_right, right_vault, right_day) =
+        setup_merge_vault("merge_in_equiv_right");
+    let left = "New target @inbox^new < @a+f @b+b\n- authored note";
+    let right =
+        "New target @inbox^new\n- authored note\n\n@a+f @b+b > @inbox+new";
+
+    let left_output = capture_json(&left_vault, &left_day, left, false);
+    assert_success(&left_output);
+    let right_output = capture_json(&right_vault, &right_day, right, false);
+    assert_success(&right_output);
+    assert_eq!(snapshot(&left_vault), snapshot(&right_vault));
+}
+
+#[test]
+fn selected_merge_in_offer_matches_two_item_transfer_without_freshness() {
+    let (_temp_left, left_vault, left_day) =
+        setup_merge_vault("merge_in_offer_left");
+    let (_temp_right, right_vault, right_day) =
+        setup_merge_vault("merge_in_offer_right");
+    let day =
+        "## Pomodoros\n\n- [ ] () — BUILD\n  - [[a#^f]]\n  - keep this slot\n";
+    write_file(&left_day, day);
+    write_file(&right_day, day);
+    let merge_in = capture_with(
+        &left_vault,
+        &left_day,
+        "New target @inbox^target < @a+f",
+        false,
+        Some("all"),
+        None,
+    );
+    let two_item_transfer = capture_with(
+        &right_vault,
+        &right_day,
+        "New target @inbox^target\n\n@a+f > @inbox+target",
+        false,
+        Some("all"),
+        None,
+    );
+    assert_success(&merge_in);
+    assert_success(&two_item_transfer);
+    assert_eq!(snapshot(&left_vault), snapshot(&right_vault));
+
+    let json = output_json(&merge_in);
+    let target_id = item(&json)["block_id"].as_str().unwrap();
+    let day = std::fs::read_to_string(&left_day).unwrap();
+    assert_eq!(
+        day.matches(&format!("[[inbox#^{target_id}]]")).count(),
+        1,
+        "{day}"
+    );
+    assert!(!day.contains("[[a#^f]]"), "{day}");
+    let inbox = std::fs::read_to_string(left_vault.join("inbox.md")).unwrap();
+    let target = inbox
+        .lines()
+        .find(|line| line.contains(&format!("^{target_id}")))
+        .unwrap();
+    assert!(target.starts_with("- [*]"), "{target}");
+    assert!(
+        !inbox.contains("[fresh::"),
+        "new target is not freshness-stamped: {inbox}"
+    );
+}
+
+#[test]
+fn later_merge_in_failure_rolls_back_the_earlier_new_task() {
+    let (_temp, vault, day_file) = setup_merge_vault("merge_in_bulk_rollback");
     let before = snapshot(&vault);
     let output = capture_json(
         &vault,
         &day_file,
-        "First task @inbox\n\nSecond < @a+f",
+        "First task @inbox\n\nSecond < @a+missing",
         false,
     );
-    assert!(
-        !output.status.success(),
-        "bulk merge-in should refuse: {}",
-        format_output(&output)
-    );
-    let combined = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        combined.contains("merge_in_unavailable"),
-        "expected merge_in_unavailable, got: {combined}"
-    );
+    assert!(!output.status.success(), "{}", format_output(&output));
     assert_eq!(snapshot(&vault), before, "bulk vault must be unchanged");
+}
+
+#[test]
+fn canonical_duplicate_sources_refuse_without_writes() {
+    let (_temp, vault, day_file) =
+        setup_merge_vault("merge_in_duplicate_alias");
+    std::fs::create_dir_all(vault.join("areas")).unwrap();
+    std::fs::rename(vault.join("a.md"), vault.join("areas/a.md")).unwrap();
+    let before = snapshot(&vault);
+    let output = capture_json(
+        &vault,
+        &day_file,
+        "New target @inbox < @a+f @areas/a+f",
+        false,
+    );
+    assert!(!output.status.success(), "{}", format_output(&output));
+    assert_eq!(output_json(&output)["code"], "duplicate_capture_target");
+    assert_eq!(snapshot(&vault), before);
+}
+
+#[test]
+fn resolved_marker_conflict_reports_item_and_exact_utf8_span() {
+    let (_temp, vault, day_file) =
+        setup_merge_vault("merge_in_marker_alias_span");
+    std::fs::create_dir_all(vault.join("areas")).unwrap();
+    std::fs::rename(vault.join("a.md"), vault.join("areas/a.md")).unwrap();
+    let draft = "@inbox\n- New café 🧪 &areas/a:f < @a+f";
+    let marker_start = draft.find("&areas/a:f").unwrap();
+    let before = snapshot(&vault);
+    let output = capture_json(&vault, &day_file, draft, false);
+    assert!(!output.status.success(), "{}", format_output(&output));
+    let error = output_json(&output);
+    assert_eq!(error["code"], "merge_in_source_also_marked");
+    assert_eq!(error["item"], 1);
+    assert_eq!(
+        error["span"],
+        serde_json::json!({"start": marker_start, "end": marker_start + "&areas/a:f".len()})
+    );
+    assert_eq!(snapshot(&vault), before);
+}
+
+#[test]
+fn any_merge_label_incoming_relation_refuses_before_writes() {
+    let (_temp, vault, day_file) =
+        setup_merge_vault("merge_in_relation_label_refusal");
+    let config = vault.join("config.yml");
+    write_file(&config, "relations:\n  merge_labels: [merged into]\n");
+    let draft = "New target @inbox ~~a:f|\"merged into\" < @a+f";
+    let marker_start = draft.find("~~a:f|\"merged into\"").unwrap();
+    let before = snapshot(&vault);
+    let output =
+        capture_with(&vault, &day_file, draft, false, None, Some(&config));
+    assert!(!output.status.success(), "{}", format_output(&output));
+    let error = output_json(&output);
+    assert_eq!(error["code"], "merge_in_source_also_marked");
+    assert_eq!(error["item"], 1);
+    assert_eq!(
+        error["span"],
+        serde_json::json!({"start": marker_start, "end": marker_start + "~~a:f|\"merged into\"".len()})
+    );
+    assert_eq!(snapshot(&vault), before);
+}
+
+#[test]
+fn automatic_id_retry_refuses_closed_source_without_a_second_target() {
+    let (_temp, vault, day_file) = setup_merge_vault("merge_in_auto_retry");
+    let draft = "New target @inbox < @a+f";
+    let first = capture_json(&vault, &day_file, draft, false);
+    assert_success(&first);
+    let before_retry = snapshot(&vault);
+    let retry = capture_json(&vault, &day_file, draft, false);
+    assert!(!retry.status.success(), "{}", format_output(&retry));
+    assert_eq!(output_json(&retry)["code"], "merge_source_closed");
+    assert_eq!(snapshot(&vault), before_retry);
+}
+
+#[test]
+fn explicit_id_retry_collision_refuses_without_writes() {
+    let (_temp, vault, day_file) = setup_merge_vault("merge_in_explicit_retry");
+    let draft = "New target @inbox^fixed < @a+f";
+    let first = capture_json(&vault, &day_file, draft, false);
+    assert_success(&first);
+    let before_retry = snapshot(&vault);
+    let retry = capture_json(&vault, &day_file, draft, false);
+    assert!(!retry.status.success(), "{}", format_output(&retry));
+    assert_eq!(snapshot(&vault), before_retry);
 }
 
 #[test]
@@ -148,15 +380,7 @@ fn incomplete_merge_in_is_refused_without_writes() {
         "incomplete should refuse: {}",
         format_output(&output)
     );
-    let combined = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        combined.contains("incomplete_merge_in"),
-        "expected incomplete_merge_in, got: {combined}"
-    );
+    assert_eq!(output_json(&output)["code"], "incomplete_merge_in");
     assert_eq!(snapshot(&vault), before);
 }
 

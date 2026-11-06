@@ -1669,17 +1669,14 @@ pub(super) fn plan_capture_item(
             dependency_ctx,
         );
     }
-    // Transitional merge-in refusal: the execute phase lands next. Refuse
-    // every complete merge-in before any vault mutation, in both dry-run
-    // and commit, including later items in a bulk draft.
-    if parsed_item.parsed.merge_in.is_some() {
-        return Err(CaptureError::usage_code(
-            crate::native::capture_language::merge_in::MERGE_IN_UNAVAILABLE_MESSAGE
-                .to_string(),
-            crate::native::capture_language::merge_in::MERGE_IN_UNAVAILABLE_CODE,
-        ));
-    }
+    super::merge_in::preflight_marker_conflicts(
+        request,
+        &parsed_item,
+        planner,
+        dependency_ctx,
+    )?;
     let mut parsed = parsed_item.parsed;
+    let merge_in = parsed.merge_in.clone();
     let is_new_task_capture = matches!(
         &parsed.kind,
         CaptureKind::Task
@@ -2380,7 +2377,8 @@ pub(super) fn plan_capture_item(
             || parsed
                 .relations
                 .iter()
-                .any(|relation| relation.direction == RelationDirection::From));
+                .any(|relation| relation.direction == RelationDirection::From)
+            || parsed.merge_in.is_some());
     if needs_new_task_id {
         let dest = relative_target(parsed.route.as_deref());
         let absolute = request.bob_dir.join(&dest);
@@ -3912,7 +3910,11 @@ pub(super) fn plan_capture_item(
         planner.record_created_task(&target, block_id);
     }
 
-    Ok(PlannedCaptureItem {
+    let merge_target_id = merge_in
+        .as_ref()
+        .and(task_block_id.as_deref())
+        .map(str::to_string);
+    let mut planned = PlannedCaptureItem {
         result: CaptureItemResult {
             note_pull: None,
             ok: true,
@@ -4042,7 +4044,44 @@ pub(super) fn plan_capture_item(
             refs
         },
         project_move_landings: Vec::new(),
-    })
+    };
+
+    if let (Some(clause), Some(block_id)) =
+        (merge_in.as_ref(), merge_target_id.as_deref())
+    {
+        let execution = super::merge_in::execute(
+            request,
+            parsed_item.index + 1,
+            clause,
+            planner,
+            dependency_ctx,
+            warnings,
+            &target,
+            block_id,
+        )?;
+        planned.result.task_line = execution.target_line;
+        planned.result.block_id = Some(execution.target_block_id);
+        planned.result.block_link = Some(execution.target_block_link);
+        planned
+            .result
+            .relation_merge_output
+            .merges
+            .extend(execution.output.merges);
+        planned
+            .result
+            .relation_merge_output
+            .offer_rows
+            .extend(execution.output.offer_rows);
+        planned
+            .result
+            .relation_merge_output
+            .merge_line_origins
+            .extend(execution.output.merge_line_origins);
+        planned.result.transfer_move_output.repaired_files =
+            execution.repaired_files;
+        planned.task_block_refs.extend(execution.task_block_refs);
+    }
+    Ok(planned)
 }
 
 pub(super) fn item_roll_seed(base: u64, item_index: usize) -> u64 {

@@ -1086,6 +1086,8 @@ pub(crate) fn parse_capture_text_with_options(
 pub(crate) struct TemplateCodedError {
     pub(crate) code: Option<&'static str>,
     pub(crate) message: String,
+    pub(crate) item: Option<usize>,
+    pub(crate) span: Option<(usize, usize)>,
 }
 
 impl TemplateCodedError {
@@ -1093,6 +1095,8 @@ impl TemplateCodedError {
         Self {
             code: None,
             message,
+            item: None,
+            span: None,
         }
     }
 
@@ -1100,6 +1104,8 @@ impl TemplateCodedError {
         Self {
             code: Some(code),
             message,
+            item: None,
+            span: None,
         }
     }
 }
@@ -1109,6 +1115,8 @@ impl From<CaptureItemParseError> for TemplateCodedError {
         Self {
             code: error.code,
             message: error.message,
+            item: error.item,
+            span: error.span,
         }
     }
 }
@@ -1323,6 +1331,8 @@ fn parse_ordinary_draft(
                         outcome.index + 1,
                         outcome.line_start
                     ),
+                    item: None,
+                    span: None,
                 });
             }
             finish_item_dependency_target(&mut outcome.parsed, inheritable)
@@ -1439,6 +1449,8 @@ fn capture_item_error_at(
             item.line_start,
             error.message
         ),
+        item: error.span.map(|_| item.index + 1),
+        span: error.span,
     }
 }
 
@@ -1785,13 +1797,15 @@ fn parse_merge_valid<'a>(
         rebind_capture_item_declarations(outcome, item.source)
     };
     // Lexical `&`/`*`/`~`/`~~` source matches refuse before kind checks.
-    if let Some(message) =
+    if let Some((message, span)) =
         merge_source_also_marked_message(&outcome.parsed, &sources)
     {
-        return Err(CaptureItemParseError::coded(
+        let mut error = CaptureItemParseError::coded(
             super::merge_in::MERGE_IN_SOURCE_ALSO_MARKED_CODE,
             message,
-        ));
+        );
+        error.span = Some(span);
+        return Err(error);
     }
     let needs = classify_merge_left(&outcome.parsed, &parent, &sources);
     match needs {
@@ -1968,13 +1982,19 @@ fn parent_left_trimmed(parent: &RawLine<'_>) -> String {
 fn merge_source_also_marked_message(
     parsed: &ParsedCaptureText,
     sources: &[super::merge_in::MergeInSource],
-) -> Option<String> {
-    let mut targets: Vec<(String, String, &'static str)> = Vec::new();
+) -> Option<(String, (usize, usize))> {
+    let mut targets: Vec<(
+        String,
+        String,
+        &'static str,
+        Option<(usize, usize)>,
+    )> = Vec::new();
     for dependency in &parsed.dependencies {
         targets.push((
             dependency.note.to_ascii_lowercase(),
             dependency.block_id.clone(),
             "prerequisite",
+            dependency.span,
         ));
     }
     for blocked in &parsed.blocked_tasks {
@@ -1982,6 +2002,7 @@ fn merge_source_also_marked_message(
             blocked.note.to_ascii_lowercase(),
             blocked.block_id.clone(),
             "dependent",
+            blocked.span,
         ));
     }
     for relation in &parsed.relations {
@@ -1993,17 +2014,21 @@ fn merge_source_also_marked_message(
             relation.note.to_ascii_lowercase(),
             relation.block_id.clone(),
             role,
+            relation.span,
         ));
     }
     for source in sources {
         let route = source.route.to_ascii_lowercase();
-        if targets.iter().any(|(note, block_id, _)| {
-            *note == route && *block_id == source.block_id
-        }) {
-            return Some(
+        if let Some((_, _, _, span)) =
+            targets.iter().find(|(note, block_id, _, _)| {
+                *note == route && *block_id == source.block_id
+            })
+        {
+            return Some((
                 "that source merges into the new task; it can't also be its prerequisite/dependent/relation"
                     .to_string(),
-            );
+                span.unwrap_or((source.start, source.end)),
+            ));
         }
     }
     None
@@ -2278,6 +2303,10 @@ fn parse_single_template_instance(
     .map_err(|error| TemplateCodedError {
         code: error.code,
         message: template_row_error(instance.row, instance.line, error.message),
+        // Expanded template bytes do not map to a contiguous range in the
+        // user's template draft.
+        item: None,
+        span: None,
     })?;
     let mut parsed_items = Vec::with_capacity(outcomes.len());
     for mut outcome in outcomes {

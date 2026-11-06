@@ -4,7 +4,6 @@
 //! `T < @a+x @b+y`. Both execution (`draft.rs`) and editor (`editor_parse.rs`)
 //! must claim the same parent lines before target-run fan-out.
 
-use super::markers::is_route_token;
 use super::model::{RawLine, Token};
 use super::task_sources as shared;
 use super::tokens::is_parent_task_selector_token;
@@ -68,7 +67,6 @@ pub(crate) const MERGE_IN_NEEDS_NEW_TASK_CODE: &str = "merge_in_needs_new_task";
 pub(crate) const INCOMPLETE_MERGE_IN_CODE: &str = "incomplete_merge_in";
 pub(crate) const MERGE_IN_SOURCE_ALSO_MARKED_CODE: &str =
     "merge_in_source_also_marked";
-pub(crate) const MERGE_IN_UNAVAILABLE_CODE: &str = "merge_in_unavailable";
 
 pub(crate) const MERGE_IN_ARROW_SPACING_MESSAGE: &str =
     "put spaces around <: New task < @a+x";
@@ -76,8 +74,6 @@ pub(crate) const MERGE_IN_EXTRA_TEXT_MESSAGE: &str =
     "everything about the new task goes before <; only @note+id tasks follow it";
 pub(crate) const INCOMPLETE_MERGE_IN_MESSAGE: &str =
     "pick tasks to merge in after <, or write \\< to keep it";
-pub(crate) const MERGE_IN_UNAVAILABLE_MESSAGE: &str =
-    "merging into a new task with < needs a newer bob";
 
 pub(crate) fn merge_in_source_from_shared(
     source: shared::TaskSource,
@@ -208,7 +204,7 @@ fn is_claimable_token(token: &Token<'_>, source: &str) -> bool {
         return true;
     }
     // Bare route `@route`.
-    if is_route_token(rest)
+    if shared::is_valid_source_route(rest)
         && !rest.contains('+')
         && !rest.contains(':')
         && !rest.contains('^')
@@ -221,7 +217,7 @@ fn is_claimable_token(token: &Token<'_>, source: &str) -> bool {
     // Partial `@route+`.
     if rest.ends_with('+') {
         let route = rest.trim_end_matches('+');
-        if !route.is_empty() && is_route_token(route) {
+        if shared::is_valid_source_route(route) {
             return true;
         }
     }
@@ -250,7 +246,7 @@ fn is_bare_route_token(text: &str) -> bool {
     {
         return false;
     }
-    is_route_token(rest)
+    shared::is_valid_source_route(rest)
 }
 
 fn is_partial_route_plus_token(text: &str) -> bool {
@@ -261,7 +257,7 @@ fn is_partial_route_plus_token(text: &str) -> bool {
         return false;
     }
     let route = rest.trim_end_matches('+');
-    !route.is_empty() && is_route_token(route) && !route.contains('+')
+    shared::is_valid_source_route(route) && !route.contains('+')
 }
 
 fn scan_with_arrow(
@@ -393,6 +389,21 @@ fn scan_with_arrow(
                     };
                 }
             }
+        }
+        // A source-shaped token with `+` that is not a valid complete source
+        // still needs the shared marker diagnostic (not the generic
+        // merge-in-extra-text refusal). Valid trailing `@route+` partials
+        // returned as Incomplete above.
+        if token.text.starts_with('@')
+            && token.text.contains('+')
+            && let Err(error) = shared::parse_source_token(token)
+        {
+            return MergeInScan::Invalid {
+                code: error.code,
+                message: error.message,
+                span: error.span,
+                rewrite: None,
+            };
         }
         // Anything else after the sources is extra text.
         let start = token.start;

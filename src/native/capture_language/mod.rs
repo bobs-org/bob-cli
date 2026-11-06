@@ -145,6 +145,8 @@ pub(crate) use self::model::EditorParseOptions;
 pub(crate) use self::model::FanoutContext;
 pub(crate) use self::model::ListContext;
 pub(crate) use self::model::ListKind;
+pub(crate) use self::model::MergeInClause;
+pub(crate) use self::model::MergeInSource as ParsedMergeInSource;
 pub(crate) use self::model::MoveBullet;
 pub(crate) use self::model::MoveChoiceBullet;
 pub(crate) use self::model::MoveVia;

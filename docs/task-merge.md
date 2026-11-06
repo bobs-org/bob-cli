@@ -6,7 +6,7 @@ decides the shape: a bare note holds tasks, so `>` to a bare note moves them
 (see [Move open tasks between notes](task-move.md)); `>` to a task, drawer,
 or section merges the sources into it. Capture `<` merges sources into the
 task its own line creates (see
-[Capture](../capture.md#merging-tasks-into-a-new-task-with)). Split is the
+[Capture syntax](reference/capture-syntax.md#merge-in)). Split is the
 inverse: it turns notes back into tasks (see [Split bullets out into
 tasks](task-split.md)). Merge labels committed through capture `~` / `~~`
 or the Obsidian Links stage run this same engine (see [Task

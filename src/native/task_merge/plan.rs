@@ -48,6 +48,18 @@ pub(crate) fn plan_task_merge(
     request: &MergeRequest,
     context: &MergeContext<'_>,
 ) -> Result<MergePlan, MergeError> {
+    plan_task_merge_with_selected_freshness(snapshot, request, context, true)
+}
+
+/// Plan a merge while controlling whether a picked target gets a freshness
+/// stamp. Capture passes false for tasks born in the same draft: confirming a
+/// task at birth does not create a freshness review record.
+pub(crate) fn plan_task_merge_with_selected_freshness(
+    snapshot: &VaultSnapshot,
+    request: &MergeRequest,
+    context: &MergeContext<'_>,
+    stamp_selected_target_fresh: bool,
+) -> Result<MergePlan, MergeError> {
     if request.sources.is_empty() {
         return Err(MergeError::new(
             "merge_no_sources",
@@ -264,7 +276,12 @@ pub(crate) fn plan_task_merge(
                     merged_from: Some(task_key(&source.located, context)),
                 };
                 if selected {
-                    apply_picked_target(&mut staged, target_identity, context)?;
+                    apply_picked_target(
+                        &mut staged,
+                        target_identity,
+                        context,
+                        stamp_selected_target_fresh,
+                    )?;
                     let day_text = staged
                         .get(&context.daily_path)
                         .or(prune.content.as_ref())
@@ -575,6 +592,7 @@ fn apply_picked_target(
     staged: &mut BTreeMap<PathBuf, String>,
     identity: &(PathBuf, String),
     context: &MergeContext<'_>,
+    stamp_target_freshness: bool,
 ) -> Result<(), MergeError> {
     let located = resolve_identity(staged, identity, context)?;
     let contents = staged.get(&identity.0).cloned().ok_or_else(|| {
@@ -603,7 +621,9 @@ fn apply_picked_target(
     let body = line.strip_suffix(ending).unwrap_or(line).to_string();
     let status = successors::successor_new_status(located.task.status_symbol);
     let mut updated = set_task_line_status(&body, status).unwrap_or(body);
-    updated = stamp_fresh(&updated, context.today).line;
+    if stamp_target_freshness {
+        updated = stamp_fresh(&updated, context.today).line;
+    }
     updated.push_str(ending);
     *line = updated;
     staged.insert(identity.0.clone(), lines.concat());

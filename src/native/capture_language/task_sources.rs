@@ -55,7 +55,7 @@ pub(crate) fn parse_complete_source_text(
         return None;
     }
     let (route, id) = rest.split_once('+')?;
-    if route.is_empty() || !is_route_token(route) {
+    if !is_valid_source_route(route) {
         return None;
     }
     if id.is_empty()
@@ -71,6 +71,13 @@ pub(crate) fn parse_complete_source_text(
         return None;
     }
     Some((route.to_ascii_lowercase(), id.to_string()))
+}
+
+/// A task source route can name either a route stem or an exact nested note
+/// path. Keep path components within the capture route alphabet so `.`/`..`,
+/// empty components, and other filesystem syntax never enter resolution.
+pub(crate) fn is_valid_source_route(route: &str) -> bool {
+    !route.is_empty() && route.split('/').all(is_route_token)
 }
 
 /// Split a complete `@route+id` marker into lowercased route and block ID.

@@ -51,10 +51,19 @@ fn parse_singleton(raw: &str) -> ParsedCaptureText {
         .parsed
 }
 
-fn ignore_type_marker_offsets(parsed: &mut ParsedCaptureText) {
+fn ignore_absolute_spans(parsed: &mut ParsedCaptureText) {
     if let Some(marker) = parsed.type_marker.as_mut() {
         marker.span = 0..0;
         marker.name_span = 0..0;
+    }
+    for dependency in &mut parsed.dependencies {
+        dependency.span = None;
+    }
+    for dependent in &mut parsed.blocked_tasks {
+        dependent.span = None;
+    }
+    for relation in &mut parsed.relations {
+        relation.span = None;
     }
 }
 
@@ -469,8 +478,8 @@ fn each_member_reuses_singleton_semantics_for_toggles_drawers_and_schedule() {
         for (actual, singleton) in actual.items.iter().zip(members) {
             let mut actual = actual.parsed.clone();
             let mut singleton = parse_singleton(singleton);
-            ignore_type_marker_offsets(&mut actual);
-            ignore_type_marker_offsets(&mut singleton);
+            ignore_absolute_spans(&mut actual);
+            ignore_absolute_spans(&mut singleton);
             assert_eq!(actual, singleton, "{run}");
         }
     }
@@ -509,14 +518,23 @@ fn child_line_runs_and_dependency_ownership_are_member_local() {
     let dependency_run = "note @a+x @b+y &foo:bar";
     let parsed = draft_active(dependency_run).expect("dependency run parses");
     assert_eq!(parsed.items.len(), 2);
-    assert_eq!(
-        parsed.items[0].parsed,
-        parse_singleton("note @a+x &foo:bar")
-    );
-    assert_eq!(
-        parsed.items[1].parsed,
-        parse_singleton("note @b+y &foo:bar")
-    );
+    let span_start = dependency_run.find("&foo:bar").unwrap();
+    for item in &parsed.items {
+        assert_eq!(
+            item.parsed.dependencies[0].span,
+            Some((span_start, span_start + "&foo:bar".len()))
+        );
+    }
+    let mut first = parsed.items[0].parsed.clone();
+    let mut first_singleton = parse_singleton("note @a+x &foo:bar");
+    ignore_absolute_spans(&mut first);
+    ignore_absolute_spans(&mut first_singleton);
+    assert_eq!(first, first_singleton);
+    let mut second = parsed.items[1].parsed.clone();
+    let mut second_singleton = parse_singleton("note @b+y &foo:bar");
+    ignore_absolute_spans(&mut second);
+    ignore_absolute_spans(&mut second_singleton);
+    assert_eq!(second, second_singleton);
 }
 
 #[test]

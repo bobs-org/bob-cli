@@ -192,6 +192,7 @@ fn blocker_as_dependency(owner: &DependentRef) -> ParsedDependency {
         note,
         block_id: owner.block_id.clone(),
         quoted: false,
+        span: None,
     }
 }
 
@@ -340,6 +341,7 @@ mod tests {
             note: note.to_string(),
             block_id: block_id.to_string(),
             quoted: false,
+            span: None,
         }
     }
 

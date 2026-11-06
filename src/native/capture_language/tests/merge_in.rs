@@ -35,6 +35,36 @@ fn valid_merge_in_claims_two_sources_in_order() {
 }
 
 #[test]
+fn nested_note_paths_are_valid_source_routes() {
+    let scan = scan("New outcome < @areas/a+f");
+    let MergeInScan::Valid { sources, .. } = scan else {
+        panic!("expected nested source path, got {scan:?}");
+    };
+    assert_eq!(sources[0].route, "areas/a");
+}
+
+#[test]
+fn nested_source_routes_reject_empty_and_dot_path_components() {
+    for input in [
+        "New outcome < @/areas/a+f",
+        "New outcome < @areas//a+f",
+        "New outcome < @areas/../a+f",
+    ] {
+        let scan = scan(input);
+        assert!(
+            matches!(
+                scan,
+                MergeInScan::Invalid {
+                    code: super::super::task_sources::SOURCE_MARKER_CODE,
+                    ..
+                }
+            ),
+            "expected invalid source path for {input:?}, got {scan:?}"
+        );
+    }
+}
+
+#[test]
 fn terminal_arrow_is_incomplete() {
     let scan = scan("New outcome @foo^great <");
     let MergeInScan::Incomplete { sources, .. } = scan else {

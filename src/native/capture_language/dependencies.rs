@@ -1533,6 +1533,7 @@ pub(crate) fn execution_dependencies(
             note: entry.note.clone(),
             block_id: entry.block_id.clone(),
             quoted: entry.quoted,
+            span: Some((entry.start, entry.end)),
         })
         .collect()
 }
@@ -1548,6 +1549,7 @@ pub(crate) fn execution_blocked_tasks(
             note: entry.note.clone(),
             block_id: entry.block_id.clone(),
             quoted: entry.quoted,
+            span: Some((entry.start, entry.end)),
         })
         .collect()
 }
@@ -1566,6 +1568,7 @@ pub(crate) fn execution_relations(
             quoted: entry.quoted,
             hidden: entry.hidden,
             label: entry.label.clone(),
+            span: Some((entry.start, entry.end)),
         })
         .collect()
 }

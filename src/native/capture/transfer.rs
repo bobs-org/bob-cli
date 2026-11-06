@@ -742,8 +742,8 @@ pub(super) fn plan_explicit_merge(
     use crate::native::{
         task_locator::TaskLocator,
         task_merge::{
-            plan_task_merge, DailyNoteReadState, MergeContext, MergeGesture,
-            MergeRelationPolicy, MergeRequest,
+            plan_task_merge_with_selected_freshness, DailyNoteReadState,
+            MergeContext, MergeGesture, MergeRelationPolicy, MergeRequest,
         },
     };
     let locator = |path: &Path, id: &str| TaskLocator {
@@ -792,8 +792,22 @@ pub(super) fn plan_explicit_merge(
         // The engine alone applies the selected target once at its lost-link slot.
         selection: request.selection.clone(),
     };
-    let mut plan = plan_task_merge(snapshot, &merge_request, &context)
-        .map_err(|error| CaptureError::usage_code(error.message, error.code))?;
+    let stamp_selected_target_fresh = match &merge_request.target {
+        crate::native::task_merge::MergeContainer::Task(locator)
+        | crate::native::task_merge::MergeContainer::Drawer(locator, _) => {
+            let target_path =
+                request.bob_dir.join(format!("{}.md", locator.note));
+            !planner.task_was_created(&target_path, &locator.block_id)
+        }
+        crate::native::task_merge::MergeContainer::Section { .. } => true,
+    };
+    let mut plan = plan_task_merge_with_selected_freshness(
+        snapshot,
+        &merge_request,
+        &context,
+        stamp_selected_target_fresh,
+    )
+    .map_err(|error| CaptureError::usage_code(error.message, error.code))?;
     mark_created_merge_targets(planner, &request.bob_dir, &mut plan.records);
     super::relations_merge::stage_merge_plan(
         planner,
