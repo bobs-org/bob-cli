@@ -2700,8 +2700,8 @@ fn print_pull_in_hint(result: &CaptureResult) {
     if result.pull_in.offer_count == 0 || result.pull_in.picked_count > 0 {
         return;
     }
-    // A verdict is an explicit choice, but the hint still teaches the
-    // verdict flags on a verdict dry run.
+    // A verdict is an explicit choice, but dry-run hints teach the flags
+    // whenever an unresolved offer supports at least one verdict.
     let has_verdicts = !result.offer_closes.is_empty();
     let styler = Styler::detect();
     if result
@@ -2726,13 +2726,16 @@ fn print_pull_in_hint(result: &CaptureResult) {
             .collect();
         numbers.sort_unstable();
         numbers.dedup();
-        let hint = match numbers.as_slice() {
+        let mut hint = match numbers.as_slice() {
             [] => return,
             [only] => format!("nothing pulled in · choose with -p {only}"),
             [first, .., last] => {
                 format!("nothing pulled in · choose with -p {first},{last} or -p all")
             }
         };
+        if result.dry_run && has_unresolved_close_eligible_offer(result) {
+            hint.push_str(" · -x N done · -X N[=why] cancel");
+        }
         println!("  {}", styler.dim(&hint));
         return;
     }
@@ -2741,7 +2744,6 @@ fn print_pull_in_hint(result: &CaptureResult) {
     }
     if result.dry_run {
         let mut numbers: Vec<usize> = Vec::new();
-        let mut verdict_numbers: Vec<usize> = Vec::new();
         let items = if result.captures.is_empty() {
             std::slice::from_ref(&result.item)
         } else {
@@ -2751,9 +2753,6 @@ fn print_pull_in_hint(result: &CaptureResult) {
             for row in all_offer_rows(item) {
                 if let Some(offer) = row.offer.as_ref() {
                     numbers.push(offer.n);
-                    if offer.verdict.is_some() {
-                        verdict_numbers.push(offer.n);
-                    }
                 }
             }
         }
@@ -2765,17 +2764,8 @@ fn print_pull_in_hint(result: &CaptureResult) {
             .collect::<Vec<_>>()
             .join(",");
         let mut hint = format!("-p {list} · -p all");
-        if !verdict_numbers.is_empty() {
-            verdict_numbers.sort_unstable();
-            verdict_numbers.dedup();
-            let verdicts = verdict_numbers
-                .iter()
-                .map(usize::to_string)
-                .collect::<Vec<_>>()
-                .join(",");
-            hint.push_str(&format!(
-                " · -x {verdicts} done · -X N[=why] cancel"
-            ));
+        if has_unresolved_close_eligible_offer(result) {
+            hint.push_str(" · -x N done · -X N[=why] cancel");
         }
         println!("  {}", styler.dim(&hint));
     } else {
@@ -2800,6 +2790,23 @@ fn print_pull_in_hint(result: &CaptureResult) {
             );
         }
     }
+}
+
+fn has_unresolved_close_eligible_offer(result: &CaptureResult) -> bool {
+    let items = if result.captures.is_empty() {
+        std::slice::from_ref(&result.item)
+    } else {
+        result.captures.as_slice()
+    };
+    items.iter().flat_map(all_offer_rows).any(|row| {
+        row.offer.as_ref().is_some_and(|offer| {
+            offer.verdict.is_none()
+                && offer
+                    .close
+                    .as_ref()
+                    .is_some_and(|close| close.complete || close.cancel)
+        })
+    })
 }
 
 fn relation_target_json(
@@ -4223,6 +4230,36 @@ fn print_human_transfer_merges(result: &CaptureItemResult) {
             }
         }
         for offer in &record.offers {
+            let resolved_offer = result
+                .relation_merge_output
+                .offer_rows
+                .iter()
+                .filter_map(|row| row.offer.as_ref())
+                .find(|candidate| candidate.key == offer.key)
+                .or_else(|| {
+                    result
+                        .relation_merge_output
+                        .offer_rows
+                        .iter()
+                        .filter_map(|row| row.offer.as_ref())
+                        .find(|candidate| candidate.n == offer.n)
+                });
+            let verdict = resolved_offer.and_then(|candidate| {
+                candidate
+                    .verdict_message
+                    .as_deref()
+                    .map(|message| (message, &candidate.verdict_ticklers))
+            });
+            if let Some((message, ticklers)) = verdict {
+                println!(
+                    "  ◌ {} link removed · offer {}  {message}",
+                    offer.entry_name, offer.n
+                );
+                for tickler in ticklers {
+                    println!("  {tickler}");
+                }
+                continue;
+            }
             println!(
                 "  ◌ {} link removed · offer {}: link “{target}” under {}{}",
                 offer.entry_name,

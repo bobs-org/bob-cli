@@ -8,11 +8,38 @@ use std::path::Path;
 use std::process::Output;
 
 const NOW: &str = "2026-10-05 09:30:00";
+const NOTE_PULL_FIXTURES: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/note_pull");
 
 fn vault(name: &str) -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
     let temp = TempDir::new(name);
     let vault = temp.path().join("vault");
     write_toggle_task_settings(&vault);
+    let day_file = vault.join("20261005.md");
+    (temp, vault, day_file)
+}
+
+fn copy_tree(source: &Path, destination: &Path) {
+    fs::create_dir_all(destination).expect("create fixture vault copy");
+    for entry in fs::read_dir(source).expect("read fixture vault") {
+        let entry = entry.expect("fixture entry");
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        if entry.file_type().expect("fixture entry type").is_dir() {
+            copy_tree(&source_path, &destination_path);
+        } else {
+            fs::copy(&source_path, &destination_path)
+                .expect("copy fixture input");
+        }
+    }
+}
+
+fn np16_vault(name: &str) -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let fixture_root = Path::new(NOTE_PULL_FIXTURES);
+    let temp = TempDir::new(name);
+    let vault = temp.path().join("vault");
+    copy_tree(&fixture_root.join("shared"), &vault);
+    copy_tree(&fixture_root.join("np16/vault"), &vault);
     let day_file = vault.join("20261005.md");
     (temp, vault, day_file)
 }
@@ -451,7 +478,47 @@ fn verdict_conflicts_are_write_free() {
 // SV11: an `-i` answer on a card-resolved task conflicts write-free.
 #[test]
 fn inbox_route_answer_on_resolved_task_conflicts() {
-    let (_temp, vault, day_file) = vault("bob-cli-verdict-inbox-conflict");
+    let (_temp, vault, day_file) =
+        inbox_route_conflict_vault("bob-cli-verdict-inbox-conflict");
+    let preview =
+        capture_output(&vault, &day_file, &["--dry-run"], "!sase:bar", false);
+    assert_success(&preview);
+    let preview_json: serde_json::Value =
+        serde_json::from_slice(&preview.stdout).expect("preview JSON");
+    assert_eq!(preview_json["inbox_route"]["candidate_count"], 1);
+    let key = preview_json["inbox_route"]["candidates"][0]["key"]
+        .as_str()
+        .expect("route candidate key")
+        .to_string();
+    assert_eq!(key, "inbox.md#^ialpha", "{preview_json}");
+
+    let before = vault_bytes(&vault);
+    let keyed_answer = format!("{key}=notes");
+    let (output, json) = capture_json_failing(
+        &vault,
+        &day_file,
+        &["-X", "2", "-i", &keyed_answer],
+        "!sase:bar",
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert_eq!(json["code"], "offer_verdict_conflict");
+    assert_eq!(vault_bytes(&vault), before, "conflict writes nothing");
+
+    let (output, json) = capture_json_failing(
+        &vault,
+        &day_file,
+        &["-X", "2", "-i", "1=notes"],
+        "!sase:bar",
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert_eq!(json["code"], "inbox_route_stale");
+    assert_eq!(vault_bytes(&vault), before, "stale number writes nothing");
+}
+
+fn inbox_route_conflict_vault(
+    name: &str,
+) -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let (temp, vault, day_file) = vault(name);
     write_file(&vault.join("sase.md"), "- [ ] #task Bar [id:: bar] ^bar\n");
     write_file(
         &vault.join("inbox.md"),
@@ -465,16 +532,75 @@ fn inbox_route_answer_on_resolved_task_conflicts() {
         &day_file,
         "## Pomodoros\n- [ ] (**0920-0950**) — CAPTURE\n- [ ] () — FIX\n  - [[sase#^bar]]\n",
     );
-    let before = vault_bytes(&vault);
+    (temp, vault, day_file)
+}
+
+// A verdict removes its row from inbox-route choices before the required
+// choice guard runs. This is the np16 Mac-path regression: the only
+// candidate is the task the card just completed.
+#[test]
+fn card_resolved_np16_row_is_not_an_inbox_route_candidate() {
+    let (_temp, vault, day_file) =
+        np16_vault("bob-cli-verdict-np16-resolved-route");
+    let json = capture_json(
+        &vault,
+        &day_file,
+        &["-x", "1", "--require-inbox-route-choice"],
+        "@mac_inbox",
+    );
+    assert_eq!(json["inbox_route"]["candidate_count"], 0, "{json}");
+    assert_eq!(json["inbox_route"]["candidates"], serde_json::json!([]));
+    assert_eq!(json["offer_closes"][0]["key"], "mac_inbox.md#^already-next");
+    let inbox =
+        fs::read_to_string(vault.join("mac_inbox.md")).expect("mac inbox");
+    let resolved = inbox
+        .lines()
+        .find(|line| line.contains("^already-next"))
+        .expect("resolved offer row");
+    assert!(
+        resolved.starts_with("- [x] #task Already Next"),
+        "{resolved}"
+    );
+    assert!(resolved.contains("[completion:: 2026-10-05]"), "{resolved}");
+}
+
+#[test]
+fn pulled_in_inbox_row_remains_required_and_is_renumbered() {
+    let (_temp, vault, day_file) =
+        vault("bob-cli-verdict-filtered-route-number");
+    write_file(&vault.join("inbox.md"), "# Inbox\n");
+    write_file(&vault.join("sase.md"), "- [ ] #task Bar [id:: bar] ^bar\n");
+    write_file(
+        &vault.join("mac_inbox.md"),
+        concat!(
+            "---\n",
+            "type: [[area]]\n",
+            "parent: [[inbox]]\n",
+            "---\n",
+            "## Tasks\n",
+            "- [?] #task Alpha [dependsOn:: bar] [id:: alpha] ^alpha\n",
+            "- [?] #task Beta [dependsOn:: bar] [id:: beta] ^beta\n",
+        ),
+    );
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] (**0920-0950**) — CAPTURE\n- [ ] () — FIX\n  - [[sase#^bar]]\n",
+    );
+
     let (output, json) = capture_json_failing(
         &vault,
         &day_file,
-        &["-X", "2", "-i", "1=notes"],
+        &["-x", "1", "-p", "2", "--require-inbox-route-choice"],
         "!sase:bar",
     );
-    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
-    assert_eq!(json["code"], "offer_verdict_conflict");
-    assert_eq!(vault_bytes(&vault), before, "conflict writes nothing");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert_eq!(json["code"], "inbox_route_choice_required");
+    assert_eq!(json["inbox_route"]["candidate_count"], 1, "{json}");
+    assert_eq!(
+        json["inbox_route"]["candidates"][0]["key"],
+        "mac_inbox.md#^beta"
+    );
+    assert_eq!(json["inbox_route"]["candidates"][0]["n"], 1);
 }
 
 // SV12: `-p all` selects every offer without a verdict.
@@ -704,9 +830,9 @@ fn done_verdict_on_project_finished_finishes_project() {
 // dry-run hint teaches the verdict flags.
 #[test]
 fn verdict_human_output_prints_receipt_and_hint() {
-    let (_temp, vault, day_file) = offer_vault("bob-cli-verdict-human");
+    let (_temp, human_vault, day_file) = offer_vault("bob-cli-verdict-human");
     let output = capture_output(
-        &vault,
+        &human_vault,
         &day_file,
         &["-X", "2=Rerouted"],
         "!sase:bar",
@@ -722,13 +848,46 @@ fn verdict_human_output_prints_receipt_and_hint() {
     );
 
     // Plain dry runs keep the old hint.
-    let (_temp, vault, day_file) = offer_vault("bob-cli-verdict-hint");
-    let output =
-        capture_output(&vault, &day_file, &["--dry-run"], "!sase:bar", true);
+    let (_temp, hint_vault, day_file) = offer_vault("bob-cli-verdict-hint");
+    let output = capture_output(
+        &hint_vault,
+        &day_file,
+        &["--dry-run"],
+        "!sase:bar",
+        true,
+    );
     assert_success(&output);
     let text = stdout(&output);
     assert!(text.contains("-p 1,2 · -p all"), "{text}");
-    assert!(!text.contains("-x"), "{text}");
+    assert!(
+        text.contains("-p 1,2 · -p all · -x N done · -X N[=why] cancel"),
+        "{text}",
+    );
+
+    // Capture-created offers have no eligible close descriptor, so the
+    // dry-run hint keeps teaching only pull-in selection.
+    let (_temp, new_offer_vault, day_file) =
+        vault("bob-cli-verdict-new-offer-hint");
+    write_file(
+        &new_offer_vault.join("cash.md"),
+        "---\ntype: [[area]]\n---\n# Cash\n",
+    );
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] (**0920-0950**) — CAPTURE\n- [ ] () — FIX\n",
+    );
+    let output = capture_output(
+        &new_offer_vault,
+        &day_file,
+        &["--dry-run"],
+        "Finish packet @cash:pkt@\n- Draft memo\n- Collect docs",
+        true,
+    );
+    assert_success(&output);
+    let text = stdout(&output);
+    assert!(text.contains("-p 1,2 · -p all"), "{text}");
+    assert!(!text.contains("-x N done"), "{text}");
+    assert!(!text.contains("-X N[=why] cancel"), "{text}");
 }
 
 // The dry-run verdict receipt uses the `would` forms and the hint names
@@ -749,5 +908,5 @@ fn verdict_dry_run_human_output_uses_would_forms() {
         text.contains("offer 1  ✓ would complete “Alpha” · Ready → Done"),
         "{text}",
     );
-    assert!(text.contains("-x 1 done · -X N[=why] cancel"), "{text}");
+    assert!(text.contains("-x N done · -X N[=why] cancel"), "{text}");
 }

@@ -148,6 +148,29 @@ fn capture_human(
         .expect("run capture human")
 }
 
+fn capture_human_flags(
+    vault: &Path,
+    day_file: &Path,
+    flags: &[&str],
+    draft: &str,
+    dry_run: bool,
+) -> std::process::Output {
+    let mut command = bob_command();
+    command.arg("capture").arg("-b").arg(vault);
+    if dry_run {
+        command.arg("--dry-run");
+    }
+    command
+        .args(flags)
+        .arg("--")
+        .arg(draft)
+        .env("BOB_DAY_FILE", day_file)
+        .env("BOB_NOW", NOW)
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("run capture human")
+}
+
 fn output_json(output: &std::process::Output) -> serde_json::Value {
     serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim())
         .unwrap_or_else(|error| {
@@ -1166,6 +1189,37 @@ fn merge_in_human_output_prints_new_target_header_once() {
             && text.contains("→ Cancelled · 1 note moved"),
         "{text}"
     );
+}
+
+#[test]
+fn merge_in_human_offer_prints_the_verdict_receipt() {
+    for (dry_run, expected) in [
+        (true, "✓ would complete “Existing target” · Ready → Done"),
+        (false, "✓ completed “Existing target” · Ready → Done"),
+    ] {
+        let name = if dry_run {
+            "merge_in_verdict_receipt_dry"
+        } else {
+            "merge_in_verdict_receipt_live"
+        };
+        let (_temp, vault, day_file) = setup_merge_vault(name);
+        write_file(
+            &day_file,
+            "## Pomodoros\n\n- [ ] () — BUILD\n  - [[a#^f]]\n  - keep this slot\n  - [[b#^b]]\n",
+        );
+        let output = capture_human_flags(
+            &vault,
+            &day_file,
+            &["-x", "1"],
+            "@a+f @b+b > @inbox+t",
+            dry_run,
+        );
+        assert_success(&output);
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(text.contains(&format!("offer 1  {expected}")), "{text}",);
+        assert!(!text.contains("(-p 1)"), "{text}");
+        assert!(!text.contains("route with -i"), "{text}");
+    }
 }
 
 #[test]

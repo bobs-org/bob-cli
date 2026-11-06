@@ -3,4 +3,4 @@ Pull from sase · 3 ready tasks
   offer 2  Next Wire docs  sase.md ^next → FIX
   offer 3  Ready Write docs  sase.md ^ready → FIX
   not offered  1 already planned · 1 blocked · 1 scheduled later · 1 hidden
-  nothing pulled in · choose with -p 1,3 or -p all
+  nothing pulled in · choose with -p 1,3 or -p all · -x N done · -X N[=why] cancel

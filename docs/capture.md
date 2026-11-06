@@ -1130,13 +1130,13 @@ Bob does not preselect or write any row while previewing. Use the existing
 Pull-In selection to choose offers:
 
 ```text
-bob capture @sase
+bob capture --dry-run @sase
 Pull from sase · 3 ready tasks
   offer 1  Pending Ship the badge renderer  sase.md ^ship-renderer → FIX
   offer 2  Next Wire badges into the README  sase.md ^readme-badges → FIX
   offer 3  Ready Write badge docs  sase.md → new DOCS session
   not offered  2 already planned · 3 blocked · 1 scheduled later · 1 hidden
-  nothing pulled in · choose with -p 1,3 or -p all
+  nothing pulled in · choose with -p 1,3 or -p all · -x N done · -X N[=why] cancel
 
 bob capture -p 1,3 @sase
 Pull from sase · 2 of 3 pulled in
@@ -3245,6 +3245,14 @@ the engine's `why`) all write nothing and carry `pull_in` plus the flat
 offers list; see
 [task-dependencies.md §12.14](task-dependencies.md#1214-cli-selection).
 
+Card-resolved rows are removed from inbox-route candidates before the
+required-choice check and before route candidates are numbered. Numeric
+`-i` selectors address only the remaining candidates; a keyed `-i
+KEY=destination` answer for a row resolved by `-x` or `-X` still refuses
+write-free with `offer_verdict_conflict`. A dry-run pull-in hint appends
+`· -x N done · -X N[=why] cancel` only when an unresolved offer supports
+Done or Cancel.
+
 The `ledger` line names entries in this order, joined with `·`, and ends
 with the day file: one `Task Link struck in <NAME>` row per entry with an
 in-place strike (` (completed)` appended when that entry is completed),
@@ -3299,6 +3307,7 @@ Detection vectors (`IR`) run against a sandbox vault:
 | IR6 | Request a route choice with the hidden guard | Exit 1 with `inbox_route_choice_required`; notes stay byte-identical |
 | IR7 | Require both pull-in and inbox-route choices | The pull-in refusal wins |
 | IR8 | Build destinations with inboxes, nested notes, blocked `^prj`, projects, and excluded folders | Sorted task-move destinations with matching kind, status, parent, and blocked fields |
+| IR9 | Resolve an inbox task with `-x` or `-X` | The row is omitted before route numbering and required-choice checks; an explicit keyed route answer for it is `offer_verdict_conflict` |
 
 Apply vectors (`IRA`) answer the candidates with `-i/--inbox-route`:
 
@@ -7376,7 +7385,9 @@ line per link, and the hint that `bob projects sync` adds the parent's
 Sub-projects line and `bob task reconcile` reconciles Blocked state, since
 neither is written here. The offer form prints a `New project <basename>`
 header over its numbered `offer N` rows before that hint, and a dry run adds
-the usual `-p 1,2 · -p all` hint when nothing was picked. When links were written, their Pomodoro also appears
+the usual `-p 1,2 · -p all` hint when nothing was picked, followed by
+`· -x N done · -X N[=why] cancel` when an unresolved offer supports a
+verdict. When links were written, their Pomodoro also appears
 in the batch-level `pomodoro_blocks` array; see
 [Pomodoro blocks](#pomodoro-blocks).
 
@@ -7556,8 +7567,9 @@ one `not offered` fold row per keep-moving group with only folds
 (`not offered  2 blocked · 1 scheduled later · 1 hidden`), and one
 `still blocked` row per remaining blocked dependent (`· waits on N more`,
 `· until YYYY-MM-DD`, `· project <path>`). A dry-run hint shows
-`-p 1,2 · -p all`; a real run without a pick says the offers were not
-pulled in. A left-open descendant or unblocked dependent with no
+`-p 1,2 · -p all`, followed by `· -x N done · -X N[=why] cancel` when an
+unresolved offer supports a verdict; a real run without a pick says the
+offers were not pulled in. A left-open descendant or unblocked dependent with no
 block ID prints only its note path with no trailing ` ^`. Already-done
 tasks print `✓ already done [x] <text>  <note> ^<id> · nothing to change`.
 

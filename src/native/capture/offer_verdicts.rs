@@ -382,21 +382,20 @@ pub(super) fn check_inbox_route_verdict_conflict(
         let super::cli::InboxRoutePick::Answer { selector, .. } = pick else {
             continue;
         };
-        let Some(index) = super::inbox_route::resolve_route_selector(
-            &report.candidates,
-            selector,
-        ) else {
+        // Numeric selectors are positions in the post-filter route list.
+        // Only explicit keys can conflict with a card-resolved task, and
+        // this check deliberately runs against the unfiltered report.
+        if selector.bytes().all(|byte| byte.is_ascii_digit()) {
+            continue;
+        }
+        let Some(candidate) = report
+            .candidates
+            .iter()
+            .find(|candidate| candidate.key == *selector)
+        else {
             continue;
         };
-        let Some(candidate) = report.candidates.get(index) else {
-            continue;
-        };
-        let hit = verdict_identities.iter().any(|(note, block_id, line)| {
-            candidate.note_path == *note
-                && ((!block_id.is_empty() && candidate.block_id == *block_id)
-                    || candidate.line == *line)
-        });
-        if hit {
+        if inbox_candidate_matches_verdict(candidate, verdict_identities) {
             return Err(CaptureError::offer_verdict_conflict(
                 &super::output::PullInJson::empty(),
                 &[],
@@ -408,6 +407,37 @@ pub(super) fn check_inbox_route_verdict_conflict(
         }
     }
     Ok(())
+}
+
+/// Remove card-resolved rows from route choices after keyed conflicts have
+/// been checked against the original report. Numeric route selectors are
+/// positions in this filtered list, so every survivor receives its new
+/// one-based number here.
+pub(super) fn drop_verdict_rows_from_inbox_route(
+    report: &mut super::inbox_route::InboxRouteReport,
+    verdict_identities: &[(String, String, usize)],
+) {
+    report.candidates.retain(|candidate| {
+        !inbox_candidate_matches_verdict(candidate, verdict_identities)
+    });
+    report.candidate_count = report.candidates.len();
+    for (index, candidate) in report.candidates.iter_mut().enumerate() {
+        candidate.n = index + 1;
+    }
+    if report.candidates.is_empty() {
+        report.destinations = None;
+    }
+}
+
+fn inbox_candidate_matches_verdict(
+    candidate: &super::inbox_route::InboxRouteCandidate,
+    verdict_identities: &[(String, String, usize)],
+) -> bool {
+    verdict_identities.iter().any(|(note, block_id, line)| {
+        candidate.note_path == *note
+            && ((!block_id.is_empty() && candidate.block_id == *block_id)
+                || candidate.line == *line)
+    })
 }
 
 /// Apply staged verdicts in the capture write pass: resolve every row
@@ -1050,6 +1080,128 @@ mod verdict_copy_tests {
                 recovered("Epsilon", true),
             ]),
             vec!["↳ 2 unblocked tasks back tomorrow as ticklers".to_string()],
+        );
+    }
+}
+
+#[cfg(test)]
+mod disk_guard_tests {
+    use super::*;
+    use std::{collections::BTreeMap, fs, path::Path};
+
+    fn write(path: &Path, contents: &str) {
+        fs::create_dir_all(path.parent().expect("parent directory"))
+            .expect("create directory");
+        fs::write(path, contents).expect("write file");
+    }
+
+    fn snapshot(root: &Path) -> BTreeMap<std::path::PathBuf, Vec<u8>> {
+        fn collect(
+            root: &Path,
+            directory: &Path,
+            files: &mut BTreeMap<std::path::PathBuf, Vec<u8>>,
+        ) {
+            for entry in fs::read_dir(directory).expect("read directory") {
+                let path = entry.expect("directory entry").path();
+                if path.is_dir() {
+                    collect(root, &path, files);
+                } else {
+                    let relative =
+                        path.strip_prefix(root).expect("relative path");
+                    files.insert(
+                        relative.to_path_buf(),
+                        fs::read(path).expect("read file"),
+                    );
+                }
+            }
+        }
+
+        let mut files = BTreeMap::new();
+        collect(root, root, &mut files);
+        files
+    }
+
+    #[test]
+    fn concurrent_verdict_target_edit_aborts_the_whole_batch() {
+        // SV13: the batch's normal staged-file preimage guard must cover
+        // the row the verdict post-pass closes.
+        let temp = tempfile::tempdir().expect("temporary vault");
+        let vault = temp.path().join("vault");
+        write(
+            &vault.join(".obsidian/plugins/obsidian-tasks-plugin/data.json"),
+            concat!(
+                r##"{"globalFilter":"#task","statusSettings":{"coreStatuses":["##,
+                r#"{"symbol":" ","name":"Ready","nextStatusSymbol":"x","type":"TODO"},"#,
+                r#"{"symbol":"x","name":"Done","nextStatusSymbol":" ","type":"DONE"}],"#,
+                r#""customStatuses":[{"symbol":"/","name":"In Progress","nextStatusSymbol":"x","type":"IN_PROGRESS"},"#,
+                r#"{"symbol":"*","name":"Next","nextStatusSymbol":"x","type":"ON_HOLD"},"#,
+                r#"{"symbol":"?","name":"Blocked","nextStatusSymbol":" ","type":"ON_HOLD"},"#,
+                r#"{"symbol":"-","name":"Canceled","nextStatusSymbol":" ","type":"CANCELLED"}]}}"#,
+            ),
+        );
+        write(&vault.join("inbox.md"), "# Inbox\n");
+        write(&vault.join("sase.md"), "- [ ] #task Bar [id:: bar] ^bar\n");
+        let deps_before =
+            "- [?] #task Alpha [dependsOn:: bar] [id:: alpha] ^alpha\n";
+        write(&vault.join("deps.md"), deps_before);
+        let day_file = crate::native::pomodoro::day_file_for(&vault);
+        write(
+            &day_file,
+            "## Pomodoros\n- [ ] (**0920-0950**) — CAPTURE\n- [ ] () — FIX\n  - [[sase#^bar]]\n",
+        );
+        let before = snapshot(&vault);
+
+        let request = CaptureRequest {
+            bob_dir: vault.clone(),
+            dry_run: false,
+            forced_clip: None,
+            forced_destination_flags: Vec::new(),
+            forced_route: None,
+            forced_section: None,
+            forced_sub_bullet_target: None,
+            forced_drawer: None,
+            inbox_routes: Vec::new(),
+            move_in: None,
+            no_clip: true,
+            no_ref: true,
+            pull_in: None,
+            complete_offers: Vec::new(),
+            cancel_offers: Vec::new(),
+            offer_verdicts: vec![OfferVerdictRequest {
+                key: "deps.md#^alpha".to_string(),
+                outcome: OfferVerdictOutcome::Done,
+                reason: String::new(),
+            }],
+            refuse_override: false,
+            require_inbox_route_choice: false,
+            require_pull_in_choice: false,
+            expect_past_windows: None,
+            argv: false,
+            template_origin: None,
+            raw_text: "!sase:bar".to_string(),
+            selection: SuccessorSelection::None,
+        };
+        let mut batch = super::super::plan_capture_batch(&request, None)
+            .expect("plan eligible Done verdict");
+
+        let concurrent = format!("{deps_before}<!-- concurrent edit -->\n");
+        write(&vault.join("deps.md"), &concurrent);
+        let mut expected = before;
+        expected.insert(
+            std::path::PathBuf::from("deps.md"),
+            concurrent.into_bytes(),
+        );
+        let error = super::super::commit_capture_batch(&mut batch, &vault)
+            .expect_err("concurrent verdict edit refuses commit");
+        assert_eq!(
+            error.typed,
+            Some(super::output::CaptureFailureKind::NoteChanged),
+            "{error:#?}",
+        );
+        assert_eq!(
+            snapshot(&vault),
+            expected,
+            "only the concurrent edit remains"
         );
     }
 }

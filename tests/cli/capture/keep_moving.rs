@@ -1287,7 +1287,10 @@ fn human_dry_run_leads_with_why_and_folds() {
         lines[header + 4],
         "  not offered  2 blocked \u{b7} 1 scheduled later \u{b7} 1 hidden"
     );
-    assert_eq!(lines[header + 5], "  -p 1,2,3 \u{b7} -p all");
+    assert_eq!(
+        lines[header + 5],
+        "  -p 1,2,3 \u{b7} -p all \u{b7} -x N done \u{b7} -X N[=why] cancel"
+    );
     // The group never borrows dependency wording or the unlock glyph.
     assert!(!out.contains("unblocked"), "{out}");
     assert!(!out.contains('\u{1f513}'), "{out}");

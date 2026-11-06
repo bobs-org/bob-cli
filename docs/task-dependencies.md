@@ -1805,9 +1805,10 @@ cards under group headers, with the hint `↩ choose what to pull in`.
 **Human output** follows the existing word-led rows (`dry run`:
 `would link`). Numbered `offer N` rows print under group headers after
 the `ledger` line for `!`, and after the task rows and before `next:`
-for closes. A dry-run hint shows `-p 1,2 · -p all`. A real run without
-a pick says the offers were not pulled in and names Obsidian / Bob Mac
-Capture / Ctrl+Shift+Enter as the way to link later:
+for closes. A dry-run hint shows `-p 1,2 · -p all`, followed by
+`· -x N done · -X N[=why] cancel` when an unresolved offer supports a
+verdict. A real run without a pick says the offers were not pulled in and
+names Obsidian / Bob Mac Capture / Ctrl+Shift+Enter as the way to link later:
 
 ```text
 ✓ completed [*] → [x] Fix apollo machine!  sase.md ^fix-apollo
@@ -2648,9 +2649,16 @@ writes neither the project note nor the daily note.
 
 Human output: numbered `offer N` rows under group headers (a project
 created by capture's `@route:id@` prints `New project <basename>`). A dry-run
-hint shows `-p 1,2 · -p all`. A real run without a pick says the
+hint shows `-p 1,2 · -p all`; when an unresolved offer supports Done or
+Cancel, it appends `· -x N done · -X N[=why] cancel`. A real run without a pick says the
 offers were not pulled in and names Obsidian / Bob Mac Capture /
 Ctrl+Shift+Enter as the way to link later.
+
+Card-resolved rows are removed from inbox-route candidates before the
+required-choice check and before numeric route selectors are applied. An
+explicit keyed `-i KEY=destination` answer for a row resolved by `-x` or
+`-X` remains the write-free `offer_verdict_conflict`; numeric selectors
+index the filtered candidate list and are stale when no candidate remains.
 
 ### 12.15 Keep-moving offers (leaf projects)
 
@@ -2908,8 +2916,9 @@ dependents above is the point.
   not offered  2 blocked · 1 scheduled later · 1 hidden
 ```
 
-The existing dry-run hint (`-p 1,2 · -p all`) and the real-run "not
-pulled in" line keep working. A pick prints
+The existing dry-run hint (`-p 1,2 · -p all`) appends
+`· -x N done · -X N[=why] cancel` when an unresolved offer supports a
+verdict; the real-run "not pulled in" line keeps working. A pick prints
 `linked Ready → Next Write badge docs  sase_badges.md ^write-badge-docs → FIX (next up) · keeps sase_badges moving · added ^write-badge-docs`.
 
 **Bob Mac Capture Pull-In card:**
@@ -3432,7 +3441,7 @@ by §12.14:
 
 | Input | Result |
 | --- | --- |
-| No `-p`, or `-p none` | Success with no write; rows are `not_selected`; human output ends with `nothing pulled in · choose with -p …` |
+| No `-p`, or `-p none` | Success with no write; rows are `not_selected`; human output says `nothing pulled in · choose with -p …`, and dry runs append the verdict hint when an unresolved offer supports Done or Cancel |
 | `-p 1,3`, `-p sase.md#^ship-renderer`, or `-p all` | Existing Pull-In selection; stale, unknown, or out-of-range picks give the existing teaching error and write nothing |
 | `--require-pull-in-choice`, no `-p`, and at least one offer | Existing write-free `pull_in_choice_required` refusal with `pull_in` and flat `offers` |
 | No offered task, with any `-p` value | `nothing_to_pull_in`, with folded counts; no write |
@@ -3533,7 +3542,7 @@ JSON match for the same flags apart from `dry_run` and preview wording.
 | Glyph and tint | `📥` (Mac `tray.and.arrow.down.fill`); existing Next status colour token |
 | CLI group header | `Pull from N · k ready tasks` (`1 ready task`); after picks, `Pull from N · p of k pulled in` |
 | CLI fold row | `not offered  2 already planned · …` |
-| CLI no-pick hint | `nothing pulled in · choose with -p 1,3 or -p all`; with one offer, `-p 1` |
+| CLI no-pick hint | `nothing pulled in · choose with -p 1,3 or -p all`; with one offer, `-p 1`; dry runs append `· -x N done · -X N[=why] cancel` when an unresolved offer supports Done or Cancel |
 | Mac footer verb | `Pull In` |
 | Mac preview hint | `↩ choose what to pull in · ⇧↩ start a list` |
 | Mac prompt status / VoiceOver | `Choose tasks to pull in from ‹N›`; with several distinct source groups, `Choose tasks to pull in from 2 notes` |

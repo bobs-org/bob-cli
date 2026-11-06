@@ -862,17 +862,23 @@ pub(super) fn plan_capture_batch_with_config_path(
     // Move-choice report was precomputed before item planning (with mint
     // and splice); reuse it before pull-in and inbox-route refusals.
     let move_choice = move_choice_report;
-    let inbox_route = detect_inbox_routes(
+    let mut inbox_route = detect_inbox_routes(
         &planner,
         &request.bob_dir,
         &task_settings,
         &dependency_ctx,
     )?;
+    let verdict_row_identities =
+        super::offer_verdicts::verdict_row_identities(&items);
     super::offer_verdicts::check_inbox_route_verdict_conflict(
         &inbox_route,
         &request.inbox_routes,
-        &super::offer_verdicts::verdict_row_identities(&items),
+        &verdict_row_identities,
     )?;
+    super::offer_verdicts::drop_verdict_rows_from_inbox_route(
+        &mut inbox_route,
+        &verdict_row_identities,
+    );
     // Answered route moves run here: after every item, the successor
     // net post-pass, and candidate detection, but before the block
     // trackers finish and the staged files freeze.
