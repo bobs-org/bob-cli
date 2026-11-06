@@ -8,7 +8,7 @@ pub(super) struct Mailbox {
     pub(super) address: Option<String>,
 }
 
-pub(super) fn subject_without_prefixes(subject: &str) -> String {
+pub(crate) fn subject_without_prefixes(subject: &str) -> String {
     let mut subject = subject.trim();
     loop {
         let Some((prefix, rest)) = subject.split_once(':') else {

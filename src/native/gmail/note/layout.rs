@@ -319,7 +319,7 @@ fn render_card(
     }
 }
 
-fn message_time(message: &GmailMessage) -> Option<DateTime<Utc>> {
+pub(crate) fn message_time(message: &GmailMessage) -> Option<DateTime<Utc>> {
     if let Some(internal_date) = message.internal_date.as_deref()
         && let Ok(millis) = internal_date.parse::<i64>()
         && let Some(date) = DateTime::from_timestamp_millis(millis)
@@ -339,7 +339,7 @@ fn normalize_hex(value: &str) -> Result<String, NoteError> {
     Ok(value.to_ascii_lowercase())
 }
 
-fn thread_who(message: &GmailMessage, account: &str) -> String {
+pub(crate) fn thread_who(message: &GmailMessage, account: &str) -> String {
     let sender = message_mailboxes(message, HeaderKind::From)
         .into_iter()
         .next();

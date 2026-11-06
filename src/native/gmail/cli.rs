@@ -26,16 +26,19 @@ pub(crate) fn build_cli() -> ClapCommand {
         .arg(all_arg())
         .arg(bob_dir_arg())
         .arg(list_format_arg())
+        .arg(remote_arg())
         .arg(help_arg())
         .subcommand(doctor_command())
         .subcommand(list_command())
         .subcommand(login_command())
         .subcommand(logout_command())
+        .subcommand(peek_command())
         .subcommand(save_command())
+        .subcommand(search_command())
 }
 
 fn top_after_help() -> &'static str {
-    "Running `bob gmail` with no command lists saved threads (offline, read-only).\n\nExamples:\n  bob gmail                   List saved threads\n  bob gmail -a                List every saved thread\n  bob gmail -f json           List saved threads as JSON\n  bob gmail save URL           Save a Gmail thread\n  bob gmail save ID -d         Preview a save without writing\n  bob gmail login             Connect Gmail in one guided step\n  bob gmail login -a EMAIL    Sign in as this account\n  bob gmail login -s compose  Also grant the compose scope (Mac only)\n  bob gmail doctor            Diagnose gog, the client, and the vault\n  bob gmail logout -y         Remove Bob's Gmail grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH\n  BOB_GMAIL_BROWSER  Browser executable; selects browser sign-in (otherwise automatic)"
+    "Running `bob gmail` with no command lists saved threads (offline, read-only). `-r` adds live message counts.\n\nExamples:\n  bob gmail                   List saved threads\n  bob gmail -a                List every saved thread\n  bob gmail -r                Fetch live new-message counts\n  bob gmail -f json           List saved threads as JSON\n  bob gmail search            Search recent inbox threads\n  bob gmail peek URL          Preview a Gmail link\n  bob gmail save URL          Save a Gmail thread\n  bob gmail save ID -d        Preview a save without writing\n  bob gmail login             Connect Gmail in one guided step\n  bob gmail login -a EMAIL    Sign in as this account\n  bob gmail login -s compose  Also grant the compose scope (Mac only)\n  bob gmail doctor            Diagnose gog, the client, and the vault\n  bob gmail logout -y         Remove Bob's Gmail grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH\n  BOB_GMAIL_BROWSER  Browser executable; selects browser sign-in (otherwise automatic)"
 }
 
 fn save_command() -> ClapCommand {
@@ -83,14 +86,53 @@ fn doctor_after_help() -> &'static str {
 
 fn list_command() -> ClapCommand {
     ClapCommand::new("list")
-        .about("List saved Gmail threads (offline, read-only)")
+        .about("List saved Gmail threads (offline unless --remote)")
         .disable_help_flag(true)
         .arg(all_arg())
         .arg(bob_dir_arg())
         .arg(list_format_arg())
+        .arg(remote_arg())
         .arg(help_arg())
         .after_help(
-            "Examples:\n  bob gmail list\n  bob gmail list -a\n  bob gmail list -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml",
+            "Examples:\n  bob gmail list\n  bob gmail list -a\n  bob gmail list -r\n  bob gmail list -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH",
+        )
+}
+
+fn peek_command() -> ClapCommand {
+    ClapCommand::new("peek")
+        .about("Preview Gmail thread metadata without saving it")
+        .long_about(
+            "Resolve a Gmail URL or ID and return a small metadata-only preview. The result is cached privately for ten minutes; message bodies are never fetched or stored.",
+        )
+        .disable_help_flag(true)
+        .arg(human_format_arg())
+        .arg(Arg::new("input")
+            .value_name("URL|ID")
+            .value_parser(OsStringValueParser::new())
+            .required(true)
+            .help("Gmail URL or thread/message ID"))
+        .arg(help_arg())
+        .after_help(
+            "Examples:\n  bob gmail peek https://mail.google.com/mail/u/0/#all/0123456789abcdef\n  bob gmail peek 0123456789abcdef -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH",
+        )
+}
+
+fn search_command() -> ClapCommand {
+    ClapCommand::new("search")
+        .about("Search Gmail threads for a picker")
+        .long_about(
+            "Search with Gmail query syntax. An empty query defaults to `in:inbox newer_than:30d`. Results are bounded to 50 threads and contain inert metadata only.",
+        )
+        .disable_help_flag(true)
+        .arg(search_format_arg())
+        .arg(limit_arg())
+        .arg(Arg::new("query")
+            .value_name("QUERY")
+            .value_parser(OsStringValueParser::new())
+            .help("Gmail query; defaults to recent inbox threads"))
+        .arg(help_arg())
+        .after_help(
+            "Examples:\n  bob gmail search\n  bob gmail search from:ada@example.com -l 10\n  bob gmail search \"newer_than:7d has:attachment\" -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH",
         )
 }
 
@@ -211,6 +253,34 @@ fn list_format_arg() -> Arg {
         .value_parser(["table", "json"])
         .default_value("table")
         .help("Output format: table or json")
+}
+
+fn search_format_arg() -> Arg {
+    Arg::new("format")
+        .long("format")
+        .short('f')
+        .value_name("FORMAT")
+        .value_parser(["table", "json"])
+        .default_value("table")
+        .help("Output format: table or json")
+}
+
+fn limit_arg() -> Arg {
+    Arg::new("limit")
+        .long("limit")
+        .short('l')
+        .value_name("N")
+        .value_parser(clap::value_parser!(u32).range(1..))
+        .default_value("20")
+        .help("Maximum threads to show (1–50; default 20)")
+}
+
+fn remote_arg() -> Arg {
+    Arg::new("remote")
+        .long("remote")
+        .short('r')
+        .action(ArgAction::SetTrue)
+        .help("Fetch live new-message counts from Gmail")
 }
 
 fn save_format_arg() -> Arg {
@@ -380,6 +450,7 @@ pub(crate) struct TopArgs {
     pub all: bool,
     pub bob_dir: Option<PathBuf>,
     pub format: ListFormat,
+    pub remote: bool,
 }
 
 /// Typed `bob gmail list` arguments.
@@ -388,6 +459,63 @@ pub(crate) struct ListArgs {
     pub all: bool,
     pub bob_dir: Option<PathBuf>,
     pub format: ListFormat,
+    pub remote: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SearchFormat {
+    Table,
+    Json,
+}
+
+impl SearchFormat {
+    fn from_matches(matches: &ArgMatches) -> Self {
+        match matches.get_one::<String>("format").map(String::as_str) {
+            Some("json") => Self::Json,
+            _ => Self::Table,
+        }
+    }
+
+    pub(crate) fn is_json(self) -> bool {
+        matches!(self, Self::Json)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SearchArgs {
+    pub query: Option<String>,
+    pub limit: u32,
+    pub format: SearchFormat,
+}
+
+impl SearchArgs {
+    pub(crate) fn from_matches(matches: &ArgMatches) -> Self {
+        Self {
+            query: matches
+                .get_one::<OsString>("query")
+                .map(|value| value.to_string_lossy().into_owned()),
+            limit: *matches.get_one::<u32>("limit").unwrap_or(&20),
+            format: SearchFormat::from_matches(matches),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PeekArgs {
+    pub input: String,
+    pub format: HumanFormat,
+}
+
+impl PeekArgs {
+    pub(crate) fn from_matches(matches: &ArgMatches) -> Self {
+        Self {
+            input: matches
+                .get_one::<OsString>("input")
+                .map(|value| value.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            format: HumanFormat::from_matches(matches),
+        }
+    }
 }
 
 /// Typed `save` arguments.
@@ -439,6 +567,7 @@ impl TopArgs {
             all: matches.get_flag("all"),
             bob_dir: raw_bob_dir(matches),
             format: ListFormat::from_matches(matches),
+            remote: matches.get_flag("remote"),
         }
     }
 }
@@ -449,6 +578,7 @@ impl ListArgs {
             all: matches.get_flag("all"),
             bob_dir: raw_bob_dir(matches),
             format: ListFormat::from_matches(matches),
+            remote: matches.get_flag("remote"),
         }
     }
 

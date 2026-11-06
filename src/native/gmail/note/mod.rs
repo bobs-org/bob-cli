@@ -13,6 +13,9 @@ pub(crate) mod parse;
 pub(crate) mod path;
 mod text;
 
+pub(crate) use layout::{message_time, thread_who};
+pub(crate) use text::subject_without_prefixes;
+
 /// Extract mailbox addresses with the parser used by mail-note rendering.
 /// Display names without an address are deliberately omitted.
 pub(crate) fn mailbox_addresses(raw: &str) -> Vec<String> {

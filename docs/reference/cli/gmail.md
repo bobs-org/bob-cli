@@ -15,10 +15,12 @@ Usage: bob gmail [OPTIONS] [COMMAND]
 
 Commands:
   doctor  Check the Gmail setup: gog, client, account, token, scopes, config, writer, and journal
-  list    List saved Gmail threads (offline, read-only)
+  list    List saved Gmail threads (offline unless --remote)
   login   Connect Gmail (read-only) in one guided step
   logout  Remove Bob's Gmail grant only; prints the Google revoke URL
+  peek    Preview Gmail thread metadata without saving it
   save    Save or refresh Gmail threads as inert mail notes
+  search  Search Gmail threads for a picker
   help    Print this message or the help of the given subcommand(s)
 
 Options:
@@ -34,17 +36,23 @@ Options:
           [default: table]
           [possible values: table, json]
 
+  -r, --remote
+          Fetch live new-message counts from Gmail
+
   -h, --help
           Show help
 
-Running `bob gmail` with no command lists saved threads (offline, read-only).
+Running `bob gmail` with no command lists saved threads (offline, read-only). `-r` adds live message counts.
 
 Examples:
   bob gmail                   List saved threads
   bob gmail -a                List every saved thread
+  bob gmail -r                Fetch live new-message counts
   bob gmail -f json           List saved threads as JSON
-  bob gmail save URL           Save a Gmail thread
-  bob gmail save ID -d         Preview a save without writing
+  bob gmail search            Search recent inbox threads
+  bob gmail peek URL          Preview a Gmail link
+  bob gmail save URL          Save a Gmail thread
+  bob gmail save ID -d        Preview a save without writing
   bob gmail login             Connect Gmail in one guided step
   bob gmail login -a EMAIL    Sign in as this account
   bob gmail login -s compose  Also grant the compose scope (Mac only)

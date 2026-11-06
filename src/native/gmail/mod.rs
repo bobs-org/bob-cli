@@ -19,6 +19,7 @@ mod journal;
 mod login;
 mod logout;
 mod save;
+pub(crate) mod search_peek;
 // Owned by mail-note (bob-cli-hg.5); the save and capture phases consume it.
 #[allow(dead_code)]
 pub(crate) mod note;
@@ -44,7 +45,8 @@ use std::{ffi::OsString, iter};
 pub(crate) use crate::native::google::GoogleError as GmailError;
 
 pub(crate) use cli::{
-    DoctorArgs, ListArgs, LoginArgs, LogoutArgs, SaveArgs, TopArgs,
+    DoctorArgs, ListArgs, LoginArgs, LogoutArgs, PeekArgs, SaveArgs,
+    SearchArgs, TopArgs,
 };
 
 const COMMAND_NAME: &str = "bob gmail";
@@ -83,8 +85,14 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         Some(("logout", sub_matches)) => {
             logout::run(&LogoutArgs::from_matches(sub_matches))
         }
+        Some(("peek", sub_matches)) => {
+            search_peek::peek(&PeekArgs::from_matches(sub_matches))
+        }
         Some(("save", sub_matches)) => {
             save::run(&SaveArgs::from_matches(sub_matches))
+        }
+        Some(("search", sub_matches)) => {
+            search_peek::search(&SearchArgs::from_matches(sub_matches))
         }
         Some((name, _)) => {
             eprintln!("{COMMAND_NAME}: unknown subcommand: {name}");
@@ -96,6 +104,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
                 all: top.all,
                 bob_dir: top.bob_dir,
                 format: top.format,
+                remote: top.remote,
             })
         }
     }

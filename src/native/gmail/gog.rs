@@ -89,6 +89,27 @@ impl Gog {
             .map_err(|error| GmailError::runtime("bad_json", error.to_string()))
     }
 
+    /// Fetch a thread's headers and message dates without requesting bodies.
+    pub(crate) fn thread_metadata(
+        &self,
+        account: &str,
+        hex: &str,
+    ) -> Result<GmailThread, GmailError> {
+        let stdout = self.gmail_run(
+            account,
+            vec![
+                OsString::from("gmail"),
+                OsString::from("thread"),
+                OsString::from("get"),
+                OsString::from(hex),
+                OsString::from("--format"),
+                OsString::from("metadata"),
+            ],
+        )?;
+        GmailThread::from_gog_json(stdout.as_bytes())
+            .map_err(|error| GmailError::runtime("bad_json", error.to_string()))
+    }
+
     // Consumed by outer gmail-save and search-peek once they land.
     #[allow(dead_code)]
     /// Fetch one message.

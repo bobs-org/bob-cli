@@ -575,6 +575,35 @@ if op == "thread_get":
     hex_id = pos[3] if len(pos) > 3 else "1a0b9eb2cc26ab96"
     if scenario == "thread_mismatch":
         hex_id = "aaaaaaaaaaaaaaaa"
+    if flag_value("--format") == "metadata":
+        if scenario in {"metadata_malformed", "malformed_json"}:
+            sys.stdout.write("{malformed JSON\n")
+            raise SystemExit(0)
+        subject = "Re: Lease renewal #task"
+        snippet = "Hello [[world]]; the sender's snippet is inert."
+        sender = "Dana Whitfield <dana@example.test>"
+        message_count = 2 if hex_id != "aaaaaaaaaaaaaaaa" else 1
+        messages = []
+        for index in range(message_count):
+            messages.append(
+                {
+                    "id": f"{index + 1:016x}",
+                    "threadId": hex_id,
+                    "labelIds": ["INBOX"],
+                    "internalDate": str(1793908800000 + index * 60000),
+                    "snippet": snippet if index == message_count - 1 else "Earlier message",
+                    "payload": {
+                        "mimeType": "text/plain",
+                        "headers": [
+                            {"name": "From", "value": sender},
+                            {"name": "To", "value": "you@example.com"},
+                            {"name": "Subject", "value": subject},
+                        ],
+                    },
+                }
+            )
+        dump({"thread": {"id": hex_id, "historyId": "2", "messages": messages}})
+        raise SystemExit(0)
     if scenario in {"thread_nonempty", "poison", "poison_error"}:
         body = "U2Vuc2l0aXZlIHBvaXNvbiBib2R5" if scenario == "poison" else "SGVsbG8="
         from_value = "PRIVATE_SENTINEL <sender@example.com>" if scenario == "poison" else "Ada <ada@example.com>"

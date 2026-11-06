@@ -29,9 +29,10 @@ use serde_json::json;
 use super::{
     cli::ListArgs,
     config::GmailConfig,
+    gog::Gog,
     ids,
     note::index::{MailIndex, MailIndexEntry},
-    resolve, ui, GmailError,
+    resolve, search_peek, ui, GmailError,
 };
 use crate::native::{
     is_always_excluded_note_directory_name, style, style::Styler,
@@ -44,6 +45,7 @@ struct ListRow {
     entry: MailIndexEntry,
     updated: Option<DateTime<FixedOffset>>,
     backlinks: usize,
+    new_messages: Option<usize>,
 }
 
 struct ListReport {
@@ -90,13 +92,26 @@ fn report(args: &ListArgs) -> Result<ListReport, GmailError> {
     let backlinks = count_backlinks(&vault, &index);
     let rows = sorted_rows(&index, config.account(), &backlinks);
     let total = rows.len();
-    let (rows, truncated) = if args.all {
+    let (mut rows, truncated) = if args.all {
         (rows, false)
     } else if rows.len() > PAGE_SIZE {
         (rows.into_iter().take(PAGE_SIZE).collect(), true)
     } else {
         (rows, false)
     };
+    if args.remote {
+        let gog = Gog::resolve(crate::native::google::GMAIL, config.timeout())?;
+        gog.require_version()?;
+        for row in &mut rows {
+            let live = search_peek::remote_message_count(
+                &gog,
+                &row.entry.account,
+                &row.entry.thread_id,
+            )?;
+            row.new_messages =
+                Some(live.saturating_sub(row.entry.messages as usize));
+        }
+    }
     Ok(ListReport {
         rows,
         total,
@@ -127,6 +142,7 @@ fn sorted_rows(
                 entry: entry.clone(),
                 updated,
                 backlinks: count,
+                new_messages: None,
             }
         })
         .collect();
@@ -414,19 +430,25 @@ fn print_report(args: &ListArgs, report: &ListReport) {
             "total": report.total,
             "shown": report.rows.len(),
             "truncated": report.truncated,
-            "threads": report.rows.iter().map(|row| json!({
-                "account": row.entry.account,
-                "thread_id": row.entry.thread_id,
-                "path": row.entry.path,
-                "subject": row.entry.title,
-                "who": row.entry.who,
-                "label": row.entry.label,
-                "link": format!("[[{}|{}]]", row.entry.path, row.entry.label),
-                "started": row.entry.started,
-                "updated": row.entry.updated,
-                "messages": row.entry.messages,
-                "backlinks": row.backlinks,
-            })).collect::<Vec<_>>(),
+            "threads": report.rows.iter().map(|row| {
+                let mut thread = json!({
+                    "account": row.entry.account,
+                    "thread_id": row.entry.thread_id,
+                    "path": row.entry.path,
+                    "subject": row.entry.title,
+                    "who": row.entry.who,
+                    "label": row.entry.label,
+                    "link": format!("[[{}|{}]]", row.entry.path, row.entry.label),
+                    "started": row.entry.started,
+                    "updated": row.entry.updated,
+                    "messages": row.entry.messages,
+                    "backlinks": row.backlinks,
+                });
+                if args.remote {
+                    thread["new_messages"] = json!(row.new_messages.unwrap_or_default());
+                }
+                thread
+            }).collect::<Vec<_>>(),
             "duplicates": report.duplicates.iter().map(|(account, thread, paths)| json!({
                 "account": account,
                 "thread_id": thread,
@@ -455,7 +477,12 @@ fn print_report(args: &ListArgs, report: &ListReport) {
                     display_date(row),
                     row.entry.title.clone(),
                     row.entry.who.clone(),
-                    row.entry.messages.to_string(),
+                    match row.new_messages {
+                        Some(new) if new > 0 => {
+                            format!("{} (+{new} new)", row.entry.messages)
+                        }
+                        _ => row.entry.messages.to_string(),
+                    },
                     row.backlinks.to_string(),
                 ]
             })

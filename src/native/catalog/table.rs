@@ -1105,11 +1105,26 @@ pub(crate) const ENTRIES: &[Row] = &[
         )
     },
     Row {
+        network: true,
         ..reads(
             "gmail-list",
             &["gmail", "list"],
             "List saved threads",
-            &["gmail", "google", "mail", "list", "saved", "threads"],
+            &[
+                "gmail", "google", "mail", "list", "saved", "threads", "new",
+                "replies",
+            ],
+            Presentation::Report,
+            60,
+        )
+    },
+    Row {
+        network: true,
+        ..reads(
+            "gmail-search",
+            &["gmail", "search"],
+            "Search Gmail threads",
+            &["gmail", "google", "mail", "search", "thread", "picker"],
             Presentation::Report,
             60,
         )
@@ -1198,6 +1213,10 @@ pub(crate) const EXCLUDED: &[Excluded] = &[
     Excluded {
         path: &["gmail", "logout"],
         reason: "Needs confirmation and handles credentials",
+    },
+    Excluded {
+        path: &["gmail", "peek"],
+        reason: "Live metadata preview for editor and capture clients",
     },
     Excluded {
         path: &["gkeep", "migrate-markers"],

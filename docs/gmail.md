@@ -3,9 +3,9 @@
 `bob gmail` saves Gmail threads you choose as inert, append-only mail notes in
 the vault, linked from tasks with a readable label. This page covers one-time
 setup through [gog](https://github.com/openclaw/gogcli) (≥ v0.44.0) and the
-shell: the `gmail` noun group, config, login, logout, doctor, and saving.
-Linking, search, and sending land in later phases. Bare `bob gmail` remains an
-offline list placeholder until that phase lands.
+shell: the `gmail` noun group, config, login, logout, doctor, saving, search,
+metadata previews, and live reply counts. Linking, composing, and pulling land
+in later phases.
 
 Typical order: `bob gmail login` once, `bob gmail doctor` until every check is
 `ok` or an explained skip. Tests never touch Google: set `BOB_GMAIL_GOG` to a
@@ -22,6 +22,8 @@ fake executable.
 - [Logout](#logout)
 - [Save](#save)
 - [List](#list)
+- [Search](#search)
+- [Peek](#peek)
 - [Try it](#try-it)
 - [Doctor](#doctor)
 - [Where it runs](#where-it-runs)
@@ -34,17 +36,19 @@ fake executable.
 ## Commands
 
 ```bash
-bob gmail [list] [-a|--all] [-b|--bob-dir DIR] [-f|--format table|json]
+bob gmail [list] [-a|--all] [-b|--bob-dir DIR] [-f|--format table|json] [-r|--remote]
 bob gmail doctor [-b|--bob-dir DIR] [-f|--format human|json]
 bob gmail login [-a|--account EMAIL] [-c|--credentials FILE] [-f|--format human|json] [-m|--manual] [-s|--scope readonly|compose]
 bob gmail logout [-a|--account EMAIL] [-f|--format human|json] [-y|--force]
+bob gmail peek URL|ID [-f|--format human|json]
 bob gmail save URL|ID|NOTE... [-b|--bob-dir DIR] [-B|--body full|headers] [-d|--dry-run] [-f|--format human|json] [-P|--parent ROUTE] [-q|--quiet] [-R|--rerender]
+bob gmail search [QUERY] [-f|--format table|json] [-l|--limit N]
 ```
 
 Running `bob gmail` with no subcommand lists saved threads, exactly like the
-explicit `bob gmail list`. Listing is offline and read-only: it never invokes
-gog, creates directories, changes files, or needs the writer host. `save`
-reads Gmail and writes selected threads to the vault. `doctor` is read-only;
+explicit `bob gmail list`. Listing is offline and read-only by default; `-r`
+fetches live message counts for the rows shown. `save` reads Gmail and writes
+selected threads to the vault. `doctor`, `search`, and `peek` are read-only;
 `login` and `logout` are excluded from the command catalog (they need a
 terminal and handle credentials).
 
@@ -280,6 +284,32 @@ are never selected as canonical: they stay visible as diagnostics and are
 left out of the threads. The footer stays absent until link health lands in a
 later phase; it never claims zero links.
 
+Add `-r|--remote` to compare each displayed thread's current Gmail message
+count with its saved note; the table shows `+N new`, and JSON adds
+`new_messages`. This option makes one metadata-only Gmail read per displayed
+row. It is uncached so the count is current.
+
+## Search
+
+`bob gmail search [QUERY]` uses Gmail query syntax and defaults to
+`in:inbox newer_than:30d` when the query is omitted or blank. It shows 20
+threads by default and accepts `-l|--limit` up to 50. The table and JSON rows
+include the thread ID, inert subject and counterpart, last date, message count,
+a snippet capped at 140 characters, and `saved_note` when the thread is
+already indexed in the vault. Search and metadata fetches are read-only.
+
+## Peek
+
+`bob gmail peek URL|ID` resolves a Gmail link without writing the vault and
+returns a ready-made preview line. `-f json` includes the resolution verdict,
+thread ID, inert subject and counterpart, message count, last date, saved-note
+path, and task-safe link label. An unresolvable link returns an
+`unresolvable` verdict with a plain message and does not fetch a thread.
+
+Successful previews use a private, metadata-only cache at
+`$XDG_CACHE_HOME/bob-cli/gmail/peek.json` (or `~/.cache/bob-cli/gmail/peek.json`)
+for ten minutes. It stores no snippets, message bodies, MIME, or attachments.
+
 ## Try it
 
 1. `bob gmail save <URL> -f json` saves one thread and prints its note path.
@@ -336,7 +366,9 @@ Every `-f json` output carries `schema_version: 1` and `ok`. Errors are typed
 - Tokens never appear in argv, logs, journals, diagnostics, caches, or JSON
   errors. Client JSON travels to gog over stdin.
 - Bodies, raw MIME, and attachment bytes never appear outside mail notes.
-  Reads never pass `--sanitize-content` or `--wrap-untrusted`.
+  Search shows only a capped, inert Gmail snippet. Peek and list `--remote`
+  fetch headers and dates only. The preview cache stores no snippets. Reads
+  never pass `--sanitize-content` or `--wrap-untrusted`.
 - `gmail.compose` also permits sending. Bob never sends without a Gmail draft
   plus a digest-bound confirmation, and keeps that grant off agent hosts.
 - Tests use a fake gog and temp vaults. Committed fixtures are synthetic.
@@ -349,7 +381,8 @@ Every `-f json` output carries `schema_version: 1` and `ok`. Errors are typed
 - `BOB_GMAIL_BROWSER`: browser for sign-in (otherwise automatic).
 - `BOB_GMAIL_ASSUME_TTY`: `1`/`true` treats stdin as a TTY for prompts.
 - `BOB_GMAIL_CONSENT_SECS`: consent window override (tests).
+- `XDG_CACHE_HOME`: cache root; defaults to `~/.cache`.
 
 ## Known limits
 
-Linking, search, peeking, composing, and pulling land in later phases.
+Linking, composing, and pulling land in later phases.
