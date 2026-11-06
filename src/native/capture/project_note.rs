@@ -1899,7 +1899,7 @@ pub(super) fn plan_project_note_item(
                                                 fallback,
                                             },
                                         close: Some(
-                                            crate::native::task_complete::offer_close::OfferCloseDescriptor::refused("new_task"),
+                                            crate::native::task_complete::offer_close::OfferCloseDescriptor::refused(crate::native::task_complete::offer_close::OfferCloseRefusal::NewTask, crate::native::task_complete::offer_close::why_new_task(&offer.text)),
                                         ),
                                         order_key: offer.order_key.clone(),
                                         settled_ordinal: offer.settled_ordinal,
@@ -2022,7 +2022,7 @@ pub(super) fn plan_project_note_item(
                                             fallback,
                                         },
                                     close: Some(
-                                        crate::native::task_complete::offer_close::OfferCloseDescriptor::refused("new_task"),
+                                        crate::native::task_complete::offer_close::OfferCloseDescriptor::refused(crate::native::task_complete::offer_close::OfferCloseRefusal::NewTask, crate::native::task_complete::offer_close::why_new_task(&offer.text)),
                                     ),
                                     order_key: offer.order_key.clone(),
                                     settled_ordinal: offer.settled_ordinal,

@@ -1334,11 +1334,17 @@ for older bobs). CLI selection is `-p, --pull-in` (§12.14).
 Offer-close support is additive. A supported response includes
 `pull_in.close: {"supported": true}` and adds a `close` descriptor to each
 offer row. An older response omits both fields. Each descriptor is
-`{complete: boolean, cancel: boolean, why?: string, scope_note?: string,
-unblocks?: integer}`: the booleans report the two independently supported
-actions, `why` is Bob-authored refusal copy, `scope_note` explains work that
-root-only resolution leaves open, and `unblocks` counts dependents the close
-would recover. Descriptors never authorize a presenter to infer eligibility.
+`{complete: boolean, cancel: boolean, why?: string,
+complete_consequence?: string, cancel_consequence?: string,
+scope_note?: string, unblocks: integer}`: the booleans report the two
+independently supported actions, `why` is Bob-authored human refusal copy,
+`complete_consequence` / `cancel_consequence` are the single-row consequence
+sentences including any `· unblocks …` and tickler suffixes, `scope_note`
+explains work that root-only resolution leaves open, and `unblocks` counts
+dependents the close would recover. Machine refusal classification
+(`new_task`, `recurring`, `muted`, `status`, `changed_identity`) stays in
+`OfferCloseRefusal` and is never inferred by matching display text.
+Descriptors never authorize a presenter to infer eligibility.
 
 Both `task_complete` and `pomodoro_close` objects carry the same three
 fields. Offered rows are emitted even when the status did not change (a
@@ -3640,9 +3646,10 @@ root-only `[x]` plus `[completion:: today]`, with no Work Log prompt. Cancel
 uses the Task Card cancel writer: root-only `[-]` plus `[cancelled:: today]`.
 A nonblank reason is prepended to the Cancel Log, creating it when needed. A
 blank reason creates no log when none exists; when a Cancel Log already exists,
-it prepends the existing `🤷 no reason given` entry. Embedded children stay
-open and the descriptor's `scope_note` reports them. Neither outcome stamps
-freshness or changes the keep count.
+it prepends the `🤷 no reason given` entry. Open subtasks stay open and the
+descriptor's `scope_note` reports them as `· its {N} open subtask(s) stay
+open`, or on a `^prj` as `· its {N} open task(s) stay open`. Neither outcome
+stamps freshness or changes the keep count.
 
 Dependents recover through the ordinary recovery rules, including the
 `[unblocked:: today]` WRITE stamp when applicable. Card-resolved rows do not
@@ -3653,23 +3660,47 @@ Done and Cancel. A `project_finished` offer may resolve its existing `^prj`
 task as Done in the same gesture that completes the project's last task.
 
 **Canonical consequence and receipt copy** is authored by Bob and shared by
-all presenters. `{S}` is the resolved task text, `{Status}` its prior lane,
-and counts use singular/plural forms:
+all presenters. `{S}` is the resolved task text, `{D}` a dependent's text,
+`{P}` a `^prj` row's project note stem, `{Status}` the row's status name as
+the card shows it, and counts use singular/plural forms. Notation follows the
+parent verdict contract verbatim:
 
-| Situation | Text |
+| Where | Text |
 | --- | --- |
-| Done consequence | `✓ Completes “{S}” · {Status} → Done` |
-| Cancel consequence | `⊘ Cancels “{S}” · {Status} → Cancelled` |
-| Root-only scope | `· its {N} embedded tasks stay open` |
-| Done on a `project_finished` row | `✓ Finishes ‹project›` |
-| Recovered dependent | `↳ also unblocked “{D}” · back tomorrow as a tickler` |
+| Consequence, Done | `✓ Completes “{S}” · {Status} → Done` |
+| Consequence, Done on a `^prj` | `✓ Finishes ‹{P}› · {Status} → Done` |
+| Consequence, Cancel | `⊘ Cancels “{S}” · {Status} → Cancelled` |
+| Unblock suffix | `· unblocks “{D}”` / `· unblocks {k} tasks` |
+| Tickler suffix (every recovered dependent stamped) | `· back tomorrow as a tickler` / `· back tomorrow as ticklers` |
+| Scope suffix | `· its {N} open subtask stays open` / `· its {N} open subtasks stay open`; on a `^prj`: `· its {N} open task stays open` / `· its {N} open tasks stay open` |
+| `why` (new) | `“{S}” is new in this capture — drop it from the draft instead` |
+| `why` (recurring) | `“{S}” repeats — close it in Obsidian so Tasks writes the next one` |
+| `why` (status) | `“{S}” is {Status} — only open tasks close here` |
+| `why` (old nav; Obsidian only) | `Update Bob Navigation Hotkeys to close tasks from this card` |
+| `why` (muted) | `“{S}” is muted — only selectable offers close here` |
+| `why` (changed identity) | `Changed since the card opened — reopen to see the current row` |
+| Receipt, Done | `✓ completed “{S}” · {Status} → Done`, plus `· unblocked “{D}”` / `· unblocked {k} tasks`; a dry run uses `✓ would complete …` / `would unblock` |
+| Receipt, Cancel | `⊘ cancelled “{S}” · {Status} → Cancelled · “{reason}”` (no reason clause when blank), plus the unblocked clause; a dry run uses `⊘ would cancel …` |
+| Receipt, tickler line | `↳ “{D}” back tomorrow as a tickler` / `↳ {k} unblocked tasks back tomorrow as ticklers` |
+| Receipt, Obsidian refusal | `{n} not closed · changed since the card opened` |
+| Status line, Esc armed | `Esc again to discard {N} close` / `Esc again to discard {N} closes` |
+| Footer summary | `pull in {a} · ✓ {b} done · ⊘ {c} cancel`, omitting zero segments; the plan meter counts pull-ins only |
+| Reason field | placeholder `Why cancel? (optional)`, trailing hint `↵ · Esc back` |
+| Cancel row detail | `“{reason}”`, or `no reason` (faint) |
+| Accessible state | `will be completed` / `will be cancelled: {reason}` / `will be cancelled, no reason` |
 
-The descriptor's `why` supplies the muted ineligible-row explanation. ✓ uses
-the existing Done green and ⊘ the existing Cancelled tint; amber is for
-caveats and red for errors, following relation complete/cancel. A task is
-never struck through before its write. Obsidian's post-write Undo is guarded
-by the exact postimages and restores only rows the pass wrote that remain
-untouched. Reopening the predecessor does not reopen resolved rows.
+The consequence copy assumes only that row closes; the receipt reports the
+exact joint result. Machine refusal codes (`new_task`, `recurring`, `muted`,
+`status`, `changed_identity`) stay in `OfferCloseRefusal`; `why` is display
+copy and is never parsed to infer a refusal. ✓ uses the existing Done green
+and ⊘ the existing Cancelled tint; amber is for caveats and red for errors,
+following relation complete/cancel. A task is never struck through before its
+write. Obsidian's post-write Undo is all-or-nothing and guarded: it restores
+exact preimages only while every touched file still equals what the verdict
+step wrote, says why when it refuses, and restores only verdict and recovery
+writes while leaving earlier picks and predecessor closes intact. It never
+captures unrelated concurrent edits into an Undo preimage. Reopening the
+predecessor does not reopen resolved rows.
 
 **Write failures differ by surface.** Capture is all-or-nothing: if a verdict
 target is stale, the batch writes nothing and the card can reopen with its
@@ -3695,18 +3726,24 @@ surface that owns them and are marked UI-only in the fixture.
 | SV2 | Eligible task Cancelled with a nonblank reason | Root becomes `[-]`; `[cancelled:: today]` is written; dated reason is prepended to the Cancel Log |
 | SV3 | Cancelled with a blank reason and no Cancel Log | Root becomes `[-]`; no Cancel Log is created |
 | SV4 | Cancelled with a blank reason and an existing Cancel Log | Root becomes `[-]`; dated `🤷 no reason given` is prepended |
-| SV5 | Resolved root has embedded task children | Only the root closes; children stay byte-identical and the close descriptor reports scope |
+| SV5 | Resolved root has open subtask children | Only the root closes; children stay byte-identical and the close descriptor reports `· its 1 open subtask stays open` |
 | SV6 | Eligible offer has no block ID | Its digest offer key revalidates and resolves the same row without minting an ID |
-| SV7 | `project_finished` offer resolves its `^prj` as Done | Project task completes in the same write pass; no child task is closed by the root-only verdict |
-| SV8 | New-in-capture, recurring, muted, unsupported-status, or changed-identity row | Done and Cancel are unavailable with Bob-authored `why`; no write |
-| SV9 | Done recovers a dependent | Dependent receives ordinary recovery and `[unblocked:: today]` when WRITE applies; it is reported `resolved_in_card`, never re-offered |
-| SV10 | Cancel recovers a dependent | Same recovery and no-cascade behavior as SV9 |
+| SV7 | `project_finished` offer resolves its `^prj` as Done | Project task completes as `✓ Finishes ‹{P}› · {Status} → Done` in the same write pass; open project tasks stay open (`· its 1 open task stays open`) |
+| SV8 | New-in-capture, recurring, muted, unsupported-status, or changed-identity row | Done and Cancel are unavailable with machine `refusal` plus Bob-authored human `why`; no write |
+| SV9 | Done recovers a dependent | Dependent receives ordinary recovery and `[unblocked:: today]` when WRITE applies; consequence gains `· unblocks “{D}” · back tomorrow as a tickler`; it is reported `resolved_in_card`, never re-offered |
+| SV10 | Cancel recovers a dependent | Same recovery and no-cascade behavior as SV9 with the Cancel consequence |
 | SV11 | A verdict key is also selected by `-p` or the other verdict flag | `offer_verdict_conflict`; write-free refusal lists current eligibility |
 | SV12 | `-p all` with one resolved row and one unmarked row | Only the unmarked selectable row is pulled in |
 | SV13 | Capture verdict target changes before apply | Entire capture batch aborts without writes |
 | SV14 | One Obsidian verdict target changes before apply | That row is refused; unchanged rows may apply; predecessor stays closed |
 | SV15 | A review-walk landing resolves a row that would otherwise be next | The original gesture advances once and skips the resolved row |
 | SV16 | Same initial vault, verdicts, and picks in dry-run and real capture | Planned JSON is identical apart from `dry_run` and preview wording |
+| SV17 | Cancel with an authored reason and no Cancel Log | Root becomes `[-]`; a new Cancel Log is created with the dated reason |
+| SV18 | Resolved root has two open subtasks | Only the root closes; scope reports `· its 2 open subtasks stay open` |
+| SV19 | Done recovers two dependents | Both recover with `[unblocked:: today]`; consequence gains `· unblocks 2 tasks · back tomorrow as ticklers` |
+| SV20 | Done recovers a NEW dependent without `[fresh::]` | Dependent recovers without an `[unblocked::]` stamp (WRITE skip); consequence keeps `· unblocks “{D}”` with no tickler suffix |
+| SV21 | Done recovers a scheduled-tickler dependent | Dependent recovers without an `[unblocked::]` stamp (WRITE skip); consequence keeps the unblock suffix with no tickler suffix |
+| SV22 | Two roots jointly unblock one dependent | Each root alone recovers nothing; the joint close recovers one dependent with `[unblocked:: today]` |
 
 ## 13. Project dependencies
 

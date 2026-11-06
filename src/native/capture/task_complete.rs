@@ -1625,8 +1625,8 @@ fn apply_offer_close_post_pass(
             };
             let key = offer.key.clone();
             let group = offer.group;
-            let prior_why =
-                offer.close.as_ref().and_then(|close| close.why.clone());
+            let prior_refusal =
+                offer.close.as_ref().and_then(|close| close.refusal);
             let relative = PathBuf::from(&row.note_path);
             let absolute = bob_dir.join(&relative);
             let Some(source_text) =
@@ -1639,7 +1639,8 @@ fn apply_offer_close_post_pass(
             else {
                 row.offer.as_mut().expect("offer still present").close =
                     Some(engine::offer_close::OfferCloseDescriptor::refused(
-                        "changed_identity",
+                        engine::offer_close::OfferCloseRefusal::ChangedIdentity,
+                        engine::offer_close::why_changed_identity(),
                     ));
                 return;
             };
@@ -1648,7 +1649,8 @@ fn apply_offer_close_post_pass(
             else {
                 row.offer.as_mut().expect("offer still present").close =
                     Some(engine::offer_close::OfferCloseDescriptor::refused(
-                        "changed_identity",
+                        engine::offer_close::OfferCloseRefusal::ChangedIdentity,
+                        engine::offer_close::why_changed_identity(),
                     ));
                 return;
             };
@@ -1657,7 +1659,8 @@ fn apply_offer_close_post_pass(
                     &source_text,
                     task.line_index,
                 );
-            let is_new_task = prior_why.as_deref() == Some("new_task")
+            let is_new_task = prior_refusal
+                == Some(engine::offer_close::OfferCloseRefusal::NewTask)
                 || capture_created_offer_task(
                     row,
                     &task,
@@ -1679,7 +1682,8 @@ fn apply_offer_close_post_pass(
                     source_text: &source_text,
                     group,
                     is_new_task,
-                    muted: prior_why.as_deref() == Some("muted"),
+                    muted: prior_refusal
+                        == Some(engine::offer_close::OfferCloseRefusal::Muted),
                     today: dependency_ctx.today,
                     tasks_settings: &tasks_settings,
                     note_settings,

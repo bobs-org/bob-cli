@@ -43,10 +43,18 @@ pub(crate) struct OfferCloseDescriptor {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) scope_note: Option<String>,
     pub(crate) unblocks: usize,
+    /// Machine refusal classification. Skipped from JSON so the wire keeps
+    /// only the human `why`; callers must match on this instead of parsing
+    /// translated display text.
+    #[serde(skip)]
+    pub(crate) refusal: Option<OfferCloseRefusal>,
 }
 
 impl OfferCloseDescriptor {
-    pub(crate) fn refused(why: impl Into<String>) -> Self {
+    pub(crate) fn refused(
+        refusal: OfferCloseRefusal,
+        why: impl Into<String>,
+    ) -> Self {
         Self {
             complete: false,
             cancel: false,
@@ -55,6 +63,25 @@ impl OfferCloseDescriptor {
             cancel_consequence: None,
             scope_note: None,
             unblocks: 0,
+            refusal: Some(refusal),
+        }
+    }
+
+    pub(crate) fn eligible(
+        complete_consequence: String,
+        cancel_consequence: String,
+        scope_note: Option<String>,
+        unblocks: usize,
+    ) -> Self {
+        Self {
+            complete: true,
+            cancel: true,
+            why: None,
+            complete_consequence: Some(complete_consequence),
+            cancel_consequence: Some(cancel_consequence),
+            scope_note,
+            unblocks,
+            refusal: None,
         }
     }
 }
@@ -91,7 +118,7 @@ pub(crate) enum OfferCloseAction {
 }
 
 /// Why a requested card close could not be planned.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OfferCloseRefusal {
     ChangedIdentity,
     Muted,
@@ -127,29 +154,138 @@ pub(crate) struct OfferClosePlan {
     pub(crate) reason: Option<String>,
 }
 
+/// Canonical human refusal sentences shared with `docs/task-dependencies.md`
+/// §12.22. Machine codes stay in [`OfferCloseRefusal`]; `why` is display copy.
+pub(crate) fn why_new_task(task_text: &str) -> String {
+    format!(
+        "“{task_text}” is new in this capture — drop it from the draft instead"
+    )
+}
+
+pub(crate) fn why_recurring(task_text: &str) -> String {
+    format!("“{task_text}” repeats — close it in Obsidian so Tasks writes the next one")
+}
+
+pub(crate) fn why_status(task_text: &str, status_name: &str) -> String {
+    format!("“{task_text}” is {status_name} — only open tasks close here")
+}
+
+pub(crate) fn why_muted(task_text: &str) -> String {
+    format!("“{task_text}” is muted — only selectable offers close here")
+}
+
+pub(crate) fn why_changed_identity() -> String {
+    "Changed since the card opened — reopen to see the current row".to_string()
+}
+
+/// Best-effort display text for rows that cannot be parsed as tasks (new or
+/// muted rows whose source still parses, else the shown line itself).
+fn display_text_fallback(input: &OfferCloseInput<'_>) -> String {
+    let tasks =
+        task_status_hooks::parse_tasks(input.source_text, input.tasks_settings);
+    if let Some(task) = tasks
+        .iter()
+        .find(|task| task.line_index == input.line_index)
+    {
+        return note_tasks::clean_description(
+            &task.description,
+            &input.note_settings.global_filter,
+            task.block_id.as_deref(),
+        );
+    }
+    let tasks = task_status_hooks::parse_tasks(
+        input.expected_line,
+        input.tasks_settings,
+    );
+    if let Some(task) = tasks.first() {
+        return note_tasks::clean_description(
+            &task.description,
+            &input.note_settings.global_filter,
+            task.block_id.as_deref(),
+        );
+    }
+    input.expected_line.trim().to_string()
+}
+
+/// Suffix for a single-row consequence: `· unblocks …` plus the tickler suffix
+/// when every recovered dependent was stamped `[unblocked:: today]`.
+fn consequence_suffix(
+    plan: &SuccessorPlan,
+    today: NaiveDate,
+    note_settings: &NoteTaskSettings,
+) -> String {
+    if plan.unblocked.is_empty() {
+        return String::new();
+    }
+    let mut suffix = String::new();
+    if plan.unblocked.len() == 1 {
+        let row = &plan.unblocked[0];
+        let block_id =
+            (!row.block_id.is_empty()).then_some(row.block_id.as_str());
+        let dependent = note_tasks::clean_description(
+            &row.text,
+            &note_settings.global_filter,
+            block_id,
+        );
+        suffix.push_str(&format!(" · unblocks “{dependent}”"));
+    } else {
+        suffix.push_str(&format!(" · unblocks {} tasks", plan.unblocked.len()));
+    }
+    let stamp = format!("[unblocked:: {}]", today.format("%Y-%m-%d"));
+    let stamped = plan
+        .changed_files
+        .values()
+        .map(|contents| contents.matches(stamp.as_str()).count())
+        .sum::<usize>();
+    if stamped == plan.unblocked.len() {
+        if plan.unblocked.len() == 1 {
+            suffix.push_str(" · back tomorrow as a tickler");
+        } else {
+            suffix.push_str(" · back tomorrow as ticklers");
+        }
+    }
+    suffix
+}
+
 /// Describe Done and Cancel independently for one selectable offer.
 pub(crate) fn describe_offer_close(
     input: &OfferCloseInput<'_>,
 ) -> OfferCloseDescriptor {
     if input.muted {
+        let text = display_text_fallback(input);
         return OfferCloseDescriptor::refused(
-            OfferCloseRefusal::Muted.as_str(),
+            OfferCloseRefusal::Muted,
+            why_muted(&text),
         );
     }
     if input.is_new_task {
+        let text = display_text_fallback(input);
         return OfferCloseDescriptor::refused(
-            OfferCloseRefusal::NewTask.as_str(),
+            OfferCloseRefusal::NewTask,
+            why_new_task(&text),
         );
     }
     let task = match resolve_offer_task(input) {
         Ok(task) => task,
-        Err(refusal) => return OfferCloseDescriptor::refused(refusal.as_str()),
+        Err(refusal) => {
+            debug_assert_eq!(refusal, OfferCloseRefusal::ChangedIdentity);
+            return OfferCloseDescriptor::refused(
+                refusal,
+                why_changed_identity(),
+            );
+        }
     };
     let raw_line =
         logical_line_at(input.source_text, task.line_index).unwrap_or_default();
+    let task_text = note_tasks::clean_description(
+        &task.description,
+        &input.note_settings.global_filter,
+        task.block_id.as_deref(),
+    );
     if super::is_recurring_task_line(raw_line) {
         return OfferCloseDescriptor::refused(
-            OfferCloseRefusal::Recurring.as_str(),
+            OfferCloseRefusal::Recurring,
+            why_recurring(&task_text),
         );
     }
     let complete = super::verdicts::complete_verdict(
@@ -170,25 +306,25 @@ pub(crate) fn describe_offer_close(
         task_cancel::verdicts::CancelSourceVerdict::Cancels { .. }
     );
     if !eligible {
+        let status = status_name(input.note_settings, task.status);
         return OfferCloseDescriptor::refused(
-            OfferCloseRefusal::Status.as_str(),
+            OfferCloseRefusal::Status,
+            why_status(&task_text, &status),
         );
     }
 
     let status_name = status_name(input.note_settings, task.status);
-    let task_text = note_tasks::clean_description(
-        &task.description,
-        &input.note_settings.global_filter,
-        task.block_id.as_deref(),
-    );
-    let complete_consequence = if input.group == "project_finished"
-        && is_project_task_id(task.block_id.as_deref())
-    {
-        format!("✓ Finishes ‹{}›", project_name(input.path))
+    let is_project = input.group == "project_finished"
+        && is_project_task_id(task.block_id.as_deref());
+    let complete_base = if is_project {
+        format!(
+            "✓ Finishes ‹{}› · {status_name} → Done",
+            project_name(input.path)
+        )
     } else {
         format!("✓ Completes “{task_text}” · {status_name} → Done")
     };
-    let cancel_consequence =
+    let cancel_base =
         format!("⊘ Cancels “{task_text}” · {status_name} → Cancelled");
     let scope_note = open_scope_count(
         input.source_text,
@@ -198,29 +334,35 @@ pub(crate) fn describe_offer_close(
     )
     .filter(|count| *count > 0)
     .map(|count| {
-        let (noun, verb) = if count == 1 {
-            ("task", "stays")
+        if is_project {
+            if count == 1 {
+                format!("· its {count} open task stays open")
+            } else {
+                format!("· its {count} open tasks stay open")
+            }
+        } else if count == 1 {
+            format!("· its {count} open subtask stays open")
         } else {
-            ("tasks", "stay")
-        };
-        format!("· its {count} embedded {noun} {verb} open")
+            format!("· its {count} open subtasks stay open")
+        }
     });
-    let unblocks = if input.snapshot_complete {
-        recover_for_single_close(input, &task, raw_line, &complete_consequence)
-            .map(|plan| plan.unblocked.len())
-            .unwrap_or(0)
+    let (unblocks, suffix) = if input.snapshot_complete {
+        recover_for_single_close(input, &task, raw_line)
+            .map(|plan| {
+                let suffix =
+                    consequence_suffix(&plan, input.today, input.note_settings);
+                (plan.unblocked.len(), suffix)
+            })
+            .unwrap_or((0, String::new()))
     } else {
-        0
+        (0, String::new())
     };
-    OfferCloseDescriptor {
-        complete: true,
-        cancel: true,
-        why: None,
-        complete_consequence: Some(complete_consequence),
-        cancel_consequence: Some(cancel_consequence),
+    OfferCloseDescriptor::eligible(
+        format!("{complete_base}{suffix}"),
+        format!("{cancel_base}{suffix}"),
         scope_note,
         unblocks,
-    }
+    )
 }
 
 /// Apply a staged verdict against the exact task row shown in the card.
@@ -228,17 +370,11 @@ pub(crate) fn plan_offer_close(
     input: &OfferCloseInput<'_>,
     action: OfferCloseAction,
 ) -> Result<OfferClosePlan, OfferCloseRefusal> {
-    let task = resolve_offer_task(input)?;
     let descriptor = describe_offer_close(input);
-    if !descriptor.complete {
-        return Err(match descriptor.why.as_deref() {
-            Some("muted") => OfferCloseRefusal::Muted,
-            Some("new_task") => OfferCloseRefusal::NewTask,
-            Some("recurring") => OfferCloseRefusal::Recurring,
-            Some("status") => OfferCloseRefusal::Status,
-            _ => OfferCloseRefusal::ChangedIdentity,
-        });
+    if let Some(refusal) = descriptor.refusal {
+        return Err(refusal);
     }
+    let task = resolve_offer_task(input)?;
     let raw_line = logical_line_at(input.source_text, task.line_index)
         .ok_or(OfferCloseRefusal::ChangedIdentity)?;
     let source_postimage = match &action {
@@ -391,7 +527,6 @@ fn recover_for_single_close(
     input: &OfferCloseInput<'_>,
     task: &TaskLine,
     raw_line: &str,
-    _consequence: &str,
 ) -> Option<SuccessorPlan> {
     if task.task_id.is_none() && !is_project_task_id(task.block_id.as_deref()) {
         return Some(SuccessorPlan::default());

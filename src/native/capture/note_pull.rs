@@ -1092,7 +1092,10 @@ pub(super) fn plan_note_pull_item(
                 destination,
                 close: offer.is_new.then(|| {
                     crate::native::task_complete::offer_close::OfferCloseDescriptor::refused(
-                        "new_task",
+                        crate::native::task_complete::offer_close::OfferCloseRefusal::NewTask,
+                        crate::native::task_complete::offer_close::why_new_task(
+                            &offer.text,
+                        ),
                     )
                 }),
                 order_key,

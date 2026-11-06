@@ -70,7 +70,7 @@
       "source": "- [ ] #task Parent ^parent\n  - [ ] #task Child ^child\n",
       "expected": {
         "source": "- [x] #task Parent  [completion:: 2026-11-05] ^parent\n  - [ ] #task Child ^child\n",
-        "scope_note": "· its 1 embedded task stays open"
+        "scope_note": "· its 1 open subtask stays open"
       }
     },
     {
@@ -97,19 +97,52 @@
       "source": "- [ ] #task #prj Ship Alpha ^prj\n- [ ] #task Project resident ^resident\n",
       "expected": {
         "source": "- [x] #task #prj Ship Alpha  [completion:: 2026-11-05] ^prj\n- [ ] #task Project resident ^resident\n",
-        "consequence": "✓ Finishes ‹Alpha›",
-        "scope_note": "· its 1 embedded task stays open"
+        "consequence": "✓ Finishes ‹Alpha› · Ready → Done",
+        "scope_note": "· its 1 open task stays open"
       }
     },
     {
       "id": "SV8",
       "kind": "eligibility",
       "cases": [
-        { "name": "new-in-capture", "is_new_task": true, "expected_why": "new_task" },
-        { "name": "recurring", "line": "- [ ] #task Weekly review [repeat:: weekly] ^weekly", "expected_why": "recurring" },
-        { "name": "muted", "muted": true, "expected_why": "muted" },
-        { "name": "unsupported-status", "line": "- [>] #task Unknown lane ^unknown", "expected_why": "status" },
-        { "name": "changed-identity", "expected_why": "changed_identity" }
+        {
+          "name": "new-in-capture",
+          "key": "Tasks.md#^new",
+          "line": "- [ ] #task New thing ^new",
+          "is_new_task": true,
+          "expected_refusal": "new_task",
+          "expected_why": "“New thing” is new in this capture — drop it from the draft instead"
+        },
+        {
+          "name": "recurring",
+          "key": "Tasks.md#^weekly",
+          "line": "- [ ] #task Weekly review [repeat:: weekly] ^weekly",
+          "expected_refusal": "recurring",
+          "expected_why": "“Weekly review” repeats — close it in Obsidian so Tasks writes the next one"
+        },
+        {
+          "name": "muted",
+          "key": "Tasks.md#^muted",
+          "line": "- [ ] #task Muted thing ^muted",
+          "muted": true,
+          "expected_refusal": "muted",
+          "expected_why": "“Muted thing” is muted — only selectable offers close here"
+        },
+        {
+          "name": "unsupported-status",
+          "key": "Tasks.md#^unknown",
+          "line": "- [>] #task Unknown lane ^unknown",
+          "expected_refusal": "status",
+          "expected_why": "“Unknown lane” is Unknown — only open tasks close here"
+        },
+        {
+          "name": "changed-identity",
+          "key": "Tasks.md#^root",
+          "line": "- [ ] #task Root ^root",
+          "changed_identity": true,
+          "expected_refusal": "changed_identity",
+          "expected_why": "Changed since the card opened — reopen to see the current row"
+        }
       ]
     },
     {
@@ -119,13 +152,15 @@
       "key": "Tasks.md#^root",
       "line": 0,
       "today": "2026-11-05",
-      "source": "- [ ] #task Root [id:: root] ^root\n- [?] #task Waiting [dependsOn:: root] [id:: waiting] ^waiting\n",
+      "source": "- [ ] #task Root [id:: root] ^root\n- [?] #task Waiting [fresh:: 2026-11-01] [dependsOn:: root] [id:: waiting] ^waiting\n",
       "action": "done",
       "expected": {
         "root": "- [x] #task Root [id:: root]  [completion:: 2026-11-05] ^root",
         "dependent_status": " ",
         "dependent_unblocked": "2026-11-05",
-        "dependent_offer_round": false
+        "dependent_offer_round": false,
+        "consequence": "✓ Completes “Root” · Ready → Done · unblocks “Waiting” · back tomorrow as a tickler",
+        "unblocks": 1
       }
     },
     {
@@ -135,14 +170,16 @@
       "key": "Tasks.md#^root",
       "line": 0,
       "today": "2026-11-05",
-      "source": "- [ ] #task Root [id:: root] ^root\n- [?] #task Waiting [dependsOn:: root] [id:: waiting] ^waiting\n",
+      "source": "- [ ] #task Root [id:: root] ^root\n- [?] #task Waiting [fresh:: 2026-11-01] [dependsOn:: root] [id:: waiting] ^waiting\n",
       "action": "cancel",
       "reason": "",
       "expected": {
         "root": "- [-] #task Root [id:: root] [cancelled:: 2026-11-05] ^root",
         "dependent_status": " ",
         "dependent_unblocked": "2026-11-05",
-        "dependent_offer_round": false
+        "dependent_offer_round": false,
+        "consequence": "⊘ Cancels “Root” · Ready → Cancelled · unblocks “Waiting” · back tomorrow as a tickler",
+        "unblocks": 1
       }
     },
     {
@@ -183,6 +220,105 @@
       "kind": "ui_only",
       "surface": "capture_dry_run",
       "expected": { "same_planned_json": true, "allowed_differences": ["dry_run", "preview wording"] }
+    },
+    {
+      "id": "SV17",
+      "kind": "cancel",
+      "path": "Tasks.md",
+      "key": "Tasks.md#^retire-new-log",
+      "line": 0,
+      "today": "2026-11-05",
+      "reason": "Duplicate work",
+      "source": "- [ ] #task Retire hook ^retire-new-log\n",
+      "expected": {
+        "source": "- [-] #task Retire hook [cancelled:: 2026-11-05] ^retire-new-log\n\t- ❌ **CANCEL LOG**\n\t\t- *2026-11-05* — Duplicate work\n",
+        "consequence": "⊘ Cancels “Retire hook” · Ready → Cancelled",
+        "log_created": true
+      }
+    },
+    {
+      "id": "SV18",
+      "kind": "done",
+      "path": "Tasks.md",
+      "key": "Tasks.md#^parent2",
+      "line": 0,
+      "today": "2026-11-05",
+      "source": "- [ ] #task Parent ^parent2\n  - [ ] #task First child ^child1\n  - [ ] #task Second child ^child2\n",
+      "expected": {
+        "source": "- [x] #task Parent  [completion:: 2026-11-05] ^parent2\n  - [ ] #task First child ^child1\n  - [ ] #task Second child ^child2\n",
+        "scope_note": "· its 2 open subtasks stay open"
+      }
+    },
+    {
+      "id": "SV19",
+      "kind": "recover",
+      "path": "Tasks.md",
+      "key": "Tasks.md#^root",
+      "line": 0,
+      "today": "2026-11-05",
+      "source": "- [ ] #task Root [id:: root] ^root\n- [?] #task First waiting [fresh:: 2026-11-01] [dependsOn:: root] [id:: first] ^first\n- [?] #task Second waiting [fresh:: 2026-11-01] [dependsOn:: root] [id:: second] ^second\n",
+      "action": "done",
+      "expected": {
+        "root": "- [x] #task Root [id:: root]  [completion:: 2026-11-05] ^root",
+        "dependent_status": " ",
+        "dependent_unblocked": "2026-11-05",
+        "dependent_offer_round": false,
+        "consequence": "✓ Completes “Root” · Ready → Done · unblocks 2 tasks · back tomorrow as ticklers",
+        "unblocks": 2
+      }
+    },
+    {
+      "id": "SV20",
+      "kind": "recover-unstamped",
+      "path": "Tasks.md",
+      "key": "Tasks.md#^root",
+      "line": 0,
+      "today": "2026-11-05",
+      "source": "- [ ] #task Root [id:: root] ^root\n- [?] #task New waiting [dependsOn:: root] [id:: waiting] ^waiting\n",
+      "action": "done",
+      "expected": {
+        "root": "- [x] #task Root [id:: root]  [completion:: 2026-11-05] ^root",
+        "dependent_status": " ",
+        "dependent_unblocked": null,
+        "dependent_offer_round": false,
+        "consequence": "✓ Completes “Root” · Ready → Done · unblocks “New waiting”",
+        "unblocks": 1
+      }
+    },
+    {
+      "id": "SV21",
+      "kind": "recover-unstamped",
+      "path": "Tasks.md",
+      "key": "Tasks.md#^root",
+      "line": 0,
+      "today": "2026-11-05",
+      "source": "- [ ] #task Root [id:: root] ^root\n- [?] #task Scheduled waiting [fresh:: 2026-10-01] [scheduled:: 2026-11-05] [dependsOn:: root] [id:: waiting] ^waiting\n",
+      "action": "done",
+      "expected": {
+        "root": "- [x] #task Root [id:: root]  [completion:: 2026-11-05] ^root",
+        "dependent_status": " ",
+        "dependent_unblocked": null,
+        "dependent_offer_round": false,
+        "consequence": "✓ Completes “Root” · Ready → Done · unblocks “Scheduled waiting”",
+        "unblocks": 1
+      }
+    },
+    {
+      "id": "SV22",
+      "kind": "joint-recover",
+      "path": "Tasks.md",
+      "keys": ["Tasks.md#^one", "Tasks.md#^two"],
+      "lines": [0, 1],
+      "today": "2026-11-05",
+      "source": "- [ ] #task Root one [id:: one] ^one\n- [ ] #task Root two [id:: two] ^two\n- [?] #task Joint waiting [fresh:: 2026-11-01] [dependsOn:: one,two] [id:: waiting] ^waiting\n",
+      "action": "done",
+      "expected": {
+        "single_unblocks": 0,
+        "joint_unblocks": 1,
+        "joint_consequence_suffix": " · back tomorrow as a tickler",
+        "dependent_unblocked": "2026-11-05",
+        "dependent_offer_round": false
+      }
     }
   ]
 }
