@@ -592,6 +592,7 @@ fn merge_only_copy(items: &[PlannedCaptureItem]) -> Option<PullInTopCopyJson> {
     for item in items {
         for record in &item.result.relation_merge_output.merges {
             if record.outcome != crate::native::task_merge::MergeOutcome::Merged
+                || record.links_pruned == 0
             {
                 continue;
             }

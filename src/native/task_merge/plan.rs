@@ -71,10 +71,14 @@ pub(crate) fn plan_task_merge(
         if request.gesture == MergeGesture::Explicit
             && outcome == SourceOutcome::AlreadyClosed
         {
-            return Err(MergeError::new(
-                "merge_source_closed",
-                format!("^{} is closed", locator.block_id),
-            ));
+            let message = retirement::existing_merge_target_message(
+                snapshot,
+                &located.path,
+                &locator.block_id,
+                context,
+            )
+            .unwrap_or_else(|| format!("^{} is closed", locator.block_id));
+            return Err(MergeError::new("merge_source_closed", message));
         }
         if target_identity.as_ref()
             == Some(&(
@@ -656,6 +660,8 @@ fn build_records(
                 MergeOutcome::Merged => {
                     let moved = if moved_notes == 0 {
                         "title only".to_string()
+                    } else if moved_notes == 1 {
+                        "1 note moved".to_string()
                     } else {
                         format!("{moved_notes} notes moved")
                     };

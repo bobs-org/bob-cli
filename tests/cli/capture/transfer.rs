@@ -1359,10 +1359,15 @@ fn transfer_records_serialize_merge_offers_top_copy_and_move_fields() {
     );
     assert_success(&two);
     let two_json = json_body(&two);
+    // G5 counts only records that pruned a link: pgdump moved title-only
+    // (links_pruned 0) while bench pruned the BUILD link, so the title
+    // names the single qualifying source.
+    assert_eq!(two_json["merges"][1]["links_pruned"], 1, "{two_json}");
+    assert_eq!(two_json["merges"][0]["links_pruned"], 0, "{two_json}");
     assert_eq!(
         two_json["pull_in"]["copy"]["title"],
         serde_json::json!(format!(
-            "Link “{}” in place of 2 merged tasks",
+            "Link “{}” in place of “Benchmark logical replication”",
             two_json["merges"][0]["target"]["title"]
                 .as_str()
                 .unwrap_or("")

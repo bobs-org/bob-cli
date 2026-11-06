@@ -208,6 +208,8 @@ fn assert_planner_invariants(
         if record.outcome == MergeOutcome::Merged {
             let moved = if record.moved_notes == 0 {
                 "title only".to_string()
+            } else if record.moved_notes == 1 {
+                "1 note moved".to_string()
             } else {
                 format!("{} notes moved", record.moved_notes)
             };
@@ -1912,6 +1914,39 @@ fn closed_sources_classify_for_label_gestures_and_refuse_explicit() {
     )
     .expect_err("explicit closed source must refuse");
     assert_eq!(error.code, "merge_source_closed");
+}
+
+#[test]
+fn explicit_merge_into_new_target_names_existing_merge_tombstone() {
+    let before = snapshot(&[
+        (
+            "src.md",
+            "- [-] #task Done work ^src\n\t- 🪢 **LINKS:** merged into [[old#^dst]]\n",
+        ),
+        ("old.md", "- [ ] #task Old target ^dst\n"),
+        ("new.md", "- [ ] #task New target ^dst\n"),
+    ]);
+    let error = plan(
+        &before,
+        &request(&["src:src"], MergeContainer::Task(locator("new:dst"))),
+    )
+    .expect_err("already-merged source must refuse the new target");
+    assert_eq!(error.code, "merge_source_closed");
+    assert!(
+        error.message.contains("Done work"),
+        "names the cleaned source title: {}",
+        error.message
+    );
+    assert!(
+        error.message.contains("Old target"),
+        "names the existing target title: {}",
+        error.message
+    );
+    assert!(
+        error.message.contains("old.md"),
+        "names the existing target note: {}",
+        error.message
+    );
 }
 
 #[test]

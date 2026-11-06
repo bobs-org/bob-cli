@@ -886,6 +886,87 @@ pub(crate) fn classify_source(
     Ok((SourceOutcome::AlreadyClosed, SourceDisposition::Closed))
 }
 
+/// Teaching copy for an already-merged closed source: name its cleaned
+/// title, the existing merge target title, and the target note. Returns
+/// `None` when no existing managed merge relation resolves, so callers
+/// keep a truthful generic closed-source error. Uses the normal parser
+/// and index with configured label normalization; never mints IDs.
+pub(crate) fn existing_merge_target_message(
+    snapshot: &VaultSnapshot,
+    source_path: &Path,
+    source_block_id: &str,
+    context: &MergeContext<'_>,
+) -> Option<String> {
+    let contents = snapshot.notes.get(source_path)?;
+    let scan = note_tasks::scan(contents, context.task_settings);
+    let source_task = scan
+        .tasks()
+        .iter()
+        .find(|task| task.block_id.as_deref() == Some(source_block_id))?;
+    let source_title = note_tasks::clean_description(
+        &source_task.description,
+        &context.task_settings.global_filter,
+        source_task.block_id.as_deref(),
+    );
+    let lines: Vec<&str> = contents.lines().collect();
+    let fenced = task_status_hooks::fenced_lines(&lines, 0..lines.len());
+    let children = relation_parse::links_children_of(
+        &lines,
+        &fenced,
+        source_task.line_index,
+    );
+    let index = context
+        .note_index
+        .with_additional(snapshot.notes.keys().cloned());
+    for child in &children {
+        let task_relations::LinksLine::Accepted { entries, .. } = &child.parsed
+        else {
+            continue;
+        };
+        for entry in entries {
+            let resolved = if entry.target.is_empty() {
+                Some((source_path.to_path_buf(), entry.block_id.clone()))
+            } else {
+                match index.resolve_detailed(Some(source_path), &entry.target) {
+                    LinkResolution::Found(path) => {
+                        Some((path, entry.block_id.clone()))
+                    }
+                    LinkResolution::Ambiguous | LinkResolution::Missing => None,
+                }
+            };
+            let Some((target_path, target_block)) = resolved else {
+                continue;
+            };
+            let Some(target_contents) = snapshot.notes.get(&target_path) else {
+                continue;
+            };
+            let target_scan =
+                note_tasks::scan(target_contents, context.task_settings);
+            let Some(target_task) = target_scan.tasks().iter().find(|task| {
+                task.block_id.as_deref() == Some(target_block.as_str())
+            }) else {
+                continue;
+            };
+            let target_title = note_tasks::clean_description(
+                &target_task.description,
+                &context.task_settings.global_filter,
+                target_task.block_id.as_deref(),
+            );
+            if target_title.is_empty() {
+                continue;
+            }
+            let display = target_path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| target_path.to_string_lossy().into_owned());
+            return Some(format!(
+                "“{source_title}” is already merged into “{target_title}” ({display})"
+            ));
+        }
+    }
+    None
+}
+
 fn source_links_match(
     snapshot: &VaultSnapshot,
     source_path: &Path,
@@ -1710,10 +1791,14 @@ pub(crate) fn apply_retirement(
     if request.gesture == MergeGesture::Explicit {
         for source in &prepared.sources {
             if source.disposition != SourceDisposition::Open {
-                return Err(MergeError::new(
-                    "merge_source_closed",
-                    format!("^{} is closed", source.block_id),
-                ));
+                let message = existing_merge_target_message(
+                    snapshot,
+                    &source.path,
+                    &source.block_id,
+                    context,
+                )
+                .unwrap_or_else(|| format!("^{} is closed", source.block_id));
+                return Err(MergeError::new("merge_source_closed", message));
             }
         }
     }

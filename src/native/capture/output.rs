@@ -2189,6 +2189,7 @@ pub(super) fn print_human_success(result: &CaptureResult) {
     if result.captures.is_empty() {
         print_list_summary(&result.item);
         print_human_item_success(result, None, &result.theme_refs);
+        print_human_merge_block_unless_task_merge(&result.item);
         if let Some(past) = result.item.pomodoro_past.as_ref() {
             print_human_past_trims(&past.trims);
         }
@@ -2218,6 +2219,7 @@ pub(super) fn print_human_success(result: &CaptureResult) {
             Some((index + 1, total)),
             &result.theme_refs,
         );
+        print_human_merge_block_unless_task_merge(item);
     }
     let past_trims: Vec<PomodoroPastTrimJson> = result
         .captures
@@ -4155,17 +4157,36 @@ fn print_human_transfer_merges(result: &CaptureItemResult) {
         .or(first.target.section.as_deref())
         .map(|title| format!(" › {title}"))
         .unwrap_or_default();
-    let action = if result.dry_run {
-        "would merge"
+    // A capture-born task target (merge-in `<` into a new task) uses the
+    // dedicated new-target header; existing task/drawer/section targets
+    // keep the established transfer wording.
+    let is_new_task_target =
+        first.target.created && first.target.kind == "task";
+    if is_new_task_target {
+        let action = if result.dry_run {
+            "Would merge"
+        } else {
+            "Merged"
+        };
+        println!(
+            "⤵ {action} {} {} into new “{target}” · {}",
+            records.len(),
+            if records.len() == 1 { "task" } else { "tasks" },
+            display_relative(&first.target.path)
+        );
     } else {
-        "merged"
-    };
-    println!(
-        "⤵ {action} {} {} into “{target}” · {}{suffix}",
-        records.len(),
-        if records.len() == 1 { "task" } else { "tasks" },
-        display_relative(&first.target.path)
-    );
+        let action = if result.dry_run {
+            "would merge"
+        } else {
+            "merged"
+        };
+        println!(
+            "⤵ {action} {} {} into “{target}” · {}{suffix}",
+            records.len(),
+            if records.len() == 1 { "task" } else { "tasks" },
+            display_relative(&first.target.path)
+        );
+    }
     for record in records {
         println!("  {}", record.message);
         for consequence in &record.consequences {
@@ -4193,6 +4214,21 @@ fn print_human_transfer_merges(result: &CaptureItemResult) {
             );
         }
     }
+}
+
+/// Label merges (and future `<` merges on ordinary kinds) share the same
+/// human merge block that `>` uses: header, source rows, consequences,
+/// and numbered offers. Normal creation/relation lines are already
+/// printed by `print_human_item_success`; the block prints once here.
+/// `task_merge` items already returned through their dedicated path.
+fn print_human_merge_block_unless_task_merge(result: &CaptureItemResult) {
+    if result.kind == "task_merge" {
+        return;
+    }
+    if result.relation_merge_output.merges.is_empty() {
+        return;
+    }
+    print_human_transfer_merges(result);
 }
 
 fn print_human_transfer_moves(result: &CaptureItemResult, styler: &Styler) {

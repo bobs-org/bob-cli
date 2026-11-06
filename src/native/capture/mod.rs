@@ -69,6 +69,7 @@ mod inbox_route;
 mod keep_moving_net;
 mod link_guard;
 mod meet_event_run;
+mod merge_in_pending;
 pub(crate) mod move_choice;
 pub(crate) mod move_consequence;
 mod note_pull;
@@ -263,6 +264,15 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
             output_format,
         );
     }
+    if request.argv && shell_guard::stdin_is_redirect_target().is_some() {
+        return print_capture_error(
+            CaptureError::usage_code(
+                shell_guard::SHELL_ATE_MERGE_IN_ARROW_MESSAGE,
+                shell_guard::SHELL_ATE_MERGE_IN_ARROW_CODE,
+            ),
+            output_format,
+        );
+    }
 
     let pending_request = request.clone();
     match capture(request) {
@@ -273,6 +283,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         Err(mut error) => {
             if output_format == OutputFormat::Json {
                 transfer_pending::attach(&mut error, &pending_request);
+                merge_in_pending::attach(&mut error, &pending_request);
             }
             print_capture_error(error, output_format)
         }

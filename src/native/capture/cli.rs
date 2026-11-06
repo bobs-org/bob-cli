@@ -81,7 +81,9 @@ Human output prints `↪ Moved N tasks into <note> › Tasks` for moves and \
 `⤵ merged N tasks into “<target>”` for merges; JSON adds `moves[]` or \
 `merges[]` plus `repaired_files[]`. When stdout is a regular file whose name \
 starts with `@`, capture refuses with `shell_ate_transfer_arrow`: the shell \
-ate an unquoted `>`.\n\n\
+ate an unquoted `>`. When draft arguments are present and stdin is a regular \
+file whose name starts with `@`, capture refuses with \
+`shell_ate_merge_in_arrow`: the shell ate an unquoted `<`.\n\n\
 A draft whose first item carries the `%t` directive expands one capture per \
 later row. Write one capture item with `{0}`, `{1}`, and so on, put `%t` at \
 either edge of any of its lines, then a blank line and one row \

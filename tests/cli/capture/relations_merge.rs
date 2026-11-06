@@ -178,6 +178,39 @@ fn relation_merge_task_block_lines_carry_source_origins() {
 }
 
 #[test]
+fn label_merge_human_output_prints_merge_block_once_with_relations() {
+    let (_temp, vault, day) = setup("bob-cli-relation-merge-human");
+    write_file(
+        &vault.join("source.md"),
+        "- [ ] #task Source ^src\n\t- source note\n",
+    );
+    write_file(
+        &vault.join("target.md"),
+        "- [ ] #task Target ^target\n\t- target note\n",
+    );
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--")
+        .arg("@source+src ~target:target|\"merged into\"")
+        .env("BOB_DAY_FILE", &day)
+        .env("BOB_NOW", NOW)
+        .env("BOB_CONFIG_FILE", vault.join("config.yml"))
+        .output()
+        .expect("human label merge");
+    assert_success(&output);
+    let stdout = stdout(&output);
+    // The shared merge block prints once with the source row.
+    assert_eq!(stdout.matches("⤵").count(), 1, "{stdout}");
+    assert!(stdout.contains("merged 1 task"), "{stdout}");
+    assert_eq!(stdout.matches("⊘ Source").count(), 1, "{stdout}");
+    // Normal relation lines are retained, not suppressed by the block.
+    assert!(stdout.contains("merged into"), "{stdout}");
+    assert!(stdout.contains("links to"), "{stdout}");
+}
+
+#[test]
 fn a_closed_merge_source_is_link_only() {
     let (_temp, vault, day) = setup("bob-cli-relation-merge-closed");
     write_file(
