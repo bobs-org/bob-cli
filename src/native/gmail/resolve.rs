@@ -951,6 +951,9 @@ mod tests {
                 title: "Saved".to_string(),
                 who: "Dana".to_string(),
                 label: "Saved".to_string(),
+                started: String::new(),
+                updated: String::new(),
+                messages: 0,
             },
         );
         let duplicate = resolve_identity(
@@ -1051,6 +1054,9 @@ mod tests {
                 title: "Saved".to_string(),
                 who: "Dana".to_string(),
                 label: "Saved".to_string(),
+                started: String::new(),
+                updated: String::new(),
+                messages: 0,
             },
         );
         let known = resolve_identity(

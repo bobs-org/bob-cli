@@ -441,6 +441,387 @@ fn doctor_reports_no_client() {
     assert_eq!(check(&doc, "client")["status"], "fail");
 }
 
+fn write_mail_note(
+    env: &GmailEnv,
+    relative: &str,
+    account: &str,
+    thread: &str,
+    title: &str,
+    who: &str,
+    updated: &str,
+) {
+    let path = env.vault().join(relative);
+    fs::create_dir_all(path.parent().expect("mail parent")).unwrap();
+    fs::write(
+        &path,
+        format!(
+            "---\ntype: \"[[mail]]\"\ncontent: untrusted-email\ngmail_account: {account}\ngmail_thread_id: {thread}\ntitle: {title}\nwho: {who}\nstarted: 2026-09-01T00:00:00+00:00\nupdated: {updated}\nmessages: 2\n---\nbody\n"
+        ),
+    )
+    .unwrap();
+}
+
+fn vault_files(env: &GmailEnv) -> Vec<String> {
+    let mut files = Vec::new();
+    visit_vault(env.vault(), env.vault(), &mut files);
+    files.sort();
+    files
+}
+
+fn visit_vault(
+    root: &std::path::Path,
+    directory: &std::path::Path,
+    files: &mut Vec<String>,
+) {
+    for entry in fs::read_dir(directory).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        if path.is_dir() {
+            visit_vault(root, &path, files);
+        } else {
+            files.push(
+                path.strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+    }
+}
+
+#[test]
+fn list_after_save_shows_thread_json_and_human() {
+    let env = GmailEnv::new("bob-cli-gmail-list-save");
+    let fake = FakeGog::new(&env, "gog").scenario("thread_nonempty");
+    let saved =
+        run_gmail(&env, &fake, &["save", "0123456789abcdef", "-f", "json"]);
+    assert_success(&saved, "save for list");
+    let note = json_stdout(&saved)["note"].as_str().unwrap().to_string();
+
+    let calls_before = fake.calls().len();
+    let files_before = vault_files(&env);
+    let output = run_gmail(&env, &fake, &["list", "-f", "json"]);
+    assert_success(&output, "explicit list json");
+    let doc = json_stdout(&output);
+    assert_eq!(doc["ok"], true);
+    assert_eq!(doc["schema_version"], 1);
+    assert_eq!(doc["total"], 1);
+    assert_eq!(doc["shown"], 1);
+    assert_eq!(doc["truncated"], false);
+    let threads = doc["threads"].as_array().expect("threads");
+    assert_eq!(threads.len(), 1);
+    let thread = &threads[0];
+    assert_eq!(thread["account"], ACCOUNT);
+    assert_eq!(thread["thread_id"], "0123456789abcdef");
+    assert_eq!(thread["path"], serde_json::Value::String(note.clone()));
+    assert!(!thread["subject"].as_str().unwrap_or_default().is_empty());
+    assert!(!thread["who"].as_str().unwrap_or_default().is_empty());
+    assert!(!thread["label"].as_str().unwrap_or_default().is_empty());
+    assert_eq!(
+        thread["link"],
+        serde_json::Value::String(format!(
+            "[[{}|{}]]",
+            note,
+            thread["label"].as_str().unwrap_or_default()
+        ))
+    );
+    assert_eq!(thread["messages"], 1);
+    assert_eq!(thread["backlinks"], 0);
+    assert!(!thread["updated"].as_str().unwrap_or_default().is_empty());
+    assert!(!thread["started"].as_str().unwrap_or_default().is_empty());
+    assert_eq!(doc["duplicates"].as_array().unwrap().len(), 0);
+    assert_eq!(doc["skipped_malformed"], 0);
+    assert!(
+        doc.get("footer").is_none(),
+        "footer stays absent until gmail-link populates it: {doc}"
+    );
+    assert!(
+        !stdout(&output).contains("Hello"),
+        "list JSON must stay body-free"
+    );
+    assert_eq!(
+        fake.calls().len(),
+        calls_before,
+        "list must make no Gmail calls"
+    );
+    assert_eq!(vault_files(&env), files_before, "list must write nothing");
+
+    let human = run_gmail(&env, &fake, &["list"]);
+    assert_success(&human, "explicit list human");
+    let text = stdout(&human);
+    assert!(text.contains("updated"), "{text}");
+    assert!(text.contains("backlinks"), "{text}");
+    assert!(!text.contains("Hello"), "list table must stay body-free");
+}
+
+#[test]
+fn bare_and_explicit_list_are_equivalent() {
+    let env = GmailEnv::new("bob-cli-gmail-list-equiv");
+    let fake = FakeGog::new(&env, "gog").scenario("thread_nonempty");
+    let saved =
+        run_gmail(&env, &fake, &["save", "0123456789abcdef", "-f", "json"]);
+    assert_success(&saved, "save for list");
+    let bare = run_gmail(&env, &fake, &["-f", "json"]);
+    let explicit = run_gmail(&env, &fake, &["list", "-f", "json"]);
+    assert_success(&bare, "bare list");
+    assert_success(&explicit, "explicit list");
+    assert_eq!(json_stdout(&bare), json_stdout(&explicit));
+    let bare_human = run_gmail(&env, &fake, &[]);
+    let explicit_human = run_gmail(&env, &fake, &["list"]);
+    assert_success(&bare_human, "bare human");
+    assert_success(&explicit_human, "explicit human");
+    assert_eq!(stdout(&bare_human), stdout(&explicit_human));
+}
+
+#[test]
+fn list_paginates_twenty_and_all() {
+    let env = GmailEnv::new("bob-cli-gmail-list-page");
+    let fake = FakeGog::new(&env, "gog");
+    for day in 1..=21 {
+        write_mail_note(
+            &env,
+            &format!("mail/2026/n{day:02}.md"),
+            ACCOUNT,
+            &format!("{day:016x}"),
+            &format!("Subject {day:02}"),
+            "Dana",
+            &format!("2026-09-{day:02}T12:00:00+00:00"),
+        );
+    }
+    let output = run_gmail(&env, &fake, &["list", "-f", "json"]);
+    assert_success(&output, "paged list");
+    let doc = json_stdout(&output);
+    assert_eq!(doc["total"], 21);
+    assert_eq!(doc["shown"], 20);
+    assert_eq!(doc["truncated"], true);
+    let threads = doc["threads"].as_array().expect("threads");
+    assert_eq!(threads[0]["subject"], "Subject 21");
+    assert_eq!(threads[19]["subject"], "Subject 02");
+
+    let all = run_gmail(&env, &fake, &["list", "-a", "-f", "json"]);
+    assert_success(&all, "unpaged list");
+    let doc = json_stdout(&all);
+    assert_eq!(doc["total"], 21);
+    assert_eq!(doc["shown"], 21);
+    assert_eq!(doc["truncated"], false);
+
+    let bare = run_gmail(&env, &fake, &["-a", "-f", "json"]);
+    assert_success(&bare, "bare unpaged list");
+    assert_eq!(json_stdout(&bare)["shown"], 21);
+
+    let human = run_gmail(&env, &fake, &["list"]);
+    assert_success(&human, "paged human");
+    assert!(stdout(&human).contains("showing 20 of 21; pass -a to show all"));
+    let human_all = run_gmail(&env, &fake, &["list", "-a"]);
+    assert_success(&human_all, "unpaged human");
+    assert!(!stdout(&human_all).contains("showing 20 of 21"));
+}
+
+#[test]
+fn list_custom_folder_and_multiple_accounts() {
+    let env = GmailEnv::new("bob-cli-gmail-list-folder");
+    env.write_config(&format!(
+        "gmail:\n  account: {ACCOUNT}\n  writer: test-host\n  folder: archive\n"
+    ));
+    let fake = FakeGog::new(&env, "gog");
+    write_mail_note(
+        &env,
+        "archive/2026/mine.md",
+        ACCOUNT,
+        "aaaaaaaaaaaaaaaa",
+        "Mine",
+        "Dana",
+        "2026-09-20T12:00:00+00:00",
+    );
+    write_mail_note(
+        &env,
+        "archive/2026/theirs.md",
+        "other@example.com",
+        "bbbbbbbbbbbbbbbb",
+        "Theirs",
+        "Bo",
+        "2026-09-21T12:00:00+00:00",
+    );
+    write_mail_note(
+        &env,
+        "mail/2026/elsewhere.md",
+        ACCOUNT,
+        "cccccccccccccccc",
+        "Elsewhere",
+        "Dana",
+        "2026-09-22T12:00:00+00:00",
+    );
+    let output = run_gmail(&env, &fake, &["list", "-f", "json"]);
+    assert_success(&output, "scoped list");
+    let doc = json_stdout(&output);
+    // Configured account scopes the list; the other folder stays out.
+    assert_eq!(doc["total"], 1);
+    assert_eq!(doc["threads"][0]["path"], "archive/2026/mine.md");
+
+    env.write_config("gmail:\n  writer: test-host\n  folder: archive\n");
+    let unscoped = run_gmail(&env, &fake, &["list", "-f", "json"]);
+    assert_success(&unscoped, "unscoped list");
+    assert_eq!(json_stdout(&unscoped)["total"], 2);
+}
+
+#[test]
+fn list_reports_malformed_and_duplicate_notes() {
+    let env = GmailEnv::new("bob-cli-gmail-list-dup");
+    let fake = FakeGog::new(&env, "gog");
+    write_mail_note(
+        &env,
+        "mail/2026/good.md",
+        ACCOUNT,
+        "aaaaaaaaaaaaaaaa",
+        "Good",
+        "Dana",
+        "2026-09-20T12:00:00+00:00",
+    );
+    // Duplicate identity: same account and thread in two notes.
+    write_mail_note(
+        &env,
+        "mail/2026/good-copy.md",
+        ACCOUNT,
+        "aaaaaaaaaaaaaaaa",
+        "Good",
+        "Dana",
+        "2026-09-20T12:00:00+00:00",
+    );
+    // Malformed identity: mail markers with a non-hex thread id.
+    let bad = env.vault().join("mail/2026/bad.md");
+    fs::create_dir_all(bad.parent().expect("parent")).unwrap();
+    fs::write(
+        &bad,
+        "---\ntype: \"[[mail]]\"\ncontent: untrusted-email\ngmail_account: you@example.com\ngmail_thread_id: not-hex\ntitle: Bad\nwho: Dana\n---\nbody\n",
+    )
+    .unwrap();
+    let output = run_gmail(&env, &fake, &["list", "-f", "json"]);
+    assert_success(&output, "list with duplicates still succeeds");
+    let doc = json_stdout(&output);
+    assert_eq!(doc["total"], 0);
+    assert_eq!(doc["threads"].as_array().unwrap().len(), 0);
+    assert_eq!(doc["skipped_malformed"], 1);
+    let duplicates = doc["duplicates"].as_array().expect("duplicates");
+    assert_eq!(duplicates.len(), 1);
+    assert_eq!(duplicates[0]["account"], ACCOUNT);
+    assert_eq!(duplicates[0]["thread_id"], "aaaaaaaaaaaaaaaa");
+    assert_eq!(duplicates[0]["paths"].as_array().unwrap().len(), 2);
+
+    let human = run_gmail(&env, &fake, &["list"]);
+    assert_success(&human, "human duplicates still succeeds");
+    assert!(stdout(&human).contains("No saved threads yet"));
+    assert!(stdout(&human).contains("duplicate identity"));
+    assert!(stdout(&human).contains("skipped 1 malformed mail note"));
+}
+
+#[test]
+fn list_counts_backlinks_from_note_links() {
+    let env = GmailEnv::new("bob-cli-gmail-list-links");
+    let fake = FakeGog::new(&env, "gog").scenario("thread_nonempty");
+    let saved =
+        run_gmail(&env, &fake, &["save", "0123456789abcdef", "-f", "json"]);
+    assert_success(&saved, "save for backlinks");
+    let note = json_stdout(&saved)["note"].as_str().unwrap().to_string();
+    let stem = note
+        .rsplit('/')
+        .next()
+        .unwrap()
+        .strip_suffix(".md")
+        .unwrap()
+        .to_string();
+    fs::write(
+        env.vault().join("tasks.md"),
+        format!("Follow up on [[{note}|the thread]] and [[{stem}#Details]].\n"),
+    )
+    .unwrap();
+    fs::write(
+        env.vault().join("other.md"),
+        format!("See also [[{stem}]].\n"),
+    )
+    .unwrap();
+    let output = run_gmail(&env, &fake, &["list", "-f", "json"]);
+    assert_success(&output, "list with backlinks");
+    let doc = json_stdout(&output);
+    assert_eq!(doc["threads"][0]["backlinks"], 2);
+}
+
+#[test]
+fn doctor_reports_decoder_health_and_duplicates() {
+    let env = GmailEnv::new("bob-cli-gmail-doctor-urls");
+    env.write_journal_rules();
+    let fake = FakeGog::new(&env, "gog");
+    fs::write(
+        env.vault().join("inbox.md"),
+        "Thread https://mail.google.com/mail/u/0/#all/0123456789abcdef\n\
+         Chat https://mail.google.com/chat/u/0/\n\
+         Mystery https://mail.google.com/mail/u/0/#inbox/AAAA\n",
+    )
+    .unwrap();
+    let output = run_gmail(&env, &fake, &["doctor", "-f", "json"]);
+    assert_success(&output, "doctor with urls");
+    let doc = json_stdout(&output);
+    assert_eq!(check(&doc, "gmail_urls")["status"], "ok");
+    let summary = check(&doc, "gmail_urls")["summary"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(summary.contains("3 Gmail URLs"), "{summary}");
+    assert!(summary.contains("1 resolvable"), "{summary}");
+    assert!(summary.contains("1 refused"), "{summary}");
+    assert_eq!(check(&doc, "gmail_duplicates")["status"], "ok");
+
+    write_mail_note(
+        &env,
+        "mail/2026/a.md",
+        ACCOUNT,
+        "aaaaaaaaaaaaaaaa",
+        "Dup",
+        "Dana",
+        "2026-09-20T12:00:00+00:00",
+    );
+    write_mail_note(
+        &env,
+        "mail/2026/b.md",
+        ACCOUNT,
+        "aaaaaaaaaaaaaaaa",
+        "Dup",
+        "Dana",
+        "2026-09-20T12:00:00+00:00",
+    );
+    let duped = run_gmail(&env, &fake, &["doctor", "-f", "json"]);
+    assert_success(&duped, "doctor with duplicates stays green");
+    let doc = json_stdout(&duped);
+    assert_eq!(check(&doc, "gmail_duplicates")["status"], "warn");
+    assert!(
+        check(&doc, "gmail_duplicates")["fix"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("ambiguous"),
+        "duplicate fix must explain ambiguity"
+    );
+}
+
+#[test]
+fn doctor_local_checks_run_when_token_fails() {
+    let env = GmailEnv::new("bob-cli-gmail-doctor-local");
+    env.write_journal_rules();
+    let fake = FakeGog::new(&env, "gog").scenario("invalid_grant");
+    write_mail_note(
+        &env,
+        "mail/2026/a.md",
+        ACCOUNT,
+        "aaaaaaaaaaaaaaaa",
+        "Dup",
+        "Dana",
+        "2026-09-20T12:00:00+00:00",
+    );
+    let output = run_gmail(&env, &fake, &["doctor", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(1));
+    let doc = json_stdout(&output);
+    assert_eq!(check(&doc, "token")["status"], "fail");
+    assert_eq!(check(&doc, "gmail_urls")["status"], "ok");
+    assert_eq!(check(&doc, "gmail_duplicates")["status"], "ok");
+}
+
 #[test]
 fn config_errors_name_the_key() {
     let env = GmailEnv::new("bob-cli-gmail-config-key");

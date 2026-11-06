@@ -11,6 +11,7 @@ pub(crate) mod cli;
 mod config;
 mod doctor;
 mod gog;
+pub(crate) mod list;
 pub(crate) use crate::native::google::{
     account, client, client_setup, login_ui, signin,
 };
@@ -42,7 +43,9 @@ use std::{ffi::OsString, iter};
 /// Gmail-facing name for the shared error type.
 pub(crate) use crate::native::google::GoogleError as GmailError;
 
-pub(crate) use cli::{DoctorArgs, LoginArgs, LogoutArgs, SaveArgs, TopArgs};
+pub(crate) use cli::{
+    DoctorArgs, ListArgs, LoginArgs, LogoutArgs, SaveArgs, TopArgs,
+};
 
 const COMMAND_NAME: &str = "bob gmail";
 
@@ -70,6 +73,10 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         Some(("doctor", sub_matches)) => {
             doctor::run(&DoctorArgs::from_matches(sub_matches))
         }
+        Some(("list", sub_matches)) => {
+            let args = ListArgs::from_matches(sub_matches);
+            list::run(&args)
+        }
         Some(("login", sub_matches)) => {
             login::run(&LoginArgs::from_matches(sub_matches))
         }
@@ -83,42 +90,13 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
             eprintln!("{COMMAND_NAME}: unknown subcommand: {name}");
             2
         }
-        None => list_saved(&TopArgs::from_matches(&matches)),
-    }
-}
-
-/// Bare `bob gmail` until gmail-save lands: a friendly offline placeholder.
-fn list_saved(args: &TopArgs) -> i32 {
-    let config = match config::GmailConfig::resolve() {
-        Ok(config) => config,
-        Err(error) => {
-            return ui::report_error(
-                "list",
-                &error,
-                if args.format.is_json() {
-                    "json"
-                } else {
-                    "human"
-                },
-            );
-        }
-    };
-    let _ = config;
-    if args.format.is_json() {
-        println!(
-            "{}",
-            serde_json::json!({
-                "schema_version": 1,
-                "ok": true,
-                "threads": [],
-                "footer": "no saved threads yet",
+        None => {
+            let top = TopArgs::from_matches(&matches);
+            list::run(&ListArgs {
+                all: top.all,
+                bob_dir: top.bob_dir,
+                format: top.format,
             })
-        );
-        ui::flush_stdout();
-        return 0;
+        }
     }
-    println!("No saved threads yet.");
-    println!("Save a thread with `bob gmail save`, then list it here.");
-    ui::flush_stdout();
-    0
 }

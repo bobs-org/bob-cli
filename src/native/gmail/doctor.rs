@@ -10,7 +10,7 @@ use super::{
     client::peek_project,
     config::GmailConfig,
     gog::{Gog, CLIENT},
-    journal, ui, DoctorArgs, GmailError,
+    journal, list, ui, DoctorArgs, GmailError,
 };
 use crate::native::{
     google::doctor::{Check, CheckStatus},
@@ -38,6 +38,8 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
                 "writer",
                 "journal",
                 "journal_malformed",
+                "gmail_urls",
+                "gmail_duplicates",
             ] {
                 checks.push(skipped(id, "no gmail config"));
             }
@@ -246,6 +248,10 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
     checks.push(writer_check(config.writer(), &host));
     checks.push(journal_check(&bob_dir));
     checks.push(journal_malformed_check(&bob_dir));
+    // Local mail-note checks: they read only vault Markdown, so they run
+    // even when gog or sign-in checks fail.
+    checks.push(url_health_check(&bob_dir));
+    checks.push(mail_duplicate_check(&bob_dir, &config));
     finish(args, &host, checks)
 }
 
@@ -302,6 +308,60 @@ fn journal_check(bob_dir: &Path) -> Check {
                 ),
             }
         }
+    }
+}
+
+/// Decoder health census: every Gmail URL found in vault notes with
+/// resolvable/refused/unknown-token counts. Local only: it runs even when
+/// gog or sign-in checks fail, and reports counts rather than raw URLs.
+fn url_health_check(bob_dir: &Path) -> Check {
+    let (total, resolvable, refused, unknown) = list::url_health(bob_dir);
+    Check {
+        id: "gmail_urls",
+        status: CheckStatus::Ok,
+        summary: list::url_summary(total, resolvable, refused, unknown),
+        fix: None,
+    }
+}
+
+/// Duplicate `(account, thread)` identities stay visible as diagnostics.
+/// Listing skips them rather than selecting one as canonical.
+fn mail_duplicate_check(bob_dir: &Path, config: &GmailConfig) -> Check {
+    let folder = std::path::Path::new(config.folder());
+    let index =
+        match super::note::index::scan(bob_dir, folder, config.link_label()) {
+            Ok(index) => index,
+            Err(_) => return skipped("gmail_duplicates", "no mail index"),
+        };
+    if index.duplicates.is_empty() {
+        return Check {
+            id: "gmail_duplicates",
+            status: CheckStatus::Ok,
+            summary: "no duplicate mail identities".to_string(),
+            fix: None,
+        };
+    }
+    let notes: usize = index
+        .duplicates
+        .iter()
+        .map(|(_, _, paths)| paths.len())
+        .sum();
+    Check {
+        id: "gmail_duplicates",
+        status: CheckStatus::Warn,
+        summary: format!(
+            "{} duplicate mail {} in {notes} notes; list skips them",
+            index.duplicates.len(),
+            if index.duplicates.len() == 1 {
+                "identity"
+            } else {
+                "identities"
+            },
+        ),
+        fix: Some(
+            "keep one saved note per account and thread; save refuses ambiguous identities"
+                .to_string(),
+        ),
     }
 }
 

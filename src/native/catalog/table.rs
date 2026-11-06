@@ -1105,6 +1105,16 @@ pub(crate) const ENTRIES: &[Row] = &[
         )
     },
     Row {
+        ..reads(
+            "gmail-list",
+            &["gmail", "list"],
+            "List saved threads",
+            &["gmail", "google", "mail", "list", "saved", "threads"],
+            Presentation::Report,
+            60,
+        )
+    },
+    Row {
         network: true,
         ..writes(
             "gmail-save",

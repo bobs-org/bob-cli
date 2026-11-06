@@ -23,17 +23,19 @@ pub(crate) fn build_cli() -> ClapCommand {
         )
         .after_help(top_after_help())
         .disable_help_flag(true)
+        .arg(all_arg())
         .arg(bob_dir_arg())
         .arg(list_format_arg())
         .arg(help_arg())
         .subcommand(doctor_command())
+        .subcommand(list_command())
         .subcommand(login_command())
         .subcommand(logout_command())
         .subcommand(save_command())
 }
 
 fn top_after_help() -> &'static str {
-    "Running `bob gmail` with no command lists saved threads (offline, read-only).\n\nExamples:\n  bob gmail                   List saved threads\n  bob gmail -f json           List saved threads as JSON\n  bob gmail save URL           Save a Gmail thread\n  bob gmail save ID -d         Preview a save without writing\n  bob gmail login             Connect Gmail in one guided step\n  bob gmail login -a EMAIL    Sign in as this account\n  bob gmail login -s compose  Also grant the compose scope (Mac only)\n  bob gmail doctor            Diagnose gog, the client, and the vault\n  bob gmail logout -y         Remove Bob's Gmail grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH\n  BOB_GMAIL_BROWSER  Browser executable; selects browser sign-in (otherwise automatic)"
+    "Running `bob gmail` with no command lists saved threads (offline, read-only).\n\nExamples:\n  bob gmail                   List saved threads\n  bob gmail -a                List every saved thread\n  bob gmail -f json           List saved threads as JSON\n  bob gmail save URL           Save a Gmail thread\n  bob gmail save ID -d         Preview a save without writing\n  bob gmail login             Connect Gmail in one guided step\n  bob gmail login -a EMAIL    Sign in as this account\n  bob gmail login -s compose  Also grant the compose scope (Mac only)\n  bob gmail doctor            Diagnose gog, the client, and the vault\n  bob gmail logout -y         Remove Bob's Gmail grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH\n  BOB_GMAIL_BROWSER  Browser executable; selects browser sign-in (otherwise automatic)"
 }
 
 fn save_command() -> ClapCommand {
@@ -77,6 +79,19 @@ fn doctor_command() -> ClapCommand {
 
 fn doctor_after_help() -> &'static str {
     "Examples:\n  bob gmail doctor\n  bob gmail doctor -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH"
+}
+
+fn list_command() -> ClapCommand {
+    ClapCommand::new("list")
+        .about("List saved Gmail threads (offline, read-only)")
+        .disable_help_flag(true)
+        .arg(all_arg())
+        .arg(bob_dir_arg())
+        .arg(list_format_arg())
+        .arg(help_arg())
+        .after_help(
+            "Examples:\n  bob gmail list\n  bob gmail list -a\n  bob gmail list -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml",
+        )
 }
 
 fn login_command() -> ClapCommand {
@@ -134,6 +149,14 @@ fn account_arg() -> Arg {
         .value_name("EMAIL")
         .value_parser(OsStringValueParser::new())
         .help("Google account email; overrides gmail.account")
+}
+
+fn all_arg() -> Arg {
+    Arg::new("all")
+        .long("all")
+        .short('a')
+        .action(ArgAction::SetTrue)
+        .help("Show every saved thread instead of the newest 20")
 }
 
 fn bob_dir_arg() -> Arg {
@@ -354,6 +377,15 @@ impl LoginScope {
 /// Typed bare `bob gmail` arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TopArgs {
+    pub all: bool,
+    pub bob_dir: Option<PathBuf>,
+    pub format: ListFormat,
+}
+
+/// Typed `bob gmail list` arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ListArgs {
+    pub all: bool,
     pub bob_dir: Option<PathBuf>,
     pub format: ListFormat,
 }
@@ -404,13 +436,22 @@ impl SaveArgs {
 impl TopArgs {
     pub(crate) fn from_matches(matches: &ArgMatches) -> Self {
         Self {
+            all: matches.get_flag("all"),
+            bob_dir: raw_bob_dir(matches),
+            format: ListFormat::from_matches(matches),
+        }
+    }
+}
+
+impl ListArgs {
+    pub(crate) fn from_matches(matches: &ArgMatches) -> Self {
+        Self {
+            all: matches.get_flag("all"),
             bob_dir: raw_bob_dir(matches),
             format: ListFormat::from_matches(matches),
         }
     }
 
-    // Consumed by gmail-save's list; shell bare resolves config only.
-    #[allow(dead_code)]
     pub(crate) fn bob_dir(&self) -> PathBuf {
         self.bob_dir.clone().unwrap_or_else(bob_env::bob_dir)
     }
@@ -558,5 +599,35 @@ mod tests {
     fn top_defaults_to_table() {
         let args = TopArgs::from_matches(&matches_for(&["bob gmail"]));
         assert_eq!(args.format, ListFormat::Table);
+        assert!(!args.all);
+    }
+
+    #[test]
+    fn bare_and_explicit_list_share_all_and_format() {
+        let top = TopArgs::from_matches(&matches_for(&[
+            "bob gmail",
+            "-a",
+            "-b",
+            "~/vault",
+            "-f",
+            "json",
+        ]));
+        assert!(top.all);
+        assert!(top.format.is_json());
+        assert_eq!(top.bob_dir, Some(bob_env::home_dir().join("vault")));
+
+        let list = ListArgs::from_matches(&sub_matches_for(
+            &["bob gmail", "list", "-a", "-b", "~/vault", "-f", "json"],
+            "list",
+        ));
+        assert!(list.all);
+        assert!(list.format.is_json());
+
+        let bare = ListArgs::from_matches(&sub_matches_for(
+            &["bob gmail", "list"],
+            "list",
+        ));
+        assert!(!bare.all);
+        assert_eq!(bare.format, ListFormat::Table);
     }
 }

@@ -21,6 +21,8 @@ fake executable.
 - [Login](#login)
 - [Logout](#logout)
 - [Save](#save)
+- [List](#list)
+- [Try it](#try-it)
 - [Doctor](#doctor)
 - [Where it runs](#where-it-runs)
 - [Exit status](#exit-status)
@@ -32,17 +34,19 @@ fake executable.
 ## Commands
 
 ```bash
-bob gmail [-b|--bob-dir DIR] [-f|--format table|json]
+bob gmail [list] [-a|--all] [-b|--bob-dir DIR] [-f|--format table|json]
 bob gmail doctor [-b|--bob-dir DIR] [-f|--format human|json]
 bob gmail login [-a|--account EMAIL] [-c|--credentials FILE] [-f|--format human|json] [-m|--manual] [-s|--scope readonly|compose]
 bob gmail logout [-a|--account EMAIL] [-f|--format human|json] [-y|--force]
 bob gmail save URL|ID|NOTE... [-b|--bob-dir DIR] [-B|--body full|headers] [-d|--dry-run] [-f|--format human|json] [-P|--parent ROUTE] [-q|--quiet] [-R|--rerender]
 ```
 
-Running `bob gmail` with no subcommand is intended to list saved threads; the
-offline list is still being completed. `save` reads Gmail and writes selected
-threads to the vault. `doctor` is read-only; `login` and `logout` are excluded
-from the command catalog (they need a terminal and handle credentials).
+Running `bob gmail` with no subcommand lists saved threads, exactly like the
+explicit `bob gmail list`. Listing is offline and read-only: it never invokes
+gog, creates directories, changes files, or needs the writer host. `save`
+reads Gmail and writes selected threads to the vault. `doctor` is read-only;
+`login` and `logout` are excluded from the command catalog (they need a
+terminal and handle credentials).
 
 ## How it works
 
@@ -239,6 +243,39 @@ Small images repeated across different messages are treated as signature
 logos. Ordinary attachments remain listings. A one-line warning is added to
 the vault root `AGENTS.md` once; vault-sync owns committing that warning.
 
+## List
+
+`bob gmail list` (or bare `bob gmail`) lists saved mail notes newest first by
+parsed `updated` date, with a stable path tie break. Only mail-note
+frontmatter is read; bodies never enter the index. The default table shows
+the 20 newest threads; `-a` shows all. Table columns are `updated`, `subject`,
+`who`, `messages`, and `backlinks`. JSON (`-f json`) carries the same fields
+plus the account/thread identity, note path, labelled wikilink, `started`,
+`schema_version`, and `ok`, with `total`, `shown`, and `truncated` for
+paging.
+
+`backlinks` counts the distinct vault notes whose `[[target]]` wikilink
+resolves to the saved note. Aliases (`[[target|label]]`) and heading/block
+targets (`[[target#heading]]`, `[[target#^block]]`) resolve through their
+target; self-links and links inside fenced/inline code or frontmatter never
+count. The count is scanned once per listing.
+
+A configured `gmail.account` scopes the list to that account; otherwise every
+locally indexed account is shown. Malformed mail notes are skipped with a
+count rather than crashing the list. Duplicate `(account, thread)` identities
+are never selected as canonical: they stay visible as diagnostics and are
+left out of the threads. The footer stays absent until link health lands in a
+later phase; it never claims zero links.
+
+## Try it
+
+1. `bob gmail save <URL> -f json` saves one thread and prints its note path.
+2. `bob gmail list` shows the saved thread with its backlink count.
+3. Add `[[<note path>|<label>]]` to a task note, then `bob gmail list` again
+   to see the count rise.
+4. `bob gmail list -f json` shows the same rows with identities and links.
+5. `bob gmail doctor` checks decoder health and duplicate identities.
+
 ## Doctor
 
 `bob gmail doctor` checks gog, the stored `bob-gmail` client, the account, the
@@ -256,6 +293,10 @@ journal readability. Rows look like `bob gcal doctor`:
 - `writer`: this host, or the pin mismatch.
 - `journal`: `.bob/gmail/*.jsonl` tracked and union-merged.
 - `journal_malformed`: malformed lines skipped with a count.
+- `gmail_urls`: every Gmail URL in vault notes with resolvable, refused, and
+  unknown-token counts. Local only: it runs even when sign-in checks fail.
+- `gmail_duplicates`: duplicate `(account, thread)` identities with a count.
+  A warning, never a failure: listing skips duplicates instead of picking one.
 
 Exit 1 when any check fails. `-f json` prints `schema_version: 1`, `ok`, the
 host, and the typed checks.
@@ -298,6 +339,4 @@ Every `-f json` output carries `schema_version: 1` and `ok`. Errors are typed
 
 ## Known limits
 
-Linking, search, peeking, composing, pulling, and the offline saved-mail list
-land in later phases. `doctor` does not yet check decoder health or duplicate
-thread identities.
+Linking, search, peeking, composing, and pulling land in later phases.

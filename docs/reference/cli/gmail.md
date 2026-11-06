@@ -15,12 +15,16 @@ Usage: bob gmail [OPTIONS] [COMMAND]
 
 Commands:
   doctor  Check the Gmail setup: gog, client, account, token, scopes, config, writer, and journal
+  list    List saved Gmail threads (offline, read-only)
   login   Connect Gmail (read-only) in one guided step
   logout  Remove Bob's Gmail grant only; prints the Google revoke URL
   save    Save or refresh Gmail threads as inert mail notes
   help    Print this message or the help of the given subcommand(s)
 
 Options:
+  -a, --all
+          Show every saved thread instead of the newest 20
+
   -b, --bob-dir <DIR>
           Bob vault root; defaults to BOB_DIR or ~/bob
 
@@ -37,6 +41,7 @@ Running `bob gmail` with no command lists saved threads (offline, read-only).
 
 Examples:
   bob gmail                   List saved threads
+  bob gmail -a                List every saved thread
   bob gmail -f json           List saved threads as JSON
   bob gmail save URL           Save a Gmail thread
   bob gmail save ID -d         Preview a save without writing

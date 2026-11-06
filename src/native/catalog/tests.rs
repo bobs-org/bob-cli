@@ -392,8 +392,8 @@ fn document_shape() {
             .collect::<Vec<_>>(),
         vec!["daily", "tasks", "vault", "integrations", "setup"]
     );
-    assert_eq!(catalog.entries.len(), 74);
-    assert_eq!(ENTRIES.len(), 74);
+    assert_eq!(catalog.entries.len(), 75);
+    assert_eq!(ENTRIES.len(), 75);
     assert!(catalog.entries.iter().any(|entry| entry.id == "plan"));
     assert!(catalog
         .entries
@@ -407,6 +407,9 @@ fn document_shape() {
     }));
     assert!(catalog.entries.iter().any(|entry| {
         entry.id == "gmail-save" && entry.path == ["gmail", "save"]
+    }));
+    assert!(catalog.entries.iter().any(|entry| {
+        entry.id == "gmail-list" && entry.path == ["gmail", "list"]
     }));
     assert!(catalog.entries.iter().any(|entry| {
         entry.id == "attachments-import"

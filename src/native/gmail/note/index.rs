@@ -17,12 +17,19 @@ pub(crate) struct MailIndexEntry {
     pub(crate) title: String,
     pub(crate) who: String,
     pub(crate) label: String,
+    pub(crate) started: String,
+    pub(crate) updated: String,
+    pub(crate) messages: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct MailIndex {
     pub(crate) by_identity: BTreeMap<(String, String), MailIndexEntry>,
     pub(crate) duplicates: Vec<(String, String, Vec<String>)>,
+    /// Mail-marker notes skipped for missing or invalid identity metadata.
+    /// Notes that fail the content/type gate are not mail notes and are
+    /// never counted here.
+    pub(crate) skipped_malformed: usize,
 }
 
 /// Scan Markdown files below `folder`, returning paths relative to `vault`.
@@ -59,12 +66,14 @@ pub(crate) fn scan(
             field(&frontmatter, "title"),
             field(&frontmatter, "who"),
         ) else {
+            index.skipped_malformed += 1;
             continue;
         };
         if account.is_empty()
             || thread_id.is_empty()
             || !thread_id.bytes().all(|byte| byte.is_ascii_hexdigit())
         {
+            index.skipped_malformed += 1;
             continue;
         }
         let relative = path.strip_prefix(vault).map_err(|_| NoteError::Io)?;
@@ -76,6 +85,11 @@ pub(crate) fn scan(
             title: title.clone(),
             who: who.clone(),
             label: label::render_saved(link_template, &title, &who),
+            started: field(&frontmatter, "started").unwrap_or_default(),
+            updated: field(&frontmatter, "updated").unwrap_or_default(),
+            messages: field(&frontmatter, "messages")
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0),
         };
         found
             .entry((account.to_ascii_lowercase(), entry.thread_id.clone()))
