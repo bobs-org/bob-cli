@@ -11,6 +11,13 @@ pub(crate) struct GmailThread {
     pub(crate) messages: Vec<GmailMessage>,
 }
 
+/// One stored Gmail draft and its fully hydrated message envelope as
+/// returned by `gog gmail drafts get --format full`.
+pub(crate) struct GmailDraft {
+    pub(crate) id: String,
+    pub(crate) message: GmailMessage,
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct GmailMessage {
     pub(crate) id: String,
@@ -102,45 +109,7 @@ impl GmailThread {
         for (message_index, message) in
             raw_thread.messages.into_iter().enumerate()
         {
-            let path = vec![message_index];
-            let message_id =
-                required_nonempty(message.id).ok_or_else(|| {
-                    BodyError::new(
-                        BodyErrorKind::MissingMessageId,
-                        path.clone(),
-                    )
-                })?;
-            let thread_id =
-                required_nonempty(message.thread_id).ok_or_else(|| {
-                    BodyError::new(
-                        BodyErrorKind::MissingMessageThreadId,
-                        path.clone(),
-                    )
-                })?;
-            if let Some(internal_date) = message.internal_date.as_deref() {
-                validate_decimal(internal_date)
-                    .map_err(|kind| BodyError::new(kind, path.clone()))?;
-            }
-            let payload = message
-                .payload
-                .map(|payload| MimePart::from_raw(payload, &path))
-                .transpose()?;
-            if let Some(payload) = &payload {
-                validate_tree(payload, MAX_MIME_DEPTH, MAX_MIME_NODES, &path)?;
-            }
-            let headers = payload
-                .as_ref()
-                .map(|payload| payload.headers.clone())
-                .unwrap_or_default();
-            messages.push(GmailMessage {
-                id: message_id,
-                thread_id,
-                label_ids: message.label_ids,
-                internal_date: message.internal_date,
-                snippet: message.snippet,
-                headers,
-                payload,
-            });
+            messages.push(GmailMessage::from_raw(message, &[message_index])?);
         }
 
         Ok(Self {
@@ -151,7 +120,62 @@ impl GmailThread {
     }
 }
 
+impl GmailDraft {
+    /// Parse the body-free gog draft envelope without echoing response bytes
+    /// through errors or debug formatting.
+    pub(crate) fn from_gog_json(bytes: &[u8]) -> Result<Self, BodyError> {
+        let raw: RawDraftEnvelope =
+            serde_json::from_slice(bytes).map_err(|_| {
+                BodyError::new(BodyErrorKind::InvalidEnvelope, Vec::new())
+            })?;
+        let draft = raw.draft.ok_or_else(|| {
+            BodyError::new(BodyErrorKind::MissingThread, Vec::new())
+        })?;
+        let id = required_nonempty(draft.id).ok_or_else(|| {
+            BodyError::new(BodyErrorKind::MissingThreadId, Vec::new())
+        })?;
+        let message = draft.message.ok_or_else(|| {
+            BodyError::new(BodyErrorKind::MissingMessageId, Vec::new())
+        })?;
+        let message = GmailMessage::from_raw(message, &[])?;
+        Ok(Self { id, message })
+    }
+}
+
 impl GmailMessage {
+    fn from_raw(raw: RawMessage, path: &[usize]) -> Result<Self, BodyError> {
+        let id = required_nonempty(raw.id).ok_or_else(|| {
+            BodyError::new(BodyErrorKind::MissingMessageId, path.to_vec())
+        })?;
+        let thread_id = required_nonempty(raw.thread_id).ok_or_else(|| {
+            BodyError::new(BodyErrorKind::MissingMessageThreadId, path.to_vec())
+        })?;
+        if let Some(internal_date) = raw.internal_date.as_deref() {
+            validate_decimal(internal_date)
+                .map_err(|kind| BodyError::new(kind, path.to_vec()))?;
+        }
+        let payload = raw
+            .payload
+            .map(|payload| MimePart::from_raw(payload, path))
+            .transpose()?;
+        if let Some(payload) = &payload {
+            validate_tree(payload, MAX_MIME_DEPTH, MAX_MIME_NODES, path)?;
+        }
+        let headers = payload
+            .as_ref()
+            .map(|payload| payload.headers.clone())
+            .unwrap_or_default();
+        Ok(Self {
+            id,
+            thread_id,
+            label_ids: raw.label_ids,
+            internal_date: raw.internal_date,
+            snippet: raw.snippet,
+            headers,
+            payload,
+        })
+    }
+
     /// Return every matching value in original wire order, matching names without case.
     pub(crate) fn header_values<'a>(
         &'a self,
@@ -254,6 +278,18 @@ fn validate_decimal(value: &str) -> Result<(), BodyErrorKind> {
 #[derive(Deserialize)]
 struct RawEnvelope {
     thread: Option<RawThread>,
+}
+
+#[derive(Deserialize)]
+struct RawDraftEnvelope {
+    draft: Option<RawDraft>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawDraft {
+    id: Option<String>,
+    message: Option<RawMessage>,
 }
 
 #[derive(Deserialize)]

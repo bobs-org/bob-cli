@@ -31,6 +31,7 @@ pub(crate) fn build_cli() -> ClapCommand {
         .arg(help_arg())
         .subcommand(attach_command())
         .subcommand(doctor_command())
+        .subcommand(draft_command())
         .subcommand(link_command())
         .subcommand(list_command())
         .subcommand(login_command())
@@ -44,7 +45,7 @@ pub(crate) fn build_cli() -> ClapCommand {
 }
 
 fn top_after_help() -> &'static str {
-    "Running `bob gmail` with no command lists saved threads (offline, read-only). `-r` adds live message counts.\n\nExamples:\n  bob gmail                   List saved threads\n  bob gmail -a                List every saved thread\n  bob gmail -r                Fetch live new-message counts\n  bob gmail -f json           List saved threads as JSON\n  bob gmail new -t EMAIL      Create a local compose note\n  bob gmail peek URL          Preview a Gmail link\n  bob gmail reply NOTE        Add a Reply section\n  bob gmail save URL          Save a Gmail thread\n  bob gmail search            Search recent inbox threads\n  bob gmail save ID -d        Preview a save without writing\n  bob gmail link tasks.md     Swap Gmail URLs for labelled links\n  bob gmail link -a -d        Preview a backfill of old URLs\n  bob gmail pull              Save threads labelled bob and file inbox tasks\n  bob gmail pull -d           Preview the label pull\n  bob gmail attach NOTE 1     Import the first listed attachment\n  bob gmail login             Connect Gmail in one guided step\n  bob gmail login -a EMAIL    Sign in as this account\n  bob gmail login -s compose  Also grant the compose scope (Mac only)\n  bob gmail doctor            Diagnose gog, the client, and the vault\n  bob gmail logout -y         Remove Bob's Gmail grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH\n  BOB_GMAIL_BROWSER  Browser executable; selects browser sign-in (otherwise automatic)"
+    "Running `bob gmail` with no command lists saved threads (offline, read-only). `-r` adds live message counts.\n\nExamples:\n  bob gmail                   List saved threads\n  bob gmail -a                List every saved thread\n  bob gmail -r                Fetch live new-message counts\n  bob gmail -f json           List saved threads as JSON\n  bob gmail new -t EMAIL      Create a local compose note\n  bob gmail peek URL          Preview a Gmail link\n  bob gmail reply NOTE        Add a Reply section\n  bob gmail save URL          Save a Gmail thread\n  bob gmail search            Search recent inbox threads\n  bob gmail save ID -d        Preview a save without writing\n  bob gmail link tasks.md     Swap Gmail URLs for labelled links\n  bob gmail link -a -d        Preview a backfill of old URLs\n  bob gmail pull              Save threads labelled bob and file inbox tasks\n  bob gmail pull -d           Preview the label pull\n  bob gmail attach NOTE 1     Import the first listed attachment\n  bob gmail draft NOTE        Create or update and preview a Gmail draft\n  bob gmail login             Connect Gmail in one guided step\n  bob gmail login -a EMAIL    Sign in as this account\n  bob gmail login -s compose  Also grant the compose scope (Mac only)\n  bob gmail doctor            Diagnose gog, the client, and the vault\n  bob gmail logout -y         Remove Bob's Gmail grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH\n  BOB_GMAIL_BROWSER  Browser executable; selects browser sign-in (otherwise automatic)"
 }
 fn attach_command() -> ClapCommand {
     ClapCommand::new("attach")
@@ -144,6 +145,28 @@ fn doctor_command() -> ClapCommand {
 
 fn doctor_after_help() -> &'static str {
     "Examples:\n  bob gmail doctor\n  bob gmail doctor -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH"
+}
+
+fn draft_command() -> ClapCommand {
+    ClapCommand::new("draft")
+        .about("Create or update a Gmail draft and show its exact preview")
+        .long_about(
+            "Render the selected compose note, create or update its recorded Gmail draft, read the stored draft back, and show the canonical preview. This writes a Gmail draft but never sends it. Requires the isolated bob-gmail compose grant and the configured Gmail writer host.",
+        )
+        .disable_help_flag(true)
+        .arg(bob_dir_arg())
+        .arg(human_format_arg())
+        .arg(
+            Arg::new("note")
+                .value_name("NOTE")
+                .value_parser(OsStringValueParser::new())
+                .required(true)
+                .help("Vault-relative compose or saved reply note"),
+        )
+        .arg(help_arg())
+        .after_help(
+            "Examples:\n  bob gmail draft mail/2026/261106_lease_renewal.md\n  bob gmail draft 261106_lease_renewal -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH",
+        )
 }
 
 fn link_command() -> ClapCommand {
@@ -862,6 +885,31 @@ impl ReplyArgs {
     pub(crate) fn from_matches(matches: &ArgMatches) -> Self {
         Self {
             all: matches.get_flag("all"),
+            bob_dir: raw_bob_dir(matches),
+            format: HumanFormat::from_matches(matches),
+            note: matches
+                .get_one::<OsString>("note")
+                .map(PathBuf::from)
+                .unwrap_or_default(),
+        }
+    }
+
+    pub(crate) fn bob_dir(&self) -> PathBuf {
+        self.bob_dir.clone().unwrap_or_else(bob_env::bob_dir)
+    }
+}
+
+/// Typed `draft` arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DraftArgs {
+    pub bob_dir: Option<PathBuf>,
+    pub format: HumanFormat,
+    pub note: PathBuf,
+}
+
+impl DraftArgs {
+    pub(crate) fn from_matches(matches: &ArgMatches) -> Self {
+        Self {
             bob_dir: raw_bob_dir(matches),
             format: HumanFormat::from_matches(matches),
             note: matches

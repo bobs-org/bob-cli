@@ -1240,6 +1240,11 @@ pub(crate) const EXCLUDED: &[Excluded] = &[
         reason: "Needs an interactive terminal and handles credentials",
     },
     Excluded {
+        path: &["gmail", "draft"],
+        reason:
+            "Creates or updates a remote Gmail draft; run it from a terminal",
+    },
+    Excluded {
         path: &["gmail", "login"],
         reason: "Needs an interactive terminal and handles credentials",
     },

@@ -11,7 +11,7 @@ use chrono::{DateTime, Local, TimeZone, Utc};
 use serde_yaml::{Mapping, Value};
 
 use super::{
-    cli::{HumanFormat, NewArgs, ReplyArgs},
+    cli::{DraftArgs, HumanFormat, NewArgs, ReplyArgs},
     config::GmailConfig,
     note, ui, GmailError,
 };
@@ -23,6 +23,7 @@ use crate::native::{
 // The draft transport phase consumes the render and attachment boundaries.
 #[allow(dead_code)]
 pub(crate) mod attachments;
+pub(super) mod draft;
 // The draft transport phase consumes the render and attachment boundaries.
 #[allow(dead_code)]
 pub(crate) mod render;
@@ -48,6 +49,10 @@ pub(crate) fn run_reply(args: &ReplyArgs) -> i32 {
         }
         Err(error) => ui::report_error("reply", &error, args.format.as_str()),
     }
+}
+
+pub(crate) fn run_draft(args: &DraftArgs) -> i32 {
+    draft::run(args)
 }
 
 fn run_new_inner(

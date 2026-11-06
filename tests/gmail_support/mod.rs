@@ -218,6 +218,23 @@ impl FakeGog {
         .expect("write fake thread state");
     }
 
+    /// Inject one operation failure without changing the scenario defaults.
+    pub(crate) fn set_failure(&self, operation: &str, stderr: &str, code: i32) {
+        let mut state: serde_json::Value = fs::read(&self.state)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        if !state.get("fail").is_some_and(serde_json::Value::is_object) {
+            state["fail"] = serde_json::json!({});
+        }
+        state["fail"][operation] = serde_json::json!({
+            "stderr": stderr,
+            "code": code,
+        });
+        fs::write(&self.state, serde_json::to_vec(&state).unwrap())
+            .expect("write fake failure state");
+    }
+
     pub(crate) fn install<'a>(
         &self,
         command: &'a mut Command,

@@ -40,6 +40,9 @@ pub(crate) struct ComposeSource {
     pub(crate) attachments: Vec<PathBuf>,
     pub(crate) reply_target: Option<ReplyTarget>,
     pub(crate) draft_id: Option<String>,
+    pub(crate) pinned_account: Option<String>,
+    pub(crate) remote_fingerprint: Option<String>,
+    pub(crate) create_operation: Option<String>,
     body: String,
 }
 
@@ -143,6 +146,17 @@ fn parse_compose(
     let bcc = recipient_field(&frontmatter.value, "bcc")?;
     let attachments = attachment_field(&frontmatter.value)?;
     let draft_id = optional_draft_id(&frontmatter.value)?;
+    let pinned_account = optional_account(&frontmatter.value)?;
+    let remote_fingerprint =
+        optional_digest(&frontmatter.value, "gmail_draft_remote_fingerprint")?;
+    let create_operation =
+        optional_digest(&frontmatter.value, "gmail_draft_create_operation")?;
+    validate_draft_metadata(
+        draft_id.as_deref(),
+        pinned_account.as_deref(),
+        remote_fingerprint.as_deref(),
+        create_operation.as_deref(),
+    )?;
     if !draft_markers(contents, frontmatter.body_start).is_empty() {
         return Err(SourceError::ConflictingDraftMarkers);
     }
@@ -181,6 +195,9 @@ fn parse_compose(
         attachments,
         reply_target: None,
         draft_id,
+        pinned_account,
+        remote_fingerprint,
+        create_operation,
         body,
     })
 }
@@ -216,6 +233,17 @@ fn parse_reply(
         return Err(SourceError::ConflictingDraftMarkers);
     }
     let draft_id = marker_events.first().map(|marker| marker.id.clone());
+    let pinned_account = optional_account(&frontmatter.value)?;
+    let remote_fingerprint =
+        optional_digest(&frontmatter.value, "gmail_draft_remote_fingerprint")?;
+    let create_operation =
+        optional_digest(&frontmatter.value, "gmail_draft_create_operation")?;
+    validate_draft_metadata(
+        draft_id.as_deref(),
+        pinned_account.as_deref(),
+        remote_fingerprint.as_deref(),
+        create_operation.as_deref(),
+    )?;
     let mut start = heading.line_end;
     if let Some(marker) = marker_events.first() {
         let marker_line_start = line_start(contents, marker.start);
@@ -248,6 +276,9 @@ fn parse_reply(
         attachments: Vec::new(),
         reply_target: Some(target),
         draft_id,
+        pinned_account,
+        remote_fingerprint,
+        create_operation,
         body,
     })
 }
@@ -572,6 +603,208 @@ fn optional_draft_id(value: &Value) -> Result<Option<String>, SourceError> {
     };
     validate_draft_id(value)?;
     Ok(Some(value.to_string()))
+}
+
+fn optional_account(value: &Value) -> Result<Option<String>, SourceError> {
+    let Some(raw) = value.as_mapping().and_then(|mapping| {
+        mapping.get(Value::String("gmail_draft_account".to_string()))
+    }) else {
+        return Ok(None);
+    };
+    let Some(account) = raw.as_str() else {
+        return Err(SourceError::InvalidRecipients);
+    };
+    let parsed = parse_recipient_list(account)?;
+    if parsed.len() != 1 || parsed[0] != account || !account.contains('@') {
+        return Err(SourceError::InvalidRecipients);
+    }
+    Ok(Some(account.to_string()))
+}
+
+fn optional_digest(
+    value: &Value,
+    name: &str,
+) -> Result<Option<String>, SourceError> {
+    let Some(raw) = value
+        .as_mapping()
+        .and_then(|mapping| mapping.get(Value::String(name.to_string())))
+    else {
+        return Ok(None);
+    };
+    let Some(digest) = raw.as_str() else {
+        return Err(SourceError::ConflictingDraftMarkers);
+    };
+    if digest.len() != 64
+        || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(SourceError::ConflictingDraftMarkers);
+    }
+    Ok(Some(digest.to_ascii_lowercase()))
+}
+
+fn validate_draft_metadata(
+    draft_id: Option<&str>,
+    account: Option<&str>,
+    remote_fingerprint: Option<&str>,
+    create_operation: Option<&str>,
+) -> Result<(), SourceError> {
+    if draft_id.is_some() && account.is_none()
+        || remote_fingerprint.is_some() && draft_id.is_none()
+        || create_operation.is_some() && account.is_none()
+        || create_operation.is_some() && remote_fingerprint.is_some()
+    {
+        return Err(SourceError::ConflictingDraftMarkers);
+    }
+    Ok(())
+}
+
+/// Patch Bob's reserved draft identity fields while preserving every other
+/// frontmatter line and all authored Markdown bytes.
+pub(crate) fn persist_draft_metadata(
+    contents: &str,
+    account: &str,
+    draft_id: Option<&str>,
+    create_operation: Option<&str>,
+    remote_fingerprint: Option<&str>,
+) -> Result<String, SourceError> {
+    let source = parse(contents)?;
+    if let Some(id) = draft_id {
+        validate_draft_id(id)?;
+    }
+    for digest in [create_operation, remote_fingerprint].into_iter().flatten() {
+        if digest.len() != 64
+            || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(SourceError::ConflictingDraftMarkers);
+        }
+    }
+    let fields = [
+        ("gmail_draft_account", Some(account.to_string())),
+        (
+            "gmail_draft_remote_fingerprint",
+            remote_fingerprint.map(str::to_string),
+        ),
+        (
+            "gmail_draft_create_operation",
+            create_operation.map(str::to_string),
+        ),
+    ];
+    let mut updated = patch_frontmatter(contents, &fields)?;
+    match source.kind {
+        ComposeKind::New => {
+            updated = patch_frontmatter(
+                &updated,
+                &[("gmail_draft_id", draft_id.map(str::to_string))],
+            )?;
+        }
+        ComposeKind::Reply { .. } => {
+            updated = patch_reply_marker(&updated, draft_id)?;
+        }
+    }
+    Ok(updated)
+}
+
+fn patch_frontmatter(
+    contents: &str,
+    fields: &[(&str, Option<String>)],
+) -> Result<String, SourceError> {
+    let parsed = frontmatter(contents)?;
+    let closing = line_start(contents, parsed.body_start.saturating_sub(1));
+    let mut seen = std::collections::BTreeSet::new();
+    let mut output = String::with_capacity(contents.len() + 128);
+    let prefix = &contents[..closing];
+    let mut offset = 0usize;
+    for line in prefix.split_inclusive('\n') {
+        let bare = line.trim_end_matches(['\r', '\n']);
+        let replacement = fields.iter().find_map(|(key, value)| {
+            bare.strip_prefix(key)
+                .and_then(|rest| rest.starts_with(':').then_some((*key, value)))
+        });
+        if let Some((key, value)) = replacement {
+            if !seen.insert(key) {
+                return Err(SourceError::ConflictingDraftMarkers);
+            }
+            if let Some(value) = value {
+                let yaml = serde_yaml::to_string(&Value::String(value.clone()))
+                    .map_err(|_| SourceError::InvalidFrontmatter)?;
+                let scalar = yaml.trim_end();
+                output.push_str(key);
+                output.push_str(": ");
+                output.push_str(scalar);
+                output.push_str(if line.ends_with("\r\n") {
+                    "\r\n"
+                } else {
+                    "\n"
+                });
+            }
+        } else {
+            output.push_str(line);
+        }
+        offset += line.len();
+    }
+    let _ = offset;
+    for (key, value) in fields {
+        if seen.contains(key) {
+            continue;
+        }
+        if let Some(value) = value {
+            let yaml = serde_yaml::to_string(&Value::String(value.clone()))
+                .map_err(|_| SourceError::InvalidFrontmatter)?;
+            output.push_str(key);
+            output.push_str(": ");
+            output.push_str(yaml.trim_end());
+            output.push('\n');
+        }
+    }
+    output.push_str(&contents[closing..]);
+    Ok(output)
+}
+
+fn patch_reply_marker(
+    contents: &str,
+    draft_id: Option<&str>,
+) -> Result<String, SourceError> {
+    let parsed = frontmatter(contents)?;
+    let headings = markdown_headings(contents, parsed.body_start);
+    let heading = headings
+        .iter()
+        .find(|heading| {
+            heading.level == HeadingLevel::H2
+                && is_reply_heading(&heading.text)
+                && is_exact_reply_heading(heading)
+        })
+        .ok_or(SourceError::MissingReply)?;
+    let markers = draft_markers(contents, parsed.body_start);
+    if markers.len() > 1 {
+        return Err(SourceError::ConflictingDraftMarkers);
+    }
+    let Some(id) = draft_id else {
+        if let Some(marker) = markers.first() {
+            let end = line_end(contents, marker.start);
+            let mut updated = contents.to_string();
+            updated.replace_range(marker.start..end, "");
+            return Ok(updated);
+        }
+        return Ok(contents.to_string());
+    };
+    validate_draft_id(id)?;
+    let marker = format!("<!-- bob:gmail:draft {id} -->");
+    let newline = if contents.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    if let Some(existing) = markers.first() {
+        let start = existing.start;
+        let end = line_end(contents, start);
+        let mut updated = contents.to_string();
+        updated.replace_range(start..end, &marker);
+        Ok(updated)
+    } else {
+        let mut updated = contents.to_string();
+        updated.insert_str(heading.line_end, &format!("{marker}{newline}"));
+        Ok(updated)
+    }
 }
 
 fn validate_draft_id(value: &str) -> Result<(), SourceError> {
@@ -927,6 +1160,10 @@ mod tests {
     fn reply_source_uses_exact_target_and_skips_code_and_callout_headings() {
         let contents = saved_note(
             "```markdown\n## Reply\n```\n\n> ## Reply all\n> quoted example\n\n## Reply all\n\n<!-- bob:gmail:draft draft_123 -->\n\nLet's proceed.",
+        )
+        .replace(
+            "gmail_account: you@example.com\n",
+            "gmail_account: you@example.com\ngmail_draft_account: you@example.com\n",
         );
         let source = parse(&contents).expect("reply source");
         assert!(matches!(source.kind, ComposeKind::Reply { all: true }));

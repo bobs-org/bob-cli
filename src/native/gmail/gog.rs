@@ -6,12 +6,12 @@
 //! explicit adapter. Errors stay body-free and never embed serde input
 //! values or raw responses.
 
-use std::ffi::OsString;
+use std::{ffi::OsString, path::Path};
 
 use super::GmailError;
 pub(crate) use crate::native::google::Gog;
 
-use super::model::GmailThread;
+use super::model::{GmailDraft, GmailThread};
 use crate::native::google::parse_json;
 
 pub(crate) const CLIENT: &str = crate::native::google::GMAIL.client_bucket;
@@ -36,6 +36,27 @@ const READONLY_SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly";
 pub(crate) struct GmailLabel {
     pub(crate) id: String,
     pub(crate) name: String,
+}
+
+/// Complete compose input for one draft create/update. Bodies and attachment
+/// bytes are passed through private files; this type is never debug-printed.
+pub(crate) struct DraftCompose<'a> {
+    pub(crate) to: &'a [String],
+    pub(crate) cc: &'a [String],
+    pub(crate) bcc: &'a [String],
+    pub(crate) subject: &'a str,
+    pub(crate) body_file: &'a Path,
+    pub(crate) html_file: &'a Path,
+    pub(crate) attachments: &'a [std::path::PathBuf],
+    pub(crate) signature: bool,
+    pub(crate) reply_to_message_id: Option<&'a str>,
+    pub(crate) reply_all: bool,
+    pub(crate) clear_reply_context: bool,
+}
+
+/// Opaque ID returned by the remote draft create/update call.
+pub(crate) struct DraftReceipt {
+    pub(crate) id: String,
 }
 
 fn read_flags(account: &str) -> Vec<OsString> {
@@ -87,6 +108,66 @@ impl Gog {
         )?;
         GmailThread::from_gog_json(stdout.as_bytes())
             .map_err(|error| GmailError::runtime("bad_json", error.to_string()))
+    }
+
+    /// Create a Gmail draft. This intentionally omits `--readonly`, while
+    /// `--gmail-no-send` and an exact command allowlist keep the transport
+    /// limited to draft creation.
+    pub(crate) fn draft_create(
+        &self,
+        account: &str,
+        compose: &DraftCompose<'_>,
+    ) -> Result<DraftReceipt, GmailError> {
+        let mut args = draft_write_flags(account, "gmail.drafts.create");
+        args.extend([
+            OsString::from("gmail"),
+            OsString::from("drafts"),
+            OsString::from("create"),
+        ]);
+        append_draft_compose(&mut args, compose, false);
+        let output = self.run(args).map_err(redact_gmail_draft_error)?;
+        parse_draft_receipt(&output.stdout)
+    }
+
+    /// Update an existing draft by its durable Gmail draft ID. Empty
+    /// recipient lists and attachment lists are explicit clears.
+    pub(crate) fn draft_update(
+        &self,
+        account: &str,
+        draft_id: &str,
+        compose: &DraftCompose<'_>,
+    ) -> Result<DraftReceipt, GmailError> {
+        let mut args = draft_write_flags(account, "gmail.drafts.update");
+        args.extend([
+            OsString::from("gmail"),
+            OsString::from("drafts"),
+            OsString::from("update"),
+            OsString::from(draft_id),
+        ]);
+        append_draft_compose(&mut args, compose, true);
+        let output = self.run(args).map_err(redact_gmail_draft_error)?;
+        parse_draft_receipt(&output.stdout)
+    }
+
+    /// Read a stored draft's complete MIME tree into memory. Never pass
+    /// `--download`: gog's attachment cache is outside Bob's write boundary.
+    pub(crate) fn draft_get(
+        &self,
+        account: &str,
+        draft_id: &str,
+    ) -> Result<GmailDraft, GmailError> {
+        let mut args = draft_read_flags(account);
+        args.extend([
+            OsString::from("gmail"),
+            OsString::from("drafts"),
+            OsString::from("get"),
+            OsString::from(draft_id),
+            OsString::from("--format"),
+            OsString::from("full"),
+        ]);
+        let output = self.run(args).map_err(redact_gmail_draft_error)?;
+        GmailDraft::from_gog_json(output.stdout.as_bytes())
+            .map_err(|_| bad_draft_response("gog returned an invalid draft"))
     }
 
     /// Fetch a thread's headers and message dates without requesting bodies.
@@ -278,6 +359,151 @@ impl Gog {
             }
         })
     }
+}
+
+fn draft_read_flags(account: &str) -> Vec<OsString> {
+    let mut flags = draft_base_flags(account);
+    flags.push(OsString::from("--readonly"));
+    flags.push(OsString::from("--enable-commands-exact"));
+    flags.push(OsString::from("gmail.drafts.get"));
+    flags
+}
+
+fn draft_write_flags(account: &str, allowed_command: &str) -> Vec<OsString> {
+    let mut flags = draft_base_flags(account);
+    flags.push(OsString::from("--enable-commands-exact"));
+    flags.push(OsString::from(allowed_command));
+    flags
+}
+
+fn draft_base_flags(account: &str) -> Vec<OsString> {
+    vec![
+        OsString::from("--no-input"),
+        OsString::from("--json"),
+        OsString::from("--color"),
+        OsString::from("never"),
+        OsString::from("--client"),
+        OsString::from(CLIENT),
+        OsString::from("--account"),
+        OsString::from(account),
+        OsString::from("--gmail-no-send"),
+    ]
+}
+
+fn append_draft_compose(
+    args: &mut Vec<OsString>,
+    compose: &DraftCompose<'_>,
+    update: bool,
+) {
+    push_flag(args, "--subject", compose.subject);
+    push_flag_path(args, "--body-file", compose.body_file);
+    push_flag_path(args, "--body-html-file", compose.html_file);
+    append_recipient(args, "--to", compose.to, update);
+    append_recipient(args, "--cc", compose.cc, update);
+    append_recipient(args, "--bcc", compose.bcc, update);
+    if compose.attachments.is_empty() {
+        if update {
+            args.push(OsString::from("--clear-attachments"));
+        }
+    } else {
+        for attachment in compose.attachments {
+            push_flag_path(args, "--attach", attachment);
+        }
+    }
+    if compose.signature {
+        args.push(OsString::from("--signature"));
+    }
+    if update && compose.clear_reply_context {
+        args.push(OsString::from("--clear-reply-context"));
+    }
+    if let Some(message_id) = compose.reply_to_message_id {
+        push_flag(args, "--reply-to-message-id", message_id);
+        if compose.reply_all {
+            args.push(OsString::from("--reply-all"));
+        }
+    }
+}
+
+fn append_recipient(
+    args: &mut Vec<OsString>,
+    flag: &str,
+    recipients: &[String],
+    include_empty: bool,
+) {
+    if recipients.is_empty() {
+        if include_empty {
+            args.push(OsString::from(format!("{flag}=")));
+        }
+    } else {
+        push_flag(args, flag, &recipients.join(", "));
+    }
+}
+
+fn push_flag(args: &mut Vec<OsString>, flag: &str, value: &str) {
+    args.push(OsString::from(flag));
+    args.push(OsString::from(value));
+}
+
+fn push_flag_path(args: &mut Vec<OsString>, flag: &str, path: &Path) {
+    args.push(OsString::from(flag));
+    args.push(path.as_os_str().to_os_string());
+}
+
+fn parse_draft_receipt(stdout: &str) -> Result<DraftReceipt, GmailError> {
+    let value: serde_json::Value = serde_json::from_str(stdout.trim())
+        .map_err(|_| {
+            bad_draft_response("gog returned an invalid draft receipt")
+        })?;
+    let id = value
+        .get("draftId")
+        .or_else(|| value.get("id"))
+        .or_else(|| value.get("draft").and_then(|draft| draft.get("id")))
+        .and_then(serde_json::Value::as_str)
+        .filter(|id| valid_draft_id(id))
+        .ok_or_else(|| bad_draft_response("gog returned no valid draft id"))?;
+    Ok(DraftReceipt { id: id.to_string() })
+}
+
+fn valid_draft_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')
+        })
+}
+
+fn bad_draft_response(message: &str) -> GmailError {
+    GmailError::runtime("bad_json", message.to_string())
+}
+
+fn redact_gmail_draft_error(error: GmailError) -> GmailError {
+    let (message, hint) = match error.kind() {
+        "not_found" => (
+            "the selected Gmail draft or reply target no longer exists",
+            None,
+        ),
+        "invalid_grant" => ("the bob-gmail sign-in needs renewal", None),
+        "not_logged_in" => ("no bob-gmail Gmail grant is stored", None),
+        "insufficient_scope" => (
+            "the bob-gmail grant lacks the compose scope",
+            Some(
+                "run `bob gmail login -s compose` on the approved compose host",
+            ),
+        ),
+        "network" => {
+            ("gog could not reach Google while handling the draft", None)
+        }
+        "timeout" => ("gog timed out while handling the draft", None),
+        "api_disabled" => {
+            ("the Gmail API is not enabled for this Cloud project", None)
+        }
+        _ => ("gog could not complete the Gmail draft operation", None),
+    };
+    let mut redacted = GmailError::runtime(error.kind(), message.to_string());
+    if let Some(hint) = hint {
+        redacted = redacted.with_hint(hint);
+    }
+    redacted
 }
 
 /// Build the exact argv for one Discovery attachment read: shared read-only

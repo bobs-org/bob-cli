@@ -16,6 +16,7 @@ Usage: bob gmail [OPTIONS] [COMMAND]
 Commands:
   attach  Import one listed Gmail attachment into the vault
   doctor  Check the Gmail setup: gog, client, account, token, scopes, config, writer, and journal
+  draft   Create or update a Gmail draft and show its exact preview
   link    Swap Gmail URLs for labelled links to saved mail notes
   list    List saved Gmail threads (offline unless --remote)
   login   Connect Gmail (read-only) in one guided step
@@ -65,6 +66,7 @@ Examples:
   bob gmail pull              Save threads labelled bob and file inbox tasks
   bob gmail pull -d           Preview the label pull
   bob gmail attach NOTE 1     Import the first listed attachment
+  bob gmail draft NOTE        Create or update and preview a Gmail draft
   bob gmail login             Connect Gmail in one guided step
   bob gmail login -a EMAIL    Sign in as this account
   bob gmail login -s compose  Also grant the compose scope (Mac only)

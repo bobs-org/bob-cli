@@ -164,6 +164,18 @@ fn gmail_compose_commands_are_explicitly_excluded() {
 }
 
 #[test]
+fn gmail_draft_remote_write_is_excluded_from_command_mode() {
+    let catalog = document();
+    assert!(catalog.excluded.iter().any(|row| {
+        row.path.iter().map(String::as_str).eq(["gmail", "draft"])
+            && row.reason.contains("remote Gmail draft")
+    }));
+    assert!(catalog.entries.iter().all(|row| {
+        row.path.iter().map(String::as_str).ne(["gmail", "draft"])
+    }));
+}
+
+#[test]
 fn ids_are_unique_kebab_case_and_keywords_are_lowercase() {
     let mut seen = HashSet::new();
     for row in ENTRIES {

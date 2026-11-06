@@ -47,6 +47,7 @@ fake executable.
 bob gmail [list] [-a|--all] [-b|--bob-dir DIR] [-f|--format table|json] [-r|--remote]
 bob gmail attach NOTE N [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json]
 bob gmail doctor [-b|--bob-dir DIR] [-f|--format human|json]
+bob gmail draft NOTE [-b|--bob-dir DIR] [-f|--format human|json]
 bob gmail link NOTE... [-a|--all] [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-q|--quiet]
 bob gmail login [-a|--account EMAIL] [-c|--credentials FILE] [-f|--format human|json] [-m|--manual] [-s|--scope readonly|compose]
 bob gmail logout [-a|--account EMAIL] [-f|--format human|json] [-y|--force]
@@ -320,6 +321,48 @@ section body.
 ```bash
 bob gmail new -t 'Ada <ada@example.com>' -s "Lease renewal" -f json
 bob gmail reply mail/2026/261105_lease_renewal.md --all -f json
+```
+
+## Gmail drafts
+
+`bob gmail draft NOTE` creates a Gmail draft for a compose note or updates the
+draft id already recorded on that note. It requires the configured
+`gmail.writer` host and the isolated `bob-gmail` grant with the compose scope;
+run `bob gmail login -s compose` to add that grant. Creating or updating a
+draft never sends it.
+
+Before calling Gmail, Bob renders the authored message region into plain-text
+and HTML alternatives, validates and snapshots every declared attachment, and
+persists a body-free create marker. The body and attachment bytes go to gog
+through private temporary files. For replies, Bob checks the saved account,
+thread, and selected non-draft message, then verifies the returned draft still
+belongs to that thread. Reply-all recipients are resolved by Gmail and are
+shown from the stored draft.
+
+Bob reads the stored draft back without using gog's download cache. It hydrates
+both MIME alternatives and attachments in memory and refuses a preview if any
+part is missing, ambiguous, or different from the prepared content. The
+canonical digest covers the note path, account, actual From/To/Cc/Bcc, subject,
+reply target, exact plain text, HTML hash, signature mode, attachment names and
+hashes, and flattened links. Volatile Gmail message ids and MIME boundaries do
+not affect it.
+
+After a successful readback, Bob stores the durable draft id and a remote
+content fingerprint on the note and appends a body-free `gmail.draft` journal
+event. Later updates compare the stored fingerprint before replacing a draft;
+an external Gmail edit is reported as a conflict. If a create response is
+ambiguous, Bob leaves the create marker and will not create a second draft
+automatically. A known id is retained in the note or a body-free recovery event
+if note persistence fails.
+
+With `-f json`, success is a schema-1 preview document with `status: preview`,
+`note`, `draft_id`, `digest`, and `preview`. The preview contains the exact
+stored text body, actual envelope, reply target, signature mode, attachment
+metadata, and flattened links. Error documents never include message bodies.
+
+```bash
+bob gmail draft mail/2026/261106_lease_renewal.md
+bob gmail draft 261106_lease_renewal -f json
 ```
 
 ## Outgoing message rendering

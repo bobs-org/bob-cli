@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import base64
+import hashlib
 import os
 import sys
 import time
@@ -40,6 +42,20 @@ FLAGS_WITH_VALUE = {
     "--disable-commands",
     "--out",
     "--name",
+    "--to",
+    "--cc",
+    "--bcc",
+    "--subject",
+    "--body",
+    "--body-file",
+    "--body-html",
+    "--body-html-file",
+    "--reply-to-message-id",
+    "--thread-id",
+    "--reply-to",
+    "--signature-from",
+    "--signature-file",
+    "--attach",
 }
 
 args = sys.argv[1:]
@@ -77,11 +93,27 @@ def positional(argv: list[str]) -> list[str]:
 
 
 def flag_value(name: str) -> str | None:
-    if name in args:
-        index = args.index(name)
-        if index + 1 < len(args):
+    for index, item in enumerate(args):
+        if item == name and index + 1 < len(args):
             return args[index + 1]
+        if item.startswith(name + "="):
+            return item[len(name) + 1 :]
     return None
+
+
+def flag_values(name: str) -> list[str]:
+    values: list[str] = []
+    index = 0
+    while index < len(args):
+        item = args[index]
+        if item == name and index + 1 < len(args):
+            values.append(args[index + 1])
+            index += 2
+            continue
+        if item.startswith(name + "="):
+            values.append(item[len(name) + 1 :])
+        index += 1
+    return values
 
 
 def load_state() -> dict:
@@ -266,6 +298,10 @@ def op_name() -> str:
         return "auth_remove"
     if pos[:2] == ["gmail", "search"]:
         return "search"
+    if pos[:2] == ["gmail", "drafts"]:
+        if len(pos) > 2 and pos[2] in {"create", "update", "get"}:
+            return "draft_" + pos[2]
+        return "forbidden_send"
     if pos[:3] == ["gmail", "thread", "get"]:
         return "thread_get"
     if pos[:3] == ["gmail", "threads", "get"]:
@@ -283,6 +319,8 @@ def op_name() -> str:
     if pos[:3] == ["gmail", "messages", "search"]:
         return "search"
     if pos[:1] == ["gmail"]:
+        if len(pos) > 1 and pos[1] in {"send", "reply"}:
+            return "forbidden_send"
         return "gmail_other"
     return "unknown"
 
@@ -366,6 +404,239 @@ if op == "accounts":
         ]
     dump({"accounts": accounts})
     raise SystemExit(0)
+
+def draft_header(message: dict, name: str) -> str | None:
+    payload = message.get("payload") or {}
+    for header in payload.get("headers") or []:
+        if header.get("name", "").lower() == name.lower():
+            return header.get("value")
+    return None
+
+
+def split_recipients(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [piece.strip() for piece in value.split(",") if piece.strip()]
+
+
+def private_file(flag: str) -> tuple[Path, bytes] | None:
+    raw = flag_value(flag)
+    if raw is None:
+        return None
+    path = Path(raw)
+    try:
+        mode = path.stat().st_mode & 0o777
+        parent_mode = path.parent.stat().st_mode & 0o777
+        if mode != 0o600 or parent_mode & 0o077:
+            fail("fake gog: draft body or attachment staging is not private", 2)
+        return path, path.read_bytes()
+    except OSError:
+        fail("fake gog: draft body or attachment file is unreadable", 2)
+    return None
+
+
+def b64url(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def mime_text(mime: str, raw: bytes) -> dict:
+    return {
+        "mimeType": mime,
+        "body": {"size": len(raw), "data": b64url(raw)},
+    }
+
+
+def build_draft_message(
+    draft: dict,
+    create: bool,
+    compose: bool,
+) -> dict:
+    previous = draft.get("message") or {}
+    plain_file = private_file("--body-file")
+    html_file = private_file("--body-html-file")
+    if plain_file is None or html_file is None:
+        fail("fake gog: draft create/update requires private plain and HTML body files", 2)
+    plain = plain_file[1]
+    html = html_file[1]
+    if "--signature" in args:
+        signature = (state.get("signature") or "-- \nTest signature").encode()
+        plain = plain.rstrip(b"\r\n") + b"\n\n" + signature
+        html += b'<div class="gmail_signature">Test signature</div>'
+
+    to_opt = flag_value("--to")
+    cc_opt = flag_value("--cc")
+    bcc_opt = flag_value("--bcc")
+    if create:
+        to = split_recipients(to_opt)
+        cc = split_recipients(cc_opt)
+        bcc = split_recipients(bcc_opt)
+    else:
+        to = split_recipients(to_opt) if to_opt is not None else list(draft.get("to") or [])
+        cc = split_recipients(cc_opt) if cc_opt is not None else list(draft.get("cc") or [])
+        bcc = split_recipients(bcc_opt) if bcc_opt is not None else list(draft.get("bcc") or [])
+
+    reply_id = flag_value("--reply-to-message-id") if create else None
+    thread_id = previous.get("threadId") or "thread-draft-1"
+    in_reply_to = draft.get("in_reply_to")
+    references = draft.get("references")
+    if create and reply_id:
+        thread_envelope = state.get("thread") or {}
+        thread = thread_envelope.get("thread") or thread_envelope
+        target = next(
+            (item for item in thread.get("messages", []) if item.get("id") == reply_id),
+            None,
+        )
+        if target is None:
+            fail("notFound: synthetic reply target missing", 1)
+        thread_id = thread.get("id") or target.get("threadId") or "thread-reply-1"
+        subject = draft_header(target, "Subject") or ""
+        target_from = draft_header(target, "From") or ""
+        target_to = split_recipients(draft_header(target, "To"))
+        target_cc = split_recipients(draft_header(target, "Cc"))
+        if "--reply-all" in args:
+            to = [target_from] if target_from else []
+            cc = [value for value in target_to + target_cc if EMAIL not in value]
+        elif not to:
+            to = [target_from] if target_from else []
+        in_reply_to = draft_header(target, "Message-ID")
+        references = " ".join(
+            value
+            for value in [draft_header(target, "References"), in_reply_to]
+            if value
+        )
+    if not create and "--clear-reply-context" in args:
+        in_reply_to = None
+        references = None
+        thread_id = "thread-draft-standalone"
+
+    attachment_options = flag_values("--attach")
+    if create:
+        attachment_paths = attachment_options
+    elif "--clear-attachments" in args:
+        attachment_paths = []
+    elif attachment_options:
+        attachment_paths = attachment_options
+    else:
+        attachment_paths = [item["path"] for item in (draft.get("attachments") or [])]
+
+    attachment_parts = []
+    attachments: list[dict] = []
+    for raw_path in attachment_paths:
+        staged = private_file_for_path(raw_path)
+        if staged is None:
+            fail("fake gog: private attachment snapshot is unreadable", 2)
+        path, content = staged
+        name = path.name.split("_", 1)[-1]
+        attachment_parts.append(
+            {
+                "mimeType": "application/octet-stream",
+                "filename": name,
+                "headers": [
+                    {"name": "Content-Disposition", "value": f'attachment; filename="{name}"'}
+                ],
+                "body": {"size": len(content), "data": b64url(content)},
+            }
+        )
+        attachments.append({"path": raw_path, "name": name, "content": b64url(content)})
+
+    alternative = {
+        "mimeType": "multipart/alternative",
+        "parts": [mime_text("text/plain", plain), mime_text("text/html", html)],
+    }
+    root = {
+        "mimeType": "multipart/mixed" if attachment_parts else "multipart/alternative",
+        "parts": [alternative, *attachment_parts] if attachment_parts else alternative["parts"],
+        "headers": [],
+    }
+    subject_value = flag_value("--subject") or ""
+    if not create and flag_value("--subject") is None:
+        subject_value = draft.get("subject", "")
+    headers = [
+        {"name": "From", "value": EMAIL},
+        {"name": "Subject", "value": subject_value},
+    ]
+    for name, values in (("To", to), ("Cc", cc), ("Bcc", bcc)):
+        if values:
+            headers.append({"name": name, "value": ", ".join(values)})
+    if in_reply_to:
+        headers.append({"name": "In-Reply-To", "value": in_reply_to})
+    if references:
+        headers.append({"name": "References", "value": references})
+    root["headers"] = headers
+    sequence = int(state.get("draft_message_seq") or 0) + 1
+    state["draft_message_seq"] = sequence
+    message = {
+        "id": f"draft-message-{sequence}",
+        "threadId": thread_id,
+        "labelIds": ["DRAFT"],
+        "payload": root,
+    }
+    draft.update(
+        {
+            "message": message,
+            "to": to,
+            "cc": cc,
+            "bcc": bcc,
+            "subject": subject_value,
+            "attachments": attachments,
+            "in_reply_to": in_reply_to,
+            "references": references,
+        }
+    )
+    return message
+
+
+def private_file_for_path(raw_path: str) -> tuple[Path, bytes] | None:
+    path = Path(raw_path)
+    try:
+        if path.stat().st_mode & 0o777 != 0o600 or path.parent.stat().st_mode & 0o077:
+            fail("fake gog: attachment snapshot is not private", 2)
+        return path, path.read_bytes()
+    except OSError:
+        return None
+
+
+if op in {"draft_create", "draft_update", "draft_get"}:
+    if "--gmail-no-send" not in args:
+        fail("fake gog: every Gmail draft call must include --gmail-no-send", 2)
+    if "--thread-id" in args and "--reply-to-message-id" in args:
+        fail("fake gog: --thread-id and --reply-to-message-id cannot be combined", 2)
+    if op == "draft_get":
+        if "--readonly" not in args:
+            fail("fake gog: draft get must be read-only", 2)
+    elif "--readonly" in args:
+        fail("fake gog: draft create/update must not be read-only", 2)
+    expected = {
+        "draft_create": "gmail.drafts.create",
+        "draft_update": "gmail.drafts.update",
+        "draft_get": "gmail.drafts.get",
+    }[op]
+    if flag_value("--enable-commands-exact") != expected:
+        fail("fake gog: draft call has an unexpected exact-command allowlist", 2)
+    drafts = state.setdefault("drafts", {})
+    if op == "draft_create":
+        draft_id = f"draft-{int(state.get('draft_seq') or 0) + 1}"
+        state["draft_seq"] = int(state.get("draft_seq") or 0) + 1
+        draft: dict = {"id": draft_id}
+        message = build_draft_message(draft, True, True)
+        drafts[draft_id] = draft
+        save_state(state)
+        dump({"draftId": draft_id, "message": message})
+        raise SystemExit(0)
+    draft_id = pos[3] if len(pos) > 3 else ""
+    draft = drafts.get(draft_id)
+    if draft is None:
+        fail("notFound: synthetic draft missing", 1)
+    if op == "draft_update":
+        message = build_draft_message(draft, False, True)
+        save_state(state)
+        dump({"draftId": draft_id, "message": message})
+        raise SystemExit(0)
+    dump({"draft": {"id": draft_id, "message": draft.get("message")}})
+    raise SystemExit(0)
+
+if op == "forbidden_send":
+    fail("fake gog: direct send commands are forbidden", 2)
 
 if op == "auth_add":
     if "--remote" not in args:
