@@ -66,10 +66,15 @@ pub(crate) struct SendState {
     pub(crate) draft_rfc_id: Option<String>,
     pub(crate) thread_id: String,
     pub(crate) subject_hash: String,
+    pub(crate) recipient_count: u32,
     pub(crate) attempt_time: String,
     pub(crate) sent_message_id: Option<String>,
     pub(crate) sent_thread_id: Option<String>,
     pub(crate) remote_fingerprint: Option<String>,
+    pub(crate) completed_note_digest: Option<String>,
+    /// Exact vault-relative paths included in the completion commit. This
+    /// lets an interrupted commit resume without staging unrelated changes.
+    pub(crate) completed_commit_paths: Vec<String>,
 }
 
 impl SendState {
@@ -131,12 +136,33 @@ pub(crate) fn load_send_state(
     let preview_digest = get("preview_digest")?.to_string();
     let thread_id = get("thread_id")?.to_string();
     let subject_hash = get("subject_hash")?.to_string();
+    let recipient_count = mapping
+        .get(serde_yaml::Value::String("recipient_count".to_string()))
+        .and_then(serde_yaml::Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or(SourceError::InvalidSendState)?;
     let attempt_time = get("attempt_time")?.to_string();
     let draft_message_id = optional("draft_message_id")?;
     let draft_rfc_id = optional("draft_rfc_id")?;
     let sent_message_id = optional("sent_message_id")?;
     let sent_thread_id = optional("sent_thread_id")?;
     let remote_fingerprint = optional("remote_fingerprint")?;
+    let completed_note_digest = optional("completed_note_digest")?;
+    let completed_commit_paths = match mapping.get(serde_yaml::Value::String(
+        "completed_commit_paths".to_string(),
+    )) {
+        None => Vec::new(),
+        Some(serde_yaml::Value::Sequence(values)) => values
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_string)
+                    .ok_or(SourceError::InvalidSendState)
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        _ => return Err(SourceError::InvalidSendState),
+    };
 
     validate_hex_digest(&operation_id)?;
     validate_opaque_id(&account, true)?;
@@ -158,6 +184,12 @@ pub(crate) fn load_send_state(
     if let Some(fingerprint) = remote_fingerprint.as_deref() {
         validate_hex_digest(fingerprint)?;
     }
+    if let Some(digest) = completed_note_digest.as_deref() {
+        validate_hex_digest(digest)?;
+    }
+    for path in &completed_commit_paths {
+        validate_commit_path(path)?;
+    }
     // Acknowledged state must name the proven sent identity; sending state
     // must not claim one yet.
     match stage {
@@ -171,7 +203,25 @@ pub(crate) fn load_send_state(
                 return Err(SourceError::InvalidSendState);
             }
         }
-        SendStage::Complete => {}
+        SendStage::Complete => {
+            if sent_message_id.is_none()
+                || sent_thread_id.is_none()
+                || completed_note_digest.is_none()
+                || mapping
+                    .get(serde_yaml::Value::String(
+                        "completed_commit_paths".to_string(),
+                    ))
+                    .is_none()
+            {
+                return Err(SourceError::InvalidSendState);
+            }
+        }
+    }
+    if stage != SendStage::Complete
+        && (completed_note_digest.is_some()
+            || !completed_commit_paths.is_empty())
+    {
+        return Err(SourceError::InvalidSendState);
     }
     if !account.contains('@') || account.chars().any(char::is_control) {
         return Err(SourceError::InvalidSendState);
@@ -189,10 +239,13 @@ pub(crate) fn load_send_state(
         draft_rfc_id,
         thread_id,
         subject_hash,
+        recipient_count,
         attempt_time,
         sent_message_id,
         sent_thread_id,
         remote_fingerprint,
+        completed_note_digest,
+        completed_commit_paths,
     }))
 }
 
@@ -291,6 +344,9 @@ fn render_send_block(state: &SendState, newline: &str) -> String {
     }
     push_field(&mut out, "thread_id", &state.thread_id, newline);
     push_field(&mut out, "subject_hash", &state.subject_hash, newline);
+    out.push_str("  recipient_count: ");
+    out.push_str(&state.recipient_count.to_string());
+    out.push_str(newline);
     push_field(&mut out, "attempt_time", &state.attempt_time, newline);
     if let Some(value) = state.sent_message_id.as_deref() {
         push_field(&mut out, "sent_message_id", value, newline);
@@ -301,7 +357,35 @@ fn render_send_block(state: &SendState, newline: &str) -> String {
     if let Some(value) = state.remote_fingerprint.as_deref() {
         push_field(&mut out, "remote_fingerprint", value, newline);
     }
+    if let Some(value) = state.completed_note_digest.as_deref() {
+        push_field(&mut out, "completed_note_digest", value, newline);
+    }
+    out.push_str("  completed_commit_paths:");
+    if state.completed_commit_paths.is_empty() {
+        out.push_str(" []");
+        out.push_str(newline);
+    } else {
+        out.push_str(newline);
+        for path in &state.completed_commit_paths {
+            out.push_str("    - ");
+            out.push_str(&yaml_scalar(path));
+            out.push_str(newline);
+        }
+    }
     out
+}
+
+fn validate_commit_path(value: &str) -> Result<(), SourceError> {
+    let path = std::path::Path::new(value);
+    if value.is_empty()
+        || path.is_absolute()
+        || path.components().any(|component| {
+            !matches!(component, std::path::Component::Normal(_))
+        })
+    {
+        return Err(SourceError::InvalidSendState);
+    }
+    Ok(())
 }
 
 fn push_field(out: &mut String, name: &str, value: &str, newline: &str) {
@@ -436,6 +520,14 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
+/// Hash a note while excluding the durable send block. This lets a completed
+/// finalization retry its exact-path commit without committing later authored
+/// edits to the same note.
+pub(crate) fn content_digest(contents: &str) -> Result<String, SourceError> {
+    let without_state = patch_send_state(contents, None)?;
+    Ok(sha256_hex(without_state.as_bytes()))
+}
+
 fn path_to_slashes(path: &Path) -> String {
     path.components()
         .map(|component| component.as_os_str().to_string_lossy())
@@ -567,6 +659,62 @@ pub(crate) fn append_send_event(
     )
 }
 
+/// Ensure the public send journal contains one event for the acknowledged
+/// Gmail message. The payload is intentionally limited to the consumer
+/// contract fields; the message/thread pair is the replay identity.
+pub(crate) fn ensure_sent_event(
+    vault: &Path,
+    state: &SendState,
+) -> Result<(), GmailError> {
+    let message_id = state.sent_message_id.as_deref().ok_or_else(|| {
+        GmailError::runtime(
+            "send_state_invalid",
+            "the completed send has no sent message identity".to_string(),
+        )
+    })?;
+    let thread_id = state.sent_thread_id.as_deref().ok_or_else(|| {
+        GmailError::runtime(
+            "send_state_invalid",
+            "the completed send has no sent thread identity".to_string(),
+        )
+    })?;
+    let (events, _) =
+        pref_journal::read_raw(vault, SEND_JOURNAL).map_err(|error| {
+            GmailError::runtime(
+                "journal",
+                format!("could not read the Gmail send journal: {error}"),
+            )
+        })?;
+    let already_recorded = events.iter().any(|event| {
+        event.kind == "gmail.sent"
+            && event
+                .value
+                .get("value")
+                .and_then(|value| value.get("thread_id"))
+                .and_then(|value| value.as_str())
+                == Some(thread_id)
+            && event
+                .value
+                .get("value")
+                .and_then(|value| value.get("message_id"))
+                .and_then(|value| value.as_str())
+                == Some(message_id)
+    });
+    if already_recorded {
+        return Ok(());
+    }
+    append_send_event(
+        vault,
+        "gmail.sent",
+        serde_json::json!({
+            "thread_id": thread_id,
+            "message_id": message_id,
+            "recipient_count": state.recipient_count,
+            "subject_hash": state.subject_hash,
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -589,10 +737,13 @@ mod tests {
             draft_rfc_id: None,
             thread_id: "thread-1".to_string(),
             subject_hash: "d".repeat(64),
+            recipient_count: 2,
             attempt_time: "2026-11-06T12:00:00+00:00".to_string(),
             sent_message_id: None,
             sent_thread_id: None,
             remote_fingerprint: Some("e".repeat(64)),
+            completed_note_digest: None,
+            completed_commit_paths: Vec::new(),
         }
     }
 

@@ -245,7 +245,9 @@ fn render_card(
     let date = format_card_date(time, current_year);
     let recipients = recipient_summary(message, account);
     let fold = if newest { '+' } else { '-' };
-    let header = format!("> [!mail{fold}] **{sender}** · {date}{recipients}");
+    let callout = if own { "mail-sent" } else { "mail" };
+    let header =
+        format!("> [!{callout}{fold}] **{sender}** · {date}{recipients}");
     let rfc_message_id = message
         .first_header(HeaderKind::MessageId)
         .map(percent_encode_marker)
@@ -639,7 +641,7 @@ mod tests {
         assert!(note.content.contains("<!-- bob:gmail:begin v1 -->"));
         assert!(note.content.contains("<!-- bob:gmail:msg 199c3f1e8b2d4a10 %3Cone%2D%2Dtwo%40example.com%3E -->"));
         assert!(note.content.contains("> [!mail-] **Dana Whitfield**"));
-        assert!(note.content.contains("> [!mail+] **You**"));
+        assert!(note.content.contains("> [!mail-sent+] **You**"));
         assert!(note.content.contains("^m-19a4b0c2d3e4f501"));
         assert!(note.content.contains("https://mail.google.com/mail/?authuser=you%40example.com#all/199c3f1e8b2d4a10"));
     }

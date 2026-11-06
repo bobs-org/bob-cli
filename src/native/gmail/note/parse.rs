@@ -112,7 +112,9 @@ pub(crate) fn parse(contents: &str) -> Result<ParsedNote, NoteError> {
         let header = lines[header_index].content.clone();
         let header_for_check = header.trim_start();
         if !(header_for_check.starts_with("> [!mail+] ")
-            || header_for_check.starts_with("> [!mail-] "))
+            || header_for_check.starts_with("> [!mail-] ")
+            || header_for_check.starts_with("> [!mail-sent+] ")
+            || header_for_check.starts_with("> [!mail-sent-] "))
         {
             return Err(damaged("message card header is malformed"));
         }

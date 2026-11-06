@@ -53,7 +53,7 @@ pub(crate) use crate::native::google::GoogleError as GmailError;
 pub(crate) use cli::{
     AttachArgs, DoctorArgs, DraftArgs, LinkArgs, ListArgs, LoginArgs,
     LogoutArgs, NewArgs, PeekArgs, PullArgs, ReplyArgs, SaveArgs, SearchArgs,
-    TopArgs,
+    SendArgs, TopArgs,
 };
 
 const COMMAND_NAME: &str = "bob gmail";
@@ -118,6 +118,9 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         }
         Some(("search", sub_matches)) => {
             search_peek::search(&SearchArgs::from_matches(sub_matches))
+        }
+        Some(("send", sub_matches)) => {
+            compose::run_send(&SendArgs::from_matches(sub_matches))
         }
         Some((name, _)) => {
             eprintln!("{COMMAND_NAME}: unknown subcommand: {name}");

@@ -155,6 +155,11 @@ const TABLE: &[Entry] = &[
         kind: Kind::FreeText,
     },
     Entry {
+        path: &["gmail", "send"],
+        arg: "confirm",
+        kind: Kind::FreeText,
+    },
+    Entry {
         path: &["gmail", "search"],
         arg: "query",
         kind: Kind::FreeText,

@@ -1,16 +1,19 @@
-//! Durable send engine: draft-id-only dispatch with crash recovery.
+//! Confirmed draft-id-only dispatch, crash recovery, and send reporting.
 //!
-//! The engine stays internal in this phase; no public `send` command lands
-//! until the finalize phase can finish notes correctly. Tests inject a
-//! finalization callback to exercise every state without a live Gmail
-//! account. Journals and errors stay body-free.
+//! Tests inject a finalization callback to exercise state transitions without
+//! a live Gmail account. Journals and errors stay body-free.
 
-use std::{fs, path::Path};
+use std::{
+    fs,
+    io::{self, IsTerminal as _, Write as _},
+    path::Path,
+};
 
 use super::super::{
+    cli::{DraftArgs, HumanFormat, SendArgs},
     config::{GmailConfig, COMPOSE_SCOPE},
     gog::{Gog, SentReceipt},
-    model, GmailError,
+    model, resolve, save, GmailError,
 };
 use super::{
     source::{self, ComposeSource},
@@ -22,10 +25,381 @@ use super::{
 };
 use crate::native::{google, vault_sync};
 
+enum SendResponse {
+    Preview(super::draft::PreparedDraft),
+    State {
+        status: &'static str,
+        note: String,
+        draft_id: Option<String>,
+        thread_id: Option<String>,
+        sent_message_id: Option<String>,
+    },
+}
+
+/// Run the public confirmed-send command.
+pub(crate) fn run(args: &SendArgs) -> i32 {
+    match run_inner(args) {
+        Ok(response) => {
+            report_response(response, args.format);
+            0
+        }
+        Err(error) => crate::native::gmail::ui::report_error(
+            "send",
+            &error,
+            args.format.as_str(),
+        ),
+    }
+}
+
+fn run_inner(args: &SendArgs) -> Result<SendResponse, GmailError> {
+    let config = GmailConfig::resolve()?;
+    let vault = args.bob_dir();
+    super::validate_vault(&vault)?;
+    super::require_writer(&config)?;
+    let folder = Path::new(config.folder());
+    super::validate_mail_folder(&vault, folder)?;
+    let relative = {
+        let _maintenance = super::maintenance_lock()?;
+        super::validate_mail_folder(&vault, folder)?;
+        let relative = super::resolve_note_path(&vault, folder, &args.note)?;
+        super::validate_target(&vault, &relative, true)?;
+        relative
+    };
+    let note = save::path_to_slashes(&relative);
+    let _operation = operation_lock(&relative)?;
+
+    let current =
+        fs::read_to_string(vault.join(&relative)).map_err(|error| {
+            GmailError::runtime(
+                "note",
+                format!("could not read compose note: {error}"),
+            )
+        })?;
+    let existing = load_send_state(&current).map_err(|error| {
+        GmailError::runtime("send_state_invalid", error.to_string())
+    })?;
+
+    if let Some(state) = existing.as_ref()
+        && state.stage == SendStage::Complete
+    {
+        super::finalize::reconcile_complete(&vault, &relative, state)?;
+        return Ok(state_response(
+            "already_sent",
+            note,
+            Some(state.draft_id.clone()),
+            state.sent_thread_id.clone(),
+            state.sent_message_id.clone(),
+        ));
+    }
+
+    let gog = Gog::resolve(google::GMAIL, config.timeout())?;
+    let account = if let Some(state) = existing.as_ref() {
+        state.account.clone()
+    } else {
+        resolve::resolve_account(&gog, None, config.account())?
+    };
+    match recover(&vault, &relative, &gog, &account)? {
+        RecoveryDecision::NoState => {}
+        RecoveryDecision::DraftPresent => {
+            return Ok(state_response(
+                "recovered_to_draft",
+                note,
+                existing.map(|state| state.draft_id),
+                None,
+                None,
+            ));
+        }
+        RecoveryDecision::Unknown { reason } => {
+            return Err(GmailError::runtime(
+                reason,
+                "the previous Gmail send is unresolved; Bob retained its state and did not send again".to_string(),
+            )
+            .with_hint("inspect the draft and SENT folder, then retry `bob gmail send NOTE` for recovery"));
+        }
+        RecoveryDecision::Acknowledged {
+            message_id,
+            thread_id,
+        } => {
+            let state = state::load_send_state(
+                &fs::read_to_string(vault.join(&relative)).map_err(
+                    |error| {
+                        GmailError::runtime(
+                            "note",
+                            format!("could not reread compose note: {error}"),
+                        )
+                    },
+                )?,
+            )
+            .map_err(|error| {
+                GmailError::runtime("send_state_invalid", error.to_string())
+            })?
+            .ok_or_else(|| {
+                GmailError::runtime(
+                    "send_ack_unpersisted",
+                    "the acknowledged send state is missing".to_string(),
+                )
+            })?;
+            super::finalize::finalize(
+                &vault, &relative, &state, &config, &gog,
+            )?;
+            return Ok(state_response(
+                "sent",
+                note,
+                Some(state.draft_id),
+                Some(thread_id),
+                Some(message_id),
+            ));
+        }
+        RecoveryDecision::Complete => {
+            let state = existing.ok_or_else(|| {
+                GmailError::runtime(
+                    "send_state_invalid",
+                    "the completed send state is missing".to_string(),
+                )
+            })?;
+            super::finalize::reconcile_complete(&vault, &relative, &state)?;
+            return Ok(state_response(
+                "already_sent",
+                note,
+                Some(state.draft_id),
+                state.sent_thread_id,
+                state.sent_message_id,
+            ));
+        }
+    }
+
+    let draft_args = DraftArgs {
+        bob_dir: Some(vault.clone()),
+        format: args.format,
+        note: args.note.clone(),
+    };
+    let prepared = super::draft::prepare_for_send(&draft_args, true)?;
+
+    // Dry-run deliberately wins over a supplied confirmation digest. It
+    // updates the stored draft and returns the intentional preview payload.
+    if args.dry_run {
+        return Ok(SendResponse::Preview(prepared));
+    }
+
+    let tty = super::super::config::assume_tty() || io::stdin().is_terminal();
+    if tty {
+        print_preview_for_confirmation(&prepared, args.format);
+    }
+    match args.confirm.as_deref() {
+        Some(confirm) if confirm != prepared.digest => {
+            return Err(GmailError::setup(
+                "confirmation_mismatch",
+                "the confirmation digest does not match the current Gmail preview".to_string(),
+            )
+            .with_hint("run `bob gmail send NOTE --dry-run` to obtain the current digest"));
+        }
+        Some(_) => {}
+        None if !tty => {
+            let command = confirmation_command(args, &prepared.digest);
+            return Err(GmailError::setup(
+                "confirmation_required",
+                "sending requires a TTY confirmation or the exact preview digest".to_string(),
+            )
+            .with_hint(&format!("confirm this exact preview with: {command}")));
+        }
+        None => {
+            if !confirm_on_tty()? {
+                return Ok(state_response(
+                    "declined",
+                    prepared.note,
+                    Some(prepared.draft_id),
+                    None,
+                    None,
+                ));
+            }
+        }
+    }
+
+    let outcome = dispatch_once_locked(
+        &vault,
+        &relative,
+        &gog,
+        &prepared.approved,
+        &config,
+        |state| {
+            super::finalize::finalize(&vault, &relative, state, &config, &gog)
+        },
+    )?;
+    match outcome {
+        DispatchOutcome::Sent {
+            message_id,
+            thread_id,
+        }
+        | DispatchOutcome::AlreadyAcknowledged {
+            message_id,
+            thread_id,
+        } => Ok(state_response(
+            "sent",
+            prepared.note,
+            Some(prepared.draft_id),
+            Some(thread_id),
+            Some(message_id),
+        )),
+        DispatchOutcome::CompleteNoop => Ok(state_response(
+            "already_sent",
+            prepared.note,
+            Some(prepared.draft_id),
+            None,
+            None,
+        )),
+        DispatchOutcome::RecoveredToDraft => Ok(state_response(
+            "recovered_to_draft",
+            prepared.note,
+            Some(prepared.draft_id),
+            None,
+            None,
+        )),
+        DispatchOutcome::UnknownRetained { reason } => Err(GmailError::runtime(
+            reason,
+            "the Gmail send outcome is unresolved; Bob retained its state and did not send again".to_string(),
+        )),
+    }
+}
+
+fn state_response(
+    status: &'static str,
+    note: String,
+    draft_id: Option<String>,
+    thread_id: Option<String>,
+    sent_message_id: Option<String>,
+) -> SendResponse {
+    SendResponse::State {
+        status,
+        note,
+        draft_id,
+        thread_id,
+        sent_message_id,
+    }
+}
+
+fn report_response(response: SendResponse, format: HumanFormat) {
+    match response {
+        SendResponse::Preview(prepared) => super::draft::report_success(
+            &prepared.note,
+            &prepared.draft_id,
+            &prepared.digest,
+            &prepared.preview,
+            format,
+        ),
+        SendResponse::State {
+            status,
+            note,
+            draft_id,
+            thread_id,
+            sent_message_id,
+        } => {
+            if format.is_json() {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "schema_version": 1,
+                        "ok": true,
+                        "status": status,
+                        "note": note,
+                        "draft_id": draft_id,
+                        "thread_id": thread_id,
+                        "sent_message_id": sent_message_id,
+                    })
+                );
+            } else {
+                match status {
+                    "sent" => println!(
+                        "Sent {} in thread {}",
+                        sent_message_id.as_deref().unwrap_or("(unknown)"),
+                        thread_id.as_deref().unwrap_or("(unknown)")
+                    ),
+                    "already_sent" => println!("Already sent; local state reconciled."),
+                    "recovered_to_draft" => println!("The prior send was not accepted; review a fresh preview before sending again."),
+                    "declined" => println!("Not sent. The Gmail draft remains saved."),
+                    _ => println!("Send status: {status}"),
+                }
+            }
+        }
+    }
+}
+
+fn print_preview_for_confirmation(
+    prepared: &super::draft::PreparedDraft,
+    format: HumanFormat,
+) {
+    let output_to_stderr = format.is_json();
+    let mut output = String::new();
+    use std::fmt::Write as _;
+    let preview = &prepared.preview;
+    let _ = writeln!(output, "Gmail send preview · {}", prepared.digest);
+    let _ = writeln!(output, "From: {}", preview.from);
+    let _ = writeln!(output, "To: {}", preview.to.join(", "));
+    if !preview.cc.is_empty() {
+        let _ = writeln!(output, "Cc: {}", preview.cc.join(", "));
+    }
+    if !preview.bcc.is_empty() {
+        let _ = writeln!(output, "Bcc: {}", preview.bcc.join(", "));
+    }
+    let _ = writeln!(output, "Subject: {}\n", preview.subject);
+    let _ = writeln!(output, "{}", preview.text_body);
+    if output_to_stderr {
+        eprint!("{output}");
+    } else {
+        print!("{output}");
+    }
+}
+
+fn confirm_on_tty() -> Result<bool, GmailError> {
+    eprint!("Send this exact Gmail draft? [y/N] ");
+    io::stderr().flush().ok();
+    let mut answer = String::new();
+    let read = io::stdin().read_line(&mut answer).map_err(|error| {
+        GmailError::runtime(
+            "confirmation",
+            format!("could not read confirmation: {error}"),
+        )
+    })?;
+    Ok(read > 0
+        && matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
+}
+
+fn confirmation_command(args: &SendArgs, digest: &str) -> String {
+    let mut parts = vec![
+        "bob gmail send".to_string(),
+        shell_quote(&args.note.to_string_lossy()),
+    ];
+    if let Some(vault) = args.bob_dir.as_ref() {
+        parts.push(format!(
+            "--bob-dir {}",
+            shell_quote(&vault.to_string_lossy())
+        ));
+    }
+    parts.push(format!("--confirm {}", shell_quote(digest)));
+    if args.format.is_json() {
+        parts.push("--format json".to_string());
+    }
+    parts.join(" ")
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
 /// Minimal Gmail surface the send engine needs. `Gog` implements it; tests
 /// inject an in-memory fake to exercise every recovery outcome without a
 /// live account.
 pub(crate) trait SendTransport {
+    fn verify_draft_snapshot(
+        &self,
+        account: &str,
+        draft_id: &str,
+        source: &ComposeSource,
+        expected_fingerprint: &str,
+    ) -> Result<(), GmailError> {
+        let _ = (account, draft_id, source, expected_fingerprint);
+        Ok(())
+    }
+
     fn draft_get(
         &self,
         account: &str,
@@ -54,6 +428,22 @@ pub(crate) trait SendTransport {
 }
 
 impl SendTransport for Gog {
+    fn verify_draft_snapshot(
+        &self,
+        account: &str,
+        draft_id: &str,
+        source: &ComposeSource,
+        expected_fingerprint: &str,
+    ) -> Result<(), GmailError> {
+        super::draft::verify_remote_snapshot(
+            self,
+            account,
+            draft_id,
+            source,
+            expected_fingerprint,
+        )
+    }
+
     fn draft_get(
         &self,
         account: &str,
@@ -95,8 +485,8 @@ impl SendTransport for Gog {
     }
 }
 
-/// Approved snapshot the (future) confirmed-send caller validates before
-/// dispatch. It binds the exact preview digest to the durable draft identity;
+/// Approved snapshot the confirmed-send command validates before dispatch.
+/// It binds the exact preview digest to the durable draft identity;
 /// the engine rechecks it immediately before sending.
 ///
 /// No `Debug` impl: callers retain the approved subject, so accidental log
@@ -112,6 +502,7 @@ pub(crate) struct ApprovedSend {
     pub(crate) draft_rfc_id: Option<String>,
     pub(crate) thread_id: String,
     pub(crate) subject: String,
+    pub(crate) recipient_count: u32,
     pub(crate) remote_fingerprint: String,
 }
 
@@ -227,10 +618,13 @@ pub(crate) fn begin_send(
         draft_rfc_id: approved.draft_rfc_id.clone(),
         thread_id: approved.thread_id.clone(),
         subject_hash: approved.subject_hash(),
+        recipient_count: approved.recipient_count,
         attempt_time: attempt_timestamp(),
         sent_message_id: None,
         sent_thread_id: None,
         remote_fingerprint: Some(approved.remote_fingerprint.clone()),
+        completed_note_digest: None,
+        completed_commit_paths: Vec::new(),
     };
     persist_send_state(
         vault,
@@ -275,7 +669,7 @@ pub(crate) fn recover(
     gog: &impl SendTransport,
     account: &str,
 ) -> Result<RecoveryDecision, GmailError> {
-    let (source, state) = read_source_and_state(vault, relative)?;
+    let state = read_state(vault, relative)?;
     let Some(state) = state else {
         return Ok(RecoveryDecision::NoState);
     };
@@ -296,6 +690,7 @@ pub(crate) fn recover(
             thread_id,
         });
     }
+    let source = read_source(vault, relative)?;
     // Stage is Sending: the draft may still exist, or it may have been
     // consumed by an accepted send.
     match gog.draft_get(account, &state.draft_id) {
@@ -517,37 +912,48 @@ where
     F: FnOnce(&SendState) -> Result<(), GmailError>,
 {
     let _operation = operation_lock(relative)?;
-    let (source, existing) = read_source_and_state(vault, relative)?;
+    dispatch_once_locked(vault, relative, gog, approved, config, finalize)
+}
+
+/// Dispatch while the caller already holds the shared compose-operation
+/// lock across recovery, preview, confirmation, and send.
+pub(crate) fn dispatch_once_locked<F>(
+    vault: &Path,
+    relative: &Path,
+    gog: &impl SendTransport,
+    approved: &ApprovedSend,
+    config: &GmailConfig,
+    finalize: F,
+) -> Result<DispatchOutcome, GmailError>
+where
+    F: FnOnce(&SendState) -> Result<(), GmailError>,
+{
+    let existing = read_state(vault, relative)?;
     if let Some(state) = existing {
         match state.stage {
-            SendStage::Complete => return Ok(DispatchOutcome::CompleteNoop),
+            SendStage::Complete => {
+                finalize(&state)?;
+                return Ok(DispatchOutcome::CompleteNoop);
+            }
             SendStage::Acknowledged => {
                 let message_id =
                     state.sent_message_id.clone().unwrap_or_default();
                 let thread_id =
                     state.sent_thread_id.clone().unwrap_or_default();
-                finalize(&state).map_err(|error| {
-                    GmailError::runtime(
-                        "send_finalization_pending",
-                        format!(
-                            "the send is acknowledged but local finalization failed ({})",
-                            error.kind()
-                        ),
-                    )
-                })?;
+                finalize(&state).map_err(finalization_error)?;
                 return Ok(DispatchOutcome::AlreadyAcknowledged {
                     message_id,
                     thread_id,
                 });
             }
             SendStage::Sending => {
-                drop(source);
                 return recover_and_report(
                     vault, relative, gog, &state, finalize,
                 );
             }
         }
     }
+    let source = read_source(vault, relative)?;
     // Fresh send: validate the approved snapshot against current inputs.
     validate_approved(&source, approved)?;
     require_writer(config)?;
@@ -591,6 +997,17 @@ where
             }
             return Err(error);
         }
+    }
+    if let Err(error) = gog.verify_draft_snapshot(
+        &sending.account,
+        &sending.draft_id,
+        &source,
+        &approved.remote_fingerprint,
+    ) {
+        if error.kind() == "draft_remote_conflict" {
+            let _ = clear_to_draft(vault, relative, &source.fingerprint);
+        }
+        return Err(error);
     }
 
     let receipt = match gog.draft_send(&sending.account, &sending.draft_id) {
@@ -642,15 +1059,7 @@ where
                     "the acknowledged send state is missing".to_string(),
                 )
             })?;
-            finalize(&state).map_err(|error| {
-                GmailError::runtime(
-                    "send_finalization_pending",
-                    format!(
-                        "the send is acknowledged but local finalization failed ({})",
-                        error.kind()
-                    ),
-                )
-            })?;
+            finalize(&state).map_err(finalization_error)?;
             Ok(DispatchOutcome::AlreadyAcknowledged {
                 message_id,
                 thread_id,
@@ -704,15 +1113,7 @@ where
     );
     // A failed local refresh never erases the acknowledged send; it stays
     // acknowledged and is retried only for local finalization.
-    finalize(&acknowledged).map_err(|error| {
-        GmailError::runtime(
-            "send_finalization_pending",
-            format!(
-                "the send is acknowledged but local finalization failed ({})",
-                error.kind()
-            ),
-        )
-    })?;
+    finalize(&acknowledged).map_err(finalization_error)?;
     Ok(DispatchOutcome::Sent {
         message_id: receipt.message_id.clone(),
         thread_id: receipt.thread_id.clone(),
@@ -788,6 +1189,35 @@ fn read_source_and_state(
         GmailError::runtime("send_state_invalid", error.to_string())
     })?;
     Ok((source, state))
+}
+
+fn read_state(
+    vault: &Path,
+    relative: &Path,
+) -> Result<Option<SendState>, GmailError> {
+    let path = vault.join(relative);
+    let contents = fs::read_to_string(&path).map_err(|error| {
+        GmailError::runtime(
+            "note",
+            format!("could not read compose note: {error}"),
+        )
+    })?;
+    load_send_state(&contents).map_err(|error| {
+        GmailError::runtime("send_state_invalid", error.to_string())
+    })
+}
+
+fn finalization_error(error: GmailError) -> GmailError {
+    if error.kind() == "sent_needs_review" {
+        return error;
+    }
+    GmailError::runtime(
+        "send_finalization_pending",
+        format!(
+            "the send is acknowledged but local finalization failed ({})",
+            error.kind()
+        ),
+    )
 }
 
 fn clear_to_draft(
@@ -923,6 +1353,7 @@ mod tests {
             draft_rfc_id: None,
             thread_id: "thread-1".to_string(),
             subject: "Lease renewal".to_string(),
+            recipient_count: 1,
             remote_fingerprint: remote_fingerprint.to_string(),
         }
     }
@@ -1218,6 +1649,7 @@ mod tests {
             draft_rfc_id: None,
             thread_id: "thread-1".to_string(),
             subject: "Lease renewal".to_string(),
+            recipient_count: 1,
             remote_fingerprint: "c".repeat(64),
         };
         let hash = approved.subject_hash();
@@ -1398,10 +1830,13 @@ mod tests {
             draft_rfc_id: None,
             thread_id: "thread-1".to_string(),
             subject_hash: subject_hash("Lease renewal"),
+            recipient_count: 1,
             attempt_time: state::attempt_timestamp(),
             sent_message_id: None,
             sent_thread_id: None,
             remote_fingerprint: Some(remote.clone()),
+            completed_note_digest: None,
+            completed_commit_paths: Vec::new(),
         };
         state::persist_send_state(
             &vault,
@@ -1484,10 +1919,13 @@ mod tests {
             draft_rfc_id: None,
             thread_id: "thread-1".to_string(),
             subject_hash: subject_hash("Lease renewal"),
+            recipient_count: 1,
             attempt_time: state::attempt_timestamp(),
             sent_message_id: None,
             sent_thread_id: None,
             remote_fingerprint: Some(remote),
+            completed_note_digest: None,
+            completed_commit_paths: Vec::new(),
         };
         state::persist_send_state(
             &vault,
@@ -1556,10 +1994,13 @@ mod tests {
             draft_rfc_id: None,
             thread_id: "thread-1".to_string(),
             subject_hash: subject_hash("Lease renewal"),
+            recipient_count: 1,
             attempt_time: state::attempt_timestamp(),
             sent_message_id: None,
             sent_thread_id: None,
             remote_fingerprint: Some(remote),
+            completed_note_digest: None,
+            completed_commit_paths: Vec::new(),
         };
         state::persist_send_state(
             &vault,
@@ -1629,10 +2070,13 @@ mod tests {
             draft_rfc_id: None,
             thread_id: "thread-1".to_string(),
             subject_hash: subject_hash("Lease renewal"),
+            recipient_count: 1,
             attempt_time: state::attempt_timestamp(),
             sent_message_id: None,
             sent_thread_id: None,
             remote_fingerprint: Some(remote),
+            completed_note_digest: None,
+            completed_commit_paths: Vec::new(),
         };
         state::persist_send_state(
             &vault,
@@ -1695,10 +2139,13 @@ mod tests {
             draft_rfc_id: None,
             thread_id: "thread-1".to_string(),
             subject_hash: subject_hash("Lease renewal"),
+            recipient_count: 1,
             attempt_time: state::attempt_timestamp(),
             sent_message_id: None,
             sent_thread_id: None,
             remote_fingerprint: Some(remote),
+            completed_note_digest: None,
+            completed_commit_paths: Vec::new(),
         };
         state::persist_send_state(
             &vault,
@@ -1753,10 +2200,13 @@ mod tests {
             draft_rfc_id: None,
             thread_id: "thread-1".to_string(),
             subject_hash: subject_hash("Lease renewal"),
+            recipient_count: 1,
             attempt_time: state::attempt_timestamp(),
             sent_message_id: None,
             sent_thread_id: None,
             remote_fingerprint: Some(remote),
+            completed_note_digest: None,
+            completed_commit_paths: Vec::new(),
         };
         state::persist_send_state(
             &vault,
@@ -2087,10 +2537,13 @@ mod tests {
             draft_rfc_id: Some(rfc.to_string()),
             thread_id: "thread-1".to_string(),
             subject_hash: subject_hash("Lease renewal"),
+            recipient_count: 1,
             attempt_time: state::attempt_timestamp(),
             sent_message_id: None,
             sent_thread_id: None,
             remote_fingerprint: Some(remote),
+            completed_note_digest: None,
+            completed_commit_paths: Vec::new(),
         };
         state::persist_send_state(
             &vault,

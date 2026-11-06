@@ -11,7 +11,7 @@ use chrono::{DateTime, Local, TimeZone, Utc};
 use serde_yaml::{Mapping, Value};
 
 use super::{
-    cli::{DraftArgs, HumanFormat, NewArgs, ReplyArgs},
+    cli::{DraftArgs, HumanFormat, NewArgs, ReplyArgs, SendArgs},
     config::GmailConfig,
     note, ui, GmailError,
 };
@@ -24,10 +24,10 @@ use crate::native::{
 #[allow(dead_code)]
 pub(crate) mod attachments;
 pub(super) mod draft;
+pub(crate) mod finalize;
 // The draft transport phase consumes the render and attachment boundaries.
 #[allow(dead_code)]
 pub(crate) mod render;
-// The send-recovery engine stays internal until the confirmed send lands.
 #[allow(dead_code)]
 pub(crate) mod send;
 // Durable send state transitions shared by recovery and the confirmed send.
@@ -59,6 +59,10 @@ pub(crate) fn run_reply(args: &ReplyArgs) -> i32 {
 
 pub(crate) fn run_draft(args: &DraftArgs) -> i32 {
     draft::run(args)
+}
+
+pub(crate) fn run_send(args: &SendArgs) -> i32 {
+    send::run(args)
 }
 
 fn run_new_inner(

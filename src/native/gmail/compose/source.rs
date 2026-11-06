@@ -67,6 +67,7 @@ pub(crate) enum SourceError {
     MissingReplyTarget,
     MissingComposeHeading,
     InvalidSendState,
+    ChangedSinceSend,
 }
 
 impl std::fmt::Display for SourceError {
@@ -104,6 +105,9 @@ impl std::fmt::Display for SourceError {
             }
             Self::InvalidSendState => {
                 "compose note has an invalid durable send state"
+            }
+            Self::ChangedSinceSend => {
+                "the compose text changed while Gmail was sending"
             }
         })
     }
@@ -706,6 +710,56 @@ pub(crate) fn persist_draft_metadata(
         }
     }
     Ok(updated)
+}
+
+/// Remove only the exact submitted Reply section after verifying its body
+/// and reply mode. The refreshed Gmail block may change the reply target to
+/// the newly sent message, so the caller separately checks the full source
+/// fingerprint before planning this refresh.
+pub(crate) fn remove_sent_reply(
+    contents: &str,
+    expected: &ComposeSource,
+) -> Result<String, SourceError> {
+    let parsed = parse(contents)?;
+    let same_mode = matches!(
+        (&parsed.kind, &expected.kind),
+        (ComposeKind::Reply { all: left }, ComposeKind::Reply { all: right })
+            if left == right
+    );
+    if parsed.body() != expected.body() || !same_mode {
+        return Err(SourceError::ChangedSinceSend);
+    }
+    let frontmatter = frontmatter(contents)?;
+    let saved = note::parse::parse(contents)
+        .map_err(|_| SourceError::MalformedManagedRegion)?;
+    let managed_end = line_end(contents, saved.end_inner_start);
+    let headings = markdown_headings(contents, frontmatter.body_start);
+    let heading = headings
+        .iter()
+        .find(|heading| {
+            heading.level == HeadingLevel::H2
+                && is_exact_reply_heading(heading)
+                && heading.start > managed_end
+        })
+        .ok_or(SourceError::MissingReply)?;
+    let end = headings
+        .iter()
+        .find(|next| {
+            next.start > heading.start
+                && matches!(next.level, HeadingLevel::H1 | HeadingLevel::H2)
+        })
+        .map_or(contents.len(), |next| next.start);
+    let mut updated = contents.to_string();
+    updated.replace_range(heading.start..end, "");
+    patch_frontmatter(
+        &updated,
+        &[
+            ("gmail_draft_account", None),
+            ("gmail_draft_remote_fingerprint", None),
+            ("gmail_draft_create_operation", None),
+            ("gmail_draft_id", None),
+        ],
+    )
 }
 
 fn patch_frontmatter(

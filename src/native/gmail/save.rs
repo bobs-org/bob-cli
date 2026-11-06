@@ -694,7 +694,7 @@ fn resolve_parent_link(
     Ok(Some(format!("[[{}]]", resolved.route)))
 }
 
-fn adjust_image_collisions(
+pub(crate) fn adjust_image_collisions(
     vault: &Path,
     prepared: &mut PreparedThread,
     existing_note: Option<&str>,

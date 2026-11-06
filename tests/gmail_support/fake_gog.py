@@ -478,7 +478,7 @@ def build_draft_message(
         bcc = split_recipients(bcc_opt) if bcc_opt is not None else list(draft.get("bcc") or [])
 
     reply_id = flag_value("--reply-to-message-id") if create else None
-    thread_id = previous.get("threadId") or "thread-draft-1"
+    thread_id = previous.get("threadId") or "0123456789abcdef"
     in_reply_to = draft.get("in_reply_to")
     references = draft.get("references")
     if create and reply_id:
@@ -509,7 +509,7 @@ def build_draft_message(
     if not create and "--clear-reply-context" in args:
         in_reply_to = None
         references = None
-        thread_id = "thread-draft-standalone"
+        thread_id = "0123456789abcdef"
 
     attachment_options = flag_values("--attach")
     if create:
@@ -650,7 +650,7 @@ if op == "draft_send":
     if draft is None:
         fail("notFound: synthetic draft missing", 1)
     previous = draft.get("message") or {}
-    thread_id = previous.get("threadId") or "thread-draft-1"
+    thread_id = previous.get("threadId") or "0123456789abcdef"
     to = list(draft.get("to") or [])
     cc = list(draft.get("cc") or [])
     bcc = list(draft.get("bcc") or [])
@@ -659,7 +659,7 @@ if op == "draft_send":
     references = draft.get("references")
     seq = int(state.get("sent_seq") or 0) + 1
     state["sent_seq"] = seq
-    sent_id = f"sent-{seq}"
+    sent_id = f"{seq:016x}"
     rfc = f"<sent-{seq}@example.test>"
     headers = [
         {"name": "From", "value": EMAIL},
@@ -691,6 +691,11 @@ if op == "draft_send":
     entry = sent_threads.get(thread_id) or {"id": thread_id, "messages": []}
     entry["messages"].append(message)
     sent_threads[thread_id] = entry
+    if state.get("thread"):
+        thread_envelope = state["thread"]
+        thread = thread_envelope.get("thread") or thread_envelope
+        if thread.get("id") == thread_id:
+            thread.setdefault("messages", []).append(message)
     del drafts[draft_id]
     save_state(state)
     dump({"message": {"id": sent_id, "threadId": thread_id}})

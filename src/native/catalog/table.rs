@@ -1265,6 +1265,10 @@ pub(crate) const EXCLUDED: &[Excluded] = &[
         reason: "Reply flow is owned by the Bob Mail plugin",
     },
     Excluded {
+        path: &["gmail", "send"],
+        reason: "Sends a confirmed email; run it from a terminal",
+    },
+    Excluded {
         path: &["gkeep", "migrate-markers"],
         reason: "One-time migration; run it from a terminal",
     },

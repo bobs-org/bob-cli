@@ -140,19 +140,19 @@ fn flip_previous_open_header(
     fresh_by_id: &BTreeMap<&str, &super::layout::RenderedCard>,
     inner: &str,
 ) -> String {
-    let Some(old_card) = parsed
-        .cards
-        .iter()
-        .rev()
-        .find(|card| card.header.contains("[!mail+]"))
-    else {
+    let Some(old_card) = parsed.cards.iter().rev().find(|card| {
+        card.header.contains("[!mail+]")
+            || card.header.contains("[!mail-sent+]")
+    }) else {
         return inner.to_string();
     };
     let Some(fresh_card) = fresh_by_id.get(old_card.id.as_str()) else {
         return inner.to_string();
     };
-    let expected_previous_open =
-        fresh_card.header.replace("[!mail-]", "[!mail+]");
+    let expected_previous_open = fresh_card
+        .header
+        .replace("[!mail-]", "[!mail+]")
+        .replace("[!mail-sent-]", "[!mail-sent+]");
     if existing[old_card.header_range.clone()] != expected_previous_open {
         return inner.to_string();
     }
@@ -161,7 +161,9 @@ fn flip_previous_open_header(
     let Some(start) = inner.get(range.clone()) else {
         return inner.to_string();
     };
-    let replacement = start.replace("[!mail+]", "[!mail-]");
+    let replacement = start
+        .replace("[!mail+]", "[!mail-]")
+        .replace("[!mail-sent+]", "[!mail-sent-]");
     let mut output = inner.to_string();
     output.replace_range(range, &replacement);
     output

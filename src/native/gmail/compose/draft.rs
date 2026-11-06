@@ -55,41 +55,41 @@ struct PreviewDocument<'a> {
 /// Field order is the canonical digest order. Do not reorder without changing
 /// `canonical_version`.
 #[derive(Serialize)]
-struct Preview {
-    account: String,
-    from: String,
-    to: Vec<String>,
-    cc: Vec<String>,
-    bcc: Vec<String>,
-    subject: String,
-    reply_target: Option<ReplyPreview>,
-    text_body: String,
-    html_sha256: String,
-    signature: &'static str,
-    attachments: Vec<AttachmentPreview>,
-    flattened_links: Vec<FlattenedLinkPreview>,
+pub(crate) struct Preview {
+    pub(crate) account: String,
+    pub(crate) from: String,
+    pub(crate) to: Vec<String>,
+    pub(crate) cc: Vec<String>,
+    pub(crate) bcc: Vec<String>,
+    pub(crate) subject: String,
+    pub(crate) reply_target: Option<ReplyPreview>,
+    pub(crate) text_body: String,
+    pub(crate) html_sha256: String,
+    pub(crate) signature: &'static str,
+    pub(crate) attachments: Vec<AttachmentPreview>,
+    pub(crate) flattened_links: Vec<FlattenedLinkPreview>,
 }
 
 #[derive(Serialize)]
-struct ReplyPreview {
-    thread_id: String,
-    message_id: String,
-    rfc_message_id: Option<String>,
-    mode: &'static str,
+pub(crate) struct ReplyPreview {
+    pub(crate) thread_id: String,
+    pub(crate) message_id: String,
+    pub(crate) rfc_message_id: Option<String>,
+    pub(crate) mode: &'static str,
 }
 
 #[derive(Serialize)]
-struct AttachmentPreview {
-    vault_path: String,
-    filename: String,
-    byte_length: u64,
-    sha256: String,
+pub(crate) struct AttachmentPreview {
+    pub(crate) vault_path: String,
+    pub(crate) filename: String,
+    pub(crate) byte_length: u64,
+    pub(crate) sha256: String,
 }
 
 #[derive(Serialize)]
-struct FlattenedLinkPreview {
-    original_target: String,
-    text: String,
+pub(crate) struct FlattenedLinkPreview {
+    pub(crate) original_target: String,
+    pub(crate) text: String,
 }
 
 #[derive(Serialize)]
@@ -124,8 +124,22 @@ struct RemoteAttachment {
 
 struct Readback {
     draft_id: String,
+    message_id: String,
+    rfc_message_id: Option<String>,
+    thread_id: String,
     preview: Preview,
     remote_fingerprint: String,
+}
+
+/// Exact stored-draft preview plus the identities needed by the send engine.
+/// This deliberately has no `Debug` implementation because `preview` carries
+/// the outgoing body.
+pub(crate) struct PreparedDraft {
+    pub(crate) note: String,
+    pub(crate) draft_id: String,
+    pub(crate) digest: String,
+    pub(crate) preview: Preview,
+    pub(crate) approved: super::send::ApprovedSend,
 }
 
 struct DraftRequest {
@@ -194,18 +208,25 @@ impl std::fmt::Debug for BodyFiles {
 }
 
 pub(crate) fn run(args: &DraftArgs) -> i32 {
-    match run_inner(args) {
-        Ok((path, draft_id, digest, preview)) => {
-            report_success(&path, &draft_id, &digest, &preview, args.format);
+    match prepare_for_send(args, false) {
+        Ok(prepared) => {
+            report_success(
+                &prepared.note,
+                &prepared.draft_id,
+                &prepared.digest,
+                &prepared.preview,
+                args.format,
+            );
             0
         }
         Err(error) => ui::report_error("draft", &error, args.format.as_str()),
     }
 }
 
-fn run_inner(
+pub(crate) fn prepare_for_send(
     args: &DraftArgs,
-) -> Result<(String, String, String, Preview), GmailError> {
+    operation_locked: bool,
+) -> Result<PreparedDraft, GmailError> {
     let config = GmailConfig::resolve()?;
     let vault = args.bob_dir();
     super::validate_vault(&vault)?;
@@ -221,7 +242,11 @@ fn run_inner(
         relative
     };
     let note_path = path_to_slashes(&relative);
-    let _operation = operation_lock(&relative)?;
+    let _operation = if operation_locked {
+        None
+    } else {
+        Some(operation_lock(&relative)?)
+    };
 
     let (_original, parsed) = read_source(&vault, &relative)?;
     let gog = Gog::resolve(google::GMAIL, config.timeout())?;
@@ -427,7 +452,41 @@ fn run_inner(
     }
 
     let digest = canonical_digest(&note_path, &fetched.preview)?;
-    Ok((note_path, draft_id, digest, fetched.preview))
+    Ok(prepared_draft(
+        note_path, draft_id, digest, &parsed, &account, fetched,
+    ))
+}
+
+fn prepared_draft(
+    note: String,
+    draft_id: String,
+    digest: String,
+    source: &source::ComposeSource,
+    account: &str,
+    readback: Readback,
+) -> PreparedDraft {
+    let approved = super::send::ApprovedSend {
+        note: note.clone(),
+        account: account.to_string(),
+        draft_id: draft_id.clone(),
+        source_digest: source.fingerprint.clone(),
+        preview_digest: digest.clone(),
+        draft_message_id: Some(readback.message_id.clone()),
+        draft_rfc_id: readback.rfc_message_id.clone(),
+        thread_id: readback.thread_id.clone(),
+        subject: readback.preview.subject.clone(),
+        recipient_count: (readback.preview.to.len()
+            + readback.preview.cc.len()
+            + readback.preview.bcc.len()) as u32,
+        remote_fingerprint: readback.remote_fingerprint.clone(),
+    };
+    PreparedDraft {
+        note,
+        draft_id,
+        digest,
+        preview: readback.preview,
+        approved,
+    }
 }
 
 fn same_attachment_snapshots(
@@ -759,7 +818,7 @@ fn recover_create(
     parsed: &source::ComposeSource,
     gog: &Gog,
     config: &GmailConfig,
-) -> Result<(String, String, String, Preview), GmailError> {
+) -> Result<PreparedDraft, GmailError> {
     let recovered = stored_id
         .map(str::to_string)
         .or_else(|| known_recovery_draft(vault, note, operation));
@@ -831,7 +890,14 @@ fn recover_create(
         .with_hint("the known draft id was restored; run `bob gmail draft NOTE` again to update the newer text"));
     }
     let digest = canonical_digest(note, &readback.preview)?;
-    Ok((note.to_string(), draft_id, digest, readback.preview))
+    Ok(prepared_draft(
+        note.to_string(),
+        draft_id,
+        digest,
+        parsed,
+        account,
+        readback,
+    ))
 }
 
 fn readback(
@@ -997,9 +1063,43 @@ fn readback(
     )?;
     Ok(Readback {
         draft_id: draft.id,
+        message_id: message.id.clone(),
+        rfc_message_id: message
+            .first_header(HeaderKind::MessageId)
+            .filter(|value| {
+                value.starts_with('<')
+                    && value.ends_with('>')
+                    && value.contains('@')
+            })
+            .map(str::to_string),
+        thread_id: message.thread_id.clone(),
         preview,
         remote_fingerprint,
     })
+}
+
+/// Re-read every digest-bound part of the stored draft immediately before
+/// dispatch. The send engine uses this after the durable `sending` intent and
+/// refuses a remote edit without replacing it.
+pub(crate) fn verify_remote_snapshot(
+    gog: &Gog,
+    account: &str,
+    draft_id: &str,
+    source: &source::ComposeSource,
+    expected_fingerprint: &str,
+) -> Result<(), GmailError> {
+    let current =
+        readback(gog, account, draft_id, source, None, None, false, false)?;
+    if current.remote_fingerprint != expected_fingerprint {
+        return Err(GmailError::runtime(
+            "draft_remote_conflict",
+            "the stored Gmail draft changed outside Bob".to_string(),
+        )
+        .with_hint(
+            "review the Gmail draft, then run `bob gmail draft NOTE` again",
+        ));
+    }
+    Ok(())
 }
 
 fn verify_request_envelope(
@@ -1239,7 +1339,7 @@ fn canonical_digest(
     Ok(sha256(&canonical))
 }
 
-fn report_success(
+pub(crate) fn report_success(
     note: &str,
     draft_id: &str,
     digest: &str,
