@@ -6586,7 +6586,7 @@ TTYs, and the Mac panel are unaffected.
 
 #### Merging tasks into a new task with `<`
 
-*Status: grammar, `capture-parse` shape, and diagnostic rewrites implemented (grammar 15); execution, merge JSON, pickers, and Mac preview remain contract-only. Complete merge-in items are refused with `merge_in_unavailable` until the execute phase lands.*
+*Status: grammar, `capture-parse` shape, diagnostic rewrites, picker scoping, separator toggles, and related-task integration implemented (grammar 15); execution, merge JSON, and Mac preview remain contract-only. Complete merge-in items are refused with `merge_in_unavailable` until the execute phase lands.*
 
 `T < @a+x @b+y` creates one open task T exactly as its left side says, then
 runs the existing explicit task merge of `S₁ … Sₙ` into T, in typed order,
@@ -6693,15 +6693,16 @@ diagnostic. New span kinds are `merge_in_arrow` and `merge_in_source`
 One additive item object appears only when the line has a clause, with
 `arrow: {start, end}` and `sources[]: {start, end, marker, route,
 block_id}`. Grammar is 15; `schema_version` stays 1.
-`capture-complete` in a `<` source slot (contract-only until the assist phase) opens the vault-wide `task_parent`
+`capture-complete` in a `<` source slot opens the vault-wide `task_parent`
 picker in a new merge-in source role (`< +` / `< +query`), or the
 note-scoped task context for `< @route+`; `< @` completes routes. Rows are
 mergeable only, excluding already-typed sources and aliases. ID-less
 mergeable rows stay, with `requires_block_id: true` and their `route`, so
 the existing Add block ID flow returns `parent_replacement`
 (`@route+id`). Accepted rows return `continuation: " +"` so `,` opens the
-next picker. Each row carries Bob-authored detail `⤵ merge in · 2 notes`
-(`· title only` when no notes would move). `capture-rewrite` in a `<`
+next picker. Each row carries Bob-authored `detail` such as
+`⤵ merge in · 2 notes` (`⤵ merge in · title only` when no notes would move).
+`capture-rewrite` in a `<`
 source slot switches `+` typed right after `@route:id` or `@route^id` to
 `@route+id`, exactly as on a `>` line; `:`/`^` after a source `+id` stays
 literal. `capture-related` lists every task named in the item's `<` clause
@@ -8554,8 +8555,8 @@ otherwise suppress. It is invalid in draft mode; no file is edited.
 - `range`: the item's half-open UTF-8 byte range in the original draft;
 - `marker_at`: the UTF-8 byte offset where an action marker can be inserted
   on the parent line before a trailing Pomodoro suffix (for a `<` clause,
-  contract-only, it sits before the arrow so verified splices land on the
-  left side and stay valid);
+  it sits before the arrow so verified splices land on the left side and
+  stay valid);
 - `route_range`: the item's own destination-token range, omitted when absent;
 - `discard_range`: the item and one adjacent blank-line separator. Ordinary
   items with authored children omit it; task-list items always get one for
@@ -8564,8 +8565,8 @@ otherwise suppress. It is invalid in draft mode; no file is edited.
 - `matches`: ranked candidate rows;
 - `linked`: resolved candidate keys already referenced by this item, with
   `link` set to `relation`, `dependency`, `blocked_task`, `parent`, or
-  `merge_in` (contract-only: every task named in the item's `<` clause;
-  never in `matches`; the similarity query uses the left side's body only).
+  `merge_in` (every task named in the item's `<` clause; never in `matches`;
+  the similarity query uses the left side's body only).
 
 Every range is half-open and indexes UTF-8 bytes in the exact draft passed to
 Bob. `marker_at` and ranges are splice anchors for that draft only; clients
@@ -8651,7 +8652,7 @@ or to `@route^block-id` with `^`. On a `>` transfer line, `+` after
 `@route+id` (`@inbox:bench+ > @db` becomes `@inbox+bench > @db`, and
 `@a+x > @c:tid+` becomes `@a+x > @c+tid`); `:` or `^` after a transfer
 `+id` stays literal, since it would break the transfer. In a `<` source
-slot (contract-only), `+` after `@route:id` or `@route^id` switches to
+slot, `+` after `@route:id` or `@route^id` switches to
 `@route+id` exactly as on a `>` line; see
 [Merging tasks into a new task with `<`](#merging-tasks-into-a-new-task-with).
 A sealed
@@ -8876,14 +8877,14 @@ prints a dim `no rewrite` line plus the notices.
 bob capture-complete --cursor BYTE [-a|--all-tasks] [-b|--bob-dir DIR] [-f|--format human|json] [--] [TEXT]...
 ```
 
-In a `<` source slot (contract-only), `< +` / `< +query` opens the
+In a `<` source slot, `< +` / `< +query` opens the
 vault-wide `task_parent` picker in a new merge-in source role and
 `< @route+` uses the note-scoped task context; `< @` completes routes.
 Rows are mergeable only (open, not `^prj`, not recurring, no open
 subtasks), excluding already-typed sources and aliases. ID-less mergeable
 rows stay, with `requires_block_id: true` and their `route`, and accepted
-rows return `continuation: " +"`; each row carries Bob-authored detail
-`⤵ merge in · 2 notes`. See
+rows return `continuation: " +"`; each row carries Bob-authored `detail`
+such as `⤵ merge in · 2 notes` or `⤵ merge in · title only`. See
 [Merging tasks into a new task with `<`](#merging-tasks-into-a-new-task-with).
 
 Returns cursor-aware completion candidates for in-progress capture `TEXT`. It
@@ -9071,7 +9072,8 @@ completion covers `@route:prefix` and parent-task completion covers
 `bob capture-tasks`. By default both contexts only offer tasks that already
 carry a block ID so older callers stay compatible. Pass `-a`/`--all-tasks` to
 include open tasks that still need an ID, but only in the `task` / `@route+`
-context. Pomodoro `@route:` completion stays identified-only even when
+context. The `>` transfer and `<` merge-in source pickers automatically keep
+eligible ID-less rows for their Add block ID flow. Pomodoro `@route:` completion stays identified-only even when
 `--all-tasks` is set. Missing-ID discovery is therefore opt-in and
 plus-context-only. For `link` intent, `@route:` candidates are further
 restricted to statuses the link path accepts (Ready, Blocked, Next, In
@@ -9303,8 +9305,9 @@ is dropped, and an empty query keeps every eligible candidate.
 
 On a `>` transfer line the same contexts serve each component: a source
 marker completes routes and that note's open tasks, narrowed to
-movable-or-mergeable rows (ID-less rows never list, since a source needs
-`+id`); `> @` completes routes; a complete bare destination keeps the route
+movable-or-mergeable rows. Eligible ID-less rows stay with
+`requires_block_id: true` and use the Add block ID flow before they can be
+inserted as `+id` sources; `> @` completes routes; a complete bare destination keeps the route
 list and adds a `type + to merge` hint warning; `@c+` completes the
 destination note's open tasks minus the typed sources, each row carrying a
 Bob-authored `⤵ merge into` consequence; `@c+id#` completes that task's
@@ -9595,15 +9598,17 @@ which clients must never insert), `ref`, `route`, `note_kind` (`inbox`,
 `@sase:deep-fix  [*] Fix deep bug  · BUGS`, with the tail naming the queued
 Pomodoro (`Planned` when unnamed), `In Progress`, `Next`, or the note
 label, plus `· needs ID (^suggestion)` on ID-less rows and
-`· scheduled YYYY-MM-DD` whenever the task carries a scheduled date. Missing-ID tasks, which appear only when
-`--all-tasks` is set in the `task` context, have `block_id: null`,
+`· scheduled YYYY-MM-DD` whenever the task carries a scheduled date. Missing-ID tasks, which appear with `--all-tasks` in the `task` context or in a `>`/`<` source slot, have `block_id: null`,
 `requires_block_id: true`, `block_id_suggestions` (up to 3 deterministic IDs),
 and an empty placeholder `replacement` that the updated client must never
 insert. A `task_parent` candidate has the same task metadata plus `note_kind`,
 `group`, and nullable `pomodoro`, but no `scheduled` or `pulls_forward` fields;
 identified rows use `@route+block-id` replacements, while ID-less rows have
-an empty replacement, `requires_block_id: true`, and suggested IDs. Human
-rows begin with `@route+block-id` or `@route+…` and describe missing IDs.
+an empty replacement, `requires_block_id: true`, and suggested IDs. Merge-in
+source rows add `detail: "⤵ merge in · N notes"` or
+`detail: "⤵ merge in · title only"`. Task candidates in merge-in source slots
+carry the same optional `detail`. Human rows begin with `@route+block-id` or
+`@route+…` and describe missing IDs.
 Every task-bearing candidate (`task`, `active_task`, `task_link`,
 `task_goto`, `task_parent`, `task_dependency`, `blocked_task`, `task_complete`) also carries an additive
 `task_kind` (`"ref"` when the row is a `#task #ref` reference reading task,

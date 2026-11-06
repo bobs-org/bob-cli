@@ -92,6 +92,9 @@ pub(super) struct TaskCandidate {
     /// existing rows serialize byte-identically.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) consequence: Option<String>,
+    /// Bob-authored picker detail, used by merge-in source rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) detail: Option<String>,
     pub(super) section: Option<String>,
     pub(super) depth: usize,
     pub(super) child_count: usize,
@@ -471,6 +474,10 @@ pub(super) struct TaskParentCandidate {
     #[serde(rename = "ref")]
     pub(super) task_ref: String,
     pub(super) route: String,
+    /// Exact vault-relative path used to scope merge-in source rows. Internal
+    /// only; the established parent-task wire shape keeps exposing `route`.
+    #[serde(skip)]
+    pub(super) note_path: String,
     pub(super) note_kind: CaptureTargetKind,
     pub(super) block_id: Option<String>,
     pub(super) requires_block_id: bool,
@@ -483,6 +490,9 @@ pub(super) struct TaskParentCandidate {
     pub(super) disabled_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) consequence: Option<String>,
+    /// Bob-authored picker detail, used by merge-in source rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) detail: Option<String>,
     pub(super) section: Option<String>,
     pub(super) depth: usize,
     pub(super) line: usize,

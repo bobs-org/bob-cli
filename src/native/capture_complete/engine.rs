@@ -236,6 +236,19 @@ fn build_result_inner(
     else {
         return Ok(CaptureCompleteResult::empty(cursor));
     };
+    let transfer_role =
+        capture_language::transfer_completion_role(raw_text, cursor);
+    let merge_in_role =
+        capture_language::merge_in_completion_role(raw_text, cursor);
+    let include_missing_task_rows = all_tasks
+        || (field.context == CompletionContext::Task
+            && (merge_in_role.is_some()
+                || matches!(
+                    &transfer_role,
+                    Some(
+                        capture_language::TransferCompletionRole::Source { .. }
+                    )
+                )));
 
     if field.context == CompletionContext::ProjectTaskMove {
         let detail = capture_language::project_task_move_detail(
@@ -437,7 +450,7 @@ fn build_result_inner(
                     bob_dir,
                     route,
                     &field.query,
-                    all_tasks,
+                    include_missing_task_rows,
                     TaskSearch::MultiField,
                 )?,
                 Vec::new(),
@@ -773,15 +786,21 @@ fn build_result_inner(
     // so narrow them here — movable-or-mergeable sources, minus-source
     // merge targets with a merge consequence, the `+` hint on complete
     // bare destinations, and section creation plus the §3.4 refusal.
-    if let Some(role) =
-        capture_language::transfer_completion_role(raw_text, cursor)
-    {
+    if let Some(role) = transfer_role {
         super::transfer_assist::apply(
             bob_dir,
             &field,
             role,
             &mut candidates,
             &mut warnings,
+        )?;
+    }
+    if let Some(role) = merge_in_role {
+        super::transfer_assist::apply_merge_in(
+            bob_dir,
+            &field,
+            role,
+            &mut candidates,
         )?;
     }
 

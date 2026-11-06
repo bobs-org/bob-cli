@@ -478,6 +478,13 @@ fn expand_parent_task_comma_alias(
         return None;
     }
 
+    // A comma after a picked `<` source starts the next, vault-wide source
+    // picker. Keep the existing marker intact and insert the intentional
+    // ` +` selector after it.
+    if merge_in_source_slot_owns(raw_text, start) {
+        return expand_merge_in_source_comma_alias(raw_text, start, cursor);
+    }
+
     // In-place forms are accepted only when replacing the comma with `+`
     // opens the ordinary note-scoped task picker or a whole-token parent
     // picker. This keeps commas in prose, names, and close/start lists literal.
@@ -541,6 +548,92 @@ fn expand_parent_task_comma_alias(
     Some(DraftRewrite {
         rule: Some(RewriteRule::ExpandSigilAlias),
         edits,
+        text: continued,
+        cursor: Some(continued_cursor),
+        summary: Some("Typed + for ,".to_string()),
+        notices: Vec::new(),
+    })
+}
+
+fn merge_in_source_slot_owns(raw_text: &str, position: usize) -> bool {
+    let draft = split_capture_draft(raw_text);
+    draft.items.iter().any(|item| {
+        let Some(parent) = item.lines.first() else {
+            return false;
+        };
+        if position < parent.raw.start || position > parent.raw.end {
+            return false;
+        }
+        match super::merge_in::scan_merge_in_line(
+            &parent.raw,
+            raw_text,
+            item.lines.len() > 1,
+        ) {
+            super::merge_in::MergeInScan::Valid { arrow, .. }
+            | super::merge_in::MergeInScan::Incomplete { arrow, .. } => {
+                position >= arrow.end
+            }
+            super::merge_in::MergeInScan::Invalid { .. } => {
+                tokenize_with_spans(parent.raw.text)
+                    .into_iter()
+                    .find(|token| token.text == "<")
+                    .is_some_and(|arrow| {
+                        position >= parent.raw.start + arrow.end
+                    })
+            }
+            super::merge_in::MergeInScan::Unclaimed
+            | super::merge_in::MergeInScan::Escaped { .. } => false,
+        }
+    })
+}
+
+fn expand_merge_in_source_comma_alias(
+    raw_text: &str,
+    start: usize,
+    cursor: usize,
+) -> Option<DraftRewrite> {
+    let mut without_comma = raw_text.to_string();
+    without_comma.replace_range(start..cursor, "");
+    let draft = split_capture_draft(&without_comma);
+    let source_ends_here = draft.items.iter().any(|item| {
+        let Some(parent) = item.lines.first() else {
+            return false;
+        };
+        if start < parent.raw.start || start > parent.raw.end {
+            return false;
+        }
+        matches!(
+            super::merge_in::scan_merge_in_line(
+                &parent.raw,
+                &without_comma,
+                item.lines.len() > 1,
+            ),
+            super::merge_in::MergeInScan::Valid { sources, .. }
+                if sources.iter().any(|source| source.end == start)
+        )
+    });
+    if !source_ends_here {
+        return None;
+    }
+
+    let mut continued = raw_text.to_string();
+    continued.replace_range(start..cursor, " +");
+    let continued_cursor = start + 2;
+    let field =
+        super::completion::completion_field_at(&continued, continued_cursor)?;
+    if field.context != super::completion::CompletionContext::TaskParent
+        || field.replacement != (start + 1, continued_cursor)
+    {
+        return None;
+    }
+
+    Some(DraftRewrite {
+        rule: Some(RewriteRule::ExpandSigilAlias),
+        edits: vec![TextEdit {
+            start,
+            end: cursor,
+            replacement: " +".to_string(),
+        }],
         text: continued,
         cursor: Some(continued_cursor),
         summary: Some("Typed + for ,".to_string()),
@@ -984,6 +1077,20 @@ fn switch_block_id_separator(
         return Some(rewrite);
     }
 
+    // Once a source already uses `+id`, `:` and `^` are literal. Checking
+    // the marker with its trigger removed preserves the merge-in claim while
+    // leaving those characters untouched.
+    if trigger_char != '+'
+        && merge_in_source_token_after_removing_trigger(
+            raw_text,
+            token_start,
+            token_end,
+            stripped,
+        )
+    {
+        return None;
+    }
+
     let mut candidate = String::with_capacity(raw_text.len() - 1);
     candidate.push_str(&raw_text[..stripped_end]);
     candidate.push_str(&raw_text[token_end..]);
@@ -1050,16 +1157,45 @@ fn switch_transfer_block_id_separator(
             {
                 continue;
             }
-            // A claimed `<` merge-in owns its source slot: never switch
-            // `:`/`^` to `+` there until the picker phase lands.
-            if !matches!(
-                super::merge_in::scan_merge_in_line(
-                    &line.raw,
-                    &switched,
-                    item.lines.len() > 1,
+            let merge_scan = super::merge_in::scan_merge_in_line(
+                &line.raw,
+                &switched,
+                item.lines.len() > 1,
+            );
+            let (merge_claimed, merge_covers) = match merge_scan {
+                super::merge_in::MergeInScan::Valid { sources, .. }
+                | super::merge_in::MergeInScan::Incomplete {
+                    sources, ..
+                } => (
+                    true,
+                    sources.iter().any(|source| {
+                        source.start == token_start
+                            && source.end == switched_end
+                    }),
                 ),
-                super::merge_in::MergeInScan::Unclaimed
-            ) {
+                super::merge_in::MergeInScan::Unclaimed => (false, false),
+                super::merge_in::MergeInScan::Escaped { .. }
+                | super::merge_in::MergeInScan::Invalid { .. } => (true, false),
+            };
+            if merge_covers {
+                let summary =
+                    format!("Changed {stripped} to {switched_marker}");
+                let edits = vec![TextEdit {
+                    start: token_start,
+                    end: token_end,
+                    replacement: switched_marker.clone(),
+                }];
+                let text = apply_text_edits(raw_text, &edits);
+                return Some(DraftRewrite {
+                    rule: Some(RewriteRule::SwitchBlockIdSeparator),
+                    edits,
+                    text,
+                    cursor: Some(token_start + switched_marker.len()),
+                    summary: Some(summary),
+                    notices: Vec::new(),
+                });
+            }
+            if merge_claimed {
                 continue;
             }
             let scan = super::transfer::scan_transfer_line(
@@ -1102,6 +1238,39 @@ fn switch_transfer_block_id_separator(
         }
     }
     None
+}
+
+fn merge_in_source_token_after_removing_trigger(
+    raw_text: &str,
+    token_start: usize,
+    token_end: usize,
+    stripped: &str,
+) -> bool {
+    let mut probe = raw_text.to_string();
+    probe.replace_range(token_start..token_end, stripped);
+    let expected_end = token_start + stripped.len();
+    let draft = split_capture_draft(&probe);
+    draft.items.iter().any(|item| {
+        item.lines.iter().enumerate().any(|(index, line)| {
+            if !(line.raw.start <= token_start && expected_end <= line.raw.end)
+            {
+                return false;
+            }
+            matches!(
+                super::merge_in::scan_merge_in_line(
+                    &line.raw,
+                    &probe,
+                    item.lines.len() > 1,
+                ),
+                super::merge_in::MergeInScan::Valid { sources, .. }
+                    | super::merge_in::MergeInScan::Incomplete { sources, .. }
+                    if sources.iter().any(|source| {
+                        source.start == token_start
+                            && source.end == expected_end
+                    })
+            ) && index == 0
+        })
+    })
 }
 
 /// Typing `|` (or `||`) after whitespace that follows a relation token

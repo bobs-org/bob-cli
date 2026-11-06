@@ -221,6 +221,12 @@ pub(super) fn task_parent_line(item: &TaskParentCandidate) -> (String, String) {
             None => detail.push_str(" · needs ID"),
         }
     }
+    if let Some(consequence) = item.consequence.as_deref() {
+        detail.push_str(&format!(" · {consequence}"));
+    }
+    if let Some(extra) = item.detail.as_deref() {
+        detail.push_str(&format!(" · {extra}"));
+    }
     let label = if item.requires_block_id {
         format!("@{}+…", item.route)
     } else {
@@ -499,6 +505,10 @@ pub(super) fn candidate_lines(
                     Some(consequence) => {
                         format!("{detail}  · {consequence}")
                     }
+                    None => detail,
+                };
+                let detail = match item.detail.as_deref() {
+                    Some(extra) => format!("{detail}  · {extra}"),
                     None => detail,
                 };
                 (label, detail)

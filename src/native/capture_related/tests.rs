@@ -655,6 +655,53 @@ fn synthetic_vault_draft_contract_is_under_250ms() {
 }
 
 #[test]
+fn merge_in_sources_are_linked_and_relate_actions_anchor_before_the_arrow() {
+    let temp = TempDir::new("bob-cli-capture-related-merge-in");
+    write_settings(temp.path());
+    write_file(
+        &temp.path().join("dev.md"),
+        &area_note(
+            "Dev",
+            "- [ ] #task Install new UPS battery ^ups\n\
+- [ ] #task Install new UPS battery ^ups-twin\n",
+        ),
+    );
+    let draft = "Install new UPS battery < @dev+ups";
+    let request = super::DraftRequest {
+        bob_dir: temp.path().to_path_buf(),
+        days: 30,
+        limit: 5,
+        draft: draft.to_string(),
+    };
+    let _now = TestEnvGuard::set(&[(
+        "BOB_NOW",
+        Some(std::ffi::OsStr::new("2026-10-20 12:00:00")),
+    )]);
+    let result = super::draft::draft_related(&request);
+    let item = result.items.first().expect("draft item");
+    assert_eq!(item.marker_at, draft.find('<'));
+    let linked = item.linked.as_ref().expect("linked targets");
+    assert!(linked.iter().any(|entry| {
+        entry.key == "dev.md#ups" && entry.link == "merge_in"
+    }));
+    assert!(item
+        .matches
+        .iter()
+        .all(|candidate| candidate.key != "dev.md#ups"));
+    let twin = item
+        .matches
+        .iter()
+        .find(|candidate| candidate.key == "dev.md#ups-twin")
+        .expect("unlinked same-title task remains a related match");
+    assert!(
+        twin.actions
+            .as_ref()
+            .is_some_and(|actions| actions.iter().any(|action| action == "relate")),
+        "relate action must reparse successfully before the merge-in arrow: {twin:?}"
+    );
+}
+
+#[test]
 fn cosine_is_symmetric_on_identical_titles() {
     let left = tokenize::tokenize("Install new UPS battery");
     let right = corpus::Candidate {

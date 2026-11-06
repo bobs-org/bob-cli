@@ -1242,6 +1242,28 @@ fn rewrite_draft_leaves_transfer_plus_triggers_for_other_marks_literal() {
 }
 
 #[test]
+fn rewrite_draft_switches_and_continues_merge_in_sources() {
+    let raw = "Create task < @cash:line+";
+    let switched = rewrite_draft(raw, Some(raw.len()));
+    assert_eq!(switched.rule, Some(RewriteRule::SwitchBlockIdSeparator));
+    assert_eq!(switched.text, "Create task < @cash+line");
+
+    for raw in ["Create task < @cash+line:", "Create task < @cash+line^"] {
+        assert_eq!(rewrite_draft(raw, Some(raw.len())).rule, None, "{raw}");
+    }
+
+    let raw = "Create task < @cash+line,";
+    let continued = rewrite_draft(raw, Some(raw.len()));
+    assert_eq!(continued.rule, Some(RewriteRule::ExpandSigilAlias));
+    assert_eq!(continued.text, "Create task < @cash+line +");
+    let cursor = continued.cursor.expect("next picker caret");
+    let field =
+        super::super::completion::completion_field_at(&continued.text, cursor)
+            .expect("vault-wide next source picker");
+    assert_eq!(field.context, super::super::CompletionContext::TaskParent);
+}
+
+#[test]
 fn rewrite_draft_expands_backslash_hash_alias() {
     for (raw, expected) in [
         ("Buy milk \\", "Buy milk #"),

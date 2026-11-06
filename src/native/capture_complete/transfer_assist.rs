@@ -9,13 +9,13 @@
 //! gain a creation row plus the §3.4 near-duplicate refusal. Everything
 //! else reuses the ordinary rows unchanged.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use super::model::{Candidates, CompleteError};
 use crate::native::{
     capture, capture_drawers, capture_language, capture_project_note,
-    note_tasks, task_complete, task_move,
+    note_tasks, task_children, task_complete, task_move,
 };
 
 /// Narrow `candidates` (and extend `warnings`) for `role` on a `>`
@@ -65,6 +65,149 @@ pub(super) fn apply(
     Ok(())
 }
 
+/// Scope a `<` source picker to mergeable tasks, retaining ID-less rows for
+/// the explicit Add block ID flow and attaching Bob's moved-note detail.
+pub(super) fn apply_merge_in(
+    bob_dir: &Path,
+    field: &capture_language::CompletionField,
+    role: capture_language::MergeInCompletionRole,
+    candidates: &mut Candidates,
+) -> Result<(), CompleteError> {
+    use capture_language::CompletionContext;
+    match field.context {
+        CompletionContext::Task => {
+            if let Some(route) = field.route.as_deref() {
+                scope_note_merge_in_sources(
+                    bob_dir,
+                    route,
+                    &role.exclude,
+                    candidates,
+                )?;
+            }
+        }
+        CompletionContext::TaskParent => {
+            scope_vault_merge_in_sources(bob_dir, &role.exclude, candidates);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn scope_note_merge_in_sources(
+    bob_dir: &Path,
+    route: &str,
+    exclude: &[(String, String)],
+    candidates: &mut Candidates,
+) -> Result<(), CompleteError> {
+    let Candidates::Task(items) = candidates else {
+        return Ok(());
+    };
+    let relative = capture::route_label(route);
+    let contents = super::candidates::read_target(bob_dir, route)?;
+    let details = mergeable_source_details(&contents, bob_dir);
+    let route_paths = route_alias_paths(bob_dir);
+    let candidate_path = route_paths
+        .get(&route.to_ascii_lowercase())
+        .cloned()
+        .unwrap_or(relative);
+    items.retain_mut(|item| {
+        let Some(moved_notes) = details.get(&item.line).copied() else {
+            return false;
+        };
+        let excluded = item.block_id.as_deref().is_some_and(|id| {
+            exclude.iter().any(|(source_route, source_id)| {
+                id == source_id
+                    && route_path(source_route, &route_paths)
+                        .eq_ignore_ascii_case(&candidate_path)
+            })
+        });
+        if excluded {
+            return false;
+        }
+        item.detail = Some(merge_in_detail(moved_notes));
+        true
+    });
+    Ok(())
+}
+
+fn scope_vault_merge_in_sources(
+    bob_dir: &Path,
+    exclude: &[(String, String)],
+    candidates: &mut Candidates,
+) {
+    let Candidates::TaskParent(items) = candidates else {
+        return;
+    };
+    let route_paths = route_alias_paths(bob_dir);
+    let mut note_details = HashMap::<String, HashMap<usize, usize>>::new();
+    let mut seen = HashSet::<(String, usize)>::new();
+    items.retain_mut(|item| {
+        let normalized_path = item.note_path.to_ascii_lowercase();
+        let details = note_details
+            .entry(item.note_path.clone())
+            .or_insert_with(|| {
+                let path = bob_dir.join(&item.note_path);
+                std::fs::read_to_string(path)
+                    .map(|contents| {
+                        mergeable_source_details(&contents, bob_dir)
+                    })
+                    .unwrap_or_default()
+            });
+        let Some(moved_notes) = details.get(&item.line).copied() else {
+            return false;
+        };
+        if !seen.insert((normalized_path.clone(), item.line)) {
+            return false;
+        }
+        let excluded = item.block_id.as_deref().is_some_and(|id| {
+            exclude.iter().any(|(source_route, source_id)| {
+                id == source_id
+                    && route_path(source_route, &route_paths)
+                        .eq_ignore_ascii_case(&normalized_path)
+            })
+        });
+        if excluded {
+            return false;
+        }
+        item.detail = Some(merge_in_detail(moved_notes));
+        true
+    });
+}
+
+fn route_alias_paths(bob_dir: &Path) -> HashMap<String, String> {
+    let report = crate::native::capture_targets::scan_capture_targets(bob_dir);
+    let mut paths = HashMap::new();
+    for target in report.targets {
+        paths.insert(
+            target.route.to_ascii_lowercase(),
+            target.relative_path.clone(),
+        );
+        for alias in target.project_name_aliases {
+            paths.insert(
+                alias.to_ascii_lowercase(),
+                target.relative_path.clone(),
+            );
+        }
+    }
+    paths
+}
+
+fn route_path(route: &str, aliases: &HashMap<String, String>) -> String {
+    aliases
+        .get(&route.to_ascii_lowercase())
+        .cloned()
+        .unwrap_or_else(|| capture::route_label(route))
+}
+
+fn merge_in_detail(moved_notes: usize) -> String {
+    if moved_notes == 0 {
+        "⤵ merge in · title only".to_string()
+    } else {
+        let unit = if moved_notes == 1 { "note" } else { "notes" };
+        format!("⤵ merge in · {moved_notes} {unit}")
+    }
+}
+
 /// Keep only tasks the transfer can actually name: tasks that are movable
 /// or mergeable, addressed by block ID. ID-less rows cannot form
 /// `@route+id` sources, so they never survive here.
@@ -85,43 +228,46 @@ fn filter_source_tasks(
             return Ok(());
         }
     };
-    // `movable_roots` lists every column-0 open task and marks the
-    // ineligible ones (`^prj`, duplicates, bad fragments) with a disabled
-    // reason; only the unmarked rows can move.
-    let movable: HashSet<String> =
+    // Movable roots already expose ID-less rows; their line numbers let
+    // completion keep those rows for the explicit Add block ID flow.
+    let movable: HashSet<usize> =
         task_move::movable_roots(Path::new(&relative), &contents)
             .into_iter()
             .filter(|root| root.disabled_reason.is_none())
-            .filter_map(|root| root.block_id)
+            .map(|root| root.line)
             .collect();
-    let mergeable = mergeable_source_ids(&contents, bob_dir);
+    let mergeable = mergeable_source_details(&contents, bob_dir);
     items.retain(|item| {
-        if item.requires_block_id {
-            return false;
-        }
-        let Some(id) = item.block_id.as_deref() else {
-            return false;
-        };
-        movable.contains(id) || mergeable.contains(id)
+        movable.contains(&item.line) || mergeable.contains_key(&item.line)
     });
     Ok(())
 }
 
-/// Block IDs in `contents` a merge could retire: open, non-project,
-/// non-recurring tasks with no open nested tasks. Mirrors the merge
-/// planner's source refusals without moving anything.
-fn mergeable_source_ids(contents: &str, bob_dir: &Path) -> HashSet<String> {
+/// Mergeable task lines and the number of notes each merge would move.
+/// This mirrors the task-merge planner's open/project/recurring/subtask
+/// guards and payload count without staging any writes.
+fn mergeable_source_details(
+    contents: &str,
+    bob_dir: &Path,
+) -> HashMap<usize, usize> {
     let settings = note_tasks::read_settings(bob_dir);
     let scan = note_tasks::scan(contents, &settings);
     let open: Vec<&note_tasks::NoteTask> = scan.open_tasks().collect();
-    let spans = capture::line_spans(contents);
     let lines: Vec<&str> = contents.lines().collect();
-    let mut ids = HashSet::new();
+    let spans = capture::line_spans(contents);
+    let mut id_counts = HashMap::<&str, usize>::new();
     for task in &open {
-        let Some(id) = task.block_id.clone() else {
-            continue;
-        };
-        if id == "prj" {
+        if let Some(id) = task.block_id.as_deref() {
+            *id_counts.entry(id).or_default() += 1;
+        }
+    }
+    let mut details = HashMap::new();
+    for task in &open {
+        if task.block_id.as_deref() == Some("prj")
+            || task.block_id.as_deref().is_some_and(|id| {
+                id_counts.get(id).copied().unwrap_or_default() > 1
+            })
+        {
             continue;
         }
         if let Some(line) = lines.get(task.line_index)
@@ -140,9 +286,62 @@ fn mergeable_source_ids(contents: &str, bob_dir: &Path) -> HashSet<String> {
         if nested_open {
             continue;
         }
-        ids.insert(id);
+        let moved_notes = moved_note_count(contents, task, &settings);
+        details.insert(task.line_index + 1, moved_notes);
     }
-    ids
+    details
+}
+
+/// Count the authored groups the merge payload planner would append after
+/// the source title. Managed links/logs are pruned; body text left outside
+/// those groups moves as one note fragment.
+fn moved_note_count(
+    contents: &str,
+    task: &note_tasks::NoteTask,
+    settings: &note_tasks::NoteTaskSettings,
+) -> usize {
+    let children =
+        task_children::classify_direct_children(contents, task, settings);
+    let authored = children
+        .iter()
+        .filter(|child| !child.kind.is_managed())
+        .count();
+    if authored > 0 {
+        return authored;
+    }
+
+    let lines = capture::line_spans(contents);
+    let end_line = lines
+        .iter()
+        .position(|line| line.end > task.block_end)
+        .unwrap_or(lines.len());
+    let mut cursor = task.line_index + 1;
+    for (offset, child) in children.iter().enumerate() {
+        if !child.kind.is_managed() {
+            continue;
+        }
+        let end = children
+            .get(offset + 1)
+            .map(|next| next.line_index)
+            .unwrap_or(end_line);
+        if cursor < child.line_index
+            && lines[cursor..child.line_index]
+                .iter()
+                .any(|line| !line.text.trim().is_empty())
+        {
+            return 1;
+        }
+        cursor = cursor.max(end);
+    }
+    if cursor < end_line
+        && lines[cursor..end_line]
+            .iter()
+            .any(|line| !line.text.trim().is_empty())
+    {
+        1
+    } else {
+        0
+    }
 }
 
 /// Merge targets are the destination note's open tasks minus the typed

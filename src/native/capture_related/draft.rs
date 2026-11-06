@@ -226,6 +226,9 @@ fn is_task_creating_mode(mode: EditorMode) -> bool {
 }
 
 fn marker_at(draft: &str, item: &EditorItemParse) -> usize {
+    if let Some(merge_in) = item.merge_in.as_ref() {
+        return merge_in.arrow.start;
+    }
     let Some((line_start, line_end)) =
         physical_line_range(draft, item.line_start)
     else {
@@ -411,6 +414,15 @@ fn linked_for_item(
             ));
         }
     }
+    if let Some(merge_in) = item.merge_in.as_ref() {
+        targets.extend(merge_in.sources.iter().map(|source| {
+            (
+                source.route.clone(),
+                source.block_id.clone(),
+                "merge_in".to_string(),
+            )
+        }));
+    }
     let mut linked = BTreeSet::new();
     for (note, block_id, link) in targets {
         let note_path = route_aliases
@@ -593,7 +605,7 @@ fn verify_link_action(
         "blocks" => &replacements.blocked_task,
         _ => return false,
     };
-    let modified = insert_at(draft, marker_at, &format!(" {marker}"));
+    let modified = insert_capture_marker(draft, marker_at, marker, item);
     let parsed = capture_language::parse_for_editor_with(&modified, options);
     parsed
         .items
@@ -637,7 +649,7 @@ fn verify_note_action(
     let modified = if let Some(range) = route_range {
         replace_range(draft, range, &parent)
     } else {
-        insert_at(draft, marker_at, &format!(" {parent}"))
+        insert_capture_marker(draft, marker_at, &parent, item)
     };
     let parsed = capture_language::parse_for_editor_with(&modified, options);
     parsed
@@ -647,6 +659,19 @@ fn verify_note_action(
         .is_some_and(|after| {
             after.mode == EditorMode::SubBullet && !has_error_diagnostics(after)
         })
+}
+
+/// Add a task marker at the item anchor. Merge-in keeps `<` as a spaced
+/// arrow, so a marker inserted immediately before it needs a trailing
+/// separator as well as the leading one.
+fn insert_capture_marker(
+    draft: &str,
+    marker_at: usize,
+    marker: &str,
+    item: &EditorItemParse,
+) -> String {
+    let trailing = if item.merge_in.is_some() { " " } else { "" };
+    insert_at(draft, marker_at, &format!(" {marker}{trailing}"))
 }
 
 fn has_error_diagnostics(item: &EditorItemParse) -> bool {

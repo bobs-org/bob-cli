@@ -1550,6 +1550,128 @@ pub(crate) enum TransferCompletionRole {
     },
 }
 
+/// A merge-in source slot borrows the ordinary note-scoped and vault-wide
+/// task pickers, with the typed sources excluded from both catalogs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MergeInCompletionRole {
+    pub(crate) exclude: Vec<(String, String)>,
+}
+
+struct MergeInCompletionSlot<'a> {
+    token: Option<Token<'a>>,
+    exclude: Vec<(String, String)>,
+}
+
+/// The merge-in role at `cursor`, when it sits in an `<` source slot.
+/// The slot's fields remain the ordinary `Route`, `Task`, and `TaskParent`
+/// contexts; this role only scopes their rows.
+pub(crate) fn merge_in_completion_role(
+    raw_text: &str,
+    cursor: usize,
+) -> Option<MergeInCompletionRole> {
+    let draft = split_capture_draft(raw_text);
+    let item = draft.items.iter().find(|item| {
+        item.lines.first().is_some_and(|line| {
+            cursor >= line.raw.start && cursor <= line.raw.end
+        })
+    })?;
+    let parent = item.lines.first()?.raw;
+    let slot = merge_in_completion_slot(item, parent, cursor)?;
+    slot.token.map(|_| MergeInCompletionRole {
+        exclude: slot.exclude,
+    })
+}
+
+/// Return the ordinary completion field inside a claimed merge-in source
+/// slot. `Some(None)` means the `<` clause owns the caret (arrow or gap),
+/// preventing target-run completion from claiming source text.
+fn merge_in_completion_field_at(
+    item: &CaptureItem<'_>,
+    line: RawLine<'_>,
+    cursor: usize,
+) -> Option<Option<CompletionField>> {
+    let slot = merge_in_completion_slot(item, line, cursor)?;
+    Some(slot.token.and_then(|token| {
+        if token.text.starts_with('+') {
+            let relative = cursor.saturating_sub(token.start);
+            let query = if relative <= 1 {
+                String::new()
+            } else {
+                token.text.get(1..relative)?.to_string()
+            };
+            Some(CompletionField {
+                context: CompletionContext::TaskParent,
+                route: None,
+                block_id: None,
+                query,
+                replacement: (token.start, token.end),
+                bare_name: false,
+            })
+        } else {
+            marker_field_at_cursor(&token, cursor)
+        }
+    }))
+}
+
+/// Locate a token owned by the `<` clause and the already-typed complete
+/// sources. The source list is the scanner's result for valid and incomplete
+/// clauses; malformed clauses still claim their text after the first
+/// standalone arrow so they cannot fall through to normal route runs.
+fn merge_in_completion_slot<'i, 's>(
+    item: &'i CaptureItem<'s>,
+    line: RawLine<'s>,
+    cursor: usize,
+) -> Option<MergeInCompletionSlot<'s>> {
+    if cursor < line.start || cursor > line.end {
+        return None;
+    }
+    let scan = super::merge_in::scan_merge_in_line(
+        &line,
+        item.source,
+        item.lines.len() > 1,
+    );
+    let (arrow_start, arrow_end, sources) = match scan {
+        super::merge_in::MergeInScan::Unclaimed => return None,
+        super::merge_in::MergeInScan::Escaped { arrow_span, .. } => {
+            (arrow_span.0, arrow_span.1, Vec::new())
+        }
+        super::merge_in::MergeInScan::Incomplete { sources, arrow, .. }
+        | super::merge_in::MergeInScan::Valid { sources, arrow } => (
+            arrow.start,
+            arrow.end,
+            sources
+                .into_iter()
+                .map(|source| (source.route, source.block_id))
+                .collect(),
+        ),
+        super::merge_in::MergeInScan::Invalid { .. } => {
+            let arrow = tokenize_line_with_spans(&line)
+                .into_iter()
+                .find(|token| token.text == "<")?;
+            (arrow.start, arrow.end, Vec::new())
+        }
+    };
+    if cursor < arrow_start {
+        return None;
+    }
+
+    let token = tokenize_line_with_spans(&line).into_iter().find(|token| {
+        token.start >= arrow_end
+            && token.start <= cursor
+            && cursor <= token.end
+            && (token.text.starts_with('@') || token.text.starts_with('+'))
+            && !crate::native::capture_links::is_protected_markup_range(
+                item.source,
+                token.start,
+                token.end,
+            )
+    });
+    Some(MergeInCompletionSlot {
+        token,
+        exclude: sources,
+    })
+}
+
 /// The transfer role at `cursor`, when the cursor sits on a
 /// transfer-claimed parent line in a completable component. Returns `None`
 /// when the line is not a transfer or the cursor owns no component, so the
@@ -2114,6 +2236,13 @@ pub(crate) fn completion_field_at(
             (&masked_item, masked_line)
         }
     };
+    // Merge-in sources borrow the ordinary marker and parent-task fields,
+    // but the arrow owns its right side before generic target-run parsing.
+    if line_index == 0
+        && let Some(field) = merge_in_completion_field_at(item, line, cursor)
+    {
+        return field;
+    }
     // Bare-plus task search is checked before the adjustment early return:
     // a literal `+` is both the existing +5m action and a task-picker
     // gesture, while numeric/double-plus operator tokens remain actions.
@@ -2151,40 +2280,6 @@ pub(crate) fn completion_field_at(
         return Some(field);
     }
     let leading = line_index == 0;
-
-    // A claimed `<` merge-in line owns its source slot: ordinary target-run
-    // completion must not mistake sources for a new route/run. The source
-    // slot offers no candidates until the picker phase lands (safe absence);
-    // the left side keeps ordinary assistance.
-    if leading
-        && let Some(merge_scan) = item.lines.first().map(|parent| {
-            super::merge_in::scan_merge_in_line(
-                &parent.raw,
-                item.source,
-                item.lines.len() > 1,
-            )
-        })
-    {
-        match merge_scan {
-            super::merge_in::MergeInScan::Valid { arrow, .. }
-            | super::merge_in::MergeInScan::Incomplete { arrow, .. } => {
-                if cursor >= arrow.start {
-                    return None;
-                }
-            }
-            super::merge_in::MergeInScan::Invalid { span, .. } => {
-                if cursor >= span.0 {
-                    return None;
-                }
-            }
-            super::merge_in::MergeInScan::Escaped { arrow_span, .. } => {
-                if cursor >= arrow_span.0 {
-                    return None;
-                }
-            }
-            super::merge_in::MergeInScan::Unclaimed => {}
-        }
-    }
 
     // A claimed `>` transfer line owns its whole parent line: the normal
     // target-run selection would treat the sources as a leading run and

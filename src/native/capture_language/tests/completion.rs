@@ -1509,6 +1509,42 @@ fn transfer_arrow_and_gaps_offer_no_completion() {
 }
 
 #[test]
+fn merge_in_source_slots_reuse_route_task_and_parent_contexts() {
+    let route_text = "New task < @wo";
+    let route = field(route_text, route_text.len()).expect("source route");
+    assert_eq!(route.context, CompletionContext::Route);
+    assert_eq!(route.query, "wo");
+
+    let task_text = "New task < @work+";
+    let task = field(task_text, task_text.len()).expect("scoped source task");
+    assert_eq!(task.context, CompletionContext::Task);
+    assert_eq!(task.route.as_deref(), Some("work"));
+    assert_eq!(task.query, "");
+
+    let parent_text = "New task < +fl";
+    let parent = field(parent_text, parent_text.len())
+        .expect("vault-wide source picker");
+    assert_eq!(parent.context, CompletionContext::TaskParent);
+    assert_eq!(parent.query, "fl");
+
+    let complete = "New task < @work+old +fl";
+    assert_eq!(
+        merge_in_completion_role(complete, complete.len()),
+        Some(MergeInCompletionRole {
+            exclude: vec![("work".to_string(), "old".to_string())],
+        })
+    );
+}
+
+#[test]
+fn merge_in_arrow_and_gaps_do_not_fall_through_to_target_runs() {
+    let raw = "New task < @work+old";
+    let arrow = raw.find('<').expect("arrow");
+    assert_eq!(field(raw, arrow + 1), None);
+    assert_eq!(field("New task < ", "New task < ".len()), None);
+}
+
+#[test]
 fn move_bullet_completion_opens_under_both_seals() {
     for raw in ["@cash^exit@\n- ^", "@cash:exit@\n- ^"] {
         let cursor = raw.len();

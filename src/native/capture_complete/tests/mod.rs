@@ -13,6 +13,7 @@ mod active_tasks;
 mod blocked_tasks;
 mod directives;
 mod drawers;
+mod merge_in;
 mod output;
 mod parent_tasks;
 mod pomodoros;
