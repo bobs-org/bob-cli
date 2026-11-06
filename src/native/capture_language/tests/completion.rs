@@ -240,14 +240,12 @@ fn pomodoro_link_suffix_names_complete_without_replacing_the_link_start() {
     }
 
     let timed = "@work:outline=bu3";
+    let name_start = timed.find("bu").expect("name query");
     let name_end = timed.find('3').expect("timing suffix");
     let completion = field(timed, name_end).expect("name before timing");
     assert_eq!(completion.context, CompletionContext::PomodoroName);
     assert_eq!(completion.query, "bu");
-    assert_eq!(
-        completion.replacement,
-        (timed.find("bu").expect("name query"), name_end)
-    );
+    assert_eq!(completion.replacement, (name_start, timed.len()));
 
     let hash = "^work:outline=3#bu";
     let completion = field(hash, hash.len()).expect("hash suffix name");
@@ -1098,6 +1096,12 @@ fn pomodoro_start_name_completes_to_bare_or_hashed_spellings() {
     assert_eq!(end.query, "bugs");
     assert_eq!(end.replacement, (1, 5));
     assert!(end.bare_name);
+
+    let trailing = field("=de3", 3).expect("name before trailing timing");
+    assert_eq!(trailing.query, "de");
+    assert_eq!(trailing.replacement, (1, 4));
+    assert!(trailing.bare_name);
+    assert_eq!(field("=de3", 4), None);
 
     // A cursor on `=` itself offers nothing; just after `=` is the empty
     // name query, matching just after `#` on `=#bugs`.

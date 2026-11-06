@@ -300,7 +300,10 @@ pub(crate) fn shell_completion(
                 .map_err(|error| error.message.clone())?
             };
             if field.bare_name {
-                apply_bare_start_name_replacements(&mut candidates);
+                let replaced = raw_text
+                    .get(field.replacement.0..field.replacement.1)
+                    .unwrap_or("");
+                apply_bare_start_name_replacements(&mut candidates, replaced);
             }
             let Candidates::PomodoroName(items) = candidates else {
                 return Ok(None);

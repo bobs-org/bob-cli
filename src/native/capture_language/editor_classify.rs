@@ -2,9 +2,7 @@
 
 use super::close_selection::*;
 use super::editor_model::*;
-use super::item::{
-    effective_start_timing, named_start_name_offset, session_equals_token,
-};
+use super::item::{effective_start_timing, session_equals_token};
 use super::line::*;
 use super::markers::*;
 use super::model::*;
@@ -1918,116 +1916,6 @@ fn classify_pomodoro_link_start_suffix(
             parsed.needs = vec![Need::PomodoroName];
             // Keep spans disjoint: the `#` placeholder never overlaps a
             // `pomodoro_start` span, and `merge_spans` never drops one.
-            TokenParse::Marker(parsed)
-        }
-        Err(message)
-            if message.contains("is incomplete: type the timing after `@`") =>
-        {
-            // Dangling `@` never produces an executable default spec. Report
-            // incomplete needing `pomodoro_start_timing` with the typed name
-            // as `section`, no spec, and a placeholder on the dangling `@`,
-            // like standalone `=bugs@`.
-            let (before_eq, raw_suffix) = match rest.split_once('=') {
-                Some((before, suffix)) => (before, Some(suffix)),
-                None => (rest, None),
-            };
-            let block_id = before_eq
-                .split_once('#')
-                .map(|(block, _)| block)
-                .unwrap_or(before_eq);
-            if block_id.is_empty() || !is_block_id(block_id) {
-                return TokenParse::Invalid(token_diagnostic(
-                    token,
-                    "invalid_pomodoro_block_id",
-                    POMODORO_BLOCK_ID_ERROR,
-                ));
-            }
-            let raw = raw_suffix.unwrap_or_default();
-            let start_token = format!("={raw}");
-            let (suffix_len, name_text, spelling) =
-                match session_equals_token(&start_token) {
-                    Some(super::item::EqualsToken::Start {
-                        suffix,
-                        name,
-                        name_spelling,
-                        ..
-                    }) => {
-                        (suffix.len(), name.unwrap_or_default(), name_spelling)
-                    }
-                    _ => (0, String::new(), None),
-                };
-            let mut parsed = marker_parse(
-                token,
-                MarkerShape {
-                    sigil_len,
-                    route_part,
-                    separator_len: 1,
-                    right_part: block_id,
-                    route_kind: SpanKind::PomodoroRoute,
-                    right_kind: SpanKind::PomodoroBlockId,
-                    complete_mode: EditorMode::PomodoroTask,
-                    right_need: Need::PomodoroId,
-                    third: None,
-                    suffix: None,
-                },
-            );
-            let equals_rel = token.text.find('=').unwrap_or(token.text.len());
-            // `=` span.
-            if suffix_len > 0 {
-                parsed.spans.push(Span {
-                    start: token.start + equals_rel,
-                    end: token.start + equals_rel + 1 + suffix_len,
-                    kind: SpanKind::PomodoroStart,
-                    project_note: None,
-                    title: None,
-                    key: None,
-                });
-            } else {
-                parsed.spans.push(Span {
-                    start: token.start + equals_rel,
-                    end: token.start + equals_rel + 1,
-                    kind: SpanKind::PomodoroStart,
-                    project_note: None,
-                    title: None,
-                    key: None,
-                });
-            }
-            // Name span (bare or hash, `#` itself never in a span).
-            if !name_text.is_empty()
-                && let Some(spelling) = spelling
-            {
-                let name_start = token.start
-                    + equals_rel
-                    + named_start_name_offset(suffix_len, spelling);
-                parsed.spans.push(Span {
-                    start: name_start,
-                    end: name_start + name_text.len(),
-                    kind: SpanKind::PomodoroName,
-                    project_note: None,
-                    title: None,
-                    key: None,
-                });
-            }
-            // Placeholder on the dangling `@` (last byte).
-            let at_rel = token.text.len().saturating_sub(1);
-            parsed.spans.push(Span {
-                start: token.start + at_rel,
-                end: token.start + at_rel + 1,
-                kind: SpanKind::InteractivePlaceholder,
-                project_note: None,
-                title: None,
-                key: None,
-            });
-            parsed.spans.sort_by_key(|span| (span.start, span.end));
-            parsed.mode = EditorMode::Incomplete;
-            parsed.section = if name_text.is_empty() {
-                None
-            } else {
-                Some(name_text)
-            };
-            parsed.block_id = Some(block_id.to_string());
-            parsed.pomodoro_start = None;
-            parsed.needs = vec![Need::PomodoroStartTiming];
             TokenParse::Marker(parsed)
         }
         Err(message) => {

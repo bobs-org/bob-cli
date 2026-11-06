@@ -884,7 +884,10 @@ fn build_result_inner(
             })
         });
     if field.bare_name {
-        apply_bare_start_name_replacements(&mut candidates);
+        let replaced = raw_text
+            .get(field.replacement.0..field.replacement.1)
+            .unwrap_or("");
+        apply_bare_start_name_replacements(&mut candidates, replaced);
     }
     if bullet.as_ref().is_some_and(|bullet| bullet.continuation) {
         super::drawers::append_continuation(&mut candidates);

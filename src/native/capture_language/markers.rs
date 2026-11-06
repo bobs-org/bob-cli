@@ -1,5 +1,6 @@
 //! Terminal-marker extraction, schedules, priorities, clips, and marker messages.
 
+use super::bare_name::{can_spell_bare, start_name_spelling};
 use super::editor_model::*;
 use super::model::*;
 use super::tokens::*;
@@ -1228,15 +1229,45 @@ pub(super) fn close_selection_expected_number_after_at_error() -> String {
     "expected a task number after `@`".to_string()
 }
 
-/// Both timings typed around a bare name.
+/// Both timings typed around a name. Suggestions use the final glued
+/// spelling: `#` only when the name cannot be written bare, and trailing
+/// timing in front of `#` for those names.
 pub(super) fn start_timing_twice_error(
     token: &str,
     leading: &str,
     trailing: &str,
     name: &str,
 ) -> String {
+    let drop_suffix = "";
+    start_timing_twice_error_with_drop(
+        token,
+        leading,
+        trailing,
+        name,
+        drop_suffix,
+    )
+}
+
+pub(super) fn start_timing_twice_error_with_drop(
+    token: &str,
+    leading: &str,
+    trailing: &str,
+    name: &str,
+    drop_suffix: &str,
+) -> String {
+    let keep_leading = format!(
+        "{}{drop_suffix}",
+        super::bare_name::glued_named_start(leading, name, "")
+    );
+    let keep_trailing = if trailing.is_empty() {
+        format!("={}{drop_suffix}", start_name_spelling(name))
+    } else if can_spell_bare(name) {
+        format!("={name}{trailing}{drop_suffix}")
+    } else {
+        format!("={trailing}#{name}{drop_suffix}")
+    };
     format!(
-        "`{token}` gives the timing twice; keep one: `={leading}{name}` or `={name}{trailing}`"
+        "`{token}` gives the timing twice; keep one: `{keep_leading}` or `{keep_trailing}`"
     )
 }
 
@@ -1253,11 +1284,6 @@ pub(super) fn start_timing_twice_unnamed_error(
         format!("~{drop_text}")
     };
     format!("`{token}` gives the timing twice; write `{sigil}{effective}{drop_suffix}`")
-}
-
-/// A dangling `@` is retired and teaches the glued spelling.
-pub(super) fn start_timing_incomplete_error(token: &str) -> String {
-    format!("`{token}` is retired: put the timing directly after the name (for example `=name3`)")
 }
 
 /// A spaceless join that lexes as a start timing gets this hint instead of

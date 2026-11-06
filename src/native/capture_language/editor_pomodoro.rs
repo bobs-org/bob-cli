@@ -507,58 +507,22 @@ pub(super) fn parse_editor_named_start_item<'a>(
                 Some(range),
             ));
         }
-        // Both timings win over the dangling-`@` incomplete state.
-        if !suffix.is_empty()
-            && let Some((timing_offset, timing_after)) = timing.as_ref()
-        {
-            let message = start_timing_twice_error(
-                token_text,
-                &suffix,
-                timing_after,
-                &name,
-            );
-            let range = (
-                token_start + timing_offset,
-                token_start + timing_offset + timing_after.len(),
-            );
+        if let Some(message) = named_timing_twice_error(
+            token_text,
+            &suffix,
+            &name,
+            timing.as_ref().map(|(_, text)| text.as_str()),
+            drop_text,
+        ) {
+            let range = timing.as_ref().map(|(offset, text)| {
+                (token_start + offset, token_start + offset + text.len())
+            });
             return Some(editor_named_invalid_outcome(
                 item,
                 parent_trimmed,
                 spans,
                 message,
-                Some(range),
-            ));
-        }
-        // A trailing X is a start span without an intervening sigil.
-        if let Some((timing_offset, timing_after)) = timing.as_ref()
-            && timing_after.is_empty()
-        {
-            let mut timing_spans = spans.clone();
-            timing_spans.push(Span {
-                start: token_start + timing_offset,
-                end: token_start + timing_offset + timing_after.len(),
-                kind: SpanKind::InteractivePlaceholder,
-                project_note: None,
-                title: None,
-                key: None,
-            });
-            // Add drop span if a valid drop was typed before the dangling `@`.
-            if let DropLex::Valid(_, range) = &drop_lex {
-                timing_spans.push(Span {
-                    start: range.0,
-                    end: range.1,
-                    kind: SpanKind::PomodoroStartDrop,
-                    project_note: None,
-                    title: None,
-                    key: None,
-                });
-                timing_spans.sort_by_key(|span| span.start);
-            }
-            return Some(editor_start_timing_incomplete_outcome(
-                item,
-                parent_trimmed,
-                timing_spans,
-                Some(name.clone()),
+                range,
             ));
         }
         let effective = super::item::effective_start_timing(&suffix, &timing);
@@ -693,6 +657,18 @@ pub(super) fn parse_editor_named_start_item<'a>(
         ));
     }
     if has_extra
+        && let Some(message) =
+            second_equals_timing_error(parent_trimmed, len, &name, drop_text)
+    {
+        return Some(editor_named_invalid_outcome(
+            item,
+            parent_trimmed,
+            spans,
+            message,
+            Some(extra_text_range(token_start, parent_trimmed, len)),
+        ));
+    }
+    if has_extra
         && let Some((message, (start, end))) =
             glued_timing_diagnostic(parent_trimmed, len, &suffix)
     {
@@ -704,43 +680,22 @@ pub(super) fn parse_editor_named_start_item<'a>(
             Some((token_start + start, token_start + end)),
         ));
     }
-    // Both timings win over dangling-`@`, like execution.
-    if !suffix.is_empty()
-        && let Some((timing_offset, timing_after)) = timing.as_ref()
-    {
-        let message =
-            start_timing_twice_error(token_text, &suffix, timing_after, &name);
-        let range = (
-            token_start + timing_offset,
-            token_start + timing_offset + timing_after.len(),
-        );
+    if let Some(message) = named_timing_twice_error(
+        token_text,
+        &suffix,
+        &name,
+        timing.as_ref().map(|(_, text)| text.as_str()),
+        drop_text,
+    ) {
+        let range = timing.as_ref().map(|(offset, text)| {
+            (token_start + offset, token_start + offset + text.len())
+        });
         return Some(editor_named_invalid_outcome(
             item,
             parent_trimmed,
             spans,
             message,
-            Some(range),
-        ));
-    }
-    if let Some((timing_offset, timing_after)) = timing.as_ref()
-        && timing_after.is_empty()
-    {
-        let mut timing_spans = spans.clone();
-        timing_spans.push(Span {
-            start: token_start + timing_offset,
-            end: token_start + timing_offset + timing_after.len(),
-            kind: SpanKind::InteractivePlaceholder,
-            project_note: None,
-            title: None,
-            key: None,
-        });
-        timing_spans.sort_by_key(|span| span.start);
-        // With extra text or child lines, a trailing X remains incomplete.
-        return Some(editor_start_timing_incomplete_outcome(
-            item,
-            parent_trimmed,
-            timing_spans,
-            Some(name.clone()),
+            range,
         ));
     }
     // A broken drop list reports its own error first, exactly like
@@ -913,56 +868,6 @@ fn editor_start_drop_incomplete_outcome<'a>(
     }
 }
 
-/// Build a timing-incomplete outcome: mode `incomplete`, need
-/// `pomodoro_start_timing`, the typed name as `section`, no spec (the
-/// timing is unknown and an empty `raw` would read as a ledger takeover),
-/// and an `interactive_placeholder` span over the `@`.
-fn editor_start_timing_incomplete_outcome<'a>(
-    item: &CaptureItem<'a>,
-    parent_trimmed: &str,
-    spans: Vec<Span>,
-    section: Option<String>,
-) -> EditorItemOutcome<'a> {
-    EditorItemOutcome {
-        item: EditorItemParse {
-            index: item.index,
-            start: item.start,
-            end: item.end,
-            line_start: item.line_start,
-            line_end: item.line_end,
-            body: parent_trimmed.to_string(),
-            mode: EditorMode::Incomplete,
-            route: None,
-            section,
-            block_id: None,
-            needs: vec![Need::PomodoroStartTiming],
-            ref_listen: false,
-            pomodoro_start: None,
-            pomodoro_adjust: None,
-            pomodoro_shift: None,
-            pomodoro_split: None,
-            pomodoro_merge: None,
-            pomodoro_close: None,
-            pomodoro_past: None,
-            dependencies: Vec::new(),
-            blocked_tasks: Vec::new(),
-            relations: Vec::new(),
-            dependency_target: None,
-            task_complete: None,
-            list: None,
-            spans,
-            diagnostics: Vec::new(),
-            sub_bullets: Vec::new(),
-            has_local_destination: false,
-            local_destination_markers: Vec::new(),
-            drawer_bullet_target: None,
-            targets: Vec::new(),
-            merge_in: None,
-        },
-        declarations: Vec::new(),
-    }
-}
-
 /// Absolute byte offsets of a named start token's parts: `token_start` is
 /// the `=` byte, `prefix_len` is the `=<X>` byte length, and `name_start`
 /// / `name_end` bound the name part. `spelling` is Hash vs Bare.
@@ -1011,25 +916,10 @@ fn named_start_token_diagnostic(
                 (name_start, name_end),
             ));
         }
-    } else if let Some((before, after)) = name.split_once('=')
-        && suffix.is_empty()
+    } else if spelling == NameSpelling::Hash
+        && can_spell_bare(name)
         && timing_text.is_none()
-        && parse_pomodoro_start_suffix(after).is_ok()
     {
-        let drop_suffix =
-            drop_text.map(|text| format!("~{text}")).unwrap_or_default();
-        let at_form = format!(
-            "{}@{after}{drop_suffix}",
-            echo_named_start(spelling, suffix, before)
-        );
-        let hash_form = format!("={after}#{before}{drop_suffix}");
-        return Some((
-            format!(
-                "write the duration after `@` or before the name: `{at_form}` or `{hash_form}` instead of `{token}`"
-            ),
-            (name_start, name_end),
-        ));
-    } else if spelling == NameSpelling::Hash && can_spell_bare(name) {
         let drop_suffix =
             drop_text.map(|text| format!("~{text}")).unwrap_or_default();
         let suggestion = format!("={suffix}{name}{drop_suffix}");
@@ -1289,25 +1179,6 @@ pub(super) fn parse_editor_start_item<'a>(
                     Some(range),
                 ));
             }
-            if let Some((timing_offset, timing_after)) = timing.as_ref()
-                && timing_after.is_empty()
-            {
-                let mut timing_spans = vec![base_span.clone()];
-                timing_spans.push(Span {
-                    start: token_start + timing_offset,
-                    end: token_start + timing_offset + timing_after.len(),
-                    kind: SpanKind::InteractivePlaceholder,
-                    project_note: None,
-                    title: None,
-                    key: None,
-                });
-                return Some(editor_start_timing_incomplete_outcome(
-                    item,
-                    parent_trimmed,
-                    timing_spans,
-                    None,
-                ));
-            }
             // A broken drop list reports its own error first, exactly like
             // execution. A dangling separator with extra text falls through
             // to the no-spaces hint or the shape error, like closes.
@@ -1400,25 +1271,6 @@ pub(super) fn parse_editor_start_item<'a>(
             base_span,
             message,
             Some(range),
-        ));
-    }
-    if let Some((timing_offset, timing_after)) = timing.as_ref()
-        && timing_after.is_empty()
-    {
-        let mut timing_spans = vec![base_span.clone()];
-        timing_spans.push(Span {
-            start: token_start + timing_offset,
-            end: token_start + timing_offset + timing_after.len(),
-            kind: SpanKind::InteractivePlaceholder,
-            project_note: None,
-            title: None,
-            key: None,
-        });
-        return Some(editor_start_timing_incomplete_outcome(
-            item,
-            parent_trimmed,
-            timing_spans,
-            None,
         ));
     }
     // Effective `<X>` errors win over the drop list.

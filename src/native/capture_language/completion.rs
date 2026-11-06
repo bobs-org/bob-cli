@@ -7,7 +7,10 @@ use super::editor_classify::*;
 use super::editor_model::*;
 use super::editor_parse::*;
 use super::editor_pomodoro::*;
-use super::item::{named_start_name_offset, session_equals_token, EqualsToken};
+use super::item::{
+    named_start_name_offset, session_equals_token, start_timing_len,
+    EqualsToken,
+};
 use super::line::*;
 use super::markers::*;
 use super::model::*;
@@ -761,12 +764,13 @@ pub(super) fn caret_completion_field_at(
                 // A suffix name used to discard the link part: admit cursors in
                 // the link part as well as the suffix name, while keeping
                 // timing bytes (`=`, `=3`, or the trailing `3` in `=bugs3`)
-                // non-completable.
+                // non-completable. Replacement may still cover trailing glued
+                // timing so acceptance keeps the typed count.
                 if cursor <= first.start + link_end {
                     return true;
                 }
                 start_offset.is_none_or(|offset| {
-                    if let Some((name_start, name_end)) = completion_name_range
+                    if let Some((name_start, name_end)) = name_range
                         && first.start + name_start >= first.start + offset
                     {
                         cursor >= first.start + name_start
@@ -777,41 +781,23 @@ pub(super) fn caret_completion_field_at(
                 })
             })
         }
-        CaretTokenShape::TimingIncomplete {
-            route,
-            block_id,
-            link_end,
-            name_range,
-            ..
-        } => {
-            if item.lines.len() != 1 {
-                return None;
-            }
-            caret_link_field(
-                first,
-                route,
-                block_id,
-                link_end,
-                Some(name_range),
-                false,
-                cursor,
-            )
-            .filter(|_| {
-                // Like a complete suffix name: link part and name are
-                // completable, the dangling `@` is not.
-                if cursor <= first.start + link_end {
-                    return true;
-                }
-                cursor >= first.start + name_range.0
-                    && cursor <= first.start + name_range.1
-            })
-        }
+    }
+}
+
+/// Extra trailing glued `<X>` bytes after a name when no leading timing is
+/// present. Retired `@` is not glued timing.
+fn trailing_glued_name_extra(after_name: &str, leading: &str) -> usize {
+    if !leading.is_empty() || after_name.starts_with('@') {
+        0
+    } else {
+        start_timing_len(after_name)
     }
 }
 
 /// Include a hash-start suffix's delimiter in its completion replacement.
 /// This lets the candidate formatter keep `#` for names that need it and
-/// remove it for names that can be written bare.
+/// remove it for names that can be written bare. Trailing glued timing
+/// joins the replacement when there is no leading `<X>`.
 fn caret_suffix_name_completion_range(
     token: &Token<'_>,
     start_offset: Option<usize>,
@@ -822,6 +808,13 @@ fn caret_suffix_name_completion_range(
     else {
         return (name_range, false);
     };
+    let prefix = token.text.get(offset + 1..name_start).unwrap_or("");
+    let leading = prefix.strip_suffix('#').unwrap_or(prefix);
+    let extra = trailing_glued_name_extra(
+        token.text.get(name_end..).unwrap_or(""),
+        leading,
+    );
+    let range_end = name_end + extra;
     if name_start <= offset
         || token.text.as_bytes().get(name_start.saturating_sub(1))
             != Some(&b'#')
@@ -830,9 +823,9 @@ fn caret_suffix_name_completion_range(
             .get(name_start..name_end)
             .is_some_and(super::pomodoro_literal::opens_exact_name)
     {
-        return (Some((name_start, name_end)), false);
+        return (Some((name_start, range_end)), false);
     }
-    (Some((name_start - 1, name_end)), true)
+    (Some((name_start - 1, range_end)), true)
 }
 
 /// A bare-spellable hash name is intentionally invalid for execution, but
@@ -984,6 +977,7 @@ fn named_start_name_at(
         name_spelling: Some(spelling),
         name_is_literal,
         doubled: false,
+        timing,
         ..
     } = super::item::session_equals_token(trimmed)?
     else {
@@ -1023,10 +1017,17 @@ fn named_start_name_at(
     } else {
         name_start
     };
+    let mut range_end = name_end;
+    if let Some((offset, text)) = timing.as_ref()
+        && !text.is_empty()
+        && trimmed.as_bytes().get(*offset) != Some(&b'@')
+    {
+        range_end += trailing_glued_name_extra(text, &suffix);
+    }
     Some((
         suffix,
         name.get(..cursor - name_start)?.to_string(),
-        (hash_start, name_end),
+        (hash_start, range_end),
         true,
     ))
 }
@@ -1176,16 +1177,18 @@ fn pomodoro_past_name_field(
     }
     let name_len = super::bare_name::bare_start_name_len(after_digits)?;
     let start = token_start + 2 + digits;
-    let end = start + name_len;
-    if cursor < start || cursor > end {
+    let name_end = start + name_len;
+    if cursor < start || cursor > name_end {
         return None;
     }
+    let leading = if digits == 0 { "" } else { &after_eq[..digits] };
+    let extra = trailing_glued_name_extra(&after_digits[name_len..], leading);
     Some(CompletionField {
         context: CompletionContext::PomodoroPastName,
         route: None,
         block_id: None,
         query: after_digits.get(..cursor - start)?.to_string(),
-        replacement: (start, end),
+        replacement: (start, name_end + extra),
         bare_name: true,
     })
 }
@@ -3413,6 +3416,7 @@ fn pomodoro_link_suffix_name_field(
         name_is_literal,
         drop,
         doubled: false,
+        timing,
         ..
     } = session_equals_token(&start_token)?
     else {
@@ -3457,6 +3461,13 @@ fn pomodoro_link_suffix_name_field(
     if cursor < token.start + name_start || cursor > token.start + name_end {
         return None;
     }
+    let mut range_end = name_end;
+    if let Some((offset, text)) = timing.as_ref()
+        && !text.is_empty()
+        && start_token.as_bytes().get(*offset) != Some(&b'@')
+    {
+        range_end += trailing_glued_name_extra(text, &timing_suffix);
+    }
     Some(CompletionField {
         context: CompletionContext::PomodoroName,
         route: Some(route_part.to_ascii_lowercase()),
@@ -3472,11 +3483,12 @@ fn pomodoro_link_suffix_name_field(
                 } else {
                     name_start
                 },
-            token.start + name_end,
+            token.start + range_end,
         ),
         // The replacement includes a typed `#` when present, so candidate
         // generation emits the shortest spelling and adds `#` only when the
-        // selected name needs it.
+        // selected name needs it. Trailing glued timing stays in the
+        // replacement so acceptance can keep the typed count.
         bare_name: true,
     })
 }

@@ -199,27 +199,28 @@ pub(crate) fn validate_past_e(
         match lex_past_hash_name(raw_token, e, pos) {
             Ok(lexed) => {
                 // Retire `#` before names a bare spelling can express.
+                // A following `@` is handled below so the count is kept
+                // (`x=#fix@3` → `x=fix3`); a `~` segment suffix is preserved.
                 if !lexed.is_literal {
                     let typed = &e[lexed.start..lexed.end];
                     if can_spell_bare(typed) {
-                        // Preserve a following segment suffix in the rewrite;
-                        // any other tail (retired `@`, trailing count) keeps
-                        // the historical rewrite that drops it.
                         let tail = &e[lexed.end..];
-                        let kept_tail =
-                            if tail.starts_with('~') { tail } else { "" };
-                        let rewrite = format!(
-                            "x={d_text}{typed}{}{}",
-                            kept_tail,
-                            past_suffix(split)
-                        );
-                        return PastEOutcome::Invalid(
-                            retired_start_spelling_error(
-                                raw_token,
-                                "`#` is only for names a bare spelling cannot express",
-                                &rewrite,
-                            ),
-                        );
+                        if !tail.starts_with('@') {
+                            let kept_tail =
+                                if tail.starts_with('~') { tail } else { "" };
+                            let rewrite = format!(
+                                "x={d_text}{typed}{}{}",
+                                kept_tail,
+                                past_suffix(split)
+                            );
+                            return PastEOutcome::Invalid(
+                                retired_start_spelling_error(
+                                    raw_token,
+                                    "`#` is only for names a bare spelling cannot express",
+                                    &rewrite,
+                                ),
+                            );
+                        }
                     }
                 }
                 pos = lexed.end;
@@ -262,25 +263,37 @@ pub(crate) fn validate_past_e(
         } else {
             &after_at[..digits]
         };
-        let base = &e[..pos];
-        // A `~`/`*` tail after the retired `@D` moves to the close part.
         let tail = &after_at[digits..];
-        let moved = (!tail.is_empty()).then_some(format!("={tail}"));
-        let glued = if d_end > 0 {
-            // A leading count already sets the blocks: drop the `@D`.
-            base.to_string()
-        } else if let Some(lexed) = name.as_ref().filter(|n| n.is_literal) {
-            // Literals take timing before the `#`.
-            let raw = &e[lexed.start..lexed.end];
-            format!("{at_count}#{raw}")
+        // A `~` segment suffix stays on `E`; other tails (`*`) move to close.
+        let (kept_e_tail, moved_close) = if tail.starts_with('~') {
+            (tail, String::new())
+        } else if !tail.is_empty() {
+            ("", format!("={tail}"))
         } else {
-            format!("{base}{at_count}")
+            ("", String::new())
         };
-        let rewrite = format!(
-            "x={glued}{}{}",
-            moved.unwrap_or_default(),
-            past_suffix(split)
-        );
+        let raw_name = name
+            .as_ref()
+            .map(|lexed| &e[lexed.start..lexed.end])
+            .unwrap_or("");
+        let is_literal = name.as_ref().is_some_and(|lexed| lexed.is_literal);
+        let suffix = past_suffix(split);
+        if d_end > 0 {
+            let leading = &e[..d_end];
+            let keep_leading = format!(
+                "x={}{kept_e_tail}{moved_close}{suffix}",
+                compose_past_e(leading, raw_name, "", is_literal)
+            );
+            let keep_trailing = format!(
+                "x={}{kept_e_tail}{moved_close}{suffix}",
+                compose_past_e("", raw_name, at_count, is_literal)
+            );
+            return PastEOutcome::Invalid(format!(
+                "`{raw_token}` gives the timing twice; keep one: `{keep_leading}` or `{keep_trailing}`"
+            ));
+        }
+        let glued = compose_past_e("", raw_name, at_count, is_literal);
+        let rewrite = format!("x={glued}{kept_e_tail}{moved_close}{suffix}");
         return PastEOutcome::Invalid(retired_start_spelling_error(
             raw_token,
             "`@` no longer separates a name from its timing",
@@ -917,6 +930,41 @@ fn past_rest_error(
         );
     }
     format!("`{raw_token}` is not a past Pomodoro")
+}
+
+/// Compose the `E` spelling for a past rewrite: bare names glue timing on
+/// either side; non-bare names and literals put it before `#`.
+fn compose_past_e(
+    leading: &str,
+    name: &str,
+    trailing: &str,
+    is_literal: bool,
+) -> String {
+    if name.is_empty() {
+        return format!("{leading}{trailing}");
+    }
+    if is_literal {
+        let timing = if leading.is_empty() {
+            trailing
+        } else {
+            leading
+        };
+        return format!("{timing}#{name}");
+    }
+    if can_spell_bare(name) {
+        if !leading.is_empty() {
+            format!("{leading}{name}")
+        } else {
+            format!("{name}{trailing}")
+        }
+    } else {
+        let timing = if leading.is_empty() {
+            trailing
+        } else {
+            leading
+        };
+        format!("{timing}#{name}")
+    }
 }
 
 /// The typed repair `!` and second-`=` close part, as they follow `E`.

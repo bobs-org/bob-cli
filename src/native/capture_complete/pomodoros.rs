@@ -890,17 +890,30 @@ pub(super) fn pomodoro_name_candidates_from_entries(
 }
 
 /// Prefix `#` onto start-name replacements that cannot be spelled bare, so
-/// accepting a substring match like `2fa` on `=fa|` yields `=#2fa`.
-pub(super) fn apply_bare_start_name_replacements(candidates: &mut Candidates) {
+/// accepting a substring match like `2fa` on `=fa|` yields `=#2fa`. When
+/// the replaced slice already holds trailing glued timing and no leading
+/// count, fold that timing into the replacement (`=de|3` plus DEEP WORK
+/// yields `=3#deep-work`; a bare name keeps `=fix3`).
+pub(super) fn apply_bare_start_name_replacements(
+    candidates: &mut Candidates,
+    replaced_slice: &str,
+) {
     let Candidates::PomodoroName(items) = candidates else {
         return;
     };
+    let trailing = capture_language::trailing_glued_timing(replaced_slice);
     for item in items {
         if item.replacement.is_empty() {
             continue;
         }
         if !capture_language::can_spell_bare(&item.replacement) {
-            item.replacement.insert(0, '#');
+            if trailing.is_empty() {
+                item.replacement.insert(0, '#');
+            } else {
+                item.replacement = format!("{trailing}#{}", item.replacement);
+            }
+        } else if !trailing.is_empty() {
+            item.replacement.push_str(trailing);
         }
     }
 }

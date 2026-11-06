@@ -103,6 +103,60 @@ pub(crate) fn echo_named_start(
     }
 }
 
+/// Compose a valid named-start token from at most one timing and a name.
+/// Non-bare names take timing before `#`; bare names keep it on either side.
+pub(crate) fn glued_named_start(
+    leading: &str,
+    name: &str,
+    trailing: &str,
+) -> String {
+    if can_spell_bare(name) {
+        if !leading.is_empty() {
+            format!("={leading}{name}")
+        } else {
+            format!("={name}{trailing}")
+        }
+    } else {
+        let timing = if leading.is_empty() {
+            trailing
+        } else {
+            leading
+        };
+        format!("={timing}#{name}")
+    }
+}
+
+/// Trailing glued `<X>` inside a bare-name replacement slice (`de3`,
+/// `fix10-3`). Hash-delimited slices keep their digits as name bytes.
+/// A retired `@` after the name is not glued timing.
+pub(crate) fn trailing_glued_timing(slice: &str) -> &str {
+    if slice.starts_with('#') {
+        return "";
+    }
+    let Some(name_len) = bare_start_name_len(slice) else {
+        return "";
+    };
+    if name_len >= slice.len() {
+        return "";
+    }
+    let rest = &slice[name_len..];
+    if rest.starts_with('@') {
+        return "";
+    }
+    let bytes = rest.as_bytes();
+    let mut len = 0;
+    while len < bytes.len() && bytes[len].is_ascii_digit() {
+        len += 1;
+    }
+    if bytes.get(len) == Some(&b'-') {
+        len += 1;
+        while len < bytes.len() && bytes[len].is_ascii_digit() {
+            len += 1;
+        }
+    }
+    &rest[..len]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,5 +219,15 @@ mod tests {
             echo_named_start(NameSpelling::Hash, "3", "deep-work"),
             "=3#deep-work"
         );
+        assert_eq!(glued_named_start("", "fix", "3"), "=fix3");
+        assert_eq!(glued_named_start("3", "fix", ""), "=3fix");
+        assert_eq!(glued_named_start("", "deep-work", "3"), "=3#deep-work");
+        assert_eq!(glued_named_start("3", "deep-work", ""), "=3#deep-work");
+        assert_eq!(trailing_glued_timing("de3"), "3");
+        assert_eq!(trailing_glued_timing("fix10-3"), "10-3");
+        assert_eq!(trailing_glued_timing("#de3"), "");
+        assert_eq!(trailing_glued_timing("de@3"), "");
+        assert_eq!(trailing_glued_timing("de3~2"), "3");
+        assert_eq!(trailing_glued_timing("de"), "");
     }
 }

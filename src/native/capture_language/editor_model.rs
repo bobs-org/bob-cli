@@ -329,7 +329,6 @@ pub(crate) enum Need {
     PomodoroCloseTask,
     PomodoroCloseLogText,
     PomodoroStartTask,
-    PomodoroStartTiming,
     /// A prerequisite picker is still open: an `&` modifier is partial.
     TaskDependency,
     /// A blocked-task picker is still open: a `*` modifier is partial.
@@ -378,7 +377,6 @@ impl Need {
             Self::PomodoroCloseTask => "pomodoro_close_task",
             Self::PomodoroCloseLogText => "pomodoro_close_log_text",
             Self::PomodoroStartTask => "pomodoro_start_task",
-            Self::PomodoroStartTiming => "pomodoro_start_timing",
             Self::TaskDependency => "task_dependency",
             Self::BlockedTask => "blocked_task",
             Self::RelationTarget => "relation_target",

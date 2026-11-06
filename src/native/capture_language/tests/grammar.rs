@@ -1020,10 +1020,26 @@ fn execution_parses_equals_family_starts_alongside_close() {
         ("=3#bugs", "=3bugs"),
         ("=bugs@3", "=bugs3"),
         ("=bugs~2@3", "=bugs3~2"),
+        ("=#fix@3", "=fix3"),
+        ("=#deep-work@3", "=3#deep-work"),
     ] {
         let error = execute(raw).expect_err(raw);
         assert!(error.contains(suggestion), "{raw}: {error}");
+        execute(suggestion).expect("suggested start stays executable");
     }
+    let twice = execute("=3#fix@2").expect_err("leading plus @");
+    assert!(
+        twice.contains("=3fix") && twice.contains("=fix2"),
+        "{twice}"
+    );
+    execute("=3fix").expect("keep-leading twice spelling");
+    execute("=fix2").expect("keep-trailing twice spelling");
+    let dashed_twice = execute("=3#deep-work@5").expect_err("non-bare twice");
+    assert!(
+        dashed_twice.contains("=3#deep-work")
+            && dashed_twice.contains("=5#deep-work"),
+        "{dashed_twice}"
+    );
     let close_shaped = execute("=3x").expect_err("close-shaped name");
     assert!(close_shaped.contains("=3#x"), "{close_shaped}");
     // Oversized values fail the shared start overflow before any write.
@@ -1221,12 +1237,24 @@ fn execution_teaches_bare_named_start_shape_in_the_typed_spelling() {
         execute("=#deep").expect_err("retired bare-name hash"),
         "`=#deep` is retired: `#` is only for names a bare start cannot spell; write `=deep`"
     );
-    assert!(execute("=bugs=3")
-        .expect_err("extra equals timing")
-        .contains("whole capture item"));
-    assert!(execute("=bugs@")
-        .expect_err("retired at timing")
-        .contains("retired"));
+    let extra_equals = execute("=bugs=3").expect_err("extra equals timing");
+    assert!(
+        extra_equals.contains("=bugs3") && extra_equals.contains("=3bugs"),
+        "{extra_equals}"
+    );
+    execute("=bugs3").expect("beside spelling stays executable");
+    execute("=3bugs").expect("before spelling stays executable");
+    let dangling = execute("=bugs@").expect_err("retired at timing");
+    assert!(dangling.contains("retired"), "{dangling}");
+    assert!(dangling.contains("=bugs3"), "{dangling}");
+    let dangling_edit = editor("=bugs@");
+    assert_eq!(dangling_edit.mode, EditorMode::PomodoroStart);
+    assert_eq!(codes(&dangling_edit), vec!["invalid_pomodoro_start"]);
+    assert_eq!(dangling_edit.diagnostics[0].message, dangling);
+    let extra_edit = editor("=bugs=3");
+    assert_eq!(extra_edit.mode, EditorMode::PomodoroStart);
+    assert_eq!(codes(&extra_edit), vec!["invalid_pomodoro_start"]);
+    assert_eq!(extra_edit.diagnostics[0].message, extra_equals);
     assert_eq!(
         execute("=x#bugs").expect_err("retired close-hash"),
         "`=x#bugs` is retired: close the running Pomodoro with a bare `x`, without the `=`; write `x =bugs`"

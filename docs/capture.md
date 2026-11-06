@@ -389,7 +389,7 @@ Bob refuses two cases before planning writes:
 | `x@` | Incomplete: type a task number after `@` (`capture-parse` needs `pomodoro_close_task`) |
 | `x2@3` | Error: lists the in-progress tasks twice (`x2,3` or `x@2,3`) |
 | `==#bugs@` | Retired: `` `==#bugs@` is retired: `=` restarts or swaps the running Pomodoro by itself; write `=bugs` `` |
-| `=3#bugs@5` | Error: gives the timing twice; write one timing (`=5bugs` or `=bugs3`) and omit the redundant `#` |
+| `=3#bugs@5` | Error: gives the timing twice; write one timing (`=3bugs` or `=bugs5`) and omit the redundant `#` |
 | `x @2 foo` | Error: `` write the task numbers right after `x`, with no spaces (`x@2`); to log text that starts with `@2`, put the task number first: `x 1 @2 foo` `` |
 | `=#` | Incomplete: type a non-bare Pomodoro name after `#` (`capture-parse` needs `pomodoro_name`) |
 | `=# bugs` | Error: remove the space and use the bare spelling (`=bugs`) |
@@ -5507,6 +5507,7 @@ Common teaching errors show the exact rewrite:
 | --- | --- |
 | `x=3-1`, `x=-2`, `x=3-`, `x=fix-`, `x=fix3-1`, `x=3-1fix` | `x=` takes no offset; to start at a segment write the suffix, to end now drop the dash (`x=3-1` → `x=3~1` or `x=3`, `x=-2` → `x=~2` or `x=`, `x=fix3-1` → `x=fix3~1` or `x=fix3`, `x=-` → `x=~` or `x=`, `x=3-` → `x=3~` or `x=3`) |
 | `x=3#fix@2` | Give the count once: `x=3fix` or `x=fix2` |
+| `x=#fix@3`, `x=#deep-work@3` | Retired `@` glued onto the name: write `x=fix3` or `x=3#deep-work` |
 | `x=fix@3`, `x=build@` | Retired timing separator: write `x=fix3` or `x=build3` |
 | `x=3#fix`, `x=#fix` | `#` is only for names a bare start cannot spell: write `x=3fix` or `x=fix` |
 | `x=3#build` | Redundant `#`: write `x=3build` |

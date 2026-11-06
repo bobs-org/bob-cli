@@ -52,6 +52,7 @@ mod tests;
 
 pub(crate) use self::bare_name::can_spell_bare;
 pub(crate) use self::bare_name::named_start_token;
+pub(crate) use self::bare_name::trailing_glued_timing;
 pub(crate) use self::close_log::assign_log_positions;
 pub(crate) use self::close_log::lexical_worked_tasks_with_all;
 pub(crate) use self::close_log::PositionalLogError;

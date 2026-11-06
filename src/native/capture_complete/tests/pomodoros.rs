@@ -44,6 +44,7 @@ fn pomodoro_past_name_fields_preserve_suffixes_and_chain_siblings() {
         ("x=3#|", "", "#", true),
         ("x=3|", "", "", true),
         ("x=fi|x!", "fi", "fix", true),
+        ("x=fi|x3", "fi", "fix3", true),
         ("x=3fi|x", "fi", "fix", true),
         ("x=#fi|x=*3", "fi", "#fix", true),
         ("x=3#fi|x!=1!2", "fi", "#fix", true),
@@ -820,7 +821,7 @@ fn bare_start_name_replacements_prefix_hash_when_the_slug_cannot_be_bare() {
     ));
     let items = pomodoro_start_name_candidates_from_scan(&scan, "");
     let mut candidates = Candidates::PomodoroName(items);
-    apply_bare_start_name_replacements(&mut candidates);
+    apply_bare_start_name_replacements(&mut candidates, "");
     let Candidates::PomodoroName(items) = candidates else {
         panic!("expected pomodoro-name candidates");
     };
@@ -909,4 +910,90 @@ fn pomodoro_start_name_orders_repeated_completed_names_newest_first() {
         alpha < beta,
         "ALPHA newest-first before BETA: {presented:?}"
     );
+}
+
+#[test]
+fn bare_start_name_replacements_fold_trailing_glued_timing() {
+    let scan = capture_pomodoros::scan(concat!(
+        "## Pomodoros\n",
+        "- [ ] () — DEEP WORK\n",
+        "- [ ] () — FIX\n",
+        "- [ ] () — 2FA\n",
+    ));
+    let items = pomodoro_start_name_candidates_from_scan(&scan, "");
+    let mut candidates = Candidates::PomodoroName(items);
+    apply_bare_start_name_replacements(&mut candidates, "de3");
+    let Candidates::PomodoroName(items) = candidates else {
+        panic!("expected pomodoro-name candidates");
+    };
+    let replacements: Vec<&str> =
+        items.iter().map(|row| row.replacement.as_str()).collect();
+    assert!(replacements.contains(&"3#deep-work"), "{replacements:?}");
+    assert!(replacements.contains(&"fix3"), "{replacements:?}");
+    assert!(replacements.contains(&"3#2fa"), "{replacements:?}");
+}
+
+#[test]
+fn accepting_a_start_name_keeps_trailing_glued_timing() {
+    let temp = TempDir::new("bob-cli-capture-complete-glued-timing");
+    let day = temp.path().join("2026/20261104.md");
+    write_file(
+        &day,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] () — DEEP WORK\n",
+            "- [ ] () — FIX\n",
+            "- [ ] () — 2FA\n",
+        ),
+    );
+    crate::native::env::with_var("BOB_DAY_FILE", &day, || {
+        for (marked, name, expected) in [
+            ("=de|3", "DEEP WORK", "=3#deep-work"),
+            ("=fi|3", "FIX", "=fix3"),
+            ("=3de|", "DEEP WORK", "=3#deep-work"),
+            ("=#fi|", "FIX", "=fix"),
+            ("x=de|3", "DEEP WORK", "x=3#deep-work"),
+            ("x=fi|3~2", "FIX", "x=fix3~2"),
+            (
+                "@work:outline=de|3",
+                "DEEP WORK",
+                "@work:outline=3#deep-work",
+            ),
+            (
+                "^work:outline=de|3",
+                "DEEP WORK",
+                "^work:outline=3#deep-work",
+            ),
+        ] {
+            let cursor = marked.find('|').unwrap();
+            let raw = marked.replace('|', "");
+            let menu = result(temp.path(), &raw, cursor);
+            let Candidates::PomodoroName(rows) = &menu.candidates else {
+                panic!("expected name candidates for {marked}");
+            };
+            let row = rows
+                .iter()
+                .find(|row| row.name.as_deref() == Some(name))
+                .unwrap_or_else(|| {
+                    panic!("missing {name} in {marked}: {rows:?}")
+                });
+            assert!(
+                !row.replacement.is_empty(),
+                "{marked} {name} requires_name"
+            );
+            let mut spliced = raw.clone();
+            spliced.replace_range(
+                menu.replacement.start..menu.replacement.end,
+                &row.replacement,
+            );
+            assert_eq!(spliced, expected, "{marked}");
+            capture_language::parse_capture_text_with_options(
+                &spliced,
+                None,
+                None,
+                &capture_language::CaptureParseOptions::routing_off(),
+            )
+            .unwrap_or_else(|error| panic!("{marked} → {spliced}: {error}"));
+        }
+    });
 }

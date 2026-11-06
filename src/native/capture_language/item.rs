@@ -3879,7 +3879,7 @@ pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
 
 /// Byte length of the timing grammar `[0-9]*(-[0-9]*)?`, allowing a lone
 /// `-` as the useful incomplete editing state.
-fn start_timing_len(text: &str) -> usize {
+pub(crate) fn start_timing_len(text: &str) -> usize {
     let bytes = text.as_bytes();
     let mut len = 0;
     while len < bytes.len() && bytes[len].is_ascii_digit() {
@@ -4130,7 +4130,10 @@ fn named_token_error(
         if canonicalize_exact_name(name).is_none() {
             return Some(pomodoro_named_start_name_error(name, token));
         }
-    } else if spelling == NameSpelling::Hash && can_spell_bare(name) {
+    } else if spelling == NameSpelling::Hash
+        && can_spell_bare(name)
+        && timing_text.is_none()
+    {
         let drop_suffix =
             drop_text.map(|text| format!("~{text}")).unwrap_or_default();
         let suggestion = format!("={suffix}{name}{drop_suffix}");
@@ -4139,21 +4142,6 @@ fn named_token_error(
             &typed,
             "`#` is only for names a bare start cannot spell",
             &suggestion,
-        ));
-    } else if let Some((before, after)) = name.split_once('=')
-        && suffix.is_empty()
-        && timing_text.is_none()
-        && parse_pomodoro_start_suffix(after).is_ok()
-    {
-        let drop_suffix =
-            drop_text.map(|text| format!("~{text}")).unwrap_or_default();
-        let at_form = format!(
-            "{}@{after}{drop_suffix}",
-            echo_named_start(spelling, suffix, before)
-        );
-        let hash_form = format!("={after}#{before}{drop_suffix}");
-        return Some(format!(
-            "write the duration after `@` or before the name: `{at_form}` or `{hash_form}` instead of `{token}`"
         ));
     } else if !is_pomodoro_selector_component(name) {
         return Some(pomodoro_named_start_name_error(name, token));
@@ -4166,22 +4154,37 @@ fn named_token_error(
 }
 
 /// Both-timings error for a named token with a leading `<X>` and an `@<X>`
-/// part. `None` when not both. Wins over the dangling-`@` incomplete state.
-fn named_timing_twice_error(
+/// part. `None` when not both. Wins over a retired `@` rewrite so leading
+/// timing plus `@` offers both keep-one spellings.
+pub(super) fn named_timing_twice_error(
     token: &str,
     suffix: &str,
     name: &str,
     timing_text: Option<&str>,
+    drop_text: Option<&str>,
 ) -> Option<String> {
     let timing = timing_text?;
     if suffix.is_empty() {
         return None;
     }
-    Some(start_timing_twice_error(token, suffix, timing, name))
+    let drop_suffix = drop_text
+        .filter(|text| !text.is_empty())
+        .map(|text| format!("~{text}"))
+        .unwrap_or_default();
+    Some(start_timing_twice_error_with_drop(
+        token,
+        suffix,
+        timing,
+        name,
+        &drop_suffix,
+    ))
 }
 
 /// Retired `@X` start spelling. The typed name bytes are retained for exact
-/// literals so the rewrite remains directly pasteable.
+/// literals so the rewrite remains directly pasteable. Bare-spellable hash
+/// names drop `#` (`=#fix@3` → `=fix3`); non-bare names take timing before
+/// `#` (`=#deep-work@3` → `=3#deep-work`). A leading timing plus `@` yields
+/// to [`named_timing_twice_error`].
 pub(super) fn retired_at_start_error(
     token: &str,
     suffix: &str,
@@ -4193,6 +4196,9 @@ pub(super) fn retired_at_start_error(
 ) -> Option<String> {
     let (offset, raw_timing) = timing?;
     if token.as_bytes().get(*offset) != Some(&b'@') {
+        return None;
+    }
+    if !suffix.is_empty() {
         return None;
     }
     let timing_text = if raw_timing.is_empty() {
@@ -4211,11 +4217,8 @@ pub(super) fn retired_at_start_error(
             let raw_name = token.get(name_start..*offset).unwrap_or_default();
             format!("={timing_text}#{raw_name}{drop_suffix}")
         }
-        (Some(name), Some(NameSpelling::Hash)) => {
-            format!("={timing_text}#{name}{drop_suffix}")
-        }
-        (Some(name), Some(NameSpelling::Bare)) => {
-            format!("={name}{timing_text}{drop_suffix}")
+        (Some(name), _) => {
+            format!("{}{drop_suffix}", glued_named_start("", name, timing_text))
         }
         _ => format!("={timing_text}{drop_suffix}"),
     };
@@ -4223,6 +4226,34 @@ pub(super) fn retired_at_start_error(
         token,
         "`@` no longer separates a name from its timing",
         &suggestion,
+    ))
+}
+
+/// Extra `=<X>` after a named start (`=bugs=3`). Teaches the glued
+/// spellings and never mentions `@` or a redundant `#`.
+pub(super) fn second_equals_timing_error(
+    parent_trimmed: &str,
+    len: usize,
+    name: &str,
+    drop_text: Option<&str>,
+) -> Option<String> {
+    let extra = parent_trimmed.get(len..)?.trim_start();
+    let after = extra.strip_prefix('=')?;
+    if after.is_empty() || parse_pomodoro_start_suffix(after).is_err() {
+        return None;
+    }
+    let displayed = parent_trimmed
+        .split_whitespace()
+        .next()
+        .unwrap_or(parent_trimmed);
+    let drop_suffix = drop_text
+        .filter(|text| !text.is_empty())
+        .map(|text| format!("~{text}"))
+        .unwrap_or_default();
+    let beside = format!("{}{drop_suffix}", glued_named_start("", name, after));
+    let before = format!("{}{drop_suffix}", glued_named_start(after, name, ""));
+    Some(format!(
+        "`{displayed}` gives the timing after a second `=`; write `{beside}` or `{before}`"
     ))
 }
 
@@ -5321,14 +5352,9 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     &suffix,
                     &selector,
                     timing_text,
+                    drop_text,
                 ) {
                     return Err(error);
-                }
-                // Dangling `@` is an incomplete error on execution.
-                if let Some(text) = timing_text
-                    && text.is_empty()
-                {
-                    return Err(start_timing_incomplete_error(token_text));
                 }
                 // A drop or timing part claims the item, like a counted token.
                 let exact =
@@ -5337,6 +5363,14 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     let has_extra = parent_trimmed.len() > len;
                     let has_children = item.lines.len() > 1;
                     if has_extra || has_children {
+                        if let Some(error) = second_equals_timing_error(
+                            parent_trimmed,
+                            len,
+                            &selector,
+                            drop_text,
+                        ) {
+                            return Err(error);
+                        }
                         if let Some((message, _)) = glued_timing_diagnostic(
                             parent_trimmed,
                             len,
@@ -5470,11 +5504,6 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                             token_text, sigil, effective, drop_text,
                         ));
                     }
-                    if let Some((_, timing_text)) = timing.as_ref()
-                        && timing_text.is_empty()
-                    {
-                        return Err(start_timing_incomplete_error(token_text));
-                    }
                     // A broken drop list reports its own error first; a
                     // dangling separator with extra text falls through to
                     // the no-spaces hint or the shape error, like closes.
@@ -5523,12 +5552,6 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                 return Err(start_timing_twice_unnamed_error(
                     token_text, sigil, effective, drop_text,
                 ));
-            }
-            if let Some((_, timing_text)) = timing.as_ref()
-                && timing_text.is_empty()
-            {
-                let token_text = parent_trimmed;
-                return Err(start_timing_incomplete_error(token_text));
             }
             // Suffix errors win over the drop list; the effective `<X>`
             // (leading or `@`) is validated.
