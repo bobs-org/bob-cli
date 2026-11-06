@@ -1283,6 +1283,10 @@ pub(super) struct TaskCompleteOfferJson {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) note: Option<String>,
     pub(super) destination: TaskCompleteOfferDestinationJson,
+    /// Bob-authored per-row Done/Cancel eligibility and consequence copy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) close:
+        Option<crate::native::task_complete::offer_close::OfferCloseDescriptor>,
     /// Crate-private draft order; never a JSON field.
     #[serde(skip)]
     pub(super) order_key: crate::native::task_complete::OfferOrderKey,
@@ -3024,6 +3028,41 @@ pub(super) fn all_offer_rows(
         .chain(all_keep_moving(item))
         .chain(all_note_pull(item))
         .chain(item.relation_merge_output.offer_rows.iter())
+}
+
+/// Mutable access to the same capture offer rows as [`all_offer_rows`].
+pub(super) fn for_each_offer_row_mut(
+    item: &mut CaptureItemResult,
+    mut apply: impl FnMut(&mut TaskCompleteUnblockedJson),
+) {
+    for vec in unblocked_vecs_mut(item) {
+        for row in vec.iter_mut().filter(|row| row.offer.is_some()) {
+            apply(row);
+        }
+    }
+    for vec in relation_successors_vecs_mut(item) {
+        for row in vec.iter_mut().filter(|row| row.offer.is_some()) {
+            apply(row);
+        }
+    }
+    for vec in keep_moving_vecs_mut(item) {
+        for row in vec.iter_mut().filter(|row| row.offer.is_some()) {
+            apply(row);
+        }
+    }
+    for vec in note_pull_vecs_mut(item) {
+        for row in vec.iter_mut().filter(|row| row.offer.is_some()) {
+            apply(row);
+        }
+    }
+    for row in item
+        .relation_merge_output
+        .offer_rows
+        .iter_mut()
+        .filter(|row| row.offer.is_some())
+    {
+        apply(row);
+    }
 }
 
 /// Every note-pull row an item reports (`docs/task-dependencies.md`
@@ -7411,6 +7450,7 @@ mod tests {
                 moved_from: None,
                 merged_from: None,
                 note: None,
+                close: None,
                 order_key: (0, (0, 0), 0, std::path::PathBuf::from("b.md"), 0),
                 settled_ordinal: None,
             }),

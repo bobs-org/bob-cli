@@ -470,6 +470,7 @@ pub(super) fn offer_json(
         moved_from: None,
         merged_from: offer.merged_from.clone(),
         note: None,
+        close: offer.close.clone(),
         settled_ordinal: None,
     }
 }
@@ -499,6 +500,7 @@ mod offer_json_tests {
             merged_from: merged_from.map(str::to_string),
             order_key: (0, (0, 0), 0, PathBuf::from("dest.md"), 0),
             relation: None,
+            close: None,
         }
     }
 

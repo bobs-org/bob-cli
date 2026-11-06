@@ -1898,6 +1898,9 @@ pub(super) fn plan_project_note_item(
                                                 entry_role,
                                                 fallback,
                                             },
+                                        close: Some(
+                                            crate::native::task_complete::offer_close::OfferCloseDescriptor::refused("new_task"),
+                                        ),
                                         order_key: offer.order_key.clone(),
                                         settled_ordinal: offer.settled_ordinal,
                                     }),
@@ -2018,6 +2021,9 @@ pub(super) fn plan_project_note_item(
                                             entry_role,
                                             fallback,
                                         },
+                                    close: Some(
+                                        crate::native::task_complete::offer_close::OfferCloseDescriptor::refused("new_task"),
+                                    ),
                                     order_key: offer.order_key.clone(),
                                     settled_ordinal: offer.settled_ordinal,
                                 }),

@@ -1090,6 +1090,11 @@ pub(super) fn plan_note_pull_item(
                 merged_from: None,
                 note: Some(note.clone()),
                 destination,
+                close: offer.is_new.then(|| {
+                    crate::native::task_complete::offer_close::OfferCloseDescriptor::refused(
+                        "new_task",
+                    )
+                }),
                 order_key,
                 settled_ordinal: offer.settled_ordinal,
             }),
@@ -1733,7 +1738,7 @@ mod tests {
     }
 
     #[test]
-    fn dependency_free_pull_without_day_links_does_not_walk_note_catalog() {
+    fn offer_close_post_pass_reuses_one_dependency_snapshot() {
         let harness = vault_harness(
             &[("sase.md", PBA)],
             Some(FIX_DAY),
@@ -1745,10 +1750,26 @@ mod tests {
         )
         .expect("dependency-free note pull plans");
         assert_eq!(
-            batch.catalog_walks, 0,
-            "the note-pull net pass must skip the catalog when the day has no task links"
+            batch.catalog_walks, 1,
+            "the offer-close post-pass shares one catalog walk"
         );
-        assert!(batch.snapshot_read_counts.is_empty());
+        assert!(
+            !batch.snapshot_read_counts.is_empty()
+                && batch.snapshot_read_counts.values().all(|count| *count == 1),
+            "each dependency snapshot note is read once: {:?}",
+            batch.snapshot_read_counts
+        );
+        let offers = crate::native::capture::output::all_offer_rows(
+            &batch.items[0].result,
+        )
+        .collect::<Vec<_>>();
+        assert_eq!(offers.len(), 3);
+        assert!(offers.iter().all(|row| {
+            row.offer
+                .as_ref()
+                .and_then(|offer| offer.close.as_ref())
+                .is_some()
+        }));
     }
 
     // NP2: `-p all` links every offer; Ready becomes Next while Pending

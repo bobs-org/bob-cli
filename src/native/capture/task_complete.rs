@@ -1584,6 +1584,162 @@ pub(super) fn apply_successor_net_post_pass(
     // Relation groups with no surviving row are silent too; the
     // presentation phase must not render an empty parked group.
     prune_empty_relation_groups(items);
+    apply_offer_close_post_pass(items, planner, dependency_ctx, bob_dir);
+}
+
+/// Attach close descriptors after batch successor rows survive net filtering.
+/// This reads one shared dependency snapshot and simulates one recover-only
+/// close for each surviving offer row against the final staged note text.
+fn apply_offer_close_post_pass(
+    items: &mut [PlannedCaptureItem],
+    planner: &mut CaptureBatchPlanner,
+    dependency_ctx: &DependencyContext,
+    bob_dir: &Path,
+) {
+    let tasks_settings =
+        crate::native::task_status_hooks::read_tasks_settings(bob_dir);
+    let note_settings = dependency_ctx.settings();
+    let staged = staged_overlay_map(bob_dir, planner);
+    let dependencies = dependency_ctx.dependents_snapshot();
+    let snapshot_complete = dependencies.snapshot_complete(&staged);
+    let recovery_snapshot = dependencies.overlaid(staged);
+    let index = staged_note_index(bob_dir, planner, dependency_ctx);
+    let day_file = pomodoro::day_file_for(bob_dir);
+    let day_relative = capture_pomodoros::relative_day_file(&day_file, bob_dir);
+    let created_tasks: Vec<(String, Option<String>, String)> = items
+        .iter()
+        .filter(|item| item.result.kind == "task")
+        .map(|item| {
+            (
+                item.result.relative_target.clone(),
+                item.result.block_id.clone(),
+                item.result.task_line.clone(),
+            )
+        })
+        .collect();
+
+    for item in items {
+        super::output::for_each_offer_row_mut(&mut item.result, |row| {
+            let Some(offer) = row.offer.as_ref() else {
+                return;
+            };
+            let key = offer.key.clone();
+            let group = offer.group;
+            let prior_why =
+                offer.close.as_ref().and_then(|close| close.why.clone());
+            let relative = PathBuf::from(&row.note_path);
+            let absolute = bob_dir.join(&relative);
+            let Some(source_text) =
+                planner.peek_text(&absolute).or_else(|| {
+                    recovery_snapshot
+                        .iter()
+                        .find(|(path, _)| path == &relative)
+                        .map(|(_, text)| text.clone())
+                })
+            else {
+                row.offer.as_mut().expect("offer still present").close =
+                    Some(engine::offer_close::OfferCloseDescriptor::refused(
+                        "changed_identity",
+                    ));
+                return;
+            };
+            let Some(task) =
+                successor_task_lookup(row, planner, bob_dir, &tasks_settings)
+            else {
+                row.offer.as_mut().expect("offer still present").close =
+                    Some(engine::offer_close::OfferCloseDescriptor::refused(
+                        "changed_identity",
+                    ));
+                return;
+            };
+            let expected_line =
+                crate::native::task_complete::successors::raw_task_line(
+                    &source_text,
+                    task.line_index,
+                );
+            let is_new_task = prior_why.as_deref() == Some("new_task")
+                || capture_created_offer_task(
+                    row,
+                    &task,
+                    &expected_line,
+                    &created_tasks,
+                    &tasks_settings,
+                );
+            let snapshot = snapshot_with_source(
+                &recovery_snapshot,
+                &relative,
+                &source_text,
+            );
+            let descriptor = engine::offer_close::describe_offer_close(
+                &engine::offer_close::OfferCloseInput {
+                    key: &key,
+                    path: &relative,
+                    line_index: task.line_index,
+                    expected_line: &expected_line,
+                    source_text: &source_text,
+                    group,
+                    is_new_task,
+                    muted: prior_why.as_deref() == Some("muted"),
+                    today: dependency_ctx.today,
+                    tasks_settings: &tasks_settings,
+                    note_settings,
+                    snapshot: &snapshot,
+                    snapshot_complete,
+                    day_relative: Path::new(&day_relative),
+                    index: &index,
+                },
+            );
+            row.offer.as_mut().expect("offer still present").close =
+                Some(descriptor);
+        });
+    }
+}
+
+fn snapshot_with_source(
+    snapshot: &[(PathBuf, String)],
+    path: &Path,
+    source_text: &str,
+) -> Vec<(PathBuf, String)> {
+    let mut snapshot = snapshot.to_vec();
+    if let Some((_, contents)) =
+        snapshot.iter_mut().find(|(candidate, _)| candidate == path)
+    {
+        *contents = source_text.to_string();
+    } else {
+        snapshot.push((path.to_path_buf(), source_text.to_string()));
+        snapshot.sort_by(|left, right| left.0.cmp(&right.0));
+    }
+    snapshot
+}
+
+fn capture_created_offer_task(
+    row: &TaskCompleteUnblockedJson,
+    task: &crate::native::task_status_hooks::TaskLine,
+    raw_line: &str,
+    created_tasks: &[(String, Option<String>, String)],
+    tasks_settings: &crate::native::task_status_hooks::TasksSettings,
+) -> bool {
+    created_tasks.iter().any(|(path, block_id, task_line)| {
+        if path != &row.note_path {
+            return false;
+        }
+        block_id
+            .as_deref()
+            .zip(task.block_id.as_deref())
+            .is_some_and(|(created, current)| created == current)
+            || raw_line.trim_end_matches('\r')
+                == task_line.trim_end_matches('\r')
+            || crate::native::task_status_hooks::parse_tasks(
+                task_line,
+                tasks_settings,
+            )
+            .first()
+            .is_some_and(|created| {
+                task.block_id.is_none()
+                    && created.block_id.is_none()
+                    && created.description == task.description
+            })
+    })
 }
 
 fn refresh_project_offer_final_position(

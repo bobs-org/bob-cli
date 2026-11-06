@@ -6,6 +6,8 @@
 //! module. Keep everything `pub(crate)`.
 
 pub(crate) mod keep_moving;
+#[allow(dead_code)]
+pub(crate) mod offer_close;
 pub(crate) mod project_close;
 pub(crate) mod project_pull_in;
 #[cfg(test)]

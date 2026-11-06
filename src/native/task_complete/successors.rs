@@ -208,6 +208,9 @@ pub(crate) struct OfferReport {
     /// Relation second-reason or winning-group metadata. Capture
     /// serializers ignore this until the parent phases expose it.
     pub relation: Option<RelationRowInfo>,
+    /// Bob-authored Done/Cancel eligibility and consequence copy for this
+    /// offered row (`docs/task-dependencies.md` §12.22).
+    pub close: Option<super::offer_close::OfferCloseDescriptor>,
 }
 
 /// Folded counts for one project whose `^prj` entered project offers.
@@ -3180,6 +3183,7 @@ pub(crate) fn offer_report(
         merged_from: None,
         order_key: offer.order_key.clone(),
         relation: relation.cloned(),
+        close: None,
     }
 }
 

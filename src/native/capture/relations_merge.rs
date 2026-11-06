@@ -415,6 +415,7 @@ fn merge_offer_row(
                 entry_role: destination_role,
                 fallback: false,
             },
+            close: None,
             order_key: (
                 0,
                 (0, 0),

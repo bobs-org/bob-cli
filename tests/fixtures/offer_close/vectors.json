@@ -1,0 +1,188 @@
+{
+  "schema_version": 1,
+  "contract": "docs/task-dependencies.md §12.22–§12.23",
+  "cases": [
+    {
+      "id": "SV1",
+      "kind": "done",
+      "path": "Tasks.md",
+      "key": "Tasks.md#^ready",
+      "line": 0,
+      "today": "2026-11-05",
+      "source": "- [ ] #task Ship it ^ready\n",
+      "expected": {
+        "source": "- [x] #task Ship it  [completion:: 2026-11-05] ^ready\n",
+        "consequence": "✓ Completes “Ship it” · Ready → Done",
+        "work_log": false,
+        "freshness": false
+      }
+    },
+    {
+      "id": "SV2",
+      "kind": "cancel",
+      "path": "Tasks.md",
+      "key": "Tasks.md#^cancel-reason",
+      "line": 0,
+      "today": "2026-11-05",
+      "reason": "Duplicate implementation",
+      "source": "- [*] #task Add retry wrapper ^cancel-reason\n  - ❌ **CANCEL LOG**\n    - *2026-10-01* — earlier reason\n",
+      "expected": {
+        "source": "- [-] #task Add retry wrapper [cancelled:: 2026-11-05] ^cancel-reason\n  - ❌ **CANCEL LOG**\n    - *2026-11-05* — Duplicate implementation\n    - *2026-10-01* — earlier reason\n",
+        "consequence": "⊘ Cancels “Add retry wrapper” · Next → Cancelled",
+        "log_created": false
+      }
+    },
+    {
+      "id": "SV3",
+      "kind": "cancel",
+      "path": "Tasks.md",
+      "key": "Tasks.md#^blank-no-log",
+      "line": 0,
+      "today": "2026-11-05",
+      "reason": "",
+      "source": "- [ ] #task Retire old hook ^blank-no-log\n",
+      "expected": {
+        "source": "- [-] #task Retire old hook [cancelled:: 2026-11-05] ^blank-no-log\n",
+        "log_created": false
+      }
+    },
+    {
+      "id": "SV4",
+      "kind": "cancel",
+      "path": "Tasks.md",
+      "key": "Tasks.md#^blank-existing-log",
+      "line": 0,
+      "today": "2026-11-05",
+      "reason": "  \n ",
+      "source": "- [ ] #task Retire old hook ^blank-existing-log\n  - ❌ **CANCEL LOG**\n    - *2026-10-01* — earlier reason\n",
+      "expected": {
+        "source": "- [-] #task Retire old hook [cancelled:: 2026-11-05] ^blank-existing-log\n  - ❌ **CANCEL LOG**\n    - *2026-11-05* — 🤷 no reason given\n    - *2026-10-01* — earlier reason\n",
+        "log_created": false
+      }
+    },
+    {
+      "id": "SV5",
+      "kind": "done",
+      "path": "Tasks.md",
+      "key": "Tasks.md#^parent",
+      "line": 0,
+      "today": "2026-11-05",
+      "source": "- [ ] #task Parent ^parent\n  - [ ] #task Child ^child\n",
+      "expected": {
+        "source": "- [x] #task Parent  [completion:: 2026-11-05] ^parent\n  - [ ] #task Child ^child\n",
+        "scope_note": "· its 1 embedded task stays open"
+      }
+    },
+    {
+      "id": "SV6",
+      "kind": "done",
+      "path": "Tasks.md",
+      "key": "Tasks.md@e06d0ca2",
+      "line": 0,
+      "today": "2026-11-05",
+      "source": "- [ ] #task Idless task\n",
+      "expected": {
+        "source": "- [x] #task Idless task  [completion:: 2026-11-05]\n",
+        "block_id": ""
+      }
+    },
+    {
+      "id": "SV7",
+      "kind": "done",
+      "group": "project_finished",
+      "path": "Projects/Alpha.md",
+      "key": "Projects/Alpha.md#^prj",
+      "line": 0,
+      "today": "2026-11-05",
+      "source": "- [ ] #task #prj Ship Alpha ^prj\n- [ ] #task Project resident ^resident\n",
+      "expected": {
+        "source": "- [x] #task #prj Ship Alpha  [completion:: 2026-11-05] ^prj\n- [ ] #task Project resident ^resident\n",
+        "consequence": "✓ Finishes ‹Alpha›",
+        "scope_note": "· its 1 embedded task stays open"
+      }
+    },
+    {
+      "id": "SV8",
+      "kind": "eligibility",
+      "cases": [
+        { "name": "new-in-capture", "is_new_task": true, "expected_why": "new_task" },
+        { "name": "recurring", "line": "- [ ] #task Weekly review [repeat:: weekly] ^weekly", "expected_why": "recurring" },
+        { "name": "muted", "muted": true, "expected_why": "muted" },
+        { "name": "unsupported-status", "line": "- [>] #task Unknown lane ^unknown", "expected_why": "status" },
+        { "name": "changed-identity", "expected_why": "changed_identity" }
+      ]
+    },
+    {
+      "id": "SV9",
+      "kind": "recover",
+      "path": "Tasks.md",
+      "key": "Tasks.md#^root",
+      "line": 0,
+      "today": "2026-11-05",
+      "source": "- [ ] #task Root [id:: root] ^root\n- [?] #task Waiting [dependsOn:: root] [id:: waiting] ^waiting\n",
+      "action": "done",
+      "expected": {
+        "root": "- [x] #task Root [id:: root]  [completion:: 2026-11-05] ^root",
+        "dependent_status": " ",
+        "dependent_unblocked": "2026-11-05",
+        "dependent_offer_round": false
+      }
+    },
+    {
+      "id": "SV10",
+      "kind": "recover",
+      "path": "Tasks.md",
+      "key": "Tasks.md#^root",
+      "line": 0,
+      "today": "2026-11-05",
+      "source": "- [ ] #task Root [id:: root] ^root\n- [?] #task Waiting [dependsOn:: root] [id:: waiting] ^waiting\n",
+      "action": "cancel",
+      "reason": "",
+      "expected": {
+        "root": "- [-] #task Root [id:: root] [cancelled:: 2026-11-05] ^root",
+        "dependent_status": " ",
+        "dependent_unblocked": "2026-11-05",
+        "dependent_offer_round": false
+      }
+    },
+    {
+      "id": "SV11",
+      "kind": "capture-conflict",
+      "complete_key": "Tasks.md#^ready",
+      "pull_in_keys": ["Tasks.md#^ready"],
+      "expected": { "code": "offer_verdict_conflict", "writes": false }
+    },
+    {
+      "id": "SV12",
+      "kind": "capture-all-selection",
+      "offers": [
+        { "key": "Tasks.md#^closed", "verdict": "done", "selected": false },
+        { "key": "Tasks.md#^open", "verdict": null, "selected": true }
+      ],
+      "expected": { "picked_keys": ["Tasks.md#^open"] }
+    },
+    {
+      "id": "SV13",
+      "kind": "capture-stale-preimage",
+      "expected": { "code": "offer_close_stale", "writes": false }
+    },
+    {
+      "id": "SV14",
+      "kind": "ui_only",
+      "surface": "obsidian",
+      "expected": { "changed_row_refused": true, "other_rows_may_apply": true }
+    },
+    {
+      "id": "SV15",
+      "kind": "ui_only",
+      "surface": "review_walk",
+      "expected": { "advance_once": true, "skip_rows_resolved_in_commit": true }
+    },
+    {
+      "id": "SV16",
+      "kind": "ui_only",
+      "surface": "capture_dry_run",
+      "expected": { "same_planned_json": true, "allowed_differences": ["dry_run", "preview wording"] }
+    }
+  ]
+}

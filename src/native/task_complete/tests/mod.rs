@@ -11,6 +11,7 @@ use super::super::vault_links::LinkResolution;
 use super::*;
 
 mod keep_moving_tests;
+mod offer_close_tests;
 mod project_pull_in_tests;
 mod recovery_tests;
 mod relation_complete_vectors;
