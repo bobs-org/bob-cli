@@ -20,6 +20,7 @@ pub(crate) struct LayoutInput<'a> {
     pub(crate) account: &'a str,
     pub(crate) body_mode: GmailBodyMode,
     pub(crate) current_year: i32,
+    pub(crate) parent: &'a str,
     pub(crate) rendered: &'a BTreeMap<String, RenderedBody>,
     pub(crate) saved_at: DateTime<Utc>,
     pub(crate) thread: &'a GmailThread,
@@ -162,7 +163,8 @@ pub(crate) fn render(
         cards.push(card);
     }
 
-    let content = assemble(&metadata, &open_gmail, &summary, &cards)?;
+    let content =
+        assemble(&metadata, &open_gmail, &summary, &cards, input.parent)?;
     Ok(RenderedNote {
         content,
         metadata,
@@ -177,9 +179,10 @@ fn assemble(
     open_gmail: &str,
     summary: &str,
     cards: &[RenderedCard],
+    parent: &str,
 ) -> Result<String, NoteError> {
     let yaml = serde_yaml::to_string(&Frontmatter {
-        parent: "[[mail]]",
+        parent,
         note_type: "[[mail]]",
         cssclasses: ["bob-mail"],
         title: &metadata.title,
@@ -611,6 +614,7 @@ mod tests {
             account: "you@example.com",
             body_mode: GmailBodyMode::Full,
             current_year: 2026,
+            parent: "[[mail]]",
             rendered: &bodies,
             saved_at: Utc.timestamp_millis_opt(1799848500000).unwrap(),
             thread: &thread,
@@ -659,6 +663,7 @@ mod tests {
             account: "you@example.com",
             body_mode: GmailBodyMode::Headers,
             current_year: 2026,
+            parent: "[[mail]]",
             rendered: &bodies,
             saved_at: Utc.timestamp_millis_opt(1799848500000).unwrap(),
             thread: &thread,
@@ -689,6 +694,7 @@ mod tests {
             account: "you@example.com",
             body_mode: GmailBodyMode::Headers,
             current_year: 2026,
+            parent: "[[mail]]",
             rendered: &BTreeMap::new(),
             saved_at: Utc::now(),
             thread: &thread,
@@ -743,6 +749,7 @@ mod tests {
             account: "you@example.com",
             body_mode: GmailBodyMode::Full,
             current_year: 2026,
+            parent: "[[mail]]",
             rendered: &bodies,
             saved_at: Utc.timestamp_millis_opt(1799848500000).unwrap(),
             thread: &thread,

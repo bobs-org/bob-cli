@@ -3,9 +3,9 @@
 `bob gmail` saves Gmail threads you choose as inert, append-only mail notes in
 the vault, linked from tasks with a readable label. This page covers one-time
 setup through [gog](https://github.com/openclaw/gogcli) (≥ v0.44.0) and the
-shell: the `gmail` noun group, config, login, logout, and doctor. Saving,
-linking, search, and sending land in later phases; bare `bob gmail` currently
-lists no saved threads yet and never touches the network.
+shell: the `gmail` noun group, config, login, logout, doctor, and saving.
+Linking, search, and sending land in later phases. Bare `bob gmail` remains an
+offline list placeholder until that phase lands.
 
 Typical order: `bob gmail login` once, `bob gmail doctor` until every check is
 `ok` or an explained skip. Tests never touch Google: set `BOB_GMAIL_GOG` to a
@@ -20,6 +20,7 @@ fake executable.
 - [Configuration](#configuration)
 - [Login](#login)
 - [Logout](#logout)
+- [Save](#save)
 - [Doctor](#doctor)
 - [Where it runs](#where-it-runs)
 - [Exit status](#exit-status)
@@ -35,12 +36,13 @@ bob gmail [-b|--bob-dir DIR] [-f|--format table|json]
 bob gmail doctor [-b|--bob-dir DIR] [-f|--format human|json]
 bob gmail login [-a|--account EMAIL] [-c|--credentials FILE] [-f|--format human|json] [-m|--manual] [-s|--scope readonly|compose]
 bob gmail logout [-a|--account EMAIL] [-f|--format human|json] [-y|--force]
+bob gmail save URL|ID|NOTE... [-b|--bob-dir DIR] [-B|--body full|headers] [-d|--dry-run] [-f|--format human|json] [-P|--parent ROUTE] [-q|--quiet] [-R|--rerender]
 ```
 
-Running `bob gmail` with no subcommand lists saved threads. Until `save`
-lands, it prints a friendly "no saved threads yet" view and makes no Gmail
-calls. `doctor` is read-only; `login` and `logout` are excluded from the
-command catalog (they need a terminal and handle credentials).
+Running `bob gmail` with no subcommand is intended to list saved threads; the
+offline list is still being completed. `save` reads Gmail and writes selected
+threads to the vault. `doctor` is read-only; `login` and `logout` are excluded
+from the command catalog (they need a terminal and handle credentials).
 
 ## How it works
 
@@ -70,7 +72,7 @@ journals, or JSON errors.
 
 ## Body rendering
 
-When `save` lands, each message's MIME tree renders to inert Markdown through
+When a thread is saved, each message's MIME tree renders to inert Markdown through
 a pure boundary with no network, filesystem, or clock access. The same rules
 already decide what the saved notes will contain:
 
@@ -146,13 +148,13 @@ gmail:
   | `account_ambiguous` | Other commands when more than one email remains |
 
   Unique emails are compared case-insensitively.
-- `body` is `full` (default) or `headers`. Later `save` honors it; headers
+- `body` is `full` (default) or `headers`. `save` honors it; headers
   mode keeps only the snippet plus a "(body not saved)" marker.
 - `folder` is the vault folder for mail notes. Default `mail`.
 - `link_label` templates the task link. Default `✉️ {subject} · {who}` under
   the `subject_who` decision. It must contain `{subject}`.
 - `never_save.from` lists addresses or `@domains`; `never_save.labels`
-  lists Gmail label names. Later `save` refuses them with a reason.
+  lists Gmail label names. `save` refuses matching threads with a reason.
 - `pull.label` unset or empty disables pull. Default `bob`; inbox default
   `gmail_inbox.md`.
 - `signature` is `gmail` (default) or `none`. Later `compose` honors it.
@@ -199,6 +201,44 @@ account. Calendar, Keep, and other gog clients are left alone. It prints the
 Google revoke URL. Pass `-y` to skip the confirmation; without a TTY, `-y` is
 required.
 
+## Save
+
+`bob gmail save` accepts Gmail URLs, thread IDs, message IDs, RFC message IDs,
+and paths to saved mail notes. It confirms the selected account and thread with
+Gmail, applies `never_save`, prepares all inputs, then writes them together
+under the vault maintenance lock. A failed input refuses the whole batch.
+Repeated inputs for the same thread are fetched and written once; each input
+still gets a result row.
+
+- `-B full|headers` overrides `gmail.body` for this invocation. Full mode
+  fetches body parts and referenced inline images into memory before the lock.
+  Headers mode performs no body-part or image downloads.
+- `-P ROUTE` resolves an area or project and sets `parent:` on newly created
+  notes. Refresh keeps the note's existing parent and saved path.
+- `-R` explicitly rebuilds managed message cards while preserving authored
+  notes and historical cards no longer returned by Gmail.
+- `-d` previews the target paths and structural changes. Message prose is
+  redacted, and the command creates no lock, directories, notes, images,
+  journals, or commits.
+- `-f json` returns one body-free result per input with the confirmed identity,
+  note path, labelled wikilink, status, message count, and number of new cards.
+  A single input also has top-level `note` and `link` fields. `-q` suppresses
+  human success output but does not suppress JSON or errors.
+
+Mail notes are append-only snapshots. Refresh adds new message cards and
+updates Bob-owned metadata while preserving authored text. Malformed markers,
+reordered messages, duplicate identities, policy refusals, and path conflicts
+stop before overwriting notes. A save commits only changed mail notes, imported
+images, and newly created `mail.md` / `mail.base` hubs. Save journals are
+appended after the commit (or after durable writes in a non-Git vault).
+`gmail.writer` blocks writes on other hosts; dry-run remains available there.
+
+Referenced CID images are copied under `img/mail/<thread id>/`, capped at
+2 MiB, content-hash deduplicated, and embedded only as local trusted images.
+Small images repeated across different messages are treated as signature
+logos. Ordinary attachments remain listings. A one-line warning is added to
+the vault root `AGENTS.md` once; vault-sync owns committing that warning.
+
 ## Doctor
 
 `bob gmail doctor` checks gog, the stored `bob-gmail` client, the account, the
@@ -222,7 +262,7 @@ host, and the typed checks.
 
 ## Where it runs
 
-Any logged-in host may read Gmail. Vault writes run only on `gmail.writer`
+Any logged-in host may read Gmail. Save writes run only on `gmail.writer`
 when that key is set; the docs recommend the Mac. Agent hosts stay read-only:
 the compose scope is granted only on the Mac. `doctor` reports the writer pin
 and the current host.
@@ -258,6 +298,6 @@ Every `-f json` output carries `schema_version: 1` and `ok`. Errors are typed
 
 ## Known limits
 
-Saving, linking, search, peeking, composing, and pulling land in later phases.
-Bare `bob gmail` lists no saved threads yet; `doctor` does not check decoder
-health (that arrives with `save`).
+Linking, search, peeking, composing, pulling, and the offline saved-mail list
+land in later phases. `doctor` does not yet check decoder health or duplicate
+thread identities.

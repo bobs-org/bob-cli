@@ -269,6 +269,7 @@ mod tests {
             account: "me@example.com",
             body_mode,
             current_year: 2026,
+            parent: "[[mail]]",
             rendered: &rendered,
             saved_at: Utc.timestamp_millis_opt(1799848500000).unwrap(),
             thread,

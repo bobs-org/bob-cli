@@ -17,6 +17,7 @@ pub(crate) use crate::native::google::{
 mod journal;
 mod login;
 mod logout;
+mod save;
 // Owned by mail-note (bob-cli-hg.5); the save and capture phases consume it.
 #[allow(dead_code)]
 pub(crate) mod note;
@@ -41,7 +42,7 @@ use std::{ffi::OsString, iter};
 /// Gmail-facing name for the shared error type.
 pub(crate) use crate::native::google::GoogleError as GmailError;
 
-pub(crate) use cli::{DoctorArgs, LoginArgs, LogoutArgs, TopArgs};
+pub(crate) use cli::{DoctorArgs, LoginArgs, LogoutArgs, SaveArgs, TopArgs};
 
 const COMMAND_NAME: &str = "bob gmail";
 
@@ -74,6 +75,9 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         }
         Some(("logout", sub_matches)) => {
             logout::run(&LogoutArgs::from_matches(sub_matches))
+        }
+        Some(("save", sub_matches)) => {
+            save::run(&SaveArgs::from_matches(sub_matches))
         }
         Some((name, _)) => {
             eprintln!("{COMMAND_NAME}: unknown subcommand: {name}");

@@ -121,6 +121,12 @@ const TABLE: &[Entry] = &[
         arg: "parent",
         kind: Kind::Route,
     },
+    // Gmail save accepts a URL, thread id, or saved mail-note link.
+    Entry {
+        path: &["gmail", "save"],
+        arg: "input",
+        kind: Kind::FreeText,
+    },
     // `bob task move` selects vault notes by stem/path, and task selectors
     // remain literal values because they are resolved against SOURCE.
     Entry {
@@ -1023,6 +1029,10 @@ mod tests {
         assert_eq!(
             lookup_exact(&["gkeep", "list"], "source"),
             Some(Kind::Choices)
+        );
+        assert_eq!(
+            lookup_exact(&["gmail", "save"], "input"),
+            Some(Kind::FreeText)
         );
         // `--output` is a PDF only on the ref command whose
         // builder says so; the generic lookup finds no entry.

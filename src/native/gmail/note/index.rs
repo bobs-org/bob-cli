@@ -78,7 +78,7 @@ pub(crate) fn scan(
             label: label::render_saved(link_template, &title, &who),
         };
         found
-            .entry((account, entry.thread_id.clone()))
+            .entry((account.to_ascii_lowercase(), entry.thread_id.clone()))
             .or_default()
             .push(entry);
     }
@@ -219,5 +219,27 @@ mod tests {
         assert!(index.by_identity.is_empty());
         assert_eq!(index.duplicates.len(), 1);
         assert_eq!(index.duplicates[0].2.len(), 2);
+    }
+
+    #[test]
+    fn duplicate_accounts_are_compared_case_insensitively() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path();
+        fs::create_dir_all(vault.join("mail")).unwrap();
+        for (name, account) in
+            [("a.md", "me@example.com"), ("b.md", "ME@example.com")]
+        {
+            fs::write(
+                vault.join("mail").join(name),
+                format!(
+                    "---\ntype: \"[[mail]]\"\ncontent: untrusted-email\ngmail_account: {account}\ngmail_thread_id: aabbccdd\ntitle: Lease\nwho: Dana\n---\nbody\n"
+                ),
+            )
+            .unwrap();
+        }
+        let index =
+            scan(vault, Path::new("mail"), "✉️ {subject} · {who}").unwrap();
+        assert!(index.by_identity.is_empty());
+        assert_eq!(index.duplicates.len(), 1);
     }
 }

@@ -17,6 +17,7 @@ Commands:
   doctor  Check the Gmail setup: gog, client, account, token, scopes, config, writer, and journal
   login   Connect Gmail (read-only) in one guided step
   logout  Remove Bob's Gmail grant only; prints the Google revoke URL
+  save    Save or refresh Gmail threads as inert mail notes
   help    Print this message or the help of the given subcommand(s)
 
 Options:
@@ -37,6 +38,8 @@ Running `bob gmail` with no command lists saved threads (offline, read-only).
 Examples:
   bob gmail                   List saved threads
   bob gmail -f json           List saved threads as JSON
+  bob gmail save URL           Save a Gmail thread
+  bob gmail save ID -d         Preview a save without writing
   bob gmail login             Connect Gmail in one guided step
   bob gmail login -a EMAIL    Sign in as this account
   bob gmail login -s compose  Also grant the compose scope (Mac only)

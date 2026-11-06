@@ -1104,6 +1104,18 @@ pub(crate) const ENTRIES: &[Row] = &[
             60,
         )
     },
+    Row {
+        network: true,
+        ..writes(
+            "gmail-save",
+            &["gmail", "save"],
+            "Save Gmail thread",
+            &["gmail", "google", "mail", "save", "refresh", "thread"],
+            Policy::PreviewFirst,
+            Some(DRY_RUN),
+            180,
+        )
+    },
     // Setup
     Row {
         network: true,

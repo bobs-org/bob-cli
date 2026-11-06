@@ -29,10 +29,37 @@ pub(crate) fn build_cli() -> ClapCommand {
         .subcommand(doctor_command())
         .subcommand(login_command())
         .subcommand(logout_command())
+        .subcommand(save_command())
 }
 
 fn top_after_help() -> &'static str {
-    "Running `bob gmail` with no command lists saved threads (offline, read-only).\n\nExamples:\n  bob gmail                   List saved threads\n  bob gmail -f json           List saved threads as JSON\n  bob gmail login             Connect Gmail in one guided step\n  bob gmail login -a EMAIL    Sign in as this account\n  bob gmail login -s compose  Also grant the compose scope (Mac only)\n  bob gmail doctor            Diagnose gog, the client, and the vault\n  bob gmail logout -y         Remove Bob's Gmail grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH\n  BOB_GMAIL_BROWSER  Browser executable; selects browser sign-in (otherwise automatic)"
+    "Running `bob gmail` with no command lists saved threads (offline, read-only).\n\nExamples:\n  bob gmail                   List saved threads\n  bob gmail -f json           List saved threads as JSON\n  bob gmail save URL           Save a Gmail thread\n  bob gmail save ID -d         Preview a save without writing\n  bob gmail login             Connect Gmail in one guided step\n  bob gmail login -a EMAIL    Sign in as this account\n  bob gmail login -s compose  Also grant the compose scope (Mac only)\n  bob gmail doctor            Diagnose gog, the client, and the vault\n  bob gmail logout -y         Remove Bob's Gmail grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH\n  BOB_GMAIL_BROWSER  Browser executable; selects browser sign-in (otherwise automatic)"
+}
+
+fn save_command() -> ClapCommand {
+    ClapCommand::new("save")
+        .about("Save or refresh Gmail threads as inert mail notes")
+        .long_about(
+            "Resolve Gmail URLs, thread or message IDs, RFC message IDs, and saved mail-note paths to confirmed threads. Gmail is read-only; writes stay in the configured vault. All network work finishes before the vault lock is acquired.",
+        )
+        .disable_help_flag(true)
+        .arg(bob_dir_arg())
+        .arg(body_arg())
+        .arg(dry_run_arg())
+        .arg(save_format_arg())
+        .arg(parent_arg())
+        .arg(quiet_arg())
+        .arg(rerender_arg())
+        .arg(Arg::new("input")
+            .value_name("URL|ID|NOTE")
+            .value_parser(OsStringValueParser::new())
+            .num_args(1..)
+            .required(true)
+            .help("Gmail URL, thread or message ID, RFC message ID, or saved mail note"))
+        .arg(help_arg())
+        .after_help(
+            "Examples:\n  bob gmail save https://mail.google.com/mail/u/0/#all/0123456789abcdef\n  bob gmail save 0123456789abcdef -B headers\n  bob gmail save mail/2026/lease.md -P work\n  bob gmail save URL1 URL2 -d -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH",
+        )
 }
 
 fn doctor_command() -> ClapCommand {
@@ -163,6 +190,58 @@ fn list_format_arg() -> Arg {
         .help("Output format: table or json")
 }
 
+fn save_format_arg() -> Arg {
+    Arg::new("format")
+        .long("format")
+        .short('f')
+        .value_name("FORMAT")
+        .value_parser(["human", "json"])
+        .default_value("human")
+        .help("Output format: human or json")
+}
+
+fn body_arg() -> Arg {
+    Arg::new("body")
+        .long("body")
+        .short('B')
+        .value_name("MODE")
+        .value_parser(["full", "headers"])
+        .help("Body mode for this save: full or headers")
+}
+
+fn dry_run_arg() -> Arg {
+    Arg::new("dry-run")
+        .long("dry-run")
+        .short('d')
+        .action(ArgAction::SetTrue)
+        .help("Preview paths and structural changes without writing")
+}
+
+fn parent_arg() -> Arg {
+    Arg::new("parent")
+        .long("parent")
+        .short('P')
+        .value_name("ROUTE")
+        .value_parser(OsStringValueParser::new())
+        .help("Area or project parent to set on newly created notes")
+}
+
+fn quiet_arg() -> Arg {
+    Arg::new("quiet")
+        .long("quiet")
+        .short('q')
+        .action(ArgAction::SetTrue)
+        .help("Suppress human success output")
+}
+
+fn rerender_arg() -> Arg {
+    Arg::new("rerender")
+        .long("rerender")
+        .short('R')
+        .action(ArgAction::SetTrue)
+        .help("Rebuild managed message cards while preserving authored text")
+}
+
 fn manual_arg() -> Arg {
     Arg::new("manual")
         .long("manual")
@@ -277,6 +356,49 @@ impl LoginScope {
 pub(crate) struct TopArgs {
     pub bob_dir: Option<PathBuf>,
     pub format: ListFormat,
+}
+
+/// Typed `save` arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SaveArgs {
+    pub bob_dir: Option<PathBuf>,
+    pub body: Option<crate::native::config::GmailBodyMode>,
+    pub dry_run: bool,
+    pub format: HumanFormat,
+    pub inputs: Vec<String>,
+    pub parent: Option<String>,
+    pub quiet: bool,
+    pub rerender: bool,
+}
+
+impl SaveArgs {
+    pub(crate) fn from_matches(matches: &ArgMatches) -> Self {
+        Self {
+            bob_dir: raw_bob_dir(matches),
+            body: match matches.get_one::<String>("body").map(String::as_str) {
+                Some("headers") => {
+                    Some(crate::native::config::GmailBodyMode::Headers)
+                }
+                Some("full") => {
+                    Some(crate::native::config::GmailBodyMode::Full)
+                }
+                _ => None,
+            },
+            dry_run: matches.get_flag("dry-run"),
+            format: HumanFormat::from_matches(matches),
+            inputs: matches
+                .get_many::<OsString>("input")
+                .into_iter()
+                .flatten()
+                .map(|value| value.to_string_lossy().into_owned())
+                .collect(),
+            parent: matches
+                .get_one::<OsString>("parent")
+                .map(|value| value.to_string_lossy().trim().to_string()),
+            quiet: matches.get_flag("quiet"),
+            rerender: matches.get_flag("rerender"),
+        }
+    }
 }
 
 impl TopArgs {
