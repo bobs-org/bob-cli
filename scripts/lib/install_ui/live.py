@@ -498,7 +498,8 @@ def run(args) -> int:
     durations, waits = phase_clock.finish(finished)
     signal_num = requested_signal or (-returncode if returncode < 0 else None)
     interrupted = signal_num in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
-    outcome = "interrupted" if interrupted else ("ok" if returncode == 0 else "fail")
+    successful = returncode == 0 or returncode in getattr(args, "success_code", [])
+    outcome = "interrupted" if interrupted else ("ok" if successful else "fail")
     wall_elapsed = wall_clock() - run_started_wall
     mono_elapsed = finished - run_started_mono
     slept = wall_elapsed - mono_elapsed > 30.0
@@ -521,14 +522,15 @@ def run(args) -> int:
     except Exception:
         cols, _ = 80, 24
     if interrupted:
-        line = f"✗ interrupted after {term.format_clock(mono_elapsed)}"
-        try:
-            sys.stdout.write(line + "\n")
-            sys.stdout.flush()
-            lines_in_scrollback += _rows_for_line(line, cols)
-        except Exception:
-            pass
-    elif returncode == 0:
+        if os.environ.get("BOB_INSTALL_ALL_INTERRUPT_PARENT") != "1":
+            line = f"✗ interrupted after {term.format_clock(mono_elapsed)}"
+            try:
+                sys.stdout.write(line + "\n")
+                sys.stdout.flush()
+                lines_in_scrollback += _rows_for_line(line, cols)
+            except Exception:
+                pass
+    elif successful:
         line = f"✓ {term.sanitize(args.done or 'built')} · {term.format_duration(mono_elapsed)}"
         try:
             sys.stdout.write(line + "\n")

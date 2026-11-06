@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/install_all [-h]
+Usage: scripts/install_all [-h|--help] [-v|--verbose]
 
 Pull and install bob-cli from this checkout, then pull and deploy the sibling
 bob-plugins and bob-mac-capture checkouts that live next to it. When a sibling
@@ -14,15 +14,22 @@ is then restarted so it loads the new plugins. On macOS it posts a Notification
 Center banner before that restart. Usually run through `just install-all`.
 
 Options:
-  -h, --help  Show this help and exit.
+  -h, --help     Show this help and exit.
+  -v, --verbose  Stream raw build and plugin-sync output.
 EOF
 }
 
-for arg in "$@"; do
+verbose_requested=0
+while [[ $# -gt 0 ]]; do
+  arg="$1"
+  shift
   case "$arg" in
     -h|--help)
       usage
       exit 0
+      ;;
+    -v|--verbose)
+      verbose_requested=1
       ;;
     *)
       usage >&2
@@ -30,6 +37,9 @@ for arg in "$@"; do
       ;;
   esac
 done
+if (( verbose_requested )); then
+  export BOB_INSTALL_VERBOSE=1
+fi
 
 if ! command -v git >/dev/null 2>&1; then
   printf 'scripts/install_all: git is required on PATH\n' >&2
@@ -69,6 +79,8 @@ export BOB_INSTALL_ALL_RUN_ID="$run_id"
 # Tells the justfile `install` recipe to skip its nested banner and quiet
 # shell completion; every helper call below shares the same run ID.
 export BOB_INSTALL_ALL=1
+# The orchestrator owns the final interrupt row after the runner restores the terminal.
+export BOB_INSTALL_ALL_INTERRUPT_PARENT=1
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$script_dir/.." && pwd)"
@@ -87,6 +99,22 @@ fi
 if ! command -v install_ui_mark_installed >/dev/null 2>&1; then
   install_ui_mark_installed() { return 1; }
 fi
+if ! command -v install_ui_live_eligible >/dev/null 2>&1; then
+  install_ui_live_eligible() { return 1; }
+fi
+if ! command -v install_ui_run >/dev/null 2>&1; then
+  install_ui_run() {
+    shift 4
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --crate|--profile|--success-code) shift 2 ;;
+        --) shift; break ;;
+        *) break ;;
+      esac
+    done
+    "$@"
+  }
+fi
 plugins_dir="$parent/bob-plugins"
 mac_capture_dir="$parent/bob-mac-capture"
 # Recorded pull results, one set per repo. The header pulls fill them in and
@@ -102,6 +130,9 @@ clone_base='git@github.com:bobs-org'
 obsidian_dir="${BOB_DIR:-$HOME/bob}/.obsidian"
 total_start=0
 pull_tmp_file=""
+active_step=""
+active_phase=""
+active_step_start=0
 PULL_STATE=""
 PULL_DETAIL=""
 PULL_OUTPUT=""
@@ -219,6 +250,39 @@ format_duration() {
     printf '%dm %02ds' "$((seconds / 60))" "$((seconds % 60))"
   fi
 }
+
+format_clock() {
+  local seconds="$1"
+  printf '%d:%02d' "$((seconds / 60))" "$((seconds % 60))"
+}
+
+record_step_start() {
+  active_step="$1"
+  active_phase="$2"
+  active_step_start="$SECONDS"
+}
+
+record_step_finish() {
+  local outcome="$1" duration
+  [[ -n "$active_step" ]] || return 0
+  duration="$((SECONDS - active_step_start))"
+  install_ui record --step "$active_step" --phase "$active_phase" \
+    --secs "$duration" --outcome "$outcome" >/dev/null 2>&1 || true
+  active_step=""
+  active_phase=""
+}
+
+interrupt_run() {
+  trap - INT
+  if [[ -t 1 ]]; then
+    printf '\r\033[K'
+  fi
+  printf '✗ interrupted after %s\n' "$(format_clock "$SECONDS")"
+  record_step_finish interrupted
+  exit 130
+}
+
+trap 'interrupt_run' INT
 
 add_summary() {
   local name="$1"
@@ -452,10 +516,71 @@ clear_restart_pending() {
   rm -f "$restart_marker"
 }
 
+plugin_sync_rows() {
+  local preview="$1"
+  printf '%s\n' "$preview" | "${BOB_INSTALL_UI_PYTHON}" -c '
+import json, sys
+try:
+    result = json.load(sys.stdin)
+except (ValueError, TypeError):
+    raise SystemExit(1)
+for plugin in result.get("plugins", []):
+    copied = [file.get("name", "") for file in plugin.get("files", [])
+              if file.get("action") in ("created", "updated", "forced")]
+    copied = [name for name in copied if name]
+    if copied:
+        print("↻ {}  {}".format(plugin.get("id", "plugin"), ", ".join(copied)))
+' 2>/dev/null
+}
+
+print_plugin_sync_warnings() {
+  local log_path="$1" line warning_detail=0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      '  ⚠ '*|'  ✗ '*)
+        printf '%s\n' "$line"
+        warning_detail=1
+        ;;
+      '             ⚠ '*|'             ✗ '*|'             ↳ '*)
+        if (( warning_detail )); then printf '%s\n' "$line"; fi
+        ;;
+      *) warning_detail=0 ;;
+    esac
+  done <"$log_path"
+}
+
+print_plugin_sync_excerpt() {
+  local excerpt="$1" line
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      '             +'*|'             -'*|'             @@'*|'              '*)
+        continue
+        ;;
+      '             ... and '*|'             binary or minified file differs'*)
+        continue
+        ;;
+    esac
+    dim_diagnostics "$line"
+  done <<<"$excerpt"
+}
+
+print_plugin_sync_failure() {
+  local log_path="$1" first_line excerpt
+  first_line="$(grep -n -m 1 -i 'error' "$log_path" 2>/dev/null | cut -d: -f1 || true)"
+  if [[ "$first_line" =~ ^[0-9]+$ ]]; then
+    excerpt="$(sed -n "${first_line},$((first_line + 39))p" "$log_path")"
+  else
+    excerpt="$(tail -n 20 "$log_path" 2>/dev/null || true)"
+  fi
+  dim_row 'plugin sync log excerpt:'
+  print_plugin_sync_excerpt "$excerpt"
+  dim_row "full log  $(display_path "$log_path")"
+}
+
 plugin_step() {
-  local step_start duration pull_detail step_warning=0
+  local step_start pull_detail step_warning=0
   local bob_bin output count synced drift plugin_detail
-  local preview pending copied_clause
+  local preview pending copied_clause plugin_log_dir plugin_log live_sync=0 sync_status
   banner 34 '🧩' 'BOB-PLUGINS  2/3'
   step_start="$SECONDS"
   if [[ ! -d "$plugins_dir" ]]; then
@@ -530,14 +655,49 @@ plugin_step() {
     copied_clause=''
   fi
   command_line "bob plugins sync --no-pull --repo $(display_path "$plugins_dir")"
-  if "$bob_bin" plugins sync --no-pull --repo "$plugins_dir"; then
-    output=''
+  if install_ui_live_eligible; then
+    plugin_log_dir="${BOB_INSTALL_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/bob-cli/install-all}/logs"
+    plugin_log="$plugin_log_dir/$run_id-bob-plugins.log"
+    if (umask 077 && mkdir -p "$plugin_log_dir" && : >"$plugin_log"); then
+      chmod 600 "$plugin_log" 2>/dev/null || true
+      live_sync=1
+    fi
+  fi
+  if (( live_sync )); then
+    record_step_start bob-plugins sync
+    if "$bob_bin" plugins sync --no-pull --repo "$plugins_dir" >"$plugin_log" 2>&1; then
+      sync_status=0
+    else
+      sync_status=$?
+    fi
+    if (( sync_status == 0 )); then
+      record_step_finish ok
+      plugin_sync_rows "$preview" || true
+      print_plugin_sync_warnings "$plugin_log"
+    else
+      record_step_finish fail
+      plugin_detail="$pull_detail · sync failed"
+      print_plugin_sync_warnings "$plugin_log"
+      print_plugin_sync_failure "$plugin_log"
+      glyph_line 31 '  ' '✗' "$plugin_detail"
+      FAILURES=$((FAILURES + 1))
+      add_summary 'bob-plugins' fail "$plugin_detail" "$(format_duration "$((SECONDS - step_start))")"
+      return 0
+    fi
   else
-    plugin_detail="$pull_detail · sync failed"
-    glyph_line 31 '  ' '✗' "$plugin_detail"
-    FAILURES=$((FAILURES + 1))
-    add_summary 'bob-plugins' fail "$plugin_detail" "$(format_duration "$((SECONDS - step_start))")"
-    return 0
+    record_step_start bob-plugins sync
+    if "$bob_bin" plugins sync --no-pull --repo "$plugins_dir"; then
+      output=''
+      record_step_finish ok
+    else
+      sync_status=$?
+      record_step_finish fail
+      plugin_detail="$pull_detail · sync failed"
+      glyph_line 31 '  ' '✗' "$plugin_detail"
+      FAILURES=$((FAILURES + 1))
+      add_summary 'bob-plugins' fail "$plugin_detail" "$(format_duration "$((SECONDS - step_start))")"
+      return 0
+    fi
   fi
   command_line "bob plugins list --no-pull --repo $(display_path "$plugins_dir") --format json"
   if ! output="$("$bob_bin" plugins list --no-pull --repo "$plugins_dir" --format json)"; then
@@ -579,6 +739,7 @@ plugin_step() {
 
 mac_capture_step() {
   local step_start pull_detail step_warning=0 status detail install_status
+  local signing_output signing_status identity
   banner 32 '🍎' 'BOB-MAC-CAPTURE  3/3'
   step_start="$SECONDS"
   if [[ "$(uname -s)" != Darwin ]]; then
@@ -612,13 +773,48 @@ mac_capture_step() {
   if [[ "$maccap_pull_state" == warn ]]; then
     step_warning=$((step_warning + 1))
   fi
+
+  if [[ -t 0 && -t 1 ]] && \
+      just --justfile "$mac_capture_dir/justfile" --show signing-check >/dev/null 2>&1; then
+    command_line "just --justfile $(display_path "$mac_capture_dir/justfile") signing-check"
+    if signing_output="$(cd "$mac_capture_dir" && just --justfile "$mac_capture_dir/justfile" signing-check)"; then
+      identity="${signing_output%%$'\n'*}"
+      dim_row "signing  ${identity:--}"
+    else
+      signing_status=$?
+      case "$signing_status" in
+        77)
+          status=fail
+          detail="$pull_detail · signing identity locked in this session · run security unlock-keychain or install from a GUI Terminal"
+          ;;
+        78)
+          status=fail
+          detail="$pull_detail · login keychain password differs from the Mac login password · run security set-keychain-password ~/Library/Keychains/login.keychain-db"
+          ;;
+        *)
+          status=fail
+          detail="$pull_detail · signing check failed (exit $signing_status)"
+          ;;
+      esac
+      glyph_line 31 '  ' '✗' "$detail"
+      FAILURES=$((FAILURES + 1))
+      add_summary 'bob-mac-capture' fail "$detail" "$(format_duration "$((SECONDS - step_start))")"
+      return 0
+    fi
+  fi
+
   command_line "just --justfile $(display_path "$mac_capture_dir/justfile") install $(display_path "$HOME/Applications")"
-  if (cd "$mac_capture_dir" && just --justfile "$mac_capture_dir/justfile" install "$HOME/Applications"); then
+  if (cd "$mac_capture_dir" && install_ui_run bob-mac-capture swiftpm "$mac_capture_dir" \
+      "built and signed" --success-code 72 -- just --justfile "$mac_capture_dir/justfile" \
+      install "$HOME/Applications"); then
     status=ok
     install_ui_mark_installed bob-mac-capture "$mac_capture_dir"
     detail="$pull_detail · installed $(display_path "$HOME/Applications/Bob Mac Capture.app")"
   else
     install_status=$?
+    if (( install_status == 130 )); then
+      interrupt_run
+    fi
     if (( install_status == 72 )); then
       status=warn
       step_warning=$((step_warning + 1))
@@ -727,8 +923,10 @@ obsidian_step() {
         notify_mac 'Restarting Obsidian' \
           'Finishing an earlier plugin update. It will reopen in a moment.'
       fi
+      record_step_start obsidian restart
       command_line "osascript -e 'tell application id \"md.obsidian\" to quit'"
       if ! osascript -e 'tell application id "md.obsidian" to quit'; then
+        record_step_finish fail
         notify_mac 'Obsidian needs a restart' \
           'Quit failed. Allow Terminal in Automation, then rerun just install-all.'
         detail='quit failed · allow Terminal in System Settings → Privacy & Security → Automation'
@@ -740,6 +938,7 @@ obsidian_step() {
       i=0
       while (( i < 60 )); do
         if ! running="$(osascript -e 'application id "md.obsidian" is running' 2>/dev/null)"; then
+          record_step_finish fail
           detail='could not check whether Obsidian quit'
           glyph_line 31 '  ' '✗' "$detail"
           FAILURES=$((FAILURES + 1))
@@ -753,6 +952,7 @@ obsidian_step() {
         i=$((i + 1))
       done
       if (( i >= 60 )); then
+        record_step_finish fail
         notify_mac 'Obsidian needs a restart' \
           'Obsidian did not quit. Close any open dialog, then restart it to load the new plugins.'
         detail='Obsidian did not quit within 30s (an open dialog?) — not relaunching'
@@ -763,6 +963,7 @@ obsidian_step() {
       fi
       command_line 'open -b md.obsidian'
       if ! open -b md.obsidian; then
+        record_step_finish fail
         notify_mac 'Obsidian needs a restart' \
           'Obsidian quit but did not reopen. Open it to load the new plugins.'
         detail='relaunch failed'
@@ -774,6 +975,7 @@ obsidian_step() {
       i=0
       while (( i < 30 )); do
         if running="$(osascript -e 'application id "md.obsidian" is running' 2>/dev/null)" && [[ "$running" == true ]]; then
+          record_step_finish ok
           detail="restarted${pending_suffix}"
           glyph_line 36 '  ' '↻' "$detail"
           add_summary obsidian restart "$detail" "$(format_duration "$((SECONDS - step_start))")"
@@ -783,6 +985,7 @@ obsidian_step() {
         sleep 0.5
         i=$((i + 1))
       done
+      record_step_finish ok
       detail='relaunch requested; not confirmed yet'
       glyph_line 33 '  ' '⚠' "$detail"
       WARNINGS=$((WARNINGS + 1))
@@ -807,12 +1010,15 @@ obsidian_step() {
         return 0
       fi
       command_line "$(display_path "$cli") restart"
+      record_step_start obsidian restart
       if "$cli" restart; then
+        record_step_finish ok
         detail="restart requested${pending_suffix}"
         glyph_line 36 '  ' '↻' "$detail"
         add_summary obsidian restart "$detail" "$(format_duration "$((SECONDS - step_start))")"
         clear_restart_pending
       else
+        record_step_finish fail
         detail='Obsidian CLI restart failed'
         glyph_line 31 '  ' '✗' "$detail"
         FAILURES=$((FAILURES + 1))
@@ -1064,6 +1270,9 @@ if (cd "$root" && just --justfile "$root/justfile" install); then
   fi
 else
   cli_status=$?
+  if (( cli_status == 130 )); then
+    interrupt_run
+  fi
   cli_detail="$cli_pull_detail · install failed (exit $cli_status)"
   glyph_line 31 '  ' '✗' "$cli_detail"
   FAILURES=$((FAILURES + 1))

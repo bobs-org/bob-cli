@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 import os
 import pty
+import select
+import signal
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from typing import Optional
@@ -50,49 +53,94 @@ FAKE_JUST = """#!/usr/bin/env bash
 set -u
 jf=""
 recipe=""
+show=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --justfile) jf="$2"; shift 2 ;;
     --justfile=*) jf="${1#--justfile=}"; shift ;;
+    --show) show=1; shift ;;
     -*) shift ;;
     *) recipe="$1"; shift; break ;;
   esac
 done
 source "$jf"
 fn="recipe_${recipe//-/_}"
+if [[ "$show" == "1" ]]; then
+  declare -F "$fn" >/dev/null
+  exit $?
+fi
 "$fn" "$@"
 """
 
 FAKE_BOBCLI_JUSTFILE = """recipe_install() {
   printf '%s' "${BOB_INSTALL_ALL:-unset}" > "$SANDBOX_OUT/bob_install_all_env"
-  if [[ "${FAKE_JUST_INSTALL_FAIL:-}" == "1" ]]; then
-    echo "error: fake cargo failure" >&2
-    return 1
-  fi
-  echo "fake cargo: Compiling bob-obsidian"
-  echo "fake cargo: Finished"
   # shellcheck disable=SC1091
   source "$SANDBOX_BOBCLI/scripts/lib/install_ui.sh"
+  install_ui_run bob-cli cargo "$SANDBOX_BOBCLI" built --crate bob-obsidian \
+    --profile local-install -- env RUSTC_WRAPPER= cargo install --path .
+  status=$?
+  [[ "$status" == "0" ]] || return "$status"
   install_ui_mark_installed bob-cli "$SANDBOX_BOBCLI"
   return 0
+}
+recipe_install_all() {
+  "$SANDBOX_BOBCLI/scripts/install_all" "$@"
 }
 """
 
 FAKE_MAC_JUSTFILE = """recipe_install() {
-  echo "fake mac install step"
+  printf 'install\n' >> "$SANDBOX_OUT/mac_order"
+  echo "Building for production..."
+  echo "Build complete!"
+  if [[ -n "${FAKE_MAC_SLEEP:-}" ]]; then sleep "$FAKE_MAC_SLEEP"; fi
   return "${FAKE_MAC_INSTALL_STATUS:-0}"
 }
+recipe_signing_check() {
+  printf 'signing-check\n' >> "$SANDBOX_OUT/mac_order"
+  echo "${FAKE_SIGNING_IDENTITY:-Developer ID Application: Test}"
+  if [[ "${FAKE_SIGNING_STATUS:-0}" != "0" ]]; then
+    echo "fake signing check requested an unlock" >&2
+  fi
+  return "${FAKE_SIGNING_STATUS:-0}"
+}
+"""
+
+FAKE_CARGO = """#!/usr/bin/env bash
+echo "Compiling bob-obsidian v0.1.0"
+if [[ -n "${FAKE_CARGO_STARTS:-}" ]]; then
+  printf 'started\n' >> "$FAKE_CARGO_STARTS"
+fi
+if [[ -n "${FAKE_CARGO_SLEEP:-}" ]]; then sleep "$FAKE_CARGO_SLEEP"; fi
+if [[ "${FAKE_JUST_INSTALL_FAIL:-}" == "1" ]]; then
+  echo "error: fake cargo failure" >&2
+  exit 1
+fi
+echo "Finished local-install profile"
 """
 
 FAKE_BOB = """#!/usr/bin/env bash
 if [[ "${1:-}" == "plugins" && "${2:-}" == "sync" ]]; then
   if [[ " $* " == *" --dry-run "* ]]; then
-    printf '{"copied": %s}\\n' "${FAKE_BOB_DRY_COPIED:-0}"
+    if [[ "${FAKE_BOB_DRY_COPIED:-0}" == "0" ]]; then
+      printf '{"copied": 0, "plugins": []}\\n'
+    else
+      printf '{"copied": %s, "plugins": [{"id": "sample-plugin", "files": ' "${FAKE_BOB_DRY_COPIED}"
+      printf '[{"name": "main.js", "action": "updated"}, '
+      printf '{"name": "styles.css", "action": "unchanged"}]}]}\\n'
+    fi
     exit 0
   fi
   if [[ "${FAKE_BOB_SYNC_FAIL:-}" == "1" ]]; then
-    echo "fake sync failed" >&2
+    echo "error: fake sync failed" >&2
     exit 1
+  fi
+  if [[ "${FAKE_BOB_SYNC_WARNING:-}" == "1" ]]; then
+    echo "  ⚠ sample-plugin  skipped main.js (dirty in vault)"
+    echo "             ⚠ vault bundle is protected"
+    echo "             +this diff must stay in the log"
+  fi
+  if [[ "${FAKE_BOB_SYNC_RAW:-}" == "1" ]]; then
+    echo "fake sync raw diff: +source"
   fi
   exit 0
 fi
@@ -117,6 +165,7 @@ exit 0
 """
 
 FAKE_PGREP = """#!/bin/sh
+if [ "${FAKE_OBSIDIAN_RUNNING:-}" = "1" ]; then exit 0; fi
 exit 1
 """
 
@@ -181,6 +230,7 @@ class Sandbox:
     def _write_bins(self) -> None:
         self._write_bin("just", FAKE_JUST)
         self._write_bin("bob", FAKE_BOB)
+        self._write_bin("cargo", FAKE_CARGO)
         self._write_bin("uname", FAKE_UNAME)
         self._write_bin("osascript", FAKE_OSASCRIPT)
         self._write_bin("pgrep", FAKE_PGREP)
@@ -252,6 +302,7 @@ class Sandbox:
                 "HOME": str(self.home),
                 "XDG_STATE_HOME": str(self.state),
                 "BOB_DIR": str(self.home / "bob"),
+                "TERM": "xterm-256color",
                 "PATH": str(self.bin) + os.pathsep + env.get("PATH", ""),
                 "SANDBOX_OUT": str(self.out),
                 "SANDBOX_BOBCLI": str(self.bobcli),
@@ -263,11 +314,30 @@ class Sandbox:
         del env["BOB_INSTALL_STATE_DIR"]
         return env
 
-    def run(self, **overrides: str) -> subprocess.CompletedProcess:
+    def run(self, *args: str, **overrides: str) -> subprocess.CompletedProcess:
         env = self.base_env()
         env.update(overrides)
         return subprocess.run(
-            [str(self.bobcli / "scripts" / "install_all")],
+            [str(self.bobcli / "scripts" / "install_all"), *args],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=str(self.root),
+            timeout=180,
+        )
+
+    def run_via_just(self, *args: str, **overrides: str) -> subprocess.CompletedProcess:
+        env = self.base_env()
+        env.update(overrides)
+        return subprocess.run(
+            [
+                "just",
+                "--justfile",
+                str(self.bobcli / "justfile"),
+                "install-all",
+                *args,
+            ],
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
@@ -290,6 +360,58 @@ class Sandbox:
         if not records:
             return None
         return json.loads(records[-1].read_text(encoding="utf-8"))
+
+
+def _run_install_all_pty(
+    sbox: Sandbox,
+    *args: str,
+    interrupt_when: Optional[Path] = None,
+    **overrides: str,
+) -> tuple[int, bytes, bytes]:
+    env = sbox.base_env()
+    env.update(overrides)
+    master, slave = pty.openpty()
+    proc = subprocess.Popen(
+        [str(sbox.bobcli / "scripts" / "install_all"), *args],
+        stdin=slave,
+        stdout=slave,
+        stderr=subprocess.PIPE,
+        env=env,
+        cwd=str(sbox.root),
+        start_new_session=True,
+    )
+    os.close(slave)
+    chunks = []
+    interrupted = False
+    deadline = time.monotonic() + 40
+    try:
+        while True:
+            if interrupt_when is not None and interrupt_when.exists() and not interrupted:
+                os.killpg(proc.pid, signal.SIGINT)
+                interrupted = True
+            ready, _, _ = select.select([master], [], [], 0.05)
+            if ready:
+                try:
+                    chunk = os.read(master, 65536)
+                except OSError:
+                    chunk = b""
+                if chunk:
+                    chunks.append(chunk)
+                elif proc.poll() is not None:
+                    break
+            if proc.poll() is not None and not ready:
+                break
+            if time.monotonic() >= deadline:
+                proc.kill()
+                proc.wait()
+                raise AssertionError("install-all PTY run did not finish")
+    finally:
+        os.close(master)
+    assert proc.stderr is not None
+    err = proc.stderr.read()
+    proc.stderr.close()
+    proc.wait(timeout=5)
+    return proc.returncode, b"".join(chunks), err
 
 
 class _InstallAllCase(unittest.TestCase):
@@ -442,6 +564,156 @@ class FailureAndRetryTests(_InstallAllCase):
         self.assertIn("ALL INSTALLED", retry.stdout)
 
 
+class QuietBuildTests(_InstallAllCase):
+    def test_pty_live_runner_replaces_cargo_output_with_built_row(self) -> None:
+        starts = self.sbox.out / "cargo-starts"
+        status, raw, err = _run_install_all_pty(
+            self.sbox,
+            FAKE_CARGO_SLEEP="0.4",
+            FAKE_CARGO_STARTS=str(starts),
+        )
+        out = raw.decode("utf-8", "replace")
+        self.assertEqual(status, 0, err.decode("utf-8", "replace"))
+        self.assertIn("compiling bob-obsidian", out)
+        self.assertIn("✓ built", out)
+        self.assertTrue(any(ch in out for ch in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"), out)
+        self.assertEqual(starts.read_text(encoding="utf-8").splitlines(), ["started"])
+
+    def test_verbose_option_is_forwarded_and_streams_raw_output(self) -> None:
+        proc = self.sbox.run_via_just(
+            "-v",
+            FAKE_BOB_SYNC_RAW="1",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("Finished local-install profile", proc.stdout)
+        self.assertIn("fake sync raw diff: +source", proc.stdout)
+        self.assertNotIn("↻ sample-plugin", proc.stdout)
+        self.assertIn("-v, --verbose", self.sbox.run("--help").stdout)
+
+        status, raw, err = _run_install_all_pty(
+            self.sbox,
+            "--verbose",
+            FAKE_BOB_SYNC_RAW="1",
+        )
+        out = raw.decode("utf-8", "replace")
+        self.assertEqual(status, 0, err.decode("utf-8", "replace"))
+        self.assertIn("Finished local-install profile", out)
+        self.assertIn("fake sync raw diff: +source", out)
+        self.assertNotIn("✓ built", out)
+
+    def test_live_build_failure_shows_excerpt_and_failure_summary(self) -> None:
+        status, raw, err = _run_install_all_pty(
+            self.sbox,
+            FAKE_JUST_INSTALL_FAIL="1",
+        )
+        out = raw.decode("utf-8", "replace")
+        self.assertEqual(status, 1, err.decode("utf-8", "replace"))
+        self.assertIn("build failed", out)
+        self.assertIn("error: fake cargo failure", out)
+        self.assertIn("full log", out)
+        self.assertIn("STEP FAILED", out)
+
+    def test_ctrl_c_stops_after_started_build_without_summary_or_bell(self) -> None:
+        starts = self.sbox.out / "interrupted-cargo-starts"
+        status, raw, err = _run_install_all_pty(
+            self.sbox,
+            interrupt_when=starts,
+            FAKE_CARGO_SLEEP="15",
+            FAKE_CARGO_STARTS=str(starts),
+            BOB_INSTALL_BELL_AFTER="0",
+        )
+        out = raw.decode("utf-8", "replace")
+        self.assertEqual(status, 130, err.decode("utf-8", "replace"))
+        self.assertEqual(out.count("interrupted after"), 1, out)
+        self.assertNotIn("SUMMARY", out)
+        self.assertNotIn("BOB-PLUGINS", out)
+        self.assertNotIn("\a", out)
+        self.assertEqual(starts.read_text(encoding="utf-8").splitlines(), ["started"])
+
+    def test_plugin_sync_diff_is_logged_and_warning_rows_stay_visible(self) -> None:
+        status, raw, err = _run_install_all_pty(
+            self.sbox,
+            FAKE_BOB_DRY_COPIED="1",
+            FAKE_BOB_SYNC_WARNING="1",
+            FAKE_BOB_SYNC_RAW="1",
+        )
+        out = raw.decode("utf-8", "replace")
+        self.assertEqual(status, 0, err.decode("utf-8", "replace"))
+        self.assertIn("↻ sample-plugin  main.js", out)
+        self.assertIn("⚠ sample-plugin  skipped main.js", out)
+        self.assertIn("⚠ vault bundle is protected", out)
+        self.assertNotIn("+this diff must stay in the log", out)
+        self.assertNotIn("fake sync raw diff", out)
+        log_dir = self.sbox.state / "bob-cli" / "install-all" / "logs"
+        logs = list(log_dir.glob("*-bob-plugins.log"))
+        self.assertEqual(len(logs), 1)
+        log = logs[0].read_text(encoding="utf-8")
+        self.assertIn("+this diff must stay in the log", log)
+        self.assertIn("fake sync raw diff", log)
+
+    def test_plugin_sync_failure_prints_log_excerpt_and_path(self) -> None:
+        status, raw, err = _run_install_all_pty(
+            self.sbox,
+            FAKE_BOB_SYNC_FAIL="1",
+        )
+        out = raw.decode("utf-8", "replace")
+        self.assertEqual(status, 1, err.decode("utf-8", "replace"))
+        self.assertIn("plugin sync log excerpt", out)
+        self.assertIn("error: fake sync failed", out)
+        self.assertIn("full log", out)
+
+    def test_sync_and_obsidian_restart_append_timed_history_rows(self) -> None:
+        cli = self.sbox.home / ".local" / "bin" / "obsidian"
+        cli.parent.mkdir(parents=True, exist_ok=True)
+        cli.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        cli.chmod(0o755)
+        proc = self.sbox.run(
+            FAKE_BOB_DRY_COPIED="1",
+            FAKE_OBSIDIAN_RUNNING="1",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        history = self.sbox.state / "bob-cli" / "install-all" / "runs.jsonl"
+        rows = [json.loads(line) for line in history.read_text(encoding="utf-8").splitlines()]
+        observed = {(row["step"], row["phase"], row["outcome"]) for row in rows}
+        self.assertIn(("bob-plugins", "sync", "ok"), observed)
+        self.assertIn(("obsidian", "restart", "ok"), observed)
+
+
+class MacSigningPreflightTests(_InstallAllCase):
+    def test_signing_preflight_runs_before_live_install_and_keeps_exit_72(self) -> None:
+        status, raw, err = _run_install_all_pty(
+            self.sbox,
+            FAKE_UNAME="Darwin",
+            FAKE_MAC_INSTALL_STATUS="72",
+            FAKE_MAC_SLEEP="0.3",
+        )
+        out = raw.decode("utf-8", "replace")
+        self.assertEqual(status, 0, err.decode("utf-8", "replace"))
+        signing_row = out.index("signing  Developer ID Application: Test")
+        built_row = out.index("built and signed")
+        self.assertLess(signing_row, built_row)
+        self.assertIn("restart it via", out)
+        self.assertEqual(
+            (self.sbox.out / "mac_order").read_text(encoding="utf-8").splitlines(),
+            ["signing-check", "install"],
+        )
+
+    def test_locked_signing_preflight_shows_remedy_and_skips_install(self) -> None:
+        status, raw, err = _run_install_all_pty(
+            self.sbox,
+            FAKE_UNAME="Darwin",
+            FAKE_SIGNING_STATUS="77",
+        )
+        out = raw.decode("utf-8", "replace")
+        self.assertEqual(status, 1, err.decode("utf-8", "replace"))
+        self.assertIn("signing identity locked in this session", out)
+        self.assertIn("security unlock-keychain", out)
+        self.assertEqual(
+            (self.sbox.out / "mac_order").read_text(encoding="utf-8").splitlines(),
+            ["signing-check"],
+        )
+
+
 class DarwinTests(_InstallAllCase):
     def test_exit_72_warns_advances_watermark_and_posts_banner(self) -> None:
         proc = self.sbox.run(
@@ -471,36 +743,9 @@ class DarwinTests(_InstallAllCase):
 
 class BellTests(_InstallAllCase):
     def _run_on_pty(self, **overrides: str) -> bytes:
-        env = self.sbox.base_env()
-        env.update(overrides)
-        master, slave = pty.openpty()
-        proc = subprocess.Popen(
-            [str(self.sbox.bobcli / "scripts" / "install_all")],
-            stdin=subprocess.DEVNULL,
-            stdout=slave,
-            stderr=subprocess.PIPE,
-            env=env,
-            cwd=str(self.sbox.root),
-        )
-        os.close(slave)
-        chunks = []
-        try:
-            while True:
-                try:
-                    data = os.read(master, 1024)
-                except OSError:
-                    break
-                if not data:
-                    break
-                chunks.append(data)
-        finally:
-            os.close(master)
-        assert proc.stderr is not None
-        err = proc.stderr.read()
-        proc.stderr.close()
-        proc.wait(timeout=180)
-        self.assertEqual(proc.returncode, 0, err.decode("utf-8", "replace"))
-        return b"".join(chunks)
+        status, output, err = _run_install_all_pty(self.sbox, **overrides)
+        self.assertEqual(status, 0, err.decode("utf-8", "replace"))
+        return output
 
     def test_bell_rings_on_pty_but_not_on_pipe(self) -> None:
         piped = self.sbox.run(BOB_INSTALL_BELL_AFTER="0")

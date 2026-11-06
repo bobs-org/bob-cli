@@ -279,6 +279,14 @@ def _build_parser() -> argparse.ArgumentParser:
     runner.add_argument("-r", "--repo", required=True, metavar="DIR", help="Repository directory.")
     runner.add_argument("-R", "--rows-file", metavar="PATH", help="Write the number of scrollback rows.")
     runner.add_argument("-S", "--started-file", metavar="PATH", help="Touch after the child starts.")
+    runner.add_argument(
+        "--success-code",
+        action="append",
+        default=[],
+        type=int,
+        metavar="STATUS",
+        help="Treat this child exit status as a successful build while preserving it.",
+    )
     runner.add_argument("-s", "--step", required=True, metavar="NAME", help="Install step name.")
     runner.add_argument("command", nargs=argparse.REMAINDER, help="Child command after --.")
     runner.set_defaults(func=cmd_run)

@@ -49,37 +49,71 @@ install_ui_mark_installed() {
   install_ui mark-installed --repo "$1" --dir "$2" >/dev/null 2>&1 || true
 }
 
-# Run a build through the live UI when it is safe to render.  Arguments are
-# STEP PARSER REPO DONE followed by the child command and its arguments.
+# True only when the live UI can safely own stdout in this terminal.
+install_ui_live_eligible() {
+  [[ -t 1 && "${TERM:-}" != "dumb" && "${BOB_INSTALL_VERBOSE:-}" != "1" && \
+     "${BOB_INSTALL_UI:-}" != "0" ]] || return 1
+  install_ui_python >/dev/null || return 1
+  [[ -f "${_install_ui_repo_root}/scripts/lib/install_ui/__main__.py" ]] || return 1
+  install_ui --help >/dev/null 2>&1
+}
+
+# Run a build through the live UI when it is safe to render. Arguments are
+# STEP PARSER REPO DONE, optional runner flags, then -- and the child command.
 install_ui_run() {
   local step="$1" parser="$2" repo="$3" done_text="$4"
-  shift 4
-  if [[ ! -t 1 || "${TERM:-}" == "dumb" || -n "${BOB_INSTALL_VERBOSE:-}" || \
-        "${BOB_INSTALL_UI:-}" == "0" ]]; then
-    "$@"
-    return $?
-  fi
-  if ! install_ui_python >/dev/null; then
-    "$@"
-    return $?
-  fi
+  local crate="" profile="" success_codes=""
   local started_file
+  local -a runner_args
+  shift 4
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --crate) crate="$2"; shift 2 ;;
+      --profile) profile="$2"; shift 2 ;;
+      --success-code)
+        if [[ -n "$success_codes" ]]; then
+          success_codes="$success_codes $2"
+        else
+          success_codes="$2"
+        fi
+        shift 2
+        ;;
+      --) shift; break ;;
+      *) break ;;
+    esac
+  done
+  if ! install_ui_live_eligible; then
+    "$@"
+    return $?
+  fi
   started_file="$(mktemp "${TMPDIR:-/tmp}/bob-install-ui-started.XXXXXX")" || {
     "$@"
     return $?
   }
   rm -f "$started_file"
   local status=0
-  if install_ui run --step "$step" --parser "$parser" --repo "$repo" \
-      --done "$done_text" --started-file "$started_file" -- "$@"; then
+  runner_args=(run --step "$step" --parser "$parser" --repo "$repo"
+    --done "$done_text" --started-file "$started_file")
+  if [[ -n "$crate" ]]; then runner_args+=(--crate "$crate"); fi
+  if [[ -n "$profile" ]]; then runner_args+=(--profile "$profile"); fi
+  local success_code
+  for success_code in $success_codes; do
+    runner_args+=(--success-code "$success_code")
+  done
+  if install_ui "${runner_args[@]}" -- "$@"; then
     status=0
   else
     status=$?
   fi
-  if [[ ! -e "$started_file" ]]; then
+  if (( status == 130 )); then
     rm -f "$started_file"
-    "$@"
-    return $?
+    return 130
+  fi
+  if [[ ! -e "$started_file" ]]; then
+    local fallback_status
+    if "$@"; then fallback_status=0; else fallback_status=$?; fi
+    rm -f "$started_file"
+    return "$fallback_status"
   fi
   rm -f "$started_file"
   return "$status"

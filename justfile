@@ -151,7 +151,9 @@ install *shells:
     # An empty RUSTC_WRAPPER disables any configured rustc wrapper (sccache or
     # sase-rustc-wrapper), which would strip or refuse -C incremental. sccache
     # cannot cache the changed bob_cli crate on a reinstall anyway.
-    RUSTC_WRAPPER= cargo install --path . --locked --profile "$profile" --root "$root"
+    install_ui_run bob-cli cargo "$PWD" built \
+        --crate bob-obsidian --profile "$profile" -- \
+        env RUSTC_WRAPPER= cargo install --path . --locked --profile "$profile" --root "$root"
     if ! "$root/bin/bob" completion install ${completion_quiet[@]+"${completion_quiet[@]}"} "$@"; then
         printf '\nbob is installed at %s; shell completion needs attention (see above).\n' \
             "$root/bin/bob" >&2
@@ -162,8 +164,10 @@ install *shells:
 
 # Offers to clone missing sibling checkouts over SSH; otherwise they are skipped.
 # Pull + install bob-cli, bob-plugins, and bob-mac-capture; restart Obsidian if plugins changed.
-install-all:
-    @scripts/install_all
+# Pass `-v` to stream raw compiler and plugin-sync output.
+[positional-arguments]
+install-all *args:
+    @scripts/install_all {{args}}
 
 install-smoke:
     #!/usr/bin/env bash
