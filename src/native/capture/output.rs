@@ -4187,11 +4187,21 @@ fn print_human_transfer_merges(result: &CaptureItemResult) {
             display_relative(&first.target.path)
         );
     }
+    let mut printed_dependents = std::collections::BTreeSet::new();
     for record in records {
         println!("  {}", record.message);
         for consequence in &record.consequences {
             match consequence.kind.as_str() {
                 "dependent" => {
+                    let already_printed = !consequence.keys.is_empty()
+                        && consequence
+                            .keys
+                            .iter()
+                            .all(|key| printed_dependents.contains(key));
+                    if already_printed {
+                        continue;
+                    }
+                    printed_dependents.extend(consequence.keys.iter().cloned());
                     println!("  ⛓ {}", consequence.text);
                 }
                 "prerequisite_left" | "successor_orphaned" => {

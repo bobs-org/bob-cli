@@ -1277,8 +1277,6 @@ Contract: [Moving and merging tasks with `>`](../capture.md#moving-and-merging-t
 
 ### `<` merge-in {#merge-in}
 
-*Status: contract only.*
-
 `T < @a+x @b+y` creates T, then merges each source into it.
 
 ```bash

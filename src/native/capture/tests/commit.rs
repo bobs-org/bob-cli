@@ -625,6 +625,67 @@ fn transfer_merge_preserves_engine_order_and_rolls_back_failed_source() {
 }
 
 #[test]
+fn merge_in_new_target_rolls_back_real_staged_files_on_source_replace_failure()
+{
+    let (dir, mut request, _env) = merge_fixture();
+    request.raw_text = "New target @new^born < @a+s".to_string();
+    let source_path = dir.path().join("a.md");
+    let source_before = fs::read(&source_path).unwrap();
+    let dependent_path = dir.path().join("dependent.md");
+    let dependent_before = "---\ntype: [[area]]\n---\n## Tasks\n- [?] #task Waiting [id:: dependent] ^dependent\n  - ⛓️ **DEPENDS ON:** [[a#^s]]\n";
+    fs::write(&dependent_path, dependent_before).unwrap();
+    let day_path = dir.path().join("day.md");
+    let day_before = "## Pomodoros\n\n- [ ] () — WORK\n  - [[a#^s]]\n";
+    fs::write(&day_path, day_before).unwrap();
+
+    let mut batch =
+        plan_capture_batch(&request, None).expect("real merge-in plans");
+    let new_targets: Vec<PathBuf> = batch
+        .text_files
+        .iter()
+        .filter(|file| !file.target_existed)
+        .map(|file| file.target.clone())
+        .collect();
+    assert_eq!(new_targets.len(), 1, "{:#?}", batch.text_files);
+    let new_target = &new_targets[0];
+    assert!(!new_target.exists());
+    assert_eq!(
+        batch.text_files.last().unwrap().target,
+        source_path,
+        "merge-in preserves destination-first/source-last ordering"
+    );
+    assert!(
+        batch
+            .text_files
+            .iter()
+            .any(|file| file.target == dependent_path),
+        "the source dependent is part of this real merge plan"
+    );
+    assert!(
+        batch.text_files.iter().any(|file| file.target == day_path),
+        "the live source link is pruned in this real merge plan"
+    );
+
+    RENAME_FAIL_TARGET
+        .with(|target| *target.borrow_mut() = Some(source_path.clone()));
+    let error = commit_capture_batch(&mut batch, dir.path())
+        .expect_err("source replacement failure rolls back earlier writes");
+    RENAME_FAIL_TARGET.with(|target| *target.borrow_mut() = None);
+    assert!(error.message.contains("rolled back"), "{error:?}");
+    assert_eq!(fs::read(&source_path).unwrap(), source_before);
+    assert_eq!(
+        fs::read_to_string(&dependent_path).unwrap(),
+        dependent_before
+    );
+    assert_eq!(fs::read_to_string(&day_path).unwrap(), day_before);
+    assert!(
+        !new_target.exists(),
+        "rollback removes the newly created target"
+    );
+    no_capture_litter(dir.path());
+}
+
+#[test]
 fn transfer_merge_rerun_has_no_staged_writes() {
     let (dir, request, _env) = merge_fixture();
     let mut batch = plan_capture_batch(&request, None).expect("merge plans");

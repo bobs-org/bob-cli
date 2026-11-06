@@ -6614,7 +6614,7 @@ ordinary items omit the empty fields. Merge-only offers get their own Pull-In
 copy (`Link “T” in place of “S”` / `Link “T” in place of N merged tasks`), and
 the CLI's dependent rows print titles from `consequences`.
 `capture-parse` and `capture-complete` report grammar revision 15. Grammar 11
-added the move-choice markers; grammar 12 adds the `x=` past-Pomodoro syntax; grammar 15 adds `<` merge-in grammar, editor parse, and teaching refusals with transitional `merge_in_unavailable` refusal.
+added the move-choice markers; grammar 12 adds the `x=` past-Pomodoro syntax; grammar 15 adds `<` merge-in grammar, editor parse, and teaching refusals. Complete clauses execute atomically through the explicit merge engine.
 `schema_version` stays 1 (see [Capture-language
 revision](reference/compatibility.md#capture-language-revision)).
 
@@ -6624,8 +6624,6 @@ the draft (bob capture '@a+x > @c') and delete the empty file “@c”`. Pipes,
 TTYs, and the Mac panel are unaffected.
 
 #### Merging tasks into a new task with `<`
-
-*Status: grammar, `capture-parse` shape, diagnostic rewrites, picker scoping, separator toggles, and related-task integration implemented (grammar 15); execution, merge JSON, and Mac preview remain contract-only. Complete merge-in items are refused with `merge_in_unavailable` until the execute phase lands.*
 
 `T < @a+x @b+y` creates one open task T exactly as its left side says, then
 runs the existing explicit task merge of `S₁ … Sₙ` into T, in typed order,
@@ -6710,7 +6708,6 @@ the offending UTF-8 byte span.
 | `merge_in_arrow_spacing` | Glued arrow next to a source | “put spaces around <: New task < @a+x” |
 | `incomplete_merge_in` | Submit with a terminal `<`, a bare `@route`, or an unresolved picker | “pick tasks to merge in after <, or write \< to keep it” |
 | `merge_in_source_also_marked` | `&`/`*`/`~`/`~~` on the item names a source, or the item carries any merge-label `~~` | “that source merges into the new task; it can't also be its prerequisite/dependent/relation” |
-| `merge_in_unavailable` | Transitional only (grammar phase to execute phase) | “merging into a new task with < needs a newer bob” |
 | reused | `transfer_source_suffix`, `transfer_source_marker`, `duplicate_capture_target`, `transfer_overlapping_sources`, `merge_source_closed`, `merge_source_recurring`, `merge_source_project`, `merge_source_open_subtasks`, `merge_dependency_cycle` | Unchanged, except `merge_source_closed` names an existing merge |
 
 Structured rewrites: `capture-parse` diagnostics gain one additive,
@@ -6749,7 +6746,7 @@ under `linked` with `link: "merge_in"` and never in `matches`; the
 similarity query uses the left side's body only; `marker_at` sits before
 the arrow.
 
-JSON and human output (contract-only until the execute phase): a `<` item keeps `kind: "task"` /
+JSON and human output: a `<` item keeps `kind: "task"` /
 `"pomodoro_task"` and gains the existing flattened `merges[]`,
 `merge_offers`, and `repaired_files[]`; offers join the draft-level
 `pull_in` and its numbering. `merges[].target.created` means “the
@@ -6768,7 +6765,7 @@ or `error: {code, message}`). Human output prints the merge block whenever
 `⤵ Merged 2 tasks into new “T” · foo.md` (`⤵ Would merge … into new “T”`
 on dry run).
 
-Shell guard (contract-only until the execute phase): when draft arguments are present and stdin is a regular file
+Shell guard: when draft arguments are present and stdin is a regular file
 whose basename starts with `@`, capture refuses with
 `shell_ate_merge_in_arrow`: “your shell ate “<”: quote the draft (bob
 capture 'New task < @a+x')”. Pipes, TTYs, and the Mac panel are unaffected.
@@ -7713,7 +7710,7 @@ Field rules:
 - `created` is true only when the parent task did not exist before the
   batch. This happens when this item or an earlier item in the same draft
   created it, as in `Task @sase^new` followed by `note @sase+new`, and for
-  every `<` merge-in target (contract-only). A created block's lines are
+  every `<` merge-in target. A created block's lines are
   all `added`. A `>` transferred task keeps `created: false`; its source
   before-image is used even when the destination note never held it.
 - `moved_from` appears on moved tasks as `{relative_target, line}`, naming
@@ -7738,11 +7735,11 @@ Field rules:
   draft also rewrites the parent's task line (for example, a task toggle
   of the same task), the task line shows as `changed` with its `before`
   text.
-- Additive `origin` (contract-only): on every row a merge in this capture
+- Additive `origin`: on every row a merge in this capture
   landed under its target, `lines[]` rows carry
   `origin: "<relative_path>#^<block_id>"` matching `merges[].source`;
   omitted on every other row. Applies to `>` and `<` merges alike.
-- Additive `merge_in_pending` (contract-only): on dry-run JSON failures
+- Additive `merge_in_pending`: on dry-run JSON failures
   whose code is `incomplete_merge_in`, the failure envelope also carries
   `merge_in_pending: {item, need, sources[]}`, mirroring
   `transfer_pending`. See

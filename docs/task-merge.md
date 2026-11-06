@@ -12,8 +12,6 @@ tasks](task-split.md)). Merge labels committed through capture `~` / `~~`
 or the Obsidian Links stage run this same engine (see [Task
 relations](task-relations.md#21-merge-labels)).
 
-*Status: contract only for `<` merge-in.*
-
 This file is the contract every implementation cites. The pure planner is
 `plan_task_merge` in `src/native/task_merge/`; capture `>` transfer lines,
 capture relation merges, and `bob task merge` all compose it, and the
@@ -164,7 +162,7 @@ write-plan ranking.
 ## 8. Merge labels (summary)
 
 Configurable merge labels live in `relations.merge_labels` (default `[]`;
-the `>`, `<` (contract-only), and `bob task merge` gestures always write
+the `>`, `<`, and `bob task merge` gestures always write
 the first configured label, falling back to `merged into`). Committing a merge label through
 capture `~` / `~~` or the Links stage merges the source into the target at
 commit time. The one-effect-per-label overlap rule spans all four lists;
@@ -215,7 +213,7 @@ bob task merge [OPTIONS] -i <TASK|NOTE> [-D TITLE | -s TITLE] <TASK>...
       `line` is the 1-based post-merge line, `created` is true when the merge
       created the drawer or section, or when the container is a task created
       by this item or an earlier item of the same draft (so the two-item `>`
-      equivalent reports it too; contract-only for `<`), and
+      equivalent reports it too), and
       `status_symbol`/`status_name` report the target's final status for
       `task` and `drawer` kinds;
     - `label`, `outcome` (`merged`, `unchanged`, or `already_closed`),
@@ -250,8 +248,6 @@ The `contract` phase records this table here and in
 use these strings verbatim. Bob authors `message`/`detail` fields, and
 clients render them.
 
-*Status: contract only for the `<` rows below.*
-
 | Key | Text |
 | --- | --- |
 | merge header | `⤵ Merged N task(s) into “T” · c.md[ › CONTAINER]` / `Would merge …` |
@@ -277,7 +273,6 @@ clients render them.
 | merge_in_arrow_spacing | `“put spaces around <: New task < @a+x”` |
 | incomplete_merge_in | `“pick tasks to merge in after <, or write \< to keep it”` |
 | merge_in_source_also_marked | `“S merges into the new task; it can't also be its prerequisite / dependent / relation”` |
-| merge_in_unavailable | `“merging into a new task with < needs a newer bob”` |
 | shell_ate_merge_in_arrow | `your shell ate “<”: quote the draft (bob capture 'New task < @a+x')` |
 | transfer_extra_text | `a > line takes one destination and nothing else; put notes in a separate @c+id item` |
 | transfer_source_suffix | `sources are whole tasks; drop #drawer from @a+x` |
@@ -371,10 +366,9 @@ The JSON wire shape is pinned by
 
 ## 13. MI vector index
 
-*Status: contract only.*
-
 Each MI row names the preimage, the `<` gesture, and the byte-exact
-postimage expectation. Test names are filled in by the implementing phases.
+postimage expectation. The test index below points to executable coverage;
+grammar and picker vectors remain owned by their sibling phases.
 
 | ID | Covers | Phase |
 | --- | --- | --- |
@@ -397,11 +391,24 @@ postimage expectation. Test names are filled in by the implementing phases.
 | MI17 | JSON: kind stays `task`; `target.created: true`; task-block roles and `origin`; `merge_in_pending` | execute |
 | MI18 | Pickers: merge-only rows, ID-less rows, exclusions, continuation, `+` toggle, capture-related exclusion and `marker_at` | assist |
 
-The grammar-phase test names for the implemented vectors are:
+The acceptance and earlier-phase test names for these vectors are:
 
 | ID | Test |
 | --- | --- |
+| MI1–MI2 | `merge_in_creates_target_and_appends_sources_after_authored_notes` |
+| MI3 | `merge_in_bytes_match_the_equivalent_two_item_transfer`, `merge_in_equivalence_covers_same_note_drawers_and_configured_labels`, `selected_merge_in_offer_matches_two_item_transfer_without_freshness`, `merge_in_selected_and_unselected_offer_bytes_match_transfer` |
+| MI4 | `merge_in_same_note_anchor_collision_repairs_payload_and_inbound_link`, `merge_in_equivalence_covers_same_note_drawers_and_configured_labels`, `transfer_merge_origins_cover_renamed_anchors_and_drawers` (shared merge engine) |
+| MI5 | `merge_in_repoints_shared_dependents_and_cycle_refusal_is_atomic`, `transfer_merge_refusals_are_atomic_and_coded`, `structural_refusals_cover_nested_open_tasks_and_destination_relationships`, `mg5_shared_dependent_dedups_to_one_target_link` |
+| MI6 | `merge_in_source_refusal_matrix_is_atomic`, `merge_in_invalid_second_source_refuses_without_writes`, `canonical_duplicate_sources_refuse_without_writes`, `source_identity_and_task_structure_refusals_are_specific` |
 | MI7 | `execution_needs_new_task_for_existing_destination`, `execution_needs_new_task_for_empty_left`, `editor_needs_new_task_carries_use_rewrite` |
 | MI8 | `valid_merge_in_claims_two_sources_in_order`, `terminal_arrow_is_incomplete`, `bare_route_and_plus_are_incomplete`, `prose_comparisons_stay_unclaimed`, `later_real_clause_claims_after_prose_arrow`, `glued_arrows_claim_spacing_error`, `glued_non_sources_stay_prose`, `duplicate_sources_refuse`, `source_marker_and_suffix_reuse_transfer_codes`, `extra_text_has_move_before_rewrite`, `second_arrow_is_extra_text`, `utf8_and_bulk_offsets_are_absolute` |
-| MI13 | `task_list_bullets_claim_per_bullet` (parse portion) |
-| MI14 | `execution_source_also_marked_refuses`, `execution_case_folds_routes_for_also_marked` (lexical portion) |
+| MI9 | `merge_in_suppresses_offers_for_blocked_and_already_linked_targets`, `selected_merge_in_offer_matches_two_item_transfer_without_freshness`, `transfer_merge_draft_global_picks_and_duplicate_offers` |
+| MI10 | `merge_in_empty_label_config_still_merges_with_fallback_label` |
+| MI11 | `automatic_id_retry_refuses_closed_source_without_a_second_target`, `explicit_id_retry_collision_refuses_without_writes` |
+| MI12 | `merge_in_invalid_second_source_refuses_without_writes`, `later_merge_in_failure_rolls_back_the_earlier_new_task`, `merge_in_new_target_rolls_back_real_staged_files_on_source_replace_failure` |
+| MI13 | `merge_in_task_list_bullets_write_each_target_and_source`, `task_list_bullets_claim_per_bullet` (parse portion) |
+| MI14 | `every_resolved_relation_marker_conflict_refuses_without_writes`, `any_merge_label_incoming_relation_refuses_before_writes`, `execution_source_also_marked_refuses`, `execution_case_folds_routes_for_also_marked` |
+| MI15 | `merge_in_creates_target_and_appends_sources_after_authored_notes` |
+| MI16 | `merge_in_dry_run_matches_commit_and_reconcile_is_a_noop`, `production_reconciliation_is_a_noop_after_merge` |
+| MI17 | `merge_in_creates_target_and_appends_sources_after_authored_notes`, `merge_in_pending_reports_single_complete_source_with_mergeability`, `merge_in_pending_preserves_typed_order_across_complete_sources`, `merge_in_pending_reports_source_level_errors`, `merge_in_pending_reports_closed_source_as_unmergeable`, `merge_in_pending_finds_the_failing_bulk_item`, `merge_in_pending_finds_failing_list_bullet`, `merge_in_pending_is_dry_run_json_only`, `merge_in_note_and_vault_pickers_keep_only_mergeable_rows` |
+| MI18 | `merge_in_note_and_vault_pickers_keep_only_mergeable_rows`, `merge_in_excludes_typed_sources_through_project_aliases`, `transfer_source_picker_keeps_idless_rows_for_add_block_id` |

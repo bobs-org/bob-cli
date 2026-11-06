@@ -2406,7 +2406,7 @@ T" merges S into T.
 
 | Gesture | Source S (merged and cancelled) | Target T (grows) |
 | --- | --- | --- |
-| Capture `Umbrella < @old+a` (contract-only) | picked existing task | the new umbrella task |
+| Capture `Umbrella < @old+a` | picked existing task | the new umbrella task |
 | Task Card `l` → `⇧↵` | task under the cursor | picked task |
 | Task Card `⇧L` → `⇧↵` | **picked task**, possibly in another note | task under the cursor |
 | Capture `@note+id ~t:id\|"merged into"` | routed existing task | picked task |
@@ -2472,7 +2472,7 @@ More edge cases:
 - `Umbrella ~~old:a|"merged into"` creates the umbrella task and folds
   `old:a` into it.
 - `Umbrella < @old+a` ≡ `Umbrella ~~old:a|"merged into"` without config,
-  with explicit-merge refusals (contract-only). `<` is the capture spelling
+  with explicit-merge refusals. `<` is the capture spelling
   of merge-in.
 - `New task ~old:a|"merged into"` is refused as `relation_merges_new_task`,
   because it would be born merged (mirroring cancel's `new_task`

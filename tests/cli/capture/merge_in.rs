@@ -12,6 +12,28 @@ fn area_with_tasks(tasks: &str) -> String {
     format!("---\ntype: \"[[area]]\"\n---\n## Tasks\n{tasks}")
 }
 
+fn enable_blocked_status(vault: &Path) {
+    let path = vault.join(".obsidian/plugins/obsidian-tasks-plugin/data.json");
+    write_file(
+        &path,
+        r##"{
+          "globalFilter": "#task",
+          "statusSettings": {
+            "coreStatuses": [
+              {"symbol":" ","name":"Ready","nextStatusSymbol":"x","availableAsCommand":true,"type":"TODO"},
+              {"symbol":"x","name":"Done","nextStatusSymbol":" ","availableAsCommand":true,"type":"DONE"}
+            ],
+            "customStatuses": [
+              {"symbol":"/","name":"In Progress","nextStatusSymbol":"x","availableAsCommand":true,"type":"IN_PROGRESS"},
+              {"symbol":"*","name":"Next","nextStatusSymbol":"x","availableAsCommand":true,"type":"ON_HOLD"},
+              {"symbol":"?","name":"Blocked","nextStatusSymbol":" ","availableAsCommand":true,"type":"ON_HOLD"},
+              {"symbol":"-","name":"Canceled","nextStatusSymbol":" ","availableAsCommand":true,"type":"CANCELLED"}
+            ]
+          }
+        }"##,
+    );
+}
+
 fn setup_merge_vault(
     name: &str,
 ) -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
@@ -101,11 +123,29 @@ fn capture_with(
         .arg("--")
         .arg(draft)
         .env("BOB_DAY_FILE", day_file)
-        .env("BOB_NOW", NOW);
+        .env("BOB_NOW", NOW)
+        .env("BOB_PRIORITY_ROLL_SEED", "merge-in-acceptance");
     if let Some(config) = config {
         command.env("BOB_CONFIG_FILE", config);
     }
     command.output().expect("run capture")
+}
+
+fn capture_human(
+    vault: &Path,
+    day_file: &Path,
+    draft: &str,
+) -> std::process::Output {
+    bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(vault)
+        .arg("--")
+        .arg(draft)
+        .env("BOB_DAY_FILE", day_file)
+        .env("BOB_NOW", NOW)
+        .output()
+        .expect("run capture human")
 }
 
 fn output_json(output: &std::process::Output) -> serde_json::Value {
@@ -126,7 +166,10 @@ fn item(result: &serde_json::Value) -> &serde_json::Value {
 #[test]
 fn merge_in_creates_target_and_appends_sources_after_authored_notes() {
     let (_temp, vault, day_file) = setup_merge_vault("merge_in_execute");
-    let draft = "New target @inbox < @a+f @b+b\n- authored note";
+    let mut source_a = fs::read_to_string(vault.join("a.md")).unwrap();
+    source_a = source_a.replace("^f", "[priority:: low] ^f");
+    write_file(&vault.join("a.md"), &source_a);
+    let draft = "New target @inbox < @a+f @b+b\n- authored note\n- #DETAILS\n  - authored drawer";
     let before = snapshot(&vault);
 
     let dry = capture_json(&vault, &day_file, draft, true);
@@ -175,9 +218,39 @@ fn merge_in_creates_target_and_appends_sources_after_authored_notes() {
 
     let inbox = std::fs::read_to_string(vault.join("inbox.md")).unwrap();
     let authored = inbox.find("authored note").expect("authored child lands");
+    let authored_drawer = inbox
+        .find("authored drawer")
+        .expect("authored drawer lands");
+    let source_title_a = inbox
+        .find("Fix the flaky login test")
+        .expect("source A title bullet lands");
     let source_a = inbox.find("source note a").expect("source A payload lands");
+    let source_title_b = inbox
+        .find("Login timeout too short")
+        .expect("source B title bullet lands");
     let source_b = inbox.find("source note b").expect("source B payload lands");
-    assert!(authored < source_a && source_a < source_b, "{inbox}");
+    assert!(
+        authored < authored_drawer
+            && authored_drawer < source_title_a
+            && source_title_a < source_a
+            && source_a < source_title_b
+            && source_title_b < source_b,
+        "{inbox}"
+    );
+    assert!(
+        inbox.contains("[[a#^f]] (merged into)")
+            && inbox.contains("[[b#^b]] (merged into)"),
+        "target keeps inverse links for each source: {inbox}"
+    );
+    let target_line = inbox
+        .lines()
+        .find(|line| line.contains(&format!("^{dry_id}")))
+        .expect("new target line");
+    assert!(target_line.contains("New target"), "{target_line}");
+    assert!(
+        !target_line.contains("priority"),
+        "source fields stay on S: {target_line}"
+    );
     for (path, id) in [("a.md", "f"), ("b.md", "b")] {
         let source = std::fs::read_to_string(vault.join(path)).unwrap();
         assert!(
@@ -200,6 +273,51 @@ fn merge_in_creates_target_and_appends_sources_after_authored_notes() {
         }),
         "{real_json}"
     );
+    assert_eq!(
+        blocks.len(),
+        3,
+        "one target card and one card per source: {real_json}"
+    );
+    for (block_id, origin) in [("f", "a.md#^f"), ("b", "b.md#^b")] {
+        let source = blocks
+            .iter()
+            .find(|block| block["block_id"] == block_id)
+            .expect("one source card");
+        assert_eq!(source["roles"], serde_json::json!(["merge_source"]));
+        assert!(
+            source["lines"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|line| line.get("origin").is_none()),
+            "tombstones do not carry payload provenance: {source}"
+        );
+        let target = blocks
+            .iter()
+            .find(|block| block["block_id"] == dry_id)
+            .expect("one target card");
+        assert!(
+            target["lines"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|line| line["origin"] == origin),
+            "landed payload rows carry exact source provenance: {target}"
+        );
+    }
+    let target = blocks
+        .iter()
+        .find(|block| block["block_id"] == dry_id)
+        .unwrap();
+    assert!(
+        target["lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|line| line["text"] == "- authored note")
+            .all(|line| line.get("origin").is_none()),
+        "authored rows do not inherit merge provenance: {target}"
+    );
 }
 
 #[test]
@@ -217,6 +335,176 @@ fn merge_in_bytes_match_the_equivalent_two_item_transfer() {
     let right_output = capture_json(&right_vault, &right_day, right, false);
     assert_success(&right_output);
     assert_eq!(snapshot(&left_vault), snapshot(&right_vault));
+}
+
+#[test]
+fn merge_in_equivalence_covers_same_note_drawers_and_configured_labels() {
+    let (_temp_left, left_vault, left_day) =
+        setup_merge_vault("merge_in_equiv_same_left");
+    let (_temp_right, right_vault, right_day) =
+        setup_merge_vault("merge_in_equiv_same_right");
+    enable_blocked_status(&left_vault);
+    enable_blocked_status(&right_vault);
+    let same_note =
+        area_with_tasks("- [ ] #task Source ^f\n\t- same-note payload\n");
+    write_file(&left_vault.join("a.md"), &same_note);
+    write_file(&right_vault.join("a.md"), &same_note);
+    let left = "New target @a^same s:3 < @a+f\n- authored note\n- #DETAILS\n  - authored drawer";
+    let right = "New target @a^same s:3\n- authored note\n- #DETAILS\n  - authored drawer\n\n@a+f > @a+same";
+    let a = capture_json(&left_vault, &left_day, left, false);
+    let b = capture_json(&right_vault, &right_day, right, false);
+    assert_success(&a);
+    assert_success(&b);
+    assert_eq!(snapshot(&left_vault), snapshot(&right_vault));
+
+    let (_temp_left, left_vault, left_day) =
+        setup_merge_vault("merge_in_equiv_label_left");
+    let (_temp_right, right_vault, right_day) =
+        setup_merge_vault("merge_in_equiv_label_right");
+    let left_config = left_vault.join("config.yml");
+    let right_config = right_vault.join("config.yml");
+    write_file(&left_config, "relations:\n  merge_labels: [folded into]\n");
+    write_file(&right_config, "relations:\n  merge_labels: [folded into]\n");
+    let left = "New target @inbox^same < @a+f @b+b\n- authored note";
+    let right =
+        "New target @inbox^same\n- authored note\n\n@a+f @b+b > @inbox+same";
+    let a = capture_with(
+        &left_vault,
+        &left_day,
+        left,
+        false,
+        None,
+        Some(&left_config),
+    );
+    let b = capture_with(
+        &right_vault,
+        &right_day,
+        right,
+        false,
+        None,
+        Some(&right_config),
+    );
+    assert_success(&a);
+    assert_success(&b);
+    assert_eq!(snapshot(&left_vault), snapshot(&right_vault));
+    assert!(
+        fs::read_to_string(left_vault.join("a.md"))
+            .unwrap()
+            .contains("folded into"),
+        "configured label is shared by both explicit merge adapters"
+    );
+}
+
+#[test]
+fn merge_in_selected_and_unselected_offer_bytes_match_transfer() {
+    for pick in ["none", "all"] {
+        let (_temp_left, left_vault, left_day) =
+            setup_merge_vault("merge_in_offer_equiv_left");
+        let (_temp_right, right_vault, right_day) =
+            setup_merge_vault("merge_in_offer_equiv_right");
+        let ledger = concat!(
+            "## Pomodoros\n\n- [ ] () — BUILD\n",
+            "  - [[a#^f]]\n",
+            "  - keep this slot\n",
+            "  - [[b#^b]]\n",
+        );
+        write_file(&left_day, ledger);
+        write_file(&right_day, ledger);
+        let merge_in = capture_with(
+            &left_vault,
+            &left_day,
+            "New target @inbox^target < @a+f @b+b",
+            false,
+            Some(pick),
+            None,
+        );
+        let transfer = capture_with(
+            &right_vault,
+            &right_day,
+            "New target @inbox^target\n\n@a+f @b+b > @inbox+target",
+            false,
+            Some(pick),
+            None,
+        );
+        assert_success(&merge_in);
+        assert_success(&transfer);
+        assert_eq!(
+            snapshot(&left_vault),
+            snapshot(&right_vault),
+            "pick={pick}"
+        );
+    }
+}
+
+#[test]
+fn merge_in_same_note_anchor_collision_repairs_payload_and_inbound_link() {
+    let (_temp, vault, day_file) =
+        setup_merge_vault("merge_in_same_note_anchor");
+    write_file(
+        &vault.join("a.md"),
+        &area_with_tasks("- [ ] #task Source ^f\n  - source note ^detail\n"),
+    );
+    write_file(&vault.join("referrer.md"), "See [[a#^detail]].\n");
+    let output = capture_json(
+        &vault,
+        &day_file,
+        "New target @a^target < @a+f\n- authored note ^detail",
+        false,
+    );
+    assert_success(&output);
+    let json = output_json(&output);
+    let target = json["task_blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|block| block["block_id"] == "target")
+        .expect("same-note target card");
+    let moved = target["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|line| {
+            line["origin"] == "a.md#^f"
+                && line["text"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("source note")
+        })
+        .expect("source child row carries its merge origin");
+    let moved_text = moved["text"].as_str().unwrap();
+    let moved_anchor =
+        moved_text.split('^').last().expect("source child anchor");
+    assert!(!moved_anchor.is_empty(), "{moved_text}");
+    let target_note = fs::read_to_string(vault.join("a.md")).unwrap();
+    assert_eq!(target_note.matches("^detail\n").count(), 1, "{target_note}");
+    assert!(
+        target_note.contains(&format!("source note ^{moved_anchor}")),
+        "moved row retains its unique anchor: {target_note}"
+    );
+    let referrer = fs::read_to_string(vault.join("referrer.md")).unwrap();
+    assert!(
+        referrer.contains(&format!("[[a#^{moved_anchor}]]")),
+        "inbound link follows the merged payload: {referrer}"
+    );
+}
+
+#[test]
+fn merge_in_empty_label_config_still_merges_with_fallback_label() {
+    let (_temp, vault, day_file) = setup_merge_vault("merge_in_empty_labels");
+    let config = vault.join("config.yml");
+    write_file(&config, "relations:\n  merge_labels: []\n");
+    let output = capture_with(
+        &vault,
+        &day_file,
+        "New target @inbox^target < @a+f",
+        false,
+        None,
+        Some(&config),
+    );
+    assert_success(&output);
+    assert!(fs::read_to_string(vault.join("a.md"))
+        .unwrap()
+        .contains("merged into [[inbox#^target]]"));
 }
 
 #[test]
@@ -285,6 +573,289 @@ fn later_merge_in_failure_rolls_back_the_earlier_new_task() {
 }
 
 #[test]
+fn merge_in_invalid_second_source_refuses_without_writes() {
+    let (_temp, vault, day_file) =
+        setup_merge_vault("merge_in_bad_second_source");
+    let before = snapshot(&vault);
+    let output = capture_json(
+        &vault,
+        &day_file,
+        "New target @inbox^target < @a+f @b+missing",
+        false,
+    );
+    assert!(!output.status.success(), "{}", format_output(&output));
+    assert_eq!(output_json(&output)["code"], "task_not_found");
+    assert_eq!(snapshot(&vault), before);
+}
+
+#[test]
+fn merge_in_source_refusal_matrix_is_atomic() {
+    let cases = [
+        ("closed", "@a+closed", "merge_source_closed"),
+        ("recurring", "@a+recurring", "merge_source_recurring"),
+        ("project", "@a+prj", "merge_source_project"),
+        ("open_child", "@a+parent", "merge_source_open_subtasks"),
+        ("missing", "@a+missing", "task_not_found"),
+        (
+            "overlap",
+            "@tree+parent @tree+child",
+            "transfer_overlapping_sources",
+        ),
+    ];
+    for (case, sources, expected_code) in cases {
+        let (_temp, vault, day_file) =
+            setup_merge_vault("merge_in_refusal_matrix");
+        let extra = match case {
+            "closed" => "- [-] #task Closed ^closed\n",
+            "recurring" => "- [ ] #task Repeats [repeat:: daily] ^recurring\n",
+            "project" => "- [ ] #task Project ^prj\n",
+            "open_child" => {
+                "- [ ] #task Parent ^parent\n  - [ ] #task Child ^child\n"
+            }
+            "overlap" => "",
+            _ => "",
+        };
+        if !extra.is_empty() {
+            let a = vault.join("a.md");
+            let mut contents = fs::read_to_string(&a).unwrap();
+            contents.push_str(extra);
+            write_file(&a, &contents);
+        }
+        if case == "overlap" {
+            write_file(
+                &vault.join("tree.md"),
+                &area_with_tasks(
+                    "- [ ] #task Parent ^parent\n  - [ ] #task Child ^child\n",
+                ),
+            );
+        }
+        let before = snapshot(&vault);
+        let output = capture_json(
+            &vault,
+            &day_file,
+            &format!("New target @inbox^target < {sources}"),
+            false,
+        );
+        assert!(
+            !output.status.success(),
+            "{case}: {}",
+            format_output(&output)
+        );
+        assert_eq!(output_json(&output)["code"], expected_code, "{case}");
+        assert_eq!(snapshot(&vault), before, "{case} refusal must be atomic");
+    }
+}
+
+#[test]
+fn merge_in_repoints_shared_dependents_and_cycle_refusal_is_atomic() {
+    let (_temp, vault, day_file) = setup_merge_vault("merge_in_dependents");
+    enable_blocked_status(&vault);
+    write_file(
+        &vault.join("dependent.md"),
+        &area_with_tasks(concat!(
+            "- [?] #task Waiting on both sources [id:: dependent] ^dependent\n",
+            "  - ⛓️ **DEPENDS ON:** [[a#^f]] [[b#^b]]\n",
+        )),
+    );
+    let output = capture_json(
+        &vault,
+        &day_file,
+        "New target @inbox^target < @a+f @b+b",
+        false,
+    );
+    assert_success(&output);
+    let dependent = fs::read_to_string(vault.join("dependent.md")).unwrap();
+    assert_eq!(
+        dependent.matches("[[inbox#^target]]").count(),
+        1,
+        "{dependent}"
+    );
+    assert!(!dependent.contains("[[a#^f]]"), "{dependent}");
+    assert!(!dependent.contains("[[b#^b]]"), "{dependent}");
+    let json = output_json(&output);
+    assert_eq!(item(&json)["merges"].as_array().unwrap().len(), 2, "{json}");
+
+    let (_temp, vault, day_file) =
+        setup_merge_vault("merge_in_shared_dependent_copy");
+    enable_blocked_status(&vault);
+    write_file(
+        &vault.join("dependent.md"),
+        &area_with_tasks(concat!(
+            "- [?] #task Shared dependent ^dependent\n",
+            "  - ⛓️ **DEPENDS ON:** [[a#^f]] [[b#^b]]\n",
+        )),
+    );
+    let human = capture_human(
+        &vault,
+        &day_file,
+        "New target @inbox^target < @a+f @b+b",
+    );
+    assert_success(&human);
+    let human_text = String::from_utf8_lossy(&human.stdout);
+    assert_eq!(
+        human_text.matches("now waits on “New target”").count(),
+        1,
+        "shared dependent identity is presented once: {human_text}"
+    );
+
+    let (_temp, vault, day_file) = setup_merge_vault("merge_in_cycle");
+    enable_blocked_status(&vault);
+    write_file(
+        &vault.join("dependent.md"),
+        &area_with_tasks(concat!(
+            "- [?] #task Waiting on source [id:: dependent] ^dependent\n",
+            "  - ⛓️ **DEPENDS ON:** [[a#^f]]\n",
+        )),
+    );
+    let before = snapshot(&vault);
+    let output = capture_json(
+        &vault,
+        &day_file,
+        "New target @inbox^target &dependent:dependent < @a+f",
+        false,
+    );
+    assert!(!output.status.success(), "{}", format_output(&output));
+    let json = output_json(&output);
+    assert_eq!(json["code"], "merge_dependency_cycle", "{json}");
+    assert_eq!(snapshot(&vault), before);
+}
+
+#[test]
+fn merge_in_suppresses_offers_for_blocked_and_already_linked_targets() {
+    for (case, draft, existing_target_link) in [
+        ("scheduled", "New target @inbox^target s:3 < @a+f", false),
+        (
+            "dependent_blocked",
+            "New target @inbox^target &b:b < @a+f",
+            false,
+        ),
+        ("already_linked", "New target @inbox^target < @a+f", true),
+    ] {
+        let (_temp, vault, day_file) =
+            setup_merge_vault("merge_in_offer_suppression");
+        enable_blocked_status(&vault);
+        let mut day = String::from("## Pomodoros\n\n- [ ] () — BUILD\n");
+        if existing_target_link {
+            day.push_str("  - [[inbox#^target]]\n");
+        }
+        day.push_str("  - [[a#^f]]\n  - keep this slot\n");
+        write_file(&day_file, &day);
+        let output = capture_json(&vault, &day_file, draft, false);
+        assert_success(&output);
+        let json = output_json(&output);
+        assert!(
+            item(&json)["merges"][0]["offers"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "{case}: {json}"
+        );
+        let after = fs::read_to_string(&day_file).unwrap();
+        assert!(
+            !after.contains("[[a#^f]]"),
+            "{case}: source link still pruned: {after}"
+        );
+        assert!(
+            after.contains("keep this slot"),
+            "{case}: unrelated ledger child survives: {after}"
+        );
+        assert_eq!(
+            after.contains("[[inbox#^target]]"),
+            existing_target_link,
+            "{case}: existing target links stay untouched: {after}"
+        );
+    }
+}
+
+#[test]
+fn merge_in_task_list_bullets_write_each_target_and_source() {
+    let (_temp, vault, day_file) = setup_merge_vault("merge_in_task_list");
+    let output = capture_json(
+        &vault,
+        &day_file,
+        "@inbox\n- First target < @a+f\n- Second target < @b+b",
+        false,
+    );
+    assert_success(&output);
+    let json = output_json(&output);
+    let captures = json["captures"].as_array().expect("bulk captures");
+    assert_eq!(captures.len(), 2, "{json}");
+    assert!(
+        captures.iter().all(|capture| capture["kind"] == "task"),
+        "{json}"
+    );
+    let inbox = fs::read_to_string(vault.join("inbox.md")).unwrap();
+    assert!(inbox.contains("First target"), "{inbox}");
+    assert!(inbox.contains("Second target"), "{inbox}");
+    for path in ["a.md", "b.md"] {
+        let source = fs::read_to_string(vault.join(path)).unwrap();
+        assert!(source.contains("[-] #task"), "{source}");
+    }
+}
+
+#[test]
+fn merge_in_dry_run_matches_commit_and_reconcile_is_a_noop() {
+    for pick in ["none", "all"] {
+        let (_temp, vault, day_file) = setup_merge_vault("merge_in_reconcile");
+        for (path, contents) in [
+            (
+                "a.md",
+                "## Tasks\n- [ ] #task Fix the flaky login test ^f\n  - source note a\n",
+            ),
+            (
+                "b.md",
+                "## Tasks\n- [ ] #task Login timeout too short ^b\n  - source note b\n",
+            ),
+            (
+                "inbox.md",
+                "## Tasks\n- [ ] #task Existing target ^t\n",
+            ),
+        ] {
+            write_file(&vault.join(path), contents);
+        }
+        write_file(
+            &day_file,
+            "## Pomodoros\n\n- [ ] () — BUILD\n  - [[a#^f]]\n  - keep this slot\n",
+        );
+        let before = snapshot(&vault);
+        let dry = capture_with(
+            &vault,
+            &day_file,
+            "New target @inbox^target < @a+f",
+            true,
+            Some(pick),
+            None,
+        );
+        assert_success(&dry);
+        assert_eq!(snapshot(&vault), before, "dry-run writes nothing");
+        let live = capture_with(
+            &vault,
+            &day_file,
+            "New target @inbox^target < @a+f",
+            false,
+            Some(pick),
+            None,
+        );
+        assert_success(&live);
+        let mut dry_json = output_json(&dry);
+        dry_json["dry_run"] = false.into();
+        assert_eq!(dry_json, output_json(&live));
+
+        let after_capture = snapshot(&vault);
+        let reconcile = bob_command()
+            .args(["task", "reconcile", "--format", "json"])
+            .arg("--bob-dir")
+            .arg(&vault)
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", NOW)
+            .output()
+            .expect("run bob task reconcile");
+        assert_success(&reconcile);
+        assert_eq!(snapshot(&vault), after_capture, "reconcile is a no-op");
+    }
+}
+
+#[test]
 fn canonical_duplicate_sources_refuse_without_writes() {
     let (_temp, vault, day_file) =
         setup_merge_vault("merge_in_duplicate_alias");
@@ -346,6 +917,46 @@ fn any_merge_label_incoming_relation_refuses_before_writes() {
 }
 
 #[test]
+fn every_resolved_relation_marker_conflict_refuses_without_writes() {
+    let cases = [
+        ("dependent", "New target @inbox &a:f < @a+f"),
+        ("blocked", "New target @inbox *a:f < @a+f"),
+        (
+            "cancel_label",
+            "New target @inbox ~a:f|\"duplicate of\" < @a+f",
+        ),
+        (
+            "other_merge_source",
+            "New target @inbox ~~b:b|\"merged into\" < @a+f",
+        ),
+    ];
+    for (case, draft) in cases {
+        let (_temp, vault, day_file) =
+            setup_merge_vault("merge_in_marker_matrix");
+        let config = vault.join("config.yml");
+        write_file(
+            &config,
+            "relations:\n  cancel_labels: [duplicate of]\n  merge_labels: [merged into]\n",
+        );
+        let before = snapshot(&vault);
+        let output =
+            capture_with(&vault, &day_file, draft, false, None, Some(&config));
+        assert!(
+            !output.status.success(),
+            "{case}: {}",
+            format_output(&output)
+        );
+        let json = output_json(&output);
+        assert_eq!(
+            json["code"], "merge_in_source_also_marked",
+            "{case}: {json}"
+        );
+        assert!(json["span"]["start"].as_u64().is_some(), "{case}: {json}");
+        assert_eq!(snapshot(&vault), before, "{case} refusal is atomic");
+    }
+}
+
+#[test]
 fn automatic_id_retry_refuses_closed_source_without_a_second_target() {
     let (_temp, vault, day_file) = setup_merge_vault("merge_in_auto_retry");
     let draft = "New target @inbox < @a+f";
@@ -354,7 +965,15 @@ fn automatic_id_retry_refuses_closed_source_without_a_second_target() {
     let before_retry = snapshot(&vault);
     let retry = capture_json(&vault, &day_file, draft, false);
     assert!(!retry.status.success(), "{}", format_output(&retry));
-    assert_eq!(output_json(&retry)["code"], "merge_source_closed");
+    let retry_json = output_json(&retry);
+    assert_eq!(retry_json["code"], "merge_source_closed");
+    assert!(
+        retry_json["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("New target"),
+        "retry identifies the prior merge destination: {retry_json}"
+    );
     assert_eq!(snapshot(&vault), before_retry);
 }
 
