@@ -1012,11 +1012,18 @@ pub(crate) fn parse_capture_text_with_options(
     }
     let options = options.with_global(!draft.declarations.is_empty());
 
-    // Singleton parsing claims transfers exactly like the draft parser but
-    // keeps ordinary items on the unfanned singleton parser.
+    // Singleton parsing claims transfers and merge-ins exactly like the
+    // draft parser but keeps ordinary items on the unfanned singleton parser.
     let mut item_outcomes = Vec::new();
     for item in &draft.items {
-        match parse_transfer_claim(item, forced_route, forced_section, &options)
+        if let Some(outcomes) =
+            parse_transfer_claim(item, forced_route, forced_section, &options)
+                .map_err(|error| error.message)?
+        {
+            item_outcomes.extend(outcomes);
+            continue;
+        }
+        match parse_merge_claim(item, forced_route, forced_section, &options)
             .map_err(|error| error.message)?
         {
             Some(outcomes) => item_outcomes.extend(outcomes),
@@ -1449,6 +1456,11 @@ fn parse_capture_item_members<'a>(
     {
         return Ok(outcomes);
     }
+    if let Some(outcomes) =
+        parse_merge_claim(item, forced_route, forced_section, options)?
+    {
+        return Ok(outcomes);
+    }
     parse_capture_item_members_legacy(
         item,
         forced_route,
@@ -1582,6 +1594,7 @@ fn parse_transfer_claim<'a>(
                         relations: Vec::new(),
                         dependency_target: None,
                         type_marker: None,
+                        merge_in: None,
                     };
                     return Ok(Some(vec![parsed_capture_item_outcome(
                         item,
@@ -1594,6 +1607,406 @@ fn parse_transfer_claim<'a>(
         }
     }
     Ok(None)
+}
+
+/// Claim a merge-in directive before target-run fan-out. Returns `None`
+/// when the shared scanner leaves the parent line unclaimed (or a forced
+/// destination keeps the line literal), so callers continue with ordinary
+/// item parsing.
+fn parse_merge_claim<'a>(
+    item: &CaptureItem<'a>,
+    forced_route: Option<&str>,
+    forced_section: Option<&str>,
+    options: &CaptureParseOptions<'_>,
+) -> Result<Option<Vec<ParsedCaptureItemOutcome<'a>>>, CaptureItemParseError> {
+    if forced_route.is_none()
+        && forced_section.is_none()
+        && !options.explicit_destination
+    {
+        let Some(parent) = item.lines.first().map(|line| line.raw) else {
+            return Err(missing_text_error().into());
+        };
+        let scan = super::merge_in::scan_merge_in_line(
+            &parent,
+            item.source,
+            item.lines.len() > 1,
+        );
+        match scan {
+            super::merge_in::MergeInScan::Unclaimed => return Ok(None),
+            super::merge_in::MergeInScan::Escaped {
+                backslash_span,
+                arrow_span,
+            } => {
+                let mut masked = item.source.as_bytes().to_vec();
+                let from = backslash_span.0.min(masked.len());
+                let arrow_start = arrow_span.0.min(masked.len());
+                // Mask the escape backslash plus the entire tail with spaces
+                // so the prefix parses alone; offsets are preserved.
+                for byte in masked.iter_mut().skip(from) {
+                    *byte = b' ';
+                }
+                let masked_text = String::from_utf8(masked)
+                    .unwrap_or_else(|_| item.source.to_string());
+                let view = capture_item_source_view(item, &masked_text);
+                let outcomes = parse_capture_item_members_legacy(
+                    &view,
+                    forced_route,
+                    forced_section,
+                    options,
+                )?;
+                // Restore the literal tail (`< ...` without the backslash)
+                // into the body in place.
+                let tail_literal = item
+                    .source
+                    .get(arrow_start..parent.end)
+                    .unwrap_or("")
+                    .trim_start()
+                    .to_string();
+                let mut rebound = Vec::new();
+                for outcome in outcomes {
+                    let mut parsed = outcome.parsed;
+                    if !tail_literal.is_empty() {
+                        if parsed.body.trim().is_empty() {
+                            parsed.body = tail_literal.clone();
+                        } else {
+                            parsed.body = format!(
+                                "{} {}",
+                                parsed.body.trim_end(),
+                                tail_literal
+                            );
+                        }
+                    }
+                    let mut fresh = rebind_capture_item_declarations(
+                        ParsedCaptureItemOutcome {
+                            index: outcome.index,
+                            start: outcome.start,
+                            end: outcome.end,
+                            line_start: outcome.line_start,
+                            line_end: outcome.line_end,
+                            parsed,
+                            declarations: outcome.declarations,
+                            local_destination_marker: outcome
+                                .local_destination_marker,
+                            list: outcome.list,
+                            fanout: outcome.fanout,
+                        },
+                        item.source,
+                    );
+                    // The escaped tail never routes or fans out.
+                    fresh.parsed.merge_in = None;
+                    rebound.push(fresh);
+                }
+                return Ok(Some(rebound));
+            }
+            super::merge_in::MergeInScan::Incomplete { message, .. } => {
+                return Err(CaptureItemParseError::coded(
+                    super::merge_in::INCOMPLETE_MERGE_IN_CODE,
+                    message,
+                ));
+            }
+            super::merge_in::MergeInScan::Invalid { code, message, .. } => {
+                return Err(CaptureItemParseError::coded(code, message));
+            }
+            super::merge_in::MergeInScan::Valid { sources, arrow } => {
+                return parse_merge_valid(
+                    item,
+                    forced_route,
+                    forced_section,
+                    options,
+                    parent,
+                    sources,
+                    arrow,
+                );
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn masked_source_for_merge(source: &str, from: usize, to: usize) -> String {
+    let mut bytes = source.as_bytes().to_vec();
+    let end = to.min(bytes.len());
+    let start = from.min(end);
+    for byte in bytes.iter_mut().skip(start).take(end - start) {
+        *byte = b' ';
+    }
+    String::from_utf8(bytes).unwrap_or_else(|_| source.to_string())
+}
+
+fn parse_merge_valid<'a>(
+    item: &CaptureItem<'a>,
+    forced_route: Option<&str>,
+    forced_section: Option<&str>,
+    options: &CaptureParseOptions<'_>,
+    parent: RawLine<'_>,
+    sources: Vec<super::merge_in::MergeInSource>,
+    arrow: super::merge_in::MergeInArrow,
+) -> Result<Option<Vec<ParsedCaptureItemOutcome<'a>>>, CaptureItemParseError> {
+    // An empty left side names no new task.
+    let left_prefix_len = arrow.start.saturating_sub(parent.start);
+    if parent
+        .text
+        .get(..left_prefix_len)
+        .unwrap_or("")
+        .trim()
+        .is_empty()
+    {
+        return Err(CaptureItemParseError::coded(
+            super::merge_in::MERGE_IN_NEEDS_NEW_TASK_CODE,
+            merge_needs_new_task_message(&parent, &sources, MergeNeeds::Empty),
+        ));
+    }
+    // Mask the clause bytes (arrow through end of parent line) and parse
+    // the left side with the ordinary parser. Scope the masked view so the
+    // local borrow ends before the rebound outcome leaves this function.
+    let mut outcome = {
+        let masked =
+            masked_source_for_merge(item.source, arrow.start, parent.end);
+        let view = capture_item_source_view(item, &masked);
+        let left_outcomes = parse_capture_item_members_legacy(
+            &view,
+            forced_route,
+            forced_section,
+            options,
+        )?;
+        if left_outcomes.len() != 1 {
+            return Err(CaptureItemParseError::coded(
+                super::merge_in::MERGE_IN_NEEDS_NEW_TASK_CODE,
+                merge_needs_new_task_message(
+                    &parent,
+                    &sources,
+                    MergeNeeds::TargetRun,
+                ),
+            ));
+        }
+        let outcome = left_outcomes.into_iter().next().expect("one left");
+        // Rebind to original offsets before context checks so spans index
+        // the exact draft.
+        rebind_capture_item_declarations(outcome, item.source)
+    };
+    // Lexical `&`/`*`/`~`/`~~` source matches refuse before kind checks.
+    if let Some(message) =
+        merge_source_also_marked_message(&outcome.parsed, &sources)
+    {
+        return Err(CaptureItemParseError::coded(
+            super::merge_in::MERGE_IN_SOURCE_ALSO_MARKED_CODE,
+            message,
+        ));
+    }
+    let needs = classify_merge_left(&outcome.parsed, &parent, &sources);
+    match needs {
+        MergeNeeds::Allowed => {
+            let clause = super::model::MergeInClause {
+                arrow: (arrow.start, arrow.end),
+                sources: sources
+                    .into_iter()
+                    .map(|source| super::model::MergeInSource {
+                        marker: source.marker,
+                        route: source.route,
+                        block_id: source.block_id,
+                        start: source.start,
+                        end: source.end,
+                    })
+                    .collect(),
+            };
+            outcome.parsed.merge_in = Some(clause);
+            Ok(Some(vec![outcome]))
+        }
+        _ => Err(CaptureItemParseError::coded(
+            super::merge_in::MERGE_IN_NEEDS_NEW_TASK_CODE,
+            merge_needs_new_task_message(&parent, &sources, needs),
+        )),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MergeNeeds {
+    Allowed,
+    Empty,
+    StartClose,
+    Project,
+    Existing,
+    NoTask,
+    TargetRun,
+}
+
+fn classify_merge_left(
+    parsed: &ParsedCaptureText,
+    parent: &RawLine<'_>,
+    _sources: &[super::merge_in::MergeInSource],
+) -> MergeNeeds {
+    // Empty left side: nothing before the arrow.
+    let left_text = parent
+        .text
+        .get(..arrow_rel_start(parent, parsed))
+        .unwrap_or("")
+        .trim();
+    // Derive left text from the parent line up to the arrow by scanning
+    // for the first `<` claim position is complex here; instead use the
+    // parsed body plus route: an empty body with no route/markers is empty.
+    // A more direct check: if the masked left parse has empty body and no
+    // route/clip/markers, treat as empty.
+    let is_empty = parsed.body.trim().is_empty()
+        && parsed.route.is_none()
+        && parsed.clip.is_none()
+        && parsed.sub_bullets.is_empty()
+        && parsed.dependencies.is_empty()
+        && parsed.blocked_tasks.is_empty()
+        && parsed.relations.is_empty()
+        && parsed.type_marker.is_none()
+        && matches!(
+            parsed.kind,
+            CaptureKind::Task | CaptureKind::Bullet { .. }
+        );
+    if is_empty && left_text.is_empty() {
+        return MergeNeeds::Empty;
+    }
+    match &parsed.kind {
+        CaptureKind::Task | CaptureKind::TaskWithBlockId { .. } => {
+            MergeNeeds::Allowed
+        }
+        CaptureKind::Pomodoro { start, close, .. } => {
+            if start.is_none() && close.is_none() {
+                MergeNeeds::Allowed
+            } else {
+                MergeNeeds::StartClose
+            }
+        }
+        CaptureKind::ProjectNote { .. } => MergeNeeds::Project,
+        CaptureKind::PomodoroLink { .. }
+        | CaptureKind::TaskToggle { .. }
+        | CaptureKind::TaskComplete { .. }
+        | CaptureKind::SubBullet { .. } => MergeNeeds::Existing,
+        CaptureKind::Transfer { .. } => MergeNeeds::Existing,
+        CaptureKind::PomodoroAdjust { .. }
+        | CaptureKind::PomodoroShift { .. }
+        | CaptureKind::PomodoroSplit { .. }
+        | CaptureKind::PomodoroMerge { .. }
+        | CaptureKind::PomodoroClose { .. }
+        | CaptureKind::PomodoroPast { .. }
+        | CaptureKind::PomodoroStart { .. } => MergeNeeds::NoTask,
+        CaptureKind::Ref(_)
+        | CaptureKind::Bullet { .. }
+        | CaptureKind::PomodoroNote
+        | CaptureKind::NotePull { .. } => MergeNeeds::NoTask,
+    }
+}
+
+fn arrow_rel_start(
+    _parent: &RawLine<'_>,
+    _parsed: &ParsedCaptureText,
+) -> usize {
+    // The masked left parse already consumed the clause; emptiness is
+    // decided from the parsed body/route above, so only the trimmed left
+    // text matters. Return 0 to check the whole parent prefix via body.
+    0
+}
+
+fn merge_needs_new_task_message(
+    parent: &RawLine<'_>,
+    sources: &[super::merge_in::MergeInSource],
+    needs: MergeNeeds,
+) -> String {
+    const PREFIX: &str = "< merges into the task this line creates";
+    match needs {
+        MergeNeeds::Empty => {
+            format!("{PREFIX}; name the new task before <")
+        }
+        MergeNeeds::StartClose => {
+            format!(
+                "{PREFIX}; the new task must stay open to take in other tasks; start or close it in a later item"
+            )
+        }
+        MergeNeeds::Project => {
+            format!(
+                "{PREFIX}; a new project keeps tasks as tasks: list them as - ^id bullets to move them in"
+            )
+        }
+        MergeNeeds::Existing | MergeNeeds::TargetRun => {
+            // Offer `Use >` only for the one-destination-token left side.
+            let left = parent_left_trimmed(parent);
+            if super::transfer::is_single_destination_token(&left) {
+                let sources_text = sources
+                    .iter()
+                    .map(|source| source.marker.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("{PREFIX}; {left} already exists. Write {sources_text} > {left}")
+            } else {
+                format!("{PREFIX}; this line names an existing task")
+            }
+        }
+        MergeNeeds::NoTask => {
+            format!("{PREFIX}; this line creates no task")
+        }
+        MergeNeeds::Allowed => unreachable!(),
+    }
+}
+
+fn parent_left_trimmed(parent: &RawLine<'_>) -> String {
+    // Left side up to the first `<` claim position; the scanner already
+    // validated it, so split at the first standalone `<`.
+    let mut left_end = parent.text.len();
+    for (index, _) in parent.text.char_indices() {
+        if parent.text[index..].starts_with('<') {
+            // Check standalone: whitespace or start before, whitespace or
+            // end after (or claimable following handles the rest).
+            let before_ok = index == 0
+                || parent.text[..index]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|character| character.is_whitespace());
+            if before_ok {
+                left_end = index;
+                break;
+            }
+        }
+    }
+    parent.text[..left_end].trim().to_string()
+}
+
+fn merge_source_also_marked_message(
+    parsed: &ParsedCaptureText,
+    sources: &[super::merge_in::MergeInSource],
+) -> Option<String> {
+    let mut targets: Vec<(String, String, &'static str)> = Vec::new();
+    for dependency in &parsed.dependencies {
+        targets.push((
+            dependency.note.to_ascii_lowercase(),
+            dependency.block_id.clone(),
+            "prerequisite",
+        ));
+    }
+    for blocked in &parsed.blocked_tasks {
+        targets.push((
+            blocked.note.to_ascii_lowercase(),
+            blocked.block_id.clone(),
+            "dependent",
+        ));
+    }
+    for relation in &parsed.relations {
+        let role = match relation.direction {
+            super::editor_model::RelationDirection::To => "relation",
+            super::editor_model::RelationDirection::From => "relation",
+        };
+        targets.push((
+            relation.note.to_ascii_lowercase(),
+            relation.block_id.clone(),
+            role,
+        ));
+    }
+    for source in sources {
+        let route = source.route.to_ascii_lowercase();
+        if targets.iter().any(|(note, block_id, _)| {
+            *note == route && *block_id == source.block_id
+        }) {
+            return Some(
+                "that source merges into the new task; it can't also be its prerequisite/dependent/relation"
+                    .to_string(),
+            );
+        }
+    }
+    None
 }
 
 fn parse_capture_item_members_legacy<'a>(

@@ -68,7 +68,7 @@ Old top-level spellings remain as hidden aliases. See
 ## Capture-language revision
 
 `capture-parse` and `capture-complete` keep `schema_version: 1` and report the
-additive top-level `grammar: 14` revision. Clients can use it to distinguish
+additive top-level `grammar: 15` revision. Clients can use it to distinguish
 capture-language updates while continuing to read the same versioned JSON
 envelope. Grammar 8 kept grammar 7's note-pull behavior: an exactly lone
 `@route` task-list header is a note pull, `@route` with bullets remains a
@@ -81,7 +81,7 @@ of `@route+block-id` markers at the start or end of a capture line; the run
 fills one route slot and applies the same item semantics to each task. Parse
 JSON adds `targets[]` for runs and the `duplicate_capture_target` and
 `split_capture_targets` diagnostics, without changing `schema_version`.
-Grammar 10 adds `>` transfer lines (`@a+x @b+y > @dest`, always quoted so
+Grammar 15 adds `<` merge-in grammar, editor parse, and teaching refusals with transitional `merge_in_unavailable` refusal. Grammar 10 adds `>` transfer lines (`@a+x @b+y > @dest`, always quoted so
 the shell keeps the `>`): a complete transfer reports mode `task_move` or
 `task_merge` with the `transfer` object and the `transfer_source`,
 `transfer_arrow`, and `transfer_destination` spans, while the legacy

@@ -1178,7 +1178,7 @@ uses the normal successor-offer shape with `trigger: "note_pull"`, an empty
 `pull_in.groups[]` row carries `note` and Bob-authored copy. Capture remains
 unversioned; `capture-parse` reports `mode: "note_pull"`, `needs: []`, no
 diagnostics, the route spans, and the ordinary list summary with
-`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 14`.
+`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 15`.
 See [task-dependencies.md §12.20](task-dependencies.md#1220-note-pull-offers)
 for the JSON, copy, gate, and protocol contracts, and
 [§12.21](task-dependencies.md#1221-np-note-pull-vectors) for the NP vectors.
@@ -6574,8 +6574,8 @@ merge hand-off offer rows, omitted when empty) and `repaired_files[]`;
 ordinary items omit the empty fields. Merge-only offers get their own Pull-In
 copy (`Link “T” in place of “S”` / `Link “T” in place of N merged tasks`), and
 the CLI's dependent rows print titles from `consequences`.
-`capture-parse` and `capture-complete` report grammar revision 14. Grammar 11
-added the move-choice markers; grammar 12 adds the `x=` past-Pomodoro syntax.
+`capture-parse` and `capture-complete` report grammar revision 15. Grammar 11
+added the move-choice markers; grammar 12 adds the `x=` past-Pomodoro syntax; grammar 15 adds `<` merge-in grammar, editor parse, and teaching refusals with transitional `merge_in_unavailable` refusal.
 `schema_version` stays 1 (see [Capture-language
 revision](reference/compatibility.md#capture-language-revision)).
 
@@ -6586,7 +6586,7 @@ TTYs, and the Mac panel are unaffected.
 
 #### Merging tasks into a new task with `<`
 
-*Status: contract only.*
+*Status: grammar, `capture-parse` shape, and diagnostic rewrites implemented (grammar 15); execution, merge JSON, pickers, and Mac preview remain contract-only. Complete merge-in items are refused with `merge_in_unavailable` until the execute phase lands.*
 
 `T < @a+x @b+y` creates one open task T exactly as its left side says, then
 runs the existing explicit task merge of `S₁ … Sₙ` into T, in typed order,
@@ -6692,8 +6692,8 @@ diagnostic. New span kinds are `merge_in_arrow` and `merge_in_source`
 (one span per whole source token; `transfer_*` spans are never reused).
 One additive item object appears only when the line has a clause, with
 `arrow: {start, end}` and `sources[]: {start, end, marker, route,
-block_id}`. Grammar stays 14 in this contract; `schema_version` stays 1.
-`capture-complete` in a `<` source slot opens the vault-wide `task_parent`
+block_id}`. Grammar is 15; `schema_version` stays 1.
+`capture-complete` in a `<` source slot (contract-only until the assist phase) opens the vault-wide `task_parent`
 picker in a new merge-in source role (`< +` / `< +query`), or the
 note-scoped task context for `< @route+`; `< @` completes routes. Rows are
 mergeable only, excluding already-typed sources and aliases. ID-less
@@ -6709,7 +6709,7 @@ under `linked` with `link: "merge_in"` and never in `matches`; the
 similarity query uses the left side's body only; `marker_at` sits before
 the arrow.
 
-JSON and human output: a `<` item keeps `kind: "task"` /
+JSON and human output (contract-only until the execute phase): a `<` item keeps `kind: "task"` /
 `"pomodoro_task"` and gains the existing flattened `merges[]`,
 `merge_offers`, and `repaired_files[]`; offers join the draft-level
 `pull_in` and its numbering. `merges[].target.created` means “the
@@ -6728,7 +6728,7 @@ or `error: {code, message}`). Human output prints the merge block whenever
 `⤵ Merged 2 tasks into new “T” · foo.md` (`⤵ Would merge … into new “T”`
 on dry run).
 
-Shell guard: when draft arguments are present and stdin is a regular file
+Shell guard (contract-only until the execute phase): when draft arguments are present and stdin is a regular file
 whose basename starts with `@`, capture refuses with
 `shell_ate_merge_in_arrow`: “your shell ate “<”: quote the draft (bob
 capture 'New task < @a+x')”. Pipes, TTYs, and the Mac panel are unaffected.
@@ -7952,7 +7952,7 @@ bob capture-parse [-f|--format human|json] [-R|--no-ref] [--] [TEXT]...
 
 Reports the authoritative capture grammar's reading of `TEXT` so an editor can
 highlight capture syntax and Obsidian wikilinks while the user is still typing.
-Success JSON includes top-level `grammar: 14` while keeping `schema_version: 1`.
+Success JSON includes top-level `grammar: 15` while keeping `schema_version: 1`.
 It shares the tokenizer, terminal-marker extraction, and `@token`
 classification with `bob capture`. Parse does not validate vault targets
 or execute the draft, so a successful parse does not guarantee a capture
@@ -7965,7 +7965,7 @@ mode `task_move` or `task_merge` with the `transfer` object and the
 `transfer_source`, `transfer_arrow`, and `transfer_destination` spans, and the
 legacy `route`/`block_id` fields describe the destination (see [Moving and
 merging tasks with `>`](#moving-and-merging-tasks-with)). A `<` merge-in
-clause is contract-only and keeps the item's own `task` / `pomodoro_task`
+clause keeps the item's own `task` / `pomodoro_task`
 mode, with an additive `merge_in` object (`arrow`, `sources[]`), new
 `merge_in_arrow` / `merge_in_source` spans, need `merge_in_source` on
 pending clauses, and an additive `rewrite` diagnostic key; see
@@ -9214,7 +9214,7 @@ the menu never reads the clipboard. Disabled rows explain composition rules
 such as `%n` beside a route, `%t` on a later item, and `%c` in a template.
 
 Every successful `capture-parse` and `capture-complete` response includes
-top-level `grammar: 14`; `schema_version` remains 1. An empty query opened by a
+top-level `grammar: 15`; `schema_version` remains 1. An empty query opened by a
 bare `#` or `%` adds `initial_selection: "none"`, so clients leave every row
 unselected. The field is omitted for typed queries and other contexts.
 

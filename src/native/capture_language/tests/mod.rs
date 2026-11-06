@@ -100,6 +100,7 @@ mod globals;
 mod goto;
 mod grammar;
 mod lists;
+mod merge_in;
 mod move_bullet;
 mod past;
 mod pomodoro_merge;

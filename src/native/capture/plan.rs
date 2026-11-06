@@ -1618,6 +1618,16 @@ pub(super) fn plan_capture_item(
             dependency_ctx,
         );
     }
+    // Transitional merge-in refusal: the execute phase lands next. Refuse
+    // every complete merge-in before any vault mutation, in both dry-run
+    // and commit, including later items in a bulk draft.
+    if parsed_item.parsed.merge_in.is_some() {
+        return Err(CaptureError::usage_code(
+            crate::native::capture_language::merge_in::MERGE_IN_UNAVAILABLE_MESSAGE
+                .to_string(),
+            crate::native::capture_language::merge_in::MERGE_IN_UNAVAILABLE_CODE,
+        ));
+    }
     let mut parsed = parsed_item.parsed;
     // A dependency-only capture updates an explicitly selected existing
     // task: no new task, empty child, link toggle, or Pomodoro action.

@@ -1050,6 +1050,18 @@ fn switch_transfer_block_id_separator(
             {
                 continue;
             }
+            // A claimed `<` merge-in owns its source slot: never switch
+            // `:`/`^` to `+` there until the picker phase lands.
+            if !matches!(
+                super::merge_in::scan_merge_in_line(
+                    &line.raw,
+                    &switched,
+                    item.lines.len() > 1,
+                ),
+                super::merge_in::MergeInScan::Unclaimed
+            ) {
+                continue;
+            }
             let scan = super::transfer::scan_transfer_line(
                 &line.raw,
                 &switched,
@@ -1446,13 +1458,24 @@ fn transfer_bare_at_at_notice(
         // Any claimed scan owns the line: a complete transfer, a partial
         // right-hand side, or a teaching error (a trailing `@@` is
         // `transfer_extra_text`). Escaped and unclaimed lines keep the
-        // ordinary declaration paths.
-        if !matches!(
+        // ordinary declaration paths. A claimed merge-in also owns its
+        // line, so `@@` there never becomes a declaration payload.
+        let transfer_claimed = matches!(
             scan_transfer_line(&parent.raw, item.source, item.lines.len() > 1),
             TransferScan::Valid { .. }
                 | TransferScan::Incomplete { .. }
                 | TransferScan::Invalid { .. }
-        ) {
+        );
+        let merge_claimed = !matches!(
+            super::merge_in::scan_merge_in_line(
+                &parent.raw,
+                item.source,
+                item.lines.len() > 1,
+            ),
+            super::merge_in::MergeInScan::Unclaimed
+                | super::merge_in::MergeInScan::Escaped { .. }
+        );
+        if !(transfer_claimed || merge_claimed) {
             continue;
         }
         for token in tokenize_with_spans(parent.raw.text) {

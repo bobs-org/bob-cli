@@ -1147,6 +1147,7 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
                         token.start + eq_rel,
                         token.start + token.text.len(),
                     )),
+                    rewrite: None,
                 });
             }
             let (after_x, x_len) = classify_link_close(raw).unwrap_or(("", 1));
@@ -1177,6 +1178,7 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
                         code: "invalid_pomodoro_close",
                         message: error.message,
                         range: Some(error.range),
+                        rewrite: None,
                     });
                 }
             }
@@ -1206,6 +1208,7 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
                 "`=x` always closes the running Pomodoro; remove `#{name}` (drop `=x` to link under a named Pomodoro instead)"
             ),
             range: Some((token.start + hash, token.start + eq)),
+            rewrite: None,
         });
     }
 
@@ -2329,6 +2332,7 @@ pub(super) fn token_diagnostic(
         code,
         message: message.to_string(),
         range: Some((token.start, token.end)),
+        rewrite: None,
     }
 }
 
@@ -2344,6 +2348,7 @@ pub(super) fn retired_priority_marker_diagnostic(
         code: "retired_priority_marker",
         message: retired_priority_marker_error(&retired.token),
         range: retired.span,
+        rewrite: None,
     })
 }
 

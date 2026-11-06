@@ -90,6 +90,8 @@ pub(crate) enum SpanKind {
     /// An ALL-CAPS first-level drawer bullet (the title text, not a `#`
     /// shortcut).
     DrawerBullet,
+    MergeInArrow,
+    MergeInSource,
 }
 
 impl SpanKind {
@@ -170,6 +172,8 @@ impl SpanKind {
             Self::WikilinkTaskDelimiter => "wikilink_task_delimiter",
             Self::WikilinkTaskQuery => "wikilink_task_query",
             Self::DrawerBullet => "drawer_bullet",
+            Self::MergeInArrow => "merge_in_arrow",
+            Self::MergeInSource => "merge_in_source",
         }
     }
 }
@@ -214,12 +218,22 @@ impl Severity {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct DiagnosticRewrite {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) replacement: String,
+    pub(crate) label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct Diagnostic {
     pub(crate) severity: Severity,
     /// Stable snake_case identifier for programmatic handling.
     pub(crate) code: &'static str,
     pub(crate) message: String,
     pub(crate) range: Option<(usize, usize)>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) rewrite: Option<DiagnosticRewrite>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -327,6 +341,7 @@ pub(crate) enum Need {
     /// A completion picker is still open: a `!` token is partial.
     TaskComplete,
     TransferDestination,
+    MergeInSource,
     /// A `=/` split is still open: a trailing `#` needs a task type.
     PomodoroSplitType,
     /// A `=*` merge is still open: a destination after `#` is missing.
@@ -369,6 +384,7 @@ impl Need {
             Self::DependencyTarget => "dependency_target",
             Self::TaskComplete => "task_complete",
             Self::TransferDestination => "transfer_destination",
+            Self::MergeInSource => "merge_in_source",
             Self::PomodoroSplitType => "pomodoro_split_type",
             Self::PomodoroMergeDest => "pomodoro_merge_dest",
             Self::TemplateRow => "template_row",
@@ -573,12 +589,44 @@ pub(crate) struct EditorParse {
     /// parser output projects these onto the matching `items[]` rows and
     /// the first item's singleton surface.
     pub(crate) transfers: Vec<EditorTransferItem>,
+    /// Complete merge-in clauses, keyed by capture-item index. Projected
+    /// onto matching `items[]` rows and the first item's singleton surface.
+    pub(crate) merge_ins: Vec<EditorMergeInItem>,
+    /// First-item merge-in clause, when the first item carries one.
+    pub(crate) merge_in: Option<EditorMergeIn>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EditorTransferItem {
     pub(crate) index: usize,
     pub(crate) transfer: EditorTransfer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EditorMergeInItem {
+    pub(crate) index: usize,
+    pub(crate) merge_in: EditorMergeIn,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct EditorMergeIn {
+    pub(crate) arrow: EditorMergeInArrow,
+    pub(crate) sources: Vec<EditorMergeInSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct EditorMergeInSource {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) marker: String,
+    pub(crate) route: String,
+    pub(crate) block_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) struct EditorMergeInArrow {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -692,6 +740,9 @@ pub(crate) struct EditorItemParse {
     /// Additive target-run members for this item, in source order. Empty
     /// for singletons and non-run items; never expands `items[]`.
     pub(crate) targets: Vec<EditorTarget>,
+    /// Complete merge-in clause for this item, when claimed. `None` for
+    /// ordinary items.
+    pub(crate) merge_in: Option<EditorMergeIn>,
 }
 
 /// One complete local destination marker token an item owns, with the span

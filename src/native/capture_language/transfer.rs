@@ -13,6 +13,7 @@
 use super::markers::is_route_token;
 use super::model::{RawLine, Token};
 use super::pomodoro_literal::{lex_exact_name_after_hash, opens_exact_name};
+use super::task_sources as shared;
 use super::tokens::{is_block_id, is_parent_task_selector_token};
 
 /// One complete transfer source: `@route+id` with absolute byte offsets.
@@ -423,58 +424,23 @@ fn scan_with_arrow(
 }
 
 fn is_source_like(text: &str) -> bool {
-    if text.starts_with("@@") {
-        return false;
-    }
-    if let Some(rest) = text.strip_prefix('@') {
-        if rest.starts_with('!') {
-            return false;
-        }
-        return rest.contains('+') || rest.contains(':') || rest.contains('^');
-    }
-    if let Some(rest) = text.strip_prefix('^') {
-        return rest.contains(':');
-    }
-    false
+    shared::is_source_like(text)
 }
 
 fn is_complete_source(text: &str) -> bool {
-    parse_complete_source_text(text).is_some()
+    shared::parse_complete_source_text(text).is_some()
 }
 
 /// Split a complete `@route+id` source marker into its lowercased route
 /// and block ID. Completion reuses this on claimed-but-invalid lines, where
 /// the scan carries no parsed sources.
 pub(crate) fn split_complete_source(text: &str) -> Option<(String, String)> {
-    parse_complete_source_text(text)
-}
-
-fn parse_complete_source_text(text: &str) -> Option<(String, String)> {
-    let rest = text.strip_prefix('@')?;
-    if rest.starts_with('@') || rest.starts_with('!') {
-        return None;
-    }
-    let (route, id) = rest.split_once('+')?;
-    if route.is_empty() || !is_route_token(route) {
-        return None;
-    }
-    if id.is_empty()
-        || id.contains('#')
-        || id.contains('!')
-        || id.contains(':')
-        || id.contains('^')
-        || id.contains('@')
-    {
-        return None;
-    }
-    if !is_block_id(id) {
-        return None;
-    }
-    Some((route.to_ascii_lowercase(), id.to_string()))
+    shared::split_complete_source(text)
 }
 
 fn parse_complete_source(token: &Token<'_>) -> Result<TransferSource, ()> {
-    let (route, block_id) = parse_complete_source_text(token.text).ok_or(())?;
+    let (route, block_id) =
+        shared::parse_complete_source_text(token.text).ok_or(())?;
     Ok(TransferSource {
         marker: token.text.to_string(),
         route,
@@ -484,94 +450,49 @@ fn parse_complete_source(token: &Token<'_>) -> Result<TransferSource, ()> {
     })
 }
 
+pub(crate) fn transfer_source_from_shared(
+    source: shared::TaskSource,
+) -> TransferSource {
+    TransferSource {
+        marker: source.marker,
+        route: source.route,
+        block_id: source.block_id,
+        start: source.start,
+        end: source.end,
+    }
+}
+
 fn parse_source_token(
     token: &Token<'_>,
 ) -> Result<TransferSource, TransferScan> {
-    if let Ok(parsed) = parse_complete_source(token) {
-        return Ok(parsed);
-    }
-    let span = (token.start, token.end);
-    let text = token.text;
-    if text.starts_with('@') {
-        let rest = &text[1..];
-        if let Some(plus) = rest.find('+') {
-            let after = &rest[plus + 1..];
-            if after.contains('#') {
-                return Err(TransferScan::Invalid {
-                    code: TRANSFER_SOURCE_SUFFIX_CODE,
-                    message: format!(
-                        "sources are whole tasks; drop #drawer from {text}"
-                    ),
-                    span,
-                });
-            }
-            if text.ends_with('!') {
-                return Err(TransferScan::Invalid {
-                    code: TRANSFER_SOURCE_SUFFIX_CODE,
-                    message: format!(
-                        "sources are whole tasks; drop ! from {text}"
-                    ),
-                    span,
-                });
-            }
-        }
-        if rest.contains(':') || rest.contains('^') {
-            return Err(TransferScan::Invalid {
-                code: TRANSFER_SOURCE_MARKER_CODE,
-                message: format!(
-                    "name tasks with @route+id; `{text}` would link it"
-                ),
-                span,
-            });
-        }
-        if text.ends_with('+')
-            || rest.contains('+')
-            || rest.contains('@')
-            || rest.contains('!')
-        {
-            return Err(TransferScan::Invalid {
-                code: TRANSFER_SOURCE_MARKER_CODE,
-                message: format!(
-                    "name tasks with @route+id; `{text}` would link it"
-                ),
-                span,
-            });
-        }
-    }
-    if text.starts_with('^') {
-        return Err(TransferScan::Invalid {
-            code: TRANSFER_SOURCE_MARKER_CODE,
-            message: format!(
-                "name tasks with @route+id; `{text}` would link it"
-            ),
-            span,
-        });
-    }
-    Err(TransferScan::Invalid {
-        code: TRANSFER_SOURCE_MARKER_CODE,
-        message: format!("name tasks with @route+id; `{text}` would link it"),
-        span,
-    })
+    shared::parse_source_token(token)
+        .map(transfer_source_from_shared)
+        .map_err(|error| TransferScan::Invalid {
+            code: match error.code {
+                shared::SOURCE_SUFFIX_CODE => TRANSFER_SOURCE_SUFFIX_CODE,
+                _ => TRANSFER_SOURCE_MARKER_CODE,
+            },
+            message: error.message,
+            span: error.span,
+        })
 }
 
 fn find_lexical_duplicate(sources: &[TransferSource]) -> Option<TransferScan> {
-    let mut seen: Vec<(String, String)> = Vec::new();
-    for source in sources {
-        let key = (source.route.clone(), source.block_id.clone());
-        if seen.iter().any(|(r, b)| r == &key.0 && b == &key.1) {
-            let message = super::target_runs::duplicate_target_message(
-                &source.marker,
-                &source.block_id,
-            );
-            return Some(TransferScan::Invalid {
-                code: TRANSFER_DUPLICATE_CODE,
-                message,
-                span: (source.start, source.end),
-            });
-        }
-        seen.push(key);
-    }
-    None
+    let shared: Vec<shared::TaskSource> = sources
+        .iter()
+        .map(|source| shared::TaskSource {
+            marker: source.marker.clone(),
+            route: source.route.clone(),
+            block_id: source.block_id.clone(),
+            start: source.start,
+            end: source.end,
+        })
+        .collect();
+    shared::find_lexical_duplicate(&shared).map(|error| TransferScan::Invalid {
+        code: TRANSFER_DUPLICATE_CODE,
+        message: error.message,
+        span: error.span,
+    })
 }
 
 fn find_destination_is_source(
@@ -857,4 +778,21 @@ fn parse_destination_token(
         start: token.start,
         end: token.end,
     })
+}
+
+/// Whether trimmed left-side text is exactly one destination the existing
+/// transfer parser accepts (`@n`, `@n+id`, `@n+id#drawer`, `@n#section`).
+/// Merge-in reuses this for the `Use >` rewrite instead of a second
+/// definition of a valid destination.
+pub(crate) fn is_single_destination_token(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed.contains(' ') || trimmed.contains('\t') {
+        return false;
+    }
+    let token = Token {
+        text: trimmed,
+        start: 0,
+        end: trimmed.len(),
+    };
+    matches!(parse_destination_token(&token), Ok(_))
 }

@@ -2152,6 +2152,40 @@ pub(crate) fn completion_field_at(
     }
     let leading = line_index == 0;
 
+    // A claimed `<` merge-in line owns its source slot: ordinary target-run
+    // completion must not mistake sources for a new route/run. The source
+    // slot offers no candidates until the picker phase lands (safe absence);
+    // the left side keeps ordinary assistance.
+    if leading
+        && let Some(merge_scan) = item.lines.first().map(|parent| {
+            super::merge_in::scan_merge_in_line(
+                &parent.raw,
+                item.source,
+                item.lines.len() > 1,
+            )
+        })
+    {
+        match merge_scan {
+            super::merge_in::MergeInScan::Valid { arrow, .. }
+            | super::merge_in::MergeInScan::Incomplete { arrow, .. } => {
+                if cursor >= arrow.start {
+                    return None;
+                }
+            }
+            super::merge_in::MergeInScan::Invalid { span, .. } => {
+                if cursor >= span.0 {
+                    return None;
+                }
+            }
+            super::merge_in::MergeInScan::Escaped { arrow_span, .. } => {
+                if cursor >= arrow_span.0 {
+                    return None;
+                }
+            }
+            super::merge_in::MergeInScan::Unclaimed => {}
+        }
+    }
+
     // A claimed `>` transfer line owns its whole parent line: the normal
     // target-run selection would treat the sources as a leading run and
     // leave every destination with no completion. Map the cursor to the

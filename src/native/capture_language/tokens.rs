@@ -2731,6 +2731,7 @@ pub(super) fn parse_pomodoro_link_item<'a>(
                     relations: Vec::new(),
                     dependency_target: None,
                     type_marker: None,
+                    merge_in: None,
                 },
                 Vec::new(),
                 Some(marker_text),

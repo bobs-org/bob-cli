@@ -661,6 +661,38 @@ pub(crate) struct ParsedCaptureText {
     /// resolves it against the selected destination and includes the type
     /// write in the capture transaction.
     pub(crate) type_marker: Option<super::type_marker::TypeMarker>,
+    /// Valid `<` merge-in clause on this item, when claimed. `None` for
+    /// every older input, so execution without a clause is unchanged.
+    pub(crate) merge_in: Option<MergeInClause>,
+}
+
+/// One `<` merge-in clause: the arrow plus ordered sources.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MergeInClause {
+    pub(crate) arrow: (usize, usize),
+    pub(crate) sources: Vec<MergeInSource>,
+}
+
+/// One `<` merge-in source: `@route+id` with absolute byte offsets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MergeInSource {
+    pub(crate) marker: String,
+    pub(crate) route: String,
+    pub(crate) block_id: String,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+}
+
+impl From<super::merge_in::MergeInSource> for MergeInSource {
+    fn from(source: super::merge_in::MergeInSource) -> Self {
+        Self {
+            marker: source.marker,
+            route: source.route,
+            block_id: source.block_id,
+            start: source.start,
+            end: source.end,
+        }
+    }
 }
 
 /// One complete `~` / `~~` modifier on an execution item, in typed

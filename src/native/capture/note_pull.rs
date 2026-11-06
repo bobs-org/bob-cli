@@ -1625,6 +1625,7 @@ mod tests {
             relations: Vec::new(),
             dependency_target: None,
             type_marker: None,
+            merge_in: None,
         }
     }
 

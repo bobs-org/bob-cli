@@ -396,3 +396,12 @@ postimage expectation. Test names are filled in by the implementing phases.
 | MI16 | Dry run identical to commit under a fixed clock and snapshot; `bob task reconcile` is a no-op afterwards | execute |
 | MI17 | JSON: kind stays `task`; `target.created: true`; task-block roles and `origin`; `merge_in_pending` | execute |
 | MI18 | Pickers: merge-only rows, ID-less rows, exclusions, continuation, `+` toggle, capture-related exclusion and `marker_at` | assist |
+
+The grammar-phase test names for the implemented vectors are:
+
+| ID | Test |
+| --- | --- |
+| MI7 | `execution_needs_new_task_for_existing_destination`, `execution_needs_new_task_for_empty_left`, `editor_needs_new_task_carries_use_rewrite` |
+| MI8 | `valid_merge_in_claims_two_sources_in_order`, `terminal_arrow_is_incomplete`, `bare_route_and_plus_are_incomplete`, `prose_comparisons_stay_unclaimed`, `later_real_clause_claims_after_prose_arrow`, `glued_arrows_claim_spacing_error`, `glued_non_sources_stay_prose`, `duplicate_sources_refuse`, `source_marker_and_suffix_reuse_transfer_codes`, `extra_text_has_move_before_rewrite`, `second_arrow_is_extra_text`, `utf8_and_bulk_offsets_are_absolute` |
+| MI13 | `task_list_bullets_claim_per_bullet` (parse portion) |
+| MI14 | `execution_source_also_marked_refuses`, `execution_case_folds_routes_for_also_marked` (lexical portion) |

@@ -28,6 +28,7 @@ mod editor_pomodoro;
 mod item;
 mod line;
 mod markers;
+pub(crate) mod merge_in;
 mod model;
 mod move_bullet;
 pub(crate) mod past;
@@ -37,13 +38,14 @@ mod relations;
 mod rewrite;
 mod start_selection;
 pub(crate) mod target_runs;
+pub(crate) mod task_sources;
 pub(crate) mod template;
 mod tokens;
 pub(crate) mod transfer;
 mod type_marker;
 
 /// Revision of the capture grammar contract exposed to clients.
-pub(crate) const GRAMMAR_REVISION: u32 = 14;
+pub(crate) const GRAMMAR_REVISION: u32 = 15;
 
 #[cfg(test)]
 mod tests;
@@ -90,8 +92,10 @@ pub(crate) use self::editor_model::DependencyEntry;
 pub(crate) use self::editor_model::DependencyTarget;
 pub(crate) use self::editor_model::DependencyTargetKind;
 pub(crate) use self::editor_model::Diagnostic;
+pub(crate) use self::editor_model::DiagnosticRewrite;
 pub(crate) use self::editor_model::EditorGlobalDestination;
 pub(crate) use self::editor_model::EditorItemParse;
+pub(crate) use self::editor_model::EditorMergeIn;
 pub(crate) use self::editor_model::EditorMode;
 #[cfg(test)]
 pub(crate) use self::editor_model::EditorParse;

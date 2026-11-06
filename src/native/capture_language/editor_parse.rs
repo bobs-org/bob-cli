@@ -283,6 +283,7 @@ pub(super) fn duplicate_capture_marker_diagnostic(
         code: "duplicate_capture_marker",
         message,
         range: Some(range),
+        rewrite: None,
     }
 }
 
@@ -392,6 +393,7 @@ pub(crate) fn parse_for_editor_with(
                         first,
                     ),
                     range: Some(range),
+                    rewrite: None,
                 });
             }
         }
@@ -408,6 +410,17 @@ pub(crate) fn parse_for_editor_with(
             )
             .then(|| editor_transfer_item(raw_item))
             .flatten()
+        })
+        .collect::<Vec<_>>();
+    let merge_ins = item_outcomes
+        .iter()
+        .filter_map(|outcome| {
+            outcome.item.merge_in.clone().map(|merge_in| {
+                super::editor_model::EditorMergeInItem {
+                    index: outcome.item.index,
+                    merge_in,
+                }
+            })
         })
         .collect::<Vec<_>>();
     let mut declarations = draft.declarations;
@@ -439,6 +452,7 @@ pub(crate) fn parse_for_editor_with(
             range: declarations.first().map(|declaration| {
                 (declaration.token.start, declaration.token.end)
             }),
+            rewrite: None,
         });
     }
 
@@ -489,6 +503,7 @@ pub(crate) fn parse_for_editor_with(
                     code: "invalid_pomodoro_past",
                     message,
                     range,
+                    rewrite: None,
                 });
                 item.pomodoro_past = None;
             }
@@ -575,7 +590,9 @@ pub(crate) fn parse_for_editor_with(
             items,
             global_destination,
             targets: Vec::new(),
-            transfers: Vec::new(),
+            transfers,
+            merge_ins,
+            merge_in: None,
         };
     };
 
@@ -613,6 +630,7 @@ pub(crate) fn parse_for_editor_with(
         .first()
         .map(|item| item.targets.clone())
         .unwrap_or_default();
+    let merge_in = items.first().and_then(|item| item.merge_in.clone());
     EditorParse {
         body,
         mode,
@@ -640,6 +658,8 @@ pub(crate) fn parse_for_editor_with(
         global_destination,
         targets,
         transfers,
+        merge_ins,
+        merge_in,
     }
 }
 
@@ -754,6 +774,7 @@ pub(super) fn parse_editor_global_declarations(
                     declaration.line_number,
                 ),
                 range: Some((declaration.token.start, declaration.token.end)),
+                rewrite: None,
             });
         }
     }
@@ -932,6 +953,7 @@ fn dependency_unsupported_target_diagnostic(
             sigil = sigil as char,
         ),
         range,
+        rewrite: None,
     }
 }
 
@@ -950,6 +972,7 @@ fn invalid_dependency_target_diagnostic(
             sigil = sigil as char
         ),
         range,
+        rewrite: None,
     }
 }
 
@@ -974,6 +997,7 @@ pub(super) fn attach_operator_dependency_rejection<'a>(
             code: "invalid_dependency",
             message: invalid.message.clone(),
             range: Some((invalid.start, invalid.end)),
+            rewrite: None,
         });
     }
     for invalid in found.relation_invalid.iter() {
@@ -982,6 +1006,7 @@ pub(super) fn attach_operator_dependency_rejection<'a>(
             code: "invalid_relation",
             message: invalid.message.clone(),
             range: Some((invalid.start, invalid.end)),
+            rewrite: None,
         });
     }
     outcome
@@ -1065,6 +1090,7 @@ pub(super) fn parse_editor_task_link_item<'a>(
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
             targets: Vec::new(),
+            merge_in: None,
         },
         declarations: Vec::new(),
     })
@@ -1120,6 +1146,7 @@ pub(super) fn parse_editor_task_goto_item<'a>(
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
             targets: Vec::new(),
+            merge_in: None,
         },
         declarations: Vec::new(),
     })
@@ -1180,6 +1207,7 @@ pub(super) fn parse_editor_task_complete_item<'a>(
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
             targets: Vec::new(),
+            merge_in: None,
         })
     };
     match claim {
@@ -1252,6 +1280,7 @@ pub(super) fn parse_editor_task_complete_item<'a>(
                 code: "invalid_task_complete",
                 message: invalid.message.clone(),
                 range: Some((invalid.start, invalid.end)),
+                rewrite: None,
             }],
         )),
     }
@@ -1296,6 +1325,7 @@ pub(super) fn parse_editor_parent_task_item<'a>(
             code: "invalid_dependency",
             message: invalid.message.clone(),
             range: Some((invalid.start, invalid.end)),
+            rewrite: None,
         });
     }
     for invalid in found.relation_invalid.iter() {
@@ -1304,6 +1334,7 @@ pub(super) fn parse_editor_parent_task_item<'a>(
             code: "invalid_relation",
             message: invalid.message.clone(),
             range: Some((invalid.start, invalid.end)),
+            rewrite: None,
         });
     }
     let parent = item.lines.first()?;
@@ -1358,6 +1389,7 @@ pub(super) fn parse_editor_parent_task_item<'a>(
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
             targets: Vec::new(),
+            merge_in: None,
         },
         declarations: Vec::new(),
     })
@@ -1453,6 +1485,7 @@ fn parse_editor_ref_item<'a>(
                 local_destination_markers: Vec::new(),
                 drawer_bullet_target: None,
                 targets: Vec::new(),
+                merge_in: None,
             },
             declarations: Vec::new(),
         });
@@ -1532,6 +1565,7 @@ fn parse_editor_ref_item<'a>(
                 }],
                 drawer_bullet_target: None,
                 targets: Vec::new(),
+                merge_in: None,
             },
             declarations: Vec::new(),
         });
@@ -1601,7 +1635,599 @@ pub(super) fn parse_editor_item_with<'a>(
             claimed => return parse_editor_transfer_item(item, claimed),
         }
     }
+    if let Some(outcome) = parse_editor_merge_claim(item, options) {
+        return outcome;
+    }
     parse_editor_item_without_transfer(item, options)
+}
+
+fn masked_editor_source(source: &str, from: usize, to: usize) -> String {
+    let mut bytes = source.as_bytes().to_vec();
+    let end = to.min(bytes.len());
+    let start = from.min(end);
+    for byte in bytes.iter_mut().skip(start).take(end - start) {
+        *byte = b' ';
+    }
+    String::from_utf8(bytes).unwrap_or_else(|_| source.to_string())
+}
+
+fn editor_item_view<'a>(
+    item: &CaptureItem<'a>,
+    source: &'a str,
+) -> CaptureItem<'a> {
+    let lines = item
+        .lines
+        .iter()
+        .map(|line| ItemLine {
+            raw: RawLine {
+                text: source.get(line.raw.start..line.raw.end).unwrap_or(""),
+                start: line.raw.start,
+                end: line.raw.end,
+            },
+            line_number: line.line_number,
+        })
+        .collect();
+    CaptureItem {
+        source,
+        index: item.index,
+        start: item.start,
+        end: item.end,
+        line_start: item.line_start,
+        line_end: item.line_end,
+        lines,
+        list: item.list.clone(),
+    }
+}
+
+fn parse_editor_merge_claim<'a>(
+    item: &CaptureItem<'a>,
+    options: &EditorParseOptions<'_>,
+) -> Option<EditorItemOutcome<'a>> {
+    let parent = item.lines.first()?.raw;
+    let scan = super::merge_in::scan_merge_in_line(
+        &parent,
+        item.source,
+        item.lines.len() > 1,
+    );
+    match scan {
+        super::merge_in::MergeInScan::Unclaimed => None,
+        super::merge_in::MergeInScan::Escaped {
+            backslash_span,
+            arrow_span,
+        } => {
+            let mut masked_bytes = item.source.as_bytes().to_vec();
+            let from = backslash_span.0.min(masked_bytes.len());
+            for byte in masked_bytes.iter_mut().skip(from) {
+                *byte = b' ';
+            }
+            let masked_text = String::from_utf8(masked_bytes)
+                .unwrap_or_else(|_| item.source.to_string());
+            let view = editor_item_view(item, &masked_text);
+            let outcome = parse_editor_item_without_transfer(&view, options);
+            // Restore literal tail (`< ...` without backslash) into body.
+            let tail_literal = item
+                .source
+                .get(arrow_span.0..parent.end)
+                .unwrap_or("")
+                .trim_start()
+                .to_string();
+            let mut item_parse = outcome.item;
+            if !tail_literal.is_empty() {
+                if item_parse.body.trim().is_empty() {
+                    item_parse.body = tail_literal;
+                } else {
+                    item_parse.body = format!(
+                        "{} {}",
+                        item_parse.body.trim_end(),
+                        tail_literal
+                    );
+                }
+            }
+            item_parse.merge_in = None;
+            Some(EditorItemOutcome {
+                item: item_parse,
+                declarations: remap_type_marker_declarations(
+                    outcome.declarations,
+                    item.source,
+                ),
+            })
+        }
+        super::merge_in::MergeInScan::Incomplete {
+            sources,
+            arrow,
+            span,
+            partial,
+            ..
+        } => {
+            let (mut item_parse, remapped_declarations) = {
+                let masked =
+                    masked_editor_source(item.source, arrow.start, parent.end);
+                let view = editor_item_view(item, &masked);
+                let outcome =
+                    parse_editor_item_without_transfer(&view, options);
+                let remapped = remap_type_marker_declarations(
+                    outcome.declarations,
+                    item.source,
+                );
+                (outcome.item, remapped)
+            };
+            // Keep complete sources, add pending need + placeholder.
+            let mut spans = item_parse.spans.clone();
+            spans.push(Span {
+                start: arrow.start,
+                end: arrow.end,
+                kind: SpanKind::MergeInArrow,
+                project_note: None,
+                title: None,
+                key: None,
+            });
+            for source in &sources {
+                spans.push(Span {
+                    start: source.start,
+                    end: source.end,
+                    kind: SpanKind::MergeInSource,
+                    project_note: None,
+                    title: None,
+                    key: None,
+                });
+            }
+            if let Some((partial_start, partial_end)) = partial {
+                spans.push(Span {
+                    start: partial_start,
+                    end: partial_end,
+                    kind: SpanKind::InteractivePlaceholder,
+                    project_note: None,
+                    title: None,
+                    key: None,
+                });
+            } else {
+                spans.push(Span {
+                    start: arrow.end,
+                    end: arrow.end,
+                    kind: SpanKind::InteractivePlaceholder,
+                    project_note: None,
+                    title: None,
+                    key: None,
+                });
+            }
+            spans.sort_by_key(|span| (span.start, span.end));
+            item_parse.spans = spans;
+            if !item_parse.needs.contains(&Need::MergeInSource) {
+                item_parse.needs.push(Need::MergeInSource);
+            }
+            let _ = span;
+            let merge_in = EditorMergeIn {
+                arrow: EditorMergeInArrow {
+                    start: arrow.start,
+                    end: arrow.end,
+                },
+                sources: sources
+                    .into_iter()
+                    .map(|source| EditorMergeInSource {
+                        start: source.start,
+                        end: source.end,
+                        marker: source.marker,
+                        route: source.route,
+                        block_id: source.block_id,
+                    })
+                    .collect(),
+            };
+            item_parse.merge_in = Some(merge_in);
+            Some(EditorItemOutcome {
+                item: item_parse,
+                declarations: remapped_declarations,
+            })
+        }
+        super::merge_in::MergeInScan::Invalid {
+            code,
+            message,
+            span,
+            rewrite,
+        } => {
+            let diagnostic = Diagnostic {
+                severity: Severity::Error,
+                code,
+                message,
+                range: Some(span),
+                rewrite: rewrite.map(|rewrite| DiagnosticRewrite {
+                    start: rewrite.start,
+                    end: rewrite.end,
+                    replacement: rewrite.replacement,
+                    label: rewrite.label,
+                }),
+            };
+            let mut item_parse = empty_editor_item(
+                item,
+                EditorMode::Incomplete,
+                None,
+                None,
+                None,
+                Vec::new(),
+                vec![Span {
+                    start: span.0,
+                    end: span.1,
+                    kind: SpanKind::MergeInArrow,
+                    project_note: None,
+                    title: None,
+                    key: None,
+                }],
+                vec![diagnostic],
+            );
+            item_parse.merge_in = None;
+            Some(EditorItemOutcome {
+                item: item_parse,
+                declarations: Vec::new(),
+            })
+        }
+        super::merge_in::MergeInScan::Valid { sources, arrow } => Some(
+            parse_editor_merge_valid(item, options, parent, sources, arrow),
+        ),
+    }
+}
+
+fn parse_editor_merge_valid<'a>(
+    item: &CaptureItem<'a>,
+    options: &EditorParseOptions<'_>,
+    parent: RawLine<'_>,
+    sources: Vec<super::merge_in::MergeInSource>,
+    arrow: super::merge_in::MergeInArrow,
+) -> EditorItemOutcome<'a> {
+    // An empty left side names no new task.
+    let left_prefix_len = arrow.start.saturating_sub(parent.start);
+    if parent
+        .text
+        .get(..left_prefix_len)
+        .unwrap_or("")
+        .trim()
+        .is_empty()
+    {
+        let (message, rewrite) = editor_needs_new_task_message(
+            &parent,
+            &sources,
+            EditorMergeNeeds::Empty,
+        );
+        let diagnostic = Diagnostic {
+            severity: Severity::Error,
+            code: super::merge_in::MERGE_IN_NEEDS_NEW_TASK_CODE,
+            message,
+            range: Some((arrow.start, arrow.end)),
+            rewrite,
+        };
+        let mut item_parse = empty_editor_item(
+            item,
+            EditorMode::Incomplete,
+            None,
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            vec![diagnostic],
+        );
+        item_parse.merge_in = None;
+        return EditorItemOutcome {
+            item: item_parse,
+            declarations: Vec::new(),
+        };
+    }
+    // Scope the masked view so the local borrow ends before we return.
+    // Remap declarations to the original source inside the block.
+    let (mut left_parse, left_declarations) = {
+        let masked = masked_editor_source(item.source, arrow.start, parent.end);
+        let view = editor_item_view(item, &masked);
+        let outcome = parse_editor_item_without_transfer(&view, options);
+        let remapped =
+            remap_type_marker_declarations(outcome.declarations, item.source);
+        (outcome.item, remapped)
+    };
+    // Lexical `&`/`*`/`~`/`~~` source matches refuse first.
+    if let Some(message) =
+        editor_merge_source_also_marked_message(&left_parse, &sources)
+    {
+        let diagnostic = Diagnostic {
+            severity: Severity::Error,
+            code: super::merge_in::MERGE_IN_SOURCE_ALSO_MARKED_CODE,
+            message,
+            range: Some((
+                sources
+                    .first()
+                    .map(|source| source.start)
+                    .unwrap_or(arrow.start),
+                sources.last().map(|source| source.end).unwrap_or(arrow.end),
+            )),
+            rewrite: None,
+        };
+        let mut item_parse = empty_editor_item(
+            item,
+            EditorMode::Incomplete,
+            None,
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            vec![diagnostic],
+        );
+        item_parse.merge_in = None;
+        return EditorItemOutcome {
+            item: item_parse,
+            declarations: Vec::new(),
+        };
+    }
+    match classify_editor_merge_left(&left_parse, &parent) {
+        EditorMergeNeeds::Allowed => {
+            left_parse.spans.push(Span {
+                start: arrow.start,
+                end: arrow.end,
+                kind: SpanKind::MergeInArrow,
+                project_note: None,
+                title: None,
+                key: None,
+            });
+            for source in &sources {
+                left_parse.spans.push(Span {
+                    start: source.start,
+                    end: source.end,
+                    kind: SpanKind::MergeInSource,
+                    project_note: None,
+                    title: None,
+                    key: None,
+                });
+            }
+            left_parse.spans.sort_by_key(|span| (span.start, span.end));
+            let merge_in = EditorMergeIn {
+                arrow: EditorMergeInArrow {
+                    start: arrow.start,
+                    end: arrow.end,
+                },
+                sources: sources
+                    .into_iter()
+                    .map(|source| EditorMergeInSource {
+                        start: source.start,
+                        end: source.end,
+                        marker: source.marker,
+                        route: source.route,
+                        block_id: source.block_id,
+                    })
+                    .collect(),
+            };
+            left_parse.merge_in = Some(merge_in);
+            EditorItemOutcome {
+                item: left_parse,
+                declarations: left_declarations,
+            }
+        }
+        needs => {
+            let (message, rewrite) =
+                editor_needs_new_task_message(&parent, &sources, needs);
+            let diagnostic = Diagnostic {
+                severity: Severity::Error,
+                code: super::merge_in::MERGE_IN_NEEDS_NEW_TASK_CODE,
+                message,
+                range: Some((arrow.start, arrow.end)),
+                rewrite,
+            };
+            let mut item_parse = empty_editor_item(
+                item,
+                EditorMode::Incomplete,
+                None,
+                None,
+                None,
+                Vec::new(),
+                Vec::new(),
+                vec![diagnostic],
+            );
+            item_parse.merge_in = None;
+            EditorItemOutcome {
+                item: item_parse,
+                declarations: Vec::new(),
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditorMergeNeeds {
+    Allowed,
+    Empty,
+    StartClose,
+    Project,
+    Existing,
+    NoTask,
+    TargetRun,
+}
+
+fn classify_editor_merge_left(
+    parsed: &EditorItemParse,
+    parent: &RawLine<'_>,
+) -> EditorMergeNeeds {
+    let left_trimmed = {
+        let mut left_end = parent.text.len();
+        for (index, _) in parent.text.char_indices() {
+            if parent.text[index..].starts_with('<') {
+                let before_ok = index == 0
+                    || parent.text[..index]
+                        .chars()
+                        .next_back()
+                        .is_some_and(|character| character.is_whitespace());
+                if before_ok {
+                    left_end = index;
+                    break;
+                }
+            }
+        }
+        parent.text[..left_end].trim()
+    };
+    let is_empty = parsed.body.trim().is_empty()
+        && parsed.route.is_none()
+        && parsed.block_id.is_none()
+        && parsed.section.is_none()
+        && parsed.sub_bullets.is_empty()
+        && parsed.dependencies.is_empty()
+        && parsed.blocked_tasks.is_empty()
+        && parsed.relations.is_empty();
+    if is_empty && left_trimmed.is_empty() {
+        return EditorMergeNeeds::Empty;
+    }
+    match parsed.mode {
+        EditorMode::Task | EditorMode::SubBullet => EditorMergeNeeds::Allowed,
+        EditorMode::PomodoroTask => {
+            if parsed.pomodoro_start.is_none()
+                && parsed.pomodoro_close.is_none()
+            {
+                EditorMergeNeeds::Allowed
+            } else {
+                EditorMergeNeeds::StartClose
+            }
+        }
+        EditorMode::ProjectNote | EditorMode::PomodoroProjectNote => {
+            EditorMergeNeeds::Project
+        }
+        EditorMode::TaskDependency
+        | EditorMode::TaskToggle
+        | EditorMode::TaskComplete => EditorMergeNeeds::Existing,
+        EditorMode::TaskMove | EditorMode::TaskMerge => {
+            EditorMergeNeeds::Existing
+        }
+        EditorMode::Incomplete => {
+            // A target-run fan-out on the left is an existing-task shape;
+            // other incompletes are empty/no-task based on body.
+            if !parsed.targets.is_empty() {
+                EditorMergeNeeds::TargetRun
+            } else if parsed.body.trim().is_empty() {
+                EditorMergeNeeds::Empty
+            } else {
+                EditorMergeNeeds::NoTask
+            }
+        }
+        _ => EditorMergeNeeds::NoTask,
+    }
+}
+
+fn editor_needs_new_task_message(
+    parent: &RawLine<'_>,
+    sources: &[super::merge_in::MergeInSource],
+    needs: EditorMergeNeeds,
+) -> (String, Option<DiagnosticRewrite>) {
+    const PREFIX: &str = "< merges into the task this line creates";
+    match needs {
+        EditorMergeNeeds::Empty => (
+            format!("{PREFIX}; name the new task before <"),
+            None,
+        ),
+        EditorMergeNeeds::StartClose => (
+            format!(
+                "{PREFIX}; the new task must stay open to take in other tasks; start or close it in a later item"
+            ),
+            None,
+        ),
+        EditorMergeNeeds::Project => (
+            format!(
+                "{PREFIX}; a new project keeps tasks as tasks: list them as - ^id bullets to move them in"
+            ),
+            None,
+        ),
+        EditorMergeNeeds::Existing | EditorMergeNeeds::TargetRun => {
+            let left = {
+                let mut left_end = parent.text.len();
+                for (index, _) in parent.text.char_indices() {
+                    if parent.text[index..].starts_with('<') {
+                        let before_ok = index == 0
+                            || parent.text[..index]
+                                .chars()
+                                .next_back()
+                                .is_some_and(|character| {
+                                    character.is_whitespace()
+                                });
+                        if before_ok {
+                            left_end = index;
+                            break;
+                        }
+                    }
+                }
+                parent.text[..left_end].trim().to_string()
+            };
+            if super::transfer::is_single_destination_token(&left) {
+                let sources_text = sources
+                    .iter()
+                    .map(|source| source.marker.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let replacement = format!("{sources_text} > {left}");
+                // Preserve leading indentation.
+                let leading_len =
+                    parent.text.len() - parent.text.trim_start().len();
+                let leading =
+                    parent.text.get(..leading_len).unwrap_or("");
+                let mut full_replacement = replacement;
+                if !full_replacement.starts_with(leading)
+                    && !leading.is_empty()
+                {
+                    full_replacement =
+                        format!("{leading}{}", full_replacement.trim_start());
+                }
+                (
+                    format!(
+                        "{PREFIX}; {left} already exists. Write {sources_text} > {left}"
+                    ),
+                    Some(DiagnosticRewrite {
+                        start: parent.start,
+                        end: parent.end,
+                        replacement: full_replacement,
+                        label: "Use >".to_string(),
+                    }),
+                )
+            } else {
+                (
+                    format!("{PREFIX}; this line names an existing task"),
+                    None,
+                )
+            }
+        }
+        EditorMergeNeeds::NoTask => (
+            format!("{PREFIX}; this line creates no task"),
+            None,
+        ),
+        EditorMergeNeeds::Allowed => unreachable!(),
+    }
+}
+
+fn editor_merge_source_also_marked_message(
+    parsed: &EditorItemParse,
+    sources: &[super::merge_in::MergeInSource],
+) -> Option<String> {
+    for source in sources {
+        let route = source.route.to_ascii_lowercase();
+        for dependency in &parsed.dependencies {
+            if dependency.note.to_ascii_lowercase() == route
+                && dependency.block_id == source.block_id
+            {
+                return Some(
+                    "that source merges into the new task; it can't also be its prerequisite/dependent/relation"
+                        .to_string(),
+                );
+            }
+        }
+        for blocked in &parsed.blocked_tasks {
+            if blocked.note.to_ascii_lowercase() == route
+                && blocked.block_id == source.block_id
+            {
+                return Some(
+                    "that source merges into the new task; it can't also be its prerequisite/dependent/relation"
+                        .to_string(),
+                );
+            }
+        }
+        for relation in &parsed.relations {
+            if relation.note.to_ascii_lowercase() == route
+                && relation.block_id == source.block_id
+            {
+                return Some(
+                    "that source merges into the new task; it can't also be its prerequisite/dependent/relation"
+                        .to_string(),
+                );
+            }
+        }
+    }
+    None
 }
 
 fn parse_editor_item_without_transfer<'a>(
@@ -1682,6 +2308,7 @@ fn parse_editor_transfer_item<'a>(
                 code: "incomplete_transfer",
                 message,
                 range: Some(span),
+                rewrite: None,
             });
             (
                 EditorMode::Incomplete,
@@ -1702,6 +2329,7 @@ fn parse_editor_transfer_item<'a>(
                 code,
                 message,
                 range: Some(span),
+                rewrite: None,
             });
             (EditorMode::Incomplete, None, None, None, Vec::new(), None)
         }
@@ -1848,6 +2476,7 @@ fn empty_editor_item(
         local_destination_markers: Vec::new(),
         drawer_bullet_target: None,
         targets: Vec::new(),
+        merge_in: None,
     }
 }
 
@@ -2276,6 +2905,7 @@ fn combine_editor_target_members<'a>(
         local_destination_markers,
         drawer_bullet_target: first.item.drawer_bullet_target.clone(),
         targets,
+        merge_in: None,
     };
     EditorItemOutcome { item, declarations }
 }
@@ -2315,6 +2945,7 @@ fn attach_list_duplicate_id_diagnostics(
                     outcome.item.line_start,
                 ),
                 range,
+                rewrite: None,
             });
             continue;
         }
@@ -2437,6 +3068,7 @@ fn attach_list_header_marker_diagnostic(
             first.body.trim(),
         ),
         range,
+        rewrite: None,
     });
 }
 
@@ -2450,6 +3082,7 @@ fn apply_note_directive(parsed: &mut EditorItemParse) {
             code: "pomodoro_note_conflict",
             message: pomodoro_note_route_conflict_error(),
             range: None,
+            rewrite: None,
         });
         return;
     }
@@ -2486,6 +3119,7 @@ fn apply_listen_directive(parsed: &mut EditorItemParse) {
         code: "directive_not_applicable",
         message: super::directive::directive_not_applicable_error(),
         range,
+        rewrite: None,
     });
 }
 
@@ -2568,6 +3202,7 @@ fn attach_type_marker_metadata(
                         super::type_marker::TypeMarkerSubject::Close,
                     ),
                     range: Some((marker.span.start, marker.span.end)),
+                    rewrite: None,
                 });
                 parsed.spans.sort_by_key(|span| (span.start, span.end));
                 return;
@@ -2610,6 +3245,7 @@ fn attach_type_marker_metadata(
                     code: "type_marker_needs_task",
                     message: needs_task_error(Some(&marker.name)),
                     range: Some((marker.span.start, marker.span.end)),
+                    rewrite: None,
                 });
                 if !parsed.needs.contains(&Need::Task) {
                     parsed.needs.push(Need::Task);
@@ -2628,6 +3264,7 @@ fn attach_type_marker_metadata(
                         subject,
                     ),
                     range: Some((marker.span.start, marker.span.end)),
+                    rewrite: None,
                 });
             }
         }
@@ -2644,6 +3281,7 @@ fn attach_type_marker_metadata(
                 code: "invalid_type_marker",
                 message: invalid_marker_error(raw),
                 range: Some((span.start, span.end)),
+                rewrite: None,
             });
         }
         TypeMarkerOccurrence::Escaped { .. } => {}
@@ -2749,6 +3387,7 @@ fn attach_drawer_bullet_metadata(
                             glued_section,
                         ),
                         range: Some((span.start, span.end)),
+                        rewrite: None,
                     });
                     continue;
                 }
@@ -2761,6 +3400,7 @@ fn attach_drawer_bullet_metadata(
                         code: error.code,
                         message: error.message,
                         range: Some((span.start, span.end)),
+                        rewrite: None,
                     });
                 }
                 if !nested {
@@ -2805,6 +3445,7 @@ fn attach_drawer_bullet_metadata(
                             code: error.code,
                             message: error.message,
                             range: Some((start, end)),
+                            rewrite: None,
                         });
                     }
                     spans.push(Span {
@@ -2883,6 +3524,7 @@ fn attach_directive_metadata(
                     code,
                     message,
                     range: Some((span.start, span.end)),
+                    rewrite: None,
                 });
             }
         }
@@ -2983,6 +3625,7 @@ fn attach_clip_incompatible_kind(parsed: &mut EditorItemParse) {
         code,
         message,
         range,
+        rewrite: None,
     });
 }
 
@@ -3073,6 +3716,7 @@ pub(super) fn list_refusal_item<'a>(
             code,
             message,
             range,
+            rewrite: None,
         });
     }
     EditorItemOutcome {
@@ -3109,6 +3753,7 @@ pub(super) fn list_refusal_item<'a>(
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
             targets: Vec::new(),
+            merge_in: None,
         },
         declarations: Vec::new(),
     }
@@ -3524,6 +4169,7 @@ pub(super) fn parse_editor_list_item<'a>(
                 code: "empty_child_after_markers",
                 message: empty_child_after_markers_error(line_number),
                 range: Some((line.raw.start, line.raw.end)),
+                rewrite: None,
             });
             continue;
         }
@@ -3578,6 +4224,7 @@ pub(super) fn parse_editor_list_item<'a>(
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
             targets: Vec::new(),
+            merge_in: None,
         },
         declarations,
     }
@@ -3658,6 +4305,7 @@ fn interpret_editor_move(
                 code,
                 message,
                 range: Some((span.start, span.end)),
+                rewrite: None,
             });
         }
         MoveBulletHit::Choice { span } => {
@@ -3670,6 +4318,7 @@ fn interpret_editor_move(
                     code: "move_choice_nested",
                     message: super::move_bullet::move_choice_nested_error(),
                     range: Some((span.start, span.end)),
+                    rewrite: None,
                 });
                 return;
             }
@@ -3681,6 +4330,7 @@ fn interpret_editor_move(
                         first,
                     ),
                     range: Some((span.start, span.end)),
+                    rewrite: None,
                 });
                 return;
             }
@@ -3755,6 +4405,7 @@ fn interpret_editor_move(
                         stem, &id,
                     ),
                     range: Some(range),
+                    rewrite: None,
                 });
                 return;
             }
@@ -3790,6 +4441,7 @@ fn interpret_editor_move(
                                 sigil, &id, first_line,
                             ),
                         range: Some(range),
+                        rewrite: None,
                     });
                 }
                 MoveIdOutcome::Collision { authored_line } => {
@@ -3804,6 +4456,7 @@ fn interpret_editor_move(
                                 authored_line,
                             ),
                         range: Some(range),
+                        rewrite: None,
                     });
                 }
             }
@@ -4013,6 +4666,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                     code: "invalid_child_line",
                     message: invalid_child_line_error(line_number),
                     range: Some((raw.start, raw.end)),
+                    rewrite: None,
                 });
                 continue;
             }
@@ -4024,6 +4678,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                 code: "orphaned_nested_bullet",
                 message: orphaned_nested_bullet_error(line_number),
                 range: Some((raw.start, raw.end)),
+                rewrite: None,
             });
             continue;
         }
@@ -4117,6 +4772,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                 code: "drawer_bullet_text",
                 message: super::drawer_bullet::drawer_bullet_text_error(),
                 range: Some((raw.start, raw.end)),
+                rewrite: None,
             });
         }
         if let Some(super::drawer_bullet::DrawerBulletHit::Invalid {
@@ -4137,6 +4793,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                 code: "invalid_drawer",
                 message,
                 range: Some((span.start, span.end)),
+                rewrite: None,
             });
         }
 
@@ -4153,6 +4810,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                     code: "empty_child_after_markers",
                     message: empty_child_after_markers_error(line_number),
                     range: Some((raw.start, raw.end)),
+                    rewrite: None,
                 });
             }
         } else if matches!(
@@ -4197,6 +4855,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                     code: "empty_child_after_markers",
                     message: empty_child_after_markers_error(line_number),
                     range: Some((raw.start, raw.end)),
+                    rewrite: None,
                 });
             }
             if !empty_bullet || id_pending {
@@ -4238,6 +4897,7 @@ pub(super) fn parse_editor_item_inner<'a>(
             code: "unsupported_explicit_toggle",
             message: EXPLICIT_TOGGLE_ONLY_MARKER_ERROR.to_string(),
             range,
+            rewrite: None,
         });
     }
     if toggle_eligible && mode == EditorMode::SubBullet {
@@ -4290,6 +4950,7 @@ pub(super) fn parse_editor_item_inner<'a>(
             code: "invalid_drawer",
             message: INVALID_DRAWER_ERROR.to_string(),
             range: Some(range),
+            rewrite: None,
         });
         local_destination_marker = None;
         if let Some(index) = own_local_destination_marker_index {
@@ -4342,6 +5003,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                 code: "invalid_pomodoro_link",
                 message: message.to_string(),
                 range,
+                rewrite: None,
             });
         }
     }
@@ -4363,6 +5025,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                 code: "invalid_pomodoro_close",
                 message: POMODORO_CLOSE_SCHEDULE_CONFLICT_ERROR.to_string(),
                 range: Some((span.start, span.end)),
+                rewrite: None,
             });
         }
         if seen.priority
@@ -4374,6 +5037,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                 code: "invalid_pomodoro_close",
                 message: POMODORO_CLOSE_PRIORITY_CONFLICT_ERROR.to_string(),
                 range: Some((span.start, span.end)),
+                rewrite: None,
             });
         }
         if seen.clip
@@ -4385,6 +5049,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                 code: "invalid_pomodoro_close",
                 message: POMODORO_LINK_CLIP_CONFLICT_ERROR.to_string(),
                 range: Some((span.start, span.end)),
+                rewrite: None,
             });
         }
     }
@@ -4420,6 +5085,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                     .body_tokens
                     .last()
                     .map(|token| (token.start, token.end)),
+                rewrite: None,
             });
         }
         let route_name = route.as_deref().unwrap_or_default();
@@ -4495,6 +5161,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                                 ),
                             range: token
                                 .map(|token| (token.start, token.end)),
+                            rewrite: None,
                         });
                         continue;
                     }
@@ -4528,6 +5195,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                         code,
                         message,
                         range: token.map(|token| (token.start, token.end)),
+                        rewrite: None,
                     });
                 }
             }
@@ -4553,6 +5221,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                     section.as_deref().unwrap_or_default(),
                 ),
                 range,
+                rewrite: None,
             });
         }
         if pass.has_link && mode == EditorMode::ProjectNote {
@@ -4715,6 +5384,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                         code: "invalid_pomodoro_link",
                         message,
                         range: Some((token_start, token_end)),
+                        rewrite: None,
                     });
                 }
             }
@@ -4839,6 +5509,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                         code: "invalid_pomodoro_link",
                         message,
                         range: Some((token_start, token_end)),
+                        rewrite: None,
                     });
                 } else {
                     mode = EditorMode::Incomplete;
@@ -4864,6 +5535,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                         code: "invalid_pomodoro_link",
                         message: conflict,
                         range: Some((token_start, token_end)),
+                        rewrite: None,
                     });
                 } else {
                     diagnostics.push(Diagnostic {
@@ -4874,6 +5546,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                             token_start + range.0,
                             token_start + range.1,
                         )),
+                        rewrite: None,
                     });
                 }
             }
@@ -5057,6 +5730,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                     code,
                     message,
                     range,
+                    rewrite: None,
                 });
             }
         }
@@ -5081,6 +5755,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                 code: "invalid_dependency",
                 message: invalid.message.clone(),
                 range: Some((invalid.start, invalid.end)),
+                rewrite: None,
             });
         }
         for invalid in item_dependencies.relation_invalid.iter() {
@@ -5089,6 +5764,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                 code: "invalid_relation",
                 message: invalid.message.clone(),
                 range: Some((invalid.start, invalid.end)),
+                rewrite: None,
             });
         }
         let parent_marker = parent_parse.marker.as_ref();
@@ -5265,6 +5941,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                     &relation_modifier_raws(&item_dependencies),
                 ),
                 range,
+                rewrite: None,
             });
         }
         if !item_dependencies.partials.is_empty()
@@ -5302,6 +5979,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                     .blocked_entries
                     .first()
                     .map(|entry| (entry.start, entry.end)),
+                rewrite: None,
             });
         }
         if dependency_target.is_none()
@@ -5328,6 +6006,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                     declaration.token.text,
                 ),
                 range: Some((declaration.token.start, declaration.token.end)),
+                rewrite: None,
             });
         }
     }
@@ -5344,6 +6023,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                 code: "pomodoro_note_conflict",
                 message,
                 range: Some((span.start, span.end)),
+                rewrite: None,
             });
         }
     }
@@ -5408,6 +6088,7 @@ pub(super) fn parse_editor_item_inner<'a>(
             local_destination_markers,
             drawer_bullet_target,
             targets: Vec::new(),
+            merge_in: None,
         },
         declarations,
     }

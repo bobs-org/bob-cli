@@ -161,6 +161,7 @@ pub(super) fn parse_editor_adjust_item<'a>(
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
             targets: Vec::new(),
+            merge_in: None,
         },
         declarations: Vec::new(),
     })
@@ -210,12 +211,14 @@ pub(super) fn editor_operator_outcome<'a>(
                 code,
                 message: message.to_string(),
                 range,
+                rewrite: None,
             }],
             sub_bullets: Vec::new(),
             has_local_destination: false,
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
             targets: Vec::new(),
+            merge_in: None,
         },
         declarations: Vec::new(),
     }
@@ -263,12 +266,14 @@ pub(super) fn editor_start_invalid_outcome<'a>(
                 code: "invalid_pomodoro_start",
                 message,
                 range,
+                rewrite: None,
             }],
             sub_bullets: Vec::new(),
             has_local_destination: false,
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
             targets: Vec::new(),
+            merge_in: None,
         },
         declarations: Vec::new(),
     }
@@ -851,6 +856,7 @@ fn editor_named_valid_outcome<'a>(
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
             targets: Vec::new(),
+            merge_in: None,
         },
         declarations: Vec::new(),
     }
@@ -901,6 +907,7 @@ fn editor_start_drop_incomplete_outcome<'a>(
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
             targets: Vec::new(),
+            merge_in: None,
         },
         declarations: Vec::new(),
     }
@@ -950,6 +957,7 @@ fn editor_start_timing_incomplete_outcome<'a>(
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
             targets: Vec::new(),
+            merge_in: None,
         },
         declarations: Vec::new(),
     }
@@ -1103,6 +1111,7 @@ fn editor_named_incomplete_outcome<'a>(
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
             targets: Vec::new(),
+            merge_in: None,
         },
         declarations: Vec::new(),
     }
@@ -1469,6 +1478,7 @@ pub(super) fn parse_editor_start_item<'a>(
                     local_destination_markers: Vec::new(),
                     drawer_bullet_target: None,
                     targets: Vec::new(),
+                    merge_in: None,
                 },
                 declarations: Vec::new(),
             })
@@ -1510,6 +1520,7 @@ pub(super) fn parse_editor_start_item<'a>(
                     local_destination_markers: Vec::new(),
                     drawer_bullet_target: None,
                     targets: Vec::new(),
+                    merge_in: None,
                 },
                 declarations: Vec::new(),
             })
@@ -1771,6 +1782,7 @@ pub(super) fn parse_editor_split_item<'a>(
                 local_destination_markers: Vec::new(),
                 drawer_bullet_target: None,
                 targets: Vec::new(),
+                merge_in: None,
             },
             declarations: Vec::new(),
         });
@@ -1827,6 +1839,7 @@ pub(super) fn parse_editor_split_item<'a>(
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
             targets: Vec::new(),
+            merge_in: None,
         },
         declarations: Vec::new(),
     })
@@ -2055,6 +2068,7 @@ pub(super) fn parse_editor_merge_item<'a>(
                 local_destination_markers: Vec::new(),
                 drawer_bullet_target: None,
                 targets: Vec::new(),
+                merge_in: None,
             },
             declarations: Vec::new(),
         });
@@ -2111,6 +2125,7 @@ pub(super) fn parse_editor_merge_item<'a>(
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
             targets: Vec::new(),
+            merge_in: None,
         },
         declarations: Vec::new(),
     })
@@ -2158,12 +2173,14 @@ fn editor_merge_invalid_outcome<'a>(
                 code: "invalid_pomodoro_merge",
                 message,
                 range,
+                rewrite: None,
             }],
             sub_bullets: Vec::new(),
             has_local_destination: false,
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
             targets: Vec::new(),
+            merge_in: None,
         },
         declarations: Vec::new(),
     }
@@ -2211,12 +2228,14 @@ fn editor_split_invalid_outcome<'a>(
                 code: "invalid_pomodoro_split",
                 message,
                 range,
+                rewrite: None,
             }],
             sub_bullets: Vec::new(),
             has_local_destination: false,
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
             targets: Vec::new(),
+            merge_in: None,
         },
         declarations: Vec::new(),
     }
@@ -2384,6 +2403,7 @@ pub(super) fn parse_editor_close_item<'a>(
                 code: "invalid_pomodoro_close",
                 message: retired_whole_item_close_error(first, &rewrite),
                 range: Some((token_start, token_start + first.len())),
+                rewrite: None,
             }],
         ));
     }
@@ -2417,6 +2437,7 @@ pub(super) fn parse_editor_close_item<'a>(
                     ),
                 ),
                 range: Some((token_start + 1, token_start + first.len())),
+                rewrite: None,
             }],
         ));
     }
@@ -2572,6 +2593,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         code: "invalid_pomodoro_close",
                         message: error.message,
                         range: Some(error.range),
+                        rewrite: None,
                     }],
                 ));
             }
@@ -2738,6 +2760,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         code: "invalid_pomodoro_close",
                         message: message.clone(),
                         range: Some(*range),
+                        rewrite: None,
                     }],
                 ));
             }
@@ -2821,6 +2844,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         code: "invalid_pomodoro_close",
                         message: error.message,
                         range: Some(error.range),
+                        rewrite: None,
                     }],
                 ));
             }
@@ -2858,6 +2882,7 @@ pub(super) fn parse_editor_close_item<'a>(
                     code: "invalid_pomodoro_close",
                     message,
                     range: Some(range),
+                    rewrite: None,
                 }],
             ));
         }
@@ -2921,6 +2946,7 @@ pub(super) fn parse_editor_close_item<'a>(
                     code: "invalid_pomodoro_close",
                     message: error.message,
                     range: Some(error.range),
+                    rewrite: None,
                 }],
             ))
         }
@@ -2949,6 +2975,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         code: "invalid_pomodoro_close",
                         message: close_inline_mixing_error(&bullet),
                         range: Some(index_range),
+                        rewrite: None,
                     }],
                 ));
             }
@@ -3019,6 +3046,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         code: "invalid_pomodoro_close",
                         message: close_inline_mixing_error(&bullet),
                         range: Some(text_range),
+                        rewrite: None,
                     }],
                 ));
             }
@@ -3286,6 +3314,7 @@ fn editor_past_outcome<'a>(
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
             targets: Vec::new(),
+            merge_in: None,
         },
         declarations: Vec::new(),
     }
@@ -3405,6 +3434,7 @@ fn parse_editor_past_item<'a>(
                     code: "invalid_pomodoro_past",
                     message,
                     range: Some((token_start, token_end)),
+                    rewrite: None,
                 }],
             ));
         }
@@ -3522,6 +3552,7 @@ fn parse_editor_past_item<'a>(
                         code: "invalid_pomodoro_past",
                         message: error.message,
                         range: Some(error.range),
+                        rewrite: None,
                     }],
                 ));
             }
@@ -3691,6 +3722,7 @@ fn parse_editor_past_item<'a>(
                         code: "invalid_pomodoro_past",
                         message: error.message,
                         range: Some(error.range),
+                        rewrite: None,
                     }],
                 ));
             }
@@ -3746,6 +3778,7 @@ fn parse_editor_past_item<'a>(
                     code: "invalid_pomodoro_past",
                     message: error.message,
                     range: Some(error.range),
+                    rewrite: None,
                 }],
             ))
         }
@@ -3768,6 +3801,7 @@ fn parse_editor_past_item<'a>(
                         code: "invalid_pomodoro_past",
                         message: close_inline_mixing_error(&bullet),
                         range: Some((token_start, token_end)),
+                        rewrite: None,
                     }],
                 ));
             }
@@ -3844,6 +3878,7 @@ fn parse_editor_past_item<'a>(
                         code: "invalid_pomodoro_past",
                         message: close_inline_mixing_error(&bullet),
                         range: Some((token_start, token_end)),
+                        rewrite: None,
                     }],
                 ));
             }
@@ -3935,6 +3970,7 @@ fn editor_close_outcome<'a>(
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
             targets: Vec::new(),
+            merge_in: None,
         },
         declarations: Vec::new(),
     }

@@ -38,6 +38,7 @@ mod meet_continuation_last;
 mod meet_event_default;
 mod meet_event_run;
 mod mentions;
+mod merge_in;
 mod multi_target;
 mod note_bullets;
 mod note_bullets_compose;

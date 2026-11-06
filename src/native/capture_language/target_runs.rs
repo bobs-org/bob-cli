@@ -362,6 +362,7 @@ pub(crate) fn editor_refusal_diagnostic(
         code,
         message,
         range: Some((start, end)),
+        rewrite: None,
     })
 }
 

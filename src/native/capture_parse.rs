@@ -16,8 +16,8 @@ use super::{
     capture_language::{
         self, resolve_exact_type_name, scan_line, unmatched_type_display,
         AuthoredSubBullet, DependencyEntry, DependencyTarget, Diagnostic,
-        EditorGlobalDestination, EditorItemParse, EditorMode,
-        EditorParseOptions, EditorTarget, ListContext, MoveBullet,
+        DiagnosticRewrite, EditorGlobalDestination, EditorItemParse,
+        EditorMode, EditorParseOptions, EditorTarget, ListContext, MoveBullet,
         MoveChoiceBullet, Need, PomodoroAdjustSpec, PomodoroCloseSpec,
         PomodoroMergeSpec, PomodoroPastSpec, PomodoroShiftSpec,
         PomodoroSplitSpec, PomodoroStartSpec, ProjectTaskId, RelationDirection,
@@ -175,7 +175,7 @@ command also best-effort reads the configured vault's theme catalog and adds \
 theme refs; if the catalog is unavailable, parsing still succeeds without \
 those refs. It never writes to the vault or reads the clipboard, and takes no \
 --bob-dir. A '%c' directive still succeeds without reading the clipboard.\n\n\
-Success JSON reports `grammar: 14` for the capture-language revision while \
+Success JSON reports `grammar: 15` for the capture-language revision while \
 `schema_version` stays 1.\n\n\
 A lone task-list header `@route` with no section, bullets, or other text \
 reports mode `note_pull`; `@route` with bullets remains a task list, and a \
@@ -684,6 +684,9 @@ struct CaptureParseResult {
     /// Complete transfer syntax, omitted for ordinary items.
     #[serde(skip_serializing_if = "Option::is_none")]
     transfer: Option<capture_language::EditorTransfer>,
+    /// Complete merge-in clause, omitted for ordinary items.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    merge_in: Option<capture_language::EditorMergeIn>,
     /// Complete `&note:block-id` modifiers on the first item, in source
     /// order: each carries its raw text, decoded note and block ID, and
     /// its sigil-inclusive range. Omitted when the draft names none, so
@@ -787,6 +790,8 @@ struct CaptureParseItem {
     block_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     transfer: Option<capture_language::EditorTransfer>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    merge_in: Option<capture_language::EditorMergeIn>,
     needs: Vec<Need>,
     /// The capture list this bullet belongs to, when split from a lone
     /// `@route` / `@route#section` header. Additive: omitted otherwise.
@@ -1215,6 +1220,8 @@ impl CaptureParseResult {
                 .find(|transfer| transfer.index == item.index)
                 .map(|transfer| transfer.transfer.clone())
         });
+        let merge_in =
+            parse.items.first().and_then(|item| item.merge_in.clone());
         let ref_parent = ref_parent_for(
             parse.mode,
             parse.route.as_deref(),
@@ -1294,6 +1301,7 @@ impl CaptureParseResult {
             pomodoro_close: parse.pomodoro_close,
             pomodoro_past: parse.pomodoro_past.as_ref().map(past_wire),
             transfer,
+            merge_in,
             dependencies: parse_dependencies(&parse.dependencies),
             blocked_tasks: parse_dependencies(&parse.blocked_tasks),
             relations,
@@ -1372,6 +1380,10 @@ impl CaptureParseResult {
                         &row.fields,
                         &row.range,
                     ));
+                    mapped.rewrite =
+                        diagnostic.rewrite.as_ref().and_then(|rewrite| {
+                            map_instance_rewrite(rewrite, instance, &row.fields)
+                        });
                     mapped.message = offset_diagnostic_lines(
                         &mapped.message,
                         instance.template_line_start.saturating_sub(1),
@@ -1395,8 +1407,13 @@ impl CaptureParseResult {
                         &row.fields,
                         &row.range,
                     );
+                    let mapped_rewrite =
+                        diagnostic.rewrite.as_ref().and_then(|rewrite| {
+                            map_instance_rewrite(rewrite, instance, &row.fields)
+                        });
                     refusal_diagnostics.push(Diagnostic {
                         range: Some(mapped_range),
+                        rewrite: mapped_rewrite,
                         ..diagnostic
                     });
                 }
@@ -1412,6 +1429,7 @@ impl CaptureParseResult {
                             row.row, row.line
                         ),
                         range: Some((row.range.start, row.range.end)),
+                        rewrite: None,
                     });
                 }
             }
@@ -1470,6 +1488,7 @@ impl CaptureParseResult {
                     pomodoro_close: None,
                     pomodoro_past: None,
                     transfer: None,
+                    merge_in: None,
                     dependencies: Vec::new(),
                     blocked_tasks: Vec::new(),
                     relations: Vec::new(),
@@ -1495,6 +1514,7 @@ impl CaptureParseResult {
                     section: None,
                     block_id: None,
                     transfer: None,
+                    merge_in: None,
                     needs: Vec::new(),
                     ref_parent: None,
                     ref_listen: false,
@@ -1575,6 +1595,7 @@ impl CaptureParseResult {
                 code: "template_list",
                 message: capture_language::template_list_error(),
                 range: Some((start, end)),
+                rewrite: None,
             })
             .into_iter()
             .collect();
@@ -1726,6 +1747,7 @@ impl CaptureParseResult {
             pomodoro_close: parsed.pomodoro_close,
             pomodoro_past: parsed.pomodoro_past.as_ref().map(past_wire),
             transfer: None,
+            merge_in: None,
             dependencies: parse_dependencies(&parsed.dependencies),
             blocked_tasks: parse_dependencies(&parsed.blocked_tasks),
             relations,
@@ -2055,6 +2077,7 @@ fn template_issue_diagnostic(
         code: issue.code(),
         message: issue.message(),
         range: Some((range.start, range.end)),
+        rewrite: None,
     }
 }
 
@@ -2277,6 +2300,7 @@ fn missing_template_directive_hint(
             "add `%t` to this item to use it as a template for the lines below"
                 .to_string(),
         range: Some((first.start, first.end)),
+        rewrite: None,
     })
 }
 
@@ -2361,6 +2385,94 @@ fn map_instance_range(
     (row_range.start, row_range.end)
 }
 
+fn map_instance_rewrite(
+    rewrite: &DiagnosticRewrite,
+    instance: &capture_language::template::TemplateInstance,
+    fields: &[capture_language::template::TemplateField],
+) -> Option<DiagnosticRewrite> {
+    // A rewrite must splice into the exact original draft, never synthetic
+    // expansion coordinates. When the expanded rewrite spans more than one
+    // field, it cannot be represented by one exact splice, so leave it
+    // absent and retain the error.
+    let touched = instance
+        .source_map
+        .iter()
+        .filter(|segment| {
+            ranges_overlap(
+                Some((rewrite.start, rewrite.end)),
+                Some((segment.expanded.start, segment.expanded.end)),
+            )
+        })
+        .collect::<Vec<_>>();
+    let field_ids = touched
+        .iter()
+        .filter_map(|segment| segment.field)
+        .collect::<std::collections::BTreeSet<_>>();
+    if field_ids.len() > 1 {
+        return None;
+    }
+    // Reuse the range mapper for the single-field/literal case; it returns
+    // an exact original-draft splice.
+    let row_range = instance
+        .source_map
+        .first()
+        .map(|segment| segment.source.start..segment.source.end)
+        .unwrap_or(0..0);
+    // Reconstruct a row_range from the instance's row range is not directly
+    // available here; fall back to mapping via the same literal logic by
+    // reusing the range mapper with a synthetic row range covering the
+    // rewrite's original context is complex. Instead, map through the
+    // instance's source map directly for the common single-segment case.
+    // For simplicity, map start/end independently when they land in one
+    // literal segment with equal lengths.
+    let (mapped_start, mapped_end) = {
+        let mut mapped: Vec<(usize, usize)> = Vec::new();
+        for segment in &touched {
+            let overlap_start = rewrite.start.max(segment.expanded.start);
+            let overlap_end = rewrite.end.min(segment.expanded.end);
+            if overlap_start >= overlap_end
+                && !(rewrite.start == rewrite.end
+                    && overlap_start == segment.expanded.start)
+            {
+                continue;
+            }
+            if segment.source.len() == segment.expanded.len() {
+                let offset_start =
+                    overlap_start.saturating_sub(segment.expanded.start);
+                let offset_end =
+                    overlap_end.saturating_sub(segment.expanded.start);
+                mapped.push((
+                    segment.source.start + offset_start,
+                    segment.source.start + offset_end,
+                ));
+            } else {
+                mapped.push((segment.source.start, segment.source.end));
+            }
+        }
+        if mapped.is_empty() {
+            return None;
+        }
+        let start = mapped.iter().map(|range| range.0).min()?;
+        let end = mapped.iter().map(|range| range.1).max()?;
+        // Multi-segment rewrites cannot be one exact splice.
+        if touched.len() != 1 && field_ids.len() != 1 {
+            // Allow contiguous literal spans that collapse to one range.
+            // Otherwise leave absent.
+            if mapped.len() != 1 {
+                return None;
+            }
+        }
+        (start, end)
+    };
+    let _ = (fields, row_range);
+    Some(DiagnosticRewrite {
+        start: mapped_start,
+        end: mapped_end,
+        replacement: rewrite.replacement.clone(),
+        label: rewrite.label.clone(),
+    })
+}
+
 fn offset_diagnostic_lines(message: &str, offset: usize) -> String {
     if offset == 0 {
         return message.to_string();
@@ -2418,6 +2530,7 @@ fn refusal_diagnostic(
             code: "template_clipboard",
             message: "a template can't capture the clipboard: `%c` would repeat once per row".to_string(),
             range: Some((span.start, span.end)),
+            rewrite: None,
         });
     }
     let is_session = |mode: EditorMode,
@@ -2467,6 +2580,7 @@ fn refusal_diagnostic(
         code: "template_session_operator",
         message: "a template can't drive the Pomodoro session; capture `=`, `x`, `+N`, and `++N` on their own".to_string(),
         range: Some(range),
+        rewrite: None,
     })
 }
 
@@ -2493,6 +2607,7 @@ fn empty_wire_item() -> CaptureParseItem {
         section: None,
         block_id: None,
         transfer: None,
+        merge_in: None,
         needs: Vec::new(),
         ref_parent: None,
         ref_listen: false,
@@ -2595,6 +2710,7 @@ fn wire_item(
             .iter()
             .find(|transfer| transfer.index == item.index)
             .map(|transfer| transfer.transfer.clone()),
+        merge_in: item.merge_in.clone(),
         needs: item.needs.clone(),
         list: item.list.clone(),
         header_range: item.list.as_ref().map(|list| SourceRange {
@@ -3585,7 +3701,7 @@ mod tests {
         let value = json("Call bank @Cash+");
         assert_eq!(value["ok"], true);
         assert_eq!(value["schema_version"], 1);
-        assert_eq!(value["grammar"], 14);
+        assert_eq!(value["grammar"], 15);
         assert_eq!(value["input"], "Call bank @Cash+");
         assert_eq!(value["body"], "Call bank");
         assert_eq!(value["mode"], "incomplete");
@@ -3648,7 +3764,7 @@ mod tests {
         // "start a list" from it.
         let value = json("@sase");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 14);
+        assert_eq!(value["grammar"], 15);
         assert_eq!(value["mode"], "note_pull");
         assert_eq!(value["route"], "sase");
         assert!(value["section"].is_null());
@@ -4430,5 +4546,78 @@ mod tests {
         assert_eq!(value["global_destination"]["route"], "foo");
         assert_eq!(value["diagnostics"][0]["code"], "missing_capture_item");
         assert!(value.get("items").is_none(), "{value}");
+    }
+
+    #[test]
+    fn json_reports_merge_in_wire_shape_and_grammar_15() {
+        let value = json("New task < @a+x @b+y");
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["grammar"], 15);
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["mode"], "task");
+        let merge_in = value.get("merge_in").expect("merge_in");
+        assert_eq!(merge_in["sources"].as_array().expect("sources").len(), 2);
+        assert_eq!(merge_in["sources"][0]["marker"], "@a+x");
+        assert_eq!(merge_in["sources"][0]["route"], "a");
+        assert_eq!(merge_in["sources"][0]["block_id"], "x");
+        let kinds = value["spans"]
+            .as_array()
+            .expect("spans")
+            .iter()
+            .map(|span| span["kind"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert!(kinds.contains(&"merge_in_arrow"));
+        assert!(kinds.contains(&"merge_in_source"));
+        assert!(!kinds.contains(&"transfer_source"));
+        assert!(value.get("transfer").is_none());
+        // Ordinary tasks omit the additive key.
+        let plain = json("Just a task @work");
+        assert!(plain.get("merge_in").is_none());
+        assert!(plain.get("transfer").is_none());
+    }
+
+    #[test]
+    fn json_reports_merge_in_pending_need_without_diagnostic() {
+        let value = json("New task < @a");
+        assert_eq!(value["ok"], true);
+        assert!(value["needs"]
+            .as_array()
+            .expect("needs")
+            .iter()
+            .any(|need| need == "merge_in_source"));
+        assert!(value["spans"]
+            .as_array()
+            .expect("spans")
+            .iter()
+            .any(|span| span["kind"] == "interactive_placeholder"));
+        assert_eq!(
+            value["diagnostics"].as_array().expect("diagnostics").len(),
+            0
+        );
+        assert!(value.get("merge_in").is_some());
+    }
+
+    #[test]
+    fn json_reports_merge_in_rewrite_and_reparses() {
+        let value = json("New outcome < @foo+f s:3");
+        assert_eq!(value["ok"], true);
+        let diagnostic = value["diagnostics"]
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .find(|diagnostic| diagnostic["code"] == "merge_in_extra_text")
+            .expect("extra-text diagnostic");
+        let rewrite = diagnostic.get("rewrite").expect("rewrite");
+        assert_eq!(rewrite["label"], "Move before <");
+        let replacement = rewrite["replacement"].as_str().expect("replacement");
+        let reparsed = json(replacement);
+        assert_eq!(
+            reparsed["diagnostics"]
+                .as_array()
+                .expect("diagnostics")
+                .len(),
+            0
+        );
+        assert!(reparsed.get("merge_in").is_some());
     }
 }
