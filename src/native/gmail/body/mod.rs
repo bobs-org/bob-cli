@@ -1,5 +1,6 @@
 //! Private MIME candidate collection and the stable body result boundary.
 
+pub(super) mod html;
 pub(super) mod inert;
 pub(super) mod mime;
 
@@ -17,6 +18,11 @@ pub(crate) use inert::{
     prose_blocks, remote_image_link, render_blocks, verified_local_image_embed,
     Block, Inline, SafeUrl,
 };
+
+// Consumer: body-integration (bob-cli-hg.3.1.4) assembles HTML selection and
+// the public RenderedBody from this sanitized HTML result.
+#[allow(unused_imports)]
+pub(crate) use html::{render_html, HtmlRender};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BodySource {

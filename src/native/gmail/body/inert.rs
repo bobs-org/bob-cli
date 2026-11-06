@@ -547,6 +547,37 @@ fn render_text_multiline(raw: &str) -> String {
         .join("\n")
 }
 
+/// Render text that sits between renderer-owned inline nodes. Unlike a
+/// standalone prose line, whitespace at the edges is meaningful here:
+/// `hello <strong>there</strong>` must keep its space. Emit edge whitespace as
+/// a Markdown-safe HTML entity so it cannot become indentation or line-start
+/// syntax, while escaping the sender's visible text as usual.
+fn render_inline_text(raw: &str) -> String {
+    normalize_sender(raw)
+        .split('\n')
+        .map(|line| {
+            if line.trim().is_empty() {
+                return if line.is_empty() {
+                    String::new()
+                } else {
+                    "&#32;".to_string()
+                };
+            }
+            let leading = line.chars().next().is_some_and(char::is_whitespace);
+            let trailing =
+                line.chars().next_back().is_some_and(char::is_whitespace);
+            let escaped = escape_line_start(&escape_inline_text(line.trim()));
+            format!(
+                "{}{}{}",
+                if leading { "&#32;" } else { "" },
+                escaped,
+                if trailing { "&#32;" } else { "" }
+            )
+        })
+        .collect::<Vec<String>>()
+        .join("\n")
+}
+
 /// Render one raw sender string confined to a single renderer-owned line:
 /// collapse whitespace, then break inline hazards.
 fn render_text_single(raw: &str) -> String {
@@ -561,7 +592,7 @@ fn render_table_cell(raw: &str) -> String {
 
 fn render_inline(inline: &Inline, out: &mut String) {
     match inline {
-        Inline::Text(raw) => out.push_str(&render_text_multiline(raw)),
+        Inline::Text(raw) => out.push_str(&render_inline_text(raw)),
         Inline::Emphasis(children) => {
             out.push('*');
             render_inlines(children, out);
@@ -591,7 +622,9 @@ fn render_inlines(inlines: &[Inline], out: &mut String) {
         match inline {
             // Labels and other nested single-line contexts collapse internal
             // newlines instead of emitting raw line breaks.
-            Inline::Text(raw) => out.push_str(&render_text_single(raw)),
+            Inline::Text(raw) => {
+                out.push_str(&render_inline_text(&raw.replace('\n', " ")))
+            }
             Inline::Emphasis(children) => {
                 out.push('*');
                 render_inlines(children, out);
@@ -1290,6 +1323,24 @@ mod tests {
         assert!(!out.contains('!'), "image syntax in {out:?}");
         assert!(!out.contains("]("), "link syntax in {out:?}");
         assert!(out.contains("pic"), "alt text lost in {out:?}");
+    }
+
+    #[test]
+    fn structured_inline_text_keeps_spaces_around_renderer_formatting() {
+        let rendered = render_blocks(&[Block::Paragraph(vec![
+            Inline::Text("Hello ".to_string()),
+            Inline::Strong(vec![Inline::Text("friend".to_string())]),
+            Inline::Text(" world".to_string()),
+            Inline::Strong(vec![
+                Inline::Text("very ".to_string()),
+                Inline::Emphasis(vec![Inline::Text("nice".to_string())]),
+            ]),
+        ])]);
+        assert_eq!(
+            rendered,
+            "Hello&#32;**friend**&#32;world**very&#32;*nice***\n\n"
+        );
+        assert_scanners_clean(&rendered, &[]);
     }
 
     #[test]
