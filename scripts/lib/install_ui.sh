@@ -48,3 +48,39 @@ install_ui() {
 install_ui_mark_installed() {
   install_ui mark-installed --repo "$1" --dir "$2" >/dev/null 2>&1 || true
 }
+
+# Run a build through the live UI when it is safe to render.  Arguments are
+# STEP PARSER REPO DONE followed by the child command and its arguments.
+install_ui_run() {
+  local step="$1" parser="$2" repo="$3" done_text="$4"
+  shift 4
+  if [[ ! -t 1 || "${TERM:-}" == "dumb" || -n "${BOB_INSTALL_VERBOSE:-}" || \
+        "${BOB_INSTALL_UI:-}" == "0" ]]; then
+    "$@"
+    return $?
+  fi
+  if ! install_ui_python >/dev/null; then
+    "$@"
+    return $?
+  fi
+  local started_file
+  started_file="$(mktemp "${TMPDIR:-/tmp}/bob-install-ui-started.XXXXXX")" || {
+    "$@"
+    return $?
+  }
+  rm -f "$started_file"
+  local status=0
+  if install_ui run --step "$step" --parser "$parser" --repo "$repo" \
+      --done "$done_text" --started-file "$started_file" -- "$@"; then
+    status=0
+  else
+    status=$?
+  fi
+  if [[ ! -e "$started_file" ]]; then
+    rm -f "$started_file"
+    "$@"
+    return $?
+  fi
+  rm -f "$started_file"
+  return "$status"
+}

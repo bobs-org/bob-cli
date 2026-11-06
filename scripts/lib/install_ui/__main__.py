@@ -14,7 +14,7 @@ if sys.path[:1] != [_LIB_S]:
         sys.path.remove(_LIB_S)
     sys.path.insert(0, _LIB_S)
 
-from install_ui import commits, digest, state, term  # noqa: E402
+from install_ui import commits, digest, history, live, state, term  # noqa: E402
 
 
 def _warn(message: str) -> None:
@@ -162,6 +162,34 @@ def cmd_digest(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_record(args: argparse.Namespace) -> int:
+    result = history.record(
+        step=args.step,
+        phase=args.phase,
+        secs=args.secs,
+        outcome=args.outcome,
+        kind=args.kind,
+        waited=args.waited,
+        profile=args.profile,
+        toolchain=args.toolchain,
+        incremental=None if args.incremental == "unknown" else args.incremental == "on",
+    )
+    if not result.ok:
+        _warn(f"install_ui: {result.error}")
+        return 1
+    return 0
+
+
+def cmd_kind(args: argparse.Namespace) -> int:
+    kind = history.predict_kind(args.step, args.repo, args.profile)
+    sys.stdout.write(kind + "\n")
+    return 0
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    return live.run(args)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="install_ui",
@@ -170,55 +198,15 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", metavar="command")
     sub.required = True
 
-    mark = sub.add_parser(
-        "mark-installed",
-        help="Record a successful install watermark.",
-    )
-    mark.add_argument(
-        "--repo",
-        required=True,
-        metavar="NAME",
-        help="Repository name (bob-cli, bob-plugins, bob-mac-capture).",
-    )
-    mark.add_argument(
-        "--dir",
-        required=True,
-        dest="repo_dir",
-        metavar="DIR",
-        help="Checkout directory.",
-    )
-    mark.set_defaults(func=cmd_mark_installed)
-
-    water = sub.add_parser(
-        "watermark",
-        help="Print a recorded install watermark.",
-    )
-    water.add_argument(
-        "--repo",
-        required=True,
-        metavar="NAME",
-        help="Repository name.",
-    )
-    water.add_argument(
-        "--json",
-        action="store_true",
-        help="Print the watermark as JSON.",
-    )
-    water.set_defaults(func=cmd_watermark)
-
     dg = sub.add_parser(
         "digest",
         help="Print the What's new digest section.",
     )
-    dg.add_argument(
-        "--repo",
-        action="append",
-        default=[],
-        metavar="NAME=DIR",
-        help="Repository checkout; repeatable, sets display order.",
-    )
-    dg.add_argument("--pre", action="append", default=[], metavar="NAME=SHA")
+    dg.add_argument("--bob-bin", default="", metavar="PATH")
+    dg.add_argument("--color", action="append", default=[], metavar="NAME=ANSI")
+    dg.add_argument("--plugins", default="", metavar="NAME")
     dg.add_argument("--post", action="append", default=[], metavar="NAME=SHA")
+    dg.add_argument("--pre", action="append", default=[], metavar="NAME=SHA")
     dg.add_argument(
         "--pull",
         action="append",
@@ -226,12 +214,91 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="NAME=STATE",
         help="One of updated|current|warn|cloned|none.",
     )
-    dg.add_argument("--color", action="append", default=[], metavar="NAME=ANSI")
-    dg.add_argument("--plugins", default="", metavar="NAME")
-    dg.add_argument("--bob-bin", default="", metavar="PATH")
-    dg.add_argument("--steps", type=int, default=3, metavar="N")
     dg.add_argument("--record", default="", metavar="PATH")
+    dg.add_argument(
+        "--repo",
+        action="append",
+        default=[],
+        metavar="NAME=DIR",
+        help="Repository checkout; repeatable, sets display order.",
+    )
+    dg.add_argument("--steps", type=int, default=3, metavar="N")
     dg.set_defaults(func=cmd_digest)
+
+    kind = sub.add_parser(
+        "kind",
+        help="Predict the next build kind.",
+    )
+    kind.add_argument("-P", "--profile", default="local-install", metavar="NAME", help="Build profile.")
+    kind.add_argument("-r", "--repo", required=True, metavar="DIR", help="Repository directory.")
+    kind.add_argument("-s", "--step", required=True, metavar="NAME", help="Install step name.")
+    kind.set_defaults(func=cmd_kind)
+
+    mark = sub.add_parser(
+        "mark-installed",
+        help="Record a successful install watermark.",
+    )
+    mark.add_argument(
+        "-d", "--dir",
+        required=True,
+        dest="repo_dir",
+        metavar="DIR",
+        help="Checkout directory.",
+    )
+    mark.add_argument(
+        "-r", "--repo",
+        required=True,
+        metavar="NAME",
+        help="Repository name (bob-cli, bob-plugins, bob-mac-capture).",
+    )
+    mark.set_defaults(func=cmd_mark_installed)
+
+    record = sub.add_parser(
+        "record",
+        help="Append a timed install-step history row.",
+    )
+    record.add_argument("-i", "--incremental", choices=("on", "off", "unknown"), default="unknown", help="Cargo incremental mode.")
+    record.add_argument("-k", "--kind", default="rebuild", metavar="NAME", help="Predicted build kind.")
+    record.add_argument("-o", "--outcome", required=True, choices=("ok", "fail", "interrupted"), help="Step outcome.")
+    record.add_argument("-p", "--phase", required=True, metavar="NAME", help="Recorded phase name.")
+    record.add_argument("-P", "--profile", default="", metavar="NAME", help="Build profile.")
+    record.add_argument("-t", "--secs", required=True, type=float, metavar="SECONDS", help="Elapsed seconds.")
+    record.add_argument("-s", "--step", required=True, metavar="NAME", help="Install step name.")
+    record.add_argument("-T", "--toolchain", default="unknown", metavar="TEXT", help="Toolchain identity.")
+    record.add_argument("-w", "--waited", default=0.0, type=float, metavar="SECONDS", help="Time blocked on a build lock.")
+    record.set_defaults(func=cmd_record)
+
+    runner = sub.add_parser(
+        "run",
+        help="Run a build command with a live status line.",
+    )
+    runner.add_argument("-c", "--crate", metavar="NAME", help="Cargo crate to track (default: bob-obsidian).")
+    runner.add_argument("-d", "--done", metavar="TEXT", help="Successful completion text.")
+    runner.add_argument("-p", "--parser", required=True, choices=("cargo", "swiftpm"), help="Build output format.")
+    runner.add_argument("-P", "--profile", metavar="NAME", help="Build profile.")
+    runner.add_argument("-r", "--repo", required=True, metavar="DIR", help="Repository directory.")
+    runner.add_argument("-R", "--rows-file", metavar="PATH", help="Write the number of scrollback rows.")
+    runner.add_argument("-S", "--started-file", metavar="PATH", help="Touch after the child starts.")
+    runner.add_argument("-s", "--step", required=True, metavar="NAME", help="Install step name.")
+    runner.add_argument("command", nargs=argparse.REMAINDER, help="Child command after --.")
+    runner.set_defaults(func=cmd_run)
+
+    water = sub.add_parser(
+        "watermark",
+        help="Print a recorded install watermark.",
+    )
+    water.add_argument(
+        "-j", "--json",
+        action="store_true",
+        help="Print the watermark as JSON.",
+    )
+    water.add_argument(
+        "-r", "--repo",
+        required=True,
+        metavar="NAME",
+        help="Repository name.",
+    )
+    water.set_defaults(func=cmd_watermark)
     return parser
 
 
