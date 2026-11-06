@@ -1380,3 +1380,334 @@ fn transfer_records_serialize_merge_offers_top_copy_and_move_fields() {
     assert!(movement["status_name"].is_string(), "{movement}");
     assert_eq!(movement["title"], "Benchmark logical replication");
 }
+
+#[test]
+fn transfer_merge_origins_mark_payload_lines_only() {
+    let (_temp, vault, day) = setup_merge_vault("transfer-merge-origins-basic");
+    write_file(
+        &vault.join("inbox.md"),
+        &area_with_tasks(concat!(
+            "- [*] #task Benchmark logical replication [created:: 2026-10-28] ^bench\n",
+            "  - Try pgbench ^detail\n",
+        )),
+    );
+    let output = capture_json(
+        &vault,
+        &day,
+        "@work+pgdump @inbox+bench > @db+upgrade",
+        true,
+    );
+    assert_success(&output);
+    let json = json_body(&output);
+    let blocks = json["task_blocks"].as_array().expect("task blocks");
+    let target = blocks
+        .iter()
+        .find(|block| block["block_id"] == "upgrade")
+        .expect("merge target block");
+    assert_eq!(target["roles"], serde_json::json!(["merge_target"]));
+    let lines = target["lines"].as_array().expect("target lines");
+    assert!(lines[0].get("origin").is_none(), "{target}");
+    let pgdump_rows: Vec<&serde_json::Value> = lines
+        .iter()
+        .filter(|line| {
+            line.get("origin").and_then(|origin| origin.as_str())
+                == Some("work.md#^pgdump")
+        })
+        .collect();
+    let bench_rows: Vec<&serde_json::Value> = lines
+        .iter()
+        .filter(|line| {
+            line.get("origin").and_then(|origin| origin.as_str())
+                == Some("inbox.md#^bench")
+        })
+        .collect();
+    assert!(!pgdump_rows.is_empty(), "{target}");
+    assert!(bench_rows.len() >= 2, "{target}");
+    assert!(
+        bench_rows.iter().any(|line| line["text"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Benchmark logical replication")),
+        "{target}"
+    );
+    assert!(
+        bench_rows.iter().any(|line| line["text"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Try pgbench")),
+        "{target}"
+    );
+    let first_pgdump = lines
+        .iter()
+        .position(|line| {
+            line.get("origin").and_then(|o| o.as_str())
+                == Some("work.md#^pgdump")
+        })
+        .expect("pgdump origin");
+    let first_bench = lines
+        .iter()
+        .position(|line| {
+            line.get("origin").and_then(|o| o.as_str())
+                == Some("inbox.md#^bench")
+        })
+        .expect("bench origin");
+    assert!(first_pgdump < first_bench, "{target}");
+    for block in blocks.iter().filter(|block| {
+        block["roles"].as_array().is_some_and(|roles| {
+            roles.contains(&serde_json::json!("merge_source"))
+        })
+    }) {
+        for line in block["lines"].as_array().expect("source lines") {
+            assert!(line.get("origin").is_none(), "{block}");
+        }
+    }
+    for line in lines {
+        let text = line["text"].as_str().unwrap_or_default();
+        if text.contains("LINKED FROM") || text.contains("Existing idea") {
+            assert!(line.get("origin").is_none(), "{line}");
+        }
+    }
+}
+
+#[test]
+fn transfer_merge_origins_distinguish_duplicates_and_identical_text() {
+    let (_temp, vault, day) =
+        setup_merge_vault("transfer-merge-origins-duplicates");
+    write_file(
+        &vault.join("inbox.md"),
+        &area_with_tasks(concat!(
+            "- [ ] #task Same title ^aaa\n",
+            "  - Shared child\n",
+            "- [ ] #task Same title ^bbb\n",
+            "  - Shared child\n",
+        )),
+    );
+    write_file(
+        &vault.join("db.md"),
+        &area_with_tasks(concat!(
+            "- [ ] #task Target ^upgrade\n",
+            "  - Shared child\n",
+        )),
+    );
+    let output =
+        capture_json(&vault, &day, "@inbox+aaa @inbox+bbb > @db+upgrade", true);
+    assert_success(&output);
+    let json = json_body(&output);
+    let target = json["task_blocks"]
+        .as_array()
+        .expect("task blocks")
+        .iter()
+        .find(|block| block["block_id"] == "upgrade")
+        .expect("target")
+        .clone();
+    let lines = target["lines"].as_array().expect("lines").clone();
+    let aaa: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| {
+            line.get("origin").and_then(|o| o.as_str()) == Some("inbox.md#^aaa")
+        })
+        .map(|(index, _)| index)
+        .collect();
+    let bbb: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| {
+            line.get("origin").and_then(|o| o.as_str()) == Some("inbox.md#^bbb")
+        })
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(aaa.len(), 2, "{target}");
+    assert_eq!(bbb.len(), 2, "{target}");
+    assert!(aaa.iter().max() < bbb.iter().min(), "{target}");
+    let shared_without_origin = lines
+        .iter()
+        .filter(|line| {
+            line["text"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Shared child")
+                && line.get("origin").is_none()
+        })
+        .count();
+    assert!(shared_without_origin >= 1, "{target}");
+}
+
+#[test]
+fn transfer_merge_origins_follow_same_note_and_later_edits() {
+    let (_temp, vault, day) =
+        setup_merge_vault("transfer-merge-origins-same-note");
+    write_file(
+        &vault.join("db.md"),
+        &area_with_tasks(concat!(
+            "- [ ] #task Upgrade Postgres ^upgrade\n",
+            "- [ ] #task Add capture timing ^capture-time\n",
+            "  - Keep the timestamp with the capture\n",
+        )),
+    );
+    let output =
+        capture_json(&vault, &day, "@db+capture-time > @db+upgrade", true);
+    assert_success(&output);
+    let json = json_body(&output);
+    let target = json["task_blocks"]
+        .as_array()
+        .expect("task blocks")
+        .iter()
+        .find(|block| block["block_id"] == "upgrade")
+        .expect("target")
+        .clone();
+    assert!(
+        target["lines"]
+            .as_array()
+            .expect("lines")
+            .iter()
+            .any(|line| {
+                line.get("origin").and_then(|o| o.as_str())
+                    == Some("db.md#^capture-time")
+            }),
+        "{target}"
+    );
+
+    let (_temp, vault, day) =
+        setup_merge_vault("transfer-merge-origins-later-edit");
+    let output = capture_json(
+        &vault,
+        &day,
+        "@inbox+bench > @db+upgrade\n\n@db+upgrade Follow up",
+        false,
+    );
+    assert_success(&output);
+    let json = json_body(&output);
+    let target = json["task_blocks"]
+        .as_array()
+        .expect("task blocks")
+        .iter()
+        .find(|block| block["block_id"] == "upgrade")
+        .expect("merge target block")
+        .clone();
+    assert_eq!(
+        target["roles"],
+        serde_json::json!(["merge_target", "sub_bullet"]),
+        "{json}"
+    );
+    let lines = target["lines"].as_array().expect("lines");
+    assert!(
+        lines.iter().any(|line| {
+            line.get("origin").and_then(|o| o.as_str())
+                == Some("inbox.md#^bench")
+        }),
+        "{target}"
+    );
+    let follow_up = lines
+        .iter()
+        .find(|line| {
+            line["text"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Follow up")
+        })
+        .expect("follow-up row");
+    assert_eq!(follow_up["change"], "added", "{target}");
+    assert!(follow_up.get("origin").is_none(), "{target}");
+}
+
+#[test]
+fn transfer_merge_origins_cover_renamed_anchors_and_drawers() {
+    let (_temp, vault, day) =
+        setup_merge_vault("transfer-merge-origins-rename");
+    write_file(
+        &vault.join("inbox.md"),
+        &area_with_tasks(concat!(
+            "- [ ] #task Benchmark logical replication ^bench\n",
+            "  - Try pgbench ^detail\n",
+        )),
+    );
+    write_file(
+        &vault.join("db.md"),
+        &area_with_tasks(concat!(
+            "- [ ] #task Upgrade Postgres ^upgrade\n",
+            "  - Existing detail ^detail\n",
+        )),
+    );
+    let output = capture_json(&vault, &day, "@inbox+bench > @db+upgrade", true);
+    assert_success(&output);
+    let json = json_body(&output);
+    let target = json["task_blocks"]
+        .as_array()
+        .expect("task blocks")
+        .iter()
+        .find(|block| block["block_id"] == "upgrade")
+        .expect("target")
+        .clone();
+    let renamed = target["lines"]
+        .as_array()
+        .expect("lines")
+        .iter()
+        .find(|line| {
+            line["text"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Try pgbench")
+                && line.get("origin").and_then(|o| o.as_str())
+                    == Some("inbox.md#^bench")
+        })
+        .expect("renamed payload line keeps origin");
+    assert!(
+        !renamed["text"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("^detail "),
+        "descendant anchor was renamed: {renamed}"
+    );
+
+    let (_temp, vault, day) =
+        setup_merge_vault("transfer-merge-origins-drawer");
+    let output = capture_json(
+        &vault,
+        &day,
+        "@inbox+bench > @db+upgrade#future-work",
+        false,
+    );
+    assert_success(&output);
+    let json = json_body(&output);
+    let target = json["task_blocks"]
+        .as_array()
+        .expect("task blocks")
+        .iter()
+        .find(|block| block["block_id"] == "upgrade")
+        .expect("drawer target")
+        .clone();
+    assert!(
+        target["lines"]
+            .as_array()
+            .expect("lines")
+            .iter()
+            .any(|line| {
+                line.get("origin").and_then(|o| o.as_str())
+                    == Some("inbox.md#^bench")
+            }),
+        "{target}"
+    );
+
+    let (_temp, vault, day) =
+        setup_merge_vault("transfer-merge-origins-section");
+    let output =
+        capture_json(&vault, &day, "@inbox+bench > @db#future-work", false);
+    assert_success(&output);
+    let json = json_body(&output);
+    for block in json
+        .get("task_blocks")
+        .and_then(|blocks| blocks.as_array())
+        .cloned()
+        .unwrap_or_default()
+    {
+        for line in block["lines"].as_array().expect("lines") {
+            assert!(line.get("origin").is_none(), "{block}");
+        }
+    }
+    for section in json["section_blocks"].as_array().expect("sections") {
+        for line in section["lines"].as_array().expect("section lines") {
+            assert!(line.get("origin").is_none(), "{section}");
+        }
+    }
+}

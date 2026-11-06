@@ -238,6 +238,7 @@ impl PomodoroBlockTracker {
                     change: PomodoroBlockChange::Removed,
                     before: None,
                     reason: None,
+                    origin: None,
                 })
                 .collect();
             self.removed.push(PomodoroBlockJson {
@@ -493,6 +494,7 @@ impl PomodoroBlockTracker {
                         change: PomodoroBlockChange::Unchanged,
                         before: None,
                         reason: None,
+                        origin: None,
                     })
                     .collect()
             } else {

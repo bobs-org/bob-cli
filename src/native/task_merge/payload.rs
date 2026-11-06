@@ -241,6 +241,8 @@ pub(crate) fn prepare_task_merge(
             repaired_files: Vec::new(),
             read_paths: snapshot.notes.keys().cloned().collect(),
             warnings: Vec::new(),
+            insertion_dest: None,
+            insertion_origins: Vec::new(),
         });
     }
 
@@ -416,18 +418,42 @@ pub(crate) fn prepare_task_merge(
         .iter()
         .map(|payload| payload.contents.clone())
         .collect();
-    let (destination_postimage, _) = transplant::insert_fragments_at_byte(
-        &final_destination.contents,
-        final_destination.container.insertion_offset,
-        &fragments,
-        final_destination.container.empty_heading,
-    )
-    .ok_or_else(|| {
-        MergeError::new(
-            "merge_container_failed",
-            "destination insertion offset is not a character boundary",
+    let (destination_postimage, landing_lines) =
+        transplant::insert_fragments_at_byte(
+            &final_destination.contents,
+            final_destination.container.insertion_offset,
+            &fragments,
+            final_destination.container.empty_heading,
         )
-    })?;
+        .ok_or_else(|| {
+            MergeError::new(
+                "merge_container_failed",
+                "destination insertion offset is not a character boundary",
+            )
+        })?;
+    // Capture exact insertion extents in destination-postimage coordinates
+    // using the repaired fragments. Each payload group's lines share its
+    // source identity; coincident text stays distinct by range, never by
+    // search.
+    let mut insertion_origins = Vec::with_capacity(raw_payloads.len());
+    for ((raw, landing), prepared) in raw_payloads
+        .iter()
+        .zip(landing_lines.iter())
+        .zip(prepared_payloads.iter())
+    {
+        let Some(source) = sources.get(raw.source_index) else {
+            continue;
+        };
+        if source.prepared.disposition == SourceDisposition::Closed {
+            continue;
+        }
+        insertion_origins.push(super::types::PayloadInsertion {
+            source_path: source.prepared.path.clone(),
+            source_block_id: source.prepared.block_id.clone(),
+            start_line: *landing,
+            line_count: prepared.contents.lines().count().max(1),
+        });
+    }
 
     let source_postimages: BTreeMap<PathBuf, String> = source_ranges
         .keys()
@@ -463,6 +489,7 @@ pub(crate) fn prepare_task_merge(
     }
     let sources = sources.into_iter().map(|source| source.prepared).collect();
 
+    let insertion_dest = Some(final_destination.container.path.clone());
     Ok(PreparedMerge {
         container: Some(final_destination.container),
         sources,
@@ -472,6 +499,8 @@ pub(crate) fn prepare_task_merge(
         repaired_files: repaired.repaired_files,
         read_paths: snapshot.notes.keys().cloned().collect(),
         warnings,
+        insertion_dest,
+        insertion_origins,
     })
 }
 

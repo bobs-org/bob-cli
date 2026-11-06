@@ -128,6 +128,56 @@ fn from_relation_merges_a_picked_task_into_a_new_capture_task() {
 }
 
 #[test]
+fn relation_merge_task_block_lines_carry_source_origins() {
+    let (_temp, vault, day) = setup("bob-cli-relation-merge-origins");
+    write_file(
+        &vault.join("source.md"),
+        "- [ ] #task Source ^src\n\t- source note\n",
+    );
+    write_file(
+        &vault.join("target.md"),
+        "- [ ] #task Target ^target\n\t- target note\n",
+    );
+    let result = capture(
+        &vault,
+        &day,
+        "@source+src ~target:target|\"merged into\"",
+        true,
+    );
+    let result_item = item(&result);
+    assert_eq!(result_item["merges"][0]["outcome"], "merged");
+    let blocks = result["task_blocks"].as_array().expect("task blocks");
+    let target_block = blocks
+        .iter()
+        .find(|block| block["block_id"] == "target")
+        .expect("merge target block");
+    assert!(
+        target_block["roles"].as_array().is_some_and(
+            |roles| roles.contains(&serde_json::json!("merge_target"))
+        ),
+        "{target_block}"
+    );
+    let lines = target_block["lines"].as_array().expect("target lines");
+    assert!(
+        lines.iter().any(|line| {
+            line.get("origin").and_then(|origin| origin.as_str())
+                == Some("source.md#^src")
+        }),
+        "{target_block}"
+    );
+    assert!(lines[0].get("origin").is_none(), "{target_block}");
+    for block in blocks.iter().filter(|block| {
+        block["roles"].as_array().is_some_and(|roles| {
+            roles.contains(&serde_json::json!("merge_source"))
+        })
+    }) {
+        for line in block["lines"].as_array().expect("source lines") {
+            assert!(line.get("origin").is_none(), "{block}");
+        }
+    }
+}
+
+#[test]
 fn a_closed_merge_source_is_link_only() {
     let (_temp, vault, day) = setup("bob-cli-relation-merge-closed");
     write_file(

@@ -3524,6 +3524,7 @@ pub(super) fn plan_dependency_only_item(
         relation_merge_output = RelationMergeOutput {
             merges: close.merges,
             offer_rows: close.merge_offer_rows,
+            merge_line_origins: close.merge_line_origins,
         };
         pomodoro_refs.extend(close.pomodoro_refs);
         task_block_refs.extend(close.task_block_refs);

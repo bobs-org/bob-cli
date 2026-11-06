@@ -32,6 +32,8 @@ pub(super) struct RelationCloseReports {
     pub(super) completes: Vec<RelationCompleteJson>,
     pub(super) merges: Vec<crate::native::task_merge::MergeRecord>,
     pub(super) merge_offer_rows: Vec<TaskCompleteUnblockedJson>,
+    pub(super) merge_line_origins:
+        Vec<crate::native::task_merge::MergeLineOrigin>,
     pub(super) pomodoro_refs: Vec<PomodoroBlockRef>,
     pub(super) task_block_refs: Vec<TaskBlockRef>,
     pub(super) day_file: Option<String>,
@@ -335,13 +337,16 @@ pub(super) fn plan_relation_close_effects(
         updates,
         warnings,
     );
+    let mut task_block_refs = complete.task_block_refs;
+    task_block_refs.extend(merges.task_block_refs);
     Ok(RelationCloseReports {
         cancels,
         completes: complete.completes,
         merges: merges.records,
         merge_offer_rows: merges.offer_rows,
+        merge_line_origins: merges.line_origins,
         pomodoro_refs: complete.pomodoro_refs,
-        task_block_refs: complete.task_block_refs,
+        task_block_refs,
         day_file: complete.day_file,
     })
 }

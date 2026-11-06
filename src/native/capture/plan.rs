@@ -626,6 +626,10 @@ pub(super) fn plan_capture_batch_with_config_path(
                     &task_refs,
                 );
                 task_tracker.track_item(&planner, &pre_tasks, task_refs);
+                task_tracker.track_merge_origins(
+                    &request.bob_dir,
+                    &planned.result.relation_merge_output.merge_line_origins,
+                );
                 task_tracker.mark_transfer_move_origins(
                     &request.bob_dir,
                     &planned.result.transfer_move_output.moves,
@@ -758,6 +762,10 @@ pub(super) fn plan_capture_batch_with_config_path(
                 &task_refs,
             );
             task_tracker.track_item(&planner, &pre_tasks, task_refs);
+            task_tracker.track_merge_origins(
+                &request.bob_dir,
+                &planned.result.relation_merge_output.merge_line_origins,
+            );
             task_tracker.mark_transfer_move_origins(
                 &request.bob_dir,
                 &planned.result.transfer_move_output.moves,
@@ -3626,6 +3634,7 @@ pub(super) fn plan_capture_item(
         relation_merge_output = RelationMergeOutput {
             merges: close.merges,
             offer_rows: close.merge_offer_rows,
+            merge_line_origins: close.merge_line_origins,
         };
         pomodoro_refs.extend(close.pomodoro_refs);
         close_task_block_refs = close.task_block_refs;
@@ -5057,6 +5066,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
         relation_merge_output = RelationMergeOutput {
             merges: close.merges,
             offer_rows: close.merge_offer_rows,
+            merge_line_origins: close.merge_line_origins,
         };
         pomodoro_refs.extend(close.pomodoro_refs);
         close_task_block_refs = close.task_block_refs;

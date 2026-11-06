@@ -30,9 +30,10 @@ pub(crate) use retirement::{
 };
 #[allow(unused_imports)]
 pub(crate) use types::{
-    DailyNoteReadState, MergeConsequence, MergeContainer, MergeContext,
-    MergeError, MergeGesture, MergeOffer, MergeOutcome, MergePlan, MergeRecord,
-    MergeRelationPolicy, MergeRequest, MergeTargetDescriptor,
-    MergeTaskDescriptor, PreparedContainer, PreparedContainerKind,
-    PreparedMerge, PreparedPayload, PreparedSource, SourceDisposition,
+    format_merge_origin, DailyNoteReadState, MergeConsequence, MergeContainer,
+    MergeContext, MergeError, MergeGesture, MergeLineOrigin, MergeOffer,
+    MergeOutcome, MergePlan, MergeRecord, MergeRelationPolicy, MergeRequest,
+    MergeTargetDescriptor, MergeTaskDescriptor, PayloadInsertion,
+    PreparedContainer, PreparedContainerKind, PreparedMerge, PreparedPayload,
+    PreparedSource, SourceDisposition,
 };

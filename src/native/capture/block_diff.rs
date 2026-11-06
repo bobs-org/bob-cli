@@ -22,6 +22,11 @@ pub(super) struct BlockLineJson {
     /// so unrelated output stays byte-identical.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) reason: Option<&'static str>,
+    /// Merge provenance: `"<relative_path>#^<block_id>"` matching
+    /// `merges[].source` on rows a merge in this capture landed.
+    /// Omitted everywhere else. Additive and byte-identical when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) origin: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -140,6 +145,7 @@ pub(super) fn pair_lines(
                 change: BlockLineChange::Added,
                 before: None,
                 reason: None,
+                origin: None,
             })
             .collect();
     }
@@ -164,6 +170,7 @@ pub(super) fn pair_lines(
                 change: BlockLineChange::Changed,
                 before: Some(old_text.clone()),
                 reason: None,
+                origin: None,
             });
         }
         for (old_text, old_depth) in pending_old.drain(..).skip(shared) {
@@ -173,6 +180,7 @@ pub(super) fn pair_lines(
                 change: BlockLineChange::Removed,
                 before: None,
                 reason: None,
+                origin: None,
             });
         }
         for (new_text, new_depth) in pending_new.drain(..).skip(shared) {
@@ -182,6 +190,7 @@ pub(super) fn pair_lines(
                 change: BlockLineChange::Added,
                 before: None,
                 reason: None,
+                origin: None,
             });
         }
     };
@@ -196,6 +205,7 @@ pub(super) fn pair_lines(
                         change: BlockLineChange::Unchanged,
                         before: None,
                         reason: None,
+                        origin: None,
                     });
                 }
             }
@@ -234,6 +244,7 @@ pub(super) fn pair_lines(
                         change: BlockLineChange::Changed,
                         before: Some(before[old_index + offset].clone()),
                         reason: None,
+                        origin: None,
                     });
                 }
                 for offset in shared..old_len {
@@ -243,6 +254,7 @@ pub(super) fn pair_lines(
                         change: BlockLineChange::Removed,
                         before: None,
                         reason: None,
+                        origin: None,
                     });
                 }
                 for offset in shared..new_len {
@@ -252,6 +264,7 @@ pub(super) fn pair_lines(
                         change: BlockLineChange::Added,
                         before: None,
                         reason: None,
+                        origin: None,
                     });
                 }
             }

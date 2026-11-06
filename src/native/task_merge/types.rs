@@ -148,6 +148,40 @@ pub(crate) struct PreparedPayload {
     pub(crate) contents: String,
 }
 
+/// One inserted payload group's source identity and its exact destination
+/// extent in `PreparedMerge::postimages` coordinates (0-based lines).
+/// Internal only: never serialized, never written to vault bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PayloadInsertion {
+    pub(crate) source_path: PathBuf,
+    pub(crate) source_block_id: String,
+    pub(crate) start_line: usize,
+    pub(crate) line_count: usize,
+}
+
+/// One final merged line's provenance in `MergePlan::postimages`
+/// coordinates (0-based line). `origin` is
+/// `"<relative_path>#^<block_id>"` matching `merges[].source`.
+/// Internal only: never serialized as a separate key; the capture
+/// adapter folds it into `task_blocks[].lines[].origin`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MergeLineOrigin {
+    pub(crate) path: PathBuf,
+    pub(crate) line: usize,
+    pub(crate) origin: String,
+}
+
+/// Format a merge origin identity: vault-relative path with `/`
+/// separators plus `#^block`.
+pub(crate) fn format_merge_origin(path: &PathBuf, block_id: &str) -> String {
+    let relative = path
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect::<Vec<_>>()
+        .join("/");
+    format!("{relative}#^{block_id}")
+}
+
 /// Internal preparation stage. It carries payload postimages and the complete
 /// consulted note set, but is not a successful public merge plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,6 +194,8 @@ pub(crate) struct PreparedMerge {
     pub(crate) repaired_files: Vec<RepairedFile>,
     pub(crate) read_paths: BTreeSet<PathBuf>,
     pub(crate) warnings: Vec<String>,
+    pub(crate) insertion_dest: Option<PathBuf>,
+    pub(crate) insertion_origins: Vec<PayloadInsertion>,
 }
 
 /// Fully composed pure merge plan. Only changed postimages are present;
@@ -176,6 +212,8 @@ pub(crate) struct MergePlan {
     /// Every note consulted from the supplied snapshot. The adapter adds
     /// its vault scan-path set to this read set before guarded writes.
     pub(crate) read_paths: BTreeSet<PathBuf>,
+    #[serde(skip)]
+    pub(crate) merge_line_origins: Vec<MergeLineOrigin>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

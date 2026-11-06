@@ -817,10 +817,17 @@ pub(super) fn plan_explicit_merge(
         })
         .collect();
     warnings.extend(plan.warnings.into_iter().map(CaptureWarning::Text));
+    // Section destinations render as section_blocks, which carry no line
+    // origins. Task and drawer targets render as task_blocks with origins.
+    let merge_line_origins = match &merge_request.target {
+        crate::native::task_merge::MergeContainer::Section { .. } => Vec::new(),
+        _ => plan.merge_line_origins,
+    };
     Ok((
         RelationMergeOutput {
             merges: plan.records,
             offer_rows,
+            merge_line_origins,
         },
         plan.repaired_files,
     ))

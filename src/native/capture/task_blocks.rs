@@ -87,6 +87,10 @@ struct TrackedTaskBlockOrigin {
 pub(super) struct TaskBlockTracker {
     tracked: Vec<TrackedTaskBlock>,
     settings: note_tasks::NoteTaskSettings,
+    /// Merge provenance by absolute note path and 0-based final line.
+    /// Carried through same-note edits via Myers mapping; never derived
+    /// by text search. Distinct from `TrackedTaskBlockOrigin` (moved_from).
+    merge_origins: HashMap<PathBuf, BTreeMap<usize, String>>,
 }
 
 impl TaskBlockTracker {
@@ -94,7 +98,109 @@ impl TaskBlockTracker {
         Self {
             tracked: Vec::new(),
             settings,
+            merge_origins: HashMap::new(),
         }
+    }
+
+    /// Record merge line origins that landed in this item's post-state
+    /// text. Origins are already in current staged coordinates; existing
+    /// entries were forwarded through this item's edits by
+    /// [`track_item`](Self::track_item) before this call.
+    pub(super) fn track_merge_origins(
+        &mut self,
+        bob_dir: &Path,
+        origins: &[crate::native::task_merge::MergeLineOrigin],
+    ) {
+        for origin in origins {
+            // Section destinations never produce task-block origins.
+            // The engine still reports them; the adapter filters by only
+            // feeding task/drawer targets, but guard here as well by
+            // requiring the line to be inside a task block at finish.
+            let absolute = bob_dir.join(&origin.path);
+            self.merge_origins
+                .entry(absolute)
+                .or_default()
+                .entry(origin.line)
+                .or_insert_with(|| origin.origin.clone());
+        }
+    }
+
+    /// Forward existing merge origins through this item's same-note
+    /// edits using actual Myers mapping with deterministic Replace
+    /// pairing. Only notes the item changed pay for a map; inserted
+    /// lines gain no origin, deleted lines drop theirs.
+    fn forward_merge_origins(
+        &mut self,
+        planner: &CaptureBatchPlanner,
+        pre: &HashMap<PathBuf, Option<String>>,
+    ) {
+        if self.merge_origins.is_empty() {
+            return;
+        }
+        let mut remapped: HashMap<PathBuf, BTreeMap<usize, String>> =
+            HashMap::new();
+        for (target, lines) in std::mem::take(&mut self.merge_origins) {
+            let Some(pre_entry) = pre.get(&target) else {
+                // Untracked note (or remapped destination without a pre
+                // snapshot): keep positions; the ref merge below will
+                // re-anchor or the finish lookup will miss harmlessly.
+                remapped.insert(target, lines);
+                continue;
+            };
+            let pre_text = pre_entry.clone();
+            let post_text = planner.peek_text(&target);
+            let (Some(pre_text), Some(post_text)) = (pre_text, post_text)
+            else {
+                remapped.insert(target, lines);
+                continue;
+            };
+            if pre_text == post_text {
+                remapped.insert(target, lines);
+                continue;
+            }
+            let pre_lines: Vec<&str> = pre_text.lines().collect();
+            let post_lines: Vec<&str> = post_text.lines().collect();
+            let mut old_to_new: BTreeMap<usize, usize> = BTreeMap::new();
+            for op in similar::capture_diff_slices(
+                similar::Algorithm::Myers,
+                &pre_lines,
+                &post_lines,
+            ) {
+                match op {
+                    similar::DiffOp::Equal {
+                        old_index,
+                        new_index,
+                        len,
+                    } => {
+                        for offset in 0..len {
+                            old_to_new
+                                .insert(old_index + offset, new_index + offset);
+                        }
+                    }
+                    similar::DiffOp::Replace {
+                        old_index,
+                        old_len,
+                        new_index,
+                        new_len,
+                    } => {
+                        for offset in 0..old_len.min(new_len) {
+                            old_to_new
+                                .insert(old_index + offset, new_index + offset);
+                        }
+                    }
+                    similar::DiffOp::Delete { .. }
+                    | similar::DiffOp::Insert { .. } => {}
+                }
+            }
+            let mut kept = BTreeMap::new();
+            for (old_line, origin) in lines {
+                if let Some(new_line) = old_to_new.get(&old_line) {
+                    kept.insert(*new_line, origin);
+                }
+            }
+            remapped.insert(target, kept);
+        }
+        self.merge_origins = remapped;
     }
 
     /// Targets currently tracked, for the caller to snapshot before
@@ -134,6 +240,7 @@ impl TaskBlockTracker {
         pre: &HashMap<PathBuf, Option<String>>,
         refs: Vec<TaskBlockRef>,
     ) {
+        self.forward_merge_origins(planner, pre);
         // Group tracked indices by target so each changed note maps once.
         let mut by_target: BTreeMap<PathBuf, Vec<usize>> = BTreeMap::new();
         for (index, tracked) in self.tracked.iter().enumerate() {
@@ -434,6 +541,7 @@ impl TaskBlockTracker {
         planner: &CaptureBatchPlanner,
     ) -> Vec<TaskBlockJson> {
         let settings = self.settings.clone();
+        let merge_origins = self.merge_origins;
         let tracked_all = self.tracked;
         // Group tracked blocks by target so each note scans once, carrying
         // the global first-touch ordinal so output restores batch order
@@ -499,8 +607,9 @@ impl TaskBlockTracker {
                             .to_string()
                     })
                     .collect::<Vec<_>>();
+                let final_start = final_range.start;
                 let final_depths =
-                    block_depths(&final_lines, final_line, final_range);
+                    block_depths(&final_lines, final_line, final_range.clone());
                 // Map the final task line back to the original.
                 let (before_block, created) = if let Some(origin) =
                     tracked.origin.as_ref()
@@ -609,13 +718,33 @@ impl TaskBlockTracker {
                     // headline index is always 0 in the sliced block.
                     block_depths(&before_refs, 0, 0..before_block.len())
                 };
-                let lines = pair_lines(
+                let mut lines = pair_lines(
                     &before_block,
                     &before_depths,
                     &final_block,
                     &final_depths,
                     created,
                 );
+                // Attach merge origins by final line index, never by text
+                // search. Rows with `Removed` change have no final line.
+                // Only lines actually landed from a merge are in the map;
+                // T's own rows, mirrors, tombstones, and Pomodoro lines
+                // stay without an origin. Deterministic for duplicate text.
+                if let Some(origins) = merge_origins.get(&target) {
+                    let mut final_index = 0usize;
+                    for row in lines.iter_mut() {
+                        if row.change == BlockLineChange::Removed {
+                            continue;
+                        }
+                        if final_index < final_block.len() {
+                            let absolute = final_start + final_index;
+                            if let Some(origin) = origins.get(&absolute) {
+                                row.origin = Some(origin.clone());
+                            }
+                        }
+                        final_index += 1;
+                    }
+                }
                 ordered.push((
                     ordinal,
                     TaskBlockJson {

@@ -26,6 +26,8 @@ use crate::native::{
 pub(super) struct RelationMergeReports {
     pub(super) records: Vec<MergeRecord>,
     pub(super) offer_rows: Vec<TaskCompleteUnblockedJson>,
+    pub(super) line_origins: Vec<crate::native::task_merge::MergeLineOrigin>,
+    pub(super) task_block_refs: Vec<super::task_blocks::TaskBlockRef>,
 }
 
 /// Run configured merge-label effects against the same staged vault
@@ -190,7 +192,31 @@ pub(super) fn plan_relation_merges(
             warnings.push(CaptureWarning::Text(warning.clone()));
         }
         stage_merge_plan(planner, &request.bob_dir, &before, &plan)?;
+        forward_accumulated_origins_through_plan(
+            &mut reports.line_origins,
+            &before,
+            &plan,
+        );
         snapshot.notes.extend(plan.postimages.clone());
+        reports.line_origins.extend(plan.merge_line_origins.clone());
+        // Task-block cards for label merges use the same MergeTarget /
+        // MergeSource contract as `>` merges so the Mac consumes one
+        // shape. Built from staged text after this group's writes.
+        {
+            let output = super::output::RelationMergeOutput {
+                merges: plan.records.clone(),
+                offer_rows: Vec::new(),
+                merge_line_origins: plan.merge_line_origins.clone(),
+            };
+            reports.task_block_refs.extend(
+                super::transfer::merge_task_block_refs(
+                    planner,
+                    &request.bob_dir,
+                    &settings,
+                    &output,
+                ),
+            );
+        }
         for record in &plan.records {
             let effect = match record.outcome {
                 MergeOutcome::Merged => RelationMergeEffect::Merged,
@@ -431,6 +457,78 @@ fn merge_offer_row(
             settled_ordinal: None,
         }),
         relation: None,
+    }
+}
+
+/// Forward previously accumulated merge line origins through one merge
+/// plan's postimage edits using actual Myers mapping with Replace pairing.
+/// New origins from the plan itself are already in post coordinates and
+/// are added by the caller after this runs.
+fn forward_accumulated_origins_through_plan(
+    accumulated: &mut Vec<crate::native::task_merge::MergeLineOrigin>,
+    before: &crate::native::task_move::VaultSnapshot,
+    plan: &crate::native::task_merge::MergePlan,
+) {
+    if accumulated.is_empty() {
+        return;
+    }
+    use std::collections::BTreeMap;
+    for (path, new_text) in &plan.postimages {
+        let Some(old_text) = before.notes.get(path) else {
+            continue;
+        };
+        if old_text == new_text {
+            continue;
+        }
+        let old_lines: Vec<&str> = old_text.lines().collect();
+        let new_lines: Vec<&str> = new_text.lines().collect();
+        let mut old_to_new: BTreeMap<usize, usize> = BTreeMap::new();
+        for op in similar::capture_diff_slices(
+            similar::Algorithm::Myers,
+            &old_lines,
+            &new_lines,
+        ) {
+            match op {
+                similar::DiffOp::Equal {
+                    old_index,
+                    new_index,
+                    len,
+                } => {
+                    for offset in 0..len {
+                        old_to_new
+                            .insert(old_index + offset, new_index + offset);
+                    }
+                }
+                similar::DiffOp::Replace {
+                    old_index,
+                    old_len,
+                    new_index,
+                    new_len,
+                } => {
+                    for offset in 0..old_len.min(new_len) {
+                        old_to_new
+                            .insert(old_index + offset, new_index + offset);
+                    }
+                }
+                similar::DiffOp::Delete { .. }
+                | similar::DiffOp::Insert { .. } => {}
+            }
+        }
+        let mut kept = Vec::with_capacity(accumulated.len());
+        for origin in accumulated.drain(..) {
+            if origin.path != *path {
+                kept.push(origin);
+                continue;
+            }
+            if let Some(mapped) = old_to_new.get(&origin.line) {
+                kept.push(crate::native::task_merge::MergeLineOrigin {
+                    path: origin.path,
+                    line: *mapped,
+                    origin: origin.origin,
+                });
+            }
+        }
+        *accumulated = kept;
     }
 }
 

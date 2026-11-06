@@ -27,9 +27,10 @@ use super::{
         SourceOutcome,
     },
     types::{
-        DailyNoteReadState, MergeConsequence, MergeContainer, MergeContext,
-        MergeError, MergeGesture, MergeOffer, MergeOutcome, MergePlan,
-        MergeRecord, MergeRequest, MergeTargetDescriptor, MergeTaskDescriptor,
+        format_merge_origin, DailyNoteReadState, MergeConsequence,
+        MergeContainer, MergeContext, MergeError, MergeGesture,
+        MergeLineOrigin, MergeOffer, MergeOutcome, MergePlan, MergeRecord,
+        MergeRequest, MergeTargetDescriptor, MergeTaskDescriptor,
         PreparedMerge,
     },
 };
@@ -306,6 +307,8 @@ pub(crate) fn plan_task_merge(
     }
 
     enrich_target_lines(&mut records, &staged, context);
+    let merge_line_origins =
+        forward_insertion_origins(prepared.as_ref(), &staged);
     let postimages = staged
         .into_iter()
         .filter(|(path, contents)| snapshot.notes.get(path) != Some(contents))
@@ -341,6 +344,7 @@ pub(crate) fn plan_task_merge(
         repaired_files,
         warnings,
         read_paths,
+        merge_line_origins,
     })
 }
 
@@ -895,6 +899,106 @@ fn enrich_target_lines(
             }
         }
     }
+}
+
+/// Forward insertion extents from `PreparedMerge::postimages` coordinates
+/// to the final staged coordinates after retirement, mirror, dependency,
+/// and offer edits. Uses actual Myers edit mapping with deterministic
+/// Replace pairing: Equal runs map directly, Replace pairs the first
+/// `min(old, new)` lines, Deletes drop, Inserts gain no origin. Never
+/// searches payload text or source titles.
+fn forward_insertion_origins(
+    prepared: Option<&PreparedMerge>,
+    staged: &BTreeMap<PathBuf, String>,
+) -> Vec<MergeLineOrigin> {
+    let Some(prepared) = prepared else {
+        return Vec::new();
+    };
+    let Some(dest) = prepared.insertion_dest.as_ref() else {
+        return Vec::new();
+    };
+    if prepared.insertion_origins.is_empty() {
+        return Vec::new();
+    }
+    let Some(old_text) = prepared.postimages.get(dest) else {
+        return Vec::new();
+    };
+    let Some(new_text) = staged.get(dest) else {
+        return Vec::new();
+    };
+    if old_text == new_text {
+        return prepared
+            .insertion_origins
+            .iter()
+            .flat_map(|insertion| {
+                let origin = format_merge_origin(
+                    &insertion.source_path,
+                    &insertion.source_block_id,
+                );
+                (insertion.start_line
+                    ..insertion.start_line + insertion.line_count)
+                    .map(move |old_line| MergeLineOrigin {
+                        path: dest.clone(),
+                        line: old_line,
+                        origin: origin.clone(),
+                    })
+            })
+            .collect();
+    }
+    let old_lines: Vec<&str> = old_text.lines().collect();
+    let new_lines: Vec<&str> = new_text.lines().collect();
+    let mut old_to_new: BTreeMap<usize, usize> = BTreeMap::new();
+    for op in similar::capture_diff_slices(
+        similar::Algorithm::Myers,
+        &old_lines,
+        &new_lines,
+    ) {
+        match op {
+            similar::DiffOp::Equal {
+                old_index,
+                new_index,
+                len,
+            } => {
+                for offset in 0..len {
+                    old_to_new.insert(old_index + offset, new_index + offset);
+                }
+            }
+            similar::DiffOp::Replace {
+                old_index,
+                old_len,
+                new_index,
+                new_len,
+            } => {
+                for offset in 0..old_len.min(new_len) {
+                    old_to_new.insert(old_index + offset, new_index + offset);
+                }
+            }
+            similar::DiffOp::Delete { .. } | similar::DiffOp::Insert { .. } => {
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for insertion in &prepared.insertion_origins {
+        let origin = format_merge_origin(
+            &insertion.source_path,
+            &insertion.source_block_id,
+        );
+        for old_line in
+            insertion.start_line..insertion.start_line + insertion.line_count
+        {
+            if let Some(new_line) = old_to_new.get(&old_line) {
+                out.push(MergeLineOrigin {
+                    path: dest.clone(),
+                    line: *new_line,
+                    origin: origin.clone(),
+                });
+            }
+        }
+    }
+    out.sort_by(|left, right| {
+        (left.path.clone(), left.line).cmp(&(right.path.clone(), right.line))
+    });
+    out
 }
 
 fn target_line(

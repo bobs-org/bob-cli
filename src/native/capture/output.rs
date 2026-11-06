@@ -923,6 +923,9 @@ pub(super) struct RelationMergeOutput {
     pub(super) merges: Vec<crate::native::task_merge::MergeRecord>,
     #[serde(rename = "merge_offers", skip_serializing_if = "Vec::is_empty")]
     pub(super) offer_rows: Vec<TaskCompleteUnblockedJson>,
+    #[serde(skip)]
+    pub(super) merge_line_origins:
+        Vec<crate::native::task_merge::MergeLineOrigin>,
 }
 
 /// Note-pull payload on a lone `@route` item
