@@ -35,6 +35,7 @@ pub(crate) fn run(args: &LoginArgs) -> i32 {
         LoginUi::new(crate::native::google::GMAIL, args.format.is_json());
     match login(args, &config, &ui_login) {
         Ok(report) => {
+            super::worker::remember_login(&report.account);
             print_report(&report, &ui_login);
             0
         }

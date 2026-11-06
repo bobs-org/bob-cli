@@ -1178,7 +1178,7 @@ uses the normal successor-offer shape with `trigger: "note_pull"`, an empty
 `pull_in.groups[]` row carries `note` and Bob-authored copy. Capture remains
 unversioned; `capture-parse` reports `mode: "note_pull"`, `needs: []`, no
 diagnostics, the route spans, and the ordinary list summary with
-`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 15`.
+`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 16`.
 See [task-dependencies.md §12.20](task-dependencies.md#1220-note-pull-offers)
 for the JSON, copy, gate, and protocol contracts, and
 [§12.21](task-dependencies.md#1221-np-note-pull-vectors) for the NP vectors.
@@ -1357,6 +1357,43 @@ two-line clipboard writes:
 ```
 
 See [Clipboard notes](#clipboard-notes).
+
+### Gmail links
+
+Paste a Gmail thread URL alone or inside task text. It stays a task, including
+when public-link routing is enabled. Bob preserves the fragment and ignores
+Gmail's browser account selector; `gmail.account` selects the account.
+
+```bash
+bob capture 'Reply to Dana https://mail.google.com/mail/#all/1a0b9eb2cc26ab96'
+bob capture -d -f json 'https://mail.google.com/mail/#all/1a0b9eb2cc26ab96'
+```
+
+Parsing, preview, and submit make no Gmail or gog calls. A thread already saved
+for the configured account becomes its labelled `[[mail/…|✉️ …]]` link inside
+the capture transaction. A Markdown link keeps its authored label. Code and
+existing wikilinks stay untouched. An unsaved thread remains a URL at submit;
+a detached worker then saves the thread and replaces the URL. Refused,
+unresolvable, or failed URLs stay as typed. Linking adds no freshness stamp.
+
+Each item's optional `gmail` array contains `url`, `verdict`, and `message`,
+plus `thread_id`, `note`, `link`, and `date_hint` when available. Verdicts are
+`known`, `decoded`, `search`, `unresolved`, and `refused`. `message` is the
+same offline explanation printed in human output; `date_hint` is an RFC 3339
+estimate derived from a thread id, not a confirmed message date. No email body
+is returned. Dry-run shows the same saved-link substitution without writing or
+starting a worker.
+
+The worker starts only after a successful capture write, on `gmail.writer`
+when configured, with a local login receipt from `bob gmail login`. Run login
+once after upgrading if your grant predates this feature. Logout clears the
+receipt. `BOB_GMAIL_KICK=off` (also `0` or `false`) disables background linking.
+The host-local queue contains only vault and note paths, under
+`$XDG_STATE_HOME/bob-cli/gmail/`; one worker drains it, including captures that
+arrive while it runs. `worker.log` retains a bounded log. Without a worker,
+the URL waits for an explicit `bob gmail link NOTE` or backfill.
+
+See [Link emails to tasks](guides/link-emails-to-tasks.md) for setup and recovery.
 
 ### Saving links to your reading queue
 
@@ -6613,7 +6650,7 @@ merge hand-off offer rows, omitted when empty) and `repaired_files[]`;
 ordinary items omit the empty fields. Merge-only offers get their own Pull-In
 copy (`Link “T” in place of “S”` / `Link “T” in place of N merged tasks`), and
 the CLI's dependent rows print titles from `consequences`.
-`capture-parse` and `capture-complete` report grammar revision 15. Grammar 11
+`capture-parse` and `capture-complete` report grammar revision 16. Grammar 11
 added the move-choice markers; grammar 12 adds the `x=` past-Pomodoro syntax; grammar 15 adds `<` merge-in grammar, editor parse, and teaching refusals. Complete clauses execute atomically through the explicit merge engine.
 `schema_version` stays 1 (see [Capture-language
 revision](reference/compatibility.md#capture-language-revision)).
@@ -7996,7 +8033,7 @@ bob capture-parse [-f|--format human|json] [-R|--no-ref] [--] [TEXT]...
 
 Reports the authoritative capture grammar's reading of `TEXT` so an editor can
 highlight capture syntax and Obsidian wikilinks while the user is still typing.
-Success JSON includes top-level `grammar: 15` while keeping `schema_version: 1`.
+Success JSON includes top-level `grammar: 16` while keeping `schema_version: 1`.
 It shares the tokenizer, terminal-marker extraction, and `@token`
 classification with `bob capture`. Parse does not validate vault targets
 or execute the draft, so a successful parse does not guarantee a capture
@@ -8275,6 +8312,12 @@ JSON output is a single versioned object:
 }
 ```
 
+Gmail URLs add a `gmail_url` span over the URL bytes (excluding angle or
+Markdown wrappers). Its optional `key` is the decoded thread hex, `title` is
+the saved label, and `gmail: {verdict, date_hint?}` contains offline metadata.
+Schema version stays 1; grammar 16 introduces these spans and saved-thread
+substitution on submit. Gmail links never become `ref` items.
+
 `input` is the raw text as received, before whitespace normalization. `body` is
 the normalized capture body after terminal `s:<N>`, `$<N>`, and applicable
 `%c` directives and the recognized `@...` token are removed, matching what `bob capture` would
@@ -8478,7 +8521,7 @@ non-overlapping, and always on a character boundary. Each `kind` is one of
 `sub_bullet_block_id`, `drawer`, `drawer_bullet`, `task_toggle_route`,
 `task_toggle_block_id`, `task_toggle_explicit_toggle`, `task_type`, `global_route`,
 `schedule`, `priority`, `clipboard`,
-`ref_url`, `ref_listen`,
+`ref_url`, `gmail_url`, `ref_listen`,
 `interactive_placeholder`, `project_task_link_marker`, `project_task_block_id`, `dependency_sigil`, `dependency_note`, `dependency_block_id`, `blocked_task_sigil`, `blocked_task_note`, `blocked_task_block_id`, `task_complete_sigil`, `task_complete_note`, `task_complete_block_id`, `wikilink_delimiter`, `wikilink_target`,
 `wikilink_heading`, `wikilink_block_id`, `wikilink_alias`,
 `wikilink_task_delimiter`, or `wikilink_task_query`. A first-level
@@ -9259,7 +9302,7 @@ the menu never reads the clipboard. Disabled rows explain composition rules
 such as `%n` beside a route, `%t` on a later item, and `%c` in a template.
 
 Every successful `capture-parse` and `capture-complete` response includes
-top-level `grammar: 15`; `schema_version` remains 1. An empty query opened by a
+top-level `grammar: 16`; `schema_version` remains 1. An empty query opened by a
 bare `#` or `%` adds `initial_selection: "none"`, so clients leave every row
 unselected. The field is omitted for typed queries and other contexts.
 

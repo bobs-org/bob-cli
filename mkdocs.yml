@@ -177,6 +177,7 @@ nav:
           - Drain Google Keep into tasks: guides/drain-google-keep.md
           - Connect Google Calendar: guides/connect-google-calendar.md
           - Connect Google Mail: guides/connect-google-mail.md
+          - Link emails to tasks: guides/link-emails-to-tasks.md
       - Plan the day:
           - Run the morning review walk: guides/run-morning-review.md
           - Keep Ready lanes under their cap: guides/keep-ready-under-cap.md

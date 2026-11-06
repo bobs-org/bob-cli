@@ -127,6 +127,7 @@ pub(super) fn plan_task_complete_item(
             consumed_links: Vec::new(),
             toggle_task_description: None,
             r#ref: None,
+            gmail: Vec::new(),
             task_complete: Some(summary),
             link_guard: None,
             dropped_dependencies: Vec::new(),

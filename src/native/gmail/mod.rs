@@ -7,12 +7,14 @@
 // dead code until outer mail-note, gmail-save, and search-peek consumers land.
 #[allow(dead_code)]
 pub(crate) mod body;
+pub(crate) mod capture;
 pub(crate) mod cli;
 mod compose;
 mod config;
 mod doctor;
 mod gog;
 pub(crate) mod list;
+pub(crate) mod worker;
 pub(crate) use crate::native::google::{
     account, client, client_setup, login_ui, signin,
 };

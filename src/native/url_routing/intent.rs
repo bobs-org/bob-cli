@@ -56,6 +56,10 @@ pub(crate) fn classify_token(token: &str) -> Option<UrlIntent> {
     if original.is_empty() || original.chars().any(char::is_whitespace) {
         return None;
     }
+    // Gmail fragments carry identity; never clean or enqueue them as references.
+    if crate::native::gmail::ids::parse_gmail_url(&original).is_some() {
+        return None;
+    }
     let cleaned = validate_and_clean(&original).ok()?;
     let parsed = url::Url::parse(&cleaned.cleaned).ok()?;
     let scheme = parsed.scheme().to_lowercase();

@@ -74,6 +74,7 @@ pub(crate) enum SpanKind {
     RelationLabel,
     /// A whole-item bare URL admitted by the routing policy.
     RefUrl,
+    GmailUrl,
     TaskCompleteSigil,
     TaskCompleteNote,
     TaskCompleteBlockId,
@@ -158,6 +159,7 @@ impl SpanKind {
             Self::RelationLabelSeparator => "relation_label_separator",
             Self::RelationLabel => "relation_label",
             Self::RefUrl => "ref_url",
+            Self::GmailUrl => "Gmail link",
             Self::TaskCompleteSigil => "task_complete_sigil",
             Self::TaskCompleteNote => "task_complete_note",
             Self::TaskCompleteBlockId => "task_complete_block_id",

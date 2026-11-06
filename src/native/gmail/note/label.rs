@@ -66,7 +66,7 @@ fn truncate_label(raw: &str, limit: usize) -> String {
 /// Obsidian aliases cannot safely contain these delimiters. Break the
 /// forbidden pairs without changing ordinary labels; the zero-width
 /// non-joiner is invisible when rendered.
-fn alias_safe(text: &str) -> String {
+pub(crate) fn alias_safe(text: &str) -> String {
     text.replace('|', "¦")
         .replace("[[", "[\u{200c}[")
         .replace("]]", "]\u{200c}]")

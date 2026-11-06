@@ -42,6 +42,7 @@ fn logout(
         confirm_logout(&account)?;
     }
     gog.auth_remove(&account)?;
+    super::worker::forget_login(&account);
     Ok(account)
 }
 

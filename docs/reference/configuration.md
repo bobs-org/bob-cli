@@ -383,6 +383,8 @@ See the [capture command reference](cli/capture.md) and
 | `BOB_GMAIL_BROWSER` | `open` on macOS, `xdg-open` elsewhere | Non-empty value selects browser sign-in and names the browser opener executable. |
 | `BOB_GMAIL_CONSENT_SECS` | 600 seconds | Positive integer override for the interactive Google consent window. |
 | `BOB_GMAIL_GOG` | `gog` resolved through `PATH` | Executable used by `bob gmail`; tests point this at a fake. Must be gog ≥ v0.44.0. |
+| `BOB_GMAIL_KICK` | Eligible capture starts the background linker | Exact values `off`, `0`, or `false` suppress both enqueue and worker launch. URLs remain available to explicit `bob gmail link` runs. |
+| `BOB_GMAIL_LINK_WORKER` | Unset | Internal launch marker: `1` makes `bob gmail link` drain the host-local capture queue under its single-worker lock. Set by capture, not needed for manual linking. |
 
 See [reference jobs](../ref-jobs.md), [reference intake](../highlights-ref-sync.md),
 [web article capture](../highlights-clip.md#hosts-and-browsers), and the

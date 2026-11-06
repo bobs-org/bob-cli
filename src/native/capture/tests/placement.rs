@@ -361,6 +361,7 @@ fn json_success_shape_is_stable() {
             consumed_links: Vec::new(),
             task_complete: None,
             r#ref: None,
+            gmail: Vec::new(),
             toggle_task_description: None,
             link_guard: None,
             dropped_dependencies: Vec::new(),

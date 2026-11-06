@@ -890,6 +890,7 @@ fn planned_item_from_pomodoro_link_plan(
             task_complete: None,
             toggle_task_description: Some(link.task_description.clone()),
             r#ref: None,
+            gmail: Vec::new(),
             link_guard,
             dropped_dependencies: link.dropped_dependencies.clone(),
             blocks_line_updates: link.blocks_updates.clone(),

@@ -35,6 +35,7 @@ pub(crate) fn bob_command() -> Command {
     let mut command = Command::new(BOB_BIN);
     command.env("BOB_CONFIG_FILE", TEST_MISSING_CONFIG_FILE);
     command.env("BOB_REF_JOBS_KICK", "off");
+    command.env("BOB_GMAIL_KICK", "off");
     command.env("BOB_WEB_CLIP_ADAPTER", TEST_MISSING_WEB_CLIP_ADAPTER);
     // Hermetic clipboard display: a stale SSH-forwarded DISPLAY (or
     // WAYLAND_DISPLAY) or a tmux session would otherwise send spawned

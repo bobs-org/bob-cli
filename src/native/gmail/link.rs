@@ -111,6 +111,13 @@ struct LinkOutcome {
 
 /// Run the link command.
 pub(crate) fn run(args: &LinkArgs) -> i32 {
+    if super::worker::is_worker() {
+        return super::worker::run();
+    }
+    run_direct(args)
+}
+
+pub(super) fn run_direct(args: &LinkArgs) -> i32 {
     match run_inner(args) {
         Ok(outcome) => {
             print_report(args, &outcome);
@@ -684,7 +691,10 @@ fn relative_slashes(vault: &Path, absolute: &Path) -> String {
 /// cannot be swapped for a wikilink without breaking the link syntax, so it
 /// is left as typed. Markdown-link wrappers carry their own range and are
 /// replaced whole, keeping the user's label.
-fn inline_link_destination(text: &str, found_url: &ids::GmailUrlMatch) -> bool {
+pub(super) fn inline_link_destination(
+    text: &str,
+    found_url: &ids::GmailUrlMatch,
+) -> bool {
     if !matches!(found_url.wrapper, GmailWrapper::Bare | GmailWrapper::Angle) {
         return false;
     }

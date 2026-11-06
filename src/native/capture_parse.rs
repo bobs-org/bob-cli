@@ -73,6 +73,7 @@ pub(crate) fn parse_template_protocol(text: &str) -> TemplateProtocolParse {
             key: span.key.clone(),
             directive: span.directive,
             count: span.count,
+            gmail: None,
         })
         .collect();
     TemplateProtocolParse { route, spans }
@@ -121,6 +122,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         has_global_destination: false,
     };
     let mut result = CaptureParseResult::new(raw_text, &options);
+    attach_gmail_spans(&mut result);
     let theme_keys = theme_component_keys(&result);
     if !theme_keys.is_empty() {
         let bob_dir = super::env::bob_dir();
@@ -175,8 +177,10 @@ command also best-effort reads the configured vault's theme catalog and adds \
 theme refs; if the catalog is unavailable, parsing still succeeds without \
 those refs. It never writes to the vault or reads the clipboard, and takes no \
 --bob-dir. A '%c' directive still succeeds without reading the clipboard.\n\n\
-Success JSON reports `grammar: 15` for the capture-language revision while \
-`schema_version` stays 1.\n\n\
+Success JSON reports `grammar: 16` for the capture-language revision while \
+`schema_version` stays 1. Gmail URLs add `gmail_url` spans with offline \
+`gmail: {verdict, date_hint?}`, decoded thread `key`, and saved-label `title`. \
+No Gmail calls are made.\n\n\
 A lone task-list header `@route` with no section, bullets, or other text \
 reports mode `note_pull`; `@route` with bullets remains a task list, and a \
 lone `@route#section` remains an empty-list refusal.\n\n\
@@ -1014,6 +1018,51 @@ pub(crate) struct CaptureParseSpan {
     /// History count for `%c<N>` when N ≥ 2. Omitted for `%c` / `%c1`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) gmail: Option<super::gmail::capture::SpanMetadata>,
+}
+
+fn attach_gmail_spans(result: &mut CaptureParseResult) {
+    let matches = super::gmail::ids::find_gmail_urls(&result.input);
+    if matches.is_empty() {
+        return;
+    }
+    let context =
+        super::gmail::capture::OfflineContext::load(&super::env::bob_dir());
+    for found in matches {
+        let preview = context.preview(&found);
+        // Underline the URL itself, keeping authored Markdown labels outside it.
+        let start = found.start
+            + result.input[found.start..found.end]
+                .find(&found.url)
+                .unwrap_or(0);
+        let end = start + found.url.len();
+        let mut span = wire_spans(vec![Span {
+            start,
+            end,
+            kind: capture_language::SpanKind::GmailUrl,
+            project_note: None,
+            title: None,
+            key: None,
+        }])
+        .remove(0);
+        span.key = preview.thread_id;
+        span.title = (preview.verdict == "known").then(|| {
+            preview
+                .message
+                .trim_end_matches(" · already saved")
+                .to_string()
+        });
+        span.gmail = Some(super::gmail::capture::SpanMetadata {
+            verdict: preview.verdict,
+            date_hint: preview.date_hint,
+        });
+        result
+            .spans
+            .retain(|existing| existing.end <= start || existing.start >= end);
+        result.spans.push(span);
+    }
+    result.spans.sort_by_key(|span| (span.start, span.end));
 }
 
 fn is_theme_name_span(span: &CaptureParseSpan) -> bool {
@@ -1998,6 +2047,7 @@ fn wire_spans(spans: Vec<Span>) -> Vec<CaptureParseSpan> {
             key: span.key.clone(),
             directive: None,
             count: None,
+            gmail: None,
         })
         .collect()
 }
@@ -2038,6 +2088,7 @@ fn fill_span_gaps(spans: &mut Vec<CaptureParseSpan>, candidates: Vec<Span>) {
                     key: candidate.key.clone(),
                     directive: None,
                     count: None,
+                    gmail: None,
                 });
             }
             cursor = cursor.max(end);
@@ -2061,6 +2112,7 @@ fn fill_span_gaps(spans: &mut Vec<CaptureParseSpan>, candidates: Vec<Span>) {
                 key: candidate.key.clone(),
                 directive: None,
                 count: None,
+                gmail: None,
             });
         }
         spans.append(&mut additions);
@@ -2163,6 +2215,7 @@ fn template_spans(
                     key: span.key.clone(),
                     directive: None,
                     count: None,
+                    gmail: None,
                 });
             }
             cursor = cursor.max(placeholder.range.end);
@@ -2183,6 +2236,7 @@ fn template_spans(
                 key: span.key.clone(),
                 directive: None,
                 count: None,
+                gmail: None,
             });
         }
     }
@@ -2203,6 +2257,7 @@ fn template_spans(
             key: None,
             directive: None,
             count: None,
+            gmail: None,
         });
     }
     result.extend(analysis.placeholders.iter().map(|placeholder| {
@@ -2221,6 +2276,7 @@ fn template_spans(
             key: None,
             directive: None,
             count: None,
+            gmail: None,
         }
     }));
     result.extend(rows.iter().flat_map(|row| {
@@ -2239,6 +2295,7 @@ fn template_spans(
             key: None,
             directive: None,
             count: None,
+            gmail: None,
         })
     }));
     result.sort_by_key(|span| (span.start, span.end));
@@ -3701,7 +3758,7 @@ mod tests {
         let value = json("Call bank @Cash+");
         assert_eq!(value["ok"], true);
         assert_eq!(value["schema_version"], 1);
-        assert_eq!(value["grammar"], 15);
+        assert_eq!(value["grammar"], 16);
         assert_eq!(value["input"], "Call bank @Cash+");
         assert_eq!(value["body"], "Call bank");
         assert_eq!(value["mode"], "incomplete");
@@ -3764,7 +3821,7 @@ mod tests {
         // "start a list" from it.
         let value = json("@sase");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 15);
+        assert_eq!(value["grammar"], 16);
         assert_eq!(value["mode"], "note_pull");
         assert_eq!(value["route"], "sase");
         assert!(value["section"].is_null());
@@ -4549,10 +4606,10 @@ mod tests {
     }
 
     #[test]
-    fn json_reports_merge_in_wire_shape_and_grammar_15() {
+    fn json_reports_merge_in_wire_shape_and_grammar_16() {
         let value = json("New task < @a+x @b+y");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 15);
+        assert_eq!(value["grammar"], 16);
         assert_eq!(value["schema_version"], 1);
         assert_eq!(value["mode"], "task");
         let merge_in = value.get("merge_in").expect("merge_in");

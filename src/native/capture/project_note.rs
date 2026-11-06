@@ -2053,6 +2053,7 @@ pub(super) fn plan_project_note_item(
             task_complete: None,
             toggle_task_description: None,
             r#ref: None,
+            gmail: Vec::new(),
             link_guard: project_link_guard,
             dropped_dependencies: extra_dropped,
             blocks_line_updates: extra_blocks_updates,

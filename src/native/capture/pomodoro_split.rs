@@ -836,6 +836,7 @@ pub(super) fn plan_pomodoro_split_item(
             task_complete: None,
             toggle_task_description: None,
             r#ref: None,
+            gmail: Vec::new(),
             link_guard: None,
             dropped_dependencies: Vec::new(),
             blocks_line_updates: Vec::new(),

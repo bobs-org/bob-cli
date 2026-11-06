@@ -408,6 +408,40 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
     let open_notes = build_open_notes(&request.bob_dir, &batch);
     if !request.dry_run {
         commit_capture_batch(&mut batch, &request.bob_dir)?;
+        let pending_gmail_urls: std::collections::HashSet<_> = batch
+            .items
+            .iter()
+            .flat_map(|item| &item.result.gmail)
+            .filter(|preview| matches!(preview.verdict, "decoded" | "search"))
+            .map(|preview| preview.url.as_str())
+            .collect();
+        let gmail_notes: Vec<_> = if pending_gmail_urls.is_empty() {
+            Vec::new()
+        } else {
+            batch
+                .text_files
+                .iter()
+                .filter(|file| {
+                    crate::native::gmail::ids::find_gmail_urls(
+                        &file.updated_target,
+                    )
+                    .iter()
+                    .any(|found| {
+                        pending_gmail_urls.contains(found.url.as_str())
+                    })
+                })
+                .map(|file| file.target.clone())
+                .collect()
+        };
+        if !gmail_notes.is_empty()
+            && let Err(error) = crate::native::gmail::worker::kick(
+                &request.bob_dir,
+                &gmail_notes,
+            )
+        {
+            eprintln!("{COMMAND_NAME}: warning: {error}; run bob gmail link on the captured notes");
+        }
+
         if !batch.staged_jobs.is_empty()
             && let Err(error) = ref_jobs::kick()
         {

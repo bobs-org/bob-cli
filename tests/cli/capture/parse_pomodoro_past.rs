@@ -33,7 +33,7 @@ fn past_parse_reports_full_contract_and_grammar_14() {
     // Single unnamed past.
     let one = parse("x=3");
     assert_eq!(one["schema_version"], 1);
-    assert_eq!(one["grammar"], 15);
+    assert_eq!(one["grammar"], 16);
     assert_eq!(one["mode"], "pomodoro_past");
     assert_eq!(one["body"], "x=3");
     assert_eq!(one["section"], serde_json::Value::Null);

@@ -22,6 +22,7 @@ and rules. Filter the same pages by CLI, Obsidian, or macOS on
 
 - [Capture a task from anywhere on your Mac](capture-from-your-mac.md)
 - [Drain Google Keep into tasks](drain-google-keep.md)
+- [Link emails to tasks](link-emails-to-tasks.md)
 
 ## Plan the day
 

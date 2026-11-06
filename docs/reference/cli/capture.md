@@ -15,6 +15,8 @@ TEXT is split into ordered capture items by one or more blank or whitespace-only
 
 Within each item, every later physical line must be either a column-zero Markdown bullet or a nested bullet prefixed by exactly two ASCII spaces. At either depth, '-', '*', or '+' must be followed by a space or tab; the source marker and separator are stripped and the item is rendered with the canonical '- <body>' marker. Column-zero authored items render one target-selected indentation unit beneath the parent; two-space source items render two units beneath the parent and attach to the nearest preceding nonempty column-zero authored item. A marker-only placeholder is skipped and never clears that owner. Unsupported indentation, prose continuation, or an orphaned nested item fails with a usage error naming the physical line, and so does an item left with no text once its own capture markers are removed. Every recognized terminal 's:<N>', '$<N>', '%...', and '@route' marker configures only its own capture item and is stripped from the rendered line it was typed on; a second line in the same item resolving the same marker is ambiguous and fails before anything is written. Only an item's first line keeps the established leading '@route text' form. Authored children render before any clipboard children and the priority schedule log.
 
+Gmail URLs stay tasks. Saved threads link offline; other resolvable URLs are linked by a detached worker after capture. Capture never calls Gmail.
+
 All items are planned against in-memory note snapshots before commit. Later items see earlier planned edits to the same target, and any parse, clipboard, validation, staging, or replace failure leaves notes, ledgers, and newly created clipboard files at their original state. Single-item JSON keeps its legacy shape; multi-item JSON keeps the first result at the top level and adds an ordered 'captures' array.
 
 A maximal adjacent run of two or more @route+id targets at one end of a parent line applies that line to every named task in marker order, in the same atomic capture. Duplicate task identities are refused before staging. A target run shares each clipboard read and each rolled priority date; errors name the failing target. Human output shows a 'targets  @route+id · @route+id' header, and JSON adds per-member fanout context.
@@ -226,6 +228,7 @@ Environment:
   BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml
   BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture
   BOB_DIR                    Bob vault root when --bob-dir is omitted
+  BOB_GMAIL_KICK             off, 0, or false disables background Gmail linking
   BOB_NOW                    current date/time override
   BOB_PRIORITY_ROLL_SEED     fixed seed for $<N> rolls; unset means random
   XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config

@@ -30,6 +30,7 @@ mod event_start_warnings;
 mod event_task_close;
 mod flag_guard;
 mod freshness_stamps;
+mod gmail;
 mod inbox_route;
 mod keep_moving;
 mod link_guard;

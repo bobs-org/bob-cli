@@ -68,9 +68,10 @@ Old top-level spellings remain as hidden aliases. See
 ## Capture-language revision
 
 `capture-parse` and `capture-complete` keep `schema_version: 1` and report the
-additive top-level `grammar: 15` revision. Clients can use it to distinguish
+additive top-level `grammar: 16` revision. Clients can use it to distinguish
 capture-language updates while continuing to read the same versioned JSON
-envelope. Grammar 8 kept grammar 7's note-pull behavior: an exactly lone
+envelope. Grammar 16 adds offline Gmail spans, per-item preview data, and saved-thread
+link substitution at capture submit. Grammar 8 kept grammar 7's note-pull behavior: an exactly lone
 `@route` task-list header is a note pull, `@route` with bullets remains a
 list, and a lone `@route#section` remains an empty-list refusal. Grammar 8
 also gives `- ^<id>` and `- :<id>` move meanings inside sealed project-note

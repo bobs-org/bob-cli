@@ -820,6 +820,8 @@ pub(super) struct CaptureItemResult {
     pub(super) task_complete: Option<TaskCompleteSummaryJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) r#ref: Option<RefItemJson>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) gmail: Vec<crate::native::gmail::capture::Preview>,
     #[serde(skip)]
     pub(super) toggle_task_description: Option<String>,
     /// Link-guard report (§13.5, PDG vectors): present exactly when a
@@ -1915,6 +1917,16 @@ pub(super) fn print_success(
             print_capture_warnings(result);
             print_human_success(result);
             print_plan_budget(result);
+            let items = if result.captures.is_empty() {
+                std::slice::from_ref(&result.item)
+            } else {
+                &result.captures
+            };
+            for item in items {
+                for gmail in &item.gmail {
+                    println!("  {}", gmail.message);
+                }
+            }
         }
         OutputFormat::Json => println!("{}", success_json(result)),
     }
@@ -7875,6 +7887,7 @@ mod tests {
             consumed_links: Vec::new(),
             task_complete: None,
             r#ref: None,
+            gmail: Vec::new(),
             toggle_task_description: None,
             link_guard: None,
             dropped_dependencies: Vec::new(),

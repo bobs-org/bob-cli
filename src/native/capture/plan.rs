@@ -170,6 +170,35 @@ pub(super) fn plan_capture_batch_with_config_path(
         .map(|item| item.template_row.clone())
         .collect();
     let mut parsed_items = parsed_draft.items;
+    let gmail_context = parsed_items
+        .iter()
+        .any(|item| {
+            !crate::native::gmail::ids::find_gmail_urls(&item.parsed.body)
+                .is_empty()
+                || item.parsed.sub_bullets.iter().any(|bullet| {
+                    !crate::native::gmail::ids::find_gmail_urls(&bullet.body)
+                        .is_empty()
+                })
+        })
+        .then(|| {
+            crate::native::gmail::capture::OfflineContext::load(
+                &request.bob_dir,
+            )
+        });
+    let gmail_previews: Vec<_> = parsed_items
+        .iter_mut()
+        .map(|item| {
+            let Some(context) = &gmail_context else {
+                return Vec::new();
+            };
+            let mut previews = context.rewrite(&mut item.parsed.body);
+            for bullet in &mut item.parsed.sub_bullets {
+                previews.extend(context.rewrite(&mut bullet.body));
+            }
+            previews
+        })
+        .collect();
+
     let mut warnings: Vec<CaptureWarning> = parsed_draft
         .warnings
         .into_iter()
@@ -642,6 +671,7 @@ pub(super) fn plan_capture_batch_with_config_path(
                     &planner,
                     &day_file,
                 );
+                planned.result.gmail = gmail_previews[items.len()].clone();
                 items.push(planned);
             }
             for member in &preflight.members {
@@ -684,6 +714,7 @@ pub(super) fn plan_capture_batch_with_config_path(
                         job,
                     });
                 }
+                planned.result.gmail = gmail_previews[items.len()].clone();
                 items.push(planned);
                 dedupe_fanout_group_warnings(
                     &mut warnings,
@@ -778,6 +809,7 @@ pub(super) fn plan_capture_batch_with_config_path(
                 &planner,
                 &day_file,
             );
+            planned.result.gmail = gmail_previews[items.len()].clone();
             items.push(planned);
             dedupe_fanout_group_warnings(
                 &mut warnings,
@@ -1501,6 +1533,7 @@ fn plan_ref_item(
                 fallback,
                 listen_hint,
             }),
+            gmail: Vec::new(),
             toggle_task_description: None,
             link_guard: None,
             dropped_dependencies: Vec::new(),
@@ -2088,6 +2121,7 @@ pub(super) fn plan_capture_item(
                 task_complete: None,
                 toggle_task_description: Some(toggle.task_description.clone()),
                 r#ref: None,
+                gmail: Vec::new(),
                 link_guard,
                 dropped_dependencies: toggle.dropped_dependencies.clone(),
                 blocks_line_updates: toggle.blocks_updates.clone(),
@@ -3076,6 +3110,7 @@ pub(super) fn plan_capture_item(
                     task_complete: None,
                     toggle_task_description: None,
                     r#ref: None,
+                    gmail: Vec::new(),
                     link_guard: None,
                     dropped_dependencies: Vec::new(),
                     blocks_line_updates: Vec::new(),
@@ -4014,6 +4049,7 @@ pub(super) fn plan_capture_item(
             task_complete: None,
             toggle_task_description: None,
             r#ref: None,
+            gmail: Vec::new(),
             link_guard: new_task_link_guard,
             dropped_dependencies: Vec::new(),
             blocks_line_updates,
@@ -5259,6 +5295,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
             task_complete: None,
             toggle_task_description: None,
             r#ref: None,
+            gmail: Vec::new(),
             link_guard: None,
             dropped_dependencies: Vec::new(),
             blocks_line_updates,
