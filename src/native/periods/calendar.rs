@@ -34,6 +34,7 @@ pub(crate) enum PeriodState {
 /// The accepted id forms, named in usage errors.
 pub(crate) const ACCEPTED_FORMS: &str =
     "a week 2026-W45, a quarter 2026-Q4, a year 2026, all, \
+     last-week, last-quarter, last-year, \
      or a vault-relative note path such as 2026/2026-W45.md";
 
 /// Number of ISO weeks in `year` (52 or 53).
@@ -89,6 +90,27 @@ impl PeriodId {
             return Ok(parsed);
         }
         Err(invalid_period(text))
+    }
+
+    /// Resolve one PERIOD argument against `today`: `last-week`,
+    /// `last-quarter`, and `last-year` (case-insensitive, `_` for `-`)
+    /// map to the previous period of that kind immediately before the
+    /// one containing `today`; every other form defers to `parse`.
+    pub(crate) fn resolve(
+        text: &str,
+        today: NaiveDate,
+    ) -> Result<Self, String> {
+        let normalized = text.trim().to_ascii_lowercase().replace('_', "-");
+        let relative = match normalized.as_str() {
+            "last-week" => Some(Self::week_for_date(today).prev()),
+            "last-quarter" => Some(Self::quarter_for_date(today).prev()),
+            "last-year" => Some(Self::year_for_date(today).prev()),
+            _ => None,
+        };
+        if let Some(resolved) = relative {
+            return resolved.ok_or_else(|| invalid_period(text));
+        }
+        Self::parse(text)
     }
 
     /// The week containing `date`.
@@ -631,5 +653,120 @@ mod tests {
             rows += 1;
         }
         assert!(rows > 1000, "fixture should cover 2000–2100");
+    }
+
+    #[test]
+    fn relative_ids_resolve_against_today() {
+        // PI1: Mon 2026-11-09 sits in 2026-W46.
+        let mon = date(2026, 11, 9);
+        assert_eq!(
+            PeriodId::resolve("last-week", mon).expect("last-week"),
+            PeriodId::Week {
+                year: 2026,
+                week: 45
+            }
+        );
+        assert_eq!(
+            PeriodId::resolve("last-quarter", mon).expect("last-quarter"),
+            PeriodId::Quarter {
+                year: 2026,
+                quarter: 3
+            }
+        );
+        assert_eq!(
+            PeriodId::resolve("last-year", mon).expect("last-year"),
+            PeriodId::Year(2025)
+        );
+        // PI2: Mon 2027-01-04 opens 2027-W01.
+        let jan4 = date(2027, 1, 4);
+        assert_eq!(
+            PeriodId::resolve("last-week", jan4).expect("last-week"),
+            PeriodId::Week {
+                year: 2026,
+                week: 53
+            }
+        );
+        assert_eq!(
+            PeriodId::resolve("last-quarter", jan4).expect("last-quarter"),
+            PeriodId::Quarter {
+                year: 2026,
+                quarter: 4
+            }
+        );
+        // PI3: Mon 2027-01-11 sits in 2027-W02.
+        let jan11 = date(2027, 1, 11);
+        assert_eq!(
+            PeriodId::resolve("last-week", jan11).expect("last-week"),
+            PeriodId::Week {
+                year: 2027,
+                week: 1
+            }
+        );
+        assert_eq!(
+            PeriodId::resolve("last-year", jan11).expect("last-year"),
+            PeriodId::Year(2026)
+        );
+        // PI4: Sun 2027-01-03 still belongs to 2026-W53.
+        let jan3 = date(2027, 1, 3);
+        assert_eq!(
+            PeriodId::resolve("last-week", jan3).expect("last-week"),
+            PeriodId::Week {
+                year: 2026,
+                week: 52
+            }
+        );
+        assert_eq!(
+            PeriodId::resolve("last-quarter", jan3).expect("last-quarter"),
+            PeriodId::Quarter {
+                year: 2026,
+                quarter: 3
+            }
+        );
+        assert_eq!(
+            PeriodId::resolve("last-year", jan3).expect("last-year"),
+            PeriodId::Year(2025)
+        );
+        // PI5: case- and `_`/`-`-insensitive.
+        assert_eq!(
+            PeriodId::resolve("LAST-WEEK", mon).expect("upper"),
+            PeriodId::Week {
+                year: 2026,
+                week: 45
+            }
+        );
+        assert_eq!(
+            PeriodId::resolve("last_week", mon).expect("underscore"),
+            PeriodId::Week {
+                year: 2026,
+                week: 45
+            }
+        );
+        assert_eq!(
+            PeriodId::resolve("Last_Quarter", mon).expect("mixed"),
+            PeriodId::Quarter {
+                year: 2026,
+                quarter: 3
+            }
+        );
+        // PI6: unknown relative words stay usage errors that list the
+        // accepted forms including the relative ones.
+        for unknown in ["last-month", "last-weeks", "next-week"] {
+            let error = PeriodId::resolve(unknown, mon)
+                .expect_err("unknown relative word");
+            for accepted in ["last-week", "last-quarter", "last-year"] {
+                assert!(
+                    error.contains(accepted),
+                    "message lists {accepted}: {error}"
+                );
+            }
+        }
+        // Canonical forms still resolve through `parse`.
+        assert_eq!(
+            PeriodId::resolve("2026-W45", mon).expect("canonical"),
+            PeriodId::Week {
+                year: 2026,
+                week: 45
+            }
+        );
     }
 }

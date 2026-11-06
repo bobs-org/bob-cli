@@ -56,7 +56,7 @@ Usage: bob periods brief [OPTIONS] [PERIOD]
 
 Arguments:
   [PERIOD]
-          Period id or note path (week, quarter, or year); all_time has no review
+          Period id or note path (week, quarter, year, last-week, last-quarter, or last-year); all_time has no review
 
 Options:
   -b, --bob-dir <DIR>
@@ -101,7 +101,7 @@ Usage: bob periods draft [OPTIONS] [PERIOD]
 
 Arguments:
   [PERIOD]
-          Period id or note path (week, quarter, or year); all_time has no review
+          Period id or note path (week, quarter, year, last-week, last-quarter, or last-year); all_time has no review
 
 Options:
   -b, --bob-dir <DIR>
@@ -318,7 +318,7 @@ Usage: bob periods show [OPTIONS] [PERIOD]
 
 Arguments:
   [PERIOD]
-          Period id or note path; defaults to the current week
+          Period id or note path (week, quarter, year, last-week, last-quarter, or last-year); defaults to the current week
 
 Options:
   -k, --clock <CLOCK>

@@ -165,16 +165,15 @@ impl DraftReport {
 }
 
 fn execute(matches: &clap::ArgMatches) -> Result<DraftReport, DraftError> {
+    let today = bob_env::current_datetime().date();
     let id = matches
         .get_one::<String>("period")
         .map(|text| {
-            PeriodId::parse(text)
+            PeriodId::resolve(text, today)
                 .map_err(|message| DraftError::usage("invalid_period", message))
         })
         .transpose()?
-        .unwrap_or_else(|| {
-            PeriodId::week_for_date(bob_env::current_datetime().date())
-        });
+        .unwrap_or_else(|| PeriodId::week_for_date(today));
     if matches!(id, PeriodId::AllTime) {
         return Err(DraftError::usage(
             "no_review_section",
@@ -241,7 +240,6 @@ fn execute(matches: &clap::ArgMatches) -> Result<DraftReport, DraftError> {
         ));
     }
     // Guards, overridden only by -F/--force.
-    let today = bob_env::current_datetime().date();
     if !matches.get_flag("force") {
         if !matches!(id.state(today), PeriodState::Closed) {
             return Err(DraftError::refused(

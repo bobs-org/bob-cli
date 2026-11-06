@@ -52,7 +52,7 @@ impl BriefError {
         Self {
             code: code.to_string(),
             message,
-            hint: "Pass a period id such as 2026-W45, 2026-Q4, or 2026. See docs/periods.md.".to_string(),
+            hint: "Pass a period id such as 2026-W45, 2026-Q4, 2026, last-week, last-quarter, or last-year. See docs/periods.md.".to_string(),
             exit_code: 2,
         }
     }
@@ -169,25 +169,23 @@ struct Ctx {
 }
 
 fn execute(matches: &clap::ArgMatches) -> Result<Bundle, BriefError> {
+    let vault = bob_env::bob_dir();
+    let now = bob_env::current_datetime();
+    let today = now.date();
     let id = matches
         .get_one::<String>("period")
         .map(|text| {
-            PeriodId::parse(text)
+            PeriodId::resolve(text, today)
                 .map_err(|message| BriefError::usage("invalid_period", message))
         })
         .transpose()?
-        .unwrap_or_else(|| {
-            PeriodId::week_for_date(bob_env::current_datetime().date())
-        });
+        .unwrap_or_else(|| PeriodId::week_for_date(today));
     if matches!(id, PeriodId::AllTime) {
         return Err(BriefError::usage(
             "no_review_section",
             "all_time has no review".to_string(),
         ));
     }
-    let vault = bob_env::bob_dir();
-    let now = bob_env::current_datetime();
-    let today = now.date();
     let report = report::build_report(
         &vault,
         config::config_path(),

@@ -50,7 +50,7 @@ impl ShowError {
         Self {
             code: "invalid_period".to_string(),
             message: message.into(),
-            hint: "Pass a period id such as 2026-W45, 2026-Q4, 2026, or all. See docs/periods.md."
+            hint: "Pass a period id such as 2026-W45, 2026-Q4, 2026, all, last-week, last-quarter, or last-year. See docs/periods.md."
                 .to_string(),
             exit_code: 2,
         }
@@ -218,7 +218,7 @@ fn execute(matches: &ArgMatches) -> Result<Value, ShowError> {
     let today = now.date();
     let id = matches
         .get_one::<String>("period")
-        .map(|text| PeriodId::parse(text).map_err(ShowError::usage))
+        .map(|text| PeriodId::resolve(text, today).map_err(ShowError::usage))
         .transpose()?
         .unwrap_or_else(|| PeriodId::week_for_date(today));
     let clock = matches
@@ -1920,6 +1920,11 @@ fn render_human(report: &Value, styler: &Styler) -> String {
         coverage.to_string()
     };
     lines.push(format!("{}  {}", styler.bold(title), styler.dim(&right)));
+    let id = period["id"].as_str().unwrap_or("");
+    let note_path = report["note"]["path"].as_str().unwrap_or("");
+    if !id.is_empty() && !note_path.is_empty() {
+        lines.push(styler.dim(&format!("{id} · {note_path}")));
+    }
 
     if report["facts"]
         .as_array()

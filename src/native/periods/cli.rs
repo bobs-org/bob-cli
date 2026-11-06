@@ -120,7 +120,7 @@ pub(crate) fn brief_command() -> ClapCommand {
         .arg(brief_format_arg())
         .arg(help_arg())
         .arg(Arg::new("period").value_name("PERIOD").help(
-            "Period id or note path (week, quarter, or year); all_time has no review",
+            "Period id or note path (week, quarter, year, last-week, last-quarter, or last-year); all_time has no review",
         ))
 }
 
@@ -162,7 +162,7 @@ pub(crate) fn draft_command() -> ClapCommand {
         .arg(draft_input_arg())
         .arg(dry_run_arg())
         .arg(Arg::new("period").value_name("PERIOD").help(
-            "Period id or note path (week, quarter, or year); all_time has no review",
+            "Period id or note path (week, quarter, year, last-week, last-quarter, or last-year); all_time has no review",
         ))
 }
 
@@ -238,7 +238,7 @@ pub(crate) fn show_command() -> ClapCommand {
         .arg(show_format_arg())
         .arg(help_arg())
         .arg(Arg::new("period").value_name("PERIOD").help(
-            "Period id or note path; defaults to the current week",
+            "Period id or note path (week, quarter, year, last-week, last-quarter, or last-year); defaults to the current week",
         ))
 }
 

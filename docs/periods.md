@@ -30,9 +30,17 @@ Period ids:
 - parsing is case-insensitive and also accepts `all_time` and
   `all-time`, plus a vault-relative note path with or without `.md`
   (`2026/2026-W45.md`, `2026.md`, `all_time.md`);
+- relative forms `last-week`, `last-quarter`, and `last-year`
+  (case-insensitive, `_` accepted for `-`, mirroring
+  `all_time`/`all-time`): `show`, `brief`, and `draft` resolve them
+  against today (`BOB_NOW`-aware) to the previous period of that kind
+  immediately before the one containing today — the previous ISO week,
+  the previous 13-week quarter, the previous ISO week-year — and every
+  output then names the canonical id;
 - weeks must be `01..=weeks_in_year`, quarters `1..=4`, and years four
   digits in `1970..=2999`;
-- anything else is a usage error that names the accepted forms.
+- anything else is a usage error that names the accepted forms,
+  including the relative ones.
 
 Paths (link targets drop `.md`):
 
@@ -180,17 +188,24 @@ and never push (vault-sync commits, and agents commit as the vault's
   one commit. `-o` skips vault-sync before and after, as with
   `bob types rename`.
 - `bob periods show [PERIOD] [-f human|json] [-k/--clock worked|off-clock|total]`:
-  read-only. With no PERIOD it shows the current ISO week. It prints a compact
-  terminal report or the schema-1 report below. The selected clock is applied to
+  read-only. With no PERIOD it shows the current ISO week. PERIOD also
+  accepts `last-week`, `last-quarter`, and `last-year`, resolved
+  against today. It prints a compact terminal report — whose first
+  lines name the canonical id and the vault-relative note path — or the
+  schema-1 report below. The selected clock is applied to
   Pomodoro minutes and lanes; Worked is the default.
 - `bob periods brief <PERIOD> [-f md|json]`:
-  read-only. With no PERIOD it briefs the current ISO week. It prints
+  read-only. With no PERIOD it briefs the current ISO week. PERIOD also
+  accepts `last-week`, `last-quarter`, and `last-year`, resolved
+  against today. It prints
   the deterministic, versioned agent bundle (brief v1) below, as
   Markdown by default (`-f md`, which the agent callouts use; `human`
   is accepted as an alias) or as JSON with `-f json`.
   `all_time` has no review and is a usage error.
 - `bob periods draft <PERIOD> -i/--input FILE|- [-F/--force] [-f human|json] [-n/--dry-run]`:
-  replaces the note's `## Review` with the draft text below. `-n`
+  replaces the note's `## Review` with the draft text below. PERIOD also
+  accepts `last-week`, `last-quarter`, and `last-year`, resolved
+  against today, with exactly the refusals of the canonical id. `-n`
   prints the planned section instead of writing it.
 - `bob periods ensure -R/--refresh-instructions` refreshes stale
   agent callouts instead of creating notes (below). It also takes
@@ -469,6 +484,10 @@ flag named in a v1 callout must change, bump
 `INSTRUCTIONS_VERSION` and update the callout text above.
 
 ## How an agent updates a period note
+
+A relative id (`last-week`, `last-quarter`, `last-year`) resolves to
+its canonical period; `bob periods show <id>` prints that period's
+vault-relative note path on its second line.
 
 1. Run `bob periods brief <PERIOD> -f md` and read all of it. Stop
    and say why if it reports the period as open (unless Bryan asked

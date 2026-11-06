@@ -1390,6 +1390,130 @@ fn brief_refuses_all_time_and_bad_periods() {
     );
 }
 
+#[test]
+fn relative_period_ids_resolve_like_canonical_ids() {
+    // REVIEWS_NOW is 2026-11-10 (in 2026-W46), so last-week is 2026-W45.
+    let vault = vault_dir("relative-ids");
+    write_reviews_fixture(vault.path());
+
+    // `show` takes no -b/--bob-dir flag; the vault travels via BOB_DIR.
+    let show_in = |period: &str, extra: &[&str]| {
+        let mut command = bob_command();
+        command
+            .arg("periods")
+            .arg("show")
+            .env("BOB_DIR", vault.path())
+            .env("BOB_NOW", REVIEWS_NOW)
+            .env("NO_COLOR", "1");
+        command.arg(period);
+        for arg in extra {
+            command.arg(arg);
+        }
+        command.output().expect("run bob periods show")
+    };
+    let show_relative = show_in("last-week", &["-f", "json"]);
+    assert_success(&show_relative);
+    let relative_body: serde_json::Value =
+        serde_json::from_str(&stdout(&show_relative)).expect("show JSON");
+    assert_eq!(relative_body["period"]["id"], "2026-W45");
+    assert_eq!(relative_body["note"]["path"], "2026/2026-W45.md");
+
+    let show_canonical = show_in("2026-W45", &["-f", "json"]);
+    assert_success(&show_canonical);
+    let canonical_body: serde_json::Value =
+        serde_json::from_str(&stdout(&show_canonical)).expect("show JSON");
+    assert_eq!(
+        relative_body["period"]["id"],
+        canonical_body["period"]["id"]
+    );
+    assert_eq!(
+        relative_body["note"]["path"],
+        canonical_body["note"]["path"]
+    );
+
+    // PI5: case- and `_`/`-`-insensitive.
+    for alias in ["LAST-WEEK", "last_week"] {
+        let output = show_in(alias, &["-f", "json"]);
+        assert_success(&output);
+        let body: serde_json::Value =
+            serde_json::from_str(&stdout(&output)).expect("show JSON");
+        assert_eq!(body["period"]["id"], "2026-W45", "{alias}");
+    }
+
+    // Human `show` names the canonical id and the vault-relative path.
+    let human = show_in("last-week", &[]);
+    assert_success(&human);
+    let text = stdout(&human);
+    assert!(text.contains("2026-W45"), "human names the id:\n{text}");
+    assert!(
+        text.contains("2026/2026-W45.md"),
+        "human names the note path:\n{text}"
+    );
+
+    // `brief last-week` matches `brief 2026-W45`.
+    let brief_body = brief_json(vault.path(), "last-week");
+    assert_eq!(brief_body["id"], "2026-W45");
+
+    // `draft last-week` drafts exactly the canonical note (PI7).
+    let input = write_review(
+        vault.path(),
+        "relative.md",
+        "**Headline:** Relative week\n\nShipped it.\n",
+    );
+    let output =
+        draft(vault.path(), "last-week", &input, &["-F", "-f", "json"]);
+    assert_success(&output);
+    let body: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("draft JSON");
+    assert_eq!(body["id"], "2026-W45");
+    assert!(
+        fs::read_to_string(vault.path().join("2026/2026-W45.md"))
+            .unwrap()
+            .contains("**Headline:** Relative week"),
+        "draft last-week writes the canonical note"
+    );
+
+    // PI6: unknown relative words stay usage errors whose message lists
+    // the accepted relative forms.
+    let output = show_in("last-month", &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(2), "show exit");
+    let body: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("error JSON");
+    assert_eq!(body["error"]["code"], "invalid_period");
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    for accepted in ["last-week", "last-quarter", "last-year"] {
+        assert!(
+            message.contains(accepted),
+            "show message lists {accepted}: {message}"
+        );
+    }
+    for (subcommand, args) in [("brief", vec!["next-week", "-f", "json"])] {
+        let output = periods_command(vault.path(), subcommand, &args);
+        assert_eq!(output.status.code(), Some(2), "{subcommand} exit");
+        let body: serde_json::Value =
+            serde_json::from_str(&stdout(&output)).expect("error JSON");
+        assert_eq!(body["error"]["code"], "invalid_period");
+        let message = body["error"]["message"].as_str().unwrap_or_default();
+        for accepted in ["last-week", "last-quarter", "last-year"] {
+            assert!(
+                message.contains(accepted),
+                "{subcommand} message lists {accepted}: {message}"
+            );
+        }
+    }
+    let draft_input = write_review(
+        vault.path(),
+        "relative-bad.md",
+        "**Headline:** Bad\n\nWords.\n",
+    );
+    let output =
+        draft(vault.path(), "last-weeks", &draft_input, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(2), "draft exit");
+    let body: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("error JSON");
+    assert_eq!(body["error"]["code"], "invalid_period");
+}
+
 fn write_review(
     vault: &std::path::Path,
     name: &str,
