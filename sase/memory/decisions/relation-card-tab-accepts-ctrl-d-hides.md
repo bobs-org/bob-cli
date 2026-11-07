@@ -8,8 +8,9 @@ summary:
   or completes the top match, selection is by key, and Ctrl+D hides what
   Return would insert."
 metadata:
-  status: accepted
+  status: superseded-in-part
   decided: 2026-10-24
+  superseded_by: decisions:relation-equals-alias-and-flips
 ---
 
 **Applies to.** The Bob Mac Capture relation card and the Obsidian
@@ -52,3 +53,7 @@ keys because Tab no longer cycles.
 
 **Reopens when.** The Hidden section needs a different chord, navigation must
 refetch, or selection must survive a key disappearing.
+
+Partly superseded by [[decisions:relation-equals-alias-and-flips]]: a
+direction flip is an edit that re-fetches the catalog and verdicts; navigation
+still never does.

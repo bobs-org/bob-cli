@@ -4,7 +4,9 @@ A task can relate to any other task with an optional label, from Bob
 Mac Capture (`~` / `~~`) and from the Obsidian Task Card (`l` /
 `⇧L`). In either client's relation picker, typing `~` anywhere in the
 task filter flips Links to ↔ Linked from in place and keeps the filter
-text. The relation is authored once on the source's
+text. In Bob Mac Capture, `~` / `=` also flip direction in the relation
+label card (keeping the query and selection), and a `~` / `=` typed glued
+to a completed relation token flips that token's direction. The relation is authored once on the source's
 `🪢 **LINKS:**` line, and a generated `🪢 **LINKED FROM:**` line on
 the target always converges to it. That same LINKED FROM line also
 lists inert text mentions ([§19](#19-text-mentions)). Live chips
