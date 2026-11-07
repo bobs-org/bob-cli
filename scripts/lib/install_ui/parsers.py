@@ -26,12 +26,18 @@ class ParsedLine:
 CHATTER_PATTERNS = (
     Pattern("cargo-lock-wait", "cargo", re.compile(r"^Blocking waiting for file lock\b"), None),
     Pattern("cargo-index", "cargo", re.compile(r"^(?:Updating\b|Locking\b|Downloading\b|Downloaded\b)"), "index"),
+    Pattern("cargo-fetch-frame", "cargo", re.compile(r"^Fetch\s*\["), "index"),
     Pattern("cargo-building-frame", "cargo", re.compile(r"^Building\s*\["), "deps"),
+    Pattern("cargo-progress-frame", "cargo", re.compile(r"^[A-Za-z][A-Za-z0-9_-]*\s+\["), None),
     Pattern("cargo-compiling", "cargo", re.compile(r"^Compiling\s+([^\s]+)"), "deps"),
     Pattern("cargo-fresh", "cargo", re.compile(r"^Fresh\s+"), "deps"),
     Pattern("cargo-adding", "cargo", re.compile(r"^Adding\s+"), "deps"),
     Pattern("cargo-finished", "cargo", re.compile(r"^Finished\b"), "finish"),
-    Pattern("cargo-installing", "cargo", re.compile(r"^(?:Installing|Replacing|Installed)\b"), "finish"),
+    Pattern("cargo-installing-package", "cargo", re.compile(r"^Installing\s+\S+\s+v[^\s]+\s+\([^)]*\)"), None),
+    Pattern("cargo-installing-path", "cargo", re.compile(r"^Installing\s+/"), "finish"),
+    Pattern("cargo-replacing", "cargo", re.compile(r"^Replacing\b"), "finish"),
+    Pattern("cargo-replaced", "cargo", re.compile(r"^Replaced\b"), "finish"),
+    Pattern("cargo-installed", "cargo", re.compile(r"^Installed\b"), "finish"),
     Pattern("swiftpm-progress", "swiftpm", re.compile(r"^\[\s*\d+\s*/\s*\d+\s*\]"), None),
     Pattern("swiftpm-build-start", "swiftpm", re.compile(r"^Building for production\b"), None),
     Pattern("swiftpm-build-complete", "swiftpm", re.compile(r"^Build complete!"), None),
@@ -65,20 +71,20 @@ class PhaseDetector:
     def parse(self, line: str) -> ParsedLine:
         text = line.strip()
         if self.parser == "cargo":
-            if text.startswith("Blocking waiting for file lock"):
-                return ParsedLine(True, lock_wait=True)
-            match = _CARGO_COMPILE.match(text)
-            if match:
-                crate_name = match.group(1)
-                phase = "crate" if crate_name == self.crate else "deps"
-                return ParsedLine(True, phase)
-            if text.startswith("Building ["):
-                phase = "crate" if self.crate in text else "deps"
-                return ParsedLine(True, phase)
             for pattern in CHATTER_PATTERNS:
-                if pattern.parser != "cargo" or pattern.name == "cargo-lock-wait" or pattern.name == "cargo-compiling":
+                if pattern.parser != "cargo":
                     continue
                 if pattern.regex.search(text):
+                    if pattern.name == "cargo-lock-wait":
+                        return ParsedLine(True, lock_wait=True)
+                    if pattern.name == "cargo-compiling":
+                        match = _CARGO_COMPILE.match(text)
+                        if match:
+                            phase = "crate" if match.group(1) == self.crate else "deps"
+                            return ParsedLine(True, phase)
+                    if pattern.name == "cargo-building-frame":
+                        phase = "crate" if self.crate in text else "deps"
+                        return ParsedLine(True, phase)
                     return ParsedLine(True, pattern.phase)
             return ParsedLine(False)
 

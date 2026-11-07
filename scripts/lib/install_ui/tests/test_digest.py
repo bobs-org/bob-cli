@@ -234,6 +234,8 @@ class LayoutTests(unittest.TestCase):
         )
         self.assertIn("\033[", text)
         self.assertIn("\033[32m", text)  # feat green
+        self.assertIn("\n  \033[1;34mbob-cli", text)
+        self.assertIn("\n    \033[32mfeat", text)
 
 
 class GoldenTests(unittest.TestCase):
@@ -285,14 +287,14 @@ class GoldenTests(unittest.TestCase):
                     "",
                     "📰  WHAT'S NEW",
                     "────────────────────────────────────────────────",
-                    "bob-cli · 3 commits since your last install 51m ago",
-                    "  feat  capture  glue start and past timing to Pomodoro names          79709fed",
-                    "  feat  gmail    add durable send-recovery engine for compose drafts   8935148f",
-                    "                 Implements versioned frontmatter and recovery.",
-                    "                 Internal only, no public send command.",
-                    "                 Verified: cargo fmt --check clean, workspace clippy gate.…",
+                    "  bob-cli · 3 commits since your last install 51m ago",
+                    "    feat  capture  glue start and past timing to Pomodoro names        79709fed",
+                    "    feat  gmail    add durable send-recovery engine for compose drafts 8935148f",
+                    "                   Implements versioned frontmatter and recovery.",
+                    "                   Internal only, no public send command.",
+                    "                   Verified: cargo fmt --check clean, workspace clippy gate.…",
                     "",
-                    "  fix   capture  repair successor verdict landing behavior             86b2501b",
+                    "    fix   capture  repair successor verdict landing behavior           86b2501b",
                 ]
             )
             + "\n",
@@ -321,6 +323,10 @@ class GoldenTests(unittest.TestCase):
         self.assertIn("+", text)
         self.assertIn("more ·", text)
         self.assertIn("git -C ", text)
+        self.assertIn("\n  bob-cli ·", text)
+        self.assertIn("\n    feat", text)
+        self.assertIn("\n    + ", text)
+        self.assertIn("\n      git -C ", text)
 
 
 class PluginTests(unittest.TestCase):
@@ -374,7 +380,7 @@ class NonTtyTests(unittest.TestCase):
         self.assertEqual(record["level"], "subjects")
         subject_rows = [
             line for line in text.splitlines()
-            if line.startswith("  ") and not line.startswith("  +")
+            if line.startswith("    ") and not line.startswith("    + ")
         ]
         self.assertEqual(len(subject_rows), 60)
         more_rows = [line for line in text.splitlines() if "+ 10 more" in line]

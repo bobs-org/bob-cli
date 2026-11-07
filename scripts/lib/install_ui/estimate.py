@@ -538,6 +538,7 @@ def replay_needed(digest_rows: int, rows_after: int, summary_rows: int, lines: i
 
 def replay_lines(record: dict, width: int) -> list[str]:
     rows = []
+    content_width = max(width - 2, 1)
     for repo in record.get("repos") or []:
         if not isinstance(repo, dict):
             continue
@@ -559,10 +560,10 @@ def replay_lines(record: dict, width: int) -> list[str]:
             if breaking:
                 subject = "⚠ " + subject
             extra = f", +{count - 1} more" if count > 1 else ""
-            available = max(8, width - term.cell_width(head + " · ") - term.cell_width(extra))
+            available = max(8, content_width - term.cell_width(head + " · ") - term.cell_width(extra))
             subject = term.truncate_cells(subject, available)
             line = f"{head} · {subject}{extra}"
         else:
             line = head
-        rows.append(term.truncate_cells(line, width))
+        rows.append("  " + term.truncate_cells(line, content_width))
     return rows

@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 import time
+import traceback
 from pathlib import Path
 from typing import Optional
 
@@ -111,7 +112,14 @@ def _status_label(parser: str, phase: str, message: str, lock_wait: bool, crate:
         return "waiting for another build to release the target directory"
     if parser == "cargo":
         if phase == "index":
-            return term.sanitize(message.strip().lower()) or "updating crates.io index"
+            verb = message.strip().split(None, 1)[0] if message.strip() else ""
+            if verb in ("Updating", "Fetch"):
+                return "updating crates.io index"
+            if verb == "Locking":
+                return "resolving dependencies"
+            if verb in ("Downloading", "Downloaded"):
+                return "downloading crates"
+            return "preparing build"
         if phase == "deps":
             if message.startswith("Compiling "):
                 pieces = message.split()
@@ -161,7 +169,7 @@ def _make_frame(
         tail.append(eta_text)
     if kind == "deps":
         tail.append("Cargo.lock changed, expect a longer build")
-    plain = " · ".join((f"{spinner} {body}", *tail))
+    plain = "  " + " · ".join((f"{spinner} {body}", *tail))
     clipped = term.truncate_cells(plain, width)
     colorize = term.use_color(sys.stdout)
     if clipped.startswith(spinner) and colorize:
@@ -202,92 +210,35 @@ def _human_path(path: Path) -> str:
         return str(path)
 
 
-def run(args) -> int:
-    command = list(args.command)
-    if command and command[0] == "--":
-        command = command[1:]
-    if not command:
-        raise ValueError("run requires a command after --")
-
-    parser_name = args.parser
-    clock = getattr(args, "clock", time.monotonic)
-    wall_clock = getattr(args, "wall_clock", time.time)
-    repo = str(Path(args.repo).expanduser().resolve())
-    step = args.step
-    profile = args.profile or ("local-install" if parser_name == "cargo" else "release")
-    crate = args.crate or "bob-obsidian"
-    run_key = history.run_id()
-    toolchain = history.probe_toolchain(step, repo)
-    kind = history.predict_kind(step, repo, profile, toolchain=toolchain)
-    incremental = history.incremental_for(step)
-    host = history.host_name()
-    key = {
-        "host": host,
-        "toolchain": toolchain,
-        "profile": profile,
-        "incremental": incremental,
-    }
-    detector = parsers.PhaseDetector(parser_name, crate=crate)
-    eta = estimate.estimate(
-        step, kind, key, 0.0, detector.phases[0], phases=detector.phases
-    )
-    eta_text = eta.text
-    eta_fill = eta.fill
-    eta_changed_at = 0.0
-    bar_color = estimate.STEP_COLORS.get(step, "35")
-    child_env = os.environ.copy()
-    if parser_name == "cargo":
-        child_env["CARGO_TERM_PROGRESS_WHEN"] = "always"
-        child_env["CARGO_TERM_PROGRESS_WIDTH"] = "80"
-    is_live = bool(sys.stdout.isatty()) and os.environ.get("TERM") != "dumb"
-    requested_signal: Optional[int] = None
-    original_handlers = {}
-    proc: Optional[subprocess.Popen] = None
-
-    def _handle_forward(signum, _frame) -> None:
-        nonlocal requested_signal
-        if requested_signal is None:
-            requested_signal = signum
-        # Keyboard interrupts arrive for the whole foreground process group, so
-        # the child already receives SIGINT. Avoid sending it twice while it is
-        # handling the first interrupt. TERM and HUP may target only this runner.
-        if signum == signal.SIGINT:
-            return
+def _run_spawned(context: dict) -> int:
+    args = context["args"]
+    proc = context["proc"]
+    original_handlers = context["original_handlers"]
+    signal_state = context["signal_state"]
+    is_live = context["is_live"]
+    parser_name = context["parser_name"]
+    clock = context["clock"]
+    wall_clock = context["wall_clock"]
+    repo = context["repo"]
+    step = context["step"]
+    profile = context["profile"]
+    crate = context["crate"]
+    run_key = context["run_key"]
+    toolchain = context["toolchain"]
+    kind = context["kind"]
+    incremental = context["incremental"]
+    host = context["host"]
+    key = context["key"]
+    detector = context["detector"]
+    eta = context["eta"]
+    eta_text = context["eta_text"]
+    eta_fill = context["eta_fill"]
+    eta_changed_at = context["eta_changed_at"]
+    bar_color = context["bar_color"]
+    child_env = context["child_env"]
+    if signal_state["value"] is not None:
         try:
-            if proc is not None and proc.poll() is None:
-                proc.send_signal(signum)
-        except OSError:
-            pass
-
-    if is_live:
-        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
-            try:
-                original_handlers[sig] = signal.getsignal(sig)
-                signal.signal(sig, _handle_forward)
-            except (ValueError, OSError):
-                pass
-
-    try:
-        proc = subprocess.Popen(
-            command,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            env=child_env,
-            bufsize=0,
-        )
-    except OSError as exc:
-        sys.stderr.write(f"install_ui: could not start build: {exc}\n")
-        for sig, handler in original_handlers.items():
-            try:
-                signal.signal(sig, handler)
-            except (ValueError, OSError):
-                pass
-        return 1
-
-    if requested_signal is not None:
-        try:
-            proc.send_signal(requested_signal)
+            proc.send_signal(signal_state["value"])
         except OSError:
             pass
 
@@ -308,15 +259,18 @@ def run(args) -> int:
     selector = selectors.DefaultSelector()
     assert proc.stdout is not None
     selector.register(proc.stdout, selectors.EVENT_READ)
+    context["selector"] = selector
 
     log_path: Optional[Path] = None
     log_handle = None
+    context["log_handle"] = log_handle
     if is_live:
         allocated = state.allocate_log(run_key, step)
         if allocated.ok and isinstance(allocated.value, Path):
             log_path = allocated.value
             try:
                 log_handle = open(log_path, "ab", buffering=0)
+                context["log_handle"] = log_handle
             except OSError:
                 log_path = None
 
@@ -324,6 +278,7 @@ def run(args) -> int:
     cursor_hidden = False
     lines_in_scrollback = 0
     line_buffer = bytearray()
+    context["line_buffer"] = line_buffer
     last_message = ""
     current_phase = detector.phases[0]
     current_counter: Optional[tuple[int, int]] = None
@@ -511,7 +466,18 @@ def run(args) -> int:
                 for byte_index, byte in enumerate(data):
                     if byte in (10, 13):
                         if line_buffer:
-                            _process_line(bytes(line_buffer))
+                            try:
+                                _process_line(bytes(line_buffer))
+                            except Exception:
+                                # This chunk has already left the pipe. Preserve
+                                # its unparsed tail before the outer recovery drains
+                                # the child's remaining output.
+                                passthrough = True
+                                display_broken = True
+                                _print_raw(bytes(line_buffer) + bytes((byte,)))
+                                line_buffer.clear()
+                                _print_raw(data[byte_index + 1 :])
+                                raise
                             line_buffer.clear()
                             if passthrough:
                                 _print_raw(data[byte_index + 1 :])
@@ -532,17 +498,13 @@ def run(args) -> int:
             selector.close()
         except Exception:
             pass
-        try:
-            if proc.poll() is None:
-                proc.wait()
-        except Exception:
-            pass
         _restore_cursor()
-        for sig, handler in original_handlers.items():
-            try:
-                signal.signal(sig, handler)
-            except (ValueError, OSError):
-                pass
+        if sys.exc_info()[0] is None:
+            for sig, handler in original_handlers.items():
+                try:
+                    signal.signal(sig, handler)
+                except (ValueError, OSError):
+                    pass
         if log_handle is not None:
             try:
                 log_handle.close()
@@ -554,7 +516,7 @@ def run(args) -> int:
 
     finished = clock()
     durations, waits = phase_clock.finish(finished)
-    signal_num = requested_signal or (-returncode if returncode < 0 else None)
+    signal_num = signal_state["value"] or (-returncode if returncode < 0 else None)
     interrupted = signal_num in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
     successful = returncode == 0 or returncode in getattr(args, "success_code", [])
     outcome = "interrupted" if interrupted else ("ok" if successful else "fail")
@@ -581,7 +543,7 @@ def run(args) -> int:
         cols, _ = 80, 24
     if interrupted:
         if os.environ.get("BOB_INSTALL_ALL_INTERRUPT_PARENT") != "1":
-            line = f"✗ interrupted after {term.format_clock(mono_elapsed)}"
+            line = f"  ✗ interrupted after {term.format_clock(mono_elapsed)}"
             try:
                 sys.stdout.write(line + "\n")
                 sys.stdout.flush()
@@ -599,7 +561,7 @@ def run(args) -> int:
             phases=detector.phases,
             prev_fill=eta_fill,
         )
-        line = f"✓ {term.sanitize(args.done or 'built')} · {term.format_duration(mono_elapsed)}"
+        line = f"  ✓ {term.sanitize(args.done or 'built')} · {term.format_duration(mono_elapsed)}"
         suffix = estimate.final_suffix(mono_elapsed, done_est)
         if suffix:
             line += f" · {suffix}"
@@ -610,18 +572,22 @@ def run(args) -> int:
         except Exception:
             pass
     else:
-        line = f"✗ build failed after {term.format_clock(mono_elapsed)} · exit {returncode}"
+        line = f"  ✗ build failed after {term.format_clock(mono_elapsed)} · exit {returncode}"
         try:
             sys.stdout.write(line + "\n")
             lines_in_scrollback += _rows_for_line(line, cols)
             excerpt = _failure_excerpt(log_path)
             for output_line in excerpt:
                 rendered = _paint_error_line(output_line)
-                sys.stdout.write("    " + rendered + "\n")
-                lines_in_scrollback += _rows_for_line("    " + output_line, cols)
+                sys.stdout.write("      " + rendered + "\n")
+                lines_in_scrollback += _rows_for_line("      " + output_line, cols)
             if log_path:
-                sys.stdout.write("    full log  " + _human_path(log_path) + "\n")
-                sys.stdout.write("    rerun with  just install-all -v  to stream build output\n")
+                sys.stdout.write("      full log  " + _human_path(log_path) + "\n")
+                if os.environ.get("BOB_INSTALL_ALL") == "1":
+                    hint = "      rerun with  just install-all -v  to stream build output\n"
+                else:
+                    hint = "      rerun with  BOB_INSTALL_VERBOSE=1 just install  to stream build output\n"
+                sys.stdout.write(hint)
                 lines_in_scrollback += 2
             sys.stdout.flush()
         except Exception:
@@ -637,3 +603,176 @@ def run(args) -> int:
             return 128 + signum
         return 128 + signum
     return returncode if returncode >= 0 else 128 + (-returncode)
+
+
+def run(args) -> int:
+    command = list(args.command)
+    if command and command[0] == "--":
+        command = command[1:]
+    if not command:
+        raise ValueError("run requires a command after --")
+
+    parser_name = args.parser
+    clock = getattr(args, "clock", time.monotonic)
+    wall_clock = getattr(args, "wall_clock", time.time)
+    repo = str(Path(args.repo).expanduser().resolve())
+    step = args.step
+    profile = args.profile or ("local-install" if parser_name == "cargo" else "release")
+    crate = args.crate or "bob-obsidian"
+    run_key = history.run_id()
+    toolchain = history.probe_toolchain(step, repo)
+    kind = history.predict_kind(step, repo, profile, toolchain=toolchain)
+    incremental = history.incremental_for(step)
+    host = history.host_name()
+    key = {
+        "host": host,
+        "toolchain": toolchain,
+        "profile": profile,
+        "incremental": incremental,
+    }
+    detector = parsers.PhaseDetector(parser_name, crate=crate)
+    eta = estimate.estimate(
+        step, kind, key, 0.0, detector.phases[0], phases=detector.phases
+    )
+    eta_text = eta.text
+    eta_fill = eta.fill
+    eta_changed_at = 0.0
+    bar_color = estimate.STEP_COLORS.get(step, "35")
+    child_env = os.environ.copy()
+    if parser_name == "cargo":
+        child_env["CARGO_TERM_PROGRESS_WHEN"] = "always"
+        child_env["CARGO_TERM_PROGRESS_WIDTH"] = "80"
+    is_live = bool(sys.stdout.isatty()) and os.environ.get("TERM") != "dumb"
+    signal_state = {"value": None}
+    original_handlers = {}
+    proc: Optional[subprocess.Popen] = None
+
+    def _handle_forward(signum, _frame) -> None:
+        if signal_state["value"] is None:
+            signal_state["value"] = signum
+        # Keyboard interrupts arrive for the whole foreground process group, so
+        # the child already receives SIGINT. Avoid sending it twice while it is
+        # handling the first interrupt. TERM and HUP may target only this runner.
+        if signum == signal.SIGINT:
+            return
+        try:
+            if proc is not None and proc.poll() is None:
+                proc.send_signal(signum)
+        except OSError:
+            pass
+
+    if is_live:
+        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            try:
+                original_handlers[sig] = signal.getsignal(sig)
+                signal.signal(sig, _handle_forward)
+            except (ValueError, OSError):
+                pass
+
+    try:
+        proc = subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env=child_env,
+            bufsize=0,
+        )
+    except OSError as exc:
+        sys.stderr.write(f"install_ui: could not start build: {exc}\n")
+        for sig, handler in original_handlers.items():
+            try:
+                signal.signal(sig, handler)
+            except (ValueError, OSError):
+                pass
+        return 1
+
+    context = locals().copy()
+    try:
+        return _run_spawned(context)
+    except Exception:
+        try:
+            state.append_crash(traceback.format_exc())
+        except Exception:
+            pass
+
+        # Stop drawing before passing the child's remaining bytes through. The
+        # normal loop's finally handles this after mid-loop faults; this also
+        # covers failures during post-spawn setup.
+        if is_live:
+            try:
+                sys.stdout.write("\r\033[K\033[?25h")
+                sys.stdout.flush()
+            except Exception:
+                pass
+
+        pending = context.get("line_buffer")
+        if isinstance(pending, bytearray) and pending:
+            try:
+                stream = getattr(sys.stdout, "buffer", None)
+                if stream is not None:
+                    stream.write(bytes(pending))
+                    stream.flush()
+                else:
+                    sys.stdout.write(pending.decode("utf-8", errors="replace"))
+                    sys.stdout.flush()
+            except Exception:
+                pass
+            pending.clear()
+
+        output = proc.stdout
+        if output is not None:
+            try:
+                while True:
+                    data = os.read(output.fileno(), 8192)
+                    if not data:
+                        break
+                    stream = getattr(sys.stdout, "buffer", None)
+                    if stream is not None:
+                        stream.write(data)
+                        stream.flush()
+                    else:
+                        sys.stdout.write(data.decode("utf-8", errors="replace"))
+                        sys.stdout.flush()
+            except Exception:
+                pass
+
+        try:
+            returncode = proc.wait()
+        except Exception:
+            returncode = proc.poll()
+        selector_value = context.get("selector")
+        if selector_value is not None:
+            try:
+                selector_value.close()
+            except Exception:
+                pass
+        log_value = context.get("log_handle")
+        if log_value is not None:
+            try:
+                log_value.close()
+            except Exception:
+                pass
+        if is_live:
+            try:
+                sys.stdout.write("\033[?25h")
+                sys.stdout.flush()
+            except Exception:
+                pass
+        for sig, handler in original_handlers.items():
+            try:
+                signal.signal(sig, handler)
+            except (ValueError, OSError):
+                pass
+
+        signal_num = signal_state["value"] or (-returncode if returncode is not None and returncode < 0 else None)
+        if signal_num in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            try:
+                signal.signal(int(signal_num), signal.SIG_DFL)
+                os.kill(os.getpid(), int(signal_num))
+            except OSError:
+                return 128 + int(signal_num)
+            return 128 + int(signal_num)
+        if returncode is None:
+            return 1
+        return returncode if returncode >= 0 else 128 + (-returncode)

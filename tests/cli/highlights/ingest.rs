@@ -54,7 +54,10 @@ pub(super) fn create_command(
         )
         .env("XDG_STATE_HOME", temp.path().join("state"))
         .env("BOB_PANDOC_COMMAND", pandoc)
-        .env("BOB_TEST_RENDERED_PDF", fixture);
+        .env("BOB_TEST_RENDERED_PDF", fixture)
+        // Pin the create clock so sequential keep-mode reports share a
+        // captured stamp across a minute boundary.
+        .env("BOB_NOW", "2026-11-06 12:00:00");
     command
 }
 

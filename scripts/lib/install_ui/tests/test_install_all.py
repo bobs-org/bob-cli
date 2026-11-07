@@ -18,6 +18,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
+from install_ui import term
+
 REPO_ROOT = Path(__file__).resolve().parents[4]
 INSTALL_ALL_SRC = REPO_ROOT / "scripts" / "install_all"
 LIB_SRC = REPO_ROOT / "scripts" / "lib"
@@ -574,6 +576,28 @@ class FailureAndRetryTests(_InstallAllCase):
         self.assertIn("teach install-all the pull-first order", retry.stdout)
         self.assertIn("ALL INSTALLED", retry.stdout)
 
+    def test_bob_cli_summary_duration_excludes_slow_sibling_pull(self) -> None:
+        self.sbox.commit_and_push(
+            "bob-plugins", "fix(plugins): exercise delayed sibling pull"
+        )
+        real_git = shutil.which("git")
+        assert real_git is not None
+        self.sbox._write_bin(
+            "git",
+            "#!/bin/sh\n"
+            "case \"$*\" in *bob-plugins*pull*) sleep 2 ;; esac\n"
+            f"exec {real_git} \"$@\"\n",
+        )
+        proc = self.sbox.run()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        cli_row = next(
+            line for line in proc.stdout.splitlines()
+            if line.startswith("  ✓  bob-cli") and "installed @" in line
+        )
+        duration = cli_row.rsplit("  ", 1)[-1]
+        self.assertTrue(duration.endswith("s"), cli_row)
+        self.assertLess(int(duration[:-1]), 2, cli_row)
+
 
 class QuietBuildTests(_InstallAllCase):
     def test_pty_live_runner_replaces_cargo_output_with_built_row(self) -> None:
@@ -618,10 +642,14 @@ class QuietBuildTests(_InstallAllCase):
             FAKE_JUST_INSTALL_FAIL="1",
         )
         out = raw.decode("utf-8", "replace")
+        plain = term.strip_ansi(out)
         self.assertEqual(status, 1, err.decode("utf-8", "replace"))
         self.assertIn("build failed", out)
         self.assertIn("error: fake cargo failure", out)
         self.assertIn("full log", out)
+        self.assertIn("rerun with  just install-all -v", out)
+        self.assertIn("  ✗ build failed", out)
+        self.assertIn("      error: fake cargo failure", plain)
         self.assertIn("STEP FAILED", out)
 
     def test_ctrl_c_stops_after_started_build_without_summary_or_bell(self) -> None:

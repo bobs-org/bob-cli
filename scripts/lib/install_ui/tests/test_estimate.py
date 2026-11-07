@@ -120,6 +120,7 @@ class PercentileAndWordingTests(unittest.TestCase):
         }
         lines = estimate.replay_lines(record, 80)
         self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith("  "))
         self.assertIn("what's new  bob-cli 3", lines[0])
         self.assertIn("⚠", lines[0])
         self.assertIn("+2 more", lines[0])

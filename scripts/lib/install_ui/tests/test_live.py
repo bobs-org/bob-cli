@@ -58,9 +58,16 @@ class ParserTests(unittest.TestCase):
         parser = parsers.PhaseDetector("cargo", "bob-obsidian")
         cases = (
             ("Updating crates.io index", True, "index"),
+            ("Fetch [====> ] 246 complete; 3 pending", True, "index"),
+            ("Downloading [=====> ] crate", True, "index"),
+            ("Locking 2 packages to latest compatible versions", True, "index"),
             ("Compiling serde v1.0.0", True, "deps"),
             ("Compiling bob-obsidian v0.1.0", True, "crate"),
             ("Building [=====>    ] 253/258: bob-obsidian", True, "crate"),
+            ("Installing bob-obsidian v0.4.0 (/repo)", True, None),
+            ("Replacing /root/bin/bob", True, "finish"),
+            ("Replaced package `bob-obsidian`", True, "finish"),
+            ("Installed package `bob-obsidian`", True, "finish"),
             ("Finished `local-install` profile [optimized]", True, "finish"),
             ("Blocking waiting for file lock on build directory", True, None),
             ("warning: a useful warning", False, None),
@@ -361,19 +368,219 @@ class RunnerPtyTests(unittest.TestCase):
         self.assertIn("warning: keep this visible", raw_log)
         self.assertEqual(raw_log.count("Compiling serde"), 1)
 
+    def test_real_cargo_install_transcript_uses_correct_phases_and_hides_chatter(self) -> None:
+        code = '''
+import sys, time
+
+def emit(line, delay=0.12):
+    print(line, flush=True)
+    time.sleep(delay)
+
+emit('  Installing bob-obsidian v0.4.0 (/repo)', 0.12)
+emit('    Updating crates.io index', 0.12)
+sys.stdout.write('\\rFetch [====>   ] 246 complete; 3 pending')
+sys.stdout.flush()
+time.sleep(0.12)
+sys.stdout.write('\\rFetch [=====>  ] 247 complete; 2 pending')
+sys.stdout.flush()
+time.sleep(0.12)
+emit('   Compiling serde v1.0.0', 0.08)
+emit('Building [==>       ] 87/235: serde', 0.08)
+emit('   Compiling bob-obsidian v0.4.0 (/repo)', 0.08)
+emit('Building [=====>    ] 253/258: bob-obsidian', 0.9)
+emit('   Finished `local-install` profile [optimized] target(s) in 8.2s', 0.08)
+emit('   Replacing /root/bin/bob', 0.04)
+emit('    Replaced package `bob-obsidian` v0.4.0 with `bob-obsidian` v0.4.0', 0.04)
+print('warning: be sure to add /root/bin to PATH', flush=True)
+'''
+        proc, master, _, _ = self._start(code)
+        output = self._collect(proc, master, timeout=10).decode("utf-8", errors="replace")
+        os.close(master)
+        self.assertEqual(proc.returncode, 0)
+        frames = [
+            part.split("\033[K", 1)[-1].split("\n", 1)[0]
+            for part in output.split("\r")
+            if any(ch in part for ch in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+        ]
+        index = next(i for i, frame in enumerate(frames) if "updating crates.io index" in frame)
+        deps = next(i for i, frame in enumerate(frames) if "compiling dependencies 87/235" in frame)
+        crate = next(i for i, frame in enumerate(frames) if "compiling bob-obsidian" in frame)
+        self.assertLess(index, deps)
+        self.assertLess(deps, crate)
+        self.assertTrue(all(frame.startswith("  ") for frame in frames))
+        for hidden in (
+            "Fetch [",
+            "Replaced package",
+            "Installing bob-obsidian v",
+        ):
+            self.assertNotIn(hidden, output)
+        self.assertIn("warning: be sure to add /root/bin to PATH", output)
+        rows = {row["phase"]: row for row in state.read_history().value}
+        self.assertGreater(rows["deps"]["secs"], 0)
+        self.assertGreater(rows["crate"]["secs"], rows["deps"]["secs"])
+        self.assertGreater(rows["crate"]["secs"], rows["index"]["secs"])
+
     def test_failure_preserves_child_status_and_excerpt(self) -> None:
         code = "import sys; print('error: broken build', flush=True); sys.exit(101)"
         proc, master, _, _ = self._start(code)
         output = self._collect(proc, master).decode("utf-8", errors="replace")
         os.close(master)
         self.assertEqual(proc.returncode, 101)
-        self.assertIn("build failed", output)
+        self.assertIn("  ✗ build failed", output)
         self.assertIn("error: broken build", output)
+        self.assertIn("      rerun with  BOB_INSTALL_VERBOSE=1 just install", output)
 
         proc, master, _, _ = self._start("raise SystemExit(72)")
         self._collect(proc, master)
         os.close(master)
         self.assertEqual(proc.returncode, 72)
+
+    def test_started_marker_write_failure_does_not_rerun_child(self) -> None:
+        wrapper = self.root / "python-with-marker-fault"
+        wrapper.write_text(
+            "#!" + sys.executable + "\n"
+            "import os, sys\n"
+            "real = " + repr(sys.executable) + "\n"
+            "if len(sys.argv) > 1 and sys.argv[1] == '-c':\n"
+            "    os.execv(real, [real, *sys.argv[1:]])\n"
+            "if len(sys.argv) > 2 and sys.argv[1] == '-B':\n"
+            "    package = sys.argv[2]\n"
+            "    sys.path.insert(0, os.path.dirname(package))\n"
+            "    from install_ui import live\n"
+            "    def fail(_path): raise OSError('injected marker write failure')\n"
+            "    live._touch_started = fail\n"
+            "    sys.argv = [package, *sys.argv[3:]]\n"
+            "    from install_ui.__main__ import main\n"
+            "    raise SystemExit(main())\n"
+            "os.execv(real, [real, *sys.argv[1:]])\n",
+            encoding="utf-8",
+        )
+        wrapper.chmod(0o755)
+        child = self.root / "child.sh"
+        child.write_text("#!/bin/sh\nprintf 'ran\\n' >> \"$RUNS\"\n", encoding="utf-8")
+        child.chmod(0o755)
+        runs = self.root / "runs"
+        shell = (
+            'source "$1"; '
+            'install_ui_run bob-cli cargo "$2" built -- /bin/sh "$3"'
+        )
+        master, slave = pty.openpty()
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 20, 38, 0, 0))
+        env = self.env.copy()
+        env.update(
+            {
+                "BOB_INSTALL_UI_PYTHON": str(wrapper),
+                "RUNS": str(runs),
+                "TMPDIR": str(self.root),
+            }
+        )
+        proc = subprocess.Popen(
+            [
+                "bash", "-c", shell, "bash",
+                str(PKG.parent / "install_ui.sh"),
+                str(self.repo_path),
+                str(child),
+            ],
+            stdin=slave,
+            stdout=slave,
+            stderr=slave,
+            env=env,
+            start_new_session=True,
+            close_fds=True,
+        )
+        os.close(slave)
+        output = self._collect(proc, master).decode("utf-8", errors="replace")
+        os.close(master)
+        self.assertEqual(proc.returncode, 0, output)
+        self.assertEqual(runs.read_text(encoding="utf-8").splitlines(), ["ran"])
+
+    def _run_injected_fault(self, fault: str, status: int) -> tuple[int, str, Path]:
+        marker = self.root / f"child-{fault}-{status}-runs"
+        started = self.root / f"started-{fault}-{status}"
+        rows_file = self.root / f"rows-{fault}-{status}"
+        if fault == "parse":
+            body = (
+                "import os,sys,time; "
+                f"open({str(marker)!r}, 'a').write('ran\\n'); "
+                "print('TRIGGER', flush=True); time.sleep(0.15); "
+                "sys.stdout.write('z'*200000); sys.stdout.flush(); "
+                f"sys.exit({status})"
+            )
+        elif fault in ("history", "estimate"):
+            body = (
+                "import os,sys,time; "
+                f"open({str(marker)!r}, 'a').write('ran\\n'); "
+                "sys.stdout.write(('warning: flood\\n' * 4096)); sys.stdout.flush(); "
+                "time.sleep(0.12); "
+                f"sys.exit({status})"
+            )
+        else:
+            raise AssertionError(f"unknown fault: {fault}")
+        outer = '''
+import argparse, sys
+sys.path.insert(0, sys.argv[1])
+from install_ui import estimate, history, live, parsers
+fault = sys.argv[8]
+if fault == "parse":
+    original = parsers.PhaseDetector.parse
+    def broken_parse(self, line):
+        if line.startswith("TRIGGER"):
+            raise RuntimeError("injected parse fault")
+        return original(self, line)
+    parsers.PhaseDetector.parse = broken_parse
+elif fault == "history":
+    def broken_history(**_kwargs):
+        raise RuntimeError("injected history fault")
+    history.append_step_rows = broken_history
+elif fault == "estimate":
+    original = estimate.estimate
+    def broken_estimate(*args, **kwargs):
+        if len(args) > 4 and args[4] == "finish" and args[3] > 0:
+            raise RuntimeError("injected final estimate fault")
+        return original(*args, **kwargs)
+    estimate.estimate = broken_estimate
+args = argparse.Namespace(
+    command=sys.argv[2:5], parser="cargo", repo=sys.argv[5],
+    step="bob-cli", profile=None, crate=None, done="built",
+    started_file=sys.argv[6], rows_file=sys.argv[7],
+)
+raise SystemExit(live.run(args))
+'''
+        master, slave = pty.openpty()
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 20, 38, 0, 0))
+        proc = subprocess.Popen(
+            [
+                sys.executable, "-c", outer, str(PKG.parent), sys.executable,
+                "-c", body, str(self.repo_path), str(started), str(rows_file), fault,
+            ],
+            stdin=slave,
+            stdout=slave,
+            stderr=slave,
+            env=self.env,
+            start_new_session=True,
+            close_fds=True,
+        )
+        os.close(slave)
+        output = self._collect(proc, master, timeout=10).decode("utf-8", errors="replace")
+        os.close(master)
+        return proc.returncode, output, marker
+
+    def test_post_spawn_faults_preserve_child_status_and_drain_output(self) -> None:
+        for fault in ("parse", "history"):
+            for status in (0, 101):
+                with self.subTest(fault=fault, status=status):
+                    returned, output, marker = self._run_injected_fault(fault, status)
+                    self.assertEqual(returned, status, output[-500:])
+                    self.assertEqual(marker.read_text(encoding="utf-8").splitlines(), ["ran"])
+                    self.assertIn("injected " + ("parse" if fault == "parse" else "history") + " fault", (self.state_path / "crash.log").read_text(encoding="utf-8"))
+                    if fault == "parse":
+                        self.assertGreater(output.count("z"), 64000)
+                    else:
+                        self.assertGreater(output.count("warning: flood"), 3000)
+        returned, output, marker = self._run_injected_fault("estimate", 0)
+        self.assertEqual(returned, 0, output[-500:])
+        self.assertEqual(marker.read_text(encoding="utf-8").splitlines(), ["ran"])
+        self.assertIn("injected final estimate fault", (self.state_path / "crash.log").read_text(encoding="utf-8"))
 
     def test_swiftpm_runner_tracks_app_helper_and_install(self) -> None:
         code = (
@@ -406,7 +613,7 @@ class RunnerPtyTests(unittest.TestCase):
         output = self._collect(proc, master).decode("utf-8", errors="replace")
         os.close(master)
         self.assertEqual(proc.returncode, 0)
-        self.assertIn("waiting for another build to relea…", output)
+        self.assertIn("waiting for another build to rel…", output)
         rows = {row["phase"]: row for row in state.read_history().value}
         self.assertGreater(rows["deps"]["waited"], 0.1)
         self.assertLess(rows["deps"]["secs"], 0.2)

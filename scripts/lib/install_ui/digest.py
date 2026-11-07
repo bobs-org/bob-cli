@@ -101,7 +101,7 @@ def _widest_scope(repo_commits: list[commits.CommitInfo]) -> int:
 
 
 def _prefix_width(type_width: int, scope_width: int) -> int:
-    return 2 + type_width + 2 + scope_width + 2
+    return 2 + 2 + type_width + 2 + scope_width + 2
 
 
 def _paint_subject_row(
@@ -124,7 +124,7 @@ def _paint_subject_row(
     scope_cell = term.truncate_cells(scope, 16) if scope else ""
     scope_cell = _pad_cells(scope_cell, scope_width_eff)
     type_cell = _pad_cells(type_str, type_width)
-    prefix = badge + type_cell + "  " + scope_cell + "  "
+    prefix = "  " + badge + type_cell + "  " + scope_cell + "  "
     sha = (commit.sha or "")[:8]
     if show_sha:
         avail = max(width - _prefix_width(type_width, scope_width_eff) - 8 - 1, 1)
@@ -141,7 +141,7 @@ def _paint_subject_row(
                 type_out = type_cell
             scope_out = term.paint("2", scope_cell, colorize=True)
             sha_out = term.paint("2", sha, colorize=True)
-            return f"{badge_out}{type_out}  {scope_out}  {short}{gap} {sha_out}"
+            return f"  {badge_out}{type_out}  {scope_out}  {short}{gap} {sha_out}"
         return f"{prefix}{short}{gap} {sha}"
     avail = max(width - _prefix_width(type_width, scope_width_eff), 1)
     short = term.truncate_cells(subject, avail)
@@ -153,7 +153,7 @@ def _paint_subject_row(
         else:
             type_out = type_cell
         scope_out = term.paint("2", scope_cell, colorize=True)
-        return f"{badge_out}{type_out}  {scope_out}  {short}"
+        return f"  {badge_out}{type_out}  {scope_out}  {short}"
     return f"{prefix}{short}"
 
 
@@ -281,12 +281,12 @@ def _header_lines(
     if colorize:
         code = (repo.color_code or "1").strip() or "1"
         bold = code if code.startswith("1;") else f"1;{code}"
-        head = term.paint(bold, repo.name, colorize=True)
+        head = "  " + term.paint(bold, repo.name, colorize=True)
         tail = term.paint("2", f" · {label}" if label else "", colorize=True)
         single = [head + tail]
     else:
-        single = [visible]
-    if term.cell_width(visible) <= width:
+        single = [f"  {visible}"]
+    if term.cell_width(visible) + 2 <= width:
         lines = single
     else:
         # Narrow panes get the range label on its own wrapped rows instead
@@ -294,15 +294,15 @@ def _header_lines(
         if colorize:
             code = (repo.color_code or "1").strip() or "1"
             bold = code if code.startswith("1;") else f"1;{code}"
-            lines = [term.paint(bold, repo.name, colorize=True)]
+            lines = ["  " + term.paint(bold, repo.name, colorize=True)]
         else:
-            lines = [repo.name]
-        for row in term.wrap_cells(label, max(width - 2, 10)) or [""]:
-            text = f"  {row}"
+            lines = ["  " + repo.name]
+        for row in term.wrap_cells(label, max(width - 4, 10)) or [""]:
+            text = f"    {row}"
             lines.append(term.paint("2", text, colorize=True) if colorize else text)
     for note in repo.notes:
-        for row in term.wrap_cells(note, max(width - 2, 10)) or [""]:
-            text = f"  {row}"
+        for row in term.wrap_cells(note, max(width - 4, 10)) or [""]:
+            text = f"    {row}"
             lines.append(term.paint("2", text, colorize=True) if colorize else text)
     return lines
 
@@ -323,7 +323,7 @@ def _render_block(
     ordered = commits.sort_commits(repo.commit_list)
     if repo.kind == "cloned":
         short = (repo.head or "")[:8]
-        row = f"  initial checkout @ {short}"
+        row = f"    initial checkout @ {short}"
         lines.append(term.paint("2", row, colorize=True) if colorize else row)
         return lines
     if level == "subjects":
@@ -407,7 +407,7 @@ def _render_grouped(
         )
         if repo.kind == "cloned":
             short = (repo.head or "")[:8]
-            row = f"  initial checkout @ {short}"
+            row = f"    initial checkout @ {short}"
             head_lines.append(
                 term.paint("2", row, colorize=True) if colorize else row
             )
@@ -464,11 +464,11 @@ def _render_grouped(
         hidden.extend(folded_only)
         if hidden:
             summary = _hidden_summary(hidden)
-            for row in term.wrap_cells(summary, max(width - 2, 10)) or [""]:
-                text = f"  {row}"
+            for row in term.wrap_cells(summary, max(width - 4, 10)) or [""]:
+                text = f"    {row}"
                 out.append(term.paint("2", text, colorize=True) if colorize else text)
             git_line = term.truncate_cells(
-                f"    git -C {repo.directory} log --oneline "
+                f"      git -C {repo.directory} log --oneline "
                 f"{(repo.base or '')[:8]}..{(repo.head or '')[:8]}",
                 width,
             )
@@ -563,12 +563,12 @@ def _render_plain(
     shown_total = 0
     record_repos = []
     for repo in repos:
-        header = f"{repo.name} · {repo.label}" if repo.label else repo.name
+        header = f"  {repo.name} · {repo.label}" if repo.label else f"  {repo.name}"
         out.append(header)
         for note in repo.notes:
-            out.append(f"  {note}")
+            out.append(f"    {note}")
         if repo.kind == "cloned":
-            out.append(f"  initial checkout @ {(repo.head or '')[:8]}")
+            out.append(f"    initial checkout @ {(repo.head or '')[:8]}")
             record_repos.append(
                 {
                     "name": repo.name, "count": 1, "label": repo.label,
@@ -583,7 +583,7 @@ def _render_plain(
             if shown_total >= _NON_TTY_CAP:
                 continue
             line = term.sanitize(commit.raw_subject)
-            out.append(term.truncate_cells(f"  {line}", width))
+            out.append(term.truncate_cells(f"    {line}", width))
             shown_total += 1
             subjects.append(line)
         record_repos.append(
@@ -599,7 +599,7 @@ def _render_plain(
         len(r.commit_list) for r in repos if r.kind != "cloned"
     )
     if total > shown_total:
-        out.append(f"  + {total - shown_total} more")
+        out.append(f"    + {total - shown_total} more")
     text = "\n".join(out) + "\n"
     record = {"v": 1, "rows": len(out), "level": "subjects", "repos": record_repos}
     return text, record

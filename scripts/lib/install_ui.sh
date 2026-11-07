@@ -109,7 +109,7 @@ install_ui_run() {
     rm -f "$started_file"
     return 130
   fi
-  if [[ ! -e "$started_file" ]]; then
+  if (( status != 0 && status != 130 )) && [[ ! -e "$started_file" ]]; then
     local fallback_status
     if "$@"; then fallback_status=0; else fallback_status=$?; fi
     rm -f "$started_file"

@@ -318,7 +318,7 @@ interrupt_run() {
   if [[ -t 1 ]]; then
     printf '\r\033[K'
   fi
-  printf '✗ interrupted after %s\n' "$(format_clock "$SECONDS")"
+  printf '  ✗ interrupted after %s\n' "$(format_clock "$SECONDS")"
   record_step_finish interrupted
   exit 130
 }
@@ -1277,7 +1277,6 @@ elif [[ "$clones_offered" != 1 ]]; then
   offer_missing_clones
 fi
 
-cli_start=0
 if [[ -n "$self_pull_state" ]]; then
   PULL_STATE="$self_pull_state"
   PULL_DETAIL="$self_pull_detail"
@@ -1353,6 +1352,7 @@ print_digest
 counting_rows=1
 print_plan
 
+cli_start="$SECONDS"
 banner 35 '🦀' 'BOB-CLI  1/3'
 command_line "just --justfile $(display_path "$root/justfile") install"
 if (cd "$root" && just --justfile "$root/justfile" install); then

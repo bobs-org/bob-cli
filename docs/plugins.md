@@ -179,6 +179,8 @@ The bob-cli `just install-all` command runs this sync against the sibling
 `bob-plugins` checkout after pulling it. It previews the sync with
 `bob plugins sync --dry-run --format json` to decide whether to restart
 Obsidian and, on macOS, posts a notification before restarting Obsidian.
+During `just install-all`, the sync's diff output goes to the step log, one row
+per changed plugin plus any warnings is shown, and `-v` streams the raw output.
 
 Pre-stamp vault copies cannot be protected retroactively: the first stamp-aware
 sync bootstraps provenance after a successful copy. Existing binaries that do
