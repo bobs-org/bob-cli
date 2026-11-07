@@ -9,19 +9,15 @@ description: Index of bob capture tokens with syntax, examples, and links into t
 Pomodoro session changes. This page is the token lookup. The full grammar and
 refusal messages live in the [Capture contract](../capture.md).
 
-At a glance: `@` says where, `#` names a place or task type, and `%` says how
-to capture. Completion opens the task-type menu at a bare edge `#` and the
-directive menu at a bare edge `%`.
+`@` routes; `#` names a place or type; `%` selects a directive. Bare edge
+`#` and `%` open their menus.
 
-Examples below were captured from this checkout's `bob` in an isolated
-`HOME`/`XDG_*` tree, a synthetic vault, `BOB_NOW=2026-10-20 12:00:00`,
-`TZ=UTC`, and `BOB_REF_JOBS_KICK=off`. Copy the bundled demo with the
-[first Bob day tutorial](../start/first-bob-day.md) when you need that
-fixture. Session examples need today's daily note with an open
-`## Pomodoros` entry. Dependency writes need Obsidian Tasks settings that
-define Blocked as `?`. Quote tokens in Zsh (`*`, `!`, `?`, and `#` glob).
-Zsh's `EQUALS` expansion rewrites a word that starts with `=`, so `bob capture =focus` fails unquoted: always single-quote (`'=focus'`, `'x =focus'`).
-Network, clipboard, sync, and hook execution are not used here.
+Examples use an isolated synthetic vault at `BOB_NOW=2026-10-20 12:00:00`,
+`TZ=UTC`, with network, sync, and hooks disabled. The
+[first Bob day tutorial](../start/first-bob-day.md) supplies a demo vault.
+Sessions need today's `## Pomodoros` ledger; dependencies need a configured
+Blocked checkbox (`?`). Quote drafts in Zsh: globbing affects `*`, `!`, `?`,
+and `#`, and `EQUALS` expansion affects `=focus`. Use `'=focus'` or `'x =focus'`.
 
 Options precede the draft. An unknown alphabetic long option such as
 `--anything` is rejected before draft text begins; after text begins it is
@@ -691,8 +687,10 @@ The captured (or explicitly selected) task links to `note.md`'s
 labels use `~note:id|see` or `~note:id|"follow-up of"`. Quote `~` on
 the shell. The target may be open, closed, in any active note, a daily
 note, or `done/` (a mirror is skipped for archived and previous-daily
-targets). Relations are inert: no status, lane, Pomodoro, or field
-changes. A `||` spelling (`~note:id||see`,
+targets). Ordinary labels record a relation; configured cancel, complete,
+or merge labels also act on the source. Successor labels offer it when
+the target is parked or done. See [relation effects](configuration.md#relations).
+A `||` spelling (`~note:id||see`,
 `~note:id||"follow-up of"`) stores the identical label and hides it
 from suggestions once the capture succeeds; a third pipe is a teaching
 error (`use || to hide a label, | to name one`).
@@ -701,7 +699,10 @@ The label pipe attaches directly to the target. Editors using
 [`capture-rewrite`](../capture.md#bob-capture-rewrite) with `--cursor` just
 after a newly typed pipe can attach it across spaces or tabs
 (`~note:id |` → `~note:id|`, `~note:id ||` → `~note:id||`); direct
-`bob capture` input does not apply that rewrite.
+`bob capture` input does not apply that rewrite. With an explicit cursor,
+`-` opens the `~` picker and `=` there switches to `~~`. After a complete
+target, a glued `~` or `=` flips direction; after a label, only `~` flips.
+The label stays unchanged.
 
 ```bash
 bob capture 'Fix flaky capture retries ~sase:retry-design|see'

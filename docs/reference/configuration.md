@@ -154,30 +154,21 @@ See [task dependency links](../task-dependencies.md#14-blocks-lines).
 | `relations.linked_from_mentions` | Boolean | `true` | Write inert `(💬 mentions)` entries on LINKED FROM for block links in a task's own text ([text mentions](../task-relations.md#19-text-mentions)). `false` removes only those entries on writable tasks, deleting a line left empty, and mints nothing for mentions. |
 | `relations.cancel_labels` | List of relation labels | `[]` | Committing a link with one of these labels also cancels the source task ([cancel labels](../task-relations.md#17-cancel-labels)). Matched by `relation_label_key` (case, spacing, and a trailing colon ignored). Empty cancels nothing. |
 | `relations.complete_labels` | List of relation labels | `[]` | Committing a link with one of these labels also completes (marks Done) the source task ([complete labels](../task-relations.md#18-complete-labels)). Matched like `cancel_labels`. Empty completes nothing. |
+| `relations.successor_labels` | List of relation labels | `[]` | Offer the source task when the target is parked or completed; link only after explicit selection ([successor labels](../task-relations.md#20-successor-labels)). |
+| `relations.merge_labels` | List of relation labels | `[]` | Committing the label merges an open source into the target. Explicit `>`, `<`, and `bob task merge` use the first configured label, or `merged into` when empty ([merge labels](../task-relations.md#21-merge-labels)). |
 
 An invalid `relations.linked_from_lines` value falls back to `true` and
 warns. An invalid `relations.linked_from_mentions` value falls back to
 `true` and warns, in the same wording pattern. See
 [Task relations](../task-relations.md#12-kill-switch-outputs-and-warnings).
 
-`relations.cancel_labels` fails toward fewer cancels: a missing key,
-`null`, or `[]` is a valid empty policy; a non-list value warns and
-cancels nothing; an illegal or non-string entry warns and is skipped;
-duplicate keys collapse. A `cancel_labels` problem never becomes a
-config error and never changes `linked_from_lines`. Hide is not
-disable: a hidden or one-off cancel label still cancels when typed.
-Chezmoi enables `duplicate of` and `superseded by` (see
-[Cancel labels](../task-relations.md#17-cancel-labels)).
-
-`relations.complete_labels` parses the same way, failing toward fewer
-completes, and never becomes a config error. A key listed in both
-`cancel_labels` and `complete_labels` is dropped from both lists and
-warns once:
-`relations: “{label}” is in both cancel_labels and complete_labels in <path>; it closes nothing`.
-Hide is not disable: a hidden or one-off complete label still
-completes when typed. Chezmoi enables `implemented by` and
-`verified by` at rollout (see
-[Complete labels](../task-relations.md#18-complete-labels)).
+All four effect lists accept a missing key, `null`, or `[]` as an empty
+policy. A non-list value warns and enables no effects for that list;
+illegal or non-string entries warn and are skipped, and duplicate keys
+collapse. These warnings do not disable `linked_from_lines`. A label key
+present in more than one effect list is removed from every conflicting
+list with a warning. Hiding a label, including with capture's `||`, affects
+suggestions only: its configured effect still applies when used.
 
 ### `freshness`
 
@@ -279,7 +270,7 @@ breaks other config loaders. `BOB_GCAL_GOG` replaces `gog` on `PATH`. See the
 | `gmail.never_save.labels` | Sequence of strings | `[]` | Gmail label names that `save` refuses. |
 | `gmail.pull.inbox` | Safe relative path inside the vault | `gmail_inbox.md` | Task file receiving one linked task per newly pulled thread. |
 | `gmail.pull.label` | String or unset | `bob` | Gmail label searched by `pull`; unset or empty disables pull. |
-| `gmail.signature` | `gmail` or `none` | `gmail` | Signature mode for the later compose command. |
+| `gmail.signature` | `gmail` or `none` | `gmail` | Include the account's Gmail signature in outgoing drafts, or omit it. The stored-draft preview includes the resulting body. |
 | `gmail.timeout_secs` | Integer greater than 0 | `60` | gog request timeout in seconds. |
 
 A missing `gmail:` block uses those defaults. Unknown keys are ignored. A

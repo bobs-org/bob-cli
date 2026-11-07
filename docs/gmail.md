@@ -195,7 +195,8 @@ gmail:
 - `pull.inbox` must be a safe relative path inside the vault. If it is
   missing, Bob creates it with `parent: "[[inbox]]"`, `type: "[[area]]"`,
   `ready_cap: off`, and a `## Tasks` section.
-- `signature` is `gmail` (default) or `none`; the later send flow honors it.
+- `signature` is `gmail` (default) or `none`; outgoing drafts include the
+  account's Gmail signature or omit it. The stored-draft preview shows the result.
 - `timeout_secs` must be an integer greater than 0. Default 60.
 - The host label is the same slug vault-sync uses in commit subjects.
   `doctor` prints it. Unset `writer` means this host may write; a mismatch
@@ -432,8 +433,8 @@ That differs from `save -d`, which only prints what it would write. A non-TTY
 Bob shows the colored preview and asks `[y/N]`; anything but an affirmative
 answer keeps the draft.
 
-With `-f json`, dry-run and confirmation success share one schema-1 preview
-document: `status: preview`, `note`, `draft_id`, `digest`, and `preview`. The
+With `-f json`, a draft preview uses a schema-1 document with
+`status: preview`, `note`, `draft_id`, `digest`, and `preview`. The
 preview carries the account, actual From, ordered To/Cc/Bcc, subject, reply
 target (null, or thread id, Gmail message id, RFC Message-ID, and mode),
 exact text body, HTML SHA-256, signature mode, attachments (vault path,
@@ -441,6 +442,12 @@ transmitted filename, byte length, SHA-256), and flattened links (original
 target and resulting text). The Bob Mail plugin renders exactly these fields.
 Synthetic examples live under `tests/fixtures/gmail_compose/` and are checked
 against CLI output so they cannot drift from the implementation.
+
+Send and recovery results use schema 1 with `status` (`sent`, `already_sent`,
+`declined`, or `recovered_to_draft`), `note`, `draft_id`, `thread_id`, and
+`sent_message_id`; unavailable identities are null. These state results omit
+the preview and digest. Recovery precedes the dry-run branch, so `send -d`
+can return a recovery result when an earlier send is unresolved.
 
 ```bash
 bob gmail send mail/2026/261105_lease_renewal.md -d

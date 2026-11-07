@@ -386,7 +386,7 @@ heading.
 
 ```markdown
 ---
-parent: "[[day]]"
+parent: "[[2026/2026-W43]]"
 ---
 # Daily note
 
@@ -551,6 +551,35 @@ Contract: [Reference library](../ref.md),
 [Highlights Reference Note Sync](../highlights-ref-sync.md),
 [Reference Note](glossary.md#reference-note).
 
+### Period notes
+
+Daily notes belong to ISO weeks, then quarters, years, `all_time`, and
+`org`. Daily folders use the calendar year; week folders use the ISO
+week-year. Quarters group weeks 1–13, 14–26, 27–39, and 40–52/53.
+
+| Period | Path | Parent |
+| --- | --- | --- |
+| Week | `YYYY/YYYY-Www.md` | Its quarter |
+| Quarter | `YYYY/YYYY-Qn.md` | `YYYY.md` |
+| Year | `YYYY.md` | `all_time.md` |
+| All time | `all_time.md` | `org.md` |
+
+These notes use `type: "[[day]]"` and hold no tasks. Bob owns the scaffold
+and agent callout; `bob periods draft` writes only the Review and Headline
+while they remain eligible. Intentions, Outcomes, Theme, Reflection, and
+Notes are user-owned. See [Period notes](../periods.md) for scaffolds,
+review states, and relative period IDs.
+
+### Mail notes
+
+Saved Gmail threads use `type: "[[mail]]"` and default to
+`mail/YYYY/YYMMDD_subject_slug.md`. Identity is the account plus
+`gmail_thread_id`; refresh keeps the original path. Messages are inert
+content inside Bob's managed region, with user notes outside it. Tasks link
+to the mail note rather than copying its body. Local compose notes and Reply
+sections supply outgoing drafts. See [Bob Gmail](../gmail.md) for ownership,
+attachments, and confirmed sending.
+
 ## Directory tree
 
 Default layout relative to `BOB_DIR`. Only some paths are required; others
@@ -561,13 +590,19 @@ vault/
 ├── inbox.md                 # triage root (counts as an inbox file)
 ├── mac_inbox.md             # default capture target (area / inbox)
 ├── gkeep_inbox.md           # default bob gkeep pull target
+├── gmail_inbox.md           # default bob gmail pull target
 ├── work.md                  # area note; @work
 ├── work_intake_flow.md      # project note from @work^intake-flow@
 ├── 2026/20261020.md         # daily note / Pomodoro ledger
+├── 2026/2026-W43.md         # ISO week note
+├── 2026/2026-Q4.md          # 13-week quarter (plus W53 in Q4)
+├── 2026.md                 # ISO year note
+├── all_time.md             # period-tree root beneath org.md
 ├── dash.md                  # dashboard (not a capture route)
 ├── done/                    # bob task archive
 ├── ref/                     # generated reference notes
 │   └── papers/example.md
+├── mail/2026/               # saved mail and local compose notes
 ├── lib/                     # library PDFs (configurable)
 │   └── papers/example.pdf
 ├── xlib/                    # host-local intake queue
@@ -579,6 +614,7 @@ vault/
 │   ├── ref-sources/         # write-once saved Markdown + code.json catalogs
 │   ├── themes/              # synced per-host theme preference journals
 │   ├── relations/           # synced per-host relation-label preference journals
+│   ├── gmail/               # synced per-host Gmail receipts, without message bodies
 │   └── attachments/         # synced per-host attachment origin journals
 └── .obsidian/plugins/       # installed community plugins, including Bob's
 ```
@@ -590,6 +626,8 @@ vault/
 | `mac_inbox.md` | Created on first default capture | `@route`, `@@route`, `--route` |
 | `ref/`, `lib/`, `xlib/` | Needed for the reference library | `bob ref` configuration |
 | `gkeep_inbox.md` | Needed for Keep drain | `gkeep.target` |
+| `mail/`, `gmail_inbox.md` | Created by Gmail save/compose and label pull | `gmail.folder`, `gmail.pull.inbox` |
+| Period notes | Created by `bob periods ensure` | Fixed paths in the period tree |
 | `done/` | Created by archive | none |
 | `.obsidian/plugins/obsidian-tasks-plugin/data.json` | Needed for Dataview Tasks and Blocked writes | none |
 
