@@ -319,6 +319,11 @@ class Sandbox:
         # An empty override would resolve to the cwd; drop it so the state
         # directory falls back to the isolated XDG_STATE_HOME.
         del env["BOB_INSTALL_STATE_DIR"]
+        # Seeded history rows record incremental=True, while incremental_for()
+        # reads the caller's CARGO_INCREMENTAL (rust-cache exports 0 in CI).
+        # Scrub it so the child install_all process always sees the default
+        # (incremental enabled) regardless of the ambient environment.
+        env.pop("CARGO_INCREMENTAL", None)
         return env
 
     def run(self, *args: str, **overrides: str) -> subprocess.CompletedProcess:
