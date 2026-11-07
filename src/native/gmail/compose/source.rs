@@ -469,18 +469,28 @@ pub(crate) fn parse_recipient_list(
         if value.is_empty() {
             return Err(SourceError::InvalidRecipients);
         }
-        let address = if let Some(open) = value.rfind('<') {
-            if !value.ends_with('>') || value[..open].contains(['<', '>']) {
-                return Err(SourceError::InvalidRecipients);
-            }
-            value[open + 1..value.len() - 1].trim()
-        } else {
-            value
-        };
+        let address = mailbox_address(value)?;
         validate_address(address)?;
         recipients.push(value.to_string());
     }
     Ok(recipients)
+}
+
+/// The bare address of one recipient from `parse_recipient_list`, so
+/// `Ada <ada@example.com>` and `"Ada" <ada@example.com>` name one mailbox.
+pub(crate) fn recipient_address(recipient: &str) -> &str {
+    let value = recipient.trim();
+    mailbox_address(value).unwrap_or(value)
+}
+
+fn mailbox_address(value: &str) -> Result<&str, SourceError> {
+    let Some(open) = value.rfind('<') else {
+        return Ok(value);
+    };
+    if !value.ends_with('>') || value[..open].contains(['<', '>']) {
+        return Err(SourceError::InvalidRecipients);
+    }
+    Ok(value[open + 1..value.len() - 1].trim())
 }
 
 fn split_addresses(raw: &str) -> Result<Vec<&str>, SourceError> {

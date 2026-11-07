@@ -301,3 +301,142 @@ fn unknown_create_result_retains_marker_and_never_retries_create() {
     );
     assert_eq!(draft_calls(&fake, "create").len(), 1);
 }
+
+#[test]
+fn gog_0471_direction_html_and_quoted_names_read_back_and_update() {
+    let env = GmailEnv::new("bob-cli-gmail-draft-gog-0471");
+    let fake = FakeGog::new(&env, "gog").scenario("compose_grant_gog_0471");
+    let created = run_gmail(
+        &env,
+        &fake,
+        &[
+            "new",
+            "-t",
+            "Ada Lovelace <ada@example.com>",
+            "-s",
+            "Lease renewal",
+            "-f",
+            "json",
+        ],
+    );
+    assert_success(&created, "create local compose note");
+    let note = json_stdout(&created)["note"].as_str().unwrap().to_string();
+    let note_path = env.vault().join(&note);
+    let original = fs::read_to_string(&note_path).unwrap();
+    fs::write(&note_path, format!("{original}Hello **Ada**.\n")).unwrap();
+
+    let first = run_gmail(&env, &fake, &["draft", &note, "-f", "json"]);
+    assert_success(&first, "create a draft through gog 0.47.1");
+    let first_doc = json_stdout(&first);
+    assert_eq!(
+        first_doc["preview"]["to"][0],
+        "\"Ada Lovelace\" <ada@example.com>"
+    );
+    assert_eq!(
+        first_doc["preview"]["text_body"],
+        "Hello Ada.\n\n-- \nTest signature"
+    );
+    let draft_id = first_doc["draft_id"].as_str().unwrap().to_string();
+
+    let updated = fs::read_to_string(&note_path).unwrap();
+    fs::write(&note_path, format!("{updated}\nSecond paragraph.\n")).unwrap();
+    let second = run_gmail(&env, &fake, &["draft", &note, "-f", "json"]);
+    assert_success(&second, "update the draft through gog 0.47.1");
+    let second_doc = json_stdout(&second);
+    assert_eq!(second_doc["draft_id"], draft_id);
+    assert_eq!(
+        second_doc["preview"]["to"][0],
+        "\"Ada Lovelace\" <ada@example.com>"
+    );
+    assert_eq!(draft_calls(&fake, "create").len(), 1);
+    assert_eq!(draft_calls(&fake, "update").len(), 1);
+}
+
+fn own_sent_reply_note(env: &GmailEnv, fake: &FakeGog, to: &str) -> String {
+    let note = "mail/2026/followup.md";
+    let note_path = env.vault().join(note);
+    fs::create_dir_all(note_path.parent().unwrap()).unwrap();
+    fs::write(
+        &note_path,
+        "---\ntype: \"[[mail]]\"\ncontent: untrusted-email\ngmail_account: you@example.com\ngmail_thread_id: 0123456789abcdef\ntitle: Follow-up\nwho: Dana\nstarted: 2026-11-06T16:00:00+00:00\nupdated: 2026-11-06T16:00:00+00:00\nmessages: 1\n---\n# Follow-up\n\n· you ↔ Dana · 1 message · Nov 6\n\n## Notes\n\n## Conversation\n\n<!-- bob:gmail:begin v1 -->\n<!-- bob:gmail:msg 0123456789abcdef %3Cfollowup%40example.test%3E -->\n> [!mail-sent+] **You** · Nov 6\n> Sounds good.\n^m-0123456789abcdef\n<!-- bob:gmail:end -->\n",
+    )
+    .unwrap();
+    fake.set_thread(
+        serde_json::json!({
+            "thread": {
+                "id": "0123456789abcdef",
+                "messages": [{
+                    "id": "0123456789abcdef",
+                    "threadId": "0123456789abcdef",
+                    "labelIds": ["SENT"],
+                    "payload": {
+                        "mimeType": "text/plain",
+                        "headers": [
+                            {"name": "From", "value": "You <you@example.com>"},
+                            {"name": "To", "value": to},
+                            {"name": "Cc", "value": "Lee <lee@example.com>"},
+                            {"name": "Subject", "value": "Follow-up"},
+                            {"name": "Message-ID", "value": "<followup@example.test>"}
+                        ],
+                        "body": {"size": 11, "data": "U291bmRzIGdvb2Qu"}
+                    }
+                }]
+            }
+        }),
+        serde_json::json!({}),
+    );
+    let appended = run_gmail(env, fake, &["reply", note, "-f", "json"]);
+    assert_success(&appended, "append reply section");
+    fs::write(
+        &note_path,
+        format!(
+            "{}One more thing.\n",
+            fs::read_to_string(&note_path).unwrap()
+        ),
+    )
+    .unwrap();
+    note.to_string()
+}
+
+#[test]
+fn reply_to_your_own_sent_message_answers_its_recipients() {
+    let env = GmailEnv::new("bob-cli-gmail-draft-reply-own-sent");
+    let fake = FakeGog::new(&env, "gog").scenario("compose_grant_gog_0471");
+    let note = own_sent_reply_note(
+        &env,
+        &fake,
+        "Dana Scully <dana@example.com>, you@example.com",
+    );
+
+    let output = run_gmail(&env, &fake, &["draft", &note, "-f", "json"]);
+    assert_success(&output, "draft a reply to your own sent message");
+    let doc = json_stdout(&output);
+    assert_eq!(doc["preview"]["subject"], "Re: Follow-up");
+    assert_eq!(doc["preview"]["reply_target"]["mode"], "reply");
+    assert_eq!(
+        doc["preview"]["to"],
+        serde_json::json!(["\"Dana Scully\" <dana@example.com>"])
+    );
+    assert_eq!(doc["preview"]["cc"], serde_json::json!([]));
+    let create = draft_calls(&fake, "create");
+    assert_eq!(create.len(), 1);
+    assert!(create[0]
+        .windows(2)
+        .any(|pair| pair == ["--to", "Dana Scully <dana@example.com>"]));
+    assert!(!create[0].contains(&"--reply-all".to_string()));
+}
+
+#[test]
+fn reply_to_your_own_message_to_yourself_creates_no_draft() {
+    let env = GmailEnv::new("bob-cli-gmail-draft-reply-own-only");
+    let fake = FakeGog::new(&env, "gog").scenario("compose_grant_gog_0471");
+    let note = own_sent_reply_note(&env, &fake, "You <you@example.com>");
+
+    let output = run_gmail(&env, &fake, &["draft", &note, "-f", "json"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert_eq!(
+        json_stdout(&output)["error"]["kind"],
+        "reply_target_invalid"
+    );
+    assert!(draft_calls(&fake, "create").is_empty());
+}

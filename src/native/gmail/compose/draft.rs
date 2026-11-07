@@ -575,13 +575,15 @@ fn compose_request(
                                 .to_string(),
                         )
                     })?;
-                source::parse_recipient_list(from).map_err(|_| {
-                    GmailError::runtime(
+                let sender =
+                    source::parse_recipient_list(from).map_err(|_| {
+                        GmailError::runtime(
                     "reply_target_invalid",
                     "the selected reply message has an invalid sender address"
                         .to_string(),
                 )
-                })?
+                    })?;
+                reply_recipients(target_message, sender, account)?
             } else {
                 Vec::new()
             };
@@ -619,6 +621,42 @@ fn compose_request(
         reply_all,
         clear_reply_context: source.reply_target.is_none(),
     })
+}
+
+/// A plain Reply answers the selected message's sender. When the account sent
+/// that message, it answers the message's To recipients instead, as Gmail and
+/// gog do, rather than addressing the draft back to the account.
+fn reply_recipients(
+    target: &GmailMessage,
+    sender: Vec<String>,
+    account: &str,
+) -> Result<Vec<String>, GmailError> {
+    let is_account = |recipient: &String| {
+        source::recipient_address(recipient).eq_ignore_ascii_case(account)
+    };
+    if !sender.iter().all(is_account) {
+        return Ok(sender);
+    }
+    let to = target.header_values("To").collect::<Vec<_>>().join(", ");
+    let recipients = source::parse_recipient_list(&to)
+        .map_err(|_| {
+            GmailError::runtime(
+                "reply_target_invalid",
+                "the selected reply message has an invalid To header"
+                    .to_string(),
+            )
+        })?
+        .into_iter()
+        .filter(|recipient| !is_account(recipient))
+        .collect::<Vec<_>>();
+    if recipients.is_empty() {
+        return Err(GmailError::runtime(
+            "reply_target_invalid",
+            "you sent the selected reply message and it has no other To recipient"
+                .to_string(),
+        ));
+    }
+    Ok(recipients)
 }
 
 fn is_draft(message: &GmailMessage) -> bool {
@@ -1120,9 +1158,9 @@ fn verify_request_envelope(
         }
         return Ok(());
     }
-    if preview.to != request.to
-        || preview.cc != request.cc
-        || preview.bcc != request.bcc
+    if !same_mailboxes(&preview.to, &request.to)
+        || !same_mailboxes(&preview.cc, &request.cc)
+        || !same_mailboxes(&preview.bcc, &request.bcc)
     {
         return Err(bad_readback(
             "the stored draft recipients differ from the compose note",
@@ -1267,11 +1305,15 @@ fn verify_local_content(
     let html_actual = normalize_newlines(html);
     let html_expected = normalize_newlines(&rendered.html_body);
     if !signature {
-        if plain_actual != plain_expected || html_actual != html_expected {
+        if plain_actual != plain_expected
+            || !stored_html_forms(&html_expected)
+                .any(|form| html_actual == form)
+        {
             return Err(bad_readback("the stored draft body differs from the rendered compose source"));
         }
     } else if !plain_actual.starts_with(&plain_expected)
-        || !html_actual.starts_with(&html_expected)
+        || !stored_html_forms(&html_expected)
+            .any(|form| html_actual.starts_with(&form))
     {
         return Err(bad_readback("the stored draft body does not preserve the rendered compose source and signature"));
     }
@@ -1290,6 +1332,28 @@ fn verify_local_content(
 
 fn normalize_newlines(value: &str) -> String {
     value.replace("\r\n", "\n")
+}
+
+/// The forms gog may store Bob's rendered HTML in: as given (gog before
+/// 0.47.1), or trimmed inside one `<div dir="auto">` so it takes the direction
+/// of its own text (gog 0.47.1 and later). Bob renders a fragment, never a
+/// whole document, so gog always wraps it; empty HTML stays as given.
+fn stored_html_forms(expected: &str) -> impl Iterator<Item = String> {
+    let trimmed = expected.trim();
+    let directed = (!trimmed.is_empty())
+        .then(|| format!("<div dir=\"auto\">{trimmed}</div>"));
+    std::iter::once(expected.to_string()).chain(directed)
+}
+
+/// Whether two recipient lists name the same mailboxes in the same order.
+/// gog rewrites display names on the wire (`Ada <a@x>` is stored as
+/// `"Ada" <a@x>`), so the address is what identifies a recipient.
+fn same_mailboxes(actual: &[String], expected: &[String]) -> bool {
+    actual.len() == expected.len()
+        && actual.iter().zip(expected).all(|(actual, expected)| {
+            source::recipient_address(actual)
+                .eq_ignore_ascii_case(source::recipient_address(expected))
+        })
 }
 
 fn remote_fingerprint(
@@ -1685,5 +1749,37 @@ mod tests {
             baseline,
             "the note identity is digest-bound"
         );
+    }
+
+    #[test]
+    fn stored_html_forms_accept_gog_direction_wrapper() {
+        let rendered = "<p style=\"margin:0 0 12px 0\">Hi Dan,</p>\n";
+        let forms = stored_html_forms(rendered).collect::<Vec<_>>();
+        assert_eq!(
+            forms,
+            [
+                rendered.to_string(),
+                "<div dir=\"auto\"><p style=\"margin:0 0 12px 0\">Hi Dan,</p></div>"
+                    .to_string(),
+            ]
+        );
+        assert_eq!(stored_html_forms("").collect::<Vec<_>>(), [String::new()]);
+    }
+
+    #[test]
+    fn same_mailboxes_compares_addresses_in_order() {
+        let ours = ["Dan Dowd <Dan.Dowd@aj-chambers.com>".to_string()];
+        let gog = ["\"Dan Dowd\" <dan.dowd@aj-chambers.com>".to_string()];
+        assert!(same_mailboxes(&gog, &ours));
+        assert!(same_mailboxes(&[], &[]));
+        assert!(!same_mailboxes(&gog, &[]));
+        let pair = ["a@example.com".to_string(), "b@example.com".to_string()];
+        let swapped =
+            ["b@example.com".to_string(), "a@example.com".to_string()];
+        assert!(!same_mailboxes(&pair, &swapped));
+        assert!(!same_mailboxes(
+            &ours,
+            &["Dan Dowd <dan@example.com>".to_string()]
+        ));
     }
 }

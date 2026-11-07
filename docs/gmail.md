@@ -351,12 +351,17 @@ and HTML alternatives, validates and snapshots every declared attachment, and
 persists a body-free create marker. The body and attachment bytes go to gog
 through private temporary files. For replies, Bob checks the saved account,
 thread, and selected non-draft message, then verifies the returned draft still
-belongs to that thread. Reply-all recipients are resolved by Gmail and are
-shown from the stored draft.
+belongs to that thread. A Reply answers the selected message's sender; when
+you sent that message, it answers that message's To recipients instead, as
+Gmail does. Reply-all recipients are resolved by Gmail and are shown from the
+stored draft.
 
 Bob reads the stored draft back without using gog's download cache. It hydrates
 both MIME alternatives and attachments in memory and refuses a preview if any
-part is missing, ambiguous, or different from the prepared content. The
+part is missing, ambiguous, or different from the prepared content.
+Recipients match by address, since gog rewrites how display names are quoted,
+and the stored HTML may sit inside the one `<div dir="auto">` that gog 0.47.1
+and later add so the text takes its own direction. The
 canonical digest covers the note path, account, actual From/To/Cc/Bcc, subject,
 reply target, exact plain text, HTML hash, signature mode, attachment names and
 hashes, and flattened links. Volatile Gmail message ids and MIME boundaries do

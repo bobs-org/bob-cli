@@ -172,6 +172,15 @@ def scenario_defaults(name: str) -> dict:
         defaults["accounts"] = [
             connected_account(EMAIL, [READONLY_SCOPE, COMPOSE_SCOPE])
         ]
+    elif name == "compose_grant_gog_0471":
+        # gog 0.47.1 marks given HTML with its direction and writes named
+        # recipients in Go's mailbox form.
+        defaults["version"] = "0.47.1"
+        defaults["accounts"] = [
+            connected_account(EMAIL, [READONLY_SCOPE, COMPOSE_SCOPE])
+        ]
+        defaults["direction_html"] = True
+        defaults["go_mailbox_format"] = True
     elif name == "compose_withheld":
         # The user leaves Google's compose checkbox unticked at consent.
         defaults["withhold_compose"] = True
@@ -421,6 +430,17 @@ def draft_header(message: dict, name: str) -> str | None:
     return None
 
 
+def go_mailbox(value: str) -> str:
+    """Render one recipient the way Go's mail.Address.String() does."""
+    value = value.strip()
+    if "<" not in value or not value.endswith(">"):
+        return value
+    name, address = value.rsplit("<", 1)
+    name = name.strip().strip('"')
+    address = address[:-1].strip()
+    return f'"{name}" <{address}>' if name else address
+
+
 def split_recipients(value: str | None) -> list[str]:
     if not value:
         return []
@@ -466,6 +486,9 @@ def build_draft_message(
         fail("fake gog: draft create/update requires private plain and HTML body files", 2)
     plain = plain_file[1]
     html = html_file[1]
+    if state.get("direction_html") and html.strip():
+        # gog 0.47.1+ puts given HTML, trimmed, inside one <div dir="auto">.
+        html = b'<div dir="auto">' + html.strip() + b"</div>"
     if "--signature" in args:
         signature = (state.get("signature") or "-- \nTest signature").encode()
         plain = plain.rstrip(b"\r\n") + b"\n\n" + signature
@@ -563,6 +586,10 @@ def build_draft_message(
         {"name": "From", "value": EMAIL},
         {"name": "Subject", "value": subject_value},
     ]
+    if state.get("go_mailbox_format"):
+        to, cc, bcc = (
+            [go_mailbox(value) for value in values] for values in (to, cc, bcc)
+        )
     for name, values in (("To", to), ("Cc", cc), ("Bcc", bcc)):
         if values:
             headers.append({"name": name, "value": ", ".join(values)})
