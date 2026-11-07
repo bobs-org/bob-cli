@@ -5,19 +5,17 @@ description: Index of bob capture tokens with syntax, examples, and links into t
 
 # Capture syntax
 
-`bob capture` reads one draft and writes tasks, bullets, reference jobs, or
-Pomodoro session changes. This page is the token lookup. The full grammar and
-refusal messages live in the [Capture contract](../capture.md).
+`bob capture` writes tasks, bullets, reference jobs, or Pomodoro changes from
+one draft. This token index links to the full [Capture contract](../capture.md).
 
-`@` routes; `#` names a place or type; `%` selects a directive. Bare edge
-`#` and `%` open their menus.
+`@` chooses a destination; `#` names a section, drawer, or task type; `%` selects a
+capture directive. In completion, standalone `#` and `%` open their menus.
 
-Examples use an isolated synthetic vault at `BOB_NOW=2026-10-20 12:00:00`,
-`TZ=UTC`, with network, sync, and hooks disabled. The
-[first Bob day tutorial](../start/first-bob-day.md) supplies a demo vault.
-Sessions need today's `## Pomodoros` ledger; dependencies need a configured
-Blocked checkbox (`?`). Quote drafts in Zsh: globbing affects `*`, `!`, `?`,
-and `#`, and `EQUALS` expansion affects `=focus`. Use `'=focus'` or `'x =focus'`.
+Examples use a synthetic vault (`BOB_NOW=2026-10-20 12:00:00`, `TZ=UTC`),
+with network, sync, and hooks disabled. [First Bob day](../start/first-bob-day.md)
+supplies a demo. Session examples need an open `## Pomodoros` entry;
+dependencies need Obsidian Tasks settings defining Blocked as `?`. Single-quote
+Zsh drafts, including `'=focus'` and `'x =focus'`, to avoid shell expansion.
 
 Options precede the draft. An unknown alphabetic long option such as
 `--anything` is rejected before draft text begins; after text begins it is
@@ -681,27 +679,28 @@ Contract: [Relating existing tasks](../capture.md#relating-existing-tasks).
 
 ### `~note:block-id[|"label"]` {#tilde-link}
 
-The captured (or explicitly selected) task links to `note.md`'s
-`^block-id` task, with an optional source-side label. Nested notes use
+The captured or selected task links to `note.md`'s `^block-id` task,
+optionally labelled. Nested notes use
 `~projects/foo:bar`; notes with spaces use `~"Shopping List":bar`;
 labels use `~note:id|see` or `~note:id|"follow-up of"`. Quote `~` on
 the shell. The target may be open, closed, in any active note, a daily
 note, or `done/` (a mirror is skipped for archived and previous-daily
-targets). Ordinary labels record a relation; configured cancel, complete,
-or merge labels also act on the source. Successor labels offer it when
-the target is parked or done. See [relation effects](configuration.md#relations).
-A `||` spelling (`~note:id||see`,
-`~note:id||"follow-up of"`) stores the identical label and hides it
-from suggestions once the capture succeeds; a third pipe is a teaching
-error (`use || to hide a label, | to name one`).
+targets). The source owns the LINKS entry.
+Configured cancel, complete, or merge labels also act on that source;
+other labels record the link. Successor labels can offer the source when
+a Bob action parks or completes the target; adding a link after that event
+does not offer it. See [relation effects](configuration.md#relations).
+`||` also hides the label from suggestions after capture succeeds.
+Three pipes fail: `use || to hide a label, | to name one`.
 
 The label pipe attaches directly to the target. Editors using
 [`capture-rewrite`](../capture.md#bob-capture-rewrite) with `--cursor` just
 after a newly typed pipe can attach it across spaces or tabs
 (`~note:id |` → `~note:id|`, `~note:id ||` → `~note:id||`); direct
-`bob capture` input does not apply that rewrite. With an explicit cursor,
-`-` opens the `~` picker and `=` there switches to `~~`. After a complete
-target, a glued `~` or `=` flips direction; after a label, only `~` flips.
+`bob capture` input does not apply these editor rewrites. With the cursor
+immediately after `=`, `Task =` becomes `Task ~`; `Task ~=` becomes
+`Task ~~`, and `Task ~~=` becomes `Task ~`. After a complete target, a
+glued `~` or `=` flips direction; after a label, only `~` flips.
 The label stays unchanged.
 
 ```bash

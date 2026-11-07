@@ -553,9 +553,10 @@ Contract: [Reference library](../ref.md),
 
 ### Period notes
 
-Daily notes belong to ISO weeks, then quarters, years, `all_time`, and
-`org`. Daily folders use the calendar year; week folders use the ISO
-week-year. Quarters group weeks 1–13, 14–26, 27–39, and 40–52/53.
+Daily notes belong to ISO weeks (Monday–Sunday), then quarters, ISO
+week-years, `all_time`, and `org`. Daily folders use the calendar year;
+`YYYY` below is the ISO week-year. Quarters group weeks 1–13, 14–26,
+27–39, and 40–52/53, rather than calendar months.
 
 | Period | Path | Parent |
 | --- | --- | --- |
@@ -564,19 +565,24 @@ week-year. Quarters group weeks 1–13, 14–26, 27–39, and 40–52/53.
 | Year | `YYYY.md` | `all_time.md` |
 | All time | `all_time.md` | `org.md` |
 
-These notes use `type: "[[day]]"` and hold no tasks. Bob owns the scaffold
-and agent callout; `bob periods draft` writes only the Review and Headline
-while they remain eligible. Intentions, Outcomes, Theme, Reflection, and
-Notes are user-owned. See [Period notes](../periods.md) for scaffolds,
-review states, and relative period IDs.
+These notes use `type: "[[day]]"` and hold no tasks. `bob periods ensure`
+creates missing notes and fills empty or frontmatter-only stubs; existing
+body content stays intact. `bob periods draft` replaces `## Review`, including
+its Headline, for a closed week, quarter, or year whose Review is empty or
+still an unedited draft and whose Reflection is blank. `-F` overrides those
+guards. All time has no Review. Intentions, Outcomes, Theme, Reflection, and
+Notes are user-owned; Bob manages the agent callout. See
+[Period notes](../periods.md) for scaffolds and review states.
 
 ### Mail notes
 
 Saved Gmail threads use `type: "[[mail]]"` and default to
-`mail/YYYY/YYMMDD_subject_slug.md`. Identity is the account plus
-`gmail_thread_id`; refresh keeps the original path. Messages are inert
-content inside Bob's managed region, with user notes outside it. Tasks link
-to the mail note rather than copying its body. Local compose notes and Reply
+`mail/YYYY/YYMMDD_subject_slug.md`, dated from the first message in the
+configured timezone. Filename collisions add `_2`, `_3`, etc. Identity is
+`gmail_account` plus `gmail_thread_id`; refresh keeps the original path.
+Messages are inert content inside Bob's managed region, with user notes
+outside it. Tasks link to the mail note rather than copying its body.
+Local compose notes and Reply
 sections supply outgoing drafts. See [Bob Gmail](../gmail.md) for ownership,
 attachments, and confirmed sending.
 

@@ -195,7 +195,7 @@ gmail:
 - `pull.inbox` must be a safe relative path inside the vault. If it is
   missing, Bob creates it with `parent: "[[inbox]]"`, `type: "[[area]]"`,
   `ready_cap: off`, and a `## Tasks` section.
-- `signature` is `gmail` (default) or `none`; outgoing drafts include the
+- `signature` is `gmail` (default) or `none`; remote Gmail drafts include the
   account's Gmail signature or omit it. The stored-draft preview shows the result.
 - `timeout_secs` must be an integer greater than 0. Default 60.
 - The host label is the same slug vault-sync uses in commit subjects.
@@ -425,7 +425,11 @@ configured `gmail.writer` host and the isolated `bob-gmail` grant with the
 compose scope; on a read-only grant it fails with the
 `bob gmail login -s compose` hint instead of sending.
 
-`-d` always wins over a confirmation digest: it creates or updates the draft,
+Before preparing a draft, `send` recovers any recorded send attempt. Recovery
+can return a state result below, or an error if the outcome remains unknown;
+it does not send again. This check also runs with `-d`.
+
+Otherwise, `-d` wins over a confirmation digest: it creates or updates the draft,
 reads it back, and prints the intentional preview without sending anything.
 That differs from `save -d`, which only prints what it would write. A non-TTY
 `send` without `-c` leaves the draft intact, exits 2 with
@@ -446,8 +450,8 @@ against CLI output so they cannot drift from the implementation.
 Send and recovery results use schema 1 with `status` (`sent`, `already_sent`,
 `declined`, or `recovered_to_draft`), `note`, `draft_id`, `thread_id`, and
 `sent_message_id`; unavailable identities are null. These state results omit
-the preview and digest. Recovery precedes the dry-run branch, so `send -d`
-can return a recovery result when an earlier send is unresolved.
+the preview and digest. `recovered_to_draft` means the prior attempt was not
+accepted; a fresh preview is required before another send.
 
 ```bash
 bob gmail send mail/2026/261105_lease_renewal.md -d
