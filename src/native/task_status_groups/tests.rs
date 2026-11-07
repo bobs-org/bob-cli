@@ -1443,6 +1443,145 @@ Body.
     assert_idempotent(crlf);
 }
 
+/// Counts the blank lines directly above the `title` heading.
+fn blank_lines_before_heading(contents: &str, title: &str) -> usize {
+    let lines: Vec<&str> = contents.lines().collect();
+    let heading = heading_line_index(contents, title);
+    lines[..heading]
+        .iter()
+        .rev()
+        .take_while(|line| line.trim().is_empty())
+        .count()
+}
+
+/// Mimics `bob task archive`: drops the closed task lines and nothing else.
+fn strip_closed_task_lines(contents: &str) -> String {
+    contents
+        .split_inclusive('\n')
+        .filter(|line| !line.starts_with("- [x]") && !line.starts_with("- [-]"))
+        .collect()
+}
+
+#[test]
+fn section_end_rule_drops_an_emptied_done_groups_separator() {
+    let input = "\
+## Tasks
+
+### Next & In Progress
+
+- [*] #task next
+
+### Done & Canceled
+
+
+
+## Future Work
+
+Body.
+";
+    let result = grouped(input);
+    assert!(result.changed);
+    assert!(
+        !result.contents.contains("Done & Canceled\n"),
+        "empty group heading must be dropped:\n{}",
+        result.contents
+    );
+    assert!(
+        result
+            .contents
+            .contains("- [*] #task next\n\n## Future Work\n"),
+        "expected one blank line before the next heading:\n{}",
+        result.contents
+    );
+    assert_idempotent(&result.contents);
+}
+
+#[test]
+fn section_end_rule_heals_an_inflated_gap() {
+    let input = format!("{GOLDEN_OUTPUT}{}## Future Work\n", "\n".repeat(13));
+    let result = grouped(&input);
+    assert!(result.changed);
+    assert_eq!(
+        result.contents,
+        format!("{GOLDEN_OUTPUT}\n## Future Work\n")
+    );
+    assert_eq!(result.grouped_sections.len(), 1);
+    assert_idempotent(&result.contents);
+}
+
+#[test]
+fn section_end_rule_keeps_a_zero_gap() {
+    let input = "## Tasks\n\n- [*] #task next\n## Notes\n";
+    let result = grouped(input);
+    assert!(
+        result.contents.contains("- [*] #task next\n## Notes\n"),
+        "a flush section end must stay flush:\n{}",
+        result.contents
+    );
+    assert_idempotent(input);
+}
+
+#[test]
+fn section_end_rule_caps_a_crlf_gap_at_one_blank_line() {
+    let input = "## Tasks\r\n\r\n- [*] #task next\r\n\r\n\r\n\r\n## Notes\r\n";
+    let result = grouped(input);
+    assert!(
+        result
+            .contents
+            .contains("- [*] #task next\r\n\r\n## Notes\r\n"),
+        "expected one CRLF blank line before the next heading:\n{:?}",
+        result.contents
+    );
+    assert!(!result.contents.contains("\r\n\r\n\r\n## Notes"));
+    assert_idempotent(input);
+}
+
+#[test]
+fn archive_cycles_keep_one_blank_line_before_the_next_heading() {
+    let mut contents = String::from(
+        "\
+# Project
+
+## Tasks
+
+- [*] #task next ^next
+
+## Future Work
+
+Body.
+",
+    );
+    for cycle in 0..3 {
+        // The intake sits above the first generated group once decorated.
+        let anchor = if contents.contains("### Next & In Progress") {
+            "### Next & In Progress"
+        } else {
+            "- [*] #task next"
+        };
+        contents = contents.replacen(
+            anchor,
+            &format!("- [x] #task done {cycle} ^done{cycle}\n\n{anchor}"),
+            1,
+        );
+        contents = grouped(&contents).contents;
+        assert!(contents.contains("### Done & Canceled"), "{contents}");
+        assert_eq!(
+            blank_lines_before_heading(&contents, "Future Work"),
+            1,
+            "cycle {cycle} after the close:\n{contents}"
+        );
+
+        contents = grouped(&strip_closed_task_lines(&contents)).contents;
+        assert!(!contents.contains("### Done & Canceled"), "{contents}");
+        assert_eq!(
+            blank_lines_before_heading(&contents, "Future Work"),
+            1,
+            "cycle {cycle} after the archive:\n{contents}"
+        );
+        assert_idempotent(&contents);
+    }
+}
+
 #[test]
 fn blank_lines_between_tasks_normalize_away() {
     let input = "\

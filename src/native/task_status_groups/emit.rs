@@ -290,13 +290,27 @@ fn emit_group(
     buf
 }
 
+/// Ends a rewritten section the way the original ended, capped at one blank
+/// line.
+///
+/// The emitted body's own trailing blank lines are replaced by the first raw
+/// line of the original section's trailing whitespace run, so a section that
+/// ended flush against the next heading stays flush, CRLF stays CRLF, and an
+/// EOF without a final newline keeps that shape. Capping matters because
+/// `bob task archive` empties a group but leaves its heading and separator:
+/// keeping the whole run would hand that separator to the next heading as one
+/// more blank line on every archive cycle.
 pub(super) fn apply_section_end_rule(
     emitted: String,
     original: &str,
 ) -> String {
-    let trailing = trailing_whitespace_run(original);
+    let trailing = first_raw_line(trailing_whitespace_run(original));
     let stripped = strip_trailing_whitespace_lines(&emitted);
     format!("{stripped}{trailing}")
+}
+
+fn first_raw_line(run: &str) -> &str {
+    run.find('\n').map_or(run, |end| &run[..=end])
 }
 
 fn split_preserved_lines(value: &str) -> Vec<(&str, &str)> {

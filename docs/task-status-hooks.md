@@ -840,7 +840,12 @@ The command preserves authored topic headings under a `Tasks` section. Direct
 task blocks are grouped locally inside the container where they already live,
 so a custom `### Backend` topic receives its own generated child groups rather
 than losing its context. Re-running on unchanged semantic input is
-byte-identical.
+byte-identical. A rewritten container keeps whether it ended with a blank line,
+its line endings, and its end-of-file shape, but the gap before the next heading
+is normalized to at most one blank line: a heading for an empty group that the
+rewrite drops takes its separator with it, so the gap left after
+`bob task archive` empties `Done & Canceled` does not grow across archive
+cycles.
 
 Only root task blocks accepted by the configured Tasks `globalFilter` move.
 The parent root's final status chooses the destination; nested children, notes,
