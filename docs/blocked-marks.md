@@ -13,31 +13,34 @@ verbatim.
 Today every Blocked row looks the same: a solid red box with a white
 `?` on a red-tinted row. Behind that one look are different
 situations that need different responses — finish a prerequisite,
-fix the project, or wait or reschedule:
+fix the project, await a reply, or wait or reschedule:
 
 ```text
 before: - [?] Ship the importer [dependsOn:: x]
         - [?] Review the queue #prj_is_blocked
+        - [?] #awaiting_reply Lease renewal · Ada [scheduled:: 2026-11-10]
         - [?] Brush teeth [priority:: medium] [scheduled:: 2026-11-20]
         - [?] Water the plants [repeat:: every day when done] [scheduled:: 2026-11-02]
 
 after:  - [&] Ship the importer …                  ← solid, held by its own prerequisite
         - [^] Review the queue                      ← solid, held by its project
+        - [✈] Lease renewal · Ada …                 ← hollow plane, awaiting their reply
         - [2] Brush teeth …                         ← hollow digit, P2 deferral
         - [⟲] Water the plants …                    ← hollow loop, next run is later
 ```
 
 Legend (glyphs approximated in plain text):
 
-| Key       | Box                       | Family    | Meaning                                         |
-| --------- | ------------------------- | --------- | ----------------------------------------------- |
-| `dep`     | solid, white `&`          | `held`    | waiting on its own open prerequisite            |
-| `prj`     | solid, white chevron mask | `held`    | its project (or an ancestor project) is blocked |
-| `p1`–`p4` | hollow digit `1`–`4`      | `waiting` | deferred by a P1–P4 priority roll               |
-| `repeat`  | hollow loop mask          | `waiting` | recurring; the next run is later                |
-| `date`    | hollow `?`                | `waiting` | a date picked by hand                           |
-| `stale`   | dashed `?`, muted         | `stale`   | Blocked, but no live reason is left             |
-| (none)    | today's plain `?`         | —         | the reasons can't be proven yet                 |
+| Key        | Box                       | Family    | Meaning                                         |
+| ---------- | ------------------------- | --------- | ----------------------------------------------- |
+| `dep`      | solid, white `&`          | `held`    | waiting on its own open prerequisite            |
+| `prj`      | solid, white chevron mask | `held`    | its project (or an ancestor project) is blocked |
+| `awaiting` | hollow paper-plane mask   | `waiting` | you sent the last email; awaiting their reply   |
+| `p1`–`p4`  | hollow digit `1`–`4`      | `waiting` | deferred by a P1–P4 priority roll               |
+| `repeat`   | hollow loop mask          | `waiting` | recurring; the next run is later                |
+| `date`     | hollow `?`                | `waiting` | a date picked by hand                           |
+| `stale`    | dashed `?`, muted         | `stale`   | Blocked, but no live reason is left             |
+| (none)     | today's plain `?`         | —         | the reasons can't be proven yet                 |
 
 ## Principles
 
@@ -90,16 +93,31 @@ Inputs, all line-local except the prerequisite lookup:
 3. **Own future date.** A canonical `[scheduled:: YYYY-MM-DD]`
    strictly after the local date today. A date that is today does not
    block.
-4. **Date source** (only when 3 holds): a readable `[repeat:: …]`
-   rule, else a canonical ladder priority, else hand. A canonical
-   ladder priority means a lowercase `priority` field with value
-   `high`, `medium`, `low`, or `lowest`.
+4. **Awaiting reply** (only when 3 holds): an exact `#awaiting_reply`
+   tag token (not `#awaiting_reply_old`), outside inline code. This is
+   the `bob gmail sync` awaiting-reply hold (`docs/gmail.md`): while the
+   tag is on the line, the date under it is the hold's nudge date, not
+   a deferral. Classification stays line-local; only the tooltip's
+   `<who>` reads the linked mail note.
+5. **Date source** (only when 3 holds and 4 doesn't): a readable
+   `[repeat:: …]` rule, else a canonical ladder priority, else hand. A
+   canonical ladder priority means a lowercase `priority` field with
+   value `high`, `medium`, `low`, or `lowest`.
 
-Winner order: **own open prerequisite > project blocked > own future
-date**. Within date holds the order is recurring > ladder priority >
-hand. If the dependency input is _unknown_, the row shows plain `?`,
-because the top-precedence input can't be ruled out. With no live
-reason and every input known, the row shows `stale`.
+Winner order: **own open prerequisite > project blocked > awaiting
+reply > own future date**. Within date holds the order is recurring >
+ladder priority > hand. If the dependency input is _unknown_, the row
+shows plain `?`, because the top-precedence input can't be ruled out.
+With no live reason and every input known, the row shows `stale`.
+
+**Awaiting owns its date.** A live awaiting reason consumes the own
+future date: it never also counts as a date reason, so an `awaiting`
+row shows no `Also scheduled` pip, and a ladder priority on the same
+line draws no digit (its bars stay shown). A `dep` or `prj` that beats
+awaiting still shows its pip and `Also` line as usual. An
+`#awaiting_reply` row whose date is today or past has no awaiting
+reason: the nudge is due, so it is `stale` if still `[?]`, and the
+Ready row gets no block mark at all.
 
 **Digit.** Use the configured ladder label when it matches `^P([1-4])$`
 (`P2` → `2`). Otherwise, or when the ladder is unknown (for example
@@ -113,6 +131,8 @@ not Schedule Log provenance, picks the digit.
 and an `Also` tooltip line. The pip takes the ink of the highest
 losing reason. A prerequisite plus a date gives an _earliest_ return,
 not a promise: a losing date reads `Also scheduled …`, never `until`.
+A losing awaiting reason reads `Also awaiting reply …` and its pip
+uses the P1 ink.
 
 ## Families, tones, and tokens
 
@@ -165,7 +185,8 @@ base tokens read from the shipped Obsidian bundle: background
 
 - The contract ramp ships unchanged (72% anchor; 68/38/12% level
   mixes): every waiting glyph already meets 4.5:1 on its washed row,
-  so no waiting correction was needed. `date` uses the P1 ink and
+  so no waiting correction was needed. `date` and `awaiting` use the
+  P1 ink (the plane therefore measures the P1 ratios below) and
   `repeat` the P4 ink.
 - White on the uncorrected solid red fails (4.20 light, 3.45 dark),
   so held boxes use a local darkening mix of the blocked fill —
@@ -184,6 +205,12 @@ the interface font with `font-variant-numeric: tabular-nums`. The
 stroked polyline `M4 10.25 8 6.25l4 4`, round caps and joins, stroke
 width 2.1, shipped as `--bob-block-glyph-chevron`). It is a mask, not
 the `^` character, because `^` sits too high in the interface font.
+The `awaiting` box draws a hollow paper-plane mask (viewBox
+`0 0 16 16`, a single stroked path `M12.75 3.25 3.25 7.25l4 1.5 1.5 4Z`
+— nose, wing, notch, wing — stroke width 2.1 to match the chevron,
+round caps and joins, shipped as `--bob-block-glyph-sent`), painted in
+the waiting ink. It has no inner fold line: at checkbox size a 2.1
+stroke fills the two half-wings solid, and the plane must stay hollow.
 The `repeat` box reuses the existing `--bob-date-glyph-repeat` mask,
 so the checkbox loop matches the `⟲ daily` recurrence mark on the
 same line. The pip is a 6 px dot at the box's top-right corner
@@ -208,11 +235,20 @@ example `Fri, Nov 20 · in 19 days`).
 | --------- | --------------------------------------------------------------------- | --------------------------------------------------------------------- |
 | `dep`     | `Blocked · after <first open prerequisite's clean text>` (+ ` +N`)    | `Ctrl+Shift+B to edit prerequisites`                                  |
 | `prj`     | `Blocked · via project <task's note stem>`                            | best effort, one hop: the note's `^prj` own reason, else `via a parent project`; omitted when unknown |
+| `awaiting`| `Awaiting reply from <who> · nudge Tue, Nov 10 · in 3 days`           | —                                                                     |
 | `p1`–`p4` | `Blocked · P2 deferral · until Fri, Nov 20 · in 19 days`              | `Ctrl+Shift+P to reschedule or change priority`                       |
 | `date`    | `Blocked · until Wed, Nov 4 · in 3 days`                              | `Ctrl+Shift+P to reschedule`                                          |
 | `repeat`  | `Recurring · next run Mon, Nov 2 · tomorrow`                          | —                                                                     |
 | `stale`   | `Blocked, but no reason is left`                                      | `Clears on the next reconcile`                                        |
-| + losing  | one line each: `Also after <text>`, `Also via project <stem>`, `Also scheduled <short date> · <relative>` |                              |
+| + losing  | one line each: `Also after <text>`, `Also via project <stem>`, `Also awaiting reply from <who> · nudge <short date> · <relative>`, `Also scheduled <short date> · <relative>` |                              |
+
+`<who>` is one metadata-cache lookup: the first wikilink on the line,
+outside inline code, that resolves to a mail note (frontmatter `type`
+`[[mail]]` or a `gmail_thread_id`) supplies its frontmatter `who`.
+When there is no such link, or `who` is empty, ` from <who>` is
+omitted (`Awaiting reply · nudge …`). The lookup runs only for a live
+awaiting reason, never reads disk, and the tooltip doubles as the
+`aria-label`.
 
 The checkbox keeps its checkbox role: `aria-label` and
 `data-tooltip-position="top"` go on the input itself. Only the
@@ -224,7 +260,7 @@ miniature `render` element uses `role="img"`.
 | ----------------------------------------------------------- | -------------------------------------------------------------------------------------- |
 | Live Preview                                                | `Decoration.line` attributes on `.HyperMD-task-line[data-task="?"]`                    |
 | Reading view, embeds, hover previews, Dataview `TASK` views | markdown post-processor sets the same attributes on `li.task-list-item[data-task="?"]` |
-| Priority bars / `#prj_is_blocked` pill                      | folded where the box already says it                                                   |
+| Priority bars / `#prj_is_blocked` / `#awaiting_reply` pills | folded where the box already says it                                                   |
 | Tasks query results                                         | CSS on Tasks' own row attributes                                                       |
 | `DEPENDS ON` / `BLOCKS` chips                               | miniature box through the shared element builder; the box also keeps a CSS fallback `?` so toggling off restores the plain glyph immediately. The chip tooltip and aria gain the target's reason line (tooltip line 1 only). Reading-view chip tooltips keep that reason text until the view re-renders. |
 | Task Card                                                   | `api.blockMarks` v1 in bob-navigation-hotkeys                                          |
@@ -293,21 +329,28 @@ Cascade, gated by `body.bob-block-marks`, later rules winning:
    `:has(.tag[href="#prj_is_blocked"])`) shows `prj`. This comes
    first because Tasks rows can't see open prerequisites: BM19's
    `dep`+`prj` source row shows `prj` here.
-2. Else a future `data-task-scheduled` plus
+2. Else a row tagged `#awaiting_reply`
+   (`:has(.tag[data-tag-name="#awaiting_reply"])` or
+   `:has(.tag[href="#awaiting_reply"])`) with a future
+   `data-task-scheduled` shows the plane (AW7: it beats the digit).
+3. Else a future `data-task-scheduled` plus
    `data-task-priority` in `high|medium|low|lowest` shows the digit
    (BM24: `medium` + future → CSS `2`). Off-ladder `highest` and
    default `normal` do not digit.
-3. Else a future date plus `.task-recurring` shows the loop.
-4. Else a future date shows hollow `?`.
-5. Else `&` by elimination: today/past/missing dates, unresolved
+4. Else a future date plus `.task-recurring` shows the loop.
+5. Else a future date shows hollow `?`.
+6. Else `&` by elimination: today/past/missing dates, unresolved
    ids, closed deps, and `stale` all look like `&` because Tasks
    cannot prove those cases.
 
 Digit rows clip `.task-priority` (the same clip pattern priority
 marks already use, never `display: none`). `prj` rows clip the
 `#prj_is_blocked` tag the same way and keep their bars, because the
-box is a chevron, not a digit. The session toggle restores Tasks
-results. `#prj_is_blocked_old` is not a project token.
+box is a chevron, not a digit. Plane rows clip the `#awaiting_reply`
+tag and keep their bars; a `prj` row keeps its `#awaiting_reply` pill.
+The session toggle restores Tasks results. `#prj_is_blocked_old` is
+not a project token and `#awaiting_reply_old` is not an awaiting
+token: Tasks' `data-tag-name` is matched exactly.
 
 ## Reliability and invalidation
 
@@ -355,7 +398,11 @@ function is synchronous and never throws.
   `{ key, family, digit, more, reasons[], tooltip, modelKey }`, or
   `null` when the row gets no mark (neutral, ineligible, or toggled
   off). Each `reasons[]` entry is
-  `{ kind: "dep"|"prj"|"date", key, text }`, winner first.
+  `{ kind: "dep"|"prj"|"awaiting"|"date", key, text }`, winner first.
+  An `awaiting` entry's `text` is its nudge date (`YYYY-MM-DD`), like
+  a `date` entry. The `awaiting` key and reason kind were added
+  within v1: consumers that don't know a key fall back to their
+  plain look.
 - `render(host, model, { decorative })` appends a listener-free
   miniature box
   `span.bob-block-mark[data-bob-block][data-bob-block-family]` (plus
@@ -422,6 +469,26 @@ ready and holds open `[id:: x]`, open `[id:: y]`, and done
 | BM26 | `- [ ] #task T [priority:: high] [scheduled:: 2026-11-20]`                                  | no mark (not a Blocked box)                                                                                       |
 | BM27 | `- [?] #task U [scheduled:: 2026-10-22]`                                                    | `stale` (past date blocks nothing; no priority, no tag, no ids)                                                   |
 
+### Awaiting-reply vectors
+
+Today is Sat 2026-11-07 (local). `A` stands for
+`[[mail/2026/261107_lease_renewal|✉️ Lease renewal · Ada]]`, a link
+to a mail note whose frontmatter has `type: "[[mail]]"` and
+`who: Ada`. The Tasks cache and ids are as above.
+
+| #   | Input                                                                                               | Expected                                                                                                          |
+| --- | --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| AW1 | `- [?] #task #awaiting_reply A [scheduled:: 2026-11-10]`                                            | `awaiting` waiting · `Awaiting reply from Ada · nudge Tue, Nov 10 · in 3 days` · `#awaiting_reply` pill folded    |
+| AW2 | AW1 + `[priority:: medium]`                                                                         | `awaiting` waiting, no pip (the digit loses to the hold, which owns the date) · bars shown                        |
+| AW3 | AW1 + `[dependsOn:: x]` (open)                                                                      | `dep` held, more `awaiting` · adds `Also awaiting reply from Ada · nudge Tue, Nov 10 · in 3 days` · pill kept     |
+| AW4 | `- [?] #task #awaiting_reply A [scheduled:: 2026-11-07]`                                            | `stale` (a date of today doesn't block) · pill kept                                                               |
+| AW5 | `- [ ] #task #awaiting_reply A [scheduled:: 2026-11-05]`                                            | no block mark (not a Blocked box)                                                                                 |
+| AW6 | `- [?] #task #awaiting_reply_old A [scheduled:: 2026-11-10]`                                        | `date` waiting, not `awaiting`                                                                                    |
+| AW7 | Tasks row `data-task="?"`, `.tag[data-tag-name="#awaiting_reply"]`, `data-task-scheduled="future-3d"`, `data-task-priority="medium"` | CSS plane, not `2` (Tasks results) · tag clipped · bars shown                    |
+
+AW1 with no resolvable mail link reads `Awaiting reply · nudge Tue,
+Nov 10 · in 3 days`.
+
 ## Live verification (real-Obsidian e2e, bob-plugins `scripts/obsidian-block-marks-e2e.cjs`)
 
 The offline self-test plus the node reading/editor suites cover the
@@ -434,8 +501,12 @@ mouseover bindings.
 
 Verified in an isolated scratch vault (light and dark, Live Preview and
 reading view) with screenshots reviewed against the accepted mockup:
-`scripts/obsidian-block-marks-e2e.cjs` **161/161** (0 failed, 0 skipped),
-including 27 chip-mark cases.
+`scripts/obsidian-block-marks-e2e.cjs` **171/171** (0 failed, 0 skipped),
+including 27 chip-mark cases and 10 awaiting-reply cases (2026-11-07): the
+`awaiting` key in both views, the plane mask on the owned checkbox, the
+exact hover and reading tooltip with `<who>` from a linked mail note, the
+folded `#awaiting_reply` pill in both views with the bars kept, and AW7's
+plane over the `medium` digit in Tasks results.
 Quoted Live Preview and quoted reading source forms that the host does
 not render as a checkbox still carry the `p4` row mark; reading view
 paints a `4` on the quoted task when a checkbox exists.
