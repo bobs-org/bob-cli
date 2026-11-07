@@ -304,16 +304,25 @@ Bob Mac Capture also runs `bob vault-sync -q` when the Refs panel opens (throttl
 
 The MacBook also runs three independent 15-minute cron jobs, staggered five minutes
 apart so their writes do not collide with each other or with the 15-second
-`bob-vault-sync` LaunchAgent:
+`bob-vault-sync` LaunchAgent. They live in the `cron:` data of `home/.chezmoidata.yaml`
+in the chezmoi dotfiles repo, the only source of truth for every machine's user crontab:
 
-```cron
-0,15,30,45 * * * * ~/bin/maybe_bob_highlights_sync -w >> /var/tmp/maybe_bob_highlights_sync.log 2>&1
-5,20,35,50 * * * * ~/.cargo/bin/bob projects sync >> /var/tmp/bob_projects.log 2>&1
-10,25,40,55 * * * * ~/.cargo/bin/bob task reconcile --retry-timeout 120 >> /var/tmp/bob_task_status_hooks.log
+```yaml
+- name: bob-highlights-sync
+  machines: [mac]
+  schedule: "0,15,30,45 * * * *"
+  command: maybe_bob_highlights_sync -w
+- name: bob-projects-sync
+  machines: [mac]
+  schedule: "5,20,35,50 * * * *"
+  command: bob projects sync
+- name: bob-task-reconcile
+  machines: [mac]
+  schedule: "10,25,40,55 * * * *"
+  command: bob task reconcile --retry-timeout 120
 ```
 
-An installed old line `bob task-status-hooks --retry-timeout 120` keeps working
-as a permanent silent alias.
+The old command name `bob task-status-hooks` keeps working as a permanent silent alias.
 
 Highlights intake precedes project reconciliation, which precedes task-status
 reconciliation. The 2-minute `--retry-timeout` on `bob task reconcile` fits
@@ -325,32 +334,33 @@ cannot guarantee exclusion from an open editor, a slow job, or the sync LaunchAg
 correctness comes from the existing lock and guarded-write checks plus the fresh-attempt
 retry behavior, not from the schedule alone.
 
-This crontab is not chezmoi-managed; it is installed by hand with `crontab` directly on
-the Mac. The highlights and projects jobs redirect both stdout and stderr with
-`>> logfile 2>&1` (in that order). The reconcile job redirects stdout only:
-routine retry progress and the final human result land in
-`/var/tmp/bob_task_status_hooks.log`, while warnings and real terminal failures remain
-on stderr so cron mail is still actionable.
+chezmoi installs these jobs as the marked `# BEGIN chezmoi-cron` block of the Mac's user
+crontab and leaves every line outside the block alone. Each line runs its command
+through `~/bin/cronrun`, which sources `~/.profile` for `PATH`, skips a run while the
+previous run of the same job still holds its lock, and appends the command's stdout and
+stderr to `~/.local/state/cron/<job>.log` (rotated past 1 MiB). cronrun is silent on
+success, so cron mails only failures: when a command exits non-zero, cronrun prints a
+one-line summary and the last 40 lines of that run's log to stderr. Warnings and retry
+progress from a run that succeeds stay in the log.
+
+Inspect the Mac's jobs from any machine:
 
 ```bash
-ssh mac crontab -l
-ssh mac 'tail -n 80 /var/tmp/bob_task_status_hooks.log'
-ssh mac '~/.cargo/bin/bob task reconcile --help' # confirm --retry-timeout is listed before installing a crontab that uses it
+cronctl status mac                             # live state and each job's last run
+cronctl diff mac                               # wanted block vs live block
+cronctl logs bob-task-reconcile --machine mac  # tail one job's log
 ```
 
-To change this schedule: re-read the live crontab, save a timestamped backup outside the
-vault, and replace only the three matching Bob entries, leaving unrelated lines
-untouched:
+The Mac is often asleep, so `pending` means unreachable or not yet applied, not broken.
 
-```bash
-ssh mac 'crontab -l' > /tmp/mac-crontab-backup-$(date +%Y%m%dT%H%M%S).txt
-# edit the three lines in a local copy, then:
-ssh mac 'crontab -' < /tmp/mac-crontab-new.txt
-ssh mac 'crontab -l' # confirm exactly one entry per job
-```
-
-Roll back by reinstalling the saved backup the same way, preserving any intervening
-unrelated edits.
+Change this schedule only through the `/crontab` skill flow (people run `cronctl edit`):
+edit the `cron:` data, check it with `cronctl check` and `cronctl diff mac`, commit and
+push, then converge with `chezmoi update -a` on the Mac or `cronctl apply mac` from any
+machine. Before a job relies on a new `bob` flag, confirm that the Mac's binary lists it,
+for example with `ssh mac '~/.cargo/bin/bob task reconcile --help'`. Never edit the
+crontab with `crontab -e` or `ssh mac crontab -`: the next sync overwrites hand edits
+inside the block. Each install first backs up the whole table under
+`~/.local/state/cron/backups/`, and reverting the data commit rolls the jobs back.
 
 ## Nightly maintenance
 
@@ -681,7 +691,7 @@ The MacBook's staggered 15-minute `maybe_bob_highlights_sync -w` cron job remain
 full annotation scan. It also drains files in the Mac's own `xlib/`; it never pulls the
 Linux queues. The gate runs when `lib/` changed today or when `xlib/` contains a file,
 so Mac-local queued creates are not missed. See
-[Mac scheduled maintenance](#mac-scheduled-maintenance) for the exact crontab.
+[Mac scheduled maintenance](#mac-scheduled-maintenance) for its exact schedule.
 
 The old `bob_xlib_pull` bridge and its `pre_scan_hook` configuration are retired. Each
 host now has exactly one intake drainer: the local timer on athena/apollo and the local

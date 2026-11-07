@@ -1085,9 +1085,10 @@ redirection. For the default human cron invocation, append stdout with
 `>> logfile` so routine retry progress and the final result are logged while
 warnings and terminal failures still go to stderr and can trigger scheduler
 mail. JSON schedulers that want a combined log must choose explicitly whether
-to keep stderr separate for retry progress or merge it with `2>&1`. See
-[Mac scheduled maintenance](vault-git-sync.md#mac-scheduled-maintenance) for
-the exact staggered crontab this project runs.
+to keep stderr separate for retry progress or merge it with `2>&1`. This
+project's own staggered Mac job runs under cronrun, which logs both streams
+and mails only failures; see
+[Mac scheduled maintenance](vault-git-sync.md#mac-scheduled-maintenance).
 
 ## Output
 

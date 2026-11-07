@@ -49,8 +49,10 @@ Do not write `/old_lib`, `old_lib/`, or `Old_lib`.
    repo does not cover every path: `lit_review/` and `xlib/` are gitignored by
    policy, and paths outside `.gitignore`'s extension allowlist are untracked.
 2. Stop automated sync processes. Today that means `bob-vault-sync.service` on
-   athena, the `com.bbugyi.bob-vault-sync` LaunchAgent on the MacBook, the 03:30
-   `bob nightly` crontab line, and `ob-sync-bob.service` if it has been re-enabled.
+   athena, the `com.bbugyi.bob-vault-sync` LaunchAgent on the MacBook, athena's 03:30
+   `bob-nightly` cron job (set `enabled: false` on it in the chezmoi `cron:` data
+   through the `/crontab` skill flow, never with `crontab -e`), and
+   `ob-sync-bob.service` if it has been re-enabled.
    `bob nightly` no longer gates on `ob sync`; it runs `vault-sync`,
    `task archive`, a report-only articles check, and `vault-sync`.
 3. Move the target folder out of the sync client's view without copying bytes,
