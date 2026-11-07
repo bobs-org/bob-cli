@@ -356,15 +356,21 @@ The Mac is often asleep, so `pending` means unreachable or not yet applied, not 
 Change this schedule only through the `/crontab` skill flow (people run `cronctl edit`):
 edit the `cron:` data, check it with `cronctl check` and `cronctl diff mac`, commit and
 push, then converge with `chezmoi update -a` on the Mac or `cronctl apply mac` from any
-machine. Before a job relies on a new `bob` flag, confirm that the Mac's binary lists it,
-for example with `ssh mac '~/.cargo/bin/bob task reconcile --help'`. Never edit the
-crontab with `crontab -e` or `ssh mac crontab -`: the next sync overwrites hand edits
-inside the block. Each install first backs up the whole table under
-`~/.local/state/cron/backups/`, and reverting the data commit rolls the jobs back.
+machine. macOS refuses crontab installs over SSH (`Operation not permitted`) unless
+Remote Login has Full Disk Access (System Settings > General > Sharing > Remote Login),
+so without that grant `cronctl apply mac` reports `failed`, leaves the table unchanged,
+and the Mac converges at its next local `chezmoi update -a`. Before a job relies on a
+new `bob` flag, confirm that the Mac's binary lists it, for example with
+`ssh mac '~/.cargo/bin/bob task reconcile --help'`. Never edit the crontab with
+`crontab -e` or `ssh mac crontab -`: the next sync overwrites hand edits inside the
+block. Each install first backs up the whole table under `~/.local/state/cron/backups/`,
+and reverting the data commit rolls the jobs back.
 
 ## Nightly maintenance
 
-athena's cron entry runs `bob nightly` at 03:30. `bob nightly` now runs:
+athena's `bob-nightly` job, in the same chezmoi `cron:` data, runs `bob nightly` at
+03:30 through cronrun; read its last run with
+`cronctl logs bob-nightly --machine athena`. `bob nightly` now runs:
 
 1. `bob vault-sync`
 2. `bob task archive`
