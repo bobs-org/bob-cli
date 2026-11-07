@@ -14,7 +14,7 @@ pub(crate) const NAMESPACE: Namespace = Namespace {
     noun: "gmail",
 };
 
-const PULLED_KIND: &str = "gmail.pulled";
+pub(crate) const PULLED_KIND: &str = "gmail.pulled";
 
 /// Fold the thread identities already filed by a label pull. The event has
 /// no message content; the mail-note index and inbox file provide recovery

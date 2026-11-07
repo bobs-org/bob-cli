@@ -28,8 +28,10 @@ pub(crate) mod resolve;
 mod route;
 mod save;
 pub(crate) mod search_peek;
+mod sync;
 pub(crate) mod turn;
 pub(crate) mod ui;
+mod vault_walk;
 pub(crate) mod worker;
 pub(crate) use crate::native::google::{
     account, client, client_setup, login_ui, signin,

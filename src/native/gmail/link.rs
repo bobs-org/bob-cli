@@ -10,7 +10,6 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    ffi::OsStr,
     fs,
     path::{Path, PathBuf},
     time::Duration,
@@ -28,12 +27,14 @@ use super::{
     policy::{self, NeverSavePolicy},
     prepare, resolve,
     save::{self, PreparedSave},
-    ui, GmailError,
+    ui,
+    vault_walk::scan_vault_notes,
+    GmailError,
 };
 use crate::native::{
     attachments::journal as attachment_journal,
     capture::{self, CaptureFailureKind, StagedTextFile},
-    env as bob_env, is_always_excluded_note_directory_name, ob, pref_journal,
+    env as bob_env, ob, pref_journal,
     style::Styler,
     vault_sync,
 };
@@ -50,10 +51,6 @@ const DEAD_REASONS: &[&str] =
 /// clear on their own, so they are reported once, not remembered.
 const GATE_KINDS: &[&str] =
     &["awaiting_sign_in", "network", "timeout", "api_disabled"];
-
-/// Vault directories never scanned by `-a`, besides the mail folder itself
-/// and any dot directory.
-const ALWAYS_SKIPPED_DIRS: &[&str] = &["_conflicts", "_generated", "done"];
 
 /// One Gmail URL token found in a source note.
 struct FoundUrl {
@@ -504,137 +501,6 @@ fn resolve_named_note(
         ));
     }
     Ok(canonical)
-}
-
-/// Every Markdown note in the vault except the mail folder, generated and
-/// state directories, the done archive, and zorg-era generated logs.
-fn scan_vault_notes(
-    vault: &Path,
-    folder: &Path,
-) -> Result<Vec<PathBuf>, GmailError> {
-    let canonical_vault = vault.canonicalize().map_err(|_| {
-        GmailError::runtime("note", "the vault path is unavailable".to_string())
-    })?;
-    let mut notes = Vec::new();
-    collect_vault_notes(
-        &canonical_vault,
-        &canonical_vault,
-        folder,
-        &mut notes,
-    )?;
-    notes.sort();
-    Ok(notes)
-}
-
-fn collect_vault_notes(
-    root: &Path,
-    directory: &Path,
-    folder: &Path,
-    notes: &mut Vec<PathBuf>,
-) -> Result<(), GmailError> {
-    let entries = fs::read_dir(directory).map_err(|error| {
-        GmailError::runtime(
-            "note",
-            format!("could not scan the vault: {error}"),
-        )
-    })?;
-    for entry in entries {
-        let entry = entry.map_err(|error| {
-            GmailError::runtime(
-                "note",
-                format!("could not scan the vault: {error}"),
-            )
-        })?;
-        let kind = entry.file_type().map_err(|error| {
-            GmailError::runtime(
-                "note",
-                format!("could not inspect a vault path: {error}"),
-            )
-        })?;
-        if kind.is_symlink() {
-            continue;
-        }
-        let path = entry.path();
-        if kind.is_dir() {
-            let name = entry.file_name();
-            if name.to_string_lossy().starts_with('.')
-                || is_always_excluded_note_directory_name(&name)
-                || ALWAYS_SKIPPED_DIRS
-                    .iter()
-                    .any(|skipped| OsStr::new(skipped) == name.as_os_str())
-            {
-                continue;
-            }
-            let Ok(relative) = path.strip_prefix(root) else {
-                continue;
-            };
-            if path_in_folder(relative, folder) {
-                continue;
-            }
-            collect_vault_notes(root, &path, folder, notes)?;
-        } else if kind.is_file()
-            && path
-                .extension()
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
-        {
-            let Ok(relative) = path.strip_prefix(root) else {
-                continue;
-            };
-            if path_in_folder(relative, folder) {
-                continue;
-            }
-            let Ok(text) = fs::read_to_string(&path) else {
-                continue;
-            };
-            if is_zorg_generated(&text) {
-                continue;
-            }
-            notes.push(path);
-        }
-    }
-    Ok(())
-}
-
-/// Whether a vault-relative path lives under the mail folder.
-fn path_in_folder(relative: &Path, folder: &Path) -> bool {
-    if folder.as_os_str().is_empty() {
-        return false;
-    }
-    let mut folder_parts = folder.components();
-    let mut relative_parts = relative.components();
-    loop {
-        match (folder_parts.next(), relative_parts.next()) {
-            (Some(expected), Some(actual)) => {
-                if expected != actual {
-                    return false;
-                }
-            }
-            (None, _) => return true,
-            (Some(_), None) => return false,
-        }
-    }
-}
-
-/// A zorg-era generated log carries this frontmatter flag and is never
-/// rewritten by a backfill.
-fn is_zorg_generated(text: &str) -> bool {
-    let mut lines = text.lines();
-    if lines.next().is_some_and(|first| first.trim() != "---") {
-        return false;
-    }
-    for line in lines {
-        let trimmed = line.trim();
-        if trimmed == "---" || trimmed == "..." {
-            break;
-        }
-        if let Some((key, value)) = trimmed.split_once(':')
-            && key.trim() == "generated_from_zorg"
-            && value.trim().eq_ignore_ascii_case("true")
-        {
-            return true;
-        }
-    }
-    false
 }
 
 /// Digests remembered as dead by every host's journal.
@@ -1647,6 +1513,7 @@ fn format_footer(waiting: usize, gone: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::vault_walk::{is_zorg_generated, path_in_folder};
     use super::*;
 
     const URL: &str = "https://mail.google.com/mail/u/0/#all/0123456789abcdef";
