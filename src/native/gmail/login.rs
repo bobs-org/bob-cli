@@ -48,12 +48,17 @@ fn login(
     config: &GmailConfig,
     ui: &LoginUi,
 ) -> Result<LoginReport, GmailError> {
+    let wants_compose = args.scope == super::cli::LoginScope::Compose;
     let mut gog = Gog::resolve(crate::native::google::GMAIL, config.timeout())?;
-    if args.scope == super::cli::LoginScope::Compose {
+    if wants_compose {
         gog = gog.with_extra_scopes(vec![COMPOSE_SCOPE.to_string()]);
     }
     let _version = gog.require_version()?;
-    ui.title();
+    ui.title_with_access(if wants_compose {
+        "compose"
+    } else {
+        "read-only"
+    });
 
     let resolved = ensure_client(&gog, args.credentials.as_deref(), ui)?;
     render_client_step(ui, &resolved);
@@ -78,6 +83,18 @@ fn login(
 
     if has_grant {
         match gog.search(&account, "in:inbox", 1) {
+            // A read-only grant cannot satisfy `-s compose`: Google adds a
+            // scope only through a fresh consent, so sign in again below.
+            Ok(_)
+                if wants_compose
+                    && !has_compose(&granted_scopes(&gog, &account)) =>
+            {
+                ui.step_warn(
+                    2,
+                    "Sign in",
+                    "the saved sign-in is read-only; signing in again to add compose…",
+                );
+            }
             Ok(_) => {
                 already_connected = true;
                 render_signin_already(ui, &account);
@@ -143,6 +160,14 @@ fn login(
         first_check_error,
     )?;
     let granted = granted_scopes(&gog, &account);
+    if wants_compose && !has_compose(&granted) {
+        ui.step_fail(
+            3,
+            "Check",
+            "Google granted read-only access, not compose",
+        );
+        return Err(compose_not_granted());
+    }
     let report = build_report(
         &account,
         &resolved,
@@ -154,6 +179,25 @@ fn login(
     );
     render_check_step(ui, &report);
     finish_login(report, ui, config, &gog, reconnected, testing_tip)
+}
+
+fn has_compose(granted: &[String]) -> bool {
+    granted.iter().any(|scope| scope == "compose")
+}
+
+/// Google's consent screen lets each scope be unticked; an unticked compose
+/// box still yields a working read-only grant, so say so instead of
+/// reporting success.
+fn compose_not_granted() -> GmailError {
+    GmailError::runtime(
+        "compose_not_granted",
+        "Google granted read-only Gmail access but not the compose scope"
+            .to_string(),
+    )
+    .with_hint(
+        "rerun `bob gmail login -s compose` and tick \"Manage drafts and \
+         send emails\" on Google's consent screen; the read-only grant is kept",
+    )
 }
 
 fn granted_scopes(gog: &Gog, account: &str) -> Vec<String> {
@@ -192,8 +236,13 @@ fn finish_login(
     reconnected: bool,
     testing_tip: bool,
 ) -> Result<LoginReport, GmailError> {
-    ui.summary(&report.account);
-    if report.scope == "compose" {
+    let compose = has_compose(&report.granted_scopes);
+    if compose {
+        ui.summary_compose(&report.account);
+    } else {
+        ui.summary(&report.account);
+    }
+    if compose {
         ui.note(
             "Compose scope granted: gmail.compose also permits sending; \
              every send still goes through a previewed draft.",

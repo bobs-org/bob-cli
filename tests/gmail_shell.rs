@@ -204,6 +204,110 @@ fn login_compose_requests_extra_scopes() {
     );
 }
 
+fn auth_add_calls(fake: &FakeGog) -> Vec<Vec<String>> {
+    fake.calls()
+        .into_iter()
+        .filter(|call| call.windows(2).any(|w| w == ["auth", "add"]))
+        .collect()
+}
+
+#[test]
+fn login_compose_upgrades_a_read_only_grant() {
+    let env = GmailEnv::new("bob-cli-gmail-login-compose-upgrade");
+    let fake = FakeGog::new(&env, "gog");
+    let output =
+        run_gmail_paste(&env, &fake, &["login", "-s", "compose", "-f", "json"]);
+    assert_success(&output, "login compose upgrade");
+    let doc = json_stdout(&output);
+    assert_eq!(doc["ok"], true);
+    assert_eq!(doc["scope"], "compose");
+    assert_eq!(doc["already_connected"], false);
+    assert_eq!(doc["sign_in"], "paste");
+    assert_eq!(
+        doc["granted_scopes"],
+        serde_json::json!(["readonly", "compose"])
+    );
+    let adds = auth_add_calls(&fake);
+    assert!(
+        !adds.is_empty()
+            && adds.iter().all(|call| {
+                call.iter().any(|arg| arg == "--force-consent")
+                    && call.iter().any(|arg| arg.contains("gmail.compose"))
+            }),
+        "a read-only grant must re-consent with compose: {adds:?}"
+    );
+    assert!(
+        stderr(&output).contains("\"Manage drafts and send emails\""),
+        "compose sign-in must name the compose permission:\n{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn login_compose_upgrade_says_why_it_signs_in_again() {
+    let env = GmailEnv::new("bob-cli-gmail-login-compose-upgrade-human");
+    let fake = FakeGog::new(&env, "gog");
+    let output = run_gmail_paste(&env, &fake, &["login", "-s", "compose"]);
+    assert_success(&output, "login compose upgrade human");
+    let err = stderr(&output);
+    assert!(err.contains("signing in again to add compose"), "{err}");
+    assert!(err.contains("scopes: readonly+compose"), "{err}");
+    assert!(err.contains("write drafts you preview"), "{err}");
+    assert!(!err.contains("already connected"), "{err}");
+}
+
+#[test]
+fn login_compose_on_a_compose_grant_is_already_connected() {
+    let env = GmailEnv::new("bob-cli-gmail-login-compose-existing");
+    let fake = FakeGog::new(&env, "gog").scenario("compose_grant");
+    let output = run_gmail(&env, &fake, &["login", "-s", "compose"]);
+    assert_success(&output, "login compose existing");
+    let err = stderr(&output);
+    assert!(err.contains("Gmail · compose · one-time setup"), "{err}");
+    assert!(err.contains("already connected"), "{err}");
+    assert!(err.contains("scopes: readonly+compose"), "{err}");
+    assert!(err.contains("Compose scope granted"), "{err}");
+    assert!(
+        auth_add_calls(&fake).is_empty(),
+        "a compose grant must skip auth add:\n{:?}",
+        fake.calls()
+    );
+}
+
+#[test]
+fn login_compose_fails_when_google_withholds_compose() {
+    let env = GmailEnv::new("bob-cli-gmail-login-compose-withheld");
+    let fake = FakeGog::new(&env, "gog").scenario("compose_withheld");
+    let output =
+        run_gmail_paste(&env, &fake, &["login", "-s", "compose", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let doc = json_stdout(&output);
+    assert_eq!(doc["ok"], false);
+    assert_eq!(doc["error"]["kind"], "compose_not_granted");
+    assert!(
+        doc["error"]["hint"]
+            .as_str()
+            .is_some_and(|hint| hint.contains("Manage drafts and send emails")),
+        "{doc}"
+    );
+    assert!(
+        !stderr(&output).contains("Compose scope granted"),
+        "a read-only result must not claim compose:\n{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn login_read_only_never_claims_compose() {
+    let env = GmailEnv::new("bob-cli-gmail-login-readonly-note");
+    let fake = FakeGog::new(&env, "gog");
+    let output = run_gmail(&env, &fake, &["login"]);
+    assert_success(&output, "login read-only");
+    let err = stderr(&output);
+    assert!(err.contains("Gmail · read-only · one-time setup"), "{err}");
+    assert!(!err.contains("Compose scope granted"), "{err}");
+}
+
 #[test]
 fn logout_removes_only_bob_gmail_grant() {
     let env = GmailEnv::new("bob-cli-gmail-logout");

@@ -325,7 +325,7 @@ fn paste_flow(
             &format!("{account} · {reason}, so sign in from any browser:"),
         );
         ui.link(&auth_url);
-        print_paste_instructions(ui, account);
+        print_paste_instructions(gog, ui, account);
         match paste_prompt_loop(
             gog,
             ui,
@@ -441,11 +441,25 @@ fn cancelled_or_denied(
     cancelled(service)
 }
 
-fn print_paste_instructions(ui: &LoginUi, account: &str) {
+/// The consent-screen permissions to allow, quoted. Google lets each
+/// requested scope be unticked, so every one Bob asks for is named.
+fn allow_labels(gog: &Gog, ui: &LoginUi) -> String {
+    let mut labels = format!("\"{}\"", ui.service().scope_prompt);
+    if gog
+        .extra_scopes()
+        .iter()
+        .any(|scope| scope.contains("gmail.compose"))
+    {
+        labels.push_str(" and \"Manage drafts and send emails\"");
+    }
+    labels
+}
+
+fn print_paste_instructions(gog: &Gog, ui: &LoginUi, account: &str) {
     ui.note_interactive(&format!(
         "1. Open the link, choose {account}, and allow"
     ));
-    ui.note_interactive(&format!("   \"{}\".", ui.service().scope_prompt));
+    ui.note_interactive(&format!("   {}.", allow_labels(gog, ui)));
     ui.note_interactive(
         "2. \"Google hasn't verified this app\"? It's your own client:",
     );
@@ -507,10 +521,7 @@ fn browser_flow(
             "Sign in",
             &format!("{account} · opening your browser…"),
         );
-        ui.note_interactive(&format!(
-            "Allow \"{}\".",
-            ui.service().scope_prompt
-        ));
+        ui.note_interactive(&format!("Allow {}.", allow_labels(gog, ui)));
         ui.note_interactive("Browser didn't open? Use this link:");
         ui.link(&auth_url);
         let opener = match spawn_opener(&auth_url, ui.service()) {

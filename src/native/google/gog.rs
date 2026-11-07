@@ -118,6 +118,10 @@ impl Gog {
         self
     }
 
+    pub(crate) fn extra_scopes(&self) -> &[String] {
+        &self.extra_scopes
+    }
+
     pub(crate) fn service(&self) -> GoogleService {
         self.service
     }

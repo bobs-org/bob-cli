@@ -243,16 +243,11 @@ impl Header {
         let mut location = path.to_vec();
         location.push(header_index);
         let name = raw.name.filter(|name| !name.trim().is_empty()).ok_or_else(
-            || {
-                BodyError::new(
-                    BodyErrorKind::InvalidMimeStructure,
-                    location.clone(),
-                )
-            },
+            || BodyError::new(BodyErrorKind::InvalidMimeStructure, location),
         )?;
-        let value = raw.value.ok_or_else(|| {
-            BodyError::new(BodyErrorKind::InvalidMimeStructure, location)
-        })?;
+        // An empty header (Outlook's `X-MS-TNEF-Correlator:`) reaches Bob
+        // with no `value` key, because gog omits empty strings.
+        let value = raw.value.unwrap_or_default();
         Ok(Self { name, value })
     }
 }
@@ -457,6 +452,16 @@ mod tests {
         assert!(payload.body.as_ref().unwrap().data.as_deref() == Some(""));
         let thread = parse(r#"{"thread":{"id":"t","messages":[{"id":"m","threadId":"t","payload":{"mimeType":"text/plain"}}]}}"#).unwrap();
         assert!(thread.messages[0].payload.as_ref().unwrap().body.is_none());
+    }
+
+    #[test]
+    fn header_without_a_value_is_an_empty_header() {
+        let thread = parse(r#"{"thread":{"id":"t","messages":[{"id":"m","threadId":"t","payload":{"mimeType":"text/plain","headers":[{"name":"X-MS-TNEF-Correlator"},{"name":"Subject","value":"Hi"}]}}]}}"#).unwrap();
+        let payload = thread.messages[0].payload.as_ref().unwrap();
+        assert_eq!(payload.headers.len(), 2);
+        assert_eq!(payload.headers[0].name, "X-MS-TNEF-Correlator");
+        assert_eq!(payload.headers[0].value, "");
+        assert_eq!(payload.headers[1].value, "Hi");
     }
 
     #[test]

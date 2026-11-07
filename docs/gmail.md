@@ -225,9 +225,16 @@ the writer note.
    `https://www.googleapis.com/auth/gmail.compose` through `--extra-scopes`
    (for the Mac only); the docs say plainly that this scope also permits
    sending. The gate is the preview/confirm step plus keeping that grant off
-   agent hosts.
+   agent hosts. A saved read-only grant does not satisfy `-s compose`: Bob
+   says it is signing in again to add compose and runs a fresh consent. The
+   sign-in prompt names both permissions to allow, "Read your email messages"
+   and "Manage drafts and send emails".
 3. **Check.** Bob runs one Gmail search page with `max=1` to confirm the grant
-   and reports the granted scopes (`readonly` or `readonly+compose`). If the
+   and reports the granted scopes (`readonly` or `readonly+compose`). With
+   `-s compose`, a consent that leaves compose unticked fails with
+   `compose_not_granted` (exit 1); the read-only grant is kept. The title,
+   summary, and compose note follow the access requested and granted, so a
+   read-only result never claims compose. If the
    Gmail API is off, a TTY can turn it on and retry in place; without a TTY, or
    after `q`, the grant is kept and the hint says to enable the printed project
    URL then rerun `bob gmail login`. An expired or revoked grant (`invalid_grant`)

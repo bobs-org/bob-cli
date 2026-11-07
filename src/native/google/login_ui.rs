@@ -38,13 +38,18 @@ impl LoginUi {
     }
 
     pub(crate) fn title(&self) {
+        self.title_with_access("read-only");
+    }
+
+    /// Title naming the access this login asks for (`read-only`, `compose`).
+    pub(crate) fn title_with_access(&self, access: &str) {
         if self.json {
             return;
         }
         eprintln!(
             "{}",
             self.styler.cyan(&format!(
-                "{} · read-only · one-time setup",
+                "{} · {access} · one-time setup",
                 self.service.product_name
             ))
         );
@@ -180,6 +185,19 @@ impl LoginUi {
                 self.service.product_name
             );
         }
+    }
+
+    /// Summary for a grant that also holds the compose scope.
+    pub(crate) fn summary_compose(&self, account: &str) {
+        if self.json {
+            return;
+        }
+        eprintln!();
+        eprintln!(
+            "{} Connected. Bob can read {account}'s {} and write drafts you preview.",
+            self.styler.green("✓"),
+            self.service.product_name
+        );
     }
 
     pub(crate) fn writer_note(&self, writer: &str) {

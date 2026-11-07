@@ -172,6 +172,9 @@ def scenario_defaults(name: str) -> dict:
         defaults["accounts"] = [
             connected_account(EMAIL, [READONLY_SCOPE, COMPOSE_SCOPE])
         ]
+    elif name == "compose_withheld":
+        # The user leaves Google's compose checkbox unticked at consent.
+        defaults["withhold_compose"] = True
     elif name == "no_scope":
         defaults["accounts"] = [
             {
@@ -789,7 +792,7 @@ if op == "auth_add":
             if item == "--extra-scopes" and i + 1 < len(args):
                 extra = args[i + 1]
         scopes = [READONLY_SCOPE]
-        if COMPOSE_SCOPE in extra:
+        if COMPOSE_SCOPE in extra and not state.get("withhold_compose"):
             scopes.append(COMPOSE_SCOPE)
         accounts = [
             entry

@@ -92,6 +92,10 @@ bob gmail login -s compose
 That also requests `https://www.googleapis.com/auth/gmail.compose` through
 `--extra-scopes`. The docs say plainly that this scope also permits sending;
 the gate is the preview/confirm step plus keeping that grant off agent hosts.
+If the Mac already has a read-only grant, Bob signs in again to add compose.
+On Google's consent screen, allow both "Read your email messages" and "Manage
+drafts and send emails"; if compose stays unticked, login fails with
+`compose_not_granted` and keeps the read-only grant.
 
 A valid grant is idempotent: login still prints all three steps, reports
 `already connected`, rechecks one Gmail search page, and reports the granted
