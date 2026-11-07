@@ -1019,7 +1019,11 @@ mod tests {
         write_file(&temp.path().join("a/inner.md"), "- [ ] #task Inner\n");
         write_file(&temp.path().join("a.md"), "- [ ] #task A\n");
         write_file(&temp.path().join("a-b.md"), "- [ ] #task AB\n");
-        write_file(&temp.path().join("A.md"), "- [ ] #task Upper\n");
+        // `B.md`, not `A.md`: on case-insensitive APFS `A.md` and `a.md`
+        // are one file, so the uppercase sibling must not collide with a
+        // lowercase name. `B` still sorts before every lowercase name,
+        // keeping the uppercase-before-lowercase ordering coverage.
+        write_file(&temp.path().join("B.md"), "- [ ] #task Upper\n");
         let root = temp.path();
         let mut paths = Vec::new();
         let mut warnings = Vec::new();
@@ -1033,7 +1037,7 @@ mod tests {
         assert!(paths.contains(&PathBuf::from("a/inner.md")));
         assert!(paths.contains(&PathBuf::from("a.md")));
         assert!(paths.contains(&PathBuf::from("a-b.md")));
-        assert!(paths.contains(&PathBuf::from("A.md")));
+        assert!(paths.contains(&PathBuf::from("B.md")));
     }
 
     #[test]

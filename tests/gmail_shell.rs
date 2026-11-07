@@ -1,4 +1,8 @@
 //! `bob gmail` shell phase: noun group, config, login, logout, doctor.
+//!
+//! Flow selection is per-test and explicit: paste-scripted tests pass `-m`
+//! so they mean paste on every OS (on macOS the default would be the
+//! browser flow, which would wait out the consent window).
 
 mod gmail_support;
 
@@ -169,6 +173,7 @@ fn login_compose_requests_extra_scopes() {
         &fake,
         &[
             "login",
+            "-m",
             "-c",
             client.to_str().expect("utf8 path"),
             "-s",
@@ -215,8 +220,11 @@ fn auth_add_calls(fake: &FakeGog) -> Vec<Vec<String>> {
 fn login_compose_upgrades_a_read_only_grant() {
     let env = GmailEnv::new("bob-cli-gmail-login-compose-upgrade");
     let fake = FakeGog::new(&env, "gog");
-    let output =
-        run_gmail_paste(&env, &fake, &["login", "-s", "compose", "-f", "json"]);
+    let output = run_gmail_paste(
+        &env,
+        &fake,
+        &["login", "-m", "-s", "compose", "-f", "json"],
+    );
     assert_success(&output, "login compose upgrade");
     let doc = json_stdout(&output);
     assert_eq!(doc["ok"], true);
@@ -247,7 +255,8 @@ fn login_compose_upgrades_a_read_only_grant() {
 fn login_compose_upgrade_says_why_it_signs_in_again() {
     let env = GmailEnv::new("bob-cli-gmail-login-compose-upgrade-human");
     let fake = FakeGog::new(&env, "gog");
-    let output = run_gmail_paste(&env, &fake, &["login", "-s", "compose"]);
+    let output =
+        run_gmail_paste(&env, &fake, &["login", "-m", "-s", "compose"]);
     assert_success(&output, "login compose upgrade human");
     let err = stderr(&output);
     assert!(err.contains("signing in again to add compose"), "{err}");
@@ -278,8 +287,11 @@ fn login_compose_on_a_compose_grant_is_already_connected() {
 fn login_compose_fails_when_google_withholds_compose() {
     let env = GmailEnv::new("bob-cli-gmail-login-compose-withheld");
     let fake = FakeGog::new(&env, "gog").scenario("compose_withheld");
-    let output =
-        run_gmail_paste(&env, &fake, &["login", "-s", "compose", "-f", "json"]);
+    let output = run_gmail_paste(
+        &env,
+        &fake,
+        &["login", "-m", "-s", "compose", "-f", "json"],
+    );
     assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
     let doc = json_stdout(&output);
     assert_eq!(doc["ok"], false);

@@ -35,6 +35,19 @@ fn clipboard_command(
     command
 }
 
+fn command_provider(report: &serde_json::Value) -> &serde_json::Value {
+    // On macOS the diagnostic `providers` list leads with the Alfred and
+    // Clipy rows and the selected command provider comes last; elsewhere
+    // it is the only row. Select by name so the assertions below do not
+    // depend on host or platform row order.
+    report["providers"]
+        .as_array()
+        .expect("providers array")
+        .iter()
+        .find(|row| row["provider"] == "command")
+        .expect("command provider row")
+}
+
 #[test]
 fn healthy_command_provider_reports_only_metadata() {
     let (_temp, live, history) = history_rig(
@@ -53,8 +66,9 @@ fn healthy_command_provider_reports_only_metadata() {
     assert_eq!(report["would_succeed"], true);
     assert_eq!(report["selected_provider"], "command");
     assert_eq!(report["selection"]["source"], "environment");
-    assert_eq!(report["providers"][0]["provider"], "command");
-    assert_eq!(report["providers"][0]["head_agrees_with_live"], true);
+    let command = command_provider(&report);
+    assert_eq!(command["selected"], true);
+    assert_eq!(command["head_agrees_with_live"], true);
     assert_no_clipboard_content(&output);
 }
 
@@ -74,7 +88,7 @@ fn stale_command_provider_refuses_with_stable_code_and_redacts_content() {
         serde_json::from_str(&stdout(&output)).expect("status JSON");
     assert_eq!(report["would_succeed"], false);
     assert_eq!(report["refusal"]["code"], "clipboard_history_mismatch");
-    assert_eq!(report["providers"][0]["head_agrees_with_live"], false);
+    assert_eq!(command_provider(&report)["head_agrees_with_live"], false);
     assert_no_clipboard_content(&output);
 }
 

@@ -36,6 +36,13 @@ const FAKE_BROWSER_SRC: &str = concat!(
     "/tests/gcal_support/fake_browser.py"
 );
 
+/// Directory of guard shims (a failing `open` / `xdg-open`) prepended to
+/// every test child's `PATH`, so a test that strays into the browser flow
+/// can never launch a real browser on the host.
+fn support_bin_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/support-bin")
+}
+
 pub(crate) const ACCOUNT: &str = "you@example.com";
 pub(crate) const FAKE_AUTH_CODE: &str = "fake/code+1";
 pub(crate) const HOST: &str = "test-host";
@@ -123,14 +130,41 @@ impl GcalEnv {
     /// `BOB_GCAL_GOG` is removed unless a test installs [`FakeGog`].
     /// The child env is explicit: host shells export `DATE=date`, and an
     /// inherited `BOB_NOW` would pin the stamp to another test's clock.
+    /// Sign-in flow selection is deterministic too: ambient SSH and display
+    /// variables are scrubbed (so a paste-scripted test means paste on every
+    /// OS, macOS included), the `open` / `xdg-open` guards make a stray
+    /// browser flow loud instead of launching a browser, and a short consent
+    /// window fails such a stray fast instead of waiting out 600 s.
+    /// Tests that mean SSH, display, or browser set them explicitly.
     pub(crate) fn command(&self) -> Command {
         let mut command = Command::new(BOB_BIN);
         let path = std::env::var_os("PATH");
         let tmpdir = std::env::var_os("TMPDIR");
         let ld_library_path = std::env::var_os("LD_LIBRARY_PATH");
         command.env_clear();
-        if let Some(path) = path {
-            command.env("PATH", path);
+        for key in [
+            "SSH_CONNECTION",
+            "SSH_TTY",
+            "SSH_CLIENT",
+            "DISPLAY",
+            "WAYLAND_DISPLAY",
+        ] {
+            command.env_remove(key);
+        }
+        let shim = support_bin_dir();
+        match path {
+            Some(path) if !path.is_empty() => {
+                // Join manually: the ambient PATH may hold entries that
+                // `join_paths` refuses, and `:` separates PATH on every
+                // platform these tests run on.
+                let mut joined = shim.into_os_string();
+                joined.push(":");
+                joined.push(path);
+                command.env("PATH", joined);
+            }
+            _ => {
+                command.env("PATH", shim);
+            }
         }
         if let Some(tmpdir) = tmpdir {
             command.env("TMPDIR", tmpdir);
@@ -143,6 +177,7 @@ impl GcalEnv {
             .env("BOB_CONFIG_FILE", self.config())
             .env("HOSTNAME", HOST)
             .env("BOB_NOW", NOW)
+            .env("BOB_GCAL_CONSENT_SECS", "20")
             .env("NO_COLOR", "1")
             .env(
                 "BOB_VAULT_SYNC_LOCK_FILE",

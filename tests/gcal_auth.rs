@@ -2,6 +2,12 @@
 //!
 //! FakeGog records argv and answers from a scenario file. Nothing here
 //! touches live Google.
+//!
+//! Flow selection is per-test and explicit: paste-scripted tests pass `-m`
+//! so they mean paste on every OS (on macOS the default would be the
+//! browser flow, which would wait out the consent window). The SSH test
+//! injects `SSH_CONNECTION` instead, and the browser tests install
+//! `FakeBrowser`.
 
 mod gcal_support;
 
@@ -75,6 +81,7 @@ fn login_dash_c_stores_the_client() {
         &fake,
         &[
             "login",
+            "-m",
             "-c",
             client.to_str().expect("utf8 path"),
             "-f",
@@ -131,7 +138,7 @@ fn login_dash_c_stores_the_client() {
 fn login_reuses_legacy_default_client_without_prompt() {
     let env = GcalEnv::new("bob-cli-gcal-login-reuse");
     let fake = FakeGog::new(&env, "gog").scenario("other_client");
-    let output = run_gcal_paste(&env, &fake, &["login", "-f", "json"]);
+    let output = run_gcal_paste(&env, &fake, &["login", "-m", "-f", "json"]);
     assert_success(&output, "login reuse");
     let doc = json_stdout(&output);
     assert_eq!(doc["ok"], true);
@@ -241,6 +248,7 @@ fn login_dash_c_accepts_legacy_flat_file() {
         &fake,
         &[
             "login",
+            "-m",
             "-c",
             client.to_str().expect("utf8 path"),
             "-f",
@@ -343,7 +351,7 @@ fn login_prints_the_guided_checklist_without_a_client() {
 fn login_self_heals_a_stale_saved_grant() {
     let env = GcalEnv::new("bob-cli-gcal-login-self-heal");
     let fake = FakeGog::new(&env, "gog").scenario("stale_grant");
-    let output = run_gcal_paste(&env, &fake, &["login", "-f", "json"]);
+    let output = run_gcal_paste(&env, &fake, &["login", "-m", "-f", "json"]);
     assert_success(&output, "login self-heal");
     let doc = json_stdout(&output);
     assert_eq!(doc["reconnected"], true);
@@ -404,7 +412,7 @@ fn login_guides_pasted_client_json_and_adds_json_fields() {
     let output = run_gcal_paste_script(
         &env,
         &fake,
-        &["login", "-f", "json"],
+        &["login", "-m", "-f", "json"],
         &format!("{raw}\n{{callback}}\n"),
     );
     assert_success(&output, "guided pasted JSON");
@@ -429,7 +437,7 @@ fn login_discovers_a_downloaded_client() {
     let output = run_gcal_paste_script(
         &env,
         &fake,
-        &["login", "-f", "json"],
+        &["login", "-m", "-f", "json"],
         "\n{callback}\n",
     );
     assert_success(&output, "downloaded client");
@@ -446,7 +454,7 @@ fn login_account_picker_accepts_a_number() {
     let output = run_gcal_paste_script(
         &env,
         &fake,
-        &["login", "-f", "json"],
+        &["login", "-m", "-f", "json"],
         "2\n{callback}\n",
     );
     assert_success(&output, "account picker");
@@ -460,7 +468,7 @@ fn login_suggests_config_when_bob_accounts_remain_ambiguous() {
     env.write_config("gcal:\n  writer: test-host\n");
     let fake = FakeGog::new(&env, "gog").scenario("two_bob_accounts");
     let output =
-        run_gcal_paste_script(&env, &fake, &["login"], "2\n{callback}\n");
+        run_gcal_paste_script(&env, &fake, &["login", "-m"], "2\n{callback}\n");
     assert_success(&output, "account tip");
     assert!(fake.called_with(&["auth", "add", "work@example.com"]));
     let err = stderr(&output);
@@ -476,7 +484,7 @@ fn login_human_transcript_stays_on_stderr_and_mentions_remote_writer() {
     let env = GcalEnv::new("bob-cli-gcal-login-human-transcript");
     env.write_config("gcal:\n  account: you@example.com\n  writer: the-mac\n");
     let fake = FakeGog::new(&env, "gog").scenario("needs_auth");
-    let output = run_gcal_paste(&env, &fake, &["login"]);
+    let output = run_gcal_paste(&env, &fake, &["login", "-m"]);
     assert_success(&output, "human login");
     assert!(stdout(&output).is_empty(), "human mode wrote stdout");
     let err = stderr(&output);
@@ -496,7 +504,7 @@ fn login_account_flag_overrides_config() {
     let output = run_gcal_paste(
         &env,
         &fake,
-        &["login", "-a", "other@example.com", "-f", "json"],
+        &["login", "-m", "-a", "other@example.com", "-f", "json"],
     );
     assert_success(&output, "login -a");
     let doc = json_stdout(&output);
@@ -665,10 +673,10 @@ fn login_paste_stale_state_then_fresh_link() {
 }
 
 #[test]
-fn login_without_manual_never_runs_interactive_auth_add() {
+fn login_paste_flow_never_runs_interactive_auth_add() {
     let env = GcalEnv::new("bob-cli-gcal-login-no-manual");
     let fake = FakeGog::new(&env, "gog").scenario("needs_auth");
-    let output = run_gcal_paste(&env, &fake, &["login", "-f", "json"]);
+    let output = run_gcal_paste(&env, &fake, &["login", "-m", "-f", "json"]);
     assert_success(&output, "login auto paste");
     for call in fake.calls() {
         if call.windows(2).any(|w| w == ["auth", "add"]) {

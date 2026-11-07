@@ -151,6 +151,13 @@ fn run_inner(args: &LinkArgs) -> Result<LinkOutcome, GmailError> {
             format!("Bob vault root does not exist: {}", vault.display()),
         ));
     }
+    // Notes resolve to canonical paths (scan and named-note resolution both
+    // canonicalize), so work with the canonical vault throughout: otherwise
+    // a vault that arrives through a symlink (on macOS, temp dirs live
+    // under /var, which points at /private/var) fails every downstream
+    // strip_prefix as an "escaped the vault" refusal. A vault that cannot
+    // be canonicalized keeps the path the caller passed in.
+    let vault = vault.canonicalize().unwrap_or(vault);
     let host = vault_sync::hostname_slug();
     if !args.dry_run
         && let Some(writer) = config.writer()
@@ -684,7 +691,15 @@ fn first_note(
 }
 
 fn relative_slashes(vault: &Path, absolute: &Path) -> String {
-    save::path_to_slashes(absolute.strip_prefix(vault).unwrap_or(absolute))
+    // Scan results are canonicalized, but the vault root may arrive through
+    // a symlink (on macOS, temp dirs live under /var, which points at
+    // /private/var). Canonicalize the prefix too, so the strip never misses
+    // and leaks an absolute path. A vault that cannot be canonicalized
+    // keeps the previous behavior.
+    let canonical_vault = vault.canonicalize().unwrap_or_else(|_| vault.into());
+    save::path_to_slashes(
+        absolute.strip_prefix(&canonical_vault).unwrap_or(absolute),
+    )
 }
 
 /// A bare or angle URL that sits in an inline-link destination (`](...)`)

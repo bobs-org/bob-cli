@@ -263,12 +263,16 @@ mod tests {
         let root = temp.path().join("state");
         let note = temp.path().join("note.md");
         fs::write(&note, "synthetic task").unwrap();
+        // Jobs store canonical paths, so compare against the canonical
+        // note: under a symlinked temp dir (macOS /var -> /private/var)
+        // the raw join and the stored path spell differently.
+        let canonical_note = fs::canonicalize(&note).unwrap();
         enqueue(&root, temp.path(), std::slice::from_ref(&note)).unwrap();
         let mut count = 0;
         assert_eq!(
             drain(&root, |job| {
                 count += 1;
-                assert_eq!(job.notes, [note.clone()]);
+                assert_eq!(job.notes, [canonical_note.clone()]);
                 assert_eq!(
                     drain(&root, |_| panic!("second worker acquired lock"))
                         .unwrap(),
@@ -350,7 +354,9 @@ mod tests {
         let job: Job =
             serde_json::from_slice(&fs::read(&pending(&root())[0]).unwrap())
                 .unwrap();
-        assert_eq!(job.notes, [note.clone()]);
+        // The queued job stores canonical paths; compare accordingly when
+        // the temp dir itself arrives through a symlink (macOS /var).
+        assert_eq!(job.notes, [fs::canonicalize(&note).unwrap()]);
         assert!(kick_with(
             &temp.path().join("missing-bob"),
             temp.path(),

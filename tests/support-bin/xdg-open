@@ -1,0 +1,7 @@
+#!/bin/sh
+# Test guard: no integration test may open a real browser. The Google
+# sign-in harness selects the paste flow explicitly (or installs a fake
+# browser), so reaching this shim means a test took the browser flow by
+# accident. Fail loudly instead of launching a browser on the host.
+echo "bob-cli-test: refusing to open a real browser: $*" >&2
+exit 1
