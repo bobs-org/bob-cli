@@ -119,6 +119,7 @@ pub(crate) mod url_routing;
 mod vault_clobber;
 pub(crate) mod vault_git;
 mod vault_links;
+mod vault_merge_union;
 mod vault_rewrite;
 mod vault_sync;
 

@@ -194,6 +194,340 @@ fn vault_sync_same_line_edit_quarantines_local_copy_and_keeps_remote() {
     );
 }
 
+const UNION_BASE: &str = "---\n\
+parent: \"[[dev]]\"\n\
+---\n\
+\n\
+- [ ] #task Successor deps ^successor-deps\n\
+\t- 🥀 **ROTTEN LOG**\n\
+\t\t- *2026-11-06* — 🍂 Next → Ready\n\
+\n\
+### Next & In Progress\n\
+\n\
+- [?] #task Make gtd_daily grey [scheduled:: 2026-11-08] ^grey-gtd-daily\n\
+\t- IMPL: Add a color property\n\
+\t- 🗓️ **SCHEDULE LOG**\n";
+
+const UNION_LOCAL_TASK: &str = "- [*] #task Change parent of gtd [created::2026-11-07] ^gtd-parent-is-gtd\n\
+\t- 🪢 **LINKED FROM:** [[#^grey-gtd-daily]] (merged into)\n\
+\t- Make gtd_daily grey\n\
+\t\t- IMPL: Add a color property\n";
+
+const UNION_REMOTE_TASK: &str = "- [ ] #task #ref [[ref/chat/gmail_thread_note_sync|Gmail sync]] [created::2026-11-07] ^ref-gmail-thread-note-sync\n";
+
+/// Local side of the incident: a new task at the end of the open list plus a
+/// non-conflicting merge cancellation further down the note.
+fn union_local_note() -> String {
+    UNION_BASE
+        .replace(
+            "\t\t- *2026-11-06* — 🍂 Next → Ready\n",
+            &format!(
+                "\t\t- *2026-11-06* — 🍂 Next → Ready\n{UNION_LOCAL_TASK}"
+            ),
+        )
+        .replace(
+            "- [?] #task Make gtd_daily grey [scheduled:: 2026-11-08] ^grey-gtd-daily\n\
+\t- IMPL: Add a color property\n",
+            "- [-] #task Make gtd_daily grey [scheduled:: 2026-11-08] [cancelled:: 2026-11-07] ^grey-gtd-daily\n\
+\t- 🪢 **LINKS:** merged into [[#^gtd-parent-is-gtd]]\n",
+        )
+}
+
+fn union_remote_note() -> String {
+    UNION_BASE.replace(
+        "\t\t- *2026-11-06* — 🍂 Next → Ready\n",
+        &format!("\t\t- *2026-11-06* — 🍂 Next → Ready\n{UNION_REMOTE_TASK}"),
+    )
+}
+
+fn union_merged_note() -> String {
+    union_local_note().replace(
+        UNION_LOCAL_TASK,
+        &format!("{UNION_LOCAL_TASK}{UNION_REMOTE_TASK}"),
+    )
+}
+
+/// Commit `files` as the shared base, then write the local edits into the
+/// vault's working tree and push the remote edits from the peer.
+fn seed_vault_sync_conflict(
+    vault: &Path,
+    peer: &Path,
+    files: &[(&str, &str, &str, &str)],
+) {
+    for (path, base, _, _) in files {
+        write_file(&vault.join(path), base);
+    }
+    git_in(vault, ["add", "."]);
+    git_in(vault, ["commit", "-q", "-m", "add shared notes"]);
+    git_in(vault, ["push", "-q", "origin", "master"]);
+    git_in(peer, ["pull", "-q", "--ff-only", "origin", "master"]);
+    for (path, _, local, remote) in files {
+        write_file(&vault.join(path), local);
+        write_file(&peer.join(path), remote);
+    }
+    git_in(peer, ["add", "."]);
+    git_in(peer, ["commit", "-q", "-m", "remote edits"]);
+    git_in(peer, ["push", "-q", "origin", "master"]);
+}
+
+fn conflict_log(vault: &Path) -> String {
+    fs::read_to_string(vault.join("_conflicts/sync_conflicts.md"))
+        .expect("read conflict log")
+}
+
+fn status_strings(status: &serde_json::Value, field: &str) -> Vec<String> {
+    status[field]
+        .as_array()
+        .unwrap_or_else(|| panic!("{field} array in {status}"))
+        .iter()
+        .map(|value| value.as_str().expect("string entry").to_string())
+        .collect()
+}
+
+#[test]
+fn vault_sync_same_point_insertions_auto_merge_without_quarantine() {
+    let temp = TempDir::new("bob-cli-vault-sync-union");
+    let (vault, remote, peer) = init_vault_sync_pair(&temp);
+    let (local_note, remote_note) = (union_local_note(), union_remote_note());
+    seed_vault_sync_conflict(
+        &vault,
+        &peer,
+        &[(
+            "bob.md",
+            UNION_BASE,
+            local_note.as_str(),
+            remote_note.as_str(),
+        )],
+    );
+
+    let output = vault_sync_command(&vault, &temp)
+        .env("HOSTNAME", "mac")
+        .output()
+        .expect("run union vault-sync");
+
+    assert_success(&output);
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains(
+            "auto-merged bob.md: kept both sides of 1 same-point insertion hunk(s)"
+        ),
+        "{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("bob.md")).expect("read merged note"),
+        union_merged_note()
+    );
+    assert!(
+        quarantined_conflict_files(&vault).is_empty(),
+        "auto-merge should not write a conflict copy"
+    );
+    assert_no_conflict_markers(&vault);
+    let log = conflict_log(&vault);
+    assert!(
+        log.contains(
+            " bob.md auto-merged 1 same-point insertion hunk(s); nothing dropped\n"
+        ),
+        "{log}"
+    );
+    assert!(!log.contains(" -> _conflicts/"), "{log}");
+
+    let status = read_vault_sync_status(&temp);
+    assert_eq!(status_strings(&status, "auto_merged"), ["bob.md"]);
+    assert!(status_strings(&status, "conflicts").is_empty());
+    assert!(status["last_error"].is_null(), "{status}");
+
+    let head = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
+    assert_eq!(
+        head,
+        stdout(&git([
+            "--git-dir",
+            path_str(&remote),
+            "rev-parse",
+            "master"
+        ])),
+        "the merge should reach the remote"
+    );
+    assert_eq!(
+        stdout(&git([
+            "--git-dir",
+            path_str(&remote),
+            "show",
+            "master:bob.md"
+        ])),
+        union_merged_note()
+    );
+    assert!(stdout(&git_in(&vault, ["status", "--porcelain"])).is_empty());
+
+    let panel = vault_sync_command(&vault, &temp)
+        .arg("status")
+        .output()
+        .expect("run vault-sync status");
+    assert_success(&panel);
+    assert!(
+        stdout(&panel).contains("auto_merged:\n  - bob.md\n"),
+        "{}",
+        format_output(&panel)
+    );
+}
+
+#[test]
+fn vault_sync_insertion_plus_edit_conflict_quarantines_whole_file() {
+    let temp = TempDir::new("bob-cli-vault-sync-union-mixed");
+    let (vault, _remote, peer) = init_vault_sync_pair(&temp);
+    let base = "# Note\n\nAlpha paragraph stays put.\nBravo paragraph stays put.\nCharlie paragraph stays put.\nDelta paragraph stays put.\n\n- [ ] #task Edited on both hosts\n";
+    let local = "# Note\n- [ ] #task Local insertion\n\nAlpha paragraph stays put.\nBravo paragraph stays put.\nCharlie paragraph stays put.\nDelta paragraph stays put.\n\n- [x] #task Edited on both hosts\n";
+    let remote = "# Note\n- [ ] #task Remote insertion\n\nAlpha paragraph stays put.\nBravo paragraph stays put.\nCharlie paragraph stays put.\nDelta paragraph stays put.\n\n- [-] #task Edited on both hosts\n";
+    seed_vault_sync_conflict(
+        &vault,
+        &peer,
+        &[("note.md", base, local, remote)],
+    );
+
+    let output = vault_sync_command(&vault, &temp)
+        .env("HOSTNAME", "athena")
+        .output()
+        .expect("run mixed-conflict vault-sync");
+
+    assert_success(&output);
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("(not auto-merged: hunk 2 changes existing lines"),
+        "{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("note.md")).expect("read remote winner"),
+        remote
+    );
+    let copies = quarantined_conflict_files(&vault);
+    assert_eq!(copies.len(), 1, "expected one conflict copy: {copies:?}");
+    assert_eq!(
+        fs::read_to_string(&copies[0]).expect("read conflict copy"),
+        local,
+        "the conflict copy should hold the complete local file"
+    );
+    assert_no_conflict_markers(&vault);
+    assert!(!conflict_log(&vault).contains("auto-merged"));
+
+    let status = read_vault_sync_status(&temp);
+    assert!(status_strings(&status, "auto_merged").is_empty());
+    assert_eq!(status_strings(&status, "conflicts").len(), 1);
+}
+
+#[test]
+fn vault_sync_canvas_both_insert_still_quarantines() {
+    let temp = TempDir::new("bob-cli-vault-sync-union-canvas");
+    let (vault, _remote, peer) = init_vault_sync_pair(&temp);
+    let base = "{\n\"nodes\":[\n]\n}\n";
+    let local = "{\n\"nodes\":[\n{\"id\":\"local\"}\n]\n}\n";
+    let remote = "{\n\"nodes\":[\n{\"id\":\"remote\"}\n]\n}\n";
+    seed_vault_sync_conflict(
+        &vault,
+        &peer,
+        &[("board.canvas", base, local, remote)],
+    );
+
+    let output = vault_sync_command(&vault, &temp)
+        .output()
+        .expect("run canvas-conflict vault-sync");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("board.canvas")).expect("read canvas"),
+        remote
+    );
+    let copies = quarantined_conflict_files(&vault);
+    assert_eq!(copies.len(), 1, "expected one conflict copy: {copies:?}");
+    assert_eq!(
+        fs::read_to_string(&copies[0]).expect("read canvas copy"),
+        local
+    );
+    let status = read_vault_sync_status(&temp);
+    assert!(status_strings(&status, "auto_merged").is_empty());
+}
+
+#[test]
+fn vault_sync_auto_merge_and_quarantine_share_one_merge_commit() {
+    let temp = TempDir::new("bob-cli-vault-sync-union-two-paths");
+    let (vault, remote, peer) = init_vault_sync_pair(&temp);
+    let (local_note, remote_note) = (union_local_note(), union_remote_note());
+    seed_vault_sync_conflict(
+        &vault,
+        &peer,
+        &[
+            (
+                "bob.md",
+                UNION_BASE,
+                local_note.as_str(),
+                remote_note.as_str(),
+            ),
+            ("note.md", "base\n", "local\n", "remote\n"),
+        ],
+    );
+    let peer_sha = stdout(&git_in(&peer, ["rev-parse", "HEAD"]));
+
+    let output = vault_sync_command(&vault, &temp)
+        .env("HOSTNAME", "apollo")
+        .output()
+        .expect("run two-path vault-sync");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("bob.md")).expect("read merged note"),
+        union_merged_note()
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("note.md")).expect("read remote winner"),
+        "remote\n"
+    );
+    let copies = quarantined_conflict_files(&vault);
+    assert_eq!(copies.len(), 1, "expected one conflict copy: {copies:?}");
+    assert_eq!(
+        fs::read_to_string(&copies[0]).expect("read conflict copy"),
+        "local\n"
+    );
+    let log = conflict_log(&vault);
+    assert!(log.contains(" bob.md auto-merged 1 same-point"), "{log}");
+    assert!(log.contains(" note.md -> _conflicts/note.apollo-"), "{log}");
+
+    let status = read_vault_sync_status(&temp);
+    assert_eq!(status_strings(&status, "auto_merged"), ["bob.md"]);
+    assert_eq!(status_strings(&status, "conflicts").len(), 1);
+
+    let head = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
+    assert_eq!(
+        head,
+        stdout(&git([
+            "--git-dir",
+            path_str(&remote),
+            "rev-parse",
+            "master"
+        ]))
+    );
+    assert_eq!(stdout(&git_in(&vault, ["rev-parse", "HEAD^2"])), peer_sha);
+    let mut resolved =
+        stdout(&git_in(&vault, ["diff", "--name-only", "HEAD^2", "HEAD"]))
+            .lines()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+    resolved.sort();
+    assert_eq!(resolved.len(), 3, "{resolved:?}");
+    assert!(
+        resolved[0].starts_with("_conflicts/note.apollo-"),
+        "{resolved:?}"
+    );
+    assert_eq!(
+        resolved[1..],
+        ["_conflicts/sync_conflicts.md", "bob.md"],
+        "one merge commit should carry the auto-merge and the quarantine"
+    );
+    assert_eq!(
+        stdout(&git_in(&vault, ["rev-list", "--count", "HEAD^1..HEAD"])),
+        "2\n",
+        "the merge commit and the peer commit are the only new commits"
+    );
+}
+
 #[test]
 fn vault_sync_conflict_copy_on_ignored_path_still_commits_merge() {
     let temp = TempDir::new("bob-cli-vault-sync-ignored-copy");

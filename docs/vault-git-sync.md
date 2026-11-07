@@ -18,9 +18,11 @@ default):
 4. Refuse any file at or above 95 MiB before staging, and warn at or above 50 MiB.
 5. Commit staged local changes with a generated `vault(<host>): ...` message, unless
    `--message` supplies one.
-6. Check `origin/master`, fetch only when needed, fast-forward or merge, retry a
-   fast-forward blocked by a Git lock, and auto-resolve supported conflicts into
-   `_conflicts/`.
+6. Check `origin/master`, fetch only when needed, fast-forward or merge, and retry a
+   fast-forward blocked by a Git lock. Auto-resolve supported conflicts: same-point
+   insertions in Markdown notes are unioned in place, and every other supported
+   conflict keeps the remote version and quarantines the local copy in `_conflicts/`
+   (see [Conflict policy](#conflict-policy)).
 7. Push, retrying bounded non-fast-forward races.
 8. Write the status record used by `bob vault-sync status`.
 
@@ -55,8 +57,47 @@ git -C ~/bob config gc.autoDetach false
 
 ## Conflict policy
 
-Remote content wins in-place during supported conflicts. The local version is kept as a
-conflict copy under `_conflicts/`, and `_conflicts/sync_conflicts.md` records the event.
+When two hosts insert different lines at the same point of a Markdown note, vault-sync
+keeps both insertions in place. The usual case is a capture on the MacBook racing a
+`bob ref create` append on a server. For a both-modified `.md` conflict, vault-sync
+re-merges the three index stages with `git merge-file --diff3` and accepts the union only
+when every conflicting hunk:
+
+- inserts on both sides and changes no existing line (its base section is empty), and
+  neither side is blank;
+- starts outside the leading YAML frontmatter;
+- has balanced code fences on each side;
+- shares no identical non-blank line between the sides, so a duplicated Task Link,
+  Pomodoro entry, or task falls back to quarantine;
+- has an outline-safe order. Local then remote is tried first, then remote then local.
+  An order is safe when no line of the first side is shallower than the second side's
+  first line. Neither side may hold a line shallower than an indented line that
+  follows the hunk.
+
+The assembled note must also repeat no `^block-id` more often than the local or remote
+version did. Non-conflicting hunks merge as usual. An accepted union is written and
+staged in place with no conflict copy. `_conflicts/sync_conflicts.md` gets an
+`auto-merged N same-point insertion hunk(s); nothing dropped` line, a non-red
+`auto-merged` warning prints, and the status record lists the path under `auto_merged`.
+
+Every other supported conflict keeps the remote-wins policy. This covers a Markdown
+conflict that fails any check, and the warning names the failed check. Remote content
+wins in place, the whole local file is kept as a conflict copy under `_conflicts/`, and
+`_conflicts/sync_conflicts.md` records the event. A cycle that quarantines any conflict
+fires one best-effort desktop notification: `Sync conflict: kept remote <path>; local copy
+at <copy>`, or a count when several paths were quarantined. `BOB_VAULT_SYNC_NOTIFY=0`
+suppresses it, and auto-merges never notify. Canvas (`.canvas`), Base (`.base`), binary,
+both-added, and delete/modify conflicts never auto-merge. Each conflicted path in one
+merge is decided on its own, and the single merge commit carries every resolution.
+
+Rejected alternatives: `git merge -X theirs` keeps local non-conflicting hunks but still
+drops the conflicting insertion. That leaves half-applied gestures, such as a
+`merged into` link to a task that no longer exists. A vault-wide `merge=union`
+attribute would also union modify/modify hunks, keeping both the old and new version of
+an edited line. Keeping remote only for the conflicting hunks in the fallback was
+rejected too: the whole-file quarantine keeps each conflict copy a complete, restorable
+local version.
+
 A whole-note clobber uses the same conflict copy and log: the working-tree bytes are
 quarantined, `HEAD` is restored in place, and the cycle continues so the restore, copy,
 and log commit together. Conflict copies are force-added, including paths ignored by
@@ -74,6 +115,25 @@ bob vault-sync status --json
 
 Unhandled conflicts leave the merge aborted and the status record's `last_error` set. Do
 not use `reset --hard`, force-push, or `-X ours/theirs` to clear the vault.
+
+### Lost content after a conflict
+
+A quarantined conflict copy is the full local file at merge time, so local-only edits
+(a new task, a cancellation, count bumps) are missing from the note until you re-apply
+them. Diff the copy against the note and re-apply only the local-only hunks. Avoid
+copying the copy back wholesale once remote edits have landed, because that reverts
+them. The MacBook edits the vault live, so keep the window short: sync, edit, then sync
+again right away.
+
+```bash
+bob vault-sync
+git -C ~/bob diff --no-index -- <note> _conflicts/<copy>
+# re-apply the local-only lines in <note>, then:
+bob vault-sync
+rg -n '<<<<<<<|>>>>>>>' ~/bob/<note>
+```
+
+Leave the copy and its `sync_conflicts.md` line in place as history.
 
 ## Halted sync
 
@@ -656,7 +716,8 @@ ssh mac 'bob vault-sync status --json'
 ```
 
 The record includes attempt and success timestamps, local and remote SHAs, files
-committed, push retries, duration, conflict-copy paths, interrupted-merge recovery,
+committed, push retries, duration, conflict-copy paths, the `auto_merged` Markdown paths
+whose conflict was resolved by a same-point insertion union, interrupted-merge recovery,
 `aborted_merge_head`, `halted_merge_head`, `interrupted_fast_forward_recovered`, this
 cycle's `clobbers` and the persistent `recent_clobbers` (last 10), and the last error.
 The halted SHA and clobber rows are shown in red in the human status panel. `clobbers`

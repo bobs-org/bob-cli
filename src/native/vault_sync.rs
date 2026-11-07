@@ -22,6 +22,7 @@ use super::{
     ob::{self, ChildEnv},
     style::Styler,
     vault_clobber,
+    vault_merge_union::{self, UnionInput, UnionOutcome},
 };
 
 const COMMAND_NAME: &str = "bob vault-sync";
@@ -97,7 +98,7 @@ pub(crate) fn build_cli() -> ClapCommand {
             "Examples:\n  bob vault-sync\n  bob vault-sync run --dry-run\n  bob vault-sync status --json\n\n\
 Environment:\n  BOB_DIR                    Bob vault root; defaults to ~/bob\n  \
 BOB_VAULT_SYNC_LOCK_FILE   lock file; defaults to ${XDG_RUNTIME_DIR:-/tmp}/bob_sync.lock\n  \
-BOB_VAULT_SYNC_NOTIFY      set to 0 to suppress desktop clobber notifications\n  \
+BOB_VAULT_SYNC_NOTIFY      set to 0 to suppress desktop clobber and conflict notifications\n  \
 BOB_VAULT_SYNC_STATE_FILE  status JSON path; defaults to ${XDG_STATE_HOME:-$HOME/.local/state}/bob-cli/vault-sync.json\n  \
 NO_COLOR                   disable color even when stdout is a TTY\n\n\
 Legacy BOB_BULK_GIT_COMMIT_* and BOB_SYNC_* environment variables are no longer recognized; use BOB_VAULT_SYNC_*.",
@@ -195,6 +196,13 @@ struct StatusRecord {
     push_retries: usize,
     duration_ms: u64,
     conflicts: Vec<String>,
+    /// Markdown paths whose conflict was resolved by a same-point insertion
+    /// union in this cycle (no conflict copy).
+    #[serde(default)]
+    auto_merged: Vec<String>,
+    /// Paths quarantined this cycle, for the end-of-cycle notification.
+    #[serde(skip)]
+    quarantined: Vec<QuarantinedPath>,
     interrupted_merge_recovered: bool,
     #[serde(default)]
     aborted_merge_head: Option<String>,
@@ -207,6 +215,12 @@ struct StatusRecord {
     clobbers: Vec<ClobberRecord>,
     #[serde(default)]
     recent_clobbers: Vec<ClobberRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct QuarantinedPath {
+    path: String,
+    conflict_copy: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -317,6 +331,8 @@ fn run_cycle_with_env_report(
     status.push_retries = 0;
     status.duration_ms = 0;
     status.conflicts.clear();
+    status.auto_merged.clear();
+    status.quarantined.clear();
     status.clobbers.clear();
     status.interrupted_merge_recovered = false;
     status.halted_merge_head = None;
@@ -325,6 +341,7 @@ fn run_cycle_with_env_report(
 
     let outcome =
         run_cycle_inner(&vault, child_env, &options, &styler, &mut status);
+    notify_quarantines(&status.quarantined);
     status.duration_ms = elapsed_ms(started);
     refresh_status_shas(&vault, child_env, &mut status);
 
@@ -643,7 +660,7 @@ fn clobber_warn(styler: &Styler, message: &str) {
 }
 
 fn notify_clobbers(hits: &[vault_clobber::ClobberHit]) {
-    if !clobber_notifications_enabled() || hits.is_empty() {
+    if !sync_notifications_enabled() || hits.is_empty() {
         return;
     }
     let body = if hits.len() == 1 {
@@ -655,10 +672,31 @@ fn notify_clobbers(hits: &[vault_clobber::ClobberHit]) {
     } else {
         format!("Quarantined {} clobbered notes", hits.len())
     };
-    send_clobber_notification(&body);
+    send_sync_notification(&body);
 }
 
-fn clobber_notifications_enabled() -> bool {
+/// One notification per cycle when the conflict fallback kept the remote
+/// version and quarantined local copies. Auto-merges never notify.
+fn notify_quarantines(quarantined: &[QuarantinedPath]) {
+    if quarantined.is_empty() || !sync_notifications_enabled() {
+        return;
+    }
+    send_sync_notification(&quarantine_notification_body(quarantined));
+}
+
+fn quarantine_notification_body(quarantined: &[QuarantinedPath]) -> String {
+    match quarantined {
+        [only] => format!(
+            "Sync conflict: kept remote {}; local copy at {}",
+            only.path, only.conflict_copy
+        ),
+        many => {
+            format!("Sync conflicts: quarantined {} local copies", many.len())
+        }
+    }
+}
+
+fn sync_notifications_enabled() -> bool {
     match bob_env::var("BOB_VAULT_SYNC_NOTIFY") {
         Ok(value)
             if matches!(
@@ -686,7 +724,7 @@ fn clobber_notifications_enabled() -> bool {
     }
 }
 
-fn send_clobber_notification(body: &str) {
+fn send_sync_notification(body: &str) {
     #[cfg(target_os = "macos")]
     {
         let script = format!(
@@ -1152,6 +1190,27 @@ fn resolve_conflicts(
 
         match conflict.code.as_str() {
             "UU" | "AA" => {
+                let mut refusal = None;
+                if conflict.code == "UU" && is_markdown_path(&conflict.path) {
+                    match try_union_merge(vault, child_env, path_stages) {
+                        UnionOutcome::Merged { text, hunks } => {
+                            write_union_merge(vault, &conflict.path, &text)?;
+                            paths_to_add.insert(conflict.path.clone());
+                            status.auto_merged.push(path_display.clone());
+                            note_lines.push(format!(
+                                "- {timestamp} {path_display} auto-merged {hunks} same-point insertion hunk(s); nothing dropped"
+                            ));
+                            warn(
+                                styler,
+                                &format!(
+                                    "auto-merged {path_display}: kept both sides of {hunks} same-point insertion hunk(s)"
+                                ),
+                            );
+                            continue;
+                        }
+                        UnionOutcome::Refused(reason) => refusal = Some(reason),
+                    }
+                }
                 let ours = path_stages.stage(2).ok_or_else(|| {
                     CycleError::fatal(format!(
                         "missing local stage for conflicted path {path_display}"
@@ -1177,17 +1236,23 @@ fn resolve_conflicts(
                 )?;
                 paths_to_add.insert(conflict.path.clone());
                 paths_to_add.insert(conflict_copy.clone());
-                status.conflicts.push(display_path(&conflict_copy));
+                let copy_display = display_path(&conflict_copy);
+                status.conflicts.push(copy_display.clone());
+                status.quarantined.push(QuarantinedPath {
+                    path: path_display.clone(),
+                    conflict_copy: copy_display.clone(),
+                });
                 note_lines.push(format!(
-                    "- {timestamp} {path_display} -> {} ({})",
-                    display_path(&conflict_copy),
+                    "- {timestamp} {path_display} -> {copy_display} ({})",
                     conflict_kind(&conflict)
                 ));
+                let not_merged = refusal
+                    .map(|reason| format!(" (not auto-merged: {reason})"))
+                    .unwrap_or_default();
                 warn(
                     styler,
                     &format!(
-                        "resolved {path_display} with remote version; quarantined local copy at {}",
-                        display_path(&conflict_copy)
+                        "resolved {path_display} with remote version; quarantined local copy at {copy_display}{not_merged}"
                     ),
                 );
             }
@@ -1298,6 +1363,108 @@ fn conflict_kind(conflict: &StatusEntry) -> &'static str {
         "UU" => "both-modified binary",
         _ => "conflict",
     }
+}
+
+fn is_markdown_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+}
+
+/// Try to resolve a both-modified Markdown conflict by keeping both sides of
+/// every same-point insertion. Any Git, decoding, or safety failure becomes
+/// `Refused` so the caller falls back to remote-wins quarantine.
+fn try_union_merge(
+    vault: &Path,
+    child_env: &ChildEnv,
+    path_stages: &PathStages,
+) -> UnionOutcome {
+    match union_merge_inputs(vault, child_env, path_stages) {
+        Ok(outcome) => outcome,
+        Err(reason) => UnionOutcome::Refused(reason),
+    }
+}
+
+fn union_merge_inputs(
+    vault: &Path,
+    child_env: &ChildEnv,
+    path_stages: &PathStages,
+) -> Result<UnionOutcome, String> {
+    let (Some(base), Some(local), Some(remote)) = (
+        path_stages.stage(1),
+        path_stages.stage(2),
+        path_stages.stage(3),
+    ) else {
+        return Err("missing a base, local, or remote index stage".to_string());
+    };
+    let read_blob = |label: &str, object_id: &str| {
+        let bytes = git_cat_file(vault, child_env, object_id)
+            .map_err(|error| error.message)?;
+        String::from_utf8(bytes)
+            .map_err(|_| format!("{label} version is not valid UTF-8"))
+    };
+    let local_text = read_blob("local", local)?;
+    let base_text = read_blob("base", base)?;
+    let remote_text = read_blob("remote", remote)?;
+
+    let marker_size =
+        format!("--marker-size={}", vault_merge_union::MARKER_SIZE);
+    let output = git_output(
+        vault,
+        child_env,
+        [
+            "merge-file",
+            "-p",
+            "--diff3",
+            "--object-id",
+            &marker_size,
+            "-L",
+            "local",
+            "-L",
+            "base",
+            "-L",
+            "remote",
+            local,
+            base,
+            remote,
+        ],
+    )
+    .map_err(|error| error.message)?;
+    // Exit status is the conflict count (capped at 127); Git's negative
+    // error status arrives as 128..=255.
+    let reported_conflicts = match output.status.code() {
+        Some(code @ 0..=127) => code as usize,
+        Some(_) | None => {
+            return Err(
+                CycleError::from_output("git merge-file", output).message
+            );
+        }
+    };
+    let merged = String::from_utf8(output.stdout)
+        .map_err(|_| "git merge-file output is not valid UTF-8".to_string())?;
+    Ok(vault_merge_union::union_same_point_insertions(
+        &UnionInput {
+            local: &local_text,
+            base: &base_text,
+            remote: &remote_text,
+            merged: &merged,
+            reported_conflicts,
+        },
+    ))
+}
+
+fn write_union_merge(
+    vault: &Path,
+    relative_path: &Path,
+    text: &str,
+) -> Result<(), CycleError> {
+    let full_path = vault.join(relative_path);
+    fs::write(&full_path, text).map_err(|error| {
+        CycleError::fatal(format!(
+            "failed to write auto-merged {}: {error}",
+            full_path.display()
+        ))
+    })
 }
 
 fn is_text_conflict_path(path: &Path) -> bool {
@@ -1883,6 +2050,14 @@ fn print_status_panel(state_file: &Path, status: &StatusRecord) {
             println!("  - {conflict}");
         }
     }
+    if status.auto_merged.is_empty() {
+        println!("auto_merged: none");
+    } else {
+        println!("auto_merged:");
+        for path in &status.auto_merged {
+            println!("  - {}", styler.green(path));
+        }
+    }
     print_clobber_status_lines(styler, "clobbers", &status.clobbers);
     print_clobber_status_lines(
         styler,
@@ -2188,22 +2363,56 @@ mod tests {
         assert!(!status.interrupted_fast_forward_recovered);
         assert!(status.clobbers.is_empty());
         assert!(status.recent_clobbers.is_empty());
+        assert!(status.auto_merged.is_empty());
     }
 
     #[test]
-    fn clobber_notifications_follow_env_override() {
+    fn quarantined_paths_stay_out_of_the_status_json() {
+        let status = StatusRecord {
+            auto_merged: vec!["bob.md".to_string()],
+            quarantined: vec![QuarantinedPath {
+                path: "sase.md".to_string(),
+                conflict_copy: "_conflicts/sase.athena-x.md".to_string(),
+            }],
+            ..StatusRecord::default()
+        };
+        let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(json["auto_merged"], serde_json::json!(["bob.md"]));
+        assert!(json.get("quarantined").is_none());
+    }
+
+    #[test]
+    fn quarantine_notification_names_one_path_or_counts_several() {
+        let one = QuarantinedPath {
+            path: "bob.md".to_string(),
+            conflict_copy: "_conflicts/bob.mac-2026-11-07T134547-0500.md"
+                .to_string(),
+        };
+        assert_eq!(
+            quarantine_notification_body(std::slice::from_ref(&one)),
+            "Sync conflict: kept remote bob.md; local copy at _conflicts/bob.mac-2026-11-07T134547-0500.md"
+        );
+        let two = vec![one.clone(), one];
+        assert_eq!(
+            quarantine_notification_body(&two),
+            "Sync conflicts: quarantined 2 local copies"
+        );
+    }
+
+    #[test]
+    fn sync_notifications_follow_env_override() {
         let suppress = bob_env::TestEnvGuard::set(&[(
             "BOB_VAULT_SYNC_NOTIFY",
             Some(OsStr::new("0")),
         )]);
-        assert!(!clobber_notifications_enabled());
+        assert!(!sync_notifications_enabled());
         drop(suppress);
         let enable = bob_env::TestEnvGuard::set(&[(
             "BOB_VAULT_SYNC_NOTIFY",
             Some(OsStr::new("1")),
         )]);
-        assert!(clobber_notifications_enabled());
+        assert!(sync_notifications_enabled());
         drop(enable);
-        assert!(!clobber_notifications_enabled());
+        assert!(!sync_notifications_enabled());
     }
 }
