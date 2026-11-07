@@ -335,6 +335,22 @@
         "hue": null,
         "hue_source": "unconfigured"
       }
+    },
+    {
+      "name": "area-grey-mutes",
+      "key": "gtd",
+      "pin": null,
+      "exempt": [
+        "plan"
+      ],
+      "areas": {
+        "gtd": null,
+        "dev": "blue"
+      },
+      "expected": {
+        "hue": null,
+        "hue_source": "area"
+      }
     }
   ],
   "fold": [

@@ -179,7 +179,8 @@ struct HueCase {
     key: String,
     pin: Option<String>,
     exempt: Vec<String>,
-    areas: BTreeMap<String, String>,
+    /// A `null` value is a grey top-level area (R8).
+    areas: BTreeMap<String, Option<String>>,
     #[serde(default)]
     configured: Option<BTreeMap<String, Option<String>>>,
     expected: HueExpected,
@@ -265,13 +266,16 @@ fn shared_vectors_cover_components_hue_fold_rank_and_similar() {
             .iter()
             .map(|value| normalize_component(value))
             .collect();
-        let areas: BTreeMap<String, Hue> = case
+        let areas: BTreeMap<String, Option<Hue>> = case
             .areas
             .iter()
             .map(|(key, hue)| {
                 (
                     key.clone(),
-                    Hue::parse(hue).unwrap_or_else(|| panic!("{}", case.name)),
+                    hue.as_deref().map(|hue| {
+                        Hue::parse(hue)
+                            .unwrap_or_else(|| panic!("{}", case.name))
+                    }),
                 )
             })
             .collect();
@@ -508,8 +512,8 @@ fn shared_vectors_cover_suggest_and_task_field() {
     ];
     let configured = [("chore".to_string(), "CHORE".to_string())];
     let areas = BTreeMap::from([
-        ("dev".to_string(), Hue::Blue),
-        ("job".to_string(), Hue::Aqua),
+        ("dev".to_string(), Some(Hue::Blue)),
+        ("job".to_string(), Some(Hue::Aqua)),
     ]);
     let hidden = ["chore".to_string()];
     let exempt = ["plan".to_string()];
@@ -735,6 +739,11 @@ fn catalog_loads_scratch_vault_and_applies_area_hue() {
         "---\ntype: [[area]]\nparent: [[area]]\ncolor: orange\n---\n",
     )
     .unwrap();
+    fs::write(
+        vault.join("quiet.md"),
+        "---\ntype: [[area]]\nparent: [[area]]\ncolor: Gray\n---\n",
+    )
+    .unwrap();
     fs::create_dir_all(vault.join("2026")).unwrap();
     fs::write(
         vault.join("2026/20261020.md"),
@@ -757,6 +766,10 @@ fn catalog_loads_scratch_vault_and_applies_area_hue() {
     let job = catalog.theme_ref("job", "JOB");
     assert_eq!(job.hue, Some(Hue::Aqua));
     assert_eq!(job.hue_source, HueSource::Area);
+    // R8: a type named after a grey top-level area is muted by the area.
+    let quiet = catalog.theme_ref("quiet", "QUIET");
+    assert_eq!(quiet.hue, None);
+    assert_eq!(quiet.hue_source, HueSource::Area);
     let plan = catalog.theme_ref("plan", "PLAN");
     assert_eq!(plan.hue, None);
     assert_eq!(plan.hue_source, HueSource::Exempt);

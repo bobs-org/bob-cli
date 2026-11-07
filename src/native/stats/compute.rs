@@ -1243,13 +1243,13 @@ mod tests {
         assert_eq!(keep.warnings[0].code, "journal_gap");
 
         // M10 review_time: minutes attributed to tasks in, or rooted at,
-        // gtd_daily. The Oct 9 PLAN rows carry no Task Links, so they are
+        // gtd. The Oct 9 PLAN rows carry no Task Links, so they are
         // unlinked and never match `in:`; the whole window reads zero.
         let review_time = metric(&report, "review_time");
         assert_eq!(review_time.since, Some(day(9)));
         assert_eq!(
             review_time.parameters.as_ref().map(|p| p.in_notes.clone()),
-            Some(vec!["gtd_daily".to_string()])
+            Some(vec!["gtd".to_string()])
         );
         assert!(review_time
             .parameters

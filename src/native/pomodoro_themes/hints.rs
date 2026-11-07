@@ -129,7 +129,7 @@ pub(crate) fn collision_hints(
     days: &BTreeMap<NaiveDate, BTreeSet<String>>,
     prefs: &Prefs,
     exempt: &BTreeSet<String>,
-    areas: &BTreeMap<String, Hue>,
+    areas: &BTreeMap<String, Option<Hue>>,
     themes: Option<&crate::native::config::ThemesConfig>,
 ) -> Vec<CollisionHint> {
     let window_start = today
@@ -253,7 +253,7 @@ fn suggested_hue(
     window_days: &[(&NaiveDate, &BTreeSet<String>)],
     prefs: &Prefs,
     exempt: &BTreeSet<String>,
-    areas: &BTreeMap<String, Hue>,
+    areas: &BTreeMap<String, Option<Hue>>,
     usage: &BTreeMap<Hue, u32>,
     themes: Option<&crate::native::config::ThemesConfig>,
 ) -> Option<Hue> {

@@ -68,8 +68,8 @@ hint. A link's close suffix still uses the separator `=`, as in
 | Homes buckets | `@daily` and `@review:<NAME>` buckets are retired; only `@unlinked` and `@unfiled` remain | Treat unknown `@daily` / `@review:*` keys as missing; daily-note tasks without a root field are `@unfiled`. |
 | Session `kind` | `review` is retired; `kind` is `work` or `unlinked` | Map unknown kinds to the unlinked/unknown fallback instead of a review bucket. |
 | Catalog `short_label` | Removed from home catalog entries | Use `label`; do not require the field. |
-| Pomodoro `review:` metric key | Ignored like any other unknown key | Filter review time with `in: [gtd_daily]` instead. |
-| Built-in `review_time` | `kind: pomodoro, measure: minutes, in: [gtd_daily]` | Redefine `stats.metrics.review_time` if review lives outside `gtd_daily`. |
+| Pomodoro `review:` metric key | Ignored like any other unknown key | Filter review time with `in: [gtd]` instead. |
+| Built-in `review_time` | `kind: pomodoro, measure: minutes, in: [gtd]` (was `in: [gtd_daily]`); old days rooted at `gtd_daily` still count because `gtd_daily` sits under `gtd` | Redefine `stats.metrics.review_time` if review lives outside `gtd`. |
 | Theme suggestion `source: review` | Removed with the `daily review` step; note defaults now start at a set `[root:: X]` field | Expect `task`, `reading`, or `note` sources only. |
 | Project reporting | `root: true` selects a project's own root parent; `rollup:` is ignored | Update frontmatter used for Stats grouping. |
 | Task dependencies | Only the managed Depends-On line supplies dependency links | Ordinary child links remain content and are not adopted automatically. |

@@ -460,6 +460,8 @@ fn bucket_home(key: &str, label: &str) -> Home {
             area_label: label.to_string(),
             subarea: None,
             hue: None,
+            hue_source: None,
+            root_hue: None,
             residence_chain: Vec::new(),
             root_parent: key.to_string(),
         },
@@ -477,6 +479,7 @@ fn catalog_entry(home: &Home) -> HomeCatalogEntry {
         subarea: home.subarea.clone(),
         path,
         hue: home.hue,
+        hue_source: home.hue_source,
         project_label,
         root_parent: home.root_parent.clone(),
     }
@@ -1130,7 +1133,7 @@ fn homes_warnings(health: &HomesHealthReport) -> Vec<StatsWarning> {
             metric: None,
             date: None,
             message: format!(
-                "{}: invalid color {:?}; using fallback. Set color: to a palette slot",
+                "{}: invalid color {:?}; the note inherits its color. Set color: to a palette slot or grey",
                 lint.path, lint.raw
             ),
         });
@@ -1719,14 +1722,16 @@ mod tests {
         let review_count = metric(&report, "gtd_daily_count");
         // H15: the Oct 14 work session links another day's rooted ^gtd, so
         // it splits 50m into 25m gtd_daily and 25m bob; the root-parent
-        // split matches, and review_time keeps the gtd_daily share.
+        // split matches. review_time is `in: [gtd]`, and both gtd_daily
+        // and bob (a gtd project) sit under gtd, so it keeps both shares.
         assert_eq!(worked.summary.total.as_ref().unwrap().value, Some(50));
         assert_eq!(part_value(worked, "project", "gtd_daily.md"), 25);
         assert_eq!(part_value(worked, "project", "bob.md"), 25);
         assert_eq!(part_value(worked, "root_parent", "gtd_daily.md"), 25);
         assert_eq!(part_value(worked, "root_parent", "bob.md"), 25);
-        assert_eq!(review_time.summary.total.as_ref().unwrap().value, Some(25));
+        assert_eq!(review_time.summary.total.as_ref().unwrap().value, Some(50));
         assert_eq!(part_value(review_time, "project", "gtd_daily.md"), 25);
+        assert_eq!(part_value(review_time, "project", "bob.md"), 25);
         assert_eq!(review_count.summary.total.as_ref().unwrap().value, Some(1));
         assert_eq!(part_value(review_count, "project", "gtd_daily.md"), 1);
     }
@@ -1801,6 +1806,8 @@ mod tests {
                 area_label: area.to_string(),
                 subarea: None,
                 hue: None,
+                hue_source: None,
+                root_hue: None,
                 residence_chain: vec![key.to_string()],
                 root_parent: root.to_string(),
             }
@@ -1956,6 +1963,60 @@ mod tests {
         assert_eq!(part_value(sessions, "root_parent", "sase.md"), 1);
         assert_eq!(part_value(sessions, "root_parent", "sase_blog.md"), 1);
         assert_eq!(part_value(sessions, "root_parent", "@unlinked"), 2);
+    }
+
+    #[test]
+    fn nearest_color_mutes_grey_areas_and_keeps_root_hues() {
+        use crate::native::pomodoro_homes::{HomeHueSource, Hue};
+        let workspace = TempDir::new().unwrap();
+        let vault = workspace.path().join("vault");
+        copy_tree(&homes_vault(), &vault);
+        let edit = |name: &str, from: &str, to: &str| {
+            let path = vault.join(name);
+            let contents = std::fs::read_to_string(&path).unwrap();
+            let edited = contents.replacen(from, to, 1);
+            assert_ne!(edited, contents, "{name} edited");
+            std::fs::write(&path, edited).unwrap();
+        };
+        edit("gtd.md", "color: orange", "color: grey");
+        edit(
+            "sase_blog.md",
+            "parent: \"[[sase]]\"",
+            "parent: \"[[sase]]\"\ncolor: red",
+        );
+        let config = write_config(&workspace);
+        let report = compute(&homes_request(vault, config))
+            .expect("recolored homes fixture computes");
+
+        // R8: grey mutes gtd and everything under it on purpose.
+        for key in ["gtd.md", "gtd_daily.md", "bob.md"] {
+            let entry = &report.homes[key];
+            assert_eq!(entry.hue, None, "{key} hue");
+            assert_eq!(entry.hue_source, Some(HomeHueSource::Muted), "{key}");
+        }
+        // A sub-project's own slot colors it, never its root.
+        let blog = &report.homes["sase_blog.md"];
+        assert_eq!(blog.hue, Some(Hue::Red));
+        assert_eq!(blog.hue_source, Some(HomeHueSource::Color));
+        assert_eq!(blog.root_parent, "sase.md");
+        let sase = &report.homes["sase.md"];
+        assert_eq!(sase.hue, Some(Hue::Blue));
+        assert_eq!(sase.hue_source, Some(HomeHueSource::Color));
+        // A muted area never collides; body keeps orange alone.
+        assert!(report.health.homes.hue_collisions.is_empty());
+        assert!(!report
+            .warnings
+            .iter()
+            .any(|w| w.code == "area_hue_collision"
+                || w.code == "area_color_invalid"));
+
+        let value = serde_json::to_value(&report).expect("report serializes");
+        let catalog = value["homes"].as_object().unwrap();
+        assert!(catalog["gtd.md"]["hue"].is_null());
+        assert_eq!(catalog["gtd.md"]["hue_source"], "muted");
+        assert_eq!(catalog["dev.md"]["hue_source"], "color");
+        // Buckets carry no hue source.
+        assert!(catalog["@unlinked"].get("hue_source").is_none());
     }
 
     #[test]

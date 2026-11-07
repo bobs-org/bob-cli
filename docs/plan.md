@@ -216,10 +216,12 @@ tasks, so they never reach a root.
 3. **Order.** `tasks` descending; ties by the Today order of each root's first
    task; `@unfiled` always last, however large.
 4. **Label.** The lowercase root stem, or `unfiled` for the bucket.
-5. **Hue.** The root's stable area hue, the same hue Pomodoro home chips use
-   (R8: the top-level area's configured slot, else the local FNV-1a fallback).
-   Roots in one area share a hue. The bucket has no hue (`null`). The Day
-   strip may re-hue same-area bar segments for legibility; Today roots do not.
+5. **Hue.** The root's own hue, the same hue Pomodoro home chips use (R8:
+   the nearest area or project `color:` slot on the root note's walk, else the
+   top-level area's local FNV-1a fallback). A grey slot gives `null`. Roots in
+   one area share a hue unless one sets its own `color:`. The bucket has no hue
+   (`null`). The Day strip may re-hue coloured bar segments for legibility;
+   Today roots do not.
 6. **Partition invariant.** The sum of `tasks` equals `today.count`, so the
    roots line partitions TODAY.
 

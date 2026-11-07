@@ -4,15 +4,15 @@ use super::{Hue, HueSource};
 
 /// PT5 revised: config color, then pin, then exempt, then the unconfigured
 /// mute (only when a `themes:` vocabulary is configured and the key is not
-/// in it and is not an inventory label), then top-level area stem, then
-/// name hash. `config_color` is `Some` only when the vocabulary sets a
+/// in it and is not an inventory label), then top-level area stem (a grey
+/// area mutes the type: `None` with `HueSource::Area`), then name hash. `config_color` is `Some` only when the vocabulary sets a
 /// palette slot for the key; `auto`/null falls through. Inventory labels
 /// never take the unconfigured step.
 pub(crate) fn resolve_hue(
     key: &str,
     pin: Option<Hue>,
     exempt: &BTreeSet<String>,
-    areas: &BTreeMap<String, Hue>,
+    areas: &BTreeMap<String, Option<Hue>>,
     config_color: Option<Hue>,
     unconfigured: bool,
 ) -> (Option<Hue>, HueSource) {
@@ -29,7 +29,7 @@ pub(crate) fn resolve_hue(
         return (None, HueSource::Unconfigured);
     }
     if let Some(hue) = areas.get(key) {
-        return (Some(*hue), HueSource::Area);
+        return (*hue, HueSource::Area);
     }
     (
         Some(crate::native::pomodoro_homes::fallback_hue(key)),

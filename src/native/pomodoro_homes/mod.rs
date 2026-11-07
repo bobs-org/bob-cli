@@ -16,9 +16,11 @@ pub(crate) use clock::{
     ClockResolution, ClockSource,
 };
 pub(crate) use facts::{
-    NoteFacts, NoteKind, NoteOffClock, NoteOffClockTypes, NoteTheme,
+    NoteColor, NoteFacts, NoteKind, NoteOffClock, NoteOffClockTypes, NoteTheme,
 };
-pub(crate) use json::{HomeKind, Homes, SessionKind, SessionState};
+pub(crate) use json::{
+    HomeHueSource, HomeKind, Homes, SessionKind, SessionState,
+};
 pub(crate) use palette::{fallback_hue, Hue};
 pub(crate) use resolve::{
     path_string, root_label, unfiled_home, unlinked_home, DiskHomeSource, Home,

@@ -54,7 +54,16 @@
     "rooted_blog.md": "---\ntype: [[project]]\nparent: [[sase]]\nroot: true\n---\n",
     "rooted_blog_notes.md": "---\ntype: [[project]]\nparent: [[rooted_blog]]\n---\n",
     "quoted_root.md": "---\ntype: [[project]]\nparent: [[sase]]\nroot: \"TRUE\"\n---\n",
-    "quoted_root_child.md": "---\ntype: [[project]]\nparent: [[quoted_root]]\n---\n"
+    "quoted_root_child.md": "---\ntype: [[project]]\nparent: [[quoted_root]]\n---\n",
+    "quiet.md": "---\ntype: [[area]]\nparent: [[area]]\ncolor: grey\n---\n",
+    "quiet_inbox.md": "---\ntype: [[area]]\nparent: [[quiet]]\n---\n",
+    "quiet_loud.md": "---\ntype: [[project]]\nparent: [[quiet]]\ncolor: red\n---\n",
+    "dev_green.md": "---\ntype: [[project]]\nparent: [[dev]]\ncolor: Green\n---\n",
+    "dev_green_child.md": "---\ntype: [[project]]\nparent: [[dev_green]]\n---\n",
+    "sase_violet.md": "---\ntype: [[project]]\nparent: [[sase]]\ncolor: violet\n---\n",
+    "love_gray.md": "---\ntype: [[project]]\nparent: [[love]]\ncolor: Gray\n---\n",
+    "dev_bad.md": "---\ntype: [[project]]\nparent: [[dev]]\ncolor: chartreuse\n---\n",
+    "job_red.md": "---\ntype: [[project]]\nparent: [[job]]\ncolor: red\n---\n"
   },
   "cases": [
     {
@@ -1626,6 +1635,172 @@
               "tasks": 1,
               "share": 100,
               "minutes": 5
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "nearest-color-and-grey",
+      "daily_path": "2026/20261018.md",
+      "expected_health": {
+        "unfiled_links": 0,
+        "ambiguous_links": 0,
+        "unresolved_links": 0,
+        "area_color_invalid": 2
+      },
+      "expected_lead_homes": [
+        "quiet.md",
+        "quiet_loud.md",
+        "dev_green.md",
+        "sase_violet.md",
+        "dev_bad.md",
+        "job_red.md"
+      ],
+      "pomodoros": "- [ ] ()\n  - [[quiet#^q1]]\n  - [[quiet_inbox#^q2]]\n- [x] (1300-1310 [t:: 10m])\n  - [[quiet_loud#^q3]]\n- [ ] ()\n  - [[dev_green#^g1]]\n  - [[dev_green_child#^g2]]\n- [ ] ()\n  - [[sase_violet#^v1]]\n- [ ] ()\n  - [[love_gray#^l1]]\n  - [[dev_bad#^b1]]\n  - [[dev_bad#^b2]]\n- [ ] ()\n  - [[job_red#^j1]]\n",
+      "expected": [
+        {
+          "state": "forecast",
+          "kind": "work",
+          "label": "quiet \u00b7 quiet_inbox",
+          "chip": "quiet \u00b7 quiet_inbox",
+          "hue": null,
+          "parts": [
+            {
+              "key": "quiet.md",
+              "label": "quiet",
+              "kind": "area",
+              "area": "quiet.md",
+              "area_label": "quiet",
+              "hue": null,
+              "tasks": 1,
+              "share": 50
+            },
+            {
+              "key": "quiet_inbox.md",
+              "label": "quiet_inbox",
+              "kind": "area",
+              "area": "quiet.md",
+              "area_label": "quiet",
+              "hue": null,
+              "tasks": 1,
+              "share": 50
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "quiet_loud",
+          "chip": "quiet_loud",
+          "hue": "red",
+          "parts": [
+            {
+              "key": "quiet_loud.md",
+              "label": "quiet_loud",
+              "kind": "project",
+              "area": "quiet.md",
+              "area_label": "quiet",
+              "hue": "red",
+              "tasks": 1,
+              "share": 100,
+              "minutes": 10
+            }
+          ]
+        },
+        {
+          "state": "forecast",
+          "kind": "work",
+          "label": "dev_green",
+          "chip": "dev_green",
+          "hue": "green",
+          "parts": [
+            {
+              "key": "dev_green.md",
+              "label": "dev_green",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "green",
+              "tasks": 1,
+              "share": 50
+            },
+            {
+              "key": "dev_green_child.md",
+              "label": "dev_green_child",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "green",
+              "tasks": 1,
+              "share": 50
+            }
+          ]
+        },
+        {
+          "state": "forecast",
+          "kind": "work",
+          "label": "sase",
+          "chip": "sase",
+          "hue": "blue",
+          "parts": [
+            {
+              "key": "sase_violet.md",
+              "label": "sase_violet",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "violet",
+              "tasks": 1,
+              "share": 100
+            }
+          ]
+        },
+        {
+          "state": "forecast",
+          "kind": "work",
+          "label": "dev_bad \u00b7 love_gray",
+          "chip": "dev_bad \u00b7 love_gray",
+          "hue": "blue",
+          "parts": [
+            {
+              "key": "love_gray.md",
+              "label": "love_gray",
+              "kind": "project",
+              "area": "love.md",
+              "area_label": "love",
+              "hue": null,
+              "tasks": 1,
+              "share": 33
+            },
+            {
+              "key": "dev_bad.md",
+              "label": "dev_bad",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 2,
+              "share": 67
+            }
+          ]
+        },
+        {
+          "state": "forecast",
+          "kind": "work",
+          "label": "job_red",
+          "chip": "job_red",
+          "hue": "red",
+          "parts": [
+            {
+              "key": "job_red.md",
+              "label": "job_red",
+              "kind": "project",
+              "area": "job.md",
+              "area_label": "job",
+              "hue": "red",
+              "tasks": 1,
+              "share": 100
             }
           ]
         }

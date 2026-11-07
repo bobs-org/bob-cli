@@ -17,7 +17,9 @@ use crate::native::{
     projects,
 };
 
-const VERSION: u32 = 1;
+/// v2: `area_hue` distinguishes a grey area (`Some(None)`) from a
+/// non-area note (`None`); v1 caches hashed `grey` as an invalid value.
+const VERSION: u32 = 2;
 type Fingerprint = (u64, u64);
 
 #[derive(Default, Serialize, Deserialize)]
@@ -31,7 +33,22 @@ struct Directory {
 struct File {
     fingerprint: Option<Fingerprint>,
     default: Option<String>,
-    area_hue: Option<Hue>,
+    /// `None` (field omitted) for a non-area note; `Some(None)` (`null`)
+    /// for a grey top-level area.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_area_hue"
+    )]
+    area_hue: Option<Option<Hue>>,
+}
+
+/// A present `area_hue` key is a top-level area, even when its value is
+/// `null` (grey); only an omitted key means "not an area".
+fn present_area_hue<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<Hue>>, D::Error> {
+    Option::<Hue>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -42,7 +59,7 @@ struct Cache {
 
 pub(super) struct NoteDefaults {
     defaults: Vec<(String, String)>,
-    pub(super) areas: BTreeMap<String, Hue>,
+    pub(super) areas: BTreeMap<String, Option<Hue>>,
 }
 
 impl NoteDefaults {
@@ -280,4 +297,51 @@ fn refresh_chunk(
         }
     }
     Ok((defaults, dirty))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    #[test]
+    fn cached_area_hues_keep_grey_apart_from_non_areas() {
+        let vault = tempfile::tempdir().expect("vault");
+        let cache = tempfile::tempdir().expect("cache");
+        fs::write(
+            vault.path().join("quiet.md"),
+            "---\ntype: [[area]]\nparent: [[area]]\ncolor: grey\n---\n",
+        )
+        .unwrap();
+        fs::write(
+            vault.path().join("dev.md"),
+            "---\ntype: [[area]]\nparent: [[area]]\ncolor: blue\n---\n",
+        )
+        .unwrap();
+        fs::write(
+            vault.path().join("sase.md"),
+            "---\ntype: [[project]]\nparent: [[dev]]\n---\n",
+        )
+        .unwrap();
+        let expected = BTreeMap::from([
+            ("dev".to_string(), Some(Hue::Blue)),
+            ("quiet".to_string(), None),
+        ]);
+
+        let fresh = load(vault.path(), true, cache.path()).expect("fresh");
+        assert_eq!(fresh.areas, expected);
+        let cached = load(vault.path(), false, cache.path()).expect("cached");
+        assert_eq!(cached.areas, expected);
+
+        let root = vault.path().canonicalize().unwrap();
+        let text = fs::read_to_string(cache_path(&root, cache.path())).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["version"], VERSION);
+        let files = &value["root"]["files"];
+        assert!(files["quiet.md"]["area_hue"].is_null());
+        assert!(files["quiet.md"].get("area_hue").is_some());
+        assert_eq!(files["dev.md"]["area_hue"], "blue");
+        assert!(files["sase.md"].get("area_hue").is_none());
+    }
 }

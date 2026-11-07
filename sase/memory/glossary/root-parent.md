@@ -12,8 +12,9 @@ a subproject without `root: true` groups under its nearest root project, or the
 outermost project when none is marked. A missing, invalid, or duplicate root
 field falls back to the task's own note. A walk with no area or project is
 `@unfiled`; unlinked Pomodoros remain `@unlinked`. The synthetic `GTD` bucket
-(`@daily`) and named review buckets are retired. Daily review time is now the
-time attributed to tasks rooted at `gtd_daily`.
+(`@daily`) and named review buckets are retired. Daily review time is the time
+attributed to tasks in, or rooted at, `gtd`; each daily note's `^gtd` row
+carries `[root:: gtd]`.
 
 Root parents are derived from the current note tree and never stored as a
 separate status. `rollup:` no longer exists. The [[day-strip]]'s root-parent

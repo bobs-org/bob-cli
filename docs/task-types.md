@@ -120,7 +120,9 @@ In order:
    `hue_source: "unconfigured"`.
 5. Else a key equal to a **top-level area note's stem** (an area whose
    `parent` is `[[area]]`) wears that area's resolved hue
-   (`hue_source: "area"`): a frontmatter `color:` slot, else the stem hash.
+   (`hue_source: "area"`): a frontmatter `color:` palette slot, else the stem
+   hash (an invalid value also hashes). A `grey` (or `gray`) slot mutes the
+   type: `hue: null`, `hue_source: "area"`.
 6. Else `Hue::ALL[fnv1a32(key) % 8]` (`hue_source: "hash"`).
 
 Explicit choices (config, pin) beat mutes, and mutes beat implicit
@@ -569,7 +571,7 @@ First match wins:
 3. **Note default.** The first valid default on the residence chain.
    Source `note`, label `from <lowercase declaring stem>`. A set
    `[root:: X]` field starts this walk at X, so a daily `^gtd` row
-   carrying `[root:: gtd_daily]` suggests `gtd_daily`'s default
+   carrying `[root:: gtd]` suggests `gtd`'s default
    (`task_type: PLAN`).
 4. **Global default.** `plan.default_type`, when set to a type name.
    `off`, `null`, or unset skips this step. Source `default`, label

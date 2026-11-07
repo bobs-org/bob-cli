@@ -199,7 +199,7 @@ count in `done`, `created`, and `dropped` and appear as the `ref` kind part.
 | `dropped` | tasks, dropped, recurring exclude | count / gray / neutral | Non-recurring CANCELLED tasks cancelled on D, same exclusions as Done. |
 | `habits` | checklist, tags gtd+pre, ratio | ratio / green / up | `#gtd #pre` chores met on D over chores due on D. |
 | `keep_rate` | journal, keep_rate, pending+next | ratio / violet / neutral | Keep share of PENDING/NEXT answers on D. |
-| `review_time` | pomodoro, minutes, `in: [gtd_daily]` | minutes / orange / neutral | Minutes attributed to tasks in, or rooted at, `gtd_daily`, the morning review's area; redefine `stats.metrics.review_time` if your review lives elsewhere. |
+| `review_time` | pomodoro, minutes, `in: [gtd]` | minutes / orange / neutral | Minutes attributed to tasks in, or rooted at, `gtd`, the GTD area that roots each daily `^gtd` row; redefine `stats.metrics.review_time` if your review lives elsewhere. |
 | `sessions` | pomodoro, count | count / orange / neutral | Closed Pomodoro rows on D; a credit-neutral coalesced row counts as one session and preserves each task's minutes. |
 
 ## Clocks
@@ -439,7 +439,8 @@ counts with the latest timestamp and day), and `health.homes` (in-window
 `unlinked_minutes` / `unlinked_sessions` / additive `untracked_sessions` /
 `unfiled_links` /
 `ambiguous_links` / `unresolved_links`, plus global
-`area_color_invalid` and hue-collision lists, additive
+`area_color_invalid` (an area or project `color:` that is neither a palette
+hue nor grey; the note inherits) and hue-collision lists, additive
 `note_offclock_invalid` / `note_offclock_ignored` lists (`{path, raw, key}`
 for an invalid clock value — an area/project `offclock:` value that is not
 `true`/`false`, or a malformed `offclock_types:` — or a clock key on a note
@@ -576,11 +577,16 @@ Reports serialize with `ok: true`, `schema_version: 1`, ISO dates, the range
 warnings, health, global warnings, a top-level `homes` catalog keyed by
 every home used in the report (`label`, `kind` project|area|bucket, `area`,
 `subarea`, `path`, `hue`, `root_parent`; `project_label` on area-kind
-entries, and every referenced root
+entries; additive `hue_source`, and every referenced root
 present even when only a leaf carries minutes),
 and a top-level `sessions` array when the
-report includes at least one pomodoro metric. The catalog and `sessions`
-are omitted when empty. `sessions` lists every closed Pomodoro in the
+report includes at least one pomodoro metric. `homes.<key>.hue_source`
+says where the entry's `hue` came from ([pomodoro-homes.md R8](pomodoro-homes.md#r8-area-hues)):
+`color` (the nearest area or project `color:` slot), `muted` (that slot is
+grey, so `hue` is `null` on purpose), or `hash` (no slot; the top-level area
+stem hash). It is omitted for the `@unlinked` and `@unfiled` buckets and for an
+arealess home with no slot, whose `hue` is `null` without a choice. The
+catalog and `sessions` are omitted when empty. `sessions` lists every closed Pomodoro in the
 display window (today included) in chronological order. Each element is
 `{date, path, line, time_range, minutes, minutes_display, quality, name,
 off_clock, homes}`: facts, not metric values, so types and filters do not
@@ -791,7 +797,8 @@ sparkline uses `◌` for an unmet provisional today point. It prints every parts
 dimension in a stable order: pomodoro `area`, `root parent`, `project`,
 `theme`; tasks `kind`, `area`, `root parent`, `project`, `note`. Area,
 root-parent, and project cells use catalog labels; under color they prefix a
-`●` in the area's xterm hue, and buckets render dim. The project line shows
+`●` in the home's xterm hue (a dim `●` for a `muted` home), and buckets
+render dim. The project line shows
 the top five homes plus
 `other`, with buckets always shown outside those five. The type line shows
 the top five plus `other`. When apportioned
@@ -855,7 +862,7 @@ field in `src/native/stats/compute.rs`. Legend: plain numbers are `ok`;
 | M7 | dropped | U | U | 2 | 0·prov | `[!]` and `[-]` CANCELLED rows with cancelled dates |
 | M8 | habits | U | 0/2 missed | 1/2 met | 0/2·prov | Skipped Journal, late Meditate, deferred Stretch; ratios pool 25% |
 | M9 | keep_rate | M, no denom | G | 1/2 → 50% | 1/1·prov | Keep share with pooled basis points |
-| M10 | review_time | U | 0 | 0 | 0·prov | `in: [gtd_daily]`; unlinked PLAN rows never match |
+| M10 | review_time | U | 0 | 0 | 0·prov | `in: [gtd]`; unlinked PLAN rows never match |
 | M11 | sessions | U | 2 | 0 | 1·prov | Count mode counts rows once; parts still attribute PLAN |
 | M12 | sase_time (custom pomodoro) | U | 3 | 0 | 10·prov | Custom type metric through the same path |
 | M13 | ref_done (custom tasks) | U | 1 | 0 | 0·prov | `task_kind: ref` spelling with the `ref` part |
@@ -941,7 +948,7 @@ metric total.
 | H12 | gtd_daily_in | `in: [gtd_daily]` is 10m on gtd_daily (the Oct 16 `[[#^gtd]]` session) |
 | H13 | sessions | 9 closed rows in the window including today; facts ignore metric filters |
 | H14 | sase_count_in | `measure: count`, `in: [sase]` keeps 3 complete-window sessions when any linked task matches |
-| H15 | review_time / gtd_daily_count | Oct 14 work session splits 50m into 25m gtd_daily and 25m `bob`; the root-parent split is 25m gtd_daily and 25m `bob`; review_time and count keep the gtd_daily share/session |
+| H15 | review_time / gtd_daily_count | Oct 14 work session splits 50m into 25m gtd_daily and 25m `bob`; the root-parent split is 25m gtd_daily and 25m `bob`; review_time (`in: [gtd]`) keeps both shares, 50m, because `bob` is a gtd project; the gtd_daily count keeps its one session |
 | H16 | worked `root_parent` | sase 80 (blog 50 + sase 30), gtd_daily 10, bob 10, dev 10, job 4, job_apply 3, `@unlinked` 35, `@unfiled` 15; sums to 167 |
 | H17 | worked `root_parent` with `root: true` on sase_blog | root_parent sase 30, sase_blog 50; area, project, and `in:` values unchanged |
 
@@ -1250,8 +1257,8 @@ The context panel follows the focused metric family:
 - Pomodoro metrics open on **Where the time went**, grouped by root parent by
   default, with **Types** one click away. The root bar reuses the area-bar component
   and is fed root rows in the same order as the Day strip's root-parent bar (area hue-slot
-  order, then label, with buckets last in gray), with those same distinct root
-  colours; root rows and their sub-project leaves match them and area headers keep
+  order, then label, then muted roots in gray, with buckets last in gray), with those
+  same distinct root colours; root rows and their sub-project leaves match them and area headers keep
   the area hue; its `aria-label` reads
   `Root parent split: …`. Groups rank by area total from `area` parts. Each group
   shows its header row (dot, area link, `value · share`, `sessions N`), then up to 3
@@ -1344,7 +1351,8 @@ and lays out. It never sums daily parts and never formats minutes itself.
 
 **Roots** come from `statsPanelHomeRows(worked, report, dimension, null)`
 (positive values only), ordered by `statsPanelHomeAreaRows` (area hue-slot
-order, then label, with buckets last) and coloured by `statsPanelDistinctHues`,
+order, then label, then muted roots, with buckets last) and coloured by
+`statsPanelDistinctHues`,
 so the top bar and the panel's root bar always agree. **types** follow the
 Day strip type-lane rule. Identity comes from `statsThemeRef` (report
 `theme_hues`, else the plugin's `pomodoroThemeHueFor`). Coloured types are
@@ -1359,7 +1367,8 @@ Every segment has `tone` = `hue` | `gray` | `none`. `none` is time bob
 cannot attribute in that dimension (`@unlinked`, `@unfiled`, and
 `(unnamed)`): a fine diagonal hatch in `--text-faint` over a faint base,
 and a hollow legend mark. `gray` is the existing muted fill:
-exempt PLAN, unconfigured types, and `other`.
+exempt PLAN, unconfigured types, types named after a grey area, `other`,
+and roots whose catalog `hue_source` is `muted`.
 
 The legend uses `bob-day-strip-legend` markup and the Day strip fitter.
 Items appear in bar order, the lowest-ranked items drop first, one `+N`
@@ -1508,10 +1517,12 @@ skeleton → ready never animate.
 Segments group D's `worked` minutes by root parent (see
 [pomodoro-homes.md](pomodoro-homes.md)), in the same order as
 the Stats page's "Where the time went" bar: area hue-slot order, then
-label, with buckets last in gray. Every root parent in the bar gets its own
-colour: the biggest root of each area keeps the reported area hue, and the
-other same-hue roots take the next free palette hue. `unlinked` and `unfiled`
-stay gray. A report without `root_parent` parts, from an older
+label, then muted roots, with buckets last in gray. Every coloured root parent
+in the bar gets its own colour: the biggest root of each hue keeps the reported
+hue, and the other same-hue roots take the next free palette hue. A root whose
+catalog `hue_source` is `muted` (a grey `color:` slot) stays gray: it is never
+shaded, never takes or claims a palette hue, and sorts after the coloured
+roots and before the buckets. `unlinked` and `unfiled` stay gray. A report without `root_parent` parts, from an older
 bob, falls back to `parts.area`, and the copy then honestly says
 "Time by area". The legend names as many roots as fit the line. It drops
 the lowest-minute roots first, keeps bar order, and puts one `+N` counter
@@ -1537,7 +1548,8 @@ when present, else the part key; `(unnamed)` and `other` keep their keys.
 Coloured types sort by minutes descending then label; gray segments
 follow, with `(unnamed)` last. Colour is identity from Bob's type hues
 (`theme_hues`, else the plugin's `pomodoroThemeHueFor` fallback): a palette
-hue, or gray for exempt, `(unnamed)`, and `other`. Among coloured
+hue, or gray for exempt, unconfigured, a type named after a grey area,
+`(unnamed)`, and `other`. Among coloured
 segments that share a hue, the largest keeps the exact hue, the second
 is `color-mix(in srgb, <hue> 65%, var(--background-primary))`, and every
 later one is `42%`. Gray is never shaded. `bob types color` pins remove

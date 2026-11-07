@@ -487,7 +487,9 @@ preferences in `.bob/themes/<host>.jsonl`. Hiding affects Recent suggestions;
 the ledger and its history remain intact.
 
 Each daily note also templates a `^gtd` task for review chores, carrying
-`[root:: gtd_daily]` so morning review time attributes to `gtd_daily`.
+`[root:: gtd]` so morning review time attributes to the `gtd` area, which the
+built-in `review_time` metric counts. The row still links `[[gtd_daily]]`,
+the PRE/POST checklist it stands for.
 Canonical daily-note Next tasks are the R9 carve-out from sticky lanes.
 
 Contract: [The ledger](../plan.md#the-ledger), [Pomodoro](glossary.md#pomodoro),

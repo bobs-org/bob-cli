@@ -10,10 +10,10 @@ use crate::native::{
     capture_pomodoros::{self, PomodoroState},
     is_always_excluded_note_directory_name,
     plan_budget::{normalize_component, split_components},
-    pomodoro_homes::{fallback_hue, Hue},
+    pomodoro_homes::{fallback_hue, Hue, NoteColor},
     projects::{
         frontmatter_is_area, frontmatter_value, parse_frontmatter,
-        trim_yaml_scalar, wikilink_path_target,
+        wikilink_path_target,
     },
     stats::index::canonical_daily_date,
 };
@@ -182,21 +182,22 @@ pub(crate) fn year_dir_fingerprints(
     years
 }
 
-pub(crate) fn scan_root_areas(vault: &Path) -> BTreeMap<String, Hue> {
+/// Top-level area stem key → that area's hue; `None` is a grey area.
+pub(crate) fn scan_root_areas(vault: &Path) -> BTreeMap<String, Option<Hue>> {
     scan_root_areas_matching(vault, None)
 }
 
 pub(crate) fn scan_root_areas_for_keys(
     vault: &Path,
     keys: &std::collections::BTreeSet<String>,
-) -> BTreeMap<String, Hue> {
+) -> BTreeMap<String, Option<Hue>> {
     scan_root_areas_matching(vault, Some(keys))
 }
 
 fn scan_root_areas_matching(
     vault: &Path,
     keys: Option<&std::collections::BTreeSet<String>>,
-) -> BTreeMap<String, Hue> {
+) -> BTreeMap<String, Option<Hue>> {
     #[cfg(test)]
     {
         if keys.is_none() {
@@ -243,8 +244,10 @@ fn scan_root_areas_matching(
     areas
 }
 
-/// Shared with the explicit list's note-facts cache.
-pub(super) fn root_area_hue(stem: &str, contents: &str) -> Option<Hue> {
+/// Shared with the explicit list's note-facts cache. `None` when the note
+/// is not a top-level area; `Some(None)` for a grey area (R8). An invalid
+/// `color:` still hashes the stem.
+pub(super) fn root_area_hue(stem: &str, contents: &str) -> Option<Option<Hue>> {
     let frontmatter = parse_frontmatter(contents)?;
     if !frontmatter_is_area(&frontmatter) {
         return None;
@@ -255,11 +258,11 @@ pub(super) fn root_area_hue(stem: &str, contents: &str) -> Option<Hue> {
     if !parent_stem.eq_ignore_ascii_case("area") {
         return None;
     }
-    Some(
-        frontmatter_value(&frontmatter, "color")
-            .and_then(|value| Hue::parse(trim_yaml_scalar(value)))
-            .unwrap_or_else(|| fallback_hue(stem)),
-    )
+    Some(match NoteColor::from_frontmatter(&frontmatter) {
+        Some(NoteColor::Hue(hue)) => Some(hue),
+        Some(NoteColor::Grey) => None,
+        Some(NoteColor::Invalid(_)) | None => Some(fallback_hue(stem)),
+    })
 }
 
 pub(crate) fn parse_summary_date(raw: &str) -> Option<NaiveDate> {

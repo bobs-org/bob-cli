@@ -112,8 +112,8 @@ retired and never regroups homes. Labels use the bare root stem (`sase`,
 dots group by root parent as well ([R7](#r7-labels-chips-and-dots)), while
 `homes.parts` stay per nearest home.
 Hues follow R8:
-bob reports each root's area hue (R8); bars give every root they show a distinct
-colour (see stats.md). Stats splits each session per task first, then sums shares by root,
+bob reports each root's own hue (R8); bars give every coloured root they show a
+distinct colour, while a grey root stays gray (see stats.md). Stats splits each session per task first, then sums shares by root,
 so every dimension still sums to the metric total; `apportioned` root
 minutes come from sessions with two or more distinct roots. Count mode
 assigns the session to the root with the most distinct tasks (ties to the
@@ -139,8 +139,8 @@ the same link rule. Open homes are forecasts and never count as worked time.
 
 A session's name never chooses its home. Every linked task attributes through
 its residence or its `[root:: X]` field, exactly as R1 resolves it. A `PLAN`
-session linking `[[#^gtd]]` attributes to `gtd_daily` when that row carries
-`[root:: gtd_daily]`. A `PLAN` session linking `[[sase_blog#^s0-spike]]`
+session linking `[[#^gtd]]` attributes to `gtd` when that row carries
+`[root:: gtd]`, as Bryan's daily `^gtd` row does. A `PLAN` session linking `[[sase_blog#^s0-spike]]`
 attributes to `sase_blog`. An unlinked closed `PLAN` session is `@unlinked`.
 "How much PLAN" remains the Stats type dimension, which already reads
 `PLAN` time, while the homes read the linked tasks' notes.
@@ -200,11 +200,12 @@ added, removed, or retyped. Derive the display fields in this order:
    the set of **root** labels. An unfiled-only chip says `unfiled`. A `— SASE`
    session that links only `sase_blog_notes` tasks therefore has no chip.
 5. **Dot.** Use a filled `●` for an attributed session and a hollow `○` for a
-   forecast. The dot takes the **lead root's** area hue. The lead root has the
+   forecast. The dot takes the **lead root's** hue. The lead root has the
    most distinct tasks, with ties going to the first task in ledger order (the
-   rule Stats count mode uses for roots). A root's hue equals each of its parts'
-   hue, because the root lies on the same chain below the same top-level area,
-   so take it from the root's first part. `lead_home` is unchanged.
+   rule Stats count mode uses for roots). A root wears its own hue: the R8 hue
+   resolved for the root note itself, never its first part's. A sub-project
+   with its own `color:` keeps that hue on its part, while the root's chip and
+   dot keep the root's hue. `lead_home` is unchanged.
 6. **Tooltip.** The Obsidian ledger chip adds one tooltip line per root, in
    label order: `<root> · N task(s)`, plus ` · Mm` when attributed.
 
@@ -218,12 +219,40 @@ instead of to one entry's forecast.
 
 ## R8 — Area hues
 
-The palette uses these fixed categorical slots. An area's own `color:` selects
-one slot only when the area is top-level. Invalid top-level values produce one
-`area_color_invalid` lint and use the local FNV-1a fallback. A subarea and
-project inherit the top-level area's hue. `color:` elsewhere is
-ignored. `bob stats` reports `area_hue_collision` when top-level areas share a
-slot and suggests setting `color:` on one of them.
+Any area or project note may set a `color:` frontmatter slot. A value is one of
+the eight palette hues below or `grey` (`gray` is also accepted); matching
+ignores case, and YAML quotes are trimmed. An absent or blank value inherits.
+Any other value is invalid: it is treated as absent, so the note inherits, and
+it produces one `area_color_invalid` lint per note path. Resolving a home lints
+every invalid value on the area and project notes of its walk (any depth, not
+only top-level areas), even past the note whose slot decides the hue.
+
+**Nearest note wins.** Walk the home's residence chain from its nearest home
+outward, over area and project notes only. Daily, reference, `done/`, and
+other non-home wrappers never count, and neither does `area.md`. The first
+valid slot decides:
+
+| First valid slot | `hue` | `hue_source` |
+| --- | --- | --- |
+| a palette hue | that hue | `color` |
+| `grey` / `gray` | `null` | `muted` |
+| none, below a top-level area | the top-level area stem hash | `hash` |
+| none, and no area | `null` | absent |
+
+Buckets (`@unlinked`, `@unfiled`) have `hue: null` and no `hue_source`. Grey
+is a choice, not a missing value: every surface already renders `hue: null`
+as neutral, and the Stats `homes` catalog reports `hue_source` so clients can
+tell a deliberately grey home from an uncolored one
+([stats.md](stats.md)).
+
+**A root wears its own hue.** A root parent's hue (R7 chips and dots, the
+plan's Today roots, and Stats root lanes) is the hue resolved for the root note
+itself: the same walk, starting at the root's place in the chain. A nearer
+sub-project's `color:` never changes it.
+
+`bob stats` reports `area_hue_collision` when top-level areas share a slot and
+suggests setting `color:` on one of them. Only top-level areas are compared,
+and a grey area never collides.
 
 | Slot | Hue | Light | Dark | xterm-256 |
 | ---: | --- | --- | --- | ---: |
@@ -235,15 +264,15 @@ slot and suggests setting `color:` on one of them.
 | 6 | `green` | `#008300` | `#008300` | 28 |
 | 7 | `violet` | `#6250d6` | `#9085e9` | 62 |
 | 8 | `red` | `#e34948` | `#e66767` | 167 |
-| — | `gray` (buckets) | `text-muted` | `text-muted` | dim |
+| — | `grey` / `gray` (muted homes and buckets) | `text-muted` | `text-muted` | dim |
 
-Without an explicit slot, assign the hue by
-`palette[fnv1a32(lowercase_area_stem) % 8]`. The algorithm is local and
+Without a slot on the walk, assign the hue by
+`palette[fnv1a32(lowercase_top_level_area_stem) % 8]`. The algorithm is local and
 deterministic; consumers do not need a global area catalog to resolve a hue.
 Stats bars order area segments by slot so adjacent colors keep the validated
 palette ordering.
 
-Bryan's current top-level area assignments are `dev: blue`, `gtd: orange`,
+Bryan's current top-level area assignments are `dev: blue`, `gtd: grey`,
 `job: aqua`, `love: yellow`, `cash: magenta`, `body: green`, and `meet: violet`.
 These are vault configuration, not application constants.
 
@@ -299,7 +328,7 @@ note tree · from Task Links”. V1 does not store snapshots.
 A task may name its root parent with `[root:: NOTE]` or `(root:: NOTE)`.
 Recognition is the shared `task_fields::inline_fields(line, "root")` scanner:
 the key is case-sensitive and any spacing around `::` is allowed. The
-canonical written form is `[root:: gtd_daily]`: one space after `::` and a
+canonical written form is `[root:: gtd]`: one space after `::` and a
 bare note name.
 
 **Value.** A note name or a vault-relative path, with or without `.md`. It
@@ -408,6 +437,7 @@ is marked `rust_only` because Obsidian's resolver owns that behavior.
 | `daily-note-task-home` | an unrooted daily-note task is `@unfiled` |
 | `root-fields` | set `[root::]` re-homes `^gtd` and inbox tasks, paren form, `sase_goals` rolls up with a lint, and missing/duplicate/invalid/no_home fall back; a closed task keeps attributing |
 | `root-parent-chips` | a project and its sub-project share one root label; a `root: true` project (and a quoted `"TRUE"`) is its own root; roots share-rank and tie-break by ledger order; the dot takes the lead root's hue while `lead_home` stays per home |
+| `nearest-color-and-grey` | a grey top-level area mutes its parts, root, and chip (`hue: null`) and a sub-area inherits it; a `color: red` project under it is red; a `color: Green` project and its child are green; a sub-project's own `violet` stays on its part while the chip keeps the root's hue; `Gray` mutes; an invalid project color inherits and lints, and a `color: red` project under the invalid `job` area is red while `job` still lints (two `area_color_invalid`) |
 
 The file also carries a top-level `today_roots` array that the plan's
 [Today roots](plan.md#today-roots) share with the JavaScript mirror. Each case

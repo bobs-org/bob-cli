@@ -24,6 +24,18 @@ pub(crate) enum HomeKind {
     Bucket,
 }
 
+/// Where a resolved home's hue came from (R8). Buckets carry none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum HomeHueSource {
+    /// The nearest area or project `color:` palette slot.
+    Color,
+    /// The nearest `color:` slot is grey: `hue` is null on purpose.
+    Muted,
+    /// No slot on the walk: the top-level area stem hash.
+    Hash,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct HomePart {
     pub(crate) key: String,

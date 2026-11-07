@@ -13,6 +13,37 @@ use super::super::{
     task_fields::canonical_theme_name,
     task_root::{parse_task_root, TaskRootState},
 };
+use super::palette::{is_grey, Hue};
+
+/// An area's or project's `color:` slot (R8): a palette hue, the grey
+/// mute (`grey` or `gray`), or an invalid value that lints and then
+/// inherits. Absent and blank values inherit and map to `None`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NoteColor {
+    Hue(Hue),
+    Grey,
+    Invalid(String),
+}
+
+impl NoteColor {
+    pub(crate) fn from_frontmatter(
+        frontmatter: &super::super::projects::Frontmatter<'_>,
+    ) -> Option<Self> {
+        match frontmatter_scalar(frontmatter, "color") {
+            FrontmatterScalar::Absent | FrontmatterScalar::Blank => None,
+            FrontmatterScalar::NonScalar(raw) => Some(Self::Invalid(raw)),
+            FrontmatterScalar::Value(raw) => {
+                Some(if let Some(hue) = Hue::parse(&raw) {
+                    Self::Hue(hue)
+                } else if is_grey(&raw) {
+                    Self::Grey
+                } else {
+                    Self::Invalid(raw)
+                })
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NoteKind {
@@ -59,7 +90,7 @@ pub(crate) struct TaskRootFact {
 pub(crate) struct NoteFacts {
     pub(crate) kind: NoteKind,
     pub(crate) parent: Option<String>,
-    pub(crate) color: Option<String>,
+    pub(crate) color: Option<NoteColor>,
     pub(crate) root: bool,
     pub(crate) theme: Option<NoteTheme>,
     pub(crate) theme_conflict: bool,
@@ -87,10 +118,7 @@ impl NoteFacts {
             .as_ref()
             .and_then(|frontmatter| frontmatter_value(frontmatter, "parent"))
             .and_then(wikilink_path_target);
-        let color = frontmatter
-            .as_ref()
-            .and_then(|frontmatter| frontmatter_value(frontmatter, "color"))
-            .map(|value| trim_yaml_scalar(value).to_string());
+        let color = frontmatter.as_ref().and_then(NoteColor::from_frontmatter);
         let root = frontmatter
             .as_ref()
             .and_then(|frontmatter| frontmatter_value(frontmatter, "root"))

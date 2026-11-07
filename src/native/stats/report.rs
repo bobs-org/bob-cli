@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use super::value::{ChecklistState, DataQuality};
 use crate::native::{
-    pomodoro_homes::{HomeKind, Homes, Hue},
+    pomodoro_homes::{HomeHueSource, HomeKind, Homes, Hue},
     pomodoro_themes::ThemeRef,
 };
 
@@ -367,6 +367,10 @@ pub(crate) struct HomeCatalogEntry {
     pub(crate) subarea: Option<String>,
     pub(crate) path: Option<String>,
     pub(crate) hue: Option<Hue>,
+    /// R8: `color`, `muted` (grey: `hue` is null on purpose), or `hash`.
+    /// Omitted for buckets and arealess homes without a slot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) hue_source: Option<HomeHueSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) project_label: Option<String>,
     pub(crate) root_parent: String,

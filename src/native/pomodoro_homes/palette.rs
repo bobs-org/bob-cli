@@ -77,6 +77,12 @@ impl Hue {
     }
 }
 
+/// Whether a `color:` value names the grey mute (`grey`, also `gray`).
+/// Matching ignores case and surrounding whitespace, like [`Hue::parse`].
+pub(crate) fn is_grey(value: &str) -> bool {
+    matches!(value.trim().to_ascii_lowercase().as_str(), "grey" | "gray")
+}
+
 pub(crate) fn fallback_hue(stem: &str) -> Hue {
     let hash = fnv1a32(stem.to_lowercase().as_bytes());
     Hue::ALL[(hash % Hue::ALL.len() as u32) as usize]

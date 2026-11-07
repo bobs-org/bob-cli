@@ -4,7 +4,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use super::{facts::NoteFacts, palette::Hue, NoteKind};
+use super::{
+    facts::{NoteColor, NoteFacts},
+    json::HomeHueSource,
+    palette::{fallback_hue, Hue},
+    NoteKind,
+};
 use crate::native::{
     task_root::{parse_task_root, RootRepairKind, TaskRootState},
     vault_links::{LinkResolution, NoteIndex, VaultLinkResolver},
@@ -104,7 +109,15 @@ pub(crate) struct Home {
     pub(crate) area: String,
     pub(crate) area_label: String,
     pub(crate) subarea: Option<String>,
+    /// R8: the nearest area or project `color:` slot, else the top-level
+    /// area stem hash. `None` for buckets, arealess homes, and grey.
     pub(crate) hue: Option<Hue>,
+    /// Where `hue` came from; `None` for buckets and arealess homes
+    /// without a slot.
+    pub(crate) hue_source: Option<HomeHueSource>,
+    /// The hue resolved for the root parent note itself (R7): the walk
+    /// from the root's chain index. Equals `hue` for an area home.
+    pub(crate) root_hue: Option<Hue>,
     /// Full residence chain from the linked note through its ancestors.
     pub(crate) residence_chain: Vec<String>,
     /// Root parent grouping for stats: the area the task lives in, else
@@ -507,22 +520,24 @@ impl<S: HomeSource> HomeResolver<S> {
             .first()
             .filter(|index| Some(**index) != top_area_index)
             .map(|index| path_string(&chain[*index].0));
-        let (area, area_label, hue) = if let Some(area_path) = top_area {
-            let area_facts = &chain[top_area_index.expect("top area")].1;
-            let stem = note_stem(area_path);
-            let explicit_hue = area_facts.color.as_deref().and_then(Hue::parse);
-            if area_facts.color.is_some() && explicit_hue.is_none() {
-                self.lint_color(
-                    area_path,
-                    area_facts.color.as_deref().unwrap_or(""),
-                );
-            }
-            let hue =
-                explicit_hue.unwrap_or_else(|| super::fallback_hue(&stem));
-            (path_string(area_path), stem, Some(hue))
-        } else {
-            ("@unfiled".to_string(), "unfiled".to_string(), None)
+        let (area, area_label) = match top_area {
+            Some(area_path) => (path_string(area_path), note_stem(area_path)),
+            None => ("@unfiled".to_string(), "unfiled".to_string()),
         };
+        // R8: every invalid `color:` on the walked area and project notes
+        // lints once per path, whichever note ends up deciding the hue.
+        for (note_path, facts) in &chain[nearest_home..] {
+            if let (
+                NoteKind::Area | NoteKind::Project,
+                Some(NoteColor::Invalid(raw)),
+            ) = (facts.kind, &facts.color)
+            {
+                self.lint_color(note_path, raw);
+            }
+        }
+        let fallback =
+            top_area.map(|area_path| fallback_hue(&note_stem(area_path)));
+        let (hue, hue_source) = chain_hue(&chain[nearest_home..], fallback);
 
         let root_parent = match home_facts.kind {
             NoteKind::Area => path_string(home_path),
@@ -549,6 +564,13 @@ impl<S: HomeSource> HomeResolver<S> {
             }
             NoteKind::Other => unreachable!("home kind was selected"),
         };
+        // R7/R8: a root wears its own hue, which a nearer sub-project's
+        // `color:` must not change.
+        let root_index = chain
+            .iter()
+            .position(|(path, _)| path_string(path) == root_parent)
+            .unwrap_or(nearest_home);
+        let (root_hue, _) = chain_hue(&chain[root_index..], fallback);
 
         let home = Home {
             key: path_string(home_path),
@@ -562,6 +584,8 @@ impl<S: HomeSource> HomeResolver<S> {
             area_label,
             subarea,
             hue,
+            hue_source,
+            root_hue,
             residence_chain: chain
                 .iter()
                 .map(|(path, _)| path_string(path))
@@ -629,6 +653,29 @@ impl<S: HomeSource> HomeResolver<S> {
     }
 }
 
+/// R8: the first valid `color:` slot on `chain`'s area and project notes,
+/// nearest first, else `fallback` (the top-level area stem hash). Daily,
+/// reference, `done/`, and other non-home notes never count; invalid
+/// values inherit.
+fn chain_hue(
+    chain: &[(PathBuf, NoteFacts)],
+    fallback: Option<Hue>,
+) -> (Option<Hue>, Option<HomeHueSource>) {
+    for (_, facts) in chain {
+        if !matches!(facts.kind, NoteKind::Area | NoteKind::Project) {
+            continue;
+        }
+        match facts.color {
+            Some(NoteColor::Hue(hue)) => {
+                return (Some(hue), Some(HomeHueSource::Color));
+            }
+            Some(NoteColor::Grey) => return (None, Some(HomeHueSource::Muted)),
+            Some(NoteColor::Invalid(_)) | None => {}
+        }
+    }
+    (fallback, fallback.map(|_| HomeHueSource::Hash))
+}
+
 pub(crate) fn path_string(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
@@ -662,6 +709,8 @@ fn unfiled_at(residence_chain: Vec<String>) -> Home {
         area_label: "unfiled".to_string(),
         subarea: None,
         hue: None,
+        hue_source: None,
+        root_hue: None,
         residence_chain,
         root_parent: "@unfiled".to_string(),
     }
@@ -676,6 +725,8 @@ pub(crate) fn unlinked_home() -> Home {
         area_label: "unlinked".to_string(),
         subarea: None,
         hue: None,
+        hue_source: None,
+        root_hue: None,
         residence_chain: Vec::new(),
         root_parent: "@unlinked".to_string(),
     }

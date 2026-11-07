@@ -276,7 +276,9 @@ struct RootGroup {
 }
 
 /// Group `parts` by their home's root parent, in root order: the ledger
-/// order of each root's first part. A root's hue is its first part's hue.
+/// order of each root's first part. A root wears its own hue (R7/R8): the
+/// hue resolved for the root note itself, which a nearer sub-project's
+/// `color:` never changes.
 fn root_groups(grouped: &[HomeGroup], parts: &[HomePart]) -> Vec<RootGroup> {
     let mut roots = Vec::<(String, RootGroup)>::new();
     for (group, part) in grouped.iter().zip(parts) {
@@ -294,7 +296,7 @@ fn root_groups(grouped: &[HomeGroup], parts: &[HomePart]) -> Vec<RootGroup> {
                     share: u16::from(part.share),
                     tasks: group.tasks,
                     first: group.first,
-                    hue: group.home.hue,
+                    hue: group.home.root_hue,
                 },
             ));
         }

@@ -183,7 +183,7 @@ pub(crate) struct Catalog {
     records: BTreeMap<String, ThemeRecord>,
     days: BTreeMap<NaiveDate, BTreeSet<String>>,
     prefs: Prefs,
-    areas: BTreeMap<String, Hue>,
+    areas: BTreeMap<String, Option<Hue>>,
     exempt: BTreeSet<String>,
     inventory: BTreeSet<String>,
     themes: Option<config::ThemesConfig>,
@@ -227,7 +227,7 @@ impl Catalog {
         fresh: bool,
         area_keys: Option<BTreeSet<String>>,
         live: Option<&crate::native::capture_pomodoros::PomodoroScan>,
-        cached_areas: Option<BTreeMap<String, Hue>>,
+        cached_areas: Option<BTreeMap<String, Option<Hue>>>,
     ) -> std::io::Result<Self> {
         let sources = config::load_theme_sources();
         let (prefs, mut warnings) = journal::load_prefs(vault)?;
@@ -391,7 +391,7 @@ impl Catalog {
         known: &[(String, String)],
         configured: &[(String, String)],
         live: &[String],
-        areas: BTreeMap<String, Hue>,
+        areas: BTreeMap<String, Option<Hue>>,
         hidden: &[String],
         exempt: &[String],
     ) -> Self {
@@ -655,7 +655,7 @@ impl Catalog {
 pub(crate) struct ThemeLookup {
     known_keys: BTreeSet<String>,
     prefs: Prefs,
-    areas: BTreeMap<String, Hue>,
+    areas: BTreeMap<String, Option<Hue>>,
     exempt: BTreeSet<String>,
     inventory: BTreeSet<String>,
     themes: Option<config::ThemesConfig>,

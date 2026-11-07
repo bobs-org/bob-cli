@@ -640,11 +640,11 @@ limits:
 label: Review time
 kind: pomodoro
 measure: minutes
-in: [gtd_daily]
+in: [gtd]
 unit: minutes
 direction: neutral
 color: orange
-description: "Minutes attributed to tasks in, or rooted at, gtd_daily, the morning review's area; redefine stats.metrics.review_time if your review lives elsewhere."
+description: "Minutes attributed to tasks in, or rooted at, gtd, the GTD area that roots each daily ^gtd row; redefine stats.metrics.review_time if your review lives elsewhere."
 limits:
   - Attributed from Task Links.
   - Grouped by today's note tree.
@@ -1830,14 +1830,11 @@ mod tests {
                 ..
             } => {
                 assert!(themes.is_empty());
-                assert_eq!(in_notes, &["gtd_daily"]);
+                assert_eq!(in_notes, &["gtd"]);
             }
             other => panic!("review_time spec {other:?}"),
         }
-        assert_eq!(
-            review_time.parameters().in_notes,
-            vec!["gtd_daily".to_string()]
-        );
+        assert_eq!(review_time.parameters().in_notes, vec!["gtd".to_string()]);
 
         let net = registry.get("net").unwrap();
         assert_eq!(net.unit, MetricUnit::Signed);

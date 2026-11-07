@@ -8,7 +8,7 @@ use super::report::{
 };
 use super::value::DataQuality;
 use crate::native::plan_budget::normalize_component;
-use crate::native::pomodoro_homes::{HomeKind, Hue};
+use crate::native::pomodoro_homes::{HomeHueSource, HomeKind, Hue};
 use crate::native::style::{pad_right, terminal_width, Styler, SPARK_BLOCKS};
 
 const NULL_MARK: char = '·';
@@ -1192,8 +1192,12 @@ fn format_part_cell(
         return styler.dim(&body);
     }
     let hue = entry.and_then(|entry| entry.hue);
+    let muted = entry
+        .is_some_and(|entry| entry.hue_source == Some(HomeHueSource::Muted));
     match hue {
         Some(hue) => format!("{} {body}", hue_dot(styler, hue)),
+        // R8: a grey home's dot is dimmed, not left at the terminal default.
+        None if muted => format!("{} {body}", styler.dim("●")),
         None => format!("● {body}"),
     }
 }
@@ -1634,6 +1638,7 @@ mod tests {
                 subarea: None,
                 path: Some("gtd_daily.md".to_string()),
                 hue: Some(Hue::Orange),
+                hue_source: Some(HomeHueSource::Color),
                 project_label: Some("gtd_daily · area tasks".to_string()),
                 root_parent: "gtd_daily.md".to_string(),
             },
@@ -1647,6 +1652,7 @@ mod tests {
                 subarea: None,
                 path: Some("sase.md".to_string()),
                 hue: Some(Hue::Blue),
+                hue_source: Some(HomeHueSource::Hash),
                 project_label: None,
                 root_parent: "sase.md".to_string(),
             },
@@ -1695,6 +1701,52 @@ mod tests {
         assert!(!text.contains("●"));
         let colored = detail(&report, &Styler::colored());
         assert!(colored.contains("\u{1b}[38;5;208m●"), "{colored:?}");
+    }
+
+    #[test]
+    fn muted_home_dot_is_dim_and_uncolored_dot_stays_plain() {
+        let entry = |hue_source| HomeCatalogEntry {
+            label: "gtd".to_string(),
+            kind: HomeKind::Area,
+            area: Some("gtd.md".to_string()),
+            subarea: None,
+            path: Some("gtd.md".to_string()),
+            hue: None,
+            hue_source,
+            project_label: None,
+            root_parent: "gtd.md".to_string(),
+        };
+        let mut gtd = part("gtd.md", 25, "78%");
+        gtd.label = Some("gtd".to_string());
+        let themes = BTreeMap::new();
+        let styler = Styler::colored();
+        let muted = BTreeMap::from([(
+            "gtd.md".to_string(),
+            entry(Some(HomeHueSource::Muted)),
+        )]);
+        assert_eq!(
+            format_part_cell(
+                &gtd,
+                "root_parent",
+                "m",
+                &muted,
+                &themes,
+                &styler
+            ),
+            format!("{} gtd 25m 78%", styler.dim("●"))
+        );
+        let uncolored = BTreeMap::from([("gtd.md".to_string(), entry(None))]);
+        assert_eq!(
+            format_part_cell(
+                &gtd,
+                "root_parent",
+                "m",
+                &uncolored,
+                &themes,
+                &styler
+            ),
+            "● gtd 25m 78%"
+        );
     }
 
     fn part(key: &str, value: i64, share: &str) -> PartSummary {
