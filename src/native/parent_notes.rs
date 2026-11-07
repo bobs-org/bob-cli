@@ -193,9 +193,20 @@ pub(crate) fn resolve_parent(
     bob_dir: &Path,
     input: &str,
 ) -> Result<ResolvedParent, ParentError> {
+    resolve_parent_in(bob_dir, &parent_candidates(bob_dir), input)
+}
+
+/// [`resolve_parent`] against a candidate set the caller already scanned
+/// with [`parent_candidates`], so resolving many inputs in one run scans
+/// the vault root once. A miss still reads that one note directly to tell
+/// a terminal project or a non-parent note from an unknown name.
+pub(crate) fn resolve_parent_in(
+    bob_dir: &Path,
+    candidates: &[ParentCandidate],
+    input: &str,
+) -> Result<ResolvedParent, ParentError> {
     let normalized = normalize_parent_input(input);
     let lowered = normalized.to_ascii_lowercase();
-    let candidates = parent_candidates(bob_dir);
 
     if !lowered.is_empty()
         && let Some(candidate) = candidates
@@ -212,7 +223,7 @@ pub(crate) fn resolve_parent(
 
     if !lowered.is_empty() {
         let mut claimants = Vec::new();
-        for candidate in &candidates {
+        for candidate in candidates {
             if let Some(alias) = candidate
                 .aliases
                 .iter()
@@ -258,7 +269,7 @@ pub(crate) fn resolve_parent(
     Err(ParentError::Unknown {
         input: input.trim().to_string(),
         normalized,
-        suggestions: near_miss_suggestions(&candidates, &lowered),
+        suggestions: near_miss_suggestions(candidates, &lowered),
     })
 }
 

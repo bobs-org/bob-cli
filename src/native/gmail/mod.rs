@@ -25,6 +25,7 @@ pub(crate) mod policy;
 pub(crate) mod prepare;
 mod pull;
 pub(crate) mod resolve;
+mod route;
 mod save;
 pub(crate) mod search_peek;
 pub(crate) mod ui;

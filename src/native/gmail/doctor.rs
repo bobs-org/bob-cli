@@ -10,7 +10,9 @@ use super::{
     client::peek_project,
     config::GmailConfig,
     gog::{Gog, CLIENT},
-    journal, list, ui, DoctorArgs, GmailError,
+    journal, list,
+    route::{self, RouteContext},
+    ui, DoctorArgs, GmailError,
 };
 use crate::native::{
     google::doctor::{Check, CheckStatus},
@@ -35,6 +37,7 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
                 "token",
                 "scopes",
                 "config",
+                "routes",
                 "writer",
                 "journal",
                 "journal_malformed",
@@ -231,20 +234,18 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
         }
     }
 
-    checks.push(Check {
-        id: "config",
-        status: CheckStatus::Ok,
-        summary: format!(
-            "folder {} · body {} · pull {}",
-            config.folder(),
-            match config.body() {
-                bob_config::GmailBodyMode::Full => "full",
-                bob_config::GmailBodyMode::Headers => "headers",
-            },
-            config.pull_label().unwrap_or("(pull disabled)"),
-        ),
-        fix: None,
-    });
+    // The label audit needs a token that refreshes; a failed token row
+    // already says why, so routes skips instead of repeating it.
+    let token_ok = checks
+        .iter()
+        .any(|check| check.id == "token" && check.status == CheckStatus::Ok);
+    checks.push(config_check(&config));
+    checks.push(routes_check(
+        gog.as_ref().filter(|_| token_ok),
+        selected_account.as_deref(),
+        &bob_dir,
+        &config,
+    ));
 
     checks.push(writer_check(config.writer(), &host));
     checks.push(journal_check(&bob_dir));
@@ -254,6 +255,116 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
     checks.push(url_health_check(&bob_dir));
     checks.push(mail_duplicate_check(&bob_dir, &config));
     finish(args, &host, checks)
+}
+
+/// Folder, body mode, and the sync settings with their fallbacks applied.
+fn config_check(config: &GmailConfig) -> Check {
+    let sync = match config.sync_label() {
+        Some(label) => format!("sync {label} → {}", config.sync_inbox()),
+        None => "sync disabled".to_string(),
+    };
+    let prefixes = if config.route_prefixes().is_empty() {
+        "prefixes none".to_string()
+    } else {
+        format!(
+            "prefixes {}",
+            config
+                .route_prefixes()
+                .iter()
+                .map(|prefix| format!("{prefix}/"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        )
+    };
+    let days = config.reply_wait_days();
+    Check {
+        id: "config",
+        status: CheckStatus::Ok,
+        summary: format!(
+            "folder {} · body {} · {sync} · {prefixes} · reply wait {days} day{}",
+            config.folder(),
+            match config.body() {
+                bob_config::GmailBodyMode::Full => "full",
+                bob_config::GmailBodyMode::Headers => "headers",
+            },
+            if days == 1 { "" } else { "s" },
+        ),
+        fix: None,
+    }
+}
+
+/// Warn-only audit of every account label under a configured route prefix:
+/// one `label → kind · hint` line per label that doesn't resolve.
+fn routes_check(
+    gog: Option<&Gog>,
+    account: Option<&str>,
+    bob_dir: &Path,
+    config: &GmailConfig,
+) -> Check {
+    if config.route_prefixes().is_empty() {
+        return skipped(
+            "routes",
+            "no gmail.sync.route_prefixes, so no-prefix mode routes a thread \
+             by any label that names an area or project",
+        );
+    }
+    let (Some(gog), Some(account)) = (gog, account) else {
+        return skipped("routes", "no signed-in account");
+    };
+    let labels = match gog.labels_list(account) {
+        Ok(labels) => labels,
+        Err(error) => {
+            return Check {
+                id: "routes",
+                status: CheckStatus::Warn,
+                summary: format!(
+                    "could not list Gmail labels: {}",
+                    error.message()
+                ),
+                fix: error.hint().map(str::to_string),
+            };
+        }
+    };
+    let ctx = RouteContext::load(bob_dir);
+    let audit = route::audit_labels(
+        &labels,
+        config.sync_label(),
+        config.route_prefixes(),
+        &ctx,
+    );
+    let total = audit.routing_labels;
+    let plural = if total == 1 { "" } else { "s" };
+    if audit.problems.is_empty() {
+        return Check {
+            id: "routes",
+            status: CheckStatus::Ok,
+            summary: format!("{total} routing label{plural}"),
+            fix: None,
+        };
+    }
+    let mut summary = format!(
+        "{} of {total} routing label{plural} {} not resolve",
+        audit.problems.len(),
+        if audit.problems.len() == 1 {
+            "does"
+        } else {
+            "do"
+        },
+    );
+    for problem in &audit.problems {
+        summary.push('\n');
+        summary.push_str(&problem.audit_line());
+    }
+    Check {
+        id: "routes",
+        status: CheckStatus::Warn,
+        summary,
+        fix: Some(
+            "rename or remove each label in Gmail, or create, alias, or \
+             reopen its area or project note"
+                .to_string(),
+        ),
+    }
 }
 
 fn fail_from(error: &GmailError, id: &'static str) -> Check {
@@ -457,13 +568,18 @@ fn finish(args: &DoctorArgs, host: &str, checks: Vec<Check>) -> i32 {
         .max()
         .unwrap_or(0);
     for check in &checks {
+        // A multi-line summary keeps its later lines under the first.
+        let mut lines = check.summary.lines();
         println!(
             "{} {:width$} {}",
             ui::glyph(&styler, check.status.label()),
             human_label(check.id),
-            check.summary,
+            lines.next().unwrap_or_default(),
             width = width,
         );
+        for line in lines {
+            println!("{:indent$}{line}", "", indent = width + 3);
+        }
         if let Some(fix) = &check.fix
             && matches!(check.status, CheckStatus::Fail | CheckStatus::Warn)
         {

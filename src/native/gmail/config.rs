@@ -9,6 +9,8 @@ use super::GmailError;
 pub(crate) const DEFAULT_FOLDER: &str = "mail";
 pub(crate) const DEFAULT_LINK_LABEL: &str = "✉️ {subject} · {who}";
 pub(crate) const DEFAULT_PULL_INBOX: &str = "gmail_inbox.md";
+pub(crate) const DEFAULT_SYNC_LABEL: &str = "bob";
+pub(crate) const DEFAULT_REPLY_WAIT_DAYS: u32 = 3;
 pub(crate) const DEFAULT_TIMEOUT_SECS: u64 = 60;
 pub(crate) const ASSUME_TTY_ENV: &str = "BOB_GMAIL_ASSUME_TTY";
 pub(crate) const COMPOSE_SCOPE: &str =
@@ -27,6 +29,10 @@ pub(crate) struct GmailConfig {
     pull_inbox: String,
     pull_label: Option<String>,
     signature: bob_config::GmailSignature,
+    sync_label: Option<String>,
+    sync_inbox: String,
+    route_prefixes: Vec<String>,
+    reply_wait_days: u32,
     timeout_secs: u64,
 }
 
@@ -113,21 +119,21 @@ impl GmailConfig {
         let pull = settings.pull.unwrap_or_default();
         let pull_inbox =
             pull.inbox.unwrap_or_else(|| DEFAULT_PULL_INBOX.to_string());
-        if pull_inbox.trim().is_empty() {
-            return Err(GmailError::setup(
-                "config",
-                "gmail.pull.inbox must not be empty".to_string(),
-            ));
-        }
-        if super::note::path::validate_folder(std::path::Path::new(&pull_inbox))
-            .is_err()
-        {
-            return Err(GmailError::setup(
-                "config",
-                "gmail.pull.inbox must be a relative path without parent segments"
-                    .to_string(),
-            ));
-        }
+        validate_inbox("gmail.pull.inbox", &pull_inbox)?;
+        let sync = settings.sync.unwrap_or_default();
+        // `gmail.sync.*` wins; `gmail.pull.*` is the older spelling.
+        let sync_label = match sync.label.or(pull.label.clone()) {
+            Some(label) if label.is_empty() => None,
+            Some(label) => Some(label),
+            None => Some(DEFAULT_SYNC_LABEL.to_string()),
+        };
+        let sync_inbox = match sync.inbox {
+            Some(inbox) => {
+                validate_inbox("gmail.sync.inbox", &inbox)?;
+                inbox
+            }
+            None => pull_inbox.clone(),
+        };
         Ok(Self {
             account: settings.account,
             writer: settings.writer,
@@ -137,8 +143,14 @@ impl GmailConfig {
             never_save_from: settings.never_save.from,
             never_save_labels: settings.never_save.labels,
             pull_inbox,
-            pull_label: pull.label,
+            pull_label: pull.label.filter(|label| !label.is_empty()),
             signature: settings.signature.unwrap_or_default(),
+            sync_label,
+            sync_inbox,
+            route_prefixes: sync.route_prefixes.unwrap_or_default(),
+            reply_wait_days: sync
+                .reply_wait_days
+                .unwrap_or(DEFAULT_REPLY_WAIT_DAYS),
             timeout_secs,
         })
     }
@@ -183,9 +195,49 @@ impl GmailConfig {
         self.signature
     }
 
+    /// The enrollment label: `gmail.sync.label`, then `gmail.pull.label`,
+    /// then `bob`. `None` when an explicit empty value disables sync.
+    pub(crate) fn sync_label(&self) -> Option<&str> {
+        self.sync_label.as_deref()
+    }
+
+    /// The file for unrouted threads and route problems:
+    /// `gmail.sync.inbox`, then `gmail.pull.inbox`, then `gmail_inbox.md`.
+    pub(crate) fn sync_inbox(&self) -> &str {
+        &self.sync_inbox
+    }
+
+    /// `gmail.sync.route_prefixes`; empty means no-prefix mode.
+    pub(crate) fn route_prefixes(&self) -> &[String] {
+        &self.route_prefixes
+    }
+
+    /// Calendar days from your send to the hold's nudge date.
+    pub(crate) fn reply_wait_days(&self) -> u32 {
+        self.reply_wait_days
+    }
+
     pub(crate) fn timeout(&self) -> Duration {
         Duration::from_secs(self.timeout_secs)
     }
+}
+
+/// An inbox key must be a safe relative path inside the vault.
+fn validate_inbox(key: &str, inbox: &str) -> Result<(), GmailError> {
+    if inbox.trim().is_empty() {
+        return Err(GmailError::setup(
+            "config",
+            format!("{key} must not be empty"),
+        ));
+    }
+    if super::note::path::validate_folder(std::path::Path::new(inbox)).is_err()
+    {
+        return Err(GmailError::setup(
+            "config",
+            format!("{key} must be a relative path without parent segments"),
+        ));
+    }
+    Ok(())
 }
 
 /// Whether stdin should be treated as a TTY for login prompts.
@@ -246,6 +298,192 @@ mod tests {
         })
         .expect_err("label without subject");
         assert!(error.message().contains("gmail.link_label"));
+    }
+
+    fn sync(
+        label: Option<&str>,
+        inbox: Option<&str>,
+    ) -> Option<bob_config::GmailSyncSettings> {
+        Some(bob_config::GmailSyncSettings {
+            label: label.map(str::to_string),
+            inbox: inbox.map(str::to_string),
+            ..Default::default()
+        })
+    }
+
+    fn pull(
+        label: Option<&str>,
+        inbox: Option<&str>,
+    ) -> Option<bob_config::GmailPullSettings> {
+        Some(bob_config::GmailPullSettings {
+            label: label.map(str::to_string),
+            inbox: inbox.map(str::to_string),
+        })
+    }
+
+    #[test]
+    fn sync_defaults_when_both_blocks_are_missing() {
+        let config = GmailConfig::from_settings(settings()).expect("defaults");
+        assert_eq!(config.sync_label(), Some("bob"));
+        assert_eq!(config.sync_inbox(), "gmail_inbox.md");
+        assert!(config.route_prefixes().is_empty(), "no-prefix mode");
+        assert_eq!(config.reply_wait_days(), 3);
+    }
+
+    #[test]
+    fn sync_label_falls_back_to_pull_then_bob() {
+        let resolve = |sync, pull| {
+            GmailConfig::from_settings(bob_config::GmailSettings {
+                sync,
+                pull,
+                ..settings()
+            })
+            .expect("resolves")
+            .sync_label()
+            .map(str::to_string)
+        };
+        // An explicit sync label wins over pull.
+        assert_eq!(
+            resolve(sync(Some("watch"), None), pull(Some("old"), None)),
+            Some("watch".to_string())
+        );
+        // An unset sync label uses pull's spelling.
+        assert_eq!(
+            resolve(sync(None, None), pull(Some("old"), None)),
+            Some("old".to_string())
+        );
+        assert_eq!(resolve(None, pull(Some("old"), None)), Some("old".into()));
+        // A pull block without a label still defaults sync to bob.
+        assert_eq!(resolve(None, pull(None, None)), Some("bob".to_string()));
+        // An explicit empty value disables sync, in either spelling.
+        assert_eq!(
+            resolve(sync(Some(""), None), pull(Some("old"), None)),
+            None
+        );
+        assert_eq!(resolve(None, pull(Some(""), None)), None);
+        // An explicit sync label re-enables what an empty pull label disabled.
+        assert_eq!(
+            resolve(sync(Some("bob"), None), pull(Some(""), None)),
+            Some("bob".to_string())
+        );
+    }
+
+    #[test]
+    fn pull_label_keeps_its_own_resolution() {
+        let resolve = |pull| {
+            GmailConfig::from_settings(bob_config::GmailSettings {
+                pull,
+                ..settings()
+            })
+            .expect("resolves")
+            .pull_label()
+            .map(str::to_string)
+        };
+        assert_eq!(resolve(None), Some("bob".to_string()));
+        assert_eq!(resolve(pull(Some("old"), None)), Some("old".to_string()));
+        assert_eq!(resolve(pull(Some(""), None)), None);
+        assert_eq!(resolve(pull(None, None)), None);
+    }
+
+    #[test]
+    fn sync_inbox_falls_back_to_pull_then_default() {
+        let resolve = |sync, pull| {
+            GmailConfig::from_settings(bob_config::GmailSettings {
+                sync,
+                pull,
+                ..settings()
+            })
+            .expect("resolves")
+            .sync_inbox()
+            .to_string()
+        };
+        assert_eq!(
+            resolve(sync(None, Some("routed.md")), pull(None, Some("old.md"))),
+            "routed.md"
+        );
+        assert_eq!(
+            resolve(sync(None, None), pull(None, Some("old.md"))),
+            "old.md"
+        );
+        assert_eq!(
+            resolve(None, pull(None, Some("inbox/mail.md"))),
+            "inbox/mail.md"
+        );
+        assert_eq!(resolve(sync(None, None), None), "gmail_inbox.md");
+    }
+
+    #[test]
+    fn route_prefixes_and_reply_wait_days_resolve() {
+        let config = GmailConfig::from_settings(bob_config::GmailSettings {
+            sync: Some(bob_config::GmailSyncSettings {
+                route_prefixes: Some(vec!["#".to_string(), "+".to_string()]),
+                reply_wait_days: Some(7),
+                ..Default::default()
+            }),
+            ..settings()
+        })
+        .expect("resolves");
+        assert_eq!(config.route_prefixes(), ["#", "+"]);
+        assert_eq!(config.reply_wait_days(), 7);
+    }
+
+    #[test]
+    fn unsafe_sync_inbox_is_a_setup_error_naming_the_key() {
+        for inbox in ["/gmail_inbox.md", "../outside.md", "a/../../b.md"] {
+            let error = GmailConfig::from_settings(bob_config::GmailSettings {
+                sync: sync(None, Some(inbox)),
+                ..settings()
+            })
+            .expect_err("unsafe inbox");
+            assert_eq!(error.exit_code(), 2);
+            assert_eq!(error.kind(), "config");
+            assert!(
+                error.message().contains("gmail.sync.inbox"),
+                "{inbox}: {}",
+                error.message()
+            );
+        }
+        let error = GmailConfig::from_settings(bob_config::GmailSettings {
+            pull: pull(None, Some("/abs.md")),
+            ..settings()
+        })
+        .expect_err("unsafe pull inbox");
+        assert!(error.message().contains("gmail.pull.inbox"));
+    }
+
+    #[test]
+    fn sync_config_errors_from_the_file_are_setup_errors() {
+        let dir = std::env::temp_dir().join(format!(
+            "bob-cli-gmail-sync-config-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("config.yml");
+        for (text, key) in [
+            (
+                "gmail:\n  sync:\n    route_prefixes: [\"#\", \"#\"]\n",
+                "gmail.sync.route_prefixes",
+            ),
+            (
+                "gmail:\n  sync:\n    reply_wait_days: 0\n",
+                "gmail.sync.reply_wait_days",
+            ),
+            ("gmail:\n  sync:\n    label: 7\n", "gmail.sync.label"),
+        ] {
+            std::fs::write(&path, text).expect("write config");
+            let error = GmailConfig::resolve_at(&path).expect_err(text);
+            assert_eq!(error.exit_code(), 2, "{text}");
+            assert!(
+                error.message().contains(key),
+                "{text}: {}",
+                error.message()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

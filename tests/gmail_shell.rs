@@ -1315,6 +1315,220 @@ fn doctor_local_checks_run_when_token_fails() {
     assert_eq!(check(&doc, "gmail_duplicates")["status"], "ok");
 }
 
+/// The routing vault: areas `job` and `family`, the done project
+/// `old_trip`, and a routing config with the `#` and `+` prefixes.
+fn routing_env(prefix: &str) -> GmailEnv {
+    let env = GmailEnv::new(prefix);
+    env.write_journal_rules();
+    env.write_config(&format!(
+        "gmail:\n  account: {ACCOUNT}\n  writer: test-host\n  sync:\n    route_prefixes: [\"#\", \"+\"]\n"
+    ));
+    for (name, text) in [
+        ("job.md", "---\ntype: \"[[area]]\"\n---\n"),
+        ("family.md", "---\ntype: \"[[area]]\"\n---\n"),
+        (
+            "old_trip.md",
+            "---\ntype: \"[[project]]\"\nstatus: done\n---\n",
+        ),
+    ] {
+        fs::write(env.vault().join(name), text).expect("write note");
+    }
+    env
+}
+
+fn user_label(id: &str, name: &str) -> Value {
+    serde_json::json!({ "id": id, "name": name, "type": "user" })
+}
+
+#[test]
+fn doctor_routes_row_lists_each_prefixed_label_that_does_not_resolve() {
+    let env = routing_env("bob-cli-gmail-doctor-routes-warn");
+    let fake = FakeGog::new(&env, "gog");
+    fake.set_labels(serde_json::json!([
+        user_label("Label_1", "bob"),
+        user_label("Label_2", "#/job"),
+        user_label("Label_3", "#/famly"),
+        user_label("Label_4", "+/old_trip"),
+        user_label("Label_5", "+/home/build"),
+        user_label("Label_6", "#"),
+        user_label("Label_7", "Job"),
+        { "id": "INBOX", "name": "INBOX", "type": "system" },
+    ]));
+    let output = run_gmail(&env, &fake, &["doctor", "-f", "json"]);
+    assert_success(&output, "a routes warning never fails doctor");
+    let doc = json_stdout(&output);
+    assert_eq!(doc["ok"], true);
+    let routes = check(&doc, "routes");
+    assert_eq!(routes["status"], "warn");
+    assert_eq!(
+        routes["summary"],
+        "3 of 4 routing labels do not resolve\n\
+         #/famly → unknown_note · did you mean family (area · family.md)?\n\
+         +/home/build → nested_route · use one label per note\n\
+         +/old_trip → closed_project · pick an open area or project instead \
+         (run 'bob capture-targets' to list them)"
+    );
+    assert!(routes["fix"]
+        .as_str()
+        .is_some_and(|fix| fix.contains("label")));
+    assert!(
+        fake.called_with(&["gmail", "labels", "list"]),
+        "routes reads the account label list once"
+    );
+
+    let human = run_gmail(&env, &fake, &["doctor"]);
+    assert_success(&human, "human doctor");
+    let text = stdout(&human);
+    let lines = text.lines().collect::<Vec<_>>();
+    let row = lines
+        .iter()
+        .position(|line| line.starts_with("! routes "))
+        .unwrap_or_else(|| panic!("routes row: {text}"));
+    let column = lines[row]
+        .find("3 of 4 routing labels do not resolve")
+        .expect("routes headline");
+    for (offset, label) in ["#/famly", "+/home/build", "+/old_trip"]
+        .into_iter()
+        .enumerate()
+    {
+        let line = lines[row + 1 + offset];
+        assert_eq!(
+            line.find(label),
+            Some(column),
+            "continuation lines align under the summary: {text}"
+        );
+        assert!(line[..column].trim().is_empty(), "{text}");
+    }
+}
+
+#[test]
+fn doctor_routes_row_is_ok_when_every_routing_label_resolves() {
+    let env = routing_env("bob-cli-gmail-doctor-routes-ok");
+    let fake = FakeGog::new(&env, "gog");
+    fake.set_labels(serde_json::json!([
+        user_label("Label_1", "bob"),
+        user_label("Label_2", "#/job"),
+        user_label("Label_3", "+/Family"),
+        user_label("Label_4", "Unrouted"),
+    ]));
+    let output = run_gmail(&env, &fake, &["doctor", "-f", "json"]);
+    assert_success(&output, "doctor routes ok");
+    let routes = check(&json_stdout(&output), "routes").clone();
+    assert_eq!(routes["status"], "ok");
+    assert_eq!(routes["summary"], "2 routing labels");
+}
+
+#[test]
+fn doctor_routes_row_explains_no_prefix_mode() {
+    let env = GmailEnv::new("bob-cli-gmail-doctor-routes-skip");
+    env.write_journal_rules();
+    let fake = FakeGog::new(&env, "gog");
+    let output = run_gmail(&env, &fake, &["doctor", "-f", "json"]);
+    assert_success(&output, "doctor without prefixes");
+    let routes = check(&json_stdout(&output), "routes").clone();
+    assert_eq!(routes["status"], "skip");
+    assert!(
+        routes["summary"]
+            .as_str()
+            .is_some_and(|summary| summary.contains("no-prefix mode")),
+        "{routes}"
+    );
+    assert!(
+        !fake.called_with(&["gmail", "labels", "list"]),
+        "no-prefix mode never lists the account's labels"
+    );
+}
+
+#[test]
+fn doctor_routes_row_skips_when_the_token_fails() {
+    let env = routing_env("bob-cli-gmail-doctor-routes-token");
+    let fake = FakeGog::new(&env, "gog").scenario("invalid_grant");
+    let output = run_gmail(&env, &fake, &["doctor", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(1));
+    let routes = check(&json_stdout(&output), "routes").clone();
+    assert_eq!(routes["status"], "skip");
+}
+
+#[test]
+fn doctor_routes_row_warns_when_labels_cannot_be_listed() {
+    let env = routing_env("bob-cli-gmail-doctor-routes-labels-fail");
+    let fake = FakeGog::new(&env, "gog");
+    fake.set_failure("labels_list", "label lookup failed", 1);
+    let output = run_gmail(&env, &fake, &["doctor", "-f", "json"]);
+    assert_success(&output, "a label-list failure only warns");
+    let routes = check(&json_stdout(&output), "routes").clone();
+    assert_eq!(routes["status"], "warn");
+    assert!(
+        routes["summary"]
+            .as_str()
+            .is_some_and(|summary| summary.starts_with("could not list")),
+        "{routes}"
+    );
+}
+
+#[test]
+fn doctor_config_row_reports_sync_settings_and_fallbacks() {
+    let env = GmailEnv::new("bob-cli-gmail-doctor-config-sync");
+    env.write_journal_rules();
+    let fake = FakeGog::new(&env, "gog");
+    let summary = |config: &str| {
+        env.write_config(&format!(
+            "gmail:\n  account: {ACCOUNT}\n  writer: test-host\n{config}"
+        ));
+        let output = run_gmail(&env, &fake, &["doctor", "-f", "json"]);
+        check(&json_stdout(&output), "config")["summary"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
+    };
+    assert_eq!(
+        summary(""),
+        "folder mail · body full · sync bob → gmail_inbox.md · prefixes none · reply wait 3 days"
+    );
+    assert_eq!(
+        summary(
+            "  sync:\n    label: watch\n    inbox: inbox/mail.md\n    route_prefixes: [\"#\", \"+\"]\n    reply_wait_days: 1\n"
+        ),
+        "folder mail · body full · sync watch → inbox/mail.md · prefixes #/ +/ · reply wait 1 day"
+    );
+    assert_eq!(
+        summary("  pull:\n    label: old\n    inbox: old_inbox.md\n"),
+        "folder mail · body full · sync old → old_inbox.md · prefixes none · reply wait 3 days"
+    );
+    assert_eq!(
+        summary("  sync:\n    label: \"\"\n"),
+        "folder mail · body full · sync disabled · prefixes none · reply wait 3 days"
+    );
+}
+
+#[test]
+fn sync_config_errors_name_the_key() {
+    let env = GmailEnv::new("bob-cli-gmail-sync-config-key");
+    let fake = FakeGog::new(&env, "gog");
+    for (config, key) in [
+        (
+            "    route_prefixes: [\"#\", \"#\"]\n",
+            "gmail.sync.route_prefixes",
+        ),
+        ("    route_prefixes: \"#\"\n", "gmail.sync.route_prefixes"),
+        ("    reply_wait_days: 0\n", "gmail.sync.reply_wait_days"),
+        ("    inbox: /abs.md\n", "gmail.sync.inbox"),
+    ] {
+        env.write_config(&format!(
+            "gmail:\n  account: {ACCOUNT}\n  sync:\n{config}"
+        ));
+        let output = run_gmail(&env, &fake, &["pull", "-d", "-f", "json"]);
+        assert_eq!(output.status.code(), Some(2), "{config}");
+        let doc = json_stdout(&output);
+        assert!(
+            doc["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains(key)),
+            "{config} must name {key}: {doc}"
+        );
+    }
+}
+
 #[test]
 fn config_errors_name_the_key() {
     let env = GmailEnv::new("bob-cli-gmail-config-key");

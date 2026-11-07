@@ -271,9 +271,13 @@ breaks other config loaders. `BOB_GCAL_GOG` replaces `gog` on `PATH`. See the
 | `gmail.link_label` | String containing `{subject}` | `✉️ {subject} · {who}` | Link label template used by save and pull. |
 | `gmail.never_save.from` | Sequence of strings | `[]` | Addresses or `@domains` that `save` refuses. |
 | `gmail.never_save.labels` | Sequence of strings | `[]` | Gmail label names that `save` refuses. |
-| `gmail.pull.inbox` | Safe relative path inside the vault | `gmail_inbox.md` | Task file receiving one linked task per newly pulled thread. |
-| `gmail.pull.label` | String or unset | `bob` | Gmail label searched by `pull`; unset or empty disables pull. |
+| `gmail.pull.inbox` | Safe relative path inside the vault | `gmail_inbox.md` | Task file receiving one linked task per newly pulled thread. Older spelling of `gmail.sync.inbox`. |
+| `gmail.pull.label` | String or unset | `bob` | Gmail label searched by `pull`; unset or empty disables pull. Older spelling of `gmail.sync.label`. |
 | `gmail.signature` | `gmail` or `none` | `gmail` | Include the account's Gmail signature in remote Gmail drafts, or omit it. The stored-draft preview includes the resulting body. |
+| `gmail.sync.inbox` | Safe relative path inside the vault | `gmail.pull.inbox`, then `gmail_inbox.md` | Task file for unrouted threads and route problems. |
+| `gmail.sync.label` | String or unset | `gmail.pull.label`, then `bob` | Enrollment label; an empty string disables sync. |
+| `gmail.sync.reply_wait_days` | Integer at least 1 | `3` | Calendar days from your send to the awaiting-reply nudge date; changing it never reschedules existing holds. |
+| `gmail.sync.route_prefixes` | Sequence of distinct quoted strings without `/` or whitespace | `[]` (no-prefix mode) | A user label `<prefix>/<note>` routes a thread to that area or project note; `[]` routes by any label that names one. |
 | `gmail.timeout_secs` | Integer greater than 0 | `60` | gog request timeout in seconds. |
 
 A missing `gmail:` block uses those defaults. Unknown keys are ignored. A

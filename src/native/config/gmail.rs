@@ -14,6 +14,7 @@ pub(crate) struct GmailSettings {
     pub(crate) never_save: GmailNeverSave,
     pub(crate) pull: Option<GmailPullSettings>,
     pub(crate) signature: Option<GmailSignature>,
+    pub(crate) sync: Option<GmailSyncSettings>,
     pub(crate) timeout_secs: Option<u64>,
     pub(crate) writer: Option<String>,
 }
@@ -41,11 +42,27 @@ pub(crate) struct GmailNeverSave {
     pub(crate) labels: Vec<String>,
 }
 
-/// `gmail.pull` block.
+/// `gmail.pull` block, the older spelling of `gmail.sync`.
+///
+/// `label` is `None` when the key is unset or null and `Some("")` when it
+/// is explicitly empty, so `gmail.sync.label` can fall back to it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GmailPullSettings {
     pub(crate) inbox: Option<String>,
     pub(crate) label: Option<String>,
+}
+
+/// `gmail.sync` block. Unset keys fall back to `gmail.pull` and then to
+/// the defaults when the command-level config resolves.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct GmailSyncSettings {
+    /// `None` when unset or null; `Some("")` disables sync.
+    pub(crate) label: Option<String>,
+    /// `None` when unset, null, or empty.
+    pub(crate) inbox: Option<String>,
+    /// `None` when unset or null; validated entries otherwise.
+    pub(crate) route_prefixes: Option<Vec<String>>,
+    pub(crate) reply_wait_days: Option<u32>,
 }
 
 impl Default for GmailPullSettings {
@@ -117,6 +134,7 @@ fn parse_gmail_value(
         never_save: parse_never_save(get("never_save"), path)?,
         pull: parse_pull(get("pull"), path)?,
         signature: parse_signature(get("signature"), path)?,
+        sync: parse_sync(get("sync"), path)?,
         timeout_secs: parse_timeout(get("timeout_secs"), path)?,
         writer: optional_string("writer", get("writer"), path)?,
     })
@@ -321,25 +339,133 @@ fn parse_pull(
             )));
         }
     };
-    let label = match get("label") {
-        None | Some(serde_yaml::Value::Null) => None,
+    let label = label_setting("pull.label", get("label"), path)?;
+    Ok(Some(GmailPullSettings { inbox, label }))
+}
+
+/// A label key: `None` when unset or null, `Some("")` when explicitly
+/// empty (which disables the command), else the trimmed name.
+fn label_setting(
+    name: &str,
+    value: Option<serde_yaml::Value>,
+    path: &Path,
+) -> Result<Option<String>, ConfigError> {
+    match value {
+        None | Some(serde_yaml::Value::Null) => Ok(None),
         Some(serde_yaml::Value::String(text)) => {
-            let trimmed = text.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
+            Ok(Some(text.trim().to_string()))
         }
-        Some(other) => {
-            return Err(ConfigError::Invalid(format!(
-                "gmail.pull.label in {} must be a string; got {}",
-                path.display(),
-                render_scalar(&other)
+        Some(other) => Err(ConfigError::Invalid(format!(
+            "gmail.{name} in {} must be a string; got {}",
+            path.display(),
+            render_scalar(&other)
+        ))),
+    }
+}
+
+fn parse_sync(
+    value: Option<serde_yaml::Value>,
+    path: &Path,
+) -> Result<Option<GmailSyncSettings>, ConfigError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let serde_yaml::Value::Mapping(mapping) = value else {
+        return Err(ConfigError::Invalid(format!(
+            "gmail.sync in {} must be a mapping; got {}",
+            path.display(),
+            render_scalar(&value)
+        )));
+    };
+    let get = |name: &str| {
+        let key = serde_yaml::Value::String(name.to_string());
+        mapping.get(&key).cloned()
+    };
+    Ok(Some(GmailSyncSettings {
+        label: label_setting("sync.label", get("label"), path)?,
+        inbox: optional_string("sync.inbox", get("inbox"), path)?,
+        route_prefixes: parse_route_prefixes(get("route_prefixes"), path)?,
+        reply_wait_days: parse_reply_wait_days(get("reply_wait_days"), path)?,
+    }))
+}
+
+/// `gmail.sync.route_prefixes`: distinct non-empty strings without `/` or
+/// whitespace. Unset or null is `None`; `[]` is no-prefix mode.
+fn parse_route_prefixes(
+    value: Option<serde_yaml::Value>,
+    path: &Path,
+) -> Result<Option<Vec<String>>, ConfigError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let invalid = |detail: String| {
+        ConfigError::Invalid(format!(
+            "gmail.sync.route_prefixes in {} {detail}",
+            path.display()
+        ))
+    };
+    let serde_yaml::Value::Sequence(items) = value else {
+        return Err(invalid(format!(
+            "must be a sequence of quoted strings such as [\"#\", \"+\"]; got {}",
+            render_scalar(&value)
+        )));
+    };
+    let mut prefixes: Vec<String> = Vec::with_capacity(items.len());
+    for item in items {
+        let serde_yaml::Value::String(prefix) = item else {
+            return Err(invalid(format!(
+                "must list strings; got {}",
+                render_scalar(&item)
+            )));
+        };
+        if prefix.is_empty() {
+            return Err(invalid("must not list an empty prefix".to_string()));
+        }
+        if prefix.contains('/') || prefix.chars().any(char::is_whitespace) {
+            return Err(invalid(format!(
+                "entries must not contain '/' or whitespace; got {prefix:?}"
             )));
         }
+        if prefixes.contains(&prefix) {
+            return Err(invalid(format!(
+                "entries must be distinct; {prefix:?} repeats"
+            )));
+        }
+        prefixes.push(prefix);
+    }
+    Ok(Some(prefixes))
+}
+
+fn parse_reply_wait_days(
+    value: Option<serde_yaml::Value>,
+    path: &Path,
+) -> Result<Option<u32>, ConfigError> {
+    let Some(value) = value else {
+        return Ok(None);
     };
-    Ok(Some(GmailPullSettings { inbox, label }))
+    if value.is_null() {
+        return Ok(None);
+    }
+    let invalid = || {
+        ConfigError::Invalid(format!(
+            "gmail.sync.reply_wait_days in {} must be an integer >= 1; got {}",
+            path.display(),
+            render_scalar(&value)
+        ))
+    };
+    let serde_yaml::Value::Number(number) = &value else {
+        return Err(invalid());
+    };
+    match number.as_u64().map(u32::try_from) {
+        Some(Ok(days)) if days >= 1 => Ok(Some(days)),
+        _ => Err(invalid()),
+    }
 }
 
 fn parse_string_list(
@@ -461,10 +587,136 @@ mod tests {
     }
 
     #[test]
-    fn empty_pull_label_disables_pull() {
+    fn empty_pull_label_is_kept_apart_from_an_unset_one() {
         let settings =
             parse("gmail:\n  pull:\n    label: \"\"\n").expect("empty label");
         let pull = settings.pull.expect("pull block");
-        assert_eq!(pull.label, None);
+        assert_eq!(pull.label.as_deref(), Some(""));
+        let settings =
+            parse("gmail:\n  pull:\n    inbox: x.md\n").expect("no label");
+        assert_eq!(settings.pull.expect("pull block").label, None);
+    }
+
+    #[test]
+    fn missing_and_null_sync_blocks_are_unset() {
+        assert_eq!(parse("gmail:\n  account: a@b.c\n").unwrap().sync, None);
+        assert_eq!(parse("gmail:\n  sync:\n").unwrap().sync, None);
+        assert_eq!(
+            parse("gmail:\n  sync:\n    label:\n    inbox:\n    route_prefixes:\n    reply_wait_days:\n")
+                .unwrap()
+                .sync,
+            Some(GmailSyncSettings::default())
+        );
+    }
+
+    #[test]
+    fn parses_the_sync_block() {
+        let settings = parse(
+            "gmail:\n  sync:\n    label: bob\n    inbox: gmail_inbox.md\n    route_prefixes: [\"#\", \"+\"]\n    reply_wait_days: 5\n",
+        )
+        .expect("sync block");
+        assert_eq!(
+            settings.sync,
+            Some(GmailSyncSettings {
+                label: Some("bob".to_string()),
+                inbox: Some("gmail_inbox.md".to_string()),
+                route_prefixes: Some(vec!["#".to_string(), "+".to_string()]),
+                reply_wait_days: Some(5),
+            })
+        );
+    }
+
+    #[test]
+    fn sync_label_keeps_an_explicit_empty_value() {
+        let sync = parse("gmail:\n  sync:\n    label: \"  \"\n")
+            .unwrap()
+            .sync
+            .expect("sync block");
+        assert_eq!(sync.label.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn empty_route_prefixes_is_no_prefix_mode() {
+        let sync = parse("gmail:\n  sync:\n    route_prefixes: []\n")
+            .unwrap()
+            .sync
+            .expect("sync block");
+        assert_eq!(sync.route_prefixes, Some(Vec::new()));
+    }
+
+    #[test]
+    fn rejects_bad_sync_values_with_key_names() {
+        for (text, key) in [
+            ("gmail:\n  sync: bob\n", "gmail.sync "),
+            ("gmail:\n  sync: [bob]\n", "gmail.sync "),
+            ("gmail:\n  sync:\n    label: 1\n", "gmail.sync.label"),
+            ("gmail:\n  sync:\n    label: [bob]\n", "gmail.sync.label"),
+            ("gmail:\n  sync:\n    inbox: 3\n", "gmail.sync.inbox"),
+            (
+                "gmail:\n  sync:\n    route_prefixes: \"#\"\n",
+                "gmail.sync.route_prefixes",
+            ),
+            (
+                "gmail:\n  sync:\n    route_prefixes: [1]\n",
+                "gmail.sync.route_prefixes",
+            ),
+            (
+                "gmail:\n  sync:\n    route_prefixes: [\"\"]\n",
+                "gmail.sync.route_prefixes",
+            ),
+            (
+                "gmail:\n  sync:\n    route_prefixes: [\"#/\"]\n",
+                "gmail.sync.route_prefixes",
+            ),
+            (
+                "gmail:\n  sync:\n    route_prefixes: [\"a b\"]\n",
+                "gmail.sync.route_prefixes",
+            ),
+            (
+                "gmail:\n  sync:\n    route_prefixes: [\" #\"]\n",
+                "gmail.sync.route_prefixes",
+            ),
+            (
+                "gmail:\n  sync:\n    route_prefixes: [\"#\", \"#\"]\n",
+                "gmail.sync.route_prefixes",
+            ),
+            (
+                "gmail:\n  sync:\n    reply_wait_days: 0\n",
+                "gmail.sync.reply_wait_days",
+            ),
+            (
+                "gmail:\n  sync:\n    reply_wait_days: -2\n",
+                "gmail.sync.reply_wait_days",
+            ),
+            (
+                "gmail:\n  sync:\n    reply_wait_days: 1.5\n",
+                "gmail.sync.reply_wait_days",
+            ),
+            (
+                "gmail:\n  sync:\n    reply_wait_days: \"3\"\n",
+                "gmail.sync.reply_wait_days",
+            ),
+            (
+                "gmail:\n  sync:\n    reply_wait_days: true\n",
+                "gmail.sync.reply_wait_days",
+            ),
+            (
+                "gmail:\n  sync:\n    reply_wait_days: 99999999999\n",
+                "gmail.sync.reply_wait_days",
+            ),
+        ] {
+            let error = parse(text).expect_err(text);
+            assert!(
+                error.message().contains(key),
+                "{text} names {key}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unquoted_hash_prefix_is_a_yaml_error() {
+        // A bare `#` starts a YAML comment, which leaves the flow sequence
+        // unterminated; the docs tell users to quote prefixes.
+        assert!(parse("gmail:\n  sync:\n    route_prefixes: [#, +]\n").is_err());
     }
 }

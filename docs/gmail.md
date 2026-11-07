@@ -160,10 +160,15 @@ gmail:
   never_save: # threads that never save
     from: [] # addresses or @domains, case-insensitive
     labels: [] # Gmail label names
-  pull:
+  pull: # older spelling of sync.label and sync.inbox
     inbox: gmail_inbox.md # task file for label pulls
     label: bob # unset or empty disables pull
   signature: gmail # gmail | none
+  sync:
+    label: bob # enrollment label; falls back to pull.label, then bob; "" disables sync
+    inbox: gmail_inbox.md # unrouted threads and route problems; falls back to pull.inbox
+    route_prefixes: ["#", "+"] # quote them; absent or [] = no-prefix mode
+    reply_wait_days: 3 # integer >= 1; calendar days after your send
   timeout_secs: 60
   writer: mac-host # optional; the one host label allowed to write
 ```
@@ -195,6 +200,37 @@ gmail:
 - `pull.inbox` must be a safe relative path inside the vault. If it is
   missing, Bob creates it with `parent: "[[inbox]]"`, `type: "[[area]]"`,
   `ready_cap: off`, and a `## Tasks` section.
+- `pull.label` and `pull.inbox` are the older spelling of `sync.label` and
+  `sync.inbox`. They keep working as fallbacks.
+- `sync.label` is the enrollment label: applying it to a thread enrolls the
+  thread once. An unset or null `sync.label` falls back to `pull.label`, then
+  `bob`. An empty string disables sync in either spelling.
+- `sync.inbox` receives unrouted threads and route problems. It falls back to
+  `pull.inbox`, then `gmail_inbox.md`, and must be a safe relative path inside
+  the vault.
+- `sync.route_prefixes` turns on prefix mode. A user label named
+  `<prefix>/<note>` for a listed prefix, such as `#/job` or
+  `+/job_2026_apply_29`, is a routing label. It names one area or project note
+  by stem or `project_name_aliases`, case-insensitively, the way
+  `bob gmail save -P` does.
+  - Quote each entry: a bare `#` starts a YAML comment. Entries must be
+    non-empty and distinct, with no `/` and no whitespace.
+  - A bare `#` parent label, unprefixed labels, and system labels are never
+    routes.
+  - Every routing label on a thread must resolve. One that doesn't is a route
+    problem, even when another label resolves.
+  - Several resolving labels route to their deepest note when they name one
+    note or lie on one `parent:` chain (project → parent project → area).
+    Otherwise the thread is a route problem.
+  - Absent or `[]` is no-prefix mode: every user label except the enrollment
+    label that names an area or project routes, and other labels are ignored.
+  - Route problems are `unknown_note`, `not_area_or_project`,
+    `closed_project`, `ambiguous_alias`, `nested_route` (a `<note>` that
+    contains `/`), and `ambiguous_route`. Bob never creates an area or project
+    note.
+- `sync.reply_wait_days` must be an integer of at least 1. Default 3. It counts
+  calendar days from your send to the awaiting-reply nudge date. Changing it
+  never reschedules existing holds.
 - `signature` is `gmail` (default) or `none`; remote Gmail drafts include the
   account's Gmail signature or omit it. The stored-draft preview shows the result.
 - `timeout_secs` must be an integer greater than 0. Default 60.
@@ -674,7 +710,14 @@ journal readability. Rows look like `bob gcal doctor`:
   consent screens issue 7-day tokens; a Google password change revokes Gmail
   tokens; a token unused for 6 months expires.
 - `scopes`: `readonly` or `readonly+compose`.
-- `config`: folder, body mode, and pull label.
+- `config`: folder, body mode, the sync label and inbox after fallbacks
+  (`sync disabled` when the label is empty), the route prefixes (`none` in
+  no-prefix mode), and the reply wait in days.
+- `routes`: a warning, never a failure. It reads the account's label list once
+  and lists every label under a configured prefix that doesn't resolve, one
+  `label → kind · hint` line each. When all resolve it shows the routing-label
+  count. It is skipped in no-prefix mode, which has no routing labels to audit,
+  and when there is no signed-in account or the token fails.
 - `writer`: this host, or the pin mismatch.
 - `journal`: `.bob/gmail/*.jsonl` tracked and union-merged.
 - `journal_malformed`: malformed lines skipped with a count.

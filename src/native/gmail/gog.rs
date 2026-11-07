@@ -36,6 +36,20 @@ const READONLY_SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly";
 pub(crate) struct GmailLabel {
     pub(crate) id: String,
     pub(crate) name: String,
+    /// Gmail's label `type`: `user` or `system`.
+    #[serde(default, rename = "type")]
+    pub(crate) kind: Option<String>,
+}
+
+impl GmailLabel {
+    /// Whether this is a label the user made. Without a `type`, Gmail's
+    /// `Label_` id prefix (system ids are names such as `INBOX`) decides.
+    pub(crate) fn is_user(&self) -> bool {
+        match self.kind.as_deref() {
+            Some(kind) => kind.eq_ignore_ascii_case("user"),
+            None => self.id.starts_with("Label_"),
+        }
+    }
 }
 
 /// Complete compose input for one draft create/update. Bodies and attachment

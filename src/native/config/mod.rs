@@ -32,6 +32,8 @@ pub(crate) use gcal::{
 pub(crate) use gmail::{
     load_gmail_config, GmailBodyMode, GmailSettings, GmailSignature,
 };
+#[cfg(test)]
+pub(crate) use gmail::{GmailPullSettings, GmailSyncSettings};
 pub(crate) use plan::{load_plan_config, parse_plan_config, PlanConfig};
 // Relation-successor authoring consumers use `LabelEffect`; this phase
 // publishes the policy type before those consumers land.

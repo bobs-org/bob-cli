@@ -270,6 +270,18 @@ impl FakeGog {
             .expect("write fake failure state");
     }
 
+    /// Replace the account's `labels list` response (objects with `id`,
+    /// `name`, and `type`) without changing the scenario defaults.
+    pub(crate) fn set_labels(&self, labels: serde_json::Value) {
+        let mut state: serde_json::Value = fs::read(&self.state)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        state["labels"] = labels;
+        fs::write(&self.state, serde_json::to_vec(&state).unwrap())
+            .expect("write fake labels state");
+    }
+
     /// Simulate an edit made in Gmail itself: replace one header on the
     /// stored synthetic draft without going through Bob.
     pub(crate) fn edit_draft_header(

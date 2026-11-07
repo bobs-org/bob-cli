@@ -303,6 +303,7 @@ mod tests {
             Ok(vec![GmailLabel {
                 id: "promo-id".to_string(),
                 name: "promotions".to_string(),
+                kind: None,
             }])
         }
     }

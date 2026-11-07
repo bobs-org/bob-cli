@@ -1123,6 +1123,9 @@ if op == "labels_list":
         fail("PRIVATE_SENTINEL label lookup failure", 1)
     if scenario in {"labels_malformed", "malformed_json"}:
         sys.stdout.write("{malformed JSON\n")
+    elif state.get("labels") is not None:
+        # A test-supplied label list (FakeGog::set_labels).
+        dump({"labels": state["labels"]})
     else:
         dump(
             {
