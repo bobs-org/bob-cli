@@ -236,8 +236,13 @@ fn run_inner(args: &SaveArgs) -> Result<Vec<StagedSaveNote>, GmailError> {
         )?;
         let event_facts =
             save_event_facts(&vault, &child_env, is_worktree, &plans, &works)?;
-        let auxiliary =
-            plan_auxiliary_files(&vault, folder, is_worktree, &child_env)?;
+        let auxiliary = plan_auxiliary_files(
+            &vault,
+            folder,
+            is_worktree,
+            &child_env,
+            plans.iter().any(|plan| plan.changed),
+        )?;
         let mut staged: Vec<StagedTextFile> = plans
             .iter()
             .filter(|plan| plan.changed)
@@ -878,6 +883,8 @@ fn structural_preview(
                 "started",
                 "updated",
                 "messages",
+                "turn",
+                "turn_since",
                 "gmail_account",
                 "gmail_thread_id",
                 "gmail_url",
@@ -937,9 +944,14 @@ fn structural_preview(
             }
         }
     } else if let Some(new) = new.as_ref() {
-        changes.push(
-            "+ owned metadata fields: title, who, started, updated, messages, gmail_account, gmail_thread_id, gmail_url".to_string(),
-        );
+        let turn_fields = ["turn", "turn_since"]
+            .into_iter()
+            .filter(|key| yaml_field(&new.frontmatter, key).is_some())
+            .map(|key| format!("{key}, "))
+            .collect::<String>();
+        changes.push(format!(
+            "+ owned metadata fields: title, who, started, updated, messages, {turn_fields}gmail_account, gmail_thread_id, gmail_url"
+        ));
         for card in &new.cards {
             changes.push(format!("+ message card {}", card.id));
         }
@@ -1110,11 +1122,16 @@ pub(crate) fn clone_staged(staged: &StagedTextFile) -> StagedTextFile {
     }
 }
 
+/// Plan the mail hubs and the vault `AGENTS.md` warning. Absent hubs are
+/// created. When `writes_note` is true (this write creates or refreshes a
+/// mail note), a hub still byte-identical to an older shipped template is
+/// upgraded to the current one; customized hubs are never touched.
 pub(crate) fn plan_auxiliary_files(
     vault: &Path,
     folder: &Path,
     is_worktree: bool,
     child_env: &ob::ChildEnv,
+    writes_note: bool,
 ) -> Result<AuxiliaryFiles, GmailError> {
     let mut staged = Vec::new();
     let mut commit_paths = Vec::new();
@@ -1131,19 +1148,34 @@ pub(crate) fn plan_auxiliary_files(
                         ),
                     ));
                 }
+                let existing = fs::read(&target).map_err(|error| {
+                    GmailError::runtime(
+                        "write",
+                        format!(
+                            "could not read {}: {error}",
+                            relative.display()
+                        ),
+                    )
+                })?;
+                if writes_note
+                    && let Some(upgraded) =
+                        note::hub::upgrade(&relative, &existing)
+                {
+                    staged.push(StagedTextFile {
+                        target,
+                        target_existed: true,
+                        original_target: String::from_utf8_lossy(&existing)
+                            .into_owned(),
+                        updated_target: upgraded.to_string(),
+                    });
+                    commit_paths.push(relative);
+                    continue;
+                }
                 // A prior commit attempt may have left a canonical hub
                 // staged. Include it on retry, while leaving clean or
                 // customized hubs outside this save's path-scoped commit.
                 if is_worktree {
-                    let is_canonical = fs::read(&target).map_err(|error| {
-                        GmailError::runtime(
-                            "write",
-                            format!(
-                                "could not read {}: {error}",
-                                relative.display()
-                            ),
-                        )
-                    })? == template.as_bytes();
+                    let is_canonical = existing == template.as_bytes();
                     is_canonical
                         && git_path_is_dirty(vault, child_env, &relative)
                             .map_err(|error| {

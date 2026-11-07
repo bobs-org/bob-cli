@@ -179,9 +179,11 @@ pub(crate) fn parse(contents: &str) -> Result<ParsedNote, NoteError> {
         begin_inner_start: begin_line.end,
         end_inner_start: end_line.start,
         heading: heading_line.content.clone(),
-        heading_range: heading_line.start..heading_line.end,
+        // Content ranges exclude the line ending, so a refresh that rewrites
+        // the title or summary keeps the blank lines around them.
+        heading_range: heading_line.start..heading_line.content_end,
         summary: summary_line.content.clone(),
-        summary_range: summary_line.start..summary_line.end,
+        summary_range: summary_line.start..summary_line.content_end,
         cards,
     })
 }
@@ -202,6 +204,8 @@ pub(crate) fn metadata_matches(
         && scalar(frontmatter, "updated").as_deref() == Some(&metadata.updated)
         && scalar(frontmatter, "messages").as_deref()
             == Some(&metadata.messages.to_string())
+        && scalar(frontmatter, "turn") == metadata.turn
+        && scalar(frontmatter, "turn_since") == metadata.turn_since
         && scalar(frontmatter, "content").as_deref() == Some(&metadata.content)
 }
 
@@ -223,6 +227,18 @@ pub(crate) fn set_owned_metadata(
     set(mapping, "started", Value::String(metadata.started.clone()));
     set(mapping, "updated", Value::String(metadata.updated.clone()));
     set(mapping, "messages", Value::Number(metadata.messages.into()));
+    set_optional_after(
+        mapping,
+        "turn",
+        metadata.turn.clone().map(Value::String),
+        "messages",
+    );
+    set_optional_after(
+        mapping,
+        "turn_since",
+        metadata.turn_since.clone().map(Value::String),
+        "turn",
+    );
     set(
         mapping,
         "gmail_account",
@@ -341,6 +357,36 @@ fn set(mapping: &mut Mapping, key: &str, value: Value) {
     mapping.insert(Value::String(key.to_string()), value);
 }
 
+/// Set `key` in place when present, or insert it right after `after` (at the
+/// end when `after` is absent). `None` removes the key and keeps the order of
+/// every other key.
+fn set_optional_after(
+    mapping: &mut Mapping,
+    key: &str,
+    value: Option<Value>,
+    after: &str,
+) {
+    let key = Value::String(key.to_string());
+    let Some(value) = value else {
+        mapping.shift_remove(&key);
+        return;
+    };
+    let after = Value::String(after.to_string());
+    if mapping.contains_key(&key) || !mapping.contains_key(&after) {
+        mapping.insert(key, value);
+        return;
+    }
+    let mut reordered = Mapping::with_capacity(mapping.len() + 1);
+    for (existing_key, existing_value) in std::mem::take(mapping) {
+        let anchor = existing_key == after;
+        reordered.insert(existing_key, existing_value);
+        if anchor {
+            reordered.insert(key.clone(), value.clone());
+        }
+    }
+    *mapping = reordered;
+}
+
 fn is_hex(value: &str) -> bool {
     !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
@@ -370,6 +416,8 @@ mod tests {
             parsed.summary,
             "· Dana ↔ you · 1 messages · Sep 19 → Sep 19"
         );
+        assert_eq!(&NOTE[parsed.heading_range.clone()], parsed.heading);
+        assert_eq!(&NOTE[parsed.summary_range.clone()], parsed.summary);
     }
 
     #[test]

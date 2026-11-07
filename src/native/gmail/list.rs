@@ -443,6 +443,8 @@ fn print_report(args: &ListArgs, report: &ListReport) {
                     "started": row.entry.started,
                     "updated": row.entry.updated,
                     "messages": row.entry.messages,
+                    "turn": row.entry.turn,
+                    "turn_since": row.entry.turn_since,
                     "backlinks": row.backlinks,
                 });
                 if args.remote {
@@ -631,6 +633,8 @@ mod tests {
             started: "2026-09-19T13:46:32+00:00".to_string(),
             updated: updated.to_string(),
             messages,
+            turn: None,
+            turn_since: None,
         }
     }
 

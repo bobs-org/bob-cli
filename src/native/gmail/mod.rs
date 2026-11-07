@@ -28,6 +28,7 @@ pub(crate) mod resolve;
 mod route;
 mod save;
 pub(crate) mod search_peek;
+pub(crate) mod turn;
 pub(crate) mod ui;
 pub(crate) mod worker;
 pub(crate) use crate::native::google::{

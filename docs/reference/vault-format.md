@@ -582,6 +582,11 @@ Saved Gmail threads use `type: "[[mail]]"` and default to
 `mail/YYYY/YYMMDD_subject_slug.md`, dated from the first message in the
 configured timezone. Filename collisions add `_2`, `_3`, etc. Identity is
 `gmail_account` plus `gmail_thread_id`; refresh keeps the original path.
+After `messages`, Bob writes `turn` (`yours` when the newest counted message is
+theirs or a bounce, `theirs` when Bryan wrote last) and `turn_since` (that
+message's local time), omitting both when nobody has moved or the order is
+unknown. The root `mail.base` adds a Waiting for reply view of the
+`turn: theirs` notes.
 Messages are inert content inside Bob's managed region, with user notes
 outside it. Tasks link to the mail note rather than copying its body.
 Local compose notes and Reply

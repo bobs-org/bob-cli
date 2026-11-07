@@ -366,6 +366,75 @@ mod tests {
         assert!(merge(&original_two.content, &reordered, false).is_err());
     }
 
+    #[test]
+    fn turn_fields_follow_messages_and_a_changed_turn_is_a_refresh() {
+        let thread = GmailThread {
+            id: "aabbccddeeff0011".to_string(),
+            history_id: None,
+            messages: vec![message("aabbccddeeff0011", "1799847992000", "One")],
+        };
+        let fresh = note(&thread, GmailBodyMode::Full);
+        assert!(fresh
+            .content
+            .contains("messages: 1\nturn: yours\nturn_since: "));
+
+        // A note saved before the turn fields gains them right after
+        // `messages`, and that alone counts as a refresh.
+        let legacy = drop_lines(&fresh.content, &["turn:", "turn_since:"]);
+        let merged = merge(&legacy, &fresh, false).unwrap().unwrap();
+        assert_eq!(merged, fresh.content);
+
+        // A stale turn is rewritten in place.
+        let stale = fresh.content.replace("turn: yours", "turn: theirs");
+        let merged = merge(&stale, &fresh, false).unwrap().unwrap();
+        assert_eq!(merged, fresh.content);
+
+        // An unknown verdict removes both fields and keeps every other key
+        // where it was.
+        let mut undated = thread.clone();
+        undated.messages[0].internal_date = None;
+        undated.messages[0].headers.push(Header {
+            name: "Date".to_string(),
+            value: "Sat, 07 Nov 2026 10:00:00 +0000".to_string(),
+        });
+        let unknown = note(&undated, GmailBodyMode::Full);
+        assert!(!unknown.content.contains("turn"));
+        let merged = merge(&fresh.content, &unknown, false).unwrap().unwrap();
+        assert!(!merged.contains("turn"));
+        assert!(merged.contains("messages: 1\ngmail_account:"));
+    }
+
+    #[test]
+    fn repeated_refreshes_keep_the_blank_lines_around_title_and_summary() {
+        let mut thread = GmailThread {
+            id: "aabbccddeeff0011".to_string(),
+            history_id: None,
+            messages: vec![message("aabbccddeeff0011", "1799847992000", "One")],
+        };
+        let mut text = note(&thread, GmailBodyMode::Full).content;
+        for (id, date) in [
+            ("bbbbccddeeff0022", "1799848200000"),
+            ("ccccccddeeff0033", "1799848300000"),
+        ] {
+            thread.messages.push(message(id, date, "More"));
+            text = merge(&text, &note(&thread, GmailBodyMode::Full), false)
+                .unwrap()
+                .unwrap();
+        }
+        assert!(text.contains("\n\n# Lease\n\n[Open in Gmail ↗]("));
+        assert!(text.contains(" · 3 messages · "));
+        assert!(text.contains("→ Jan 13, 2027\n\n## Notes\n"));
+        assert!(parse::parse(&text).is_ok());
+    }
+
+    fn drop_lines(text: &str, prefixes: &[&str]) -> String {
+        text.split_inclusive('\n')
+            .filter(|line| {
+                !prefixes.iter().any(|prefix| line.starts_with(prefix))
+            })
+            .collect()
+    }
+
     fn with_parent(note: &str, parent: &str) -> String {
         let mut frontmatter = parse::parse_frontmatter_only(note).unwrap();
         frontmatter.as_mapping_mut().unwrap().insert(

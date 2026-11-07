@@ -20,6 +20,9 @@ pub(crate) struct MailIndexEntry {
     pub(crate) started: String,
     pub(crate) updated: String,
     pub(crate) messages: u64,
+    /// `yours` or `theirs`, when the note records whose turn it is.
+    pub(crate) turn: Option<String>,
+    pub(crate) turn_since: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -90,6 +93,9 @@ pub(crate) fn scan(
             messages: field(&frontmatter, "messages")
                 .and_then(|value| value.parse::<u64>().ok())
                 .unwrap_or(0),
+            turn: field(&frontmatter, "turn")
+                .filter(|turn| matches!(turn.as_str(), "yours" | "theirs")),
+            turn_since: field(&frontmatter, "turn_since"),
         };
         found
             .entry((account.to_ascii_lowercase(), entry.thread_id.clone()))

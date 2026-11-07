@@ -226,7 +226,15 @@ impl Gog {
         parse_sent_receipt(&output.stdout)
     }
 
-    /// Fetch a thread's headers and message dates without requesting bodies.
+    /// Fetch a thread for its headers, labels, and message dates.
+    ///
+    /// gog's `gmail thread get` has no metadata-only mode: it always asks
+    /// Gmail for the `full` format, so every message carries all of its
+    /// headers (the turn classifier needs `From`, `To`, `Cc`, `Bcc`,
+    /// `Auto-Submitted`, `X-Autoreply`, `X-Autorespond`, `Precedence`, and
+    /// `Content-Type`), and the JSON also carries body parts. Callers of this
+    /// entry point read only identity, labels, dates, headers, and snippets;
+    /// it omits `--full`, which changes only gog's human output.
     pub(crate) fn thread_metadata(
         &self,
         account: &str,
@@ -239,8 +247,6 @@ impl Gog {
                 OsString::from("thread"),
                 OsString::from("get"),
                 OsString::from(hex),
-                OsString::from("--format"),
-                OsString::from("metadata"),
             ],
         )?;
         GmailThread::from_gog_json(stdout.as_bytes())

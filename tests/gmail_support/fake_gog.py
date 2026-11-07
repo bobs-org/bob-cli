@@ -969,6 +969,10 @@ if op == "api_call":
     raise SystemExit(0)
 
 if op == "thread_get":
+    # Real gog (v0.44 through v0.48) has no `thread get --format` flag.
+    if "--format" in args:
+        sys.stderr.write("unknown flag --format\n")
+        raise SystemExit(2)
     state = load_state()
     if "thread" in state:
         dump(state["thread"])
@@ -981,7 +985,9 @@ if op == "thread_get":
         raise SystemExit(0)
     if scenario == "thread_mismatch":
         hex_id = "aaaaaaaaaaaaaaaa"
-    if flag_value("--format") == "metadata":
+    # Bob's metadata reads are the thread gets without `--full`; real gog
+    # returns Gmail's full format either way.
+    if "--full" not in args:
         if scenario in {"metadata_malformed", "malformed_json"}:
             sys.stdout.write("{malformed JSON\n")
             raise SystemExit(0)

@@ -70,9 +70,11 @@ fn search_defaults_to_recent_inbox_caps_results_and_sanitizes_metadata() {
     assert!(search.iter().any(|item| item == "in:inbox newer_than:30d"));
     let metadata = thread_get_calls(&fake);
     assert_eq!(metadata.len(), 2);
-    assert!(metadata.iter().all(|call| call
-        .windows(2)
-        .any(|items| items == ["--format", "metadata"])));
+    // Real gog's `thread get` has no `--format`; omitting `--full` marks the
+    // metadata read.
+    assert!(metadata
+        .iter()
+        .all(|call| !call.iter().any(|item| item == "--format")));
     assert!(metadata
         .iter()
         .all(|call| !call.iter().any(|item| item == "--full")));
@@ -175,7 +177,7 @@ fn list_remote_shows_live_new_message_count() {
     assert_eq!(document["threads"][0]["messages"], 1);
     assert_eq!(document["threads"][0]["new_messages"], 1);
     assert_eq!(thread_get_calls(&fake).len(), 1);
-    assert!(thread_get_calls(&fake)[0]
-        .windows(2)
-        .any(|items| items == ["--format", "metadata"]));
+    assert!(!thread_get_calls(&fake)[0]
+        .iter()
+        .any(|item| item == "--format" || item == "--full"));
 }

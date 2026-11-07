@@ -311,9 +311,40 @@ Mail notes are append-only snapshots. Refresh adds new message cards and
 updates Bob-owned metadata while preserving authored text. Malformed markers,
 reordered messages, duplicate identities, policy refusals, and path conflicts
 stop before overwriting notes. A save commits only changed mail notes, imported
-images, and newly created `mail.md` / `mail.base` hubs. Save journals are
-appended after the commit (or after durable writes in a non-Git vault).
+images, newly created `mail.md` / `mail.base` hubs, and an upgraded
+`mail.base`. Save journals are appended after the commit (or after durable
+writes in a non-Git vault).
 `gmail.writer` blocks writes on other hosts; dry-run remains available there.
+
+Every save or refresh also records whose turn the thread is in, in two
+frontmatter fields right after `messages`:
+
+- `turn: yours` when the newest counted message is theirs or a bounce, so the
+  ball is in your court; `turn: theirs` when you wrote last.
+- `turn_since`: the local time of that message.
+
+Bob classifies each message from metadata only, first match wins:
+
+| Message                                                                                         | Class          |
+| ----------------------------------------------------------------------------------------------- | -------------- |
+| Labelled `DRAFT`                                                                                | ignored        |
+| `SENT`, or `From` is the account, and every To/Cc/Bcc address is the account                    | ignored (self) |
+| `SENT`, or `From` is the account, with another recipient                                        | your move      |
+| `From` is `mailer-daemon@` / `postmaster@`, or `multipart/report; report-type=delivery-status`  | bounce         |
+| `Auto-Submitted` other than `no`, `X-Autoreply`, `X-Autorespond`, or `Precedence: auto_reply`   | automated      |
+| Anything else with a sender address                                                             | their move     |
+
+Messages are ordered by Gmail's `internalDate`, with thread order breaking
+ties. Automated and ignored messages never decide the turn. Both fields are
+omitted when nobody has made a move, when a message lacks `internalDate`, or
+when the newest message has no `SENT` label and no sender address. A changed
+turn counts as a refresh.
+
+`mail.base` has two table views. Mail lists every saved thread. Waiting for
+reply lists the notes with `turn == "theirs"`, oldest `turn_since` first, with
+`title`, `who`, `turn_since`, and backlinks. A `mail.base` still byte-identical
+to the earlier one-view template is upgraded in the same write that creates or
+refreshes a mail note. Bob never touches a customized `mail.base`.
 
 The dry-run preview lists note paths, changed owned metadata field names,
 message-card identifiers, folding changes, and referenced or newly written
@@ -559,8 +590,9 @@ frontmatter is read; bodies never enter the index. The default table shows
 the 20 newest threads; `-a` shows all. Table columns are `updated`, `subject`,
 `who`, `messages`, and `backlinks`. JSON (`-f json`) carries the same fields
 plus the account/thread identity, note path, labelled wikilink, `started`,
-`schema_version`, and `ok`, with `total`, `shown`, and `truncated` for
-paging.
+`turn`, `turn_since`, `schema_version`, and `ok`, with `total`, `shown`, and
+`truncated` for paging. `turn` and `turn_since` are `null` when the note
+records no turn.
 
 `backlinks` counts the distinct vault notes whose `[[target]]` wikilink
 resolves to the saved note. Aliases (`[[target|label]]`) and heading/block
@@ -609,8 +641,8 @@ scans the whole vault instead: mail notes, `_generated/`, `_conflicts/`,
 
 Add `-r|--remote` to compare each displayed thread's current Gmail message
 count with its saved note; the table shows `+N new`, and JSON adds
-`new_messages`. This option makes one metadata-only Gmail read per displayed
-row. It is uncached so the count is current.
+`new_messages`. This option makes one Gmail thread read per displayed row and
+uses only its message identities. It is uncached so the count is current.
 
 ## Search
 
@@ -756,8 +788,10 @@ Every `-f json` output carries `schema_version: 1` and `ok`. Errors are typed
 - Bodies and raw MIME appear only in mail notes. Attachment bytes stay in
   memory until Bob writes the imported vault file; they never appear in argv,
   logs, the Gmail journal, or JSON errors. Search shows only a capped, inert
-  snippet. Peek and list `--remote` fetch headers and dates only. The preview
-  cache stores no snippets. Reads never pass `--sanitize-content` or
+  snippet. Search, peek, and list `--remote` use only headers, labels, dates,
+  and snippets. gog's `gmail thread get` has no metadata-only mode, so its
+  response also carries body parts; Bob discards them. The preview cache
+  stores no snippets. Reads never pass `--sanitize-content` or
   `--wrap-untrusted`.
 - `gmail.compose` also permits sending. Bob never sends without a Gmail draft
   plus a digest-bound confirmation, and keeps that grant off agent hosts.

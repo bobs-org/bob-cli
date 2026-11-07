@@ -465,7 +465,7 @@ checkout: they expose no `--format json` or `--json` flag.
 | `bob gkeep migrate-tasks` | `-f json` | Link-repair plan for open tasks | `schema_version: 1` | [Bob Gkeep](../gkeep.md) |
 | `bob gkeep pull` | `-f json` | Inbox import report | `schema_version: 1` | [Bob Gkeep](../gkeep.md) |
 | `bob gkeep status` | `-f json` (default is `human`) | Cached Keep pull count, check state, and open inbox count | `schema_version: 1` | [Bob Gkeep](../gkeep.md#states-and-the-json-document) |
-| `bob gmail` and `bob gmail list` | `-f json` (default is `table`) | Saved threads, `total`, `shown`, and `truncated`; `-r` adds `new_messages` (remote count minus saved count, floored at zero) | `schema_version: 1` | [List](../gmail.md#list) |
+| `bob gmail` and `bob gmail list` | `-f json` (default is `table`) | Saved threads with `turn` and `turn_since` (`null` when unrecorded), `total`, `shown`, and `truncated`; `-r` adds `new_messages` (remote count minus saved count, floored at zero) | `schema_version: 1` | [List](../gmail.md#list) |
 | `bob gmail save` | `-f json` | `dry_run`, `results[]`, and `warnings`; each result includes identity, note, link, status, and message counts. Dry runs add per-result `preview`; a single result also exposes `note`, `link`, and any `preview` at the top level | `schema_version: 1` | [Save](../gmail.md#save) |
 | `bob gmail search` | `-f json` (default is `table`) | `query`, `shown`, `limit`, and metadata-only `threads[]` with optional saved-note matches | `schema_version: 1` | [Search](../gmail.md#search) |
 | `bob gmail peek` | `-f json` | Identity verdict, thread metadata, saved note, label, and message; no body or vault writes | `schema_version: 1` | [Peek](../gmail.md#peek) |

@@ -1033,8 +1033,13 @@ fn commit_link(
             saved_at,
             timezone,
         )?;
-        let auxiliary =
-            save::plan_auxiliary_files(vault, folder, is_worktree, &child_env)?;
+        let auxiliary = save::plan_auxiliary_files(
+            vault,
+            folder,
+            is_worktree,
+            &child_env,
+            plans.iter().any(|plan| plan.changed),
+        )?;
         let targets = link_targets(vault, &plans);
         let (mut source_staged, applied, dropped, _) =
             plan_source_swaps(vault, &grouped, &targets, false)?;
@@ -1243,8 +1248,13 @@ fn persist_mail_only(
         saved_at,
         timezone,
     )?;
-    let auxiliary =
-        save::plan_auxiliary_files(vault, folder, is_worktree, child_env)?;
+    let auxiliary = save::plan_auxiliary_files(
+        vault,
+        folder,
+        is_worktree,
+        child_env,
+        plans.iter().any(|plan| plan.changed),
+    )?;
     let mut staged: Vec<StagedTextFile> = plans
         .iter()
         .filter(|plan| plan.changed)

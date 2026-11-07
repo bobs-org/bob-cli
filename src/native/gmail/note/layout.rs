@@ -11,6 +11,7 @@ use crate::native::gmail::{
     body::{importable_messages, inert_single_line, RenderedBody},
     ids,
     model::{GmailMessage, GmailThread, HeaderKind},
+    turn,
 };
 
 use super::{text, NoteError};
@@ -37,6 +38,11 @@ pub(crate) struct NoteMetadata {
     pub(crate) saved: String,
     pub(crate) started: String,
     pub(crate) title: String,
+    /// `yours` or `theirs`; absent when nobody has moved or the order or
+    /// direction can't be established.
+    pub(crate) turn: Option<String>,
+    /// The local time of the message that set `turn`.
+    pub(crate) turn_since: Option<String>,
     pub(crate) updated: String,
     pub(crate) who: String,
 }
@@ -68,6 +74,10 @@ struct Frontmatter<'a> {
     started: &'a str,
     updated: &'a str,
     messages: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    turn: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    turn_since: Option<&'a str>,
     gmail_account: &'a str,
     gmail_thread_id: &'a str,
     gmail_url: &'a str,
@@ -125,6 +135,21 @@ pub(crate) fn render(
         .format("%Y-%m-%dT%H:%M:%S%:z")
         .to_string();
     let gmail_url = ids::canonical_url(input.account, &thread_id);
+    // The turn reads every message Gmail returned, drafts included: the
+    // classifier ignores drafts itself.
+    let thread_turn = turn::fold(&input.thread.messages, input.account, None);
+    let (turn, turn_since) = match (thread_turn.turn, thread_turn.turn_since) {
+        (Some(turn), Some(since)) => (
+            Some(turn.as_str().to_string()),
+            Some(
+                since
+                    .with_timezone(&input.timezone)
+                    .format("%Y-%m-%dT%H:%M:%S%:z")
+                    .to_string(),
+            ),
+        ),
+        _ => (None, None),
+    };
     let metadata = NoteMetadata {
         account: inert_single_line(input.account),
         content: "untrusted-email".to_string(),
@@ -134,6 +159,8 @@ pub(crate) fn render(
         saved,
         started,
         title,
+        turn,
+        turn_since,
         updated,
         who,
     };
@@ -190,6 +217,8 @@ fn assemble(
         started: &metadata.started,
         updated: &metadata.updated,
         messages: metadata.messages,
+        turn: metadata.turn.as_deref(),
+        turn_since: metadata.turn_since.as_deref(),
         gmail_account: &metadata.account,
         gmail_thread_id: &metadata.gmail_thread_id,
         gmail_url: &metadata.gmail_url,
@@ -644,6 +673,61 @@ mod tests {
         assert!(note.content.contains("> [!mail-sent+] **You**"));
         assert!(note.content.contains("^m-19a4b0c2d3e4f501"));
         assert!(note.content.contains("https://mail.google.com/mail/?authuser=you%40example.com#all/199c3f1e8b2d4a10"));
+        // Bryan wrote last, so the thread waits on Dana. The fields follow
+        // `messages` and carry the local time of that message.
+        assert!(note.content.contains(
+            "messages: 2\nturn: theirs\nturn_since: 2027-01-13T08:50:00-05:00\ngmail_account:"
+        ));
+        assert_eq!(note.metadata.turn.as_deref(), Some("theirs"));
+    }
+
+    #[test]
+    fn turn_fields_are_omitted_when_nobody_has_moved_or_order_is_unknown() {
+        let mut auto = message(
+            "aabbccddeeff0011",
+            "1799847992000",
+            "Dana <dana@example.com>",
+            "you@example.com",
+            "Away",
+            "I am away.",
+        );
+        auto.thread_id = "aabbccddeeff0011".to_string();
+        auto.headers.push(header("Auto-Submitted", "auto-replied"));
+        let mut thread = GmailThread {
+            id: "aabbccddeeff0011".to_string(),
+            history_id: None,
+            messages: vec![auto],
+        };
+        let render_thread = |thread: &GmailThread| {
+            let bodies = rendered(&thread.messages);
+            render(&LayoutInput {
+                account: "you@example.com",
+                body_mode: GmailBodyMode::Full,
+                current_year: 2026,
+                parent: "[[mail]]",
+                rendered: &bodies,
+                saved_at: Utc.timestamp_millis_opt(1799848500000).unwrap(),
+                thread,
+                timezone: chrono_tz::UTC,
+            })
+            .unwrap()
+        };
+        let note = render_thread(&thread);
+        assert!(!note.content.contains("turn"));
+        assert_eq!(note.metadata.turn, None);
+        assert_eq!(note.metadata.turn_since, None);
+
+        // A message without internalDate still renders from its Date header,
+        // but the turn can't be ordered.
+        thread.messages[0]
+            .headers
+            .retain(|h| h.name != "Auto-Submitted");
+        thread.messages[0].internal_date = None;
+        thread.messages[0]
+            .headers
+            .push(header("Date", "Sat, 07 Nov 2026 10:00:00 +0000"));
+        let note = render_thread(&thread);
+        assert!(!note.content.contains("turn"));
     }
 
     #[test]

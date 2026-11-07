@@ -945,6 +945,8 @@ mod tests {
                 started: String::new(),
                 updated: String::new(),
                 messages: 0,
+                turn: None,
+                turn_since: None,
             },
         );
         let duplicate = resolve_identity(
@@ -1048,6 +1050,8 @@ mod tests {
                 started: String::new(),
                 updated: String::new(),
                 messages: 0,
+                turn: None,
+                turn_since: None,
             },
         );
         let known = resolve_identity(
