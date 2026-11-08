@@ -2372,6 +2372,18 @@ fn parse_capture_item_masked<'a>(
     } else {
         resolve_line(parent_tokens, true, detect_route)?
     };
+    if let Some(route) = parent_outcome.route.as_ref()
+        && let CaptureKind::Pomodoro {
+            start: Some(start), ..
+        } = &route.token.kind
+        && let Some(message) = pomodoro_link_operator_body_error(
+            parent_line.raw.text,
+            &parent_outcome.body,
+            &start.raw,
+        )
+    {
+        return Err(message);
+    }
     if let Some(target_run) = target_run
         && target_run.line == parent_line.line_number
     {
@@ -3985,6 +3997,41 @@ pub(super) fn is_session_chain_token(token: &str) -> bool {
         }
         None => false,
     }
+}
+
+/// Reject a link-start body made only of session operators and suggest the
+/// equivalent glued later timing for the one unambiguous `++[N]` case.
+pub(super) fn pomodoro_link_operator_body_error(
+    parent_text: &str,
+    body: &str,
+    start_suffix: &str,
+) -> Option<String> {
+    let operators: Vec<_> = body.split_whitespace().collect();
+    if operators.is_empty()
+        || !operators.iter().all(|token| is_session_chain_token(token))
+    {
+        return None;
+    }
+    let fold = if operators.len() == 1
+        && operators[0].starts_with("++")
+        && start_suffix
+            .bytes()
+            .all(|byte| !matches!(byte, b'+' | b'-'))
+    {
+        let count = &operators[0][2..];
+        let marker = parent_text.split_whitespace().next().unwrap_or_default();
+        marker.find('=').map(|_| format!("{marker}+{count}"))
+    } else {
+        None
+    };
+    Some(match fold {
+        Some(folded) => format!(
+            "session operators after a Pomodoro link start are not task text; fold this shift into the start as `{folded}`"
+        ),
+        None => format!(
+            "session operators after a Pomodoro link start are not task text; put them on their own capture item (in `{parent_text}`, keep the link start as one item)"
+        ),
+    })
 }
 
 /// Whether a whitespace-free token is a close-hash near miss: bare lowercase

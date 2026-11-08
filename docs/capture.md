@@ -1179,7 +1179,7 @@ uses the normal successor-offer shape with `trigger: "note_pull"`, an empty
 `pull_in.groups[]` row carries `note` and Bob-authored copy. Capture remains
 unversioned; `capture-parse` reports `mode: "note_pull"`, `needs: []`, no
 diagnostics, the route spans, and the ordinary list summary with
-`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 18`.
+`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 19`.
 See [task-dependencies.md §12.20](task-dependencies.md#1220-note-pull-offers)
 for the JSON, copy, gate, and protocol contracts, and
 [§12.21](task-dependencies.md#1221-np-note-pull-vectors) for the NP vectors.
@@ -1709,6 +1709,15 @@ are rejected with messages naming the `@route^block-id@` project-note and
 `@route+block-id!` toggle spellings. A `@@` declaration never applies to a
 `^` item. Body-bearing `<text> @route:block-id[#name][=<X>]` keeps its exact
 current new-task meaning.
+
+After a link-start marker, a first-line remainder made only of session-operator
+tokens is refused as `invalid_pomodoro_link`, ranged on the operators, rather
+than captured as a task body. Fold one `++[N]` shift into an unsigned suffix:
+`@foo:bar= ++3` becomes `@foo:bar=+3`, and
+`@foo:bar=fix2 ++` becomes `@foo:bar=fix2+`; `^route:block-id=<X> ++N`
+gets the same hint. For other operator-only remainders, put the operators on
+their own capture item. Prose such as `@foo:bar= Fix the ++3 bug` remains a
+task body.
 
 An explicit Pomodoro name on a whole-item existing-task link also lands by
 merging as described above. This includes the `^route:block-id` active-task
@@ -6679,7 +6688,9 @@ merge hand-off offer rows, omitted when empty) and `repaired_files[]`;
 ordinary items omit the empty fields. Merge-only offers get their own Pull-In
 copy (`Link “T” in place of “S”` / `Link “T” in place of N merged tasks`), and
 the CLI's dependent rows print titles from `consequences`.
-`capture-parse` and `capture-complete` report grammar revision 18. Grammar 18
+`capture-parse` and `capture-complete` report grammar revision 19. Grammar 19
+refuses an operator-only first-line body after an existing-task link start,
+teaching a glued later-start `+` for a single `++[N]` operator. Grammar 18
 treats trailing `+` after a bare start name as later-start timing (`=fix2+`,
 `=bugs+2`) and uses `#` for names that end in `+` (`=#c++`). Grammar 17
 adds signed later offsets to whole-item, named, and linked Pomodoro starts,
@@ -8069,7 +8080,7 @@ bob capture-parse [-f|--format human|json] [-R|--no-ref] [--] [TEXT]...
 
 Reports the authoritative capture grammar's reading of `TEXT` so an editor can
 highlight capture syntax and Obsidian wikilinks while the user is still typing.
-Success JSON includes top-level `grammar: 18` while keeping `schema_version: 1`.
+Success JSON includes top-level `grammar: 19` while keeping `schema_version: 1`.
 It shares the tokenizer, terminal-marker extraction, and `@token`
 classification with `bob capture`. Parse does not validate vault targets
 or execute the draft, so a successful parse does not guarantee a capture
@@ -8614,7 +8625,7 @@ ALL-CAPS literal with nested notes under a new task or an existing
 `@route+id` target, ranged on the bullet's name; never on a new project note,
 and structural `^prj` headings or near-duplicates stay commit-time, because
 only the vault knows),
-`invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `invalid_pomodoro_name`, `invalid_pomodoro_start` (a malformed `=<X>` suffix, one on a project-note `@` form, a whole-item start near miss such as `=3 more` or `=3x`, or a whole-item named-start near miss such as `=bugs=3`, `=deep work`, or `=3bugs more`, with the range on the extra text, child line, name, or token for overflow), `invalid_pomodoro_adjustment` (a zero magnitude, an overflow, or extra text/markers/child lines on an adjustment-first item), `invalid_pomodoro_shift` (a zero magnitude, an overflow, or extra text/markers/child lines on a shift-first item), `invalid_pomodoro_close` (a leading selection-shaped token with extra text/markers/child lines, a malformed task-number list, `#name=x…`, a project-note `=x`, or an `s:<N>`/`$<N>`/`%` conflict on a close item, with the range on the extra text, child line, offending list part, `#name`, or conflicting marker), `invalid_pomodoro_link` (a near miss or conflict on a solo `@route:block-id…` / `^route:block-id…` item, such as extra text, authored children, or terminal markers on a complete shape), `invalid_project_note_marker` (a project-note shape error: a misordered `@`, a `#name` without its `@` seal, text after the seal, or an `=` suffix), `retired_project_note_marker` (a `+` project-note spelling, teaching both `@`-sealed forms), `misplaced_project_task_id` (a task ID on the parent line or a nested bullet), `invalid_project_task_id` (a malformed, reserved, empty-body, or checkbox-bearing ` :` / ` ^` task ID), `duplicate_project_task_id` (two equal IDs in one list or item, naming both lines), `empty_list` (a list header with no bullets), `list_header_marker` (item-wide markers on a list header line, which stands alone), `list_bullet_marker` (a route-changing marker on a list bullet), `list_bullet_checkbox` (a non-open checkbox on a list bullet), `template_list` (a list header in a `%t` template body), `unused_project_note_pomodoro` (a `^`-form `#name` with no ` :` task, ranged on the name; the `:` offer form is never flagged at parse time, and `bob capture` refuses its `#name` only when the note has nothing to offer or link), `unsupported_explicit_toggle`, `retired_priority_marker` (a typed `p:<N>` token, teaching `$<N>`),
+`invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `invalid_pomodoro_name`, `invalid_pomodoro_start` (a malformed `=<X>` suffix, one on a project-note `@` form, a whole-item start near miss such as `=3 more` or `=3x`, or a whole-item named-start near miss such as `=bugs=3`, `=deep work`, or `=3bugs more`, with the range on the extra text, child line, name, or token for overflow), `invalid_pomodoro_adjustment` (a zero magnitude, an overflow, or extra text/markers/child lines on an adjustment-first item), `invalid_pomodoro_shift` (a zero magnitude, an overflow, or extra text/markers/child lines on a shift-first item), `invalid_pomodoro_close` (a leading selection-shaped token with extra text/markers/child lines, a malformed task-number list, `#name=x…`, a project-note `=x`, or an `s:<N>`/`$<N>`/`%` conflict on a close item, with the range on the extra text, child line, offending list part, `#name`, or conflicting marker), `invalid_pomodoro_link` (a near miss or conflict on a solo `@route:block-id…` / `^route:block-id…` item, such as extra text, authored children, terminal markers on a complete shape, or an operator-only first-line body after a link start; the operator-only case ranges the operators and teaches the glued `+` spelling for one `++[N]` token), `invalid_project_note_marker` (a project-note shape error: a misordered `@`, a `#name` without its `@` seal, text after the seal, or an `=` suffix), `retired_project_note_marker` (a `+` project-note spelling, teaching both `@`-sealed forms), `misplaced_project_task_id` (a task ID on the parent line or a nested bullet), `invalid_project_task_id` (a malformed, reserved, empty-body, or checkbox-bearing ` :` / ` ^` task ID), `duplicate_project_task_id` (two equal IDs in one list or item, naming both lines), `empty_list` (a list header with no bullets), `list_header_marker` (item-wide markers on a list header line, which stands alone), `list_bullet_marker` (a route-changing marker on a list bullet), `list_bullet_checkbox` (a non-open checkbox on a list bullet), `template_list` (a list header in a `%t` template body), `unused_project_note_pomodoro` (a `^`-form `#name` with no ` :` task, ranged on the name; the `:` offer form is never flagged at parse time, and `bob capture` refuses its `#name` only when the note has nothing to offer or link), `unsupported_explicit_toggle`, `retired_priority_marker` (a typed `p:<N>` token, teaching `$<N>`),
 `pomodoro_note_conflict` (a `%n` directive on the same item as `@route`,
 `s:<N>`, or `$<N>`),
 `invalid_child_line` (a later physical line is not blank, a column-zero
@@ -9359,7 +9370,7 @@ the menu never reads the clipboard. Disabled rows explain composition rules
 such as `%n` beside a route, `%t` on a later item, and `%c` in a template.
 
 Every successful `capture-parse` and `capture-complete` response includes
-top-level `grammar: 18`; `schema_version` remains 1. An empty query opened by a
+top-level `grammar: 19`; `schema_version` remains 1. An empty query opened by a
 bare `#` or `%` adds `initial_selection: "none"`, so clients leave every row
 unselected. The field is omitted for typed queries and other contexts.
 

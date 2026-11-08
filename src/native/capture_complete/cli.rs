@@ -246,7 +246,7 @@ A bare `%` opens the `directive` context with Bob-authored Clip, Pomodoro \
 note, and Template rows; bare-URL items also offer Listen. A typed letter \
 filters the rows, and opening the menu never reads the clipboard. Bare `#` \
 opens `task_type` with no row preselected. Every success response reports \
-`grammar: 18` while `schema_version` stays 1; an empty bare `#` or `%` \
+`grammar: 19` while `schema_version` stays 1; an empty bare `#` or `%` \
 query, an empty `=*` merge source, or an empty drawer query after `@route+id#`, adds \
 `initial_selection: \"none\"`. \
 A solo leading `:` token \

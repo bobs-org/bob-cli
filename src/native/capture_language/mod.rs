@@ -45,7 +45,7 @@ pub(crate) mod transfer;
 mod type_marker;
 
 /// Revision of the capture grammar contract exposed to clients.
-pub(crate) const GRAMMAR_REVISION: u32 = 18;
+pub(crate) const GRAMMAR_REVISION: u32 = 19;
 
 #[cfg(test)]
 mod tests;

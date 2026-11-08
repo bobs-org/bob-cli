@@ -4,6 +4,61 @@ use crate::support::*;
 use std::fs;
 
 #[test]
+fn link_starts_refuse_operator_only_bodies_without_writing() {
+    let cases = [
+        "@cash:work= ++3",
+        "@cash:work=3 ++2",
+        "@cash:work=fix2 ++",
+        "@cash:work= --",
+        "^cash:work=3 ++2",
+    ];
+    for (index, draft) in cases.iter().enumerate() {
+        let temp = TempDir::new("bob-cli-link-operator-body");
+        let vault = temp.path().join("vault");
+        let target = vault.join("cash.md");
+        let day_file = vault.join("day.md");
+        let target_before = "# Cash\n## Tasks\n- [ ] #task Work ^work\n";
+        let day_before = "## Pomodoros\n- [ ] Untimed placeholder\n";
+        write_file(&target, target_before);
+        write_file(&day_file, day_before);
+
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(draft)
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-07-10 09:42:00")
+            .output()
+            .expect("run operator-only link body");
+        assert!(
+            !output.status.success(),
+            "{draft}: {}",
+            format_output(&output)
+        );
+        assert!(
+            stdout(&output)
+                .contains("session operators after a Pomodoro link start"),
+            "{draft}: {}",
+            format_output(&output)
+        );
+        assert_eq!(
+            fs::read_to_string(&target).expect("read target after refusal"),
+            target_before,
+            "case {index}: {draft}"
+        );
+        assert_eq!(
+            fs::read_to_string(&day_file).expect("read day after refusal"),
+            day_before,
+            "case {index}: {draft}"
+        );
+    }
+}
+
+#[test]
 fn capture_pomodoro_linked_task_updates_both_notes_and_reports_json() {
     let temp = TempDir::new("bob-cli-capture-pomodoro-json");
     let vault = temp.path().join("vault");

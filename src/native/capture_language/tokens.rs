@@ -2614,6 +2614,20 @@ pub(super) fn parse_pomodoro_link_item<'a>(
                     "Pomodoro link capture cannot be combined with --route, --section, --task, --task-ref, --drawer, or --clip; capture the link alone".to_string(),
                 );
             }
+            let trailing = parent_trimmed[first_len..].trim();
+            if !trailing.is_empty()
+                && let Some(message) =
+                    super::item::pomodoro_link_operator_body_error(
+                        parent_trimmed,
+                        trailing,
+                        parts
+                            .start
+                            .as_ref()
+                            .map_or("", |start| start.raw.as_str()),
+                    )
+            {
+                return Err(message);
+            }
             if !is_solo_item {
                 if !is_solo_parent {
                     for extra in &tokens[1..] {

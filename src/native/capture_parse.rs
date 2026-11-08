@@ -177,7 +177,7 @@ command also best-effort reads the configured vault's theme catalog and adds \
 theme refs; if the catalog is unavailable, parsing still succeeds without \
 those refs. It never writes to the vault or reads the clipboard, and takes no \
 --bob-dir. A '%c' directive still succeeds without reading the clipboard.\n\n\
-Success JSON reports `grammar: 18` for the capture-language revision while \
+Success JSON reports `grammar: 19` for the capture-language revision while \
 `schema_version` stays 1. Gmail URLs add `gmail_url` spans with offline \
 `gmail: {verdict, date_hint?}`, decoded thread `key`, and saved-label `title`. \
 No Gmail calls are made.\n\n\
@@ -3762,7 +3762,7 @@ mod tests {
         let value = json("Call bank @Cash+");
         assert_eq!(value["ok"], true);
         assert_eq!(value["schema_version"], 1);
-        assert_eq!(value["grammar"], 18);
+        assert_eq!(value["grammar"], 19);
         assert_eq!(value["input"], "Call bank @Cash+");
         assert_eq!(value["body"], "Call bank");
         assert_eq!(value["mode"], "incomplete");
@@ -3825,7 +3825,7 @@ mod tests {
         // "start a list" from it.
         let value = json("@sase");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 18);
+        assert_eq!(value["grammar"], 19);
         assert_eq!(value["mode"], "note_pull");
         assert_eq!(value["route"], "sase");
         assert!(value["section"].is_null());
@@ -4610,10 +4610,10 @@ mod tests {
     }
 
     #[test]
-    fn json_reports_merge_in_wire_shape_and_grammar_18() {
+    fn json_reports_merge_in_wire_shape_and_grammar_19() {
         let value = json("New task < @a+x @b+y");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 18);
+        assert_eq!(value["grammar"], 19);
         assert_eq!(value["schema_version"], 1);
         assert_eq!(value["mode"], "task");
         let merge_in = value.get("merge_in").expect("merge_in");

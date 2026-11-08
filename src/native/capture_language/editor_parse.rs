@@ -5013,6 +5013,36 @@ pub(super) fn parse_editor_item_inner<'a>(
         }
     }
 
+    // A task body made entirely of session operators after a link start is
+    // almost always a spaced timing spelling. Keep it editable as a link
+    // item, but point the diagnostic at those operators and teach the glued
+    // `+` spelling when it is unambiguous.
+    if mode == EditorMode::PomodoroTask
+        && let Some(start) = pomodoro_start.as_ref()
+        && let Some(message) = super::item::pomodoro_link_operator_body_error(
+            parent_line.text,
+            &body,
+            &start.raw,
+        )
+    {
+        let operator_tokens: Vec<_> = parent_parse
+            .body_tokens
+            .iter()
+            .filter(|token| super::item::is_session_chain_token(token.text))
+            .collect();
+        if let (Some(first), Some(last)) =
+            (operator_tokens.first(), operator_tokens.last())
+        {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code: "invalid_pomodoro_link",
+                message,
+                range: Some((first.start, last.end)),
+                rewrite: None,
+            });
+        }
+    }
+
     // A `=x` close suffix cannot combine with `s:<N>`, `$<N>`, or `%c`:
     // report `invalid_pomodoro_close` on the conflicting marker itself,
     // mirroring `bob capture`'s strict execution errors. Applies to both
@@ -5384,11 +5414,38 @@ pub(super) fn parse_editor_item_inner<'a>(
                     .last()
                     .map(|marker| marker.text.clone());
                 if let Some(message) = conflict {
+                    let trailing = parent_line
+                        .text
+                        .get(token_end.saturating_sub(parent_line.start)..)
+                        .unwrap_or_default()
+                        .trim();
+                    let operator_error =
+                        super::item::pomodoro_link_operator_body_error(
+                            parent_line.text,
+                            trailing,
+                            pomodoro_start
+                                .as_ref()
+                                .map_or("", |start| start.raw.as_str()),
+                        );
+                    let (message, conflict_range) = match operator_error {
+                        Some(operator_error) => {
+                            let start = parent_line
+                                .text
+                                .find(trailing)
+                                .map(|start| parent_line.start + start)
+                                .unwrap_or(token_start);
+                            (
+                                operator_error,
+                                Some((start, start + trailing.len())),
+                            )
+                        }
+                        None => (message, Some((token_start, token_end))),
+                    };
                     diagnostics.push(Diagnostic {
                         severity: Severity::Error,
                         code: "invalid_pomodoro_link",
                         message,
-                        range: Some((token_start, token_end)),
+                        range: conflict_range,
                         rewrite: None,
                     });
                 }

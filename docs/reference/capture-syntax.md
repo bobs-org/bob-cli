@@ -412,9 +412,11 @@ Contract: [Pomodoro-linked tasks](../capture.md#pomodoro-linked-tasks).
 
 ### `@route:block-id=<X>` / `@route:block-id=name` {#at-route-colon-start}
 
-Atomically start it with five-minute `<X>` units: `=3` is 15m, `=+2` starts
-10m later, and `=` defaults to 25m. For example,
-`@work:outline=bugs` means `@work:outline#bugs=`.
+Start it: `=3` is 15m; `=+2` starts 10m later; `=` is 25m.
+`=bugs` equals `#bugs=`.
+
+Operator-only link-start bodies fail `invalid_pomodoro_link` on their range.
+One `++[N]` teaches glued `+`; prose stays text.
 
 ```bash
 bob capture '@work:outline=3'
@@ -432,9 +434,8 @@ bob capture '@work:outline=bugs'
 | `=#2fa`, `=3#deep-work` | `#` escapes names that cannot be spelled bare |
 | `=focus@3`, `=3#focus` | Retired; write `=focus3` or `=3focus` |
 
-A link-and-start fills or creates a `()` placeholder and refuses if today's
-note has an open timed Pomodoro. The whole-item [`=name`
-start](#equals-named) has separate restart and swap behavior.
+Link-and-start fills a `()` placeholder and refuses when today's note has an
+open timed Pomodoro. Whole-item [`=name` starts](#equals-named) restart or swap.
 
 Contract: [Starting the session atomically](../capture.md#starting-the-session-atomically).
 

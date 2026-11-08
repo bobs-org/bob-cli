@@ -3,6 +3,63 @@
 use crate::support::*;
 
 #[test]
+fn capture_parse_teaches_link_start_operator_folding() {
+    let parse = |text: &str| {
+        let output = bob_command()
+            .arg("capture-parse")
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(text)
+            .output()
+            .expect("run capture-parse");
+        assert_success(&output);
+        serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+            .expect("capture-parse JSON")
+    };
+
+    for (text, operator, hint) in [
+        ("@foo:bar= ++3", "++3", "@foo:bar=+3"),
+        ("@foo:bar=3 ++2", "++2", "@foo:bar=3+2"),
+        ("@foo:bar=fix2 ++", "++", "@foo:bar=fix2+"),
+        ("^foo:bar=3 ++2", "++2", "^foo:bar=3+2"),
+        ("@foo:bar= --", "--", "put them on their own capture item"),
+    ] {
+        let value = parse(text);
+        assert_eq!(
+            value["mode"],
+            if text.starts_with('^') {
+                "pomodoro_link"
+            } else {
+                "pomodoro_task"
+            },
+            "{text}: {value}"
+        );
+        assert_eq!(
+            value["diagnostics"].as_array().unwrap().len(),
+            1,
+            "{value}"
+        );
+        let diagnostic = &value["diagnostics"][0];
+        assert_eq!(diagnostic["code"], "invalid_pomodoro_link", "{value}");
+        assert!(
+            diagnostic["message"].as_str().unwrap().contains(hint),
+            "{value}"
+        );
+        let start = text.find(operator).unwrap();
+        assert_eq!(
+            diagnostic["range"],
+            serde_json::json!([start, start + operator.len()]),
+            "{text}: {value}"
+        );
+    }
+
+    let prose = parse("@foo:bar= Fix the ++3 bug");
+    assert_eq!(prose["mode"], "pomodoro_task");
+    assert_eq!(prose["diagnostics"], serde_json::json!([]));
+}
+
+#[test]
 fn capture_parse_pomodoro_adjust_protocol() {
     let parse = |text: &str| {
         let output = bob_command()
@@ -203,7 +260,7 @@ fn capture_parse_pomodoro_start_reports_later_units_additively() {
         ("=bugs+2", "+2", 5, 2),
     ] {
         let value = parse(text);
-        assert_eq!(value["grammar"], 18, "{text}");
+        assert_eq!(value["grammar"], 19, "{text}");
         assert_eq!(value["mode"], "pomodoro_start", "{text}");
         assert_eq!(
             value["pomodoro_start"],
