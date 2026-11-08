@@ -331,10 +331,10 @@ Bob refuses two cases before planning writes:
 | `=*` / `=*build` | Merge the next planned Pomodoro below the current/source Pomodoro |
 | `=*1`, `=*!2`, `=**` | Unchanged retired-close teaching errors |
 | `= foo` | Ordinary task text; a bare `=` followed by prose stays prose |
-| `=xx`, `=xa`, `=xmas`, `=Bugs` | Named start; `x` followed by more name characters is not close-shaped |
+| `=xx`, `=xa`, `=xmas`, `=Bugs` | Grammar and CLI: named start; `x` followed by more name characters is not close-shaped. In Mac Capture's editor, typing `xx` on a link-close suffix gives `=x!` |
 | `=x`, `=X`, `=x2!1`, `=*1`, `=!`, `=x wired the lexer` | Unchanged retired-close teaching errors |
 | `=x#bugs` | Unchanged retired error, now teaching `x =bugs` |
-| `xx`, `xa`, `x.`, `x-ray`, `xylophone` | Ordinary prose; only a plain `x` or a selection-shaped `x…` token closes |
+| `xx`, `xa`, `x.`, `x-ray`, `xylophone` | Grammar and CLI: ordinary prose; only a plain `x` or a selection-shaped `x…` token closes. In Mac Capture's editor, typing `xx` gives `x!` |
 | `Plan x` | Ordinary task text; a mid-body `x` stays prose |
 | `Plan =x` | Ordinary task text; a mid-body `=x` stays prose |
 | `X`, `X2`, `X post about the launch` | Ordinary task text; only lowercase `x` closes |
@@ -3584,7 +3584,7 @@ or an exact token with child lines fails as an invalid start, never a task.
 A bare token followed by more text (`= foo`, `=- foo`, `=+ foo`, `=+ )`), bare
 `x` lookalikes (`xx`, `xa`,
 `X`, `X2`), and mid-body tokens (`Plan =3`, `Plan =bugs`, `Plan x`, `a=3`) stay ordinary
-prose. `=xx` and `=xa` are named starts now, not prose. The retired `==` spelling stays prose when followed by more text,
+prose in the grammar and CLI; in Mac Capture's editor, typing `xx` gives `x!`. `=xx` and `=xa` are named starts now, not prose. In Mac Capture's editor, a named start beginning `xx`/`xs` must be typed uppercase (`=XS…`) or as `=#xs…`. The retired `==` spelling stays prose when followed by more text,
 which protects Obsidian highlight syntax; a claimed `==` start token gets
 the retirement error and teaches the matching `=` spelling.
 
@@ -4656,7 +4656,7 @@ those suffixes retire, rewriting to `=x*` / `=x!`.
 | `==*` | `` `==*` is not a close: close the running Pomodoro with `x*` `` |
 | `==!2` | `` `==!2` is not a close: close the running Pomodoro with `x!2` `` |
 
-Mid-body `Plan =x` stays ordinary prose. `=xx` and `=xa` are named starts now, not prose. Capitalizing the
+Mid-body `Plan =x` stays ordinary prose. `=xx` and `=xa` are named starts in the grammar and CLI; in Mac Capture's editor, typing `xx` on a link-close suffix gives `=x!`, so a named start beginning `xx`/`xs` must be typed uppercase (`=XS…`) or as `=#xs…`. Capitalizing the
 first letter (`X post about the launch`, `X11 forwarding`, `X *job:cleanup`)
 is the escape for a task that must start with the word `x`.
 
@@ -4686,7 +4686,9 @@ see
 [Chaining session operators on one line](#chaining-session-operators-on-one-line)
 and [Logging work while closing](#logging-work-while-closing));
 `xx`, `xa`, `x.`, `x-ray`, `xylophone`, capitalized `X…`, and mid-body
-`Plan x` stay ordinary prose, as does mid-body `Plan =x` and `Plan =bugs`.
+`Plan x` stay ordinary prose in the grammar and CLI, as does mid-body
+`Plan =x` and `Plan =bugs`. In Mac Capture's editor, typing `xx` gives
+`x!`.
 Capitalizing the first letter is the escape for a task that must start with
 the word `x`. `x more` logs the inline entry `more` to task 1, `x86 build`
 claims task 86, and `x *job:cleanup` is refused as a Pomodoro-operator
@@ -8883,6 +8885,17 @@ after the second `=`, in chain tokens, or in prose. This is an
 editor assist:
 `bob capture` and `bob capture-parse` keep the literal text. Feeding the
 result back through the command is a no-op.
+
+Typing a lowercase `x` or `s` that ends a close selection aliases `!`
+(complete) or `*` (park). The three slots are a whole-item or lead-chain
+close (`xx` → `x!`, `+2 xs` → `+2 x*`), the close part after a past
+token's second `=` (`x=1=s` → `x=1=*`), and a link-close suffix
+(`@r:id=xx` → `@r:id=x!`). Competing park-all and complete-all wildcards
+are a viable prefix (`x!s` → `x!*`). Only lowercase letters fire, and
+only with `--cursor`. The alias stays off after inline Work Log text
+(`x log xs`), on child bullets (`x` then `- xs`), in past `E` names
+(`x=1s`), after a dangling `,` or `@`, and in prose. This is an editor
+assist only: `bob capture` and `bob capture-parse` keep the letters.
 
 Typing `=` after a space or tab aliases `~` only where a bare `~` would open
 the Links To relation picker. It stays literal at a line or bullet-body start,

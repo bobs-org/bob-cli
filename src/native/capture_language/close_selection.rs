@@ -50,11 +50,56 @@ pub(crate) struct CloseSelectionIncomplete {
     pub(crate) separator: char,
 }
 
+/// Why [`lex_close_selection`] refused a selection body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CloseSelectionErrorKind {
+    /// Empty park-all and complete-all groups compete (`x!*`, `x*!`).
+    /// Adding a number makes the selection valid, so a typing alias may
+    /// still land this marker.
+    CompetingWildcards,
+    /// Every other lexical failure.
+    Other,
+}
+
 /// One lexical failure with its absolute byte range.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CloseSelectionError {
     pub(crate) message: String,
     pub(crate) range: (usize, usize),
+    pub(crate) kind: CloseSelectionErrorKind,
+}
+
+impl CloseSelectionError {
+    fn new(message: String, range: (usize, usize)) -> Self {
+        Self {
+            message,
+            range,
+            kind: CloseSelectionErrorKind::Other,
+        }
+    }
+
+    fn competing_wildcards(token: &str, range: (usize, usize)) -> Self {
+        Self {
+            message: close_selection_competing_wildcards_error(token),
+            range,
+            kind: CloseSelectionErrorKind::CompetingWildcards,
+        }
+    }
+}
+
+/// Whether a close-outcome typing alias may land on this lex result: a
+/// valid or incomplete selection, or the competing-wildcards error that
+/// becomes valid once a number follows.
+pub(crate) fn close_marker_may_follow(
+    lexed: &Result<CloseSelectionOutcome, CloseSelectionError>,
+) -> bool {
+    match lexed {
+        Ok(
+            CloseSelectionOutcome::Valid(_)
+            | CloseSelectionOutcome::Incomplete(_),
+        ) => true,
+        Err(error) => error.kind == CloseSelectionErrorKind::CompetingWildcards,
+    }
 }
 
 /// The result of lexing the text after a close's `x`.
@@ -232,10 +277,10 @@ pub(crate) fn lex_close_selection(
             .find('!')
             .map(|offset| first + 1 + offset)
             .expect("second bang");
-        return Err(CloseSelectionError {
-            message: close_selection_one_bang_error(),
-            range: (base_offset + second, base_offset + second + 1),
-        });
+        return Err(CloseSelectionError::new(
+            close_selection_one_bang_error(),
+            (base_offset + second, base_offset + second + 1),
+        ));
     }
     let tilde_count = after_x.bytes().filter(|byte| *byte == b'~').count();
     if tilde_count > 1 {
@@ -244,10 +289,10 @@ pub(crate) fn lex_close_selection(
             .find('~')
             .map(|offset| first + 1 + offset)
             .expect("second tilde");
-        return Err(CloseSelectionError {
-            message: close_selection_one_tilde_error(),
-            range: (base_offset + second, base_offset + second + 1),
-        });
+        return Err(CloseSelectionError::new(
+            close_selection_one_tilde_error(),
+            (base_offset + second, base_offset + second + 1),
+        ));
     }
     let star_count = after_x.bytes().filter(|byte| *byte == b'*').count();
     if star_count > 1 {
@@ -256,10 +301,10 @@ pub(crate) fn lex_close_selection(
             .find('*')
             .map(|offset| first + 1 + offset)
             .expect("second star");
-        return Err(CloseSelectionError {
-            message: close_selection_one_star_error(),
-            range: (base_offset + second, base_offset + second + 1),
-        });
+        return Err(CloseSelectionError::new(
+            close_selection_one_star_error(),
+            (base_offset + second, base_offset + second + 1),
+        ));
     }
     let at_count = after_x.bytes().filter(|byte| *byte == b'@').count();
     if at_count > 1 {
@@ -268,10 +313,10 @@ pub(crate) fn lex_close_selection(
             .find('@')
             .map(|offset| first + 1 + offset)
             .expect("second at");
-        return Err(CloseSelectionError {
-            message: close_selection_one_at_error(),
-            range: (base_offset + second, base_offset + second + 1),
-        });
+        return Err(CloseSelectionError::new(
+            close_selection_one_at_error(),
+            (base_offset + second, base_offset + second + 1),
+        ));
     }
     // A trailing `!` is a present-but-empty complete group. Never an
     // incomplete state.
@@ -313,10 +358,10 @@ pub(crate) fn lex_close_selection(
     if let Some(body) = after_x.strip_suffix('@') {
         // Keep-list-twice wins over the dangling-`@` incomplete state.
         if !leading_keep_text(body).is_empty() {
-            return Err(CloseSelectionError {
-                message: close_selection_keep_twice_error(token),
-                range: (token_end - 1, token_end),
-            });
+            return Err(CloseSelectionError::new(
+                close_selection_keep_twice_error(token),
+                (token_end - 1, token_end),
+            ));
         }
         let parsed = parse_selection_body(body, base_offset, token, token_end)?;
         return Ok(CloseSelectionOutcome::Incomplete(
@@ -361,10 +406,10 @@ pub(crate) fn lex_close_selection(
             && !head.contains('*')
             && head.is_empty()
         {
-            return Err(CloseSelectionError {
-                message: close_selection_expected_number_error(),
-                range: separator_range,
-            });
+            return Err(CloseSelectionError::new(
+                close_selection_expected_number_error(),
+                separator_range,
+            ));
         }
         // A dangling list separator (`x1!,`, `x1~2~,`, `x*2,`) names no
         // number after it yet: the trailing comma is the precise range.
@@ -373,26 +418,26 @@ pub(crate) fn lex_close_selection(
         if let Some(last) = head.rfind(['!', '~', '*', '@'])
             && head[last + 1..].is_empty()
         {
-            return Err(CloseSelectionError {
-                message: close_selection_expected_number_error(),
-                range: separator_range,
-            });
+            return Err(CloseSelectionError::new(
+                close_selection_expected_number_error(),
+                separator_range,
+            ));
         }
         // `x0,` can never become valid: `0` must stand alone, so the
         // lexical `0`-alone error wins over the incomplete state.
         if head == "0" {
-            return Err(CloseSelectionError {
-                message: close_selection_zero_alone_error(),
-                range: (base_offset, base_offset + 1),
-            });
+            return Err(CloseSelectionError::new(
+                close_selection_zero_alone_error(),
+                (base_offset, base_offset + 1),
+            ));
         }
         // A double separator (`x1,,`, `x1!2,,`) points at the dangling
         // (second) comma, matching `x1,,2`.
         if head.ends_with(',') || head.ends_with('*') {
-            return Err(CloseSelectionError {
-                message: close_selection_expected_number_error(),
-                range: separator_range,
-            });
+            return Err(CloseSelectionError::new(
+                close_selection_expected_number_error(),
+                separator_range,
+            ));
         }
         let parsed = parse_selection_body(head, base_offset, token, token_end)?;
         return Ok(CloseSelectionOutcome::Incomplete(
@@ -507,10 +552,10 @@ fn parse_selection_body(
             trailing.iter().find(|list| list.separator == '@')
     {
         let range = (at_list.base - 1, at_list.base + at_list.text.len());
-        return Err(CloseSelectionError {
-            message: close_selection_keep_twice_error(token),
+        return Err(CloseSelectionError::new(
+            close_selection_keep_twice_error(token),
             range,
-        });
+        ));
     }
     let has_trailing = !trailing.is_empty();
     // `x1,!2`: the `<N>` part ends in a single comma after a number, so the
@@ -523,10 +568,10 @@ fn parse_selection_body(
         && n_text.as_bytes()[n_text.len() - 2].is_ascii_digit()
     {
         let comma = base_offset + n_text.len() - 1;
-        return Err(CloseSelectionError {
-            message: close_selection_expected_number_after_error(),
-            range: (comma, comma + 1),
-        });
+        return Err(CloseSelectionError::new(
+            close_selection_expected_number_after_error(),
+            (comma, comma + 1),
+        ));
     }
     // `x@1,!2`: the `@` list ends in a single comma after a number.
     if let Some(at_list) = trailing.iter().find(|list| list.separator == '@')
@@ -536,20 +581,20 @@ fn parse_selection_body(
         && at_list.text.as_bytes()[at_list.text.len() - 2].is_ascii_digit()
     {
         let comma = at_list.base + at_list.text.len() - 1;
-        return Err(CloseSelectionError {
-            message: close_selection_expected_number_after_error(),
-            range: (comma, comma + 1),
-        });
+        return Err(CloseSelectionError::new(
+            close_selection_expected_number_after_error(),
+            (comma, comma + 1),
+        ));
     }
     // An empty `@` directly before another marker (`x@!1`) is an error,
     // unlike today's lenient empty `~`.
     if let Some(at_list) = trailing.iter().find(|list| list.separator == '@')
         && at_list.text.is_empty()
     {
-        return Err(CloseSelectionError {
-            message: close_selection_expected_number_after_at_error(),
-            range: (at_list.base - 1, at_list.base),
-        });
+        return Err(CloseSelectionError::new(
+            close_selection_expected_number_after_at_error(),
+            (at_list.base - 1, at_list.base),
+        ));
     }
     let n_parsed = parse_number_list(n_text, base_offset, token, token_end)?;
     let mut p_parsed: Vec<ParsedNumber> = Vec::new();
@@ -648,23 +693,24 @@ fn parse_number_list(
         }
         if digits_start == index {
             if bytes[index] == b',' {
-                return Err(CloseSelectionError {
-                    message: close_selection_expected_number_error(),
-                    range: (part_base + index, part_base + index + 1),
-                });
+                return Err(CloseSelectionError::new(
+                    close_selection_expected_number_error(),
+                    (part_base + index, part_base + index + 1),
+                ));
             }
-            return Err(CloseSelectionError {
-                message: close_selection_bad_list_error(token),
-                range: (part_base + index, token_end),
-            });
+            return Err(CloseSelectionError::new(
+                close_selection_bad_list_error(token),
+                (part_base + index, token_end),
+            ));
         }
         let digits = &part[digits_start..index];
         let range = (part_base + digits_start, part_base + index);
-        let number =
-            digits.parse::<u32>().map_err(|_| CloseSelectionError {
-                message: close_selection_too_large_error(digits),
+        let number = digits.parse::<u32>().map_err(|_| {
+            CloseSelectionError::new(
+                close_selection_too_large_error(digits),
                 range,
-            })?;
+            )
+        })?;
         numbers.push((number, range));
         if index == bytes.len() {
             break;
@@ -672,17 +718,17 @@ fn parse_number_list(
         if bytes[index] == b',' {
             index += 1;
             if index == bytes.len() {
-                return Err(CloseSelectionError {
-                    message: close_selection_expected_number_error(),
-                    range: (part_base + index - 1, part_base + index),
-                });
+                return Err(CloseSelectionError::new(
+                    close_selection_expected_number_error(),
+                    (part_base + index - 1, part_base + index),
+                ));
             }
             continue;
         }
-        return Err(CloseSelectionError {
-            message: close_selection_bad_list_error(token),
-            range: (part_base + index, token_end),
-        });
+        return Err(CloseSelectionError::new(
+            close_selection_bad_list_error(token),
+            (part_base + index, token_end),
+        ));
     }
     Ok(numbers)
 }
@@ -718,10 +764,7 @@ fn validate_selection(
         } else {
             complete_range.expect("complete wildcard has a range")
         };
-        return Err(CloseSelectionError {
-            message: close_selection_competing_wildcards_error(token),
-            range,
-        });
+        return Err(CloseSelectionError::competing_wildcards(token, range));
     }
     // Only a literal `0` means "none": a zero-valued `<n>` with extra digits
     // (`x00`) gets the `0`-alone message on that number. An `@` list keeps
@@ -730,18 +773,18 @@ fn validate_selection(
         if let Some((_, range)) = parsed.iter().find(|(number, range)| {
             *number == 0 && range.1.saturating_sub(range.0) > 1
         }) {
-            return Err(CloseSelectionError {
-                message: close_selection_zero_alone_error(),
-                range: *range,
-            });
+            return Err(CloseSelectionError::new(
+                close_selection_zero_alone_error(),
+                *range,
+            ));
         }
         if let Some((_, range)) = parsed.iter().find(|(number, _)| *number == 0)
             && parsed.len() > 1
         {
-            return Err(CloseSelectionError {
-                message: close_selection_zero_alone_error(),
-                range: *range,
-            });
+            return Err(CloseSelectionError::new(
+                close_selection_zero_alone_error(),
+                *range,
+            ));
         }
     }
     if let Some((_, range)) = p_parsed
@@ -750,49 +793,49 @@ fn validate_selection(
         .chain(k_parsed.iter())
         .find(|(number, _)| *number == 0)
     {
-        return Err(CloseSelectionError {
-            message: close_selection_starts_at_one_error(),
-            range: *range,
-        });
+        return Err(CloseSelectionError::new(
+            close_selection_starts_at_one_error(),
+            *range,
+        ));
     }
     for (position, (number, range)) in n_parsed.iter().enumerate() {
         if n_parsed[..position].iter().any(|(seen, _)| seen == number) {
-            return Err(CloseSelectionError {
-                message: close_selection_duplicate_error(*number, token),
-                range: *range,
-            });
+            return Err(CloseSelectionError::new(
+                close_selection_duplicate_error(*number, token),
+                *range,
+            ));
         }
     }
     for (position, (number, range)) in p_parsed.iter().enumerate() {
         if p_parsed[..position].iter().any(|(seen, _)| seen == number) {
-            return Err(CloseSelectionError {
-                message: close_selection_duplicate_error(*number, token),
-                range: *range,
-            });
+            return Err(CloseSelectionError::new(
+                close_selection_duplicate_error(*number, token),
+                *range,
+            ));
         }
     }
     for (position, (number, range)) in m_parsed.iter().enumerate() {
         if m_parsed[..position].iter().any(|(seen, _)| seen == number) {
-            return Err(CloseSelectionError {
-                message: close_selection_duplicate_error(*number, token),
-                range: *range,
-            });
+            return Err(CloseSelectionError::new(
+                close_selection_duplicate_error(*number, token),
+                *range,
+            ));
         }
     }
     for (position, (number, range)) in k_parsed.iter().enumerate() {
         if k_parsed[..position].iter().any(|(seen, _)| seen == number) {
-            return Err(CloseSelectionError {
-                message: close_selection_duplicate_error(*number, token),
-                range: *range,
-            });
+            return Err(CloseSelectionError::new(
+                close_selection_duplicate_error(*number, token),
+                *range,
+            ));
         }
     }
     for (position, (number, range)) in at_parsed.iter().enumerate() {
         if at_parsed[..position].iter().any(|(seen, _)| seen == number) {
-            return Err(CloseSelectionError {
-                message: close_selection_duplicate_error(*number, token),
-                range: *range,
-            });
+            return Err(CloseSelectionError::new(
+                close_selection_duplicate_error(*number, token),
+                *range,
+            ));
         }
     }
     // Overlaps involving the keep list point at the later-typed occurrence.
@@ -820,96 +863,85 @@ fn validate_selection(
                 *at_num_range
             };
             if p_parsed.iter().any(|(seen, _)| seen == number) {
-                return Err(CloseSelectionError {
-                    message: close_selection_overlap_in_progress_park_error(
+                return Err(CloseSelectionError::new(
+                    close_selection_overlap_in_progress_park_error(
                         *number, token,
                     ),
                     range,
-                });
+                ));
             }
             if m_parsed.iter().any(|(seen, _)| seen == number) {
-                return Err(CloseSelectionError {
-                    message: close_selection_overlap_error(*number, token),
+                return Err(CloseSelectionError::new(
+                    close_selection_overlap_error(*number, token),
                     range,
-                });
+                ));
             }
-            return Err(CloseSelectionError {
-                message: close_selection_overlap_in_progress_drop_error(
-                    *number, token,
-                ),
+            return Err(CloseSelectionError::new(
+                close_selection_overlap_in_progress_drop_error(*number, token),
                 range,
-            });
+            ));
         }
     } else {
         if let Some((overlapped, range)) = p_parsed
             .iter()
             .find(|(number, _)| n_parsed.iter().any(|(seen, _)| seen == number))
         {
-            return Err(CloseSelectionError {
-                message: close_selection_overlap_in_progress_park_error(
+            return Err(CloseSelectionError::new(
+                close_selection_overlap_in_progress_park_error(
                     *overlapped,
                     token,
                 ),
-                range: *range,
-            });
+                *range,
+            ));
         }
         if let Some((overlapped, range)) = m_parsed
             .iter()
             .find(|(number, _)| n_parsed.iter().any(|(seen, _)| seen == number))
         {
-            return Err(CloseSelectionError {
-                message: close_selection_overlap_error(*overlapped, token),
-                range: *range,
-            });
+            return Err(CloseSelectionError::new(
+                close_selection_overlap_error(*overlapped, token),
+                *range,
+            ));
         }
         if let Some((overlapped, range)) = k_parsed
             .iter()
             .find(|(number, _)| n_parsed.iter().any(|(seen, _)| seen == number))
         {
-            return Err(CloseSelectionError {
-                message: close_selection_overlap_in_progress_drop_error(
+            return Err(CloseSelectionError::new(
+                close_selection_overlap_in_progress_drop_error(
                     *overlapped,
                     token,
                 ),
-                range: *range,
-            });
+                *range,
+            ));
         }
     }
     if let Some((overlapped, range)) = m_parsed
         .iter()
         .find(|(number, _)| p_parsed.iter().any(|(seen, _)| seen == number))
     {
-        return Err(CloseSelectionError {
-            message: close_selection_overlap_park_complete_error(
-                *overlapped,
-                token,
-            ),
-            range: *range,
-        });
+        return Err(CloseSelectionError::new(
+            close_selection_overlap_park_complete_error(*overlapped, token),
+            *range,
+        ));
     }
     if let Some((overlapped, range)) = k_parsed
         .iter()
         .find(|(number, _)| p_parsed.iter().any(|(seen, _)| seen == number))
     {
-        return Err(CloseSelectionError {
-            message: close_selection_overlap_park_drop_error(
-                *overlapped,
-                token,
-            ),
-            range: *range,
-        });
+        return Err(CloseSelectionError::new(
+            close_selection_overlap_park_drop_error(*overlapped, token),
+            *range,
+        ));
     }
     if let Some((overlapped, range)) = k_parsed
         .iter()
         .find(|(number, _)| m_parsed.iter().any(|(seen, _)| seen == number))
     {
-        return Err(CloseSelectionError {
-            message: close_selection_overlap_complete_drop_error(
-                *overlapped,
-                token,
-            ),
-            range: *range,
-        });
+        return Err(CloseSelectionError::new(
+            close_selection_overlap_complete_drop_error(*overlapped, token),
+            *range,
+        ));
     }
     let (in_progress, in_progress_range) = if at_range.is_some() {
         // An `@` list is always explicit, so it gives `Some`.
@@ -1630,15 +1662,53 @@ mod tests {
             "`x*!` has competing park-all and complete-all groups; add task numbers to at least one group"
         );
         assert_eq!(conflict.range, (2, 3));
+        assert_eq!(conflict.kind, CloseSelectionErrorKind::CompetingWildcards);
         let reversed = error("x!*");
         assert_eq!(reversed.range, (2, 3));
+        assert_eq!(reversed.kind, CloseSelectionErrorKind::CompetingWildcards);
 
         // Malformed wildcard lists claim close syntax, never task creation.
         let bad = error("x*abc");
         assert!(bad.message.starts_with("`x*abc` is not a task list:"));
+        assert_eq!(bad.kind, CloseSelectionErrorKind::Other);
         let zero = error("x!0");
         assert_eq!(zero.message, "task numbers start at 1");
+        assert_eq!(zero.kind, CloseSelectionErrorKind::Other);
         let doubled = error("x**2");
         assert_eq!(doubled.message, "use one `*` list: `x1*2,3`");
+        assert_eq!(doubled.kind, CloseSelectionErrorKind::Other);
+    }
+
+    #[test]
+    fn close_marker_may_follow_accepts_viable_prefixes() {
+        let empty = lex_close_selection("", 1, "x");
+        assert!(close_marker_may_follow(&empty));
+        let complete_all = lex_close_selection("!", 1, "x!");
+        assert!(close_marker_may_follow(&complete_all));
+        let park_all = lex_close_selection("*", 1, "x*");
+        assert!(close_marker_may_follow(&park_all));
+        let numbered = lex_close_selection("1", 1, "x1");
+        assert!(close_marker_may_follow(&numbered));
+        let dangling = lex_close_selection("1,", 1, "x1,");
+        assert!(matches!(dangling, Ok(CloseSelectionOutcome::Incomplete(_))));
+        assert!(close_marker_may_follow(&dangling));
+        let competing = lex_close_selection("!*", 1, "x!*");
+        assert_eq!(
+            competing.as_ref().unwrap_err().kind,
+            CloseSelectionErrorKind::CompetingWildcards
+        );
+        assert!(close_marker_may_follow(&competing));
+        let reversed = lex_close_selection("*!", 1, "x*!");
+        assert!(close_marker_may_follow(&reversed));
+        let duplicate = lex_close_selection("!!", 1, "x!!");
+        assert_eq!(
+            duplicate.as_ref().unwrap_err().kind,
+            CloseSelectionErrorKind::Other
+        );
+        assert!(!close_marker_may_follow(&duplicate));
+        let dangling_comma = lex_close_selection("1,*", 1, "x1,*");
+        assert!(!close_marker_may_follow(&dangling_comma));
+        let dangling_at = lex_close_selection("@*", 1, "x@*");
+        assert!(!close_marker_may_follow(&dangling_at));
     }
 }

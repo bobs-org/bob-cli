@@ -1,12 +1,17 @@
 //! Draft absorption and text edits.
 
+use super::close_selection::{
+    classify_whole_item_close, close_after_eq_parts, close_marker_may_follow,
+    lex_close_selection, retired_whole_item_close_rewrite,
+};
 use super::draft::*;
 use super::editor_model::*;
 use super::editor_parse::*;
+use super::item::{is_session_chain_token, past_token_len};
 use super::markers::is_route_token;
 use super::model::*;
 use super::project_tasks::{lex_project_task_id, TaskIdLex};
-use super::tokens::is_block_id;
+use super::tokens::{is_block_id, link_eq_suffix};
 
 /// The result of applying the capture grammar's automatic draft rewrites to
 /// `raw_text`. See [`rewrite_draft`].
@@ -67,7 +72,8 @@ impl RewriteRule {
 /// `+`) is rewritten to the trigger's spelling and the appended trigger is
 /// dropped. A `+` after `@route^id` switches to `@route+id`, like every
 /// other separator. That rule never searches the draft: no cursor means
-/// absorption-only, matching the historical `@@` contract.
+/// absorption-only, matching the historical `@@` contract. Sigil aliases
+/// at the cursor also include close-outcome `x` → `!` and `s` → `*`.
 ///
 /// Apply Rule A1's absorption to the bare `@@` at (or before, when
 /// no cursor is given, the last one in source order at) `cursor`: claim the
@@ -114,22 +120,27 @@ pub(crate) fn rewrite_draft(
     absorb_bare_declaration(raw_text, cursor)
 }
 
-/// Typing `.`, `;`, `,`, `-`, `\`, `/`, or `=` in a position where its real sigil
-/// would open a picker swaps that byte to `^`, `:`, `+`, `~`, or `#`. The candidate
-/// is checked by the ordinary completion grammar, keeping the assist lexical and
-/// aligned with picker eligibility. Route-scope contexts plus lone
+/// Typing `.`, `;`, `,`, `-`, `\`, `/`, `=`, `x`, or `s` in a position where
+/// its real sigil would open a picker or close-outcome slot swaps that byte
+/// to `^`, `:`, `+`, `~`, `#`, `!`, or `*`. The candidate is checked by the
+/// ordinary completion grammar or the close lexer, keeping the assist lexical
+/// and aligned with picker eligibility. Route-scope contexts plus lone
 /// move-bullet sigils are accepted; a `.` that completes a `- ^^` choice
 /// marker is also accepted. A comma glued to a complete target-run member
 /// instead inserts ` +` to open the next parent-task picker. Typing `=` right
 /// after a bare `~` that opens the Links To picker turns it into `~~` (Linked
 /// From), while `~~=` turns back into `~`. A spaced `=` aliases `~` only where
-/// a bare relation sigil would open Links To. Everywhere else `=` stays literal,
-/// including inside a wikilink.
+/// a bare relation sigil would open Links To. A lowercase `x` or `s` that
+/// ends a close selection aliases `!` or `*`. Everywhere else `=` stays
+/// literal, including inside a wikilink.
 fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
     let start = cursor.checked_sub(1)?;
     let alias = raw_text.get(start..cursor)?;
     if alias == "-" {
         return expand_past_segment_dash_alias(raw_text, start, cursor);
+    }
+    if alias == "x" || alias == "s" {
+        return expand_close_outcome_alias(raw_text, start, cursor);
     }
     if alias == "=" {
         return expand_relation_flip_alias(raw_text, start, cursor)
@@ -224,6 +235,117 @@ fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
     Some(finish_sigil_alias(
         raw_text, &candidate, start, cursor, sigil, alias,
     ))
+}
+
+/// Typing lowercase `x` or `s` where a close selection accepts an outcome
+/// marker aliases `!` or `*`. Locate the slot on the pre-key draft, then
+/// lex the swapped selection: valid, incomplete, and competing-wildcards
+/// prefixes fire; every other error stays literal.
+fn expand_close_outcome_alias(
+    raw_text: &str,
+    start: usize,
+    cursor: usize,
+) -> Option<DraftRewrite> {
+    let alias = raw_text.get(start..cursor)?;
+    let sigil = match alias {
+        "x" => '!',
+        "s" => '*',
+        _ => return None,
+    };
+    if odd_backtick_parity_before(raw_text, start) {
+        return None;
+    }
+    let mut pre_key = raw_text.to_string();
+    pre_key.replace_range(start..cursor, "");
+    // Child bullets are excluded via the split item's line index. Tokenize
+    // the physical line so an inline Work Log (`x log xs`) sees `log` before
+    // the trailing `x` and stays literal; `split_capture_draft` would isolate
+    // that `x` as its own trail item.
+    let draft = split_capture_draft(&pre_key);
+    let line_index = draft.items.iter().find_map(|item| {
+        item.lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| start >= line.raw.start && start <= line.raw.end)
+            .map(|(line_index, _)| line_index)
+    })?;
+    if line_index != 0 {
+        return None;
+    }
+    let line = split_physical_lines(&pre_key)
+        .into_iter()
+        .find(|line| start >= line.start && start <= line.end)?;
+    let tokens = line_session_view_tokens(&line);
+    let token_index = tokens.iter().position(|token| token.end == start)?;
+    let token = tokens[token_index];
+    let selection = close_outcome_selection(&token, token_index, &tokens)?;
+    let mut candidate_body = selection;
+    candidate_body.push(sigil);
+    let display = format!("x{candidate_body}");
+    let lexed = lex_close_selection(&candidate_body, 1, &display);
+    if !close_marker_may_follow(&lexed) {
+        return None;
+    }
+    let mut candidate = raw_text.to_string();
+    candidate.replace_range(start..cursor, &sigil.to_string());
+    if wikilink_claims(&candidate, cursor) {
+        return None;
+    }
+    Some(finish_sigil_alias(
+        raw_text, &candidate, start, cursor, sigil, alias,
+    ))
+}
+
+fn odd_backtick_parity_before(raw_text: &str, start: usize) -> bool {
+    let line_start = raw_text[..start].rfind('\n').map_or(0, |index| index + 1);
+    raw_text
+        .get(line_start..start)
+        .map(|prefix| {
+            prefix.bytes().filter(|byte| *byte == b'`').count() % 2 != 0
+        })
+        .unwrap_or(false)
+}
+
+fn close_lead_ok(token_index: usize, tokens: &[Token<'_>]) -> bool {
+    token_index == 0
+        || tokens[..token_index]
+            .iter()
+            .all(|token| is_session_chain_token(token.text))
+}
+
+fn close_outcome_selection(
+    token: &Token<'_>,
+    token_index: usize,
+    tokens: &[Token<'_>],
+) -> Option<String> {
+    if retired_whole_item_close_rewrite(token.text).is_some() {
+        return None;
+    }
+    if let Some(selection) = classify_whole_item_close(token.text) {
+        if !close_lead_ok(token_index, tokens) {
+            return None;
+        }
+        return Some(selection.to_string());
+    }
+    if past_token_len(token.text) == Some(token.text.len()) {
+        if !close_lead_ok(token_index, tokens) {
+            return None;
+        }
+        let split = super::past::split_past_token(token.text)?;
+        if !split.has_second_eq {
+            return None;
+        }
+        return Some(split.close_text);
+    }
+    let suffix = link_eq_suffix(token.text)?;
+    if !suffix.starts_with('x') {
+        return None;
+    }
+    let (selection, x_len) = close_after_eq_parts(suffix)?;
+    if x_len != 1 {
+        return None;
+    }
+    Some(selection.to_string())
 }
 
 /// Typing `-` inside an `x=` past token aliases `~` only where the swapped

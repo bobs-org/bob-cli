@@ -1,6 +1,6 @@
 //! Draft rewrite tests.
 
-use super::super::editor_model::EditorMode;
+use super::super::editor_model::{EditorMode, Severity, SpanKind};
 use super::super::editor_parse::*;
 use super::super::rewrite::*;
 
@@ -1885,4 +1885,180 @@ fn rewrite_draft_past_segment_dash_stays_literal() {
             panic!("{raw:?} must not alias to a past segment");
         }
     }
+}
+
+fn assert_close_outcome_alias(
+    raw: &str,
+    expected: &str,
+    alias: &str,
+    sigil: char,
+) {
+    let cursor = raw.len();
+    let rewrite = rewrite_draft(raw, Some(cursor));
+    assert_eq!(rewrite.rule, Some(RewriteRule::ExpandSigilAlias), "{raw:?}");
+    assert_eq!(rewrite.text, expected, "{raw:?}");
+    assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
+    assert_eq!(rewrite.edits.len(), 1, "{raw:?}");
+    assert_eq!(rewrite.edits[0].start, cursor - 1, "{raw:?}");
+    assert_eq!(rewrite.edits[0].end, cursor, "{raw:?}");
+    assert_eq!(rewrite.edits[0].replacement, sigil.to_string(), "{raw:?}");
+    assert_eq!(
+        rewrite.summary.as_deref(),
+        Some(format!("Typed {sigil} for {alias}").as_str()),
+        "{raw:?}"
+    );
+    let again = rewrite_draft(&rewrite.text, rewrite.cursor);
+    assert_eq!(again.rule, None, "idempotent {raw:?}");
+    assert_eq!(again.text, expected, "idempotent {raw:?}");
+    assert_close_parse(expected);
+}
+
+fn assert_close_parse(text: &str) {
+    let parsed = parse_for_editor(text);
+    let has_close = parsed.items.iter().any(|item| {
+        item.pomodoro_close.is_some()
+            || item.pomodoro_past.is_some()
+            || item.spans.iter().any(|span| {
+                matches!(
+                    span.kind,
+                    SpanKind::PomodoroClose
+                        | SpanKind::PomodoroCloseInProgress
+                        | SpanKind::PomodoroClosePark
+                        | SpanKind::PomodoroCloseComplete
+                        | SpanKind::PomodoroCloseDrop
+                        | SpanKind::PomodoroPast
+                )
+            })
+    });
+    assert!(
+        has_close,
+        "{text:?} should parse as a close, link close, or past close; modes {:?}",
+        parsed
+            .items
+            .iter()
+            .map(|item| item.mode)
+            .collect::<Vec<_>>()
+    );
+    for diagnostic in parsed
+        .items
+        .iter()
+        .flat_map(|item| item.diagnostics.iter())
+        .chain(parsed.diagnostics.iter())
+    {
+        if diagnostic.severity == Severity::Error {
+            assert!(
+                diagnostic
+                    .message
+                    .contains("competing park-all and complete-all"),
+                "{text:?} unexpected error: {}",
+                diagnostic.message
+            );
+        }
+    }
+}
+
+#[test]
+fn rewrite_draft_expands_close_outcome_aliases() {
+    for (raw, expected, alias, sigil) in [
+        ("xx", "x!", "x", '!'),
+        ("xs", "x*", "s", '*'),
+        ("x1x", "x1!", "x", '!'),
+        ("x1s", "x1*", "s", '*'),
+        ("x!s", "x!*", "s", '*'),
+        ("x*x", "x*!", "x", '!'),
+        ("x*1x", "x*1!", "x", '!'),
+        ("x@1s", "x@1*", "s", '*'),
+        ("x1~2s", "x1~2*", "s", '*'),
+        ("x=1=s", "x=1=*", "s", '*'),
+        ("x=1=x", "x=1=!", "x", '!'),
+        ("x==s", "x==*", "s", '*'),
+        ("x=fix=s", "x=fix=*", "s", '*'),
+        ("x=1!=x", "x=1!=!", "x", '!'),
+        ("x=1=1s", "x=1=1*", "s", '*'),
+        ("+2 xs", "+2 x*", "s", '*'),
+        ("@r:id=xx", "@r:id=x!", "x", '!'),
+        ("^r:id=x1s", "^r:id=x1*", "s", '*'),
+        ("Fix it @r:id=xs", "Fix it @r:id=x*", "s", '*'),
+        ("Plan\n\nxx", "Plan\n\nx!", "x", '!'),
+    ] {
+        assert_close_outcome_alias(raw, expected, alias, sigil);
+    }
+}
+
+#[test]
+fn rewrite_draft_close_outcome_aliases_stay_literal() {
+    let cases: &[(&str, usize)] = &[
+        ("x=1s", 4),
+        ("x=s", 3),
+        ("x=xs", 4),
+        ("x=1x", 4),
+        ("x!x", 3),
+        ("x*s", 3),
+        ("x1,s", 4),
+        ("x@s", 3),
+        ("Xx", 2),
+        ("Xs", 2),
+        ("@r:id=Xs", 8),
+        ("xS", 2),
+        ("xX", 2),
+        ("x log xs", 8),
+        ("x\n- xs", 6),
+        ("=xs", 3),
+        ("=x", 2),
+        ("Plan xs", 7),
+        ("tax", 3),
+        ("session", 1),
+        ("s:2", 1),
+        ("x1s2", 3),
+        ("[[xx]]", 4),
+        ("`xx`", 3),
+    ];
+    for &(raw, cursor) in cases {
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(
+            rewrite.rule, None,
+            "{raw:?} at {cursor} should stay literal, got {:?}",
+            rewrite.text
+        );
+        assert_eq!(rewrite.text, raw, "{raw:?}");
+    }
+    let after_s = rewrite_draft("=xs", Some(3));
+    assert_eq!(after_s.rule, None, "=x + s should stay literal");
+    assert_eq!(after_s.text, "=xs");
+}
+
+#[test]
+fn rewrite_draft_close_outcome_alias_requires_cursor() {
+    for raw in ["xx", "xs", "x=1=s", "@r:id=xx", "+2 xs"] {
+        let rewrite = rewrite_draft(raw, None);
+        assert_eq!(rewrite.rule, None, "{raw:?} without cursor");
+        assert_eq!(rewrite.text, raw, "{raw:?} without cursor");
+    }
+}
+
+#[test]
+fn rewrite_draft_close_outcome_alias_utf8_and_crlf() {
+    let emoji = "🚀\n\nxs";
+    let cursor = emoji.len();
+    let rewrite = rewrite_draft(emoji, Some(cursor));
+    assert_eq!(rewrite.rule, Some(RewriteRule::ExpandSigilAlias));
+    assert_eq!(rewrite.text, "🚀\n\nx*");
+    assert_eq!(rewrite.cursor, Some(cursor));
+    assert!(emoji.is_char_boundary(rewrite.edits[0].start));
+    assert!(emoji.is_char_boundary(rewrite.edits[0].end));
+    assert_close_parse(&rewrite.text);
+
+    let crlf = "Plan\r\n\r\nxx";
+    let rewrite = rewrite_draft(crlf, Some(crlf.len()));
+    assert_eq!(rewrite.rule, Some(RewriteRule::ExpandSigilAlias));
+    assert_eq!(rewrite.text, "Plan\r\n\r\nx!");
+    assert_close_parse(&rewrite.text);
+}
+
+#[test]
+fn rewrite_draft_close_outcome_alias_leaves_templates() {
+    let raw = "Do work @file:{0}^ %t\n\nxx";
+    let rewrite = rewrite_draft(raw, Some(raw.len()));
+    assert_eq!(rewrite.rule, None);
+    assert_eq!(rewrite.text, raw);
 }

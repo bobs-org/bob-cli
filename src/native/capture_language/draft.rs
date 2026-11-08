@@ -489,6 +489,14 @@ fn merge_past_literal_tokens<'a>(
     tokens
 }
 
+/// Masked whitespace tokens plus merged past literals, the view
+/// [`session_chain_tokens`] uses to decide whether a line is a chain.
+pub(super) fn line_session_view_tokens<'a>(
+    line: &RawLine<'a>,
+) -> Vec<Token<'a>> {
+    merge_past_literal_tokens(line, super::type_marker::masked_tokens(line))
+}
+
 /// Return the line's whitespace-separated tokens when the parent line is
 /// a session-operator chain: at least two tokens, every one passing
 /// [`is_session_chain_token`]. A single token is never a chain, so the
@@ -497,8 +505,7 @@ fn merge_past_literal_tokens<'a>(
 pub(super) fn session_chain_tokens<'a>(
     line: &RawLine<'a>,
 ) -> Option<Vec<Token<'a>>> {
-    let tokens = super::type_marker::masked_tokens(line);
-    let tokens = merge_past_literal_tokens(line, tokens);
+    let tokens = line_session_view_tokens(line);
     if tokens.len() >= 2
         && tokens
             .iter()

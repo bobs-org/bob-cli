@@ -1678,6 +1678,28 @@ pub(super) fn parse_colon_link_tail(
     })
 }
 
+/// The text after `=` on a Pomodoro `@route:id=` / `^route:id=` marker,
+/// confirmed by the existing link-tail parser. `None` when the token is
+/// not a link marker or has no session suffix.
+pub(super) fn link_eq_suffix(token: &str) -> Option<&str> {
+    let (caret, rest) = if let Some(rest) = token.strip_prefix('^') {
+        (true, rest)
+    } else if let Some(rest) = token.strip_prefix("@!") {
+        (false, rest)
+    } else if let Some(rest) = token.strip_prefix('@') {
+        (false, rest)
+    } else {
+        return None;
+    };
+    let (route, tail) = rest.split_once(':')?;
+    if route.is_empty() || !is_route_token(route) {
+        return None;
+    }
+    let parts = parse_colon_link_tail(token, route, tail, caret).ok()?;
+    let offset = parts.start_offset?;
+    token.get(offset + 1..)
+}
+
 pub(super) fn parse_pomodoro_route_token(
     token: &str,
 ) -> Result<RouteToken, String> {

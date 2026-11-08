@@ -17,6 +17,11 @@ fn capture_rewrite_help_describes_only_the_remaining_rules() {
         "capture-rewrite help miscounts its rules:\n{out}"
     );
     assert!(
+        out.contains("lowercase 'x' or 's'")
+            || out.contains("x' or 's'"),
+        "capture-rewrite help should describe the x/s close-outcome alias:\n{out}"
+    );
+    assert!(
         !out.contains("Template start"),
         "capture-rewrite help still documents the template start:\n{out}"
     );
@@ -1088,4 +1093,102 @@ fn capture_rewrite_json_leaves_a_split_slash_literal() {
         .expect("capture-rewrite JSON");
     assert_eq!(json["changed"], false, "{json}");
     assert_eq!(json["text"], "=/", "{json}");
+}
+
+fn capture_rewrite_json(
+    draft: &str,
+    cursor: Option<usize>,
+) -> serde_json::Value {
+    let mut command = bob_command();
+    command.arg("capture-rewrite").arg("-f").arg("json");
+    if let Some(cursor) = cursor {
+        command.arg("-c").arg(cursor.to_string());
+    }
+    let output = command
+        .arg("--")
+        .arg(draft)
+        .output()
+        .expect("run bob capture-rewrite");
+    assert_success(&output);
+    assert!(stderr(&output).is_empty(), "{}", format_output(&output));
+    serde_json::from_str(stdout(&output).trim()).expect("capture-rewrite JSON")
+}
+
+#[test]
+fn capture_rewrite_json_expands_close_outcome_aliases() {
+    for (draft, expected, replacement, summary) in [
+        ("xx", "x!", "!", "Typed ! for x"),
+        ("x=1=s", "x=1=*", "*", "Typed * for s"),
+        ("@r:id=xx", "@r:id=x!", "!", "Typed ! for x"),
+        ("+2 xs", "+2 x*", "*", "Typed * for s"),
+    ] {
+        let json = capture_rewrite_json(draft, Some(draft.len()));
+        assert_eq!(json["ok"], true, "{draft}");
+        assert_eq!(json["schema_version"], 1, "{draft}");
+        assert_eq!(json["input"], draft, "{draft}");
+        assert_eq!(json["text"], expected, "{draft}");
+        assert_eq!(json["changed"], true, "{draft}");
+        assert_eq!(json["cursor"], draft.len(), "{draft}");
+        assert_eq!(json["rule"], "expand_sigil_alias", "{draft}");
+        assert_eq!(
+            json["edits"],
+            serde_json::json!([
+                {
+                    "range": { "start": draft.len() - 1, "end": draft.len() },
+                    "replacement": replacement,
+                },
+            ]),
+            "{draft}"
+        );
+        assert_eq!(json["summary"], summary, "{draft}");
+    }
+}
+
+#[test]
+fn capture_rewrite_json_leaves_close_outcome_letters_literal_without_cursor() {
+    for draft in ["xx", "xs", "x=1=s", "@r:id=xx", "+2 xs"] {
+        let json = capture_rewrite_json(draft, None);
+        assert_eq!(json["changed"], false, "{draft}: {json}");
+        assert_eq!(json["text"], draft, "{draft}");
+        assert!(json["rule"].is_null(), "{draft}: {json}");
+    }
+}
+
+#[test]
+fn capture_parse_and_capture_keep_xx_as_prose() {
+    let parse = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("xx")
+        .output()
+        .expect("run bob capture-parse xx");
+    assert_success(&parse);
+    let json: serde_json::Value = serde_json::from_str(stdout(&parse).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["mode"], "task", "{json}");
+    assert_eq!(json["input"], "xx", "{json}");
+
+    let temp = TempDir::new("bob-cli-xx-prose");
+    let vault = temp.path().join("vault");
+    std::fs::create_dir_all(&vault).expect("create vault");
+    let dry = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--dry-run")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("xx")
+        .output()
+        .expect("run bob capture --dry-run xx");
+    assert_success(&dry);
+    let json: serde_json::Value = serde_json::from_str(stdout(&dry).trim())
+        .expect("capture dry-run JSON");
+    assert_eq!(
+        json["kind"], "task",
+        "xx dry-run should stay a task, got {json}"
+    );
 }

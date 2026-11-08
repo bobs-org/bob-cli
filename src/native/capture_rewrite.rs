@@ -153,7 +153,12 @@ word, inside an unclosed backtick span, or inside a wikilink; 'Fix it =' \
 becomes 'Fix it ~', while 'Fix it -' stays literal. Typing '=' after a bare \
 '~' flips it to '~~' (Linked From), and '~~=' flips it back to '~' only \
 where the result opens an empty Links To target. The past-session dash alias \
-still works inside x= tokens, such as 'x=2-' to 'x=2~'. 'bob capture' and \
+still works inside x= tokens, such as 'x=2-' to 'x=2~'. Typing a lowercase \
+'x' or 's' that ends a close selection aliases '!' (complete) or '*' (park): \
+'xx' becomes 'x!', 'xs' becomes 'x*', 'x=1=s' becomes 'x=1=*', and \
+'@r:id=xx' becomes '@r:id=x!'. Competing wildcards ('x!s' to 'x!*') stay a \
+viable prefix. The letters stay literal in past names ('x=1s'), after a \
+dangling ',' or '@', on child bullets, and in prose. 'bob capture' and \
 'bob capture-parse' keep the literal text. Without --cursor this rule is \
 skipped rather than searching the draft.\n\n\
 Relation direction toggle (requires --cursor): typing '~' or '=' immediately \
