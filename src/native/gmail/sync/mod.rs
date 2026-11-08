@@ -10,13 +10,22 @@
 //! - [`scan`] walks the vault (with `bob gmail link -a`'s exclusions) for
 //!   open `#task` rows that link an indexed mail note on their own line or
 //!   in a direct link-only child bullet, returning a [`scan::WatchScan`].
+//! - [`discover`] pages `label:<enrollment label>` searches `--ids-only`
+//!   through the last page, deduplicates and validates ids, stops at the
+//!   5,000-id cap, and selects at most `-l` unseen filing candidates.
+//! - [`guard`] holds the host-local per-account file guard for a live run.
+//! - [`retry`] shares one `-r` budget across guard, retry, and vault-lock
+//!   waits with pacing and bounded backoff.
 //!
 //! Consumers (discovery, filing, the report, and the later watch loop) use
 //! these structs directly; none of them parses a rendered report. Scanning
 //! and deciding never write: the apply step owns durability and appends
 //! enrollment events only after the vault writes they describe are durable.
 
+pub(crate) mod discover;
 pub(crate) mod enroll;
+pub(crate) mod guard;
+pub(crate) mod retry;
 pub(crate) mod scan;
 
 /// One Gmail conversation's identity: the lowercase account plus the

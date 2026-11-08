@@ -270,6 +270,83 @@ impl FakeGog {
             .expect("write fake failure state");
     }
 
+    /// Set paged discovery responses in order, each `{"threads": [{"id":
+    /// ...}], "nextPageToken": ...|None}`. The fake serves page 0 when
+    /// `--page` is absent and page N when `--page` equals page N-1's token.
+    pub(crate) fn set_search_pages(&self, pages: serde_json::Value) {
+        let mut state: serde_json::Value = fs::read(&self.state)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        state["search_pages"] = pages;
+        fs::write(&self.state, serde_json::to_vec(&state).unwrap())
+            .expect("write fake search pages");
+    }
+
+    /// Fail the next `remaining` calls for `operation`, then succeed. Used
+    /// for bounded-backoff and partial-success tests.
+    pub(crate) fn set_transient_failure(
+        &self,
+        operation: &str,
+        stderr: &str,
+        code: i32,
+        remaining: u32,
+    ) {
+        let mut state: serde_json::Value = fs::read(&self.state)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        if !state
+            .get("fail_remaining")
+            .is_some_and(serde_json::Value::is_object)
+        {
+            state["fail_remaining"] = serde_json::json!({});
+        }
+        state["fail_remaining"][operation] = serde_json::json!({
+            "stderr": stderr,
+            "code": code,
+            "remaining": remaining,
+        });
+        fs::write(&self.state, serde_json::to_vec(&state).unwrap())
+            .expect("write fake transient state");
+    }
+
+    /// Map thread ids to full thread envelopes for per-thread outcomes.
+    pub(crate) fn set_threads(&self, threads: serde_json::Value) {
+        let mut state: serde_json::Value = fs::read(&self.state)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        state["threads"] = threads;
+        fs::write(&self.state, serde_json::to_vec(&state).unwrap())
+            .expect("write fake threads");
+    }
+
+    /// Fail one thread id permanently with `stderr`.
+    pub(crate) fn set_thread_fail(
+        &self,
+        thread_id: &str,
+        stderr: &str,
+        code: i32,
+    ) {
+        let mut state: serde_json::Value = fs::read(&self.state)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        if !state
+            .get("thread_fail")
+            .is_some_and(serde_json::Value::is_object)
+        {
+            state["thread_fail"] = serde_json::json!({});
+        }
+        state["thread_fail"][thread_id] = serde_json::json!({
+            "stderr": stderr,
+            "code": code,
+        });
+        fs::write(&self.state, serde_json::to_vec(&state).unwrap())
+            .expect("write fake thread failure");
+    }
+
     /// Replace the account's `labels list` response (objects with `id`,
     /// `name`, and `type`) without changing the scenario defaults.
     pub(crate) fn set_labels(&self, labels: serde_json::Value) {

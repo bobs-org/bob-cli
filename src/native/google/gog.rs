@@ -530,6 +530,42 @@ pub(crate) fn classify_gog_failure(
         )
         .with_hint(&format!("enable it at {url}"));
     }
+    if blob.contains("ratelimitexceeded")
+        || blob.contains("rate_limit_exceeded")
+        || blob.contains("rate-limit-exceeded")
+        || blob.contains("rate limit exceeded")
+        || blob.contains("quotaexceeded")
+        || blob.contains("quota_exceeded")
+        || blob.contains("quota-exceeded")
+        || blob.contains("quota exceeded")
+        || blob.contains("429")
+    {
+        return GoogleError::runtime(
+            "rate_limited",
+            format!("Google throttled {} requests", service.service_name),
+        )
+        .with_hint("wait and run again; the next run resumes");
+    }
+    if blob.contains("backenderror")
+        || blob.contains("internalerror")
+        || blob.contains("serviceunavailable")
+        || blob.contains("badgateway")
+        || blob.contains("gatewaytimeout")
+        || blob.contains("\"code\":500")
+        || blob.contains("\"code\": 500")
+        || blob.contains("\"code\":502")
+        || blob.contains("\"code\": 502")
+        || blob.contains("\"code\":503")
+        || blob.contains("\"code\": 503")
+        || blob.contains("\"code\":504")
+        || blob.contains("\"code\": 504")
+    {
+        return GoogleError::runtime(
+            "transient",
+            format!("Google had a transient {} failure", service.service_name),
+        )
+        .with_hint("wait and run again; the next run resumes");
+    }
     if blob.contains("store secret") || blob.contains("keyring") {
         return GoogleError::runtime(
             "keyring",
@@ -699,6 +735,30 @@ mod tests {
         assert_eq!(parse_semver("v0.44.1"), Some((0, 44, 1)));
         assert!(parse_semver("0.44.0").unwrap() >= MIN_VERSION);
         assert!(parse_semver("0.43.9").unwrap() < MIN_VERSION);
+    }
+
+    #[test]
+    fn maps_rate_limit_and_transient_before_redaction() {
+        for stderr in [
+            "rateLimitExceeded: Rate limit exceeded",
+            "User-rate-limit-exceeded",
+            "429 Too Many Requests",
+            "quotaExceeded: Quota exceeded",
+        ] {
+            let error = classify_gog_failure(GMAIL, "", stderr);
+            assert_eq!(error.kind(), "rate_limited", "{stderr}");
+            assert_eq!(error.exit_code(), 1);
+        }
+        for stderr in [
+            "backendError: Backend error",
+            "internalError",
+            "serviceUnavailable",
+            "\"code\":503",
+        ] {
+            let error = classify_gog_failure(GMAIL, "", stderr);
+            assert_eq!(error.kind(), "transient", "{stderr}");
+            assert_eq!(error.exit_code(), 1);
+        }
     }
 
     #[test]

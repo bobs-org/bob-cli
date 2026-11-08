@@ -348,6 +348,17 @@ fail_spec = (state.get("fail") or {}).get(op)
 if fail_spec:
     fail(fail_spec.get("stderr") or "gog failed", int(fail_spec.get("code") or 1))
 
+# Transient failures: fail the next N calls for one op, then succeed. Used
+# to pin bounded backoff and partial success without timing flakes.
+remaining_spec = (state.get("fail_remaining") or {}).get(op)
+if isinstance(remaining_spec, dict) and int(remaining_spec.get("remaining") or 0) > 0:
+    remaining_spec["remaining"] = int(remaining_spec.get("remaining") or 0) - 1
+    save_state(state)
+    fail(
+        remaining_spec.get("stderr") or "gog failed",
+        int(remaining_spec.get("code") or 1),
+    )
+
 if op == "version":
     dump(
         {
@@ -851,6 +862,36 @@ if op == "auth_remove":
 if op == "search":
     query = pos[2] if len(pos) > 2 else ""
     page = flag_value("--page")
+    # Discovery paging control: state["search_pages"] is a list of pages in
+    # order, each {"threads": [{"id": ...}], "nextPageToken": ...|None}.
+    # The first page is returned when --page is absent; page N>0 is returned
+    # when --page equals the previous page's nextPageToken. Invalid ids in
+    # the pages are returned verbatim so the caller validates them.
+    search_pages = state.get("search_pages")
+    if isinstance(search_pages, list) and search_pages:
+        # Discovery stays on Gmail's read allowlist: paged enumeration is
+        # ids-only, never a hydrated search.
+        if "--ids-only" not in args:
+            fail("fake gog: discovery search requires --ids-only", 2)
+        if page is None:
+            dump(search_pages[0])
+        else:
+            for index in range(1, len(search_pages)):
+                prev_token = (search_pages[index - 1] or {}).get(
+                    "nextPageToken"
+                )
+                if prev_token == page:
+                    dump(search_pages[index])
+                    break
+            else:
+                dump(
+                    {
+                        "threads": [],
+                        "nextPageToken": None,
+                        "resultSizeEstimate": 0,
+                    }
+                )
+        raise SystemExit(0)
     if "in:sent" in query:
         sent_threads = state.get("sent_threads") or {}
         ids = []
@@ -978,6 +1019,25 @@ if op == "thread_get":
         dump(state["thread"])
         raise SystemExit(0)
     hex_id = pos[3] if len(pos) > 3 else "1a0b9eb2cc26ab96"
+    # Per-thread outcomes: state["threads"] maps a thread id to its envelope
+    # (with per-message labelIds for routing), state["thread_fail"] maps an
+    # id to a permanent failure, and state["thread_fail_remaining"] maps an
+    # id to a transient failure that succeeds after N attempts.
+    per_remaining = (state.get("thread_fail_remaining") or {}).get(hex_id)
+    if isinstance(per_remaining, dict) and int(per_remaining.get("remaining") or 0) > 0:
+        per_remaining["remaining"] = int(per_remaining.get("remaining") or 0) - 1
+        save_state(state)
+        fail(
+            per_remaining.get("stderr") or "gog failed",
+            int(per_remaining.get("code") or 1),
+        )
+    per_fail = (state.get("thread_fail") or {}).get(hex_id)
+    if isinstance(per_fail, dict):
+        fail(per_fail.get("stderr") or "gog failed", int(per_fail.get("code") or 1))
+    per_threads = state.get("threads") or {}
+    if hex_id in per_threads:
+        dump(per_threads[hex_id])
+        raise SystemExit(0)
     sent_threads = state.get("sent_threads") or {}
     if hex_id in sent_threads:
         entry = sent_threads[hex_id]

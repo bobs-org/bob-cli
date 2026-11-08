@@ -52,6 +52,17 @@ pub(crate) trait GmailRead {
 
     fn labels_list(&self, account: &str)
         -> Result<Vec<GmailLabel>, GmailError>;
+
+    /// Fetch a thread's headers, labels, and dates without bodies. Defaults
+    /// to the full fetch so existing test doubles keep working; production
+    /// forwards to the lighter metadata read.
+    fn thread_metadata(
+        &self,
+        account: &str,
+        thread_id: &str,
+    ) -> Result<GmailThread, GmailError> {
+        self.thread_get(account, thread_id)
+    }
 }
 
 impl GmailRead for Gog {
@@ -95,6 +106,14 @@ impl GmailRead for Gog {
         account: &str,
     ) -> Result<Vec<GmailLabel>, GmailError> {
         Gog::labels_list(self, account)
+    }
+
+    fn thread_metadata(
+        &self,
+        account: &str,
+        thread_id: &str,
+    ) -> Result<GmailThread, GmailError> {
+        Gog::thread_metadata(self, account, thread_id)
     }
 }
 

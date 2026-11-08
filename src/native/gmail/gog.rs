@@ -696,6 +696,8 @@ fn redact_gmail_read_error(error: GmailError) -> GmailError {
         }
         "network" => "gog could not reach Google",
         "timeout" => "gog timed out while reading Gmail",
+        "rate_limited" => "Gmail throttled the read; retry with backoff",
+        "transient" => "Gmail had a transient failure; retry with backoff",
         "api_disabled" => "the Gmail API is not enabled for this Cloud project",
         _ => return redact_gmail_setup_error(error, "read-only Gmail request"),
     };
@@ -831,6 +833,24 @@ mod tests {
                 "{kind} must point at login: {:?}",
                 error.hint()
             );
+        }
+    }
+
+    #[test]
+    fn read_errors_keep_rate_limit_transient_without_echo() {
+        use crate::native::google::{gog::classify_gog_failure, GMAIL};
+
+        for (stderr, kind) in [
+            ("rateLimitExceeded: PRIVATE_SENTINEL quota", "rate_limited"),
+            ("429 Too Many Requests PRIVATE_SENTINEL", "rate_limited"),
+            ("backendError: PRIVATE_SENTINEL down", "transient"),
+        ] {
+            let error = redact_gmail_read_error(classify_gog_failure(
+                GMAIL, "", stderr,
+            ));
+            assert_eq!(error.kind(), kind, "{stderr}");
+            assert_eq!(error.exit_code(), 1, "{stderr}");
+            assert!(!error.message().contains("PRIVATE_SENTINEL"));
         }
     }
 
