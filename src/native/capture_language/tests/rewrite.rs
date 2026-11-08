@@ -858,6 +858,91 @@ fn rewrite_draft_relation_equals_alias_stays_literal() {
 }
 
 #[test]
+fn rewrite_draft_expands_dot_route_alias() {
+    for (raw, expected) in [
+        ("Buy milk .", "Buy milk @"),
+        ("Buy milk\t.", "Buy milk\t@"),
+        ("Buy\n- buy eggs .", "Buy\n- buy eggs @"),
+        ("Fix it &dev:build .", "Fix it &dev:build @"),
+        ("Buy milk #fix .", "Buy milk #fix @"),
+        ("@a+x > .", "@a+x > @"),
+        ("Buy milk < .", "Buy milk < @"),
+        ("Fix it `code` .", "Fix it `code` @"),
+        ("Buy milk\n\nFix it .", "Buy milk\n\nFix it @"),
+        ("Café run .", "Café run @"),
+        ("@@sase Buy .", "@@sase Buy @"),
+    ] {
+        let cursor = raw.len();
+        assert!(raw.is_char_boundary(cursor), "{raw:?}");
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(
+            rewrite.rule,
+            Some(RewriteRule::ExpandSigilAlias),
+            "{raw:?}"
+        );
+        assert_eq!(rewrite.text, expected, "{raw:?}");
+        assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
+        assert_eq!(
+            rewrite.summary.as_deref(),
+            Some("Typed @ for ."),
+            "{raw:?}"
+        );
+        assert_eq!(rewrite.edits.len(), 1, "{raw:?}");
+        assert_eq!(rewrite.edits[0].start, cursor - 1, "{raw:?}");
+        assert_eq!(rewrite.edits[0].end, cursor, "{raw:?}");
+        assert_eq!(rewrite.edits[0].replacement, "@", "{raw:?}");
+        assert!(raw.is_char_boundary(rewrite.edits[0].start), "{raw:?}");
+
+        let again = rewrite_draft(&rewrite.text, rewrite.cursor);
+        assert_eq!(again.rule, None, "idempotent {raw:?}");
+        assert_eq!(again.text, expected, "idempotent {raw:?}");
+    }
+}
+
+#[test]
+fn rewrite_draft_dot_route_alias_stays_literal() {
+    let mut cases = vec![
+        (".", 1),
+        ("  .", 3),
+        ("- .", 3),
+        ("Buy milk\n.", "Buy milk\n.".len()),
+        ("Buy\n  - foo .", "Buy\n  - foo .".len()),
+        (
+            "@cash^goog-exit@\n- [ ] .",
+            "@cash^goog-exit@\n- [ ] .".len(),
+        ),
+        ("Buy milk.", "Buy milk.".len()),
+        ("Buy milk @.", "Buy milk @.".len()),
+        ("x .", 3),
+        ("=deep .", 7),
+        ("+5 .", 4),
+        ("x log work .", 12),
+        ("@sase Buy milk .", 16),
+        ("run `cargo .", 12),
+        ("see [[foo .", 11),
+        ("Fix ((foo .", 11),
+    ];
+    for raw in ["Buy . milk", "Buy .foo"] {
+        cases.push((raw, raw.find('.').expect("dot") + 1));
+    }
+    for (raw, cursor) in cases {
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(rewrite.rule, None, "{raw:?} at {cursor}");
+        assert_eq!(rewrite.text, raw, "{raw:?} at {cursor}");
+    }
+
+    let raw = "Buy milk .";
+    let rewrite = rewrite_draft(raw, None);
+    assert_eq!(rewrite.rule, None);
+    assert_eq!(rewrite.text, raw);
+
+    let raw = "Task {0} %t\n\nBuy milk .";
+    let rewrite = rewrite_draft(raw, Some(raw.len()));
+    assert_eq!(rewrite.rule, None);
+    assert_eq!(rewrite.text, raw);
+}
+
+#[test]
 fn rewrite_draft_expands_comma_to_parent_task_picker() {
     for (raw, expected) in [
         ("@cash,", "@cash+"),

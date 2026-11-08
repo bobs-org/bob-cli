@@ -134,7 +134,13 @@ becomes '^', or ';' becomes ':', only where bob's completion grammar would \
 open the corresponding Block ID picker. A whole-item ';' becomes ':' only \
 where the Task Link picker opens. A '- .' or '- ;' first-level bullet in a \
 sealed project-note item becomes '- ^' or '- :' where the Move picker would \
-open, and '- ^.' becomes '- ^^'. Typing '\\' or '/' becomes '#' wherever \
+open, and '- ^.' becomes '- ^^'. Typing '.' after a space or tab that \
+follows body text becomes '@' wherever a bare '@' would open route \
+completion. It stays literal at a line or bullet-body start, after a \
+checkbox, glued to a word, inside an unclosed backtick span or a wikilink, \
+and in positions with no route field. For example, 'Buy milk .' becomes \
+'Buy milk @', while '@errands.' still becomes '@errands^' as the first '.' \
+rule. Typing '\\' or '/' becomes '#' wherever \
 bob's completion grammar would open a '#' menu: task type, section, drawer \
 and drawer bullet, Pomodoro name, named-start and past-session name, split \
 type, merge destination, and wikilink heading. A '\\' or '/' at a line \

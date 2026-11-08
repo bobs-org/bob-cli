@@ -130,7 +130,9 @@ pub(crate) fn rewrite_draft(
 /// instead inserts ` +` to open the next parent-task picker. Typing `=` right
 /// after a bare `~` that opens the Links To picker turns it into `~~` (Linked
 /// From), while `~~=` turns back into `~`. A spaced `=` aliases `~` only where
-/// a bare relation sigil would open Links To. A lowercase `x` or `s` that
+/// a bare relation sigil would open Links To, and a spaced `.` aliases `@`
+/// only where a bare `@` would open route completion (never after a bare
+/// task checkbox). A lowercase `x` or `s` that
 /// ends a close selection aliases `!` or `*`. Everywhere else `=` stays
 /// literal, including inside a wikilink.
 fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
@@ -149,14 +151,20 @@ fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
     if alias == "\\" || alias == "/" {
         return expand_hash_alias(raw_text, start, cursor, alias);
     }
+    if alias == "," {
+        let token = tokenize_with_spans(raw_text)
+            .into_iter()
+            .find(|token| token.end == cursor)?;
+        return expand_parent_task_comma_alias(raw_text, start, cursor, token);
+    }
+    if alias == "." {
+        return expand_dot_block_id_alias(raw_text, start, cursor)
+            .or_else(|| expand_dot_route_alias(raw_text, start, cursor));
+    }
     let token = tokenize_with_spans(raw_text)
         .into_iter()
         .find(|token| token.end == cursor)?;
-    if alias == "," {
-        return expand_parent_task_comma_alias(raw_text, start, cursor, token);
-    }
     let (sigil, allowed_context) = match alias {
-        "." => ('^', super::completion::CompletionContext::TaskBlockId),
         ";" => (':', super::completion::CompletionContext::PomodoroBlockId),
         _ => return None,
     };
@@ -168,24 +176,15 @@ fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
     if let Some(field) =
         super::completion::completion_field_at(&candidate, cursor)
     {
-        let allowed =
-            match alias {
-                "." => (field.context == allowed_context
-                    && field.replacement.0 == cursor)
-                    || (field.context
-                        == super::completion::CompletionContext::ProjectTaskMove
-                        && field.replacement == (cursor, cursor)),
-                ";" if field.context == allowed_context => {
-                    field.replacement.0 == cursor
-                }
-                ";" => (field.context
-                    == super::completion::CompletionContext::TaskLink
-                    && field.replacement == (start, cursor))
-                    || (field.context
-                        == super::completion::CompletionContext::ProjectTaskMove
-                        && field.replacement == (cursor, cursor)),
-                _ => false,
-            };
+        let allowed = if field.context == allowed_context {
+            field.replacement.0 == cursor
+        } else {
+            (field.context == super::completion::CompletionContext::TaskLink
+                && field.replacement == (start, cursor))
+                || (field.context
+                    == super::completion::CompletionContext::ProjectTaskMove
+                    && field.replacement == (cursor, cursor))
+        };
         if allowed {
             return Some(finish_sigil_alias(
                 raw_text, &candidate, start, cursor, sigil, alias,
@@ -194,12 +193,47 @@ fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
     }
     // Choice alias: `.` that completes a `- ^^` marker while the picker is
     // closed. `;` never aliases here: `- ::` is the `move_choice_colon`
-    // teaching error. Lexical only: the candidate line must be a first-level
-    // bullet in a sealed project-note item whose move scan is a Choice
-    // ending at the cursor.
-    if alias != "." {
+    // teaching error. (This tail is now only reachable for `;`,
+    // which never aliases here.)
+    None
+}
+
+/// Typing `.` where `^` would open a Block ID picker aliases it to `^`.
+/// A `.` that completes a `- ^^` choice marker on a sealed project-note
+/// bullet also aliases `^`. Everywhere else the `.` handling falls through
+/// to [`expand_dot_route_alias`].
+fn expand_dot_block_id_alias(
+    raw_text: &str,
+    start: usize,
+    cursor: usize,
+) -> Option<DraftRewrite> {
+    let token = tokenize_with_spans(raw_text)
+        .into_iter()
+        .find(|token| token.end == cursor)?;
+    if token.end != cursor {
         return None;
     }
+    let mut candidate = raw_text.to_string();
+    candidate.replace_range(start..cursor, "^");
+    if let Some(field) =
+        super::completion::completion_field_at(&candidate, cursor)
+    {
+        let allowed = (field.context
+            == super::completion::CompletionContext::TaskBlockId
+            && field.replacement.0 == cursor)
+            || (field.context
+                == super::completion::CompletionContext::ProjectTaskMove
+                && field.replacement == (cursor, cursor));
+        if allowed {
+            return Some(finish_sigil_alias(
+                raw_text, &candidate, start, cursor, '^', ".",
+            ));
+        }
+    }
+    // Choice alias: `.` that completes a `- ^^` marker while the picker is
+    // closed. Lexical only: the candidate line must be a first-level
+    // bullet in a sealed project-note item whose move scan is a Choice
+    // ending at the cursor.
     let draft = split_capture_draft(&candidate);
     let (item, line_index, line) = draft.items.iter().find_map(|item| {
         item.lines
@@ -233,7 +267,41 @@ fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
         _ => return None,
     }
     Some(finish_sigil_alias(
-        raw_text, &candidate, start, cursor, sigil, alias,
+        raw_text, &candidate, start, cursor, '^', ".",
+    ))
+}
+
+/// Typing `.` after a space or tab that follows body text aliases `@` only
+/// where a bare `@` would open route completion. Line and bullet-body
+/// starts, a bare checkbox, glued words, code spans, and wikilink fields
+/// stay literal.
+fn expand_dot_route_alias(
+    raw_text: &str,
+    start: usize,
+    cursor: usize,
+) -> Option<DraftRewrite> {
+    if !dot_route_alias_position_ok(raw_text, start) {
+        return None;
+    }
+    if tokenize_with_spans(raw_text)
+        .into_iter()
+        .all(|token| token.end != cursor)
+    {
+        return None;
+    }
+    let mut candidate = raw_text.to_string();
+    candidate.replace_range(start..cursor, "@");
+    if wikilink_claims(&candidate, cursor) {
+        return None;
+    }
+    let field = super::completion::completion_field_at(&candidate, cursor)?;
+    if field.context != super::completion::CompletionContext::Route
+        || field.replacement != (cursor, cursor)
+    {
+        return None;
+    }
+    Some(finish_sigil_alias(
+        raw_text, &candidate, start, cursor, '@', ".",
     ))
 }
 
@@ -457,6 +525,21 @@ fn expand_relation_equals_alias(
 }
 
 fn relation_alias_position_ok(raw_text: &str, alias_start: usize) -> bool {
+    sigil_alias_position_ok(raw_text, alias_start, false)
+}
+
+/// Spaced `.` aliases `@` everywhere `=` aliases `~`, except after a bare
+/// task checkbox: `- [ ] .` keeps its literal dot while `- [ ] =` still
+/// becomes `- [ ] ~`.
+fn dot_route_alias_position_ok(raw_text: &str, alias_start: usize) -> bool {
+    sigil_alias_position_ok(raw_text, alias_start, true)
+}
+
+fn sigil_alias_position_ok(
+    raw_text: &str,
+    alias_start: usize,
+    strip_checkbox: bool,
+) -> bool {
     if alias_start == 0
         || !matches!(
             raw_text.as_bytes().get(alias_start - 1),
@@ -480,6 +563,13 @@ fn relation_alias_position_ok(raw_text: &str, alias_start: usize) -> bool {
         && matches!(bytes[1], b' ' | b'\t')
     {
         prefix = prefix[1..].trim_start_matches([' ', '\t']);
+    }
+    if strip_checkbox {
+        let (checkbox, rest) =
+            super::project_tasks::split_leading_checkbox(prefix);
+        if checkbox.is_some() {
+            prefix = rest.trim_start_matches([' ', '\t']);
+        }
     }
     if prefix.trim().is_empty()
         || prefix.bytes().filter(|byte| *byte == b'`').count() % 2 != 0

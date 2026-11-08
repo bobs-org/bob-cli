@@ -6,26 +6,26 @@ description: Index of bob capture tokens with syntax, examples, and links into t
 # Capture syntax
 
 `bob capture` writes tasks, bullets, reference jobs, or Pomodoro changes from
-one draft. This token index links to the full [Capture contract](../capture.md).
+one draft; this index links the full [Capture contract](../capture.md).
 
 `@` chooses a destination; `#` names a section, drawer, or task type; `%` selects a
-capture directive. In completion, standalone `#` and `%` open their menus.
+capture directive. In completion, standalone `#` and `%` open menus.
 
 Examples use a synthetic vault (`BOB_NOW=2026-10-20 12:00:00`, `TZ=UTC`),
 with network, sync, and hooks disabled. [First Bob day](../start/first-bob-day.md)
 supplies a demo. Session examples need an open `## Pomodoros` entry;
 dependencies need Obsidian Tasks settings defining Blocked as `?`. Single-quote
-Zsh drafts, including `'=focus'` and `'x =focus'`, to avoid shell expansion.
+Zsh drafts (`'=focus'`, `'x =focus'`) to avoid shell expansion.
 
-Options precede the draft. An unknown alphabetic long option such as
-`--anything` is rejected before draft text begins; after text begins it is
-literal. `--` ends option parsing: `bob capture -- '--anything'` captures
-that text, and `bob capture --dry-run -- '--'` previews the bare shift token.
+Options precede the draft: an unknown alphabetic long option such as
+`--anything` is rejected before draft text begins but literal after it, and
+`--` ends option parsing (`bob capture -- '--anything'` captures that text;
+`bob capture --dry-run -- '--'` previews the bare shift token).
 
 ## Token index
 
-Each row is a distinct operation. Equivalent spellings share a heading.
-Incomplete picker input is labeled **picker** and is refused if you submit it.
+Each row is a distinct operation; equivalent spellings share a heading.
+Incomplete picker input, labeled **picker**, is refused on submit.
 
 | Token | Meaning | Heading |
 | --- | --- | --- |
@@ -103,6 +103,7 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | --- | --- | --- |
 | `+` | `+[N]`, `++[N]`, `+query` | Resize, shift, or open the parent-task picker |
 | `,` | Parent Task picker positions only | Alias `+`; after a complete target run, insert ` +` to open the next picker |
+| `.` | Right after `@route`; after a space following text | Alias `^`; alias `@` |
 | `+` | `@route+id`; typed-last owner; after `#name` | Child/Ensure Next, typed-last alias, or name suffix |
 | `%n` | Item edge | Pomodoro note |
 | `#` | `@route#Section`, edge `#type`, existing-task `#type` | Heading, task type, or retype |
@@ -250,8 +251,8 @@ Contract: [Command-line options](../capture.md#command-line-options) and
 #### Inbox task destinations
 
 A capture that changes an existing inbox task's status reports its top-level
-task block as a route candidate; changing a nested task routes that whole block.
-The CLI leaves unanswered candidates in place. Repeatable
+task block as a route candidate; a nested change routes that whole block.
+Unanswered candidates stay in place. Repeatable
 `-i N=note` or `--inbox-route KEY=note` moves a candidate after the capture action;
 `-i N=` keeps one, and `-i keep` keeps every otherwise unanswered candidate.
 Numbers and keys come from that draft's `inbox_route` preview.
@@ -264,9 +265,9 @@ bob capture --dry-run -i 'mac_inbox.md#^triage=work' -- '@mac_inbox:triage'
 ```
 
 Both commands only preview. The second plans the link, then the move to
-`work.md` and link repairs. Removing `--dry-run` from that second command
-commits the action and move together; do not commit the first command before
-answering. New tasks and blocks with no status changes produce no candidates.
+`work.md` and link repairs; removing `--dry-run` from it commits the action
+and move together. Do not commit the first command before answering. New
+tasks and blocks with no status changes produce no candidates.
 Destinations exclude inboxes; stale keys or refused moves abort the batch.
 
 Contract: [Routing inbox tasks out](../capture.md#routing-inbox-tasks-out).
@@ -276,7 +277,7 @@ Contract: [Routing inbox tasks out](../capture.md#routing-inbox-tasks-out).
 ### Bare public URL {#bare-public-url}
 
 When the URL routing policy admits it, a bare public URL queues a background
-reference job under `mac_inbox`. The confirmation says reading queue; the
+reference job under `mac_inbox`. Confirmation says reading queue; the
 job files the note later. `-R, --no-ref` keeps it a task.
 
 ```bash
@@ -352,16 +353,16 @@ Call Alex @work
 Call Sam @work
 ```
 
-A successful real `%t` capture saves the template block (not the rows) on the
-shelf. Manage it with `bob capture-templates`. A `%t` anywhere but the first
+A successful real `%t` capture shelves the template block, not the rows;
+manage it with `bob capture-templates`. A `%t` anywhere but the first
 item is refused (`template_directive_misplaced`).
 
 Contract: [Bulk templates](../capture.md#bulk-templates).
 
 ## Block IDs and linked tasks
 
-Mac Capture uses `capture-rewrite` for `@route.` / `@route;` → `^` / `:`
-and whole-item `;` → `:`; direct input stays literal.
+Mac Capture uses `capture-rewrite` for `@route.` / `@route;` → `^` / `:`,
+whole-item `;` → `:`, and spaced `.` → `@`; direct input stays literal.
 
 ### `@route^block-id` {#at-route-caret}
 

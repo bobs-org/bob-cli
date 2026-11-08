@@ -363,6 +363,39 @@ fn capture_rewrite_json_expands_a_move_bullet_sigil_alias() {
 }
 
 #[test]
+fn capture_rewrite_json_expands_a_dot_route_alias() {
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg("10")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Buy milk .")
+        .output()
+        .expect("run bob capture-rewrite dot route alias");
+
+    assert_success(&output);
+    assert!(stderr(&output).is_empty(), "{}", format_output(&output));
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["input"], "Buy milk .");
+    assert_eq!(json["text"], "Buy milk @");
+    assert_eq!(json["changed"], true);
+    assert_eq!(json["cursor"], 10);
+    assert_eq!(json["rule"], "expand_sigil_alias");
+    assert_eq!(
+        json["edits"],
+        serde_json::json!([
+            { "range": { "start": 9, "end": 10 }, "replacement": "@" },
+        ])
+    );
+    assert_eq!(json["summary"], "Typed @ for .");
+}
+
+#[test]
 fn capture_rewrite_json_leaves_a_third_at_alone() {
     let output = bob_command()
         .arg("capture-rewrite")
