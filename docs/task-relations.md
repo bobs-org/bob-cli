@@ -796,8 +796,8 @@ The executable cases live in `tests/fixtures/relation_labels/vectors.json`
 | --- | --- | --- |
 | LG1 | Links stage ↵ on a same-note T | S's LINKS, T's mirror, and S's mint in one transaction; one Ctrl+Z undoes all |
 | LG2 | cross-note T / the follow-up finds T changed | S commits, then T's mirror follows / S stands, suffix `· 🪢 LINKED FROM not updated` |
-| LG3 | ⇧↵ then a label / an empty label | labelled entry / plain entry |
-| LG4 | CURRENT ↵ / ⇧↵ | unlink with the mirror entry removed / relabel in place |
+| LG3 | ⌃↵ then a label / an empty label | labelled entry / plain entry |
+| LG4 | CURRENT ↵ / ⌃↵ | unlink with the mirror entry removed / relabel in place |
 | LG5 | id-less T | block-ID prompt; Escape writes and mints nothing |
 | LG6 | closed T / archived T | allowed / allowed, no mirror, suffix `· archived: shown live only` |
 | LG7 | Linked-from stage ↵ on S | S's LINKS gains this task; this task's mirror updated |
@@ -816,6 +816,7 @@ The executable cases live in `tests/fixtures/relation_labels/vectors.json`
 | LG20 | `N Ctrl+Shift+L` on Task Links | opens the first resolved linked task's Links stage and reports that it opened the first of N linked tasks |
 | LG21 | Ctrl+Shift+L / Ctrl+Shift+Alt+L on a Depends-On or BLOCKS line | opens the owner's Links / Linked-from stage |
 | LG22 | Ctrl+Shift+B / Ctrl+Shift+Alt+B on a LINKS / LINKED FROM line | opens the owner's Depends on / Blocks stage |
+| LG23 | ⇧↵ in a Links / Linked-from stage | no-op: nothing links, unlinks, or opens |
 
 ### LC — chips
 
@@ -1186,7 +1187,7 @@ Task Card Cancel would. Nothing else cancels because of a label, and
 nothing ever reopens because of one.
 
 **Explicit gestures** are capture `~` / `~~` (CLI and Mac), the nav
-Links-to and Linked-from stages (`l` / `⇧L` → `⇧↵`), and counted or
+Links-to and Linked-from stages (`l` / `⇧L` → `⌃↵`), and counted or
 marked batches in those stages.
 
 It **never** fires on: reconcile, `bob relations rename`, hand edits
@@ -1263,8 +1264,8 @@ of T" cancels S.
 
 | Gesture | Source S (cancelled) | Target T (survives) |
 | --- | --- | --- |
-| Task Card `l` → `⇧↵` | task under the cursor | picked task |
-| Task Card `⇧L` → `⇧↵` | **picked task**, possibly in another note | task under the cursor |
+| Task Card `l` → `⌃↵` | task under the cursor | picked task |
+| Task Card `⇧L` → `⌃↵` | **picked task**, possibly in another note | task under the cursor |
 | Capture `@note+id ~t:id\|"duplicate of"` | routed existing task | picked task |
 | Capture `New task ~~old:id\|"superseded by"` | **picked existing task** | the new task |
 | Capture `New task ~old:id\|"duplicate of"` | — refused `relation_cancels_new_task` | — |
@@ -1489,7 +1490,7 @@ as that surface's managed Done gesture would. Nothing else completes
 because of a label, and nothing ever reopens because of one.
 
 **Explicit gestures** are capture `~` / `~~` (CLI and Mac), the nav
-Links-to and Linked-from stages (`l` / `⇧L` → `⇧↵`), and counted or
+Links-to and Linked-from stages (`l` / `⇧L` → `⌃↵`), and counted or
 marked batches in those stages.
 
 It **never** fires on: reconcile, `bob relations rename` (including
@@ -1569,8 +1570,8 @@ implemented by T" completes S.
 
 | Gesture | Source S (completed) | Target T (unchanged) |
 | --- | --- | --- |
-| Task Card `l` → `⇧↵` | task under the cursor | picked task |
-| Task Card `⇧L` → `⇧↵` | **picked task**, possibly in another note | task under the cursor |
+| Task Card `l` → `⌃↵` | task under the cursor | picked task |
+| Task Card `⇧L` → `⌃↵` | **picked task**, possibly in another note | task under the cursor |
 | Capture `@note+id ~t:id\|"implemented by"` | routed existing task | picked task |
 | Capture `New task ~~ref:id\|"implemented by"` | **picked existing task** | the new task |
 | Capture `New task ~old:id\|"verified by"` | — refused `relation_completes_new_task` | — |
@@ -2341,7 +2342,7 @@ target through the merge engine, then cancels the source. Nothing else
 merges because of a label, and nothing ever unmerges because of one.
 
 **Explicit gestures** are capture `~` / `~~` (CLI and Mac), the nav
-Links-to and Linked-from stages (`l` / `⇧L` → `⇧↵`), and counted or
+Links-to and Linked-from stages (`l` / `⇧L` → `⌃↵`), and counted or
 marked batches in those stages.
 
 It **never** fires on: reconcile, `bob relations rename`, hand edits
@@ -2409,8 +2410,8 @@ T" merges S into T.
 | Gesture | Source S (merged and cancelled) | Target T (grows) |
 | --- | --- | --- |
 | Capture `Umbrella < @old+a` | picked existing task | the new umbrella task |
-| Task Card `l` → `⇧↵` | task under the cursor | picked task |
-| Task Card `⇧L` → `⇧↵` | **picked task**, possibly in another note | task under the cursor |
+| Task Card `l` → `⌃↵` | task under the cursor | picked task |
+| Task Card `⇧L` → `⌃↵` | **picked task**, possibly in another note | task under the cursor |
 | Capture `@note+id ~t:id\|"merged into"` | routed existing task | picked task |
 | Capture `Umbrella ~~old:id\|"merged into"` | **picked existing task** | the new umbrella task |
 | Capture `New task ~old:id\|"merged into"` | — refused `relation_merges_new_task` | — |

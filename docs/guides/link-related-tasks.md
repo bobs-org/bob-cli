@@ -49,8 +49,9 @@ to the current one. The linked-from action writes the chosen source task's
 `LINKS` line; Bob maintains the target's `LINKED FROM` mirror.
 
 Mac Capture accepts the same `~` and `~~` draft syntax. Choose the task, press
-`⇧↩` to open the relation card, then review the label and relation in the
-preview before submitting. See [Capture a task from anywhere on your
+`⌃↩` to open the relation card, then review the label and relation in the
+preview before submitting. That is Ctrl+Enter in Obsidian's Links stages too.
+See [Capture a task from anywhere on your
 Mac](capture-from-your-mac.md) for the panel workflow.
 
 ## Add a label
