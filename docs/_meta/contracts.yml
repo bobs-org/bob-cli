@@ -155,3 +155,6 @@ groups:
       - stem: attachments
         summary: "Attachment origin journal, resolution states, `bob attachments import` / `origin`, and `%c` recording"
         order: 42
+      - stem: records
+        summary: "Config-declared Record Notes: schema, validation, filename planning, and rendered Markdown"
+        order: 44

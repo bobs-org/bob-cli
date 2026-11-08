@@ -129,6 +129,7 @@ plugins:
           - obsidian-sync-exclusions.md
           - vault-git-sync.md
           - attachments.md
+          - records.md
 
 markdown_extensions:
   - admonition
@@ -342,4 +343,5 @@ nav:
               - "Obsidian Sync folder exclusions (historical)": obsidian-sync-exclusions.md
               - "Bob vault Git sync runbook": vault-git-sync.md
               - "Attachment origins": attachments.md
+              - "Record notes": records.md
           # END GENERATED: contracts nav

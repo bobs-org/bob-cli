@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
 pub(crate) mod catalog;
+pub(crate) mod check;
+pub(crate) mod plan;
 pub(crate) mod render;
 pub(crate) mod schema;
 pub(crate) mod stem;
@@ -9,6 +11,12 @@ pub(crate) mod stem;
 pub(crate) use catalog::{
     FolderIndex, IndexedField, IndexedFieldValue, IndexedRecord, RecordCatalog,
     StemLookup, ValueSuggestion,
+};
+#[allow(unused_imports)]
+pub(crate) use plan::{
+    PlannedRecordProperty, RecordCreatePlan, RecordCreateRequest,
+    RecordPlanError, RecordPlanErrorCode, RecordPropertySource,
+    RecordPropertyState,
 };
 #[allow(unused_imports)]
 pub(crate) use render::{

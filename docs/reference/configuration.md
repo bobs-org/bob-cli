@@ -96,6 +96,27 @@ its `scheduled` date. `BOB_PRIORITY_ROLL_SEED` can make a roll repeatable. See
 See [capture templates](../capture.md#saved-templates). Use [`bob clipboard`](cli/clipboard.md)
 to diagnose the active history provider and whether a counted capture would succeed.
 
+### `records`
+
+`records` is an optional mapping from record type id to a schema. Each type
+requires a safe one-segment `dir`, a display `label`, and an ordered `fields`
+mapping. It may also set `emoji`, a literal `parent` wikilink, `dated_notes`
+(default `false`), and tolerated `legacy` frontmatter patterns. Type ids and
+field keys use lowercase letters, digits, and underscores; built-in type ids
+and reserved frontmatter keys are unavailable.
+
+Fields support `required`, `values`, `list`, `default`, `suggest`, `label`,
+`min`, and `max`. Omit `values` for text; provide a nonempty key-to-label
+mapping for choices; or use `date`, `link`, `url`, or `number`. Defaults must
+validate as values of their field, and `status` cannot have one. Numeric bounds
+apply only to number fields. Shared properties across record types must agree
+on storage kind and scalar/list shape.
+
+An absent `records:` block means no configured record types. A malformed block
+is reported to record features without changing how other config sections are
+loaded. See the [Record Notes contract](../records.md) for field validation,
+defaults, rendering, and filename rules.
+
 ### `plan`
 
 All caps are positive integers. `max_ready_per_note` is limited to 1–999;

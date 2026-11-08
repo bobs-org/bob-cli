@@ -45,6 +45,7 @@ pub(crate) enum RecordDiagnosticCode {
     InvalidDefault,
     InvalidNumberBound,
     IncompatiblePropertyStorage,
+    UnknownField,
     InvalidValue,
     InvalidDate,
     InvalidLink,

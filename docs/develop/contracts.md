@@ -62,3 +62,4 @@ These pages specify behavior that Bob components and their tests must agree on.
 - [Obsidian Sync folder exclusions (historical)](../obsidian-sync-exclusions.md) — Historical: Obsidian Sync folder-exclusion semantics, kept for reference now that the vault syncs through git only
 - [Bob vault Git sync runbook](../vault-git-sync.md) — Git-only Bob vault sync operations, triggers, conflict copies, Keep receipts, and the Stats review journal
 - [Attachment origins](../attachments.md) — Attachment origin journal, resolution states, `bob attachments import` / `origin`, and `%c` recording
+- [Record notes](../records.md) — Config-declared Record Notes: schema, validation, filename planning, and rendered Markdown
