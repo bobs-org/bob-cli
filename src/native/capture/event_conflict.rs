@@ -229,8 +229,10 @@ fn start_fit_token(
     spec: &PomodoroStartSpec,
     name: Option<&str>,
 ) -> String {
-    let duration = if spec.offset_units == 0 {
+    let duration = if spec.offset_units == 0 && spec.later_units == 0 {
         units.to_string()
+    } else if spec.later_units > 0 {
+        format!("{units}+{}", spec.later_units)
     } else {
         format!("{units}-{}", spec.offset_units)
     };
@@ -653,8 +655,25 @@ mod tests {
             raw: String::new(),
             duration_units: 5,
             offset_units: 0,
+            later_units: 0,
             drop: Vec::new(),
         }
+    }
+
+    #[test]
+    fn start_fit_drafts_keep_the_later_sign() {
+        let spec = PomodoroStartSpec {
+            raw: "+2".to_string(),
+            duration_units: 5,
+            offset_units: 0,
+            later_units: 2,
+            drop: Vec::new(),
+        };
+        assert_eq!(start_fit_token(3, &spec, None), "=3+2");
+        assert_eq!(
+            start_fit_token(3, &spec, Some("deep-work")),
+            "=3+2#deep-work"
+        );
     }
 
     fn session_index(note: &str) -> usize {
@@ -711,6 +730,7 @@ mod tests {
             raw: String::new(),
             duration_units: 5,
             offset_units: 0,
+            later_units: 0,
             drop: Vec::new(),
         };
         let conflict = detect_event_conflict(

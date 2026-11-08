@@ -42,6 +42,8 @@ fn chain_token_predicate_covers_the_documented_table() {
         "=-",
         "=3",
         "=-2",
+        "=+3",
+        "=3+1",
         "=2-1",
         "=3x",
         "=99999999999999999999999",
@@ -360,6 +362,19 @@ fn execution_distinguishes_spaced_start_adjust_from_offset_start() {
         }
         other => panic!("expected start, got {other:?}"),
     }
+
+    let signed_chain = execute_draft("=+3 +2").expect("signed start chain");
+    assert_eq!(signed_chain.items.len(), 2);
+    match &signed_chain.items[0].parsed.kind {
+        CaptureKind::PomodoroStart { spec, .. } => {
+            assert_eq!(spec.later_units, 3);
+        }
+        other => panic!("expected signed start, got {other:?}"),
+    }
+    assert!(matches!(
+        signed_chain.items[1].parsed.kind,
+        CaptureKind::PomodoroAdjust { .. }
+    ));
 }
 
 #[test]

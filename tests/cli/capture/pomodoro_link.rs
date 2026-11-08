@@ -144,6 +144,36 @@ fn bare_named_link_suffix_writes_the_same_result_as_hash_before_equals() {
 }
 
 #[test]
+fn link_start_accepts_a_leading_later_offset() {
+    let temp = TempDir::new("bob-cli-capture-link-later-start");
+    let vault = temp.path().join("vault");
+    let target = vault.join("cash.md");
+    let day_file = vault.join("day.md");
+    write_file(&target, "# Cash\n## Tasks\n- [ ] #task Work ^work\n");
+    write_file(&day_file, "## Pomodoros\n- [ ] () — CURRENT\n");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@cash:work=+3")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:00:00")
+        .output()
+        .expect("run later link start");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["kind"], "pomodoro_link", "{json}");
+    assert_eq!(json["pomodoro_start"]["start"], "0915", "{json}");
+    assert_eq!(json["pomodoro_start"]["end"], "0940", "{json}");
+    assert_eq!(json["pomodoro_start"]["later_units"], 3, "{json}");
+}
+
+#[test]
 fn link_suffix_timing_errors_leave_notes_byte_identical() {
     for invalid in [
         "@cash:work=3focus2",

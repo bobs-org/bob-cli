@@ -244,6 +244,37 @@
       "expected_source": "calendar",
       "expected_off_clock": true,
       "expected_clock_note": "love.md"
+    },
+    {
+      "id": "signed-later-unnamed-reaches-meet",
+      "now": "2026-11-01 07:54:00",
+      "token": "=+2",
+      "day": "## Events\n- [ ] #task **0805-0830** Standup ^standup\n\n## Pomodoros\n- [ ] () — BUILD\n- [ ] () — MEET\n  - [[#^standup]]\n",
+      "expected_day": "## Events\n- [ ] #task **0805-0830** Standup ^standup\n\n## Pomodoros\n- [ ] (**0805-0830** [t:: 25m]) — MEET\n  - [[#^standup]]\n- [ ] () — BUILD\n",
+      "expected_span": "0805-0830",
+      "expected_source": "explicit",
+      "expected_off_clock": false
+    },
+    {
+      "id": "signed-later-named-meet-is-explicit",
+      "now": "2026-11-01 07:54:00",
+      "token": "=+meet",
+      "day": "## Events\n- [ ] #task **0800-0830** Standup ^standup\n\n## Pomodoros\n- [ ] () — BOB\n- [ ] () — MEET\n  - [[#^standup]]\n",
+      "expected_day": "## Events\n- [ ] #task **0800-0830** Standup ^standup\n\n## Pomodoros\n- [ ] (**0800-0825** [t:: 25m]) — MEET\n  - [[#^standup]]\n- [ ] () — BOB\n",
+      "expected_span": "0800-0825",
+      "expected_source": "explicit",
+      "expected_off_clock": false
+    },
+    {
+      "id": "signed-later-fit-draft-keeps-plus",
+      "now": "2026-11-01 07:50:00",
+      "token": "=+",
+      "day": "## Events\n- [ ] #task **0800-0830** Standup ^standup\n\n## Pomodoros\n- [ ] () — BOB\n",
+      "expected_day": "## Events\n- [ ] #task **0800-0830** Standup ^standup\n\n## Pomodoros\n- [ ] (**0755-0820** [t:: 25m]) — BOB\n",
+      "expected_span": "0755-0820",
+      "expected_warning": "pomodoro_runs_past_event",
+      "expected_fit": "=1+1",
+      "expected_off_clock": false
     }
   ]
 }

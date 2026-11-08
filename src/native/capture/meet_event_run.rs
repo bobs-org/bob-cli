@@ -195,8 +195,8 @@ fn start_suffix_too_large() -> CaptureError {
     )
 }
 
-/// The unwrapped start minute a typed start writes: now minus `5·offset`,
-/// rounded up to 5 minutes. Not the `HHMM` modulo 1440.
+/// The unwrapped start minute a typed start writes: now minus `5·offset`
+/// plus `5·later`, rounded up to 5 minutes. Not the `HHMM` modulo 1440.
 pub(crate) fn start_block_minute(
     now: chrono::NaiveDateTime,
     spec: &PomodoroStartSpec,
@@ -209,9 +209,17 @@ pub(crate) fn start_block_minute(
     let offset_i64: i64 = offset_minutes
         .try_into()
         .map_err(|_| start_suffix_too_large())?;
+    let later_minutes = spec
+        .later_units
+        .checked_mul(5)
+        .ok_or_else(start_suffix_too_large)?;
+    let later_i64: i64 = later_minutes
+        .try_into()
+        .map_err(|_| start_suffix_too_large())?;
     let now_minutes = (now.time().hour() * 60 + now.time().minute()) as i64;
     let numerator = now_minutes
         .checked_sub(offset_i64)
+        .and_then(|value| value.checked_add(later_i64))
         .ok_or_else(start_suffix_too_large)?;
     let quot = if numerator >= 0 {
         numerator
@@ -482,6 +490,7 @@ pub(super) struct MeetFinish {
     pub(super) end: Option<String>,
     pub(super) duration_minutes: Option<u64>,
     pub(super) offset_units: Option<u64>,
+    pub(super) later_units: Option<u64>,
     pub(super) tracked: bool,
     pub(super) off_clock: bool,
     pub(super) clock_note: Option<String>,
@@ -510,6 +519,9 @@ impl MeetFinish {
         }
         if let Some(offset) = self.offset_units {
             summary.offset_units = offset;
+        }
+        if let Some(later) = self.later_units {
+            summary.later_units = later;
         }
         summary.tracked = self.tracked;
         summary.off_clock = self.off_clock;
@@ -590,6 +602,7 @@ pub(super) fn restamp_session_clock_with_finish(
         raw: String::new(),
         duration_units: 5,
         offset_units: 0,
+        later_units: 0,
         drop: Vec::new(),
     };
     let (updated, finish) = {
@@ -735,6 +748,7 @@ pub(super) fn finalize_session_clock(
             end: Some(hhmm(run.end_min)),
             duration_minutes: Some(duration),
             offset_units: Some(0),
+            later_units: Some(0),
             tracked,
             off_clock,
             clock_note: clock_note.clone(),
@@ -758,6 +772,7 @@ pub(super) fn finalize_session_clock(
             end: None,
             duration_minutes: None,
             offset_units: None,
+            later_units: None,
             tracked,
             off_clock,
             clock_note,
@@ -785,6 +800,7 @@ pub(super) fn finalize_session_clock(
         end: None,
         duration_minutes: None,
         offset_units: None,
+        later_units: None,
         tracked,
         off_clock,
         clock_note,
@@ -885,6 +901,7 @@ fn finalize_lineup_clock(
             end: None,
             duration_minutes: None,
             offset_units: None,
+            later_units: None,
             tracked: !off_clock,
             off_clock,
             clock_note,
@@ -912,6 +929,7 @@ fn finalize_lineup_clock(
         end: None,
         duration_minutes: None,
         offset_units: None,
+        later_units: None,
         tracked: !off_clock,
         off_clock,
         clock_note,
@@ -1036,7 +1054,7 @@ fn clock_link_label(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::NaiveDateTime;
+    use chrono::{NaiveDateTime, Timelike};
 
     fn rel() -> &'static Path {
         Path::new("2026/20261101.md")
@@ -1153,6 +1171,7 @@ mod tests {
             raw: String::new(),
             duration_units: 0,
             offset_units: 0,
+            later_units: 0,
             drop: Vec::new(),
         };
         let now = NaiveDate::from_ymd_opt(2026, 11, 1)
@@ -1265,8 +1284,48 @@ mod tests {
             raw: String::new(),
             duration_units: 5,
             offset_units: 0,
+            later_units: 0,
             drop: Vec::new(),
         }
+    }
+
+    #[test]
+    fn later_offsets_round_forward_and_use_checked_arithmetic() {
+        let spec = PomodoroStartSpec {
+            raw: "+3".to_string(),
+            duration_units: 5,
+            offset_units: 0,
+            later_units: 3,
+            drop: Vec::new(),
+        };
+        assert_eq!(start_block_minute(at(7, 54), &spec).unwrap(), 8 * 60 + 10);
+        let exact_boundary = PomodoroStartSpec {
+            later_units: 1,
+            ..spec.clone()
+        };
+        assert_eq!(
+            start_block_minute(
+                at(7, 55).with_second(30).unwrap(),
+                &exact_boundary,
+            )
+            .unwrap(),
+            8 * 60,
+        );
+        assert_eq!(
+            start_block_minute(at(23, 55), &spec).unwrap(),
+            24 * 60 + 10
+        );
+
+        let overflow = PomodoroStartSpec {
+            later_units: u64::MAX,
+            ..spec
+        };
+        assert_eq!(
+            start_block_minute(at(7, 54), &overflow)
+                .unwrap_err()
+                .message,
+            "Pomodoro start suffix is too large; use a smaller duration or offset",
+        );
     }
 
     fn target_name(note: &str, hour: u32, minute: u32) -> Option<String> {

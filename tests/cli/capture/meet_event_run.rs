@@ -84,6 +84,9 @@ fn capture_start_matches_shared_meet_event_run_vectors() {
                 "{id} must not report an event run: {start}"
             ),
         }
+        if let Some(fit) = case.get("expected_fit").and_then(Value::as_str) {
+            assert_eq!(start["event_conflict"]["fit"], fit, "{id}: {start}");
+        }
         let warnings = json["warnings"].as_array().cloned().unwrap_or_default();
         match case.get("expected_warning").and_then(Value::as_str) {
             Some(code) => assert!(

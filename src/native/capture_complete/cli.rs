@@ -151,7 +151,9 @@ Replacements preserve the displayed name, using an exact-name quoted literal \
 when a plain selector would change it or select another theme. Partial quoted \
 names match theme-key prefixes; plain names also match slug substrings.\n\n\
 Pomodoro-start-name completion covers `=name`, `=<X>name`, `=name<X>`, \
-`=<X>#name`, and the `=<X>#` incomplete state. A planned placeholder that a bare \
+`=<X>#name`, and the `=<X>#` incomplete state. `<X>` accepts one `-` earlier \
+or `+` later offset with an optional count; a lone sign means one 5-minute unit. \
+A planned placeholder that a bare \
 `=` would start carries next_up. Nameable utility rows set requires_name \
 and use an empty replacement that clients must not insert; the running entry \
 is last in start-name completion. Hashed-name replacements include `#`, \
@@ -244,7 +246,7 @@ A bare `%` opens the `directive` context with Bob-authored Clip, Pomodoro \
 note, and Template rows; bare-URL items also offer Listen. A typed letter \
 filters the rows, and opening the menu never reads the clipboard. Bare `#` \
 opens `task_type` with no row preselected. Every success response reports \
-`grammar: 16` while `schema_version` stays 1; an empty bare `#` or `%` \
+`grammar: 17` while `schema_version` stays 1; an empty bare `#` or `%` \
 query, an empty `=*` merge source, or an empty drawer query after `@route+id#`, adds \
 `initial_selection: \"none\"`. \
 A solo leading `:` token \

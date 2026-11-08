@@ -93,6 +93,18 @@ fn start_warns_with_fit_draft_and_event_conflict() {
 }
 
 #[test]
+fn later_start_fit_draft_keeps_the_plus_offset() {
+    let (_temp, vault, day_file) =
+        write_day("bob-cli-event-warn-later-start", STANDUP_DAY);
+    let json = capture_json(&vault, &day_file, "2026-11-01 11:50:00", &["=+"]);
+    let start = &json["pomodoro_start"];
+    assert_eq!(start["start"], "1155");
+    assert_eq!(start["end"], "1220");
+    assert_eq!(start["later_units"], 1);
+    assert_eq!(start["event_conflict"]["fit"], "=1+1");
+}
+
+#[test]
 fn off_clock_event_warns_like_any_other_open_event() {
     let (_temp, vault, day_file) =
         write_day("bob-cli-event-warn-untracked", UNTRACKED_DAY);

@@ -60,6 +60,54 @@ fn capture_pomodoro_start_default_and_explicit_durations() {
 }
 
 #[test]
+fn capture_pomodoro_start_later_offsets_write_the_resolved_span() {
+    let cases = [
+        ("later-default", "+", "0910", "0935", 5, 1),
+        ("later-three", "+3", "0920", "0945", 5, 3),
+        ("duration-later-default", "3+", "0910", "0925", 3, 1),
+        ("duration-later-two", "3+2", "0915", "0930", 3, 2),
+    ];
+    for (name, suffix, expect_start, expect_end, duration, later) in cases {
+        let temp = TempDir::new(&format!("bob-cli-capture-start-{name}"));
+        let vault = temp.path().join("vault");
+        let target = vault.join("sase.md");
+        let day_file = vault.join("day.md");
+        write_file(&target, "# S\n## Tasks\n");
+        write_file(&day_file, "## Pomodoros\n- [ ] ()\n");
+        let marker = format!("@sase:task-{name}={suffix}");
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("Work")
+            .arg(&marker)
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-07-10 09:02:00")
+            .output()
+            .expect("run later start capture");
+        assert_success(&output);
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim()).expect("start JSON");
+        let start = &json["pomodoro_start"];
+        assert_eq!(start["start"], expect_start, "{name}: {json}");
+        assert_eq!(start["end"], expect_end, "{name}: {json}");
+        assert_eq!(start["duration_minutes"], duration * 5, "{name}");
+        assert_eq!(start["offset_units"], 0, "{name}");
+        assert_eq!(start["later_units"], later, "{name}");
+        let day_after = fs::read_to_string(&day_file).expect("read day");
+        assert!(
+            day_after.contains(&format!(
+                "(**{expect_start}-{expect_end}** [t:: {}m])",
+                duration * 5
+            )),
+            "{name}: {day_after}"
+        );
+    }
+}
+
+#[test]
 fn capture_pomodoro_start_named_existing_and_new() {
     let temp = TempDir::new("bob-cli-capture-start-named");
     let vault = temp.path().join("vault");

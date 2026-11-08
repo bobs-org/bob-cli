@@ -437,23 +437,30 @@ pub(crate) enum SessionSuffix {
 
 /// Typed `@<route>:<block-id>[#<name>]=<X>` start specification, where `<X>`
 /// mirrors the Obsidian bob-ledger-tools `se<X>` snippet suffix: empty,
-/// unsigned ASCII digits, `-`, `-` followed by digits, or digits followed by
-/// `-` and optionally digits. An omitted duration means five 5-minute units
-/// (25 minutes); an omitted offset with `-` means one unit; no `-` means
-/// zero offset.
+/// unsigned ASCII digits, `-`/`+`, a sign followed by digits, or digits
+/// followed by a sign and optionally digits. `-` means earlier and `+` means
+/// later. An omitted duration means five 5-minute units (25 minutes); an
+/// omitted signed count means one unit.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct PomodoroStartSpec {
     /// Raw `<X>` text after `=`, exactly as typed.
     pub(crate) raw: String,
     /// Number of 5-minute duration units.
     pub(crate) duration_units: u64,
-    /// Number of 5-minute offset units.
+    /// Number of 5-minute units to start earlier.
     pub(crate) offset_units: u64,
+    /// Number of 5-minute units to start later, omitted when zero.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) later_units: u64,
     /// Queued lineup numbers to drop from the started session, empty when
     /// no `~<K>` list was typed. Every parser leaves it empty until the
     /// start-drop grammar lands; the lineup engine already applies it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) drop: Vec<u32>,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 /// Which edge a segment suffix pins: the run starts at a start edge or

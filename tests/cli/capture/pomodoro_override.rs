@@ -94,6 +94,20 @@ fn override_restart_worked_example_rows() {
             25,
             "(**0925-0950** [t:: 25m]) — CAPTURE",
         ),
+        (
+            "=+2",
+            "0945",
+            "1010",
+            25,
+            "(**0945-1010** [t:: 25m]) — CAPTURE",
+        ),
+        (
+            "=3+1",
+            "0940",
+            "0955",
+            15,
+            "(**0940-0955** [t:: 15m]) — CAPTURE",
+        ),
     ];
     for (token, expect_start, expect_end, expect_dur, expect_fragment) in cases
     {
@@ -514,6 +528,24 @@ fn override_swap_fresh_timing_worked_example() {
     let capture = day_after.find("— CAPTURE").expect("capture line");
     let sase = day_after.find("— SASE").expect("sase line");
     assert!(bugs < capture && capture < sase, "{day_after}");
+
+    let (_temp, vault, day_file) =
+        worked_vault("bob-cli-override-swap-later-timing");
+    let json = run_json(&vault, &day_file, &["=3+1bugs"]);
+    let start = &json["pomodoro_start"];
+    assert_eq!(start["pomodoro_name"], "BUGS", "{json}");
+    assert_eq!(start["start"], "0940", "{json}");
+    assert_eq!(start["end"], "0955", "{json}");
+    assert_eq!(start["duration_minutes"], 15, "{json}");
+    assert_eq!(start["offset_units"], 0, "{json}");
+    assert_eq!(start["later_units"], 1, "{json}");
+    assert_eq!(start["override"]["action"], "swap", "{json}");
+    assert_eq!(start["override"]["ledger"], "fresh", "{json}");
+    let day_after = fs::read_to_string(&day_file).expect("read day");
+    assert!(
+        day_after.contains("- [ ] (**0940-0955** [t:: 15m]) — BUGS"),
+        "{day_after}"
+    );
 }
 
 #[test]

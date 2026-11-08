@@ -941,16 +941,21 @@ fn execution_retired_double_colon_is_a_usage_error() {
 #[test]
 fn execution_parses_equals_family_starts_alongside_close() {
     // Exact starts: bare and counted suffixes mirror `se<X>` timing.
-    for (raw, suffix, duration, offset) in [
-        ("=", "", 5, 0),
-        ("  =  ", "", 5, 0),
-        ("=-", "-", 5, 1),
-        ("=3", "3", 3, 0),
-        ("=-2", "-2", 5, 2),
-        ("=3-", "3-", 3, 1),
-        ("=2-1", "2-1", 2, 1),
-        ("=0", "0", 0, 0),
-        ("=03", "03", 3, 0),
+    for (raw, suffix, duration, offset, later) in [
+        ("=", "", 5, 0, 0),
+        ("  =  ", "", 5, 0, 0),
+        ("=-", "-", 5, 1, 0),
+        ("=3", "3", 3, 0, 0),
+        ("=-2", "-2", 5, 2, 0),
+        ("=3-", "3-", 3, 1, 0),
+        ("=2-1", "2-1", 2, 1, 0),
+        ("=+", "+", 5, 0, 1),
+        ("=+3", "+3", 5, 0, 3),
+        ("=3+", "3+", 3, 0, 1),
+        ("=3+2", "3+2", 3, 0, 2),
+        ("=+03", "+03", 5, 0, 3),
+        ("=0", "0", 0, 0, 0),
+        ("=03", "03", 3, 0, 0),
     ] {
         let parsed =
             execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
@@ -960,6 +965,7 @@ fn execution_parses_equals_family_starts_alongside_close() {
                 assert_eq!(spec.raw, suffix, "{raw}");
                 assert_eq!(spec.duration_units, duration, "{raw}");
                 assert_eq!(spec.offset_units, offset, "{raw}");
+                assert_eq!(spec.later_units, later, "{raw}");
             }
             other => panic!("{raw}: expected start, got {other:?}"),
         }
@@ -970,7 +976,6 @@ fn execution_parses_equals_family_starts_alongside_close() {
     for (raw, token, suffix) in [
         ("=3 more", "=3", "3"),
         ("=-2 @work", "=-2", "-2"),
-        ("=2-1-", "=2-1", "2-1"),
         ("=\n- child", "=", ""),
         ("=2\n- child", "=2", "2"),
     ] {
@@ -1125,6 +1130,92 @@ fn execution_parses_equals_family_starts_alongside_close() {
         dangling.contains("`x~` is incomplete: type a task number after `~`"),
         "{dangling}"
     );
+}
+
+#[test]
+fn signed_start_forms_share_the_lexer_editor_and_link_contract() {
+    for (raw, duration, offset, later, name) in [
+        ("=+fix", 5, 0, 1, Some("fix")),
+        ("=3+1#deep-work", 3, 0, 1, Some("deep-work")),
+        ("@foo:bar=+3", 5, 0, 3, None),
+        ("@foo:bar=3+", 3, 0, 1, None),
+        ("@foo:bar#fix=+2", 5, 0, 2, Some("fix")),
+        ("Write outline @sase:outline=+2", 5, 0, 2, None),
+    ] {
+        let parsed =
+            execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
+        let spec = match parsed.kind {
+            CaptureKind::PomodoroStart {
+                spec,
+                pomodoro_name,
+                ..
+            } => {
+                assert_eq!(pomodoro_name.as_deref(), name, "{raw}");
+                spec
+            }
+            CaptureKind::Pomodoro {
+                start: Some(spec),
+                pomodoro_name,
+                ..
+            }
+            | CaptureKind::PomodoroLink {
+                start: Some(spec),
+                pomodoro_name,
+                ..
+            } => {
+                assert_eq!(pomodoro_name.as_deref(), name, "{raw}");
+                spec
+            }
+            other => panic!("{raw}: expected signed start, got {other:?}"),
+        };
+        assert_eq!(spec.duration_units, duration, "{raw}");
+        assert_eq!(spec.offset_units, offset, "{raw}");
+        assert_eq!(spec.later_units, later, "{raw}");
+
+        let parsed = editor(raw);
+        assert!(
+            parsed.diagnostics.is_empty(),
+            "{raw}: {:?}",
+            parsed.diagnostics
+        );
+        assert!(
+            parsed
+                .pomodoro_start
+                .as_ref()
+                .is_some_and(|spec| spec.later_units == later),
+            "{raw}: {:?}",
+            parsed.pomodoro_start
+        );
+    }
+}
+
+#[test]
+fn signed_start_refusals_are_teaching_errors_and_prose_stays_prose() {
+    for (raw, expected) in [
+        ("=+0", "`+0` moves nothing"),
+        ("=3+0", "`+0` moves nothing"),
+        ("=3-1+2", "takes one offset"),
+        ("=+1-2", "takes one offset"),
+        ("=3+1+2", "takes one offset"),
+        ("=2-1-", "takes one offset"),
+    ] {
+        let error = execute(raw).expect_err(raw);
+        assert!(error.contains(expected), "{raw}: {error}");
+        let edit = editor(raw);
+        assert_eq!(edit.mode, EditorMode::PomodoroStart, "{raw}");
+        assert_eq!(edit.diagnostics.len(), 1, "{raw}");
+        assert_eq!(edit.diagnostics[0].code, "invalid_pomodoro_start", "{raw}");
+        assert!(
+            edit.diagnostics[0].message.contains(expected),
+            "{raw}: {:?}",
+            edit.diagnostics[0]
+        );
+    }
+
+    for raw in ["=- foo", "=+ foo", "=-)", "=+)", "Plan =+3"] {
+        assert_eq!(execute(raw).expect(raw).kind, CaptureKind::Task, "{raw}");
+        assert_ne!(editor(raw).mode, EditorMode::PomodoroStart, "{raw}");
+    }
 }
 
 #[test]

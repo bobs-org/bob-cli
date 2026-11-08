@@ -635,6 +635,7 @@ fn unnamed_start_next_up_line(
         raw: String::new(),
         duration_units: 5,
         offset_units: 0,
+        later_units: 0,
         drop: Vec::new(),
     };
     capture::unnamed_start_target(

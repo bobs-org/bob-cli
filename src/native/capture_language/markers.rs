@@ -480,7 +480,7 @@ pub(crate) fn unused_project_note_offer_pomodoro_error(name: &str) -> String {
     )
 }
 
-pub(super) const POMODORO_START_SHAPE_ERROR: &str = "Pomodoro start suffix must mirror se<X>: use `=<X>` where <X> is empty, digits, `-`, `-digits`, or `digits-` with optional digits (for example `@<route>:<block-id>=`, `@<route>:<block-id>=3`, `@<route>:<block-id>=-2`)";
+pub(super) const POMODORO_START_SHAPE_ERROR: &str = "Pomodoro start suffix must mirror se<X>: use `=<X>` where <X> is empty, digits, `-` or `+` with optional digits, or digits followed by one `-` or `+` and optional digits (for example `=`, `=3`, `=-2`, `=+2`, `=3+1`)";
 
 pub(super) const POMODORO_START_OVERFLOW_ERROR: &str =
     "Pomodoro start suffix is too large; use a smaller duration or offset";

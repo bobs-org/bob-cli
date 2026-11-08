@@ -121,8 +121,6 @@ pub(crate) fn acquire_with_budget<S: Sleeper, C: Clock>(
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;

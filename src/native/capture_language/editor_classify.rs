@@ -1184,11 +1184,11 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
         }
         Some(raw) => match parse_pomodoro_start_suffix(raw) {
             Ok(spec) => Some(spec),
-            Err(_) => {
+            Err(message) => {
                 return TokenParse::Invalid(token_diagnostic(
                     token,
                     "invalid_pomodoro_start",
-                    POMODORO_START_SHAPE_ERROR,
+                    &message,
                 ));
             }
         },

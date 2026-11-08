@@ -3877,18 +3877,24 @@ pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
     })
 }
 
-/// Byte length of the timing grammar `[0-9]*(-[0-9]*)?`, allowing a lone
-/// `-` as the useful incomplete editing state.
+/// Byte length of the timing grammar `[0-9]*([-+][0-9]*)?`, allowing a lone
+/// sign as the useful incomplete editing state. Further glued sign-and-digit
+/// groups are claimed as one near miss for the parser's two-sign diagnostic.
 pub(crate) fn start_timing_len(text: &str) -> usize {
     let bytes = text.as_bytes();
     let mut len = 0;
     while len < bytes.len() && bytes[len].is_ascii_digit() {
         len += 1;
     }
-    if bytes.get(len) == Some(&b'-') {
-        len += 1;
-        while len < bytes.len() && bytes[len].is_ascii_digit() {
+    if matches!(bytes.get(len), Some(b'-' | b'+')) {
+        loop {
             len += 1;
+            while len < bytes.len() && bytes[len].is_ascii_digit() {
+                len += 1;
+            }
+            if !matches!(bytes.get(len), Some(b'-' | b'+')) {
+                break;
+            }
         }
     }
     len

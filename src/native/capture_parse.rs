@@ -177,7 +177,7 @@ command also best-effort reads the configured vault's theme catalog and adds \
 theme refs; if the catalog is unavailable, parsing still succeeds without \
 those refs. It never writes to the vault or reads the clipboard, and takes no \
 --bob-dir. A '%c' directive still succeeds without reading the clipboard.\n\n\
-Success JSON reports `grammar: 16` for the capture-language revision while \
+Success JSON reports `grammar: 17` for the capture-language revision while \
 `schema_version` stays 1. Gmail URLs add `gmail_url` spans with offline \
 `gmail: {verdict, date_hint?}`, decoded thread `key`, and saved-label `title`. \
 No Gmail calls are made.\n\n\
@@ -231,7 +231,7 @@ or `[\"drawer_notes\"]`). '#' plus a \
 digit, '##…', '#-…', mid-line '#', and glued hashes stay ordinary prose. A valid `=<X>` start \
 suffix on a `@<route>:<block-id>[#<name>]` marker reports mode \
 'pomodoro_task' with a `pomodoro_start` object (`raw` plus 5-minute \
-`duration_units`/`offset_units`) and a `pomodoro_start` span covering the \
+`duration_units`, earlier `offset_units`, and nonzero `later_units`) and a `pomodoro_start` span covering the \
 `=` and `<X>` bytes; the Pomodoro-name span always ends before the `=`. An \
 invalid suffix is an `invalid_pomodoro_start` diagnostic instead. A \
 whole-item `+[N]`/`-[N]` adjustment (for example `+5` extends today's \
@@ -256,9 +256,10 @@ normal task semantics: a bare sign run followed by more text (`- foo`, \
 tokens (`Plan +5`, `C++`) stay ordinary prose. An operator is an action and \
 requests no route or task completion candidates. A whole-item `=`/`=<X>` \
 start (for example `=` starts 25 minutes, `=3` starts 15 minutes, `=-2` \
-starts 25 minutes with a 10-minute offset) reports mode 'pomodoro_start' \
+starts 25 minutes 10 minutes earlier, `=+2` starts 25 minutes 10 minutes later, \
+and `=3+1` starts 15 minutes 5 minutes later) reports mode 'pomodoro_start' \
 with a `pomodoro_start` object (`raw` excludes `=`, plus 5-minute \
-`duration_units`/`offset_units` and the additive `drop` list) and a \
+`duration_units`, earlier `offset_units`, nonzero `later_units`, and the additive `drop` list) and a \
 `pomodoro_start` span covering the `=` and leading X, plus a separate span \
 for trailing X; a `~<K>` drop part adds a `pomodoro_start_drop` span covering \
 `~<K>` including the `~`. The human \
@@ -646,7 +647,7 @@ struct CaptureParseResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     global_destination: Option<GlobalDestinationParse>,
     /// Validated additive `@<route>:<block-id>[#<name>]=<X>` start suffix:
-    /// the raw `<X>` text plus its 5-minute duration/offset units. Omitted
+    /// the raw `<X>` text plus 5-minute duration, earlier, and later units. Omitted
     /// for every older marker shape, so schema version 1 is unchanged for
     /// inputs without a start suffix.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3143,19 +3144,22 @@ fn format_pomodoro_start(
         token.push('~');
         token.push_str(&compact);
     }
+    let offset = if start.later_units > 0 {
+        format!("+{}", start.later_units)
+    } else if start.offset_units > 0 {
+        format!("-{}", start.offset_units)
+    } else {
+        "0".to_string()
+    };
+    let duration = start.duration_units.saturating_mul(5);
     if start.drop.is_empty() {
-        return format!(
-            "{token} ({}m, offset {}u)",
-            start.duration_units.saturating_mul(5),
-            start.offset_units
-        );
+        format!("{token} ({duration}m, offset {offset}u)")
+    } else {
+        format!(
+            "{token} ({duration}m, offset {offset}u · drop {})",
+            join_numbers(&start.drop)
+        )
     }
-    format!(
-        "{token} ({}m, offset {}u · drop {})",
-        start.duration_units.saturating_mul(5),
-        start.offset_units,
-        join_numbers(&start.drop)
-    )
 }
 
 /// Render a validated whole-item `+[N]`/`-[N]` adjustment for human
@@ -3758,7 +3762,7 @@ mod tests {
         let value = json("Call bank @Cash+");
         assert_eq!(value["ok"], true);
         assert_eq!(value["schema_version"], 1);
-        assert_eq!(value["grammar"], 16);
+        assert_eq!(value["grammar"], 17);
         assert_eq!(value["input"], "Call bank @Cash+");
         assert_eq!(value["body"], "Call bank");
         assert_eq!(value["mode"], "incomplete");
@@ -3821,7 +3825,7 @@ mod tests {
         // "start a list" from it.
         let value = json("@sase");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 16);
+        assert_eq!(value["grammar"], 17);
         assert_eq!(value["mode"], "note_pull");
         assert_eq!(value["route"], "sase");
         assert!(value["section"].is_null());
@@ -4606,10 +4610,10 @@ mod tests {
     }
 
     #[test]
-    fn json_reports_merge_in_wire_shape_and_grammar_16() {
+    fn json_reports_merge_in_wire_shape_and_grammar_17() {
         let value = json("New task < @a+x @b+y");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 16);
+        assert_eq!(value["grammar"], 17);
         assert_eq!(value["schema_version"], 1);
         assert_eq!(value["mode"], "task");
         let merge_in = value.get("merge_in").expect("merge_in");

@@ -460,7 +460,6 @@ fn capture_pomodoro_whole_item_start_rejects_shape_and_forced_flags() {
     for (text, token, suffix, named_link) in [
         ("=3 more", "=3", "3", false),
         ("=3s:1", "=3s", "3", true),
-        ("=2-1-", "=2-1", "2-1", false),
         ("=-2 @work", "=-2", "-2", false),
     ] {
         let (output, before, after) = run(text);

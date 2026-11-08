@@ -158,8 +158,8 @@ pub(crate) enum PastNeed {
 /// `E` is scanned left to right: an optional leading count `N`, then a `#`
 /// name or literal or a bare name with an optional trailing count `N`
 /// (`x=3fix`, `x=fix3`). `@D` is retired: timing glues to the name
-/// (`x=fix@3` teaches `x=fix3`). A dash after a bare name starts a
-/// teaching error, never a name byte. Every rewrite is built from the typed
+/// (`x=fix@3` teaches `x=fix3`). A timing sign after a start-shaped count
+/// starts a teaching error, never a name byte. Every rewrite is built from the typed
 /// parts and keeps the typed repair `!` and close part.
 pub(crate) fn validate_past_e(
     raw_token: &str,
@@ -837,6 +837,36 @@ fn past_rest_error(
     context: PastRestContext,
 ) -> String {
     let suffix = past_suffix(split);
+    if let Some(after_plus) = rest.strip_prefix('+') {
+        let digits = after_plus.bytes().take_while(u8::is_ascii_digit).count();
+        if digits == after_plus.len() {
+            let duration_end =
+                parsed.bytes().take_while(u8::is_ascii_digit).count();
+            let duration_units = if duration_end == 0 {
+                5
+            } else {
+                parsed[..duration_end].parse::<u64>().unwrap_or(5)
+            };
+            let parsed_later = if digits == 0 {
+                1
+            } else {
+                after_plus[..digits].parse::<u64>().unwrap_or(1)
+            };
+            let later_units = parsed_later.max(1);
+            let later_text = if parsed_later == 0 {
+                String::new()
+            } else {
+                after_plus[..digits].to_string()
+            };
+            let start_token = format!("={parsed}+{later_text}");
+            return past_later_error(
+                raw_token,
+                &start_token,
+                duration_units,
+                later_units,
+            );
+        }
+    }
     if let Some(after_dash) = rest.strip_prefix('-') {
         // A dash continued into letters is a bare-name spelling that must
         // use `#`; any other dash is an offset, which past work never takes.
@@ -930,6 +960,21 @@ fn past_rest_error(
         );
     }
     format!("`{raw_token}` is not a past Pomodoro")
+}
+
+/// Teaching error shared by the numeric past-later forms and named forms
+/// handled by the later bare-name grammar phase.
+pub(crate) fn past_later_error(
+    raw_token: &str,
+    start_token: &str,
+    duration_units: u64,
+    later_units: u64,
+) -> String {
+    format!(
+        "`{raw_token}` records finished work, so it takes no `+`: `{start_token}` starts a {}-minute session {} minutes from now, and `x {start_token}` closes the running session first",
+        duration_units.saturating_mul(5),
+        later_units.saturating_mul(5),
+    )
 }
 
 /// Compose the `E` spelling for a past rewrite: bare names glue timing on

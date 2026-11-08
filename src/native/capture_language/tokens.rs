@@ -1618,70 +1618,112 @@ pub(super) fn parse_pomodoro_start_suffix(
             drop: Vec::new(),
             duration_units: 5,
             offset_units: 0,
+            later_units: 0,
         });
     }
-    if raw == "-" {
-        return Ok(PomodoroStartSpec {
-            raw: raw.to_string(),
-            drop: Vec::new(),
-            duration_units: 5,
-            offset_units: 1,
-        });
-    }
-    if let Some(after_dash) = raw.strip_prefix('-') {
-        if after_dash.is_empty()
-            || !after_dash.bytes().all(|byte| byte.is_ascii_digit())
-        {
-            return Err(POMODORO_START_SHAPE_ERROR.to_string());
-        }
-        let offset_units = after_dash
+    let duration_end = raw.bytes().take_while(u8::is_ascii_digit).count();
+    let duration_text = &raw[..duration_end];
+    let timing = &raw[duration_end..];
+    let duration_units = if duration_text.is_empty() {
+        5
+    } else {
+        duration_text
             .parse::<u64>()
-            .map_err(|_| POMODORO_START_OVERFLOW_ERROR.to_string())?;
-        return Ok(PomodoroStartSpec {
-            raw: raw.to_string(),
-            drop: Vec::new(),
-            duration_units: 5,
-            offset_units,
-        });
-    }
-    if let Some((duration_text, offset_text)) = raw.split_once('-') {
-        if duration_text.is_empty()
-            || !duration_text.bytes().all(|byte| byte.is_ascii_digit())
-            || offset_text.contains('-')
-            || (!offset_text.is_empty()
-                && !offset_text.bytes().all(|byte| byte.is_ascii_digit()))
-        {
-            return Err(POMODORO_START_SHAPE_ERROR.to_string());
-        }
-        let duration_units = duration_text
-            .parse::<u64>()
-            .map_err(|_| POMODORO_START_OVERFLOW_ERROR.to_string())?;
-        let offset_units = if offset_text.is_empty() {
-            1
-        } else {
-            offset_text
-                .parse::<u64>()
-                .map_err(|_| POMODORO_START_OVERFLOW_ERROR.to_string())?
-        };
+            .map_err(|_| POMODORO_START_OVERFLOW_ERROR.to_string())?
+    };
+    if timing.is_empty() {
         return Ok(PomodoroStartSpec {
             raw: raw.to_string(),
             duration_units,
-            offset_units,
+            offset_units: 0,
+            later_units: 0,
             drop: Vec::new(),
         });
     }
-    if !raw.bytes().all(|byte| byte.is_ascii_digit()) {
+    let mut chars = timing.chars();
+    let Some(sign @ ('-' | '+')) = chars.next() else {
+        return Err(POMODORO_START_SHAPE_ERROR.to_string());
+    };
+    let count_text = chars.as_str();
+    if !count_text.bytes().all(|byte| byte.is_ascii_digit()) {
+        if timing
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'-' | b'+'))
+            && timing
+                .bytes()
+                .filter(|byte| matches!(byte, b'-' | b'+'))
+                .count()
+                > 1
+        {
+            return Err(pomodoro_start_multiple_offsets_error(raw));
+        }
         return Err(POMODORO_START_SHAPE_ERROR.to_string());
     }
-    let duration_units = raw
-        .parse::<u64>()
-        .map_err(|_| POMODORO_START_OVERFLOW_ERROR.to_string())?;
+    let units = if count_text.is_empty() {
+        1
+    } else {
+        count_text
+            .parse::<u64>()
+            .map_err(|_| POMODORO_START_OVERFLOW_ERROR.to_string())?
+    };
+    if sign == '+' && units == 0 {
+        let duration_prefix = if duration_text.is_empty() {
+            String::new()
+        } else {
+            duration_text.to_string()
+        };
+        return Err(format!(
+            "`+0` moves nothing: drop it (`={duration_prefix}`), or write `={duration_prefix}+` to start 5 minutes later"
+        ));
+    }
     Ok(PomodoroStartSpec {
         raw: raw.to_string(),
         duration_units,
-        offset_units: 0,
+        offset_units: if sign == '-' { units } else { 0 },
+        later_units: if sign == '+' { units } else { 0 },
         drop: Vec::new(),
     })
+}
+
+fn pomodoro_start_multiple_offsets_error(raw: &str) -> String {
+    let duration_end = raw.bytes().take_while(u8::is_ascii_digit).count();
+    let duration = &raw[..duration_end];
+    let offsets = &raw[duration_end..];
+    let mut alternatives = Vec::new();
+    let mut cursor = 0;
+    while cursor < offsets.len() {
+        let sign = offsets.as_bytes()[cursor] as char;
+        cursor += 1;
+        let digits_start = cursor;
+        while cursor < offsets.len()
+            && offsets.as_bytes()[cursor].is_ascii_digit()
+        {
+            cursor += 1;
+        }
+        let units = if cursor == digits_start {
+            "1"
+        } else {
+            &offsets[digits_start..cursor]
+        };
+        alternatives.push((sign, units.to_string()));
+    }
+    if alternatives.len() >= 2 && alternatives[0] == alternatives[1] {
+        alternatives[1].0 = if alternatives[0].0 == '-' { '+' } else { '-' };
+    }
+    let alternatives = if alternatives.len() >= 2 {
+        format!(
+            "={duration}{}{} or ={duration}{}{}",
+            alternatives[0].0,
+            alternatives[0].1,
+            alternatives[1].0,
+            alternatives[1].1,
+        )
+    } else {
+        format!("={duration}")
+    };
+    format!(
+        "`={raw}` takes one offset: `-` starts earlier, `+` starts later ({alternatives})"
+    )
 }
 
 /// Whether a `^route:…` tail carries a close-shaped suffix (`=x…`, or the

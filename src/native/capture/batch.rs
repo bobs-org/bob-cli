@@ -705,6 +705,8 @@ pub(super) struct PomodoroStartSummary {
     pub(super) end: String,
     pub(super) duration_minutes: u64,
     pub(super) offset_units: u64,
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub(super) later_units: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) pomodoro_name: Option<String>,
     pub(super) pomodoro_line: usize,
@@ -748,6 +750,10 @@ pub(super) struct PomodoroStartSummary {
     /// not inside a meeting.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) event_in_progress: Option<EventInProgressJson>,
+}
+
+fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
 }
 
 fn is_true(value: &bool) -> bool {

@@ -222,6 +222,35 @@ fn past_prose_guards_stay_prose() {
 }
 
 #[test]
+fn numeric_past_later_offsets_teach_the_start_spelling() {
+    for (typed, start, duration, later) in [
+        ("x=3+", "=3+", 15, 5),
+        ("x=+", "=+", 25, 5),
+        ("x=+2", "=+2", 25, 10),
+        ("x=3+0", "=3+", 15, 5),
+    ] {
+        let error = execute(typed).expect_err(typed);
+        assert!(error.contains("records finished work"), "{typed}: {error}");
+        assert!(error.contains(&format!("`{start}` starts a {duration}-minute session {later} minutes from now")), "{typed}: {error}");
+        assert!(
+            error.contains(&format!(
+                "`x {start}` closes the running session first"
+            )),
+            "{typed}: {error}"
+        );
+
+        let edit = editor(typed);
+        assert_eq!(edit.mode, EditorMode::PomodoroPast, "{typed}");
+        assert_eq!(edit.diagnostics.len(), 1, "{typed}");
+        assert_eq!(
+            edit.diagnostics[0].code, "invalid_pomodoro_past",
+            "{typed}"
+        );
+        assert_eq!(edit.diagnostics[0].message, error, "{typed}");
+    }
+}
+
+#[test]
 fn past_names_stop_at_operators_and_literals_hold_them() {
     // `!` and `=` end unquoted names.
     let parsed = execute("x=fix!2").expect_err("should be teaching error");

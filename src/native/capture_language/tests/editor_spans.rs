@@ -1040,6 +1040,47 @@ fn editor_spans_a_bare_named_start_without_a_hash_gap() {
 }
 
 #[test]
+fn editor_spans_cover_signed_start_timing_and_name_bytes() {
+    let named = editor("=3+1#deep-work");
+    assert_eq!(named.mode, EditorMode::PomodoroStart);
+    assert_eq!(named.section.as_deref(), Some("deep-work"));
+    assert_eq!(
+        named.pomodoro_start.as_ref().map(|spec| spec.later_units),
+        Some(1)
+    );
+    assert_eq!(
+        ranges(&named),
+        vec![
+            (0, 4, SpanKind::PomodoroStart),
+            (5, 14, SpanKind::PomodoroName),
+        ]
+    );
+
+    let leading_name = editor("=+fix");
+    assert_eq!(leading_name.mode, EditorMode::PomodoroStart);
+    assert_eq!(leading_name.section.as_deref(), Some("fix"));
+    assert_eq!(
+        ranges(&leading_name),
+        vec![
+            (0, 2, SpanKind::PomodoroStart),
+            (2, 5, SpanKind::PomodoroName),
+        ]
+    );
+
+    let link = editor("@foo:bar=+3");
+    assert_eq!(link.mode, EditorMode::PomodoroLink);
+    assert_eq!(link.pomodoro_start.as_ref().unwrap().later_units, 3);
+    assert_eq!(
+        ranges(&link),
+        vec![
+            (0, 4, SpanKind::PomodoroRoute),
+            (5, 8, SpanKind::PomodoroBlockId),
+            (8, 11, SpanKind::PomodoroStart),
+        ]
+    );
+}
+
+#[test]
 fn editor_spans_cover_past_tokens() {
     let parse = editor("x=fix3!=*3");
     assert_eq!(parse.mode, EditorMode::PomodoroPast);

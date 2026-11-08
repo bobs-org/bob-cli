@@ -181,6 +181,78 @@ fn capture_parse_pomodoro_adjust_protocol() {
 }
 
 #[test]
+fn capture_parse_pomodoro_start_reports_later_units_additively() {
+    let parse = |text: &str| {
+        let output = bob_command()
+            .arg("capture-parse")
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(text)
+            .output()
+            .expect("run capture-parse");
+        assert_success(&output);
+        serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+            .expect("capture-parse JSON")
+    };
+
+    for (text, raw, duration, later) in
+        [("=+3", "+3", 5, 3), ("=3+2", "3+2", 3, 2)]
+    {
+        let value = parse(text);
+        assert_eq!(value["grammar"], 17, "{text}");
+        assert_eq!(value["mode"], "pomodoro_start", "{text}");
+        assert_eq!(
+            value["pomodoro_start"],
+            serde_json::json!({
+                "raw": raw,
+                "duration_units": duration,
+                "offset_units": 0,
+                "later_units": later
+            }),
+            "{text}"
+        );
+    }
+
+    let named = parse("=3+1#deep-work");
+    assert_eq!(named["mode"], "pomodoro_start");
+    assert_eq!(named["section"], "deep-work");
+    assert_eq!(named["pomodoro_start"]["later_units"], 1);
+    assert_eq!(named["pomodoro_start"]["raw"], "3+1");
+
+    for (text, hint) in [
+        ("=+0", "`+0` moves nothing"),
+        ("=3-1+2", "takes one offset"),
+    ] {
+        let value = parse(text);
+        assert_eq!(value["mode"], "pomodoro_start", "{text}");
+        assert_eq!(
+            value["diagnostics"][0]["code"], "invalid_pomodoro_start",
+            "{text}: {value}"
+        );
+        assert!(
+            value["diagnostics"][0]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains(hint)),
+            "{text}: {value}"
+        );
+    }
+
+    let human = bob_command()
+        .arg("capture-parse")
+        .arg("--")
+        .arg("=3+2")
+        .output()
+        .expect("run human capture-parse");
+    assert_success(&human);
+    assert!(
+        stdout(&human).contains("=3+2 (15m, offset +2u)"),
+        "{}",
+        stdout(&human)
+    );
+}
+
+#[test]
 fn capture_parse_pomodoro_adjust_human_and_help() {
     let human = bob_command()
         .arg("capture-parse")
@@ -667,12 +739,9 @@ fn capture_parse_pomodoro_start_protocol() {
 
     // Counted tokens with extra text are invalid starts on the extra text,
     // never tasks.
-    for (text, start, end) in [
-        ("=3 more", 3, 7),
-        ("=-2 @work", 4, 9),
-        ("=3x", 2, 3),
-        ("=2-1-", 4, 5),
-    ] {
+    for (text, start, end) in
+        [("=3 more", 3, 7), ("=-2 @work", 4, 9), ("=3x", 2, 3)]
+    {
         let value = parse(text);
         assert_eq!(value["mode"], "pomodoro_start", "{text}");
         assert!(value.get("pomodoro_start").is_none(), "{text}: {value}");
@@ -1066,7 +1135,7 @@ fn capture_parse_pomodoro_start_human_and_help() {
         .expect("run marked human");
     assert_success(&marked);
     assert!(
-        stdout(&marked).contains("=-2 (25m, offset 2u)"),
+        stdout(&marked).contains("=-2 (25m, offset -2u)"),
         "{}",
         stdout(&marked)
     );

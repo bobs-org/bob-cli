@@ -412,9 +412,9 @@ Contract: [Pomodoro-linked tasks](../capture.md#pomodoro-linked-tasks).
 
 ### `@route:block-id=<X>` / `@route:block-id=name` {#at-route-colon-start}
 
-Same, and atomically start the selected session. `<X>` uses five-minute units:
-`=3` means 15 minutes; empty `=` means 25 minutes. A bare suffix name
-(`@work:outline=bugs`) means `@work:outline#bugs=`.
+Atomically start it with five-minute `<X>` units: `=3` is 15m, `=+2` starts
+10m later, and `=` defaults to 25m. For example,
+`@work:outline=bugs` means `@work:outline#bugs=`.
 
 ```bash
 bob capture '@work:outline=3'
@@ -426,13 +426,14 @@ bob capture '@work:outline=bugs'
 
 | Suffix on `@work:outline` or `^work:outline` | Session and timing |
 | --- | --- |
-| `=focus3`, `=3focus` | FOCUS, 15 minutes |
-| `=focus-2` | FOCUS starts 10 minutes ago |
+| `=focus3`, `=3focus` | FOCUS, 15m |
+| `=focus-2` | 10 minutes earlier |
+| `=+2`, `=+focus` | 10 minutes later |
 | `=#2fa`, `=3#deep-work` | `#` escapes names that cannot be spelled bare |
 | `=focus@3`, `=3#focus` | Retired; write `=focus3` or `=3focus` |
 
-A link-and-start fills an open `()` placeholder or creates a started session.
-It refuses while any timed Pomodoro in today's daily note is open. The whole-item [`=name`
+A link-and-start fills or creates a `()` placeholder and refuses if today's
+note has an open timed Pomodoro. The whole-item [`=name`
 start](#equals-named) has separate restart and swap behavior.
 
 Contract: [Starting the session atomically](../capture.md#starting-the-session-atomically).
@@ -853,7 +854,8 @@ Contract: [Shifting the current Pomodoro](../capture.md#shifting-the-current-pom
 ### `=` / `=<X>` {#equals-start}
 
 Start today's next future Pomodoro now with `se<X>` timing (`=` is 25
-minutes, `=3` is 15, `=-2` is 25 minutes with a 10-minute offset), or
+minutes, `=3` is 15, `=-2` is 25 minutes with a 10-minute earlier offset,
+`=+2` is 25 minutes with a 10-minute later offset), or
 restart the running session with that timing. A restart prints an override
 warning. The item must contain only the start token. An empty-suffix start of
 a `MEET` session takes the span of its next back-to-back Event Tasks instead

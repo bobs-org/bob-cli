@@ -184,6 +184,7 @@ fn plan_pomodoro_start_unruled(
                         end,
                         duration_minutes,
                         offset_units: spec.offset_units,
+                        later_units: spec.later_units,
                         pomodoro_name: resolved_name,
                         pomodoro_line: moved_index + 1,
                         created_pomodoro: false,
@@ -233,6 +234,7 @@ fn plan_pomodoro_start_unruled(
                         end,
                         duration_minutes,
                         offset_units: spec.offset_units,
+                        later_units: spec.later_units,
                         pomodoro_name: Some(canonical),
                         pomodoro_line: created_line + 1,
                         created_pomodoro: true,
@@ -277,6 +279,7 @@ fn plan_pomodoro_start_unruled(
                         end,
                         duration_minutes,
                         offset_units: spec.offset_units,
+                        later_units: spec.later_units,
                         pomodoro_name: Some(canonical),
                         pomodoro_line: created_line + 1,
                         created_pomodoro: true,
@@ -309,6 +312,7 @@ fn plan_pomodoro_start_unruled(
             end,
             duration_minutes,
             spec.offset_units,
+            spec.later_units,
             resolved,
         );
     }
@@ -351,6 +355,7 @@ fn plan_pomodoro_start_unruled(
                 end,
                 duration_minutes,
                 offset_units: spec.offset_units,
+                later_units: spec.later_units,
                 pomodoro_name: resolved_name,
                 pomodoro_line: moved_index + 1,
                 created_pomodoro: false,
@@ -385,6 +390,7 @@ fn plan_pomodoro_start_unruled(
             end,
             duration_minutes,
             offset_units: spec.offset_units,
+            later_units: spec.later_units,
             pomodoro_name: None,
             pomodoro_line: created_line + 1,
             created_pomodoro: true,
@@ -421,6 +427,7 @@ fn plan_typed_pomodoro_start(
     end: String,
     duration_minutes: u64,
     offset_units: u64,
+    later_units: u64,
     typed: &crate::native::capture_task_toggle::TypedImplicit<'_>,
 ) -> Result<
     (String, Placement, PomodoroStartSummary, PomodoroBlockBefore),
@@ -454,6 +461,7 @@ fn plan_typed_pomodoro_start(
                     end,
                     duration_minutes,
                     offset_units,
+                    later_units,
                     pomodoro_name: resolved_name,
                     pomodoro_line: moved_index + 1,
                     created_pomodoro: false,
@@ -490,6 +498,7 @@ fn plan_typed_pomodoro_start(
                     end,
                     duration_minutes,
                     offset_units,
+                    later_units,
                     pomodoro_name: Some(name),
                     pomodoro_line: created_line + 1,
                     created_pomodoro: true,
@@ -1041,6 +1050,7 @@ pub(super) fn plan_pomodoro_start_item(
         end,
         duration_minutes,
         offset_units: spec.offset_units,
+        later_units: spec.later_units,
         pomodoro_name: entry_name.clone(),
         pomodoro_line: moved_index + 1,
         created_pomodoro: false,
@@ -1291,6 +1301,7 @@ fn plan_override_restart_item(
         end: end.to_string(),
         duration_minutes,
         offset_units: spec.offset_units,
+        later_units: spec.later_units,
         pomodoro_name: running_name.clone(),
         pomodoro_line: moved_index + 1,
         created_pomodoro: false,
@@ -1866,23 +1877,30 @@ fn plan_override_swap_item(
                 "Pomodoro capture invariant failed: demoted entry is out of range",
             )
         })?;
-    let (summary_start, summary_end, summary_duration, summary_offset) =
-        if keeps_ledger {
-            (prev_start, prev_end, previous_duration, 0)
-        } else {
-            (
-                fresh_start.to_string(),
-                fresh_end.to_string(),
-                fresh_duration,
-                spec.offset_units,
-            )
-        };
+    let (
+        summary_start,
+        summary_end,
+        summary_duration,
+        summary_offset,
+        summary_later,
+    ) = if keeps_ledger {
+        (prev_start, prev_end, previous_duration, 0, 0)
+    } else {
+        (
+            fresh_start.to_string(),
+            fresh_end.to_string(),
+            fresh_duration,
+            spec.offset_units,
+            spec.later_units,
+        )
+    };
     let ledger = if keeps_ledger { "kept" } else { "fresh" };
     let mut summary = PomodoroStartSummary {
         start: summary_start,
         end: summary_end,
         duration_minutes: summary_duration,
         offset_units: summary_offset,
+        later_units: summary_later,
         pomodoro_name: Some(display_name.clone()),
         pomodoro_line: target_final + 1,
         created_pomodoro: created,
@@ -2701,6 +2719,7 @@ fn plan_named_pomodoro_start_item(
         end: end.to_string(),
         duration_minutes,
         offset_units: spec.offset_units,
+        later_units: spec.later_units,
         pomodoro_name: Some(display_name.clone()),
         pomodoro_line: moved_index + 1,
         created_pomodoro: created,

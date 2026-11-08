@@ -25,9 +25,9 @@ kept ledger set it, absent when the MEET has no run). `expected_warning` is a
 structured warning `code` the start raises.
 
 Pin: copy this file from the bob-cli commit that adds the inherited-root
-frontmatter case. Earlier buffered cases (ids containing `buffer` or
-`lead-out`) remain; a bob-plugins copy that predates the inherited-root
-case is stale. A buffered event runs on its buffered span
+frontmatter case and the signed-later start cases. Earlier buffered cases
+(ids containing `buffer` or `lead-out`) remain; a bob-plugins copy that
+predates either addition is stale. A buffered event runs on its buffered span
 (`start - before` through `end + after`): candidates, sorting, clustering,
 the written span, the early start, and the far-run warning all use it,
 while a run never bridges trackedness.

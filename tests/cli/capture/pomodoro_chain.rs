@@ -104,6 +104,41 @@ fn chain_switches_sessions_like_a_blank_line_batch() {
 }
 
 #[test]
+fn chain_closes_then_starts_with_a_later_offset() {
+    let (_temp_a, vault_a, day_a) = close_worked_vault("bob-cli-chain-later-a");
+    let (_temp_b, vault_b, day_b) = close_worked_vault("bob-cli-chain-later-b");
+    let now = "2026-09-28 09:37:00";
+
+    let chain = run_capture_json(&vault_a, &day_a, now, &["x =+"]);
+    assert_eq!(chain["captures"][0]["kind"], "pomodoro_close");
+    assert_eq!(chain["captures"][1]["kind"], "pomodoro_start");
+    assert_eq!(chain["captures"][1]["pomodoro_start"]["later_units"], 1);
+
+    let blank_output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault_b)
+            .arg("-f")
+            .arg("json")
+            .env("BOB_DAY_FILE", &day_b)
+            .env("BOB_NOW", now),
+        "x\n\n=+\n",
+    );
+    assert_success(&blank_output);
+    let blank: serde_json::Value =
+        serde_json::from_str(stdout(&blank_output).trim()).expect("blank JSON");
+    assert_eq!(
+        fs::read_to_string(&day_a).expect("read chain day"),
+        fs::read_to_string(&day_b).expect("read blank day")
+    );
+    assert_eq!(
+        chain["captures"][1]["pomodoro_start"]["start"],
+        blank["captures"][1]["pomodoro_start"]["start"]
+    );
+}
+
+#[test]
 fn chain_positional_args_form_works() {
     let (_temp, vault, day_file) =
         close_worked_vault("bob-cli-chain-positional");
