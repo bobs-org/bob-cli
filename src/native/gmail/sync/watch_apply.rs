@@ -610,36 +610,25 @@ pub(crate) fn plan_watch_edits(input: WatchPlanInput<'_>) -> WatchPlan {
                 task_action = Some(*action);
             }
         }
+        // The thread-level nudge shown when no task-level nudge overrides it.
+        let thread_nudge = match (&folded.net, folded.last_send_at) {
+            (Net::Hold, Some(send)) => Some(
+                hold::nudge_date_for_send(
+                    send,
+                    input.timezone,
+                    input.reply_wait_days,
+                )
+                .format("%Y-%m-%d")
+                .to_string(),
+            ),
+            _ => None,
+        };
         if deferred_threads.contains(&watch.observation.key) {
             action = ACTION_DEFERRED_RUNNING;
-            if matches!(folded.net, Net::Hold) {
-                if let Some(send) = folded.last_send_at {
-                    nudge_on = Some(
-                        hold::nudge_date_for_send(
-                            send,
-                            input.timezone,
-                            input.reply_wait_days,
-                        )
-                        .format("%Y-%m-%d")
-                        .to_string(),
-                    );
-                }
-            }
+            nudge_on = thread_nudge.clone();
         } else if let Some(task_action) = task_action {
             action = task_action;
-            if matches!(folded.net, Net::Hold) {
-                if let Some(send) = folded.last_send_at {
-                    nudge_on = Some(
-                        hold::nudge_date_for_send(
-                            send,
-                            input.timezone,
-                            input.reply_wait_days,
-                        )
-                        .format("%Y-%m-%d")
-                        .to_string(),
-                    );
-                }
-            }
+            nudge_on = thread_nudge.clone();
         } else if is_terminal && has_receipt {
             action = match folded.net {
                 Net::Hold => ACTION_HELD,
@@ -648,19 +637,7 @@ pub(crate) fn plan_watch_edits(input: WatchPlanInput<'_>) -> WatchPlan {
                 Net::Nothing => ACTION_REFRESHED,
                 Net::Unknown(_) => ACTION_UNCHANGED,
             };
-            if matches!(folded.net, Net::Hold) {
-                if let Some(send) = folded.last_send_at {
-                    nudge_on = Some(
-                        hold::nudge_date_for_send(
-                            send,
-                            input.timezone,
-                            input.reply_wait_days,
-                        )
-                        .format("%Y-%m-%d")
-                        .to_string(),
-                    );
-                }
-            }
+            nudge_on = thread_nudge.clone();
         }
         let tasks: Vec<WatchTaskRef> = changed_tasks
             .iter()
@@ -676,22 +653,14 @@ pub(crate) fn plan_watch_edits(input: WatchPlanInput<'_>) -> WatchPlan {
                 .find(|target| target.key == watch.observation.key)
                 .map(|target| target.note.clone())
         });
-        // Override deferred display with the task-level nudge when known.
-        if action == ACTION_DEFERRED_RUNNING {
-            if let Some((_, _, _, nudge)) = changed_tasks
+        // Override deferred and held display with the task-level nudge when
+        // known.
+        if (action == ACTION_DEFERRED_RUNNING || action == ACTION_HELD)
+            && let Some((_, _, _, nudge)) = changed_tasks
                 .iter()
                 .find(|(key, _, _, _)| key == &watch.observation.key)
-            {
-                nudge_on = nudge.clone();
-            }
-        }
-        if action == ACTION_HELD {
-            if let Some((_, _, _, nudge)) = changed_tasks
-                .iter()
-                .find(|(key, _, _, _)| key == &watch.observation.key)
-            {
-                nudge_on = nudge.clone();
-            }
+        {
+            nudge_on = nudge.clone();
         }
         plan.outcomes.push(WatchThreadOutcome {
             key: watch.observation.key.clone(),

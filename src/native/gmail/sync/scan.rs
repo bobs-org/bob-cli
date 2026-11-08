@@ -120,11 +120,6 @@ impl WatchScan {
             .map(|&index| &self.tasks[index])
     }
 
-    #[allow(dead_code)] // bob-cli-ii.4 applies each update to all task watchers.
-    pub(crate) fn watcher_count(&self, key: &ThreadKey) -> usize {
-        self.by_thread.get(key).map_or(0, Vec::len)
-    }
-
     /// Whether any open task links the thread's mail note.
     pub(crate) fn is_watched(&self, key: &ThreadKey) -> bool {
         self.by_thread.contains_key(key)
@@ -153,12 +148,6 @@ impl WatchScan {
 }
 
 impl WatchingTask {
-    /// Whether this task watches `key`.
-    #[allow(dead_code)] // Useful to consumers that inspect projected membership.
-    pub(crate) fn watches(&self, key: &ThreadKey) -> bool {
-        self.targets.iter().any(|target| &target.key == key)
-    }
-
     /// The mail-note path this task links for `key`.
     pub(crate) fn target_note(&self, key: &ThreadKey) -> Option<&str> {
         self.targets
@@ -639,7 +628,7 @@ mod tests {
             vec![("job.md".to_string(), 7), ("job.md".to_string(), 10)]
         );
         assert_eq!(lines(&scan, "bb02"), vec![("job.md".to_string(), 8)]);
-        assert_eq!(scan.watcher_count(&key("cc03")), 1);
+        assert_eq!(scan.watchers(&key("cc03")).count(), 1);
         assert!(scan.warnings().is_empty());
     }
 
@@ -756,7 +745,7 @@ mod tests {
             .map(|target| target.key.thread_id())
             .collect();
         assert_eq!(threads, vec!["aa01", "bb02", "cc03"]);
-        assert!(both.watches(&key("cc03")));
+        assert!(both.targets.iter().any(|target| target.key == key("cc03")));
         assert_eq!(
             lines(&scan, "aa01"),
             vec![

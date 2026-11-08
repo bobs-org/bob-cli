@@ -8,10 +8,6 @@
 //! inputs travel explicitly, and the guard helper only reads today's
 //! ledger and resolves task identities.
 
-// bob-cli-ii.4.1.2+ consumes the watch planning APIs; allow dead code until
-// the transaction and polling phases land their callers.
-#![allow(dead_code)]
-
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
@@ -23,7 +19,6 @@ use crate::native::{
     capture_pomodoro_close::{
         find_running_pomodoro, number_task_links, TaskLinkMarker,
     },
-    env as bob_env,
     freshness::placement::{mark_unblocked, UnblockScope},
     pomodoro, task_fields,
     task_status_hooks::{
@@ -730,15 +725,6 @@ fn set_checkbox_at(line: &str, status_at: usize, to: char) -> String {
     let mut output = line.to_string();
     output.replace_range(status_at..status_at + 1, &to.to_string());
     output
-}
-
-#[allow(dead_code)]
-pub(crate) fn configured_nudge_for_send(
-    send_at: DateTime<Utc>,
-    reply_wait_days: u32,
-) -> NaiveDate {
-    let timezone = bob_env::configured_timezone().unwrap_or(chrono_tz::UTC);
-    nudge_date_for_send(send_at, timezone, reply_wait_days)
 }
 
 #[cfg(test)]

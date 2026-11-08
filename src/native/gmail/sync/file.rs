@@ -1118,13 +1118,11 @@ fn build_attempt(
     // never discards the other watches.
     let mut refreshes: Vec<(ThreadKey, PreparedSave)> = Vec::new();
     for watch in &mut watches {
-        if watch.refresh.is_some()
-            && !works.contains_key(&watch.observation.key.index_key())
+        if !works.contains_key(&watch.observation.key.index_key())
+            && let Some(refresh) = watch.refresh.take()
         {
-            if let Some(refresh) = watch.refresh.take() {
-                let key = watch.observation.key.clone();
-                refreshes.push((key, refresh));
-            }
+            let key = watch.observation.key.clone();
+            refreshes.push((key, refresh));
         }
     }
     let mut watch_refresh_plans: Vec<StagedSaveNote> = Vec::new();
@@ -2018,12 +2016,11 @@ fn persist_attempt(
             watch_pending.push(recovery_watch_for_turn(&turn, true));
             continue;
         }
-        if let Some(marker) = fresh_journal.marker(&turn.key) {
-            if marker.message_id.eq_ignore_ascii_case(&turn.message_id)
-                && marker.internal_date == turn.internal_date
-            {
-                continue;
-            }
+        if let Some(marker) = fresh_journal.marker(&turn.key)
+            && marker.message_id.eq_ignore_ascii_case(&turn.message_id)
+            && marker.internal_date == turn.internal_date
+        {
+            continue;
         }
         // Skip already-applied turns recorded by another host file that the
         // fresh load above may have missed due to a concurrent write that
@@ -2173,10 +2170,10 @@ fn persist_attempt(
     // Deferred watch threads (running holds, unknown siblings) never advance
     // a marker and stay pending with their body-free turn evidence.
     for pending in &watch_pending {
-        if let Some(key) = pending.key() {
-            if !plan.outcome.deferred.contains(&key) {
-                plan.outcome.deferred.push(key);
-            }
+        if let Some(key) = pending.key()
+            && !plan.outcome.deferred.contains(&key)
+        {
+            plan.outcome.deferred.push(key);
         }
     }
     // Final receipt: filing and watch evidence share one persistence so a

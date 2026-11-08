@@ -195,7 +195,6 @@ impl EnrollmentFold {
     }
 
     /// Every enrolled thread, sorted by key.
-    #[allow(dead_code)] // bob-cli-ii.4 fetches the currently watched enrollments.
     pub(crate) fn threads(&self) -> impl Iterator<Item = &ThreadKey> {
         self.by_thread.keys()
     }
@@ -429,18 +428,6 @@ impl<'a> Membership<'a> {
             .collect()
     }
 
-    /// Enrolled threads of `account` with at least one open watching task,
-    /// sorted by key. Threads adopted or filed by the current run are not
-    /// enrolled yet; callers add them.
-    #[allow(dead_code)] // bob-cli-ii.4 applies turn changes to these watched threads.
-    pub(crate) fn watched(&self, account: &str) -> Vec<&'a ThreadKey> {
-        self.scan
-            .threads()
-            .filter(|key| key.is_account(account))
-            .filter(|key| self.fold.is_enrolled(key))
-            .collect()
-    }
-
     fn adoption(&self, key: &ThreadKey) -> Option<AdoptionIntent> {
         let mut watchers = self.scan.watchers(key);
         let first: &WatchingTask = watchers.next()?;
@@ -460,6 +447,7 @@ mod tests {
     use std::fs;
 
     use super::*;
+    use crate::native::gmail::sync::watch::watched_keys;
 
     fn key(account: &str, thread: &str) -> ThreadKey {
         ThreadKey::new(account, thread).unwrap()
@@ -812,7 +800,7 @@ mod tests {
             CandidateDecision::File
         );
         // Not enrolled yet, so not watched until the run adopts it.
-        assert!(membership.watched(ME).is_empty());
+        assert!(watched_keys(ME, &fold, &scan, &[]).is_empty());
         assert_eq!(
             intent.event(),
             EnrollmentEvent::Adopted {
@@ -850,7 +838,7 @@ mod tests {
             membership.decide(&key(ME, "aa01")),
             CandidateDecision::Enrolled(EnrollmentOrigin::Sync)
         );
-        assert_eq!(membership.watched(ME), vec![&key(ME, "aa01")]);
+        assert_eq!(watched_keys(ME, &fold, &scan, &[]), vec![key(ME, "aa01")]);
     }
 
     #[test]
@@ -890,7 +878,7 @@ mod tests {
             membership.decide(&key(ME, "bb02")),
             CandidateDecision::Enrolled(EnrollmentOrigin::Legacy)
         );
-        assert!(membership.watched(ME).is_empty());
+        assert!(watched_keys(ME, &fold, &scan, &[]).is_empty());
         assert!(membership.adoptions(ME).is_empty());
 
         // Reopening one and linking the other from a new open task resumes
@@ -900,8 +888,8 @@ mod tests {
         let (fold, scan) = vault.fold_and_scan();
         let membership = Membership::new(&fold, &scan);
         assert_eq!(
-            membership.watched(ME),
-            vec![&key(ME, "aa01"), &key(ME, "bb02")]
+            watched_keys(ME, &fold, &scan, &[]),
+            vec![key(ME, "aa01"), key(ME, "bb02")]
         );
         assert!(membership.adoptions(ME).is_empty());
         assert_eq!(fold.threads().count(), 2);
@@ -950,6 +938,6 @@ mod tests {
             .map(|intent| intent.key)
             .collect();
         assert_eq!(adopted, vec![key(ME, "aa01")]);
-        assert_eq!(scan.watcher_count(&key("other@example.com", "bb02")), 1);
+        assert_eq!(scan.watchers(&key("other@example.com", "bb02")).count(), 1);
     }
 }
