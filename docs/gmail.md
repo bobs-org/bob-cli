@@ -94,6 +94,13 @@ https://www.googleapis.com/auth/gmail.readonly --no-cache`) with
 `--enable-commands api.call,api.gmail.users.messages.attachments.get`.
 The legacy `gmail attachment` command is never used: it writes a cache file.
 
+IDs-only listing (sync discovery and `rfc822msgid:` resolution) uses
+`api call gmail v1 gmail.users.threads.list --params … --scope
+https://www.googleapis.com/auth/gmail.readonly --no-cache` with
+`--enable-commands api.call,api.gmail.users.threads.list`. Hydrated
+`gmail search` serves only the picker, login and token checks, and the
+sent-message lookup.
+
 The isolated `--client bob-gmail` token bucket means removing or re-consenting
 Bob's Gmail grant never touches other gog tokens (Calendar included). Login
 runs gog's remote two-step sign-in with captured `--no-input --json` input and
@@ -779,8 +786,9 @@ bob gmail attach mail/2026/lease_renewal.md 1
 ## Doctor
 
 `bob gmail doctor` checks gog, the stored `bob-gmail` client, the account, the
-token (one `search` page), the granted scopes, the config, the writer pin, and
-journal readability. Rows look like `bob gcal doctor`:
+token (one hydrated `search` page), IDs-only listing, the granted scopes, the
+config, the writer pin, and journal readability. Rows look like
+`bob gcal doctor`:
 
 - `gog`: version and program path.
 - `client`: stored `bob-gmail` OAuth client and its Cloud project.
@@ -788,6 +796,9 @@ journal readability. Rows look like `bob gcal doctor`:
 - `token`: `refreshes`, or `invalid_grant` with a login hint. Testing-mode
   consent screens issue 7-day tokens; a Google password change revokes Gmail
   tokens; a token unused for 6 months expires.
+- `thread_ids`: IDs-only `threads.list` of the sync-label query
+  (`label:<label>`), or `in:inbox` when sync is disabled. Skipped when there
+  is no account or the token row failed.
 - `scopes`: `readonly` or `readonly+compose`.
 - `config`: folder, body mode, the sync label and inbox after fallbacks
   (`sync disabled` when the label is empty), the route prefixes (`none` in

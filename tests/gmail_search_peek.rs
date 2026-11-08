@@ -153,6 +153,48 @@ fn peek_returns_preview_and_uses_private_body_free_cache_until_expiry() {
 }
 
 #[test]
+fn peek_resolves_rfc822msgid_urls_through_threads_list() {
+    let env = GmailEnv::new("bob-cli-gmail-peek-rfc");
+    let fake = FakeGog::new(&env, "gog").scenario("search_one");
+    let url =
+        "https://mail.google.com/mail/u/0/#search/rfc822msgid%3Aone%40example.test";
+    let output = run_gmail(&env, &fake, &["peek", url, "-f", "json"]);
+    assert_success(&output, "rfc822msgid peek");
+    let document = json_stdout(&output);
+    assert_eq!(document["verdict"], "resolved");
+    assert_eq!(document["thread_id"], "0123456789abcdef");
+    let list = fake
+        .calls()
+        .into_iter()
+        .find(|call| call.iter().any(|arg| arg == "gmail.users.threads.list"))
+        .expect("threads.list for rfc822msgid");
+    let params: Value = serde_json::from_str(
+        &list
+            .windows(2)
+            .find(|pair| pair[0] == "--params")
+            .expect("--params")[1],
+    )
+    .expect("params JSON");
+    assert_eq!(params["q"], "rfc822msgid:one@example.test");
+    assert!(!thread_get_calls(&fake).is_empty());
+}
+
+#[test]
+fn peek_reports_zero_rfc822msgid_matches_without_fetching_thread_data() {
+    let env = GmailEnv::new("bob-cli-gmail-peek-rfc-zero");
+    let fake = FakeGog::new(&env, "gog").scenario("search_zero");
+    let url =
+        "https://mail.google.com/mail/u/0/#search/rfc822msgid%3Azero%40example.test";
+    let output = run_gmail(&env, &fake, &["peek", url, "-f", "json"]);
+    assert_success(&output, "rfc822msgid zero peek");
+    let document = json_stdout(&output);
+    assert_eq!(document["verdict"], "unresolvable");
+    assert_eq!(document["thread_id"], Value::Null);
+    assert!(fake.called_with(&["gmail.users.threads.list"]));
+    assert!(thread_get_calls(&fake).is_empty());
+}
+
+#[test]
 fn peek_reports_unresolvable_links_without_fetching_thread_data() {
     let env = GmailEnv::new("bob-cli-gmail-peek-unresolvable");
     let fake = FakeGog::new(&env, "gog");

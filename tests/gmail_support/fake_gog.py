@@ -58,6 +58,131 @@ FLAGS_WITH_VALUE = {
     "--attach",
 }
 
+# Flag inventory recorded from gog v0.44.0 `--help` (bob's minimum gog).
+GLOBAL_FLAGS = frozenset(
+    {
+        "--access-token",
+        "--account",
+        "--client",
+        "--color",
+        "--disable-commands",
+        "--dry-run",
+        "--enable-commands",
+        "--enable-commands-exact",
+        "--force",
+        "--gmail-no-send",
+        "--help",
+        "--home",
+        "--json",
+        "--no-input",
+        "--plain",
+        "--quota-project",
+        "--readonly",
+        "--results-only",
+        "--select",
+        "--verbose",
+        "--version",
+        "--wrap-untrusted",
+    }
+)
+_GMAIL_SEARCH_FLAGS = frozenset(
+    {
+        "--all",
+        "--count",
+        "--fail-empty",
+        "--from-contact",
+        "--local",
+        "--max",
+        "--oldest",
+        "--page",
+        "--timezone",
+    }
+)
+_THREAD_GET_FLAGS = frozenset(
+    {
+        "--download",
+        "--full",
+        "--out-dir",
+        "--sanitize-content",
+        "--use-indexed-attachment-ids",
+    }
+)
+_DRAFT_CREATE_FLAGS = frozenset(
+    {
+        "--attach",
+        "--auto-from-addressed-alias",
+        "--bcc",
+        "--body",
+        "--body-file",
+        "--body-html",
+        "--body-html-file",
+        "--cc",
+        "--from",
+        "--quote",
+        "--raw-file",
+        "--reply-all",
+        "--reply-to",
+        "--reply-to-message-id",
+        "--signature",
+        "--signature-file",
+        "--signature-from",
+        "--subject",
+        "--thread-id",
+        "--to",
+    }
+)
+COMMAND_FLAGS = {
+    ("version",): frozenset(),
+    ("auth", "credentials", "list"): frozenset(),
+    ("auth", "remove"): frozenset(),
+    ("gmail", "url"): frozenset(),
+    ("gmail", "labels", "list"): frozenset(),
+    ("gmail", "drafts", "send"): frozenset(),
+    ("auth", "credentials", "set"): frozenset(
+        {"--domain", "--expand-env", "--insecure"}
+    ),
+    ("auth", "list"): frozenset({"--check", "--timeout"}),
+    ("auth", "add"): frozenset(
+        {
+            "--auth-url",
+            "--drive-scope",
+            "--extra-scopes",
+            "--force-consent",
+            "--gmail-scope",
+            "--listen-addr",
+            "--manual",
+            "--photos-scope",
+            "--redirect-host",
+            "--redirect-uri",
+            "--remote",
+            "--services",
+            "--step",
+            "--timeout",
+        }
+    ),
+    ("gmail", "search"): _GMAIL_SEARCH_FLAGS,
+    ("gmail", "messages", "search"): _GMAIL_SEARCH_FLAGS,
+    ("gmail", "thread", "get"): _THREAD_GET_FLAGS,
+    ("gmail", "threads", "get"): _THREAD_GET_FLAGS,
+    ("gmail", "get"): frozenset(
+        {
+            "--format",
+            "--headers",
+            "--sanitize-content",
+            "--use-indexed-attachment-ids",
+        }
+    ),
+    ("gmail", "drafts", "get"): frozenset(
+        {"--download", "--format", "--use-indexed-attachment-ids"}
+    ),
+    ("gmail", "drafts", "create"): _DRAFT_CREATE_FLAGS,
+    ("gmail", "drafts", "update"): _DRAFT_CREATE_FLAGS
+    | {"--clear-attachments", "--clear-reply-context"},
+    ("api", "call"): frozenset(
+        {"--allow-write", "--body", "--no-cache", "--params", "--scope"}
+    ),
+}
+
 args = sys.argv[1:]
 log_path = os.environ.get("BOB_GMAIL_FAKE_LOG")
 state_path = os.environ.get("BOB_GMAIL_FAKE_STATE")
@@ -270,6 +395,128 @@ def fail(message: str, code: int = 1) -> None:
     raise SystemExit(code)
 
 
+def usage_error(message: str) -> None:
+    """Emit gog's JSON usage envelope (when --json) and matching stderr."""
+    sys.stderr.write(message + "\n")
+    if message.startswith("unknown flag "):
+        sys.stderr.write("Run with --help to see available flags\n")
+        json_message = message + "\nRun with --help to see available flags"
+    else:
+        json_message = message
+    if "--json" in args:
+        dump({"error": {"class": "usage", "code": 2, "message": json_message}})
+    raise SystemExit(2)
+
+
+def command_flags_for(positionals: list[str]) -> frozenset[str] | None:
+    for length in range(min(4, len(positionals)), 0, -1):
+        key = tuple(positionals[:length])
+        if key in COMMAND_FLAGS:
+            return COMMAND_FLAGS[key]
+    return None
+
+
+def dump_ids_list_page(page: dict) -> None:
+    """Raw Gmail threads.list shape: omit empty `threads` and missing tokens."""
+    payload: dict = {}
+    threads = page.get("threads")
+    if isinstance(threads, list) and threads:
+        payload["threads"] = threads
+    token = page.get("nextPageToken")
+    if token:
+        payload["nextPageToken"] = token
+    if "resultSizeEstimate" in page:
+        payload["resultSizeEstimate"] = page["resultSizeEstimate"]
+    elif isinstance(threads, list):
+        payload["resultSizeEstimate"] = len(threads)
+    else:
+        payload["resultSizeEstimate"] = 0
+    dump(payload)
+
+
+def dump_ids_list(ids: list[str], next_token: str | None = None, estimate: int | None = None) -> None:
+    dump_ids_list_page(
+        {
+            "threads": [{"id": thread_id} for thread_id in ids],
+            "nextPageToken": next_token,
+            "resultSizeEstimate": estimate if estimate is not None else len(ids),
+        }
+    )
+
+
+def matching_rfc_thread_ids(query: str) -> list[str]:
+    if "rfc822msgid:" not in query:
+        return []
+    rfc = query.split("rfc822msgid:", 1)[1].split()[0]
+    ids: list[str] = []
+    sent_threads = state.get("sent_threads") or {}
+    for thread_id, entry in sent_threads.items():
+        for item in entry.get("messages", []):
+            for header in (item.get("payload") or {}).get("headers", []):
+                if (
+                    header.get("name", "").lower() == "message-id"
+                    and header.get("value", "").strip() == rfc.strip()
+                ):
+                    ids.append(thread_id)
+                    break
+    return ids
+
+
+def serve_threads_list(query: str, page: str | None) -> None:
+    search_pages = state.get("search_pages")
+    if isinstance(search_pages, list) and search_pages:
+        if page is None:
+            dump_ids_list_page(search_pages[0] or {})
+            return
+        for index in range(1, len(search_pages)):
+            prev_token = (search_pages[index - 1] or {}).get("nextPageToken")
+            if prev_token == page:
+                dump_ids_list_page(search_pages[index] or {})
+                return
+        dump_ids_list_page({"resultSizeEstimate": 0})
+        return
+    rfc_ids = matching_rfc_thread_ids(query)
+    if rfc_ids:
+        dump_ids_list(rfc_ids)
+        return
+    ids_query = query.startswith("rfc822msgid:") or query.startswith("label:")
+    if scenario in {"gmail_pull_one", "gmail_pull_many"} and query.startswith(
+        "label:"
+    ):
+        ids = ["0123456789abcdef"]
+        if scenario == "gmail_pull_many":
+            ids.append("aaaaaaaaaaaaaaaa")
+        dump_ids_list(ids)
+        return
+    if ids_query and (
+        scenario == "search_zero" or "zero@example.test" in query
+    ):
+        dump_ids_list_page({"resultSizeEstimate": 0})
+        return
+    if ids_query and (
+        scenario == "search_many" or "many@example.test" in query
+    ):
+        dump_ids_list(["0123456789abcdef", "aaaaaaaaaaaaaaaa"])
+        return
+    if ids_query and (
+        scenario == "search_one" or "one@example.test" in query
+    ):
+        dump_ids_list(["0123456789abcdef"])
+        return
+    if ids_query and (
+        scenario == "search_paginated" or "paged@example.test" in query
+    ):
+        if page:
+            dump_ids_list_page({"resultSizeEstimate": 1})
+        else:
+            dump_ids_list(["0123456789abcdef"], next_token="synthetic-page-2", estimate=1)
+        return
+    if scenario in {"search_malformed", "malformed_json"}:
+        sys.stdout.write("{malformed JSON\n")
+        return
+    dump_ids_list_page({"resultSizeEstimate": 0})
+
+
 def valid_client_payload(payload: bytes) -> bool:
     try:
         value = json.loads(payload.decode("utf-8"))
@@ -343,6 +590,25 @@ def op_name() -> str:
 
 
 op = op_name()
+
+allowed_command_flags = command_flags_for(pos)
+if allowed_command_flags is not None:
+    allowed_flags = GLOBAL_FLAGS | allowed_command_flags
+    index = 0
+    while index < len(args):
+        item = args[index]
+        if item == "-" or not item.startswith("-"):
+            index += 1
+            continue
+        name = item.split("=", 1)[0]
+        if name not in allowed_flags:
+            usage_error(f"unknown flag {name}")
+        if "=" in item:
+            index += 1
+        elif name in FLAGS_WITH_VALUE:
+            index += 2
+        else:
+            index += 1
 
 fail_spec = (state.get("fail") or {}).get(op)
 if fail_spec:
@@ -862,60 +1128,13 @@ if op == "auth_remove":
 if op == "search":
     query = pos[2] if len(pos) > 2 else ""
     page = flag_value("--page")
-    # Discovery paging control: state["search_pages"] is a list of pages in
-    # order, each {"threads": [{"id": ...}], "nextPageToken": ...|None}.
-    # The first page is returned when --page is absent; page N>0 is returned
-    # when --page equals the previous page's nextPageToken. Invalid ids in
-    # the pages are returned verbatim so the caller validates them.
-    search_pages = state.get("search_pages")
-    if isinstance(search_pages, list) and search_pages:
-        # Discovery stays on Gmail's read allowlist: paged enumeration is
-        # ids-only, never a hydrated search.
-        if "--ids-only" not in args:
-            fail("fake gog: discovery search requires --ids-only", 2)
-        if page is None:
-            dump(search_pages[0])
-        else:
-            for index in range(1, len(search_pages)):
-                prev_token = (search_pages[index - 1] or {}).get(
-                    "nextPageToken"
-                )
-                if prev_token == page:
-                    dump(search_pages[index])
-                    break
-            else:
-                dump(
-                    {
-                        "threads": [],
-                        "nextPageToken": None,
-                        "resultSizeEstimate": 0,
-                    }
-                )
-        raise SystemExit(0)
     if "in:sent" in query:
         sent_threads = state.get("sent_threads") or {}
         ids = []
         if "rfc822msgid:" in query:
-            rfc = query.split("rfc822msgid:", 1)[1].split()[0]
-            for thread_id, entry in sent_threads.items():
-                for item in entry.get("messages", []):
-                    for header in (item.get("payload") or {}).get("headers", []):
-                        if header.get("name", "").lower() == "message-id" and header.get("value", "").strip() == rfc.strip():
-                            ids.append(thread_id)
-                            break
+            ids = matching_rfc_thread_ids(query)
         else:
             ids = list(sent_threads.keys())
-        dump(
-            {
-                "threads": [{"id": thread_id} for thread_id in ids],
-                "nextPageToken": None,
-                "resultSizeEstimate": len(ids),
-            }
-        )
-    elif scenario in {"gmail_pull_one", "gmail_pull_many"} and query.startswith("label:"):
-        ids = ["0123456789abcdef"]
-        if scenario == "gmail_pull_many":
-            ids.append("aaaaaaaaaaaaaaaa")
         dump(
             {
                 "threads": [{"id": thread_id} for thread_id in ids],
@@ -970,8 +1189,43 @@ if op == "search":
 if op == "api_call":
     import base64
 
-    # The save path uses exactly one Discovery call shape for attachment
-    # bytes. Anything else is a regression in the narrow read contract.
+    method = pos[4] if len(pos) > 4 else ""
+    if method == "gmail.users.threads.list":
+        if "--no-cache" not in args:
+            fail("fake gog: api call requires --no-cache", 2)
+        scope = flag_value("--scope")
+        if scope != READONLY_SCOPE:
+            fail(f"fake gog: api call requires readonly scope, got {scope}", 2)
+        allowlist = set((flag_value("--enable-commands") or "").split(","))
+        if scenario == "threads_list_refused" or (
+            {"api.call", "api.gmail.users.threads.list"} - allowlist
+        ):
+            usage_error(
+                'Discovery method "gmail.users.threads.list" requires explicit '
+                "command-policy permission; add "
+                '"api.gmail.users.threads.list" to --enable-commands'
+            )
+        try:
+            params = json.loads(flag_value("--params") or "{}")
+        except json.JSONDecodeError:
+            fail("fake gog: --params is not JSON", 2)
+        if not isinstance(params, dict):
+            fail("fake gog: --params must be an object", 2)
+        allowed_keys = {"userId", "q", "maxResults", "pageToken", "fields"}
+        if set(params) - allowed_keys:
+            fail("fake gog: --params has unexpected keys", 2)
+        if params.get("userId") != "me":
+            fail("fake gog: --params userId must be me", 2)
+        query = params.get("q") or ""
+        if not isinstance(query, str) or not query:
+            fail("fake gog: --params q must be a non-empty string", 2)
+        page = params.get("pageToken")
+        if page is not None and not isinstance(page, str):
+            fail("fake gog: --params pageToken must be a string", 2)
+        serve_threads_list(query, page)
+        raise SystemExit(0)
+
+    # Attachment bytes stay on the original Discovery method.
     if pos[2:5] != ["gmail", "v1", "gmail.users.messages.attachments.get"]:
         fail(f"fake gog: unexpected api call {pos[2:5]}", 2)
     if "--no-cache" not in args:
@@ -1010,10 +1264,6 @@ if op == "api_call":
     raise SystemExit(0)
 
 if op == "thread_get":
-    # Real gog (v0.44 through v0.48) has no `thread get --format` flag.
-    if "--format" in args:
-        sys.stderr.write("unknown flag --format\n")
-        raise SystemExit(2)
     state = load_state()
     if "thread" in state:
         dump(state["thread"])

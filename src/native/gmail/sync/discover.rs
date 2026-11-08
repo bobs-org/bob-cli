@@ -1,9 +1,10 @@
 //! Paged ids-only discovery for `bob gmail sync`.
 //!
 //! One run resolves config, the writer pin, gog, and the account, then
-//! discovers with paged `label:<enrollment label>` searches through the
-//! last page. Already enrolled ids need no candidate metadata or hydration;
-//! unseen ids proceed in stable discovery order. Local adoption from the
+//! discovers with paged `label:<enrollment label>` `threads.list` reads
+//! through the last page. Already enrolled ids need no candidate metadata
+//! or hydration; unseen ids proceed in stable discovery order. Local
+//! adoption from the
 //! vault scan is independent of search membership so a lost journal append
 //! is repaired even after the label is gone.
 //!
@@ -77,7 +78,7 @@ pub(crate) struct DiscoveryOutcome {
     pub(crate) pages_fetched: usize,
 }
 
-/// Discover thread ids with paged `--ids-only` searches to the last page.
+/// Discover thread ids with paged `threads.list` reads to the last page.
 ///
 /// Deduplicates while preserving first-seen order, skips invalid ids with a
 /// bounded warning, stops at [`MAX_DISCOVERY_IDS`] with a cap warning only
@@ -190,11 +191,10 @@ pub(crate) fn discover_ids<R: GmailRead>(
                 }
             }
             None => {
-                // No `threads` key means gog returned no thread list. An
-                // empty result set is the end of paging; a non-empty
-                // response without the key is a malformed page. Keep ids
-                // already discovered and fail the run instead of aborting
-                // adoption and recovery.
+                // The transport inserts `"threads": []` when Gmail omits
+                // the key, so a present non-array value is a malformed
+                // page. Keep ids already discovered and fail the run
+                // instead of aborting adoption and recovery.
                 if response.get("nextPageToken").is_some()
                     || response.get("resultSizeEstimate").is_some()
                 {

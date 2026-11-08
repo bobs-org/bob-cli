@@ -28,6 +28,41 @@ fn write_area(env: &GmailEnv, route: &str) {
     .expect("write area note");
 }
 
+fn threads_list_queries(fake: &FakeGog) -> Vec<String> {
+    fake.calls()
+        .iter()
+        .filter(|call| call.iter().any(|arg| arg == "gmail.users.threads.list"))
+        .filter_map(|call| {
+            call.windows(2)
+                .find(|pair| pair[0] == "--params")
+                .map(|pair| {
+                    let params: Value = serde_json::from_str(&pair[1])
+                        .expect("threads.list --params is JSON");
+                    params["q"].as_str().unwrap_or_default().to_string()
+                })
+        })
+        .collect()
+}
+
+fn threads_list_page_tokens(fake: &FakeGog) -> Vec<Option<String>> {
+    fake.calls()
+        .iter()
+        .filter(|call| call.iter().any(|arg| arg == "gmail.users.threads.list"))
+        .filter_map(|call| {
+            call.windows(2)
+                .find(|pair| pair[0] == "--params")
+                .map(|pair| {
+                    let params: Value = serde_json::from_str(&pair[1])
+                        .expect("threads.list --params is JSON");
+                    params
+                        .get("pageToken")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+        })
+        .collect()
+}
+
 #[test]
 fn sync_creates_an_inbox_and_is_idempotent_by_thread_id() {
     let env = GmailEnv::new("bob-cli-gmail-sync");
@@ -46,7 +81,7 @@ fn sync_creates_an_inbox_and_is_idempotent_by_thread_id() {
     assert!(first_json["problems"].as_array().unwrap().is_empty());
     assert_eq!(first_json["summary"]["watching"], 1);
     assert_eq!(first_json["summary"]["awaiting"], 0);
-    assert!(fake.called_with(&["label:bob"]));
+    assert_eq!(threads_list_queries(&fake), ["label:bob"]);
 
     let inbox = fs::read_to_string(env.vault().join("gmail_inbox.md"))
         .expect("sync creates the configured inbox");
@@ -118,7 +153,7 @@ fn sync_refuses_a_non_writer_and_a_disabled_label() {
     assert_eq!(writer.status.code(), Some(2));
     let writer_json: Value = serde_json::from_slice(&writer.stdout).unwrap();
     assert_eq!(writer_json["error"]["kind"], "writer");
-    assert!(!fake.called_with(&["gmail", "search"]));
+    assert!(!fake.called_with(&["gmail.users.threads.list"]));
 
     env.write_config(&format!(
         "gmail:\n  account: {ACCOUNT}\n  writer: {HOST}\n  pull:\n    label: ''\n"
@@ -127,6 +162,7 @@ fn sync_refuses_a_non_writer_and_a_disabled_label() {
     assert_eq!(disabled.status.code(), Some(2));
     let value: Value = serde_json::from_slice(&disabled.stdout).unwrap();
     assert_eq!(value["error"]["kind"], "sync_disabled");
+    assert!(!fake.called_with(&["gmail.users.threads.list"]));
 }
 
 #[test]
@@ -259,5 +295,71 @@ fn help_lists_sync_and_hides_the_pull_alias() {
         stdout(&pull_help).contains("bob gmail sync"),
         "{}",
         stdout(&pull_help)
+    );
+}
+
+#[test]
+fn sync_pages_threads_list_by_page_token() {
+    let env = GmailEnv::new("bob-cli-gmail-sync-pages");
+    let fake = FakeGog::new(&env, "gog").scenario("gmail_pull_many");
+    fake.set_search_pages(serde_json::json!([
+        {
+            "threads": [{"id": "0123456789abcdef"}],
+            "nextPageToken": "page-2",
+            "resultSizeEstimate": 2
+        },
+        {
+            "threads": [{"id": "aaaaaaaaaaaaaaaa"}],
+            "resultSizeEstimate": 2
+        }
+    ]));
+
+    let output = run_gmail(&env, &fake, &["sync", "-f", "json"]);
+    assert_success(&output, "paged sync");
+    let value = json_stdout(&output);
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["pulled"], 2);
+    assert_eq!(threads_list_queries(&fake), ["label:bob", "label:bob"]);
+    assert_eq!(
+        threads_list_page_tokens(&fake),
+        [None, Some("page-2".to_string())]
+    );
+}
+
+#[test]
+fn sync_empty_label_is_ok_with_no_threads_key() {
+    let env = GmailEnv::new("bob-cli-gmail-sync-empty");
+    let fake = FakeGog::new(&env, "gog");
+    fake.set_search_pages(serde_json::json!([{"resultSizeEstimate": 0}]));
+
+    let output = run_gmail(&env, &fake, &["sync", "-f", "json"]);
+    assert_success(&output, "empty label sync");
+    let value = json_stdout(&output);
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["pulled"], 0);
+    assert!(value["warnings"].as_array().unwrap().is_empty(), "{value}");
+    assert!(fake.called_with(&["gmail.users.threads.list"]));
+}
+
+#[test]
+fn sync_threads_list_refused_is_a_search_failure() {
+    let env = GmailEnv::new("bob-cli-gmail-sync-refused");
+    let fake = FakeGog::new(&env, "gog").scenario("threads_list_refused");
+
+    let output = run_gmail(&env, &fake, &["sync", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+    let value = json_stdout(&output);
+    assert_eq!(value["ok"], false);
+    let warnings = value["warnings"].as_array().expect("warnings");
+    assert!(
+        warnings.iter().any(|warning| {
+            warning.as_str().is_some_and(|text| {
+                text.contains("gog_usage")
+                    && text.contains(
+                        "gog's command policy refused Bob's Gmail command",
+                    )
+            })
+        }),
+        "{warnings:?}"
     );
 }

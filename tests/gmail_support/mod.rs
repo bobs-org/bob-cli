@@ -275,8 +275,9 @@ impl FakeGog {
     }
 
     /// Set paged discovery responses in order, each `{"threads": [{"id":
-    /// ...}], "nextPageToken": ...|None}`. The fake serves page 0 when
-    /// `--page` is absent and page N when `--page` equals page N-1's token.
+    /// ...}], "nextPageToken": ...}`. The fake serves page 0 when
+    /// `pageToken` is absent from `--params` and page N when `pageToken`
+    /// equals page N-1's token. Empty pages omit `threads`.
     pub(crate) fn set_search_pages(&self, pages: serde_json::Value) {
         let mut state: serde_json::Value = fs::read(&self.state)
             .ok()

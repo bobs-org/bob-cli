@@ -29,6 +29,9 @@ const READ_COMMANDS: &str =
 const ATTACHMENT_API_COMMANDS: &str =
     "api.call,api.gmail.users.messages.attachments.get";
 
+/// Read-only Discovery commands Bob may invoke for IDs-only thread listing.
+const THREADS_LIST_API_COMMANDS: &str = "api.call,api.gmail.users.threads.list";
+
 /// Explicit Gmail read-only OAuth scope for the Discovery attachment call.
 const READONLY_SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly";
 
@@ -293,8 +296,8 @@ impl Gog {
         parse_json(&stdout)
     }
 
-    /// Read one page of matching thread IDs. The `--ids-only` mode avoids
-    /// fetching per-thread message data while resolving an RFC message ID.
+    /// Read one page of matching thread IDs through Gmail's IDs-only
+    /// `users.threads.list` Discovery call.
     pub(crate) fn search_page(
         &self,
         account: &str,
@@ -302,20 +305,9 @@ impl Gog {
         max: u32,
         page: Option<&str>,
     ) -> Result<serde_json::Value, GmailError> {
-        let mut command = vec![
-            OsString::from("gmail"),
-            OsString::from("search"),
-            OsString::from(query),
-            OsString::from("--max"),
-            OsString::from(max.to_string()),
-            OsString::from("--ids-only"),
-        ];
-        if let Some(page) = page {
-            command.push(OsString::from("--page"));
-            command.push(OsString::from(page));
-        }
-        let stdout = self.gmail_run(account, command)?;
-        parse_json(&stdout)
+        let args = threads_list_api_argv(account, query, max, page);
+        let output = self.run(args).map_err(redact_gmail_read_error)?;
+        normalize_threads_list(&output.stdout)
     }
 
     /// Read Gmail label names and opaque IDs without changing labels.
@@ -598,20 +590,14 @@ fn redact_gmail_draft_error(error: GmailError) -> GmailError {
     redact_keeping_hint(&error, message, hint)
 }
 
-/// Build the exact argv for one Discovery attachment read: shared read-only
-/// transport flags, the narrow command allowlist, and the serialized
-/// `--params` argument. Pure so tests pin the shape without a subprocess.
-fn attachment_api_argv(
+/// Shared Discovery argv: read-only transport flags, a narrow command
+/// allowlist, and one serialized `--params` JSON argument.
+fn discovery_api_argv(
     account: &str,
-    message_id: &str,
-    attachment_id: &str,
+    commands: &str,
+    method: &str,
+    params: serde_json::Value,
 ) -> Vec<OsString> {
-    let params = serde_json::json!({
-        "userId": "me",
-        "messageId": message_id,
-        "id": attachment_id,
-    })
-    .to_string();
     vec![
         OsString::from("--no-input"),
         OsString::from("--json"),
@@ -624,20 +610,82 @@ fn attachment_api_argv(
         OsString::from(account),
         OsString::from("--gmail-no-send"),
         OsString::from("--enable-commands"),
-        OsString::from(ATTACHMENT_API_COMMANDS),
+        OsString::from(commands),
         OsString::from("--account"),
         OsString::from(account),
         OsString::from("api"),
         OsString::from("call"),
         OsString::from("gmail"),
         OsString::from("v1"),
-        OsString::from("gmail.users.messages.attachments.get"),
+        OsString::from(method),
         OsString::from("--params"),
-        OsString::from(params),
+        OsString::from(params.to_string()),
         OsString::from("--scope"),
         OsString::from(READONLY_SCOPE),
         OsString::from("--no-cache"),
     ]
+}
+
+/// Build the exact argv for one Discovery attachment read. Pure so tests pin
+/// the shape without a subprocess.
+fn attachment_api_argv(
+    account: &str,
+    message_id: &str,
+    attachment_id: &str,
+) -> Vec<OsString> {
+    discovery_api_argv(
+        account,
+        ATTACHMENT_API_COMMANDS,
+        "gmail.users.messages.attachments.get",
+        serde_json::json!({
+            "userId": "me",
+            "messageId": message_id,
+            "id": attachment_id,
+        }),
+    )
+}
+
+/// Build the exact argv for one IDs-only `threads.list` Discovery read.
+fn threads_list_api_argv(
+    account: &str,
+    query: &str,
+    max: u32,
+    page: Option<&str>,
+) -> Vec<OsString> {
+    let mut params = serde_json::json!({
+        "userId": "me",
+        "q": query,
+        "maxResults": max,
+        "fields": "threads/id,nextPageToken,resultSizeEstimate",
+    });
+    if let Some(token) = page {
+        params["pageToken"] = serde_json::Value::String(token.to_string());
+    }
+    discovery_api_argv(
+        account,
+        THREADS_LIST_API_COMMANDS,
+        "gmail.users.threads.list",
+        params,
+    )
+}
+
+/// Normalize a `threads.list` body. Gmail omits `threads` when the result is
+/// empty; callers always see an array. Non-objects are body-free `bad_json`.
+fn normalize_threads_list(
+    stdout: &str,
+) -> Result<serde_json::Value, GmailError> {
+    let bad = || {
+        GmailError::runtime("bad_json", "gog returned invalid JSON".to_string())
+    };
+    let mut value: serde_json::Value =
+        serde_json::from_str(stdout.trim()).map_err(|_| bad())?;
+    let Some(object) = value.as_object_mut() else {
+        return Err(bad());
+    };
+    if !object.contains_key("threads") {
+        object.insert("threads".to_string(), serde_json::json!([]));
+    }
+    Ok(value)
 }
 
 /// Parse one Discovery attachments-get response. Body-free: failures never
@@ -672,7 +720,7 @@ fn parse_attachment_response(stdout: &str) -> Result<Vec<u8>, GmailError> {
 /// cache-writing command.
 fn redact_attachment_error(error: GmailError) -> GmailError {
     let redacted = redact_gmail_read_error(error);
-    if redacted.kind() == "gog" {
+    if matches!(redacted.kind(), "gog" | "gog_usage") {
         return GmailError::setup(
             "attachment_unsupported",
             "this gog build refused the read-only Gmail attachment lookup"
@@ -717,6 +765,7 @@ fn redact_gmail_setup_error(error: GmailError, operation: &str) -> GmailError {
         "keyring" => {
             "gog could not read the bob-gmail sign-in from the system keyring"
         }
+        "gog_usage" => return error,
         _ => {
             return GmailError::runtime(
                 error.kind(),
@@ -1026,6 +1075,166 @@ mod tests {
         ));
         assert_eq!(error.kind(), "not_found");
         assert!(!error.message().contains("PRIVATE_SENTINEL"));
+
+        let usage = GmailError::setup(
+            "gog_usage",
+            "gog rejected Bob's Gmail command: unknown flag --ids-only"
+                .to_string(),
+        )
+        .with_hint(
+            "Bob and this gog build disagree on gog's command line; update gog, then run `bob gmail doctor`",
+        );
+        let error = redact_attachment_error(usage);
+        assert_eq!(error.kind(), "attachment_unsupported");
+        assert_eq!(error.exit_code(), 2);
+        assert!(!error.message().contains("ids-only"));
+    }
+
+    #[test]
+    fn threads_list_argv_is_a_narrow_discovery_read() {
+        let argv =
+            threads_list_api_argv("me@example.com", "label:bob", 500, None);
+        let args: Vec<String> = argv
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        for flag in [
+            "--no-input",
+            "--json",
+            "--readonly",
+            "--gmail-no-send",
+            "--no-cache",
+        ] {
+            assert!(
+                args.iter().any(|arg| arg == flag),
+                "missing {flag}: {args:?}"
+            );
+        }
+        let allowlist = args
+            .windows(2)
+            .find(|pair| pair[0] == "--enable-commands")
+            .map(|pair| pair[1].clone())
+            .expect("enable-commands must be present");
+        assert_eq!(allowlist, "api.call,api.gmail.users.threads.list");
+        assert!(
+            !args.windows(2).any(|pair| {
+                pair == ["gmail".to_string(), "search".to_string()]
+            }),
+            "must not invoke gmail search: {args:?}"
+        );
+        assert!(
+            !args.iter().any(|arg| arg == "--ids-only"),
+            "must not send --ids-only: {args:?}"
+        );
+        let method = ["api", "call", "gmail", "v1", "gmail.users.threads.list"];
+        assert!(
+            args.windows(method.len()).any(|window| {
+                window.iter().map(String::as_str).eq(method.iter().copied())
+            }),
+            "api call method path must be present: {args:?}"
+        );
+        let params_raw = args
+            .windows(2)
+            .find(|pair| pair[0] == "--params")
+            .map(|pair| pair[1].clone())
+            .expect("--params must be present");
+        let params: serde_json::Value =
+            serde_json::from_str(&params_raw).expect("params must be JSON");
+        assert_eq!(params["userId"], "me");
+        assert_eq!(params["q"], "label:bob");
+        assert_eq!(params["maxResults"], 500);
+        assert_eq!(
+            params["fields"],
+            "threads/id,nextPageToken,resultSizeEstimate"
+        );
+        assert!(params.get("pageToken").is_none());
+        let scope = args
+            .windows(2)
+            .find(|pair| pair[0] == "--scope")
+            .map(|pair| pair[1].clone())
+            .expect("--scope must be present");
+        assert_eq!(scope, "https://www.googleapis.com/auth/gmail.readonly");
+        assert!(args.iter().any(|arg| arg == "me@example.com"));
+
+        let paged = threads_list_api_argv(
+            "me@example.com",
+            "rfc822msgid:a@b.com",
+            1,
+            Some("page-2"),
+        );
+        let paged_args: Vec<String> = paged
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let paged_params: serde_json::Value = serde_json::from_str(
+            &paged_args
+                .windows(2)
+                .find(|pair| pair[0] == "--params")
+                .map(|pair| pair[1].clone())
+                .expect("--params must be present"),
+        )
+        .expect("paged params must be JSON");
+        assert_eq!(paged_params["q"], "rfc822msgid:a@b.com");
+        assert_eq!(paged_params["maxResults"], 1);
+        assert_eq!(paged_params["pageToken"], "page-2");
+        assert!(
+            paged_params.get("fields").is_some(),
+            "fields must stay on paged calls"
+        );
+    }
+
+    #[test]
+    fn threads_list_normalizes_missing_threads_and_stays_body_free() {
+        let empty = normalize_threads_list(r#"{"resultSizeEstimate":0}"#)
+            .expect("empty result");
+        assert_eq!(empty["threads"], serde_json::json!([]));
+        assert_eq!(empty["resultSizeEstimate"], 0);
+
+        let present = normalize_threads_list(
+            r#"{"threads":[{"id":"abc"}],"nextPageToken":"n"}"#,
+        )
+        .expect("present threads");
+        assert_eq!(present["threads"][0]["id"], "abc");
+        assert_eq!(present["nextPageToken"], "n");
+
+        for stdout in ["SECRET-BYTES {{{", "[1,2]", "\"nope\"", "null"] {
+            let error = normalize_threads_list(stdout).err().expect("fail");
+            assert_eq!(error.kind(), "bad_json");
+            assert!(
+                !error.message().contains("SECRET"),
+                "echoed input: {}",
+                error.message()
+            );
+            assert_eq!(error.message(), "gog returned invalid JSON");
+        }
+    }
+
+    #[test]
+    fn usage_read_error_keeps_message_hint_and_setup_status() {
+        use crate::native::google::{gog::classify_gog_failure, GMAIL};
+
+        let stdout = concat!(
+            r#"{"error":{"class":"usage","code":2,"message":"#,
+            r#""unknown flag --ids-only\nRun with --help to see available flags"}}"#
+        );
+        let error = redact_gmail_read_error(classify_gog_failure(
+            GMAIL,
+            stdout,
+            "unknown flag --ids-only",
+        ));
+        assert_eq!(error.kind(), "gog_usage");
+        assert_eq!(error.exit_code(), 2);
+        assert_eq!(
+            error.message(),
+            "gog rejected Bob's Gmail command: unknown flag --ids-only"
+        );
+        assert!(
+            error.hint().is_some_and(|hint| {
+                hint.contains("bob gmail doctor") && hint.contains("update gog")
+            }),
+            "{:?}",
+            error.hint()
+        );
     }
 
     #[test]

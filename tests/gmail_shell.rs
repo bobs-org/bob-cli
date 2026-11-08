@@ -893,6 +893,15 @@ fn doctor_reports_healthy_setup() {
     assert_eq!(check(&doc, "client")["status"], "ok");
     assert_eq!(check(&doc, "account")["status"], "ok");
     assert_eq!(check(&doc, "token")["status"], "ok");
+    assert_eq!(check(&doc, "thread_ids")["status"], "ok");
+    assert!(
+        check(&doc, "thread_ids")["summary"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("ids-only listing · label:bob"),
+        "{}",
+        check(&doc, "thread_ids")
+    );
     assert_eq!(check(&doc, "scopes")["status"], "ok");
 }
 
@@ -951,6 +960,15 @@ fn doctor_maps_invalid_grant() {
             .unwrap_or_default()
             .contains("bob gmail login"),
         "invalid_grant must point at login: {doc}"
+    );
+    assert_eq!(check(&doc, "thread_ids")["status"], "skip");
+    assert!(
+        check(&doc, "thread_ids")["summary"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("token failed"),
+        "{}",
+        check(&doc, "thread_ids")
     );
 }
 
@@ -1471,6 +1489,31 @@ fn doctor_routes_row_explains_no_prefix_mode() {
     assert!(
         !fake.called_with(&["gmail", "labels", "list"]),
         "no-prefix mode never lists the account's labels"
+    );
+}
+
+#[test]
+fn doctor_thread_ids_fails_when_threads_list_is_refused() {
+    let env = GmailEnv::new("bob-cli-gmail-doctor-thread-ids");
+    env.write_journal_rules();
+    let fake = FakeGog::new(&env, "gog").scenario("threads_list_refused");
+    let output = run_gmail(&env, &fake, &["doctor", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(1));
+    let doc = json_stdout(&output);
+    assert_eq!(check(&doc, "token")["status"], "ok");
+    let thread_ids = check(&doc, "thread_ids");
+    assert_eq!(thread_ids["status"], "fail");
+    assert_eq!(
+        thread_ids["summary"],
+        "gog's command policy refused Bob's Gmail command"
+    );
+    assert!(
+        thread_ids["fix"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("bob gmail doctor"),
+        "{}",
+        thread_ids
     );
 }
 

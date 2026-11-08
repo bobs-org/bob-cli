@@ -10,9 +10,10 @@
 //! - [`scan`] walks the vault (with `bob gmail link -a`'s exclusions) for
 //!   open `#task` rows that link an indexed mail note on their own line or
 //!   in a direct link-only child bullet, returning a [`scan::WatchScan`].
-//! - [`discover`] pages `label:<enrollment label>` searches `--ids-only`
-//!   through the last page, deduplicates and validates ids, stops at the
-//!   5,000-id cap, and selects at most `-l` unseen filing candidates.
+//! - [`discover`] pages `label:<enrollment label>` through Gmail's
+//!   IDs-only `threads.list` Discovery call through the last page,
+//!   deduplicates and validates ids, stops at the 5,000-id cap, and
+//!   selects at most `-l` unseen filing candidates.
 //! - [`guard`] holds the host-local per-account file guard for a live run.
 //! - [`retry`] shares one `-r` budget across guard, retry, and vault-lock
 //!   waits with pacing and bounded backoff.

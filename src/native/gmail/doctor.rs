@@ -35,6 +35,7 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
                 "client",
                 "account",
                 "token",
+                "thread_ids",
                 "scopes",
                 "config",
                 "routes",
@@ -193,6 +194,35 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
         }
     }
 
+    let token_ok = checks
+        .iter()
+        .any(|check| check.id == "token" && check.status == CheckStatus::Ok);
+    match (gog.as_ref(), selected_account.as_deref()) {
+        (Some(gog), Some(email)) if token_ok => {
+            let query = config
+                .sync_label()
+                .map(super::sync::discover::label_query)
+                .unwrap_or_else(|| "in:inbox".to_string());
+            match gog.search_page(email, &query, 1, None) {
+                Ok(_) => {
+                    checks.push(Check {
+                        id: "thread_ids",
+                        status: CheckStatus::Ok,
+                        summary: format!("ids-only listing · {query}"),
+                        fix: None,
+                    });
+                }
+                Err(error) => checks.push(fail_from(&error, "thread_ids")),
+            }
+        }
+        (Some(_), Some(_)) => {
+            checks.push(skipped("thread_ids", "token failed"));
+        }
+        _ => {
+            checks.push(skipped("thread_ids", "no account"));
+        }
+    }
+
     match (gog.as_ref(), selected_account.as_deref()) {
         (Some(gog), Some(email)) => match gog.accounts(Some(CLIENT)) {
             Ok(entries) => {
@@ -242,9 +272,6 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
 
     // The label audit needs a token that refreshes; a failed token row
     // already says why, so routes skips instead of repeating it.
-    let token_ok = checks
-        .iter()
-        .any(|check| check.id == "token" && check.status == CheckStatus::Ok);
     checks.push(config_check(&config));
     checks.push(routes_check(
         gog.as_ref().filter(|_| token_ok),

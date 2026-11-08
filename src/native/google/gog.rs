@@ -789,6 +789,9 @@ pub(crate) fn classify_gog_failure(
             service.command
         ));
     }
+    if is_gog_usage_failure(stdout, &blob) {
+        return classify_gog_usage(service, stdout, stderr);
+    }
     if blob.contains("connection refused")
         || blob.contains("network is unreachable")
         || blob.contains("temporary failure in name resolution")
@@ -825,6 +828,80 @@ pub(crate) fn classify_gog_failure(
         .or_else(|| stdout.lines().map(str::trim).find(|line| !line.is_empty()))
         .unwrap_or("gog failed");
     GoogleError::runtime("gog", detail.to_string())
+}
+
+fn is_gog_usage_failure(stdout: &str, blob: &str) -> bool {
+    json_error_class(stdout)
+        .is_some_and(|class| class.eq_ignore_ascii_case("usage"))
+        || blob.contains("unknown flag")
+        || blob.contains("unknown command")
+        || blob.contains("unexpected argument")
+        || blob.contains("requires explicit command-policy permission")
+}
+
+fn json_error_class(stdout: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(stdout.trim())
+        .ok()?
+        .get("error")?
+        .get("class")?
+        .as_str()
+        .map(str::to_string)
+}
+
+fn classify_gog_usage(
+    service: GoogleService,
+    stdout: &str,
+    stderr: &str,
+) -> GoogleError {
+    let combined = format!("{stdout}\n{stderr}");
+    let lower = combined.to_ascii_lowercase();
+    let message =
+        if lower.contains("requires explicit command-policy permission") {
+            format!(
+                "gog's command policy refused Bob's {} command",
+                service.service_name
+            )
+        } else if let Some(flag) = unknown_flag_name(&combined) {
+            format!(
+                "gog rejected Bob's {} command: unknown flag --{flag}",
+                service.service_name
+            )
+        } else {
+            format!(
+                "gog rejected Bob's {} command as invalid usage",
+                service.service_name
+            )
+        };
+    GoogleError::setup("gog_usage", message).with_hint(&format!(
+        "Bob and this gog build disagree on gog's command line; update gog, then run `{} doctor`",
+        service.command
+    ))
+}
+
+/// A gog unknown-flag token that is safe to echo: lowercase, digits, hyphens.
+///
+/// gog's JSON usage envelope encodes the stderr newline as `\n`, so the
+/// token is taken as the `^[a-z0-9][a-z0-9-]*` prefix after the marker
+/// rather than up to whitespace.
+fn unknown_flag_name(combined: &str) -> Option<&str> {
+    let lower = combined.to_ascii_lowercase();
+    let marker = "unknown flag --";
+    let start = lower.find(marker)?;
+    let rest = combined.get(start + marker.len()..)?;
+    let mut chars = rest.char_indices();
+    let (_, first) = chars.next()?;
+    if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
+        return None;
+    }
+    let mut end = first.len_utf8();
+    for (index, ch) in chars {
+        if ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' {
+            end = index + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    rest.get(..end)
 }
 
 fn expected_client_store_dir(stdout: &str, stderr: &str) -> Option<PathBuf> {
@@ -1150,5 +1227,54 @@ mod tests {
             .hint()
             .unwrap_or_default()
             .contains("gmail.googleapis.com"));
+    }
+
+    #[test]
+    fn maps_gog_usage_without_echoing_unsafe_tokens() {
+        // Exact v0.47.1 unknown-flag envelope plus stderr.
+        let stdout = concat!(
+            r#"{"error":{"class":"usage","code":2,"message":"#,
+            r#""unknown flag --ids-only\nRun with --help to see available flags"}}"#
+        );
+        let error =
+            classify_gog_failure(GMAIL, stdout, "unknown flag --ids-only");
+        assert_eq!(error.kind(), "gog_usage");
+        assert_eq!(error.exit_code(), 2);
+        assert_eq!(
+            error.message(),
+            "gog rejected Bob's Gmail command: unknown flag --ids-only"
+        );
+        let hint = error.hint().unwrap_or_default();
+        assert!(hint.contains("update gog"), "{hint}");
+        assert!(hint.contains("`bob gmail doctor`"), "{hint}");
+
+        let policy = classify_gog_failure(
+            GMAIL,
+            concat!(
+                r#"{"error":{"class":"usage","code":2,"message":"#,
+                r#""Discovery method \"gmail.users.threads.list\" requires explicit command-policy permission; add \"api.gmail.users.threads.list\" to --enable-commands"}}"#
+            ),
+            "",
+        );
+        assert_eq!(policy.kind(), "gog_usage");
+        assert_eq!(policy.exit_code(), 2);
+        assert_eq!(
+            policy.message(),
+            "gog's command policy refused Bob's Gmail command"
+        );
+        assert!(!policy.message().contains("threads.list"));
+
+        let unsafe_flag = classify_gog_failure(
+            GMAIL,
+            "",
+            "unknown flag --PRIVATE_SENTINEL@x",
+        );
+        assert_eq!(unsafe_flag.kind(), "gog_usage");
+        assert_eq!(
+            unsafe_flag.message(),
+            "gog rejected Bob's Gmail command as invalid usage"
+        );
+        assert!(!unsafe_flag.message().contains("PRIVATE_SENTINEL"));
+        assert!(!unsafe_flag.message().contains("@x"));
     }
 }
