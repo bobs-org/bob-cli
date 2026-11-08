@@ -58,11 +58,11 @@ bob gmail login [-a|--account EMAIL] [-c|--credentials FILE] [-f|--format human|
 bob gmail logout [-a|--account EMAIL] [-f|--format human|json] [-y|--force]
 bob gmail new [-b|--bob-dir DIR] [-B|--bcc LIST] [-c|--cc LIST] [-f|--format human|json] [-s|--subject TEXT] [-t|--to LIST]
 bob gmail peek URL|ID [-f|--format human|json]
-bob gmail sync [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-l|--limit N] [-q|--quiet] [-r|--retry-timeout SECS]
 bob gmail reply NOTE [-a|--all] [-b|--bob-dir DIR] [-f|--format human|json]
 bob gmail save URL|ID|NOTE... [-b|--bob-dir DIR] [-B|--body full|headers] [-d|--dry-run] [-f|--format human|json] [-P|--parent ROUTE] [-q|--quiet] [-R|--rerender]
 bob gmail search [QUERY] [-f|--format table|json] [-l|--limit N]
 bob gmail send NOTE [-b|--bob-dir DIR] [-c|--confirm DIGEST] [-d|--dry-run] [-f|--format human|json]
+bob gmail sync [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-l|--limit N] [-q|--quiet] [-r|--retry-timeout SECS]
 ```
 
 Running `bob gmail` with no subcommand lists saved threads, exactly like the
@@ -172,7 +172,7 @@ gmail:
     labels: [] # Gmail label names
   pull: # older spelling of sync.label and sync.inbox
     inbox: gmail_inbox.md # task file for label pulls
-    label: bob # unset or empty disables pull
+    label: bob # older spelling of sync.label; missing falls through to bob; "" disables
   signature: gmail # gmail | none
   sync:
     label: bob # enrollment label; falls back to pull.label, then bob; "" disables sync
@@ -205,7 +205,8 @@ gmail:
   the `subject_who` decision. It must contain `{subject}`.
 - `never_save.from` lists addresses or `@domains`; `never_save.labels`
   lists Gmail label names. `save` refuses matching threads with a reason.
-- `pull.label` unset or empty disables pull. Default `bob`; inbox default
+- `pull.label` is the older spelling of `sync.label`. A missing value falls
+  through to `bob`; an empty string disables sync. Inbox default
   `gmail_inbox.md`. See the [phone filing guide](guides/file-email-from-your-phone.md).
 - `pull.inbox` must be a safe relative path inside the vault. If it is
   missing, Bob creates it with `parent: "[[inbox]]"`, `type: "[[area]]"`,
@@ -712,12 +713,15 @@ membership without needing the label again. `pulled` counts only durable
 planning failures never count. `watching` counts distinct enrolled threads
 with open watchers from the revalidated apply snapshot plus this run's
 filings and adoptions. `-d` reads and plans without writing, taking no guard
-or vault lock. `-r` is the shared retry budget (default 120 seconds) for the
-guard, remote retries with pacing and bounded backoff, and the vault-lock
-wait; `0` gives each needed operation one immediate attempt with no
-contention or backoff sleep. The label stays in Gmail: sync uses read-only
-access and never unlabels, archives, marks read, or changes a message.
-`pull` remains a hidden alias with the same behaviour.
+or vault lock. `-d` is allowed on a non-writer host: the writer pin is
+live-only. `-r` is the remaining allowance for waiting (default 120
+seconds): guard contention, retry backoff, and vault-lock waits. Ordinary
+pacing (the 200 ms minimum gap between Gmail requests) always applies,
+including at `-r 0`, and never consumes the budget. `-r 0` means one
+attempt per operation with no contention, backoff, or lock-wait sleep. The
+label stays in Gmail: sync uses read-only access and never unlabels,
+archives, marks read, or changes a message. `pull` remains a hidden alias
+with the same behaviour.
 
 A thread whose routing label does not resolve is still filed to the inbox
 with a managed `GMAIL ROUTE` child that names the offending label, the
@@ -825,7 +829,15 @@ Any logged-in host may read Gmail. Save, sync, and attachment writes run only
 on `gmail.writer` when that key is set; the docs recommend the Mac. Agent
 hosts stay read-only:
 the compose scope is granted only on the Mac. `doctor` reports the writer pin
-and the current host.
+and the current host. Sync dry-run (`-d`) is allowed on a non-writer host.
+
+Live sync holds a host-local per-account guard at
+`$XDG_STATE_HOME/bob/gmail/sync-<digest>.lock`. If a scoped commit or
+journal append fails, body-free recovery evidence at
+`$XDG_STATE_HOME/bob/gmail/sync-recovery-<digest>.json` lets a later live
+run on this host finish that work before new enrollment. The digest keys
+the file to this account and vault; the evidence never ships with the
+vault.
 
 ## Exit status
 
@@ -838,6 +850,10 @@ Every `-f json` output carries `schema_version: 1` and `ok`. Errors are typed
 `{kind, message, hint?}` on stdout; human errors go to stderr with a dim hint.
 [Compose notes](#compose-notes), [Gmail drafts](#gmail-drafts), and
 [Writing and sending](#writing-and-sending) describe the compose documents.
+`bob gmail sync -f json` prints the schema-1 sync document (`ok`,
+`dry_run`, `pulled`, `results`, `warnings`, `watch`, `problems`, and
+`summary`). See [JSON outputs](reference/json-outputs.md) for the field
+list, statuses, and which counts include route-problem rows.
 
 ## Security
 
@@ -864,6 +880,9 @@ Every `-f json` output carries `schema_version: 1` and `ok`. Errors are typed
 - `BOB_GMAIL_ASSUME_TTY`: `1`/`true` treats stdin as a TTY for prompts.
 - `BOB_GMAIL_CONSENT_SECS`: consent window override (tests).
 - `XDG_CACHE_HOME`: cache root; defaults to `~/.cache`.
+- `XDG_STATE_HOME`: host-local state root; defaults to `~/.local/state`.
+  Sync stores its guard lock and recovery evidence under
+  `$XDG_STATE_HOME/bob/gmail/`.
 
 ## Known limits
 

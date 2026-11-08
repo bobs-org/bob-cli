@@ -511,6 +511,14 @@ fn help_lists_sync_and_hides_the_pull_alias() {
     let sync_text = stdout(&sync_help);
     assert!(sync_text.contains("-r, --retry-timeout"), "{sync_text}");
     assert!(sync_text.contains("-l, --limit"), "{sync_text}");
+    assert!(
+        sync_text.contains("watch-only"),
+        "limit help should name watch-only -l 0:\n{sync_text}"
+    );
+    assert!(
+        help.contains("bob gmail sync -l 0"),
+        "parent help should show the watch-only example:\n{help}"
+    );
     let options: Vec<&str> = [
         "-b, --bob-dir",
         "-d, --dry-run",

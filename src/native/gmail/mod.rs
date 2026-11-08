@@ -27,7 +27,7 @@ pub(crate) mod resolve;
 mod route;
 mod save;
 pub(crate) mod search_peek;
-mod sync;
+pub(crate) mod sync;
 pub(crate) mod turn;
 pub(crate) mod ui;
 mod vault_walk;

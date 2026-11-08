@@ -67,6 +67,7 @@ Examples:
   bob gmail link -a -d        Preview a backfill of old URLs
   bob gmail sync              File labelled threads into area or project notes
   bob gmail sync -d           Preview the label sync
+  bob gmail sync -l 0         Watch and adopt only; file no new threads
   bob gmail attach NOTE 1     Import the first listed attachment
   bob gmail draft NOTE        Create or update and preview a Gmail draft
   bob gmail login             Connect Gmail in one guided step

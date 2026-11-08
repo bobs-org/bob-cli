@@ -278,7 +278,7 @@ store left under `~/Library/Application Support/gogcli` is not read. Rerun
 | `gmail.never_save.from` | Sequence of strings | `[]` | Addresses or `@domains` that `save` refuses. |
 | `gmail.never_save.labels` | Sequence of strings | `[]` | Gmail label names that `save` refuses. |
 | `gmail.pull.inbox` | Safe relative path inside the vault | `gmail_inbox.md` | Older spelling of `gmail.sync.inbox`. |
-| `gmail.pull.label` | String or unset | `bob` | Older spelling of `gmail.sync.label`; unset or empty disables sync. |
+| `gmail.pull.label` | String or unset | `bob` | Older spelling of `gmail.sync.label`. A missing value falls through to `bob`; an empty string disables sync. |
 | `gmail.signature` | `gmail` or `none` | `gmail` | Include the account's Gmail signature in remote Gmail drafts, or omit it. The stored-draft preview includes the resulting body. |
 | `gmail.sync.inbox` | Safe relative path inside the vault | `gmail.pull.inbox`, then `gmail_inbox.md` | Task file for unrouted threads and route problems. |
 | `gmail.sync.label` | String or unset | `gmail.pull.label`, then `bob` | Enrollment label; an empty string disables sync. |

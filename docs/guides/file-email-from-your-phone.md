@@ -23,9 +23,19 @@ host configured as `gmail.writer`.
 
 On your phone, open the conversation you want to file and apply the `bob`
 label plus one routing label that names its destination, such as `#/job` or
-`+/job_2026_apply_29`. The routing label uses a configured prefix from
-`gmail.sync.route_prefixes` (default `#` and `+`); the part after the slash
-names one area or project note, the way `bob gmail save -P` does.
+`+/job_2026_apply_29`. Prefix routing needs `gmail.sync.route_prefixes`
+set to `#` and `+`:
+
+```yaml
+gmail:
+  sync:
+    route_prefixes: ["#", "+"]
+```
+
+The part after the slash names one area or project note, the way
+`bob gmail save -P` does. Absent or `[]` is no-prefix mode: a user label
+named after the note routes the thread, and a `#/job` label is ignored so
+the thread files to the inbox.
 
 Only the original conversation is watched. Removing the Gmail label later
 changes nothing: enrollment is durable after the first sync, even when the

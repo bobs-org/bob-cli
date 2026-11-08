@@ -656,11 +656,7 @@ identity (`account`, lowercase hex `thread_id`): `gmail.filed` carries
 `route`; `gmail.adopted` carries `note` and `task_file`; legacy
 `gmail.pulled` carries `inbox` and `note` and is read-only. `gmail.save`
 receipts carry `note`, `created`, and `added`. Values never contain bodies,
-snippets, or subjects. `.bob/gmail/sync-recovery.json` holds body-free
-ownership evidence for an unfinished scoped commit (owned note, task,
-image, and canonical hub paths plus deferred save, origin, and enrollment
-events); the next live sync finishes it before new enrollment and deletes
-the file. See [Bob Gmail](../gmail.md#sync).
+snippets, or subjects. See [Bob Gmail](../gmail.md#sync).
 
 `old_lib/` is the archival predecessor of `lib/`. Capture routes select
 root-level notes: `@work` writes `work.md`. Nested notes are reached with

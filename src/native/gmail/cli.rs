@@ -7,6 +7,7 @@ use clap::{
     Command as ClapCommand,
 };
 
+use super::sync::discover::{DEFAULT_LIMIT, DEFAULT_LIMIT_VALUE};
 use crate::native::env as bob_env;
 
 const COMMAND_NAME: &str = "bob gmail";
@@ -46,7 +47,7 @@ pub(crate) fn build_cli() -> ClapCommand {
 }
 
 fn top_after_help() -> &'static str {
-    "Running `bob gmail` with no command lists saved threads (offline, read-only). `-r` adds live message counts.\n\nExamples:\n  bob gmail                   List saved threads\n  bob gmail -a                List every saved thread\n  bob gmail -r                Fetch live new-message counts\n  bob gmail -f json           List saved threads as JSON\n  bob gmail new -t EMAIL      Create a local compose note\n  bob gmail peek URL          Preview a Gmail link\n  bob gmail reply NOTE        Add a Reply section\n  bob gmail send NOTE         Preview and confirm a Gmail draft send\n  bob gmail save URL          Save a Gmail thread\n  bob gmail search            Search recent inbox threads\n  bob gmail save ID -d        Preview a save without writing\n  bob gmail link tasks.md     Swap Gmail URLs for labelled links\n  bob gmail link -a -d        Preview a backfill of old URLs\n  bob gmail sync              File labelled threads into area or project notes\n  bob gmail sync -d           Preview the label sync\n  bob gmail attach NOTE 1     Import the first listed attachment\n  bob gmail draft NOTE        Create or update and preview a Gmail draft\n  bob gmail login             Connect Gmail in one guided step\n  bob gmail login -a EMAIL    Sign in as this account\n  bob gmail login -s compose  Also grant the compose scope (Mac only)\n  bob gmail doctor            Diagnose gog, the client, and the vault\n  bob gmail logout -y         Remove Bob's Gmail grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      overrides gmail.gog and gog on PATH\n  BOB_GMAIL_BROWSER  Browser executable; selects browser sign-in (otherwise automatic)"
+    "Running `bob gmail` with no command lists saved threads (offline, read-only). `-r` adds live message counts.\n\nExamples:\n  bob gmail                   List saved threads\n  bob gmail -a                List every saved thread\n  bob gmail -r                Fetch live new-message counts\n  bob gmail -f json           List saved threads as JSON\n  bob gmail new -t EMAIL      Create a local compose note\n  bob gmail peek URL          Preview a Gmail link\n  bob gmail reply NOTE        Add a Reply section\n  bob gmail send NOTE         Preview and confirm a Gmail draft send\n  bob gmail save URL          Save a Gmail thread\n  bob gmail search            Search recent inbox threads\n  bob gmail save ID -d        Preview a save without writing\n  bob gmail link tasks.md     Swap Gmail URLs for labelled links\n  bob gmail link -a -d        Preview a backfill of old URLs\n  bob gmail sync              File labelled threads into area or project notes\n  bob gmail sync -d           Preview the label sync\n  bob gmail sync -l 0         Watch and adopt only; file no new threads\n  bob gmail attach NOTE 1     Import the first listed attachment\n  bob gmail draft NOTE        Create or update and preview a Gmail draft\n  bob gmail login             Connect Gmail in one guided step\n  bob gmail login -a EMAIL    Sign in as this account\n  bob gmail login -s compose  Also grant the compose scope (Mac only)\n  bob gmail doctor            Diagnose gog, the client, and the vault\n  bob gmail logout -y         Remove Bob's Gmail grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      overrides gmail.gog and gog on PATH\n  BOB_GMAIL_BROWSER  Browser executable; selects browser sign-in (otherwise automatic)"
 }
 fn attach_command() -> ClapCommand {
     ClapCommand::new("attach")
@@ -104,8 +105,11 @@ fn sync_limit_arg() -> Arg {
         .short('l')
         .value_name("N")
         .value_parser(clap::value_parser!(u32))
-        .default_value("50")
-        .help("Maximum new filings (default 50; 0–500)")
+        .default_value(DEFAULT_LIMIT_VALUE)
+        .help(
+            "Maximum new filings (default 50; 0 is watch-only: no new filings, \
+             watchers and adoption still run; 0–500)",
+        )
 }
 
 fn retry_timeout_arg() -> Arg {
@@ -115,7 +119,10 @@ fn retry_timeout_arg() -> Arg {
         .value_name("SECS")
         .value_parser(clap::value_parser!(u32))
         .default_value("120")
-        .help("Shared retry budget in seconds (default 120)")
+        .help(
+            "Seconds of wait budget for contention, backoff, and lock waits \
+             (default 120; pacing always applies)",
+        )
 }
 
 fn save_command() -> ClapCommand {
@@ -840,7 +847,10 @@ impl SyncArgs {
             bob_dir: raw_bob_dir(matches),
             dry_run: matches.get_flag("dry-run"),
             format: HumanFormat::from_matches(matches),
-            limit: matches.get_one::<u32>("limit").copied().unwrap_or(50),
+            limit: matches
+                .get_one::<u32>("limit")
+                .copied()
+                .unwrap_or(DEFAULT_LIMIT),
             quiet: matches.get_flag("quiet"),
             retry_timeout: matches
                 .get_one::<u32>("retry-timeout")

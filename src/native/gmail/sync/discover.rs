@@ -29,8 +29,9 @@ pub(crate) const PAGE_SIZE: u32 = 500;
 /// Largest `-l` value: at most 500 new filings per run.
 pub(crate) const MAX_LIMIT: u32 = 500;
 /// Default `-l` when the flag is absent.
-#[allow(dead_code)] // bob-cli-in.4 wires this shared default into the CLI.
 pub(crate) const DEFAULT_LIMIT: u32 = 50;
+/// Clap `default_value` for [`DEFAULT_LIMIT`].
+pub(crate) const DEFAULT_LIMIT_VALUE: &str = "50";
 
 /// Validate `-l`: 0 through 500. Zero means watch only.
 pub(crate) fn validate_limit(limit: u32) -> Result<u32, GmailError> {
@@ -845,6 +846,7 @@ mod tests {
     #[test]
     fn default_limit_is_fifty_and_within_max() {
         assert_eq!(DEFAULT_LIMIT, 50);
+        assert_eq!(DEFAULT_LIMIT_VALUE.parse::<u32>().unwrap(), DEFAULT_LIMIT);
         assert!(DEFAULT_LIMIT <= MAX_LIMIT);
         let temp = tempfile::tempdir().unwrap();
         let fold = EnrollmentFold::load(temp.path()).unwrap();
