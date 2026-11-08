@@ -10,6 +10,11 @@
 //! - [`scan`] walks the vault (with `bob gmail link -a`'s exclusions) for
 //!   open `#task` rows that link an indexed mail note on their own line or
 //!   in a direct link-only child bullet, returning a [`scan::WatchScan`].
+//! - [`watch_state`] folds body-free `gmail.turn` applied markers and
+//!   one-time `gmail.gone` reports across hosts.
+//! - [`watch`] prepares current thread metadata and note refreshes before
+//!   mutation, then folds one deterministic task plan across each task's
+//!   watched threads.
 //! - [`discover`] pages `label:<enrollment label>` through Gmail's
 //!   IDs-only `threads.list` Discovery call through the last page,
 //!   deduplicates and validates ids, stops at the 5,000-id cap, and
@@ -34,6 +39,8 @@ pub(crate) mod hold;
 pub(crate) mod report;
 pub(crate) mod retry;
 pub(crate) mod scan;
+pub(crate) mod watch;
+pub(crate) mod watch_state;
 
 pub(crate) use command::run;
 

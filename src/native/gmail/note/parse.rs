@@ -258,6 +258,52 @@ pub(crate) fn set_owned_metadata(
     Ok(())
 }
 
+/// Update only the Bob-owned turn metadata on an existing mail note. This is
+/// used by metadata-first polling when no message card needs a body refresh.
+/// `None` means the note was already byte-correct and should remain untouched.
+pub(crate) fn update_turn_fields(
+    contents: &str,
+    turn: Option<&str>,
+    turn_since: Option<&str>,
+) -> Result<Option<String>, NoteError> {
+    let parsed = parse(contents)?;
+    if scalar(&parsed.frontmatter, "turn").as_deref() == turn
+        && scalar(&parsed.frontmatter, "turn_since").as_deref() == turn_since
+    {
+        return Ok(None);
+    }
+    let mut frontmatter = parsed.frontmatter;
+    let Value::Mapping(mapping) = &mut frontmatter else {
+        return Err(damaged("frontmatter is not a mapping"));
+    };
+    set_optional_after(
+        mapping,
+        "turn",
+        turn.map(|value| Value::String(value.to_string())),
+        "messages",
+    );
+    set_optional_after(
+        mapping,
+        "turn_since",
+        turn_since.map(|value| Value::String(value.to_string())),
+        "turn",
+    );
+    let serialized = serde_yaml::to_string(&frontmatter).map_err(|_| {
+        NoteError::Damaged {
+            reason: "frontmatter could not be serialized",
+        }
+    })?;
+    let serialized = serialized.strip_prefix("---\n").unwrap_or(&serialized);
+    let mut updated = String::from("---\n");
+    updated.push_str(serialized);
+    if !serialized.ends_with('\n') {
+        updated.push('\n');
+    }
+    updated.push_str("---\n");
+    updated.push_str(&contents[parsed.body_start..]);
+    Ok(Some(updated))
+}
+
 pub(crate) fn parse_frontmatter_only(contents: &str) -> Option<Value> {
     let lines = lines(contents);
     parse_frontmatter_lines(&lines).map(|(_, _, value)| value)
@@ -442,5 +488,33 @@ mod tests {
         let linted =
             NOTE.replace("\n\n<!-- bob:gmail:msg", "\n   \n<!-- bob:gmail:msg");
         assert!(parse(&linted).is_ok());
+    }
+
+    #[test]
+    fn turn_update_is_byte_noop_when_unchanged_and_preserves_note_sections() {
+        let with_turn = NOTE.replace(
+            "gmail_thread_id: aabbccddeeff0011\n",
+            "gmail_thread_id: aabbccddeeff0011\nturn: yours\nturn_since: 2026-09-19T09:46:00-04:00\n",
+        );
+        assert_eq!(
+            update_turn_fields(
+                &with_turn,
+                Some("yours"),
+                Some("2026-09-19T09:46:00-04:00"),
+            )
+            .unwrap(),
+            None
+        );
+        let updated = update_turn_fields(
+            &with_turn,
+            Some("theirs"),
+            Some("2026-09-19T10:00:00-04:00"),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(updated.contains("turn: theirs"));
+        assert!(updated.contains("## Notes"));
+        assert!(updated.contains("## Conversation"));
+        assert!(updated.contains("> body"));
     }
 }

@@ -26,7 +26,7 @@ impl NeverSavePolicy {
     }
 
     #[cfg(test)]
-    fn new(from: &[&str], labels: &[&str]) -> Self {
+    pub(crate) fn for_test(from: &[&str], labels: &[&str]) -> Self {
         Self {
             from: from.iter().map(|value| (*value).to_string()).collect(),
             labels: labels.iter().map(|value| (*value).to_string()).collect(),
@@ -151,7 +151,7 @@ mod tests {
 
     #[test]
     fn sender_rules_use_addresses_domains_and_ignore_display_names() {
-        let policy = NeverSavePolicy::new(
+        let policy = NeverSavePolicy::for_test(
             &["blocked@example.com", "@spam.example"],
             &[],
         );
@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     fn label_names_fold_but_label_ids_remain_exact_and_drafts_are_ignored() {
-        let policy = NeverSavePolicy::new(&[], &["Promotions"]);
+        let policy = NeverSavePolicy::for_test(&[], &["Promotions"]);
         let draft = thread(
             r#"{"id":"m1","threadId":"t1","labelIds":["DRAFT","promo-id"],"payload":{"headers":[]}}"#,
         );
@@ -216,7 +216,7 @@ mod tests {
 
     #[test]
     fn label_lookup_failure_refuses_instead_of_skipping_policy() {
-        let policy = NeverSavePolicy::new(&[], &["Promotions"]);
+        let policy = NeverSavePolicy::for_test(&[], &["Promotions"]);
         let thread = thread(
             r#"{"id":"m1","threadId":"t1","labelIds":["promo-id"],"payload":{"headers":[]}}"#,
         );

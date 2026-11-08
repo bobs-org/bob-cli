@@ -78,7 +78,6 @@ pub(crate) enum UnknownReason {
 }
 
 impl UnknownReason {
-    #[cfg_attr(not(test), allow(dead_code))] // Reported by the gmail sync watch phase.
     pub(crate) fn message(self) -> &'static str {
         match self {
             Self::MissingInternalDate => {

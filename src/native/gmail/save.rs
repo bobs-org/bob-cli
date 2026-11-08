@@ -101,6 +101,39 @@ pub(crate) fn prepare_sync_candidate<R: GmailRead>(
     never_save: &NeverSavePolicy,
 ) -> Result<PreparedSave, GmailError> {
     let confirmed = resolve::fetch_confirmed_thread(reader, identity)?;
+    prepare_sync_candidate_from_thread(
+        reader,
+        account,
+        confirmed.identity,
+        confirmed.thread,
+        body_mode,
+        never_save,
+    )
+}
+
+/// Prepare an already fetched thread, such as metadata retained by sync
+/// discovery. This avoids fetching the same enrolled or newly filed thread
+/// a second time when a watch refresh needs its message cards.
+pub(crate) fn prepare_sync_candidate_from_thread<R: GmailRead>(
+    reader: &R,
+    account: &str,
+    identity: ResolvedIdentity,
+    thread: super::model::GmailThread,
+    body_mode: crate::native::config::GmailBodyMode,
+    never_save: &NeverSavePolicy,
+) -> Result<PreparedSave, GmailError> {
+    if thread.id != identity.thread_id
+        || thread
+            .messages
+            .iter()
+            .any(|message| message.thread_id != identity.thread_id)
+    {
+        return Err(GmailError::runtime(
+            "unresolvable",
+            "Gmail returned a different thread identity".to_string(),
+        ));
+    }
+    let confirmed = resolve::ConfirmedThread { identity, thread };
     policy::check(reader, account, &confirmed.thread, never_save)?;
     let prepared =
         prepare::prepare_thread(reader, account, &confirmed.thread, body_mode)?;
