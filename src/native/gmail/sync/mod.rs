@@ -40,6 +40,7 @@ pub(crate) mod report;
 pub(crate) mod retry;
 pub(crate) mod scan;
 pub(crate) mod watch;
+pub(crate) mod watch_apply;
 pub(crate) mod watch_state;
 
 pub(crate) use command::run;

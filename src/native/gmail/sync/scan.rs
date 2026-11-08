@@ -146,6 +146,12 @@ impl WatchScan {
     pub(crate) fn from_tasks_for_test(tasks: Vec<WatchingTask>) -> Self {
         Self::new(tasks, Vec::new())
     }
+
+    /// Projected scan for the watch transaction, including newly filed rows.
+    /// Test helper shares this constructor.
+    pub(crate) fn from_tasks(tasks: Vec<WatchingTask>) -> Self {
+        Self::new(tasks, Vec::new())
+    }
 }
 
 impl WatchingTask {

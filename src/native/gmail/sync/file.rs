@@ -22,8 +22,14 @@ use super::{
         self, AdoptionIntent, CandidateDecision, EnrollmentEvent,
         EnrollmentFold, EnrollmentOrigin, FiledVia, Membership,
     },
+    hold,
     retry::{Clock, SharedBudget, Sleeper},
     scan::{self, WatchScan},
+    watch::{PreparedWatch, WatchFailure},
+    watch_apply::{
+        self, FilingTaskSnapshot, RecoveryWatch, WatchThreadOutcome,
+    },
+    watch_state::WatchJournal,
     ThreadKey,
 };
 use crate::native::{
@@ -57,6 +63,10 @@ use crate::native::{
 struct RecoveryData {
     threads: Vec<RecoveryThread>,
     commit_paths: Vec<StoredCommitPath>,
+    /// Body-free pending watch turns. Older evidence without this section
+    /// loads with an empty list.
+    #[serde(default)]
+    watch: Vec<RecoveryWatch>,
 }
 
 /// One owned path as sync wrote it, with the SHA-256 of its bytes. Replay
@@ -405,6 +415,18 @@ pub(crate) struct FilingInput<'a> {
     pub(crate) saved_at: DateTime<Utc>,
     pub(crate) timezone: chrono_tz::Tz,
     pub(crate) budget: &'a SharedBudget,
+    /// Prepared watched threads from the read-only preparation phase. The
+    /// transaction owns their task/note writes, marker advancement, and
+    /// recovery; polling wires this field next phase.
+    pub(crate) watches: Vec<PreparedWatch>,
+    /// Isolated preparation failures that must not discard independent
+    /// successes. Reported as failures with body-free warnings.
+    pub(crate) watch_failures: Vec<WatchFailure>,
+    /// Threads whose metadata reads deferred when the retry budget gave up.
+    pub(crate) watch_deferred: Vec<ThreadKey>,
+    /// Calendar-day wait for hold nudges. Read from Gmail config by the
+    /// command; tests pass the default.
+    pub(crate) reply_wait_days: u32,
 }
 
 /// One thread's result for the command report. Paths are vault-relative and
@@ -458,6 +480,9 @@ pub(crate) struct FilingOutcome {
     /// membership, not the pre-fetch scan, so a task closed during
     /// preparation leaves the summary.
     pub(crate) watch_snapshot: WatchScan,
+    /// Typed per-thread watch outcomes. The polling phase renders these
+    /// into `watch[]` rows; the transaction records them here.
+    pub(crate) watch_threads: Vec<WatchThreadOutcome>,
 }
 
 #[derive(Debug, Clone)]
@@ -484,6 +509,9 @@ struct AttemptPlan {
     task_commit_paths: Vec<PathBuf>,
     auxiliary_commit_paths: Vec<PathBuf>,
     enrollment_events: Vec<EnrollmentEvent>,
+    watch_turns: Vec<crate::native::gmail::sync::watch_state::AppliedTurn>,
+    watch_gone: Vec<ThreadKey>,
+    watch_pending: Vec<RecoveryWatch>,
 }
 
 impl AttemptPlan {
@@ -530,6 +558,7 @@ pub(crate) fn apply<S: Sleeper, C: Clock>(
             }
         };
         let in_flight = in_flight_keys(&recovery);
+        let watch_journal = WatchJournal::load(input.vault).unwrap_or_default();
         let mut plan = build_attempt(
             input.vault,
             input.mail_folder,
@@ -545,6 +574,12 @@ pub(crate) fn apply<S: Sleeper, C: Clock>(
             input.saved_at,
             input.timezone,
             &in_flight,
+            input.watches,
+            input.watch_failures,
+            input.watch_deferred,
+            input.reply_wait_days,
+            &watch_journal,
+            &recovery.watch,
         )?;
         let mut invalid = 0usize;
         for thread in &recovery.threads {
@@ -603,6 +638,17 @@ pub(crate) fn apply<S: Sleeper, C: Clock>(
     let in_flight = in_flight_keys(&recovery);
 
     let mut candidates = input.candidates;
+    let mut watches = input.watches;
+    let mut watch_failures = input.watch_failures;
+    let mut watch_deferred = input.watch_deferred;
+    let reply_wait_days = input.reply_wait_days;
+    // Watch keys for deferral when a stale-line retry drops watch work.
+    let watch_keys: Vec<ThreadKey> = watches
+        .iter()
+        .map(|watch| watch.observation.key.clone())
+        .chain(watch_failures.iter().map(|failure| failure.key.clone()))
+        .chain(watch_deferred.iter().cloned())
+        .collect();
     for attempt in 0..2 {
         let enrollment = EnrollmentFold::load(input.vault).map_err(|error| {
             GmailError::runtime(
@@ -617,6 +663,7 @@ pub(crate) fn apply<S: Sleeper, C: Clock>(
         )?;
         let watchers =
             scan::scan_watching_tasks(input.vault, input.mail_folder, &index)?;
+        let watch_journal = WatchJournal::load(input.vault).unwrap_or_default();
         let child_env = ob::child_env();
         let is_worktree = ob::detect_git_worktree(input.vault, &child_env)
             .map_err(|error| {
@@ -625,6 +672,24 @@ pub(crate) fn apply<S: Sleeper, C: Clock>(
                     format!("could not determine whether the vault is a Git worktree: {error}"),
                 )
             })?;
+        // First attempt plans watch work; a stale-line retry drops it and
+        // defers every watched thread so the next run replans from fresh
+        // snapshots instead of writing at a stale line number.
+        let attempt_watches = if attempt == 0 {
+            std::mem::take(&mut watches)
+        } else {
+            Vec::new()
+        };
+        let attempt_failures = if attempt == 0 {
+            std::mem::take(&mut watch_failures)
+        } else {
+            Vec::new()
+        };
+        let attempt_deferred = if attempt == 0 {
+            std::mem::take(&mut watch_deferred)
+        } else {
+            watch_keys.clone()
+        };
 
         let plan = build_attempt(
             input.vault,
@@ -641,6 +706,12 @@ pub(crate) fn apply<S: Sleeper, C: Clock>(
             input.saved_at,
             input.timezone,
             &in_flight,
+            attempt_watches,
+            attempt_failures,
+            attempt_deferred,
+            reply_wait_days,
+            &watch_journal,
+            &recovery.watch,
         )?;
         match persist_attempt(
             input.vault,
@@ -716,6 +787,12 @@ fn build_attempt(
     saved_at: DateTime<Utc>,
     timezone: chrono_tz::Tz,
     in_flight: &BTreeSet<ThreadKey>,
+    mut watches: Vec<PreparedWatch>,
+    watch_failures: Vec<WatchFailure>,
+    watch_deferred: Vec<ThreadKey>,
+    reply_wait_days: u32,
+    watch_journal: &WatchJournal,
+    pending_watch: &[RecoveryWatch],
 ) -> Result<AttemptPlan, GmailError> {
     let membership =
         Membership::new(enrollment, watchers).with_in_flight(in_flight);
@@ -867,7 +944,7 @@ fn build_attempt(
         }
     }
 
-    let plans = match save::plan_prepared_saves_with_parent_links(
+    let mut plans = match save::plan_prepared_saves_with_parent_links(
         vault,
         mail_folder,
         link_template,
@@ -998,6 +1075,165 @@ fn build_attempt(
     staged.extend(auxiliary.staged.iter().map(save::clone_staged));
     save::validate_write_targets(vault, &plans, &works, &staged)?;
 
+    for failure in &watch_failures {
+        outcome.failures.push(FilingFailure {
+            key: failure.key.clone(),
+            kind: failure.kind.clone(),
+            message: failure.message.clone(),
+        });
+        outcome.warnings.push(format!(
+            "skipped Gmail thread {}: {}: {}",
+            failure.key.thread_id(),
+            failure.kind,
+            failure.message
+        ));
+    }
+    for key in &watch_deferred {
+        if !outcome.deferred.contains(key) {
+            outcome.deferred.push(key.clone());
+        }
+    }
+    for watch in &watches {
+        if let Some(failure) = &watch.refresh_failure {
+            outcome.failures.push(FilingFailure {
+                key: failure.key.clone(),
+                kind: failure.kind.clone(),
+                message: failure.message.clone(),
+            });
+            outcome.warnings.push(format!(
+                "skipped Gmail watch refresh for {}: {}: {}",
+                failure.key.thread_id(),
+                failure.kind,
+                failure.message
+            ));
+        }
+    }
+
+    // Stage body-bearing watch refreshes. Each refresh moves out of the
+    // owned watches vector so no Clone bound is needed; one damaged note
+    // never discards the other watches.
+    let mut refreshes: Vec<(ThreadKey, PreparedSave)> = Vec::new();
+    for watch in &mut watches {
+        if watch.refresh.is_some()
+            && !works.contains_key(&watch.observation.key.index_key())
+        {
+            if let Some(refresh) = watch.refresh.take() {
+                let key = watch.observation.key.clone();
+                refreshes.push((key, refresh));
+            }
+        }
+    }
+    let mut watch_refresh_plans: Vec<StagedSaveNote> = Vec::new();
+    for (key, refresh) in refreshes {
+        let mut one = BTreeMap::from([(key.index_key(), refresh)]);
+        match save::plan_prepared_saves_with_parent_links(
+            vault,
+            mail_folder,
+            link_template,
+            &mut one,
+            index,
+            None,
+            &BTreeMap::new(),
+            false,
+            saved_at,
+            timezone,
+        ) {
+            Ok(mut made) => watch_refresh_plans.append(&mut made),
+            Err(error) => {
+                outcome.failures.push(FilingFailure {
+                    key: key.clone(),
+                    kind: error.kind().to_string(),
+                    message: error.message().to_string(),
+                });
+                outcome.warnings.push(format!(
+                    "skipped Gmail watch refresh for {}: {}: {}",
+                    key.thread_id(),
+                    error.kind(),
+                    error.message()
+                ));
+            }
+        }
+    }
+    for plan in &watch_refresh_plans {
+        match save::staged_note(plan) {
+            Ok(staged_note) => staged.push(staged_note),
+            Err(error) => {
+                if let Some(key) =
+                    ThreadKey::new(&plan.account, &plan.thread_id)
+                {
+                    outcome.failures.push(FilingFailure {
+                        key,
+                        kind: error.kind().to_string(),
+                        message: error.message().to_string(),
+                    });
+                }
+            }
+        }
+    }
+    plans.extend(watch_refresh_plans);
+
+    let today = bob_env::current_datetime().date();
+    let (blocked_ok, blocked_reason) = hold::blocked_status_for_hold(vault);
+    let running = hold::load_running_tasks(vault);
+    let filing_tasks: BTreeMap<PathBuf, FilingTaskSnapshot> = BTreeMap::new();
+    let watch_plan =
+        watch_apply::plan_watch_edits(watch_apply::WatchPlanInput {
+            vault,
+            timezone,
+            reply_wait_days,
+            today,
+            blocked_ok,
+            blocked_reason,
+            running,
+            watchers,
+            prepared: &watches,
+            journal: watch_journal,
+            filing_tasks: &filing_tasks,
+            pending: pending_watch,
+        });
+    outcome.warnings.extend(watch_plan.warnings);
+    outcome.failed |= watch_plan.failed;
+    for edit in watch_plan.edits {
+        if let Some(existing) =
+            staged.iter_mut().find(|file| file.target == edit.target)
+        {
+            existing.updated_target = edit.updated;
+        } else {
+            let existed = edit.existed
+                || fs::symlink_metadata(&edit.target)
+                    .is_ok_and(|metadata| metadata.is_file());
+            staged.push(StagedTextFile {
+                target: edit.target.clone(),
+                target_existed: existed,
+                original_target: edit.original,
+                updated_target: edit.updated,
+            });
+        }
+        if let Ok(relative) = edit.target.strip_prefix(vault) {
+            let relative = relative.to_path_buf();
+            if !task_commit_paths.contains(&relative) {
+                task_commit_paths.push(relative);
+            }
+        }
+    }
+    apply_born_held(
+        vault,
+        timezone,
+        reply_wait_days,
+        today,
+        blocked_ok,
+        &mut staged,
+        &mut task_commit_paths,
+        &mut outcome,
+        &works,
+    );
+    outcome.watch_threads = watch_plan.outcomes;
+    for key in &watch_deferred {
+        if !outcome.deferred.contains(key) {
+            outcome.deferred.push(key.clone());
+        }
+    }
+
     outcome
         .results
         .sort_by(|left, right| left.key.cmp(&right.key));
@@ -1019,7 +1255,107 @@ fn build_attempt(
         task_commit_paths,
         auxiliary_commit_paths: auxiliary.commit_paths,
         enrollment_events,
+        watch_turns: watch_plan.receipts.turns,
+        watch_gone: watch_plan.receipts.gone,
+        watch_pending: watch_plan.pending,
     })
+}
+
+/// Newly filed rows are born held when their thread is outgoing-last.
+/// The filing snapshot already contains the new task line; this pass folds
+/// the filed thread with no marker and applies the hold in the same staged
+/// batch so the commit stays scoped to one transaction.
+fn apply_born_held(
+    vault: &Path,
+    timezone: chrono_tz::Tz,
+    reply_wait_days: u32,
+    today: chrono::NaiveDate,
+    blocked_ok: bool,
+    staged: &mut Vec<StagedTextFile>,
+    task_commit_paths: &mut Vec<PathBuf>,
+    outcome: &mut FilingOutcome,
+    works: &BTreeMap<(String, String), PreparedSave>,
+) {
+    use crate::native::gmail::turn as gmail_turn;
+
+    for result in &outcome.results {
+        if !matches!(result.status, "filed" | "would_file") {
+            continue;
+        }
+        if !result.watch_member {
+            continue;
+        }
+        let Some(note_path) = result.note.clone() else {
+            continue;
+        };
+        let Some(task_path) = result.task_file.clone() else {
+            continue;
+        };
+        let Some(link) = result.link.clone() else {
+            continue;
+        };
+        let Some(save) = works.get(&result.key.index_key()) else {
+            continue;
+        };
+        let folded = gmail_turn::fold(
+            &save.confirmed.thread.messages,
+            result.key.account(),
+            None,
+        );
+        if !matches!(folded.net, gmail_turn::Net::Hold) {
+            continue;
+        }
+        let Some(send_at) = folded.last_send_at else {
+            continue;
+        };
+        let nudge =
+            hold::nudge_date_for_send(send_at, timezone, reply_wait_days);
+        let req = hold::HoldRequest {
+            nudge_date: nudge,
+            today,
+            blocked_ok,
+            blocked_reason: None,
+        };
+        let task_target = vault.join(PathBuf::from(&task_path));
+        let Some(staged_file) =
+            staged.iter_mut().find(|file| file.target == task_target)
+        else {
+            continue;
+        };
+        // Find the new task line by its link and apply the hold in place.
+        let mut lines: Vec<String> = staged_file
+            .updated_target
+            .lines()
+            .map(str::to_string)
+            .collect();
+        let trailing_newline = staged_file.updated_target.ends_with('\n');
+        let mut changed = false;
+        for line in &mut lines {
+            if !line.contains(link.as_str()) || !line.contains("#task") {
+                continue;
+            }
+            let applied = hold::apply_hold(line, &req);
+            if applied.changed {
+                *line = applied.line;
+                changed = true;
+                break;
+            }
+        }
+        if changed {
+            let mut rebuilt = lines.join("\n");
+            if trailing_newline {
+                rebuilt.push('\n');
+            }
+            staged_file.updated_target = rebuilt;
+            if let Ok(relative) = task_target.strip_prefix(vault) {
+                let relative = relative.to_path_buf();
+                if !task_commit_paths.contains(&relative) {
+                    task_commit_paths.push(relative);
+                }
+            }
+            let _ = note_path;
+        }
+    }
 }
 
 fn persist_attempt(
@@ -1128,12 +1464,42 @@ fn persist_attempt(
             }
             // Best effort: the run already fails with the uncommitted
             // error below, which carries the replay hint.
+            // Watch work shares the same scoped commit: retain pending turns
+            // (tasks are already written, markers never advanced) alongside
+            // filing evidence so replay finishes both without resending.
+            let watch = dedup_watch_pending(
+                recovery
+                    .watch
+                    .iter()
+                    .cloned()
+                    .chain(plan.watch_pending.iter().cloned())
+                    .chain(
+                        plan.watch_turns
+                            .iter()
+                            .map(|turn| recovery_watch_for_turn(turn, false)),
+                    )
+                    .chain(plan.watch_gone.iter().filter_map(|key| {
+                        Some(RecoveryWatch {
+                            account: key.account().to_string(),
+                            thread_id: key.thread_id().to_string(),
+                            message_id: String::new(),
+                            internal_date: 0,
+                            turn: "gone".to_string(),
+                            effect: "gone".to_string(),
+                            nudge_on: None,
+                            unblocked_on: None,
+                            pending_tasks: false,
+                            pending_marker: true,
+                        })
+                    })),
+            );
             let persist_error = write_recovery(
                 vault,
                 account,
                 &RecoveryData {
                     threads,
                     commit_paths: commit_hashes,
+                    watch,
                 },
             )
             .err();
@@ -1355,6 +1721,15 @@ fn persist_attempt(
                 })
                 .map(|work| work.thread.clone())
                 .collect();
+            // Preserve both prior watch evidence and this run's deferred
+            // turns so a filing journal failure never drops watch work.
+            let watch = dedup_watch_pending(
+                recovery
+                    .watch
+                    .iter()
+                    .cloned()
+                    .chain(plan.watch_pending.iter().cloned()),
+            );
             persist_recovery(
                 outcome,
                 vault,
@@ -1362,6 +1737,7 @@ fn persist_attempt(
                 &RecoveryData {
                     threads,
                     commit_paths: Vec::new(),
+                    watch,
                 },
             )
         };
@@ -1563,15 +1939,292 @@ fn persist_attempt(
         .results
         .sort_by(|left, right| left.key.cmp(&right.key));
 
-    // Retain only the threads that still have pending stages so the next
-    // run finishes them without duplicating what already succeeded. The
-    // scoped commit above already consumed the stored commit paths.
-    let _ = persist_journal(&mut plan.outcome, &works);
+    // Watch markers follow durable note/task writes and the scoped commit.
+    // A running-task hold has no task write and never advances its marker;
+    // those threads stay in plan.watch_pending via the planner. Here we
+    // append applied turns and one-time gone reports with the same receipt
+    // approach as filing journals: checkpoint after each append so a retry
+    // never duplicates what already landed.
+    let mut watch_pending: Vec<RecoveryWatch> = plan.watch_pending.clone();
+    let mut watch_checkpoint_ok = checkpoint_ok;
+    // Re-check markers against the current journal so a concurrent host that
+    // appended the same turn between planning and persisting does not cause
+    // a duplicate append.
+    let fresh_journal = WatchJournal::load(vault).unwrap_or_default();
+    for turn in std::mem::take(&mut plan.watch_turns) {
+        if !watch_checkpoint_ok {
+            // Journal persistence already failed; retain the rest without
+            // attempting more appends.
+            watch_pending.push(recovery_watch_for_turn(&turn, true));
+            continue;
+        }
+        if let Some(marker) = fresh_journal.marker(&turn.key) {
+            if marker.message_id.eq_ignore_ascii_case(&turn.message_id)
+                && marker.internal_date == turn.internal_date
+            {
+                continue;
+            }
+        }
+        // Skip already-applied turns recorded by another host file that the
+        // fresh load above may have missed due to a concurrent write that
+        // landed after the load. The append itself is idempotent per key
+        // only through the marker check; a duplicate append would still
+        // fold to the same marker, but we avoid it when the pre-check hits.
+        if let Err(error) = WatchJournal::append_turn(vault, &host, &turn) {
+            plan.outcome.failed = true;
+            plan.outcome
+                .warnings
+                .push(format!("could not append Gmail watch journal: {error}"));
+            // Tasks are already durable; only the marker remains.
+            watch_pending.push(recovery_watch_for_turn(&turn, false));
+            // Persist the pending evidence immediately so a retry finishes
+            // the marker without reapplying already-applied targets.
+            let threads: Vec<RecoveryThread> = works
+                .iter()
+                .filter(|work| {
+                    work.thread.pending_save
+                        || !work.thread.pending_origins.is_empty()
+                        || work.thread.pending_enrollment
+                })
+                .map(|work| work.thread.clone())
+                .collect();
+            watch_checkpoint_ok = persist_recovery(
+                &mut plan.outcome,
+                vault,
+                account,
+                &RecoveryData {
+                    threads,
+                    commit_paths: Vec::new(),
+                    watch: dedup_watch_pending(
+                        recovery
+                            .watch
+                            .iter()
+                            .cloned()
+                            .chain(watch_pending.iter().cloned()),
+                    ),
+                },
+            );
+            continue;
+        }
+        // Checkpoint the remaining watch evidence after each successful
+        // marker so a later interruption does not re-append it.
+        {
+            let threads: Vec<RecoveryThread> = works
+                .iter()
+                .filter(|work| {
+                    work.thread.pending_save
+                        || !work.thread.pending_origins.is_empty()
+                        || work.thread.pending_enrollment
+                })
+                .map(|work| work.thread.clone())
+                .collect();
+            watch_checkpoint_ok = persist_recovery(
+                &mut plan.outcome,
+                vault,
+                account,
+                &RecoveryData {
+                    threads,
+                    commit_paths: Vec::new(),
+                    watch: dedup_watch_pending(
+                        recovery
+                            .watch
+                            .iter()
+                            .cloned()
+                            .chain(watch_pending.iter().cloned()),
+                    ),
+                },
+            );
+            if !watch_checkpoint_ok {
+                // The marker landed but its receipt did not; retain it as
+                // marker-pending without reapplying tasks.
+                watch_pending.push(recovery_watch_for_turn(&turn, false));
+            }
+        }
+    }
+    for key in std::mem::take(&mut plan.watch_gone) {
+        if !watch_checkpoint_ok {
+            continue;
+        }
+        let fresh = WatchJournal::load(vault).unwrap_or_default();
+        if fresh.was_reported_gone(&key) {
+            continue;
+        }
+        if let Err(error) = WatchJournal::append_gone(vault, &host, &key) {
+            plan.outcome.failed = true;
+            plan.outcome
+                .warnings
+                .push(format!("could not append Gmail watch journal: {error}"));
+            let threads: Vec<RecoveryThread> = works
+                .iter()
+                .filter(|work| {
+                    work.thread.pending_save
+                        || !work.thread.pending_origins.is_empty()
+                        || work.thread.pending_enrollment
+                })
+                .map(|work| work.thread.clone())
+                .collect();
+            watch_checkpoint_ok = persist_recovery(
+                &mut plan.outcome,
+                vault,
+                account,
+                &RecoveryData {
+                    threads,
+                    commit_paths: Vec::new(),
+                    watch: dedup_watch_pending(
+                        recovery
+                            .watch
+                            .iter()
+                            .cloned()
+                            .chain(watch_pending.iter().cloned()),
+                    ),
+                },
+            );
+            let _ = error;
+            continue;
+        }
+        {
+            let threads: Vec<RecoveryThread> = works
+                .iter()
+                .filter(|work| {
+                    work.thread.pending_save
+                        || !work.thread.pending_origins.is_empty()
+                        || work.thread.pending_enrollment
+                })
+                .map(|work| work.thread.clone())
+                .collect();
+            watch_checkpoint_ok = persist_recovery(
+                &mut plan.outcome,
+                vault,
+                account,
+                &RecoveryData {
+                    threads,
+                    commit_paths: Vec::new(),
+                    watch: dedup_watch_pending(
+                        recovery
+                            .watch
+                            .iter()
+                            .cloned()
+                            .chain(watch_pending.iter().cloned()),
+                    ),
+                },
+            );
+        }
+    }
+    // Deferred watch threads (running holds, unknown siblings) never advance
+    // a marker and stay pending with their body-free turn evidence.
+    for pending in &watch_pending {
+        if let Some(key) = pending.key() {
+            if !plan.outcome.deferred.contains(&key) {
+                plan.outcome.deferred.push(key);
+            }
+        }
+    }
+    // Final receipt: filing and watch evidence share one persistence so a
+    // single clear failure keeps the same retry semantics as before. The
+    // watch markers above already checkpointed after each append; this
+    // retains deferred turns alongside any remaining filing stages.
+    // Note: `persist_journal` already includes `plan.watch_pending` plus
+    // prior watch evidence, but marker-only failures appended above added
+    // new `watch_pending` entries after those checkpoints. Persist once
+    // more only when watch work remains; otherwise leave the single filing
+    // receipt (and its clear-failure accounting) untouched.
+    if !watch_pending.is_empty() || !recovery.watch.is_empty() {
+        let threads: Vec<RecoveryThread> = works
+            .iter()
+            .filter(|work| {
+                work.thread.pending_save
+                    || !work.thread.pending_origins.is_empty()
+                    || work.thread.pending_enrollment
+            })
+            .map(|work| work.thread.clone())
+            .collect();
+        let watch = dedup_watch_pending(
+            recovery
+                .watch
+                .iter()
+                .cloned()
+                .chain(watch_pending.iter().cloned()),
+        );
+        let _ = persist_recovery(
+            &mut plan.outcome,
+            vault,
+            account,
+            &RecoveryData {
+                threads,
+                commit_paths: Vec::new(),
+                watch,
+            },
+        );
+    } else {
+        let _ = persist_journal(&mut plan.outcome, &works);
+    }
     let _ = checkpoint_ok;
+    let _ = watch_checkpoint_ok;
     // Restore current enrollment events for any caller that inspects the
     // plan after a journal failure (the outcome already records failure).
     plan.enrollment_events = current_events;
+    // Surface deferred watch threads as failed so polling retries them.
+    if plan
+        .outcome
+        .deferred
+        .iter()
+        .any(|key| watch_keys_for_outcome(&plan.outcome, key))
+    {
+        plan.outcome.failed = true;
+    }
     Ok(plan.outcome)
+}
+
+fn recovery_watch_for_turn(
+    turn: &crate::native::gmail::sync::watch_state::AppliedTurn,
+    tasks_pending: bool,
+) -> RecoveryWatch {
+    let (turn_text, effect_text) = match (&turn.turn, &turn.effect) {
+        (crate::native::gmail::turn::Turn::Theirs, _) => ("theirs", "hold"),
+        (
+            crate::native::gmail::turn::Turn::Yours,
+            crate::native::gmail::sync::watch_state::AppliedEffect::Bounced,
+        ) => ("yours", "bounced"),
+        (crate::native::gmail::turn::Turn::Yours, _) => ("yours", "lift"),
+    };
+    RecoveryWatch {
+        account: turn.key.account().to_string(),
+        thread_id: turn.key.thread_id().to_string(),
+        message_id: turn.message_id.clone(),
+        internal_date: turn.internal_date,
+        turn: turn_text.to_string(),
+        effect: effect_text.to_string(),
+        nudge_on: None,
+        unblocked_on: None,
+        pending_tasks: tasks_pending,
+        pending_marker: true,
+    }
+}
+
+fn dedup_watch_pending(
+    pending: impl IntoIterator<Item = RecoveryWatch>,
+) -> Vec<RecoveryWatch> {
+    let mut by_key: BTreeMap<(String, String), RecoveryWatch> = BTreeMap::new();
+    for item in pending {
+        let key = (item.account.clone(), item.thread_id.clone());
+        // Keep the newest turn per thread: larger Gmail date wins, then
+        // larger message id. A newer turn supersedes obsolete pending holds.
+        let replace = by_key.get(&key).is_none_or(|existing| {
+            (item.internal_date, item.message_id.clone())
+                > (existing.internal_date, existing.message_id.clone())
+        });
+        if replace {
+            by_key.insert(key, item);
+        }
+    }
+    by_key.into_values().collect()
+}
+
+fn watch_keys_for_outcome(outcome: &FilingOutcome, key: &ThreadKey) -> bool {
+    outcome
+        .watch_threads
+        .iter()
+        .any(|thread| thread.key == *key)
 }
 
 /// Threads with stored recovery evidence: in-flight filings the current
@@ -2566,6 +3219,10 @@ mod tests {
                 saved_at: Utc::now(),
                 timezone: chrono_tz::UTC,
                 budget: &budget,
+                watches: Vec::new(),
+                watch_failures: Vec::new(),
+                watch_deferred: Vec::new(),
+                reply_wait_days: 3,
             },
             &crate::native::gmail::sync::retry::SystemSleeper,
             &crate::native::gmail::sync::retry::SystemClock,
@@ -2889,6 +3546,10 @@ mod tests {
                 saved_at: Utc::now(),
                 timezone: chrono_tz::UTC,
                 budget: &budget,
+                watches: Vec::new(),
+                watch_failures: Vec::new(),
+                watch_deferred: Vec::new(),
+                reply_wait_days: 3,
             },
             &NoSleep,
             &crate::native::gmail::sync::retry::SystemClock,
@@ -3003,6 +3664,10 @@ mod tests {
                 saved_at: Utc::now(),
                 timezone: chrono_tz::UTC,
                 budget: &budget,
+                watches: Vec::new(),
+                watch_failures: Vec::new(),
+                watch_deferred: Vec::new(),
+                reply_wait_days: 3,
             },
             &NoSleep,
             &crate::native::gmail::sync::retry::SystemClock,
@@ -3185,6 +3850,10 @@ mod tests {
                 saved_at: Utc::now(),
                 timezone: chrono_tz::UTC,
                 budget: &budget,
+                watches: Vec::new(),
+                watch_failures: Vec::new(),
+                watch_deferred: Vec::new(),
+                reply_wait_days: 3,
             },
             &NoSleep,
             &crate::native::gmail::sync::retry::SystemClock,
@@ -3265,6 +3934,10 @@ mod tests {
                 saved_at: Utc::now(),
                 timezone: chrono_tz::UTC,
                 budget: &budget,
+                watches: Vec::new(),
+                watch_failures: Vec::new(),
+                watch_deferred: Vec::new(),
+                reply_wait_days: 3,
             },
             &clock,
             &clock,
@@ -4190,5 +4863,118 @@ mod tests {
             outcome.warnings
         );
         assert_eq!(count_journal(vault, "gmail.filed", "aabb"), 0);
+    }
+
+    fn try_apply_with_watches(
+        vault: &Path,
+        watches: Vec<crate::native::gmail::sync::watch::PreparedWatch>,
+    ) -> Result<FilingOutcome, GmailError> {
+        let fold = EnrollmentFold::load(vault).unwrap();
+        let index = resolve::scan_index(
+            vault,
+            Path::new("mail"),
+            "✉️ {subject} · {who}",
+        )
+        .unwrap();
+        let watchers =
+            scan::scan_watching_tasks(vault, Path::new("mail"), &index)
+                .unwrap();
+        let budget = SharedBudget::new(Duration::from_secs(10));
+        apply(
+            FilingInput {
+                vault,
+                account: TEST_ACCOUNT,
+                mail_folder: Path::new("mail"),
+                link_template: "✉️ {subject} · {who}",
+                inbox: "gmail_inbox.md",
+                candidates: Vec::new(),
+                adoptions: &[],
+                enrollment: &fold,
+                watchers: &watchers,
+                dry_run: false,
+                saved_at: Utc::now(),
+                timezone: chrono_tz::UTC,
+                budget: &budget,
+                watches,
+                watch_failures: Vec::new(),
+                watch_deferred: Vec::new(),
+                reply_wait_days: 3,
+            },
+            &crate::native::gmail::sync::retry::SystemSleeper,
+            &crate::native::gmail::sync::retry::SystemClock,
+        )
+    }
+
+    fn hold_watch_for_test(
+        key: &ThreadKey,
+    ) -> crate::native::gmail::sync::watch::PreparedWatch {
+        use crate::native::gmail::turn::{Net, ThreadTurn, Turn};
+        use chrono::TimeZone;
+        let send = chrono::Utc.timestamp_millis_opt(10).unwrap();
+        crate::native::gmail::sync::watch::PreparedWatch {
+            observation: crate::native::gmail::sync::watch::ThreadObservation {
+                key: key.clone(),
+                folded: ThreadTurn {
+                    net: Net::Hold,
+                    turn: Some(Turn::Theirs),
+                    turn_since: Some(send),
+                    newest_counted_id: Some("aa02".to_string()),
+                    newest_internal_date: Some(20),
+                    last_send_at: Some(send),
+                },
+            },
+            note_path: None,
+            refresh: None,
+            turn_update: None,
+            report_gone: false,
+            refresh_failure: None,
+        }
+    }
+
+    #[test]
+    fn watch_hold_applies_task_and_marker_in_one_scoped_write() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path();
+        let _env = test_env(vault);
+        let (_state, _state_env) = isolated_state();
+        fs::create_dir_all(vault.join("mail")).unwrap();
+        fs::write(
+            vault.join("mail/aa01.md"),
+            "---\ntype: \"[[mail]]\"\ncontent: untrusted-email\ngmail_account: me@example.com\ngmail_thread_id: aa01\ntitle: Lease\nwho: Dana\n---\nbody\n",
+        )
+        .unwrap();
+        fs::write(
+            vault.join("job.md"),
+            "---\nparent: \"[[inbox]]\"\ntype: \"[[area]]\"\n---\n\n# Job\n\n## Tasks\n- [ ] #task [[mail/aa01|✉️ Lease · Dana]] [created:: 2026-11-07]\n",
+        )
+        .unwrap();
+        let key = ThreadKey::new(TEST_ACCOUNT, "aa01").unwrap();
+        let watches = vec![hold_watch_for_test(&key)];
+        let outcome =
+            try_apply_with_watches(vault, watches).expect("watch applies");
+        assert_eq!(outcome.watch_threads.len(), 1);
+        assert_eq!(outcome.watch_threads[0].action, "held");
+        let task = fs::read_to_string(vault.join("job.md")).unwrap();
+        assert!(task.contains("#awaiting_reply"), "{task}");
+        assert!(task.contains("[scheduled::"), "{task}");
+        // Marker follows the durable task write.
+        let journal =
+            crate::native::gmail::sync::watch_state::WatchJournal::load(vault)
+                .unwrap();
+        let marker = journal.marker(&key).expect("marker advanced");
+        assert_eq!(marker.message_id, "aa02");
+        // A hand edit between polls survives: the same turn replays as a
+        // byte-identical noop instead of reasserting.
+        let handed = task
+            .replace("[created:: 2026-11-07]", "[created:: 2026-11-07] extra");
+        fs::write(vault.join("job.md"), &handed).unwrap();
+        let key2 = ThreadKey::new(TEST_ACCOUNT, "aa01").unwrap();
+        let watches2 = vec![hold_watch_for_test(&key2)];
+        let second =
+            try_apply_with_watches(vault, watches2).expect("replay is noop");
+        let after = fs::read_to_string(vault.join("job.md")).unwrap();
+        assert!(after.contains("extra"), "hand edit survives: {after}");
+        assert!(after.contains("#awaiting_reply"), "{after}");
+        let _ = second;
     }
 }

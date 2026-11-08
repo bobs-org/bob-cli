@@ -314,6 +314,8 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
     {
         FilingOutcome::default()
     } else {
+        // Watch preparation lands in the polling phase; the transaction
+        // already accepts it through these fields.
         file::apply(
             FilingInput {
                 vault: &vault,
@@ -329,6 +331,10 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
                 saved_at,
                 timezone,
                 budget: &budget,
+                watches: Vec::new(),
+                watch_failures: Vec::new(),
+                watch_deferred: Vec::new(),
+                reply_wait_days: config.reply_wait_days(),
             },
             &sleeper,
             &clock,
