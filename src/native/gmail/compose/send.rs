@@ -92,7 +92,7 @@ fn run_inner(args: &SendArgs) -> Result<SendResponse, GmailError> {
         ));
     }
 
-    let gog = Gog::resolve(google::GMAIL, config.timeout())?;
+    let gog = Gog::resolve(google::GMAIL, config.gog(), config.timeout())?;
     let account = if let Some(state) = existing.as_ref() {
         state.account.clone()
     } else {

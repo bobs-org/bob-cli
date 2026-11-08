@@ -90,6 +90,7 @@ whose id is the literal `primary`.
 ```yaml
 gcal:
   account: you@example.com # optional when gog holds exactly one account
+  # gog: ~/bin/gog # optional absolute path or wrapper
   writer: kellys-macbook-pro # optional; the one host label allowed to sync
   root: meet # default [root::]
   calendars: # default: [primary]
@@ -121,6 +122,15 @@ gcal:
   default bucket does not hide a `bob-gcal` Calendar account.
 - `calendars` accepts a list of ids or a list of `{id, root?}` maps.
 - `timeout_secs` must be an integer greater than 0. Default 60.
+- `gog`, when set, must be an absolute executable path; a leading `~/` is
+  expanded. Bob resolves the executable in this order: `BOB_GCAL_GOG`,
+  `gcal.gog`, `gog` on `PATH`, `~/.local/bin/gog`, `/opt/homebrew/bin/gog`,
+  then `/usr/local/bin/gog`.
+- Every gog child receives `XDG_CONFIG_HOME` set to Bob's config root: the
+  non-empty value from Bob's environment after `~/` expansion, or
+  `$HOME/.config`. gog's store is `<root>/gogcli`. A macOS store left under
+  `~/Library/Application Support/gogcli` is not read; rerun `bob gcal login`
+  or move `gogcli` into the configured root.
 - `colors` maps Google event colour names or ids (`lavender`/`1` through
   `tomato`/`11`) to roots. The colour key is validated when config loads; the
   mapped root is checked against the vault for each event.
@@ -966,7 +976,7 @@ immediately. The `bob-gcal` client is a separate bucket from Gmail. Tests use
 | --- | --- |
 | `BOB_DIR` | Vault root; defaults to `~/bob`. |
 | `BOB_CONFIG_FILE` | Config file holding the `gcal:` section. |
-| `BOB_GCAL_GOG` | Executable replacing `gog` on `PATH`. Tests point this at a fake. |
+| `BOB_GCAL_GOG` | Executable overriding `gcal.gog` and `gog` on `PATH`. Tests point this at a fake. |
 | `BOB_GCAL_ASSUME_TTY` | `1` or `true` treats stdin as a TTY for login setup, paste prompts, denial retries, API-disabled retries, and logout confirm (test hook). |
 | `BOB_NOW` | Local datetime override for today and relative list-day selection. |
 | `SSH_CONNECTION`, `SSH_TTY` | Select the paste-URL sign-in flow when `BOB_GCAL_BROWSER` is unset. |

@@ -48,16 +48,21 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
     };
 
     let mut checks = Vec::new();
-    let gog = match Gog::resolve(crate::native::google::GCAL, config.timeout())
-    {
+    let gog = match Gog::resolve(
+        crate::native::google::GCAL,
+        config.gog(),
+        config.timeout(),
+    ) {
         Ok(gog) => match gog.require_version() {
             Ok(version) => {
                 checks.push(Check {
                     id: "gog",
                     status: CheckStatus::Ok,
                     summary: format!(
-                        "v{version} · {}",
-                        gog.program().display()
+                        "v{} · {} · store {}",
+                        version.trim_start_matches('v'),
+                        gog.program().display(),
+                        crate::native::google::gog::gog_store_display()
                     ),
                     fix: None,
                 });
@@ -102,8 +107,10 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
                         checks.push(Check {
                             id: "client",
                             status: CheckStatus::Fail,
-                            summary: "no bob-gcal OAuth client is stored"
-                                .to_string(),
+                            summary: format!(
+                                "no bob-gcal OAuth client is stored in {}",
+                                crate::native::google::gog::gog_store_display()
+                            ),
                             fix: Some("run `bob gcal login`".to_string()),
                         });
                     }

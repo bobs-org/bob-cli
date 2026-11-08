@@ -249,7 +249,7 @@ pub(crate) fn prepare_for_send(
     };
 
     let (_original, parsed) = read_source(&vault, &relative)?;
-    let gog = Gog::resolve(google::GMAIL, config.timeout())?;
+    let gog = Gog::resolve(google::GMAIL, config.gog(), config.timeout())?;
     let account = resolve::resolve_account(&gog, None, config.account())?;
     require_compose_grant(&gog, &account)?;
     if parsed

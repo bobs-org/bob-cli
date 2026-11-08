@@ -886,10 +886,41 @@ fn doctor_reports_healthy_setup() {
     assert_eq!(doc["ok"], true);
     assert_eq!(doc["schema_version"], 1);
     assert_eq!(check(&doc, "gog")["status"], "ok");
+    assert!(check(&doc, "gog")["summary"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("store ~/.config/gogcli"));
     assert_eq!(check(&doc, "client")["status"], "ok");
     assert_eq!(check(&doc, "account")["status"], "ok");
     assert_eq!(check(&doc, "token")["status"], "ok");
     assert_eq!(check(&doc, "scopes")["status"], "ok");
+}
+
+#[test]
+fn configured_gmail_gog_is_used_without_the_environment_override() {
+    let env = GmailEnv::new("bob-cli-gmail-configured-gog");
+    let fake = FakeGog::new(&env, "gog");
+    env.write_journal_rules();
+    env.write_config(&format!(
+        "gmail:\n  account: {ACCOUNT}\n  gog: {:?}\n",
+        fake.path().display()
+    ));
+    let mut command = env.command();
+    fake.install(&mut command);
+    let output = command
+        .env_remove("BOB_GMAIL_GOG")
+        .args(["gmail", "doctor", "-f", "json"])
+        .output()
+        .expect("doctor with configured gog");
+    let doc = json_stdout(&output);
+    let summary = check(&doc, "gog")["summary"].as_str().unwrap_or_default();
+    assert!(summary.starts_with("v0.44.0 · "), "{summary}");
+    assert!(
+        summary.contains(&fake.path().display().to_string()),
+        "{summary}"
+    );
+    assert!(summary.contains("store ~/.config/gogcli"), "{summary}");
+    assert!(fake.called_with(&["version"]));
 }
 
 #[test]
@@ -932,6 +963,10 @@ fn doctor_reports_no_client() {
     assert_eq!(output.status.code(), Some(1));
     let doc = json_stdout(&output);
     assert_eq!(check(&doc, "client")["status"], "fail");
+    assert!(check(&doc, "client")["summary"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("~/.config/gogcli"));
 }
 
 fn write_mail_note(

@@ -122,9 +122,10 @@ Without `-y`, logout asks for confirmation on a TTY.
 
 | Symptom | What to do |
 | --- | --- |
-| `gog not found` | Install gog ≥ v0.44.0 and put it on `PATH`, or set `BOB_GMAIL_GOG`. |
+| `gog not found` | Install gog ≥ v0.44.0 and put it on `PATH`, set `gmail.gog`, or set `BOB_GMAIL_GOG`. |
 | `gog … is older than v0.44.0` | Upgrade gog. |
-| `no_client`, exit 2 | Run login in a terminal and follow its API, consent screen, and Desktop-app client checklist. |
+| `Works in a terminal, fails from Obsidian, Bob Mac Capture, or after a reboot` | Set `gmail.gog` to a gog wrapper that exports `GOG_KEYRING_PASSWORD`, such as `~/bin/gog`. |
+| `no_client`, exit 2 | Check the store directory named in the error. Move `gogcli` into Bob's configured config root or rerun `bob gmail login` there. |
 | Client JSON rejected | Use a Google OAuth client of type Desktop app. |
 | gog client secret is in keyring | Download a Desktop-app JSON and pass its path to `bob gmail login -c PATH`. |
 | `needs_tty` | Run `bob gmail login` in a terminal. |

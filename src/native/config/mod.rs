@@ -76,6 +76,43 @@ fn non_empty_os_string(value: Option<OsString>) -> Option<OsString> {
     value.filter(|value| !value.is_empty())
 }
 
+/// Parse an optional gog executable path. Unlike ordinary optional strings,
+/// an explicitly empty or non-string value is a configuration error.
+pub(crate) fn parse_gog_path(
+    value: Option<serde_yaml::Value>,
+    key: &str,
+    config_path: &Path,
+) -> Result<Option<PathBuf>, ConfigError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let serde_yaml::Value::String(text) = value else {
+        return Err(ConfigError::Invalid(format!(
+            "{key} in {} must be a non-empty absolute path string; got {}",
+            config_path.display(),
+            value.as_str().map_or_else(
+                || format!("{value:?}"),
+                |text| format!("{text:?}")
+            )
+        )));
+    };
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(ConfigError::Invalid(format!(
+            "{key} in {} must be a non-empty absolute path string",
+            config_path.display()
+        )));
+    }
+    let expanded = bob_env::expand_tilde(Path::new(text));
+    if !expanded.is_absolute() {
+        return Err(ConfigError::Invalid(format!(
+            "{key} in {} must be absolute after expanding ~/; got {text:?}",
+            config_path.display()
+        )));
+    }
+    Ok(Some(expanded))
+}
+
 /// Expand a leading `~` against `home` without touching process env, so
 /// `resolve_config_path` stays pure and unit-testable.
 fn expand_tilde_with_home(path: &Path, home: &Path) -> PathBuf {

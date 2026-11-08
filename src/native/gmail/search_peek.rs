@@ -102,7 +102,11 @@ fn search_inner(args: &SearchArgs) -> Result<Vec<SearchRow>, GmailError> {
             format!("Bob vault root does not exist: {}", vault.display()),
         ));
     }
-    let gog = Gog::resolve(crate::native::google::GMAIL, config.timeout())?;
+    let gog = Gog::resolve(
+        crate::native::google::GMAIL,
+        config.gog(),
+        config.timeout(),
+    )?;
     gog.require_version()?;
     let account = resolve::resolve_account(&gog, None, config.account())?;
     let index = resolve::scan_index(
@@ -178,7 +182,11 @@ fn peek_inner(args: &PeekArgs) -> Result<PeekResult, GmailError> {
             format!("Bob vault root does not exist: {}", vault.display()),
         ));
     }
-    let gog = Gog::resolve(crate::native::google::GMAIL, config.timeout())?;
+    let gog = Gog::resolve(
+        crate::native::google::GMAIL,
+        config.gog(),
+        config.timeout(),
+    )?;
     gog.require_version()?;
     let account = resolve::resolve_account(&gog, None, config.account())?;
     let folder = Path::new(config.folder());

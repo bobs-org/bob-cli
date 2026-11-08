@@ -1,6 +1,9 @@
 //! Resolved `bob gmail` configuration: the `gmail:` config block.
 
-use std::time::Duration;
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use crate::native::{config as bob_config, env as bob_env};
 
@@ -33,6 +36,7 @@ pub(crate) struct GmailConfig {
     sync_inbox: String,
     route_prefixes: Vec<String>,
     reply_wait_days: u32,
+    gog: Option<PathBuf>,
     timeout_secs: u64,
 }
 
@@ -151,6 +155,7 @@ impl GmailConfig {
             reply_wait_days: sync
                 .reply_wait_days
                 .unwrap_or(DEFAULT_REPLY_WAIT_DAYS),
+            gog: settings.gog,
             timeout_secs,
         })
     }
@@ -221,6 +226,10 @@ impl GmailConfig {
 
     pub(crate) fn timeout(&self) -> Duration {
         Duration::from_secs(self.timeout_secs)
+    }
+
+    pub(crate) fn gog(&self) -> Option<&Path> {
+        self.gog.as_deref()
     }
 }
 

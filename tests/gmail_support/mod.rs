@@ -235,6 +235,10 @@ impl FakeGog {
         self
     }
 
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// Replace the thread response and attachment API bodies with explicit,
     /// deterministic synthetic data for transaction tests.
     pub(crate) fn set_thread(

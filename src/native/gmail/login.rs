@@ -49,7 +49,11 @@ fn login(
     ui: &LoginUi,
 ) -> Result<LoginReport, GmailError> {
     let wants_compose = args.scope == super::cli::LoginScope::Compose;
-    let mut gog = Gog::resolve(crate::native::google::GMAIL, config.timeout())?;
+    let mut gog = Gog::resolve(
+        crate::native::google::GMAIL,
+        config.gog(),
+        config.timeout(),
+    )?;
     if wants_compose {
         gog = gog.with_extra_scopes(vec![COMPOSE_SCOPE.to_string()]);
     }

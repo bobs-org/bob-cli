@@ -18,7 +18,11 @@ pub(crate) fn run(args: &CalendarsArgs) -> i32 {
 
 fn list(args: &CalendarsArgs) -> Result<(), GcalError> {
     let config = GcalConfig::resolve()?;
-    let gog = Gog::resolve(crate::native::google::GCAL, config.timeout())?;
+    let gog = Gog::resolve(
+        crate::native::google::GCAL,
+        config.gog(),
+        config.timeout(),
+    )?;
     let _ = gog.require_version()?;
     let account = account::resolve_command(&gog, config.account())?;
     let calendars = gog.calendars(&account)?;

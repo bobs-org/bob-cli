@@ -20,6 +20,7 @@ use gcal_support::{
     hit_oauth_callback, json_stdout, run_gcal, run_gcal_paste,
     run_gcal_paste_script, run_gcal_paste_script_with, run_gcal_stdin, stderr,
     stdout, wait_printed_auth_url, FakeBrowser, FakeGog, GcalEnv, ACCOUNT,
+    HOST,
 };
 use serde_json::Value;
 
@@ -1079,6 +1080,13 @@ fn doctor_json_healthy_setup() {
     assert_eq!(doc["schema_version"], 1);
     assert_eq!(doc["ok"], true);
     assert_eq!(doc["host"], "test-host");
+    let gog_summary =
+        check(&doc, "gog")["summary"].as_str().unwrap_or_default();
+    assert!(gog_summary.starts_with("v0.44.0 · "), "{gog_summary}");
+    assert!(
+        gog_summary.contains(" · store ~/.config/gogcli"),
+        "{gog_summary}"
+    );
     let checks = doc["checks"].as_array().expect("checks");
     let ids: Vec<&str> = checks
         .iter()
@@ -1107,6 +1115,76 @@ fn doctor_json_healthy_setup() {
         }
         assert_eq!(check["status"], "ok", "expected ok: {check}");
     }
+}
+
+#[test]
+fn gog_receives_bobs_default_and_explicit_config_roots() {
+    let env = GcalEnv::new("bob-cli-gcal-gog-config-root");
+    let fake = FakeGog::new(&env, "gog");
+    let output = run_gcal(&env, &fake, &["calendars"]);
+    assert_success(&output, "calendars with default config root");
+    let rows = fake.received_env();
+    assert!(!rows.is_empty(), "fake must record its environment");
+    let default_root = env.root().join("home/.config");
+    for row in &rows {
+        assert_eq!(
+            row["xdg_config_home"],
+            default_root.to_string_lossy().as_ref()
+        );
+        assert_eq!(row["gog_keyring_password_present"], false);
+    }
+
+    let xdg = env.root().join("custom-config");
+    let previous = rows.len();
+    let mut command = env.command();
+    fake.install(&mut command);
+    let output = command
+        .env("XDG_CONFIG_HOME", &xdg)
+        .args(["gcal", "calendars"])
+        .output()
+        .expect("run calendars with explicit XDG_CONFIG_HOME");
+    assert_success(&output, "calendars with explicit config root");
+    let rows = fake.received_env();
+    assert!(rows.len() > previous);
+    for row in &rows[previous..] {
+        assert_eq!(row["xdg_config_home"], xdg.to_string_lossy().as_ref());
+    }
+}
+
+#[test]
+fn configured_gog_is_used_and_relative_gog_is_a_config_error() {
+    let env = GcalEnv::new("bob-cli-gcal-configured-gog");
+    let fake = FakeGog::new(&env, "gog");
+    env.write_config(&format!(
+        "gcal:\n  account: {ACCOUNT}\n  writer: {HOST}\n  gog: {:?}\n",
+        fake.path().display()
+    ));
+    let mut command = env.command();
+    fake.install(&mut command);
+    let output = command
+        .env_remove("BOB_GCAL_GOG")
+        .args(["gcal", "doctor", "-f", "json"])
+        .output()
+        .expect("doctor with configured gog");
+    let doc = json_stdout(&output);
+    let summary = check(&doc, "gog")["summary"].as_str().unwrap_or_default();
+    assert!(summary.starts_with("v0.44.0 · "), "{summary}");
+    assert!(
+        summary.contains(&fake.path().display().to_string()),
+        "{summary}"
+    );
+    assert!(summary.contains("store ~/.config/gogcli"), "{summary}");
+    assert!(fake.called_with(&["version"]));
+
+    env.write_config("gcal:\n  gog: relative/gog\n");
+    let output = run_gcal(&env, &fake, &["calendars"]);
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    assert!(stderr(&output).contains("gcal.gog"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains(&env.config().display().to_string()),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]
@@ -1163,6 +1241,10 @@ fn doctor_reports_no_client() {
         .find(|check| check["id"] == "client")
         .expect("client check");
     assert_eq!(client["status"], "fail");
+    assert!(client["summary"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("~/.config/gogcli"));
     assert_eq!(client["fix"], "run `bob gcal login`");
 }
 

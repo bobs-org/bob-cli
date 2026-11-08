@@ -101,7 +101,11 @@ fn report(args: &ListArgs) -> Result<ListReport, GmailError> {
         (rows, false)
     };
     if args.remote {
-        let gog = Gog::resolve(crate::native::google::GMAIL, config.timeout())?;
+        let gog = Gog::resolve(
+            crate::native::google::GMAIL,
+            config.gog(),
+            config.timeout(),
+        )?;
         gog.require_version()?;
         for row in &mut rows {
             let live = search_peek::remote_message_count(

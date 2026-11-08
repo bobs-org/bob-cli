@@ -138,7 +138,11 @@ fn run_inner(args: &SaveArgs) -> Result<Vec<StagedSaveNote>, GmailError> {
             "run this command on the configured writer {writer}"
         )));
     }
-    let gog = Gog::resolve(crate::native::google::GMAIL, config.timeout())?;
+    let gog = Gog::resolve(
+        crate::native::google::GMAIL,
+        config.gog(),
+        config.timeout(),
+    )?;
     gog.require_version()?;
     let account = resolve::resolve_account(&gog, None, config.account())?;
     let body_mode = args.body.unwrap_or(config.body());

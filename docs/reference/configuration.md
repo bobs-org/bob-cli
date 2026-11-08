@@ -253,11 +253,17 @@ The adapter can be replaced with `BOB_GKEEP_ADAPTER`. See the
 | `gcal.tentative` | `context` or `task` | `context` | Whether a busy Maybe event becomes a context row or an Event Task. |
 | `gcal.description` | `bullets` or `off` | `bullets` | Whether sync copies event descriptions as Event Task bullets; `off` is the kill switch. |
 | `gcal.description_lines` | Integer at least 2 | `8` | Most copied description lines per Event Task, overflow line included; buffer reasons are extra. |
+| `gcal.gog` | Absolute executable path; a leading `~/` is expanded | `gog` on `PATH`, then standard install locations | Configured gog executable for Calendar. |
 | `gcal.timeout_secs` | Integer greater than 0 | `60` | gog request timeout in seconds. |
 
 A missing `gcal:` block uses those defaults. Unknown keys are ignored. A
 wrong-typed value is a setup error (exit 2) that names the key and never
-breaks other config loaders. `BOB_GCAL_GOG` replaces `gog` on `PATH`. See the
+breaks other config loaders. Every gog child gets `XDG_CONFIG_HOME` set to
+Bob's config root: the non-empty value from Bob's environment after `~/`
+expansion, or `$HOME/.config`. gog therefore uses `<root>/gogcli`; a macOS
+store left under `~/Library/Application Support/gogcli` is not read. Rerun
+`bob gcal login` or move the `gogcli` directory into the configured root.
+`BOB_GCAL_GOG` overrides `gcal.gog` and `gog` on `PATH`. See the
 [Google Calendar contract](../gcal.md#configuration).
 
 ### `gmail`
@@ -278,11 +284,17 @@ breaks other config loaders. `BOB_GCAL_GOG` replaces `gog` on `PATH`. See the
 | `gmail.sync.label` | String or unset | `gmail.pull.label`, then `bob` | Enrollment label; an empty string disables sync. |
 | `gmail.sync.reply_wait_days` | Integer at least 1 | `3` | Calendar days from your send to the awaiting-reply nudge date; changing it never reschedules existing holds. |
 | `gmail.sync.route_prefixes` | Sequence of distinct quoted strings without `/` or whitespace | `[]` (no-prefix mode) | A user label `<prefix>/<note>` routes a thread to that area or project note; `[]` routes by any label that names one. |
+| `gmail.gog` | Absolute executable path; a leading `~/` is expanded | `gog` on `PATH`, then standard install locations | Configured gog executable for Gmail. |
 | `gmail.timeout_secs` | Integer greater than 0 | `60` | gog request timeout in seconds. |
 
 A missing `gmail:` block uses those defaults. Unknown keys are ignored. A
 wrong-typed value is a setup error (exit 2) that names the key and never
-breaks other config loaders. `BOB_GMAIL_GOG` replaces `gog` on `PATH`. See the
+breaks other config loaders. Every gog child gets `XDG_CONFIG_HOME` set to
+Bob's config root: the non-empty value from Bob's environment after `~/`
+expansion, or `$HOME/.config`. gog therefore uses `<root>/gogcli`; a macOS
+store left under `~/Library/Application Support/gogcli` is not read. Rerun
+`bob gmail login` or move the `gogcli` directory into the configured root.
+`BOB_GMAIL_GOG` overrides `gmail.gog` and `gog` on `PATH`. See the
 [Bob Gmail contract](../gmail.md#configuration).
 
 ### `stats`
@@ -376,11 +388,11 @@ See the [capture command reference](cli/capture.md) and
 | `BOB_GCAL_ASSUME_TTY` | Unset (real TTY detection) | Test hook: `1` or `true` treats stdin as a TTY for login prompts and logout confirm. |
 | `BOB_GCAL_BROWSER` | `open` on macOS, `xdg-open` elsewhere | Non-empty value selects browser sign-in and names the browser opener executable. |
 | `BOB_GCAL_CONSENT_SECS` | 600 seconds | Positive integer override for the interactive Google consent window. |
-| `BOB_GCAL_GOG` | `gog` resolved through `PATH` | Executable used by `bob gcal`; tests point this at a fake. Must be gog ≥ v0.44.0. |
+| `BOB_GCAL_GOG` | `gcal.gog`, then `gog` on `PATH`, then `~/.local/bin/gog`, `/opt/homebrew/bin/gog`, `/usr/local/bin/gog` | Highest-priority executable override for `bob gcal`; tests point this at a fake. Must be gog ≥ v0.44.0. |
 | `BOB_GMAIL_ASSUME_TTY` | Unset (real TTY detection) | Test hook: `1` or `true` treats stdin as a TTY for login prompts and logout confirm. |
 | `BOB_GMAIL_BROWSER` | `open` on macOS, `xdg-open` elsewhere | Non-empty value selects browser sign-in and names the browser opener executable. |
 | `BOB_GMAIL_CONSENT_SECS` | 600 seconds | Positive integer override for the interactive Google consent window. |
-| `BOB_GMAIL_GOG` | `gog` resolved through `PATH` | Executable used by `bob gmail`; tests point this at a fake. Must be gog ≥ v0.44.0. |
+| `BOB_GMAIL_GOG` | `gmail.gog`, then `gog` on `PATH`, then `~/.local/bin/gog`, `/opt/homebrew/bin/gog`, `/usr/local/bin/gog` | Highest-priority executable override for `bob gmail`; tests point this at a fake. Must be gog ≥ v0.44.0. |
 | `BOB_GMAIL_KICK` | Eligible capture starts the background linker | Exact values `off`, `0`, or `false` suppress both enqueue and worker launch. URLs remain available to explicit `bob gmail link` runs. |
 | `BOB_GMAIL_LINK_WORKER` | Unset | Internal launch marker: `1` makes `bob gmail link` drain the host-local capture queue under its single-worker lock. Set by capture, not needed for manual linking. |
 

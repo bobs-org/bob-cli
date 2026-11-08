@@ -156,6 +156,7 @@ already decide what the saved notes will contain:
 ```yaml
 gmail:
   account: you@example.com # optional when gog holds exactly one account
+  # gog: ~/bin/gog # optional absolute path or wrapper
   body: full # full | headers (default full)
   folder: mail # vault folder for mail notes
   link_label: "✉️ {subject} · {who}" # must contain {subject}
@@ -236,6 +237,15 @@ gmail:
 - `signature` is `gmail` (default) or `none`; remote Gmail drafts include the
   account's Gmail signature or omit it. The stored-draft preview shows the result.
 - `timeout_secs` must be an integer greater than 0. Default 60.
+- `gog`, when set, must be an absolute executable path; a leading `~/` is
+  expanded. Bob resolves the executable in this order: `BOB_GMAIL_GOG`,
+  `gmail.gog`, `gog` on `PATH`, `~/.local/bin/gog`, `/opt/homebrew/bin/gog`,
+  then `/usr/local/bin/gog`.
+- Every gog child receives `XDG_CONFIG_HOME` set to Bob's config root: the
+  non-empty value from Bob's environment after `~/` expansion, or
+  `$HOME/.config`. gog's store is `<root>/gogcli`. A macOS store left under
+  `~/Library/Application Support/gogcli` is not read; rerun `bob gmail login`
+  or move `gogcli` into the configured root.
 - The host label is the same slug vault-sync uses in commit subjects.
   `doctor` prints it. Unset `writer` means this host may write; a mismatch
   fails the writer check.
@@ -838,7 +848,7 @@ Every `-f json` output carries `schema_version: 1` and `ok`. Errors are typed
 
 - `BOB_DIR`: vault root; defaults to `~/bob`.
 - `BOB_CONFIG_FILE`: config file; defaults to `~/.config/bob/config.yml`.
-- `BOB_GMAIL_GOG`: gog executable replacing `gog` on PATH.
+- `BOB_GMAIL_GOG`: gog executable overriding `gmail.gog` and `gog` on `PATH`.
 - `BOB_GMAIL_BROWSER`: browser for sign-in (otherwise automatic).
 - `BOB_GMAIL_ASSUME_TTY`: `1`/`true` treats stdin as a TTY for prompts.
 - `BOB_GMAIL_CONSENT_SECS`: consent window override (tests).

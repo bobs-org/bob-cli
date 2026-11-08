@@ -71,7 +71,11 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
             )
         })?;
 
-    let gog = Gog::resolve(crate::native::google::GMAIL, config.timeout())?;
+    let gog = Gog::resolve(
+        crate::native::google::GMAIL,
+        config.gog(),
+        config.timeout(),
+    )?;
     gog.require_version()?;
     let account = resolve::resolve_account(&gog, None, config.account())?;
     let budget =

@@ -51,7 +51,11 @@ fn login(
     config: &GcalConfig,
     ui: &LoginUi,
 ) -> Result<LoginReport, GcalError> {
-    let gog = Gog::resolve(crate::native::google::GCAL, config.timeout())?;
+    let gog = Gog::resolve(
+        crate::native::google::GCAL,
+        config.gog(),
+        config.timeout(),
+    )?;
     let _version = gog.require_version()?;
     ui.title();
 

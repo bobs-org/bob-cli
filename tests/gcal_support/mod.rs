@@ -252,6 +252,7 @@ pub(crate) struct FakeGog {
     event_dir: PathBuf,
     home: PathBuf,
     stdin_log: PathBuf,
+    env_log: PathBuf,
     scenario: String,
 }
 
@@ -274,12 +275,29 @@ impl FakeGog {
             event_dir,
             stdin_log: root.join("stdin.log"),
             home,
+            env_log: root.join("env.jsonl"),
             scenario: "ok".to_string(),
         }
     }
 
     pub(crate) fn home(&self) -> &Path {
         &self.home
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn received_env(&self) -> Vec<serde_json::Value> {
+        let text = fs::read_to_string(&self.env_log).unwrap_or_default();
+        text.lines()
+            .filter(|line| !line.is_empty())
+            .map(|line| {
+                serde_json::from_str(line).unwrap_or_else(|error| {
+                    panic!("parse fake env log {line}: {error}")
+                })
+            })
+            .collect()
     }
 
     pub(crate) fn stdin_payloads(&self) -> Vec<serde_json::Value> {
@@ -323,6 +341,7 @@ impl FakeGog {
             .env("BOB_GCAL_FAKE_EVENT_DIR", &self.event_dir)
             .env("BOB_GCAL_FAKE_HOME", &self.home)
             .env("BOB_GCAL_FAKE_STDIN_LOG", &self.stdin_log)
+            .env("BOB_GCAL_FAKE_ENV_LOG", &self.env_log)
             .env("BOB_GCAL_FAKE_SCENARIO", &self.scenario)
     }
 

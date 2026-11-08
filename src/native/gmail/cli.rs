@@ -46,7 +46,7 @@ pub(crate) fn build_cli() -> ClapCommand {
 }
 
 fn top_after_help() -> &'static str {
-    "Running `bob gmail` with no command lists saved threads (offline, read-only). `-r` adds live message counts.\n\nExamples:\n  bob gmail                   List saved threads\n  bob gmail -a                List every saved thread\n  bob gmail -r                Fetch live new-message counts\n  bob gmail -f json           List saved threads as JSON\n  bob gmail new -t EMAIL      Create a local compose note\n  bob gmail peek URL          Preview a Gmail link\n  bob gmail reply NOTE        Add a Reply section\n  bob gmail send NOTE         Preview and confirm a Gmail draft send\n  bob gmail save URL          Save a Gmail thread\n  bob gmail search            Search recent inbox threads\n  bob gmail save ID -d        Preview a save without writing\n  bob gmail link tasks.md     Swap Gmail URLs for labelled links\n  bob gmail link -a -d        Preview a backfill of old URLs\n  bob gmail sync              File labelled threads into area or project notes\n  bob gmail sync -d           Preview the label sync\n  bob gmail attach NOTE 1     Import the first listed attachment\n  bob gmail draft NOTE        Create or update and preview a Gmail draft\n  bob gmail login             Connect Gmail in one guided step\n  bob gmail login -a EMAIL    Sign in as this account\n  bob gmail login -s compose  Also grant the compose scope (Mac only)\n  bob gmail doctor            Diagnose gog, the client, and the vault\n  bob gmail logout -y         Remove Bob's Gmail grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH\n  BOB_GMAIL_BROWSER  Browser executable; selects browser sign-in (otherwise automatic)"
+    "Running `bob gmail` with no command lists saved threads (offline, read-only). `-r` adds live message counts.\n\nExamples:\n  bob gmail                   List saved threads\n  bob gmail -a                List every saved thread\n  bob gmail -r                Fetch live new-message counts\n  bob gmail -f json           List saved threads as JSON\n  bob gmail new -t EMAIL      Create a local compose note\n  bob gmail peek URL          Preview a Gmail link\n  bob gmail reply NOTE        Add a Reply section\n  bob gmail send NOTE         Preview and confirm a Gmail draft send\n  bob gmail save URL          Save a Gmail thread\n  bob gmail search            Search recent inbox threads\n  bob gmail save ID -d        Preview a save without writing\n  bob gmail link tasks.md     Swap Gmail URLs for labelled links\n  bob gmail link -a -d        Preview a backfill of old URLs\n  bob gmail sync              File labelled threads into area or project notes\n  bob gmail sync -d           Preview the label sync\n  bob gmail attach NOTE 1     Import the first listed attachment\n  bob gmail draft NOTE        Create or update and preview a Gmail draft\n  bob gmail login             Connect Gmail in one guided step\n  bob gmail login -a EMAIL    Sign in as this account\n  bob gmail login -s compose  Also grant the compose scope (Mac only)\n  bob gmail doctor            Diagnose gog, the client, and the vault\n  bob gmail logout -y         Remove Bob's Gmail grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      overrides gmail.gog and gog on PATH\n  BOB_GMAIL_BROWSER  Browser executable; selects browser sign-in (otherwise automatic)"
 }
 fn attach_command() -> ClapCommand {
     ClapCommand::new("attach")
@@ -74,7 +74,7 @@ fn attach_command() -> ClapCommand {
                 .help("1-based attachment number shown in the note"),
         )
         .after_help(
-            "Examples:\n  bob gmail attach mail/2026/lease.md 1\n  bob gmail attach mail/2026/lease.md 2 -d -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH",
+            "Examples:\n  bob gmail attach mail/2026/lease.md 1\n  bob gmail attach mail/2026/lease.md 2 -d -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      overrides gmail.gog and gog on PATH",
         )
 }
 
@@ -94,7 +94,7 @@ fn sync_command() -> ClapCommand {
         .arg(quiet_arg())
         .arg(retry_timeout_arg())
         .after_help(
-            "Examples:\n  bob gmail sync\n  bob gmail sync -l 5\n  bob gmail sync -l 0\n  bob gmail sync -d -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH",
+            "Examples:\n  bob gmail sync\n  bob gmail sync -l 5\n  bob gmail sync -l 0\n  bob gmail sync -d -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      overrides gmail.gog and gog on PATH",
         )
 }
 
@@ -140,7 +140,7 @@ fn save_command() -> ClapCommand {
             .help("Gmail URL, thread or message ID, RFC message ID, or saved mail note"))
         .arg(help_arg())
         .after_help(
-            "Examples:\n  bob gmail save https://mail.google.com/mail/u/0/#all/0123456789abcdef\n  bob gmail save 0123456789abcdef -B headers\n  bob gmail save mail/2026/lease.md -P work\n  bob gmail save URL1 URL2 -d -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH",
+            "Examples:\n  bob gmail save https://mail.google.com/mail/u/0/#all/0123456789abcdef\n  bob gmail save 0123456789abcdef -B headers\n  bob gmail save mail/2026/lease.md -P work\n  bob gmail save URL1 URL2 -d -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      overrides gmail.gog and gog on PATH",
         )
 }
 
@@ -158,7 +158,7 @@ fn doctor_command() -> ClapCommand {
 }
 
 fn doctor_after_help() -> &'static str {
-    "Examples:\n  bob gmail doctor\n  bob gmail doctor -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH"
+    "Examples:\n  bob gmail doctor\n  bob gmail doctor -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      overrides gmail.gog and gog on PATH"
 }
 
 fn draft_command() -> ClapCommand {
@@ -179,7 +179,7 @@ fn draft_command() -> ClapCommand {
         )
         .arg(help_arg())
         .after_help(
-            "Examples:\n  bob gmail draft mail/2026/261106_lease_renewal.md\n  bob gmail draft 261106_lease_renewal -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH",
+            "Examples:\n  bob gmail draft mail/2026/261106_lease_renewal.md\n  bob gmail draft 261106_lease_renewal -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      overrides gmail.gog and gog on PATH",
         )
 }
 
@@ -209,7 +209,7 @@ fn send_command() -> ClapCommand {
         )
         .arg(help_arg())
         .after_help(
-            "Examples:\n  bob gmail send mail/2026/261106_lease_renewal.md -d\n  bob gmail send mail/2026/261106_lease_renewal.md\n  bob gmail send mail/2026/261106_lease_renewal.md -c 0123abcd...\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH",
+            "Examples:\n  bob gmail send mail/2026/261106_lease_renewal.md -d\n  bob gmail send mail/2026/261106_lease_renewal.md\n  bob gmail send mail/2026/261106_lease_renewal.md -c 0123abcd...\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      overrides gmail.gog and gog on PATH",
         )
 }
 
@@ -237,7 +237,7 @@ fn link_command() -> ClapCommand {
             .help("Vault-relative mail note to scan for Gmail URLs"))
         .arg(help_arg())
         .after_help(
-            "Examples:\n  bob gmail link tasks.md\n  bob gmail link one.md two.md -q\n  bob gmail link -a -d\n  bob gmail link -a -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH",
+            "Examples:\n  bob gmail link tasks.md\n  bob gmail link one.md two.md -q\n  bob gmail link -a -d\n  bob gmail link -a -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      overrides gmail.gog and gog on PATH",
         )
 }
 
@@ -251,7 +251,7 @@ fn list_command() -> ClapCommand {
         .arg(remote_arg())
         .arg(help_arg())
         .after_help(
-            "Examples:\n  bob gmail list\n  bob gmail list -a\n  bob gmail list -r\n  bob gmail list -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH",
+            "Examples:\n  bob gmail list\n  bob gmail list -a\n  bob gmail list -r\n  bob gmail list -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      overrides gmail.gog and gog on PATH",
         )
 }
 
@@ -270,7 +270,7 @@ fn peek_command() -> ClapCommand {
             .help("Gmail URL or thread/message ID"))
         .arg(help_arg())
         .after_help(
-            "Examples:\n  bob gmail peek https://mail.google.com/mail/u/0/#all/0123456789abcdef\n  bob gmail peek 0123456789abcdef -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH",
+            "Examples:\n  bob gmail peek https://mail.google.com/mail/u/0/#all/0123456789abcdef\n  bob gmail peek 0123456789abcdef -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      overrides gmail.gog and gog on PATH",
         )
 }
 
@@ -289,7 +289,7 @@ fn search_command() -> ClapCommand {
             .help("Gmail query; defaults to recent inbox threads"))
         .arg(help_arg())
         .after_help(
-            "Examples:\n  bob gmail search\n  bob gmail search from:ada@example.com -l 10\n  bob gmail search \"newer_than:7d has:attachment\" -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH",
+            "Examples:\n  bob gmail search\n  bob gmail search from:ada@example.com -l 10\n  bob gmail search \"newer_than:7d has:attachment\" -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      overrides gmail.gog and gog on PATH",
         )
 }
 
@@ -321,7 +321,7 @@ fn login_command() -> ClapCommand {
 }
 
 fn login_after_help() -> &'static str {
-    "Examples:\n  bob gmail login\n  bob gmail login -a you@example.com\n  bob gmail login -c ~/Downloads/client_secret.json\n  bob gmail login -m\n  bob gmail login -s compose\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH\n  BOB_GMAIL_BROWSER  Browser executable; selects browser sign-in (otherwise automatic)"
+    "Examples:\n  bob gmail login\n  bob gmail login -a you@example.com\n  bob gmail login -c ~/Downloads/client_secret.json\n  bob gmail login -m\n  bob gmail login -s compose\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      overrides gmail.gog and gog on PATH\n  BOB_GMAIL_BROWSER  Browser executable; selects browser sign-in (otherwise automatic)"
 }
 
 fn logout_command() -> ClapCommand {
@@ -338,7 +338,7 @@ fn logout_command() -> ClapCommand {
 fn logout_after_help() -> &'static str {
     "Removes the isolated `bob-gmail` refresh token. Calendar, Keep, and other gog \
      clients are left alone. Then revoke Bob's Gmail access at \
-     https://myaccount.google.com/permissions.\n\nExamples:\n  bob gmail logout -y\n  bob gmail logout -a you@example.com -y\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH"
+     https://myaccount.google.com/permissions.\n\nExamples:\n  bob gmail logout -y\n  bob gmail logout -a you@example.com -y\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      overrides gmail.gog and gog on PATH"
 }
 
 fn new_command() -> ClapCommand {

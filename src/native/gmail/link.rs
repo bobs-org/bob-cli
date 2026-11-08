@@ -221,7 +221,11 @@ fn run_inner(args: &LinkArgs) -> Result<LinkOutcome, GmailError> {
         return Ok(outcome);
     }
 
-    let gog = Gog::resolve(crate::native::google::GMAIL, config.timeout())?;
+    let gog = Gog::resolve(
+        crate::native::google::GMAIL,
+        config.gog(),
+        config.timeout(),
+    )?;
     gog.require_version()?;
     let account = match resolve::resolve_account(&gog, None, config.account()) {
         Ok(account) => account,

@@ -83,7 +83,11 @@ fn run_inner(
     }
     let folder = Path::new(config.folder());
     let index = resolve::scan_index(&vault, folder, config.link_label())?;
-    let gog = Gog::resolve(crate::native::google::GMAIL, config.timeout())?;
+    let gog = Gog::resolve(
+        crate::native::google::GMAIL,
+        config.gog(),
+        config.timeout(),
+    )?;
     gog.require_version()?;
     let account = resolve::resolve_account(&gog, None, config.account())?;
     let identity = resolve::resolve_identity(

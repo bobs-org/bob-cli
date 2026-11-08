@@ -67,9 +67,11 @@ impl GogAccount {
 }
 
 impl Gog {
-    /// Resolve the service-specific gog override, else `gog` on PATH.
+    /// Resolve the service-specific executable override, config value, PATH,
+    /// then the well-known Homebrew and user-local locations.
     pub(crate) fn resolve(
         service: GoogleService,
+        configured: Option<&Path>,
         timeout: Duration,
     ) -> Result<Self, GoogleError> {
         let override_path = bob_env::var_os(service.gog_override_env)
@@ -88,16 +90,35 @@ impl Gog {
                         .unwrap_or(path)
                 }
             }
-            None => bob_env::find_on_path("gog").ok_or_else(|| {
-                GoogleError::setup(
-                    "gog_missing",
-                    "gog not found on PATH".to_string(),
-                )
-                .with_hint(
-                    "install gog ≥ v0.44.0 (https://github.com/openclaw/gogcli) \
-                     and put it on PATH",
-                )
-            })?,
+            None => match configured {
+                Some(path) if bob_env::is_executable_file(path) => {
+                    path.to_path_buf()
+                }
+                Some(path) => {
+                    return Err(GoogleError::setup(
+                        "gog_missing",
+                        format!(
+                            "configured gog executable is missing or not executable: {}",
+                            path.display()
+                        ),
+                    )
+                    .with_hint(&format!(
+                        "fix {} in the Bob config file",
+                        service.gog_config_key
+                    )));
+                }
+                None => resolve_gog_from_path_or_fallback().ok_or_else(|| {
+                    GoogleError::setup(
+                        "gog_missing",
+                        "gog not found on PATH or in a standard install location"
+                            .to_string(),
+                    )
+                    .with_hint(&format!(
+                        "install gog ≥ v0.44.0 and put it on PATH, or set {} in the Bob config file",
+                        service.gog_config_key
+                    ))
+                })?,
+            },
         };
         let program = if program.is_absolute() {
             program
@@ -403,7 +424,10 @@ impl Gog {
             program: self.program.clone(),
             args,
             stdin,
-            env: Vec::new(),
+            env: vec![(
+                OsString::from("XDG_CONFIG_HOME"),
+                config_root().into_os_string(),
+            )],
             env_remove: Vec::new(),
             timeout: self.timeout,
         })
@@ -443,6 +467,55 @@ impl Gog {
             )),
         }
     }
+}
+
+/// Bob's config root, resolved with the same XDG and tilde rules as
+/// `bob/config.yml`. gog always receives this value, independent of how Bob
+/// itself was launched.
+pub(crate) fn config_root() -> PathBuf {
+    bob_env::var_os("XDG_CONFIG_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .map(|path| bob_env::expand_tilde(&path))
+        .unwrap_or_else(|| bob_env::home_dir().join(".config"))
+}
+
+pub(crate) fn gog_store_dir() -> PathBuf {
+    config_root().join("gogcli")
+}
+
+/// Display gog's store with Bob's home abbreviated as `~` when possible.
+pub(crate) fn gog_store_display() -> String {
+    let store = gog_store_dir();
+    let home = bob_env::home_dir();
+    match store.strip_prefix(&home) {
+        Ok(relative) if relative.as_os_str().is_empty() => "~".to_string(),
+        Ok(relative) => format!("~/{}", relative.display()),
+        Err(_) => store.display().to_string(),
+    }
+}
+
+fn resolve_gog_from_path_or_fallback() -> Option<PathBuf> {
+    let home = bob_env::home_dir();
+    resolve_gog_candidates(
+        bob_env::find_on_path("gog"),
+        [
+            home.join(".local/bin/gog"),
+            PathBuf::from("/opt/homebrew/bin/gog"),
+            PathBuf::from("/usr/local/bin/gog"),
+        ],
+    )
+}
+
+fn resolve_gog_candidates(
+    path_match: Option<PathBuf>,
+    fallback_candidates: impl IntoIterator<Item = PathBuf>,
+) -> Option<PathBuf> {
+    path_match.or_else(|| {
+        fallback_candidates
+            .into_iter()
+            .find(|path| bob_env::is_executable_file(path))
+    })
 }
 
 fn once_os(value: &str) -> std::iter::Once<OsString> {
@@ -567,9 +640,33 @@ pub(crate) fn classify_gog_failure(
         .with_hint("wait and run again; the next run resumes");
     }
     if blob.contains("store secret") || blob.contains("keyring") {
+        if blob.contains("integrity check failed") {
+            return GoogleError::runtime(
+                "keyring",
+                "gog could not unlock its file keyring (wrong or empty GOG_KEYRING_PASSWORD)"
+                    .to_string(),
+            )
+            .with_hint(&format!(
+                "check the password source used by {}",
+                service.gog_config_key
+            ));
+        }
+        if blob.contains("gog_keyring_password")
+            || blob.contains("no tty available for keyring")
+        {
+            return GoogleError::runtime(
+                "keyring",
+                "gog's file keyring is locked: this run has no GOG_KEYRING_PASSWORD"
+                    .to_string(),
+            )
+            .with_hint(&format!(
+                "point {} at a gog wrapper that exports GOG_KEYRING_PASSWORD, for example `~/bin/gog`",
+                service.gog_config_key
+            ));
+        }
         return GoogleError::runtime(
             "keyring",
-            "gog could not save the client or token in the system keyring"
+            "gog could not read or save the client or token in the system keyring"
                 .to_string(),
         )
         .with_hint(&format!(
@@ -677,11 +774,17 @@ pub(crate) fn classify_gog_failure(
             || blob.contains("credentials missing"))
         || blob.contains("no client")
     {
-        return GoogleError::setup(
-            "no_client",
-            format!("no {} OAuth client is stored", service.client_bucket),
-        )
-        .with_hint(&format!(
+        let message = expected_client_store_dir(stdout, stderr).map_or_else(
+            || format!("no {} OAuth client is stored", service.client_bucket),
+            |directory| {
+                format!(
+                    "no {} OAuth client is stored in {}",
+                    service.client_bucket,
+                    directory.display()
+                )
+            },
+        );
+        return GoogleError::setup("no_client", message).with_hint(&format!(
             "run `{} login -c PATH` with a Desktop-app client JSON",
             service.command
         ));
@@ -724,10 +827,51 @@ pub(crate) fn classify_gog_failure(
     GoogleError::runtime("gog", detail.to_string())
 }
 
+fn expected_client_store_dir(stdout: &str, stderr: &str) -> Option<PathBuf> {
+    for text in [stdout, stderr] {
+        let lower = text.to_ascii_lowercase();
+        let Some(start) = lower.find("expected at ") else {
+            continue;
+        };
+        let path_start = start + "expected at ".len();
+        let rest = text.get(path_start..)?;
+        let path = rest.split(['\n', ')']).next()?.trim().trim_end_matches('.');
+        if let Some(parent) = Path::new(path).parent() {
+            return Some(parent.to_path_buf());
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::profile::{GCAL, GMAIL};
     use super::*;
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn temp_root(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos();
+        std::env::temp_dir()
+            .join(format!("bob-gog-{label}-{}-{nonce}", std::process::id()))
+    }
+
+    fn make_executable(path: &Path) {
+        fs::create_dir_all(path.parent().expect("parent"))
+            .expect("create executable parent");
+        fs::write(path, "#!/bin/sh\nexit 0\n").expect("write executable");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+                .expect("chmod executable");
+        }
+    }
 
     #[test]
     fn semver_parse_and_compare() {
@@ -735,6 +879,103 @@ mod tests {
         assert_eq!(parse_semver("v0.44.1"), Some((0, 44, 1)));
         assert!(parse_semver("0.44.0").unwrap() >= MIN_VERSION);
         assert!(parse_semver("0.43.9").unwrap() < MIN_VERSION);
+    }
+
+    #[test]
+    fn resolves_gog_in_environment_config_path_then_path_then_fallback_order() {
+        let root = temp_root("resolution");
+        let home = root.join("home");
+        let configured = root.join("configured/gog");
+        let override_path = root.join("override/gog");
+        let path_bin = root.join("path/gog");
+        let fallback = home.join(".local/bin/gog");
+        for executable in [&configured, &override_path, &path_bin, &fallback] {
+            make_executable(executable);
+        }
+        let path_dir = path_bin.parent().expect("PATH directory");
+        let home_text = home.as_os_str();
+        let path_text = path_dir.as_os_str();
+        let override_text = override_path.as_os_str();
+        let _base = bob_env::TestEnvGuard::set(&[
+            ("HOME", Some(home_text)),
+            ("PATH", Some(path_text)),
+            ("BOB_GCAL_GOG", Some(override_text)),
+        ]);
+
+        let resolved =
+            Gog::resolve(GCAL, Some(&configured), Duration::from_secs(1))
+                .expect("environment override wins");
+        assert_eq!(resolved.program(), override_path.as_path());
+
+        let _without_override =
+            bob_env::TestEnvGuard::set(&[("BOB_GCAL_GOG", None)]);
+        let resolved =
+            Gog::resolve(GCAL, Some(&configured), Duration::from_secs(1))
+                .expect("configured executable wins");
+        assert_eq!(resolved.program(), configured.as_path());
+
+        let resolved = Gog::resolve(GCAL, None, Duration::from_secs(1))
+            .expect("PATH executable wins over fallbacks");
+        assert_eq!(resolved.program(), path_bin.as_path());
+
+        let _without_path = bob_env::TestEnvGuard::set(&[(
+            "PATH",
+            Some(std::ffi::OsStr::new("/no-such-bob-gog-path")),
+        )]);
+        let resolved = Gog::resolve(GCAL, None, Duration::from_secs(1))
+            .expect("user-local fallback is found");
+        assert_eq!(resolved.program(), fallback.as_path());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn config_root_matches_bobs_xdg_and_home_rules() {
+        let home = temp_root("config-root");
+        let _env = bob_env::TestEnvGuard::set(&[
+            ("HOME", Some(home.as_os_str())),
+            ("XDG_CONFIG_HOME", None),
+        ]);
+        assert_eq!(config_root(), home.join(".config"));
+        let xdg = PathBuf::from("~/settings");
+        let _xdg = bob_env::TestEnvGuard::set(&[(
+            "XDG_CONFIG_HOME",
+            Some(xdg.as_os_str()),
+        )]);
+        assert_eq!(config_root(), home.join("settings"));
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn standard_gog_fallbacks_keep_their_priority() {
+        let root = temp_root("fallback-order");
+        let path_match = root.join("path/gog");
+        let user_local = root.join("home/.local/bin/gog");
+        let homebrew = root.join("opt-homebrew/bin/gog");
+        let local = root.join("usr-local/bin/gog");
+        for executable in [&path_match, &user_local, &homebrew, &local] {
+            make_executable(executable);
+        }
+        let candidates =
+            || vec![user_local.clone(), homebrew.clone(), local.clone()];
+        assert_eq!(
+            resolve_gog_candidates(None, candidates()),
+            Some(user_local.clone())
+        );
+        fs::remove_file(&user_local).expect("remove user-local gog");
+        assert_eq!(
+            resolve_gog_candidates(None, candidates()),
+            Some(homebrew.clone())
+        );
+        fs::remove_file(&homebrew).expect("remove Homebrew gog");
+        assert_eq!(
+            resolve_gog_candidates(None, candidates()),
+            Some(local.clone())
+        );
+        assert_eq!(
+            resolve_gog_candidates(Some(path_match.clone()), candidates()),
+            Some(path_match)
+        );
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -806,6 +1047,55 @@ mod tests {
             classify_gog_failure(GCAL, "", "Error 400: redirect_uri_mismatch");
         assert_eq!(error.kind(), "client_invalid");
         assert_eq!(error.exit_code(), 2);
+    }
+
+    #[test]
+    fn launch_environment_failures_name_the_keyring_and_store() {
+        let locked = classify_gog_failure(
+            GCAL,
+            "",
+            "read encoded file keyring item: no TTY available for keyring file backend password prompt; set GOG_KEYRING_PASSWORD",
+        );
+        assert_eq!(locked.kind(), "keyring");
+        assert_eq!(locked.exit_code(), 1);
+        assert_eq!(
+            locked.message(),
+            "gog's file keyring is locked: this run has no GOG_KEYRING_PASSWORD"
+        );
+        assert!(locked.hint().unwrap_or_default().contains("gcal.gog"));
+        assert!(locked.hint().unwrap_or_default().contains("~/bin/gog"));
+
+        let integrity = classify_gog_failure(
+            GCAL,
+            "",
+            "read encoded file keyring item: aes.KeyUnwrap(): integrity check failed",
+        );
+        assert_eq!(integrity.kind(), "keyring");
+        assert_eq!(integrity.exit_code(), 1);
+        assert_eq!(
+            integrity.message(),
+            "gog could not unlock its file keyring (wrong or empty GOG_KEYRING_PASSWORD)"
+        );
+        assert!(integrity
+            .hint()
+            .unwrap_or_default()
+            .contains("password source"));
+
+        let missing_client = classify_gog_failure(
+            GCAL,
+            "",
+            "OAuth client credentials missing (OAuth client ID JSON). … (expected at /Users/bbugyi/Library/Application Support/gogcli/credentials-bob-gcal.json)",
+        );
+        assert_eq!(missing_client.kind(), "no_client");
+        assert_eq!(missing_client.exit_code(), 2);
+        assert_eq!(
+            missing_client.message(),
+            "no bob-gcal OAuth client is stored in /Users/bbugyi/Library/Application Support/gogcli"
+        );
+        assert!(missing_client
+            .hint()
+            .unwrap_or_default()
+            .contains("bob gcal login -c PATH"));
     }
 
     #[test]

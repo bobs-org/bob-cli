@@ -67,7 +67,11 @@ pub(crate) fn fetch_day<S: HomeSource>(
     let timezone = bob_env::configured_timezone();
     let window = DayWindow::new(day, timezone)?;
     let daily_rel = daily_relative_path(day);
-    let gog = Gog::resolve(crate::native::google::GCAL, config.timeout())?;
+    let gog = Gog::resolve(
+        crate::native::google::GCAL,
+        config.gog(),
+        config.timeout(),
+    )?;
     let _ = gog.require_version()?;
     let account = resolve_command(&gog, config.account())?;
     let calendars = gog.calendars(&account)?;

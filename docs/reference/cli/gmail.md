@@ -78,6 +78,6 @@ Examples:
 Environment:
   BOB_DIR            Bob vault root; defaults to ~/bob
   BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml
-  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH
+  BOB_GMAIL_GOG      overrides gmail.gog and gog on PATH
   BOB_GMAIL_BROWSER  Browser executable; selects browser sign-in (otherwise automatic)
 ```

@@ -31,7 +31,11 @@ fn logout(
     args: &LogoutArgs,
     config: &GmailConfig,
 ) -> Result<String, GmailError> {
-    let gog = Gog::resolve(crate::native::google::GMAIL, config.timeout())?;
+    let gog = Gog::resolve(
+        crate::native::google::GMAIL,
+        config.gog(),
+        config.timeout(),
+    )?;
     let _ = gog.require_version()?;
     let account = account::resolve_logout(
         &gog,

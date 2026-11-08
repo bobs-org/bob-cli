@@ -761,6 +761,7 @@ fn resolve_absent(
                     let config = GcalConfig::resolve()?;
                     transport = Some(Gog::resolve(
                         crate::native::google::GCAL,
+                        config.gog(),
                         config.timeout(),
                     )?);
                 }

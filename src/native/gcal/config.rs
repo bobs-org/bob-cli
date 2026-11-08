@@ -1,6 +1,10 @@
 //! Resolved `bob gcal` configuration: the `gcal:` config section.
 
-use std::{collections::BTreeMap, path::Path, time::Duration};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use crate::native::{config as bob_config, env as bob_env};
 
@@ -27,6 +31,7 @@ pub(crate) struct GcalConfig {
     tentative: bob_config::GcalTentative,
     description: bob_config::GcalDescriptionMode,
     description_lines: usize,
+    gog: Option<PathBuf>,
     timeout_secs: u64,
 }
 
@@ -125,6 +130,7 @@ impl GcalConfig {
                 .unwrap_or(bob_config::GcalTentative::Context),
             description: settings.description.unwrap_or_default(),
             description_lines: description_lines_usize,
+            gog: settings.gog,
             timeout_secs,
         })
     }
@@ -165,6 +171,10 @@ impl GcalConfig {
 
     pub(crate) fn timeout(&self) -> Duration {
         Duration::from_secs(self.timeout_secs)
+    }
+
+    pub(crate) fn gog(&self) -> Option<&Path> {
+        self.gog.as_deref()
     }
 
     /// Calendar root: per-calendar override, else the default root.
@@ -226,6 +236,7 @@ mod tests {
             tentative: None,
             description: None,
             description_lines: None,
+            gog: None,
             timeout_secs: None,
         }
     }

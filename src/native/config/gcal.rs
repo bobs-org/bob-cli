@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::ConfigError;
 
@@ -14,6 +14,7 @@ pub(crate) struct GcalSettings {
     pub(crate) tentative: Option<GcalTentative>,
     pub(crate) description: Option<GcalDescriptionMode>,
     pub(crate) description_lines: Option<u64>,
+    pub(crate) gog: Option<PathBuf>,
     pub(crate) timeout_secs: Option<u64>,
 }
 
@@ -103,6 +104,7 @@ fn parse_gcal_value(
             get("description_lines"),
             path,
         )?,
+        gog: super::parse_gog_path(get("gog"), "gcal.gog", path)?,
         timeout_secs: parse_timeout(get("timeout_secs"), path)?,
     })
 }
@@ -536,6 +538,25 @@ mod tests {
         let settings = parse("gcal:\n  extra: 1\n  account: you@example.com\n")
             .expect("unknown keys ignored");
         assert_eq!(settings.account.as_deref(), Some("you@example.com"));
+    }
+
+    #[test]
+    fn gog_path_expands_home_and_rejects_invalid_values() {
+        let settings = parse("gcal:\n  gog: ~/bin/gog\n").expect("gog path");
+        assert_eq!(
+            settings.gog.as_deref(),
+            Some(crate::native::env::home_dir().join("bin/gog").as_path())
+        );
+        for text in [
+            "gcal:\n  gog: bin/gog\n",
+            "gcal:\n  gog: ''\n",
+            "gcal:\n  gog: 1\n",
+            "gcal:\n  gog: null\n",
+        ] {
+            let error = parse(text).expect_err(text);
+            assert!(error.message().contains("gcal.gog"), "{error}");
+            assert!(error.message().contains("/config.yml"), "{error}");
+        }
     }
 
     #[test]

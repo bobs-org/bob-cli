@@ -37,12 +37,28 @@ state_path = os.environ.get("BOB_GCAL_FAKE_STATE")
 scenario = os.environ.get("BOB_GCAL_FAKE_SCENARIO", "ok")
 fake_home = Path(os.environ.get("BOB_GCAL_FAKE_HOME", "/tmp"))
 stdin_log = os.environ.get("BOB_GCAL_FAKE_STDIN_LOG")
+env_log = os.environ.get("BOB_GCAL_FAKE_ENV_LOG")
 
 if log_path:
     path = Path(log_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(args) + "\n")
+
+if env_log:
+    path = Path(env_log)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "xdg_config_home": os.environ.get("XDG_CONFIG_HOME"),
+                    "gog_keyring_password_present": "GOG_KEYRING_PASSWORD"
+                    in os.environ,
+                }
+            )
+            + "\n"
+        )
 
 
 def positional(argv: list[str]) -> list[str]:

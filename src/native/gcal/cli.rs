@@ -36,7 +36,7 @@ pub(crate) fn build_cli() -> ClapCommand {
 }
 
 fn top_after_help() -> &'static str {
-    "Running `bob gcal` with no command runs `bob gcal list`.\n\nExamples:\n  bob gcal                    Show today's events and what sync would do\n  bob gcal -D tomorrow        List tomorrow in Bob's timezone\n  bob gcal -a -f json         Include omitted events as JSON\n  bob gcal login              Connect Google Calendar in one guided step\n  bob gcal login -a EMAIL     Sign in as this account\n  bob gcal login -c PATH      Replace Bob's stored Desktop-app client JSON\n  bob gcal login -m           Paste the redirect address (automatic over SSH)\n  bob gcal calendars          List calendars with ids for config\n  bob gcal doctor             Diagnose gog, the client, and the vault\n  bob gcal sync               Write today's Events and MEET links\n  bob gcal sync -d            Preview the exact Markdown a sync writes\n  bob gcal logout -y          Remove Bob's Calendar grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       gog executable replacing `gog` on PATH\n  BOB_GCAL_BROWSER   Browser executable; selects browser sign-in (otherwise automatic)"
+    "Running `bob gcal` with no command runs `bob gcal list`.\n\nExamples:\n  bob gcal                    Show today's events and what sync would do\n  bob gcal -D tomorrow        List tomorrow in Bob's timezone\n  bob gcal -a -f json         Include omitted events as JSON\n  bob gcal login              Connect Google Calendar in one guided step\n  bob gcal login -a EMAIL     Sign in as this account\n  bob gcal login -c PATH      Replace Bob's stored Desktop-app client JSON\n  bob gcal login -m           Paste the redirect address (automatic over SSH)\n  bob gcal calendars          List calendars with ids for config\n  bob gcal doctor             Diagnose gog, the client, and the vault\n  bob gcal sync               Write today's Events and MEET links\n  bob gcal sync -d            Preview the exact Markdown a sync writes\n  bob gcal logout -y          Remove Bob's Calendar grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH\n  BOB_GCAL_BROWSER   Browser executable; selects browser sign-in (otherwise automatic)"
 }
 
 fn calendars_command() -> ClapCommand {
@@ -52,7 +52,7 @@ fn calendars_command() -> ClapCommand {
 }
 
 fn calendars_after_help() -> &'static str {
-    "Examples:\n  bob gcal calendars\n  bob gcal calendars -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       gog executable replacing `gog` on PATH"
+    "Examples:\n  bob gcal calendars\n  bob gcal calendars -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH"
 }
 
 fn list_command() -> ClapCommand {
@@ -70,7 +70,7 @@ fn list_command() -> ClapCommand {
 }
 
 fn list_after_help() -> &'static str {
-    "`-a` also shows declined, unanswered, and out-of-scope events with their reasons. Root candidates are validated against the vault; warnings show why Bob fell back.\n\nExamples:\n  bob gcal\n  bob gcal list -D tomorrow\n  bob gcal list -D 2026-10-30 -f json\n  bob gcal list -a\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       gog executable replacing `gog` on PATH\n  BOB_NOW            Local datetime override for default day selection"
+    "`-a` also shows declined, unanswered, and out-of-scope events with their reasons. Root candidates are validated against the vault; warnings show why Bob fell back.\n\nExamples:\n  bob gcal\n  bob gcal list -D tomorrow\n  bob gcal list -D 2026-10-30 -f json\n  bob gcal list -a\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH\n  BOB_NOW            Local datetime override for default day selection"
 }
 
 fn sync_command() -> ClapCommand {
@@ -93,7 +93,7 @@ fn sync_command() -> ClapCommand {
 }
 
 fn sync_after_help() -> &'static str {
-    "Examples:\n  bob gcal sync\n  bob gcal sync -D tomorrow\n  bob gcal sync -d\n  bob gcal sync -q\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       gog executable replacing `gog` on PATH\n  BOB_NOW            Local datetime override for default day selection"
+    "Examples:\n  bob gcal sync\n  bob gcal sync -D tomorrow\n  bob gcal sync -d\n  bob gcal sync -q\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH\n  BOB_NOW            Local datetime override for default day selection"
 }
 
 fn doctor_command() -> ClapCommand {
@@ -110,7 +110,7 @@ fn doctor_command() -> ClapCommand {
 }
 
 fn doctor_after_help() -> &'static str {
-    "Examples:\n  bob gcal doctor\n  bob gcal doctor -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       gog executable replacing `gog` on PATH"
+    "Examples:\n  bob gcal doctor\n  bob gcal doctor -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH"
 }
 
 fn login_command() -> ClapCommand {
@@ -138,7 +138,7 @@ fn login_command() -> ClapCommand {
 }
 
 fn login_after_help() -> &'static str {
-    "Examples:\n  bob gcal login\n  bob gcal login -a you@example.com\n  bob gcal login -c ~/Downloads/client_secret.json\n  bob gcal login -m\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       gog executable replacing `gog` on PATH\n  BOB_GCAL_BROWSER   Browser executable; selects browser sign-in (otherwise automatic)"
+    "Examples:\n  bob gcal login\n  bob gcal login -a you@example.com\n  bob gcal login -c ~/Downloads/client_secret.json\n  bob gcal login -m\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH\n  BOB_GCAL_BROWSER   Browser executable; selects browser sign-in (otherwise automatic)"
 }
 
 fn logout_command() -> ClapCommand {
@@ -155,7 +155,7 @@ fn logout_command() -> ClapCommand {
 fn logout_after_help() -> &'static str {
     "Removes the isolated `bob-gcal` refresh token. Gmail and other gog \
      clients are left alone. Then revoke Bob's Calendar access at \
-     https://myaccount.google.com/permissions.\n\nExamples:\n  bob gcal logout -y\n  bob gcal logout -a you@example.com -y\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       gog executable replacing `gog` on PATH"
+     https://myaccount.google.com/permissions.\n\nExamples:\n  bob gcal logout -y\n  bob gcal logout -a you@example.com -y\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH"
 }
 
 fn account_arg() -> Arg {

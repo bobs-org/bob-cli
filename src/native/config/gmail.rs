@@ -1,6 +1,6 @@
 //! Parsed `gmail:` settings before command-level defaults are applied.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::ConfigError;
 
@@ -15,6 +15,7 @@ pub(crate) struct GmailSettings {
     pub(crate) pull: Option<GmailPullSettings>,
     pub(crate) signature: Option<GmailSignature>,
     pub(crate) sync: Option<GmailSyncSettings>,
+    pub(crate) gog: Option<PathBuf>,
     pub(crate) timeout_secs: Option<u64>,
     pub(crate) writer: Option<String>,
 }
@@ -135,6 +136,7 @@ fn parse_gmail_value(
         pull: parse_pull(get("pull"), path)?,
         signature: parse_signature(get("signature"), path)?,
         sync: parse_sync(get("sync"), path)?,
+        gog: super::parse_gog_path(get("gog"), "gmail.gog", path)?,
         timeout_secs: parse_timeout(get("timeout_secs"), path)?,
         writer: optional_string("writer", get("writer"), path)?,
     })
@@ -542,6 +544,23 @@ mod tests {
             parse("gmail:\n  extra: 1\n  account: you@example.com\n")
                 .expect("unknown keys ignored");
         assert_eq!(settings.account.as_deref(), Some("you@example.com"));
+    }
+
+    #[test]
+    fn gog_path_expands_home_and_rejects_invalid_values() {
+        let settings = parse("gmail:\n  gog: ~/bin/gog\n").expect("gog path");
+        let expected = crate::native::env::home_dir().join("bin/gog");
+        assert_eq!(settings.gog.as_deref(), Some(expected.as_path()));
+        for text in [
+            "gmail:\n  gog: bin/gog\n",
+            "gmail:\n  gog: ''\n",
+            "gmail:\n  gog: 1\n",
+            "gmail:\n  gog: null\n",
+        ] {
+            let error = parse(text).expect_err(text);
+            assert!(error.message().contains("gmail.gog"), "{error}");
+            assert!(error.message().contains("/config.yml"), "{error}");
+        }
     }
 
     #[test]

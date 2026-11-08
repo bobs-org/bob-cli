@@ -28,7 +28,11 @@ pub(crate) fn run(args: &LogoutArgs) -> i32 {
 }
 
 fn logout(args: &LogoutArgs, config: &GcalConfig) -> Result<String, GcalError> {
-    let gog = Gog::resolve(crate::native::google::GCAL, config.timeout())?;
+    let gog = Gog::resolve(
+        crate::native::google::GCAL,
+        config.gog(),
+        config.timeout(),
+    )?;
     let _ = gog.require_version()?;
     let account = account::resolve_logout(
         &gog,

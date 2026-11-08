@@ -62,6 +62,6 @@ Examples:
 Environment:
   BOB_DIR            Bob vault root; defaults to ~/bob
   BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml
-  BOB_GCAL_GOG       gog executable replacing `gog` on PATH
+  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH
   BOB_GCAL_BROWSER   Browser executable; selects browser sign-in (otherwise automatic)
 ```
