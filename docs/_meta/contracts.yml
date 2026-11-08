@@ -110,6 +110,9 @@ groups:
       - stem: task-tag-marks
         summary: "Task tag marks: the teal hash glyph that replaces the `#task` pill; explicit types render as colored `#TYPE`"
         order: 34
+      - stem: mail-link-marks
+        summary: "Mail link marks: the display-only reply badge, no-reply pill, and Also-replied tooltip pip on Gmail-watched tasks"
+        order: 43
       - stem: today-marks
         summary: "Today marks: a display-only tomato on task lines linked under today's open Pomodoros"
         order: 35

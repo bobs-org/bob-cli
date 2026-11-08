@@ -117,6 +117,7 @@ plugins:
           - task-status-hooks.md
           - task-link-marks.md
           - task-tag-marks.md
+          - mail-link-marks.md
           - today-marks.md
           - frees-marks.md
           - off-clock-link-chips.md
@@ -332,6 +333,7 @@ nav:
               - "Decay ladder": decay-ladder.md
               - "Off-clock link chips": off-clock-link-chips.md
               - "Event link times": event-link-times.md
+              - "Mail link marks": mail-link-marks.md
           - "References":
               - "bob query": dataview.md
               - "Reference library (`bob ref`)": ref.md

@@ -241,14 +241,14 @@ example `Fri, Nov 20 · in 19 days`).
 | `repeat`  | `Recurring · next run Mon, Nov 2 · tomorrow`                          | —                                                                     |
 | `stale`   | `Blocked, but no reason is left`                                      | `Clears on the next reconcile`                                        |
 | + losing  | one line each: `Also after <text>`, `Also via project <stem>`, `Also awaiting reply from <who> · nudge <short date> · <relative>`, `Also scheduled <short date> · <relative>` |                              |
+| + replied | `Also: <who> replied` when the row is still `[?]` for another reason after a Gmail reply (`turn: yours` on the linked mail note, and `#awaiting_reply` is gone). With no `who`, `Also: replied`. See [Mail link marks](mail-link-marks.md). | |
 
 `<who>` is one metadata-cache lookup: the first wikilink on the line,
 outside inline code, that resolves to a mail note (frontmatter `type`
-`[[mail]]` or a `gmail_thread_id`) supplies its frontmatter `who`.
-When there is no such link, or `who` is empty, ` from <who>` is
-omitted (`Awaiting reply · nudge …`). The lookup runs only for a live
-awaiting reason, never reads disk, and the tooltip doubles as the
-`aria-label`.
+`[[mail]]` or a `gmail_thread_id`) supplies its frontmatter `who`,
+`turn`, and `turn_since`. When there is no such link, or `who` is empty,
+` from <who>` is omitted (`Awaiting reply · nudge …`). The lookup never
+reads disk, and the tooltip doubles as the `aria-label`.
 
 The checkbox keeps its checkbox role: `aria-label` and
 `data-tooltip-position="top"` go on the input itself. Only the

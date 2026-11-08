@@ -59,6 +59,7 @@ https://bobs-org.github.io/stats/
 https://bobs-org.github.io/task-dependencies/
 https://bobs-org.github.io/task-move/
 https://bobs-org.github.io/task-status-hooks/
+https://bobs-org.github.io/mail-link-marks/
 https://bobs-org.github.io/task-tag-marks/
 https://bobs-org.github.io/today-marks/
 https://bobs-org.github.io/task-relations/

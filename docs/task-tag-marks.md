@@ -443,6 +443,20 @@ theme-aware identity hue with reduced emphasis; the closed-row fade reuses
 the glyph's resting mix. No live Obsidian session was available in this
 phase; the rollout phase confirms the footer and labels on open rows.
 
+## No-reply pill
+
+A Ready (`[ ]`) `#task` row whose exact `#awaiting_reply` token is paired
+with a canonical `[scheduled::]` of today or earlier replaces that tag
+pill with a muted `✈ no reply since <Sat, Nov 7>`. The date is the linked
+mail note's `turn_since` (see [Mail link marks](mail-link-marks.md)). With
+no `turn_since` the pill reads `✈ no reply yet`. `[?]` rows, future dates,
+`#awaiting_reply_old`, and tags in inline code stay untouched. Tasks query
+results keep the native `#awaiting_reply` pill.
+
+The pill uses the same Live Preview replace-and-reveal path as the hash
+glyph, gated by Toggle task tag marks. Vectors NR1–NR8 live in
+`docs/mail-link-marks.md`.
+
 ## Toggle and lifecycle
 
 The command "Toggle task tag marks" (id `toggle-task-tag-marks`) is

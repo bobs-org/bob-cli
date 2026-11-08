@@ -74,6 +74,7 @@ queued intake; full scans also synchronize annotations. The
 | [off-clock-link-chips.md](off-clock-link-chips.md) | Off-clock link chips: the Event Task `off` chip after ledger Task Links whose task resolves off the clock, tagged or inherited |
 | [event-link-times.md](event-link-times.md) | Event link times: the Event Task's time pill beside ledger Task Links that point at it |
 | [attachments.md](attachments.md) | Attachment origin journal, resolution states, `bob attachments import` / `origin`, and `%c` recording |
+| [mail-link-marks.md](mail-link-marks.md) | Mail link marks: the display-only reply badge, no-reply pill, and Also-replied tooltip pip on Gmail-watched tasks |
 <!-- END GENERATED: contract table -->
 
 `bob <command> --help` is the concise usage source for that command, and
