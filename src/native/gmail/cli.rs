@@ -38,15 +38,15 @@ pub(crate) fn build_cli() -> ClapCommand {
         .subcommand(logout_command())
         .subcommand(new_command())
         .subcommand(peek_command())
-        .subcommand(pull_command())
         .subcommand(reply_command())
         .subcommand(save_command())
         .subcommand(search_command())
         .subcommand(send_command())
+        .subcommand(sync_command())
 }
 
 fn top_after_help() -> &'static str {
-    "Running `bob gmail` with no command lists saved threads (offline, read-only). `-r` adds live message counts.\n\nExamples:\n  bob gmail                   List saved threads\n  bob gmail -a                List every saved thread\n  bob gmail -r                Fetch live new-message counts\n  bob gmail -f json           List saved threads as JSON\n  bob gmail new -t EMAIL      Create a local compose note\n  bob gmail peek URL          Preview a Gmail link\n  bob gmail reply NOTE        Add a Reply section\n  bob gmail send NOTE         Preview and confirm a Gmail draft send\n  bob gmail save URL          Save a Gmail thread\n  bob gmail search            Search recent inbox threads\n  bob gmail save ID -d        Preview a save without writing\n  bob gmail link tasks.md     Swap Gmail URLs for labelled links\n  bob gmail link -a -d        Preview a backfill of old URLs\n  bob gmail pull              Save threads labelled bob and file inbox tasks\n  bob gmail pull -d           Preview the label pull\n  bob gmail attach NOTE 1     Import the first listed attachment\n  bob gmail draft NOTE        Create or update and preview a Gmail draft\n  bob gmail login             Connect Gmail in one guided step\n  bob gmail login -a EMAIL    Sign in as this account\n  bob gmail login -s compose  Also grant the compose scope (Mac only)\n  bob gmail doctor            Diagnose gog, the client, and the vault\n  bob gmail logout -y         Remove Bob's Gmail grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH\n  BOB_GMAIL_BROWSER  Browser executable; selects browser sign-in (otherwise automatic)"
+    "Running `bob gmail` with no command lists saved threads (offline, read-only). `-r` adds live message counts.\n\nExamples:\n  bob gmail                   List saved threads\n  bob gmail -a                List every saved thread\n  bob gmail -r                Fetch live new-message counts\n  bob gmail -f json           List saved threads as JSON\n  bob gmail new -t EMAIL      Create a local compose note\n  bob gmail peek URL          Preview a Gmail link\n  bob gmail reply NOTE        Add a Reply section\n  bob gmail send NOTE         Preview and confirm a Gmail draft send\n  bob gmail save URL          Save a Gmail thread\n  bob gmail search            Search recent inbox threads\n  bob gmail save ID -d        Preview a save without writing\n  bob gmail link tasks.md     Swap Gmail URLs for labelled links\n  bob gmail link -a -d        Preview a backfill of old URLs\n  bob gmail sync              File labelled threads into area or project notes\n  bob gmail sync -d           Preview the label sync\n  bob gmail attach NOTE 1     Import the first listed attachment\n  bob gmail draft NOTE        Create or update and preview a Gmail draft\n  bob gmail login             Connect Gmail in one guided step\n  bob gmail login -a EMAIL    Sign in as this account\n  bob gmail login -s compose  Also grant the compose scope (Mac only)\n  bob gmail doctor            Diagnose gog, the client, and the vault\n  bob gmail logout -y         Remove Bob's Gmail grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH\n  BOB_GMAIL_BROWSER  Browser executable; selects browser sign-in (otherwise automatic)"
 }
 fn attach_command() -> ClapCommand {
     ClapCommand::new("attach")
@@ -78,31 +78,44 @@ fn attach_command() -> ClapCommand {
         )
 }
 
-fn pull_command() -> ClapCommand {
-    ClapCommand::new("pull")
-        .about("Save threads with the configured Gmail label as inbox tasks")
+fn sync_command() -> ClapCommand {
+    ClapCommand::new("sync")
+        .alias("pull")
+        .about("File labelled Gmail threads into area or project notes")
         .long_about(
-            "Read the configured Gmail label (default: bob), save each new thread as a mail note, and append one task linking it from the configured inbox file (default: gmail_inbox.md). Pull is read-only in Gmail and idempotent by thread identity.",
+            "Read the configured Gmail enrollment label (default: bob), save each new thread as a mail note, and append one task linking it from the area or project named by a routing label, or from the configured inbox file when none or an invalid routing label is present (default: gmail_inbox.md). Sync is read-only in Gmail and idempotent by thread identity. `pull` is a hidden alias.",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
         .arg(dry_run_arg())
         .arg(save_format_arg())
         .arg(help_arg())
-        .arg(pull_limit_arg())
+        .arg(sync_limit_arg())
         .arg(quiet_arg())
+        .arg(retry_timeout_arg())
         .after_help(
-            "Examples:\n  bob gmail pull\n  bob gmail pull -l 5\n  bob gmail pull -d -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH",
+            "Examples:\n  bob gmail sync\n  bob gmail sync -l 5\n  bob gmail sync -d -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH",
         )
 }
 
-fn pull_limit_arg() -> Arg {
+fn sync_limit_arg() -> Arg {
     Arg::new("limit")
         .long("limit")
         .short('l')
         .value_name("N")
         .value_parser(clap::value_parser!(u32))
-        .help("Maximum label threads to inspect (default 20; maximum 500)")
+        .default_value("50")
+        .help("Maximum new filings (default 50; 0–500)")
+}
+
+fn retry_timeout_arg() -> Arg {
+    Arg::new("retry-timeout")
+        .long("retry-timeout")
+        .short('r')
+        .value_name("SECS")
+        .value_parser(clap::value_parser!(u32))
+        .default_value("120")
+        .help("Shared retry budget in seconds (default 120)")
 }
 
 fn save_command() -> ClapCommand {
@@ -810,24 +823,29 @@ impl AttachArgs {
     }
 }
 
-/// `pull` arguments.
+/// `sync` arguments (and the hidden `pull` alias).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PullArgs {
+pub(crate) struct SyncArgs {
     pub bob_dir: Option<PathBuf>,
     pub dry_run: bool,
     pub format: HumanFormat,
     pub limit: u32,
     pub quiet: bool,
+    pub retry_timeout: u32,
 }
 
-impl PullArgs {
+impl SyncArgs {
     pub(crate) fn from_matches(matches: &ArgMatches) -> Self {
         Self {
             bob_dir: raw_bob_dir(matches),
             dry_run: matches.get_flag("dry-run"),
             format: HumanFormat::from_matches(matches),
-            limit: matches.get_one::<u32>("limit").copied().unwrap_or(20),
+            limit: matches.get_one::<u32>("limit").copied().unwrap_or(50),
             quiet: matches.get_flag("quiet"),
+            retry_timeout: matches
+                .get_one::<u32>("retry-timeout")
+                .copied()
+                .unwrap_or(120),
         }
     }
 
@@ -1223,6 +1241,52 @@ mod tests {
         let args = TopArgs::from_matches(&matches_for(&["bob gmail"]));
         assert_eq!(args.format, ListFormat::Table);
         assert!(!args.all);
+    }
+
+    #[test]
+    fn sync_and_hidden_pull_alias_parse_the_same_args() {
+        let flags = [
+            "bob gmail",
+            "SYNC",
+            "-b",
+            "~/vault",
+            "-d",
+            "-f",
+            "json",
+            "-l",
+            "5",
+            "-q",
+            "-r",
+            "30",
+        ];
+        let mut sync_flags = flags;
+        sync_flags[1] = "sync";
+        let mut pull_flags = flags;
+        pull_flags[1] = "pull";
+        let sync =
+            SyncArgs::from_matches(&sub_matches_for(&sync_flags, "sync"));
+        let pull =
+            SyncArgs::from_matches(&sub_matches_for(&pull_flags, "sync"));
+        assert_eq!(sync, pull);
+        assert_eq!(sync.limit, 5);
+        assert_eq!(sync.retry_timeout, 30);
+        assert!(sync.dry_run);
+        assert!(sync.quiet);
+        assert!(sync.format.is_json());
+        assert_eq!(sync.bob_dir(), bob_env::home_dir().join("vault"));
+    }
+
+    #[test]
+    fn sync_defaults_limit_50_and_retry_120() {
+        let args = SyncArgs::from_matches(&sub_matches_for(
+            &["bob gmail", "sync"],
+            "sync",
+        ));
+        assert_eq!(args.limit, 50);
+        assert_eq!(args.retry_timeout, 120);
+        assert!(!args.dry_run);
+        assert!(!args.quiet);
+        assert_eq!(args.format, HumanFormat::Human);
     }
 
     #[test]

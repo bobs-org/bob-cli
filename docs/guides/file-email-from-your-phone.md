@@ -1,15 +1,16 @@
 ---
 title: "File email from your phone"
-description: "Forward a message to a Gmail plus address, apply the Bob label automatically, and pull it into the vault inbox."
+description: "Forward a message to a Gmail plus address, apply the Bob label automatically, and sync it into the vault."
 tags:
   - CLI
 ---
 
 # File email from your phone
 
-This guide routes a message you forward from your phone into Bob's Gmail task
-inbox. Bob reads the Gmail label and writes a mail note plus a task link; it
-does not archive, mark read, or remove the label.
+This guide routes a message you forward from your phone into Bob. Bob reads
+the Gmail label and writes a mail note plus a task link in the area or
+project named by a routing label, or in the Gmail inbox when none is
+present; it does not archive, mark read, or remove the label.
 
 ## Before you start
 
@@ -34,20 +35,21 @@ already in the inbox. Save the filter.
 The filter only applies the label. It does not forward mail elsewhere or
 change read or archive state.
 
-## 3. Pull the label into Bob
+## 3. Sync the label into Bob
 
-Preview what Bob will file, then pull it on the configured writer host:
+Preview what Bob will file, then sync it on the configured writer host:
 
 ```bash
-bob gmail pull -d
-bob gmail pull
+bob gmail sync -d
+bob gmail sync
 ```
 
-Each new thread is saved as a mail note and linked from `gmail_inbox.md` by
-default. Review the tasks there and route them as usual. Pulling again is
-idempotent; existing tasks are not duplicated. The Gmail label stays in
-place, so you can keep using it as a filing marker.
+Each new thread is saved as a mail note and linked from the area or project
+named by a routing label, or from `gmail_inbox.md` when none or an invalid
+one is present. Review the tasks there and route them as usual. Syncing
+again is idempotent; existing tasks are not duplicated. The Gmail label
+stays in place, so you can keep using it as a filing marker.
 
-Change `gmail.pull.inbox` or `gmail.pull.label` in the Gmail config when you
-want another task file or label. See [Bob Gmail](../gmail.md#pull) for the
+Change `gmail.sync.inbox` or `gmail.sync.label` in the Gmail config when you
+want another inbox file or label. See [Bob Gmail](../gmail.md#sync) for the
 full command and JSON contracts.

@@ -23,11 +23,11 @@ Commands:
   logout  Remove Bob's Gmail grant only; prints the Google revoke URL
   new     Create a local Gmail compose note
   peek    Preview Gmail thread metadata without saving it
-  pull    Save threads with the configured Gmail label as inbox tasks
   reply   Add a Reply section to a saved Gmail note
   save    Save or refresh Gmail threads as inert mail notes
   search  Search Gmail threads for a picker
   send    Preview and explicitly send a Gmail draft
+  sync    File labelled Gmail threads into area or project notes
   help    Print this message or the help of the given subcommand(s)
 
 Options:
@@ -65,8 +65,8 @@ Examples:
   bob gmail save ID -d        Preview a save without writing
   bob gmail link tasks.md     Swap Gmail URLs for labelled links
   bob gmail link -a -d        Preview a backfill of old URLs
-  bob gmail pull              Save threads labelled bob and file inbox tasks
-  bob gmail pull -d           Preview the label pull
+  bob gmail sync              File labelled threads into area or project notes
+  bob gmail sync -d           Preview the label sync
   bob gmail attach NOTE 1     Import the first listed attachment
   bob gmail draft NOTE        Create or update and preview a Gmail draft
   bob gmail login             Connect Gmail in one guided step

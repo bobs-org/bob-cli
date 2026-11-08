@@ -88,19 +88,9 @@ pub(crate) fn run(args: &SaveArgs) -> i32 {
     }
 }
 
-/// Run the normal save path and return its rendered structural plans. The
-/// Gmail label pull uses this boundary so every thread is saved by the same
-/// policy, writer gate, and transaction as an explicit `save` command.
-pub(crate) fn run_internal(
-    args: &SaveArgs,
-) -> Result<Vec<StagedSaveNote>, GmailError> {
-    run_inner(args)
-}
-
 /// Fetch and prepare one sync candidate without taking the vault lock or
 /// writing any files. Sync prepares every remote body and attachment before
 /// entering its one vault transaction.
-#[allow(dead_code)] // The command phase consumes this boundary.
 pub(crate) fn prepare_sync_candidate<R: GmailRead>(
     reader: &R,
     account: &str,

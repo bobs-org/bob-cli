@@ -183,10 +183,12 @@ impl GmailConfig {
         &self.never_save_labels
     }
 
+    #[cfg_attr(not(test), allow(dead_code))] // Older spelling; tests pin it.
     pub(crate) fn pull_inbox(&self) -> &str {
         &self.pull_inbox
     }
 
+    #[cfg_attr(not(test), allow(dead_code))] // Older spelling; tests pin it.
     pub(crate) fn pull_label(&self) -> Option<&str> {
         self.pull_label.as_deref()
     }

@@ -1517,7 +1517,7 @@ fn sync_config_errors_name_the_key() {
         env.write_config(&format!(
             "gmail:\n  account: {ACCOUNT}\n  sync:\n{config}"
         ));
-        let output = run_gmail(&env, &fake, &["pull", "-d", "-f", "json"]);
+        let output = run_gmail(&env, &fake, &["sync", "-d", "-f", "json"]);
         assert_eq!(output.status.code(), Some(2), "{config}");
         let doc = json_stdout(&output);
         assert!(

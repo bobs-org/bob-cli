@@ -443,7 +443,7 @@ fn document_shape() {
         entry.id == "gmail-attach" && entry.path == ["gmail", "attach"]
     }));
     assert!(catalog.entries.iter().any(|entry| {
-        entry.id == "gmail-pull" && entry.path == ["gmail", "pull"]
+        entry.id == "gmail-sync" && entry.path == ["gmail", "sync"]
     }));
     assert!(catalog.entries.iter().any(|entry| {
         entry.id == "gmail-save" && entry.path == ["gmail", "save"]

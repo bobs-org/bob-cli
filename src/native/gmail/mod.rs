@@ -1,4 +1,4 @@
-//! `bob gmail`: saved mail notes, Gmail links, label pull, and draft-first
+//! `bob gmail`: saved mail notes, Gmail links, label sync, and draft-first
 //! compose.
 //!
 //! Gmail stays the system of record. Reads go through the read-only gog
@@ -23,7 +23,6 @@ pub(crate) mod model;
 pub(crate) mod note;
 pub(crate) mod policy;
 pub(crate) mod prepare;
-mod pull;
 pub(crate) mod resolve;
 mod route;
 mod save;
@@ -44,8 +43,8 @@ pub(crate) use crate::native::google::GoogleError as GmailError;
 
 pub(crate) use cli::{
     AttachArgs, DoctorArgs, DraftArgs, LinkArgs, ListArgs, LoginArgs,
-    LogoutArgs, NewArgs, PeekArgs, PullArgs, ReplyArgs, SaveArgs, SearchArgs,
-    SendArgs, TopArgs,
+    LogoutArgs, NewArgs, PeekArgs, ReplyArgs, SaveArgs, SearchArgs, SendArgs,
+    SyncArgs, TopArgs,
 };
 
 const COMMAND_NAME: &str = "bob gmail";
@@ -102,9 +101,6 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         Some(("reply", sub_matches)) => {
             compose::run_reply(&ReplyArgs::from_matches(sub_matches))
         }
-        Some(("pull", sub_matches)) => {
-            pull::run(&PullArgs::from_matches(sub_matches))
-        }
         Some(("save", sub_matches)) => {
             save::run(&SaveArgs::from_matches(sub_matches))
         }
@@ -113,6 +109,9 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         }
         Some(("send", sub_matches)) => {
             compose::run_send(&SendArgs::from_matches(sub_matches))
+        }
+        Some(("sync", sub_matches)) => {
+            sync::run(&SyncArgs::from_matches(sub_matches))
         }
         Some((name, _)) => {
             eprintln!("{COMMAND_NAME}: unknown subcommand: {name}");

@@ -268,11 +268,11 @@ breaks other config loaders. `BOB_GCAL_GOG` replaces `gog` on `PATH`. See the
 | `gmail.writer` | Hostname slug | Unset (this host may write) | The one host label allowed to write; `doctor` compares it to vault-sync's hostname slug. |
 | `gmail.body` | `full` or `headers` | `full` | `save` keeps full bodies or headers plus snippet; `doctor` reports the mode. |
 | `gmail.folder` | Nonempty string | `mail` | Vault folder for mail notes. |
-| `gmail.link_label` | String containing `{subject}` | `✉️ {subject} · {who}` | Link label template used by save and pull. |
+| `gmail.link_label` | String containing `{subject}` | `✉️ {subject} · {who}` | Link label template used by save and sync. |
 | `gmail.never_save.from` | Sequence of strings | `[]` | Addresses or `@domains` that `save` refuses. |
 | `gmail.never_save.labels` | Sequence of strings | `[]` | Gmail label names that `save` refuses. |
-| `gmail.pull.inbox` | Safe relative path inside the vault | `gmail_inbox.md` | Task file receiving one linked task per newly pulled thread. Older spelling of `gmail.sync.inbox`. |
-| `gmail.pull.label` | String or unset | `bob` | Gmail label searched by `pull`; unset or empty disables pull. Older spelling of `gmail.sync.label`. |
+| `gmail.pull.inbox` | Safe relative path inside the vault | `gmail_inbox.md` | Older spelling of `gmail.sync.inbox`. |
+| `gmail.pull.label` | String or unset | `bob` | Older spelling of `gmail.sync.label`; unset or empty disables sync. |
 | `gmail.signature` | `gmail` or `none` | `gmail` | Include the account's Gmail signature in remote Gmail drafts, or omit it. The stored-draft preview includes the resulting body. |
 | `gmail.sync.inbox` | Safe relative path inside the vault | `gmail.pull.inbox`, then `gmail_inbox.md` | Task file for unrouted threads and route problems. |
 | `gmail.sync.label` | String or unset | `gmail.pull.label`, then `bob` | Enrollment label; an empty string disables sync. |

@@ -772,7 +772,7 @@ fn load_destinations(
                 (Some(text.clone()), text)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                if destination.relative == PathBuf::from(inbox) {
+                if destination.relative.as_path() == Path::new(inbox) {
                     (None, inbox_template())
                 } else {
                     return Err(GmailError::runtime(
@@ -967,12 +967,11 @@ fn commit_paths(
         {
             for (saved, _, _) in &event_facts.origins {
                 let relative = save::safe_relative_path(saved)?;
-                if is_worktree {
-                    if save::git_path_is_dirty(vault, child_env, &relative)
+                if is_worktree
+                    && save::git_path_is_dirty(vault, child_env, &relative)
                         .map_err(|error| GmailError::runtime("git", error))?
-                    {
-                        paths.push(relative);
-                    }
+                {
+                    paths.push(relative);
                 }
             }
         }

@@ -435,6 +435,24 @@ fn nested_subcommands_complete() {
 }
 
 #[test]
+fn gmail_nested_subcommands_complete() {
+    let output = complete(&["bob", "gmail", ""]);
+    assert_success(&output);
+    let names = values(&output);
+    for subcommand in ["doctor", "list", "login", "sync"] {
+        assert!(
+            names.contains(&subcommand.to_string()),
+            "missing {subcommand}: {names:?}"
+        );
+    }
+    assert!(
+        !names.iter().any(|name| name == "pull"),
+        "hidden pull alias leaked: {names:?}"
+    );
+    assert!(!names.iter().any(|name| name.starts_with('-')));
+}
+
+#[test]
 fn hidden_aliases_stay_hidden() {
     let output = complete(&["bob", "mark-"]);
     assert_success(&output);

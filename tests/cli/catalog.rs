@@ -61,8 +61,8 @@ fn protocol_1_parses_with_schema_version_one() {
             && entry["policy"] == "preview-first"
     }));
     assert!(entries.iter().any(|entry| {
-        entry["id"] == "gmail-pull"
-            && entry["path"] == serde_json::json!(["gmail", "pull"])
+        entry["id"] == "gmail-sync"
+            && entry["path"] == serde_json::json!(["gmail", "sync"])
             && entry["effect"] == "writes"
             && entry["network"] == true
             && entry["policy"] == "preview-first"

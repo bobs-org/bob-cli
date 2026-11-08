@@ -603,7 +603,7 @@ vault/
 ├── inbox.md                 # triage root (counts as an inbox file)
 ├── mac_inbox.md             # default capture target (area / inbox)
 ├── gkeep_inbox.md           # default bob gkeep pull target
-├── gmail_inbox.md           # default bob gmail pull target
+├── gmail_inbox.md           # default bob gmail sync inbox
 ├── work.md                  # area note; @work
 ├── work_intake_flow.md      # project note from @work^intake-flow@
 ├── 2026/20261020.md         # daily note / Pomodoro ledger
@@ -639,7 +639,7 @@ vault/
 | `mac_inbox.md` | Created on first default capture | `@route`, `@@route`, `--route` |
 | `ref/`, `lib/`, `xlib/` | Needed for the reference library | `bob ref` configuration |
 | `gkeep_inbox.md` | Needed for Keep drain | `gkeep.target` |
-| `mail/`, `gmail_inbox.md` | Created by Gmail save/compose and label pull | `gmail.folder`, `gmail.pull.inbox` |
+| `mail/`, `gmail_inbox.md` | Created by Gmail save/compose and label sync | `gmail.folder`, `gmail.sync.inbox` |
 | Period notes | Created by `bob periods ensure` | Fixed paths in the period tree |
 | `done/` | Created by archive | none |
 | `.obsidian/plugins/obsidian-tasks-plugin/data.json` | Needed for Dataview Tasks and Blocked writes | none |

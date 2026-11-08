@@ -1046,7 +1046,8 @@ if op == "thread_get":
     if scenario == "thread_mismatch":
         hex_id = "aaaaaaaaaaaaaaaa"
     # Bob's metadata reads are the thread gets without `--full`; real gog
-    # returns Gmail's full format either way.
+    # returns Gmail's full format either way. Include Label_1 so sync can
+    # route from the same per-message labelIds as the `--full` payload.
     if "--full" not in args:
         if scenario in {"metadata_malformed", "malformed_json"}:
             sys.stdout.write("{malformed JSON\n")
@@ -1061,7 +1062,7 @@ if op == "thread_get":
                 {
                     "id": f"{index + 1:016x}",
                     "threadId": hex_id,
-                    "labelIds": ["INBOX"],
+                    "labelIds": ["INBOX", "Label_1"],
                     "internalDate": str(1793908800000 + index * 60000),
                     "snippet": snippet if index == message_count - 1 else "Earlier message",
                     "payload": {

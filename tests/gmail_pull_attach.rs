@@ -1,5 +1,5 @@
-//! Gmail label pull and on-demand attachment import stay on the fake gog
-//! transport and an isolated vault.
+//! On-demand Gmail attachment import stays on the fake gog transport and
+//! an isolated vault. Label filing lives in `gmail_sync.rs`.
 
 mod gmail_support;
 
@@ -18,82 +18,6 @@ fn assert_success(output: &std::process::Output, label: &str) {
         stdout(output),
         stderr(output)
     );
-}
-
-#[test]
-fn pull_creates_an_inbox_and_is_idempotent_by_thread_id() {
-    let env = GmailEnv::new("bob-cli-gmail-pull");
-    let fake = FakeGog::new(&env, "gog").scenario("gmail_pull_one");
-
-    let first = run_gmail(&env, &fake, &["pull", "-f", "json"]);
-    assert_success(&first, "first pull");
-    let first_json = json_stdout(&first);
-    assert_eq!(first_json["schema_version"], 1);
-    assert_eq!(first_json["pulled"], 1);
-    assert_eq!(first_json["results"][0]["status"], "filed");
-    assert!(fake.called_with(&["label:bob"]));
-
-    let inbox = fs::read_to_string(env.vault().join("gmail_inbox.md"))
-        .expect("pull creates the configured inbox");
-    assert!(inbox.contains("parent: \"[[inbox]]\""));
-    assert!(inbox.contains("type: \"[[area]]\""));
-    assert!(inbox.contains("ready_cap: off"));
-    assert!(inbox.contains("## Tasks"));
-    assert!(inbox.contains("- [ ] #task [[mail/"));
-    assert!(inbox.contains("✉️ Pull sample · Ada"));
-    assert!(!inbox.contains("[fresh::"));
-
-    let second = run_gmail(&env, &fake, &["pull", "-f", "json"]);
-    assert_success(&second, "second pull");
-    let second_json = json_stdout(&second);
-    assert_eq!(second_json["pulled"], 0);
-    assert_eq!(second_json["results"][0]["status"], "already_pulled");
-    let inbox_after = fs::read_to_string(env.vault().join("gmail_inbox.md"))
-        .expect("inbox remains readable");
-    assert_eq!(
-        inbox_after.matches("- [ ] #task [[mail/").count(),
-        1,
-        "a repeated pull must not duplicate the task"
-    );
-}
-
-#[test]
-fn pull_dry_run_reads_but_writes_nothing() {
-    let env = GmailEnv::new("bob-cli-gmail-pull-dry-run");
-    let fake = FakeGog::new(&env, "gog").scenario("gmail_pull_one");
-
-    let output = run_gmail(&env, &fake, &["pull", "-d", "-f", "json"]);
-    assert_success(&output, "dry-run pull");
-    let value = json_stdout(&output);
-    assert_eq!(value["dry_run"], true);
-    assert_eq!(value["results"][0]["status"], "would_file");
-    assert!(!env.vault().join("gmail_inbox.md").exists());
-    assert!(!env.vault().join("mail").exists());
-    assert!(!env.vault().join(".bob/gmail").exists());
-}
-
-#[test]
-fn pull_refuses_a_non_writer_and_a_disabled_label() {
-    let env = GmailEnv::new("bob-cli-gmail-pull-writer");
-    env.write_config(&format!(
-        "gmail:\n  account: {}\n  writer: someone-else\n",
-        gmail_support::ACCOUNT
-    ));
-    let fake = FakeGog::new(&env, "gog").scenario("gmail_pull_one");
-    let writer = run_gmail(&env, &fake, &["pull", "-f", "json"]);
-    assert_eq!(writer.status.code(), Some(2));
-    let writer_json: Value = serde_json::from_slice(&writer.stdout).unwrap();
-    assert_eq!(writer_json["error"]["kind"], "writer");
-    assert!(!fake.called_with(&["gmail", "search"]));
-
-    env.write_config(&format!(
-        "gmail:\n  account: {}\n  pull:\n    label: ''\n",
-        gmail_support::ACCOUNT
-    ));
-    let disabled = run_gmail(&env, &fake, &["pull", "-f", "json"]);
-    assert_eq!(disabled.status.code(), Some(2));
-    let value: Value = serde_json::from_slice(&disabled.stdout).unwrap();
-    assert_eq!(value["error"]["kind"], "pull_disabled");
 }
 
 #[test]

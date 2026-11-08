@@ -16,20 +16,24 @@
 //! - [`guard`] holds the host-local per-account file guard for a live run.
 //! - [`retry`] shares one `-r` budget across guard, retry, and vault-lock
 //!   waits with pacing and bounded backoff.
+//! - [`command`] is `bob gmail sync` (hidden `pull` alias) and [`report`]
+//!   prints its human and JSON documents.
 //!
 //! Consumers (discovery, filing, the report, and the later watch loop) use
 //! these structs directly; none of them parses a rendered report. Scanning
 //! and deciding never write: the apply step owns durability and appends
 //! enrollment events only after the vault writes they describe are durable.
 
+pub(crate) mod command;
 pub(crate) mod discover;
 pub(crate) mod enroll;
-// The following CLI phase wires this transaction boundary into `gmail sync`.
-#[allow(dead_code)]
 pub(crate) mod file;
 pub(crate) mod guard;
+pub(crate) mod report;
 pub(crate) mod retry;
 pub(crate) mod scan;
+
+pub(crate) use command::run;
 
 /// One Gmail conversation's identity: the lowercase account plus the
 /// lowercase hex thread id. Every map keyed by thread in sync uses this

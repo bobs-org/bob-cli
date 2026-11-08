@@ -1145,10 +1145,13 @@ pub(crate) const ENTRIES: &[Row] = &[
         network: true,
         invalidates: &["tasks"],
         ..writes(
-            "gmail-pull",
-            &["gmail", "pull"],
-            "Pull Gmail label",
-            &["gmail", "google", "mail", "label", "pull", "inbox", "tasks"],
+            "gmail-sync",
+            &["gmail", "sync"],
+            "Sync Gmail label",
+            &[
+                "gmail", "google", "mail", "label", "pull", "sync", "inbox",
+                "tasks",
+            ],
             Policy::PreviewFirst,
             Some(DRY_RUN),
             180,
