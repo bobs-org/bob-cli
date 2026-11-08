@@ -415,6 +415,39 @@ fn display_metadata(
     ))
 }
 
+/// Observation-only preparation for send finalization. The sent-note write
+/// owns the mail note; siblings are fetched only so multi-thread aggregation
+/// can see them. Neither refresh nor turn-field updates are produced.
+pub(crate) fn observation_only(
+    key: ThreadKey,
+    thread: &GmailThread,
+    account: &str,
+    journal: &WatchJournal,
+    index: &MailIndex,
+) -> PreparedWatch {
+    let marker = journal.marker(&key).map(|marker| turn::Marker {
+        message_id: &marker.message_id,
+        internal_date: marker.internal_date,
+    });
+    let folded = turn::fold(&thread.messages, account, marker);
+    let entry = index.by_identity.get(&key.index_key());
+    let display = display_metadata(thread, account);
+    PreparedWatch {
+        observation: ThreadObservation { key, folded },
+        note_path: entry.map(|entry| entry.path.clone()),
+        title: entry
+            .map(|entry| entry.title.clone())
+            .or_else(|| display.as_ref().map(|value| value.0.clone())),
+        who: entry
+            .map(|entry| entry.who.clone())
+            .or_else(|| display.as_ref().map(|value| value.1.clone())),
+        refresh: None,
+        turn_update: None,
+        report_gone: false,
+        refresh_failure: None,
+    }
+}
+
 /// Aggregate one effect per task, independent of thread iteration order.
 /// Incoming moves and bounces win over outgoing moves; an outgoing move only
 /// holds the task when every watched sibling is known to be awaiting a reply.

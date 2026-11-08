@@ -625,6 +625,8 @@ pub(crate) fn begin_send(
         remote_fingerprint: Some(approved.remote_fingerprint.clone()),
         completed_note_digest: None,
         completed_commit_paths: Vec::new(),
+        completed_path_receipts: Vec::new(),
+        watch_turns: Vec::new(),
     };
     persist_send_state(
         vault,
@@ -1840,6 +1842,8 @@ mod tests {
             remote_fingerprint: Some(remote.clone()),
             completed_note_digest: None,
             completed_commit_paths: Vec::new(),
+            completed_path_receipts: Vec::new(),
+            watch_turns: Vec::new(),
         };
         state::persist_send_state(
             &vault,
@@ -1929,6 +1933,8 @@ mod tests {
             remote_fingerprint: Some(remote),
             completed_note_digest: None,
             completed_commit_paths: Vec::new(),
+            completed_path_receipts: Vec::new(),
+            watch_turns: Vec::new(),
         };
         state::persist_send_state(
             &vault,
@@ -2004,6 +2010,8 @@ mod tests {
             remote_fingerprint: Some(remote),
             completed_note_digest: None,
             completed_commit_paths: Vec::new(),
+            completed_path_receipts: Vec::new(),
+            watch_turns: Vec::new(),
         };
         state::persist_send_state(
             &vault,
@@ -2080,6 +2088,8 @@ mod tests {
             remote_fingerprint: Some(remote),
             completed_note_digest: None,
             completed_commit_paths: Vec::new(),
+            completed_path_receipts: Vec::new(),
+            watch_turns: Vec::new(),
         };
         state::persist_send_state(
             &vault,
@@ -2149,6 +2159,8 @@ mod tests {
             remote_fingerprint: Some(remote),
             completed_note_digest: None,
             completed_commit_paths: Vec::new(),
+            completed_path_receipts: Vec::new(),
+            watch_turns: Vec::new(),
         };
         state::persist_send_state(
             &vault,
@@ -2210,6 +2222,8 @@ mod tests {
             remote_fingerprint: Some(remote),
             completed_note_digest: None,
             completed_commit_paths: Vec::new(),
+            completed_path_receipts: Vec::new(),
+            watch_turns: Vec::new(),
         };
         state::persist_send_state(
             &vault,
@@ -2547,6 +2561,8 @@ mod tests {
             remote_fingerprint: Some(remote),
             completed_note_digest: None,
             completed_commit_paths: Vec::new(),
+            completed_path_receipts: Vec::new(),
+            watch_turns: Vec::new(),
         };
         state::persist_send_state(
             &vault,

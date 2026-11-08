@@ -25,6 +25,7 @@ pub(super) mod draft;
 pub(crate) mod finalize;
 pub(crate) mod render;
 pub(crate) mod send;
+mod send_watch;
 pub(crate) mod source;
 pub(crate) mod state;
 

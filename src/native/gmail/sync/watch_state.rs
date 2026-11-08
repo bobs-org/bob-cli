@@ -39,7 +39,7 @@ impl AppliedEffect {
         }
     }
 
-    fn parse(value: &str) -> Option<Self> {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
             "hold" => Some(Self::Hold),
             "lift" => Some(Self::Lift),

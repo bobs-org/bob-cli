@@ -778,9 +778,6 @@ pub(crate) fn plan_watch_edits(input: WatchPlanInput<'_>) -> WatchPlan {
 }
 
 /// Non-locking planner for send finalization.
-// Consumed by bob-cli-ii.4.1.5's send hook while it holds the maintenance
-// lock; allow dead code until that phase lands its caller.
-#[allow(dead_code)]
 pub(crate) fn plan_for_send(
     vault: &Path,
     timezone: chrono_tz::Tz,

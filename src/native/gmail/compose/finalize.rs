@@ -17,9 +17,11 @@ use super::super::{
     prepare,
     resolve::{self, ResolvedIdentity},
     save::{self, PreparedSave},
+    sync::ThreadKey,
     GmailError,
 };
 use super::{
+    send_watch,
     source::{self, ComposeKind},
     state::{self, SendStage, SendState},
 };
@@ -108,6 +110,13 @@ pub(crate) fn finalize(
     let folder = Path::new(config.folder());
     save::validate_mail_folder(vault, folder)?;
     super::validate_target(vault, relative, true)?;
+
+    // Sibling metadata for multi-thread aggregation finishes before the
+    // lock. Local watch planning below rechecks membership and never
+    // fetches Gmail again.
+    let siblings = ThreadKey::new(&state.account, &state.thread_id)
+        .map(|key| send_watch::fetch_siblings(vault, config, gog, &key))
+        .unwrap_or_default();
 
     // TTY/network work is complete. The maintenance lock protects the exact
     // source snapshot, image destinations, staged note write, and commit.
@@ -242,6 +251,16 @@ pub(crate) fn finalize(
         save::newly_referenced_origins(&work.prepared.origins, Some(&original));
     let created_images = save::install_imports(vault, imports)?;
 
+    let watch_plan = send_watch::plan_under_lock(
+        vault,
+        config,
+        &state.account,
+        &state.thread_id,
+        &work.confirmed.thread,
+        &siblings,
+        relative,
+    );
+
     let commit_paths = (|| -> Result<BTreeSet<PathBuf>, GmailError> {
         let mut paths = BTreeSet::<PathBuf>::new();
         paths.insert(relative.to_path_buf());
@@ -267,6 +286,10 @@ pub(crate) fn finalize(
                 paths.insert(image);
             }
         }
+        for extra in &watch_plan.extra_paths {
+            super::validate_target(vault, extra, true)?;
+            paths.insert(extra.clone());
+        }
         Ok(paths)
     })();
     let commit_paths = match commit_paths {
@@ -288,6 +311,8 @@ pub(crate) fn finalize(
         .iter()
         .map(|path| save::path_to_slashes(path))
         .collect();
+    completed.completed_path_receipts = watch_plan.receipts.clone();
+    completed.watch_turns = watch_plan.turns.clone();
     let updated = match state::patch_send_state(&updated, Some(&completed)) {
         Ok(updated) => updated,
         Err(error) => {
@@ -296,13 +321,14 @@ pub(crate) fn finalize(
         }
     };
 
-    let staged = StagedTextFile {
+    let mut staged = vec![StagedTextFile {
         target: note_path.clone(),
         target_existed: true,
         original_target: original.clone(),
         updated_target: updated,
-    };
-    let write_result = capture::write_staged_files(&[staged]);
+    }];
+    staged.extend(watch_plan.staged);
+    let write_result = capture::write_staged_files(&staged);
     if let Err(error) = write_result {
         save::cleanup_created_images(vault, &created_images);
         return Err(GmailError::runtime(
@@ -330,6 +356,10 @@ pub(crate) fn finalize(
             .with_hint("rerun `bob gmail send NOTE` to finish local finalization")
         })?;
     }
+
+    // Markers follow durable note/task writes and the scoped commit. A
+    // running deferral leaves this list empty so the next sync holds.
+    send_watch::append_turns(vault, &completed.watch_turns)?;
 
     // Attachment-origin logging is ancillary to the durable mail note. The
     // sent event below remains the authoritative idempotent completion record.
@@ -375,56 +405,78 @@ pub(crate) fn reconcile_complete(
         .as_deref()
         .zip(state::content_digest(&contents).ok().as_deref())
         .is_some_and(|(expected, actual)| expected == actual);
-    if digest_matches {
-        let child_env = ob::child_env();
-        let is_worktree =
-            ob::detect_git_worktree(vault, &child_env).map_err(|error| {
-                GmailError::runtime(
-                    "git",
-                    format!("could not inspect the vault repository: {error}"),
-                )
-            })?;
-        if is_worktree {
-            let completed = current.as_ref().ok_or_else(|| {
-                GmailError::runtime(
-                    "send_state_invalid",
-                    "the completed send state is missing".to_string(),
-                )
-            })?;
-            let mut commit_paths = Vec::new();
-            for path in &completed.completed_commit_paths {
-                let path = PathBuf::from(path);
-                if save::git_path_is_dirty(vault, &child_env, &path)
-                    .map_err(|error| {
-                        GmailError::runtime(
-                            "git",
-                            format!(
-                                "could not inspect a completed send path: {error}"
-                            ),
-                        )
-                    })?
-                {
-                    commit_paths.push(path);
-                }
-            }
-            if !commit_paths.is_empty() {
-                ob::commit_paths(
-                    vault,
-                    &child_env,
-                    "gmail: complete sent note",
-                    &commit_paths,
-                )
-                .map_err(|error| {
+    let completed = current.as_ref().ok_or_else(|| {
+        GmailError::runtime(
+            "send_state_invalid",
+            "the completed send state is missing".to_string(),
+        )
+    })?;
+    let child_env = ob::child_env();
+    let is_worktree =
+        ob::detect_git_worktree(vault, &child_env).map_err(|error| {
+            GmailError::runtime(
+                "git",
+                format!("could not inspect the vault repository: {error}"),
+            )
+        })?;
+    if is_worktree {
+        let mut commit_paths = Vec::new();
+        for path in &completed.completed_commit_paths {
+            let relative = PathBuf::from(path);
+            if !save::git_path_is_dirty(vault, &child_env, &relative).map_err(
+                |error| {
                     GmailError::runtime(
-                        "uncommitted",
+                        "git",
                         format!(
-                            "the completed sent note could not be committed: {error}"
+                            "could not inspect a completed send path: {error}"
                         ),
                     )
-                })?;
+                },
+            )? {
+                continue;
+            }
+            let is_note = path == &note_relative;
+            let include = if is_note {
+                digest_matches
+            } else if send_watch::receipt_matches(
+                vault,
+                &completed.completed_path_receipts,
+                path,
+            ) {
+                true
+            } else if completed
+                .completed_path_receipts
+                .iter()
+                .any(|receipt| receipt.path == *path)
+            {
+                // The task (or other extra path) changed after send wrote
+                // it; leave the later edit uncommitted.
+                false
+            } else {
+                digest_matches
+            };
+            if include {
+                commit_paths.push(relative);
             }
         }
+        if !commit_paths.is_empty() {
+            ob::commit_paths(
+                vault,
+                &child_env,
+                "gmail: complete sent note",
+                &commit_paths,
+            )
+            .map_err(|error| {
+                GmailError::runtime(
+                    "uncommitted",
+                    format!(
+                        "the completed sent note could not be committed: {error}"
+                    ),
+                )
+            })?;
+        }
     }
+    send_watch::append_turns(vault, &completed.watch_turns)?;
     state::ensure_sent_event(vault, state)
 }
 

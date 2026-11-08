@@ -2,12 +2,13 @@
 
 mod gmail_support;
 
-use std::{fs, process::Output};
+use std::{fs, path::Path, process::Output};
 
 use gmail_support::{
     json_stdout, run_gmail, run_gmail_stdin, stderr, stdout, FakeGog, GmailEnv,
+    ACCOUNT, HOST,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 
 fn assert_success(output: &Output, label: &str) {
     assert_eq!(
@@ -356,4 +357,404 @@ fn html_only_and_remote_draft_edits_invalidate_confirmation() {
     assert!(fs::read_to_string(&note_path)
         .unwrap()
         .contains("status: draft"));
+}
+
+const WATCH_THREAD: &str = "0123456789abcdef";
+const SIBLING_THREAD: &str = "fedcba9876543210";
+
+fn write_watch_config(env: &GmailEnv) {
+    env.write_config(&format!(
+        "timezone: America/New_York\ngmail:\n  account: {ACCOUNT}\n  writer: {HOST}\n  sync:\n    reply_wait_days: 1\n"
+    ));
+}
+
+fn write_blocked_task_settings(env: &GmailEnv) {
+    let path = env
+        .vault()
+        .join(".obsidian/plugins/obsidian-tasks-plugin/data.json");
+    fs::create_dir_all(path.parent().unwrap())
+        .expect("create Tasks settings dir");
+    fs::write(
+        path,
+        serde_json::to_vec(&json!({
+            "globalFilter": "#task",
+            "taskFormat": "dataview",
+            "statusSettings": {
+                "coreStatuses": [
+                    {"symbol": " ", "name": "Ready", "type": "TODO"},
+                    {"symbol": "x", "name": "Done", "type": "DONE"}
+                ],
+                "customStatuses": [
+                    {"symbol": "*", "name": "Next", "nextStatusSymbol": "x", "availableAsCommand": true, "type": "ON_HOLD"},
+                    {"symbol": "/", "name": "In Progress", "nextStatusSymbol": "x", "availableAsCommand": true, "type": "IN_PROGRESS"},
+                    {"symbol": "?", "name": "Blocked", "nextStatusSymbol": " ", "availableAsCommand": true, "type": "ON_HOLD"},
+                    {"symbol": "-", "name": "Canceled", "nextStatusSymbol": " ", "availableAsCommand": true, "type": "CANCELLED"}
+                ]
+            }
+        }))
+        .expect("serialize Tasks settings"),
+    )
+    .expect("write Tasks settings");
+}
+
+fn watch_message(
+    thread_id: &str,
+    id: &str,
+    internal_date: i64,
+    from: &str,
+    to: &str,
+    labels: &[&str],
+) -> Value {
+    json!({
+        "id": id,
+        "threadId": thread_id,
+        "labelIds": labels,
+        "internalDate": internal_date.to_string(),
+        "payload": {
+            "mimeType": "text/plain",
+            "headers": [
+                {"name": "From", "value": from},
+                {"name": "To", "value": to},
+                {"name": "Subject", "value": "Re: Watch contract"},
+                {"name": "Message-ID", "value": format!("<{id}@example.test>")}
+            ],
+            "body": {"size": 5, "data": "SGVsbG8="}
+        }
+    })
+}
+
+fn inbound_thread(thread_id: &str, message_id: &str) -> Value {
+    json!({
+        "thread": {
+            "id": thread_id,
+            "historyId": "7",
+            "messages": [watch_message(
+                thread_id,
+                message_id,
+                1_793_786_400_000,
+                "Dana <dana@example.test>",
+                ACCOUNT,
+                &["INBOX"],
+            )]
+        }
+    })
+}
+
+fn enroll_thread(env: &GmailEnv, thread_id: &str, note: &str, task_file: &str) {
+    let journal = env.vault().join(format!(".bob/gmail/{HOST}.jsonl"));
+    fs::create_dir_all(journal.parent().unwrap()).expect("journal directory");
+    let mut existing = fs::read_to_string(&journal).unwrap_or_default();
+    existing.push_str(
+        &json!({
+            "v": 1,
+            "ts": "2026-11-05T12:00:00-05:00",
+            "host": HOST,
+            "kind": "gmail.adopted",
+            "value": {
+                "account": ACCOUNT,
+                "thread_id": thread_id,
+                "note": note,
+                "task_file": task_file
+            }
+        })
+        .to_string(),
+    );
+    existing.push('\n');
+    fs::write(journal, existing).expect("write enrollment");
+}
+
+fn journal_kinds(env: &GmailEnv, kind: &str) -> Vec<Value> {
+    let path = env.vault().join(format!(".bob/gmail/{HOST}.jsonl"));
+    fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|event| event["kind"] == kind)
+        .collect()
+}
+
+fn first_task_line(path: &Path) -> String {
+    fs::read_to_string(path)
+        .expect("read task note")
+        .lines()
+        .find(|line| line.contains("#task") && line.contains("[[mail/"))
+        .expect("mail task row")
+        .to_string()
+}
+
+fn write_task_row(env: &GmailEnv, task_file: &str, line: &str) {
+    let path = env.vault().join(task_file);
+    fs::create_dir_all(path.parent().unwrap()).expect("task dir");
+    fs::write(
+        path,
+        format!(
+            "---\ntype: \"[[area]]\"\n---\n\n# Mail\n\n## Tasks\n\n{line}\n"
+        ),
+    )
+    .expect("write task note");
+}
+
+fn save_thread(
+    env: &GmailEnv,
+    fake: &FakeGog,
+    thread_id: &str,
+) -> (String, String) {
+    let saved = run_gmail(env, fake, &["save", thread_id, "-f", "json"]);
+    assert_success(&saved, "save mail note");
+    let doc = json_stdout(&saved);
+    (
+        doc["note"].as_str().expect("saved note path").to_string(),
+        doc["link"].as_str().expect("saved note link").to_string(),
+    )
+}
+
+fn send_confirmed_reply(env: &GmailEnv, fake: &FakeGog, note: &str) -> Value {
+    let reply = run_gmail(env, fake, &["reply", note, "-f", "json"]);
+    assert_success(&reply, "append reply");
+    let note_path = env.vault().join(note);
+    fs::write(
+        &note_path,
+        format!("{}Thanks.\n", fs::read_to_string(&note_path).unwrap()),
+    )
+    .unwrap();
+    let preview = run_gmail(env, fake, &["send", note, "-d", "-f", "json"]);
+    assert_success(&preview, "preview send");
+    let digest = json_stdout(&preview)["digest"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let sent =
+        run_gmail(env, fake, &["send", note, "-c", &digest, "-f", "json"]);
+    assert_success(&sent, "confirmed send");
+    json_stdout(&sent)
+}
+
+fn setup_watched_send(prefix: &str) -> (GmailEnv, FakeGog, String, String) {
+    let env = GmailEnv::new(prefix);
+    write_watch_config(&env);
+    write_blocked_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("compose_grant");
+    fake.set_thread(
+        inbound_thread(WATCH_THREAD, "00000000000000a0"),
+        json!({}),
+    );
+    let (note, link) = save_thread(&env, &fake, WATCH_THREAD);
+    write_task_row(
+        &env,
+        "gmail_inbox.md",
+        &format!("- [ ] #task Watch mail {link} [fresh:: 2026-11-04] ^watch1"),
+    );
+    enroll_thread(&env, WATCH_THREAD, &note, "gmail_inbox.md");
+    (env, fake, note, link)
+}
+
+#[test]
+fn confirmed_send_holds_an_enrolled_watched_task() {
+    let (env, fake, note, _) =
+        setup_watched_send("bob-cli-gmail-send-watch-hold");
+    let sent = send_confirmed_reply(&env, &fake, &note);
+    assert_eq!(sent["status"], "sent");
+    let held = first_task_line(&env.vault().join("gmail_inbox.md"));
+    assert!(held.starts_with("- [?] #task #awaiting_reply"), "{held}");
+    assert!(held.contains("[scheduled::"), "{held}");
+    let turns = journal_kinds(&env, "gmail.turn");
+    assert_eq!(turns.len(), 1, "{turns:?}");
+    assert_eq!(turns[0]["value"]["thread_id"], WATCH_THREAD);
+    assert_eq!(turns[0]["value"]["effect"], "hold");
+    assert_eq!(calls_for(&fake, "send").len(), 1);
+
+    let poll = run_gmail(&env, &fake, &["sync", "-l", "0", "-f", "json"]);
+    assert_success(&poll, "subsequent poll after send hold");
+    let poll_doc = json_stdout(&poll);
+    assert!(
+        poll_doc["watch"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .all(|row| row["action"] == "unchanged"),
+        "send-consumed turn must not reapply on poll: {poll_doc}"
+    );
+    assert_eq!(
+        first_task_line(&env.vault().join("gmail_inbox.md")),
+        held,
+        "poll must not rewrite the send hold"
+    );
+}
+
+#[test]
+fn confirmed_send_holds_every_watcher_of_the_thread() {
+    let (env, fake, note, link) =
+        setup_watched_send("bob-cli-gmail-send-watch-many");
+    write_task_row(
+        &env,
+        "job.md",
+        &format!(
+            "- [ ] #task Second watcher {link} [fresh:: 2026-11-04] ^watch2"
+        ),
+    );
+    enroll_thread(&env, WATCH_THREAD, &note, "job.md");
+    send_confirmed_reply(&env, &fake, &note);
+    for path in ["gmail_inbox.md", "job.md"] {
+        let line = first_task_line(&env.vault().join(path));
+        assert!(
+            line.contains("#awaiting_reply"),
+            "{path} was not held: {line}"
+        );
+    }
+}
+
+#[test]
+fn unwatched_send_does_not_hold_or_mark_a_turn() {
+    let env = GmailEnv::new("bob-cli-gmail-send-unwatched");
+    write_watch_config(&env);
+    write_blocked_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("compose_grant");
+    let note = "mail/2026/lease.md";
+    make_saved_thread(&env, &fake, note);
+    send_confirmed_reply(&env, &fake, note);
+    assert!(journal_kinds(&env, "gmail.turn").is_empty());
+    assert!(!env.vault().join("gmail_inbox.md").exists());
+}
+
+#[test]
+fn send_defers_a_running_hold_and_lets_sync_finish_it() {
+    let (env, fake, note, _) =
+        setup_watched_send("bob-cli-gmail-send-watch-running");
+    let daily = env.vault().join("2026/20261105.md");
+    fs::create_dir_all(daily.parent().unwrap()).expect("daily dir");
+    fs::write(
+        &daily,
+        "# Thursday 2026-11-05\n\n## Pomodoros\n- [ ] (**1200-1230** [t:: 30m]) Mail\n  - [[gmail_inbox#^watch1]]\n",
+    )
+    .expect("write running ledger");
+    send_confirmed_reply(&env, &fake, &note);
+    let line = first_task_line(&env.vault().join("gmail_inbox.md"));
+    assert!(
+        !line.contains("#awaiting_reply"),
+        "running session must defer the hold: {line}"
+    );
+    assert!(
+        journal_kinds(&env, "gmail.turn").is_empty(),
+        "deferred running hold must not mark the turn applied"
+    );
+    assert_eq!(calls_for(&fake, "send").len(), 1);
+
+    fs::write(&daily, "# Thursday 2026-11-05\n\n## Pomodoros\n")
+        .expect("close the running session");
+    let held = run_gmail(&env, &fake, &["sync", "-l", "0", "-f", "json"]);
+    assert_success(&held, "sync finishes the deferred hold");
+    let held_line = first_task_line(&env.vault().join("gmail_inbox.md"));
+    assert!(
+        held_line.contains("#awaiting_reply"),
+        "next sync must hold after the session closes: {held_line}"
+    );
+    assert_eq!(journal_kinds(&env, "gmail.turn").len(), 1);
+    assert_eq!(calls_for(&fake, "send").len(), 1);
+}
+
+#[test]
+fn send_does_not_hold_when_sibling_metadata_is_unavailable() {
+    let (env, fake, note, link) =
+        setup_watched_send("bob-cli-gmail-send-watch-sibling-fail");
+    fake.set_threads(json!({
+        SIBLING_THREAD: inbound_thread(SIBLING_THREAD, "00000000000000b0")
+    }));
+    let (sibling_note, sibling_link) = save_thread(&env, &fake, SIBLING_THREAD);
+    write_task_row(
+        &env,
+        "gmail_inbox.md",
+        &format!(
+            "- [ ] #task Watch mail {link} {sibling_link} [fresh:: 2026-11-04] ^watch1"
+        ),
+    );
+    enroll_thread(&env, SIBLING_THREAD, &sibling_note, "gmail_inbox.md");
+    fake.set_thread_fail(SIBLING_THREAD, "notFound: sibling missing", 1);
+    send_confirmed_reply(&env, &fake, &note);
+    let line = first_task_line(&env.vault().join("gmail_inbox.md"));
+    assert!(
+        !line.contains("#awaiting_reply"),
+        "unknown sibling must not claim every thread is waiting: {line}"
+    );
+    assert!(journal_kinds(&env, "gmail.turn").is_empty());
+    let finalized = fs::read_to_string(env.vault().join(&note)).unwrap();
+    assert!(finalized.contains("> [!mail-sent+] **You**"));
+}
+
+#[test]
+fn send_lifts_when_a_sibling_incoming_move_has_precedence() {
+    let (env, fake, note, link) =
+        setup_watched_send("bob-cli-gmail-send-watch-lift");
+    fake.set_threads(json!({
+        SIBLING_THREAD: inbound_thread(SIBLING_THREAD, "00000000000000b0")
+    }));
+    let (sibling_note, sibling_link) = save_thread(&env, &fake, SIBLING_THREAD);
+    write_task_row(
+        &env,
+        "gmail_inbox.md",
+        &format!(
+            "- [?] #task #awaiting_reply Watch mail {link} {sibling_link} [scheduled:: 2026-11-06] [fresh:: 2026-11-04] ^watch1"
+        ),
+    );
+    enroll_thread(&env, SIBLING_THREAD, &sibling_note, "gmail_inbox.md");
+    send_confirmed_reply(&env, &fake, &note);
+    let line = first_task_line(&env.vault().join("gmail_inbox.md"));
+    assert!(
+        !line.contains("#awaiting_reply"),
+        "incoming sibling must lift rather than hold: {line}"
+    );
+    assert!(!line.contains("[scheduled::"), "{line}");
+}
+
+#[test]
+fn complete_send_retries_watch_marker_without_a_second_gmail_send() {
+    let (env, fake, note, _) =
+        setup_watched_send("bob-cli-gmail-send-watch-retry");
+    send_confirmed_reply(&env, &fake, &note);
+    assert_eq!(calls_for(&fake, "send").len(), 1);
+    assert_eq!(journal_kinds(&env, "gmail.turn").len(), 1);
+
+    let journal_path = env.vault().join(format!(".bob/gmail/{HOST}.jsonl"));
+    let kept: String = fs::read_to_string(&journal_path)
+        .unwrap()
+        .lines()
+        .filter(|line| !line.contains("\"kind\":\"gmail.turn\""))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    fs::write(&journal_path, kept).expect("drop the watch marker");
+    let inbox = env.vault().join("gmail_inbox.md");
+    let held = first_task_line(&inbox);
+    let edited =
+        held.replace("[scheduled:: 2026-11-06]", "[scheduled:: 2026-11-09]");
+    let edited = if edited == held {
+        held.replace(
+            first_scheduled(&held).as_str(),
+            "[scheduled:: 2026-11-09]",
+        )
+    } else {
+        edited
+    };
+    fs::write(
+        &inbox,
+        fs::read_to_string(&inbox).unwrap().replace(&held, &edited),
+    )
+    .expect("edit the held task after the partial completion");
+
+    let repeat = run_gmail(&env, &fake, &["send", &note, "-f", "json"]);
+    assert_success(&repeat, "retry completed send");
+    assert_eq!(json_stdout(&repeat)["status"], "already_sent");
+    assert_eq!(calls_for(&fake, "send").len(), 1);
+    assert_eq!(journal_kinds(&env, "gmail.turn").len(), 1);
+    let retried = first_task_line(&inbox);
+    assert!(
+        retried.contains("[scheduled:: 2026-11-09]"),
+        "retry must preserve the later task edit: {retried}"
+    );
+    assert_eq!(retried.matches("#awaiting_reply").count(), 1, "{retried}");
+}
+
+fn first_scheduled(line: &str) -> String {
+    let start = line.find("[scheduled:: ").expect("scheduled field");
+    let rest = &line[start..];
+    let end = rest.find(']').expect("scheduled close");
+    rest[..=end].to_string()
 }

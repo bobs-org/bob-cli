@@ -1018,8 +1018,13 @@ if op == "draft_send":
     if state.get("thread"):
         thread_envelope = state["thread"]
         thread = thread_envelope.get("thread") or thread_envelope
-        if thread.get("id") == thread_id:
+        if str(thread.get("id") or "").lower() == str(thread_id).lower():
             thread.setdefault("messages", []).append(message)
+    per_threads = state.get("threads") or {}
+    if thread_id in per_threads:
+        envelope = per_threads[thread_id]
+        thread = envelope.get("thread") or envelope
+        thread.setdefault("messages", []).append(message)
     del drafts[draft_id]
     save_state(state)
     dump({"message": {"id": sent_id, "threadId": thread_id}})
@@ -1279,14 +1284,12 @@ if op == "api_call":
 
 if op == "thread_get":
     state = load_state()
-    if "thread" in state:
-        dump(state["thread"])
-        raise SystemExit(0)
     hex_id = pos[3] if len(pos) > 3 else "1a0b9eb2cc26ab96"
     # Per-thread outcomes: state["threads"] maps a thread id to its envelope
     # (with per-message labelIds for routing), state["thread_fail"] maps an
     # id to a permanent failure, and state["thread_fail_remaining"] maps an
-    # id to a transient failure that succeeds after N attempts.
+    # id to a transient failure that succeeds after N attempts. The single
+    # `thread` slot is used only when its id matches the requested thread.
     if "--full" in args:
         full_fail = (state.get("thread_full_fail") or {}).get(hex_id)
         if isinstance(full_fail, dict):
@@ -1309,6 +1312,13 @@ if op == "thread_get":
     if hex_id in per_threads:
         dump(per_threads[hex_id])
         raise SystemExit(0)
+    if "thread" in state:
+        envelope = state["thread"]
+        stored = envelope.get("thread") or envelope
+        stored_id = str(stored.get("id") or "")
+        if not stored_id or stored_id.lower() == hex_id.lower():
+            dump(envelope)
+            raise SystemExit(0)
     sent_threads = state.get("sent_threads") or {}
     if hex_id in sent_threads:
         entry = sent_threads[hex_id]

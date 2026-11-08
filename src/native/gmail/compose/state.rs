@@ -75,6 +75,32 @@ pub(crate) struct SendState {
     /// Exact vault-relative paths included in the completion commit. This
     /// lets an interrupted commit resume without staging unrelated changes.
     pub(crate) completed_commit_paths: Vec<String>,
+    /// SHA-256 of each extra completed path (task files) as send wrote it.
+    /// Recovery commits a path only while those bytes still match, so a
+    /// later task edit is never swept into this operation's retry.
+    pub(crate) completed_path_receipts: Vec<PathReceipt>,
+    /// Body-free watch turns still needing a journal append after the
+    /// scoped commit. Replay is idempotent against the folded marker.
+    pub(crate) watch_turns: Vec<SendWatchTurn>,
+}
+
+/// One extra path send wrote, with the SHA-256 of those exact bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PathReceipt {
+    pub(crate) path: String,
+    pub(crate) sha256: String,
+}
+
+/// One consumed Gmail watch turn stored on the complete send state so a
+/// later local retry can append the marker without sending again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SendWatchTurn {
+    pub(crate) account: String,
+    pub(crate) thread_id: String,
+    pub(crate) message_id: String,
+    pub(crate) internal_date: i64,
+    pub(crate) turn: String,
+    pub(crate) effect: String,
 }
 
 /// Read the `gmail_send` object when present. Malformed state is a typed
@@ -157,6 +183,8 @@ pub(crate) fn load_send_state(
             .collect::<Result<Vec<_>, _>>()?,
         _ => return Err(SourceError::InvalidSendState),
     };
+    let completed_path_receipts = parse_path_receipts(mapping)?;
+    let watch_turns = parse_watch_turns(mapping)?;
 
     validate_hex_digest(&operation_id)?;
     validate_opaque_id(&account, true)?;
@@ -213,7 +241,9 @@ pub(crate) fn load_send_state(
     }
     if stage != SendStage::Complete
         && (completed_note_digest.is_some()
-            || !completed_commit_paths.is_empty())
+            || !completed_commit_paths.is_empty()
+            || !completed_path_receipts.is_empty()
+            || !watch_turns.is_empty())
     {
         return Err(SourceError::InvalidSendState);
     }
@@ -240,6 +270,8 @@ pub(crate) fn load_send_state(
         remote_fingerprint,
         completed_note_digest,
         completed_commit_paths,
+        completed_path_receipts,
+        watch_turns,
     }))
 }
 
@@ -366,7 +398,126 @@ fn render_send_block(state: &SendState, newline: &str) -> String {
             out.push_str(newline);
         }
     }
+    if !state.completed_path_receipts.is_empty() {
+        out.push_str("  completed_path_receipts:");
+        out.push_str(newline);
+        for receipt in &state.completed_path_receipts {
+            out.push_str("    - path: ");
+            out.push_str(&yaml_scalar(&receipt.path));
+            out.push_str(newline);
+            out.push_str("      sha256: ");
+            out.push_str(&yaml_scalar(&receipt.sha256));
+            out.push_str(newline);
+        }
+    }
+    if !state.watch_turns.is_empty() {
+        out.push_str("  watch_turns:");
+        out.push_str(newline);
+        for turn in &state.watch_turns {
+            out.push_str("    - account: ");
+            out.push_str(&yaml_scalar(&turn.account));
+            out.push_str(newline);
+            out.push_str("      thread_id: ");
+            out.push_str(&yaml_scalar(&turn.thread_id));
+            out.push_str(newline);
+            out.push_str("      message_id: ");
+            out.push_str(&yaml_scalar(&turn.message_id));
+            out.push_str(newline);
+            out.push_str("      internal_date: ");
+            out.push_str(&turn.internal_date.to_string());
+            out.push_str(newline);
+            out.push_str("      turn: ");
+            out.push_str(&yaml_scalar(&turn.turn));
+            out.push_str(newline);
+            out.push_str("      effect: ");
+            out.push_str(&yaml_scalar(&turn.effect));
+            out.push_str(newline);
+        }
+    }
     out
+}
+
+fn parse_path_receipts(
+    mapping: &serde_yaml::Mapping,
+) -> Result<Vec<PathReceipt>, SourceError> {
+    match mapping.get(serde_yaml::Value::String(
+        "completed_path_receipts".to_string(),
+    )) {
+        None | Some(serde_yaml::Value::Null) => Ok(Vec::new()),
+        Some(serde_yaml::Value::Sequence(values)) => {
+            let mut receipts = Vec::new();
+            for value in values {
+                let item =
+                    value.as_mapping().ok_or(SourceError::InvalidSendState)?;
+                let path = item
+                    .get(serde_yaml::Value::String("path".to_string()))
+                    .and_then(serde_yaml::Value::as_str)
+                    .ok_or(SourceError::InvalidSendState)?;
+                let sha256 = item
+                    .get(serde_yaml::Value::String("sha256".to_string()))
+                    .and_then(serde_yaml::Value::as_str)
+                    .ok_or(SourceError::InvalidSendState)?;
+                validate_commit_path(path)?;
+                validate_hex_digest(sha256)?;
+                receipts.push(PathReceipt {
+                    path: path.to_string(),
+                    sha256: sha256.to_string(),
+                });
+            }
+            Ok(receipts)
+        }
+        _ => Err(SourceError::InvalidSendState),
+    }
+}
+
+fn parse_watch_turns(
+    mapping: &serde_yaml::Mapping,
+) -> Result<Vec<SendWatchTurn>, SourceError> {
+    match mapping.get(serde_yaml::Value::String("watch_turns".to_string())) {
+        None | Some(serde_yaml::Value::Null) => Ok(Vec::new()),
+        Some(serde_yaml::Value::Sequence(values)) => {
+            let mut turns = Vec::new();
+            for value in values {
+                let item =
+                    value.as_mapping().ok_or(SourceError::InvalidSendState)?;
+                let get = |name: &str| -> Result<&str, SourceError> {
+                    item.get(serde_yaml::Value::String(name.to_string()))
+                        .and_then(serde_yaml::Value::as_str)
+                        .ok_or(SourceError::InvalidSendState)
+                };
+                let account = get("account")?;
+                let thread_id = get("thread_id")?;
+                let message_id = get("message_id")?;
+                let internal_date = item
+                    .get(serde_yaml::Value::String("internal_date".to_string()))
+                    .and_then(serde_yaml::Value::as_i64)
+                    .ok_or(SourceError::InvalidSendState)?;
+                if internal_date < 0 {
+                    return Err(SourceError::InvalidSendState);
+                }
+                let turn = get("turn")?;
+                let effect = get("effect")?;
+                if !matches!(turn, "yours" | "theirs")
+                    || !matches!(effect, "hold" | "lift" | "bounced")
+                {
+                    return Err(SourceError::InvalidSendState);
+                }
+                validate_opaque_id(account, true)?;
+                validate_opaque_id(thread_id, false)?;
+                validate_opaque_id(message_id, false)?;
+                turns.push(SendWatchTurn {
+                    account: account.to_string(),
+                    thread_id: thread_id.to_string(),
+                    message_id: message_id.to_string(),
+                    internal_date,
+                    turn: turn.to_string(),
+                    effect: effect.to_string(),
+                });
+            }
+            Ok(turns)
+        }
+        _ => Err(SourceError::InvalidSendState),
+    }
 }
 
 fn validate_commit_path(value: &str) -> Result<(), SourceError> {
@@ -738,7 +889,40 @@ mod tests {
             remote_fingerprint: Some("e".repeat(64)),
             completed_note_digest: None,
             completed_commit_paths: Vec::new(),
+            completed_path_receipts: Vec::new(),
+            watch_turns: Vec::new(),
         }
+    }
+
+    #[test]
+    fn complete_watch_receipts_round_trip() {
+        let note = compose_note();
+        let mut state = sample_state();
+        state.stage = SendStage::Complete;
+        state.sent_message_id = Some("sent-1".to_string());
+        state.sent_thread_id = Some("0123456789abcdef".to_string());
+        state.completed_note_digest = Some("f".repeat(64));
+        state.completed_commit_paths =
+            vec!["mail/2026/lease.md".to_string(), "inbox.md".to_string()];
+        state.completed_path_receipts = vec![PathReceipt {
+            path: "inbox.md".to_string(),
+            sha256: "a".repeat(64),
+        }];
+        state.watch_turns = vec![SendWatchTurn {
+            account: "you@example.com".to_string(),
+            thread_id: "0123456789abcdef".to_string(),
+            message_id: "0000000000000001".to_string(),
+            internal_date: 1_793_872_800_000,
+            turn: "theirs".to_string(),
+            effect: "hold".to_string(),
+        }];
+        let patched =
+            patch_send_state(&note, Some(&state)).expect("patch complete");
+        assert!(patched.contains("completed_path_receipts:"));
+        assert!(patched.contains("watch_turns:"));
+        assert!(patched.contains("Hello."));
+        let loaded = load_send_state(&patched).expect("load complete");
+        assert_eq!(loaded, Some(state));
     }
 
     #[test]
