@@ -25,6 +25,7 @@ use crate::native::gmail::{
     note::parse as note_parse,
     turn::{Net, Turn},
 };
+use crate::native::markdown;
 
 /// Typed per-thread watch outcome for the transaction boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,7 +60,7 @@ pub(crate) struct WatchTaskRef {
 }
 
 /// Body-free pending watch evidence in the host-local recovery file.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct RecoveryWatch {
     pub(crate) account: String,
     pub(crate) thread_id: String,
@@ -75,6 +76,27 @@ pub(crate) struct RecoveryWatch {
     pub(crate) pending_tasks: bool,
     #[serde(default = "default_true")]
     pub(crate) pending_marker: bool,
+    #[serde(default)]
+    pub(crate) applied_targets: Vec<RecoveryWatchTarget>,
+}
+
+/// Body-free identity for a task already applied during a deferred turn.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+pub(crate) struct RecoveryWatchTarget {
+    pub(crate) path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) block_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) line: Option<usize>,
 }
 
 fn default_true() -> bool {
@@ -204,6 +226,18 @@ pub(crate) fn plan_watch_edits(input: WatchPlanInput<'_>) -> WatchPlan {
             },
         );
     }
+    for task in &projected {
+        let relative = PathBuf::from(&task.path);
+        buffers.entry(relative.clone()).or_insert_with(|| {
+            let target = input.vault.join(&relative);
+            let original = fs::read_to_string(&target).ok();
+            FileBuffer {
+                target,
+                updated: original.clone().unwrap_or_default(),
+                original,
+            }
+        });
+    }
 
     // Map each intent back to its projected task to find its threads.
     let task_by_location: BTreeMap<
@@ -223,6 +257,12 @@ pub(crate) fn plan_watch_edits(input: WatchPlanInput<'_>) -> WatchPlan {
         &'static str,
         Option<String>,
     )> = Vec::new();
+    let mut applied_targets: BTreeMap<
+        ThreadKey,
+        BTreeSet<RecoveryWatchTarget>,
+    > = BTreeMap::new();
+    let mut resolved_lines: BTreeMap<(String, usize, Option<String>), usize> =
+        BTreeMap::new();
 
     for intent in &intents {
         let Some(task) = task_by_location
@@ -283,9 +323,49 @@ pub(crate) fn plan_watch_edits(input: WatchPlanInput<'_>) -> WatchPlan {
         // Revalidate: reread the line under the lock. Closed or deleted
         // tasks always win and write nothing.
         let live = match resolve_live_task(input.vault, task, &mut buffers) {
-            Some(live) => live,
-            None => continue,
+            LiveTaskResolution::Live(live) => live,
+            LiveTaskResolution::Closed => continue,
+            LiveTaskResolution::Unresolved => {
+                for key in &thread_keys {
+                    deferred_threads.insert(key.clone());
+                }
+                continue;
+            }
         };
+        resolved_lines.insert(
+            (task.path.clone(), task.line, task.block_id.clone()),
+            live.line,
+        );
+        let receipt = recovery_watch_target(task, live.line);
+        let retry_keys: Vec<&ThreadKey> = thread_keys
+            .iter()
+            .filter(|key| {
+                let Some(pending) = pending_by_key.get(*key) else {
+                    return false;
+                };
+                pending.pending_tasks
+                    && prepared_by_key.get(*key).is_some_and(|prepared| {
+                        pending_turn_matches(pending, prepared)
+                    })
+            })
+            .collect();
+        if !retry_keys.is_empty()
+            && retry_keys.iter().all(|key| {
+                pending_by_key.get(*key).is_some_and(|pending| {
+                    pending.applied_targets.iter().any(|target| {
+                        target_matches_task(target, task, live.line)
+                    })
+                })
+            })
+        {
+            for key in retry_keys {
+                applied_targets
+                    .entry(key.clone())
+                    .or_default()
+                    .insert(receipt.clone());
+            }
+            continue;
+        }
         match effect {
             TaskEffect::Hold { nudge_at } => {
                 let nudge = hold::nudge_date_for_send(
@@ -327,6 +407,10 @@ pub(crate) fn plan_watch_edits(input: WatchPlanInput<'_>) -> WatchPlan {
                 ) {
                     HoldApply::Applied => {
                         for key in &thread_keys {
+                            applied_targets
+                                .entry(key.clone())
+                                .or_default()
+                                .insert(receipt.clone());
                             changed_tasks.push((
                                 key.clone(),
                                 WatchTaskRef {
@@ -339,12 +423,22 @@ pub(crate) fn plan_watch_edits(input: WatchPlanInput<'_>) -> WatchPlan {
                             ));
                         }
                     }
-                    HoldApply::Noop => {}
+                    HoldApply::Noop => {
+                        for key in &thread_keys {
+                            applied_targets
+                                .entry(key.clone())
+                                .or_default()
+                                .insert(receipt.clone());
+                        }
+                    }
                     HoldApply::Refused { reason } => {
                         plan.warnings.push(format!(
                             "skipped Gmail reply hold for {}:{}: {}",
                             live.path, live.line, reason
                         ));
+                        for key in &thread_keys {
+                            deferred_threads.insert(key.clone());
+                        }
                     }
                     HoldApply::Missing => {
                         for key in &thread_keys {
@@ -362,6 +456,12 @@ pub(crate) fn plan_watch_edits(input: WatchPlanInput<'_>) -> WatchPlan {
                     input.today,
                 ) {
                     LiftApply::Applied { unblocked, lifted } => {
+                        for key in &thread_keys {
+                            applied_targets
+                                .entry(key.clone())
+                                .or_default()
+                                .insert(receipt.clone());
+                        }
                         // Unheld Ready rows that still resurface report
                         // `resurfaced`; held rows report lift/bounce.
                         let action = match effect {
@@ -384,6 +484,12 @@ pub(crate) fn plan_watch_edits(input: WatchPlanInput<'_>) -> WatchPlan {
                         }
                     }
                     LiftApply::Noop { lifted } => {
+                        for key in &thread_keys {
+                            applied_targets
+                                .entry(key.clone())
+                                .or_default()
+                                .insert(receipt.clone());
+                        }
                         if lifted {
                             let action = match effect {
                                 TaskEffect::Bounced => ACTION_BOUNCED,
@@ -461,12 +567,6 @@ pub(crate) fn plan_watch_edits(input: WatchPlanInput<'_>) -> WatchPlan {
         }
     }
 
-    for buffer in buffers.values() {
-        // Only emit edits for files this planner changed beyond the filing
-        // snapshots it started from. Filing-owned buffers already contain
-        // filing's own edits; emit only when watch added more.
-        let _ = buffer;
-    }
     // Emit every changed buffer relative to its on-disk original. Filing
     // snapshots are part of the same scoped commit, so the caller merges
     // these with its own staged list and dedups by path (watch wins for
@@ -701,6 +801,16 @@ pub(crate) fn plan_watch_edits(input: WatchPlanInput<'_>) -> WatchPlan {
         ) else {
             continue;
         };
+        if input
+            .journal
+            .marker(&watch.observation.key)
+            .is_some_and(|marker| {
+                (marker.internal_date, marker.message_id.as_str())
+                    >= (internal_date, message_id.as_str())
+            })
+        {
+            continue;
+        }
         if !deferred_threads.contains(&watch.observation.key)
             && matches!(folded.net, Net::Nothing)
         {
@@ -727,20 +837,44 @@ pub(crate) fn plan_watch_edits(input: WatchPlanInput<'_>) -> WatchPlan {
             unblocked_on: None,
             pending_tasks: true,
             pending_marker: true,
+            applied_targets: {
+                let mut targets = applied_targets
+                    .remove(&watch.observation.key)
+                    .unwrap_or_default();
+                if let Some(previous) = pending_by_key
+                    .get(&watch.observation.key)
+                    .filter(|previous| pending_turn_matches(previous, watch))
+                {
+                    targets.extend(previous.applied_targets.iter().cloned());
+                }
+                targets.into_iter().collect()
+            },
         });
     }
 
     let mut snapshot_tasks = projected;
-    for task in &mut snapshot_tasks {
+    snapshot_tasks.retain_mut(|task| {
+        let location = (task.path.clone(), task.line, task.block_id.clone());
         let relative = PathBuf::from(&task.path);
         let Some(buffer) = buffers.get(&relative) else {
-            continue;
+            return true;
         };
-        if let Some(line) = read_line(&buffer.updated, task.line) {
-            task.status = checkbox_status(&line).unwrap_or(task.status);
-            task.text = line;
+        let line = resolved_lines
+            .get(&location)
+            .copied()
+            .or_else(|| unique_line_for_text(&buffer.updated, &task.text));
+        if let Some(line_number) = line
+            && let Some(text) = read_line(&buffer.updated, line_number)
+        {
+            let Some(status) = open_task_status(&text) else {
+                return false;
+            };
+            task.line = line_number;
+            task.status = status;
+            task.text = text;
         }
-    }
+        true
+    });
     plan.snapshot = WatchScan::from_tasks(snapshot_tasks);
 
     plan
@@ -782,6 +916,12 @@ struct LiveTask {
     block_id: Option<String>,
 }
 
+enum LiveTaskResolution {
+    Closed,
+    Live(LiveTask),
+    Unresolved,
+}
+
 struct FileBuffer {
     target: PathBuf,
     original: Option<String>,
@@ -821,14 +961,6 @@ fn apply_hold_to_buffer(
     let Some(line_text) = read_line(&buffer.updated, live.line) else {
         return HoldApply::Missing;
     };
-    if !line_matches_task(&line_text, live) {
-        if relocate_by_block(&buffer.updated, live).is_none() {
-            return HoldApply::Missing;
-        }
-        // Relocation found a unique block-id row elsewhere; defer rather
-        // than writing at the stale line number.
-        return HoldApply::Missing;
-    }
     let outcome = hold::apply_hold(&line_text, req);
     if let Some(reason) = outcome.refused {
         return HoldApply::Refused { reason };
@@ -836,7 +968,14 @@ fn apply_hold_to_buffer(
     if !outcome.changed {
         return HoldApply::Noop;
     }
-    replace_line(buffer, live.line, &outcome.line);
+    let Some(updated) = replace_line_preserving_ending(
+        &buffer.updated,
+        live.line,
+        &outcome.line,
+    ) else {
+        return HoldApply::Missing;
+    };
+    buffer.updated = updated;
     HoldApply::Applied
 }
 
@@ -860,12 +999,6 @@ fn apply_lift_to_buffer(
     let Some(line_text) = read_line(&buffer.updated, live.line) else {
         return LiftApply::Missing;
     };
-    if !line_matches_task(&line_text, live) {
-        if relocate_by_block(&buffer.updated, live).is_none() {
-            return LiftApply::Missing;
-        }
-        return LiftApply::Missing;
-    }
     let scope =
         hold::unblock_scope_for(&PathBuf::from(&live.path), &line_text, false);
     let outcome = hold::apply_lift(
@@ -880,70 +1013,83 @@ fn apply_lift_to_buffer(
             lifted: outcome.lifted,
         };
     }
-    replace_line(buffer, live.line, &outcome.line);
+    let Some(updated) = replace_line_preserving_ending(
+        &buffer.updated,
+        live.line,
+        &outcome.line,
+    ) else {
+        return LiftApply::Missing;
+    };
+    buffer.updated = updated;
     LiftApply::Applied {
         unblocked: outcome.unblocked_written,
         lifted: outcome.lifted,
     }
 }
 
-fn replace_line(buffer: &mut FileBuffer, line: usize, next: &str) {
-    let mut lines: Vec<String> =
-        buffer.updated.lines().map(str::to_string).collect();
-    if line == 0 || line > lines.len() {
-        return;
-    }
-    // Preserve a trailing carriage return through the hold/lift writers,
-    // which already carry it; only the newline style is normalized here.
-    lines[line - 1] = next.to_string();
-    let trailing_newline = buffer.updated.ends_with('\n');
-    let mut rebuilt = lines.join("\n");
-    if trailing_newline {
-        rebuilt.push('\n');
-    }
-    buffer.updated = rebuilt;
-}
-
 fn read_line(contents: &str, line: usize) -> Option<String> {
     if line == 0 {
         return None;
     }
-    contents.lines().nth(line - 1).map(str::to_string)
+    contents
+        .split_inclusive('\n')
+        .nth(line - 1)
+        .map(|physical| markdown::split_line_ending(physical).0.to_string())
 }
 
-fn line_matches_task(line: &str, live: &LiveTask) -> bool {
-    if let Some(block_id) = &live.block_id {
-        if !block_id.is_empty() && line.contains(block_id.as_str()) {
-            return true;
-        }
-        return line.contains("#task");
-    }
-    line.trim_start().starts_with('-') && line.contains("#task")
-}
-
-fn relocate_by_block(contents: &str, live: &LiveTask) -> Option<String> {
-    let block_id = live.block_id.as_deref()?;
-    if block_id.is_empty() {
+/// Replace one physical line's content while preserving its original line
+/// ending and every other byte in the file.
+pub(crate) fn replace_line_preserving_ending(
+    contents: &str,
+    line: usize,
+    next: &str,
+) -> Option<String> {
+    if line == 0 {
         return None;
     }
-    let mut matches = Vec::new();
-    for line in contents.lines() {
-        if line.contains(block_id) && line.contains("#task") {
-            matches.push(line.to_string());
+    let mut output = String::with_capacity(contents.len());
+    let mut found = false;
+    for (index, physical) in contents.split_inclusive('\n').enumerate() {
+        if index + 1 == line {
+            let (content, ending) = markdown::split_line_ending(physical);
+            let _ = content;
+            output.push_str(next);
+            output.push_str(ending);
+            found = true;
+        } else {
+            output.push_str(physical);
         }
     }
-    if matches.len() == 1 {
-        matches.pop()
-    } else {
-        None
+    if !found {
+        return None;
     }
+    Some(output)
+}
+
+fn unique_line_for_text(contents: &str, expected: &str) -> Option<usize> {
+    let mut matches = contents.split_inclusive('\n').enumerate().filter_map(
+        |(index, physical)| {
+            (markdown::split_line_ending(physical).0 == expected)
+                .then_some(index + 1)
+        },
+    );
+    let first = matches.next()?;
+    matches.next().is_none().then_some(first)
+}
+
+fn open_task_status(line: &str) -> Option<char> {
+    let status = checkbox_status(line)?;
+    let has_task_tag = line.split_whitespace().any(|token| token == "#task");
+    (crate::native::gmail::sync::scan::OPEN_STATUSES.contains(&status)
+        && has_task_tag)
+        .then_some(status)
 }
 
 fn resolve_live_task(
     vault: &Path,
     task: &WatchingTask,
     buffers: &mut BTreeMap<PathBuf, FileBuffer>,
-) -> Option<LiveTask> {
+) -> LiveTaskResolution {
     let relative = PathBuf::from(&task.path);
     let target = vault.join(&relative);
     let buffer = buffers.entry(relative.clone()).or_insert_with(|| {
@@ -956,29 +1102,62 @@ fn resolve_live_task(
         }
     });
     let contents = buffer.updated.clone();
-    let line_text = read_line(&contents, task.line)?;
-    let status = checkbox_status(&line_text)?;
-    if matches!(status, 'x' | 'X' | '-') {
-        return None;
+    let line = if read_line(&contents, task.line).as_deref()
+        == Some(task.text.as_str())
+    {
+        Some(task.line)
+    } else {
+        unique_line_for_text(&contents, &task.text)
+    };
+    let Some(line) = line else {
+        return LiveTaskResolution::Unresolved;
+    };
+    let Some(line_text) = read_line(&contents, line) else {
+        return LiveTaskResolution::Unresolved;
+    };
+    if open_task_status(&line_text).is_none() {
+        return LiveTaskResolution::Closed;
     }
-    if !line_text.contains("#task") {
-        let _ = relocate_by_block(
-            &contents,
-            &LiveTask {
-                path: task.path.clone(),
-                line: task.line,
-                block_id: task.block_id.clone(),
-            },
-        )?;
-        // Relocation found the row elsewhere; defer rather than writing at
-        // the stale line number. The next run replans from the fresh scan.
-        return None;
-    }
-    Some(LiveTask {
+    LiveTaskResolution::Live(LiveTask {
         path: task.path.clone(),
-        line: task.line,
+        line,
         block_id: task.block_id.clone(),
     })
+}
+
+fn recovery_watch_target(
+    task: &WatchingTask,
+    line: usize,
+) -> RecoveryWatchTarget {
+    RecoveryWatchTarget {
+        path: task.path.clone(),
+        block_id: task.block_id.clone(),
+        line: task.block_id.is_none().then_some(line),
+    }
+}
+
+fn target_matches_task(
+    target: &RecoveryWatchTarget,
+    task: &WatchingTask,
+    line: usize,
+) -> bool {
+    target.path == task.path
+        && match target.block_id.as_deref() {
+            Some(block_id) => task.block_id.as_deref() == Some(block_id),
+            None => target.line == Some(line),
+        }
+}
+
+fn pending_turn_matches(
+    pending: &RecoveryWatch,
+    watch: &PreparedWatch,
+) -> bool {
+    let folded = &watch.observation.folded;
+    folded
+        .newest_counted_id
+        .as_deref()
+        .is_some_and(|id| id.eq_ignore_ascii_case(&pending.message_id))
+        && folded.newest_internal_date == Some(pending.internal_date)
 }
 
 fn checkbox_status(line: &str) -> Option<char> {
@@ -1013,13 +1192,20 @@ mod tests {
         ThreadKey::new("me@example.com", id).unwrap()
     }
 
-    fn task(path: &str, line: usize, keys: &[ThreadKey]) -> WatchingTask {
+    fn task(
+        vault: &std::path::Path,
+        path: &str,
+        line: usize,
+        keys: &[ThreadKey],
+    ) -> WatchingTask {
+        let contents = std::fs::read_to_string(vault.join(path)).unwrap();
+        let text = read_line(&contents, line).unwrap();
         WatchingTask {
             path: path.to_string(),
             line,
-            text: format!("- [ ] #task [[mail|M]] {line}"),
+            status: checkbox_status(&text).unwrap_or(' '),
+            text,
             block_id: None,
-            status: ' ',
             targets: keys
                 .iter()
                 .map(|key| WatchTarget {
@@ -1113,6 +1299,7 @@ mod tests {
             "- [ ] #task [[mail/aa01|M]] [created:: 2026-11-07]",
         );
         let scan = WatchScan::from_tasks_for_test(vec![task(
+            dir.path(),
             "job.md",
             1,
             &[thread.clone()],
@@ -1154,7 +1341,7 @@ mod tests {
             "job.md",
             "- [ ] #task [[mail/aa01|M]] [created:: 2026-11-07] ^task1",
         );
-        let mut watching = task("job.md", 1, &[thread.clone()]);
+        let mut watching = task(dir.path(), "job.md", 1, &[thread.clone()]);
         watching.block_id = Some("task1".to_string());
         let scan = WatchScan::from_tasks_for_test(vec![watching]);
         let journal = WatchJournal::load(dir.path()).unwrap();
@@ -1195,6 +1382,7 @@ mod tests {
             "- [x] #task [[mail/aa01|M]] [created:: 2026-11-07]",
         );
         let scan = WatchScan::from_tasks_for_test(vec![task(
+            dir.path(),
             "job.md",
             1,
             &[thread.clone()],
@@ -1228,6 +1416,7 @@ mod tests {
         let line = "- [?] #task #awaiting_reply [[mail/aa01|M]] [created:: 2026-11-07] [scheduled:: 1970-01-04]";
         write_task(dir.path(), "job.md", line);
         let scan = WatchScan::from_tasks_for_test(vec![task(
+            dir.path(),
             "job.md",
             1,
             &[thread.clone()],
@@ -1269,8 +1458,8 @@ mod tests {
             "- [ ] #task [[m|M]] [fresh:: 2026-11-05]",
         );
         let scan = WatchScan::from_tasks_for_test(vec![
-            task("job.md", 1, &[held_thread.clone()]),
-            task("body.md", 1, &[fresh_thread.clone()]),
+            task(dir.path(), "job.md", 1, &[held_thread.clone()]),
+            task(dir.path(), "body.md", 1, &[fresh_thread.clone()]),
         ]);
         let journal = WatchJournal::load(dir.path()).unwrap();
         let watches = vec![
@@ -1339,8 +1528,7 @@ mod tests {
         let journal = WatchJournal::load(dir.path()).unwrap();
         let send = Utc.timestamp_millis_opt(10).unwrap();
         let watches = vec![prepared(thread.clone(), folded_hold(send))];
-        // Only ^busy runs: the eligible task changes, the running one
-        // defers, and the marker must not advance.
+        // Only ^busy runs: ^idle is held and ^busy is deferred.
         let running = hold::RunningLookup::Session(
             [("job.md".to_string(), "busy".to_string())]
                 .into_iter()
@@ -1363,8 +1551,36 @@ mod tests {
         assert_eq!(plan.edits.len(), 1, "only idle changes: {plan:?}");
         assert!(plan.receipts.turns.is_empty(), "deferral keeps the turn");
         assert_eq!(plan.pending.len(), 1);
-        // After the session closes, the same turn plans both rows in one
-        // coalesced file write and advances the marker.
+        assert_eq!(plan.pending[0].applied_targets.len(), 1);
+        assert_eq!(
+            plan.pending[0].applied_targets[0].block_id.as_deref(),
+            Some("idle")
+        );
+        assert_eq!(plan.pending[0].applied_targets[0].line, None);
+
+        // Persist run one's task bytes, then simulate Bryan removing the
+        // hold tag from ^idle. A retry uses a fresh scan snapshot and must
+        // skip this target while it catches up ^busy.
+        let updated = &plan.edits[0].updated;
+        let hand_edited = updated.replace(" #awaiting_reply", "");
+        std::fs::write(dir.path().join("job.md"), &hand_edited).unwrap();
+        let fresh_idle = WatchingTask {
+            text: read_line(&hand_edited, 1).unwrap(),
+            status: checkbox_status(&read_line(&hand_edited, 1).unwrap())
+                .unwrap(),
+            block_id: Some("idle".to_string()),
+            ..task(dir.path(), "job.md", 1, &[thread.clone()])
+        };
+        let fresh_busy = WatchingTask {
+            line: 2,
+            text: read_line(&hand_edited, 2).unwrap(),
+            status: checkbox_status(&read_line(&hand_edited, 2).unwrap())
+                .unwrap(),
+            block_id: Some("busy".to_string()),
+            ..task(dir.path(), "job.md", 2, &[thread.clone()])
+        };
+        let retry_scan =
+            WatchScan::from_tasks_for_test(vec![fresh_idle, fresh_busy]);
         let idle_only = plan_watch_edits(WatchPlanInput {
             vault: dir.path(),
             timezone: chrono_tz::UTC,
@@ -1373,37 +1589,286 @@ mod tests {
             blocked_ok: true,
             blocked_reason: None,
             running: hold::RunningLookup::NoSession,
-            watchers: &scan,
+            watchers: &retry_scan,
             prepared: &watches,
             journal: &journal,
             filing_tasks: &BTreeMap::new(),
-            pending: &[],
+            pending: &plan.pending,
         });
-        assert_eq!(idle_only.edits.len(), 1, "one file coalesces both rows");
+        assert_eq!(
+            idle_only.edits.len(),
+            1,
+            "one file coalesces the remaining row"
+        );
         assert_eq!(idle_only.receipts.turns.len(), 1, "marker advances");
         assert!(idle_only.pending.is_empty());
         let updated = &idle_only.edits[0].updated;
         assert_eq!(
             updated.matches("#awaiting_reply").count(),
-            2,
-            "both rows held: {updated}"
+            1,
+            "only the deferred target is held: {updated}"
         );
+        let idle_line = read_line(updated, 1).unwrap();
+        assert!(
+            !idle_line.contains("#awaiting_reply"),
+            "hand edit survives: {idle_line}"
+        );
+        assert!(read_line(updated, 2).unwrap().contains("#awaiting_reply"));
     }
 
     #[test]
-    fn newer_turn_supersedes_obsolete_pending_hold() {
+    fn filing_insert_relocates_existing_watcher_by_exact_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let old_thread = key("aa01");
+        let new_thread = key("bb02");
+        let old_row = "- [*] #task Old [[mail/aa01|M]] [created:: 2026-11-01]";
+        let original = format!(
+            "## Tasks\n### Next & In Progress\n{old_row}\n### Done & Canceled\n"
+        );
+        std::fs::write(dir.path().join("job.md"), &original).unwrap();
+        let watchers = WatchScan::from_tasks_for_test(vec![task(
+            dir.path(),
+            "job.md",
+            3,
+            &[old_thread.clone()],
+        )]);
+        let new_row = "- [ ] #task New [[mail/bb02|M]] [created:: 2026-11-08]";
+        let updated = format!(
+            "## Tasks\n{new_row}\n### Next & In Progress\n{old_row}\n### Done & Canceled\n"
+        );
+        let new_task = WatchingTask {
+            path: "job.md".to_string(),
+            line: 2,
+            text: new_row.to_string(),
+            block_id: None,
+            status: ' ',
+            targets: vec![WatchTarget {
+                key: new_thread,
+                note: "mail/bb02.md".to_string(),
+                placement: LinkPlacement::TaskLine,
+            }],
+        };
+        let filing = BTreeMap::from([(
+            PathBuf::from("job.md"),
+            FilingTaskSnapshot {
+                target: dir.path().join("job.md"),
+                original: Some(original),
+                updated: updated.clone(),
+                tasks: vec![new_task],
+            },
+        )]);
+        let journal = WatchJournal::load(dir.path()).unwrap();
+        let send = Utc.timestamp_millis_opt(10).unwrap();
+        let prepared = vec![prepared(old_thread, folded_hold(send))];
+        let plan = plan_watch_edits(WatchPlanInput {
+            vault: dir.path(),
+            timezone: chrono_tz::UTC,
+            reply_wait_days: 3,
+            today: NaiveDate::from_ymd_opt(2026, 11, 8).unwrap(),
+            blocked_ok: true,
+            blocked_reason: None,
+            running: hold::RunningLookup::NoSession,
+            watchers: &watchers,
+            prepared: &prepared,
+            journal: &journal,
+            filing_tasks: &filing,
+            pending: &[],
+        });
+        assert_eq!(plan.edits.len(), 1);
+        assert_eq!(plan.outcomes[0].tasks[0].line, 4);
+        assert!(read_line(&plan.edits[0].updated, 4)
+            .unwrap()
+            .contains("#awaiting_reply"));
+        assert_eq!(read_line(&plan.edits[0].updated, 2).unwrap(), new_row);
+        assert_eq!(plan.snapshot.tasks()[0].line, 2);
+        assert_eq!(plan.snapshot.tasks()[1].line, 4);
+    }
+
+    #[test]
+    fn shifted_nonmatching_task_line_defers_without_touching_other_task() {
+        let dir = tempfile::tempdir().unwrap();
+        let thread = key("aa01");
+        let old_row = "- [ ] #task Old [[mail/aa01|M]] [created:: 2026-11-01]";
+        let original = format!("## Tasks\n{old_row}\n");
+        std::fs::write(dir.path().join("job.md"), &original).unwrap();
+        let watchers = WatchScan::from_tasks_for_test(vec![task(
+            dir.path(),
+            "job.md",
+            2,
+            &[thread.clone()],
+        )]);
+        let new_row = "- [ ] #task New [[mail/bb02|M]] [created:: 2026-11-08]";
+        let neighbor =
+            "- [ ] #task Neighbor [[mail/cc03|M]] [created:: 2026-11-08]";
+        let updated = format!("## Tasks\n{new_row}\n{neighbor}\n");
+        let filing = BTreeMap::from([(
+            PathBuf::from("job.md"),
+            FilingTaskSnapshot {
+                target: dir.path().join("job.md"),
+                original: Some(original),
+                updated: updated.clone(),
+                tasks: Vec::new(),
+            },
+        )]);
+        let journal = WatchJournal::load(dir.path()).unwrap();
+        let send = Utc.timestamp_millis_opt(10).unwrap();
+        let prepared = vec![prepared(thread, folded_hold(send))];
+        let plan = plan_watch_edits(WatchPlanInput {
+            vault: dir.path(),
+            timezone: chrono_tz::UTC,
+            reply_wait_days: 3,
+            today: NaiveDate::from_ymd_opt(2026, 11, 8).unwrap(),
+            blocked_ok: true,
+            blocked_reason: None,
+            running: hold::RunningLookup::NoSession,
+            watchers: &watchers,
+            prepared: &prepared,
+            journal: &journal,
+            filing_tasks: &filing,
+            pending: &[],
+        });
+        assert!(plan.edits.is_empty());
+        assert_eq!(plan.pending.len(), 1);
+        assert!(plan.receipts.turns.is_empty());
+        assert_eq!(read_line(&updated, 2).unwrap(), new_row);
+        assert_eq!(read_line(&updated, 3).unwrap(), neighbor);
+    }
+
+    #[test]
+    fn ambiguous_exact_row_relocation_defers() {
+        let dir = tempfile::tempdir().unwrap();
+        let thread = key("aa01");
+        let old_row = "- [ ] #task Old [[mail/aa01|M]] [created:: 2026-11-01]";
+        let original = format!("## Tasks\n{old_row}\n");
+        std::fs::write(dir.path().join("job.md"), &original).unwrap();
+        let watchers = WatchScan::from_tasks_for_test(vec![task(
+            dir.path(),
+            "job.md",
+            2,
+            &[thread.clone()],
+        )]);
+        let updated =
+            format!("## Tasks\n- [ ] #task New\n{old_row}\n{old_row}\n");
+        let filing = BTreeMap::from([(
+            PathBuf::from("job.md"),
+            FilingTaskSnapshot {
+                target: dir.path().join("job.md"),
+                original: Some(original),
+                updated: updated.clone(),
+                tasks: Vec::new(),
+            },
+        )]);
+        let journal = WatchJournal::load(dir.path()).unwrap();
+        let send = Utc.timestamp_millis_opt(10).unwrap();
+        let prepared = vec![prepared(thread, folded_hold(send))];
+        let plan = plan_watch_edits(WatchPlanInput {
+            vault: dir.path(),
+            timezone: chrono_tz::UTC,
+            reply_wait_days: 3,
+            today: NaiveDate::from_ymd_opt(2026, 11, 8).unwrap(),
+            blocked_ok: true,
+            blocked_reason: None,
+            running: hold::RunningLookup::NoSession,
+            watchers: &watchers,
+            prepared: &prepared,
+            journal: &journal,
+            filing_tasks: &filing,
+            pending: &[],
+        });
+        assert!(plan.edits.is_empty());
+        assert_eq!(plan.pending.len(), 1);
+        assert!(plan.receipts.turns.is_empty());
+        assert_eq!(read_line(&updated, 3).unwrap(), old_row);
+        assert_eq!(read_line(&updated, 4).unwrap(), old_row);
+    }
+
+    #[test]
+    fn hold_and_lift_preserve_crlf_and_unmodified_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let thread = key("aa01");
+        let send = Utc.timestamp_millis_opt(10).unwrap();
+        let cases = [
+            (
+                "- [ ] #task [[mail/aa01|M]] [created:: 2026-11-07]",
+                folded_hold(send),
+            ),
+            (
+                "- [?] #task #awaiting_reply [[mail/aa01|M]] [created:: 2026-11-07] [scheduled:: 2026-11-10]",
+                folded_lift(),
+            ),
+        ];
+        for (index, (target_line, folded)) in cases.into_iter().enumerate() {
+            let path = format!("job-{index}.md");
+            let original = format!("## Tasks\r\n{target_line}\r\n### Done");
+            std::fs::write(dir.path().join(&path), &original).unwrap();
+            let watchers = WatchScan::from_tasks_for_test(vec![task(
+                dir.path(),
+                &path,
+                2,
+                &[thread.clone()],
+            )]);
+            let journal = WatchJournal::load(dir.path()).unwrap();
+            let prepared = vec![prepared(thread.clone(), folded)];
+            let plan = plan_watch_edits(WatchPlanInput {
+                vault: dir.path(),
+                timezone: chrono_tz::UTC,
+                reply_wait_days: 3,
+                today: NaiveDate::from_ymd_opt(2026, 11, 8).unwrap(),
+                blocked_ok: true,
+                blocked_reason: None,
+                running: hold::RunningLookup::NoSession,
+                watchers: &watchers,
+                prepared: &prepared,
+                journal: &journal,
+                filing_tasks: &BTreeMap::new(),
+                pending: &[],
+            });
+            assert_eq!(plan.edits.len(), 1);
+            let updated = &plan.edits[0].updated;
+            assert_eq!(updated.matches("\r\n").count(), 2);
+            assert_eq!(
+                replace_line_preserving_ending(updated, 2, target_line)
+                    .as_deref(),
+                Some(original.as_str()),
+                "only task content may change"
+            );
+            assert!(
+                !updated.ends_with('\n'),
+                "missing final newline is preserved"
+            );
+        }
+    }
+
+    #[test]
+    fn old_recovery_watch_without_applied_targets_deserializes() {
+        let encoded = r#"{
+            "account":"me@example.com",
+            "thread_id":"aa01",
+            "message_id":"aa02",
+            "internal_date":20,
+            "turn":"theirs",
+            "effect":"hold",
+            "nudge_on":null,
+            "unblocked_on":null,
+            "pending_tasks":true,
+            "pending_marker":true
+        }"#;
+        let pending: RecoveryWatch = serde_json::from_str(encoded).unwrap();
+        assert!(pending.applied_targets.is_empty());
+    }
+
+    #[test]
+    fn newer_turn_supersedes_obsolete_pending_receipts() {
         let dir = tempfile::tempdir().unwrap();
         let thread = key("aa01");
         write_task(
             dir.path(),
             "job.md",
-            "- [ ] #task [[mail/aa01|M]] [created:: 2026-11-07]",
+            "- [ ] #task [[mail/aa01|M]] [created:: 2026-11-07] ^task1",
         );
-        let scan = WatchScan::from_tasks_for_test(vec![task(
-            "job.md",
-            1,
-            &[thread.clone()],
-        )]);
+        let mut watching = task(dir.path(), "job.md", 1, &[thread.clone()]);
+        watching.block_id = Some("task1".to_string());
+        let scan = WatchScan::from_tasks_for_test(vec![watching]);
         let journal = WatchJournal::load(dir.path()).unwrap();
         let pending = vec![RecoveryWatch {
             account: "me@example.com".to_string(),
@@ -1416,6 +1881,11 @@ mod tests {
             unblocked_on: None,
             pending_tasks: true,
             pending_marker: true,
+            applied_targets: vec![RecoveryWatchTarget {
+                path: "job.md".to_string(),
+                block_id: Some("task1".to_string()),
+                line: None,
+            }],
         }];
         // Fresh turn is newer (aa02 @ 20): the obsolete aa01 pending drops.
         let send = Utc.timestamp_millis_opt(10).unwrap();
@@ -1427,16 +1897,22 @@ mod tests {
             today: NaiveDate::from_ymd_opt(2026, 11, 7).unwrap(),
             blocked_ok: true,
             blocked_reason: None,
-            running: hold::RunningLookup::NoSession,
+            running: hold::RunningLookup::Session(
+                [("job.md".to_string(), "task1".to_string())]
+                    .into_iter()
+                    .collect(),
+            ),
             watchers: &scan,
             prepared: &watches,
             journal: &journal,
             filing_tasks: &BTreeMap::new(),
             pending: &pending,
         });
-        // Fresh aa02 is still a hold for the open task: one edit, one
-        // receipt, and the stale aa01 pending is replaced, not duplicated.
-        assert_eq!(plan.edits.len(), 1);
-        assert_eq!(plan.pending.len(), 0, "{:?}", plan.pending);
+        // The newer aa02 turn is deferred, and its pending record does not
+        // inherit the old aa01 applied-target receipt.
+        assert!(plan.edits.is_empty());
+        assert_eq!(plan.pending.len(), 1, "{:?}", plan.pending);
+        assert_eq!(plan.pending[0].message_id, "aa02");
+        assert!(plan.pending[0].applied_targets.is_empty());
     }
 }

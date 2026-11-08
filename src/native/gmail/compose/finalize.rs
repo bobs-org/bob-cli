@@ -259,7 +259,7 @@ pub(crate) fn finalize(
         &work.confirmed.thread,
         &siblings,
         relative,
-    );
+    )?;
 
     let commit_paths = (|| -> Result<BTreeSet<PathBuf>, GmailError> {
         let mut paths = BTreeSet::<PathBuf>::new();
@@ -313,6 +313,7 @@ pub(crate) fn finalize(
         .collect();
     completed.completed_path_receipts = watch_plan.receipts.clone();
     completed.watch_turns = watch_plan.turns.clone();
+    completed.watch_pending = watch_plan.pending.clone();
     let updated = match state::patch_send_state(&updated, Some(&completed)) {
         Ok(updated) => updated,
         Err(error) => {
@@ -359,6 +360,11 @@ pub(crate) fn finalize(
 
     // Markers follow durable note/task writes and the scoped commit. A
     // running deferral leaves this list empty so the next sync holds.
+    super::super::sync::file::persist_send_watch_pending(
+        vault,
+        &completed.account,
+        &completed.watch_pending,
+    )?;
     send_watch::append_turns(vault, &completed.watch_turns)?;
 
     // Attachment-origin logging is ancillary to the durable mail note. The
@@ -476,6 +482,11 @@ pub(crate) fn reconcile_complete(
             })?;
         }
     }
+    super::super::sync::file::persist_send_watch_pending(
+        vault,
+        &completed.account,
+        &completed.watch_pending,
+    )?;
     send_watch::append_turns(vault, &completed.watch_turns)?;
     state::ensure_sent_event(vault, state)
 }

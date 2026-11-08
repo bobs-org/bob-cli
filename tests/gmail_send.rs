@@ -550,7 +550,7 @@ fn setup_watched_send(prefix: &str) -> (GmailEnv, FakeGog, String, String) {
 
 #[test]
 fn confirmed_send_holds_an_enrolled_watched_task() {
-    let (env, fake, note, _) =
+    let (env, fake, note, _link) =
         setup_watched_send("bob-cli-gmail-send-watch-hold");
     let sent = send_confirmed_reply(&env, &fake, &note);
     assert_eq!(sent["status"], "sent");
@@ -618,20 +618,43 @@ fn unwatched_send_does_not_hold_or_mark_a_turn() {
 
 #[test]
 fn send_defers_a_running_hold_and_lets_sync_finish_it() {
-    let (env, fake, note, _) =
+    let (env, fake, note, link) =
         setup_watched_send("bob-cli-gmail-send-watch-running");
+    let inbox = env.vault().join("gmail_inbox.md");
+    let initial = fs::read_to_string(&inbox).expect("inbox task");
+    let idle_row = initial.replace("^watch1", "^idle");
+    fs::write(
+        &inbox,
+        format!(
+            "{}- [ ] #task Second watcher {link} [fresh:: 2026-11-04] ^busy\n",
+            idle_row,
+        ),
+    )
+    .expect("add busy watcher");
     let daily = env.vault().join("2026/20261105.md");
     fs::create_dir_all(daily.parent().unwrap()).expect("daily dir");
     fs::write(
         &daily,
-        "# Thursday 2026-11-05\n\n## Pomodoros\n- [ ] (**1200-1230** [t:: 30m]) Mail\n  - [[gmail_inbox#^watch1]]\n",
+        "# Thursday 2026-11-05\n\n## Pomodoros\n- [ ] (**1200-1230** [t:: 30m]) Mail\n  - [[gmail_inbox#^busy]]\n",
     )
     .expect("write running ledger");
     send_confirmed_reply(&env, &fake, &note);
-    let line = first_task_line(&env.vault().join("gmail_inbox.md"));
+    let sent_bytes = fs::read_to_string(&inbox).expect("sent task rows");
+    let line = sent_bytes
+        .lines()
+        .find(|line| line.contains("^idle"))
+        .unwrap();
     assert!(
-        !line.contains("#awaiting_reply"),
-        "running session must defer the hold: {line}"
+        line.contains("#awaiting_reply"),
+        "eligible idle watcher should be held: {line}"
+    );
+    let busy = sent_bytes
+        .lines()
+        .find(|line| line.contains("^busy"))
+        .unwrap();
+    assert!(
+        !busy.contains("#awaiting_reply"),
+        "running session defers busy: {busy}"
     );
     assert!(
         journal_kinds(&env, "gmail.turn").is_empty(),
@@ -639,14 +662,23 @@ fn send_defers_a_running_hold_and_lets_sync_finish_it() {
     );
     assert_eq!(calls_for(&fake, "send").len(), 1);
 
+    let hand_edited = sent_bytes.replace(" #awaiting_reply", "");
+    fs::write(&inbox, &hand_edited).expect("remove hold tag by hand");
+
     fs::write(&daily, "# Thursday 2026-11-05\n\n## Pomodoros\n")
         .expect("close the running session");
     let held = run_gmail(&env, &fake, &["sync", "-l", "0", "-f", "json"]);
     assert_success(&held, "sync finishes the deferred hold");
-    let held_line = first_task_line(&env.vault().join("gmail_inbox.md"));
+    let after = fs::read_to_string(&inbox).expect("retried task rows");
+    let held_line = after.lines().find(|line| line.contains("^idle")).unwrap();
     assert!(
-        held_line.contains("#awaiting_reply"),
-        "next sync must hold after the session closes: {held_line}"
+        !held_line.contains("#awaiting_reply"),
+        "hand edit to already applied target must survive: {held_line}"
+    );
+    let busy = after.lines().find(|line| line.contains("^busy")).unwrap();
+    assert!(
+        busy.contains("#awaiting_reply"),
+        "deferred target catches up: {busy}"
     );
     assert_eq!(journal_kinds(&env, "gmail.turn").len(), 1);
     assert_eq!(calls_for(&fake, "send").len(), 1);

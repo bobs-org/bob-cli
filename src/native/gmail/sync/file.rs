@@ -302,7 +302,9 @@ fn persist_recovery(
     account: &str,
     data: &RecoveryData,
 ) -> bool {
-    let empty = data.threads.is_empty() && data.commit_paths.is_empty();
+    let empty = data.threads.is_empty()
+        && data.commit_paths.is_empty()
+        && data.watch.is_empty();
     let result = if empty {
         clear_recovery(vault, account)
     } else {
@@ -317,6 +319,53 @@ fn persist_recovery(
     } else {
         true
     }
+}
+
+/// Merge send-hook watch deferrals into this account's host-local sync
+/// recovery evidence. The caller holds the vault maintenance lock and calls
+/// only after its task writes are durable. Repeating this after complete-send
+/// recovery is idempotent by thread turn and applied-target identity.
+pub(crate) fn persist_send_watch_pending(
+    vault: &Path,
+    account: &str,
+    pending: &[RecoveryWatch],
+) -> Result<(), GmailError> {
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let mut recovery = load_recovery(vault, account).map_err(|message| {
+        GmailError::runtime(
+            "sync_recovery",
+            format!("Gmail sync recovery evidence is unusable: {message}"),
+        )
+    })?;
+    recovery.watch = dedup_watch_pending(
+        recovery.watch.into_iter().chain(pending.iter().cloned()),
+    );
+    write_recovery(vault, account, &recovery).map_err(|error| {
+        GmailError::runtime(
+            "sync_recovery",
+            format!("could not persist Gmail watch deferral: {error}"),
+        )
+        .with_hint(
+            "rerun `bob gmail send NOTE` to finish local finalization; Gmail will not be sent again",
+        )
+    })
+}
+
+/// Read this account's pending watch receipts for send-hook replanning.
+pub(crate) fn load_send_watch_pending(
+    vault: &Path,
+    account: &str,
+) -> Result<Vec<RecoveryWatch>, GmailError> {
+    load_recovery(vault, account)
+        .map(|recovery| recovery.watch)
+        .map_err(|message| {
+            GmailError::runtime(
+                "sync_recovery",
+                format!("Gmail sync recovery evidence is unusable: {message}"),
+            )
+        })
 }
 
 /// Whether a `gmail.save` event for this account/thread/note is already in
@@ -1381,29 +1430,26 @@ fn apply_born_held(
             continue;
         };
         // Find the new task line by its link and apply the hold in place.
-        let mut lines: Vec<String> = staged_file
+        let held_line = staged_file
             .updated_target
-            .lines()
-            .map(str::to_string)
-            .collect();
-        let trailing_newline = staged_file.updated_target.ends_with('\n');
-        let mut changed = false;
-        for line in &mut lines {
-            if !line.contains(link.as_str()) || !line.contains("#task") {
-                continue;
-            }
-            let applied = hold::apply_hold(line, &req);
-            if applied.changed {
-                *line = applied.line;
-                changed = true;
-                break;
-            }
-        }
-        if changed {
-            let mut rebuilt = lines.join("\n");
-            if trailing_newline {
-                rebuilt.push('\n');
-            }
+            .split_inclusive('\n')
+            .enumerate()
+            .find_map(|(index, physical)| {
+                let line =
+                    crate::native::markdown::split_line_ending(physical).0;
+                if !line.contains(link.as_str()) || !line.contains("#task") {
+                    return None;
+                }
+                let applied = hold::apply_hold(line, &req);
+                applied.changed.then_some((index + 1, applied.line))
+            });
+        if let Some((line, updated)) = held_line
+            && let Some(rebuilt) = watch_apply::replace_line_preserving_ending(
+                &staged_file.updated_target,
+                line,
+                &updated,
+            )
+        {
             staged_file.updated_target = rebuilt;
             if let Ok(relative) = task_target.strip_prefix(vault) {
                 let relative = relative.to_path_buf();
@@ -1548,6 +1594,7 @@ fn persist_attempt(
                             unblocked_on: None,
                             pending_tasks: false,
                             pending_marker: true,
+                            applied_targets: Vec::new(),
                         })
                     })),
             );
@@ -2195,12 +2242,22 @@ fn persist_attempt(
             })
             .map(|work| work.thread.clone())
             .collect();
+        let latest_journal = WatchJournal::load(vault).unwrap_or_default();
+        let mut old_pending = recovery.watch.clone();
+        old_pending.retain(|pending| {
+            let Some(key) = pending.key() else {
+                return true;
+            };
+            if pending.effect == "gone" {
+                return !latest_journal.was_reported_gone(&key);
+            }
+            !latest_journal.marker(&key).is_some_and(|marker| {
+                (marker.internal_date, marker.message_id.as_str())
+                    >= (pending.internal_date, pending.message_id.as_str())
+            })
+        });
         let watch = dedup_watch_pending(
-            recovery
-                .watch
-                .iter()
-                .cloned()
-                .chain(watch_pending.iter().cloned()),
+            old_pending.into_iter().chain(watch_pending.iter().cloned()),
         );
         let _ = persist_recovery(
             &mut plan.outcome,
@@ -2255,6 +2312,7 @@ fn recovery_watch_for_turn(
         unblocked_on: None,
         pending_tasks: tasks_pending,
         pending_marker: true,
+        applied_targets: Vec::new(),
     }
 }
 
@@ -2264,14 +2322,45 @@ fn dedup_watch_pending(
     let mut by_key: BTreeMap<(String, String), RecoveryWatch> = BTreeMap::new();
     for item in pending {
         let key = (item.account.clone(), item.thread_id.clone());
-        // Keep the newest turn per thread: larger Gmail date wins, then
-        // larger message id. A newer turn supersedes obsolete pending holds.
-        let replace = by_key.get(&key).is_none_or(|existing| {
-            (item.internal_date, item.message_id.clone())
-                > (existing.internal_date, existing.message_id.clone())
-        });
-        if replace {
-            by_key.insert(key, item);
+        match by_key.get_mut(&key) {
+            None => {
+                by_key.insert(key, item);
+            }
+            Some(existing)
+                if item.internal_date == existing.internal_date
+                    && item
+                        .message_id
+                        .eq_ignore_ascii_case(&existing.message_id) =>
+            {
+                // Retries may contribute applied targets in separate passes.
+                // Keep the union for this turn, and do not let a marker-only
+                // receipt erase task work that is still pending.
+                existing.applied_targets.extend(item.applied_targets);
+                existing.applied_targets.sort();
+                existing.applied_targets.dedup();
+                // A marker-only receipt is authoritative that all task
+                // targets were already made durable for this turn.
+                existing.pending_tasks &= item.pending_tasks;
+                existing.pending_marker |= item.pending_marker;
+                if existing.nudge_on.is_none() {
+                    existing.nudge_on = item.nudge_on;
+                }
+                if existing.unblocked_on.is_none() {
+                    existing.unblocked_on = item.unblocked_on;
+                }
+            }
+            Some(existing)
+                if (item.internal_date, item.message_id.as_str())
+                    > (
+                        existing.internal_date,
+                        existing.message_id.as_str(),
+                    ) =>
+            {
+                // A newer turn supersedes the old entry, including its
+                // applied-target receipts.
+                *existing = item;
+            }
+            Some(_) => {}
         }
     }
     by_key.into_values().collect()
@@ -5035,5 +5124,93 @@ mod tests {
         assert!(after.contains("extra"), "hand edit survives: {after}");
         assert!(after.contains("#awaiting_reply"), "{after}");
         let _ = second;
+    }
+
+    #[test]
+    fn deferred_watch_retry_keeps_applied_target_hand_edits() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path();
+        let _env = test_env(vault);
+        let (_state, _state_env) = isolated_state();
+        fs::create_dir_all(vault.join("mail")).unwrap();
+        fs::write(
+            vault.join("mail/aa01.md"),
+            "---\ntype: \"[[mail]]\"\ncontent: untrusted-email\ngmail_account: me@example.com\ngmail_thread_id: aa01\ntitle: Lease\nwho: Dana\n---\nbody\n",
+        )
+        .unwrap();
+        fs::write(
+            vault.join("job.md"),
+            "- [ ] #task [[mail/aa01|M]] [created:: 2026-11-07] ^idle\n- [ ] #task [[mail/aa01|M]] [created:: 2026-11-07] ^busy\n",
+        )
+        .unwrap();
+        let daily = vault.join("2026/20261107.md");
+        fs::create_dir_all(daily.parent().unwrap()).unwrap();
+        fs::write(
+            &daily,
+            "# Saturday 2026-11-07\n\n## Pomodoros\n- [ ] (**1200-1230** [t:: 30m]) Mail\n  - [[job#^busy]]\n",
+        )
+        .unwrap();
+        let key = ThreadKey::new(TEST_ACCOUNT, "aa01").unwrap();
+
+        let first =
+            try_apply_with_watches(vault, vec![hold_watch_for_test(&key)])
+                .expect("partial hold applies");
+        assert!(first
+            .watch_threads
+            .iter()
+            .any(|row| row.action == "deferred_running"));
+        let first_bytes = fs::read_to_string(vault.join("job.md")).unwrap();
+        let idle = first_bytes
+            .lines()
+            .find(|line| line.contains("^idle"))
+            .unwrap();
+        let busy = first_bytes
+            .lines()
+            .find(|line| line.contains("^busy"))
+            .unwrap();
+        assert!(idle.contains("#awaiting_reply"), "{idle}");
+        assert!(!busy.contains("#awaiting_reply"), "{busy}");
+        let recovery = read_evidence(vault);
+        assert_eq!(
+            recovery["watch"][0]["applied_targets"][0]["path"],
+            "job.md"
+        );
+        assert_eq!(
+            recovery["watch"][0]["applied_targets"][0]["block_id"],
+            "idle"
+        );
+
+        let edited_idle = idle.replace(" #awaiting_reply", "");
+        fs::write(
+            vault.join("job.md"),
+            first_bytes.replace(idle, &edited_idle),
+        )
+        .unwrap();
+        fs::write(&daily, "# Saturday 2026-11-07\n\n## Pomodoros\n").unwrap();
+
+        let second =
+            try_apply_with_watches(vault, vec![hold_watch_for_test(&key)])
+                .expect("retry catches up deferred task");
+        assert_eq!(second.watch_threads[0].tasks.len(), 1);
+        let final_bytes = fs::read_to_string(vault.join("job.md")).unwrap();
+        let idle = final_bytes
+            .lines()
+            .find(|line| line.contains("^idle"))
+            .unwrap();
+        let busy = final_bytes
+            .lines()
+            .find(|line| line.contains("^busy"))
+            .unwrap();
+        assert!(
+            !idle.contains("#awaiting_reply"),
+            "hand edit survives: {idle}"
+        );
+        assert!(
+            busy.contains("#awaiting_reply"),
+            "deferred task catches up: {busy}"
+        );
+        let journal = WatchJournal::load(vault).unwrap();
+        assert_eq!(journal.marker(&key).unwrap().message_id, "aa02");
+        assert!(load_recovery(vault, TEST_ACCOUNT).unwrap().watch.is_empty());
     }
 }

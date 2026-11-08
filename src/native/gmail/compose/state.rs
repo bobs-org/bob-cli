@@ -15,6 +15,7 @@ use std::{
 use chrono::SecondsFormat;
 use sha2::{Digest, Sha256};
 
+use crate::native::gmail::sync::watch_apply::RecoveryWatch;
 use crate::native::{
     capture::StagedTextFile, env as bob_env, pref_journal, vault_sync,
 };
@@ -82,6 +83,9 @@ pub(crate) struct SendState {
     /// Body-free watch turns still needing a journal append after the
     /// scoped commit. Replay is idempotent against the folded marker.
     pub(crate) watch_turns: Vec<SendWatchTurn>,
+    /// Body-free task deferrals to merge into sync recovery after a
+    /// completed send, including on complete-state retries.
+    pub(crate) watch_pending: Vec<RecoveryWatch>,
 }
 
 /// One extra path send wrote, with the SHA-256 of those exact bytes.
@@ -185,6 +189,7 @@ pub(crate) fn load_send_state(
     };
     let completed_path_receipts = parse_path_receipts(mapping)?;
     let watch_turns = parse_watch_turns(mapping)?;
+    let watch_pending = parse_watch_pending(mapping)?;
 
     validate_hex_digest(&operation_id)?;
     validate_opaque_id(&account, true)?;
@@ -243,7 +248,8 @@ pub(crate) fn load_send_state(
         && (completed_note_digest.is_some()
             || !completed_commit_paths.is_empty()
             || !completed_path_receipts.is_empty()
-            || !watch_turns.is_empty())
+            || !watch_turns.is_empty()
+            || !watch_pending.is_empty())
     {
         return Err(SourceError::InvalidSendState);
     }
@@ -272,6 +278,7 @@ pub(crate) fn load_send_state(
         completed_commit_paths,
         completed_path_receipts,
         watch_turns,
+        watch_pending,
     }))
 }
 
@@ -434,6 +441,11 @@ fn render_send_block(state: &SendState, newline: &str) -> String {
             out.push_str(newline);
         }
     }
+    if !state.watch_pending.is_empty()
+        && let Ok(serialized) = serde_json::to_string(&state.watch_pending)
+    {
+        push_field(&mut out, "watch_pending", &serialized, newline);
+    }
     out
 }
 
@@ -518,6 +530,45 @@ fn parse_watch_turns(
         }
         _ => Err(SourceError::InvalidSendState),
     }
+}
+
+fn parse_watch_pending(
+    mapping: &serde_yaml::Mapping,
+) -> Result<Vec<RecoveryWatch>, SourceError> {
+    let Some(value) =
+        mapping.get(serde_yaml::Value::String("watch_pending".to_string()))
+    else {
+        return Ok(Vec::new());
+    };
+    let raw = value.as_str().ok_or(SourceError::InvalidSendState)?;
+    let pending: Vec<RecoveryWatch> =
+        serde_json::from_str(raw).map_err(|_| SourceError::InvalidSendState)?;
+    for item in &pending {
+        validate_opaque_id(&item.account, true)?;
+        validate_opaque_id(&item.thread_id, false)?;
+        validate_opaque_id(&item.message_id, false)?;
+        if item.internal_date < 0
+            || !matches!(item.turn.as_str(), "yours" | "theirs")
+            || !matches!(item.effect.as_str(), "hold" | "lift" | "bounced")
+        {
+            return Err(SourceError::InvalidSendState);
+        }
+        for target in &item.applied_targets {
+            validate_commit_path(&target.path)?;
+            let bad_identity = match target.block_id.as_deref() {
+                Some(block_id) => {
+                    target.line.is_some()
+                        || block_id.is_empty()
+                        || block_id.chars().any(char::is_control)
+                }
+                None => target.line.is_none_or(|line| line == 0),
+            };
+            if bad_identity {
+                return Err(SourceError::InvalidSendState);
+            }
+        }
+    }
+    Ok(pending)
 }
 
 fn validate_commit_path(value: &str) -> Result<(), SourceError> {
@@ -891,6 +942,7 @@ mod tests {
             completed_commit_paths: Vec::new(),
             completed_path_receipts: Vec::new(),
             watch_turns: Vec::new(),
+            watch_pending: Vec::new(),
         }
     }
 
@@ -916,10 +968,30 @@ mod tests {
             turn: "theirs".to_string(),
             effect: "hold".to_string(),
         }];
+        state.watch_pending = vec![RecoveryWatch {
+            account: "you@example.com".to_string(),
+            thread_id: "0123456789abcdef".to_string(),
+            message_id: "0000000000000001".to_string(),
+            internal_date: 1_793_872_800_000,
+            turn: "theirs".to_string(),
+            effect: "hold".to_string(),
+            nudge_on: Some("2026-11-09".to_string()),
+            unblocked_on: None,
+            pending_tasks: true,
+            pending_marker: true,
+            applied_targets: vec![
+                crate::native::gmail::sync::watch_apply::RecoveryWatchTarget {
+                    path: "job.md".to_string(),
+                    block_id: Some("task1".to_string()),
+                    line: None,
+                },
+            ],
+        }];
         let patched =
             patch_send_state(&note, Some(&state)).expect("patch complete");
         assert!(patched.contains("completed_path_receipts:"));
         assert!(patched.contains("watch_turns:"));
+        assert!(patched.contains("watch_pending:"));
         assert!(patched.contains("Hello."));
         let loaded = load_send_state(&patched).expect("load complete");
         assert_eq!(loaded, Some(state));

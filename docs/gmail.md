@@ -842,7 +842,8 @@ dropped links, and mentions do not defer. An ambiguous running ledger
 reports and defers affected holds rather than guessing. The thread marker
 does not advance for that deferred hold; other eligible tasks on the same
 thread still receive the move. The next `sync` after the session closes
-finishes the hold.
+finishes the hold. Catching up after a deferral never rewrites targets the
+earlier run already applied.
 
 ### Several threads, several tasks
 

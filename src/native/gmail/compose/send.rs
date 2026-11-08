@@ -627,6 +627,7 @@ pub(crate) fn begin_send(
         completed_commit_paths: Vec::new(),
         completed_path_receipts: Vec::new(),
         watch_turns: Vec::new(),
+        watch_pending: Vec::new(),
     };
     persist_send_state(
         vault,
@@ -1844,6 +1845,7 @@ mod tests {
             completed_commit_paths: Vec::new(),
             completed_path_receipts: Vec::new(),
             watch_turns: Vec::new(),
+            watch_pending: Vec::new(),
         };
         state::persist_send_state(
             &vault,
@@ -1935,6 +1937,7 @@ mod tests {
             completed_commit_paths: Vec::new(),
             completed_path_receipts: Vec::new(),
             watch_turns: Vec::new(),
+            watch_pending: Vec::new(),
         };
         state::persist_send_state(
             &vault,
@@ -2012,6 +2015,7 @@ mod tests {
             completed_commit_paths: Vec::new(),
             completed_path_receipts: Vec::new(),
             watch_turns: Vec::new(),
+            watch_pending: Vec::new(),
         };
         state::persist_send_state(
             &vault,
@@ -2090,6 +2094,7 @@ mod tests {
             completed_commit_paths: Vec::new(),
             completed_path_receipts: Vec::new(),
             watch_turns: Vec::new(),
+            watch_pending: Vec::new(),
         };
         state::persist_send_state(
             &vault,
@@ -2161,6 +2166,7 @@ mod tests {
             completed_commit_paths: Vec::new(),
             completed_path_receipts: Vec::new(),
             watch_turns: Vec::new(),
+            watch_pending: Vec::new(),
         };
         state::persist_send_state(
             &vault,
@@ -2224,6 +2230,7 @@ mod tests {
             completed_commit_paths: Vec::new(),
             completed_path_receipts: Vec::new(),
             watch_turns: Vec::new(),
+            watch_pending: Vec::new(),
         };
         state::persist_send_state(
             &vault,
@@ -2563,6 +2570,7 @@ mod tests {
             completed_commit_paths: Vec::new(),
             completed_path_receipts: Vec::new(),
             watch_turns: Vec::new(),
+            watch_pending: Vec::new(),
         };
         state::persist_send_state(
             &vault,

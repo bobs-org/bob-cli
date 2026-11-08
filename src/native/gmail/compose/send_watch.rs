@@ -17,7 +17,8 @@ use super::super::{
     resolve, save,
     sync::{
         enroll::EnrollmentFold,
-        hold, scan, watch, watch_apply,
+        file, hold, scan, watch, watch_apply,
+        watch_apply::RecoveryWatch,
         watch_state::{AppliedEffect, AppliedTurn, WatchJournal},
         ThreadKey,
     },
@@ -80,6 +81,7 @@ pub(super) struct SendWatchPlan {
     pub(super) extra_paths: Vec<PathBuf>,
     pub(super) receipts: Vec<PathReceipt>,
     pub(super) turns: Vec<SendWatchTurn>,
+    pub(super) pending: Vec<RecoveryWatch>,
 }
 
 /// Plan watch edits while the send lock is already held. Never fetches
@@ -92,27 +94,28 @@ pub(super) fn plan_under_lock(
     sent_thread: &GmailThread,
     siblings: &BTreeMap<ThreadKey, GmailThread>,
     mail_relative: &Path,
-) -> SendWatchPlan {
+) -> Result<SendWatchPlan, GmailError> {
     let Some(sent) = ThreadKey::new(account, thread_id) else {
-        return SendWatchPlan::default();
+        return Ok(SendWatchPlan::default());
     };
     let folder = Path::new(config.folder());
     let Ok(index) = resolve::scan_index(vault, folder, config.link_label())
     else {
-        return SendWatchPlan::default();
+        return Ok(SendWatchPlan::default());
     };
     let Ok(watchers) = scan::scan_watching_tasks(vault, folder, &index) else {
-        return SendWatchPlan::default();
+        return Ok(SendWatchPlan::default());
     };
     let Ok(enrollment) = EnrollmentFold::load(vault) else {
-        return SendWatchPlan::default();
+        return Ok(SendWatchPlan::default());
     };
     if !enrollment.is_enrolled(&sent) || !watchers.is_watched(&sent) {
-        return SendWatchPlan::default();
+        return Ok(SendWatchPlan::default());
     }
     let Ok(journal) = WatchJournal::load(vault) else {
-        return SendWatchPlan::default();
+        return Ok(SendWatchPlan::default());
     };
+    let pending = file::load_send_watch_pending(vault, account)?;
     let mut prepared = vec![watch::observation_only(
         sent.clone(),
         sent_thread,
@@ -155,7 +158,7 @@ pub(super) fn plan_under_lock(
         &watchers,
         &prepared,
         &journal,
-        &[],
+        &pending,
     );
     let mail_path = vault.join(mail_relative);
     let mut result = SendWatchPlan::default();
@@ -193,7 +196,8 @@ pub(super) fn plan_under_lock(
             effect: turn.effect.as_str().to_string(),
         })
         .collect();
-    result
+    result.pending = plan.pending;
+    Ok(result)
 }
 
 /// Append stored watch turns if they are not already the folded marker.

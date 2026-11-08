@@ -132,9 +132,20 @@ fn watch_message(
     to: &str,
     labels: &[&str],
 ) -> Value {
+    watch_message_for(WATCH_THREAD, id, internal_date, from, to, labels)
+}
+
+fn watch_message_for(
+    thread_id: &str,
+    id: &str,
+    internal_date: i64,
+    from: &str,
+    to: &str,
+    labels: &[&str],
+) -> Value {
     json!({
         "id": id,
-        "threadId": WATCH_THREAD,
+        "threadId": thread_id,
         "labelIds": labels,
         "internalDate": internal_date.to_string(),
         "snippet": "A metadata-only watch fixture.",
@@ -622,6 +633,153 @@ fn sync_polls_send_reply_and_due_nudge_through_one_watch_lifecycle() {
         unchanged_line.contains("#awaiting_reply"),
         "{unchanged_line}"
     );
+}
+
+#[test]
+fn same_run_filing_insert_holds_the_shifted_existing_watcher_only() {
+    const NEW_THREAD: &str = "fedcba9876543210";
+    let env = GmailEnv::new("bob-cli-gmail-watch-filing-insert");
+    env.write_config(&format!(
+        "timezone: America/New_York\ngmail:\n  account: {ACCOUNT}\n  writer: {HOST}\n"
+    ));
+    write_blocked_task_settings(&env);
+    write_area(&env, "job");
+    let fake = FakeGog::new(&env, "gog");
+    fake.set_labels(json!([
+        {"id": "Label_1", "name": "job", "type": "user"},
+        {"id": "INBOX", "name": "INBOX", "type": "system"}
+    ]));
+
+    let received = watch_message_for(
+        WATCH_THREAD,
+        "00000000000000a0",
+        1_793_786_400_000,
+        "Dana <dana@example.test>",
+        ACCOUNT,
+        &["INBOX"],
+    );
+    fake.set_threads(json!({
+        WATCH_THREAD: {"thread": {"id": WATCH_THREAD, "historyId": "1", "messages": [received.clone()]}}
+    }));
+    let saved = run_gmail(&env, &fake, &["save", WATCH_THREAD, "-f", "json"]);
+    assert_success(&saved, "save the existing watched mail note");
+    let old_note = json_stdout(&saved);
+    let old_link = old_note["link"].as_str().unwrap();
+    let job_path = env.vault().join("job.md");
+    fs::write(
+        &job_path,
+        format!(
+            "---\ntype: \"[[area]]\"\n---\n\n# job\n\n## Tasks\n\n### Next & In Progress\n- [*] #task Existing {old_link} [created:: 2026-11-01]\n\n### Done & Canceled\n"
+        ),
+    )
+    .expect("write grouped area task");
+
+    let adopted =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_success(&adopted, "adopt the existing watched thread");
+    assert_eq!(json_stdout(&adopted)["summary"]["watching"], 1);
+
+    let sent = watch_message_for(
+        WATCH_THREAD,
+        "00000000000000a1",
+        1_793_872_800_000,
+        ACCOUNT,
+        "Dana <dana@example.test>",
+        &["SENT"],
+    );
+    let candidate = watch_message_for(
+        NEW_THREAD,
+        "00000000000000b0",
+        1_793_872_800_000,
+        "Lee <lee@example.test>",
+        ACCOUNT,
+        &["INBOX", "Label_1"],
+    );
+    fake.set_threads(json!({
+        WATCH_THREAD: {"thread": {"id": WATCH_THREAD, "historyId": "2", "messages": [received, sent]}},
+        NEW_THREAD: {"thread": {"id": NEW_THREAD, "historyId": "1", "messages": [candidate]}}
+    }));
+    fake.set_search_pages(json!([{"threads": [{"id": NEW_THREAD}]}]));
+
+    let output =
+        run_gmail(&env, &fake, &["sync", "-l", "1", "-r", "0", "-f", "json"]);
+    assert_success(
+        &output,
+        "file the new thread and hold the existing watcher",
+    );
+    let value = json_stdout(&output);
+    assert_eq!(value["pulled"], 1);
+    assert_eq!(value["summary"]["watching"], 2);
+    assert_eq!(value["watch"][0]["action"], "held");
+    assert_eq!(value["watch"][0]["tasks"][0]["path"], "job.md");
+
+    let job = fs::read_to_string(&job_path).expect("updated area note");
+    let old_line = job
+        .lines()
+        .find(|line| line.contains(old_link))
+        .expect("existing Next row");
+    let old_line_number =
+        job.lines().position(|line| line == old_line).unwrap() + 1;
+    assert!(old_line.contains("#awaiting_reply"), "{old_line}");
+    assert_eq!(value["watch"][0]["tasks"][0]["line"], old_line_number);
+    let filed_link = value["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["status"] == "filed")
+        .unwrap()["link"]
+        .as_str()
+        .unwrap();
+    let new_line = job
+        .lines()
+        .find(|line| line.contains(filed_link))
+        .expect("newly filed row");
+    assert!(!new_line.contains("#awaiting_reply"), "{new_line}");
+}
+
+#[test]
+fn born_held_filing_keeps_crlf_in_an_existing_inbox() {
+    const NEW_THREAD: &str = "fedcba9876543210";
+    let env = GmailEnv::new("bob-cli-gmail-born-held-crlf");
+    env.write_config(&format!(
+        "timezone: America/New_York\ngmail:\n  account: {ACCOUNT}\n  writer: {HOST}\n"
+    ));
+    write_blocked_task_settings(&env);
+    let inbox_path = env.vault().join("gmail_inbox.md");
+    let before = "---\r\ntype: \"[[inbox]]\"\r\nready_cap: off\r\n---\r\n\r\n# Gmail Inbox\r\n\r\n## Tasks\r\n### Next & In Progress\r\n- [ ] #task Existing [created:: 2026-11-01]\r\n### Done & Canceled\r\n";
+    fs::write(&inbox_path, before).expect("write CRLF inbox");
+    let fake = FakeGog::new(&env, "gog");
+    fake.set_search_pages(json!([{"threads": [{"id": NEW_THREAD}]}]));
+    let sent = watch_message_for(
+        NEW_THREAD,
+        "00000000000000b0",
+        1_793_872_800_000,
+        ACCOUNT,
+        "Dana <dana@example.test>",
+        &["SENT"],
+    );
+    fake.set_threads(json!({
+        NEW_THREAD: {"thread": {"id": NEW_THREAD, "historyId": "1", "messages": [sent]}}
+    }));
+
+    let output =
+        run_gmail(&env, &fake, &["sync", "-l", "1", "-r", "0", "-f", "json"]);
+    assert_success(&output, "file and hold outgoing-last thread");
+    let after = fs::read_to_string(&inbox_path).expect("read born-held inbox");
+    assert!(after.contains("#awaiting_reply"), "{after}");
+    assert_eq!(
+        after.matches("\r\n").count(),
+        before.matches("\r\n").count() + 2
+    );
+    assert_eq!(after.matches('\n').count(), after.matches("\r\n").count());
+    for original_line in [
+        "# Gmail Inbox",
+        "## Tasks",
+        "### Next & In Progress",
+        "### Done & Canceled",
+    ] {
+        assert!(after.contains(&format!("{original_line}\r\n")), "{after}");
+    }
 }
 
 #[test]
