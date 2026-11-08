@@ -397,9 +397,9 @@ fn read_inbox(
 }
 
 fn append_tasks(existing: Option<&str>, additions: &[String]) -> String {
-    let mut text = existing.map(str::to_string).unwrap_or_else(|| {
-        "---\nparent: \"[[inbox]]\"\ntype: \"[[area]]\"\nready_cap: off\n---\n\n# Gmail inbox\n\n## Tasks\n".to_string()
-    });
+    let mut text = existing
+        .map(str::to_string)
+        .unwrap_or_else(super::sync::file::inbox_template);
     let heading = find_tasks_heading(&text);
     let Some((_, section_end)) = heading else {
         if !text.is_empty() && !text.ends_with('\n') {

@@ -20,7 +20,7 @@ use super::{
     note::{self, index::MailIndex},
     policy::{self, NeverSavePolicy},
     prepare::{self, BinaryImport, OriginDescriptor, PreparedThread},
-    resolve::{self, ConfirmedThread},
+    resolve::{self, ConfirmedThread, GmailRead, ResolvedIdentity},
     ui, GmailError,
 };
 use crate::native::{
@@ -95,6 +95,28 @@ pub(crate) fn run_internal(
     args: &SaveArgs,
 ) -> Result<Vec<StagedSaveNote>, GmailError> {
     run_inner(args)
+}
+
+/// Fetch and prepare one sync candidate without taking the vault lock or
+/// writing any files. Sync prepares every remote body and attachment before
+/// entering its one vault transaction.
+#[allow(dead_code)] // The command phase consumes this boundary.
+pub(crate) fn prepare_sync_candidate<R: GmailRead>(
+    reader: &R,
+    account: &str,
+    identity: ResolvedIdentity,
+    body_mode: crate::native::config::GmailBodyMode,
+    never_save: &NeverSavePolicy,
+) -> Result<PreparedSave, GmailError> {
+    let confirmed = resolve::fetch_confirmed_thread(reader, identity)?;
+    policy::check(reader, account, &confirmed.thread, never_save)?;
+    let prepared =
+        prepare::prepare_thread(reader, account, &confirmed.thread, body_mode)?;
+    Ok(PreparedSave {
+        confirmed,
+        prepared,
+        body_mode,
+    })
 }
 
 fn run_inner(args: &SaveArgs) -> Result<Vec<StagedSaveNote>, GmailError> {
@@ -463,6 +485,36 @@ pub(crate) fn plan_prepared_saves(
     saved_at: DateTime<Utc>,
     timezone: chrono_tz::Tz,
 ) -> Result<Vec<StagedSaveNote>, GmailError> {
+    plan_prepared_saves_with_parent_links(
+        vault,
+        folder,
+        link_template,
+        works,
+        index,
+        parent_link,
+        &BTreeMap::new(),
+        rerender,
+        saved_at,
+        timezone,
+    )
+}
+
+/// Plan a batch of saves with a per-thread parent override. The ordinary
+/// save and compose callers keep using their single-parent entry point;
+/// routed sync supplies different parents while sharing filename and image
+/// collision accounting across the whole batch.
+pub(crate) fn plan_prepared_saves_with_parent_links(
+    vault: &Path,
+    folder: &Path,
+    link_template: &str,
+    works: &mut BTreeMap<(String, String), PreparedSave>,
+    index: &MailIndex,
+    parent_link: Option<&str>,
+    parent_links: &BTreeMap<(String, String), String>,
+    rerender: bool,
+    saved_at: DateTime<Utc>,
+    timezone: chrono_tz::Tz,
+) -> Result<Vec<StagedSaveNote>, GmailError> {
     let mut occupied = collect_occupied(vault, folder)?;
     let mut reserved_imports = BTreeMap::<String, String>::new();
     let mut plans = Vec::with_capacity(works.len());
@@ -541,7 +593,11 @@ pub(crate) fn plan_prepared_saves(
 
         let thread = &work.confirmed.thread;
         let parent = if original.is_none() {
-            parent_link.unwrap_or("[[mail]]")
+            parent_links
+                .get(key)
+                .map(String::as_str)
+                .or(parent_link)
+                .unwrap_or("[[mail]]")
         } else {
             "[[mail]]"
         };
@@ -685,6 +741,56 @@ pub(crate) fn plan_prepared_saves(
         });
     }
     Ok(plans)
+}
+
+/// Install the shared save planner's images and write its mail notes together
+/// with caller-owned staged edits. Any failed text batch removes only images
+/// created by this attempt, preserving the save transaction's rollback rule.
+#[allow(dead_code)] // Consumed by the Gmail sync command phase.
+pub(crate) fn write_prepared_batch(
+    vault: &Path,
+    works: &BTreeMap<(String, String), PreparedSave>,
+    plans: &[StagedSaveNote],
+    staged: &[StagedTextFile],
+) -> Result<Vec<(PathBuf, String)>, GmailError> {
+    validate_write_targets(vault, plans, works, staged)?;
+    for file in staged {
+        let relative = file.target.strip_prefix(vault).map_err(|_| {
+            GmailError::runtime(
+                "refused",
+                "a staged text target escaped the vault".to_string(),
+            )
+        })?;
+        ensure_parent_dirs(vault, relative)?;
+    }
+
+    let mut created_images = Vec::new();
+    for work in works.values() {
+        match install_imports(vault, &work.prepared.imports) {
+            Ok(created) => created_images.extend(created),
+            Err(error) => {
+                cleanup_created_images(vault, &created_images);
+                return Err(error);
+            }
+        }
+    }
+
+    if let Err(error) = capture::write_staged_files(staged) {
+        cleanup_created_images(vault, &created_images);
+        let kind = if error.typed == Some(CaptureFailureKind::NoteChanged) {
+            "note_changed"
+        } else {
+            "write"
+        };
+        return Err(GmailError::runtime(
+            kind,
+            format!(
+                "could not safely write the Gmail filing batch: {}",
+                error.message
+            ),
+        ));
+    }
+    Ok(created_images)
 }
 
 fn resolve_parent_link(
@@ -1419,7 +1525,7 @@ pub(crate) fn validate_write_targets(
     Ok(())
 }
 
-fn validate_target_path(
+pub(crate) fn validate_target_path(
     vault: &Path,
     relative: &Path,
 ) -> Result<(), GmailError> {

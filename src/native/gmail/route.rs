@@ -60,6 +60,17 @@ impl RouteContext {
         parent_notes::resolve_parent_in(&self.bob_dir, &self.candidates, input)
     }
 
+    /// Revalidate a canonical route against a fresh vault snapshot while a
+    /// sync transaction holds the maintenance lock. This keeps a destination
+    /// that was renamed, closed, or retyped during Gmail preparation from
+    /// receiving a stale task.
+    #[allow(dead_code)] // Consumed by the Gmail sync command phase.
+    pub(crate) fn resolve_route(&self, route: &str) -> Option<ResolvedParent> {
+        self.resolve(route)
+            .ok()
+            .filter(|parent| parent.route == route)
+    }
+
     /// The route a note's `parent:` links to. A chain may pass through a
     /// note that is not a candidate (a done project), which is read here.
     fn parent_of(&self, route: &str) -> Option<String> {

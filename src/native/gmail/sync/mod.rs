@@ -24,6 +24,9 @@
 
 pub(crate) mod discover;
 pub(crate) mod enroll;
+// The following CLI phase wires this transaction boundary into `gmail sync`.
+#[allow(dead_code)]
+pub(crate) mod file;
 pub(crate) mod guard;
 pub(crate) mod retry;
 pub(crate) mod scan;
