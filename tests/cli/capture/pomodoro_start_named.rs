@@ -334,3 +334,52 @@ fn named_start_timing_can_precede_or_follow_a_bare_name() {
         fs::read_to_string(&day_b).expect("trailing timing day")
     );
 }
+
+#[test]
+fn named_start_trailing_later_offset_writes_the_resolved_span() {
+    let (_temp, vault, day_file) =
+        named_vault("bob-cli-named-trailing-later", WORKED);
+    let output =
+        run_capture(&vault, &day_file, &["=bugs+2"], "2026-07-10 09:42:00");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("later JSON");
+    assert_eq!(json["pomodoro_start"]["pomodoro_name"], "BUGS");
+    assert_eq!(json["pomodoro_start"]["start"], "0955");
+    assert_eq!(json["pomodoro_start"]["end"], "1020");
+    assert_eq!(json["pomodoro_start"]["duration_minutes"], 25);
+    assert_eq!(json["pomodoro_start"]["later_units"], 2);
+    let after = fs::read_to_string(&day_file).expect("read day");
+    assert!(
+        after.contains("- [ ] (**0955-1020** [t:: 25m]) — BUGS"),
+        "{after}"
+    );
+
+    let (_temp, vault, day_file) =
+        named_vault("bob-cli-named-fix2-plus", WORKED);
+    let output =
+        run_capture(&vault, &day_file, &["=fix2+"], "2026-07-10 09:42:00");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("fix2+ JSON");
+    assert_eq!(json["pomodoro_start"]["pomodoro_name"], "FIX");
+    assert_eq!(json["pomodoro_start"]["created_pomodoro"], true);
+    assert_eq!(json["pomodoro_start"]["start"], "0950");
+    assert_eq!(json["pomodoro_start"]["end"], "1000");
+    assert_eq!(json["pomodoro_start"]["later_units"], 1);
+
+    let (_temp, vault, day_file) =
+        named_vault("bob-cli-named-hash-c-plus", WORKED);
+    let output =
+        run_capture(&vault, &day_file, &["=#c++"], "2026-07-10 09:42:00");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("c++ JSON");
+    assert_eq!(json["pomodoro_start"]["pomodoro_name"], "C++");
+    assert!(
+        json["pomodoro_start"]["later_units"].is_null(),
+        "zero later_units is omitted: {json}"
+    );
+    assert_eq!(json["pomodoro_start"]["start"], "0945");
+    assert_eq!(json["pomodoro_start"]["end"], "1010");
+}

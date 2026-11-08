@@ -1009,9 +1009,6 @@ fn named_start_name_at(
         return Some((suffix, query, (name_start, name_end), false));
     }
     let name_end = name_start + name.len();
-    if cursor < name_start || cursor > name_end {
-        return None;
-    }
     let hash_start = if spelling == super::bare_name::NameSpelling::Hash {
         name_start.saturating_sub(1)
     } else {
@@ -1024,22 +1021,27 @@ fn named_start_name_at(
     {
         range_end += trailing_glued_name_extra(text, &suffix);
     }
-    Some((
-        suffix,
-        name.get(..cursor - name_start)?.to_string(),
-        (hash_start, range_end),
-        true,
-    ))
+    if cursor < name_start || cursor > range_end {
+        return None;
+    }
+    let query = if cursor <= name_end {
+        name.get(..cursor - name_start)?.to_string()
+    } else {
+        name.clone()
+    };
+    Some((suffix, query, (hash_start, range_end), true))
 }
 
 /// Completion field for the name part of a `=<X>#name` / `=name` named
-/// Pomodoro start. The cursor must lie inside `[name_start, name_end]`:
-/// just after `#` (hash) or just after `=` (bare) through the end of the
-/// name part. A cursor on timing or at the `#` byte itself yields nothing.
-/// The replacement includes `#` for selector names so candidate formatting
-/// can keep it only when the selected name needs it; quoted exact-name
+/// Pomodoro start. The cursor must lie inside the name part, or inside
+/// trailing glued timing when there is no leading `<X>`: just after `#`
+/// (hash) or just after `=` (bare) through the end of that range. A cursor
+/// on leading timing or at the `#` byte itself yields nothing. The
+/// replacement includes `#` for selector names so candidate formatting can
+/// keep it only when the selected name needs it; quoted exact-name
 /// literals keep their typed delimiter. The replacement covers the whole
-/// name part regardless of where the cursor sits inside it.
+/// name part and any trailing glued timing regardless of where the cursor
+/// sits inside it.
 fn pomodoro_start_name_field(
     item: &CaptureItem<'_>,
     cursor: usize,
@@ -1178,17 +1180,23 @@ fn pomodoro_past_name_field(
     let name_len = super::bare_name::bare_start_name_len(after_digits)?;
     let start = token_start + 2 + digits;
     let name_end = start + name_len;
-    if cursor < start || cursor > name_end {
-        return None;
-    }
     let leading = if digits == 0 { "" } else { &after_eq[..digits] };
     let extra = trailing_glued_name_extra(&after_digits[name_len..], leading);
+    let range_end = name_end + extra;
+    if cursor < start || cursor > range_end {
+        return None;
+    }
+    let query = if cursor <= name_end {
+        after_digits.get(..cursor - start)?.to_string()
+    } else {
+        after_digits.get(..name_len)?.to_string()
+    };
     Some(CompletionField {
         context: CompletionContext::PomodoroPastName,
         route: None,
         block_id: None,
-        query: after_digits.get(..cursor - start)?.to_string(),
-        replacement: (start, name_end + extra),
+        query,
+        replacement: (start, range_end),
         bare_name: true,
     })
 }
@@ -3458,9 +3466,6 @@ fn pomodoro_link_suffix_name_field(
         });
     }
     let name_end = name_start + name.len();
-    if cursor < token.start + name_start || cursor > token.start + name_end {
-        return None;
-    }
     let mut range_end = name_end;
     if let Some((offset, text)) = timing.as_ref()
         && !text.is_empty()
@@ -3468,14 +3473,22 @@ fn pomodoro_link_suffix_name_field(
     {
         range_end += trailing_glued_name_extra(text, &timing_suffix);
     }
+    if cursor < token.start + name_start || cursor > token.start + range_end {
+        return None;
+    }
+    let query = if cursor <= token.start + name_end {
+        token
+            .text
+            .get(name_start..cursor - token.start)?
+            .to_string()
+    } else {
+        name.clone()
+    };
     Some(CompletionField {
         context: CompletionContext::PomodoroName,
         route: Some(route_part.to_ascii_lowercase()),
         block_id: Some(block_id.to_string()),
-        query: token
-            .text
-            .get(name_start..cursor - token.start)?
-            .to_string(),
+        query,
         replacement: (
             token.start
                 + if spelling == NameSpelling::Hash {

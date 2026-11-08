@@ -251,6 +251,49 @@ fn numeric_past_later_offsets_teach_the_start_spelling() {
 }
 
 #[test]
+fn named_past_later_offsets_teach_the_hash_spelling() {
+    for (typed, start, duration, later) in [
+        ("x=fix+", "=fix+", 25, 5),
+        ("x=fix2+", "=fix2+", 10, 5),
+        ("x=c++", "=c+", 25, 5),
+    ] {
+        let error = execute(typed).expect_err(typed);
+        assert!(error.contains("records finished work"), "{typed}: {error}");
+        assert!(
+            error.contains(&format!(
+                "`{start}` starts a {duration}-minute session {later} minutes from now"
+            )),
+            "{typed}: {error}"
+        );
+        assert!(
+            error.contains(
+                "; spell a name that ends in `+` with `#` (`x=#c++`)"
+            ),
+            "{typed}: {error}"
+        );
+        let edit = editor(typed);
+        assert_eq!(edit.mode, EditorMode::PomodoroPast, "{typed}");
+        assert_eq!(
+            edit.diagnostics[0].code, "invalid_pomodoro_past",
+            "{typed}"
+        );
+    }
+
+    let parsed = execute("x=#c++").expect("hash plus name");
+    let spec = past_spec(&parsed);
+    assert_eq!(spec.name.as_deref(), Some("C++"));
+    assert_eq!(spec.blocks, 5);
+
+    for typed in ["x=fix~1+", "x=fix3~1+"] {
+        let parsed = execute(typed).expect(typed);
+        assert!(
+            matches!(parsed.kind, CaptureKind::PomodoroPast { .. }),
+            "{typed}"
+        );
+    }
+}
+
+#[test]
 fn past_names_stop_at_operators_and_literals_hold_them() {
     // `!` and `=` end unquoted names.
     let parsed = execute("x=fix!2").expect_err("should be teaching error");

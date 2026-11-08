@@ -1101,7 +1101,14 @@ fn pomodoro_start_name_completes_to_bare_or_hashed_spellings() {
     assert_eq!(trailing.query, "de");
     assert_eq!(trailing.replacement, (1, 4));
     assert!(trailing.bare_name);
-    assert_eq!(field("=de3", 4), None);
+    let in_digits = field("=de3", 4).expect("cursor in trailing digits");
+    assert_eq!(in_digits.query, "de");
+    assert_eq!(in_digits.replacement, (1, 4));
+    assert!(in_digits.bare_name);
+    let on_plus = field("=fi2+", 4).expect("cursor on trailing plus");
+    assert_eq!(on_plus.query, "fi");
+    assert_eq!(on_plus.replacement, (1, 5));
+    assert!(on_plus.bare_name);
 
     // A cursor on `=` itself offers nothing; just after `=` is the empty
     // name query, matching just after `#` on `=#bugs`.

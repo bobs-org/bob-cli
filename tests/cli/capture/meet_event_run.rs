@@ -473,3 +473,38 @@ fn dry_run_reports_the_buffered_span_and_writes_nothing() {
         BUFFERED_LUNCH_DAY
     );
 }
+
+#[test]
+fn trailing_plus_named_meet_is_explicit_timing() {
+    let temp = TempDir::new("bob-cli-meet-trailing-plus");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20261101.md");
+    let day = concat!(
+        "## Events\n",
+        "- [ ] #task **0800-0830** Standup ^standup\n",
+        "\n",
+        "## Pomodoros\n",
+        "- [ ] () — BOB\n",
+        "- [ ] () — MEET\n",
+        "  - [[#^standup]]\n",
+    );
+    write_file(&day_file, day);
+    let json = run_start(&vault, &day_file, "2026-11-01 07:54:00", "=meet+");
+    let start = &json["pomodoro_start"];
+    assert_eq!(start["start"], "0800", "{json}");
+    assert_eq!(start["end"], "0825", "{json}");
+    assert_eq!(start["later_units"], 1, "{json}");
+    assert_eq!(start["event_run"]["source"], "explicit", "{json}");
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("started day"),
+        concat!(
+            "## Events\n",
+            "- [ ] #task **0800-0830** Standup ^standup\n",
+            "\n",
+            "## Pomodoros\n",
+            "- [ ] (**0800-0825** [t:: 25m]) — MEET\n",
+            "  - [[#^standup]]\n",
+            "- [ ] () — BOB\n",
+        )
+    );
+}

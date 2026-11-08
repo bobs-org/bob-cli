@@ -1012,6 +1012,19 @@ fn parse_link_start_suffix(
     if name.as_deref() == Some("") {
         return Err(POMODORO_NAME_REQUIRED_ERROR.to_string());
     }
+    if name.is_none()
+        && let Some(message) = close_shaped_plus_start_error(typed_token)
+    {
+        return Err(message);
+    }
+    if name_spelling == Some(NameSpelling::Bare)
+        && let Some(name_str) = name.as_deref()
+        && let Some((_, trailing)) = timing.as_ref()
+        && trailing.contains("++")
+        && let Some(message) = doubled_plus_start_error(typed_token, name_str)
+    {
+        return Err(message);
+    }
     if name_is_literal {
         // A literal's spaces are the point: validate the canonical name,
         // never the slug charset.
@@ -1047,7 +1060,20 @@ fn parse_link_start_suffix(
     // mirroring `parse_pomodoro_equals_item`'s `named_token_error` order.
     // A glued timing (`=3bugs`) already returned above via the length
     // check; any remaining effective failure is overflow/invalid timing.
-    let spec = parse_pomodoro_start_suffix(&effective)?;
+    let spec = match parse_pomodoro_start_suffix(&effective) {
+        Ok(spec) => spec,
+        Err(message) if message.contains("`+0` moves nothing") => {
+            if let Some(name_str) = name.as_deref() {
+                return Err(plus_zero_named_error(
+                    name_str,
+                    &suffix,
+                    timing.as_ref().map(|(_, text)| text.as_str()),
+                ));
+            }
+            return Err(message);
+        }
+        Err(message) => return Err(message),
+    };
     // Both timings win over a retired `@`, including a dangling second
     // timing (`=3#bugs@`). Reuse the standalone teaching rule rather than
     // drifting. Dangling `@` with no leading count is already a retired

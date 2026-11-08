@@ -1073,3 +1073,56 @@ fn capture_pomodoro_start_batch_adjusts_moved_entry() {
         )
     );
 }
+
+fn later_start_day_bytes(name: &str, now: &str, args: &[&str]) -> String {
+    let temp = TempDir::new(name);
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&vault.join("sase.md"), "# S\n## Tasks\n");
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] () — FIX\n- [ ] () — DEEP WORK\n- [ ] ()\n",
+    );
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .args(args)
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", now)
+        .output()
+        .expect("run later-start capture");
+    assert_success(&output);
+    fs::read_to_string(&day_file).expect("read day")
+}
+
+#[test]
+fn glued_later_start_matches_start_then_shift_note_bytes() {
+    let now = "2026-07-10 09:42:00";
+    for (glued, spaced) in [
+        ("=3+", "=3 ++"),
+        ("=3+1", "=3 ++1"),
+        ("=3+3", "=3 ++3"),
+        ("=3+fix", "=3fix ++"),
+        ("=3+1#deep-work", "=3#deep-work ++1"),
+        ("=fix2+", "=fix2 ++"),
+        ("=fix2+1", "=fix2 ++1"),
+        ("=fix2+3", "=fix2 ++3"),
+        ("=bugs+2", "=bugs ++2"),
+    ] {
+        let glued_day = later_start_day_bytes(
+            &format!("bob-cli-later-glued-{glued}"),
+            now,
+            &[glued],
+        );
+        let spaced_day = later_start_day_bytes(
+            &format!("bob-cli-later-spaced-{glued}"),
+            now,
+            &[spaced],
+        );
+        assert_eq!(glued_day, spaced_day, "{glued} vs {spaced}");
+    }
+}

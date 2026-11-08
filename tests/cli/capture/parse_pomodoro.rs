@@ -196,11 +196,14 @@ fn capture_parse_pomodoro_start_reports_later_units_additively() {
             .expect("capture-parse JSON")
     };
 
-    for (text, raw, duration, later) in
-        [("=+3", "+3", 5, 3), ("=3+2", "3+2", 3, 2)]
-    {
+    for (text, raw, duration, later) in [
+        ("=+3", "+3", 5, 3),
+        ("=3+2", "3+2", 3, 2),
+        ("=fix2+", "2+", 2, 1),
+        ("=bugs+2", "+2", 5, 2),
+    ] {
         let value = parse(text);
-        assert_eq!(value["grammar"], 17, "{text}");
+        assert_eq!(value["grammar"], 18, "{text}");
         assert_eq!(value["mode"], "pomodoro_start", "{text}");
         assert_eq!(
             value["pomodoro_start"],
@@ -223,6 +226,10 @@ fn capture_parse_pomodoro_start_reports_later_units_additively() {
     for (text, hint) in [
         ("=+0", "`+0` moves nothing"),
         ("=3-1+2", "takes one offset"),
+        ("=c++", "ends in two `+`"),
+        ("=fix++", "ends in two `+`"),
+        ("=x+", "cannot start a Pomodoro named `X`"),
+        ("=fix2+0", "`+0` moves nothing"),
     ] {
         let value = parse(text);
         assert_eq!(value["mode"], "pomodoro_start", "{text}");

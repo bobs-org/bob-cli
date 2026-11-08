@@ -33,7 +33,7 @@ fn past_parse_reports_full_contract_and_grammar_14() {
     // Single unnamed past.
     let one = parse("x=3");
     assert_eq!(one["schema_version"], 1);
-    assert_eq!(one["grammar"], 17);
+    assert_eq!(one["grammar"], 18);
     assert_eq!(one["mode"], "pomodoro_past");
     assert_eq!(one["body"], "x=3");
     assert_eq!(one["section"], serde_json::Value::Null);
@@ -341,4 +341,32 @@ fn past_capture_records_with_nothing_lost() {
     assert_eq!(value["placement"], "recorded");
     let after = fs::read_to_string(&day).expect("read day after");
     assert!(after.contains("(**0910-0925**"), "{after}");
+}
+
+#[test]
+fn past_parse_named_later_offset_teaches_the_hash_spelling() {
+    for text in ["x=fix+", "x=fix2+", "x=c++"] {
+        let value = parse(text);
+        assert_eq!(value["mode"], "pomodoro_past", "{text}");
+        assert_eq!(
+            value["diagnostics"][0]["code"], "invalid_pomodoro_past",
+            "{text}: {value}"
+        );
+        let message = value["diagnostics"][0]["message"]
+            .as_str()
+            .expect("message");
+        assert!(
+            message.contains("records finished work"),
+            "{text}: {message}"
+        );
+        assert!(
+            message
+                .contains("spell a name that ends in `+` with `#` (`x=#c++`)"),
+            "{text}: {message}"
+        );
+    }
+    let legal = parse("x=#c++");
+    assert_eq!(legal["mode"], "pomodoro_past");
+    assert_eq!(legal["diagnostics"], serde_json::json!([]));
+    assert_eq!(legal["pomodoro_past"]["name"], "C++");
 }

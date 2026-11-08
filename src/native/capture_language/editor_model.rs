@@ -775,11 +775,16 @@ pub(super) struct MarkerParse {
     /// Validated `@<route>:<block-id>[#<name>]=<X>` start suffix, when the
     /// marker carries one. Set even on incomplete markers (e.g. `@r:=3`
     /// still missing its block ID); invalid suffixes become an
-    /// `invalid_pomodoro_start` diagnostic instead.
+    /// `invalid_pomodoro_start` diagnostic instead, except a doubled-plus
+    /// near miss which stays on this marker as `invalid_pomodoro_link`.
     pub(super) pomodoro_start: Option<PomodoroStartSpec>,
     /// Validated `@<route>:<block-id>=x` close suffix, when the marker
     /// carries one. Never coexists with `pomodoro_start`.
     pub(super) pomodoro_close: Option<PomodoroCloseSpec>,
+    /// Diagnostic that still lets this token claim the item. Used so a
+    /// solo `@route:id=c++` near miss stays `pomodoro_link` instead of
+    /// dropping to a new task.
+    pub(super) diagnostic: Option<Diagnostic>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

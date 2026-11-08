@@ -1767,3 +1767,96 @@ fn link_with_start_creates_started_entry_from_completed_name() {
     );
     assert!(!day_after.contains("DEEP-WORK"), "{day_after}");
 }
+
+#[test]
+fn link_start_accepts_trailing_later_timing_on_a_bare_name() {
+    let temp = TempDir::new("bob-cli-capture-link-trailing-later");
+    let vault = temp.path().join("vault");
+    let target = vault.join("cash.md");
+    let day_file = vault.join("day.md");
+    write_file(&target, "# Cash\n## Tasks\n- [ ] #task Work ^work\n");
+    write_file(&day_file, "## Pomodoros\n- [ ] () — FIX\n");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@cash:work=fix2+")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:42:00")
+        .output()
+        .expect("run trailing later link start");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["kind"], "pomodoro_link", "{json}");
+    assert_eq!(json["pomodoro_start"]["pomodoro_name"], "FIX", "{json}");
+    assert_eq!(json["pomodoro_start"]["start"], "0950", "{json}");
+    assert_eq!(json["pomodoro_start"]["end"], "1000", "{json}");
+    assert_eq!(json["pomodoro_start"]["later_units"], 1, "{json}");
+}
+
+#[test]
+fn glued_later_link_start_matches_two_item_draft_note_bytes() {
+    let now = "2026-07-10 09:42:00";
+    let target_before = "# Cash\n## Tasks\n- [ ] #task Work ^work\n";
+    let day_before = "## Pomodoros\n- [ ] () — FIX\n";
+    for (glued, shift) in [
+        ("@cash:work=fix2+", "++"),
+        ("@cash:work=fix2+1", "++1"),
+        ("@cash:work=fix2+3", "++3"),
+    ] {
+        let glued_temp = TempDir::new("bob-cli-link-later-glued");
+        let glued_vault = glued_temp.path().join("vault");
+        let glued_target = glued_vault.join("cash.md");
+        let glued_day = glued_vault.join("day.md");
+        write_file(&glued_target, target_before);
+        write_file(&glued_day, day_before);
+        let glued_out = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&glued_vault)
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(glued)
+            .env("BOB_DAY_FILE", &glued_day)
+            .env("BOB_NOW", now)
+            .output()
+            .expect("run glued later link");
+        assert_success(&glued_out);
+
+        let spaced_temp = TempDir::new("bob-cli-link-later-spaced");
+        let spaced_vault = spaced_temp.path().join("vault");
+        let spaced_target = spaced_vault.join("cash.md");
+        let spaced_day = spaced_vault.join("day.md");
+        write_file(&spaced_target, target_before);
+        write_file(&spaced_day, day_before);
+        let spaced_out = run_with_stdin(
+            bob_command()
+                .arg("capture")
+                .arg("-b")
+                .arg(&spaced_vault)
+                .arg("-f")
+                .arg("json")
+                .env("BOB_DAY_FILE", &spaced_day)
+                .env("BOB_NOW", now),
+            &format!("@cash:work=fix2\n\n{shift}\n"),
+        );
+        assert_success(&spaced_out);
+
+        assert_eq!(
+            fs::read_to_string(&glued_day).expect("glued day"),
+            fs::read_to_string(&spaced_day).expect("spaced day"),
+            "{glued} vs @cash:work=fix2 / {shift}"
+        );
+        assert_eq!(
+            fs::read_to_string(&glued_target).expect("glued target"),
+            fs::read_to_string(&spaced_target).expect("spaced target"),
+            "{glued} vs @cash:work=fix2 / {shift} target"
+        );
+    }
+}

@@ -229,7 +229,7 @@ fn start_fit_token(
     spec: &PomodoroStartSpec,
     name: Option<&str>,
 ) -> String {
-    let duration = if spec.offset_units == 0 && spec.later_units == 0 {
+    let timing = if spec.offset_units == 0 && spec.later_units == 0 {
         units.to_string()
     } else if spec.later_units > 0 {
         format!("{units}+{}", spec.later_units)
@@ -237,11 +237,8 @@ fn start_fit_token(
         format!("{units}-{}", spec.offset_units)
     };
     match name.map(str::trim).filter(|name| !name.is_empty()) {
-        Some(name) if capture_language::can_spell_bare(name) => {
-            format!("={duration}{name}")
-        }
-        Some(name) => format!("={duration}#{name}"),
-        None => format!("={duration}"),
+        Some(name) => capture_language::glued_named_start("", name, &timing),
+        None => format!("={timing}"),
     }
 }
 
@@ -674,6 +671,8 @@ mod tests {
             start_fit_token(3, &spec, Some("deep-work")),
             "=3+2#deep-work"
         );
+        assert_eq!(start_fit_token(2, &spec, Some("fix")), "=fix2+2");
+        assert_eq!(start_fit_token(2, &empty_start(), Some("bugs")), "=bugs2");
     }
 
     fn session_index(note: &str) -> usize {
@@ -748,7 +747,7 @@ mod tests {
         )
         .expect("conflict");
         assert!(conflict.event.off_clock);
-        assert_eq!(conflict.fit.as_deref(), Some("=2bugs"));
+        assert_eq!(conflict.fit.as_deref(), Some("=bugs2"));
     }
 
     #[test]

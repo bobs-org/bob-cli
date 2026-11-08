@@ -67,7 +67,7 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | `++[N]` | Shift the running session later | [`++[N]`](#plus-plus-shift) |
 | `--[N]` | Shift the running session earlier | [`--[N]`](#minus-minus-shift) |
 | `=` / `=<X>` | Start the next future Pomodoro, or restart | [`=`](#equals-start) |
-| `=name` | Start a named Pomodoro (`=bugs`, `=3bugs`, or `=bugs3`) | [`=name`](#equals-named) |
+| `=name` | Start a named Pomodoro (`=bugs`, `=3bugs`, `=bugs3`, `=fix2+`) | [`=name`](#equals-named) |
 | `=/[base][#type…]` | Split types into separate planned Pomodoros | [`=/`](#equals-split) |
 | `=*[source][#destination…]` | Merge the next planned Pomodoro or named destinations into one open session | [`=*`](#equals-merge) |
 | `~<K>` | Drop those queued Task Links from the start | [`~<K>`](#tilde-drop) |
@@ -165,8 +165,8 @@ Contract: [Retired close spellings](../capture.md#retired-close-spellings).
 
 `x=E[s][!][=X]` records a past Pomodoro. `E` is empty (25 minutes), a
 positive count, or a name. Counts can go before or after bare names
-(`x=3fix`, `x=fix3`); names with `-`, a trailing digit, or close shape use
-`#` when needed. `@N` timing is retired. Records stack backward from the
+(`x=3fix`, `x=fix3`); names with `-`, a trailing digit or `+`, or close
+shape use `#` (`x=#c++`). `@N` timing is retired. Records stack backward from the
 next five-minute boundary unless a segment suffix (`~…`) places them;
 `!` permits trimming an older closed edge. See the
 [past Pomodoro contract](../capture.md#placing-it-on-todays-timeline).
@@ -881,10 +881,10 @@ Contract: [Starting the next Pomodoro](../capture.md#starting-the-next-pomodoro)
 
 Start with `=focus`, `=3focus`, or `=focus3`; timing can precede or follow a
 bare name. Bare names start with a letter, contain no `-`, do not end in a
-digit, and are not close-shaped. Use `#` for names that cannot be spelled
-bare (`=3#deep-work`, `=#2fa`, `=#x2`) or exact literals; timing goes before
+digit or `+`, and are not close-shaped. Use `#` for names that cannot be spelled
+bare (`=3#deep-work`, `=#2fa`, `=#c++`) or exact literals; timing goes before
 `#`. An open match starts in place (whole slug before prefix); a completed
-match starts a new session with that name ("again"); otherwise Bob creates
+match starts a new session ("again"); otherwise Bob creates
 and starts it. With a session running, a different name swaps in; no `<X>`
 keeps its clock, and `<X>` supplies fresh timing.
 

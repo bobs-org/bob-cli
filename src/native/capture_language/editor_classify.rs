@@ -108,6 +108,7 @@ pub(super) fn classify_global_token(token: &Token<'_>) -> TokenParse {
             requires_body: false,
             pomodoro_start: None,
             pomodoro_close: None,
+            diagnostic: None,
         });
     }
     if !is_route_token(rest) {
@@ -134,6 +135,7 @@ pub(super) fn classify_global_token(token: &Token<'_>) -> TokenParse {
         requires_body: false,
         pomodoro_start: None,
         pomodoro_close: None,
+        diagnostic: None,
     })
 }
 
@@ -1926,6 +1928,39 @@ fn classify_pomodoro_link_start_suffix(
             } else {
                 "invalid_pomodoro_start"
             };
+            // A doubled-plus near miss is still a Pomodoro link: keep the
+            // marker so a solo `@route:id=c++` reports `pomodoro_link`
+            // with `invalid_pomodoro_link`, matching execution and the
+            // caret path, instead of dropping to a new task.
+            if message.contains("ends in two `+`") {
+                let before_eq =
+                    rest.split_once('=').map_or(rest, |(before, _)| before);
+                let block_id = before_eq
+                    .split_once('#')
+                    .map(|(block, _)| block)
+                    .unwrap_or(before_eq);
+                let mut parsed = marker_parse(
+                    token,
+                    MarkerShape {
+                        sigil_len,
+                        route_part,
+                        separator_len: 1,
+                        right_part: block_id,
+                        route_kind: SpanKind::PomodoroRoute,
+                        right_kind: SpanKind::PomodoroBlockId,
+                        complete_mode: EditorMode::PomodoroTask,
+                        right_need: Need::PomodoroId,
+                        third: None,
+                        suffix: None,
+                    },
+                );
+                parsed.diagnostic = Some(token_diagnostic(
+                    token,
+                    "invalid_pomodoro_link",
+                    &message,
+                ));
+                return TokenParse::Marker(parsed);
+            }
             TokenParse::Invalid(token_diagnostic(token, code, &message))
         }
     }
@@ -1955,6 +1990,7 @@ pub(super) fn classify_route_token(token: &Token<'_>) -> Option<MarkerParse> {
                 requires_body: false,
                 pomodoro_start: None,
                 pomodoro_close: None,
+                diagnostic: None,
             });
         }
         if !is_route_token(rest) {
@@ -1977,6 +2013,7 @@ pub(super) fn classify_route_token(token: &Token<'_>) -> Option<MarkerParse> {
             requires_body: true,
             pomodoro_start: None,
             pomodoro_close: None,
+            diagnostic: None,
         });
     };
 
@@ -2207,6 +2244,7 @@ pub(super) fn marker_parse(
         requires_body: false,
         pomodoro_start: None,
         pomodoro_close: None,
+        diagnostic: None,
     }
 }
 

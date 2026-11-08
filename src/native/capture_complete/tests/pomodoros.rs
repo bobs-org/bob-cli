@@ -931,6 +931,17 @@ fn bare_start_name_replacements_fold_trailing_glued_timing() {
     assert!(replacements.contains(&"3#deep-work"), "{replacements:?}");
     assert!(replacements.contains(&"fix3"), "{replacements:?}");
     assert!(replacements.contains(&"3#2fa"), "{replacements:?}");
+
+    let items = pomodoro_start_name_candidates_from_scan(&scan, "");
+    let mut candidates = Candidates::PomodoroName(items);
+    apply_bare_start_name_replacements(&mut candidates, "fi2+");
+    let Candidates::PomodoroName(items) = candidates else {
+        panic!("expected pomodoro-name candidates");
+    };
+    let replacements: Vec<&str> =
+        items.iter().map(|row| row.replacement.as_str()).collect();
+    assert!(replacements.contains(&"fix2+"), "{replacements:?}");
+    assert!(replacements.contains(&"2+#deep-work"), "{replacements:?}");
 }
 
 #[test]
@@ -944,14 +955,20 @@ fn accepting_a_start_name_keeps_trailing_glued_timing() {
             "- [ ] () — DEEP WORK\n",
             "- [ ] () — FIX\n",
             "- [ ] () — 2FA\n",
+            "- [ ] () — BOB+DECKS\n",
         ),
     );
     crate::native::env::with_var("BOB_DAY_FILE", &day, || {
         for (marked, name, expected) in [
             ("=de|3", "DEEP WORK", "=3#deep-work"),
             ("=fi|3", "FIX", "=fix3"),
+            ("=fi|2+", "FIX", "=fix2+"),
+            ("=fix2+|", "FIX", "=fix2+"),
+            ("=fix|2+", "FIX", "=fix2+"),
+            ("=de|3+1", "DEEP WORK", "=3+1#deep-work"),
             ("=3de|", "DEEP WORK", "=3#deep-work"),
             ("=#fi|", "FIX", "=fix"),
+            ("=bob+|decks", "BOB+DECKS", "=bob+decks"),
             ("x=de|3", "DEEP WORK", "x=3#deep-work"),
             ("x=fi|3~2", "FIX", "x=fix3~2"),
             (

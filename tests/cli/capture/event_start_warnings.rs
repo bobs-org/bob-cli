@@ -202,7 +202,7 @@ fn swap_with_fresh_timing_warns_on_a_new_crossing() {
         capture_json(&vault, &day_file, "2026-11-01 11:50:00", &["=5bugs"]);
     let conflict = &json["pomodoro_start"]["event_conflict"];
     assert_eq!(conflict["event"]["title"], "Standup");
-    assert_eq!(conflict["fit"], "=2bugs");
+    assert_eq!(conflict["fit"], "=bugs2");
 }
 
 #[test]
@@ -213,7 +213,7 @@ fn named_start_fit_uses_a_bare_name() {
         capture_json(&vault, &day_file, "2026-11-01 11:50:00", &["=bob"]);
     // STANDUP_DAY already has a BOB placeholder; =bob starts it.
     let conflict = &json["pomodoro_start"]["event_conflict"];
-    assert_eq!(conflict["fit"], "=2bob");
+    assert_eq!(conflict["fit"], "=bob2");
 }
 
 #[test]

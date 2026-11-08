@@ -175,7 +175,12 @@ pub(super) fn parse_editor_line<'a>(
         .join(" ");
 
     let marker = match selected {
-        Some((_, TokenParse::Marker(marker))) => Some(marker),
+        Some((_, TokenParse::Marker(mut marker))) => {
+            if let Some(diagnostic) = marker.diagnostic.take() {
+                diagnostics.push(diagnostic);
+            }
+            Some(marker)
+        }
         Some((_, TokenParse::Invalid(diagnostic))) => {
             diagnostics.push(diagnostic);
             None

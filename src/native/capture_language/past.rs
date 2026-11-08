@@ -837,26 +837,39 @@ fn past_rest_error(
     context: PastRestContext,
 ) -> String {
     let suffix = past_suffix(split);
-    if let Some(after_plus) = rest.strip_prefix('+') {
-        let digits = after_plus.bytes().take_while(u8::is_ascii_digit).count();
-        if digits == after_plus.len() {
+    if rest.starts_with('+') {
+        let pluses = rest.bytes().take_while(|byte| *byte == b'+').count();
+        let after_pluses = &rest[pluses..];
+        let digits =
+            after_pluses.bytes().take_while(u8::is_ascii_digit).count();
+        if pluses >= 1 && digits == after_pluses.len() {
             let duration_end =
                 parsed.bytes().take_while(u8::is_ascii_digit).count();
-            let duration_units = if duration_end == 0 {
-                5
-            } else {
+            let duration_units = if duration_end > 0 {
                 parsed[..duration_end].parse::<u64>().unwrap_or(5)
+            } else if context.has_name {
+                let trailing =
+                    parsed.bytes().rev().take_while(u8::is_ascii_digit).count();
+                if trailing == 0 {
+                    5
+                } else {
+                    parsed[parsed.len() - trailing..]
+                        .parse::<u64>()
+                        .unwrap_or(5)
+                }
+            } else {
+                5
             };
             let parsed_later = if digits == 0 {
                 1
             } else {
-                after_plus[..digits].parse::<u64>().unwrap_or(1)
+                after_pluses[..digits].parse::<u64>().unwrap_or(1)
             };
             let later_units = parsed_later.max(1);
             let later_text = if parsed_later == 0 {
                 String::new()
             } else {
-                after_plus[..digits].to_string()
+                after_pluses[..digits].to_string()
             };
             let start_token = format!("={parsed}+{later_text}");
             return past_later_error(
@@ -864,6 +877,7 @@ fn past_rest_error(
                 &start_token,
                 duration_units,
                 later_units,
+                context.has_name,
             );
         }
     }
@@ -963,18 +977,23 @@ fn past_rest_error(
 }
 
 /// Teaching error shared by the numeric past-later forms and named forms
-/// handled by the later bare-name grammar phase.
+/// whose trailing `+` is later-start timing.
 pub(crate) fn past_later_error(
     raw_token: &str,
     start_token: &str,
     duration_units: u64,
     later_units: u64,
+    named: bool,
 ) -> String {
-    format!(
+    let mut message = format!(
         "`{raw_token}` records finished work, so it takes no `+`: `{start_token}` starts a {}-minute session {} minutes from now, and `x {start_token}` closes the running session first",
         duration_units.saturating_mul(5),
         later_units.saturating_mul(5),
-    )
+    );
+    if named {
+        message.push_str("; spell a name that ends in `+` with `#` (`x=#c++`)");
+    }
+    message
 }
 
 /// Compose the `E` spelling for a past rewrite: bare names glue timing on

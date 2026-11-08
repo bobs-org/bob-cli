@@ -3672,9 +3672,10 @@ fn lex_merge_after_star(
 /// error. A bare start token (`=`, `=-`) has an empty or digit-free suffix;
 /// a counted token (`=3`, `=-2`, `=3-`, `=2-1`, `=0`) carries timing before
 /// a name. Bare names start with a letter, contain no dash, and may carry a
-/// trailing timing digit run (`=bugs3`). Hash names (`=#2fa`,
-/// `=3#deep-work`) and exact-name literals take timing before `#`; trailing
-/// digits belong to the hash name. `~<K>` may follow the start name. The old
+/// trailing timing run of digits and `+` (`=bugs3`, `=fix2+`). Hash names
+/// (`=#2fa`, `=3#deep-work`, `=#c++`) and exact-name literals take timing
+/// before `#`; trailing digits belong to the hash name. `~<K>` may follow
+/// the start name. The old
 /// `@<X>` timing separator remains claimed so it can return a teaching
 /// error. `len` covers every part.
 pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
@@ -3805,6 +3806,19 @@ pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
         if trailing_len > 0 {
             timing = Some((token_len, after_name[..trailing_len].to_string()));
             token_len += trailing_len;
+        }
+    } else if suffix.is_empty()
+        && let Some(after_x) = rest[len..]
+            .strip_prefix('x')
+            .or_else(|| rest[len..].strip_prefix('X'))
+        && after_x.starts_with('+')
+    {
+        // Claim `=x+` so it is a start near-miss, never a session named
+        // `X`/`X+` and never silent prose.
+        let trailing_len = start_timing_len(after_x);
+        if trailing_len > 0 {
+            timing = Some((token_len + 1, after_x[..trailing_len].to_string()));
+            token_len += 1 + trailing_len;
         }
     }
     // Only `~<K>` remains in the grammar. Keep the old `@<X>` shape claimed
@@ -4153,10 +4167,107 @@ fn named_token_error(
         return Some(pomodoro_named_start_name_error(name, token));
     }
     let effective = timing_text.unwrap_or(suffix);
+    if spelling == NameSpelling::Bare
+        && let Some(trailing) = timing_text
+        && let Some(message) =
+            doubled_plus_start_error(&format!("{token}{trailing}"), name)
+    {
+        return Some(message);
+    }
     if let Err(message) = parse_pomodoro_start_suffix(effective) {
+        if message.contains("`+0` moves nothing") {
+            return Some(plus_zero_named_error(name, suffix, timing_text));
+        }
         return Some(message);
     }
     None
+}
+
+/// Three-way teaching error for a bare name followed by two `+` (`=c++`,
+/// `=fix++`, `=fix2++`, `=c++3`). Suggestions come from the typed token:
+/// drop one `+`, put a space before the `++`, or prefix `#`.
+pub(super) fn doubled_plus_start_error(
+    token: &str,
+    name: &str,
+) -> Option<String> {
+    let idx = token.rfind("++")?;
+    let after_equals = token.rfind('=')? + 1;
+    if idx <= after_equals {
+        return None;
+    }
+    let trailing = &token[idx..];
+    if trailing.contains('-')
+        || !trailing
+            .bytes()
+            .all(|byte| byte == b'+' || byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let drop = format!("{}+{}", &token[..idx], &token[idx + 2..]);
+    let spaced = format!("{} ++{}", &token[..idx], &token[idx + 2..]);
+    let hashed =
+        format!("{}=#{}", &token[..after_equals - 1], &token[after_equals..]);
+    let display_name = name.to_ascii_uppercase();
+    let hash_name = token[after_equals..].to_ascii_uppercase();
+    let later_digits = &token[idx + 2..];
+    let digit_len = later_digits.bytes().take_while(u8::is_ascii_digit).count();
+    let later_units = if digit_len == 0 {
+        1
+    } else {
+        later_digits[..digit_len].parse::<u64>().unwrap_or(1).max(1)
+    };
+    Some(format!(
+        "`{token}` ends in two `+`: `{drop}` starts {display_name} {} minutes later, `{spaced}` starts it and then shifts it later, and `{hashed}` names a Pomodoro `{hash_name}`",
+        later_units.saturating_mul(5),
+    ))
+}
+
+/// `+0` after a named start, rewriting the unnamed `+0` message so both
+/// suggestions keep the typed name (`=fix2+0` → `=fix2` / `=fix2+`).
+pub(super) fn plus_zero_named_error(
+    name: &str,
+    suffix: &str,
+    timing_text: Option<&str>,
+) -> String {
+    let effective = timing_text.unwrap_or(suffix);
+    let stripped = effective.strip_suffix("+0").unwrap_or(effective);
+    let later_part = if stripped.is_empty() {
+        "+".to_string()
+    } else {
+        format!("{stripped}+")
+    };
+    let (drop, later) = if timing_text.is_some() {
+        (
+            glued_named_start("", name, stripped),
+            glued_named_start("", name, &later_part),
+        )
+    } else {
+        (
+            glued_named_start(stripped, name, ""),
+            glued_named_start(&later_part, name, ""),
+        )
+    };
+    format!(
+        "`+0` moves nothing: drop it (`{drop}`), or write `{later}` to start 5 minutes later"
+    )
+}
+
+/// `=x+` / `@r:id=x+`: close-shaped `x` with trailing plus is never a
+/// start of `X` or `X+`.
+pub(super) fn close_shaped_plus_start_error(token: &str) -> Option<String> {
+    let after_eq = match token.rfind('=') {
+        Some(idx) => &token[idx + 1..],
+        None => token,
+    };
+    let after_x = after_eq
+        .strip_prefix('x')
+        .or_else(|| after_eq.strip_prefix('X'))?;
+    if !after_x.starts_with('+') {
+        return None;
+    }
+    Some(format!(
+        "`{token}` cannot start a Pomodoro named `X` or `X+`: `x` closes the running session, and `=#x+` names a Pomodoro `X+`"
+    ))
 }
 
 /// Both-timings error for a named token with a leading `<X>` and an `@<X>`
@@ -5558,6 +5669,9 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                 return Err(start_timing_twice_unnamed_error(
                     token_text, sigil, effective, drop_text,
                 ));
+            }
+            if let Some(error) = close_shaped_plus_start_error(parent_trimmed) {
+                return Err(error);
             }
             // Suffix errors win over the drop list; the effective `<X>`
             // (leading or `@`) is validated.

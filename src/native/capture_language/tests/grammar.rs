@@ -1004,6 +1004,18 @@ fn execution_parses_equals_family_starts_alongside_close() {
         ("=#2fa", "2fa", "", 5),
         ("=3#2fa", "2fa", "3", 3),
         ("=3#\"DEEP WORK\"", "DEEP WORK", "3", 3),
+        ("=fix2+", "fix", "2+", 2),
+        ("=fix+3", "fix", "+3", 5),
+        ("=bugs+2", "bugs", "+2", 5),
+        ("=bob+decks", "bob+decks", "", 5),
+        ("=bob+2fa", "bob+2fa", "", 5),
+        ("=b2b+2", "b2b", "+2", 5),
+        ("=xx+", "xx", "+", 5),
+        ("=#c++", "c++", "", 5),
+        ("=3#c++", "c++", "3", 3),
+        ("=+#c++", "c++", "+", 5),
+        ("=bob+decks2+3", "bob+decks", "2+3", 2),
+        ("=fix2+~1", "fix", "2+", 2),
     ] {
         let parsed =
             execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
@@ -1136,7 +1148,11 @@ fn execution_parses_equals_family_starts_alongside_close() {
 fn signed_start_forms_share_the_lexer_editor_and_link_contract() {
     for (raw, duration, offset, later, name) in [
         ("=+fix", 5, 0, 1, Some("fix")),
+        ("=fix+", 5, 0, 1, Some("fix")),
+        ("=fix2+", 2, 0, 1, Some("fix")),
+        ("=bugs+2", 5, 0, 2, Some("bugs")),
         ("=3+1#deep-work", 3, 0, 1, Some("deep-work")),
+        ("@foo:bar=fix2+", 2, 0, 1, Some("fix")),
         ("@foo:bar=+3", 5, 0, 3, None),
         ("@foo:bar=3+", 3, 0, 1, None),
         ("@foo:bar#fix=+2", 5, 0, 2, Some("fix")),
@@ -1198,6 +1214,12 @@ fn signed_start_refusals_are_teaching_errors_and_prose_stays_prose() {
         ("=+1-2", "takes one offset"),
         ("=3+1+2", "takes one offset"),
         ("=2-1-", "takes one offset"),
+        ("=c++", "ends in two `+`"),
+        ("=fix++", "ends in two `+`"),
+        ("=fix2++", "ends in two `+`"),
+        ("=c++3", "ends in two `+`"),
+        ("=x+", "cannot start a Pomodoro named `X`"),
+        ("=fix2+0", "`+0` moves nothing"),
     ] {
         let error = execute(raw).expect_err(raw);
         assert!(error.contains(expected), "{raw}: {error}");
@@ -1211,6 +1233,24 @@ fn signed_start_refusals_are_teaching_errors_and_prose_stays_prose() {
             edit.diagnostics[0]
         );
     }
+    let doubled = execute("=fix++").expect_err("=fix++");
+    assert!(doubled.contains("=fix+"), "{doubled}");
+    assert!(doubled.contains("=fix ++"), "{doubled}");
+    assert!(doubled.contains("=#fix++"), "{doubled}");
+    assert!(doubled.contains("FIX++"), "{doubled}");
+    let plus_zero = execute("=fix2+0").expect_err("=fix2+0");
+    assert!(plus_zero.contains("=fix2"), "{plus_zero}");
+    assert!(plus_zero.contains("=fix2+"), "{plus_zero}");
+
+    let link = execute("@r:id=c++").expect_err("@r:id=c++");
+    assert!(link.contains("ends in two `+`"), "{link}");
+    assert!(link.contains("@r:id=c+"), "{link}");
+    assert!(link.contains("@r:id=c ++"), "{link}");
+    assert!(link.contains("@r:id=#c++"), "{link}");
+    let link_edit = editor("@r:id=c++");
+    assert_eq!(link_edit.mode, EditorMode::PomodoroLink);
+    assert_eq!(link_edit.diagnostics.len(), 1);
+    assert_eq!(link_edit.diagnostics[0].code, "invalid_pomodoro_link");
 
     for raw in ["=- foo", "=+ foo", "=-)", "=+)", "Plan =+3"] {
         assert_eq!(execute(raw).expect(raw).kind, CaptureKind::Task, "{raw}");

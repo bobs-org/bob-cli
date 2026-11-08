@@ -396,7 +396,7 @@ Bob refuses two cases before planning writes:
 | `=# bugs` | Error: remove the space and use the bare spelling (`=bugs`) |
 | `=deep work` / `=#deep work` | Error: join a multi-word selector with `-` (`=#deep-work`) or use an exact literal (`=#"DEEP WORK"`) |
 | `=bugs=3` | Error: write the timing beside the name (`=bugs3`) or before it (`=3bugs`) |
-| `=bugs+2` | Start the Pomodoro named `BUGS+2`; `+` is name charset, so the token stays one named start |
+| `=bugs+2` | Start `BUGS` 10 minutes later; a trailing `+` after a bare name is later-start timing |
 | `x#bugs` | Error: `` `x` always closes the running Pomodoro; remove `#bugs`, or write `x =bugs` to close it and then start that Pomodoro; `=bugs` swaps it in without closing the running session `` |
 | `=3#bugs more` | Error: a named start item must contain only the token; use `=3bugs` and remove extra text, markers, or child lines |
 | `= -2` vs `=-2` | `= -2` starts 25 minutes then shortens 10 minutes; `=-2` is one 25-minute start with a 10-minute earlier offset, while `=+2` starts 10 minutes later |
@@ -1179,7 +1179,7 @@ uses the normal successor-offer shape with `trigger: "note_pull"`, an empty
 `pull_in.groups[]` row carries `note` and Bob-authored copy. Capture remains
 unversioned; `capture-parse` reports `mode: "note_pull"`, `needs: []`, no
 diagnostics, the route spans, and the ordinary list summary with
-`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 17`.
+`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 18`.
 See [task-dependencies.md §12.20](task-dependencies.md#1220-note-pull-offers)
 for the JSON, copy, gate, and protocol contracts, and
 [§12.21](task-dependencies.md#1221-np-note-pull-vectors) for the NP vectors.
@@ -3893,12 +3893,17 @@ created MEET has an empty lineup and keeps the 25-minute default.
 
 A named start can put timing before or after a bare name: `=3bugs` and
 `=bugs3` both start BUGS for 15 minutes. A bare name starts with an ASCII
-letter, contains no `-`, does not end in an ASCII digit, and is not
+letter, contains no `-`, does not end in an ASCII digit or `+`, and is not
 close-shaped. Bare selectors use the Pomodoro selector bytes except `-`;
-the maximal trailing digit run is timing. A leading timing can also include
-an earlier or later offset, as in `=-2bugs` or `=+2bugs`. Use `#` only when a bare spelling cannot express
-the name: `=3#deep-work`, `=#2fa`, `=#x`, and `=#x2`. Timing for a `#` name
-goes before `#`; `@` is retired as a timing separator. To spell a name with
+the maximal trailing run of digits and `+` is timing, so `=fix2+` starts
+FIX for 10 minutes, five minutes later, and `=bugs+2` starts BUGS 10 minutes
+later, while `=bob+decks` and `=bob+2fa` stay names. A leading timing can
+also include an earlier or later offset, as in `=-2bugs` or `=+2bugs`.
+Use `#` only when a bare spelling cannot express the name:
+`=3#deep-work`, `=#2fa`, `=#x`, `=#x2`, and names that end in `+`
+(`=#c++`, `=3#c++`, `=+#c++`). A doubled trailing `+` (`=c++`, `=fix++`)
+is refused with a three-way hint. Timing for a `#` name goes before `#`;
+`@` is retired as a timing separator. To spell a name with
 spaces exactly, quote it after `#`:
 `=#"DEEP WORK"` (or `=#“DEEP WORK”` with curly quotes) names `DEEP WORK`
 verbatim, matched by key equality instead of the whole-slug/else-prefix
@@ -4180,6 +4185,8 @@ Worked example (`BOB_NOW=2026-10-09 09:32:00`, TAB indentation):
 | `=plan` | A new PLAN session ("again") takes over `0920-0945`; CAPTURE first future |
 | `=capture` | Refused: CAPTURE is already running; restart it with `=` or `=<X>`, close it with `x`, or name another Pomodoro to swap in |
 | `=3capture` | Identical to `=3` (a restart) |
+| `=capture+` | Identical to `=+` (a restart) |
+| `=bugs+` | Same layout as `=bugs`, BUGS is `(**0940-1005** [t:: 25m])` |
 | `=bugs +2` | Swap, then BUGS extends to `0920-0955` |
 
 `=bugs` writes:
@@ -4426,7 +4433,7 @@ Bob emits one structured warning `pomodoro_runs_past_event` naming the
 earliest conflicting event (by buffered start), the overlap in minutes
 (the new span against the occupied span), `and N more` when later events
 also newly conflict, and a fit draft: the largest same-operator count that
-ends at or before the event's occupied start (`=2`, `=2bugs`, `=2-1`, `+K`,
+ends at or before the event's occupied start (`=2`, `=bugs2`, `=2-1`, `+K`,
 `++K`, `--K`). A fit is offered only when `S` is before that start, so
 starting inside a lead-in has none, and when no positive count fits it is
 omitted. `--K` instead keeps the session inside the meeting, so it measures
@@ -5526,6 +5533,7 @@ Common teaching errors show the exact rewrite:
 | --- | --- |
 | `x=3-1`, `x=-2`, `x=3-`, `x=fix-`, `x=fix3-1`, `x=3-1fix` | `x=` takes no offset; to start at a segment write the suffix, to end now drop the dash (`x=3-1` → `x=3~1` or `x=3`, `x=-2` → `x=~2` or `x=`, `x=fix3-1` → `x=fix3~1` or `x=fix3`, `x=-` → `x=~` or `x=`, `x=3-` → `x=3~` or `x=3`) |
 | `x=+2`, `x=3+`, `x=3+1` | `x=` takes no later offset; use a whole-item start such as `=+2`/`=3+1`, or remove `+` to record the past Pomodoro now |
+| `x=fix+`, `x=fix2+`, `x=c++` | The same later-offset teaching, plus spell a name that ends in `+` with `#` (`x=#c++`) |
 | `x=3#fix@2` | Give the count once: `x=3fix` or `x=fix2` |
 | `x=#fix@3`, `x=#deep-work@3` | Retired `@` glued onto the name: write `x=fix3` or `x=3#deep-work` |
 | `x=fix@3`, `x=build@` | Retired timing separator: write `x=fix3` or `x=build3` |
@@ -5649,7 +5657,7 @@ partially overlap.
 Spacing is significant: `= -2` starts a 25-minute session then shortens it
 by 10 minutes, while `=-2` is one start with a 10-minute offset; likewise
 `=bugs +2` starts `BUGS` then extends it, while `=bugs+2` is one start of
-the Pomodoro named `BUGS+2`. Lines made
+`BUGS` 10 minutes later. Lines made
 only of bare operators are newly recognized chains (`- -`, `+ -`, `= =`,
 `-- --`, `- - -`); they used to be prose. Runtime guards apply per token in
 order (`x -2` closes then fails because nothing is running; `= =` fails on
@@ -6671,7 +6679,9 @@ merge hand-off offer rows, omitted when empty) and `repaired_files[]`;
 ordinary items omit the empty fields. Merge-only offers get their own Pull-In
 copy (`Link “T” in place of “S”` / `Link “T” in place of N merged tasks`), and
 the CLI's dependent rows print titles from `consequences`.
-`capture-parse` and `capture-complete` report grammar revision 17. Grammar 17
+`capture-parse` and `capture-complete` report grammar revision 18. Grammar 18
+treats trailing `+` after a bare start name as later-start timing (`=fix2+`,
+`=bugs+2`) and uses `#` for names that end in `+` (`=#c++`). Grammar 17
 adds signed later offsets to whole-item, named, and linked Pomodoro starts,
 with `later_units` added only when nonzero. Grammar 11
 added the move-choice markers; grammar 12 adds the `x=` past-Pomodoro syntax; grammar 15 adds `<` merge-in grammar, editor parse, and teaching refusals. Complete clauses execute atomically through the explicit merge engine.
@@ -8059,7 +8069,7 @@ bob capture-parse [-f|--format human|json] [-R|--no-ref] [--] [TEXT]...
 
 Reports the authoritative capture grammar's reading of `TEXT` so an editor can
 highlight capture syntax and Obsidian wikilinks while the user is still typing.
-Success JSON includes top-level `grammar: 17` while keeping `schema_version: 1`.
+Success JSON includes top-level `grammar: 18` while keeping `schema_version: 1`.
 It shares the tokenizer, terminal-marker extraction, and `@token`
 classification with `bob capture`. Parse does not validate vault targets
 or execute the draft, so a successful parse does not guarantee a capture
@@ -9349,7 +9359,7 @@ the menu never reads the clipboard. Disabled rows explain composition rules
 such as `%n` beside a route, `%t` on a later item, and `%c` in a template.
 
 Every successful `capture-parse` and `capture-complete` response includes
-top-level `grammar: 17`; `schema_version` remains 1. An empty query opened by a
+top-level `grammar: 18`; `schema_version` remains 1. An empty query opened by a
 bare `#` or `%` adds `initial_selection: "none"`, so clients leave every row
 unselected. The field is omitted for typed queries and other contexts.
 

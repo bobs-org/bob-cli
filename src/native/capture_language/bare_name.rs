@@ -3,7 +3,8 @@
 //! Every position (lexer, link suffix, completion, hints) calls these
 //! helpers instead of re-deriving when a word after `=` is a Pomodoro
 //! name. A bare name starts with an ASCII letter, contains no dash, and
-//! does not end in an ASCII digit. Close-shaped names keep the `#` spelling.
+//! does not end in an ASCII digit or `+`. Close-shaped names and names
+//! that end in `+` keep the `#` spelling.
 
 use super::close_selection::close_after_eq_parts;
 use super::tokens::{
@@ -32,7 +33,9 @@ pub(crate) fn start_name_extent(text: &str) -> usize {
 /// `Some` when the text right after a single `=` begins a bare name.
 ///
 /// That means its first byte is an ASCII letter. The returned length omits
-/// a maximal trailing digit run, which belongs to the trailing timing.
+/// a maximal trailing run of ASCII digits and `+`, which belongs to the
+/// trailing timing (`fix2+` → `fix`, `bob+decks2+3` → `bob+decks`). A name
+/// that ends in a letter keeps interior `+` bytes (`bob+2fa`, `bob+decks`).
 pub(crate) fn bare_start_name_len(after_eq: &str) -> Option<usize> {
     if !after_eq
         .as_bytes()
@@ -50,8 +53,13 @@ pub(crate) fn bare_start_name_len(after_eq: &str) -> Option<usize> {
         .count();
     let candidate = after_eq.get(..len)?;
     let mut name_len = candidate.len();
-    while name_len > 0 && candidate.as_bytes()[name_len - 1].is_ascii_digit() {
-        name_len -= 1;
+    while name_len > 0 {
+        let last = candidate.as_bytes()[name_len - 1];
+        if last.is_ascii_digit() || last == b'+' {
+            name_len -= 1;
+        } else {
+            break;
+        }
     }
     if name_len == 0 {
         return None;
@@ -69,6 +77,7 @@ pub(crate) fn can_spell_bare(name: &str) -> bool {
         && name.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
         && !name.contains('-')
         && !name.as_bytes().last().is_some_and(u8::is_ascii_digit)
+        && !name.ends_with('+')
         && close_after_eq_parts(name).is_none()
 }
 
@@ -127,8 +136,8 @@ pub(crate) fn glued_named_start(
 }
 
 /// Trailing glued `<X>` inside a bare-name replacement slice (`de3`,
-/// `fix10-3`). Hash-delimited slices keep their digits as name bytes.
-/// A retired `@` after the name is not glued timing.
+/// `fix10-3`, `fix2+`, `de3+1`). Hash-delimited slices keep their digits
+/// as name bytes. A retired `@` after the name is not glued timing.
 pub(crate) fn trailing_glued_timing(slice: &str) -> &str {
     if slice.starts_with('#') {
         return "";
@@ -148,10 +157,15 @@ pub(crate) fn trailing_glued_timing(slice: &str) -> &str {
     while len < bytes.len() && bytes[len].is_ascii_digit() {
         len += 1;
     }
-    if bytes.get(len) == Some(&b'-') {
-        len += 1;
-        while len < bytes.len() && bytes[len].is_ascii_digit() {
+    if matches!(bytes.get(len), Some(b'-' | b'+')) {
+        loop {
             len += 1;
+            while len < bytes.len() && bytes[len].is_ascii_digit() {
+                len += 1;
+            }
+            if !matches!(bytes.get(len), Some(b'-' | b'+')) {
+                break;
+            }
         }
     }
     &rest[..len]
@@ -171,6 +185,12 @@ mod tests {
         assert_eq!(bare_start_name_len("b2b"), Some(3));
         assert_eq!(bare_start_name_len("xmas3"), Some(4));
         assert_eq!(bare_start_name_len("bob+decks2"), Some(9));
+        assert_eq!(bare_start_name_len("fix2+"), Some(3));
+        assert_eq!(bare_start_name_len("bob+decks2+3"), Some(9));
+        assert_eq!(bare_start_name_len("bob+2fa"), Some(7));
+        assert_eq!(bare_start_name_len("xx+"), Some(2));
+        assert_eq!(bare_start_name_len("b2b+2"), Some(3));
+        assert_eq!(bare_start_name_len("c++"), Some(1));
         assert_eq!(bare_start_name_len("xx"), Some(2));
         assert_eq!(bare_start_name_len("xmas"), Some(4));
         assert_eq!(bare_start_name_len("Bugs"), Some(4));
@@ -194,6 +214,9 @@ mod tests {
         assert!(!can_spell_bare("deep-work"));
         assert!(!can_spell_bare("fix3"));
         assert!(can_spell_bare("b2b"));
+        assert!(can_spell_bare("bob+decks"));
+        assert!(!can_spell_bare("c++"));
+        assert!(!can_spell_bare("fix+"));
         assert!(!can_spell_bare("bob+decks2"));
         assert!(!can_spell_bare("2fa"));
         assert!(!can_spell_bare("x"));
@@ -223,8 +246,14 @@ mod tests {
         assert_eq!(glued_named_start("3", "fix", ""), "=3fix");
         assert_eq!(glued_named_start("", "deep-work", "3"), "=3#deep-work");
         assert_eq!(glued_named_start("3", "deep-work", ""), "=3#deep-work");
+        assert_eq!(glued_named_start("", "fix", "2+"), "=fix2+");
+        assert_eq!(glued_named_start("", "deep-work", "2+1"), "=2+1#deep-work");
+        assert_eq!(glued_named_start("", "c++", ""), "=#c++");
         assert_eq!(trailing_glued_timing("de3"), "3");
         assert_eq!(trailing_glued_timing("fix10-3"), "10-3");
+        assert_eq!(trailing_glued_timing("fix2+"), "2+");
+        assert_eq!(trailing_glued_timing("de3+1"), "3+1");
+        assert_eq!(trailing_glued_timing("fix2+~1"), "2+");
         assert_eq!(trailing_glued_timing("#de3"), "");
         assert_eq!(trailing_glued_timing("de@3"), "");
         assert_eq!(trailing_glued_timing("de3~2"), "3");

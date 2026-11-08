@@ -1067,6 +1067,25 @@ fn editor_spans_cover_signed_start_timing_and_name_bytes() {
         ]
     );
 
+    let trailing = editor("=fix2+");
+    assert_eq!(trailing.mode, EditorMode::PomodoroStart);
+    assert_eq!(trailing.section.as_deref(), Some("fix"));
+    assert_eq!(
+        trailing
+            .pomodoro_start
+            .as_ref()
+            .map(|spec| spec.later_units),
+        Some(1)
+    );
+    assert_eq!(
+        ranges(&trailing),
+        vec![
+            (0, 1, SpanKind::PomodoroStart),
+            (1, 4, SpanKind::PomodoroName),
+            (4, 6, SpanKind::PomodoroStart),
+        ]
+    );
+
     let link = editor("@foo:bar=+3");
     assert_eq!(link.mode, EditorMode::PomodoroLink);
     assert_eq!(link.pomodoro_start.as_ref().unwrap().later_units, 3);

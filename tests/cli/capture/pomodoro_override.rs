@@ -617,6 +617,68 @@ fn override_swap_named_restart_matches_plain_restart() {
 }
 
 #[test]
+fn override_trailing_plus_restart_matches_plain_later_restart() {
+    let (_temp, vault, day_file) =
+        worked_vault("bob-cli-override-capture-plus-a");
+    let json = run_json(&vault, &day_file, &["=capture+"]);
+    assert_eq!(
+        json["pomodoro_start"]["override"]["action"], "restart",
+        "{json}"
+    );
+    assert_eq!(json["pomodoro_start"]["later_units"], 1, "{json}");
+    let named_day = fs::read_to_string(&day_file).expect("read day");
+
+    let (_temp, vault, day_file) =
+        worked_vault("bob-cli-override-capture-plus-b");
+    run_json(&vault, &day_file, &["=+"]);
+    let restart_day = fs::read_to_string(&day_file).expect("read day");
+    assert_eq!(named_day, restart_day);
+}
+
+#[test]
+fn override_swap_trailing_plus_writes_fresh_later_span() {
+    let temp = TempDir::new("bob-cli-override-swap-fix-plus");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0950** [t:: 50m]) — BUILD\n",
+            "- [ ] () — FIX\n",
+        ),
+    );
+    let json = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("=fix+")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-11-08 09:42:00")
+        .output()
+        .expect("run trailing plus swap");
+    assert_success(&json);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&json).trim()).expect("swap JSON");
+    let start = &json["pomodoro_start"];
+    assert_eq!(start["pomodoro_name"], "FIX", "{json}");
+    assert_eq!(start["start"], "0950", "{json}");
+    assert_eq!(start["end"], "1015", "{json}");
+    assert_eq!(start["later_units"], 1, "{json}");
+    assert_eq!(start["override"]["action"], "swap", "{json}");
+    assert_eq!(start["override"]["ledger"], "fresh", "{json}");
+    let day_after = fs::read_to_string(&day_file).expect("read day");
+    assert!(
+        day_after.contains("- [ ] (**0950-1015** [t:: 25m]) — FIX"),
+        "{day_after}"
+    );
+    assert!(day_after.contains("- [ ] () — BUILD"), "{day_after}");
+}
+
+#[test]
 fn override_swap_matches_reset_then_start() {
     // Fresh-timing swaps equal `x0` then `=` on a note-free ledger.
     let (_temp, vault, day_file) = worked_vault("bob-cli-override-swap-eq-a");

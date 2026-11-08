@@ -68,9 +68,11 @@ Old top-level spellings remain as hidden aliases. See
 ## Capture-language revision
 
 `capture-parse` and `capture-complete` keep `schema_version: 1` and report the
-additive top-level `grammar: 17` revision. Clients can use it to distinguish
+additive top-level `grammar: 18` revision. Clients can use it to distinguish
 capture-language updates while continuing to read the same versioned JSON
-envelope. Grammar 17 adds signed later offsets to whole-item, named, and linked
+envelope. Grammar 18 treats trailing `+` after a bare start name as later-start
+timing (`=fix2+`, `=bugs+2`) and uses `#` for names that end in `+` (`=#c++`).
+Grammar 17 adds signed later offsets to whole-item, named, and linked
 Pomodoro starts, and reports nonzero `later_units`. Grammar 16 adds offline
 Gmail spans, per-item preview data, and saved-thread link substitution at
 capture submit. Grammar 8 kept grammar 7's note-pull behavior: an exactly lone

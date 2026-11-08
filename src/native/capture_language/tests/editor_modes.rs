@@ -1127,13 +1127,18 @@ fn editor_agrees_with_execution_for_resolved_captures() {
         "=3bugs",
         "=-2bugs",
         "=#deep-work",
-        "=c++",
+        "=#c++",
+        "=3#c++",
+        "=+#c++",
         "=bugs",
         "=xx",
         "=xa",
         "=xmas",
         "=bugs3",
-        "=c++",
+        "=fix2+",
+        "=bugs+2",
+        "=bob+decks",
+        "=bob+2fa",
     ];
 
     for raw in inputs {

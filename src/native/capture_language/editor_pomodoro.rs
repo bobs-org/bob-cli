@@ -939,7 +939,23 @@ fn named_start_token_diagnostic(
         ));
     }
     let effective = timing_text.unwrap_or(suffix);
+    if spelling == NameSpelling::Bare
+        && let Some(trailing) = timing_text
+        && let Some(message) =
+            doubled_plus_start_error(&format!("{token}{trailing}"), name)
+    {
+        return Some((
+            message,
+            (token_start, token_start + token.len() + trailing.len()),
+        ));
+    }
     if let Err(message) = parse_pomodoro_start_suffix(effective) {
+        if message.contains("`+0` moves nothing") {
+            return Some((
+                plus_zero_named_error(name, suffix, timing_text),
+                (token_start, token_start + prefix_len),
+            ));
+        }
         return Some((message, (token_start, token_start + prefix_len)));
     }
     None
@@ -1274,6 +1290,15 @@ pub(super) fn parse_editor_start_item<'a>(
         ));
     }
     // Effective `<X>` errors win over the drop list.
+    if let Some(message) = close_shaped_plus_start_error(parent_trimmed) {
+        return Some(editor_start_invalid_outcome(
+            item,
+            parent_trimmed,
+            base_span,
+            message,
+            Some((token_start, token_end)),
+        ));
+    }
     let effective = super::item::effective_start_timing(&suffix, &timing);
     let base_spec = match parse_pomodoro_start_suffix(&effective) {
         Ok(spec) => spec,
