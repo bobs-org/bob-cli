@@ -36,7 +36,6 @@ fn guard_dir() -> PathBuf {
 /// Normalizes case and surrounding whitespace before digesting so
 /// `You@Example.com` and `you@example.com` share one guard while
 /// `other@example.com` gets another.
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` guards runs.
 pub(crate) fn guard_path(account: &str) -> PathBuf {
     let normalized = account.trim().to_ascii_lowercase();
     let digest = hex::encode(Sha256::digest(normalized.as_bytes()));
@@ -62,7 +61,6 @@ pub(crate) enum GuardAttempt {
 /// Creates the guard directory on first use. A dry run must not call this:
 /// orchestration skips the guard entirely when `-d` is set so no state file
 /// or directory is created.
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` guards runs.
 pub(crate) fn try_acquire(account: &str) -> io::Result<GuardAttempt> {
     let path = guard_path(account);
     if let Some(parent) = path.parent() {
@@ -89,7 +87,6 @@ pub(crate) fn try_acquire(account: &str) -> io::Result<GuardAttempt> {
 /// Otherwise polls about every 100 ms until the shared deadline, so the
 /// guard wait, the retry loop, and the vault-lock wait together stay within
 /// one `-r` instead of each waiting another full timeout.
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` guards runs.
 pub(crate) fn acquire_with_budget<S: Sleeper, C: Clock>(
     sleeper: &S,
     budget: &SharedBudget,

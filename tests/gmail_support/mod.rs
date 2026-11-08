@@ -167,6 +167,8 @@ impl GmailEnv {
             .env("BOB_CONFIG_FILE", self.config())
             .env("HOSTNAME", HOST)
             .env("BOB_NOW", NOW)
+            .env("GIT_AUTHOR_DATE", "2026-11-05T17:00:00Z")
+            .env("GIT_COMMITTER_DATE", "2026-11-05T17:00:00Z")
             .env("BOB_GMAIL_CONSENT_SECS", "20")
             .env("NO_COLOR", "1")
             .env(
@@ -352,6 +354,31 @@ impl FakeGog {
             .expect("write fake thread failure");
     }
 
+    /// Fail a hydrated thread read after metadata has already succeeded.
+    pub(crate) fn set_thread_full_fail(
+        &self,
+        thread_id: &str,
+        stderr: &str,
+        code: i32,
+    ) {
+        let mut state: serde_json::Value = fs::read(&self.state)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        if !state
+            .get("thread_full_fail")
+            .is_some_and(serde_json::Value::is_object)
+        {
+            state["thread_full_fail"] = serde_json::json!({});
+        }
+        state["thread_full_fail"][thread_id] = serde_json::json!({
+            "stderr": stderr,
+            "code": code,
+        });
+        fs::write(&self.state, serde_json::to_vec(&state).unwrap())
+            .expect("write fake full-thread failure");
+    }
+
     /// Replace the account's `labels list` response (objects with `id`,
     /// `name`, and `type`) without changing the scenario defaults.
     pub(crate) fn set_labels(&self, labels: serde_json::Value) {
@@ -411,6 +438,10 @@ impl FakeGog {
                 })
             })
             .collect()
+    }
+
+    pub(crate) fn clear_calls(&self) {
+        fs::write(&self.log, "").expect("clear fake gog call log");
     }
 
     pub(crate) fn called_with(&self, needles: &[&str]) -> bool {

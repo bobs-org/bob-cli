@@ -29,11 +29,10 @@ pub(crate) const PAGE_SIZE: u32 = 500;
 /// Largest `-l` value: at most 500 new filings per run.
 pub(crate) const MAX_LIMIT: u32 = 500;
 /// Default `-l` when the flag is absent.
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` defaults `-l`.
+#[allow(dead_code)] // bob-cli-in.4 wires this shared default into the CLI.
 pub(crate) const DEFAULT_LIMIT: u32 = 50;
 
 /// Validate `-l`: 0 through 500. Zero means watch only.
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` validates limits.
 pub(crate) fn validate_limit(limit: u32) -> Result<u32, GmailError> {
     if limit > MAX_LIMIT {
         return Err(GmailError::setup(
@@ -48,7 +47,6 @@ pub(crate) fn validate_limit(limit: u32) -> Result<u32, GmailError> {
 ///
 /// A label with whitespace is quoted and backslash/quote-escaped; other
 /// labels pass through as `label:<label>`.
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` searches labels.
 pub(crate) fn label_query(label: &str) -> String {
     if label.bytes().any(|byte| byte.is_ascii_whitespace()) {
         format!(
@@ -89,7 +87,6 @@ pub(crate) struct DiscoveryOutcome {
 /// outcome so local adoption and recovery still run. Only a revoked or
 /// expired grant returns `Err`. Returns the raw ids; callers join with
 /// enrollment (see [`select_candidates`]) and never hydrate enrolled ids.
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` discovers ids.
 pub(crate) fn discover_ids<R: GmailRead>(
     reader: &R,
     account: &str,
@@ -271,7 +268,6 @@ pub(crate) fn discover_ids<R: GmailRead>(
 /// exclusion: ids from another account's search never match this fold. A
 /// zero limit selects nothing so the run skips search, fetch, and filing
 /// while watchers and adoptions proceed normally.
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` selects filings.
 pub(crate) fn select_candidates(
     ids: &[String],
     account: &str,
@@ -304,7 +300,6 @@ pub(crate) fn select_candidates(
 
 /// One metadata fetch result: successes keep their threads, failures keep
 /// their body-free errors, and deferred ids catch up next run.
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` files from this.
 pub(crate) struct FetchOutcome {
     /// Threads fetched in the requested key order.
     pub(crate) successes:
@@ -325,7 +320,6 @@ pub(crate) struct FetchOutcome {
 /// ids through this response and never routes by a label-name search.
 /// Callers pass a [`super::retry::CoordinatedRead`] so this read shares the
 /// run's pacing slot and wait budget.
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` lists labels.
 pub(crate) fn fetch_labels_once<R: GmailRead>(
     reader: &R,
     account: &str,
@@ -341,7 +335,6 @@ pub(crate) fn fetch_labels_once<R: GmailRead>(
 /// rest defer, and `aborted` carries the grant error. Permanent per-thread
 /// failures are recorded with the thread and the batch continues; budget
 /// exhaustion defers this key and every remaining key for the next run.
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` fetches candidates.
 pub(crate) fn fetch_candidate_metadata<R: GmailRead>(
     reader: &R,
     keys: &[ThreadKey],

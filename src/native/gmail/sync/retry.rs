@@ -35,7 +35,6 @@ pub(crate) const MAX_BACKOFF: Duration = Duration::from_secs(5);
 /// Only rate limiting, network reachability, timeouts, and transient
 /// service failures retry. Authentication, setup, and permanent failures
 /// return immediately so the caller can report or abort.
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` retries fetches.
 pub(crate) fn is_transient(error: &GmailError) -> bool {
     matches!(
         error.kind(),
@@ -48,13 +47,11 @@ pub(crate) fn is_transient(error: &GmailError) -> bool {
 /// A global `invalid_grant` aborts the run before any vault mutation. It is
 /// a runtime failure (exit 1), never a quiet skip, and it is never retried:
 /// another attempt with the same grant fails the same way.
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` aborts on it.
 pub(crate) fn is_auth_abort(error: &GmailError) -> bool {
     error.kind() == "invalid_grant"
 }
 
 /// Whether the caller should sleep and try the same request again.
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` retries fetches.
 pub(crate) fn should_retry(error: &GmailError) -> bool {
     is_transient(error) && !is_auth_abort(error)
 }
@@ -88,7 +85,6 @@ impl Clock for SystemClock {
 
 /// Production sleeper: block the thread.
 #[derive(Debug, Clone, Copy, Default)]
-#[allow(dead_code)] // `bob gmail sync` paces live runs with this.
 pub(crate) struct SystemSleeper;
 
 impl Sleeper for SystemSleeper {
@@ -114,7 +110,6 @@ pub(crate) struct SharedBudget {
     remaining: Cell<Duration>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` shares one budget.
 impl SharedBudget {
     /// A budget of `timeout` for waiting. Zero means no waiting at all.
     pub(crate) fn new(timeout: Duration) -> Self {
@@ -126,6 +121,7 @@ impl SharedBudget {
 
     /// A budget of `timeout`, ignoring `now`. Kept so existing tests that
     /// pin a start instant keep compiling after the wait-only rewrite.
+    #[cfg(test)]
     pub(crate) fn new_with_now(timeout: Duration, _now: Instant) -> Self {
         Self::new(timeout)
     }
@@ -147,6 +143,7 @@ impl SharedBudget {
     }
 
     /// Whether any wait remains. `now` is ignored.
+    #[cfg(test)]
     pub(crate) fn is_exhausted_at(&self, _now: Instant) -> bool {
         self.is_exhausted()
     }
@@ -163,7 +160,6 @@ impl SharedBudget {
 /// Doubling from [`BASE_BACKOFF`] to [`MAX_BACKOFF`], plus a small
 /// deterministic jitter ((attempt * 37) % 100 ms) so concurrent runs spread
 /// without needing an RNG in tests.
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` backs off.
 pub(crate) fn backoff_for_attempt(attempt: u32) -> Duration {
     let doubled = BASE_BACKOFF
         .as_millis()
@@ -182,7 +178,6 @@ pub(crate) fn backoff_for_attempt(attempt: u32) -> Duration {
 /// wait allowance cannot cover another wait, so the caller defers. Ordinary
 /// request pacing must not call this. The injectable [`Clock`] measures the
 /// wait so healthy request time never spends the budget.
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` waits with it.
 pub(crate) fn sleep_within_budget<S: Sleeper, C: Clock>(
     sleeper: &S,
     budget: &SharedBudget,
@@ -222,7 +217,6 @@ pub(crate) fn sleep_within_budget<S: Sleeper, C: Clock>(
 /// without sleeping. When the budget exhausts, the last transient error
 /// returns so the caller retains prepared successes and defers the rest.
 /// A zero budget still makes one immediate attempt with no backoff sleep.
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` fetches with it.
 pub(crate) fn execute_with_retry<S: Sleeper, C: Clock, T>(
     sleeper: &S,
     budget: &SharedBudget,
@@ -255,7 +249,6 @@ pub(crate) fn execute_with_retry<S: Sleeper, C: Clock, T>(
 /// Always applies, including at `-r 0`. Never consumes the wait budget,
 /// never fails, and never defers an operation: a healthy multi-thread run
 /// is never capped by pacing.
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` paces fetches.
 pub(crate) fn pace_before_request<S: Sleeper, C: Clock>(
     sleeper: &S,
     clock: &C,
@@ -273,7 +266,6 @@ pub(crate) fn pace_before_request<S: Sleeper, C: Clock>(
 /// Body-free deferred error when the shared wait budget cannot afford
 /// another contention or backoff sleep. Callers treat this as "catch up
 /// next run", not as a remote failure.
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` defers work.
 pub(crate) fn deferred_error() -> GmailError {
     GmailError::runtime(
         "deferred",
@@ -307,7 +299,6 @@ pub(crate) struct CoordinatedRead<'a, R, S, C> {
     gave_up: Cell<bool>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` coordinates reads.
 impl<'a, R: GmailRead, S: Sleeper, C: Clock> CoordinatedRead<'a, R, S, C> {
     pub(crate) fn new(
         inner: &'a R,

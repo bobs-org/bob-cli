@@ -54,7 +54,6 @@ pub(crate) enum FiledVia {
     Problem,
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` files threads.
 impl FiledVia {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
@@ -109,7 +108,6 @@ pub(crate) struct EnrollmentFold {
     warnings: Vec<String>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` folds enrollment.
 impl EnrollmentFold {
     /// Fold `.bob/gmail/*.jsonl` across every host. Malformed lines and
     /// enrollment events without a valid identity are skipped with bounded
@@ -197,12 +195,9 @@ impl EnrollmentFold {
     }
 
     /// Every enrolled thread, sorted by key.
+    #[allow(dead_code)] // bob-cli-ii.4 fetches the currently watched enrollments.
     pub(crate) fn threads(&self) -> impl Iterator<Item = &ThreadKey> {
         self.by_thread.keys()
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.by_thread.len()
     }
 
     /// Malformed-line and malformed-event warnings, body-free.
@@ -252,7 +247,6 @@ fn parse_record(
 /// A new enrollment event. Append it only after the vault writes it
 /// describes are durable; a lost append is repaired by adoption.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` records filings.
 pub(crate) enum EnrollmentEvent {
     /// Sync wrote the thread's task row into `task_file`.
     Filed {
@@ -270,7 +264,6 @@ pub(crate) enum EnrollmentEvent {
     },
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` records filings.
 impl EnrollmentEvent {
     pub(crate) fn key(&self) -> &ThreadKey {
         match self {
@@ -319,7 +312,6 @@ impl EnrollmentEvent {
 
 /// Append one enrollment event to this host's journal with one `O_APPEND`
 /// write.
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` records filings.
 pub(crate) fn append(
     vault: &Path,
     host: &str,
@@ -354,7 +346,6 @@ pub(crate) struct AdoptionIntent {
     pub(crate) watchers: usize,
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` adopts threads.
 impl AdoptionIntent {
     pub(crate) fn event(&self) -> EnrollmentEvent {
         EnrollmentEvent::Adopted {
@@ -387,7 +378,6 @@ pub(crate) struct Membership<'a> {
     in_flight: Option<&'a BTreeSet<ThreadKey>>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` decides threads.
 impl<'a> Membership<'a> {
     pub(crate) fn new(fold: &'a EnrollmentFold, scan: &'a WatchScan) -> Self {
         Self {
@@ -442,6 +432,7 @@ impl<'a> Membership<'a> {
     /// Enrolled threads of `account` with at least one open watching task,
     /// sorted by key. Threads adopted or filed by the current run are not
     /// enrolled yet; callers add them.
+    #[allow(dead_code)] // bob-cli-ii.4 applies turn changes to these watched threads.
     pub(crate) fn watched(&self, account: &str) -> Vec<&'a ThreadKey> {
         self.scan
             .threads()
@@ -563,7 +554,7 @@ mod tests {
         );
         let fold = EnrollmentFold::load(vault).unwrap();
         assert!(fold.warnings().is_empty(), "{:?}", fold.warnings());
-        assert_eq!(fold.len(), 3);
+        assert_eq!(fold.threads().count(), 3);
         // A save event never enrolls.
         assert!(!fold.is_enrolled(&key("me@example.com", "ccdd02")));
 
@@ -630,7 +621,7 @@ mod tests {
             ],
         );
         let fold = EnrollmentFold::load(vault).unwrap();
-        assert_eq!(fold.len(), 1);
+        assert_eq!(fold.threads().count(), 1);
         let record = fold.latest(&key("me@example.com", "aabb")).unwrap();
         // A valid identity enrolls even when optional provenance is junk.
         assert_eq!(record.via, None);
@@ -651,7 +642,7 @@ mod tests {
     fn missing_journal_is_an_empty_fold() {
         let temp = tempfile::tempdir().unwrap();
         let fold = EnrollmentFold::load(temp.path()).unwrap();
-        assert_eq!(fold.len(), 0);
+        assert_eq!(fold.threads().count(), 0);
         assert!(fold.warnings().is_empty());
     }
 
@@ -731,7 +722,7 @@ mod tests {
         assert_eq!(super::super::super::journal::malformed_count(vault), 0);
 
         let fold = EnrollmentFold::load(vault).unwrap();
-        assert_eq!(fold.len(), 3);
+        assert_eq!(fold.threads().count(), 3);
         assert_eq!(
             fold.latest(&key("me@example.com", "ccdd")).unwrap().via,
             Some(FiledVia::Problem)
@@ -913,7 +904,7 @@ mod tests {
             vec![&key(ME, "aa01"), &key(ME, "bb02")]
         );
         assert!(membership.adoptions(ME).is_empty());
-        assert_eq!(fold.len(), 2);
+        assert_eq!(fold.threads().count(), 2);
     }
 
     #[test]

@@ -1273,6 +1273,13 @@ if op == "thread_get":
     # (with per-message labelIds for routing), state["thread_fail"] maps an
     # id to a permanent failure, and state["thread_fail_remaining"] maps an
     # id to a transient failure that succeeds after N attempts.
+    if "--full" in args:
+        full_fail = (state.get("thread_full_fail") or {}).get(hex_id)
+        if isinstance(full_fail, dict):
+            fail(
+                full_fail.get("stderr") or "gog failed",
+                int(full_fail.get("code") or 1),
+            )
     per_remaining = (state.get("thread_fail_remaining") or {}).get(hex_id)
     if isinstance(per_remaining, dict) and int(per_remaining.get("remaining") or 0) > 0:
         per_remaining["remaining"] = int(per_remaining.get("remaining") or 0) - 1

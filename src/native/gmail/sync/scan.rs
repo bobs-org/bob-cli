@@ -45,7 +45,6 @@ const TASK_TAG: &str = "#task";
 pub(crate) struct WatchScan {
     tasks: Vec<WatchingTask>,
     by_thread: BTreeMap<ThreadKey, Vec<usize>>,
-    scanned_notes: usize,
     warnings: Vec<String>,
 }
 
@@ -85,13 +84,8 @@ pub(crate) enum LinkPlacement {
     ChildBullet { line: usize },
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` reads the scan.
 impl WatchScan {
-    fn new(
-        mut tasks: Vec<WatchingTask>,
-        scanned_notes: usize,
-        warnings: Vec<String>,
-    ) -> Self {
+    fn new(mut tasks: Vec<WatchingTask>, warnings: Vec<String>) -> Self {
         tasks.sort_by(|left, right| {
             left.path.cmp(&right.path).then(left.line.cmp(&right.line))
         });
@@ -104,12 +98,12 @@ impl WatchScan {
         Self {
             tasks,
             by_thread,
-            scanned_notes,
             warnings,
         }
     }
 
     /// Every watching task, sorted by path, then line.
+    #[allow(dead_code)] // bob-cli-ii.4 updates every open task linked to a watched thread.
     pub(crate) fn tasks(&self) -> &[WatchingTask] {
         &self.tasks
     }
@@ -127,11 +121,13 @@ impl WatchScan {
             .map(|&index| &self.tasks[index])
     }
 
+    #[allow(dead_code)] // bob-cli-ii.4 applies each update to all task watchers.
     pub(crate) fn watcher_count(&self, key: &ThreadKey) -> usize {
         self.by_thread.get(key).map_or(0, Vec::len)
     }
 
     /// Whether any open task links the thread's mail note.
+    #[allow(dead_code)] // bob-cli-ii.4 skips remote reads for unwatched enrollments.
     pub(crate) fn is_watched(&self, key: &ThreadKey) -> bool {
         self.by_thread.contains_key(key)
     }
@@ -141,11 +137,6 @@ impl WatchScan {
         self.by_thread.keys()
     }
 
-    /// How many notes the walk read.
-    pub(crate) fn scanned_notes(&self) -> usize {
-        self.scanned_notes
-    }
-
     /// Body-free warnings about links that could not name one thread.
     pub(crate) fn warnings(&self) -> &[String] {
         &self.warnings
@@ -153,14 +144,13 @@ impl WatchScan {
 
     #[cfg(test)]
     pub(crate) fn from_tasks_for_test(tasks: Vec<WatchingTask>) -> Self {
-        let scanned = tasks.len();
-        Self::new(tasks, scanned, Vec::new())
+        Self::new(tasks, Vec::new())
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` reads the scan.
 impl WatchingTask {
     /// Whether this task watches `key`.
+    #[allow(dead_code)] // bob-cli-ii.4 applies each new turn to linked tasks.
     pub(crate) fn watches(&self, key: &ThreadKey) -> bool {
         self.targets.iter().any(|target| &target.key == key)
     }
@@ -177,7 +167,6 @@ impl WatchingTask {
 /// Walk the vault (minus the mail folder and `bob gmail link -a`'s other
 /// exclusions) for watching tasks. `index` is the mail-note index of
 /// `mail_folder`; only its uniquely identified notes can be watched.
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` scans watchers.
 pub(crate) fn scan_watching_tasks(
     vault: &Path,
     mail_folder: &Path,
@@ -185,12 +174,10 @@ pub(crate) fn scan_watching_tasks(
 ) -> Result<WatchScan, GmailError> {
     let mut links = MailLinks::new(vault, index);
     let mut tasks = Vec::new();
-    let mut scanned_notes = 0usize;
     vault_walk::visit_vault_notes(
         vault,
         mail_folder,
         &mut |note: WalkedNote<'_>| {
-            scanned_notes += 1;
             if !note.text.contains(TASK_TAG) || !note.text.contains("[[") {
                 return Ok(());
             }
@@ -199,7 +186,7 @@ pub(crate) fn scan_watching_tasks(
             Ok(())
         },
     )?;
-    Ok(WatchScan::new(tasks, scanned_notes, links.warnings()))
+    Ok(WatchScan::new(tasks, links.warnings()))
 }
 
 /// Resolves wikilink targets to indexed mail-note identities.
@@ -649,7 +636,6 @@ mod tests {
         );
         assert_eq!(lines(&scan, "bb02"), vec![("job.md".to_string(), 8)]);
         assert_eq!(scan.watcher_count(&key("cc03")), 1);
-        assert_eq!(scan.scanned_notes(), 1);
         assert!(scan.warnings().is_empty());
     }
 

@@ -46,7 +46,6 @@ pub(crate) struct ThreadKey {
     thread_id: String,
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` consumes keys.
 impl ThreadKey {
     /// Normalize and validate an identity: a non-empty account (trimmed,
     /// ASCII-lowercased) and a non-empty all-hex thread id (lowercased).

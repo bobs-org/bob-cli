@@ -3,7 +3,7 @@
 
 mod gmail_support;
 
-use std::fs;
+use std::{fs, path::Path, process::Command};
 
 use gmail_support::{
     json_stdout, run_gmail, stderr, stdout, FakeGog, GmailEnv, ACCOUNT, HOST,
@@ -63,6 +63,218 @@ fn threads_list_page_tokens(fake: &FakeGog) -> Vec<Option<String>> {
         .collect()
 }
 
+fn seed_unenrolled_task(
+    env: &GmailEnv,
+    fake: &FakeGog,
+    thread_id: &str,
+    task_file: &str,
+) -> (String, String) {
+    let saved = run_gmail(env, fake, &["save", thread_id, "-f", "json"]);
+    assert_success(&saved, "save unenrolled mail note");
+    let doc = json_stdout(&saved);
+    let note = doc["note"].as_str().expect("saved note path").to_string();
+    let link = doc["link"].as_str().expect("saved note link").to_string();
+
+    let path = env.vault().join(task_file);
+    if !path.exists() {
+        let area = task_file.strip_suffix(".md").unwrap_or(task_file);
+        write_area(env, area);
+    }
+    let mut text = fs::read_to_string(&path).expect("task note");
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&format!("- [ ] #task Existing {link}\n"));
+    fs::write(path, text).expect("write existing task");
+    (note, link)
+}
+
+fn journal_kinds(env: &GmailEnv) -> Vec<String> {
+    let dir = env.vault().join(".bob/gmail");
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| fs::read_to_string(entry.path()).ok())
+        .flat_map(|text| {
+            text.lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter_map(|event| event["kind"].as_str().map(str::to_string))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn task_row_count(path: &Path) -> usize {
+    fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.contains("#task") && line.contains("[[mail/"))
+        .count()
+}
+
+fn snapshot_tree(root: &Path, skip_git: bool) -> Vec<(String, Vec<u8>)> {
+    fn visit(
+        root: &Path,
+        current: &Path,
+        skip_git: bool,
+        out: &mut Vec<(String, Vec<u8>)>,
+    ) {
+        let Ok(entries) = fs::read_dir(current) else {
+            return;
+        };
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let path = entry.path();
+            let relative =
+                path.strip_prefix(root).expect("relative fixture path");
+            if skip_git && relative == Path::new(".git") {
+                continue;
+            }
+            let name = relative.to_string_lossy().replace('\\', "/");
+            if path.is_dir() {
+                out.push((name, Vec::new()));
+                visit(root, &path, skip_git, out);
+            } else if let Ok(bytes) = fs::read(&path) {
+                out.push((name, bytes));
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    if root.is_dir() {
+        visit(root, root, skip_git, &mut out);
+    }
+    out.sort_by(|left, right| left.0.cmp(&right.0));
+    out
+}
+
+fn git(vault: &Path, args: &[&str]) -> std::process::Output {
+    Command::new("git")
+        .arg("-C")
+        .arg(vault)
+        .args(args)
+        .output()
+        .expect("run git")
+}
+
+fn initialize_git_vault(vault: &Path) {
+    let output = git(vault, &["init", "-q"]);
+    assert!(
+        output.status.success(),
+        "git init: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for (key, value) in [
+        ("user.name", "Gmail Sync Tests"),
+        ("user.email", "gmail-sync-tests@example.test"),
+    ] {
+        let output = git(vault, &["config", "--local", key, value]);
+        assert!(output.status.success(), "git config {key}");
+    }
+    fs::write(vault.join("baseline.md"), "baseline\n").expect("write baseline");
+    assert!(git(vault, &["add", "baseline.md"]).status.success());
+    assert!(git(vault, &["commit", "-qm", "baseline"]).status.success());
+}
+
+fn git_subjects(vault: &Path) -> Vec<String> {
+    let output = git(vault, &["log", "--format=%s"]);
+    assert!(
+        output.status.success(),
+        "git log: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .expect("git subjects are UTF-8")
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+fn normalize_root(bytes: &[u8], root: &Path) -> Vec<u8> {
+    let needle = root.as_os_str().to_string_lossy().as_bytes().to_vec();
+    if needle.is_empty() {
+        return bytes.to_vec();
+    }
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at..].starts_with(&needle) {
+            out.extend_from_slice(b"<ROOT>");
+            at += needle.len();
+        } else {
+            out.push(bytes[at]);
+            at += 1;
+        }
+    }
+    out
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct AliasSnapshot {
+    status: Option<i32>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    vault: Vec<(String, Vec<u8>)>,
+    state: Vec<(String, Vec<u8>)>,
+    git_subjects: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum AliasScenario {
+    LiveSuccess,
+    DryRunHuman,
+    DryRunJson,
+    RouteProblem,
+    Help,
+    SetupFailure,
+}
+
+fn run_alias_fixture(alias: &str, scenario: AliasScenario) -> AliasSnapshot {
+    let env = GmailEnv::new("bob-cli-gmail-alias-parity");
+    initialize_git_vault(env.vault());
+    let fake = FakeGog::new(&env, "gog").scenario("gmail_pull_one");
+    let mut args: Vec<&str> = vec![alias];
+    match scenario {
+        AliasScenario::LiveSuccess => args.extend(["-f", "json"]),
+        AliasScenario::DryRunHuman => args.push("-d"),
+        AliasScenario::DryRunJson => args.extend(["-d", "-f", "json"]),
+        AliasScenario::RouteProblem => {
+            env.write_config(&format!(
+                "gmail:\n  account: {ACCOUNT}\n  writer: {HOST}\n  sync:\n    route_prefixes: [\"#\"]\n"
+            ));
+            fake.set_labels(serde_json::json!([
+                {"id": "Label_1", "name": "#/missing", "type": "user"},
+                {"id": "INBOX", "name": "INBOX", "type": "system"}
+            ]));
+            args.extend(["-f", "json"]);
+        }
+        AliasScenario::Help => args.push("--help"),
+        AliasScenario::SetupFailure => args.extend(["-l", "501", "-f", "json"]),
+    }
+    let output = run_gmail(&env, &fake, &args);
+    let root = env.root();
+    let vault = snapshot_tree(env.vault(), true)
+        .into_iter()
+        .map(|(path, bytes)| (path, normalize_root(&bytes, root)))
+        .collect();
+    let state_root = root.join("state");
+    let state = snapshot_tree(&state_root, false)
+        .into_iter()
+        .map(|(path, bytes)| (path, normalize_root(&bytes, root)))
+        .collect();
+    AliasSnapshot {
+        status: output.status.code(),
+        stdout: normalize_root(&output.stdout, root),
+        stderr: normalize_root(&output.stderr, root),
+        vault,
+        state,
+        git_subjects: git_subjects(env.vault()),
+    }
+}
+
 #[test]
 fn sync_creates_an_inbox_and_is_idempotent_by_thread_id() {
     let env = GmailEnv::new("bob-cli-gmail-sync");
@@ -120,6 +332,8 @@ fn sync_dry_run_reads_but_writes_nothing() {
     let env = GmailEnv::new("bob-cli-gmail-sync-dry-run");
     let fake = FakeGog::new(&env, "gog").scenario("gmail_pull_one");
 
+    let before_vault = snapshot_tree(env.vault(), true);
+    let before_state = snapshot_tree(&env.root().join("state"), false);
     let output = run_gmail(&env, &fake, &["sync", "-d", "-f", "json"]);
     assert_success(&output, "dry-run sync");
     let value = json_stdout(&output);
@@ -129,17 +343,33 @@ fn sync_dry_run_reads_but_writes_nothing() {
     assert!(!env.vault().join("gmail_inbox.md").exists());
     assert!(!env.vault().join("mail").exists());
     assert!(!env.vault().join(".bob/gmail").exists());
+    assert_eq!(snapshot_tree(env.vault(), true), before_vault);
+    assert_eq!(
+        snapshot_tree(&env.root().join("state"), false),
+        before_state
+    );
+
+    let live = run_gmail(&env, &fake, &["sync", "-f", "json"]);
+    assert_success(&live, "live sync after dry run");
+    let mut dry_result = value["results"][0].clone();
+    dry_result["status"] = serde_json::json!("filed");
+    assert_eq!(dry_result, json_stdout(&live)["results"][0]);
 }
 
 #[test]
-fn hidden_pull_alias_matches_sync_json() {
-    let env = GmailEnv::new("bob-cli-gmail-sync-alias");
-    let fake = FakeGog::new(&env, "gog").scenario("gmail_pull_one");
-    let sync = run_gmail(&env, &fake, &["sync", "-d", "-f", "json"]);
-    assert_success(&sync, "sync dry-run");
-    let pull = run_gmail(&env, &fake, &["pull", "-d", "-f", "json"]);
-    assert_success(&pull, "pull dry-run alias");
-    assert_eq!(json_stdout(&sync), json_stdout(&pull));
+fn hidden_pull_alias_matches_sync_byte_for_byte_across_scenarios() {
+    for scenario in [
+        AliasScenario::LiveSuccess,
+        AliasScenario::DryRunHuman,
+        AliasScenario::DryRunJson,
+        AliasScenario::RouteProblem,
+        AliasScenario::Help,
+        AliasScenario::SetupFailure,
+    ] {
+        let sync = run_alias_fixture("sync", scenario);
+        let pull = run_alias_fixture("pull", scenario);
+        assert_eq!(sync, pull, "sync/pull parity for {scenario:?}");
+    }
 }
 
 #[test]
@@ -155,6 +385,13 @@ fn sync_refuses_a_non_writer_and_a_disabled_label() {
     assert_eq!(writer_json["error"]["kind"], "writer");
     assert!(!fake.called_with(&["gmail.users.threads.list"]));
 
+    let dry_run = run_gmail(&env, &fake, &["sync", "-d", "-f", "json"]);
+    assert_success(&dry_run, "non-writer dry-run");
+    assert_eq!(json_stdout(&dry_run)["dry_run"], true);
+    assert_eq!(json_stdout(&dry_run)["pulled"], 1);
+    assert!(!env.vault().join("gmail_inbox.md").exists());
+
+    fake.clear_calls();
     env.write_config(&format!(
         "gmail:\n  account: {ACCOUNT}\n  writer: {HOST}\n  pull:\n    label: ''\n"
     ));
@@ -230,6 +467,9 @@ fn busy_guard_is_a_quiet_success_skip() {
         .expect("open guard");
     guard.try_lock_exclusive().expect("hold sync guard");
 
+    let before_vault = snapshot_tree(env.vault(), true);
+    let before_state = snapshot_tree(&env.root().join("state"), false);
+
     // Fast contention budget: a held guard must skip without waiting the
     // default 120 s twice.
     let json = run_gmail(&env, &fake, &["sync", "-f", "json", "-r", "0"]);
@@ -243,6 +483,11 @@ fn busy_guard_is_a_quiet_success_skip() {
     assert_success(&human, "busy quiet skip");
     assert!(stdout(&human).is_empty(), "{}", stdout(&human));
     assert!(!env.vault().join("gmail_inbox.md").exists());
+    assert_eq!(snapshot_tree(env.vault(), true), before_vault);
+    assert_eq!(
+        snapshot_tree(&env.root().join("state"), false),
+        before_state
+    );
     drop(guard);
 }
 
@@ -314,7 +559,7 @@ fn sync_pages_threads_list_by_page_token() {
         }
     ]));
 
-    let output = run_gmail(&env, &fake, &["sync", "-f", "json"]);
+    let output = run_gmail(&env, &fake, &["sync", "-l", "2", "-f", "json"]);
     assert_success(&output, "paged sync");
     let value = json_stdout(&output);
     assert_eq!(value["ok"], true);
@@ -362,4 +607,439 @@ fn sync_threads_list_refused_is_a_search_failure() {
         }),
         "{warnings:?}"
     );
+}
+
+#[test]
+fn sync_adopts_before_limit_and_skips_candidate_fetch_for_the_adoption() {
+    let env = GmailEnv::new("bob-cli-gmail-sync-adopt-limit");
+    let fake = FakeGog::new(&env, "gog").scenario("gmail_pull_many");
+    seed_unenrolled_task(&env, &fake, "0123456789abcdef", "gmail_inbox.md");
+    fake.set_search_pages(serde_json::json!([
+        {"threads": [{"id": "0123456789abcdef"}, {"id": "aaaaaaaaaaaaaaaa"}]}
+    ]));
+    fake.clear_calls();
+
+    let output =
+        run_gmail(&env, &fake, &["sync", "-l", "1", "-r", "0", "-f", "json"]);
+    assert_success(&output, "adopt and file one new thread");
+    let value = json_stdout(&output);
+    assert_eq!(value["pulled"], 1);
+    assert_eq!(value["summary"]["watching"], 2);
+    assert!(value["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["status"] == "adopted"));
+    assert!(value["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["status"] == "filed"));
+    assert_eq!(task_row_count(&env.vault().join("gmail_inbox.md")), 2);
+    assert_eq!(
+        journal_kinds(&env)
+            .iter()
+            .filter(|kind| *kind == "gmail.adopted")
+            .count(),
+        1
+    );
+    assert!(
+        !fake.calls().iter().any(|call| {
+            call.windows(3)
+                .any(|args| args == ["gmail", "thread", "get"])
+                && call.iter().any(|arg| arg == "0123456789abcdef")
+        }),
+        "adopted thread was fetched as a candidate: {:?}",
+        fake.calls()
+    );
+
+    let replay =
+        run_gmail(&env, &fake, &["sync", "-l", "1", "-r", "0", "-f", "json"]);
+    assert_success(&replay, "replay after adoption");
+    assert_eq!(json_stdout(&replay)["pulled"], 0);
+    assert_eq!(task_row_count(&env.vault().join("gmail_inbox.md")), 2);
+    assert_eq!(
+        journal_kinds(&env)
+            .iter()
+            .filter(|kind| *kind == "gmail.adopted")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn sync_adopts_without_search_presence_and_in_watch_only_mode() {
+    for (name, limit, search_ids, expected_pulled, expected_watching) in [
+        ("absent", "1", vec!["aaaaaaaaaaaaaaaa"], 1, 2),
+        ("watch-only", "0", vec!["aaaaaaaaaaaaaaaa"], 0, 1),
+    ] {
+        let env = GmailEnv::new(&format!("bob-cli-gmail-sync-adopt-{name}"));
+        let fake = FakeGog::new(&env, "gog").scenario("gmail_pull_many");
+        seed_unenrolled_task(&env, &fake, "0123456789abcdef", "gmail_inbox.md");
+        fake.set_search_pages(serde_json::json!([{
+            "threads": search_ids.iter().map(|id| serde_json::json!({"id": id})).collect::<Vec<_>>()
+        }]));
+        fake.clear_calls();
+
+        let output = run_gmail(
+            &env,
+            &fake,
+            &["sync", "-l", limit, "-r", "0", "-f", "json"],
+        );
+        assert_success(&output, name);
+        let value = json_stdout(&output);
+        assert_eq!(value["pulled"], expected_pulled);
+        assert_eq!(value["summary"]["watching"], expected_watching);
+        assert_eq!(
+            journal_kinds(&env)
+                .iter()
+                .filter(|kind| *kind == "gmail.adopted")
+                .count(),
+            1
+        );
+        if limit == "0" {
+            assert!(!fake.called_with(&["gmail.users.threads.list"]));
+        }
+        assert!(!fake.calls().iter().any(|call| {
+            call.windows(3)
+                .any(|args| args == ["gmail", "thread", "get"])
+                && call.iter().any(|arg| arg == "0123456789abcdef")
+        }));
+    }
+}
+
+#[test]
+fn sync_adopts_a_task_outside_the_inbox() {
+    let env = GmailEnv::new("bob-cli-gmail-sync-adopt-area");
+    let fake = FakeGog::new(&env, "gog").scenario("gmail_pull_one");
+    seed_unenrolled_task(&env, &fake, "0123456789abcdef", "job.md");
+
+    let output = run_gmail(&env, &fake, &["sync", "-r", "0", "-f", "json"]);
+    assert_success(&output, "adopt area task");
+    assert_eq!(json_stdout(&output)["pulled"], 0);
+    assert_eq!(task_row_count(&env.vault().join("job.md")), 1);
+    assert!(!env.vault().join("gmail_inbox.md").exists());
+    assert_eq!(
+        journal_kinds(&env)
+            .iter()
+            .filter(|kind| *kind == "gmail.adopted")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn legacy_pull_enrollment_is_reported_without_filing_again() {
+    let env = GmailEnv::new("bob-cli-gmail-sync-legacy");
+    let fake = FakeGog::new(&env, "gog").scenario("gmail_pull_one");
+    let journal = env.vault().join(".bob/gmail/legacy-host.jsonl");
+    fs::create_dir_all(journal.parent().unwrap()).expect("journal directory");
+    fs::write(
+        &journal,
+        serde_json::json!({
+            "v": 1,
+            "ts": "2026-11-01T09:00:00-04:00",
+            "host": "legacy-host",
+            "kind": "gmail.pulled",
+            "value": {
+                "account": ACCOUNT,
+                "thread_id": "0123456789abcdef",
+                "inbox": "gmail_inbox.md",
+                "note": "mail/2026/0123456789abcdef.md"
+            }
+        })
+        .to_string()
+            + "\n",
+    )
+    .expect("legacy enrollment");
+
+    let output = run_gmail(&env, &fake, &["sync", "-r", "0", "-f", "json"]);
+    assert_success(&output, "legacy enrollment sync");
+    let value = json_stdout(&output);
+    assert_eq!(value["results"][0]["status"], "already_pulled");
+    assert_eq!(value["pulled"], 0);
+    assert!(!env.vault().join("gmail_inbox.md").exists());
+    assert_eq!(
+        fake.calls()
+            .iter()
+            .filter(|call| call.iter().any(|arg| arg == "thread"))
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn enrolled_tasks_close_delete_reopen_move_and_survive_label_removal() {
+    let env = GmailEnv::new("bob-cli-gmail-sync-lifecycle");
+    let fake = FakeGog::new(&env, "gog").scenario("gmail_pull_one");
+    let first = run_gmail(&env, &fake, &["sync", "-r", "0", "-f", "json"]);
+    assert_success(&first, "initial filing");
+    let first_value = json_stdout(&first);
+    assert_eq!(first_value["pulled"], 1);
+    let link = first_value["results"][0]["link"]
+        .as_str()
+        .expect("filed mail link")
+        .to_string();
+    let inbox_path = env.vault().join("gmail_inbox.md");
+
+    let inbox = fs::read_to_string(&inbox_path).expect("filed inbox");
+    fs::write(&inbox_path, inbox.replacen("- [ ] #task", "- [x] #task", 1))
+        .expect("close task");
+    let closed = run_gmail(&env, &fake, &["sync", "-r", "0", "-f", "json"]);
+    assert_success(&closed, "closed enrolled task");
+    assert_eq!(json_stdout(&closed)["pulled"], 0);
+    assert_eq!(json_stdout(&closed)["summary"]["watching"], 0);
+    assert_eq!(task_row_count(&inbox_path), 1);
+
+    let inbox = fs::read_to_string(&inbox_path).expect("closed task note");
+    fs::write(&inbox_path, inbox.replacen("- [x] #task", "- [ ] #task", 1))
+        .expect("reopen task");
+    let reopened = run_gmail(&env, &fake, &["sync", "-r", "0", "-f", "json"]);
+    assert_success(&reopened, "reopened enrolled task");
+    assert_eq!(json_stdout(&reopened)["summary"]["watching"], 1);
+    assert_eq!(task_row_count(&inbox_path), 1);
+
+    let inbox = fs::read_to_string(&inbox_path).expect("reopened task note");
+    let row = inbox
+        .lines()
+        .find(|line| line.contains("#task [[mail/"))
+        .unwrap()
+        .to_string();
+    let remaining = inbox
+        .lines()
+        .filter(|line| *line != row)
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    fs::write(&inbox_path, remaining).expect("delete task while label remains");
+    let deleted = run_gmail(&env, &fake, &["sync", "-r", "0", "-f", "json"]);
+    assert_success(&deleted, "deleted enrolled task with label");
+    assert_eq!(json_stdout(&deleted)["pulled"], 0);
+    assert_eq!(json_stdout(&deleted)["summary"]["watching"], 0);
+    assert_eq!(task_row_count(&inbox_path), 0);
+
+    let mut inbox = fs::read_to_string(&inbox_path).expect("empty inbox note");
+    inbox.push_str(&format!("- [ ] #task Reopened {link}\n"));
+    fs::write(&inbox_path, inbox).expect("link an open task without the label");
+    fake.set_search_pages(serde_json::json!([{"resultSizeEstimate": 0}]));
+    let relinked =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_success(&relinked, "relinked enrolled task without label");
+    assert_eq!(json_stdout(&relinked)["summary"]["watching"], 1);
+
+    let inbox = fs::read_to_string(&inbox_path).expect("relinked task note");
+    let row = inbox
+        .lines()
+        .find(|line| line.contains("#task") && line.contains("[[mail/"))
+        .unwrap()
+        .to_string();
+    let remaining = inbox
+        .lines()
+        .filter(|line| *line != row)
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    fs::write(&inbox_path, remaining).expect("remove moved task from inbox");
+    write_area(&env, "job");
+    let job_path = env.vault().join("job.md");
+    let mut job = fs::read_to_string(&job_path).expect("job area");
+    job.push_str(&format!("{row}\n"));
+    fs::write(&job_path, job).expect("move task into area");
+    fake.set_search_pages(serde_json::json!([{"resultSizeEstimate": 0}]));
+    let moved = run_gmail(&env, &fake, &["sync", "-r", "0", "-f", "json"]);
+    assert_success(&moved, "moved enrolled task with removed label");
+    assert_eq!(json_stdout(&moved)["summary"]["watching"], 1);
+    assert_eq!(task_row_count(&job_path), 1);
+    assert_eq!(task_row_count(&inbox_path), 0);
+
+    fs::write(
+        &job_path,
+        fs::read_to_string(&job_path).unwrap().replace(&row, ""),
+    )
+    .expect("delete enrolled task");
+    let deleted = run_gmail(&env, &fake, &["sync", "-r", "0", "-f", "json"]);
+    assert_success(&deleted, "deleted moved enrolled task");
+    assert_eq!(json_stdout(&deleted)["pulled"], 0);
+    assert_eq!(json_stdout(&deleted)["summary"]["watching"], 0);
+    assert_eq!(task_row_count(&job_path), 0);
+    assert_eq!(
+        journal_kinds(&env)
+            .iter()
+            .filter(|kind| *kind == "gmail.filed")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn sync_limits_cover_default_zero_maximum_and_invalid_value() {
+    for (name, args, expected, expected_exit) in [
+        ("default", vec!["sync", "-r", "0", "-f", "json"], 2, 0),
+        (
+            "maximum",
+            vec!["sync", "-l", "500", "-r", "0", "-f", "json"],
+            2,
+            0,
+        ),
+        (
+            "invalid",
+            vec!["sync", "-l", "501", "-r", "0", "-f", "json"],
+            0,
+            2,
+        ),
+    ] {
+        let env = GmailEnv::new(&format!("bob-cli-gmail-sync-limit-{name}"));
+        let fake = FakeGog::new(&env, "gog").scenario("gmail_pull_many");
+        let before_vault = snapshot_tree(env.vault(), true);
+        let before_state = snapshot_tree(&env.root().join("state"), false);
+        let output = run_gmail(&env, &fake, &args);
+        assert_eq!(
+            output.status.code(),
+            Some(expected_exit),
+            "{name}: {}",
+            stdout(&output)
+        );
+        if expected_exit == 0 {
+            assert_eq!(json_stdout(&output)["pulled"], expected);
+        } else {
+            assert_eq!(snapshot_tree(env.vault(), true), before_vault);
+            assert_eq!(
+                snapshot_tree(&env.root().join("state"), false),
+                before_state
+            );
+            assert!(
+                fake.calls().is_empty(),
+                "limit validation must precede Gmail reads"
+            );
+        }
+    }
+}
+
+#[test]
+fn sync_keeps_partial_success_retries_transients_and_aborts_hydration_auth() {
+    let env = GmailEnv::new("bob-cli-gmail-sync-partial");
+    let fake = FakeGog::new(&env, "gog").scenario("gmail_pull_many");
+    fake.set_thread_fail(
+        "0123456789abcdef",
+        "notFound: synthetic thread missing",
+        1,
+    );
+    let partial = run_gmail(&env, &fake, &["sync", "-r", "0", "-f", "json"]);
+    assert_eq!(partial.status.code(), Some(1), "{}", stdout(&partial));
+    let partial_value = json_stdout(&partial);
+    assert_eq!(partial_value["ok"], false);
+    assert_eq!(partial_value["pulled"], 1);
+    assert_eq!(task_row_count(&env.vault().join("gmail_inbox.md")), 1);
+
+    let retry_env = GmailEnv::new("bob-cli-gmail-sync-transient");
+    let retry_fake = FakeGog::new(&retry_env, "gog").scenario("gmail_pull_one");
+    retry_fake.set_transient_failure(
+        "thread_get",
+        "backendError: retry this read",
+        1,
+        1,
+    );
+    let retried = run_gmail(&retry_env, &retry_fake, &["sync", "-f", "json"]);
+    assert_success(&retried, "transient thread read recovers");
+    assert_eq!(json_stdout(&retried)["pulled"], 1);
+    assert!(
+        retry_fake
+            .calls()
+            .iter()
+            .filter(|call| {
+                call.windows(3)
+                    .any(|args| args == ["gmail", "thread", "get"])
+            })
+            .count()
+            >= 3,
+        "metadata retry and hydration should all run"
+    );
+
+    let auth_env = GmailEnv::new("bob-cli-gmail-sync-hydration-auth");
+    let auth_fake = FakeGog::new(&auth_env, "gog").scenario("gmail_pull_one");
+    auth_fake.set_thread_full_fail(
+        "0123456789abcdef",
+        "invalid_grant: synthetic revoked grant during hydration",
+        1,
+    );
+    let before = snapshot_tree(auth_env.vault(), true);
+    let auth =
+        run_gmail(&auth_env, &auth_fake, &["sync", "-r", "0", "-f", "json"]);
+    assert_eq!(auth.status.code(), Some(1), "{}", stdout(&auth));
+    assert_eq!(snapshot_tree(auth_env.vault(), true), before);
+    assert!(!journal_kinds(&auth_env)
+        .iter()
+        .any(|kind| kind == "gmail.filed"));
+    assert!(
+        auth_fake.calls().iter().any(|call| {
+            call.windows(3)
+                .any(|args| args == ["gmail", "thread", "get"])
+                && call.contains(&"--full".to_string())
+        }),
+        "test must fail during hydration, after metadata"
+    );
+}
+
+#[test]
+fn busy_vault_lock_skips_without_vault_or_journal_writes() {
+    use fs2::FileExt;
+    let env = GmailEnv::new("bob-cli-gmail-sync-busy-vault");
+    let fake = FakeGog::new(&env, "gog").scenario("gmail_pull_one");
+    let lock_path = env.root().join("bob_sync.lock");
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(lock_path)
+        .expect("open vault sync lock");
+    lock.try_lock_exclusive().expect("hold vault lock");
+    let before = snapshot_tree(env.vault(), true);
+    let journal_before = journal_kinds(&env);
+
+    let output = run_gmail(&env, &fake, &["sync", "-q", "-r", "0"]);
+    assert_success(&output, "busy vault-lock skip");
+    assert!(stdout(&output).is_empty());
+    assert_eq!(snapshot_tree(env.vault(), true), before);
+    assert_eq!(journal_kinds(&env), journal_before);
+    assert!(fake.called_with(&["gmail.users.threads.list"]));
+    drop(lock);
+}
+
+#[test]
+fn sync_commits_only_owned_paths_and_noop_replay_keeps_head_and_journal() {
+    let env = GmailEnv::new("bob-cli-gmail-sync-git");
+    initialize_git_vault(env.vault());
+    let fake = FakeGog::new(&env, "gog").scenario("gmail_pull_one");
+    fs::write(env.vault().join("unrelated.md"), "uncommitted user edit\n")
+        .expect("unrelated dirt");
+
+    let first = run_gmail(&env, &fake, &["sync", "-r", "0", "-f", "json"]);
+    assert_success(&first, "Git-backed sync");
+    assert_eq!(git_subjects(env.vault())[0], "gmail: sync 1 threads");
+    let committed =
+        git(env.vault(), &["show", "--format=", "--name-only", "HEAD"]);
+    let changed = String::from_utf8(committed.stdout).unwrap();
+    assert!(changed.contains("gmail_inbox.md"), "{changed}");
+    assert!(
+        !changed.contains("unrelated.md"),
+        "unrelated dirt entered the sync commit: {changed}"
+    );
+    let status =
+        String::from_utf8(git(env.vault(), &["status", "--short"]).stdout)
+            .unwrap();
+    assert!(status.contains("unrelated.md"), "{status}");
+    let head =
+        String::from_utf8(git(env.vault(), &["rev-parse", "HEAD"]).stdout)
+            .unwrap();
+    let journal = journal_kinds(&env);
+
+    let second = run_gmail(&env, &fake, &["sync", "-r", "0", "-f", "json"]);
+    assert_success(&second, "no-op replay");
+    assert_eq!(
+        String::from_utf8(git(env.vault(), &["rev-parse", "HEAD"]).stdout)
+            .unwrap(),
+        head
+    );
+    assert_eq!(journal_kinds(&env), journal);
 }

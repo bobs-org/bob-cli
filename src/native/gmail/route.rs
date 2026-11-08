@@ -23,7 +23,6 @@ use crate::native::{
 pub(crate) type LabelsById = HashMap<String, GmailLabel>;
 
 /// Key one `labels list` response by id.
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` routes threads.
 pub(crate) fn labels_by_id(labels: Vec<GmailLabel>) -> LabelsById {
     labels
         .into_iter()
@@ -64,7 +63,6 @@ impl RouteContext {
     /// sync transaction holds the maintenance lock. This keeps a destination
     /// that was renamed, closed, or retyped during Gmail preparation from
     /// receiving a stale task.
-    #[allow(dead_code)] // Consumed by the Gmail sync command phase.
     pub(crate) fn resolve_route(&self, route: &str) -> Option<ResolvedParent> {
         self.resolve(route)
             .ok()
@@ -241,7 +239,6 @@ impl RouteProblem {
 ///
 /// Several resolving labels route to their deepest note when they name one
 /// note or lie on one `parent:` chain, and are `ambiguous_route` otherwise.
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` routes threads.
 pub(crate) fn route<I, S>(
     labels_by_id: &LabelsById,
     thread_label_ids: I,
