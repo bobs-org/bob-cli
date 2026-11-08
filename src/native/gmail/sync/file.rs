@@ -21,7 +21,7 @@ use super::{
         self, AdoptionIntent, CandidateDecision, EnrollmentEvent,
         EnrollmentFold, EnrollmentOrigin, FiledVia, Membership,
     },
-    retry::{SharedBudget, Sleeper},
+    retry::{Clock, SharedBudget, Sleeper},
     scan::{self, WatchScan},
     ThreadKey,
 };
@@ -167,6 +167,10 @@ pub(crate) struct FilingOutcome {
     /// but make this run fail, as the durable row is not yet enrolled.
     pub(crate) failed: bool,
     pub(crate) changed: bool,
+    /// Whether this outcome came from live apply or dry-run planning.
+    /// Reports use the revalidated snapshot when this is set; otherwise they
+    /// keep the run's own scan so a skipped apply cannot zero membership.
+    pub(crate) applied: bool,
     /// The watch scan the apply boundary revalidated under the vault lock
     /// (or the dry-run input scan). Reports must use this snapshot for live
     /// membership, not the pre-fetch scan, so a task closed during
@@ -219,9 +223,10 @@ impl AttemptPlan {
 /// Recheck local snapshots, plan every successful candidate together, and
 /// persist the result as one scoped transaction. All callers must complete
 /// Gmail fetching and body preparation before entering this function.
-pub(crate) fn apply<S: Sleeper>(
+pub(crate) fn apply<S: Sleeper, C: Clock>(
     input: FilingInput<'_>,
     sleeper: &S,
+    clock: &C,
 ) -> Result<FilingOutcome, GmailError> {
     if input.dry_run {
         let index = resolve::scan_index(
@@ -247,7 +252,7 @@ pub(crate) fn apply<S: Sleeper>(
         return Ok(plan.outcome);
     }
 
-    let Some(_lock) = acquire_vault_lock(input.budget, sleeper)? else {
+    let Some(_lock) = acquire_vault_lock(input.budget, sleeper, clock)? else {
         return Ok(FilingOutcome {
             busy: true,
             ..FilingOutcome::default()
@@ -620,6 +625,7 @@ fn build_attempt(
     outcome.deferred.dedup();
     outcome.changed = !staged.is_empty() || !enrollment_events.is_empty();
     outcome.watch_snapshot = watchers.clone();
+    outcome.applied = true;
 
     Ok(AttemptPlan {
         outcome,
@@ -1583,19 +1589,25 @@ fn commit_paths(
     Ok(paths)
 }
 
-fn acquire_vault_lock<S: Sleeper>(
+fn acquire_vault_lock<S: Sleeper, C: Clock>(
     budget: &SharedBudget,
     sleeper: &S,
+    clock: &C,
 ) -> Result<Option<std::fs::File>, GmailError> {
     loop {
         match ob::try_acquire_lock() {
             Ok(file) => return Ok(Some(file)),
             Err(ob::LockAcquireError::Contended) => {
-                let remaining = budget.remaining();
-                if remaining.is_zero() {
+                if super::retry::sleep_within_budget(
+                    sleeper,
+                    budget,
+                    clock,
+                    Duration::from_millis(100),
+                )
+                .is_none()
+                {
                     return Ok(None);
                 }
-                sleeper.sleep(remaining.min(Duration::from_millis(100)));
             }
             Err(ob::LockAcquireError::Open { path, error }) => {
                 return Err(GmailError::runtime(
@@ -1708,6 +1720,34 @@ mod tests {
         fn sleep(&self, _: Duration) {}
     }
 
+    /// Advances on every sleep so lock-wait accounting is deterministic.
+    struct TestClock {
+        now: std::cell::RefCell<std::time::Instant>,
+        sleeps: std::cell::RefCell<Vec<Duration>>,
+    }
+
+    impl TestClock {
+        fn new() -> Self {
+            Self {
+                now: std::cell::RefCell::new(std::time::Instant::now()),
+                sleeps: std::cell::RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl Clock for TestClock {
+        fn now(&self) -> std::time::Instant {
+            *self.now.borrow()
+        }
+    }
+
+    impl Sleeper for TestClock {
+        fn sleep(&self, duration: Duration) {
+            self.sleeps.borrow_mut().push(duration);
+            *self.now.borrow_mut() += duration;
+        }
+    }
+
     fn test_env(root: &Path) -> TestEnvGuard {
         let lock = root.join("maintenance.lock");
         TestEnvGuard::set(&[
@@ -1804,6 +1844,7 @@ mod tests {
                 budget: &budget,
             },
             &NoSleep,
+            &crate::native::gmail::sync::retry::SystemClock,
         )
         .expect("filing succeeds")
     }
@@ -1916,6 +1957,7 @@ mod tests {
                 budget: &budget,
             },
             &NoSleep,
+            &crate::native::gmail::sync::retry::SystemClock,
         )
         .expect("batch files");
 
@@ -2096,6 +2138,7 @@ mod tests {
                 budget: &budget,
             },
             &NoSleep,
+            &crate::native::gmail::sync::retry::SystemClock,
         )
         .expect("stale adoption is deferred");
 
@@ -2144,5 +2187,54 @@ mod tests {
         let resolved = parent_notes::resolve_parent(temp.path(), "job")
             .expect("area resolves as a capture parent");
         assert_eq!(resolved.route, "job");
+    }
+
+    #[test]
+    fn vault_lock_wait_consumes_the_shared_wait_budget() {
+        let temp = tempfile::tempdir().expect("temporary vault");
+        let vault = temp.path();
+        let _env = test_env(vault);
+        let _held =
+            crate::native::ob::try_acquire_lock().expect("hold vault lock");
+        let fold = EnrollmentFold::load(vault).unwrap();
+        let watchers = WatchScan::default();
+        let budget = SharedBudget::new(Duration::from_millis(250));
+        let original = budget.remaining();
+        let clock = TestClock::new();
+        let outcome = apply(
+            FilingInput {
+                vault,
+                mail_folder: Path::new("mail"),
+                link_template: "✉️ {subject} · {who}",
+                inbox: "gmail_inbox.md",
+                candidates: Vec::new(),
+                adoptions: &[],
+                enrollment: &fold,
+                watchers: &watchers,
+                dry_run: false,
+                saved_at: Utc::now(),
+                timezone: chrono_tz::UTC,
+                budget: &budget,
+            },
+            &clock,
+            &clock,
+        )
+        .expect("busy skip");
+        assert!(outcome.busy);
+        assert!(!outcome.applied);
+        assert!(
+            budget.remaining() < original,
+            "lock wait draws from the wait budget: {:?} vs {:?}",
+            budget.remaining(),
+            original
+        );
+        assert!(
+            budget.is_exhausted(),
+            "250ms budget is consumed by 100ms lock-wait polls"
+        );
+        assert!(
+            !clock.sleeps.borrow().is_empty(),
+            "the vault-lock wait slept against the test clock"
+        );
     }
 }

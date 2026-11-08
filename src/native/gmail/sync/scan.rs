@@ -150,6 +150,12 @@ impl WatchScan {
     pub(crate) fn warnings(&self) -> &[String] {
         &self.warnings
     }
+
+    #[cfg(test)]
+    pub(crate) fn from_tasks_for_test(tasks: Vec<WatchingTask>) -> Self {
+        let scanned = tasks.len();
+        Self::new(tasks, scanned, Vec::new())
+    }
 }
 
 #[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` reads the scan.

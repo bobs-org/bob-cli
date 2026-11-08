@@ -102,18 +102,15 @@ pub(crate) fn from_outcome(
     account: &str,
     enrollment: &super::enroll::EnrollmentFold,
 ) -> SyncReport {
-    // The apply boundary revalidates watchers under the vault lock; that
-    // snapshot is authoritative for live runs so a task closed during
-    // preparation leaves the summary. Dry-run and no-op outcomes carry no
-    // snapshot and fall back to the pre-fetch scan.
-    let snapshot = if outcome.watch_snapshot.tasks().is_empty()
-        && outcome.results.is_empty()
-        && outcome.failures.is_empty()
-        && outcome.deferred.is_empty()
-    {
-        watchers
-    } else {
+    // Membership source is explicit:
+    // - the revalidated apply snapshot when apply ran;
+    // - the projected membership in dry-run (also `applied`);
+    // - otherwise the run's own scan.
+    // Never fall back to an empty default when apply was skipped.
+    let snapshot = if outcome.applied {
         &outcome.watch_snapshot
+    } else {
+        watchers
     };
     let extra_failed = extra_results.iter().any(|row| row.status == "problem");
     let mut results: Vec<SyncResult> = extra_results;
@@ -164,7 +161,10 @@ pub(crate) fn from_outcome(
         .iter()
         .filter(|row| matches!(row.status, "filed" | "would_file"))
         .count();
-    let failed = outcome.failed || !outcome.failures.is_empty() || extra_failed;
+    let failed = outcome.failed
+        || !outcome.failures.is_empty()
+        || extra_failed
+        || !outcome.deferred.is_empty();
     first_seen |= problems.iter().any(|problem| problem.first_seen);
 
     let watching = watching_count(&outcome, snapshot, account, enrollment);
@@ -190,7 +190,10 @@ pub(crate) fn print(args: &SyncArgs, report: &SyncReport) {
         ui::flush_stdout();
         return;
     }
-    if report.busy {
+    // A busy skip is quiet only when preparation recorded no failure.
+    // Failures and deferrals already on the report still print (and keep
+    // exit 1) even though apply wrote nothing.
+    if report.busy && report.ok {
         return;
     }
     let styler = Styler::detect();
@@ -200,14 +203,6 @@ pub(crate) fn print(args: &SyncArgs, report: &SyncReport) {
             if let Some(line) = human_row(row, &report.problems) {
                 println!("  {}", color_row(&styler, row.status, &line));
             }
-        }
-        // Filed route problems carry their resolver explanation on the row;
-        // remote failures with no durable row are already distinguished
-        // there, with kind/message in warnings.
-        for problem in &report.problems {
-            // Problems are already rendered on their result row; this loop
-            // keeps the explanation visible when the result row was hidden.
-            let _ = problem;
         }
     } else {
         for row in &report.results {
@@ -467,6 +462,7 @@ fn color_row(styler: &Styler, status: &str, line: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::scan::{LinkPlacement, WatchTarget, WatchingTask};
     use super::*;
 
     fn filed() -> SyncResult {
@@ -725,5 +721,151 @@ mod tests {
         assert_eq!(report.pulled, 1);
         assert_eq!(report.watching, 1);
         assert!(report.dry_run);
+    }
+
+    fn enrolled_fold_with(
+        id: &str,
+    ) -> (tempfile::TempDir, super::super::enroll::EnrollmentFold) {
+        use std::fs;
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join(".bob/gmail");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("athena.jsonl"),
+            format!(
+                "{{\"v\":1,\"ts\":\"2026-11-01T09:00:00-04:00\",\"host\":\"athena\",\
+                 \"kind\":\"gmail.filed\",\"value\":{{\"account\":\"me@example.com\",\
+                 \"thread_id\":\"{id}\",\"note\":\"mail/2026/{id}.md\",\
+                 \"task_file\":\"job.md\",\"via\":\"route\",\"route\":\"job\"}}}}\n"
+            ),
+        )
+        .unwrap();
+        let fold =
+            super::super::enroll::EnrollmentFold::load(temp.path()).unwrap();
+        (temp, fold)
+    }
+
+    fn scan_with(id: &str) -> WatchScan {
+        WatchScan::from_tasks_for_test(vec![WatchingTask {
+            path: "job.md".into(),
+            line: 1,
+            text: format!("- [ ] #task [[mail/2026/{id}.md]]"),
+            block_id: None,
+            status: ' ',
+            targets: vec![WatchTarget {
+                key: filing_key(id),
+                note: format!("mail/2026/{id}.md"),
+                placement: LinkPlacement::TaskLine,
+            }],
+        }])
+    }
+
+    #[test]
+    fn skipped_apply_keeps_the_run_scan_when_fetches_were_deferred() {
+        let (_temp, fold) = enrolled_fold_with("aa01");
+        let scan = scan_with("aa01");
+        let mut outcome = FilingOutcome::default();
+        outcome.failed = true;
+        outcome.deferred.push(filing_key("bb02"));
+        // Apply skipped: empty snapshot must not zero watching/awaiting.
+        let report = from_outcome(
+            false,
+            outcome,
+            Vec::new(),
+            vec!["deferred remaining Gmail fetches".into()],
+            &scan,
+            "me@example.com",
+            &fold,
+        );
+        assert_eq!(report.watching, 1);
+        assert!(!report.ok);
+        assert_eq!(report.exit_code(), 1);
+    }
+
+    #[test]
+    fn watcher_closed_between_scan_and_apply_is_not_counted() {
+        let (_temp, fold) = enrolled_fold_with("aa01");
+        let initial = scan_with("aa01");
+        let mut outcome = FilingOutcome::default();
+        outcome.applied = true;
+        outcome.watch_snapshot = WatchScan::default();
+        let report = from_outcome(
+            false,
+            outcome,
+            Vec::new(),
+            Vec::new(),
+            &initial,
+            "me@example.com",
+            &fold,
+        );
+        assert_eq!(report.watching, 0);
+        assert_eq!(report.awaiting, 0);
+    }
+
+    #[test]
+    fn planning_failure_warning_includes_kind_and_message() {
+        let fold = empty_fold();
+        let mut outcome = FilingOutcome::default();
+        outcome.failures.push(FilingFailure {
+            key: filing_key("aa01"),
+            kind: "note_changed".into(),
+            message: "the adopted mail note or task disappeared during filing"
+                .into(),
+        });
+        let report = from_outcome(
+            false,
+            outcome,
+            Vec::new(),
+            Vec::new(),
+            &WatchScan::default(),
+            "me@example.com",
+            &fold,
+        );
+        assert!(
+            report.warnings.iter().any(|warning| {
+                warning.contains("note_changed")
+                    && warning.contains("disappeared during filing")
+            }),
+            "{:?}",
+            report.warnings
+        );
+        assert!(!report.ok);
+    }
+
+    #[test]
+    fn dry_run_and_live_counts_match_on_the_same_projected_row() {
+        let fold = empty_fold();
+        let mut live = FilingOutcome::default();
+        live.applied = true;
+        live.results.push(filed_result("aa01"));
+        let mut dry = FilingOutcome::default();
+        dry.applied = true;
+        dry.results.push(FilingResult {
+            status: "would_file",
+            ..filed_result("aa01")
+        });
+        let live_report = from_outcome(
+            false,
+            live,
+            Vec::new(),
+            Vec::new(),
+            &WatchScan::default(),
+            "me@example.com",
+            &fold,
+        );
+        let dry_report = from_outcome(
+            true,
+            dry,
+            Vec::new(),
+            Vec::new(),
+            &WatchScan::default(),
+            "me@example.com",
+            &fold,
+        );
+        assert_eq!(live_report.pulled, dry_report.pulled);
+        assert_eq!(live_report.watching, dry_report.watching);
+        assert_eq!(live_report.pulled, 1);
+        assert!(dry_report.dry_run);
+        assert!(!live_report.dry_run);
     }
 }

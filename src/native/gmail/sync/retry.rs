@@ -10,12 +10,18 @@
 //! The helpers are reusable by the later watch loop, whose watched-thread
 //! fetches must not share the new-filing `-l` limit. Callers share one
 //! [`SharedBudget`] across the guard, the retry loop, and the vault lock so
-//! `-r` bounds the whole run instead of each wait separately. Tests inject a
-//! [`Sleeper`] so backoff stays fast and deterministic.
+//! `-r` bounds waiting for those three, never healthy request time. Tests
+//! inject a [`Sleeper`] and [`Clock`] so backoff stays fast and
+//! deterministic.
 
-use std::time::{Duration, Instant};
+use std::{
+    cell::{Cell, RefCell},
+    time::{Duration, Instant},
+};
 
-use crate::native::gmail::GmailError;
+use crate::native::gmail::{
+    gog::GmailLabel, model::GmailThread, resolve::GmailRead, GmailError,
+};
 
 /// Minimum gap between two Gmail requests.
 pub(crate) const MIN_GAP: Duration = Duration::from_millis(200);
@@ -95,50 +101,60 @@ impl Sleeper for SystemSleeper {
 ///
 /// Created once from `-r` (default 120 s; 0 means one immediate attempt) and
 /// shared by the guard wait, the retry loop, and the vault-lock wait so the
-/// three do not each wait another full timeout. A zero timeout never sleeps
-/// for contention or backoff, but ordinary request pacing still proceeds
-/// without sleeping so a healthy multi-thread run is not capped at one
-/// thread.
-#[derive(Debug, Clone, Copy)]
+/// three do not each wait another full timeout. The budget is the remaining
+/// allowance for **waiting** only: contention sleeps, transient-retry
+/// backoff, and vault-lock waits, measured with the injectable [`Clock`].
+/// Ordinary request pacing never consumes it, is never refused by it, and
+/// never fails or defers an operation. A zero timeout never sleeps for
+/// contention, backoff, or lock waiting; a healthy multi-thread run is
+/// never capped.
+#[derive(Debug)]
 pub(crate) struct SharedBudget {
     timeout: Duration,
-    deadline: Instant,
+    remaining: Cell<Duration>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` shares one budget.
 impl SharedBudget {
-    /// A budget of `timeout` from now. Zero means no waiting at all.
+    /// A budget of `timeout` for waiting. Zero means no waiting at all.
     pub(crate) fn new(timeout: Duration) -> Self {
-        Self::new_with_now(timeout, Instant::now())
-    }
-
-    /// A budget of `timeout` from `now`, for deterministic tests.
-    pub(crate) fn new_with_now(timeout: Duration, now: Instant) -> Self {
         Self {
             timeout,
-            deadline: now + timeout,
+            remaining: Cell::new(timeout),
         }
     }
 
+    /// A budget of `timeout`, ignoring `now`. Kept so existing tests that
+    /// pin a start instant keep compiling after the wait-only rewrite.
+    pub(crate) fn new_with_now(timeout: Duration, _now: Instant) -> Self {
+        Self::new(timeout)
+    }
+
     /// Whether `-r 0` was configured: every needed operation still gets one
-    /// immediate attempt with no contention or backoff sleep.
+    /// immediate attempt with no contention, backoff, or lock-wait sleep.
     pub(crate) fn is_zero_budget(&self) -> bool {
         self.timeout.is_zero()
     }
 
-    /// Time left before the deadline at `now`, or zero when exhausted.
-    pub(crate) fn remaining_at(&self, now: Instant) -> Duration {
-        self.deadline.saturating_duration_since(now)
-    }
-
-    /// Time left before the deadline, or zero when exhausted.
+    /// Remaining wait allowance.
     pub(crate) fn remaining(&self) -> Duration {
-        self.remaining_at(Instant::now())
+        self.remaining.get()
     }
 
-    /// Whether any wait remains at `now`.
-    pub(crate) fn is_exhausted_at(&self, now: Instant) -> bool {
-        self.remaining_at(now).is_zero()
+    /// Whether any wait remains.
+    pub(crate) fn is_exhausted(&self) -> bool {
+        self.remaining().is_zero()
+    }
+
+    /// Whether any wait remains. `now` is ignored.
+    pub(crate) fn is_exhausted_at(&self, _now: Instant) -> bool {
+        self.is_exhausted()
+    }
+
+    /// Subtract a measured wait from the remaining allowance.
+    pub(crate) fn consume_wait(&self, elapsed: Duration) {
+        self.remaining
+            .set(self.remaining.get().saturating_sub(elapsed));
     }
 }
 
@@ -159,28 +175,42 @@ pub(crate) fn backoff_for_attempt(attempt: u32) -> Duration {
     )
 }
 
-/// Sleep at most `desired`, bounded by the shared budget at `clock`.
+/// Sleep at most `desired` for a wait that consumes the shared budget.
 ///
-/// Returns the slept duration, or `None` when the budget is already
-/// exhausted so the caller defers the remaining work to the next run.
-#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` paces fetches.
+/// Used for guard contention, transient-retry backoff, and vault-lock
+/// waits. Returns the slept duration, or `None` when `-r 0` or the remaining
+/// wait allowance cannot cover another wait, so the caller defers. Ordinary
+/// request pacing must not call this. The injectable [`Clock`] measures the
+/// wait so healthy request time never spends the budget.
+#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` waits with it.
 pub(crate) fn sleep_within_budget<S: Sleeper, C: Clock>(
     sleeper: &S,
     budget: &SharedBudget,
     clock: &C,
     desired: Duration,
 ) -> Option<Duration> {
-    let remaining = budget.remaining_at(clock.now());
-    if remaining.is_zero() || desired.is_zero() {
+    if budget.is_zero_budget() || desired.is_zero() {
+        return None;
+    }
+    let remaining = budget.remaining();
+    if remaining.is_zero() {
         return None;
     }
     let sleep_for = desired.min(remaining);
-    // A zero budget never sleeps; a non-zero budget sleeps at least a
-    // millisecond so pacing still applies on short budgets.
     if sleep_for.is_zero() {
         return None;
     }
+    let start = clock.now();
     sleeper.sleep(sleep_for);
+    let elapsed = clock.now().saturating_duration_since(start);
+    // A sleeper that does not advance the clock (tests) still accounts the
+    // requested wait so the loop cannot spin forever.
+    let accounted = if elapsed.is_zero() {
+        sleep_for
+    } else {
+        elapsed
+    };
+    budget.consume_wait(accounted);
     Some(sleep_for)
 }
 
@@ -222,38 +252,27 @@ pub(crate) fn execute_with_retry<S: Sleeper, C: Clock, T>(
 /// Enforce the minimum gap since `last_request` at `clock`.
 ///
 /// Sleeps `MIN_GAP - elapsed` when the previous request was too recent.
-/// Returns `false` when a non-zero budget is exhausted so the caller defers
-/// the remaining candidates instead of issuing another request. A zero
-/// `-r 0` budget never sleeps for pacing: every needed operation still gets
-/// its one immediate attempt, so pacing alone never caps a healthy
-/// multi-thread run at one thread.
+/// Always applies, including at `-r 0`. Never consumes the wait budget,
+/// never fails, and never defers an operation: a healthy multi-thread run
+/// is never capped by pacing.
 #[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` paces fetches.
 pub(crate) fn pace_before_request<S: Sleeper, C: Clock>(
     sleeper: &S,
-    budget: &SharedBudget,
     clock: &C,
     last_request: &mut Option<Instant>,
-) -> bool {
-    if budget.is_zero_budget() {
-        *last_request = Some(clock.now());
-        return true;
-    }
+) {
     if let Some(last) = *last_request {
         let elapsed = clock.now().saturating_duration_since(last);
-        if elapsed < MIN_GAP
-            && sleep_within_budget(sleeper, budget, clock, MIN_GAP - elapsed)
-                .is_none()
-        {
-            return false;
+        if elapsed < MIN_GAP {
+            sleeper.sleep(MIN_GAP - elapsed);
         }
     }
     *last_request = Some(clock.now());
-    true
 }
 
-/// Body-free deferred error when the shared budget cannot afford another
-/// paced request. Callers treat this as "catch up next run", not as a
-/// remote failure.
+/// Body-free deferred error when the shared wait budget cannot afford
+/// another contention or backoff sleep. Callers treat this as "catch up
+/// next run", not as a remote failure.
 #[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` defers work.
 pub(crate) fn deferred_error() -> GmailError {
     GmailError::runtime(
@@ -263,12 +282,151 @@ pub(crate) fn deferred_error() -> GmailError {
     )
 }
 
-/// One run's Gmail stages share a single pacing slot and a single
-/// remaining budget: the caller threads one `last_request` through paged
-/// search, label enumeration, candidate metadata, hydration, policy
-/// metadata, and attachment reads (see `command.rs` and `discover.rs`), so
-/// `-r` bounds the whole run and ordinary pacing never requires a second
-/// sleep for the same gap.
+/// One injectable coordinator for every Gmail read during preparation:
+/// search pages, label list, candidate metadata, hydration, policy label
+/// lookup, and attachment bytes.
+///
+/// Records two sticky latches from the **raw** read errors, before shared
+/// save/policy code re-labels them (`invalid_grant` → `awaiting_sign_in`,
+/// budget exhaustion → `refused`):
+/// - **auth abort:** the first [`is_auth_abort`] error;
+/// - **gave up:** the wait budget was exhausted, or a transient failure
+///   ran out of retries.
+///
+/// Ordinary pacing always applies across stage boundaries and never
+/// consumes the wait budget. After a give-up latch, further reads return
+/// [`deferred_error`] without calling the inner reader so remaining
+/// unprepared keys catch up next run.
+pub(crate) struct CoordinatedRead<'a, R, S, C> {
+    inner: &'a R,
+    sleeper: &'a S,
+    budget: &'a SharedBudget,
+    clock: &'a C,
+    last: &'a RefCell<Option<Instant>>,
+    auth_abort: RefCell<Option<GmailError>>,
+    gave_up: Cell<bool>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` coordinates reads.
+impl<'a, R: GmailRead, S: Sleeper, C: Clock> CoordinatedRead<'a, R, S, C> {
+    pub(crate) fn new(
+        inner: &'a R,
+        sleeper: &'a S,
+        budget: &'a SharedBudget,
+        clock: &'a C,
+        last: &'a RefCell<Option<Instant>>,
+    ) -> Self {
+        Self {
+            inner,
+            sleeper,
+            budget,
+            clock,
+            last,
+            auth_abort: RefCell::new(None),
+            gave_up: Cell::new(false),
+        }
+    }
+
+    /// The first raw auth-abort error, if any read hit a revoked grant.
+    pub(crate) fn auth_abort(&self) -> Option<GmailError> {
+        self.auth_abort.borrow().clone()
+    }
+
+    /// Whether a wait-budget exhaustion or a transient retry give-up latched.
+    pub(crate) fn gave_up(&self) -> bool {
+        self.gave_up.get()
+    }
+
+    fn run<T>(
+        &self,
+        operation: impl FnMut() -> Result<T, GmailError>,
+    ) -> Result<T, GmailError> {
+        if let Some(error) = self.auth_abort() {
+            return Err(error);
+        }
+        if self.gave_up.get() {
+            return Err(deferred_error());
+        }
+        pace_before_request(
+            self.sleeper,
+            self.clock,
+            &mut self.last.borrow_mut(),
+        );
+        match execute_with_retry(
+            self.sleeper,
+            self.budget,
+            self.clock,
+            operation,
+        ) {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                if is_auth_abort(&error) {
+                    *self.auth_abort.borrow_mut() = Some(error.clone());
+                } else if should_retry(&error) {
+                    self.gave_up.set(true);
+                }
+                Err(error)
+            }
+        }
+    }
+}
+
+impl<R: GmailRead, S: Sleeper, C: Clock> GmailRead
+    for CoordinatedRead<'_, R, S, C>
+{
+    fn attachment_bytes(
+        &self,
+        account: &str,
+        message_id: &str,
+        attachment_id: &str,
+    ) -> Result<Vec<u8>, GmailError> {
+        self.run(|| {
+            self.inner
+                .attachment_bytes(account, message_id, attachment_id)
+        })
+    }
+
+    fn thread_get(
+        &self,
+        account: &str,
+        thread_id: &str,
+    ) -> Result<GmailThread, GmailError> {
+        self.run(|| self.inner.thread_get(account, thread_id))
+    }
+
+    fn message_metadata(
+        &self,
+        account: &str,
+        message_id: &str,
+    ) -> Result<serde_json::Value, GmailError> {
+        self.run(|| self.inner.message_metadata(account, message_id))
+    }
+
+    fn search_page(
+        &self,
+        account: &str,
+        query: &str,
+        max: u32,
+        page: Option<&str>,
+    ) -> Result<serde_json::Value, GmailError> {
+        self.run(|| self.inner.search_page(account, query, max, page))
+    }
+
+    fn labels_list(
+        &self,
+        account: &str,
+    ) -> Result<Vec<GmailLabel>, GmailError> {
+        self.run(|| self.inner.labels_list(account))
+    }
+
+    fn thread_metadata(
+        &self,
+        account: &str,
+        thread_id: &str,
+    ) -> Result<GmailThread, GmailError> {
+        self.run(|| self.inner.thread_metadata(account, thread_id))
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -402,47 +560,304 @@ mod tests {
     }
 
     #[test]
-    fn pacing_enforces_minimum_gap_and_respects_budget() {
+    fn pacing_enforces_minimum_gap_without_consuming_budget() {
         let clock = ManualClock::new();
-        let budget =
-            SharedBudget::new_with_now(Duration::from_secs(120), clock.now());
+        let budget = SharedBudget::new(Duration::from_secs(120));
         let mut last = None;
-        assert!(pace_before_request(&clock, &budget, &clock, &mut last));
+        pace_before_request(&clock, &clock, &mut last);
         assert!(clock.sleeps.borrow().is_empty(), "first request is free");
-        assert!(pace_before_request(&clock, &budget, &clock, &mut last));
+        pace_before_request(&clock, &clock, &mut last);
         assert_eq!(clock.sleeps.borrow().len(), 1, "second request paces");
-        // Advancing past the gap needs no further sleep.
+        assert_eq!(
+            budget.remaining(),
+            Duration::from_secs(120),
+            "pacing never consumes the wait budget"
+        );
         clock.advance(MIN_GAP + Duration::from_millis(1));
-        assert!(pace_before_request(&clock, &budget, &clock, &mut last));
+        pace_before_request(&clock, &clock, &mut last);
         assert_eq!(clock.sleeps.borrow().len(), 1);
+        assert_eq!(budget.remaining(), Duration::from_secs(120));
     }
 
     #[test]
-    fn zero_budget_pacing_still_allows_healthy_requests() {
+    fn zero_budget_pacing_still_sleeps_the_gap() {
         let clock = ManualClock::new();
-        let budget = SharedBudget::new_with_now(Duration::ZERO, clock.now());
+        let budget = SharedBudget::new(Duration::ZERO);
         let mut last = None;
-        assert!(pace_before_request(&clock, &budget, &clock, &mut last));
+        pace_before_request(&clock, &clock, &mut last);
         assert!(clock.sleeps.borrow().is_empty());
-        assert!(pace_before_request(&clock, &budget, &clock, &mut last));
-        assert!(
-            clock.sleeps.borrow().is_empty(),
-            "-r 0 never sleeps for pacing"
+        pace_before_request(&clock, &clock, &mut last);
+        assert_eq!(
+            clock.sleeps.borrow().as_slice(),
+            &[MIN_GAP],
+            "-r 0 still applies ordinary pacing"
+        );
+        assert!(budget.is_zero_budget());
+        assert!(budget.remaining().is_zero());
+    }
+
+    #[test]
+    fn wait_sleeps_consume_budget_request_time_does_not() {
+        let clock = ManualClock::new();
+        let budget = SharedBudget::new(Duration::from_millis(500));
+        // Healthy request time advances the clock without a wait sleep.
+        clock.advance(Duration::from_secs(30));
+        assert_eq!(
+            budget.remaining(),
+            Duration::from_millis(500),
+            "elapsed request time does not spend -r"
+        );
+        let slept = sleep_within_budget(
+            &clock,
+            &budget,
+            &clock,
+            Duration::from_millis(200),
+        )
+        .expect("wait");
+        assert_eq!(slept, Duration::from_millis(200));
+        assert_eq!(budget.remaining(), Duration::from_millis(300));
+    }
+
+    #[test]
+    fn coordinator_latches_auth_abort_from_raw_error() {
+        struct AuthOnce {
+            calls: AtomicUsize,
+        }
+        impl GmailRead for AuthOnce {
+            fn attachment_bytes(
+                &self,
+                _: &str,
+                _: &str,
+                _: &str,
+            ) -> Result<Vec<u8>, GmailError> {
+                unreachable!()
+            }
+            fn thread_get(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> Result<GmailThread, GmailError> {
+                self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(transient("invalid_grant"))
+            }
+            fn message_metadata(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> Result<serde_json::Value, GmailError> {
+                unreachable!()
+            }
+            fn search_page(
+                &self,
+                _: &str,
+                _: &str,
+                _: u32,
+                _: Option<&str>,
+            ) -> Result<serde_json::Value, GmailError> {
+                unreachable!()
+            }
+            fn labels_list(
+                &self,
+                _: &str,
+            ) -> Result<Vec<GmailLabel>, GmailError> {
+                unreachable!()
+            }
+        }
+        let inner = AuthOnce {
+            calls: AtomicUsize::new(0),
+        };
+        let clock = ManualClock::new();
+        let budget = SharedBudget::new(Duration::from_secs(120));
+        let last = RefCell::new(None);
+        let coordinated =
+            CoordinatedRead::new(&inner, &clock, &budget, &clock, &last);
+        let error = coordinated
+            .thread_get("me@example.com", "aa01")
+            .err()
+            .expect("auth");
+        assert_eq!(error.kind(), "invalid_grant");
+        assert!(is_auth_abort(&coordinated.auth_abort().unwrap()));
+        // A later read returns the latched error without calling inner.
+        let again = coordinated
+            .thread_get("me@example.com", "bb02")
+            .err()
+            .expect("latched");
+        assert_eq!(again.kind(), "invalid_grant");
+        assert_eq!(inner.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn coordinator_latches_give_up_and_skips_remaining_reads() {
+        struct AlwaysTransient {
+            calls: AtomicUsize,
+        }
+        impl GmailRead for AlwaysTransient {
+            fn attachment_bytes(
+                &self,
+                _: &str,
+                _: &str,
+                _: &str,
+            ) -> Result<Vec<u8>, GmailError> {
+                unreachable!()
+            }
+            fn thread_get(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> Result<GmailThread, GmailError> {
+                self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(transient("rate_limited"))
+            }
+            fn message_metadata(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> Result<serde_json::Value, GmailError> {
+                unreachable!()
+            }
+            fn search_page(
+                &self,
+                _: &str,
+                _: &str,
+                _: u32,
+                _: Option<&str>,
+            ) -> Result<serde_json::Value, GmailError> {
+                unreachable!()
+            }
+            fn labels_list(
+                &self,
+                _: &str,
+            ) -> Result<Vec<GmailLabel>, GmailError> {
+                unreachable!()
+            }
+        }
+        let inner = AlwaysTransient {
+            calls: AtomicUsize::new(0),
+        };
+        let clock = ManualClock::new();
+        let budget = SharedBudget::new(Duration::from_millis(50));
+        let last = RefCell::new(None);
+        let coordinated =
+            CoordinatedRead::new(&inner, &clock, &budget, &clock, &last);
+        let error = coordinated
+            .thread_get("me@example.com", "aa01")
+            .err()
+            .expect("gave up");
+        assert_eq!(error.kind(), "rate_limited");
+        assert!(coordinated.gave_up());
+        let first_calls = inner.calls.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(first_calls >= 1);
+        let deferred = coordinated
+            .thread_get("me@example.com", "bb02")
+            .err()
+            .expect("latched give-up");
+        assert_eq!(deferred.kind(), "deferred");
+        assert_eq!(
+            inner.calls.load(std::sync::atomic::Ordering::SeqCst),
+            first_calls,
+            "give-up skips remaining inner reads"
         );
     }
 
     #[test]
-    fn exhausted_nonzero_budget_defers_pacing() {
+    fn coordinator_paces_across_stage_boundaries() {
+        struct CountingRead {
+            labels: AtomicUsize,
+            metadata: AtomicUsize,
+            bodies: AtomicUsize,
+        }
+        impl GmailRead for CountingRead {
+            fn attachment_bytes(
+                &self,
+                _: &str,
+                _: &str,
+                _: &str,
+            ) -> Result<Vec<u8>, GmailError> {
+                self.bodies
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(b"bytes".to_vec())
+            }
+            fn thread_get(
+                &self,
+                _: &str,
+                thread_id: &str,
+            ) -> Result<GmailThread, GmailError> {
+                self.bodies
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(GmailThread::from_gog_json(
+                    format!(
+                        r#"{{"thread":{{"id":"{thread_id}","messages":[]}}}}"#
+                    )
+                    .as_bytes(),
+                )
+                .expect("thread"))
+            }
+            fn message_metadata(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> Result<serde_json::Value, GmailError> {
+                unreachable!()
+            }
+            fn search_page(
+                &self,
+                _: &str,
+                _: &str,
+                _: u32,
+                _: Option<&str>,
+            ) -> Result<serde_json::Value, GmailError> {
+                Ok(serde_json::json!({"threads":[{"id":"aa01"}]}))
+            }
+            fn labels_list(
+                &self,
+                _: &str,
+            ) -> Result<Vec<GmailLabel>, GmailError> {
+                self.labels
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(Vec::new())
+            }
+            fn thread_metadata(
+                &self,
+                _: &str,
+                thread_id: &str,
+            ) -> Result<GmailThread, GmailError> {
+                self.metadata
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(GmailThread::from_gog_json(
+                    format!(
+                        r#"{{"thread":{{"id":"{thread_id}","messages":[]}}}}"#
+                    )
+                    .as_bytes(),
+                )
+                .expect("thread"))
+            }
+        }
+        let inner = CountingRead {
+            labels: AtomicUsize::new(0),
+            metadata: AtomicUsize::new(0),
+            bodies: AtomicUsize::new(0),
+        };
         let clock = ManualClock::new();
-        let budget =
-            SharedBudget::new_with_now(Duration::from_millis(10), clock.now());
-        let mut last = None;
-        assert!(pace_before_request(&clock, &budget, &clock, &mut last));
-        // Exhaust the small budget with a sleep, then pacing must defer.
-        clock.advance(Duration::from_secs(1));
-        let mut stale = Some(clock.now());
-        // Move the last request to now so pacing needs a sleep it cannot afford.
-        // Budget is exhausted, so the next paced request defers.
-        assert!(!pace_before_request(&clock, &budget, &clock, &mut stale));
+        let budget = SharedBudget::new(Duration::ZERO);
+        let last = RefCell::new(None);
+        let coordinated =
+            CoordinatedRead::new(&inner, &clock, &budget, &clock, &last);
+        coordinated
+            .search_page("me@example.com", "label:bob", 500, None)
+            .unwrap();
+        coordinated.labels_list("me@example.com").unwrap();
+        coordinated
+            .thread_metadata("me@example.com", "aa01")
+            .unwrap();
+        coordinated.thread_get("me@example.com", "aa01").unwrap();
+        coordinated.thread_get("me@example.com", "bb02").unwrap();
+        coordinated
+            .attachment_bytes("me@example.com", "m1", "a1")
+            .unwrap();
+        // Six stage reads: first is free, the next five pace. Two
+        // hydrations at `-r 0` both run.
+        assert_eq!(clock.sleeps.borrow().len(), 5);
+        assert!(clock.sleeps.borrow().iter().all(|sleep| *sleep == MIN_GAP));
+        assert!(budget.remaining().is_zero(), "-r 0 wait budget stays empty");
     }
 }

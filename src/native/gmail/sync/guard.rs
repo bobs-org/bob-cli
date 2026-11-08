@@ -102,20 +102,29 @@ pub(crate) fn acquire_with_budget<S: Sleeper, C: Clock>(
         }
         GuardAttempt::Busy => {}
     }
-    if budget.is_exhausted_at(clock.now()) {
+    if budget.is_zero_budget() || budget.is_exhausted() {
         return Ok(GuardAttempt::Busy);
     }
     loop {
-        let remaining = budget.remaining_at(clock.now());
+        let remaining = budget.remaining();
         if remaining.is_zero() {
             return Ok(GuardAttempt::Busy);
         }
-        sleeper.sleep(remaining.min(Duration::from_millis(100)));
+        if super::retry::sleep_within_budget(
+            sleeper,
+            budget,
+            clock,
+            remaining.min(Duration::from_millis(100)),
+        )
+        .is_none()
+        {
+            return Ok(GuardAttempt::Busy);
+        }
         match try_acquire(account)? {
             acquired @ GuardAttempt::Acquired(_) => return Ok(acquired),
             GuardAttempt::Busy => {}
         }
-        if budget.is_exhausted_at(clock.now()) {
+        if budget.is_exhausted() {
             return Ok(GuardAttempt::Busy);
         }
     }

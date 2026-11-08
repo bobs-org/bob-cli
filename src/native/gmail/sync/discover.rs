@@ -16,10 +16,7 @@ use std::collections::{BTreeSet, HashSet};
 
 use super::{
     enroll::EnrollmentFold,
-    retry::{
-        execute_with_retry, is_auth_abort, pace_before_request, should_retry,
-        Clock, SharedBudget, Sleeper,
-    },
+    retry::{is_auth_abort, should_retry},
     ThreadKey,
 };
 use crate::native::gmail::{resolve::GmailRead, GmailError};
@@ -73,6 +70,9 @@ pub(crate) struct DiscoveryOutcome {
     pub(crate) capped: bool,
     /// Whether transient search exhaustion deferred later pages.
     pub(crate) deferred: bool,
+    /// Whether a non-auth search failure left the run in failure state
+    /// without discarding already-discovered ids.
+    pub(crate) failed: bool,
     /// Search pages fetched.
     pub(crate) pages_fetched: usize,
 }
@@ -82,21 +82,17 @@ pub(crate) struct DiscoveryOutcome {
 /// Deduplicates while preserving first-seen order, skips invalid ids with a
 /// bounded warning, stops at [`MAX_DISCOVERY_IDS`] with a cap warning only
 /// when more results remain, and stops on a repeated page token instead of
-/// looping. Every search page is paced and retried within the shared budget
-/// (see [`super::retry`]); a transient page failure after budget exhaustion
-/// keeps earlier pages and defers the rest with a body-free warning, while a
-/// revoked or expired grant aborts before any vault mutation. Returns the raw
-/// ids; callers join with enrollment (see [`select_candidates`]) and never
-/// hydrate enrolled ids.
+/// looping. Callers pass a [`super::retry::CoordinatedRead`] so every page
+/// is paced and retried; a non-auth search failure keeps already-discovered
+/// ids (including an empty first page) as a body-free failure on the
+/// outcome so local adoption and recovery still run. Only a revoked or
+/// expired grant returns `Err`. Returns the raw ids; callers join with
+/// enrollment (see [`select_candidates`]) and never hydrate enrolled ids.
 #[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` discovers ids.
-pub(crate) fn discover_ids<R: GmailRead, S: Sleeper, C: Clock>(
+pub(crate) fn discover_ids<R: GmailRead>(
     reader: &R,
     account: &str,
     label: &str,
-    budget: &SharedBudget,
-    sleeper: &S,
-    clock: &C,
-    last_request: &mut Option<std::time::Instant>,
 ) -> Result<DiscoveryOutcome, GmailError> {
     let query = label_query(label);
     let mut seen_ids: HashSet<String> = HashSet::new();
@@ -108,38 +104,36 @@ pub(crate) fn discover_ids<R: GmailRead, S: Sleeper, C: Clock>(
     let mut pages_fetched = 0usize;
     let mut capped = false;
     let mut deferred_search = false;
+    let mut failed = false;
 
     loop {
-        if !pace_before_request(sleeper, budget, clock, last_request) {
-            warnings.push(
-                "deferred remaining Gmail search pages when the retry budget ran out"
-                    .to_string(),
-            );
-            deferred_search = true;
-            break;
-        }
-        let response = match execute_with_retry(sleeper, budget, clock, || {
-            reader.search_page(account, &query, PAGE_SIZE, page.as_deref())
-        }) {
+        let response = match reader.search_page(
+            account,
+            &query,
+            PAGE_SIZE,
+            page.as_deref(),
+        ) {
             Ok(response) => response,
             Err(error) if is_auth_abort(&error) => return Err(error),
-            Err(error) if should_retry(&error) => {
-                warnings.push(
-                    "deferred remaining Gmail search pages when the retry budget ran out"
-                        .to_string(),
-                );
+            Err(error)
+                if should_retry(&error) || error.kind() == "deferred" =>
+            {
+                warnings.push(format!(
+                    "deferred remaining Gmail search pages when the retry budget ran out: {}: {}",
+                    error.kind(),
+                    error.message()
+                ));
                 deferred_search = true;
+                failed = true;
                 break;
             }
             Err(error) => {
-                if ordered.is_empty() {
-                    return Err(error);
-                }
                 warnings.push(format!(
-                    "kept {} discovered Gmail threads after a search failure: {}",
-                    ordered.len(),
-                    error.kind()
+                    "Gmail search failed: {}: {}",
+                    error.kind(),
+                    error.message()
                 ));
+                failed = true;
                 break;
             }
         };
@@ -198,14 +192,17 @@ pub(crate) fn discover_ids<R: GmailRead, S: Sleeper, C: Clock>(
             None => {
                 // No `threads` key means gog returned no thread list. An
                 // empty result set is the end of paging; a non-empty
-                // response without the key is a malformed page.
+                // response without the key is a malformed page. Keep ids
+                // already discovered and fail the run instead of aborting
+                // adoption and recovery.
                 if response.get("nextPageToken").is_some()
                     || response.get("resultSizeEstimate").is_some()
                 {
-                    return Err(GmailError::runtime(
-                        "bad_json",
-                        "gog label search returned no thread list".to_string(),
-                    ));
+                    warnings.push(
+                        "Gmail search failed: bad_json: gog label search returned no thread list"
+                            .to_string(),
+                    );
+                    failed = true;
                 }
                 break;
             }
@@ -220,11 +217,12 @@ pub(crate) fn discover_ids<R: GmailRead, S: Sleeper, C: Clock>(
             Some(serde_json::Value::String(token)) if token.is_empty() => None,
             Some(serde_json::Value::String(token)) => Some(token.clone()),
             Some(_) => {
-                return Err(GmailError::runtime(
-                    "bad_json",
-                    "gog returned an invalid Gmail search page token"
+                warnings.push(
+                    "Gmail search failed: bad_json: gog returned an invalid Gmail search page token"
                         .to_string(),
-                ));
+                );
+                failed = true;
+                break;
             }
         };
         let Some(next) = next else {
@@ -257,6 +255,7 @@ pub(crate) fn discover_ids<R: GmailRead, S: Sleeper, C: Clock>(
         warnings,
         capped,
         deferred: deferred_search,
+        failed,
         pages_fetched,
     })
 }
@@ -320,48 +319,32 @@ pub(crate) struct FetchOutcome {
     pub(crate) aborted: Option<GmailError>,
 }
 
-/// Fetch one label list with bounded retries.
+/// Fetch one label list.
 ///
 /// Called once per run; the caller maps the union of every message's label
-/// ids through this response and never routes by a label-name search. The
-/// shared `last_request` paces this read against every other Gmail request
-/// in the run.
+/// ids through this response and never routes by a label-name search.
+/// Callers pass a [`super::retry::CoordinatedRead`] so this read shares the
+/// run's pacing slot and wait budget.
 #[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` lists labels.
-pub(crate) fn fetch_labels_once<R: GmailRead, S: Sleeper, C: Clock>(
+pub(crate) fn fetch_labels_once<R: GmailRead>(
     reader: &R,
     account: &str,
-    budget: &SharedBudget,
-    sleeper: &S,
-    clock: &C,
-    last_request: &mut Option<std::time::Instant>,
 ) -> Result<Vec<crate::native::gmail::gog::GmailLabel>, GmailError> {
-    if !pace_before_request(sleeper, budget, clock, last_request) {
-        return Err(GmailError::runtime(
-            "deferred",
-            "deferred Gmail label fetch when the retry budget ran out"
-                .to_string(),
-        ));
-    }
-    execute_with_retry(sleeper, budget, clock, || reader.labels_list(account))
+    reader.labels_list(account)
 }
 
-/// Fetch candidate metadata with pacing, bounded retries, and isolation.
+/// Fetch candidate metadata with isolation.
 ///
-/// Requests share the run's `last_request` pacing slot across stages and
-/// each request retries transient failures within the shared budget. A
-/// revoked or expired grant aborts the batch before any vault mutation:
-/// successes so far are retained, the rest defer, and `aborted` carries the
-/// grant error. Permanent per-thread failures are recorded with the thread
-/// and the batch continues; budget exhaustion defers the remaining keys for
-/// the next run.
+/// Callers pass a [`super::retry::CoordinatedRead`] so requests share the
+/// run's pacing slot and wait budget. A revoked or expired grant aborts
+/// the batch before any vault mutation: successes so far are retained, the
+/// rest defer, and `aborted` carries the grant error. Permanent per-thread
+/// failures are recorded with the thread and the batch continues; budget
+/// exhaustion defers this key and every remaining key for the next run.
 #[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` fetches candidates.
-pub(crate) fn fetch_candidate_metadata<R: GmailRead, S: Sleeper, C: Clock>(
+pub(crate) fn fetch_candidate_metadata<R: GmailRead>(
     reader: &R,
     keys: &[ThreadKey],
-    budget: &SharedBudget,
-    sleeper: &S,
-    clock: &C,
-    last_request: &mut Option<std::time::Instant>,
 ) -> FetchOutcome {
     let mut successes = Vec::new();
     let mut failures = Vec::new();
@@ -370,43 +353,34 @@ pub(crate) fn fetch_candidate_metadata<R: GmailRead, S: Sleeper, C: Clock>(
     let mut aborted = None;
 
     for (index, key) in keys.iter().enumerate() {
-        if !pace_before_request(sleeper, budget, clock, last_request) {
-            deferred.extend(keys[index..].iter().cloned());
-            warnings.push(
-                "deferred remaining Gmail fetches when the retry budget ran out"
-                    .to_string(),
-            );
-            break;
-        }
-        match execute_with_retry(sleeper, budget, clock, || {
-            reader.thread_metadata(key.account(), key.thread_id())
-        }) {
+        match reader.thread_metadata(key.account(), key.thread_id()) {
             Ok(thread) => successes.push((key.clone(), thread)),
             Err(error) => {
                 if is_auth_abort(&error) {
-                    warnings.push(
-                        "stopped Gmail fetches when the grant was revoked or expired"
-                            .to_string(),
-                    );
+                    warnings.push(format!(
+                        "stopped Gmail fetches when the grant was revoked or expired: {}: {}",
+                        error.kind(),
+                        error.message()
+                    ));
                     aborted = Some(error);
                     deferred.extend(keys[index + 1..].iter().cloned());
                     break;
                 }
-                if should_retry(&error) {
-                    // execute_with_retry only returns a transient error when
-                    // the budget exhausted mid-retry: defer this and the rest.
+                if should_retry(&error) || error.kind() == "deferred" {
                     deferred.push(key.clone());
                     deferred.extend(keys[index + 1..].iter().cloned());
-                    warnings.push(
-                        "deferred remaining Gmail fetches when the retry budget ran out"
-                            .to_string(),
-                    );
+                    warnings.push(format!(
+                        "deferred remaining Gmail fetches when the retry budget ran out: {}: {}",
+                        error.kind(),
+                        error.message()
+                    ));
                     break;
                 }
                 warnings.push(format!(
-                    "skipped Gmail thread {}: {}",
+                    "skipped Gmail thread {}: {}: {}",
                     key.thread_id(),
-                    error.kind()
+                    error.kind(),
+                    error.message()
                 ));
                 failures.push((key.clone(), error));
             }
@@ -424,6 +398,9 @@ pub(crate) fn fetch_candidate_metadata<R: GmailRead, S: Sleeper, C: Clock>(
 
 #[cfg(test)]
 mod tests {
+    use super::super::retry::{
+        Clock, CoordinatedRead, SharedBudget, Sleeper, MIN_GAP,
+    };
     use super::*;
     use std::{cell::RefCell, collections::VecDeque, time::Duration};
 
@@ -555,13 +532,6 @@ mod tests {
             }
         }
 
-        fn budget(&self, secs: u64) -> SharedBudget {
-            SharedBudget::new_with_now(
-                Duration::from_secs(secs),
-                *self.now.borrow(),
-            )
-        }
-
         fn advance(&self, duration: Duration) {
             *self.now.borrow_mut() += duration;
         }
@@ -603,19 +573,8 @@ mod tests {
             MockRead::threads(&["AA01", "bb02"], Some("token-2")),
             MockRead::threads(&["bb02", "cc03"], None),
         ]);
-        let clock = TestClock::new();
-        let budget = clock.budget(120);
-        let mut last = None;
-        let outcome = discover_ids(
-            &reader,
-            "me@example.com",
-            "bob",
-            &budget,
-            &clock,
-            &clock,
-            &mut last,
-        )
-        .expect("pages");
+        let outcome =
+            discover_ids(&reader, "me@example.com", "bob").expect("pages");
         assert_eq!(outcome.ids, vec!["aa01", "bb02", "cc03"]);
         assert_eq!(outcome.pages_fetched, 2);
         assert!(!outcome.capped);
@@ -632,19 +591,8 @@ mod tests {
             &["aa01", "", "xyz", "bb02"],
             None,
         )]);
-        let clock = TestClock::new();
-        let budget = clock.budget(120);
-        let mut last = None;
-        let outcome = discover_ids(
-            &reader,
-            "me@example.com",
-            "bob",
-            &budget,
-            &clock,
-            &clock,
-            &mut last,
-        )
-        .expect("invalid skipped");
+        let outcome = discover_ids(&reader, "me@example.com", "bob")
+            .expect("invalid skipped");
         assert_eq!(outcome.ids, vec!["aa01", "bb02"]);
         assert_eq!(outcome.warnings.len(), 1);
         assert!(outcome.warnings[0].contains("invalid"));
@@ -657,19 +605,8 @@ mod tests {
             MockRead::threads(&["bb02"], Some("repeat")),
             MockRead::threads(&["cc03"], None),
         ]);
-        let clock = TestClock::new();
-        let budget = clock.budget(120);
-        let mut last = None;
-        let outcome = discover_ids(
-            &reader,
-            "me@example.com",
-            "bob",
-            &budget,
-            &clock,
-            &clock,
-            &mut last,
-        )
-        .expect("repeat");
+        let outcome =
+            discover_ids(&reader, "me@example.com", "bob").expect("repeat");
         assert_eq!(outcome.ids, vec!["aa01", "bb02"]);
         assert!(outcome
             .warnings
@@ -691,19 +628,8 @@ mod tests {
             MockRead::threads(&first_refs, Some("token-2")),
             MockRead::threads(&second_refs, Some("token-3")),
         ]);
-        let clock = TestClock::new();
-        let budget = clock.budget(120);
-        let mut last = None;
-        let outcome = discover_ids(
-            &reader,
-            "me@example.com",
-            "bob",
-            &budget,
-            &clock,
-            &clock,
-            &mut last,
-        )
-        .expect("capped");
+        let outcome =
+            discover_ids(&reader, "me@example.com", "bob").expect("capped");
         assert_eq!(outcome.ids.len(), MAX_DISCOVERY_IDS);
         assert!(outcome.capped);
         assert!(outcome
@@ -732,19 +658,8 @@ mod tests {
             &["aa01", "bb02", "cc03"],
             None,
         )]);
-        let clock = TestClock::new();
-        let budget = clock.budget(120);
-        let mut last = None;
-        let outcome = discover_ids(
-            &reader,
-            "me@example.com",
-            "bob",
-            &budget,
-            &clock,
-            &clock,
-            &mut last,
-        )
-        .expect("pages");
+        let outcome =
+            discover_ids(&reader, "me@example.com", "bob").expect("pages");
         assert_eq!(outcome.ids, vec!["aa01", "bb02", "cc03"]);
         let selected = select_candidates(
             &outcome.ids,
@@ -797,16 +712,9 @@ mod tests {
             Err(GmailError::runtime("not_found", "gone".to_string())),
             Ok(MockRead::thread("cc03")),
         ]);
-        let clock = TestClock::new();
-        let budget = clock.budget(120);
-        let mut last = None;
         let outcome = fetch_candidate_metadata(
             &reader,
             &keys("me@example.com", &["aa01", "bb02", "cc03"]),
-            &budget,
-            &clock,
-            &clock,
-            &mut last,
         );
         assert_eq!(outcome.successes.len(), 2);
         assert_eq!(outcome.failures.len(), 1);
@@ -823,16 +731,9 @@ mod tests {
             Err(GmailError::runtime("invalid_grant", "expired".to_string())),
             Ok(MockRead::thread("cc03")),
         ]);
-        let clock = TestClock::new();
-        let budget = clock.budget(120);
-        let mut last = None;
         let outcome = fetch_candidate_metadata(
             &reader,
             &keys("me@example.com", &["aa01", "bb02", "cc03"]),
-            &budget,
-            &clock,
-            &clock,
-            &mut last,
         );
         assert_eq!(outcome.successes.len(), 1);
         assert!(outcome.failures.is_empty());
@@ -845,51 +746,107 @@ mod tests {
     }
 
     #[test]
-    fn zero_budget_allows_healthy_threads_without_pacing_sleep() {
+    fn zero_budget_allows_healthy_two_thread_run_with_pacing() {
         let reader = MockRead::pages(vec![]);
         let clock = TestClock::new();
-        let budget = SharedBudget::new_with_now(Duration::ZERO, clock.now());
-        let mut last = None;
+        let budget = SharedBudget::new(Duration::ZERO);
+        let last = RefCell::new(None);
+        let coordinated =
+            CoordinatedRead::new(&reader, &clock, &budget, &clock, &last);
         let outcome = fetch_candidate_metadata(
-            &reader,
+            &coordinated,
             &keys("me@example.com", &["aa01", "bb02"]),
-            &budget,
-            &clock,
-            &clock,
-            &mut last,
         );
-        // `-r 0` gives every needed operation one immediate attempt with no
-        // pacing sleep, so a healthy two-thread run is not capped at one.
+        // `-r 0` still paces; a healthy two-thread run is not capped.
         assert_eq!(outcome.successes.len(), 2);
         assert!(outcome.deferred.is_empty());
         assert!(outcome.aborted.is_none());
-        assert!(clock.sleeps.borrow().is_empty());
+        assert_eq!(clock.sleeps.borrow().len(), 1);
+        assert_eq!(clock.sleeps.borrow()[0], MIN_GAP);
     }
 
     #[test]
-    fn exhausted_nonzero_budget_defers_remaining_candidates() {
-        let reader = MockRead::pages(vec![]);
+    fn exhausted_wait_budget_defers_remaining_candidates() {
+        struct FirstThenTransient {
+            calls: RefCell<usize>,
+        }
+        impl GmailRead for FirstThenTransient {
+            fn attachment_bytes(
+                &self,
+                _: &str,
+                _: &str,
+                _: &str,
+            ) -> Result<Vec<u8>, GmailError> {
+                unreachable!()
+            }
+            fn thread_get(
+                &self,
+                _: &str,
+                thread_id: &str,
+            ) -> Result<crate::native::gmail::model::GmailThread, GmailError>
+            {
+                self.thread_metadata("", thread_id)
+            }
+            fn message_metadata(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> Result<serde_json::Value, GmailError> {
+                unreachable!()
+            }
+            fn search_page(
+                &self,
+                _: &str,
+                _: &str,
+                _: u32,
+                _: Option<&str>,
+            ) -> Result<serde_json::Value, GmailError> {
+                unreachable!()
+            }
+            fn labels_list(
+                &self,
+                _: &str,
+            ) -> Result<Vec<crate::native::gmail::gog::GmailLabel>, GmailError>
+            {
+                Ok(Vec::new())
+            }
+            fn thread_metadata(
+                &self,
+                _: &str,
+                thread_id: &str,
+            ) -> Result<crate::native::gmail::model::GmailThread, GmailError>
+            {
+                let mut calls = self.calls.borrow_mut();
+                *calls += 1;
+                if *calls == 1 {
+                    return Ok(MockRead::thread(thread_id));
+                }
+                Err(GmailError::runtime("rate_limited", "quota".to_string()))
+            }
+        }
+        let reader = FirstThenTransient {
+            calls: RefCell::new(0),
+        };
         let clock = TestClock::new();
-        let budget = clock.budget(120);
-        // Exhaust the budget after the first fetch by advancing past it.
-        let mut last = None;
+        let budget = SharedBudget::new(Duration::from_millis(50));
+        let last = RefCell::new(None);
+        let coordinated =
+            CoordinatedRead::new(&reader, &clock, &budget, &clock, &last);
         let outcome = fetch_candidate_metadata(
-            &reader,
-            &keys("me@example.com", &["aa01", "bb02"]),
-            &budget,
-            &clock,
-            &clock,
-            &mut last,
+            &coordinated,
+            &keys("me@example.com", &["aa01", "bb02", "cc03"]),
         );
-        assert_eq!(outcome.successes.len(), 2);
-        // Now advance past the deadline and prove the next paced request
-        // defers instead of issuing another request.
-        clock.advance(Duration::from_secs(121));
-        let mut stale = Some(clock.now());
+        assert_eq!(outcome.successes.len(), 1);
+        assert_eq!(outcome.successes[0].0.thread_id(), "aa01");
         assert!(
-            !pace_before_request(&clock, &budget, &clock, &mut stale),
-            "exhausted budget defers"
+            outcome
+                .deferred
+                .iter()
+                .map(|key| key.thread_id())
+                .collect::<Vec<_>>()
+                == vec!["bb02", "cc03"]
         );
+        assert!(coordinated.gave_up());
     }
 
     #[test]
@@ -939,20 +896,9 @@ mod tests {
     #[test]
     fn fetch_labels_once_returns_empty_without_network_writes() {
         let reader = MockRead::pages(vec![]);
-        let clock = TestClock::new();
-        let budget = clock.budget(120);
-        let mut last = None;
-        let labels = fetch_labels_once(
-            &reader,
-            "me@example.com",
-            &budget,
-            &clock,
-            &clock,
-            &mut last,
-        )
-        .expect("labels");
+        let labels =
+            fetch_labels_once(&reader, "me@example.com").expect("labels");
         assert!(labels.is_empty());
-        assert!(clock.sleeps.borrow().is_empty());
     }
 
     #[test]
@@ -1025,28 +971,24 @@ mod tests {
             calls: RefCell::new(0),
         };
         let clock = TestClock::new();
-        // Small budget: the first page succeeds, the second page keeps
-        // failing transiently until the shared budget exhausts, so the run
-        // keeps the first page and defers the rest.
-        let budget = clock.budget(1);
-        let mut last = None;
-        let outcome = discover_ids(
-            &reader,
-            "me@example.com",
-            "bob",
-            &budget,
-            &clock,
-            &clock,
-            &mut last,
-        )
-        .expect("partial search");
+        // Small wait budget: the first page succeeds, the second page keeps
+        // failing transiently until retries give up, so the run keeps the
+        // first page and defers the rest.
+        let budget = SharedBudget::new(Duration::from_millis(50));
+        let last = RefCell::new(None);
+        let coordinated =
+            CoordinatedRead::new(&reader, &clock, &budget, &clock, &last);
+        let outcome = discover_ids(&coordinated, "me@example.com", "bob")
+            .expect("partial search");
         assert_eq!(outcome.ids, vec!["aa01"]);
         assert!(outcome.deferred);
+        assert!(outcome.failed);
         assert!(
             outcome.warnings.iter().any(|w| w.contains("deferred")),
             "{:?}",
             outcome.warnings
         );
+        assert!(*reader.calls.borrow() > 1, "transient page is retried");
     }
 
     #[test]
@@ -1057,19 +999,8 @@ mod tests {
             (0..MAX_DISCOVERY_IDS).map(|i| format!("{i:08x}")).collect();
         let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
         let reader = MockRead::pages(vec![MockRead::threads(&refs, None)]);
-        let clock = TestClock::new();
-        let budget = clock.budget(120);
-        let mut last = None;
-        let outcome = discover_ids(
-            &reader,
-            "me@example.com",
-            "bob",
-            &budget,
-            &clock,
-            &clock,
-            &mut last,
-        )
-        .expect("exact cap");
+        let outcome =
+            discover_ids(&reader, "me@example.com", "bob").expect("exact cap");
         assert_eq!(outcome.ids.len(), MAX_DISCOVERY_IDS);
         assert!(outcome.capped);
         assert!(
@@ -1077,5 +1008,201 @@ mod tests {
             "quiet when cap leaves nothing outstanding: {:?}",
             outcome.warnings
         );
+    }
+
+    #[test]
+    fn permanent_first_page_failure_keeps_empty_ids_and_fails() {
+        let mut reader = MockRead::pages(vec![]);
+        reader.page_error = Some(GmailError::runtime(
+            "not_found",
+            "label missing".to_string(),
+        ));
+        let outcome = discover_ids(&reader, "me@example.com", "bob")
+            .expect("non-auth search stays an outcome");
+        assert!(outcome.ids.is_empty());
+        assert!(outcome.failed);
+        assert!(!outcome.deferred);
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("not_found")),
+            "{:?}",
+            outcome.warnings
+        );
+    }
+
+    #[test]
+    fn later_page_failure_keeps_earlier_ids_and_fails() {
+        struct LaterFail {
+            calls: RefCell<usize>,
+        }
+        impl GmailRead for LaterFail {
+            fn attachment_bytes(
+                &self,
+                _: &str,
+                _: &str,
+                _: &str,
+            ) -> Result<Vec<u8>, GmailError> {
+                unreachable!()
+            }
+            fn thread_get(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> Result<crate::native::gmail::model::GmailThread, GmailError>
+            {
+                unreachable!()
+            }
+            fn message_metadata(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> Result<serde_json::Value, GmailError> {
+                unreachable!()
+            }
+            fn search_page(
+                &self,
+                _: &str,
+                _: &str,
+                _: u32,
+                page: Option<&str>,
+            ) -> Result<serde_json::Value, GmailError> {
+                let mut calls = self.calls.borrow_mut();
+                *calls += 1;
+                if page.is_none() {
+                    return Ok(MockRead::threads(
+                        &["aa01", "bb02"],
+                        Some("next"),
+                    ));
+                }
+                Err(GmailError::runtime("not_found", "gone".to_string()))
+            }
+            fn labels_list(
+                &self,
+                _: &str,
+            ) -> Result<Vec<crate::native::gmail::gog::GmailLabel>, GmailError>
+            {
+                Ok(Vec::new())
+            }
+            fn thread_metadata(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> Result<crate::native::gmail::model::GmailThread, GmailError>
+            {
+                unreachable!()
+            }
+        }
+        let outcome = discover_ids(
+            &LaterFail {
+                calls: RefCell::new(0),
+            },
+            "me@example.com",
+            "bob",
+        )
+        .expect("later page");
+        assert_eq!(outcome.ids, vec!["aa01", "bb02"]);
+        assert!(outcome.failed);
+        assert!(!outcome.deferred);
+    }
+
+    #[test]
+    fn malformed_later_page_keeps_earlier_ids_and_fails() {
+        let reader = MockRead::pages(vec![
+            MockRead::threads(&["aa01"], Some("token-2")),
+            serde_json::json!({"nextPageToken": "token-3", "resultSizeEstimate": 1}),
+        ]);
+        let outcome = discover_ids(&reader, "me@example.com", "bob")
+            .expect("malformed later page");
+        assert_eq!(outcome.ids, vec!["aa01"]);
+        assert!(outcome.failed);
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("bad_json")),
+            "{:?}",
+            outcome.warnings
+        );
+    }
+
+    #[test]
+    fn transient_search_page_retries_then_recovers() {
+        struct Recovering {
+            calls: RefCell<usize>,
+        }
+        impl GmailRead for Recovering {
+            fn attachment_bytes(
+                &self,
+                _: &str,
+                _: &str,
+                _: &str,
+            ) -> Result<Vec<u8>, GmailError> {
+                unreachable!()
+            }
+            fn thread_get(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> Result<crate::native::gmail::model::GmailThread, GmailError>
+            {
+                unreachable!()
+            }
+            fn message_metadata(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> Result<serde_json::Value, GmailError> {
+                unreachable!()
+            }
+            fn search_page(
+                &self,
+                _: &str,
+                _: &str,
+                _: u32,
+                _: Option<&str>,
+            ) -> Result<serde_json::Value, GmailError> {
+                let mut calls = self.calls.borrow_mut();
+                *calls += 1;
+                if *calls == 1 {
+                    return Err(GmailError::runtime(
+                        "rate_limited",
+                        "quota".to_string(),
+                    ));
+                }
+                Ok(MockRead::threads(&["aa01"], None))
+            }
+            fn labels_list(
+                &self,
+                _: &str,
+            ) -> Result<Vec<crate::native::gmail::gog::GmailLabel>, GmailError>
+            {
+                Ok(Vec::new())
+            }
+            fn thread_metadata(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> Result<crate::native::gmail::model::GmailThread, GmailError>
+            {
+                unreachable!()
+            }
+        }
+        let reader = Recovering {
+            calls: RefCell::new(0),
+        };
+        let clock = TestClock::new();
+        let budget = SharedBudget::new(Duration::from_secs(120));
+        let last = RefCell::new(None);
+        let coordinated =
+            CoordinatedRead::new(&reader, &clock, &budget, &clock, &last);
+        let outcome = discover_ids(&coordinated, "me@example.com", "bob")
+            .expect("recovered");
+        assert_eq!(outcome.ids, vec!["aa01"]);
+        assert!(!outcome.failed);
+        assert!(!outcome.deferred);
+        assert_eq!(*reader.calls.borrow(), 2, "one retry then success");
+        assert_eq!(clock.sleeps.borrow().len(), 1);
     }
 }
