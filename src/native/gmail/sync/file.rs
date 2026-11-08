@@ -160,7 +160,7 @@ thread_local! {
 fn injected_write_failure() -> Option<io::Error> {
     #[cfg(test)]
     {
-        return RECOVERY_IO.with(|io| {
+        RECOVERY_IO.with(|io| {
             let mut io = io.borrow_mut();
             if io.succeed_writes > 0 {
                 io.succeed_writes -= 1;
@@ -172,7 +172,7 @@ fn injected_write_failure() -> Option<io::Error> {
             } else {
                 None
             }
-        });
+        })
     }
     #[cfg(not(test))]
     None
@@ -181,7 +181,7 @@ fn injected_write_failure() -> Option<io::Error> {
 fn injected_clear_failure() -> Option<io::Error> {
     #[cfg(test)]
     {
-        return RECOVERY_IO.with(|io| {
+        RECOVERY_IO.with(|io| {
             let mut io = io.borrow_mut();
             if io.fail_clears > 0 {
                 io.fail_clears -= 1;
@@ -189,7 +189,7 @@ fn injected_clear_failure() -> Option<io::Error> {
             } else {
                 None
             }
-        });
+        })
     }
     #[cfg(not(test))]
     None
@@ -327,21 +327,15 @@ fn save_event_present(
             && event
                 .value
                 .get("value")
-                .and_then(|value| {
-                    Some(
-                        value
-                            .get("account")
+                .map(|value| {
+                    value.get("account").and_then(serde_json::Value::as_str)
+                        == Some(account)
+                        && value
+                            .get("thread_id")
                             .and_then(serde_json::Value::as_str)
-                            == Some(account)
-                            && value
-                                .get("thread_id")
-                                .and_then(serde_json::Value::as_str)
-                                == Some(thread_id)
-                            && value
-                                .get("note")
-                                .and_then(serde_json::Value::as_str)
-                                == Some(note),
-                    )
+                            == Some(thread_id)
+                        && value.get("note").and_then(serde_json::Value::as_str)
+                            == Some(note)
                 })
                 .unwrap_or(false)
     })
