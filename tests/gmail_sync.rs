@@ -939,10 +939,23 @@ fn busy_guard_is_a_quiet_success_skip() {
     assert!(stdout(&human).is_empty(), "{}", stdout(&human));
     assert!(!env.vault().join("gmail_inbox.md").exists());
     assert_eq!(snapshot_tree(env.vault(), true), before_vault);
-    assert_eq!(
-        snapshot_tree(&env.root().join("state"), false),
-        before_state
-    );
+    let after_state = snapshot_tree(&env.root().join("state"), false);
+    let state_path = env.root().join("state/bob/gmail/sync-state.json");
+    let state: Value = serde_json::from_slice(
+        &fs::read(&state_path).expect("busy skip writes sync-state"),
+    )
+    .expect("sync-state json");
+    assert!(state["last_attempt_at"].as_str().is_some(), "{state}");
+    assert!(state["last_success_at"].is_null(), "{state}");
+    let filtered: Vec<_> = after_state
+        .into_iter()
+        .filter(|(path, _)| path != "bob/gmail/sync-state.json")
+        .collect();
+    let before_filtered: Vec<_> = before_state
+        .into_iter()
+        .filter(|(path, _)| path != "bob/gmail/sync-state.json")
+        .collect();
+    assert_eq!(filtered, before_filtered);
     drop(guard);
 }
 
@@ -1721,4 +1734,224 @@ fn hydration_give_up_keeps_prepared_success_and_fails() {
     assert_eq!(value["ok"], false);
     assert_eq!(value["pulled"], 1);
     assert_eq!(task_row_count(&env.vault().join("gmail_inbox.md")), 1);
+}
+
+fn sync_state_doc(env: &GmailEnv) -> Value {
+    let path = env.root().join("state/bob/gmail/sync-state.json");
+    serde_json::from_slice(&fs::read(path).expect("read sync-state"))
+        .expect("parse sync-state")
+}
+
+#[test]
+fn persisting_route_problem_is_first_seen_false_and_exits_0() {
+    let env = GmailEnv::new("bob-cli-gmail-sync-persist-problem");
+    env.write_config(&format!(
+        "gmail:\n  account: {ACCOUNT}\n  writer: {HOST}\n  sync:\n    route_prefixes: [\"#\"]\n"
+    ));
+    let fake = FakeGog::new(&env, "gog").scenario("gmail_pull_one");
+    fake.set_labels(serde_json::json!([
+        {"id": "Label_1", "name": "#/missing", "type": "user"},
+        {"id": "INBOX", "name": "INBOX", "type": "system"},
+    ]));
+    let first = run_gmail(&env, &fake, &["sync", "-f", "json"]);
+    assert_eq!(first.status.code(), Some(1), "{}", stdout(&first));
+    assert_eq!(json_stdout(&first)["problems"][0]["first_seen"], true);
+
+    let second = run_gmail(&env, &fake, &["sync", "-l", "0", "-f", "json"]);
+    assert_success(&second, "persisted route problem");
+    let value = json_stdout(&second);
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["problems"][0]["first_seen"], false);
+    assert_eq!(value["problems"][0]["kind"], "unknown_note");
+    let inbox = fs::read_to_string(env.vault().join("gmail_inbox.md"))
+        .expect("inbox still holds the problem row");
+    assert!(inbox.contains("GMAIL ROUTE"), "{inbox}");
+}
+
+#[test]
+fn inbox_row_refiles_once_the_route_resolves() {
+    let env = GmailEnv::new("bob-cli-gmail-sync-refile");
+    env.write_config(&format!(
+        "gmail:\n  account: {ACCOUNT}\n  writer: {HOST}\n  sync:\n    route_prefixes: [\"#\"]\n"
+    ));
+    let fake = FakeGog::new(&env, "gog").scenario("gmail_pull_one");
+    fake.set_labels(serde_json::json!([
+        {"id": "Label_1", "name": "#/job", "type": "user"},
+        {"id": "INBOX", "name": "INBOX", "type": "system"},
+    ]));
+    let first = run_gmail(&env, &fake, &["sync", "-f", "json"]);
+    assert_eq!(first.status.code(), Some(1), "{}", stdout(&first));
+    assert!(fs::read_to_string(env.vault().join("gmail_inbox.md"))
+        .expect("inbox")
+        .contains("GMAIL ROUTE"));
+
+    write_area(&env, "job");
+    let dry = run_gmail(&env, &fake, &["sync", "-d", "-l", "0", "-f", "json"]);
+    assert_success(&dry, "dry-run refile");
+    assert_eq!(json_stdout(&dry)["results"][0]["status"], "would_refile");
+    assert!(fs::read_to_string(env.vault().join("gmail_inbox.md"))
+        .expect("inbox")
+        .contains("#task"));
+
+    let second = run_gmail(&env, &fake, &["sync", "-l", "0", "-f", "json"]);
+    assert_success(&second, "refile");
+    let value = json_stdout(&second);
+    assert_eq!(value["results"][0]["status"], "refiled");
+    assert_eq!(value["results"][0]["task_file"], "job.md");
+    assert_eq!(value["results"][0]["route"], "job");
+    assert!(journal_kinds(&env)
+        .iter()
+        .any(|kind| kind == "gmail.refiled"));
+    let inbox = fs::read_to_string(env.vault().join("gmail_inbox.md"))
+        .unwrap_or_default();
+    assert!(!inbox.contains("#task"), "{inbox}");
+    let job = fs::read_to_string(env.vault().join("job.md")).expect("job");
+    assert!(job.contains("#task"), "{job}");
+    assert!(!job.contains("GMAIL ROUTE"), "{job}");
+}
+
+#[test]
+fn unrouted_labels_clear_the_managed_warning() {
+    let env = GmailEnv::new("bob-cli-gmail-sync-clear-warning");
+    env.write_config(&format!(
+        "gmail:\n  account: {ACCOUNT}\n  writer: {HOST}\n  sync:\n    route_prefixes: [\"#\"]\n"
+    ));
+    let fake = FakeGog::new(&env, "gog").scenario("gmail_pull_one");
+    fake.set_labels(serde_json::json!([
+        {"id": "Label_1", "name": "#/missing", "type": "user"},
+        {"id": "INBOX", "name": "INBOX", "type": "system"},
+    ]));
+    let first = run_gmail(&env, &fake, &["sync", "-f", "json"]);
+    assert_eq!(first.status.code(), Some(1), "{}", stdout(&first));
+    fake.set_labels(serde_json::json!([
+        {"id": "Label_1", "name": "Promotions", "type": "user"},
+        {"id": "INBOX", "name": "INBOX", "type": "system"},
+    ]));
+    let second = run_gmail(&env, &fake, &["sync", "-l", "0", "-f", "json"]);
+    assert_success(&second, "clear warning");
+    let inbox =
+        fs::read_to_string(env.vault().join("gmail_inbox.md")).expect("inbox");
+    assert!(!inbox.contains("GMAIL ROUTE"), "{inbox}");
+    assert!(inbox.contains("#task"), "{inbox}");
+}
+
+#[test]
+fn outside_inbox_route_conflict_is_reported_once() {
+    let env = GmailEnv::new("bob-cli-gmail-sync-conflict");
+    write_area(&env, "job");
+    write_area(&env, "family");
+    let fake = FakeGog::new(&env, "gog").scenario("gmail_pull_one");
+    fake.set_labels(serde_json::json!([
+        {"id": "Label_1", "name": "job", "type": "user"},
+        {"id": "INBOX", "name": "INBOX", "type": "system"},
+    ]));
+    let first = run_gmail(&env, &fake, &["sync", "-f", "json"]);
+    assert_success(&first, "file to job");
+    assert_eq!(task_row_count(&env.vault().join("job.md")), 1);
+
+    fake.set_labels(serde_json::json!([
+        {"id": "Label_1", "name": "family", "type": "user"},
+        {"id": "INBOX", "name": "INBOX", "type": "system"},
+    ]));
+    let conflict = run_gmail(&env, &fake, &["sync", "-l", "0", "-f", "json"]);
+    assert_success(&conflict, "conflict");
+    assert_eq!(
+        journal_kinds(&env)
+            .iter()
+            .filter(|kind| *kind == "gmail.route_conflict")
+            .count(),
+        1
+    );
+    assert!(
+        json_stdout(&conflict)["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row
+                .as_str()
+                .unwrap_or_default()
+                .contains("route conflict")),
+        "{}",
+        json_stdout(&conflict)
+    );
+    assert_eq!(task_row_count(&env.vault().join("job.md")), 1);
+    assert_eq!(task_row_count(&env.vault().join("family.md")), 0);
+
+    let second = run_gmail(&env, &fake, &["sync", "-l", "0", "-f", "json"]);
+    assert_success(&second, "conflict once");
+    assert_eq!(
+        journal_kinds(&env)
+            .iter()
+            .filter(|kind| *kind == "gmail.route_conflict")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn labels_list_runs_in_watch_only_mode() {
+    let env = GmailEnv::new("bob-cli-gmail-sync-labels-l0");
+    let fake = FakeGog::new(&env, "gog").scenario("gmail_pull_one");
+    let first = run_gmail(&env, &fake, &["sync", "-f", "json"]);
+    assert_success(&first, "file");
+    fake.clear_calls();
+    let second =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_success(&second, "watch-only labels");
+    let labels_calls = fake
+        .calls()
+        .iter()
+        .filter(|call| {
+            call.windows(3)
+                .any(|args| args == ["gmail", "labels", "list"])
+        })
+        .count();
+    assert!(
+        labels_calls >= 1,
+        "watch-only sync must list labels: {:?}",
+        fake.calls()
+    );
+}
+
+#[test]
+fn live_sync_records_success_and_stale_busy_skip_exits_1() {
+    use fs2::FileExt;
+    let env = GmailEnv::new("bob-cli-gmail-sync-stale");
+    let fake = FakeGog::new(&env, "gog").scenario("gmail_pull_one");
+    let first = run_gmail(&env, &fake, &["sync", "-f", "json"]);
+    assert_success(&first, "live success");
+    let state = sync_state_doc(&env);
+    assert!(state["last_success_at"].as_str().is_some(), "{state}");
+    assert!(state["last_attempt_at"].as_str().is_some(), "{state}");
+
+    let dry = run_gmail(&env, &fake, &["sync", "-d", "-l", "0", "-f", "json"]);
+    assert_success(&dry, "dry-run keeps state");
+    assert_eq!(sync_state_doc(&env), state);
+
+    let stale = serde_json::json!({
+        "last_attempt_at": "2020-01-01T00:00:00Z",
+        "last_success_at": "2020-01-01T00:00:00Z",
+    });
+    fs::write(
+        env.root().join("state/bob/gmail/sync-state.json"),
+        serde_json::to_vec_pretty(&stale).unwrap(),
+    )
+    .expect("write stale state");
+    let lock_path = env.root().join("state/bob/gmail").join(
+        "sync-53e6cdc30765aade0129f85e5aeb50124b1d3f5bb9a70373be31e4eb328371e0.lock",
+    );
+    let guard = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .expect("open guard");
+    guard.try_lock_exclusive().expect("hold sync guard");
+    let output = run_gmail(&env, &fake, &["sync", "-f", "json", "-r", "0"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+    let text = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(text.contains("last successful run"), "{text}");
+    assert!(text.contains("bob gmail doctor"), "{text}");
+    drop(guard);
 }

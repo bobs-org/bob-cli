@@ -12,6 +12,7 @@ use super::{
     enroll::{EnrollmentFold, EnrollmentOrigin, Membership},
     file::{self, FilingCandidate, FilingInput, FilingOutcome},
     guard::{self, GuardAttempt},
+    health,
     report::{self, SyncReport, SyncResult},
     retry::{
         is_auth_abort, CoordinatedRead, SharedBudget, SystemClock,
@@ -101,8 +102,17 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
                     format!("could not acquire the Gmail sync guard: {error}"),
                 )
             })? {
-            GuardAttempt::Acquired(guard) => Some(guard),
+            GuardAttempt::Acquired(guard) => {
+                health::record_attempt()?;
+                Some(guard)
+            }
             GuardAttempt::Busy => {
+                health::record_attempt()?;
+                if let Some(message) =
+                    health::stale_skip_message("the Gmail sync guard")
+                {
+                    return Err(GmailError::runtime("stale", message));
+                }
                 return Ok(SyncReport::busy(args.dry_run));
             }
         }
@@ -175,134 +185,136 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
     let mut filing_candidates = Vec::new();
     let mut known_metadata = std::collections::BTreeMap::new();
     let mut fetch_deferred_keys: Vec<ThreadKey> = Vec::new();
-    if !candidates.is_empty() {
-        let labels = match discover::fetch_labels_once(&coordinator, &account) {
-            Ok(labels) => Some(labels),
-            Err(error)
-                if is_auth_abort(&error)
-                    || coordinator.auth_abort().is_some() =>
-            {
-                return Err(coordinator.auth_abort().unwrap_or(error));
-            }
-            Err(error)
-                if coordinator.gave_up() || error.kind() == "deferred" =>
-            {
-                warnings.push(format!(
-                    "deferred remaining Gmail fetches when the retry budget ran out: {}: {}",
-                    error.kind(),
-                    error.message()
-                ));
-                has_run_failure = true;
-                fetch_deferred_keys.extend(candidates.iter().cloned());
-                None
-            }
-            Err(error) => {
-                warnings.push(format!(
-                    "Gmail label list failed: {}: {}",
-                    error.kind(),
-                    error.message()
-                ));
-                has_run_failure = true;
-                None
-            }
-        };
-        if let Some(labels) = labels {
-            let labels_by_id = route::labels_by_id(labels);
-            let route_ctx = RouteContext::load(&vault);
-            let fetched =
-                discover::fetch_candidate_metadata(&coordinator, &candidates);
-            warnings.extend(fetched.warnings);
-            if let Some(error) = fetched.aborted {
-                return Err(coordinator.auth_abort().unwrap_or(error));
-            }
-            if let Some(error) = coordinator.auth_abort() {
-                return Err(error);
-            }
-            if !fetched.deferred.is_empty() {
-                has_run_failure = true;
-                fetch_deferred_keys.extend(fetched.deferred.iter().cloned());
-            }
-            for (key, error) in fetched.failures {
-                warnings.push(format!(
-                    "skipped Gmail thread {}: {}: {}",
-                    key.thread_id(),
-                    error.kind(),
-                    error.message()
-                ));
-                extra_results.push(problem_row(&key));
-            }
+    let labels = match discover::fetch_labels_once(&coordinator, &account) {
+        Ok(labels) => Some(labels),
+        Err(error)
+            if is_auth_abort(&error) || coordinator.auth_abort().is_some() =>
+        {
+            return Err(coordinator.auth_abort().unwrap_or(error));
+        }
+        Err(error) if coordinator.gave_up() || error.kind() == "deferred" => {
+            warnings.push(format!(
+                "deferred remaining Gmail fetches when the retry budget ran out: {}: {}",
+                error.kind(),
+                error.message()
+            ));
+            has_run_failure = true;
+            fetch_deferred_keys.extend(candidates.iter().cloned());
+            None
+        }
+        Err(error) => {
+            warnings.push(format!(
+                "Gmail label list failed: {}: {}",
+                error.kind(),
+                error.message()
+            ));
+            has_run_failure = true;
+            None
+        }
+    };
+    let health = labels.as_ref().map(|labels| health::HealthConfig {
+        labels_by_id: route::labels_by_id(labels.clone()),
+        enrollment_label: Some(label.to_string()),
+        route_prefixes: config.route_prefixes().to_vec(),
+    });
+    if let Some(health_config) = health.as_ref()
+        && !candidates.is_empty()
+    {
+        let labels_by_id = &health_config.labels_by_id;
+        let route_ctx = RouteContext::load(&vault);
+        let fetched =
+            discover::fetch_candidate_metadata(&coordinator, &candidates);
+        warnings.extend(fetched.warnings);
+        if let Some(error) = fetched.aborted {
+            return Err(coordinator.auth_abort().unwrap_or(error));
+        }
+        if let Some(error) = coordinator.auth_abort() {
+            return Err(error);
+        }
+        if !fetched.deferred.is_empty() {
+            has_run_failure = true;
+            fetch_deferred_keys.extend(fetched.deferred.iter().cloned());
+        }
+        for (key, error) in fetched.failures {
+            warnings.push(format!(
+                "skipped Gmail thread {}: {}: {}",
+                key.thread_id(),
+                error.kind(),
+                error.message()
+            ));
+            extra_results.push(problem_row(&key));
+        }
 
-            let successes = fetched.successes;
-            known_metadata.extend(
-                successes
-                    .iter()
-                    .map(|(key, thread)| (key.clone(), thread.clone())),
+        let successes = fetched.successes;
+        known_metadata.extend(
+            successes
+                .iter()
+                .map(|(key, thread)| (key.clone(), thread.clone())),
+        );
+        let mut prepared_at = 0usize;
+        while prepared_at < successes.len() {
+            let (key, thread) = &successes[prepared_at];
+            let label_ids: BTreeSet<String> = thread
+                .messages
+                .iter()
+                .flat_map(|message| message.label_ids.iter().cloned())
+                .collect();
+            let verdict = route::route(
+                labels_by_id,
+                &label_ids,
+                Some(label),
+                config.route_prefixes(),
+                &route_ctx,
             );
-            let mut prepared_at = 0usize;
-            while prepared_at < successes.len() {
-                let (key, thread) = &successes[prepared_at];
-                let label_ids: BTreeSet<String> = thread
-                    .messages
-                    .iter()
-                    .flat_map(|message| message.label_ids.iter().cloned())
-                    .collect();
-                let verdict = route::route(
-                    &labels_by_id,
-                    &label_ids,
-                    Some(label),
-                    config.route_prefixes(),
-                    &route_ctx,
-                );
-                let identity = ResolvedIdentity {
-                    account: key.account().to_string(),
-                    thread_id: key.thread_id().to_string(),
-                    known_path: index
-                        .by_identity
-                        .get(&key.index_key())
-                        .map(|entry| entry.path.clone()),
-                };
-                match save::prepare_sync_candidate(
-                    &coordinator,
-                    &account,
-                    identity,
-                    config.body(),
-                    &never_save,
-                ) {
-                    Ok(prepared) => filing_candidates.push(FilingCandidate {
-                        save: prepared,
-                        route: verdict,
-                    }),
-                    Err(_) if coordinator.auth_abort().is_some() => {
-                        return Err(coordinator
-                            .auth_abort()
-                            .expect("auth abort latched"));
-                    }
-                    Err(error) if coordinator.gave_up() => {
-                        warnings.push(format!(
-                            "deferred remaining Gmail fetches when the retry budget ran out: {}: {}",
-                            error.kind(),
-                            error.message()
-                        ));
-                        has_run_failure = true;
-                        fetch_deferred_keys.extend(
-                            successes[prepared_at..]
-                                .iter()
-                                .map(|(key, _)| key.clone()),
-                        );
-                        break;
-                    }
-                    Err(error) => {
-                        warnings.push(format!(
-                            "skipped Gmail thread {}: {}: {}",
-                            key.thread_id(),
-                            error.kind(),
-                            error.message()
-                        ));
-                        extra_results.push(problem_row(key));
-                    }
+            let identity = ResolvedIdentity {
+                account: key.account().to_string(),
+                thread_id: key.thread_id().to_string(),
+                known_path: index
+                    .by_identity
+                    .get(&key.index_key())
+                    .map(|entry| entry.path.clone()),
+            };
+            match save::prepare_sync_candidate(
+                &coordinator,
+                &account,
+                identity,
+                config.body(),
+                &never_save,
+            ) {
+                Ok(prepared) => filing_candidates.push(FilingCandidate {
+                    save: prepared,
+                    route: verdict,
+                }),
+                Err(_) if coordinator.auth_abort().is_some() => {
+                    return Err(coordinator
+                        .auth_abort()
+                        .expect("auth abort latched"));
                 }
-                prepared_at += 1;
+                Err(error) if coordinator.gave_up() => {
+                    warnings.push(format!(
+                        "deferred remaining Gmail fetches when the retry budget ran out: {}: {}",
+                        error.kind(),
+                        error.message()
+                    ));
+                    has_run_failure = true;
+                    fetch_deferred_keys.extend(
+                        successes[prepared_at..]
+                            .iter()
+                            .map(|(key, _)| key.clone()),
+                    );
+                    break;
+                }
+                Err(error) => {
+                    warnings.push(format!(
+                        "skipped Gmail thread {}: {}: {}",
+                        key.thread_id(),
+                        error.kind(),
+                        error.message()
+                    ));
+                    extra_results.push(problem_row(key));
+                }
             }
+            prepared_at += 1;
         }
     }
 
@@ -368,6 +380,7 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
         && watches.is_empty()
         && watch_failures.is_empty()
         && watch_deferred.is_empty()
+        && health.is_none()
     {
         FilingOutcome::default()
     } else {
@@ -390,6 +403,7 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
                 watch_failures,
                 watch_deferred,
                 reply_wait_days: config.reply_wait_days(),
+                health,
             },
             &sleeper,
             &clock,
@@ -403,6 +417,15 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
         outcome.deferred.extend(fetch_deferred_keys.iter().cloned());
         outcome.deferred.sort();
         outcome.deferred.dedup();
+    }
+    if !args.dry_run
+        && outcome.busy
+        && let Some(message) = health::stale_skip_message("the vault lock")
+    {
+        return Err(GmailError::runtime("stale", message));
+    }
+    if !args.dry_run && !outcome.busy {
+        health::record_success()?;
     }
     Ok(finish_report(
         args.dry_run,

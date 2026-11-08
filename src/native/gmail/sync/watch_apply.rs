@@ -1254,6 +1254,7 @@ mod tests {
             turn_update: None,
             report_gone: false,
             refresh_failure: None,
+            label_ids: BTreeSet::new(),
         }
     }
 

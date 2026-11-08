@@ -22,6 +22,7 @@ use super::{
         self, AdoptionIntent, CandidateDecision, EnrollmentEvent,
         EnrollmentFold, EnrollmentOrigin, FiledVia, Membership,
     },
+    health::{self, HealthAction, HealthConfig, HealthEvent},
     hold,
     retry::{Clock, SharedBudget, Sleeper},
     scan::{self, LinkPlacement, WatchScan, WatchTarget, WatchingTask},
@@ -44,7 +45,12 @@ use crate::native::{
         save::{self, PreparedSave, SaveEventFacts, StagedSaveNote},
         GmailError,
     },
-    ob, pref_journal, vault_sync,
+    ob, pref_journal,
+    task_move::{
+        plan_task_move, IdCollisionPolicy, MovePlacement, MoveRequest,
+        MoveSelector, VaultSnapshot,
+    },
+    vault_sync,
 };
 
 /// Body-free transaction ownership evidence for commit and journal recovery.
@@ -477,6 +483,8 @@ pub(crate) struct FilingInput<'a> {
     /// Calendar-day wait for hold nudges. Read from Gmail config by the
     /// command; tests pass the default.
     pub(crate) reply_wait_days: u32,
+    /// Labels and prefixes for route repair. `None` skips health.
+    pub(crate) health: Option<HealthConfig>,
 }
 
 /// One thread's result for the command report. Paths are vault-relative and
@@ -565,6 +573,7 @@ struct AttemptPlan {
     watch_turns: Vec<crate::native::gmail::sync::watch_state::AppliedTurn>,
     watch_gone: Vec<ThreadKey>,
     watch_pending: Vec<RecoveryWatch>,
+    health_events: Vec<HealthEvent>,
 }
 
 impl AttemptPlan {
@@ -631,6 +640,7 @@ pub(crate) fn apply<S: Sleeper, C: Clock>(
             input.watch_failures,
             input.watch_deferred,
             input.reply_wait_days,
+            input.health.as_ref(),
             &watch_journal,
             &recovery.watch,
         )?;
@@ -763,6 +773,7 @@ pub(crate) fn apply<S: Sleeper, C: Clock>(
             attempt_failures,
             attempt_deferred,
             reply_wait_days,
+            input.health.as_ref(),
             &watch_journal,
             &recovery.watch,
         )?;
@@ -844,6 +855,7 @@ fn build_attempt(
     watch_failures: Vec<WatchFailure>,
     watch_deferred: Vec<ThreadKey>,
     reply_wait_days: u32,
+    health: Option<&HealthConfig>,
     watch_journal: &WatchJournal,
     pending_watch: &[RecoveryWatch],
 ) -> Result<AttemptPlan, GmailError> {
@@ -1334,6 +1346,20 @@ fn build_attempt(
         &mut outcome,
         &works,
     );
+    let mut health_events = Vec::new();
+    apply_health_edits(
+        vault,
+        inbox,
+        enrollment,
+        watchers,
+        &watches,
+        health,
+        dry_run,
+        &mut staged,
+        &mut task_commit_paths,
+        &mut outcome,
+        &mut health_events,
+    );
     outcome.watch_threads = watch_plan.outcomes;
     outcome.watch_gone = watch_plan.gone;
     for key in &watch_deferred {
@@ -1350,7 +1376,9 @@ fn build_attempt(
         .sort_by(|left, right| left.key.cmp(&right.key));
     outcome.deferred.sort();
     outcome.deferred.dedup();
-    outcome.changed = !staged.is_empty() || !enrollment_events.is_empty();
+    outcome.changed = !staged.is_empty()
+        || !enrollment_events.is_empty()
+        || !health_events.is_empty();
     outcome.applied = true;
 
     Ok(AttemptPlan {
@@ -1365,6 +1393,7 @@ fn build_attempt(
         watch_turns: watch_plan.receipts.turns,
         watch_gone: watch_plan.receipts.gone,
         watch_pending: watch_plan.pending,
+        health_events,
     })
 }
 
@@ -1459,6 +1488,306 @@ fn apply_born_held(
             }
             let _ = note_path;
         }
+    }
+}
+
+fn apply_health_edits(
+    vault: &Path,
+    inbox: &str,
+    enrollment: &EnrollmentFold,
+    watchers: &WatchScan,
+    watches: &[PreparedWatch],
+    health: Option<&HealthConfig>,
+    dry_run: bool,
+    staged: &mut Vec<StagedTextFile>,
+    task_commit_paths: &mut Vec<PathBuf>,
+    outcome: &mut FilingOutcome,
+    health_events: &mut Vec<HealthEvent>,
+) {
+    let Some(config) = health else {
+        return;
+    };
+    let mut label_ids = BTreeMap::new();
+    for watch in watches {
+        label_ids
+            .insert(watch.observation.key.clone(), watch.label_ids.clone());
+    }
+    let already = health::load_conflicts(vault);
+    let route_ctx = RouteContext::load(vault);
+    let intents = health::plan(
+        vault, inbox, enrollment, watchers, &label_ids, config, &route_ctx,
+        &already,
+    );
+    for intent in &intents {
+        match &intent.action {
+            HealthAction::PersistProblem { problem }
+            | HealthAction::SetWarning { problem } => {
+                upsert_health_result(
+                    outcome,
+                    FilingResult {
+                        key: intent.key.clone(),
+                        note: intent.note.clone(),
+                        link: None,
+                        task_file: Some(intent.task_path.clone()),
+                        status: "problem",
+                        route: None,
+                        via: None,
+                        problem: Some(problem.clone()),
+                        first_seen: false,
+                        watch_member: true,
+                    },
+                );
+            }
+            HealthAction::Refile { dest_file, route } => {
+                upsert_health_result(
+                    outcome,
+                    FilingResult {
+                        key: intent.key.clone(),
+                        note: intent.note.clone(),
+                        link: None,
+                        task_file: Some(dest_file.clone()),
+                        status: if dry_run {
+                            "would_refile"
+                        } else {
+                            "refiled"
+                        },
+                        route: Some(route.clone()),
+                        via: None,
+                        problem: None,
+                        first_seen: false,
+                        watch_member: true,
+                    },
+                );
+            }
+            HealthAction::ClearWarning | HealthAction::Conflict { .. } => {}
+        }
+    }
+    for intent in &intents {
+        match &intent.action {
+            HealthAction::SetWarning { problem } => {
+                let warning = health::route_warning_child(problem);
+                apply_overlay_warning(
+                    vault,
+                    staged,
+                    task_commit_paths,
+                    &intent.task_path,
+                    intent.task_line,
+                    Some(&warning),
+                    outcome,
+                );
+            }
+            HealthAction::ClearWarning => {
+                apply_overlay_warning(
+                    vault,
+                    staged,
+                    task_commit_paths,
+                    &intent.task_path,
+                    intent.task_line,
+                    None,
+                    outcome,
+                );
+            }
+            HealthAction::Refile { dest_file, route } => {
+                apply_overlay_warning(
+                    vault,
+                    staged,
+                    task_commit_paths,
+                    &intent.task_path,
+                    intent.task_line,
+                    None,
+                    outcome,
+                );
+                match refile_inbox_task(
+                    vault,
+                    staged,
+                    task_commit_paths,
+                    intent,
+                    dest_file,
+                ) {
+                    Ok(()) => {
+                        if !dry_run {
+                            health_events.push(HealthEvent::Refiled {
+                                key: intent.key.clone(),
+                                note: intent.note.clone(),
+                                task_file: dest_file.clone(),
+                                route: route.clone(),
+                            });
+                        }
+                    }
+                    Err(message) => {
+                        outcome.warnings.push(message);
+                    }
+                }
+            }
+            HealthAction::Conflict {
+                dest_file, label, ..
+            } => {
+                outcome.warnings.push(format!(
+                    "Gmail route conflict for {}: label `{label}` names {dest_file} \
+                     but the task lives in {}",
+                    intent.key.thread_id(),
+                    intent.task_path
+                ));
+                if !dry_run {
+                    health_events.push(HealthEvent::RouteConflict {
+                        key: intent.key.clone(),
+                        note: intent.note.clone(),
+                        task_file: intent.task_path.clone(),
+                        label: label.clone(),
+                        dest_file: dest_file.clone(),
+                    });
+                }
+            }
+            HealthAction::PersistProblem { .. } => {}
+        }
+    }
+}
+
+fn upsert_health_result(outcome: &mut FilingOutcome, result: FilingResult) {
+    if let Some(existing) =
+        outcome.results.iter_mut().find(|row| row.key == result.key)
+    {
+        *existing = result;
+    } else {
+        outcome.results.push(result);
+    }
+}
+
+fn apply_overlay_warning(
+    vault: &Path,
+    staged: &mut Vec<StagedTextFile>,
+    task_commit_paths: &mut Vec<PathBuf>,
+    relative: &str,
+    task_line: usize,
+    warning: Option<&str>,
+    outcome: &mut FilingOutcome,
+) {
+    let Some((target, contents)) = overlay_text(vault, staged, relative) else {
+        outcome.warnings.push(format!(
+            "could not read {relative} to update a Gmail route warning"
+        ));
+        return;
+    };
+    let Some(updated) =
+        health::apply_warning_edit(&contents, task_line, warning)
+    else {
+        return;
+    };
+    write_overlay(staged, task_commit_paths, &target, relative, updated);
+}
+
+fn refile_inbox_task(
+    vault: &Path,
+    staged: &mut Vec<StagedTextFile>,
+    task_commit_paths: &mut Vec<PathBuf>,
+    intent: &health::HealthIntent,
+    dest_file: &str,
+) -> Result<(), String> {
+    let dest_path = vault.join(dest_file);
+    if !dest_path.is_file()
+        && !staged.iter().any(|file| file.target == dest_path)
+    {
+        return Err(format!(
+            "skipped refiling Gmail thread {}: destination {dest_file} is missing",
+            intent.key.thread_id()
+        ));
+    }
+    let mut notes = BTreeMap::new();
+    for file in staged.iter() {
+        if let Ok(relative) = file.target.strip_prefix(vault) {
+            notes.insert(relative.to_path_buf(), file.updated_target.clone());
+        }
+    }
+    for relative in [intent.task_path.as_str(), dest_file] {
+        let path = PathBuf::from(relative);
+        if notes.contains_key(&path) {
+            continue;
+        }
+        match fs::read_to_string(vault.join(relative)) {
+            Ok(text) => {
+                notes.insert(path, text);
+            }
+            Err(error) => {
+                return Err(format!(
+                    "skipped refiling Gmail thread {}: could not read {relative}: {error}",
+                    intent.key.thread_id()
+                ));
+            }
+        }
+    }
+    let snapshot = VaultSnapshot::from_notes(notes);
+    let selector = if let Some(id) = &intent.block_id {
+        MoveSelector::Block(id.clone())
+    } else if let Some(note) = &intent.note {
+        overlay_text(vault, staged, &intent.task_path)
+            .and_then(|(_, contents)| {
+                health::find_task_line_for_note(&contents, note)
+            })
+            .map(|line| MoveSelector::Line(line.saturating_sub(1)))
+            .unwrap_or_else(|| MoveSelector::Match(intent.task_text.clone()))
+    } else {
+        MoveSelector::Match(intent.task_text.clone())
+    };
+    let request = MoveRequest {
+        source: intent.task_path.clone(),
+        dest: dest_file.to_string(),
+        selectors: vec![selector],
+        allow_closed: false,
+        placement: MovePlacement::Append,
+        id_collision: IdCollisionPolicy::Rename,
+    };
+    let plan = plan_task_move(&snapshot, &request).map_err(|error| {
+        format!(
+            "skipped refiling Gmail thread {}: {error}",
+            intent.key.thread_id()
+        )
+    })?;
+    for (relative, contents) in plan.postimages {
+        let target = vault.join(&relative);
+        write_overlay(
+            staged,
+            task_commit_paths,
+            &target,
+            &save::path_to_slashes(&relative),
+            contents,
+        );
+    }
+    Ok(())
+}
+
+fn overlay_text(
+    vault: &Path,
+    staged: &[StagedTextFile],
+    relative: &str,
+) -> Option<(PathBuf, String)> {
+    let target = vault.join(relative);
+    if let Some(file) = staged.iter().find(|file| file.target == target) {
+        return Some((target, file.updated_target.clone()));
+    }
+    fs::read_to_string(&target).ok().map(|text| (target, text))
+}
+
+fn write_overlay(
+    staged: &mut Vec<StagedTextFile>,
+    task_commit_paths: &mut Vec<PathBuf>,
+    target: &Path,
+    relative: &str,
+    updated: String,
+) {
+    if let Some(file) = staged.iter_mut().find(|file| file.target == target) {
+        file.updated_target = updated;
+    } else {
+        let original = fs::read_to_string(target).unwrap_or_default();
+        staged.push(StagedTextFile {
+            target: target.to_path_buf(),
+            target_existed: target.is_file(),
+            original_target: original,
+            updated_target: updated,
+        });
+    }
+    let rel = PathBuf::from(relative);
+    if !task_commit_paths.contains(&rel) {
+        task_commit_paths.push(rel);
     }
 }
 
@@ -2274,6 +2603,14 @@ fn persist_attempt(
     }
     let _ = checkpoint_ok;
     let _ = watch_checkpoint_ok;
+    for event in std::mem::take(&mut plan.health_events) {
+        if let Err(error) = health::append_event(vault, &host, &event) {
+            plan.outcome.failed = true;
+            plan.outcome.warnings.push(format!(
+                "could not append the Gmail health journal: {error}"
+            ));
+        }
+    }
     // Restore current enrollment events for any caller that inspects the
     // plan after a journal failure (the outcome already records failure).
     plan.enrollment_events = current_events;
@@ -3369,6 +3706,7 @@ mod tests {
                 watch_failures: Vec::new(),
                 watch_deferred: Vec::new(),
                 reply_wait_days: 3,
+                health: None,
             },
             &crate::native::gmail::sync::retry::SystemSleeper,
             &crate::native::gmail::sync::retry::SystemClock,
@@ -3696,6 +4034,7 @@ mod tests {
                 watch_failures: Vec::new(),
                 watch_deferred: Vec::new(),
                 reply_wait_days: 3,
+                health: None,
             },
             &NoSleep,
             &crate::native::gmail::sync::retry::SystemClock,
@@ -3814,6 +4153,7 @@ mod tests {
                 watch_failures: Vec::new(),
                 watch_deferred: Vec::new(),
                 reply_wait_days: 3,
+                health: None,
             },
             &NoSleep,
             &crate::native::gmail::sync::retry::SystemClock,
@@ -4000,6 +4340,7 @@ mod tests {
                 watch_failures: Vec::new(),
                 watch_deferred: Vec::new(),
                 reply_wait_days: 3,
+                health: None,
             },
             &NoSleep,
             &crate::native::gmail::sync::retry::SystemClock,
@@ -4084,6 +4425,7 @@ mod tests {
                 watch_failures: Vec::new(),
                 watch_deferred: Vec::new(),
                 reply_wait_days: 3,
+                health: None,
             },
             &clock,
             &clock,
@@ -5045,6 +5387,7 @@ mod tests {
                 watch_failures: Vec::new(),
                 watch_deferred: Vec::new(),
                 reply_wait_days: 3,
+                health: None,
             },
             &crate::native::gmail::sync::retry::SystemSleeper,
             &crate::native::gmail::sync::retry::SystemClock,
@@ -5076,6 +5419,7 @@ mod tests {
             turn_update: None,
             report_gone: false,
             refresh_failure: None,
+            label_ids: std::collections::BTreeSet::new(),
         }
     }
 

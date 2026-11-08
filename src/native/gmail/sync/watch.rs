@@ -63,6 +63,8 @@ pub(crate) struct PreparedWatch {
     pub(crate) report_gone: bool,
     /// A note refresh can fail independently of the metadata-based turn.
     pub(crate) refresh_failure: Option<WatchFailure>,
+    /// Union of every message's Gmail label ids, for health routing.
+    pub(crate) label_ids: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -248,6 +250,7 @@ pub(crate) fn prepare_watches<R: GmailRead>(
             turn_update: None,
             report_gone: false,
             refresh_failure: None,
+            label_ids: thread_label_ids(&thread),
         };
 
         let Some(entry) = index.by_identity.get(&key.index_key()) else {
@@ -383,7 +386,16 @@ fn gone_prepared(key: &ThreadKey, index: &MailIndex) -> PreparedWatch {
         turn_update: None,
         report_gone: true,
         refresh_failure: None,
+        label_ids: BTreeSet::new(),
     }
+}
+
+fn thread_label_ids(thread: &GmailThread) -> BTreeSet<String> {
+    thread
+        .messages
+        .iter()
+        .flat_map(|message| message.label_ids.iter().cloned())
+        .collect()
 }
 
 fn is_trashed(thread: &GmailThread) -> bool {
@@ -445,6 +457,7 @@ pub(crate) fn observation_only(
         turn_update: None,
         report_gone: false,
         refresh_failure: None,
+        label_ids: thread_label_ids(thread),
     }
 }
 

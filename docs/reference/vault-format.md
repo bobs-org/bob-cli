@@ -661,10 +661,12 @@ task archive, link repair, project and ready scans, task-status hooks,
 per line with `v`, `ts`, `host`, `kind`, and `value`. Sync enrolls by
 identity (`account`, lowercase hex `thread_id`): `gmail.filed` carries
 `note`, `task_file`, `via` (`route`|`inbox`|`problem`), and optional
-`route`; `gmail.adopted` carries `note` and `task_file`; legacy
-`gmail.pulled` carries `inbox` and `note` and is read-only. `gmail.save`
-receipts carry `note`, `created`, and `added`. Values never contain bodies,
-snippets, or subjects. See [Bob Gmail](../gmail.md#sync).
+`route`; `gmail.adopted` carries `note` and `task_file`; `gmail.refiled`
+carries `note`, `task_file`, and `route`; `gmail.route_conflict` carries
+`note`, `task_file`, `label`, and `dest_file`; legacy `gmail.pulled`
+carries `inbox` and `note` and is read-only. `gmail.save` receipts carry
+`note`, `created`, and `added`. Values never contain bodies, snippets, or
+subjects. See [Bob Gmail](../gmail.md#sync).
 
 `old_lib/` is the archival predecessor of `lib/`. Capture routes select
 root-level notes: `@work` writes `work.md`. Nested notes are reached with

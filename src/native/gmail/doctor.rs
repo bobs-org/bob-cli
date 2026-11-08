@@ -12,6 +12,7 @@ use super::{
     gog::{Gog, CLIENT},
     journal, list,
     route::{self, RouteContext},
+    sync::{enroll::EnrollmentFold, health, scan},
     ui, DoctorArgs, GmailError,
 };
 use crate::native::{
@@ -40,6 +41,7 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
                 "config",
                 "routes",
                 "writer",
+                "sync",
                 "journal",
                 "journal_malformed",
                 "gmail_urls",
@@ -281,6 +283,7 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
     ));
 
     checks.push(writer_check(config.writer(), &host));
+    checks.push(sync_check(&bob_dir, &config, &host));
     checks.push(journal_check(&bob_dir));
     checks.push(journal_malformed_check(&bob_dir));
     // Local mail-note checks: they read only vault Markdown, so they run
@@ -531,6 +534,71 @@ fn journal_malformed_check(bob_dir: &Path) -> Check {
                     .to_string(),
             ),
         },
+    }
+}
+
+/// Host-local last-success, route-problem, and watch counts. No network.
+fn sync_check(bob_dir: &Path, config: &GmailConfig, host: &str) -> Check {
+    let writer = match config.writer() {
+        None => format!("{host} · no writer pin"),
+        Some(writer) if writer == host => format!("{host} · writer this host"),
+        Some(writer) => format!("{host} · writer {writer}"),
+    };
+    let last = health::load_state()
+        .ok()
+        .and_then(|state| state.last_success_at);
+    let last_text = match last.as_deref() {
+        Some(ts) => health::ago_label(ts).unwrap_or_else(|| ts.to_string()),
+        None => "never".to_string(),
+    };
+    let stale = health::stale_skip_message("doctor").is_some();
+    let folder = Path::new(config.folder());
+    let (problems, watching, awaiting) =
+        match crate::native::gmail::resolve::scan_index(
+            bob_dir,
+            folder,
+            config.link_label(),
+        ) {
+            Ok(index) => {
+                match scan::scan_watching_tasks(bob_dir, folder, &index) {
+                    Ok(watchers) => {
+                        let problems = health::open_route_problem_count(
+                            &watchers,
+                            config.sync_inbox(),
+                            bob_dir,
+                        );
+                        let enrollment = EnrollmentFold::load(bob_dir).ok();
+                        let (watching, awaiting) =
+                            health::watch_counts(&watchers, |key| {
+                                enrollment
+                                    .as_ref()
+                                    .is_some_and(|fold| fold.is_enrolled(key))
+                            });
+                        (problems, watching, awaiting)
+                    }
+                    Err(_) => (0, 0, 0),
+                }
+            }
+            Err(_) => (0, 0, 0),
+        };
+    let problem_text = if problems == 1 {
+        "1 open route problem".to_string()
+    } else {
+        format!("{problems} open route problems")
+    };
+    Check {
+        id: "sync",
+        status: if stale {
+            CheckStatus::Warn
+        } else {
+            CheckStatus::Ok
+        },
+        summary: format!(
+            "{writer} · last success {last_text} · {problem_text} · watching {watching} · {awaiting} awaiting"
+        ),
+        fix: stale.then(|| {
+            "run `bob gmail sync` on the writer host".to_string()
+        }),
     }
 }
 

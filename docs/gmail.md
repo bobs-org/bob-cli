@@ -740,9 +740,16 @@ hidden alias with the same behaviour.
 A thread whose routing label does not resolve is still filed to the inbox
 with a managed `GMAIL ROUTE` child that names the offending label, the
 resolver's explanation, and its hint; the first such filing exits 1.
-Failures carry their body-free `kind` and `message` in warnings, and human
-and quiet rows show the route label, explanation, and hint for filed route
-problems while distinguishing remote failures with no durable row.
+Each later run recomputes that inbox row: a resolving route moves the task
+through the task-move engine with no freshness stamp and appends
+`gmail.refiled`; a persisting problem updates the warning and reports
+`first_seen: false` without failing the run; leftover unrouted labels drop
+the warning. Rows outside the inbox never move. A routing label that names
+a different note is reported once (`gmail.route_conflict`). Each live run
+lists account labels once, including `-l 0`. Failures carry their body-free
+`kind` and `message` in warnings, and human and quiet rows show the route
+label, explanation, and hint for filed route problems while distinguishing
+remote failures with no durable row.
 
 JSON schema 1 keeps pull's `ok`, `dry_run`, `pulled`, `results`, and
 `warnings`, and adds `watch`, `problems`, and
@@ -753,9 +760,11 @@ JSON schema 1 keeps pull's `ok`, `dry_run`, `pulled`, `results`, and
 and `unchanged`. A missing or trashed thread is not an action: it is
 reported once through a `gmail.gone` journal event plus a human and warning
 row. Result statuses are `filed`, `would_file`, `adopted`, `already_filed`,
-`already_pulled`, and `problem`. Exit 0 on success, no-op, or contention
-skip; 1 on a runtime failure, deferred work, or first-seen route problem; 2
-on setup (empty label, writer, bad `-l`).
+`already_pulled`, `problem`, `refiled`, and `would_refile`. Exit 0 on
+success, no-op, or a quiet contention skip; 1 on a runtime failure,
+deferred work, a first-seen route problem, or a quiet busy-skip whose last
+successful run is older than two hours; 2 on setup (empty label, writer,
+bad `-l`).
 
 ```bash
 bob gmail sync -d
@@ -940,6 +949,10 @@ config, the writer pin, and journal readability. Rows look like
   count. It is skipped in no-prefix mode, which has no routing labels to audit,
   and when there is no signed-in account or the token fails.
 - `writer`: this host, or the pin mismatch.
+- `sync`: local only. This host and the writer pin, the last successful run
+  as a relative time (`never` until one completes), the open route-problem
+  count, and the watching and awaiting counts. A last success older than two
+  hours is a warning. It runs even when sign-in checks fail.
 - `journal`: `.bob/gmail/*.jsonl` tracked and union-merged.
 - `journal_malformed`: malformed lines skipped with a count.
 - `gmail_urls`: every Gmail URL in vault notes with resolvable, refused, and
@@ -959,8 +972,12 @@ the compose scope is granted only on the Mac. `doctor` reports the writer pin
 and the current host. Sync dry-run (`-d`) is allowed on a non-writer host.
 
 Live sync holds a host-local per-account guard at
-`$XDG_STATE_HOME/bob/gmail/sync-<digest>.lock`. If a scoped commit or
-journal append fails, body-free recovery evidence at
+`$XDG_STATE_HOME/bob/gmail/sync-<digest>.lock`. Each live run records
+`last_attempt_at` and, when it completes, `last_success_at` in
+`$XDG_STATE_HOME/bob/gmail/sync-state.json` (including first-seen route
+problems). A quiet busy-skip exits 1 when `last_success_at` is older than
+two hours. Dry-run writes neither file. If a scoped commit or journal
+append fails, body-free recovery evidence at
 `$XDG_STATE_HOME/bob/gmail/sync-recovery-<digest>.json` lets a later live
 run on this host finish that work before new enrollment. The digest keys
 the file to this account and vault; the evidence never ships with the
@@ -969,7 +986,8 @@ vault.
 ## Exit status
 
 0 success, 1 runtime failure, 2 usage or setup error. Config errors name the
-key (for example `gmail.account`).
+key (for example `gmail.account`). A quiet Gmail sync busy-skip is 0 unless
+the last successful run is older than two hours, in which case it is 1.
 
 ## JSON output
 

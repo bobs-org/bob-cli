@@ -502,7 +502,15 @@ fn header(report: &SyncReport) -> String {
 
 fn with_nothing(report: &SyncReport, header: String) -> String {
     if report.results.iter().any(|row| {
-        matches!(row.status, "filed" | "would_file" | "adopted" | "problem")
+        matches!(
+            row.status,
+            "filed"
+                | "would_file"
+                | "adopted"
+                | "problem"
+                | "refiled"
+                | "would_refile"
+        )
     }) || report.watch.iter().any(|row| row.action != "unchanged")
         || !report.gone.is_empty()
     {
@@ -530,6 +538,8 @@ fn human_row(row: &SyncResult, problems: &[SyncProblem]) -> Option<String> {
         "filed" => "filed",
         "would_file" => "would file",
         "adopted" => "adopted",
+        "refiled" => "refiled",
+        "would_refile" => "would refile",
         "problem" if filed_problem.is_some() => "route",
         "problem" => "failed",
         _ => return None,
@@ -542,6 +552,7 @@ fn human_row(row: &SyncResult, problems: &[SyncProblem]) -> Option<String> {
         .unwrap_or("saved note unavailable");
     let glyph = match row.status {
         "adopted" => "⇢",
+        "refiled" | "would_refile" => "↗",
         "problem" => "⚠",
         _ => "+",
     };
@@ -788,6 +799,37 @@ mod tests {
         };
         let text = with_nothing(&report, "header".into());
         assert!(text.ends_with("nothing new"), "{text}");
+    }
+
+    #[test]
+    fn refiled_rows_print_and_suppress_nothing_new() {
+        let refiled = SyncResult {
+            thread_id: "aa01".into(),
+            note: Some("mail/2026/a.md".into()),
+            link: Some("[[mail/2026/a.md|✉️ Lease · Ada]]".into()),
+            status: "refiled",
+            task_file: Some("job.md".into()),
+            route: Some("job".into()),
+        };
+        let line = human_row(&refiled, &[]).expect("refiled row");
+        assert!(line.contains("refiled"), "{line}");
+        assert!(line.contains("job.md"), "{line}");
+        let report = SyncReport {
+            ok: true,
+            dry_run: false,
+            pulled: 0,
+            results: vec![refiled],
+            watch: Vec::new(),
+            gone: Vec::new(),
+            problems: Vec::new(),
+            warnings: Vec::new(),
+            watching: 1,
+            awaiting: 0,
+            first_seen: false,
+            busy: false,
+        };
+        let text = with_nothing(&report, "header".into());
+        assert!(!text.contains("nothing new"), "{text}");
     }
 
     fn empty_fold() -> super::super::enroll::EnrollmentFold {

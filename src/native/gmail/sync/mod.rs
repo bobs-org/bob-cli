@@ -22,6 +22,8 @@
 //! - [`guard`] holds the host-local per-account file guard for a live run.
 //! - [`retry`] shares one `-r` budget across guard, retry, and vault-lock
 //!   waits with pacing and bounded backoff.
+//! - [`health`] repairs inbox routes, persists alert-once problems, and
+//!   keeps host-local last-success timestamps for busy-skip staleness.
 //! - [`command`] is `bob gmail sync` (hidden `pull` alias) and [`report`]
 //!   prints its human and JSON documents.
 //!
@@ -35,6 +37,7 @@ pub(crate) mod discover;
 pub(crate) mod enroll;
 pub(crate) mod file;
 pub(crate) mod guard;
+pub(crate) mod health;
 pub(crate) mod hold;
 pub(crate) mod report;
 pub(crate) mod retry;

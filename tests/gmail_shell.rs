@@ -1366,6 +1366,15 @@ fn doctor_local_checks_run_when_token_fails() {
     assert_eq!(check(&doc, "token")["status"], "fail");
     assert_eq!(check(&doc, "gmail_urls")["status"], "ok");
     assert_eq!(check(&doc, "gmail_duplicates")["status"], "ok");
+    assert_eq!(check(&doc, "sync")["status"], "ok");
+    assert!(
+        check(&doc, "sync")["summary"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("last success never"),
+        "{}",
+        check(&doc, "sync")
+    );
 }
 
 /// The routing vault: areas `job` and `family`, the done project
@@ -1626,6 +1635,61 @@ fn config_errors_name_the_key() {
                     .unwrap_or_default()
                     .contains("gmail.timeout_secs"))),
         "config error must name the key: {doc}"
+    );
+}
+
+#[test]
+fn doctor_sync_row_is_local_and_warns_when_stale() {
+    let env = GmailEnv::new("bob-cli-gmail-doctor-sync");
+    env.write_journal_rules();
+    let fake = FakeGog::new(&env, "gog");
+    let before = run_gmail(&env, &fake, &["doctor", "-f", "json"]);
+    assert_success(&before, "doctor before sync");
+    let before_doc = json_stdout(&before);
+    let sync = check(&before_doc, "sync");
+    assert_eq!(sync["status"], "ok");
+    let summary = sync["summary"].as_str().unwrap_or_default();
+    assert!(summary.contains("writer this host"), "{summary}");
+    assert!(summary.contains("last success never"), "{summary}");
+    assert!(summary.contains("0 open route problems"), "{summary}");
+
+    let pulled = FakeGog::new(&env, "gog").scenario("gmail_pull_one");
+    let live = run_gmail(&env, &pulled, &["sync", "-f", "json"]);
+    assert_success(&live, "live sync for doctor");
+    let after = run_gmail(&env, &fake, &["doctor", "-f", "json"]);
+    assert_success(&after, "doctor after sync");
+    let after_doc = json_stdout(&after);
+    let after_sync = check(&after_doc, "sync");
+    assert_eq!(after_sync["status"], "ok");
+    let after_summary = after_sync["summary"].as_str().unwrap_or_default();
+    assert!(
+        after_summary.contains("last success")
+            && !after_summary.contains("never"),
+        "{after_summary}"
+    );
+    assert!(after_summary.contains("watching 1"), "{after_summary}");
+
+    fs::write(
+        env.root().join("state/bob/gmail/sync-state.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "last_attempt_at": "2020-01-01T00:00:00Z",
+            "last_success_at": "2020-01-01T00:00:00Z",
+        }))
+        .unwrap(),
+    )
+    .expect("write stale sync-state");
+    let stale = run_gmail(&env, &fake, &["doctor", "-f", "json"]);
+    assert_success(&stale, "stale doctor stays green");
+    let stale_doc = json_stdout(&stale);
+    let stale_sync = check(&stale_doc, "sync");
+    assert_eq!(stale_sync["status"], "warn");
+    assert!(
+        stale_sync["summary"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("ago"),
+        "{}",
+        stale_sync
     );
 }
 
