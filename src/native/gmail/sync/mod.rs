@@ -30,6 +30,7 @@ pub(crate) mod discover;
 pub(crate) mod enroll;
 pub(crate) mod file;
 pub(crate) mod guard;
+pub(crate) mod hold;
 pub(crate) mod report;
 pub(crate) mod retry;
 pub(crate) mod scan;
