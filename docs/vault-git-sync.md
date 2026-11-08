@@ -302,10 +302,11 @@ Bob Mac Capture also runs `bob vault-sync -q` when the Refs panel opens (throttl
 
 ## Mac scheduled maintenance
 
-The MacBook also runs three independent 15-minute cron jobs, staggered five minutes
+The MacBook also runs four independent 15-minute cron jobs, staggered five minutes
 apart so their writes do not collide with each other or with the 15-second
 `bob-vault-sync` LaunchAgent. They live in the `cron:` data of `home/.chezmoidata.yaml`
-in the chezmoi dotfiles repo, the only source of truth for every machine's user crontab:
+in the chezmoi dotfiles repo, the only source of truth for every machine's user crontab
+(see `cronctl`):
 
 ```yaml
 - name: bob-highlights-sync
@@ -316,6 +317,10 @@ in the chezmoi dotfiles repo, the only source of truth for every machine's user 
   machines: [mac]
   schedule: "5,20,35,50 * * * *"
   command: bob projects sync
+- name: bob-gmail-sync
+  machines: [mac]
+  schedule: "7,22,37,52 * * * *"
+  command: bob gmail sync -q
 - name: bob-task-reconcile
   machines: [mac]
   schedule: "10,25,40,55 * * * *"
@@ -324,12 +329,13 @@ in the chezmoi dotfiles repo, the only source of truth for every machine's user 
 
 The old command name `bob task-status-hooks` keeps working as a permanent silent alias.
 
-Highlights intake precedes project reconciliation, which precedes task-status
-reconciliation. The 2-minute `--retry-timeout` on `bob task reconcile` fits
+Highlights intake precedes project reconciliation, then Gmail filing at `:07`, then
+task-status reconciliation, so reconcile tidies the same Gmail-filed rows minutes
+later. The 2-minute `--retry-timeout` on `bob task reconcile` fits
 comfortably inside the 15-minute cadence and absorbs transient maintenance-lock
 contention and concurrent-save races against the 15-second sync LaunchAgent; see
 [Retries](task-status-hooks.md#retries) for the backoff policy and its allowed failure
-reasons. Offsetting the three jobs by minutes reduces collisions between them, but
+reasons. Offsetting the four jobs by minutes reduces collisions between them, but
 cannot guarantee exclusion from an open editor, a slow job, or the sync LaunchAgent —
 correctness comes from the existing lock and guarded-write checks plus the fresh-attempt
 retry behavior, not from the schedule alone.
