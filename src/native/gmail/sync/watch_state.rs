@@ -31,7 +31,6 @@ pub(crate) enum AppliedEffect {
 }
 
 impl AppliedEffect {
-    #[allow(dead_code)] // Journal writer consumed by later watch phases.
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Hold => "hold",
@@ -73,7 +72,6 @@ pub(crate) struct WatchJournal {
 impl WatchJournal {
     /// Read and fold all `.bob/gmail/*.jsonl` files. Malformed Gmail watch
     /// events are skipped with bounded, body-free warnings.
-    #[allow(dead_code)] // Read by the watch preparation and transaction phases.
     pub(crate) fn load(vault: &Path) -> io::Result<Self> {
         let (events, warnings) = pref_journal::read_raw(vault, NAMESPACE)?;
         Ok(Self::from_events(events, warnings))
@@ -148,13 +146,11 @@ impl WatchJournal {
     }
 
     /// Body-free journal warnings.
-    #[allow(dead_code)] // Reported by the watch preparation phase.
     pub(crate) fn warnings(&self) -> &[String] {
         &self.warnings
     }
 
     /// Append a consumed turn after its task and note writes are durable.
-    #[allow(dead_code)] // Written after durable task/note changes by apply.
     pub(crate) fn append_turn(
         vault: &Path,
         host: &str,
@@ -174,7 +170,6 @@ impl WatchJournal {
     /// Append the one-time missing/trashed report after local application.
     /// The caller checks [`was_reported_gone`](Self::was_reported_gone) while
     /// holding the transaction lock before invoking this method.
-    #[allow(dead_code)] // Written after durable task/note changes by apply.
     pub(crate) fn append_gone(
         vault: &Path,
         host: &str,
@@ -247,7 +242,6 @@ fn parse_key(value: &Map<String, Value>) -> Option<ThreadKey> {
     ThreadKey::new(value.get("account")?.as_str()?, thread_id)
 }
 
-#[allow(dead_code)] // Used by the journal's append APIs.
 fn append_event(
     vault: &Path,
     host: &str,

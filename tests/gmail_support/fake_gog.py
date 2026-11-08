@@ -1323,29 +1323,52 @@ if op == "thread_get":
         if scenario in {"metadata_malformed", "malformed_json"}:
             sys.stdout.write("{malformed JSON\n")
             raise SystemExit(0)
-        subject = "Re: Lease renewal #task"
-        snippet = "Hello [[world]]; the sender's snippet is inert."
-        sender = "Dana Whitfield <dana@example.test>"
-        message_count = 2 if hex_id != "aaaaaaaaaaaaaaaa" else 1
-        messages = []
-        for index in range(message_count):
-            messages.append(
+        if scenario in {"gmail_pull_one", "gmail_pull_many"}:
+            # Sync saves these threads and polls them again in the same test.
+            # Keep metadata ids in step with the full response below so an
+            # unchanged second poll stays a no-op.
+            messages = [
                 {
-                    "id": f"{index + 1:016x}",
+                    "id": "1111111111111111",
                     "threadId": hex_id,
                     "labelIds": ["INBOX", "Label_1"],
-                    "internalDate": str(1793908800000 + index * 60000),
-                    "snippet": snippet if index == message_count - 1 else "Earlier message",
+                    "internalDate": "1793908800000",
+                    "snippet": "hello",
                     "payload": {
                         "mimeType": "text/plain",
                         "headers": [
-                            {"name": "From", "value": sender},
-                            {"name": "To", "value": "you@example.com"},
-                            {"name": "Subject", "value": subject},
+                            {"name": "From", "value": "Ada <ada@example.com>"},
+                            {"name": "To", "value": EMAIL},
+                            {"name": "Subject", "value": "Pull sample"},
+                            {"name": "Message-ID", "value": "<message@example.test>"},
                         ],
                     },
                 }
-            )
+            ]
+        else:
+            subject = "Re: Lease renewal #task"
+            snippet = "Hello [[world]]; the sender's snippet is inert."
+            sender = "Dana Whitfield <dana@example.test>"
+            message_count = 2 if hex_id != "aaaaaaaaaaaaaaaa" else 1
+            messages = []
+            for index in range(message_count):
+                messages.append(
+                    {
+                        "id": f"{index + 1:016x}",
+                        "threadId": hex_id,
+                        "labelIds": ["INBOX", "Label_1"],
+                        "internalDate": str(1793908800000 + index * 60000),
+                        "snippet": snippet if index == message_count - 1 else "Earlier message",
+                        "payload": {
+                            "mimeType": "text/plain",
+                            "headers": [
+                                {"name": "From", "value": sender},
+                                {"name": "To", "value": "you@example.com"},
+                                {"name": "Subject", "value": subject},
+                            ],
+                        },
+                    }
+                )
         dump({"thread": {"id": hex_id, "historyId": "2", "messages": messages}})
         raise SystemExit(0)
     if scenario in {

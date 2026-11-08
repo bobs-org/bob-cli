@@ -24,10 +24,11 @@ use super::{
     },
     hold,
     retry::{Clock, SharedBudget, Sleeper},
-    scan::{self, WatchScan},
+    scan::{self, LinkPlacement, WatchScan, WatchTarget, WatchingTask},
     watch::{PreparedWatch, WatchFailure},
     watch_apply::{
-        self, FilingTaskSnapshot, RecoveryWatch, WatchThreadOutcome,
+        self, FilingTaskSnapshot, RecoveryWatch, WatchGoneOutcome,
+        WatchThreadOutcome,
     },
     watch_state::WatchJournal,
     ThreadKey,
@@ -483,6 +484,9 @@ pub(crate) struct FilingOutcome {
     /// Typed per-thread watch outcomes. The polling phase renders these
     /// into `watch[]` rows; the transaction records them here.
     pub(crate) watch_threads: Vec<WatchThreadOutcome>,
+    /// First-time gone reports; they are warning/human rows, not `watch[]`
+    /// actions because the public watch action set has no `gone` value.
+    pub(crate) watch_gone: Vec<WatchGoneOutcome>,
 }
 
 #[derive(Debug, Clone)]
@@ -1175,7 +1179,62 @@ fn build_attempt(
     let today = bob_env::current_datetime().date();
     let (blocked_ok, blocked_reason) = hold::blocked_status_for_hold(vault);
     let running = hold::load_running_tasks(vault);
-    let filing_tasks: BTreeMap<PathBuf, FilingTaskSnapshot> = BTreeMap::new();
+    let mut filing_tasks: BTreeMap<PathBuf, FilingTaskSnapshot> =
+        BTreeMap::new();
+    for (relative, snapshot) in &snapshots {
+        let original_lines: BTreeSet<String> = snapshot
+            .original
+            .as_deref()
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect();
+        let mut projected = Vec::new();
+        for plan in &plans {
+            let Some(key) = ThreadKey::new(&plan.account, &plan.thread_id)
+            else {
+                continue;
+            };
+            let Some(destination) = destinations.get(&key) else {
+                continue;
+            };
+            if destination.relative != *relative {
+                continue;
+            }
+            let Some((line_index, line)) =
+                snapshot.updated.lines().enumerate().find(|(_, line)| {
+                    line.contains(&plan.link)
+                        && line.contains("#task")
+                        && !original_lines.contains(*line)
+                })
+            else {
+                continue;
+            };
+            projected.push(WatchingTask {
+                path: save::path_to_slashes(relative),
+                line: line_index + 1,
+                text: line.to_string(),
+                block_id: None,
+                status: ' ',
+                targets: vec![WatchTarget {
+                    key,
+                    note: path_relative(vault, &plan.path)?,
+                    placement: LinkPlacement::TaskLine,
+                }],
+            });
+        }
+        if !projected.is_empty() {
+            filing_tasks.insert(
+                relative.clone(),
+                FilingTaskSnapshot {
+                    target: snapshot.target.clone(),
+                    original: snapshot.original.clone(),
+                    updated: snapshot.updated.clone(),
+                    tasks: projected,
+                },
+            );
+        }
+    }
     let watch_plan =
         watch_apply::plan_watch_edits(watch_apply::WatchPlanInput {
             vault,
@@ -1193,6 +1252,7 @@ fn build_attempt(
         });
     outcome.warnings.extend(watch_plan.warnings);
     outcome.failed |= watch_plan.failed;
+    outcome.watch_snapshot = watch_plan.snapshot.clone();
     for edit in watch_plan.edits {
         if let Some(existing) =
             staged.iter_mut().find(|file| file.target == edit.target)
@@ -1228,6 +1288,7 @@ fn build_attempt(
         &works,
     );
     outcome.watch_threads = watch_plan.outcomes;
+    outcome.watch_gone = watch_plan.gone;
     for key in &watch_deferred {
         if !outcome.deferred.contains(key) {
             outcome.deferred.push(key.clone());
@@ -1243,7 +1304,6 @@ fn build_attempt(
     outcome.deferred.sort();
     outcome.deferred.dedup();
     outcome.changed = !staged.is_empty() || !enrollment_events.is_empty();
-    outcome.watch_snapshot = watchers.clone();
     outcome.applied = true;
 
     Ok(AttemptPlan {
@@ -4924,6 +4984,8 @@ mod tests {
                 },
             },
             note_path: None,
+            title: None,
+            who: None,
             refresh: None,
             turn_update: None,
             report_gone: false,

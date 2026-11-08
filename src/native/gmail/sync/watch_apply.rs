@@ -31,11 +31,23 @@ use crate::native::gmail::{
 pub(crate) struct WatchThreadOutcome {
     pub(crate) key: ThreadKey,
     pub(crate) note: Option<String>,
+    pub(crate) title: Option<String>,
+    pub(crate) who: Option<String>,
     pub(crate) tasks: Vec<WatchTaskRef>,
     pub(crate) turn: Option<String>,
     pub(crate) turn_since: Option<String>,
     pub(crate) action: &'static str,
     pub(crate) nudge_on: Option<String>,
+}
+
+/// A first report that a watched Gmail thread disappeared. Gone is surfaced
+/// as a warning/human row and deliberately has no `watch[]` action value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WatchGoneOutcome {
+    pub(crate) key: ThreadKey,
+    pub(crate) note: Option<String>,
+    pub(crate) title: Option<String>,
+    pub(crate) who: Option<String>,
 }
 
 /// One task row a thread outcome touched.
@@ -97,6 +109,8 @@ pub(crate) struct FilingTaskSnapshot {
     pub(crate) target: PathBuf,
     pub(crate) original: Option<String>,
     pub(crate) updated: String,
+    /// New task rows from this transaction, with their just-filed identities.
+    pub(crate) tasks: Vec<WatchingTask>,
 }
 
 /// Inputs for the shared local planner.
@@ -120,6 +134,8 @@ pub(crate) struct WatchPlanInput<'a> {
 pub(crate) struct WatchPlan {
     pub(crate) edits: Vec<WatchFileEdit>,
     pub(crate) outcomes: Vec<WatchThreadOutcome>,
+    pub(crate) gone: Vec<WatchGoneOutcome>,
+    pub(crate) snapshot: WatchScan,
     pub(crate) receipts: WatchReceipts,
     pub(crate) pending: Vec<RecoveryWatch>,
     pub(crate) warnings: Vec<String>,
@@ -129,8 +145,6 @@ pub(crate) struct WatchPlan {
 pub(crate) const ACTION_HELD: &str = "held";
 pub(crate) const ACTION_LIFTED: &str = "lifted";
 pub(crate) const ACTION_BOUNCED: &str = "bounced";
-// bob-cli-ii.4.1.4 renders this for unheld Ready rows that still resurface.
-#[allow(dead_code)]
 pub(crate) const ACTION_RESURFACED: &str = "resurfaced";
 pub(crate) const ACTION_DEFERRED_RUNNING: &str = "deferred_running";
 pub(crate) const ACTION_REFRESHED: &str = "refreshed";
@@ -482,6 +496,16 @@ pub(crate) fn plan_watch_edits(input: WatchPlanInput<'_>) -> WatchPlan {
     let mut terminal: BTreeSet<ThreadKey> = BTreeSet::new();
     for watch in input.prepared {
         if watch.report_gone {
+            plan.gone.push(WatchGoneOutcome {
+                key: watch.observation.key.clone(),
+                note: watch.note_path.clone(),
+                title: watch.title.clone(),
+                who: watch.who.clone(),
+            });
+            plan.warnings.push(format!(
+                "Gmail watch thread {} is gone",
+                watch.observation.key.thread_id()
+            ));
             if !input.journal.was_reported_gone(&watch.observation.key) {
                 plan.receipts.gone.push(watch.observation.key.clone());
             }
@@ -556,7 +580,7 @@ pub(crate) fn plan_watch_edits(input: WatchPlanInput<'_>) -> WatchPlan {
         let folded = &watch.observation.folded;
         let turn = folded.turn.map(|turn| turn.as_str().to_string());
         let turn_since = folded.turn_since.map(|time| {
-            time.with_timezone(&chrono_tz::UTC)
+            time.with_timezone(&input.timezone)
                 .format("%Y-%m-%dT%H:%M:%S%:z")
                 .to_string()
         });
@@ -590,16 +614,30 @@ pub(crate) fn plan_watch_edits(input: WatchPlanInput<'_>) -> WatchPlan {
             action = ACTION_DEFERRED_RUNNING;
             if matches!(folded.net, Net::Hold) {
                 if let Some(send) = folded.last_send_at {
-                    // Display the send date; the hold nudge itself is
-                    // computed per task above with reply_wait_days.
-                    nudge_on = Some(send.format("%Y-%m-%d").to_string());
+                    nudge_on = Some(
+                        hold::nudge_date_for_send(
+                            send,
+                            input.timezone,
+                            input.reply_wait_days,
+                        )
+                        .format("%Y-%m-%d")
+                        .to_string(),
+                    );
                 }
             }
         } else if let Some(task_action) = task_action {
             action = task_action;
             if matches!(folded.net, Net::Hold) {
                 if let Some(send) = folded.last_send_at {
-                    nudge_on = Some(send.format("%Y-%m-%d").to_string());
+                    nudge_on = Some(
+                        hold::nudge_date_for_send(
+                            send,
+                            input.timezone,
+                            input.reply_wait_days,
+                        )
+                        .format("%Y-%m-%d")
+                        .to_string(),
+                    );
                 }
             }
         } else if is_terminal && has_receipt {
@@ -612,7 +650,15 @@ pub(crate) fn plan_watch_edits(input: WatchPlanInput<'_>) -> WatchPlan {
             };
             if matches!(folded.net, Net::Hold) {
                 if let Some(send) = folded.last_send_at {
-                    nudge_on = Some(send.format("%Y-%m-%d").to_string());
+                    nudge_on = Some(
+                        hold::nudge_date_for_send(
+                            send,
+                            input.timezone,
+                            input.reply_wait_days,
+                        )
+                        .format("%Y-%m-%d")
+                        .to_string(),
+                    );
                 }
             }
         }
@@ -621,6 +667,15 @@ pub(crate) fn plan_watch_edits(input: WatchPlanInput<'_>) -> WatchPlan {
             .filter(|(key, _, _, _)| key == &watch.observation.key)
             .map(|(_, task_ref, _, _)| task_ref.clone())
             .collect();
+        let note = watch.note_path.clone().or_else(|| {
+            input
+                .filing_tasks
+                .values()
+                .flat_map(|snapshot| snapshot.tasks.iter())
+                .flat_map(|task| task.targets.iter())
+                .find(|target| target.key == watch.observation.key)
+                .map(|target| target.note.clone())
+        });
         // Override deferred display with the task-level nudge when known.
         if action == ACTION_DEFERRED_RUNNING {
             if let Some((_, _, _, nudge)) = changed_tasks
@@ -640,7 +695,9 @@ pub(crate) fn plan_watch_edits(input: WatchPlanInput<'_>) -> WatchPlan {
         }
         plan.outcomes.push(WatchThreadOutcome {
             key: watch.observation.key.clone(),
-            note: watch.note_path.clone(),
+            note,
+            title: watch.title.clone(),
+            who: watch.who.clone(),
             tasks,
             turn,
             turn_since,
@@ -703,6 +760,19 @@ pub(crate) fn plan_watch_edits(input: WatchPlanInput<'_>) -> WatchPlan {
             pending_marker: true,
         });
     }
+
+    let mut snapshot_tasks = projected;
+    for task in &mut snapshot_tasks {
+        let relative = PathBuf::from(&task.path);
+        let Some(buffer) = buffers.get(&relative) else {
+            continue;
+        };
+        if let Some(line) = read_line(&buffer.updated, task.line) {
+            task.status = checkbox_status(&line).unwrap_or(task.status);
+            task.text = line;
+        }
+    }
+    plan.snapshot = WatchScan::from_tasks(snapshot_tasks);
 
     plan
 }
@@ -958,30 +1028,8 @@ fn projected_tasks(
     filing_tasks: &BTreeMap<PathBuf, FilingTaskSnapshot>,
 ) -> Vec<WatchingTask> {
     let mut tasks: Vec<WatchingTask> = watchers.tasks().to_vec();
-    for (relative, snapshot) in filing_tasks {
-        let path = relative.to_string_lossy().replace('\\', "/");
-        let original_lines: BTreeSet<&str> = snapshot
-            .original
-            .as_deref()
-            .unwrap_or_default()
-            .lines()
-            .collect();
-        for (index, line) in snapshot.updated.lines().enumerate() {
-            if !line.contains("#task") {
-                continue;
-            }
-            if original_lines.contains(line) {
-                continue;
-            }
-            tasks.push(WatchingTask {
-                path: path.clone(),
-                line: index + 1,
-                text: line.to_string(),
-                block_id: None,
-                status: ' ',
-                targets: Vec::new(),
-            });
-        }
+    for snapshot in filing_tasks.values() {
+        tasks.extend(snapshot.tasks.iter().cloned());
     }
     tasks.sort_by(|left, right| {
         left.path.cmp(&right.path).then(left.line.cmp(&right.line))
@@ -1048,6 +1096,8 @@ mod tests {
         PreparedWatch {
             observation: super::super::watch::ThreadObservation { key, folded },
             note_path: None,
+            title: None,
+            who: None,
             refresh: None,
             turn_update: None,
             report_gone: false,

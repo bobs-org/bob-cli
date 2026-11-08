@@ -2,14 +2,14 @@
 //!
 //! The JSON document is a superset of pull's schema 1: it keeps `ok`,
 //! `dry_run`, `pulled`, `results`, and `warnings`, and adds `watch`,
-//! `problems`, and `summary`. This phase emits `watch: []`; later watch
-//! work fills the actions. Consumers of scan and apply outcomes should
-//! use those structs directly rather than parsing this document.
+//! `problems`, and `summary`. Consumers of scan and apply outcomes use
+//! those structs directly rather than parsing this document.
 
 use serde_json::{json, Value};
 
 use super::file::{FilingFailure, FilingOutcome, FilingResult};
 use super::scan::WatchScan;
+use super::watch_apply::{WatchGoneOutcome, WatchThreadOutcome};
 use super::ThreadKey;
 use crate::native::env as bob_env;
 use crate::native::gmail::cli::SyncArgs;
@@ -49,6 +49,8 @@ pub(crate) struct SyncReport {
     pub(crate) dry_run: bool,
     pub(crate) pulled: usize,
     pub(crate) results: Vec<SyncResult>,
+    pub(crate) watch: Vec<WatchThreadOutcome>,
+    pub(crate) gone: Vec<WatchGoneOutcome>,
     pub(crate) problems: Vec<SyncProblem>,
     pub(crate) warnings: Vec<String>,
     pub(crate) watching: usize,
@@ -66,6 +68,8 @@ impl SyncReport {
             dry_run,
             pulled: 0,
             results: Vec::new(),
+            watch: Vec::new(),
+            gone: Vec::new(),
             problems: Vec::new(),
             warnings: Vec::new(),
             watching: 0,
@@ -175,6 +179,8 @@ pub(crate) fn from_outcome(
         dry_run,
         pulled,
         results,
+        watch: outcome.watch_threads.clone(),
+        gone: outcome.watch_gone.clone(),
         problems,
         warnings,
         watching,
@@ -204,10 +210,29 @@ pub(crate) fn print(args: &SyncArgs, report: &SyncReport) {
                 println!("  {}", color_row(&styler, row.status, &line));
             }
         }
+        for row in &report.watch {
+            if row.action != "unchanged"
+                && let Some(line) = watch_human_row(row)
+            {
+                println!("  {}", watch_color_row(&styler, row.action, &line));
+            }
+        }
+        for row in &report.gone {
+            if let Some(line) = gone_human_row(row) {
+                println!("  {}", styler.yellow(&line));
+            }
+        }
     } else {
         for row in &report.results {
             if row.status == "problem"
                 && let Some(line) = human_row(row, &report.problems)
+            {
+                println!("  {}", styler.yellow(&line));
+            }
+        }
+        for row in &report.watch {
+            if row.action == "deferred_running"
+                && let Some(line) = watch_human_row(row)
             {
                 println!("  {}", styler.yellow(&line));
             }
@@ -255,7 +280,7 @@ fn json_document(report: &SyncReport) -> Value {
         "dry_run": report.dry_run,
         "pulled": report.pulled,
         "results": results,
-        "watch": [],
+        "watch": report.watch.iter().map(watch_json).collect::<Vec<_>>(),
         "problems": problems,
         "summary": {
             "watching": report.watching,
@@ -263,6 +288,76 @@ fn json_document(report: &SyncReport) -> Value {
         },
         "warnings": report.warnings,
     })
+}
+
+fn watch_json(row: &WatchThreadOutcome) -> Value {
+    let tasks: Vec<Value> = row
+        .tasks
+        .iter()
+        .map(|task| {
+            json!({
+                "path": task.path,
+                "line": task.line,
+                "block_id": task.block_id,
+            })
+        })
+        .collect();
+    let mut value = json!({
+        "thread_id": row.key.thread_id(),
+        "note": row.note,
+        "tasks": tasks,
+        "turn": row.turn,
+        "turn_since": row.turn_since,
+        "action": row.action,
+    });
+    if let Some(nudge_on) = &row.nudge_on {
+        value["nudge_on"] = json!(nudge_on);
+    }
+    value
+}
+
+fn watch_human_row(row: &WatchThreadOutcome) -> Option<String> {
+    let action = match row.action {
+        "held" => "awaiting reply",
+        "lifted" => "replied",
+        "bounced" => "bounced",
+        "resurfaced" => "resurfaced",
+        "deferred_running" => "deferred (running task)",
+        "refreshed" => "refreshed",
+        _ => return None,
+    };
+    let who = row.who.as_deref().unwrap_or("Unknown sender");
+    let title = row.title.as_deref().unwrap_or(row.key.thread_id());
+    let note = row
+        .note
+        .as_deref()
+        .map(|path| format!(" → {path}"))
+        .unwrap_or_default();
+    let nudge = row
+        .nudge_on
+        .as_deref()
+        .map(|date| format!(" (nudge {date})"))
+        .unwrap_or_default();
+    Some(format!("✉ {action:<23} {who} — {title}{nudge}{note}"))
+}
+
+fn gone_human_row(row: &WatchGoneOutcome) -> Option<String> {
+    let who = row.who.as_deref().unwrap_or("Unknown sender");
+    let title = row.title.as_deref().unwrap_or(row.key.thread_id());
+    let note = row
+        .note
+        .as_deref()
+        .map(|path| format!(" → {path}"))
+        .unwrap_or_default();
+    Some(format!("⚠ gone                    {who} — {title}{note}"))
+}
+
+fn watch_color_row(styler: &Styler, action: &str, line: &str) -> String {
+    match action {
+        "lifted" => styler.blue(line),
+        "bounced" | "deferred_running" => styler.yellow(line),
+        _ => styler.green(line),
+    }
 }
 
 fn from_filing(result: &FilingResult) -> SyncResult {
@@ -408,7 +503,9 @@ fn header(report: &SyncReport) -> String {
 fn with_nothing(report: &SyncReport, header: String) -> String {
     if report.results.iter().any(|row| {
         matches!(row.status, "filed" | "would_file" | "adopted" | "problem")
-    }) {
+    }) || report.watch.iter().any(|row| row.action != "unchanged")
+        || !report.gone.is_empty()
+    {
         header
     } else {
         format!("{header} · nothing new")
@@ -498,6 +595,7 @@ fn color_row(styler: &Styler, status: &str, line: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::super::scan::{LinkPlacement, WatchTarget, WatchingTask};
+    use super::super::watch_apply::{WatchGoneOutcome, WatchTaskRef};
     use super::*;
 
     fn filed() -> SyncResult {
@@ -518,6 +616,8 @@ mod tests {
             dry_run: false,
             pulled: 1,
             results: vec![filed()],
+            watch: Vec::new(),
+            gone: Vec::new(),
             problems: Vec::new(),
             warnings: Vec::new(),
             watching: 1,
@@ -536,6 +636,61 @@ mod tests {
         assert_eq!(value["summary"]["watching"], 1);
         assert_eq!(value["summary"]["awaiting"], 0);
         assert!(value["problems"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn watch_json_and_human_rows_keep_the_typed_polling_contract() {
+        let row = WatchThreadOutcome {
+            key: ThreadKey::new("me@example.com", "aa01").unwrap(),
+            note: Some("mail/2026/aa01.md".into()),
+            title: Some("Lease renewal".into()),
+            who: Some("Dana Whitfield".into()),
+            tasks: vec![WatchTaskRef {
+                path: "job.md".into(),
+                line: 8,
+                block_id: Some("follow-up".into()),
+            }],
+            turn: Some("theirs".into()),
+            turn_since: Some("2026-11-05T09:00:00-05:00".into()),
+            action: "held",
+            nudge_on: Some("2026-11-06".into()),
+        };
+        let value = watch_json(&row);
+        assert_eq!(value["thread_id"], "aa01");
+        assert_eq!(value["note"], "mail/2026/aa01.md");
+        assert_eq!(value["tasks"][0]["path"], "job.md");
+        assert_eq!(value["tasks"][0]["line"], 8);
+        assert_eq!(value["tasks"][0]["block_id"], "follow-up");
+        assert_eq!(value["turn"], "theirs");
+        assert_eq!(value["turn_since"], "2026-11-05T09:00:00-05:00");
+        assert_eq!(value["action"], "held");
+        assert_eq!(value["nudge_on"], "2026-11-06");
+
+        for (action, expected) in [
+            ("held", "awaiting reply"),
+            ("lifted", "replied"),
+            ("bounced", "bounced"),
+            ("deferred_running", "deferred (running task)"),
+        ] {
+            let row = WatchThreadOutcome {
+                action,
+                ..row.clone()
+            };
+            let line = watch_human_row(&row).expect("visible watch action");
+            assert!(line.contains(expected), "{line}");
+            assert!(line.contains("Dana Whitfield"), "{line}");
+            assert!(line.contains("Lease renewal"), "{line}");
+        }
+
+        let gone = gone_human_row(&WatchGoneOutcome {
+            key: ThreadKey::new("me@example.com", "aa01").unwrap(),
+            note: Some("mail/2026/aa01.md".into()),
+            title: Some("Lease renewal".into()),
+            who: Some("Dana Whitfield".into()),
+        })
+        .expect("gone warning row");
+        assert!(gone.contains("gone"), "{gone}");
+        assert!(gone.contains("Dana Whitfield — Lease renewal"), "{gone}");
     }
 
     #[test]
@@ -589,6 +744,8 @@ mod tests {
             dry_run: false,
             pulled: 1,
             results: vec![filed()],
+            watch: Vec::new(),
+            gone: Vec::new(),
             problems: Vec::new(),
             warnings: Vec::new(),
             watching: 1,
@@ -620,6 +777,8 @@ mod tests {
                 task_file: None,
                 route: None,
             }],
+            watch: Vec::new(),
+            gone: Vec::new(),
             problems: Vec::new(),
             warnings: Vec::new(),
             watching: 0,

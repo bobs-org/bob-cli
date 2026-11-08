@@ -2,8 +2,8 @@
 //!
 //! Remote fetching, routing, policy checks, and body preparation finish
 //! before the vault lock. The scan and [`super::file::FilingOutcome`] are
-//! the extension point for later watch work: that phase consumes them
-//! directly and never parses the rendered report.
+//! the extension point for watch work: that phase consumes them directly
+//! and never parses the rendered report.
 
 use std::{collections::BTreeSet, path::Path, time::Duration};
 
@@ -17,7 +17,9 @@ use super::{
         is_auth_abort, CoordinatedRead, SharedBudget, SystemClock,
         SystemSleeper,
     },
-    scan, ThreadKey,
+    scan,
+    watch_state::WatchJournal,
+    ThreadKey,
 };
 use crate::native::{
     env as bob_env,
@@ -171,6 +173,7 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
 
     let never_save = NeverSavePolicy::from_config(&config);
     let mut filing_candidates = Vec::new();
+    let mut known_metadata = std::collections::BTreeMap::new();
     let mut fetch_deferred_keys: Vec<ThreadKey> = Vec::new();
     if !candidates.is_empty() {
         let labels = match discover::fetch_labels_once(&coordinator, &account) {
@@ -230,6 +233,11 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
             }
 
             let successes = fetched.successes;
+            known_metadata.extend(
+                successes
+                    .iter()
+                    .map(|(key, thread)| (key.clone(), thread.clone())),
+            );
             let mut prepared_at = 0usize;
             while prepared_at < successes.len() {
                 let (key, thread) = &successes[prepared_at];
@@ -300,6 +308,52 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
 
     let timezone = bob_env::configured_timezone().unwrap_or(chrono_tz::UTC);
     let saved_at = save::current_utc();
+    let additional: Vec<ThreadKey> = filing_candidates
+        .iter()
+        .filter_map(|candidate| {
+            ThreadKey::new(
+                &candidate.save.confirmed.identity.account,
+                &candidate.save.confirmed.identity.thread_id,
+            )
+        })
+        .chain(adoptions.iter().map(|intent| intent.key.clone()))
+        .collect();
+    let mut watches = Vec::new();
+    let mut watch_failures = Vec::new();
+    let mut watch_deferred = Vec::new();
+    match WatchJournal::load(&vault) {
+        Ok(watch_journal) => {
+            let batch = super::watch::prepare_watches(
+                &coordinator,
+                &vault,
+                &account,
+                &enrollment,
+                &watchers,
+                &additional,
+                &known_metadata,
+                &watch_journal,
+                &index,
+                config.body(),
+                &never_save,
+                timezone,
+            );
+            if let Some(error) = batch.aborted {
+                return Err(coordinator.auth_abort().unwrap_or(error));
+            }
+            warnings.extend(batch.warnings);
+            has_run_failure |=
+                !batch.failures.is_empty() || !batch.deferred.is_empty();
+            watches = batch.prepared;
+            watch_failures = batch.failures;
+            watch_deferred = batch.deferred;
+        }
+        Err(error) => {
+            warnings.push(format!(
+                "could not read the Gmail watch journal: {error}"
+            ));
+            has_run_failure = true;
+        }
+    }
     // Recovery runs even in watch-only mode, after the enrollment label
     // disappears, and with `-l 0`: a pending evidence file means a prior
     // scoped commit or its journal appends still need finishing. Dry-run
@@ -311,11 +365,12 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
     let mut outcome = if filing_candidates.is_empty()
         && adoptions.is_empty()
         && !needs_recovery
+        && watches.is_empty()
+        && watch_failures.is_empty()
+        && watch_deferred.is_empty()
     {
         FilingOutcome::default()
     } else {
-        // Watch preparation lands in the polling phase; the transaction
-        // already accepts it through these fields.
         file::apply(
             FilingInput {
                 vault: &vault,
@@ -331,9 +386,9 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
                 saved_at,
                 timezone,
                 budget: &budget,
-                watches: Vec::new(),
-                watch_failures: Vec::new(),
-                watch_deferred: Vec::new(),
+                watches,
+                watch_failures,
+                watch_deferred,
                 reply_wait_days: config.reply_wait_days(),
             },
             &sleeper,

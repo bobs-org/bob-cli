@@ -8,7 +8,9 @@ use std::{fs, path::Path, process::Command};
 use gmail_support::{
     json_stdout, run_gmail, stderr, stdout, FakeGog, GmailEnv, ACCOUNT, HOST,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
+
+const WATCH_THREAD: &str = "0123456789abcdef";
 
 fn assert_success(output: &std::process::Output, label: &str) {
     assert_eq!(
@@ -112,6 +114,89 @@ fn task_row_count(path: &Path) -> usize {
         .lines()
         .filter(|line| line.contains("#task") && line.contains("[[mail/"))
         .count()
+}
+
+fn first_mail_task_line(path: &Path) -> String {
+    fs::read_to_string(path)
+        .expect("read task note")
+        .lines()
+        .find(|line| line.contains("#task") && line.contains("[[mail/"))
+        .expect("mail task row")
+        .to_string()
+}
+
+fn watch_message(
+    id: &str,
+    internal_date: i64,
+    from: &str,
+    to: &str,
+    labels: &[&str],
+) -> Value {
+    json!({
+        "id": id,
+        "threadId": WATCH_THREAD,
+        "labelIds": labels,
+        "internalDate": internal_date.to_string(),
+        "snippet": "A metadata-only watch fixture.",
+        "payload": {
+            "mimeType": "text/plain",
+            "headers": [
+                {"name": "From", "value": from},
+                {"name": "To", "value": to},
+                {"name": "Subject", "value": "Re: Watch contract"},
+                {"name": "Message-ID", "value": format!("<{id}@example.test>")}
+            ],
+            "body": {"size": 5, "data": "SGVsbG8="}
+        }
+    })
+}
+
+fn set_watch_thread(fake: &FakeGog, messages: Vec<Value>) {
+    fake.set_thread(
+        json!({"thread": {"id": WATCH_THREAD, "historyId": "7", "messages": messages}}),
+        json!({}),
+    );
+}
+
+fn write_blocked_task_settings(env: &GmailEnv) {
+    let path = env
+        .vault()
+        .join(".obsidian/plugins/obsidian-tasks-plugin/data.json");
+    fs::create_dir_all(path.parent().unwrap())
+        .expect("create Tasks settings dir");
+    fs::write(
+        path,
+        serde_json::to_vec(&json!({
+            "globalFilter": "#task",
+            "taskFormat": "dataview",
+            "statusSettings": {
+                "coreStatuses": [
+                    {"symbol": " ", "name": "Ready", "type": "TODO"},
+                    {"symbol": "x", "name": "Done", "type": "DONE"}
+                ],
+                "customStatuses": [
+                    {"symbol": "*", "name": "Next", "nextStatusSymbol": "x", "availableAsCommand": true, "type": "ON_HOLD"},
+                    {"symbol": "/", "name": "In Progress", "nextStatusSymbol": "x", "availableAsCommand": true, "type": "IN_PROGRESS"},
+                    {"symbol": "?", "name": "Blocked", "nextStatusSymbol": " ", "availableAsCommand": true, "type": "ON_HOLD"},
+                    {"symbol": "-", "name": "Canceled", "nextStatusSymbol": " ", "availableAsCommand": true, "type": "CANCELLED"}
+                ]
+            }
+        }))
+        .expect("serialize Tasks settings"),
+    )
+    .expect("write Tasks settings");
+}
+
+fn run_local_at(
+    env: &GmailEnv,
+    args: &[&str],
+    now: &str,
+) -> std::process::Output {
+    env.command()
+        .args(args)
+        .env("BOB_NOW", now)
+        .output()
+        .expect("run local Bob command")
 }
 
 fn snapshot_tree(root: &Path, skip_git: bool) -> Vec<(String, Vec<u8>)> {
@@ -289,7 +374,10 @@ fn sync_creates_an_inbox_and_is_idempotent_by_thread_id() {
     assert_eq!(first_json["results"][0]["status"], "filed");
     assert_eq!(first_json["results"][0]["task_file"], "gmail_inbox.md");
     assert!(first_json["results"][0]["route"].is_null());
-    assert!(first_json["watch"].as_array().unwrap().is_empty());
+    assert_eq!(first_json["watch"].as_array().unwrap().len(), 1);
+    assert_eq!(first_json["watch"][0]["thread_id"], "0123456789abcdef");
+    assert_eq!(first_json["watch"][0]["action"], "lifted");
+    assert!(first_json["watch"][0]["tasks"].is_array());
     assert!(first_json["problems"].as_array().unwrap().is_empty());
     assert_eq!(first_json["summary"]["watching"], 1);
     assert_eq!(first_json["summary"]["awaiting"], 0);
@@ -310,6 +398,7 @@ fn sync_creates_an_inbox_and_is_idempotent_by_thread_id() {
     let second_json = json_stdout(&second);
     assert_eq!(second_json["pulled"], 0);
     assert_eq!(second_json["results"][0]["status"], "already_filed");
+    assert_eq!(second_json["watch"][0]["action"], "unchanged");
     assert_eq!(second_json["summary"]["watching"], 1);
     let inbox_after = fs::read_to_string(env.vault().join("gmail_inbox.md"))
         .expect("inbox remains readable");
@@ -325,6 +414,214 @@ fn sync_creates_an_inbox_and_is_idempotent_by_thread_id() {
     assert!(text.contains("gmail sync"), "{text}");
     assert!(text.contains("nothing new"), "{text}");
     assert!(!text.contains("filed"), "{text}");
+}
+
+#[test]
+fn sync_polls_send_reply_and_due_nudge_through_one_watch_lifecycle() {
+    let env = GmailEnv::new("bob-cli-gmail-watch-lifecycle");
+    env.write_config(&format!(
+        "timezone: America/New_York\ngmail:\n  account: {ACCOUNT}\n  writer: {HOST}\n  sync:\n    reply_wait_days: 1\n"
+    ));
+    write_blocked_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("gmail_pull_one");
+    let received = watch_message(
+        "00000000000000a0",
+        1_793_786_400_000,
+        "Dana <dana@example.test>",
+        ACCOUNT,
+        &["INBOX", "Label_1"],
+    );
+    set_watch_thread(&fake, vec![received.clone()]);
+
+    let filed = run_gmail(&env, &fake, &["sync", "-f", "json"]);
+    assert_success(&filed, "file the initial incoming thread");
+    assert_eq!(json_stdout(&filed)["pulled"], 1);
+    let inbox_path = env.vault().join("gmail_inbox.md");
+    let line = first_mail_task_line(&inbox_path);
+    assert!(!line.contains("[fresh::"));
+    fs::write(
+        &inbox_path,
+        fs::read_to_string(&inbox_path).unwrap().replacen(
+            " [created::",
+            " [fresh:: 2026-11-04] [created::",
+            1,
+        ),
+    )
+    .expect("seed reviewed freshness on the task");
+
+    let sent = watch_message(
+        "00000000000000a1",
+        1_793_872_800_000,
+        ACCOUNT,
+        "Dana <dana@example.test>",
+        &["SENT"],
+    );
+    set_watch_thread(&fake, vec![received.clone(), sent.clone()]);
+
+    // Watch-only dry-run projects the outgoing transition without changing
+    // either the vault or the host-local recovery state.
+    let before_dry_vault = snapshot_tree(env.vault(), true);
+    let before_dry_state = snapshot_tree(&env.root().join("state"), false);
+    let dry_hold =
+        run_gmail(&env, &fake, &["sync", "-d", "-l", "0", "-f", "json"]);
+    assert_success(&dry_hold, "dry-run the outgoing watch");
+    let dry_json = json_stdout(&dry_hold);
+    assert_eq!(dry_json["watch"][0]["action"], "held");
+    assert_eq!(dry_json["summary"]["awaiting"], 1);
+    assert_eq!(snapshot_tree(env.vault(), true), before_dry_vault);
+    assert_eq!(
+        snapshot_tree(&env.root().join("state"), false),
+        before_dry_state
+    );
+
+    let held = run_gmail(&env, &fake, &["sync", "-l", "0", "-f", "json"]);
+    assert_success(&held, "poll the outgoing message");
+    let held_json = json_stdout(&held);
+    assert_eq!(held_json["watch"][0]["action"], "held");
+    assert_eq!(held_json["watch"][0]["nudge_on"], "2026-11-06");
+    assert_eq!(held_json["watch"][0]["tasks"][0]["path"], "gmail_inbox.md");
+    assert!(held_json["watch"][0]["tasks"][0]["line"].as_u64().unwrap() > 0);
+    assert_eq!(held_json["summary"]["awaiting"], 1);
+    let held_line = first_mail_task_line(&inbox_path);
+    assert!(
+        held_line.starts_with("- [?] #task #awaiting_reply"),
+        "{held_line}"
+    );
+    assert!(
+        held_line.contains("[scheduled:: 2026-11-06]"),
+        "{held_line}"
+    );
+
+    let reply = watch_message(
+        "00000000000000a2",
+        1_793_876_400_000,
+        "Dana <dana@example.test>",
+        ACCOUNT,
+        &["INBOX"],
+    );
+    set_watch_thread(&fake, vec![received, sent.clone(), reply.clone()]);
+    let lifted = run_gmail(&env, &fake, &["sync", "-l", "0", "-f", "json"]);
+    assert_success(&lifted, "poll the incoming reply");
+    let lifted_json = json_stdout(&lifted);
+    assert_eq!(lifted_json["watch"][0]["action"], "lifted");
+    assert_eq!(lifted_json["summary"]["awaiting"], 0);
+    let lifted_line = first_mail_task_line(&inbox_path);
+    assert!(lifted_line.starts_with("- [ ] #task"), "{lifted_line}");
+    assert!(!lifted_line.contains("#awaiting_reply"), "{lifted_line}");
+    assert!(!lifted_line.contains("[scheduled::"), "{lifted_line}");
+    assert!(
+        lifted_line.contains("[unblocked:: 2026-11-05]"),
+        "{lifted_line}"
+    );
+
+    let freshness = run_local_at(
+        &env,
+        &["freshness", "list", "-f", "json"],
+        "2026-11-05 12:00",
+    );
+    assert_success(&freshness, "freshness after the reply");
+    let freshness_json = json_stdout(&freshness);
+    let unblocked = freshness_json["queue"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["path"] == "gmail_inbox.md")
+        .expect("resurfaced task in freshness queue");
+    assert_eq!(unblocked["tier"], "tickler");
+    assert_eq!(unblocked["returned_by"], "unblocked");
+
+    let reviewed_line = lifted_line
+        .replace("[fresh:: 2026-11-04]", "[fresh:: 2026-11-05]")
+        .replace("[unblocked:: 2026-11-05] ", "");
+    fs::write(
+        &inbox_path,
+        fs::read_to_string(&inbox_path)
+            .unwrap()
+            .replace(&lifted_line, &reviewed_line),
+    )
+    .expect("record review before the next send");
+    let next_send = watch_message(
+        "00000000000000a3",
+        1_793_880_000_000,
+        ACCOUNT,
+        "Dana <dana@example.test>",
+        &["SENT"],
+    );
+    set_watch_thread(
+        &fake,
+        vec![
+            watch_message(
+                "00000000000000a0",
+                1_793_786_400_000,
+                "Dana <dana@example.test>",
+                ACCOUNT,
+                &["INBOX", "Label_1"],
+            ),
+            sent,
+            reply,
+            next_send,
+        ],
+    );
+    let next_hold = run_gmail(&env, &fake, &["sync", "-l", "0", "-f", "json"]);
+    assert_success(&next_hold, "poll a later outgoing message");
+    assert_eq!(json_stdout(&next_hold)["watch"][0]["action"], "held");
+    assert!(first_mail_task_line(&inbox_path).contains("#awaiting_reply"));
+
+    let daily = env.vault().join("2026/20261106.md");
+    fs::create_dir_all(daily.parent().unwrap()).expect("create daily note dir");
+    fs::write(&daily, "# Friday 2026-11-06\n\n## Pomodoros\n")
+        .expect("write empty current daily ledger");
+
+    let reconciled = run_local_at(
+        &env,
+        &["task", "reconcile", "-f", "json"],
+        "2026-11-06 12:00",
+    );
+    assert_success(&reconciled, "reconcile the due nudge");
+    let due_line = first_mail_task_line(&inbox_path);
+    assert!(
+        due_line.starts_with("- [ ] #task #awaiting_reply"),
+        "{due_line}"
+    );
+    assert!(due_line.contains("[scheduled:: 2026-11-06]"), "{due_line}");
+    let due_freshness = run_local_at(
+        &env,
+        &["freshness", "list", "-f", "json"],
+        "2026-11-06 12:00",
+    );
+    assert_success(&due_freshness, "freshness after reconcile");
+    let due_json = json_stdout(&due_freshness);
+    let scheduled = due_json["queue"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["path"] == "gmail_inbox.md")
+        .expect("scheduled task in freshness queue");
+    assert_eq!(scheduled["tier"], "tickler");
+    assert_eq!(scheduled["scheduled"], "2026-11-06");
+
+    // A human edit to a held task survives a poll with no new Gmail message.
+    let manual_line = due_line
+        .replace("[scheduled:: 2026-11-06]", "[scheduled:: 2026-11-09]");
+    fs::write(
+        &inbox_path,
+        fs::read_to_string(&inbox_path)
+            .unwrap()
+            .replace(&due_line, &manual_line),
+    )
+    .expect("record manual schedule edit");
+    let unchanged = run_gmail(&env, &fake, &["sync", "-l", "0", "-f", "json"]);
+    assert_success(&unchanged, "poll after manual schedule edit");
+    assert_eq!(json_stdout(&unchanged)["watch"][0]["action"], "unchanged");
+    let unchanged_line = first_mail_task_line(&inbox_path);
+    assert!(
+        unchanged_line.contains("[scheduled:: 2026-11-09]"),
+        "{unchanged_line}"
+    );
+    assert!(
+        unchanged_line.contains("#awaiting_reply"),
+        "{unchanged_line}"
+    );
 }
 
 #[test]
@@ -651,14 +948,19 @@ fn sync_adopts_before_limit_and_skips_candidate_fetch_for_the_adoption() {
             .count(),
         1
     );
-    assert!(
-        !fake.calls().iter().any(|call| {
+    let calls = fake.calls();
+    let adopted_fetches: Vec<_> = calls
+        .iter()
+        .filter(|call| {
             call.windows(3)
                 .any(|args| args == ["gmail", "thread", "get"])
                 && call.iter().any(|arg| arg == "0123456789abcdef")
-        }),
-        "adopted thread was fetched as a candidate: {:?}",
-        fake.calls()
+        })
+        .collect();
+    assert_eq!(adopted_fetches.len(), 1, "{adopted_fetches:?}");
+    assert!(
+        !adopted_fetches[0].iter().any(|arg| arg == "--full"),
+        "watch polling should reuse metadata for adoption: {adopted_fetches:?}"
     );
 
     let replay =
@@ -708,11 +1010,17 @@ fn sync_adopts_without_search_presence_and_in_watch_only_mode() {
         if limit == "0" {
             assert!(!fake.called_with(&["gmail.users.threads.list"]));
         }
-        assert!(!fake.calls().iter().any(|call| {
-            call.windows(3)
-                .any(|args| args == ["gmail", "thread", "get"])
-                && call.iter().any(|arg| arg == "0123456789abcdef")
-        }));
+        let calls = fake.calls();
+        let adopted_fetches: Vec<_> = calls
+            .iter()
+            .filter(|call| {
+                call.windows(3)
+                    .any(|args| args == ["gmail", "thread", "get"])
+                    && call.iter().any(|arg| arg == "0123456789abcdef")
+            })
+            .collect();
+        assert_eq!(adopted_fetches.len(), 1, "{adopted_fetches:?}");
+        assert!(!adopted_fetches[0].iter().any(|arg| arg == "--full"));
     }
 }
 
@@ -793,11 +1101,17 @@ fn enrolled_tasks_close_delete_reopen_move_and_survive_label_removal() {
     let inbox = fs::read_to_string(&inbox_path).expect("filed inbox");
     fs::write(&inbox_path, inbox.replacen("- [ ] #task", "- [x] #task", 1))
         .expect("close task");
-    let closed = run_gmail(&env, &fake, &["sync", "-r", "0", "-f", "json"]);
+    fake.clear_calls();
+    let closed =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
     assert_success(&closed, "closed enrolled task");
     assert_eq!(json_stdout(&closed)["pulled"], 0);
     assert_eq!(json_stdout(&closed)["summary"]["watching"], 0);
     assert_eq!(task_row_count(&inbox_path), 1);
+    assert!(
+        !fake.called_with(&["gmail.users.threads.get"]),
+        "closed watchers must not fetch Gmail thread metadata"
+    );
 
     let inbox = fs::read_to_string(&inbox_path).expect("closed task note");
     fs::write(&inbox_path, inbox.replacen("- [x] #task", "- [ ] #task", 1))
@@ -851,18 +1165,62 @@ fn enrolled_tasks_close_delete_reopen_move_and_survive_label_removal() {
     write_area(&env, "job");
     let job_path = env.vault().join("job.md");
     let mut job = fs::read_to_string(&job_path).expect("job area");
-    job.push_str(&format!("{row}\n"));
+    let task_row = row.replace(&format!(" {link}"), "");
+    job.push_str(&format!("{task_row}\n\t- {link}\n"));
     fs::write(&job_path, job).expect("move task into area");
     fake.set_search_pages(serde_json::json!([{"resultSizeEstimate": 0}]));
-    let moved = run_gmail(&env, &fake, &["sync", "-r", "0", "-f", "json"]);
+    set_watch_thread(
+        &fake,
+        vec![
+            watch_message(
+                "00000000000000a0",
+                1_793_786_400_000,
+                "Dana <dana@example.test>",
+                ACCOUNT,
+                &["INBOX"],
+            ),
+            watch_message(
+                "00000000000000a1",
+                1_793_912_400_000,
+                ACCOUNT,
+                "Dana <dana@example.test>",
+                &["SENT"],
+            ),
+        ],
+    );
+    let moved =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
     assert_success(&moved, "moved enrolled task with removed label");
     assert_eq!(json_stdout(&moved)["summary"]["watching"], 1);
-    assert_eq!(task_row_count(&job_path), 1);
+    assert_eq!(json_stdout(&moved)["watch"][0]["action"], "held");
+    assert_eq!(
+        json_stdout(&moved)["watch"][0]["tasks"][0]["path"],
+        "job.md"
+    );
+    let moved_job = fs::read_to_string(&job_path).expect("moved task note");
+    let moved_parent = moved_job
+        .lines()
+        .find(|line| line.contains("#task"))
+        .expect("moved task parent");
+    let moved_line = moved_job
+        .lines()
+        .position(|line| line == moved_parent)
+        .unwrap()
+        + 1;
+    assert_eq!(
+        json_stdout(&moved)["watch"][0]["tasks"][0]["line"],
+        moved_line
+    );
+    assert!(moved_parent.contains("#awaiting_reply"), "{moved_parent}");
+    assert!(moved_job.contains(&format!("\t- {link}")), "{moved_job}");
     assert_eq!(task_row_count(&inbox_path), 0);
 
+    let moved_task_block = format!("{moved_parent}\n\t- {link}\n");
     fs::write(
         &job_path,
-        fs::read_to_string(&job_path).unwrap().replace(&row, ""),
+        fs::read_to_string(&job_path)
+            .unwrap()
+            .replace(&moved_task_block, ""),
     )
     .expect("delete enrolled task");
     let deleted = run_gmail(&env, &fake, &["sync", "-r", "0", "-f", "json"]);
@@ -1047,7 +1405,10 @@ fn sync_commits_only_owned_paths_and_noop_replay_keeps_head_and_journal() {
     assert_eq!(
         String::from_utf8(git(env.vault(), &["rev-parse", "HEAD"]).stdout)
             .unwrap(),
-        head
+        head,
+        "no-op watch poll created a commit: {:?}; output: {}",
+        git_subjects(env.vault()),
+        stdout(&second)
     );
     assert_eq!(journal_kinds(&env), journal);
 }

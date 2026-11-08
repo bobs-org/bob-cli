@@ -103,7 +103,6 @@ impl WatchScan {
     }
 
     /// Every watching task, sorted by path, then line.
-    #[allow(dead_code)] // bob-cli-ii.4 updates every open task linked to a watched thread.
     pub(crate) fn tasks(&self) -> &[WatchingTask] {
         &self.tasks
     }
@@ -127,7 +126,6 @@ impl WatchScan {
     }
 
     /// Whether any open task links the thread's mail note.
-    #[allow(dead_code)] // bob-cli-ii.4 skips remote reads for unwatched enrollments.
     pub(crate) fn is_watched(&self, key: &ThreadKey) -> bool {
         self.by_thread.contains_key(key)
     }
@@ -156,7 +154,7 @@ impl WatchScan {
 
 impl WatchingTask {
     /// Whether this task watches `key`.
-    #[allow(dead_code)] // bob-cli-ii.4 applies each new turn to linked tasks.
+    #[allow(dead_code)] // Useful to consumers that inspect projected membership.
     pub(crate) fn watches(&self, key: &ThreadKey) -> bool {
         self.targets.iter().any(|target| &target.key == key)
     }

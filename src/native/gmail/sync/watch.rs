@@ -22,8 +22,8 @@ use super::{
 use crate::native::{
     config::GmailBodyMode,
     gmail::{
-        body::importable_messages,
-        model::GmailThread,
+        body::{importable_messages, inert_single_line},
+        model::{GmailThread, HeaderKind},
         note::{self, index::MailIndex},
         policy::NeverSavePolicy,
         resolve::{GmailRead, ResolvedIdentity},
@@ -51,10 +51,12 @@ pub(crate) struct TurnMetadataUpdate {
 
 /// All remote preparation for one watched thread. `refresh` may contain
 /// email bodies in memory and deliberately has no Debug/serde surface.
-#[allow(dead_code)] // Consumed by bob-cli-ii.4.1.3's sync transaction.
 pub(crate) struct PreparedWatch {
     pub(crate) observation: ThreadObservation,
     pub(crate) note_path: Option<String>,
+    /// Sanitized mail metadata used only for human watch rows.
+    pub(crate) title: Option<String>,
+    pub(crate) who: Option<String>,
     pub(crate) refresh: Option<PreparedSave>,
     pub(crate) turn_update: Option<TurnMetadataUpdate>,
     /// True only on the first run that observed the missing/trashed thread.
@@ -73,7 +75,6 @@ pub(crate) struct WatchFailure {
 /// Isolated preparation results. An auth abort is present when the caller
 /// must discard every staged write; other failures leave independent
 /// successes available to the transaction.
-#[allow(dead_code)] // Consumed by bob-cli-ii.4.1.3's sync transaction.
 pub(crate) struct WatchBatch {
     pub(crate) prepared: Vec<PreparedWatch>,
     pub(crate) failures: Vec<WatchFailure>,
@@ -109,7 +110,6 @@ pub(crate) struct TaskPlan {
 /// Select currently watched enrollments, plus explicitly supplied rows filed
 /// or adopted in this run. Enrollments without an open linking task are never
 /// fetched, and removing a Gmail label does not remove an enrollment.
-#[allow(dead_code)] // Used by the watch input and transaction phases.
 pub(crate) fn watched_keys(
     account: &str,
     enrollment: &EnrollmentFold,
@@ -123,7 +123,9 @@ pub(crate) fn watched_keys(
         }
     }
     for key in additional {
-        if key.is_account(account) && scan.is_watched(key) {
+        // These are this run's prepared filing candidates. The transaction
+        // projects their new task rows before applying the watch effect.
+        if key.is_account(account) {
             keys.insert(key.clone());
         }
     }
@@ -134,7 +136,6 @@ pub(crate) fn watched_keys(
 /// `known_metadata` lets sync reuse discovery's successful metadata for newly
 /// filed candidates instead of fetching the thread again.
 #[allow(clippy::too_many_arguments)]
-#[allow(dead_code)] // Consumed by bob-cli-ii.4.1.3's sync transaction.
 pub(crate) fn prepare_watches<R: GmailRead>(
     reader: &R,
     vault: &Path,
@@ -186,7 +187,7 @@ pub(crate) fn prepare_watches<R: GmailRead>(
             }
             Err(error) if error.kind() == "not_found" => {
                 if !journal.was_reported_gone(key) {
-                    batch.prepared.push(gone_prepared(key));
+                    batch.prepared.push(gone_prepared(key, index));
                 }
                 continue;
             }
@@ -216,7 +217,7 @@ pub(crate) fn prepare_watches<R: GmailRead>(
         }
         if is_trashed(&thread) {
             if !journal.was_reported_gone(key) {
-                batch.prepared.push(gone_prepared(key));
+                batch.prepared.push(gone_prepared(key, index));
             }
             continue;
         }
@@ -240,6 +241,9 @@ pub(crate) fn prepare_watches<R: GmailRead>(
                 folded: folded.clone(),
             },
             note_path: None,
+            title: display_metadata(&thread, key.account())
+                .map(|value| value.0),
+            who: display_metadata(&thread, key.account()).map(|value| value.1),
             refresh: None,
             turn_update: None,
             report_gone: false,
@@ -251,6 +255,8 @@ pub(crate) fn prepare_watches<R: GmailRead>(
             continue;
         };
         prepared.note_path = Some(entry.path.clone());
+        prepared.title = Some(entry.title.clone());
+        prepared.who = Some(entry.who.clone());
         let source_path = vault.join(&entry.path);
         let existing = match fs::read_to_string(&source_path) {
             Ok(contents) => contents,
@@ -356,8 +362,8 @@ pub(crate) fn prepare_watches<R: GmailRead>(
     batch
 }
 
-#[allow(dead_code)] // Called by prepare_watches in this phase's API.
-fn gone_prepared(key: &ThreadKey) -> PreparedWatch {
+fn gone_prepared(key: &ThreadKey, index: &MailIndex) -> PreparedWatch {
+    let entry = index.by_identity.get(&key.index_key());
     PreparedWatch {
         observation: ThreadObservation {
             key: key.clone(),
@@ -370,7 +376,9 @@ fn gone_prepared(key: &ThreadKey) -> PreparedWatch {
                 last_send_at: None,
             },
         },
-        note_path: None,
+        note_path: entry.map(|entry| entry.path.clone()),
+        title: entry.map(|entry| entry.title.clone()),
+        who: entry.map(|entry| entry.who.clone()),
         refresh: None,
         turn_update: None,
         report_gone: true,
@@ -378,7 +386,6 @@ fn gone_prepared(key: &ThreadKey) -> PreparedWatch {
     }
 }
 
-#[allow(dead_code)] // Called by prepare_watches in this phase's API.
 fn is_trashed(thread: &GmailThread) -> bool {
     !thread.messages.is_empty()
         && thread.messages.iter().all(|message| {
@@ -389,10 +396,28 @@ fn is_trashed(thread: &GmailThread) -> bool {
         })
 }
 
+fn display_metadata(
+    thread: &GmailThread,
+    account: &str,
+) -> Option<(String, String)> {
+    let first = importable_messages(thread).next()?;
+    let subject = crate::native::gmail::note::subject_without_prefixes(
+        first.first_header(HeaderKind::Subject).unwrap_or_default(),
+    );
+    let title = if subject.is_empty() {
+        "(no subject)".to_string()
+    } else {
+        subject
+    };
+    Some((
+        inert_single_line(&title),
+        inert_single_line(&note::thread_who(first, account)),
+    ))
+}
+
 /// Aggregate one effect per task, independent of thread iteration order.
 /// Incoming moves and bounces win over outgoing moves; an outgoing move only
 /// holds the task when every watched sibling is known to be awaiting a reply.
-#[allow(dead_code)] // Consumed by bob-cli-ii.4.1.3's sync transaction.
 pub(crate) fn plan_tasks(
     scan: &WatchScan,
     prepared: &[PreparedWatch],
@@ -1058,6 +1083,41 @@ mod tests {
             key.clone(),
             Err(GmailError::runtime("not_found", "gone".into())),
         )]);
+        let first = prepare_test(
+            &reader,
+            dir.path(),
+            std::slice::from_ref(&key),
+            &MailIndex::default(),
+            &WatchJournal::load(dir.path()).unwrap(),
+            &NeverSavePolicy::default(),
+            &BTreeMap::new(),
+        );
+        assert!(first.prepared[0].report_gone);
+        WatchJournal::append_gone(dir.path(), "testhost", &key).unwrap();
+        let second = prepare_test(
+            &reader,
+            dir.path(),
+            std::slice::from_ref(&key),
+            &MailIndex::default(),
+            &WatchJournal::load(dir.path()).unwrap(),
+            &NeverSavePolicy::default(),
+            &BTreeMap::new(),
+        );
+        assert!(second.prepared.is_empty());
+    }
+
+    #[test]
+    fn trashed_thread_is_reported_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = key("aa01");
+        let mut thread = synthetic_thread(
+            "aa01",
+            &[("aa01", "1000", "Dana <dana@example.com>")],
+        );
+        for message in &mut thread.messages {
+            message.label_ids = vec!["TRASH".to_string()];
+        }
+        let reader = Reader::new([(key.clone(), Ok(thread))]);
         let first = prepare_test(
             &reader,
             dir.path(),
