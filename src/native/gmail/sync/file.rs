@@ -9,8 +9,9 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
+    fs, io,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
 
@@ -30,7 +31,6 @@ use crate::native::{
     capture::{self, StagedTextFile},
     env as bob_env,
     gmail::{
-        journal as gmail_journal,
         note::index::MailIndex,
         resolve,
         route::{RouteContext, RouteProblem, RouteVerdict},
@@ -49,10 +49,25 @@ use crate::native::{
 /// new enrollment, without requiring the failed transaction's SHA, a push,
 /// or the enrollment label. Unrelated staged dirt, custom hubs, and the
 /// vault AGENTS warning are never blanket commit targets.
+///
+/// The evidence lives in host-local state beside the guard
+/// (`$XDG_STATE_HOME/bob/gmail/sync-recovery-<digest>.json`), never in the
+/// vault: it describes this host's uncommitted working tree.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 struct RecoveryData {
     threads: Vec<RecoveryThread>,
-    commit_paths: Vec<String>,
+    commit_paths: Vec<StoredCommitPath>,
+}
+
+/// One owned path as sync wrote it, with the SHA-256 of its bytes. Replay
+/// commits the path only while its bytes still match; a path whose bytes
+/// changed (a hub customized after the failure, a user's later edit) is
+/// left out of the commit with a body-free warning, dropped from the
+/// evidence, and still finishes its thread's events.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct StoredCommitPath {
+    path: String,
+    sha256: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -72,38 +87,127 @@ struct RecoveryThread {
     problem_message: Option<String>,
     problem_hint: Option<String>,
     first_seen: bool,
+    /// The `gmail.save` event still needs appending. Filed threads only:
+    /// adoptions never produce save receipts.
+    #[serde(default)]
+    pending_save: bool,
+    /// Attachment-origin events still needing an append.
+    #[serde(default)]
+    pending_origins: Vec<(String, String, String)>,
+    /// The enrollment event (`gmail.filed` or `gmail.adopted`) still needs
+    /// appending, after the save and origin stages are done.
+    #[serde(default)]
+    pending_enrollment: bool,
 }
 
-pub(crate) fn has_pending_recovery(vault: &Path) -> bool {
-    let path = recovery_path(vault);
-    fs::read(&path).is_ok_and(|bytes| !bytes.is_empty())
+/// Whether this host has unreplayed sync-recovery evidence. A read-only
+/// peek for dispatch: the authoritative load happens under the guard and
+/// the vault lock inside [`apply`].
+pub(crate) fn has_pending_recovery(vault: &Path, account: &str) -> bool {
+    fs::read(recovery_path(vault, account)).is_ok_and(|bytes| !bytes.is_empty())
 }
 
-fn recovery_path(vault: &Path) -> PathBuf {
-    vault
-        .join(gmail_journal::NAMESPACE.dir)
-        .join("sync-recovery.json")
+/// The host-local evidence path for `account` and `vault`.
+///
+/// The digest is SHA-256 over the normalized account plus the canonical
+/// vault path, in the same style as the guard path, so different accounts
+/// and different vault checkouts never share evidence.
+fn recovery_path(vault: &Path, account: &str) -> PathBuf {
+    let normalized = account.trim().to_ascii_lowercase();
+    let canonical =
+        fs::canonicalize(vault).unwrap_or_else(|_| vault.to_path_buf());
+    let mut keyed = normalized.into_bytes();
+    keyed.push(0);
+    keyed.extend_from_slice(canonical.to_string_lossy().as_bytes());
+    let digest = save::sha256(&keyed);
+    bob_env::state_home().join(format!("bob/gmail/sync-recovery-{digest}.json"))
 }
 
-fn load_recovery(vault: &Path) -> RecoveryData {
-    let path = recovery_path(vault);
-    let bytes = fs::read(&path).unwrap_or_default();
+/// Load the evidence. A missing file is empty evidence; an unreadable or
+/// corrupt file, or any other load failure, is a body-free error the caller
+/// turns into a warning plus failure state — never a silent ignore.
+fn load_recovery(vault: &Path, account: &str) -> Result<RecoveryData, String> {
+    let path = recovery_path(vault, account);
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(RecoveryData::default())
+        }
+        Err(error) => {
+            return Err(format!("could not read {}: {error}", path.display()))
+        }
+    };
     if bytes.is_empty() {
-        return RecoveryData::default();
+        return Ok(RecoveryData::default());
     }
-    serde_json::from_slice(&bytes).unwrap_or_default()
+    serde_json::from_slice(&bytes)
+        .map_err(|error| format!("could not parse {}: {error}", path.display()))
 }
 
-fn write_recovery(vault: &Path, data: &RecoveryData) {
-    let dir = vault.join(gmail_journal::NAMESPACE.dir);
-    let _ = fs::create_dir_all(&dir);
-    if let Ok(bytes) = serde_json::to_vec(data) {
-        let _ = fs::write(recovery_path(vault), bytes);
+static RECOVERY_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Write the evidence atomically (temp file plus rename in the same
+/// directory). Callers turn a failure into a body-free warning plus
+/// failure state.
+fn write_recovery(
+    vault: &Path,
+    account: &str,
+    data: &RecoveryData,
+) -> io::Result<()> {
+    let path = recovery_path(vault, account);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let bytes = serde_json::to_vec(data)
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let temp = parent.join(format!(
+        ".sync-recovery-{}-{}.tmp",
+        std::process::id(),
+        RECOVERY_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    if let Err(error) = fs::write(&temp, &bytes).and_then(|()| {
+        fs::rename(&temp, &path).inspect_err(|_| {
+            let _ = fs::remove_file(&temp);
+        })
+    }) {
+        let _ = fs::remove_file(&temp);
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Delete the evidence file. A missing file is fine; any other failure is
+/// returned so the caller can warn instead of silently ignoring it.
+fn clear_recovery(vault: &Path, account: &str) -> io::Result<()> {
+    match fs::remove_file(recovery_path(vault, account)) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
     }
 }
 
-fn clear_recovery(vault: &Path) {
-    let _ = fs::remove_file(recovery_path(vault));
+/// Persist the evidence, or delete the file when nothing remains pending.
+/// Every error becomes a body-free warning plus failure state on the
+/// outcome — never a silent ignore.
+fn persist_recovery(
+    outcome: &mut FilingOutcome,
+    vault: &Path,
+    account: &str,
+    data: &RecoveryData,
+) {
+    let empty = data.threads.is_empty() && data.commit_paths.is_empty();
+    let result = if empty {
+        clear_recovery(vault, account)
+    } else {
+        write_recovery(vault, account, data)
+    };
+    if let Err(error) = result {
+        outcome.failed = true;
+        outcome.warnings.push(format!(
+            "could not persist Gmail sync recovery evidence: {error}"
+        ));
+    }
 }
 
 /// A fully prepared thread and the route resolved from its fetched labels.
@@ -117,6 +221,9 @@ pub(crate) struct FilingCandidate {
 /// rereads these snapshots under the vault lock; dry-run consumes them as-is.
 pub(crate) struct FilingInput<'a> {
     pub(crate) vault: &'a Path,
+    /// Gmail account being synced. Keys the host-local recovery evidence
+    /// beside the per-account guard.
+    pub(crate) account: &'a str,
     pub(crate) mail_folder: &'a Path,
     pub(crate) link_template: &'a str,
     pub(crate) inbox: &'a str,
@@ -234,7 +341,21 @@ pub(crate) fn apply<S: Sleeper, C: Clock>(
             input.mail_folder,
             input.link_template,
         )?;
-        let plan = build_attempt(
+        // Dry-run reads the evidence to project recovery rows but never
+        // writes or deletes it. A load failure still fails the run.
+        let mut outcome = FilingOutcome::default();
+        let recovery = match load_recovery(input.vault, input.account) {
+            Ok(recovery) => recovery,
+            Err(message) => {
+                outcome.failed = true;
+                outcome.warnings.push(format!(
+                    "Gmail sync recovery evidence is unusable: {message}"
+                ));
+                RecoveryData::default()
+            }
+        };
+        let in_flight = in_flight_keys(&recovery);
+        let mut plan = build_attempt(
             input.vault,
             input.mail_folder,
             input.link_template,
@@ -248,7 +369,33 @@ pub(crate) fn apply<S: Sleeper, C: Clock>(
             false,
             input.saved_at,
             input.timezone,
+            &in_flight,
         )?;
+        let mut invalid = 0usize;
+        for thread in &recovery.threads {
+            let Some(key) = ThreadKey::new(&thread.account, &thread.thread_id)
+            else {
+                invalid += 1;
+                continue;
+            };
+            if plan.outcome.results.iter().any(|result| result.key == key) {
+                continue;
+            }
+            plan.outcome
+                .results
+                .push(recovery_row(thread, &key, &index, true));
+        }
+        if invalid > 0 {
+            plan.outcome.failed = true;
+            plan.outcome.warnings.push(format!(
+                "skipped {invalid} stored Gmail sync recovery thread(s) with an invalid identity"
+            ));
+        }
+        plan.outcome.failed |= outcome.failed;
+        plan.outcome.warnings.extend(outcome.warnings);
+        plan.outcome
+            .results
+            .sort_by(|left, right| left.key.cmp(&right.key));
         return Ok(plan.outcome);
     }
 
@@ -258,6 +405,23 @@ pub(crate) fn apply<S: Sleeper, C: Clock>(
             ..FilingOutcome::default()
         });
     };
+
+    // The authoritative evidence load happens here, under the guard and the
+    // vault lock. A load failure fails the run but still files the current
+    // work; replay simply has nothing to finish this time.
+    let mut pre_failed = false;
+    let mut pre_warnings = Vec::new();
+    let recovery = match load_recovery(input.vault, input.account) {
+        Ok(recovery) => recovery,
+        Err(message) => {
+            pre_failed = true;
+            pre_warnings.push(format!(
+                "Gmail sync recovery evidence is unusable: {message}"
+            ));
+            RecoveryData::default()
+        }
+    };
+    let in_flight = in_flight_keys(&recovery);
 
     let mut candidates = input.candidates;
     for attempt in 0..2 {
@@ -297,9 +461,22 @@ pub(crate) fn apply<S: Sleeper, C: Clock>(
             is_worktree,
             input.saved_at,
             input.timezone,
+            &in_flight,
         )?;
-        match persist_attempt(input.vault, &child_env, is_worktree, plan) {
-            Ok(outcome) => return Ok(outcome),
+        match persist_attempt(
+            input.vault,
+            input.account,
+            &child_env,
+            is_worktree,
+            plan,
+            &index,
+            &recovery,
+        ) {
+            Ok(mut outcome) => {
+                outcome.failed |= pre_failed;
+                outcome.warnings.extend(pre_warnings);
+                return Ok(outcome);
+            }
             Err((error, plan))
                 if error.kind() == "note_changed" && attempt == 0 =>
             {
@@ -321,9 +498,18 @@ pub(crate) fn apply<S: Sleeper, C: Clock>(
                     "vault files changed again during filing; remaining threads were deferred".to_string(),
                 );
                 let _ = error;
+                outcome.failed |= pre_failed;
+                outcome.warnings.extend(pre_warnings);
                 return Ok(outcome);
             }
-            Err((error, _)) => return Err(error),
+            Err((error, _)) => {
+                if pre_warnings.is_empty() {
+                    return Err(error);
+                }
+                // The run fails either way; keep the evidence-load warning
+                // visible since an Err return carries no report warnings.
+                return Err(error.with_hint(&pre_warnings.join(" ")));
+            }
         }
     }
 
@@ -344,8 +530,10 @@ fn build_attempt(
     is_worktree: bool,
     saved_at: DateTime<Utc>,
     timezone: chrono_tz::Tz,
+    in_flight: &BTreeSet<ThreadKey>,
 ) -> Result<AttemptPlan, GmailError> {
-    let membership = Membership::new(enrollment, watchers);
+    let membership =
+        Membership::new(enrollment, watchers).with_in_flight(in_flight);
     let route_context = RouteContext::load(vault);
     let initial_adoption_keys: BTreeSet<_> = initial_adoptions
         .iter()
@@ -382,6 +570,9 @@ fn build_attempt(
                     .results
                     .push(already_enrolled(&key, origin, enrollment, index));
             }
+            // A thread with pending evidence is an in-flight filing. It is
+            // never filed again; the replay appends its recorded event.
+            CandidateDecision::InFlight => continue,
             CandidateDecision::Adopt(intent) => {
                 record_adoption(
                     vault,
@@ -428,6 +619,9 @@ fn build_attempt(
             CandidateDecision::Enrolled(origin) => outcome
                 .results
                 .push(already_enrolled(&intent.key, origin, enrollment, index)),
+            // In-flight adoptions are owned by the replay, which appends
+            // their recorded enrollment event.
+            CandidateDecision::InFlight => continue,
             CandidateDecision::Adopt(current) => record_adoption(
                 vault,
                 &current,
@@ -596,21 +790,24 @@ fn build_attempt(
         }
     }
 
-    // Always plan auxiliary hubs so a prior failed commit's canonical
-    // `mail.md`/`mail.base` recovery is included even when no note plan
-    // changed (adoption-only replay). `plan_auxiliary_files` only stages
-    // upgrades when a note is written and only commits canonical hubs that
-    // remain dirty, so custom hubs, unrelated dirt, and the vault AGENTS
-    // warning stay outside the scoped commit.
-    let auxiliary = {
+    // Plan auxiliary hubs only when this run writes at least one mail
+    // note. Adoption-only, failure-only, and recovery-only runs must not
+    // create hubs or append the AGENTS warning; a replay's stored hub paths
+    // rejoin the scoped commit through the recovery evidence instead.
+    let auxiliary = if plans.iter().any(|plan| plan.changed) {
         let child_env = ob::child_env();
         save::plan_auxiliary_files(
             vault,
             mail_folder,
             is_worktree,
             &child_env,
-            plans.iter().any(|plan| plan.changed),
+            true,
         )?
+    } else {
+        save::AuxiliaryFiles {
+            staged: Vec::new(),
+            commit_paths: Vec::new(),
+        }
     };
     staged.extend(auxiliary.staged.iter().map(save::clone_staged));
     save::validate_write_targets(vault, &plans, &works, &staged)?;
@@ -641,9 +838,12 @@ fn build_attempt(
 
 fn persist_attempt(
     vault: &Path,
+    account: &str,
     child_env: &ob::ChildEnv,
     is_worktree: bool,
     mut plan: AttemptPlan,
+    index: &MailIndex,
+    recovery: &RecoveryData,
 ) -> Result<FilingOutcome, (GmailError, AttemptPlan)> {
     let facts = match save::save_event_facts(
         vault,
@@ -680,58 +880,29 @@ fn persist_attempt(
     commit_paths.dedup();
 
     // Finish a prior failed transaction's scoped commit before new
-    // enrollment is recorded. Only owned, still-dirty recovery paths join
-    // this commit; unrelated dirt, custom hubs, and the AGENTS warning stay
-    // out. Rechecked under the lock so edits after the failed attempt are
-    // never overwritten.
-    let recovery = load_recovery(vault);
-    let mut recovery_commit_paths: Vec<PathBuf> = Vec::new();
-    for rel in &recovery.commit_paths {
-        let Ok(relative) = save::safe_relative_path(rel) else {
-            continue;
-        };
-        if save::validate_target_path(vault, &relative).is_err() {
-            continue;
-        }
-        if relative.as_path() == Path::new("AGENTS.md") {
-            continue;
-        }
-        if !is_worktree {
-            continue;
-        }
-        let dirty = save::git_path_is_dirty(vault, child_env, &relative)
-            .unwrap_or(false);
-        if dirty && !commit_paths.contains(&relative) {
-            recovery_commit_paths.push(relative);
-        }
-    }
-    // Owned images from the failed transaction may no longer be in the
-    // current works (adoption-only replay): re-include them when they are
-    // still dirty and referenced by a recovery note.
-    for thread in &recovery.threads {
-        for (saved, _, _) in &thread.origins {
-            let Ok(relative) = save::safe_relative_path(saved) else {
-                continue;
-            };
-            if commit_paths.contains(&relative)
-                || recovery_commit_paths.contains(&relative)
-            {
-                continue;
-            }
-            if save::validate_target_path(vault, &relative).is_err() {
-                continue;
-            }
-            if is_worktree
-                && save::git_path_is_dirty(vault, child_env, &relative)
-                    .unwrap_or(false)
-            {
-                recovery_commit_paths.push(relative);
-            }
-        }
-    }
-    commit_paths.extend(recovery_commit_paths.iter().cloned());
+    // enrollment is recorded. Stored recovery paths rejoin only while
+    // their bytes still match what sync wrote; a path the user edited
+    // after the failure is left out with a warning and dropped from the
+    // evidence, while unrelated dirt, custom hubs, and the vault AGENTS
+    // warning stay out. Rechecked under the lock so edits after the
+    // failed attempt are never overwritten.
+    commit_paths.extend(replay_commit_paths(
+        &mut plan.outcome,
+        vault,
+        child_env,
+        is_worktree,
+        &recovery.commit_paths,
+        &commit_paths,
+    ));
     commit_paths.sort();
     commit_paths.dedup();
+    // SHA-256 of each owned path's bytes as sync wrote them, so a later
+    // replay commits a path only while it still matches.
+    let commit_hashes = if is_worktree {
+        snapshot_commit_paths(vault, &commit_paths)
+    } else {
+        Vec::new()
+    };
 
     if is_worktree && !commit_paths.is_empty() {
         let count = plan.enrollment_events.len() + recovery.threads.len();
@@ -743,6 +914,8 @@ fn persist_attempt(
         ) {
             // Retain body-free ownership evidence so replay can finish the
             // scoped commit and its deferred events before enrollment.
+            // Filed threads keep every stage pending; adopted threads keep
+            // only enrollment (adoptions never produce save receipts).
             let mut threads: Vec<RecoveryThread> = recovery.threads.clone();
             for result in &plan.outcome.results {
                 if !matches!(result.status, "filed" | "adopted") {
@@ -754,61 +927,9 @@ fn persist_attempt(
                 }) {
                     continue;
                 }
-                let key = (
-                    result.key.account().to_string(),
-                    result.key.thread_id().to_string(),
-                );
-                let event_facts = facts.get(&key);
-                let (created, added, origins) = event_facts
-                    .map(|event_facts| {
-                        (
-                            event_facts.created,
-                            event_facts.added_count,
-                            event_facts.origins.clone(),
-                        )
-                    })
-                    .unwrap_or_default();
-                threads.push(RecoveryThread {
-                    account: result.key.account().to_string(),
-                    thread_id: result.key.thread_id().to_string(),
-                    note: result.note.clone().unwrap_or_default(),
-                    task_file: result.task_file.clone().unwrap_or_default(),
-                    via: result
-                        .via
-                        .map(|via| via.as_str().to_string())
-                        .unwrap_or_else(|| {
-                            if result.status == "adopted" {
-                                "adopted".to_string()
-                            } else {
-                                "inbox".to_string()
-                            }
-                        }),
-                    route: result.route.clone(),
-                    created,
-                    added,
-                    origins,
-                    adopted: result.status == "adopted",
-                    problem_label: result
-                        .problem
-                        .as_ref()
-                        .map(|problem| problem.label.clone()),
-                    problem_kind: result
-                        .problem
-                        .as_ref()
-                        .map(|problem| problem.kind.as_str().to_string()),
-                    problem_message: result
-                        .problem
-                        .as_ref()
-                        .map(|problem| problem.message.clone()),
-                    problem_hint: result
-                        .problem
-                        .as_ref()
-                        .map(|problem| problem.hint.clone()),
-                    first_seen: result.first_seen,
-                });
+                threads.push(new_filed_evidence(result, &facts));
             }
-            // Adopted threads with no filed plans still need their
-            // enrollment evidence retained.
+            // Enrollment events without a result row still need retention.
             for event in &plan.enrollment_events {
                 let key = event.key();
                 if threads.iter().any(|thread| {
@@ -817,77 +938,16 @@ fn persist_attempt(
                 }) {
                     continue;
                 }
-                match event {
-                    enroll::EnrollmentEvent::Adopted {
-                        key,
-                        note,
-                        task_file,
-                    } => threads.push(RecoveryThread {
-                        account: key.account().to_string(),
-                        thread_id: key.thread_id().to_string(),
-                        note: note.clone(),
-                        task_file: task_file.clone(),
-                        via: "adopted".to_string(),
-                        route: None,
-                        created: false,
-                        added: 0,
-                        origins: Vec::new(),
-                        adopted: true,
-                        problem_label: None,
-                        problem_kind: None,
-                        problem_message: None,
-                        problem_hint: None,
-                        first_seen: false,
-                    }),
-                    enroll::EnrollmentEvent::Filed {
-                        key,
-                        note,
-                        task_file,
-                        via,
-                        route,
-                    } => {
-                        let event_facts = facts.get(&(
-                            key.account().to_string(),
-                            key.thread_id().to_string(),
-                        ));
-                        let (created, added, origins) = event_facts
-                            .map(|event_facts| {
-                                (
-                                    event_facts.created,
-                                    event_facts.added_count,
-                                    event_facts.origins.clone(),
-                                )
-                            })
-                            .unwrap_or_default();
-                        threads.push(RecoveryThread {
-                            account: key.account().to_string(),
-                            thread_id: key.thread_id().to_string(),
-                            note: note.clone(),
-                            task_file: task_file.clone(),
-                            via: via.as_str().to_string(),
-                            route: route.clone(),
-                            created,
-                            added,
-                            origins,
-                            adopted: false,
-                            problem_label: None,
-                            problem_kind: None,
-                            problem_message: None,
-                            problem_hint: None,
-                            first_seen: false,
-                        });
-                    }
-                }
+                threads.push(new_event_evidence(event, &facts));
             }
-            let commit_strings: Vec<String> = commit_paths
-                .iter()
-                .map(|path| save::path_to_slashes(path))
-                .collect();
-            write_recovery(
+            // Best effort: the run already fails with the uncommitted
+            // error below, which carries the replay hint.
+            let _ = write_recovery(
                 vault,
+                account,
                 &RecoveryData {
                     threads,
-                    commit_paths: commit_strings,
+                    commit_paths: commit_hashes,
                 },
             );
             return Err((
@@ -902,7 +962,39 @@ fn persist_attempt(
     }
 
     let host = vault_sync::hostname_slug();
-    let journaled_notes: Vec<_> = plan
+    // Enrollment last, after the vault writes it describes are durable.
+    // With in-flight skips above, current keys and recovery keys are
+    // disjoint; keep the defensive guard so a current Adopted event for a
+    // recovery key is still superseded by the recorded filing.
+    let recovery_keys: BTreeSet<(String, String)> = recovery
+        .threads
+        .iter()
+        .map(|thread| (thread.account.clone(), thread.thread_id.clone()))
+        .collect();
+    let mut current_events = std::mem::take(&mut plan.enrollment_events);
+    current_events.retain(|event| {
+        let key = event.key();
+        let pair = (key.account().to_string(), key.thread_id().to_string());
+        !recovery_keys.contains(&pair)
+    });
+
+    // One thread's journal work: this run's filings plus the recovery
+    // replay. Each thread's stages complete in order — `gmail.save`, then
+    // each attachment-origin event, then enrollment — and a thread's
+    // enrollment is appended only after its save and origin stages are
+    // done. After each successful append the stage is dropped from the
+    // evidence and persisted immediately, so a retry never re-appends
+    // anything that already succeeded.
+    struct JournalWork {
+        key: ThreadKey,
+        thread: RecoveryThread,
+        staged: Option<StagedSaveNote>,
+        save_facts: SaveEventFacts,
+        enrollment: enroll::EnrollmentEvent,
+        from_recovery: bool,
+    }
+    let mut works: Vec<JournalWork> = Vec::new();
+    let journaled_notes: Vec<&StagedSaveNote> = plan
         .plans
         .iter()
         .filter(|note| {
@@ -912,53 +1004,114 @@ fn persist_attempt(
                 })
         })
         .collect();
-    let mut origins = Vec::new();
-    let mut failed_save_threads: Vec<(String, String)> = Vec::new();
-    for note in &journaled_notes {
-        let key = (note.account.clone(), note.thread_id.clone());
-        let Some(event_facts) = facts.get(&key) else {
+    // Current-run filings: every stage is pending. A save or origin
+    // failure keeps the stages in the evidence and blocks that thread's
+    // enrollment until a replay succeeds.
+    for note in journaled_notes {
+        let Some(key) = ThreadKey::new(&note.account, &note.thread_id) else {
+            plan.outcome.failed = true;
+            plan.outcome.warnings.push(
+                "skipped a filed Gmail thread with an invalid identity"
+                    .to_string(),
+            );
             continue;
         };
-        if let Err(error) =
-            save::append_save_event(vault, &host, note, event_facts)
-        {
-            plan.outcome.failed = true;
-            plan.outcome
-                .warnings
-                .push(format!("could not append Gmail save journal: {error}"));
-            failed_save_threads
-                .push((note.account.clone(), note.thread_id.clone()));
-        }
-        origins.extend(event_facts.origins.iter().cloned());
+        let Some(event_facts) = facts.get(&key.index_key()) else {
+            continue;
+        };
+        let Some(enrollment) = current_events
+            .iter()
+            .find(|event| event.key() == &key)
+            .cloned()
+        else {
+            continue;
+        };
+        let Some(result) =
+            plan.outcome.results.iter().find(|result| result.key == key)
+        else {
+            continue;
+        };
+        // The stored thread mirrors the result row, with every stage
+        // pending: a save or origin failure keeps the stages in the
+        // evidence and blocks that thread's enrollment until a replay
+        // succeeds.
+        works.push(JournalWork {
+            key,
+            thread: new_filed_evidence(result, &facts),
+            staged: Some(note.clone()),
+            save_facts: event_facts.clone(),
+            enrollment,
+            from_recovery: false,
+        });
     }
-    // Recovery save events for previously filed threads whose journal
-    // append never ran (commit failed before any appends).
-    let mut recovery_origins: Vec<(String, String, String)> = Vec::new();
-    let mut recovery_save_ok = true;
-    let recovery_keys: std::collections::BTreeSet<(String, String)> = recovery
-        .threads
-        .iter()
-        .map(|thread| (thread.account.clone(), thread.thread_id.clone()))
-        .collect();
-    let current_keys: std::collections::BTreeSet<(String, String)> = plan
-        .plans
-        .iter()
-        .map(|note| (note.account.clone(), note.thread_id.clone()))
-        .collect();
+    // Current-run adoptions carry no save or origin stages: adoptions never
+    // produce `gmail.save` receipts.
+    for event in &current_events {
+        let key = event.key().clone();
+        if works.iter().any(|work| work.key == key) {
+            continue;
+        }
+        if !matches!(event, enroll::EnrollmentEvent::Adopted { .. }) {
+            continue;
+        }
+        works.push(JournalWork {
+            key,
+            thread: new_event_evidence(event, &facts),
+            staged: None,
+            save_facts: SaveEventFacts {
+                created: false,
+                added_count: 0,
+                origins: Vec::new(),
+            },
+            enrollment: event.clone(),
+            from_recovery: false,
+        });
+    }
+    // Recovery replay: only the stages still pending in the evidence run.
     for thread in &recovery.threads {
-        let key = (thread.account.clone(), thread.thread_id.clone());
-        if current_keys.contains(&key) {
+        let Some(key) = ThreadKey::new(&thread.account, &thread.thread_id)
+        else {
+            plan.outcome.failed = true;
+            plan.outcome.warnings.push(
+                "skipped stored Gmail sync recovery evidence with an invalid identity"
+                    .to_string(),
+            );
+            continue;
+        };
+        if works.iter().any(|work| work.key == key) {
             continue;
         }
-        // Skip recovery enrollment that the current run already covers
-        // as an adoption of the same thread: the recovery Filed event
-        // (with via/route) wins, so the current Adopted event is dropped
-        // below.
-        let note_path = PathBuf::from(&thread.note);
-        let absolute = vault.join(&note_path);
-        if fs::symlink_metadata(&absolute).is_err() {
+        let Some(enrollment) = recovery_enrollment_event(thread) else {
+            plan.outcome.failed = true;
+            plan.outcome.warnings.push(
+                "skipped stored Gmail sync recovery evidence with an invalid identity"
+                    .to_string(),
+            );
+            continue;
+        };
+        if thread.adopted {
+            works.push(JournalWork {
+                key,
+                thread: RecoveryThread {
+                    pending_save: false,
+                    pending_origins: Vec::new(),
+                    ..thread.clone()
+                },
+                staged: None,
+                save_facts: SaveEventFacts {
+                    created: false,
+                    added_count: 0,
+                    origins: Vec::new(),
+                },
+                enrollment,
+                from_recovery: true,
+            });
             continue;
         }
+        // A missing note file keeps today's behavior: skip the save and
+        // origin stages for that thread but still append its enrollment.
+        let absolute = vault.join(PathBuf::from(&thread.note));
+        let missing = fs::symlink_metadata(&absolute).is_err();
         let staged = StagedSaveNote {
             account: thread.account.clone(),
             thread_id: thread.thread_id.clone(),
@@ -976,28 +1129,81 @@ fn persist_attempt(
             preview: Vec::new(),
             preview_noop: true,
         };
-        let event_facts = SaveEventFacts {
-            created: thread.created,
-            added_count: thread.added,
-            origins: thread.origins.clone(),
-        };
-        if let Err(error) =
-            save::append_save_event(vault, &host, &staged, &event_facts)
-        {
-            recovery_save_ok = false;
+        works.push(JournalWork {
+            key,
+            thread: RecoveryThread {
+                pending_save: thread.pending_save && !missing,
+                pending_origins: if missing {
+                    Vec::new()
+                } else {
+                    thread.pending_origins.clone()
+                },
+                ..thread.clone()
+            },
+            staged: Some(staged),
+            save_facts: SaveEventFacts {
+                created: thread.created,
+                added_count: thread.added,
+                origins: thread.origins.clone(),
+            },
+            enrollment,
+            from_recovery: true,
+        });
+    }
+
+    let persist_journal = |outcome: &mut FilingOutcome,
+                           works: &[JournalWork]| {
+        let threads: Vec<RecoveryThread> = works
+            .iter()
+            .filter(|work| {
+                work.thread.pending_save
+                    || !work.thread.pending_origins.is_empty()
+                    || work.thread.pending_enrollment
+            })
+            .map(|work| work.thread.clone())
+            .collect();
+        persist_recovery(
+            outcome,
+            vault,
+            account,
+            &RecoveryData {
+                threads,
+                commit_paths: Vec::new(),
+            },
+        );
+    };
+
+    // Save events first. A failure keeps the save and origin stages pending
+    // and blocks that thread's enrollment until a replay succeeds.
+    for index in 0..works.len() {
+        if !works[index].thread.pending_save || works[index].staged.is_none() {
+            continue;
+        }
+        let result = save::append_save_event(
+            vault,
+            &host,
+            works[index].staged.as_ref().expect("checked above"),
+            &works[index].save_facts,
+        );
+        if let Err(error) = result {
             plan.outcome.failed = true;
             plan.outcome
                 .warnings
                 .push(format!("could not append Gmail save journal: {error}"));
+            continue;
         }
-        recovery_origins.extend(thread.origins.iter().cloned());
+        works[index].thread.pending_save = false;
+        persist_journal(&mut plan.outcome, &works);
     }
-    let mut all_origins = origins.clone();
-    all_origins.extend(recovery_origins.iter().cloned());
+    // Origin events next, only for threads whose save stage is done.
+    let mut all_origins: Vec<(String, String, String)> = works
+        .iter()
+        .filter(|work| !work.thread.pending_save)
+        .flat_map(|work| work.thread.pending_origins.clone())
+        .collect();
     all_origins.sort();
     all_origins.dedup();
-    let mut failed_origin_saved: std::collections::BTreeSet<String> =
-        std::collections::BTreeSet::new();
+    let mut failed_origin_saved: BTreeSet<String> = BTreeSet::new();
     for failure in
         attachment_journal::append_origin_events(vault, &all_origins, "gmail")
     {
@@ -1008,243 +1214,429 @@ fn persist_attempt(
         plan.outcome.failed = true;
         failed_origin_saved.insert(failure.saved.clone());
     }
+    for work in &mut works {
+        // Threads whose save stage is still pending were excluded from
+        // the batch above; their origins stay pending untouched.
+        if work.thread.pending_save {
+            continue;
+        }
+        work.thread
+            .pending_origins
+            .retain(|(saved, _, _)| failed_origin_saved.contains(saved));
+    }
+    persist_journal(&mut plan.outcome, &works);
 
     // Enrollment last, after the vault writes it describes are durable.
-    // Recovery Filed events win over a current Adopted event for the same
-    // thread so via/route are preserved without duplication.
-    let mut current_events = std::mem::take(&mut plan.enrollment_events);
-    current_events.retain(|event| {
-        let key = event.key();
-        let pair = (key.account().to_string(), key.thread_id().to_string());
-        if recovery_keys.contains(&pair) {
-            // Current adoption is superseded by the recovery filing.
-            return false;
+    // A thread's enrollment is appended only after its save and origin
+    // stages are done, so a current-run save or origin failure blocks the
+    // enrollment until a replay succeeds. A failed enrollment is reported
+    // as a failure and deferred, so a failed adoption never counts as
+    // newly enrolled watch; the next run repairs it by adoption, as today.
+    for index in 0..works.len() {
+        if !works[index].thread.pending_enrollment {
+            continue;
         }
-        true
-    });
-    let mut failed_enrollment: Vec<enroll::EnrollmentEvent> = Vec::new();
-    for event in &current_events {
-        if let Err(error) = enroll::append(vault, &host, event) {
-            plan.outcome.failed = true;
-            plan.outcome.warnings.push(format!(
-                "could not append Gmail enrollment journal: {error}"
-            ));
-            failed_enrollment.push(event.clone());
+        if works[index].thread.pending_save
+            || !works[index].thread.pending_origins.is_empty()
+        {
+            continue;
         }
-    }
-    let mut recovery_enrollment_ok = true;
-    for thread in &recovery.threads {
-        let event = if thread.adopted {
-            enroll::EnrollmentEvent::Adopted {
-                key: ThreadKey::new(&thread.account, &thread.thread_id)
-                    .expect("recovery identity was validated when filed"),
-                note: thread.note.clone(),
-                task_file: thread.task_file.clone(),
-            }
-        } else {
-            let via = match thread.via.as_str() {
-                "route" => enroll::FiledVia::Route,
-                "problem" => enroll::FiledVia::Problem,
-                _ => enroll::FiledVia::Inbox,
-            };
-            enroll::EnrollmentEvent::Filed {
-                key: ThreadKey::new(&thread.account, &thread.thread_id)
-                    .expect("recovery identity was validated when filed"),
-                note: thread.note.clone(),
-                task_file: thread.task_file.clone(),
-                via,
-                route: thread.route.clone(),
-            }
-        };
-        // Avoid duplicating an enrollment the vault already records
+        // Avoid duplicating a recovery enrollment the vault already records
         // (e.g. a prior replay partially succeeded).
-        if let Ok(fold) = EnrollmentFold::load(vault) {
-            let key = event.key();
-            if fold.is_enrolled(key) {
-                continue;
-            }
+        if works[index].from_recovery
+            && let Ok(fold) = EnrollmentFold::load(vault)
+            && fold.is_enrolled(&works[index].key)
+        {
+            works[index].thread.pending_enrollment = false;
+            persist_journal(&mut plan.outcome, &works);
+            continue;
         }
-        if let Err(error) = enroll::append(vault, &host, &event) {
-            recovery_enrollment_ok = false;
+        if let Err(error) =
+            enroll::append(vault, &host, &works[index].enrollment)
+        {
             plan.outcome.failed = true;
             plan.outcome.warnings.push(format!(
                 "could not append Gmail enrollment journal: {error}"
             ));
-            failed_enrollment.push(event);
+            plan.outcome.deferred.push(works[index].key.clone());
+            plan.outcome.deferred.sort();
+            plan.outcome.deferred.dedup();
+            continue;
         }
+        works[index].thread.pending_enrollment = false;
+        persist_journal(&mut plan.outcome, &works);
     }
     // Surface recovered threads in this run's outcome so counts, watch
     // membership, and human rows reflect the finished transaction once.
-    for thread in &recovery.threads {
-        let Some(key) = ThreadKey::new(&thread.account, &thread.thread_id)
-        else {
-            continue;
-        };
-        if plan.outcome.results.iter().any(|result| result.key == key) {
+    for work in &works {
+        if !work.from_recovery {
             continue;
         }
-        if plan.outcome.deferred.contains(&key) {
+        if plan
+            .outcome
+            .results
+            .iter()
+            .any(|result| result.key == work.key)
+        {
             continue;
         }
-        let (status, via, problem) = if thread.adopted {
-            ("adopted", None, None)
-        } else {
-            let via = match thread.via.as_str() {
-                "route" => Some(enroll::FiledVia::Route),
-                "problem" => Some(enroll::FiledVia::Problem),
-                _ => Some(enroll::FiledVia::Inbox),
-            };
-            let problem = match (
-                &thread.problem_label,
-                &thread.problem_kind,
-                &thread.problem_message,
-            ) {
-                (Some(label), Some(kind), Some(message)) => {
-                    let kind = match kind.as_str() {
-                        "unknown_note" => {
-                            crate::native::gmail::route::RouteProblemKind::UnknownNote
-                        }
-                        "not_area_or_project" => {
-                            crate::native::gmail::route::RouteProblemKind::NotAreaOrProject
-                        }
-                        "closed_project" => {
-                            crate::native::gmail::route::RouteProblemKind::ClosedProject
-                        }
-                        "ambiguous_alias" => {
-                            crate::native::gmail::route::RouteProblemKind::AmbiguousAlias
-                        }
-                        "nested_route" => {
-                            crate::native::gmail::route::RouteProblemKind::NestedRoute
-                        }
-                        _ => {
-                            crate::native::gmail::route::RouteProblemKind::AmbiguousRoute
-                        }
-                    };
-                    Some(RouteProblem {
-                        kind,
-                        label: label.clone(),
-                        message: message.clone(),
-                        hint: thread.problem_hint.clone().unwrap_or_default(),
-                    })
-                }
-                _ => None,
-            };
-            ("filed", via, problem)
-        };
-        plan.outcome.results.push(FilingResult {
-            key,
-            note: Some(thread.note.clone()),
-            link: None,
-            task_file: Some(thread.task_file.clone()),
-            status,
-            route: thread.route.clone(),
-            via,
-            problem,
-            first_seen: thread.first_seen,
-        });
+        plan.outcome.results.push(recovery_row(
+            &work.thread,
+            &work.key,
+            index,
+            false,
+        ));
     }
     plan.outcome
         .results
         .sort_by(|left, right| left.key.cmp(&right.key));
 
-    if plan.outcome.failed {
-        // Retain only the events that still need a replay so the next run
-        // finishes them without duplication.
-        let mut threads: Vec<RecoveryThread> = Vec::new();
-        for thread in &recovery.threads {
-            let key = (thread.account.clone(), thread.thread_id.clone());
-            // If recovery save/origin/enrollment all succeeded for this
-            // thread, it needs no further replay.
-            let save_failed =
-                failed_save_threads.contains(&key) || !recovery_save_ok;
-            let origin_failed = thread
-                .origins
-                .iter()
-                .any(|(saved, _, _)| failed_origin_saved.contains(saved));
-            // Enrollment failure is tracked per-event; if any enrollment
-            // failed, keep threads whose enrollment is still missing.
-            let still_missing =
-                load_recovery(vault).threads.iter().any(|candidate| {
-                    candidate.account == thread.account
-                        && candidate.thread_id == thread.thread_id
-                });
-            let _ = still_missing;
-            if save_failed || origin_failed || !recovery_enrollment_ok {
-                threads.push(thread.clone());
-            }
-        }
-        // Also retain current-run failures for the next replay.
-        for event in failed_enrollment {
-            let key = event.key();
-            if threads.iter().any(|thread| {
-                thread.account == key.account()
-                    && thread.thread_id == key.thread_id()
-            }) {
-                continue;
-            }
-            match event {
-                enroll::EnrollmentEvent::Adopted {
-                    key,
-                    note,
-                    task_file,
-                } => threads.push(RecoveryThread {
-                    account: key.account().to_string(),
-                    thread_id: key.thread_id().to_string(),
-                    note,
-                    task_file,
-                    via: "adopted".to_string(),
-                    route: None,
-                    created: false,
-                    added: 0,
-                    origins: Vec::new(),
-                    adopted: true,
-                    problem_label: None,
-                    problem_kind: None,
-                    problem_message: None,
-                    problem_hint: None,
-                    first_seen: false,
-                }),
-                enroll::EnrollmentEvent::Filed {
-                    key,
-                    note,
-                    task_file,
-                    via,
-                    route,
-                } => threads.push(RecoveryThread {
-                    account: key.account().to_string(),
-                    thread_id: key.thread_id().to_string(),
-                    note,
-                    task_file,
-                    via: via.as_str().to_string(),
-                    route,
-                    created: false,
-                    added: 0,
-                    origins: Vec::new(),
-                    adopted: false,
-                    problem_label: None,
-                    problem_kind: None,
-                    problem_message: None,
-                    problem_hint: None,
-                    first_seen: false,
-                }),
-            }
-        }
-        if !threads.is_empty() || !commit_paths.is_empty() {
-            write_recovery(
-                vault,
-                &RecoveryData {
-                    threads,
-                    commit_paths: Vec::new(),
-                },
-            );
-        }
-    } else {
-        clear_recovery(vault);
-    }
+    // Retain only the threads that still have pending stages so the next
+    // run finishes them without duplicating what already succeeded. The
+    // scoped commit above already consumed the stored commit paths.
+    persist_journal(&mut plan.outcome, &works);
     // Restore current enrollment events for any caller that inspects the
     // plan after a journal failure (the outcome already records failure).
     plan.enrollment_events = current_events;
     Ok(plan.outcome)
+}
+
+/// Threads with stored recovery evidence: in-flight filings the current
+/// run must neither file nor adopt again.
+fn in_flight_keys(recovery: &RecoveryData) -> BTreeSet<ThreadKey> {
+    recovery
+        .threads
+        .iter()
+        .filter_map(|thread| ThreadKey::new(&thread.account, &thread.thread_id))
+        .collect()
+}
+
+/// The recorded enrollment event for one recovery thread: the `gmail.filed`
+/// or `gmail.adopted` the replay appends. `None` when the stored identity
+/// is invalid; callers warn and fail instead of panicking.
+fn recovery_enrollment_event(
+    thread: &RecoveryThread,
+) -> Option<enroll::EnrollmentEvent> {
+    let key = ThreadKey::new(&thread.account, &thread.thread_id)?;
+    if thread.adopted {
+        return Some(enroll::EnrollmentEvent::Adopted {
+            key,
+            note: thread.note.clone(),
+            task_file: thread.task_file.clone(),
+        });
+    }
+    let via = match thread.via.as_str() {
+        "route" => enroll::FiledVia::Route,
+        "problem" => enroll::FiledVia::Problem,
+        _ => enroll::FiledVia::Inbox,
+    };
+    Some(enroll::EnrollmentEvent::Filed {
+        key,
+        note: thread.note.clone(),
+        task_file: thread.task_file.clone(),
+        via,
+        route: thread.route.clone(),
+    })
+}
+
+fn recovery_problem(thread: &RecoveryThread) -> Option<RouteProblem> {
+    let label = thread.problem_label.as_ref()?;
+    let kind = thread.problem_kind.as_ref()?;
+    let message = thread.problem_message.as_ref()?;
+    let kind = match kind.as_str() {
+        "unknown_note" => {
+            crate::native::gmail::route::RouteProblemKind::UnknownNote
+        }
+        "not_area_or_project" => {
+            crate::native::gmail::route::RouteProblemKind::NotAreaOrProject
+        }
+        "closed_project" => {
+            crate::native::gmail::route::RouteProblemKind::ClosedProject
+        }
+        "ambiguous_alias" => {
+            crate::native::gmail::route::RouteProblemKind::AmbiguousAlias
+        }
+        "nested_route" => {
+            crate::native::gmail::route::RouteProblemKind::NestedRoute
+        }
+        _ => crate::native::gmail::route::RouteProblemKind::AmbiguousRoute,
+    };
+    Some(RouteProblem {
+        kind,
+        label: label.clone(),
+        message: message.clone(),
+        hint: thread.problem_hint.clone().unwrap_or_default(),
+    })
+}
+
+/// One recovered thread's result row. The link renders the mail note's
+/// inert title and who from the index; dry-run projects the filing with
+/// `would_file` instead of `filed`.
+fn recovery_row(
+    thread: &RecoveryThread,
+    key: &ThreadKey,
+    index: &MailIndex,
+    dry_run: bool,
+) -> FilingResult {
+    let link = index
+        .by_identity
+        .get(&key.index_key())
+        .map(|entry| entry.label.clone());
+    if thread.adopted {
+        return FilingResult {
+            key: key.clone(),
+            note: Some(thread.note.clone()),
+            link,
+            task_file: Some(thread.task_file.clone()),
+            status: "adopted",
+            route: thread.route.clone(),
+            via: None,
+            problem: None,
+            first_seen: thread.first_seen,
+        };
+    }
+    let via = match thread.via.as_str() {
+        "route" => Some(enroll::FiledVia::Route),
+        "problem" => Some(enroll::FiledVia::Problem),
+        _ => Some(enroll::FiledVia::Inbox),
+    };
+    FilingResult {
+        key: key.clone(),
+        note: Some(thread.note.clone()),
+        link,
+        task_file: Some(thread.task_file.clone()),
+        status: if dry_run { "would_file" } else { "filed" },
+        route: thread.route.clone(),
+        via,
+        problem: recovery_problem(thread),
+        first_seen: thread.first_seen,
+    }
+}
+
+/// Snapshot the SHA-256 of each owned path's bytes as sync wrote them. A
+/// path that cannot be read keeps an empty hash, which never matches at
+/// replay, so it is excluded with a warning instead of committed blind.
+fn snapshot_commit_paths(
+    vault: &Path,
+    paths: &[PathBuf],
+) -> Vec<StoredCommitPath> {
+    paths
+        .iter()
+        .map(|path| {
+            let sha256 = fs::read(vault.join(path))
+                .map(|bytes| save::sha256(&bytes))
+                .unwrap_or_default();
+            StoredCommitPath {
+                path: save::path_to_slashes(path),
+                sha256,
+            }
+        })
+        .collect()
+}
+
+/// Stored recovery paths that rejoin this run's scoped commit: owned,
+/// still-dirty paths whose bytes still match what sync wrote. A changed
+/// path is left out with a body-free warning naming it and dropped from
+/// the evidence, while its thread's events still finish. Ownership and
+/// read failures warn and fail the run instead of committing blind.
+fn replay_commit_paths(
+    outcome: &mut FilingOutcome,
+    vault: &Path,
+    child_env: &ob::ChildEnv,
+    is_worktree: bool,
+    stored: &[StoredCommitPath],
+    commit_paths: &[PathBuf],
+) -> Vec<PathBuf> {
+    let mut replayed = Vec::new();
+    for stored in stored {
+        let relative = match save::safe_relative_path(&stored.path) {
+            Ok(relative) => relative,
+            Err(_) => {
+                outcome.failed = true;
+                outcome.warnings.push(format!(
+                    "skipping stored Gmail sync recovery path with an invalid identity: {}",
+                    stored.path
+                ));
+                continue;
+            }
+        };
+        if save::validate_target_path(vault, &relative).is_err() {
+            outcome.failed = true;
+            outcome.warnings.push(format!(
+                "skipping unsafe stored Gmail sync recovery path: {}",
+                stored.path
+            ));
+            continue;
+        }
+        if relative.as_path() == Path::new("AGENTS.md") {
+            continue;
+        }
+        if !is_worktree {
+            continue;
+        }
+        if commit_paths.contains(&relative) || replayed.contains(&relative) {
+            continue;
+        }
+        let dirty = match save::git_path_is_dirty(vault, child_env, &relative) {
+            Ok(dirty) => dirty,
+            Err(error) => {
+                outcome.failed = true;
+                outcome.warnings.push(format!(
+                    "could not inspect stored Gmail sync recovery path {}: {error}",
+                    stored.path
+                ));
+                continue;
+            }
+        };
+        if !dirty {
+            continue;
+        }
+        let matches = !stored.sha256.is_empty()
+            && fs::read(vault.join(&relative))
+                .map(|bytes| save::sha256(&bytes) == stored.sha256)
+                .unwrap_or(false);
+        if !matches {
+            outcome.warnings.push(format!(
+                "leaving edited file out of the Gmail sync commit: {}",
+                stored.path
+            ));
+            continue;
+        }
+        replayed.push(relative);
+    }
+    replayed
+}
+
+/// Evidence for one current-run filing after a scoped-commit failure:
+/// every stage stays pending. Adoptions keep only enrollment — they never
+/// produce save receipts.
+fn new_filed_evidence(
+    result: &FilingResult,
+    facts: &BTreeMap<(String, String), SaveEventFacts>,
+) -> RecoveryThread {
+    let adopted = result.status == "adopted";
+    let event_facts = facts.get(&result.key.index_key());
+    let (created, added, origins) = event_facts
+        .map(|event_facts| {
+            (
+                event_facts.created,
+                event_facts.added_count,
+                event_facts.origins.clone(),
+            )
+        })
+        .unwrap_or_default();
+    RecoveryThread {
+        account: result.key.account().to_string(),
+        thread_id: result.key.thread_id().to_string(),
+        note: result.note.clone().unwrap_or_default(),
+        task_file: result.task_file.clone().unwrap_or_default(),
+        via: result
+            .via
+            .map(|via| via.as_str().to_string())
+            .unwrap_or_else(|| {
+                if adopted {
+                    "adopted".to_string()
+                } else {
+                    "inbox".to_string()
+                }
+            }),
+        route: result.route.clone(),
+        created,
+        added,
+        origins: origins.clone(),
+        adopted,
+        problem_label: result
+            .problem
+            .as_ref()
+            .map(|problem| problem.label.clone()),
+        problem_kind: result
+            .problem
+            .as_ref()
+            .map(|problem| problem.kind.as_str().to_string()),
+        problem_message: result
+            .problem
+            .as_ref()
+            .map(|problem| problem.message.clone()),
+        problem_hint: result
+            .problem
+            .as_ref()
+            .map(|problem| problem.hint.clone()),
+        first_seen: result.first_seen,
+        pending_save: !adopted,
+        pending_origins: if adopted { Vec::new() } else { origins },
+        pending_enrollment: true,
+    }
+}
+
+/// Evidence for one enrollment event without a result row after a
+/// scoped-commit failure.
+fn new_event_evidence(
+    event: &enroll::EnrollmentEvent,
+    facts: &BTreeMap<(String, String), SaveEventFacts>,
+) -> RecoveryThread {
+    let key = event.key();
+    match event {
+        enroll::EnrollmentEvent::Adopted {
+            note, task_file, ..
+        } => RecoveryThread {
+            account: key.account().to_string(),
+            thread_id: key.thread_id().to_string(),
+            note: note.clone(),
+            task_file: task_file.clone(),
+            via: "adopted".to_string(),
+            route: None,
+            created: false,
+            added: 0,
+            origins: Vec::new(),
+            adopted: true,
+            problem_label: None,
+            problem_kind: None,
+            problem_message: None,
+            problem_hint: None,
+            first_seen: false,
+            pending_save: false,
+            pending_origins: Vec::new(),
+            pending_enrollment: true,
+        },
+        enroll::EnrollmentEvent::Filed {
+            note,
+            task_file,
+            via,
+            route,
+            ..
+        } => {
+            let event_facts = facts.get(&key.index_key());
+            let (created, added, origins) = event_facts
+                .map(|event_facts| {
+                    (
+                        event_facts.created,
+                        event_facts.added_count,
+                        event_facts.origins.clone(),
+                    )
+                })
+                .unwrap_or_default();
+            RecoveryThread {
+                account: key.account().to_string(),
+                thread_id: key.thread_id().to_string(),
+                note: note.clone(),
+                task_file: task_file.clone(),
+                via: via.as_str().to_string(),
+                route: route.clone(),
+                created,
+                added,
+                origins: origins.clone(),
+                adopted: false,
+                problem_label: None,
+                problem_kind: None,
+                problem_message: None,
+                problem_hint: None,
+                first_seen: false,
+                pending_save: true,
+                pending_origins: origins,
+                pending_enrollment: true,
+            }
+        }
+    }
 }
 
 fn destination_for_route(
@@ -1756,6 +2148,239 @@ mod tests {
         ])
     }
 
+    /// Isolated `$XDG_STATE_HOME` so recovery-evidence tests never touch
+    /// real host state and never collide across vaults.
+    fn isolated_state() -> (tempfile::TempDir, TestEnvGuard) {
+        let temp = tempfile::tempdir().expect("temporary state home");
+        let guard = TestEnvGuard::set(&[(
+            "XDG_STATE_HOME",
+            Some(temp.path().as_os_str()),
+        )]);
+        (temp, guard)
+    }
+
+    const TEST_ACCOUNT: &str = "me@example.com";
+
+    fn evidence_path(vault: &Path) -> PathBuf {
+        recovery_path(vault, TEST_ACCOUNT)
+    }
+
+    fn read_evidence(vault: &Path) -> serde_json::Value {
+        let bytes = fs::read(evidence_path(vault)).expect("evidence exists");
+        serde_json::from_slice(&bytes).expect("evidence parses")
+    }
+
+    fn journal_lines(vault: &Path) -> Vec<String> {
+        let path = vault.join(format!(
+            ".bob/gmail/{}.jsonl",
+            crate::native::vault_sync::hostname_slug()
+        ));
+        let Ok(text) = fs::read_to_string(&path) else {
+            return Vec::new();
+        };
+        text.lines().map(str::to_string).collect()
+    }
+
+    fn count_journal(vault: &Path, kind: &str, thread: &str) -> usize {
+        let needle = format!("\"kind\":\"{kind}\"");
+        journal_lines(vault)
+            .iter()
+            .filter(|line| line.contains(&needle) && line.contains(thread))
+            .count()
+    }
+
+    fn count_attachment(vault: &Path, saved: &str) -> usize {
+        let path = vault.join(format!(
+            ".bob/attachments/{}.jsonl",
+            crate::native::vault_sync::hostname_slug()
+        ));
+        let Ok(text) = fs::read_to_string(&path) else {
+            return 0;
+        };
+        text.lines().filter(|line| line.contains(saved)).count()
+    }
+
+    fn try_apply(
+        vault: &Path,
+        candidates: Vec<FilingCandidate>,
+        adoptions: &[AdoptionIntent],
+        dry_run: bool,
+    ) -> Result<FilingOutcome, GmailError> {
+        let fold = EnrollmentFold::load(vault).unwrap();
+        let watchers = WatchScan::default();
+        // Production retries lock contention within the wait budget
+        // instead of single-attempting it: the per-test vault lock is
+        // never legitimately contended, so a transient denial waits out
+        // a short poll and retries instead of failing the test.
+        let budget = SharedBudget::new(Duration::from_secs(10));
+        apply(
+            FilingInput {
+                vault,
+                account: TEST_ACCOUNT,
+                mail_folder: Path::new("mail"),
+                link_template: "✉️ {subject} · {who}",
+                inbox: "gmail_inbox.md",
+                candidates,
+                adoptions,
+                enrollment: &fold,
+                watchers: &watchers,
+                dry_run,
+                saved_at: Utc::now(),
+                timezone: chrono_tz::UTC,
+                budget: &budget,
+            },
+            &crate::native::gmail::sync::retry::SystemSleeper,
+            &crate::native::gmail::sync::retry::SystemClock,
+        )
+    }
+
+    fn init_git_vault(vault: &Path) {
+        git(vault, &["init", "-q"]);
+        git(vault, &["config", "user.name", "Sync Test"]);
+        git(vault, &["config", "user.email", "sync@example.test"]);
+    }
+
+    fn install_failing_hook(vault: &Path) {
+        let hook = vault.join(".git/hooks/pre-commit");
+        fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mut permissions = fs::metadata(&hook).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&hook, permissions).unwrap();
+        }
+    }
+
+    /// A filing candidate whose thread carries an inline image, so the
+    /// shared save planner installs a real import and origin event for it.
+    /// Small attachments ride inline in the MIME payload and need no fetch.
+    fn candidate_with_image(
+        thread_id: &str,
+        route: RouteVerdict,
+    ) -> FilingCandidate {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+        let bytes = vec![0x41u8; 100];
+        let html = r#"<p>See <img src="cid:a" alt="A"></p>"#;
+        let envelope = serde_json::json!({
+            "thread": {
+                "id": thread_id,
+                "historyId": "1",
+                "messages": [{
+                    "id": format!("e{thread_id}"),
+                    "threadId": thread_id,
+                    "labelIds": ["INBOX"],
+                    "internalDate": "1794070800000",
+                    "snippet": "A short preview",
+                    "payload": {
+                        "mimeType": "multipart/related",
+                        "headers": [
+                            {"name": "From", "value": "Ada Example <ada@example.com>"},
+                            {"name": "Subject", "value": "Lease renewal"},
+                        ],
+                        "parts": [
+                            {
+                                "partId": "body",
+                                "mimeType": "text/html",
+                                "headers": [{"name": "Content-Type", "value": "text/html; charset=utf-8"}],
+                                "body": {"size": html.len(), "data": URL_SAFE_NO_PAD.encode(html.as_bytes())},
+                            },
+                            {
+                                "partId": "img-<a>",
+                                "mimeType": "image/png",
+                                "headers": [{"name": "Content-ID", "value": "<a>"}],
+                                "filename": "photo.png",
+                                "body": {"size": bytes.len(), "data": URL_SAFE_NO_PAD.encode(&bytes)},
+                            },
+                        ],
+                    },
+                }],
+            },
+        });
+        let thread =
+            GmailThread::from_gog_json(envelope.to_string().as_bytes())
+                .expect("valid test thread");
+        let confirmed = ConfirmedThread {
+            identity: ResolvedIdentity {
+                account: TEST_ACCOUNT.to_string(),
+                thread_id: thread_id.to_string(),
+                known_path: None,
+            },
+            thread,
+        };
+        let prepared = prepare::prepare_thread(
+            &NoRemote,
+            TEST_ACCOUNT,
+            &confirmed.thread,
+            GmailBodyMode::Full,
+        )
+        .expect("inline image attachments need no fetch");
+        assert!(
+            !prepared.imports.is_empty() && !prepared.origins.is_empty(),
+            "the image fixture must produce an import and an origin"
+        );
+        FilingCandidate {
+            save: PreparedSave {
+                confirmed,
+                prepared,
+                body_mode: GmailBodyMode::Full,
+            },
+            route,
+        }
+    }
+
+    /// Block one journal namespace by replacing its directory with a
+    /// regular file, so every append fails deterministically (even as
+    /// root, where read-only directories still allow writes).
+    fn block_journal(vault: &Path, namespace: &str) {
+        let dir = vault.join(".bob").join(namespace);
+        fs::create_dir_all(vault.join(".bob")).unwrap();
+        // A prior phase may have created the namespace directory already.
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_file(&dir);
+        fs::write(&dir, "blocked").unwrap();
+    }
+
+    /// Every non-Git file under the vault with its bytes, so dry-run
+    /// tests can prove the tree is untouched.
+    fn snapshot_tree(vault: &Path) -> BTreeMap<String, Vec<u8>> {
+        let mut out = BTreeMap::new();
+        let mut stack = vec![vault.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            for entry in fs::read_dir(&dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.file_name().is_some_and(|name| name == ".git") {
+                    continue;
+                }
+                if path.is_dir() {
+                    stack.push(path);
+                } else if let Ok(rel) = path.strip_prefix(vault) {
+                    out.insert(
+                        rel.display().to_string(),
+                        fs::read(&path).unwrap_or_default(),
+                    );
+                }
+            }
+        }
+        out
+    }
+
+    fn count_mail_notes(vault: &Path) -> usize {
+        fn walk(dir: &Path, count: &mut usize) {
+            for entry in fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, count);
+                } else if path.extension().is_some_and(|ext| ext == "md") {
+                    *count += 1;
+                }
+            }
+        }
+        let mut count = 0;
+        walk(&vault.join("mail"), &mut count);
+        count
+    }
+
     fn candidate(thread_id: &str, route: RouteVerdict) -> FilingCandidate {
         let thread = GmailThread::from_gog_json(
             format!(
@@ -1831,6 +2456,7 @@ mod tests {
         apply(
             FilingInput {
                 vault,
+                account: "me@example.com",
                 mail_folder: Path::new("mail"),
                 link_template: "✉️ {subject} · {who}",
                 inbox: "gmail_inbox.md",
@@ -1944,6 +2570,7 @@ mod tests {
         let outcome = apply(
             FilingInput {
                 vault,
+                account: "me@example.com",
                 mail_folder: Path::new("mail"),
                 link_template: "✉️ {subject} · {who}",
                 inbox: "gmail_inbox.md",
@@ -2125,6 +2752,7 @@ mod tests {
         let outcome = apply(
             FilingInput {
                 vault,
+                account: "me@example.com",
                 mail_folder: Path::new("mail"),
                 link_template: "✉️ {subject} · {who}",
                 inbox: "gmail_inbox.md",
@@ -2204,6 +2832,7 @@ mod tests {
         let outcome = apply(
             FilingInput {
                 vault,
+                account: "me@example.com",
                 mail_folder: Path::new("mail"),
                 link_template: "✉️ {subject} · {who}",
                 inbox: "gmail_inbox.md",
@@ -2236,5 +2865,659 @@ mod tests {
             !clock.sleeps.borrow().is_empty(),
             "the vault-lock wait slept against the test clock"
         );
+    }
+
+    #[test]
+    fn recovery_evidence_path_is_host_local_and_scoped() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path();
+        let (_state, _env) = isolated_state();
+        assert!(!has_pending_recovery(vault, TEST_ACCOUNT));
+        let first = recovery_path(vault, "Me@Example.com ");
+        assert_eq!(first, recovery_path(vault, "me@example.com"));
+        assert_ne!(first, recovery_path(vault, "other@example.com"));
+        let other_vault = tempfile::tempdir().unwrap();
+        assert_ne!(first, recovery_path(other_vault.path(), TEST_ACCOUNT));
+        let name = first.file_name().unwrap().to_string_lossy();
+        assert!(
+            name.starts_with("sync-recovery-") && name.ends_with(".json"),
+            "{name}"
+        );
+        assert!(
+            !first.to_string_lossy().contains('@'),
+            "never a raw email path: {}",
+            first.display()
+        );
+        assert_eq!(
+            first.parent().unwrap(),
+            bob_env::state_home().join("bob/gmail").as_path(),
+        );
+    }
+
+    #[test]
+    fn commit_failure_then_replay_files_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path();
+        let _env = test_env(vault);
+        let (_state, _state_env) = isolated_state();
+        area(
+            vault,
+            "job",
+            "## Tasks\n\n### Next & In Progress\n\n### Done & Canceled\n",
+        );
+        // A customized hub the scoped commit must never touch.
+        fs::write(vault.join("mail.md"), "customized hub\n").unwrap();
+        init_git_vault(vault);
+        git(vault, &["add", "-A"]);
+        git(vault, &["commit", "-q", "-m", "base"]);
+        fs::write(vault.join("unrelated.md"), "leave this alone\n").unwrap();
+        install_failing_hook(vault);
+
+        let error = try_apply(
+            vault,
+            vec![candidate_with_image("aabb", route(vault, "job"))],
+            &[],
+            false,
+        )
+        .expect_err("a failing pre-commit hook fails the run");
+        assert_eq!(error.kind(), "uncommitted");
+        // No enrollment is recorded on a commit failure.
+        assert_eq!(count_journal(vault, "gmail.filed", "aabb"), 0);
+        assert_eq!(count_journal(vault, "gmail.adopted", "aabb"), 0);
+        assert_eq!(count_journal(vault, "gmail.save", "aabb"), 0);
+        // The evidence keeps every stage pending with hashed owned paths.
+        let evidence = read_evidence(vault);
+        let threads = evidence["threads"].as_array().unwrap();
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0]["pending_save"], true);
+        assert_eq!(threads[0]["pending_enrollment"], true);
+        assert!(!threads[0]["pending_origins"].as_array().unwrap().is_empty());
+        let stored = evidence["commit_paths"].as_array().unwrap();
+        assert!(!stored.is_empty(), "{evidence}");
+        for path in stored {
+            assert!(!path["sha256"].as_str().unwrap().is_empty(), "{path}");
+        }
+
+        // Replay after removing the hook: one task, one card set, one
+        // commit, and each event exactly once.
+        fs::remove_file(vault.join(".git/hooks/pre-commit")).unwrap();
+        let outcome = try_apply(
+            vault,
+            vec![candidate("aabb", route(vault, "job"))],
+            &[],
+            false,
+        )
+        .expect("replay succeeds");
+        assert_eq!(outcome.results.len(), 1);
+        assert_eq!(outcome.results[0].status, "filed");
+        let link = outcome.results[0].link.as_ref().unwrap();
+        assert!(link.contains("Lease renewal"), "{link}");
+        assert_eq!(git(vault, &["log", "--oneline"]).lines().count(), 2);
+        assert_eq!(
+            git(vault, &["log", "-1", "--pretty=%s"]),
+            "gmail: sync 1 threads"
+        );
+        let committed =
+            git(vault, &["show", "--name-only", "--pretty=format:", "HEAD"]);
+        let note = outcome.results[0].note.as_ref().unwrap();
+        assert!(committed.contains(note), "{committed}");
+        assert!(committed.contains("job.md"), "{committed}");
+        assert!(committed.contains("img/mail/aabb/photo.png"), "{committed}");
+        assert!(committed.contains("mail.base"), "{committed}");
+        assert!(!committed.contains("unrelated.md"), "{committed}");
+        assert!(!committed.contains("mail.md"), "{committed}");
+        assert!(!committed.contains("AGENTS.md"), "{committed}");
+        let tasks = fs::read_to_string(vault.join("job.md")).unwrap();
+        assert_eq!(tasks.matches("✉️").count(), 1, "{tasks}");
+        assert_eq!(
+            git(vault, &["status", "--porcelain", "--", "unrelated.md"]),
+            "?? unrelated.md"
+        );
+        assert_eq!(
+            fs::read_to_string(vault.join("mail.md")).unwrap(),
+            "customized hub\n"
+        );
+        assert_eq!(count_journal(vault, "gmail.save", "aabb"), 1);
+        assert_eq!(count_journal(vault, "gmail.filed", "aabb"), 1);
+        assert_eq!(count_attachment(vault, "img/mail/aabb/photo.png"), 1);
+        assert!(
+            !evidence_path(vault).exists(),
+            "empty evidence is deleted, never written"
+        );
+
+        // A further replay files nothing and appends nothing.
+        let outcome = try_apply(
+            vault,
+            vec![candidate("aabb", route(vault, "job"))],
+            &[],
+            false,
+        )
+        .expect("idempotent replay succeeds");
+        assert_eq!(outcome.results.len(), 1);
+        assert_eq!(outcome.results[0].status, "already_filed");
+        assert_eq!(count_journal(vault, "gmail.save", "aabb"), 1);
+        assert_eq!(count_journal(vault, "gmail.filed", "aabb"), 1);
+        assert_eq!(count_attachment(vault, "img/mail/aabb/photo.png"), 1);
+        assert_eq!(git(vault, &["log", "--oneline"]).lines().count(), 2);
+    }
+
+    #[test]
+    fn replay_without_candidates_still_finishes_filing() {
+        // The label removed from search, or `-l 0`: no candidates reach
+        // apply, but the pending evidence still replays.
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path();
+        let _env = test_env(vault);
+        let (_state, _state_env) = isolated_state();
+        area(vault, "job", "## Tasks\n");
+        init_git_vault(vault);
+        git(vault, &["add", "-A"]);
+        git(vault, &["commit", "-q", "-m", "base"]);
+        install_failing_hook(vault);
+        try_apply(
+            vault,
+            vec![candidate("ccdd", route(vault, "job"))],
+            &[],
+            false,
+        )
+        .expect_err("commit must fail");
+        fs::remove_file(vault.join(".git/hooks/pre-commit")).unwrap();
+
+        let outcome =
+            try_apply(vault, Vec::new(), &[], false).expect("replay succeeds");
+        assert_eq!(outcome.results.len(), 1);
+        assert!(!evidence_path(vault).exists());
+    }
+
+    #[test]
+    fn dry_run_projects_recovery_without_touching_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path();
+        let _env = test_env(vault);
+        let (_state, _state_env) = isolated_state();
+        area(vault, "job", "## Tasks\n");
+        init_git_vault(vault);
+        git(vault, &["add", "-A"]);
+        git(vault, &["commit", "-q", "-m", "base"]);
+        install_failing_hook(vault);
+        try_apply(
+            vault,
+            vec![candidate("eeff", route(vault, "job"))],
+            &[],
+            false,
+        )
+        .expect_err("commit must fail");
+        let before = fs::read(evidence_path(vault)).unwrap();
+        let tree = snapshot_tree(vault);
+
+        let outcome =
+            try_apply(vault, Vec::new(), &[], true).expect("dry run succeeds");
+        assert!(!outcome.failed);
+        assert_eq!(outcome.results.len(), 1);
+        assert_eq!(outcome.results[0].status, "would_file");
+        assert!(outcome.results[0]
+            .link
+            .as_ref()
+            .unwrap()
+            .contains("Lease renewal"));
+        // Dry-run never writes or deletes the evidence, the vault tree, or
+        // the journals.
+        assert_eq!(fs::read(evidence_path(vault)).unwrap(), before);
+        assert_eq!(snapshot_tree(vault), tree);
+        assert!(!vault.join(".bob").exists());
+        assert_eq!(count_journal(vault, "gmail.filed", "eeff"), 0);
+    }
+
+    #[test]
+    fn closed_task_before_replay_is_not_filed_twice() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path();
+        let _env = test_env(vault);
+        let (_state, _state_env) = isolated_state();
+        area(vault, "job", "## Tasks\n");
+        init_git_vault(vault);
+        git(vault, &["add", "-A"]);
+        git(vault, &["commit", "-q", "-m", "base"]);
+        install_failing_hook(vault);
+        try_apply(
+            vault,
+            vec![candidate("aabb", route(vault, "job"))],
+            &[],
+            false,
+        )
+        .expect_err("commit must fail");
+        // Close the recovered task before replay while the label remains.
+        let tasks = fs::read_to_string(vault.join("job.md")).unwrap();
+        assert!(tasks.contains("- [ ] #task"), "{tasks}");
+        fs::write(
+            vault.join("job.md"),
+            tasks.replacen("- [ ] #task", "- [x] #task", 1),
+        )
+        .unwrap();
+        fs::remove_file(vault.join(".git/hooks/pre-commit")).unwrap();
+
+        let outcome = try_apply(
+            vault,
+            vec![candidate("aabb", route(vault, "job"))],
+            &[],
+            false,
+        )
+        .expect("replay succeeds");
+        assert_eq!(outcome.results.len(), 1);
+        assert_eq!(outcome.results[0].status, "filed");
+        let tasks = fs::read_to_string(vault.join("job.md")).unwrap();
+        assert_eq!(tasks.matches("✉️").count(), 1, "{tasks}");
+        assert_eq!(count_mail_notes(vault), 1);
+        assert_eq!(count_journal(vault, "gmail.filed", "aabb"), 1);
+    }
+
+    #[test]
+    fn edited_owned_path_is_excluded_with_warning_but_events_finish() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path();
+        let _env = test_env(vault);
+        let (_state, _state_env) = isolated_state();
+        area(vault, "job", "## Tasks\n");
+        init_git_vault(vault);
+        git(vault, &["add", "-A"]);
+        git(vault, &["commit", "-q", "-m", "base"]);
+        install_failing_hook(vault);
+        try_apply(
+            vault,
+            vec![candidate("aabb", route(vault, "job"))],
+            &[],
+            false,
+        )
+        .expect_err("commit must fail");
+        // The user edits the owned mail note after the failure.
+        let note = read_evidence(vault)["threads"][0]["note"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        fs::write(vault.join(&note), "user-edited after failure\n").unwrap();
+        fs::remove_file(vault.join(".git/hooks/pre-commit")).unwrap();
+
+        let outcome = try_apply(
+            vault,
+            vec![candidate("aabb", route(vault, "job"))],
+            &[],
+            false,
+        )
+        .expect("replay succeeds");
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|warning| warning.contains(&note)),
+            "{:?}",
+            outcome.warnings
+        );
+        let committed =
+            git(vault, &["show", "--name-only", "--pretty=format:", "HEAD"]);
+        assert!(!committed.contains(&note), "{committed}");
+        assert!(committed.contains("job.md"), "{committed}");
+        assert_eq!(count_journal(vault, "gmail.save", "aabb"), 1);
+        assert_eq!(count_journal(vault, "gmail.filed", "aabb"), 1);
+        assert!(!evidence_path(vault).exists());
+    }
+
+    #[test]
+    fn journal_failure_then_replay_appends_each_event_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path();
+        let _env = test_env(vault);
+        let (_state, _state_env) = isolated_state();
+        area(vault, "job", "## Tasks\n");
+        // Block the Gmail journal: saves, and the enrollment below them,
+        // fail while the vault writes still land.
+        block_journal(vault, "gmail");
+
+        let outcome = try_apply(
+            vault,
+            vec![candidate_with_image("aabb", route(vault, "job"))],
+            &[],
+            false,
+        )
+        .expect("journal failure fails the run, not the call");
+        assert!(outcome.failed);
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("journal")),
+            "{:?}",
+            outcome.warnings
+        );
+        let evidence = read_evidence(vault);
+        assert_eq!(evidence["threads"].as_array().unwrap().len(), 1);
+        assert_eq!(evidence["threads"][0]["pending_save"], true);
+        assert_eq!(evidence["threads"][0]["pending_enrollment"], true);
+        fs::remove_file(vault.join(".bob/gmail")).unwrap();
+        let outcome = try_apply(
+            vault,
+            vec![candidate_with_image("aabb", route(vault, "job"))],
+            &[],
+            false,
+        )
+        .expect("replay succeeds");
+        assert!(!outcome.failed, "{:?}", outcome.warnings);
+        assert_eq!(count_journal(vault, "gmail.save", "aabb"), 1);
+        assert_eq!(count_journal(vault, "gmail.filed", "aabb"), 1);
+        assert_eq!(count_attachment(vault, "img/mail/aabb/photo.png"), 1);
+        assert!(!evidence_path(vault).exists());
+
+        // A save that succeeded while only origins failed is never
+        // re-appended: its replay runs origins and enrollment only.
+        block_journal(vault, "attachments");
+        let outcome = try_apply(
+            vault,
+            vec![candidate_with_image("ccdd", route(vault, "job"))],
+            &[],
+            false,
+        )
+        .expect("origin failure fails the run, not the call");
+        assert!(outcome.failed);
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|warning| warning
+                    .contains("could not record imported image")),
+            "{:?}",
+            outcome.warnings
+        );
+        assert_eq!(count_journal(vault, "gmail.save", "ccdd"), 1);
+        assert_eq!(count_journal(vault, "gmail.filed", "ccdd"), 0);
+        let evidence = read_evidence(vault);
+        assert_eq!(evidence["threads"][0]["pending_save"], false);
+        assert!(!evidence["threads"][0]["pending_origins"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+
+        fs::remove_file(vault.join(".bob/attachments")).unwrap();
+        let outcome = try_apply(
+            vault,
+            vec![candidate_with_image("ccdd", route(vault, "job"))],
+            &[],
+            false,
+        )
+        .expect("replay succeeds");
+        assert!(!outcome.failed, "{:?}", outcome.warnings);
+        assert_eq!(count_journal(vault, "gmail.save", "ccdd"), 1);
+        assert_eq!(count_journal(vault, "gmail.filed", "ccdd"), 1);
+        assert_eq!(count_attachment(vault, "img/mail/ccdd/photo.png"), 1);
+        assert!(!evidence_path(vault).exists());
+    }
+
+    #[test]
+    fn adoption_only_journal_failure_replays_without_save_receipts() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path();
+        let _env = test_env(vault);
+        let (_state, _state_env) = isolated_state();
+        fs::create_dir_all(vault.join("mail/2026")).unwrap();
+        fs::write(
+            vault.join("mail/2026/lease.md"),
+            "---\ntype: \"[[mail]]\"\ncontent: untrusted-email\ngmail_account: me@example.com\ngmail_thread_id: aabb\ntitle: Lease renewal\nwho: Ada\n---\nbody\n",
+        )
+        .unwrap();
+        fs::write(
+            vault.join("job.md"),
+            "- [ ] #task Lease\n\t- [[mail/2026/lease]]\n",
+        )
+        .unwrap();
+        // Adoption intents come from the local scan, exactly as the
+        // command builds them: no label, no search, just the open task.
+        let fold = EnrollmentFold::load(vault).unwrap();
+        let index = resolve::scan_index(
+            vault,
+            Path::new("mail"),
+            "✉️ {subject} · {who}",
+        )
+        .unwrap();
+        let watchers =
+            scan::scan_watching_tasks(vault, Path::new("mail"), &index)
+                .unwrap();
+        let adoptions =
+            Membership::new(&fold, &watchers).adoptions(TEST_ACCOUNT);
+        assert_eq!(adoptions.len(), 1);
+        block_journal(vault, "gmail");
+
+        let outcome = try_apply(vault, Vec::new(), &adoptions, false)
+            .expect("journal failure fails the run, not the call");
+        assert!(outcome.failed);
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("journal")),
+            "{:?}",
+            outcome.warnings
+        );
+        let evidence = read_evidence(vault);
+        let threads = evidence["threads"].as_array().unwrap();
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0]["adopted"], true);
+        assert_eq!(threads[0]["pending_save"], false);
+        assert_eq!(threads[0]["pending_enrollment"], true);
+
+        fs::remove_file(vault.join(".bob/gmail")).unwrap();
+        let outcome = try_apply(vault, Vec::new(), &adoptions, false)
+            .expect("replay succeeds");
+        assert!(!outcome.failed, "{:?}", outcome.warnings);
+        assert_eq!(outcome.results.len(), 1);
+        assert_eq!(outcome.results[0].status, "adopted");
+        assert_eq!(count_journal(vault, "gmail.adopted", "aabb"), 1);
+        assert_eq!(count_journal(vault, "gmail.save", "aabb"), 0);
+        assert!(!evidence_path(vault).exists());
+    }
+
+    #[test]
+    fn corrupt_and_invalid_evidence_warn_and_fail_without_panic() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path();
+        let _env = test_env(vault);
+        let (_state, _state_env) = isolated_state();
+        area(vault, "job", "## Tasks\n");
+
+        // Corrupt evidence: a warning plus failure, never a panic, and no
+        // enrollment is written.
+        fs::create_dir_all(evidence_path(vault).parent().unwrap()).unwrap();
+        fs::write(evidence_path(vault), b"{not json").unwrap();
+        let outcome =
+            try_apply(vault, Vec::new(), &[], false).expect("no panic");
+        assert!(outcome.failed);
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("recovery")),
+            "{:?}",
+            outcome.warnings
+        );
+        assert!(journal_lines(vault).is_empty());
+
+        // An invalid stored identity warns and fails the same way.
+        let invalid = serde_json::json!({
+            "threads": [{
+                "account": TEST_ACCOUNT,
+                "thread_id": "xyz",
+                "note": "mail/2026/x.md",
+                "task_file": "job.md",
+                "via": "inbox",
+                "route": null,
+                "created": false,
+                "added": 0,
+                "origins": [],
+                "adopted": false,
+                "problem_label": null,
+                "problem_kind": null,
+                "problem_message": null,
+                "problem_hint": null,
+                "first_seen": false,
+                "pending_save": true,
+                "pending_origins": [],
+                "pending_enrollment": true,
+            }],
+            "commit_paths": [],
+        });
+        fs::write(evidence_path(vault), serde_json::to_vec(&invalid).unwrap())
+            .unwrap();
+        let outcome =
+            try_apply(vault, Vec::new(), &[], false).expect("no panic");
+        assert!(outcome.failed);
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("invalid identity")),
+            "{:?}",
+            outcome.warnings
+        );
+        assert!(journal_lines(vault).is_empty());
+
+        // A clean run writes no evidence file at all. (A corrupt file
+        // from the earlier step was already deleted when the failed run
+        // persisted its empty pending set.)
+        let _ = fs::remove_file(evidence_path(vault));
+        let outcome = try_apply(
+            vault,
+            vec![candidate("aabb", route(vault, "job"))],
+            &[],
+            false,
+        )
+        .expect("filing succeeds");
+        assert!(!outcome.failed);
+        assert!(!evidence_path(vault).exists());
+    }
+
+    #[test]
+    fn image_rollback_on_failed_text_batch() {
+        // `save::write_prepared_batch` removes only the images this
+        // attempt created when the text batch fails, preserving the save
+        // transaction's rollback rule.
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path();
+        let _env = test_env(vault);
+        let (_state, _state_env) = isolated_state();
+        fs::write(vault.join("job.md"), "actual bytes\n").unwrap();
+        let mut filed = candidate("aabb", RouteVerdict::Unrouted);
+        filed.save.prepared.imports.push(prepare::BinaryImport {
+            relative_path: "mail/img/aabb.png".into(),
+            bytes: vec![1, 2, 3],
+        });
+        let mut works = BTreeMap::new();
+        works
+            .insert((TEST_ACCOUNT.to_string(), "aabb".to_string()), filed.save);
+        let plans = vec![StagedSaveNote {
+            account: TEST_ACCOUNT.to_string(),
+            thread_id: "aabb".to_string(),
+            path: vault.join("job.md"),
+            link: String::new(),
+            title: String::new(),
+            who: String::new(),
+            message_count: 0,
+            added_count: 0,
+            created: false,
+            changed: true,
+            status: "filed",
+            original: Some("actual bytes\n".to_string()),
+            updated: "new bytes\n".to_string(),
+            preview: Vec::new(),
+            preview_noop: true,
+        }];
+        // The disk preimage changed after planning: refuse the batch.
+        let staged = vec![StagedTextFile {
+            target: vault.join("job.md"),
+            target_existed: true,
+            original_target: "stale bytes\n".to_string(),
+            updated_target: "new bytes\n".to_string(),
+        }];
+        let error = save::write_prepared_batch(vault, &works, &plans, &staged)
+            .expect_err("stale preimage refuses the batch");
+        assert_eq!(error.kind(), "note_changed");
+        assert!(
+            !vault.join("mail/img/aabb.png").exists(),
+            "images created by the failed attempt are removed"
+        );
+        assert_eq!(
+            fs::read_to_string(vault.join("job.md")).unwrap(),
+            "actual bytes\n"
+        );
+    }
+
+    #[test]
+    fn repeated_snapshot_conflicts_defer_without_filing_twice() {
+        // The bounded second snapshot-conflict deferral: two conflicting
+        // attempts defer the thread instead of filing it twice.
+        use std::sync::{
+            atomic::{AtomicBool, AtomicU64, Ordering},
+            mpsc::channel,
+            Arc,
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path();
+        let _env = test_env(vault);
+        let (_state, _state_env) = isolated_state();
+        area(vault, "job", "## Tasks\n");
+        // Resolve the route before churning starts: the churner rewrites
+        // the destination note, which stops being a valid area.
+        let filed = candidate("aabb", route(vault, "job"));
+        // Mutate the task destination continuously so both filing attempts
+        // observe a changed disk preimage. Every write carries a counter so
+        // the bytes always differ from any earlier snapshot; the first
+        // write is rendezvoused before filing starts so the churner cannot
+        // lose the startup race. A drop guard stops the churner on every
+        // exit path, including a test panic.
+        struct StopOnDrop(Arc<AtomicBool>);
+        impl Drop for StopOnDrop {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Relaxed);
+            }
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let churn = stop.clone();
+        let _stopper = StopOnDrop(stop.clone());
+        let (started, first_write) = channel::<()>();
+        let tasks = vault.join("job.md");
+        let churner = std::thread::spawn(move || {
+            use std::io::Write as _;
+            let counter = AtomicU64::new(0);
+            let mut signaled = false;
+            while !churn.load(Ordering::Relaxed) {
+                let tick = counter.fetch_add(1, Ordering::Relaxed);
+                // Append only: the area frontmatter stays valid for route
+                // resolution while the bytes always differ from any earlier
+                // snapshot.
+                if let Ok(mut file) =
+                    std::fs::OpenOptions::new().append(true).open(&tasks)
+                {
+                    let _ = writeln!(file, "churn {tick}");
+                }
+                if !signaled {
+                    signaled = true;
+                    let _ = started.send(());
+                }
+            }
+        });
+        first_write.recv().unwrap();
+        let outcome = try_apply(vault, vec![filed], &[], false)
+            .expect("conflicts defer, they do not error");
+        stop.store(true, Ordering::Relaxed);
+        churner.join().unwrap();
+        let key = ThreadKey::new(TEST_ACCOUNT, "aabb").unwrap();
+        assert_eq!(outcome.deferred, vec![key]);
+        assert!(outcome.failed);
+        assert!(outcome.results.is_empty());
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("deferred")),
+            "{:?}",
+            outcome.warnings
+        );
+        assert_eq!(count_journal(vault, "gmail.filed", "aabb"), 0);
     }
 }

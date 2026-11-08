@@ -11,7 +11,11 @@
 //! Event values are body-free: identity, vault-relative paths, the filing
 //! route, and how it was filed. Never a subject, snippet, or body.
 
-use std::{collections::BTreeMap, io, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io,
+    path::Path,
+};
 
 use chrono::{DateTime, FixedOffset};
 use serde_json::{json, Map, Value};
@@ -366,6 +370,9 @@ impl AdoptionIntent {
 pub(crate) enum CandidateDecision {
     /// Already enrolled: never filed again, whatever its tasks look like.
     Enrolled(EnrollmentOrigin),
+    /// Pending sync-recovery evidence: the replay owns this thread, so the
+    /// current run neither files nor adopts it again.
+    InFlight,
     /// Unenrolled, but an open task links its mail note: adopt it.
     Adopt(AdoptionIntent),
     /// Unenrolled and unlinked: a new filing candidate.
@@ -377,19 +384,41 @@ pub(crate) enum CandidateDecision {
 pub(crate) struct Membership<'a> {
     fold: &'a EnrollmentFold,
     scan: &'a WatchScan,
+    in_flight: Option<&'a BTreeSet<ThreadKey>>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` decides threads.
 impl<'a> Membership<'a> {
     pub(crate) fn new(fold: &'a EnrollmentFold, scan: &'a WatchScan) -> Self {
-        Self { fold, scan }
+        Self {
+            fold,
+            scan,
+            in_flight: None,
+        }
+    }
+
+    /// Mark threads with pending sync-recovery evidence as in-flight. Their
+    /// recorded `gmail.filed` or `gmail.adopted` event is appended by the
+    /// recovery replay; they are never filed or adopted again.
+    pub(crate) fn with_in_flight(
+        self,
+        in_flight: &'a BTreeSet<ThreadKey>,
+    ) -> Self {
+        Self {
+            in_flight: Some(in_flight),
+            ..self
+        }
     }
 
     /// Decide one thread: enrolled threads are never filed again, linked
     /// unenrolled threads are adopted, and the rest are filing candidates.
+    /// In-flight threads are skipped: recovery replays them.
     pub(crate) fn decide(&self, key: &ThreadKey) -> CandidateDecision {
         if let Some(origin) = self.fold.origin(key) {
             return CandidateDecision::Enrolled(origin);
+        }
+        if self.in_flight.is_some_and(|set| set.contains(key)) {
+            return CandidateDecision::InFlight;
         }
         match self.adoption(key) {
             Some(intent) => CandidateDecision::Adopt(intent),
@@ -885,6 +914,32 @@ mod tests {
         );
         assert!(membership.adoptions(ME).is_empty());
         assert_eq!(fold.len(), 2);
+    }
+
+    #[test]
+    fn in_flight_threads_are_skipped_not_filed_or_adopted() {
+        let vault = MemberVault::new(&[(ME, "aa01"), (ME, "bb02")]);
+        vault.write("job.md", "- [ ] #task Mine [[mail/2026/aa01]]\n");
+        let (fold, scan) = vault.fold_and_scan();
+        let plain = Membership::new(&fold, &scan);
+        assert!(matches!(
+            plain.decide(&key(ME, "aa01")),
+            CandidateDecision::Adopt(_)
+        ));
+        assert_eq!(plain.decide(&key(ME, "bb02")), CandidateDecision::File);
+        // A thread with pending recovery evidence is an in-flight filing:
+        // never filed again, even when an open task links it.
+        let in_flight = BTreeSet::from([key(ME, "aa01"), key(ME, "bb02")]);
+        let membership =
+            Membership::new(&fold, &scan).with_in_flight(&in_flight);
+        assert_eq!(
+            membership.decide(&key(ME, "aa01")),
+            CandidateDecision::InFlight
+        );
+        assert_eq!(
+            membership.decide(&key(ME, "bb02")),
+            CandidateDecision::InFlight
+        );
     }
 
     #[test]

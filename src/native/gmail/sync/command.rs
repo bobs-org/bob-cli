@@ -300,10 +300,11 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
 
     let timezone = bob_env::configured_timezone().unwrap_or(chrono_tz::UTC);
     let saved_at = save::current_utc();
-    // Recovery must run even in watch-only mode and after the enrollment
-    // label disappears: a pending sync-recovery file means a prior scoped
-    // commit or its journal appends still need finishing.
-    let needs_recovery = !args.dry_run && file::has_pending_recovery(&vault);
+    // Recovery runs even in watch-only mode, after the enrollment label
+    // disappears, and with `-l 0`: a pending evidence file means a prior
+    // scoped commit or its journal appends still need finishing. Dry-run
+    // only projects the recovery rows; it never writes or deletes evidence.
+    let needs_recovery = file::has_pending_recovery(&vault, &account);
     let mut outcome = if filing_candidates.is_empty()
         && adoptions.is_empty()
         && !needs_recovery
@@ -313,6 +314,7 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
         file::apply(
             FilingInput {
                 vault: &vault,
+                account: &account,
                 mail_folder: folder,
                 link_template: config.link_label(),
                 inbox: config.sync_inbox(),

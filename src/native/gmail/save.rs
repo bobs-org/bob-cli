@@ -48,6 +48,7 @@ pub(crate) struct PreparedSave {
 
 /// One body-bearing note plan. A caller can combine `updated` with its own
 /// staged edits and persist them through the shared staged text writer.
+#[derive(Debug, Clone)]
 pub(crate) struct StagedSaveNote {
     pub(crate) account: String,
     pub(crate) thread_id: String,
@@ -66,6 +67,7 @@ pub(crate) struct StagedSaveNote {
     pub(crate) preview_noop: bool,
 }
 
+#[derive(Debug, Clone)]
 pub(crate) struct SaveEventFacts {
     pub(crate) created: bool,
     pub(crate) added_count: usize,

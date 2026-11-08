@@ -330,6 +330,10 @@ fn watching_count(
     }
     for result in &outcome.results {
         if matches!(result.status, "filed" | "would_file" | "adopted") {
+            // A failed enrollment is deferred, never newly enrolled watch.
+            if outcome.deferred.contains(&result.key) {
+                continue;
+            }
             keys.insert(result.key.thread_id().to_string());
         }
     }
@@ -669,6 +673,49 @@ mod tests {
         assert_eq!(report.watching, 1);
         assert!(!report.ok);
         assert!(report.warnings.iter().any(|w| w.contains("not_found")));
+    }
+
+    #[test]
+    fn deferred_failed_enrollment_is_not_newly_enrolled_watch() {
+        let fold = empty_fold();
+        let mut adopted = filed_result("aa01");
+        adopted.status = "adopted";
+        adopted.via = None;
+        // A successful adoption counts as watch ...
+        let mut outcome = FilingOutcome::default();
+        outcome.results.push(adopted.clone());
+        let report = from_outcome(
+            false,
+            outcome,
+            Vec::new(),
+            Vec::new(),
+            &WatchScan::default(),
+            "me@example.com",
+            &fold,
+        );
+        assert_eq!(report.watching, 1);
+        assert!(report.ok);
+        // ... but when its enrollment append failed, the key is deferred:
+        // still reported as a failure, never as newly enrolled watch.
+        let mut outcome = FilingOutcome::default();
+        outcome.results.push(adopted);
+        outcome.deferred.push(filing_key("aa01"));
+        outcome.failed = true;
+        outcome
+            .warnings
+            .push("could not append Gmail enrollment journal: test".into());
+        let report = from_outcome(
+            false,
+            outcome,
+            Vec::new(),
+            vec!["could not append Gmail enrollment journal: test".into()],
+            &WatchScan::default(),
+            "me@example.com",
+            &fold,
+        );
+        assert_eq!(report.watching, 0);
+        assert!(!report.ok);
+        assert_eq!(report.exit_code(), 1);
     }
 
     #[test]
