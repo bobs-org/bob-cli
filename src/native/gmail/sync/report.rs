@@ -168,7 +168,7 @@ pub(crate) fn from_outcome(
     first_seen |= problems.iter().any(|problem| problem.first_seen);
 
     let watching = watching_count(&outcome, snapshot, account, enrollment);
-    let awaiting = awaiting_count(snapshot, account);
+    let awaiting = awaiting_count(&outcome, snapshot, account, enrollment);
 
     SyncReport {
         ok: !failed && !first_seen,
@@ -330,7 +330,12 @@ fn watching_count(
     }
     for result in &outcome.results {
         if matches!(result.status, "filed" | "would_file" | "adopted") {
-            // A failed enrollment is deferred, never newly enrolled watch.
+            // Status strings never imply membership: recovered closed
+            // tasks, pending save/origin/enrollment, and deferred
+            // adoptions stay out of the watching count.
+            if !result.watch_member {
+                continue;
+            }
             if outcome.deferred.contains(&result.key) {
                 continue;
             }
@@ -340,11 +345,37 @@ fn watching_count(
     keys.len()
 }
 
-fn awaiting_count(watchers: &WatchScan, account: &str) -> usize {
+fn awaiting_count(
+    outcome: &FilingOutcome,
+    watchers: &WatchScan,
+    account: &str,
+    enrollment: &super::enroll::EnrollmentFold,
+) -> usize {
+    let watching: std::collections::BTreeSet<String> = {
+        let mut keys: std::collections::BTreeSet<String> =
+            std::collections::BTreeSet::new();
+        for key in watchers.threads().filter(|key| key.is_account(account)) {
+            if enrollment.is_enrolled(key) {
+                keys.insert(key.thread_id().to_string());
+            }
+        }
+        for result in &outcome.results {
+            if matches!(result.status, "filed" | "would_file" | "adopted")
+                && result.watch_member
+                && !outcome.deferred.contains(&result.key)
+            {
+                keys.insert(result.key.thread_id().to_string());
+            }
+        }
+        keys
+    };
     let mut counted = std::collections::BTreeSet::new();
-    for key in watchers.threads().filter(|key| key.is_account(account)) {
-        if has_awaiting(watchers, key) {
-            counted.insert(key.thread_id().to_string());
+    for id in watching {
+        let Some(key) = ThreadKey::new(account, &id) else {
+            continue;
+        };
+        if has_awaiting(watchers, &key) {
+            counted.insert(id);
         }
     }
     counted.len()
@@ -620,6 +651,7 @@ mod tests {
             via: Some(super::super::enroll::FiledVia::Route),
             problem: None,
             first_seen: false,
+            watch_member: true,
         }
     }
 
@@ -673,6 +705,28 @@ mod tests {
         assert_eq!(report.watching, 1);
         assert!(!report.ok);
         assert!(report.warnings.iter().any(|w| w.contains("not_found")));
+    }
+
+    #[test]
+    fn pending_journal_without_deferred_is_not_watching() {
+        let fold = empty_fold();
+        let mut pending = filed_result("aa01");
+        pending.watch_member = false;
+        let mut outcome = FilingOutcome::default();
+        outcome.results.push(pending);
+        outcome.failed = true;
+        let report = from_outcome(
+            false,
+            outcome,
+            Vec::new(),
+            Vec::new(),
+            &WatchScan::default(),
+            "me@example.com",
+            &fold,
+        );
+        assert_eq!(report.watching, 0);
+        assert_eq!(report.awaiting, 0);
+        assert!(!report.ok);
     }
 
     #[test]

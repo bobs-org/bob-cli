@@ -318,6 +318,35 @@ impl FakeGog {
             .expect("write fake transient state");
     }
 
+    /// Succeed `ok` calls for `operation`, then fail. Used to abort the
+    /// policy label lookup after the routing `labels.list` has already
+    /// succeeded.
+    pub(crate) fn set_fail_after(
+        &self,
+        operation: &str,
+        stderr: &str,
+        code: i32,
+        ok: u32,
+    ) {
+        let mut state: serde_json::Value = fs::read(&self.state)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        if !state
+            .get("fail_after")
+            .is_some_and(serde_json::Value::is_object)
+        {
+            state["fail_after"] = serde_json::json!({});
+        }
+        state["fail_after"][operation] = serde_json::json!({
+            "stderr": stderr,
+            "code": code,
+            "remaining_ok": ok,
+        });
+        fs::write(&self.state, serde_json::to_vec(&state).unwrap())
+            .expect("write fake fail-after state");
+    }
+
     /// Map thread ids to full thread envelopes for per-thread outcomes.
     pub(crate) fn set_threads(&self, threads: serde_json::Value) {
         let mut state: serde_json::Value = fs::read(&self.state)

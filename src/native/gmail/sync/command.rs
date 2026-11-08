@@ -304,7 +304,10 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
     // disappears, and with `-l 0`: a pending evidence file means a prior
     // scoped commit or its journal appends still need finishing. Dry-run
     // only projects the recovery rows; it never writes or deletes evidence.
-    let needs_recovery = file::has_pending_recovery(&vault, &account);
+    let needs_recovery = !matches!(
+        file::recovery_presence(&vault, &account),
+        file::RecoveryPresence::Absent
+    );
     let mut outcome = if filing_candidates.is_empty()
         && adoptions.is_empty()
         && !needs_recovery

@@ -159,6 +159,10 @@ mod tests {
         (temp, guard)
     }
 
+    fn unique_account(prefix: &str) -> String {
+        format!("{prefix}@example.com")
+    }
+
     #[test]
     fn guard_paths_are_account_separated_and_normalized() {
         let (_temp, _env) = isolated_state("sync-guard-path");
@@ -187,15 +191,20 @@ mod tests {
     #[test]
     fn real_lock_contention_and_release() {
         let (_temp, _env) = isolated_state("sync-guard-contention");
-        let account = "you@example.com";
-        let first = try_acquire(account).expect("acquire");
+        let account = unique_account("sync-guard-contention");
+        let first = match try_acquire(&account).expect("acquire") {
+            GuardAttempt::Acquired(guard) => guard,
+            GuardAttempt::Busy => {
+                panic!("first acquisition must acquire, not report Busy")
+            }
+        };
         assert!(
-            matches!(try_acquire(account).unwrap(), GuardAttempt::Busy),
+            matches!(try_acquire(&account).unwrap(), GuardAttempt::Busy),
             "second acquisition while held is busy"
         );
         drop(first);
         assert!(
-            matches!(try_acquire(account).unwrap(), GuardAttempt::Acquired(_)),
+            matches!(try_acquire(&account).unwrap(), GuardAttempt::Acquired(_)),
             "release frees the guard"
         );
     }
@@ -203,15 +212,20 @@ mod tests {
     #[test]
     fn zero_budget_fails_fast_when_busy() {
         let (_temp, _env) = isolated_state("sync-guard-budget");
-        let account = "you@example.com";
-        let _held = try_acquire(account).expect("hold");
+        let account = unique_account("sync-guard-budget");
+        let _held = match try_acquire(&account).expect("hold") {
+            GuardAttempt::Acquired(guard) => guard,
+            GuardAttempt::Busy => {
+                panic!("first acquisition must acquire, not report Busy")
+            }
+        };
         let clock = TestClock {
             now: std::cell::Cell::new(Instant::now()),
         };
         let budget = SharedBudget::new_with_now(Duration::ZERO, clock.now());
         assert!(
             matches!(
-                acquire_with_budget(&NoSleep, &budget, &clock, account)
+                acquire_with_budget(&NoSleep, &budget, &clock, &account)
                     .unwrap(),
                 GuardAttempt::Busy
             ),

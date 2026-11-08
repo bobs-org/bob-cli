@@ -77,6 +77,41 @@ pub(crate) struct DiscoveryOutcome {
     pub(crate) pages_fetched: usize,
 }
 
+/// Normalize one Gmail thread id: trim, reject empty/oversized/non-hex,
+/// and lowercase. Invalid ids are skipped with a bounded warning.
+fn normalize_thread_id(id: &str) -> Option<String> {
+    let trimmed = id.trim();
+    if trimmed.is_empty()
+        || trimmed.len() > 128
+        || !trimmed.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    Some(trimmed.to_ascii_lowercase())
+}
+
+/// Whether trailing entries after the unique-id cap still hold a genuinely
+/// new valid thread id. Duplicates and invalid ids do not count as
+/// outstanding results.
+fn remaining_page_has_new_id(
+    threads: &[serde_json::Value],
+    start: usize,
+    seen: &HashSet<String>,
+) -> bool {
+    for thread in threads.iter().skip(start) {
+        let Some(id) = thread.get("id").and_then(|value| value.as_str()) else {
+            continue;
+        };
+        let Some(normalized) = normalize_thread_id(id) else {
+            continue;
+        };
+        if !seen.contains(&normalized) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Discover thread ids with paged `threads.list` reads to the last page.
 ///
 /// Deduplicates while preserving first-seen order, skips invalid ids with a
@@ -150,22 +185,22 @@ pub(crate) fn discover_ids<R: GmailRead>(
                         invalid += 1;
                         continue;
                     };
-                    let trimmed = id.trim();
-                    if trimmed.is_empty()
-                        || trimmed.len() > 128
-                        || !trimmed.bytes().all(|byte| byte.is_ascii_hexdigit())
-                    {
+                    let Some(normalized) = normalize_thread_id(id) else {
                         invalid += 1;
                         continue;
-                    }
-                    let normalized = trimmed.to_ascii_lowercase();
+                    };
                     if seen_ids.insert(normalized.clone()) {
                         ordered.push(normalized);
                         if ordered.len() >= MAX_DISCOVERY_IDS {
                             capped = true;
-                            // More results remain when this page still holds
-                            // unprocessed threads after the cap.
-                            cap_has_more = thread_index + 1 < threads.len();
+                            // Trailing duplicates and invalid ids are not
+                            // outstanding results; only a genuinely new
+                            // valid id still on this page counts.
+                            cap_has_more = remaining_page_has_new_id(
+                                threads,
+                                thread_index + 1,
+                                &seen_ids,
+                            );
                             break;
                         }
                     }
@@ -1001,6 +1036,47 @@ mod tests {
         assert!(
             !outcome.warnings.iter().any(|w| w.contains("more results")),
             "quiet when cap leaves nothing outstanding: {:?}",
+            outcome.warnings
+        );
+    }
+
+    #[test]
+    fn cap_with_only_duplicate_or_invalid_trailing_stays_quiet() {
+        let mut ids: Vec<String> =
+            (0..MAX_DISCOVERY_IDS).map(|i| format!("{i:08x}")).collect();
+        ids.push(ids[0].clone());
+        ids.push(String::new());
+        ids.push("xyz".into());
+        let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+        let reader = MockRead::pages(vec![MockRead::threads(&refs, None)]);
+        let outcome = discover_ids(&reader, "me@example.com", "bob")
+            .expect("trailing noise");
+        assert_eq!(outcome.ids.len(), MAX_DISCOVERY_IDS);
+        assert!(outcome.capped);
+        assert!(
+            !outcome.warnings.iter().any(|w| w.contains("more results")),
+            "duplicates and invalid trailing ids are not outstanding: {:?}",
+            outcome.warnings
+        );
+    }
+
+    #[test]
+    fn cap_with_a_genuinely_new_trailing_id_warns() {
+        let mut ids: Vec<String> =
+            (0..MAX_DISCOVERY_IDS).map(|i| format!("{i:08x}")).collect();
+        ids.push(format!("{:08x}", MAX_DISCOVERY_IDS));
+        let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+        let reader = MockRead::pages(vec![MockRead::threads(&refs, None)]);
+        let outcome = discover_ids(&reader, "me@example.com", "bob")
+            .expect("trailing id");
+        assert_eq!(outcome.ids.len(), MAX_DISCOVERY_IDS);
+        assert!(outcome.capped);
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("more results")),
+            "{:?}",
             outcome.warnings
         );
     }

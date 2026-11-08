@@ -625,6 +625,20 @@ if isinstance(remaining_spec, dict) and int(remaining_spec.get("remaining") or 0
         int(remaining_spec.get("code") or 1),
     )
 
+# Succeed N calls, then fail. Used for a second labels.list (policy) after
+# the routing label list already succeeded.
+after_spec = (state.get("fail_after") or {}).get(op)
+if isinstance(after_spec, dict):
+    remaining_ok = int(after_spec.get("remaining_ok") or 0)
+    if remaining_ok > 0:
+        after_spec["remaining_ok"] = remaining_ok - 1
+        save_state(state)
+    else:
+        fail(
+            after_spec.get("stderr") or "gog failed",
+            int(after_spec.get("code") or 1),
+        )
+
 if op == "version":
     dump(
         {

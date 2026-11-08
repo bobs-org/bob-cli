@@ -211,12 +211,13 @@ pub(crate) fn sleep_within_budget<S: Sleeper, C: Clock>(
 
 /// Run `operation` once, retrying transient failures within the budget.
 ///
-/// Pacing between distinct requests is the caller's job (see
-/// [`pace_before_request`]); this helper only backs off between attempts of
-/// the same request. Auth aborts and permanent failures return immediately
-/// without sleeping. When the budget exhausts, the last transient error
-/// returns so the caller retains prepared successes and defers the rest.
-/// A zero budget still makes one immediate attempt with no backoff sleep.
+/// Each actual read attempt is the caller's `operation` (see
+/// [`CoordinatedRead`], which paces and timestamps every attempt). This
+/// helper only backs off between attempts of the same request. Auth aborts
+/// and permanent failures return immediately without sleeping. When the
+/// budget exhausts, the last transient error returns so the caller retains
+/// prepared successes and defers the rest. A zero budget still makes one
+/// immediate attempt with no backoff sleep.
 pub(crate) fn execute_with_retry<S: Sleeper, C: Clock, T>(
     sleeper: &S,
     budget: &SharedBudget,
@@ -330,7 +331,7 @@ impl<'a, R: GmailRead, S: Sleeper, C: Clock> CoordinatedRead<'a, R, S, C> {
 
     fn run<T>(
         &self,
-        operation: impl FnMut() -> Result<T, GmailError>,
+        mut operation: impl FnMut() -> Result<T, GmailError>,
     ) -> Result<T, GmailError> {
         if let Some(error) = self.auth_abort() {
             return Err(error);
@@ -338,17 +339,20 @@ impl<'a, R: GmailRead, S: Sleeper, C: Clock> CoordinatedRead<'a, R, S, C> {
         if self.gave_up.get() {
             return Err(deferred_error());
         }
-        pace_before_request(
-            self.sleeper,
-            self.clock,
-            &mut self.last.borrow_mut(),
-        );
-        match execute_with_retry(
-            self.sleeper,
-            self.budget,
-            self.clock,
-            operation,
-        ) {
+        // Pace and stamp every actual read attempt, including retries, so
+        // a recovered retry still leaves MIN_GAP before the next stage
+        // and a budget-limited backoff shorter than MIN_GAP still waits
+        // out the remainder. Backoff that already covers the gap is not
+        // slept again: `pace_before_request` is a no-op when elapsed
+        // already meets MIN_GAP. Ordinary pacing never consumes `-r`.
+        match execute_with_retry(self.sleeper, self.budget, self.clock, || {
+            pace_before_request(
+                self.sleeper,
+                self.clock,
+                &mut self.last.borrow_mut(),
+            );
+            operation()
+        }) {
             Ok(value) => Ok(value),
             Err(error) => {
                 if is_auth_abort(&error) {
@@ -850,5 +854,165 @@ mod tests {
         assert_eq!(clock.sleeps.borrow().len(), 5);
         assert!(clock.sleeps.borrow().iter().all(|sleep| *sleep == MIN_GAP));
         assert!(budget.remaining().is_zero(), "-r 0 wait budget stays empty");
+    }
+
+    #[test]
+    fn retry_then_next_stage_paces_from_the_retry_attempt() {
+        struct FlakyThenOk {
+            search: AtomicUsize,
+            labels: AtomicUsize,
+        }
+        impl GmailRead for FlakyThenOk {
+            fn attachment_bytes(
+                &self,
+                _: &str,
+                _: &str,
+                _: &str,
+            ) -> Result<Vec<u8>, GmailError> {
+                unreachable!()
+            }
+            fn thread_get(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> Result<GmailThread, GmailError> {
+                unreachable!()
+            }
+            fn message_metadata(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> Result<serde_json::Value, GmailError> {
+                unreachable!()
+            }
+            fn search_page(
+                &self,
+                _: &str,
+                _: &str,
+                _: u32,
+                _: Option<&str>,
+            ) -> Result<serde_json::Value, GmailError> {
+                let calls = self
+                    .search
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if calls == 0 {
+                    return Err(transient("rate_limited"));
+                }
+                Ok(serde_json::json!({"threads":[{"id":"aa01"}]}))
+            }
+            fn labels_list(
+                &self,
+                _: &str,
+            ) -> Result<Vec<GmailLabel>, GmailError> {
+                self.labels
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(Vec::new())
+            }
+        }
+        let inner = FlakyThenOk {
+            search: AtomicUsize::new(0),
+            labels: AtomicUsize::new(0),
+        };
+        let clock = ManualClock::new();
+        let budget = SharedBudget::new(Duration::from_secs(120));
+        let last = RefCell::new(None);
+        let coordinated =
+            CoordinatedRead::new(&inner, &clock, &budget, &clock, &last);
+        coordinated
+            .search_page("me@example.com", "label:bob", 500, None)
+            .unwrap();
+        coordinated.labels_list("me@example.com").unwrap();
+        assert_eq!(inner.search.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(inner.labels.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let sleeps = clock.sleeps.borrow().clone();
+        assert_eq!(sleeps.len(), 2, "{sleeps:?}");
+        assert_eq!(sleeps[0], backoff_for_attempt(0));
+        assert_eq!(
+            sleeps[1], MIN_GAP,
+            "the next stage paces from the successful retry, not the failed first attempt"
+        );
+        assert_eq!(
+            budget.remaining(),
+            Duration::from_secs(120) - backoff_for_attempt(0),
+            "pacing never consumes the wait budget"
+        );
+    }
+
+    #[test]
+    fn short_remaining_backoff_still_paces_the_retry() {
+        struct AlwaysOnce {
+            calls: AtomicUsize,
+        }
+        impl GmailRead for AlwaysOnce {
+            fn attachment_bytes(
+                &self,
+                _: &str,
+                _: &str,
+                _: &str,
+            ) -> Result<Vec<u8>, GmailError> {
+                unreachable!()
+            }
+            fn thread_get(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> Result<GmailThread, GmailError> {
+                let calls = self
+                    .calls
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if calls == 0 {
+                    return Err(transient("rate_limited"));
+                }
+                Ok(GmailThread::from_gog_json(
+                    br#"{"thread":{"id":"aa01","messages":[]}}"#,
+                )
+                .expect("thread"))
+            }
+            fn message_metadata(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> Result<serde_json::Value, GmailError> {
+                unreachable!()
+            }
+            fn search_page(
+                &self,
+                _: &str,
+                _: &str,
+                _: u32,
+                _: Option<&str>,
+            ) -> Result<serde_json::Value, GmailError> {
+                unreachable!()
+            }
+            fn labels_list(
+                &self,
+                _: &str,
+            ) -> Result<Vec<GmailLabel>, GmailError> {
+                unreachable!()
+            }
+        }
+        let inner = AlwaysOnce {
+            calls: AtomicUsize::new(0),
+        };
+        let clock = ManualClock::new();
+        // Shorter than MIN_GAP: the budget-limited backoff cannot cover
+        // the request gap on its own.
+        let budget = SharedBudget::new(Duration::from_millis(50));
+        let last = RefCell::new(None);
+        let coordinated =
+            CoordinatedRead::new(&inner, &clock, &budget, &clock, &last);
+        coordinated
+            .thread_get("me@example.com", "aa01")
+            .expect("retry recovers after a short backoff");
+        let sleeps = clock.sleeps.borrow().clone();
+        assert_eq!(sleeps.len(), 2, "{sleeps:?}");
+        assert_eq!(sleeps[0], Duration::from_millis(50));
+        assert_eq!(
+            sleeps[1],
+            MIN_GAP - Duration::from_millis(50),
+            "the retry still waits out the remainder of MIN_GAP"
+        );
+        assert!(budget.remaining().is_zero());
+        assert_eq!(inner.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 }
