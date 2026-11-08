@@ -1,3 +1,8 @@
+//! Record Note engine: schema, per-folder catalog, renderer, and planner.
+//!
+//! The engine has no production caller yet. `bob records` (bob-cli-ir.3) and
+//! the record capture grammar (bob-cli-ir.5) are its first consumers; remove
+//! these unused-code allowances once they call into it.
 #![allow(dead_code)]
 
 pub(crate) mod catalog;

@@ -126,10 +126,9 @@ pub(crate) enum RecordPlanErrorCode {
 impl RecordPlanErrorCode {
     pub(crate) fn diagnostic_code(self) -> &'static str {
         match self {
-            Self::EmptyTitle => "record_title",
+            Self::EmptyTitle | Self::ExplicitStemRequired => "record_title",
             Self::PathCollision => "record_exists",
             Self::UnknownRecordType
-            | Self::ExplicitStemRequired
             | Self::InvalidExplicitStem
             | Self::FolderUnavailable => "record_invalid_value",
         }
@@ -1090,6 +1089,7 @@ records:
         )
         .unwrap_err();
         assert_eq!(error.code, RecordPlanErrorCode::ExplicitStemRequired);
+        assert_eq!(error.code.diagnostic_code(), "record_title");
 
         let mut catalog = RecordCatalog::new(&root);
         let explicit = plan_create(
