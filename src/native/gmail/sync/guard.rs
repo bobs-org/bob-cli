@@ -23,7 +23,7 @@ use std::{
 use fs2::FileExt;
 use sha2::{Digest, Sha256};
 
-use super::retry::{SharedBudget, Sleeper};
+use super::retry::{Clock, SharedBudget, Sleeper};
 use crate::native::env as bob_env;
 
 /// Guard directory under the state home: `$XDG_STATE_HOME/bob/gmail`.
@@ -90,9 +90,10 @@ pub(crate) fn try_acquire(account: &str) -> io::Result<GuardAttempt> {
 /// guard wait, the retry loop, and the vault-lock wait together stay within
 /// one `-r` instead of each waiting another full timeout.
 #[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` guards runs.
-pub(crate) fn acquire_with_budget<S: Sleeper>(
+pub(crate) fn acquire_with_budget<S: Sleeper, C: Clock>(
     sleeper: &S,
     budget: &SharedBudget,
+    clock: &C,
     account: &str,
 ) -> io::Result<GuardAttempt> {
     match try_acquire(account)? {
@@ -101,11 +102,11 @@ pub(crate) fn acquire_with_budget<S: Sleeper>(
         }
         GuardAttempt::Busy => {}
     }
-    if budget.is_exhausted() {
+    if budget.is_exhausted_at(clock.now()) {
         return Ok(GuardAttempt::Busy);
     }
     loop {
-        let remaining = budget.remaining();
+        let remaining = budget.remaining_at(clock.now());
         if remaining.is_zero() {
             return Ok(GuardAttempt::Busy);
         }
@@ -114,22 +115,34 @@ pub(crate) fn acquire_with_budget<S: Sleeper>(
             acquired @ GuardAttempt::Acquired(_) => return Ok(acquired),
             GuardAttempt::Busy => {}
         }
-        if budget.is_exhausted() {
+        if budget.is_exhausted_at(clock.now()) {
             return Ok(GuardAttempt::Busy);
         }
     }
 }
 
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::native::env::TestEnvGuard;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     struct NoSleep;
 
     impl Sleeper for NoSleep {
         fn sleep(&self, _: Duration) {}
+    }
+
+    struct TestClock {
+        now: std::cell::Cell<Instant>,
+    }
+
+    impl Clock for TestClock {
+        fn now(&self) -> Instant {
+            self.now.get()
+        }
     }
 
     fn isolated_state(prefix: &str) -> (tempfile::TempDir, TestEnvGuard) {
@@ -188,10 +201,14 @@ mod tests {
         let (_temp, _env) = isolated_state("sync-guard-budget");
         let account = "you@example.com";
         let _held = try_acquire(account).expect("hold");
-        let budget = SharedBudget::new(Duration::ZERO);
+        let clock = TestClock {
+            now: std::cell::Cell::new(Instant::now()),
+        };
+        let budget = SharedBudget::new_with_now(Duration::ZERO, clock.now());
         assert!(
             matches!(
-                acquire_with_budget(&NoSleep, &budget, account).unwrap(),
+                acquire_with_budget(&NoSleep, &budget, &clock, account)
+                    .unwrap(),
                 GuardAttempt::Busy
             ),
             "zero retry timeout makes one immediate attempt"

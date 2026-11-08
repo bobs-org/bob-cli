@@ -60,6 +60,26 @@ pub(crate) trait Sleeper {
     fn sleep(&self, duration: Duration);
 }
 
+/// Injectable clock for tests.
+///
+/// Production uses [`SystemClock`]; tests advance a manual clock on every
+/// sleep so pacing and exhaustion stay deterministic without wall-clock
+/// flakiness. The recording sleeper alone does not advance [`Instant`], so
+/// it cannot reliably test exhaustion.
+pub(crate) trait Clock {
+    fn now(&self) -> Instant;
+}
+
+/// Production clock: the real wall clock.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+}
+
 /// Production sleeper: block the thread.
 #[derive(Debug, Clone, Copy, Default)]
 #[allow(dead_code)] // `bob gmail sync` paces live runs with this.
@@ -75,10 +95,13 @@ impl Sleeper for SystemSleeper {
 ///
 /// Created once from `-r` (default 120 s; 0 means one immediate attempt) and
 /// shared by the guard wait, the retry loop, and the vault-lock wait so the
-/// three do not each wait another full timeout. A zero timeout never sleeps:
-/// every wait fails fast.
+/// three do not each wait another full timeout. A zero timeout never sleeps
+/// for contention or backoff, but ordinary request pacing still proceeds
+/// without sleeping so a healthy multi-thread run is not capped at one
+/// thread.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SharedBudget {
+    timeout: Duration,
     deadline: Instant,
 }
 
@@ -86,19 +109,36 @@ pub(crate) struct SharedBudget {
 impl SharedBudget {
     /// A budget of `timeout` from now. Zero means no waiting at all.
     pub(crate) fn new(timeout: Duration) -> Self {
+        Self::new_with_now(timeout, Instant::now())
+    }
+
+    /// A budget of `timeout` from `now`, for deterministic tests.
+    pub(crate) fn new_with_now(timeout: Duration, now: Instant) -> Self {
         Self {
-            deadline: Instant::now() + timeout,
+            timeout,
+            deadline: now + timeout,
         }
+    }
+
+    /// Whether `-r 0` was configured: every needed operation still gets one
+    /// immediate attempt with no contention or backoff sleep.
+    pub(crate) fn is_zero_budget(&self) -> bool {
+        self.timeout.is_zero()
+    }
+
+    /// Time left before the deadline at `now`, or zero when exhausted.
+    pub(crate) fn remaining_at(&self, now: Instant) -> Duration {
+        self.deadline.saturating_duration_since(now)
     }
 
     /// Time left before the deadline, or zero when exhausted.
     pub(crate) fn remaining(&self) -> Duration {
-        self.deadline.saturating_duration_since(Instant::now())
+        self.remaining_at(Instant::now())
     }
 
-    /// Whether any wait remains. A zero timeout is exhausted immediately.
-    pub(crate) fn is_exhausted(&self) -> bool {
-        self.remaining().is_zero()
+    /// Whether any wait remains at `now`.
+    pub(crate) fn is_exhausted_at(&self, now: Instant) -> bool {
+        self.remaining_at(now).is_zero()
     }
 }
 
@@ -119,17 +159,18 @@ pub(crate) fn backoff_for_attempt(attempt: u32) -> Duration {
     )
 }
 
-/// Sleep at most `desired`, bounded by the shared budget.
+/// Sleep at most `desired`, bounded by the shared budget at `clock`.
 ///
 /// Returns the slept duration, or `None` when the budget is already
 /// exhausted so the caller defers the remaining work to the next run.
 #[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` paces fetches.
-pub(crate) fn sleep_within_budget<S: Sleeper>(
+pub(crate) fn sleep_within_budget<S: Sleeper, C: Clock>(
     sleeper: &S,
     budget: &SharedBudget,
+    clock: &C,
     desired: Duration,
 ) -> Option<Duration> {
-    let remaining = budget.remaining();
+    let remaining = budget.remaining_at(clock.now());
     if remaining.is_zero() || desired.is_zero() {
         return None;
     }
@@ -150,10 +191,12 @@ pub(crate) fn sleep_within_budget<S: Sleeper>(
 /// the same request. Auth aborts and permanent failures return immediately
 /// without sleeping. When the budget exhausts, the last transient error
 /// returns so the caller retains prepared successes and defers the rest.
+/// A zero budget still makes one immediate attempt with no backoff sleep.
 #[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` fetches with it.
-pub(crate) fn execute_with_retry<S: Sleeper, T>(
+pub(crate) fn execute_with_retry<S: Sleeper, C: Clock, T>(
     sleeper: &S,
     budget: &SharedBudget,
+    clock: &C,
     mut operation: impl FnMut() -> Result<T, GmailError>,
 ) -> Result<T, GmailError> {
     let mut attempt: u32 = 0;
@@ -165,7 +208,9 @@ pub(crate) fn execute_with_retry<S: Sleeper, T>(
                     return Err(error);
                 }
                 let backoff = backoff_for_attempt(attempt);
-                if sleep_within_budget(sleeper, budget, backoff).is_none() {
+                if sleep_within_budget(sleeper, budget, clock, backoff)
+                    .is_none()
+                {
                     return Err(error);
                 }
                 attempt = attempt.saturating_add(1);
@@ -174,42 +219,92 @@ pub(crate) fn execute_with_retry<S: Sleeper, T>(
     }
 }
 
-/// Enforce the minimum gap since `last_request`.
+/// Enforce the minimum gap since `last_request` at `clock`.
 ///
 /// Sleeps `MIN_GAP - elapsed` when the previous request was too recent.
-/// Returns `false` when the budget is exhausted so the caller defers the
-/// remaining candidates instead of issuing another request.
+/// Returns `false` when a non-zero budget is exhausted so the caller defers
+/// the remaining candidates instead of issuing another request. A zero
+/// `-r 0` budget never sleeps for pacing: every needed operation still gets
+/// its one immediate attempt, so pacing alone never caps a healthy
+/// multi-thread run at one thread.
 #[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` paces fetches.
-pub(crate) fn pace_before_request<S: Sleeper>(
+pub(crate) fn pace_before_request<S: Sleeper, C: Clock>(
     sleeper: &S,
     budget: &SharedBudget,
+    clock: &C,
     last_request: &mut Option<Instant>,
 ) -> bool {
+    if budget.is_zero_budget() {
+        *last_request = Some(clock.now());
+        return true;
+    }
     if let Some(last) = *last_request {
-        let elapsed = last.elapsed();
+        let elapsed = clock.now().saturating_duration_since(last);
         if elapsed < MIN_GAP
-            && sleep_within_budget(sleeper, budget, MIN_GAP - elapsed).is_none()
+            && sleep_within_budget(sleeper, budget, clock, MIN_GAP - elapsed)
+                .is_none()
         {
             return false;
         }
     }
-    *last_request = Some(Instant::now());
+    *last_request = Some(clock.now());
     true
 }
+
+/// Body-free deferred error when the shared budget cannot afford another
+/// paced request. Callers treat this as "catch up next run", not as a
+/// remote failure.
+#[cfg_attr(not(test), allow(dead_code))] // `bob gmail sync` defers work.
+pub(crate) fn deferred_error() -> GmailError {
+    GmailError::runtime(
+        "deferred",
+        "deferred remaining Gmail work when the retry budget ran out"
+            .to_string(),
+    )
+}
+
+/// One run's Gmail stages share a single pacing slot and a single
+/// remaining budget: the caller threads one `last_request` through paged
+/// search, label enumeration, candidate metadata, hydration, policy
+/// metadata, and attachment reads (see `command.rs` and `discover.rs`), so
+/// `-r` bounds the whole run and ordinary pacing never requires a second
+/// sleep for the same gap.
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::{cell::RefCell, sync::atomic::AtomicUsize};
 
-    #[derive(Default)]
-    struct RecordSleep {
+    /// Manual clock that advances on every sleep, so pacing and exhaustion
+    /// stay deterministic without wall-clock flakiness.
+    struct ManualClock {
+        now: RefCell<Instant>,
         sleeps: RefCell<Vec<Duration>>,
     }
 
-    impl Sleeper for RecordSleep {
+    impl ManualClock {
+        fn new() -> Self {
+            Self {
+                now: RefCell::new(Instant::now()),
+                sleeps: RefCell::new(Vec::new()),
+            }
+        }
+
+        fn advance(&self, duration: Duration) {
+            *self.now.borrow_mut() += duration;
+        }
+    }
+
+    impl Clock for ManualClock {
+        fn now(&self) -> Instant {
+            *self.now.borrow()
+        }
+    }
+
+    impl Sleeper for ManualClock {
         fn sleep(&self, duration: Duration) {
             self.sleeps.borrow_mut().push(duration);
+            self.advance(duration);
         }
     }
 
@@ -253,11 +348,12 @@ mod tests {
 
     #[test]
     fn zero_budget_never_sleeps_and_returns_last_error() {
-        let sleeper = RecordSleep::default();
-        let budget = SharedBudget::new(Duration::ZERO);
-        assert!(budget.is_exhausted());
+        let clock = ManualClock::new();
+        let budget = SharedBudget::new_with_now(Duration::ZERO, clock.now());
+        assert!(budget.is_exhausted_at(clock.now()));
+        assert!(budget.is_zero_budget());
         let attempts = AtomicUsize::new(0);
-        let error = execute_with_retry(&sleeper, &budget, || {
+        let error = execute_with_retry(&clock, &budget, &clock, || {
             attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Err::<(), _>(transient("rate_limited"))
         })
@@ -268,15 +364,16 @@ mod tests {
             1,
             "zero budget makes one immediate attempt"
         );
-        assert!(sleeper.sleeps.borrow().is_empty());
+        assert!(clock.sleeps.borrow().is_empty());
     }
 
     #[test]
     fn transient_then_success_sleeps_once_with_backoff() {
-        let sleeper = RecordSleep::default();
-        let budget = SharedBudget::new(Duration::from_secs(120));
+        let clock = ManualClock::new();
+        let budget =
+            SharedBudget::new_with_now(Duration::from_secs(120), clock.now());
         let attempts = AtomicUsize::new(0);
-        let value = execute_with_retry(&sleeper, &budget, || {
+        let value = execute_with_retry(&clock, &budget, &clock, || {
             let attempt =
                 attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if attempt == 0 {
@@ -287,37 +384,65 @@ mod tests {
         })
         .expect("recovers");
         assert_eq!(value, 7);
-        assert_eq!(sleeper.sleeps.borrow().len(), 1);
-        assert_eq!(sleeper.sleeps.borrow()[0], backoff_for_attempt(0));
+        assert_eq!(clock.sleeps.borrow().len(), 1);
+        assert_eq!(clock.sleeps.borrow()[0], backoff_for_attempt(0));
     }
 
     #[test]
     fn auth_abort_returns_without_sleeping() {
-        let sleeper = RecordSleep::default();
-        let budget = SharedBudget::new(Duration::from_secs(120));
-        let error = execute_with_retry(&sleeper, &budget, || {
+        let clock = ManualClock::new();
+        let budget =
+            SharedBudget::new_with_now(Duration::from_secs(120), clock.now());
+        let error = execute_with_retry(&clock, &budget, &clock, || {
             Err::<(), _>(transient("invalid_grant"))
         })
         .expect_err("aborts");
         assert_eq!(error.kind(), "invalid_grant");
-        assert!(sleeper.sleeps.borrow().is_empty());
+        assert!(clock.sleeps.borrow().is_empty());
     }
 
     #[test]
     fn pacing_enforces_minimum_gap_and_respects_budget() {
-        let sleeper = RecordSleep::default();
-        let budget = SharedBudget::new(Duration::from_secs(120));
+        let clock = ManualClock::new();
+        let budget =
+            SharedBudget::new_with_now(Duration::from_secs(120), clock.now());
         let mut last = None;
-        assert!(pace_before_request(&sleeper, &budget, &mut last));
-        assert!(sleeper.sleeps.borrow().is_empty(), "first request is free");
-        assert!(pace_before_request(&sleeper, &budget, &mut last));
-        assert_eq!(sleeper.sleeps.borrow().len(), 1, "second request paces");
+        assert!(pace_before_request(&clock, &budget, &clock, &mut last));
+        assert!(clock.sleeps.borrow().is_empty(), "first request is free");
+        assert!(pace_before_request(&clock, &budget, &clock, &mut last));
+        assert_eq!(clock.sleeps.borrow().len(), 1, "second request paces");
+        // Advancing past the gap needs no further sleep.
+        clock.advance(MIN_GAP + Duration::from_millis(1));
+        assert!(pace_before_request(&clock, &budget, &clock, &mut last));
+        assert_eq!(clock.sleeps.borrow().len(), 1);
+    }
 
-        let empty = SharedBudget::new(Duration::ZERO);
-        let mut last = Some(Instant::now());
+    #[test]
+    fn zero_budget_pacing_still_allows_healthy_requests() {
+        let clock = ManualClock::new();
+        let budget = SharedBudget::new_with_now(Duration::ZERO, clock.now());
+        let mut last = None;
+        assert!(pace_before_request(&clock, &budget, &clock, &mut last));
+        assert!(clock.sleeps.borrow().is_empty());
+        assert!(pace_before_request(&clock, &budget, &clock, &mut last));
         assert!(
-            !pace_before_request(&sleeper, &empty, &mut last),
-            "exhausted budget defers instead of requesting"
+            clock.sleeps.borrow().is_empty(),
+            "-r 0 never sleeps for pacing"
         );
+    }
+
+    #[test]
+    fn exhausted_nonzero_budget_defers_pacing() {
+        let clock = ManualClock::new();
+        let budget =
+            SharedBudget::new_with_now(Duration::from_millis(10), clock.now());
+        let mut last = None;
+        assert!(pace_before_request(&clock, &budget, &clock, &mut last));
+        // Exhaust the small budget with a sleep, then pacing must defer.
+        clock.advance(Duration::from_secs(1));
+        let mut stale = Some(clock.now());
+        // Move the last request to now so pacing needs a sleep it cannot afford.
+        // Budget is exhausted, so the next paced request defers.
+        assert!(!pace_before_request(&clock, &budget, &clock, &mut stale));
     }
 }

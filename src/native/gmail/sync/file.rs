@@ -30,6 +30,7 @@ use crate::native::{
     capture::{self, StagedTextFile},
     env as bob_env,
     gmail::{
+        journal as gmail_journal,
         note::index::MailIndex,
         resolve,
         route::{RouteContext, RouteProblem, RouteVerdict},
@@ -38,6 +39,72 @@ use crate::native::{
     },
     ob, vault_sync,
 };
+
+/// Body-free transaction ownership evidence for commit and journal recovery.
+///
+/// Written when a scoped commit or a journal append fails, before any
+/// enrollment is recorded. The next live run finishes the original scoped
+/// commit (owned mail notes, task files, images, and canonical hubs only)
+/// and its deferred save, origin, and enrollment events before recording
+/// new enrollment, without requiring the failed transaction's SHA, a push,
+/// or the enrollment label. Unrelated staged dirt, custom hubs, and the
+/// vault AGENTS warning are never blanket commit targets.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+struct RecoveryData {
+    threads: Vec<RecoveryThread>,
+    commit_paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct RecoveryThread {
+    account: String,
+    thread_id: String,
+    note: String,
+    task_file: String,
+    via: String,
+    route: Option<String>,
+    created: bool,
+    added: usize,
+    origins: Vec<(String, String, String)>,
+    adopted: bool,
+    problem_label: Option<String>,
+    problem_kind: Option<String>,
+    problem_message: Option<String>,
+    problem_hint: Option<String>,
+    first_seen: bool,
+}
+
+pub(crate) fn has_pending_recovery(vault: &Path) -> bool {
+    let path = recovery_path(vault);
+    fs::read(&path).is_ok_and(|bytes| !bytes.is_empty())
+}
+
+fn recovery_path(vault: &Path) -> PathBuf {
+    vault
+        .join(gmail_journal::NAMESPACE.dir)
+        .join("sync-recovery.json")
+}
+
+fn load_recovery(vault: &Path) -> RecoveryData {
+    let path = recovery_path(vault);
+    let bytes = fs::read(&path).unwrap_or_default();
+    if bytes.is_empty() {
+        return RecoveryData::default();
+    }
+    serde_json::from_slice(&bytes).unwrap_or_default()
+}
+
+fn write_recovery(vault: &Path, data: &RecoveryData) {
+    let dir = vault.join(gmail_journal::NAMESPACE.dir);
+    let _ = fs::create_dir_all(&dir);
+    if let Ok(bytes) = serde_json::to_vec(data) {
+        let _ = fs::write(recovery_path(vault), bytes);
+    }
+}
+
+fn clear_recovery(vault: &Path) {
+    let _ = fs::remove_file(recovery_path(vault));
+}
 
 /// A fully prepared thread and the route resolved from its fetched labels.
 /// No Gmail request is performed by this module.
@@ -100,6 +167,11 @@ pub(crate) struct FilingOutcome {
     /// but make this run fail, as the durable row is not yet enrolled.
     pub(crate) failed: bool,
     pub(crate) changed: bool,
+    /// The watch scan the apply boundary revalidated under the vault lock
+    /// (or the dry-run input scan). Reports must use this snapshot for live
+    /// membership, not the pre-fetch scan, so a task closed during
+    /// preparation leaves the summary.
+    pub(crate) watch_snapshot: WatchScan,
 }
 
 #[derive(Debug, Clone)]
@@ -519,20 +591,21 @@ fn build_attempt(
         }
     }
 
-    let auxiliary = if plans.iter().any(|plan| plan.changed) {
+    // Always plan auxiliary hubs so a prior failed commit's canonical
+    // `mail.md`/`mail.base` recovery is included even when no note plan
+    // changed (adoption-only replay). `plan_auxiliary_files` only stages
+    // upgrades when a note is written and only commits canonical hubs that
+    // remain dirty, so custom hubs, unrelated dirt, and the vault AGENTS
+    // warning stay outside the scoped commit.
+    let auxiliary = {
         let child_env = ob::child_env();
         save::plan_auxiliary_files(
             vault,
             mail_folder,
             is_worktree,
             &child_env,
-            true,
+            plans.iter().any(|plan| plan.changed),
         )?
-    } else {
-        save::AuxiliaryFiles {
-            staged: Vec::new(),
-            commit_paths: Vec::new(),
-        }
     };
     staged.extend(auxiliary.staged.iter().map(save::clone_staged));
     save::validate_write_targets(vault, &plans, &works, &staged)?;
@@ -546,6 +619,7 @@ fn build_attempt(
     outcome.deferred.sort();
     outcome.deferred.dedup();
     outcome.changed = !staged.is_empty() || !enrollment_events.is_empty();
+    outcome.watch_snapshot = watchers.clone();
 
     Ok(AttemptPlan {
         outcome,
@@ -588,21 +662,228 @@ fn persist_attempt(
         &plan.staged,
     ) {
         Ok(paths) => paths,
-        Err(error) => return Err((error, plan)),
+        Err(error) => {
+            // A failed text batch must remove only images this attempt
+            // created, preserving the save transaction's rollback rule.
+            return Err((error, plan));
+        }
     };
     commit_paths
         .extend(created_images.into_iter().map(|(relative, _)| relative));
     commit_paths.sort();
     commit_paths.dedup();
 
+    // Finish a prior failed transaction's scoped commit before new
+    // enrollment is recorded. Only owned, still-dirty recovery paths join
+    // this commit; unrelated dirt, custom hubs, and the AGENTS warning stay
+    // out. Rechecked under the lock so edits after the failed attempt are
+    // never overwritten.
+    let recovery = load_recovery(vault);
+    let mut recovery_commit_paths: Vec<PathBuf> = Vec::new();
+    for rel in &recovery.commit_paths {
+        let Ok(relative) = save::safe_relative_path(rel) else {
+            continue;
+        };
+        if save::validate_target_path(vault, &relative).is_err() {
+            continue;
+        }
+        if relative.as_path() == Path::new("AGENTS.md") {
+            continue;
+        }
+        if !is_worktree {
+            continue;
+        }
+        let dirty = save::git_path_is_dirty(vault, child_env, &relative)
+            .unwrap_or(false);
+        if dirty && !commit_paths.contains(&relative) {
+            recovery_commit_paths.push(relative);
+        }
+    }
+    // Owned images from the failed transaction may no longer be in the
+    // current works (adoption-only replay): re-include them when they are
+    // still dirty and referenced by a recovery note.
+    for thread in &recovery.threads {
+        for (saved, _, _) in &thread.origins {
+            let Ok(relative) = save::safe_relative_path(saved) else {
+                continue;
+            };
+            if commit_paths.contains(&relative)
+                || recovery_commit_paths.contains(&relative)
+            {
+                continue;
+            }
+            if save::validate_target_path(vault, &relative).is_err() {
+                continue;
+            }
+            if is_worktree
+                && save::git_path_is_dirty(vault, child_env, &relative)
+                    .unwrap_or(false)
+            {
+                recovery_commit_paths.push(relative);
+            }
+        }
+    }
+    commit_paths.extend(recovery_commit_paths.iter().cloned());
+    commit_paths.sort();
+    commit_paths.dedup();
+
     if is_worktree && !commit_paths.is_empty() {
-        let count = plan.enrollment_events.len();
+        let count = plan.enrollment_events.len() + recovery.threads.len();
         if let Err(error) = ob::commit_paths(
             vault,
             child_env,
             &format!("gmail: sync {count} threads"),
             &commit_paths,
         ) {
+            // Retain body-free ownership evidence so replay can finish the
+            // scoped commit and its deferred events before enrollment.
+            let mut threads: Vec<RecoveryThread> = recovery.threads.clone();
+            for result in &plan.outcome.results {
+                if !matches!(result.status, "filed" | "adopted") {
+                    continue;
+                }
+                if threads.iter().any(|thread| {
+                    thread.account == result.key.account()
+                        && thread.thread_id == result.key.thread_id()
+                }) {
+                    continue;
+                }
+                let key = (
+                    result.key.account().to_string(),
+                    result.key.thread_id().to_string(),
+                );
+                let event_facts = facts.get(&key);
+                let (created, added, origins) = event_facts
+                    .map(|event_facts| {
+                        (
+                            event_facts.created,
+                            event_facts.added_count,
+                            event_facts.origins.clone(),
+                        )
+                    })
+                    .unwrap_or_default();
+                threads.push(RecoveryThread {
+                    account: result.key.account().to_string(),
+                    thread_id: result.key.thread_id().to_string(),
+                    note: result.note.clone().unwrap_or_default(),
+                    task_file: result.task_file.clone().unwrap_or_default(),
+                    via: result
+                        .via
+                        .map(|via| via.as_str().to_string())
+                        .unwrap_or_else(|| {
+                            if result.status == "adopted" {
+                                "adopted".to_string()
+                            } else {
+                                "inbox".to_string()
+                            }
+                        }),
+                    route: result.route.clone(),
+                    created,
+                    added,
+                    origins,
+                    adopted: result.status == "adopted",
+                    problem_label: result
+                        .problem
+                        .as_ref()
+                        .map(|problem| problem.label.clone()),
+                    problem_kind: result
+                        .problem
+                        .as_ref()
+                        .map(|problem| problem.kind.as_str().to_string()),
+                    problem_message: result
+                        .problem
+                        .as_ref()
+                        .map(|problem| problem.message.clone()),
+                    problem_hint: result
+                        .problem
+                        .as_ref()
+                        .map(|problem| problem.hint.clone()),
+                    first_seen: result.first_seen,
+                });
+            }
+            // Adopted threads with no filed plans still need their
+            // enrollment evidence retained.
+            for event in &plan.enrollment_events {
+                let key = event.key();
+                if threads.iter().any(|thread| {
+                    thread.account == key.account()
+                        && thread.thread_id == key.thread_id()
+                }) {
+                    continue;
+                }
+                match event {
+                    enroll::EnrollmentEvent::Adopted {
+                        key,
+                        note,
+                        task_file,
+                    } => threads.push(RecoveryThread {
+                        account: key.account().to_string(),
+                        thread_id: key.thread_id().to_string(),
+                        note: note.clone(),
+                        task_file: task_file.clone(),
+                        via: "adopted".to_string(),
+                        route: None,
+                        created: false,
+                        added: 0,
+                        origins: Vec::new(),
+                        adopted: true,
+                        problem_label: None,
+                        problem_kind: None,
+                        problem_message: None,
+                        problem_hint: None,
+                        first_seen: false,
+                    }),
+                    enroll::EnrollmentEvent::Filed {
+                        key,
+                        note,
+                        task_file,
+                        via,
+                        route,
+                    } => {
+                        let event_facts = facts.get(&(
+                            key.account().to_string(),
+                            key.thread_id().to_string(),
+                        ));
+                        let (created, added, origins) = event_facts
+                            .map(|event_facts| {
+                                (
+                                    event_facts.created,
+                                    event_facts.added_count,
+                                    event_facts.origins.clone(),
+                                )
+                            })
+                            .unwrap_or_default();
+                        threads.push(RecoveryThread {
+                            account: key.account().to_string(),
+                            thread_id: key.thread_id().to_string(),
+                            note: note.clone(),
+                            task_file: task_file.clone(),
+                            via: via.as_str().to_string(),
+                            route: route.clone(),
+                            created,
+                            added,
+                            origins,
+                            adopted: false,
+                            problem_label: None,
+                            problem_kind: None,
+                            problem_message: None,
+                            problem_hint: None,
+                            first_seen: false,
+                        });
+                    }
+                }
+            }
+            let commit_strings: Vec<String> = commit_paths
+                .iter()
+                .map(|path| save::path_to_slashes(path))
+                .collect();
+            write_recovery(
+                vault,
+                &RecoveryData {
+                    threads,
+                    commit_paths: commit_strings,
+                },
+            );
             return Err((
                 GmailError::runtime(
                     "uncommitted",
@@ -626,6 +907,7 @@ fn persist_attempt(
         })
         .collect();
     let mut origins = Vec::new();
+    let mut failed_save_threads: Vec<(String, String)> = Vec::new();
     for note in &journaled_notes {
         let key = (note.account.clone(), note.thread_id.clone());
         let Some(event_facts) = facts.get(&key) else {
@@ -638,26 +920,324 @@ fn persist_attempt(
             plan.outcome
                 .warnings
                 .push(format!("could not append Gmail save journal: {error}"));
+            failed_save_threads
+                .push((note.account.clone(), note.thread_id.clone()));
         }
         origins.extend(event_facts.origins.iter().cloned());
     }
+    // Recovery save events for previously filed threads whose journal
+    // append never ran (commit failed before any appends).
+    let mut recovery_origins: Vec<(String, String, String)> = Vec::new();
+    let mut recovery_save_ok = true;
+    let recovery_keys: std::collections::BTreeSet<(String, String)> = recovery
+        .threads
+        .iter()
+        .map(|thread| (thread.account.clone(), thread.thread_id.clone()))
+        .collect();
+    let current_keys: std::collections::BTreeSet<(String, String)> = plan
+        .plans
+        .iter()
+        .map(|note| (note.account.clone(), note.thread_id.clone()))
+        .collect();
+    for thread in &recovery.threads {
+        let key = (thread.account.clone(), thread.thread_id.clone());
+        if current_keys.contains(&key) {
+            continue;
+        }
+        // Skip recovery enrollment that the current run already covers
+        // as an adoption of the same thread: the recovery Filed event
+        // (with via/route) wins, so the current Adopted event is dropped
+        // below.
+        let note_path = PathBuf::from(&thread.note);
+        let absolute = vault.join(&note_path);
+        if fs::symlink_metadata(&absolute).is_err() {
+            continue;
+        }
+        let staged = StagedSaveNote {
+            account: thread.account.clone(),
+            thread_id: thread.thread_id.clone(),
+            path: absolute,
+            link: String::new(),
+            title: String::new(),
+            who: String::new(),
+            message_count: 0,
+            added_count: thread.added,
+            created: thread.created,
+            changed: false,
+            status: "filed",
+            original: None,
+            updated: String::new(),
+            preview: Vec::new(),
+            preview_noop: true,
+        };
+        let event_facts = SaveEventFacts {
+            created: thread.created,
+            added_count: thread.added,
+            origins: thread.origins.clone(),
+        };
+        if let Err(error) =
+            save::append_save_event(vault, &host, &staged, &event_facts)
+        {
+            recovery_save_ok = false;
+            plan.outcome.failed = true;
+            plan.outcome
+                .warnings
+                .push(format!("could not append Gmail save journal: {error}"));
+        }
+        recovery_origins.extend(thread.origins.iter().cloned());
+    }
+    let mut all_origins = origins.clone();
+    all_origins.extend(recovery_origins.iter().cloned());
+    all_origins.sort();
+    all_origins.dedup();
+    let mut failed_origin_saved: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
     for failure in
-        attachment_journal::append_origin_events(vault, &origins, "gmail")
+        attachment_journal::append_origin_events(vault, &all_origins, "gmail")
     {
         plan.outcome.warnings.push(format!(
             "could not record imported image {}: {}",
             failure.saved, failure.error
         ));
+        plan.outcome.failed = true;
+        failed_origin_saved.insert(failure.saved.clone());
     }
 
-    for event in &plan.enrollment_events {
+    // Enrollment last, after the vault writes it describes are durable.
+    // Recovery Filed events win over a current Adopted event for the same
+    // thread so via/route are preserved without duplication.
+    let mut current_events = std::mem::take(&mut plan.enrollment_events);
+    current_events.retain(|event| {
+        let key = event.key();
+        let pair = (key.account().to_string(), key.thread_id().to_string());
+        if recovery_keys.contains(&pair) {
+            // Current adoption is superseded by the recovery filing.
+            return false;
+        }
+        true
+    });
+    let mut failed_enrollment: Vec<enroll::EnrollmentEvent> = Vec::new();
+    for event in &current_events {
         if let Err(error) = enroll::append(vault, &host, event) {
             plan.outcome.failed = true;
             plan.outcome.warnings.push(format!(
                 "could not append Gmail enrollment journal: {error}"
             ));
+            failed_enrollment.push(event.clone());
         }
     }
+    let mut recovery_enrollment_ok = true;
+    for thread in &recovery.threads {
+        let event = if thread.adopted {
+            enroll::EnrollmentEvent::Adopted {
+                key: ThreadKey::new(&thread.account, &thread.thread_id)
+                    .expect("recovery identity was validated when filed"),
+                note: thread.note.clone(),
+                task_file: thread.task_file.clone(),
+            }
+        } else {
+            let via = match thread.via.as_str() {
+                "route" => enroll::FiledVia::Route,
+                "problem" => enroll::FiledVia::Problem,
+                _ => enroll::FiledVia::Inbox,
+            };
+            enroll::EnrollmentEvent::Filed {
+                key: ThreadKey::new(&thread.account, &thread.thread_id)
+                    .expect("recovery identity was validated when filed"),
+                note: thread.note.clone(),
+                task_file: thread.task_file.clone(),
+                via,
+                route: thread.route.clone(),
+            }
+        };
+        // Avoid duplicating an enrollment the vault already records
+        // (e.g. a prior replay partially succeeded).
+        if let Ok(fold) = EnrollmentFold::load(vault) {
+            let key = event.key();
+            if fold.is_enrolled(key) {
+                continue;
+            }
+        }
+        if let Err(error) = enroll::append(vault, &host, &event) {
+            recovery_enrollment_ok = false;
+            plan.outcome.failed = true;
+            plan.outcome.warnings.push(format!(
+                "could not append Gmail enrollment journal: {error}"
+            ));
+            failed_enrollment.push(event);
+        }
+    }
+    // Surface recovered threads in this run's outcome so counts, watch
+    // membership, and human rows reflect the finished transaction once.
+    for thread in &recovery.threads {
+        let Some(key) = ThreadKey::new(&thread.account, &thread.thread_id)
+        else {
+            continue;
+        };
+        if plan.outcome.results.iter().any(|result| result.key == key) {
+            continue;
+        }
+        if plan.outcome.deferred.contains(&key) {
+            continue;
+        }
+        let (status, via, problem) = if thread.adopted {
+            ("adopted", None, None)
+        } else {
+            let via = match thread.via.as_str() {
+                "route" => Some(enroll::FiledVia::Route),
+                "problem" => Some(enroll::FiledVia::Problem),
+                _ => Some(enroll::FiledVia::Inbox),
+            };
+            let problem = match (
+                &thread.problem_label,
+                &thread.problem_kind,
+                &thread.problem_message,
+            ) {
+                (Some(label), Some(kind), Some(message)) => {
+                    let kind = match kind.as_str() {
+                        "unknown_note" => {
+                            crate::native::gmail::route::RouteProblemKind::UnknownNote
+                        }
+                        "not_area_or_project" => {
+                            crate::native::gmail::route::RouteProblemKind::NotAreaOrProject
+                        }
+                        "closed_project" => {
+                            crate::native::gmail::route::RouteProblemKind::ClosedProject
+                        }
+                        "ambiguous_alias" => {
+                            crate::native::gmail::route::RouteProblemKind::AmbiguousAlias
+                        }
+                        "nested_route" => {
+                            crate::native::gmail::route::RouteProblemKind::NestedRoute
+                        }
+                        _ => {
+                            crate::native::gmail::route::RouteProblemKind::AmbiguousRoute
+                        }
+                    };
+                    Some(RouteProblem {
+                        kind,
+                        label: label.clone(),
+                        message: message.clone(),
+                        hint: thread.problem_hint.clone().unwrap_or_default(),
+                    })
+                }
+                _ => None,
+            };
+            ("filed", via, problem)
+        };
+        plan.outcome.results.push(FilingResult {
+            key,
+            note: Some(thread.note.clone()),
+            link: None,
+            task_file: Some(thread.task_file.clone()),
+            status,
+            route: thread.route.clone(),
+            via,
+            problem,
+            first_seen: thread.first_seen,
+        });
+    }
+    plan.outcome
+        .results
+        .sort_by(|left, right| left.key.cmp(&right.key));
+
+    if plan.outcome.failed {
+        // Retain only the events that still need a replay so the next run
+        // finishes them without duplication.
+        let mut threads: Vec<RecoveryThread> = Vec::new();
+        for thread in &recovery.threads {
+            let key = (thread.account.clone(), thread.thread_id.clone());
+            // If recovery save/origin/enrollment all succeeded for this
+            // thread, it needs no further replay.
+            let save_failed =
+                failed_save_threads.contains(&key) || !recovery_save_ok;
+            let origin_failed = thread
+                .origins
+                .iter()
+                .any(|(saved, _, _)| failed_origin_saved.contains(saved));
+            // Enrollment failure is tracked per-event; if any enrollment
+            // failed, keep threads whose enrollment is still missing.
+            let still_missing =
+                load_recovery(vault).threads.iter().any(|candidate| {
+                    candidate.account == thread.account
+                        && candidate.thread_id == thread.thread_id
+                });
+            let _ = still_missing;
+            if save_failed || origin_failed || !recovery_enrollment_ok {
+                threads.push(thread.clone());
+            }
+        }
+        // Also retain current-run failures for the next replay.
+        for event in failed_enrollment {
+            let key = event.key();
+            if threads.iter().any(|thread| {
+                thread.account == key.account()
+                    && thread.thread_id == key.thread_id()
+            }) {
+                continue;
+            }
+            match event {
+                enroll::EnrollmentEvent::Adopted {
+                    key,
+                    note,
+                    task_file,
+                } => threads.push(RecoveryThread {
+                    account: key.account().to_string(),
+                    thread_id: key.thread_id().to_string(),
+                    note,
+                    task_file,
+                    via: "adopted".to_string(),
+                    route: None,
+                    created: false,
+                    added: 0,
+                    origins: Vec::new(),
+                    adopted: true,
+                    problem_label: None,
+                    problem_kind: None,
+                    problem_message: None,
+                    problem_hint: None,
+                    first_seen: false,
+                }),
+                enroll::EnrollmentEvent::Filed {
+                    key,
+                    note,
+                    task_file,
+                    via,
+                    route,
+                } => threads.push(RecoveryThread {
+                    account: key.account().to_string(),
+                    thread_id: key.thread_id().to_string(),
+                    note,
+                    task_file,
+                    via: via.as_str().to_string(),
+                    route,
+                    created: false,
+                    added: 0,
+                    origins: Vec::new(),
+                    adopted: false,
+                    problem_label: None,
+                    problem_kind: None,
+                    problem_message: None,
+                    problem_hint: None,
+                    first_seen: false,
+                }),
+            }
+        }
+        if !threads.is_empty() || !commit_paths.is_empty() {
+            write_recovery(
+                vault,
+                &RecoveryData {
+                    threads,
+                    commit_paths: Vec::new(),
+                },
+            );
+        }
+    } else {
+        clear_recovery(vault);
+    }
+    // Restore current enrollment events for any caller that inspects the
+    // plan after a journal failure (the outcome already records failure).
+    plan.enrollment_events = current_events;
     Ok(plan.outcome)
 }
 

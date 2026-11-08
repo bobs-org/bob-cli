@@ -672,38 +672,61 @@ for ten minutes. It stores no snippets, message bodies, MIME, or attachments.
 `bob gmail sync` searches `label:<gmail.sync.label>` (default `label:bob`,
 falling back to `gmail.pull.label`), up to 50 new threads by default and at
 most 500 per invocation. `-l` caps new filings only; `0` skips new-candidate
-search while still scanning and adopting. Each thread that is not already
-enrolled is saved through the normal save path, then one `- [ ] #task` row
+search while still scanning, adopting, and reporting watchers normally.
+Already enrolled threads and locally adoptable threads never consume filing
+slots and never receive candidate metadata or body fetches. Each unseen
+thread is saved through the normal save path, then one `- [ ] #task` row
 linking its mail note is appended under `## Tasks` in the area or project
 named by a routing label, or in `gmail.sync.inbox` when none or an invalid
 routing label is present. New task rows carry no freshness stamp. If the
-inbox file is missing, Bob creates it as an inbox area note. A missing or
-empty `sync.label` (or `pull.label` fallback) disables the command.
+inbox file is missing, Bob creates it as an inbox area note. A missing
+`sync.label` falls back to `pull.label`, then `bob`; an explicitly empty
+label disables the command as a setup error.
 
 Enrollment identity is `(account, Gmail thread id)`. The `.bob/gmail/*.jsonl`
 `gmail.filed` and `gmail.adopted` events prevent repeat filing; legacy
-`gmail.pulled` events still enroll a thread. `-d` reads and plans without
-writing, taking no guard or vault lock. `-r` is the shared retry budget
-(default 120 seconds) for the guard, remote retries, and vault-lock wait.
-The label stays in Gmail: sync uses read-only access and never unlabels,
-archives, marks read, or changes a message. `pull` remains a hidden alias
-with the same behaviour.
+`gmail.pulled` events still enroll a thread. Enrollment is durable: removing
+the Gmail label, or closing, moving, merging, or deleting the task, never
+un-enrolls a thread. An open task that already links an unenrolled mail note
+is adopted with no new row, including after a lost journal append and even
+when the label is gone. Reopening or linking from a new open task restores
+membership without needing the label again. `pulled` counts only durable
+`filed`/`would_file` rows, including filed route problems; fetch and
+planning failures never count. `watching` counts distinct enrolled threads
+with open watchers from the revalidated apply snapshot plus this run's
+filings and adoptions. `-d` reads and plans without writing, taking no guard
+or vault lock. `-r` is the shared retry budget (default 120 seconds) for the
+guard, remote retries with pacing and bounded backoff, and the vault-lock
+wait; `0` gives each needed operation one immediate attempt with no
+contention or backoff sleep. The label stays in Gmail: sync uses read-only
+access and never unlabels, archives, marks read, or changes a message.
+`pull` remains a hidden alias with the same behaviour.
+
+A thread whose routing label does not resolve is still filed to the inbox
+with a managed `GMAIL ROUTE` child that names the offending label, the
+resolver's explanation, and its hint; the first such filing exits 1.
+Failures carry their body-free `kind` and `message` in warnings, and human
+and quiet rows show the route label, explanation, and hint for filed route
+problems while distinguishing remote failures with no durable row.
 
 JSON schema 1 keeps pull's `ok`, `dry_run`, `pulled`, `results`, and
 `warnings`, and adds `watch: []`, `problems`, and
 `summary: {watching, awaiting}`. Result statuses are `filed`, `would_file`,
 `adopted`, `already_filed`, `already_pulled`, and `problem`. Exit 0 on
-success, no-op, or contention skip; 1 on a runtime or first-seen route
-problem; 2 on setup (empty label, writer, bad `-l`).
+success, no-op, or contention skip; 1 on a runtime failure, deferred work,
+or first-seen route problem; 2 on setup (empty label, writer, bad `-l`).
 
 ```bash
 bob gmail sync -d
 bob gmail sync -l 5 -f json
+bob gmail sync -l 0
 bob gmail sync
 ```
 
 The [phone filing guide](guides/file-email-from-your-phone.md) explains how
-to apply the label in Gmail and set up a `+bob` forwarding filter.
+to label the original conversation with `bob` plus one routing label. A
+`+bob` forwarding filter remains available only as a separate alternative
+that files the forwarded copy, not the original.
 
 ## Attachments
 

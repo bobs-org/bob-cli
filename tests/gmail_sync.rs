@@ -194,14 +194,16 @@ fn busy_guard_is_a_quiet_success_skip() {
         .expect("open guard");
     guard.try_lock_exclusive().expect("hold sync guard");
 
-    let json = run_gmail(&env, &fake, &["sync", "-f", "json"]);
+    // Fast contention budget: a held guard must skip without waiting the
+    // default 120 s twice.
+    let json = run_gmail(&env, &fake, &["sync", "-f", "json", "-r", "0"]);
     assert_success(&json, "busy json skip");
     let value = json_stdout(&json);
     assert_eq!(value["ok"], true);
     assert_eq!(value["pulled"], 0);
     assert!(value["results"].as_array().unwrap().is_empty());
 
-    let human = run_gmail(&env, &fake, &["sync", "-q"]);
+    let human = run_gmail(&env, &fake, &["sync", "-q", "-r", "0"]);
     assert_success(&human, "busy quiet skip");
     assert!(stdout(&human).is_empty(), "{}", stdout(&human));
     assert!(!env.vault().join("gmail_inbox.md").exists());

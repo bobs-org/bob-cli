@@ -85,6 +85,14 @@ impl SyncReport {
 }
 
 /// Build the report from apply's outcome plus enrolled discovery rows.
+///
+/// Counts come from typed filings, not the public status string:
+/// `pulled` counts only `filed`/`would_file` rows (including filed
+/// route-problem rows); fetch and planning failures never count. Watching
+/// uses the apply boundary's revalidated snapshot so a task closed during
+/// preparation leaves the summary, plus this run's newly filed and adopted
+/// threads. Failed and deferred adoptions never count as newly enrolled
+/// watch.
 pub(crate) fn from_outcome(
     dry_run: bool,
     outcome: FilingOutcome,
@@ -92,7 +100,21 @@ pub(crate) fn from_outcome(
     extra_warnings: Vec<String>,
     watchers: &WatchScan,
     account: &str,
+    enrollment: &super::enroll::EnrollmentFold,
 ) -> SyncReport {
+    // The apply boundary revalidates watchers under the vault lock; that
+    // snapshot is authoritative for live runs so a task closed during
+    // preparation leaves the summary. Dry-run and no-op outcomes carry no
+    // snapshot and fall back to the pre-fetch scan.
+    let snapshot = if outcome.watch_snapshot.tasks().is_empty()
+        && outcome.results.is_empty()
+        && outcome.failures.is_empty()
+        && outcome.deferred.is_empty()
+    {
+        watchers
+    } else {
+        &outcome.watch_snapshot
+    };
     let extra_failed = extra_results.iter().any(|row| row.status == "problem");
     let mut results: Vec<SyncResult> = extra_results;
     let mut seen: std::collections::BTreeSet<String> =
@@ -122,20 +144,31 @@ pub(crate) fn from_outcome(
     }
 
     let mut warnings = extra_warnings;
-    warnings.extend(outcome.warnings);
+    warnings.extend(outcome.warnings.clone());
+    // Surface filing failure kind/message as body-free warnings.
+    for failure in &outcome.failures {
+        warnings.push(format!(
+            "skipped Gmail thread {}: {}: {}",
+            failure.key.thread_id(),
+            failure.kind,
+            failure.message
+        ));
+    }
 
     results.sort_by(|left, right| left.thread_id.cmp(&right.thread_id));
     problems.sort_by(|left, right| left.thread_id.cmp(&right.thread_id));
 
-    let pulled = results
+    // Typed durable filings only; fetch/planning failures never count.
+    let pulled = outcome
+        .results
         .iter()
-        .filter(|row| matches!(row.status, "filed" | "would_file" | "problem"))
+        .filter(|row| matches!(row.status, "filed" | "would_file"))
         .count();
     let failed = outcome.failed || !outcome.failures.is_empty() || extra_failed;
     first_seen |= problems.iter().any(|problem| problem.first_seen);
 
-    let watching = watching_count(&results, watchers, account);
-    let awaiting = awaiting_count(watchers, account);
+    let watching = watching_count(&outcome, snapshot, account, enrollment);
+    let awaiting = awaiting_count(snapshot, account);
 
     SyncReport {
         ok: !failed && !first_seen,
@@ -164,14 +197,22 @@ pub(crate) fn print(args: &SyncArgs, report: &SyncReport) {
     if !args.quiet {
         println!("{}", styler.cyan(&header(report)));
         for row in &report.results {
-            if let Some(line) = human_row(row) {
+            if let Some(line) = human_row(row, &report.problems) {
                 println!("  {}", color_row(&styler, row.status, &line));
             }
+        }
+        // Filed route problems carry their resolver explanation on the row;
+        // remote failures with no durable row are already distinguished
+        // there, with kind/message in warnings.
+        for problem in &report.problems {
+            // Problems are already rendered on their result row; this loop
+            // keeps the explanation visible when the result row was hidden.
+            let _ = problem;
         }
     } else {
         for row in &report.results {
             if row.status == "problem"
-                && let Some(line) = human_row(row)
+                && let Some(line) = human_row(row, &report.problems)
             {
                 println!("  {}", styler.yellow(&line));
             }
@@ -274,19 +315,27 @@ fn sync_problem(
 }
 
 fn watching_count(
-    results: &[SyncResult],
+    outcome: &FilingOutcome,
     watchers: &WatchScan,
     account: &str,
+    enrollment: &super::enroll::EnrollmentFold,
 ) -> usize {
-    let mut keys: std::collections::BTreeSet<String> = watchers
-        .threads()
-        .filter(|key| key.is_account(account))
-        .map(|key| key.thread_id().to_string())
-        .collect();
-    for row in results {
-        if matches!(row.status, "filed" | "would_file" | "adopted" | "problem")
-        {
-            keys.insert(row.thread_id.clone());
+    // Distinct enrolled threads with open watchers, including this run's
+    // successful and projected filings and adoptions. Failed or deferred
+    // adoptions never count as newly enrolled watch, and fetch failures
+    // with no durable row never count.
+    let mut keys: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
+    for key in watchers.threads().filter(|key| key.is_account(account)) {
+        // The revalidated snapshot lists open watchers; only enrolled
+        // threads count, and enrollment never expires.
+        if enrollment.is_enrolled(key) {
+            keys.insert(key.thread_id().to_string());
+        }
+    }
+    for result in &outcome.results {
+        if matches!(result.status, "filed" | "would_file" | "adopted") {
+            keys.insert(result.key.thread_id().to_string());
         }
     }
     keys.len()
@@ -342,12 +391,20 @@ fn local_time() -> String {
     utc.with_timezone(&tz).format("%H:%M").to_string()
 }
 
-fn human_row(row: &SyncResult) -> Option<String> {
+fn human_row(row: &SyncResult, problems: &[SyncProblem]) -> Option<String> {
+    let filed_problem = (row.status == "problem")
+        .then(|| {
+            problems
+                .iter()
+                .find(|problem| problem.thread_id == row.thread_id)
+        })
+        .flatten();
     let action = match row.status {
         "filed" => "filed",
         "would_file" => "would file",
         "adopted" => "adopted",
-        "problem" => "route",
+        "problem" if filed_problem.is_some() => "route",
+        "problem" => "failed",
         _ => return None,
     };
     let name = display_name(row);
@@ -361,6 +418,26 @@ fn human_row(row: &SyncResult) -> Option<String> {
         "problem" => "⚠",
         _ => "+",
     };
+    if let Some(problem) = filed_problem {
+        // Filed route problems show the resolver's label, message, and
+        // hint so Bryan can fix the label without opening JSON.
+        let mut line = format!(
+            "{glyph} {action:<10} {name} → {dest} — `{}` {}",
+            problem.label, problem.message
+        );
+        if !problem.hint.is_empty() {
+            line.push_str(" — ");
+            line.push_str(&problem.hint);
+        }
+        return Some(line);
+    }
+    if row.status == "problem" {
+        // Remote fetch or planning failures have no durable row; keep the
+        // per-thread row and point at warnings for the body-free diagnostic.
+        return Some(format!(
+            "{glyph} {action:<10} {name} → {dest} (see warnings)"
+        ));
+    }
     let extra = match row.status {
         "adopted" => " (existing task)",
         _ => "",
@@ -440,6 +517,15 @@ mod tests {
             task_file: Some("gmail_inbox.md".into()),
             route: None,
         };
+        let filed_problem = SyncProblem {
+            thread_id: "bb02".into(),
+            note: Some("mail/2026/b.md".into()),
+            label: "#/missing".into(),
+            kind: "unknown_note".into(),
+            message: "unknown note".into(),
+            hint: "create the note".into(),
+            first_seen: true,
+        };
         let already = SyncResult {
             thread_id: "cc03".into(),
             note: Some("mail/2026/c.md".into()),
@@ -448,10 +534,25 @@ mod tests {
             task_file: Some("job.md".into()),
             route: Some("job".into()),
         };
-        assert_eq!(human_row(&already), None);
-        let line = human_row(&problem).expect("problem row");
+        assert_eq!(human_row(&already, &[]), None);
+        let line = human_row(&problem, std::slice::from_ref(&filed_problem))
+            .expect("problem row");
         assert!(line.contains("route"), "{line}");
         assert!(line.contains("gmail_inbox.md"), "{line}");
+        assert!(line.contains("#/missing"), "{line}");
+        assert!(line.contains("unknown note"), "{line}");
+        assert!(line.contains("create the note"), "{line}");
+        let remote = SyncResult {
+            thread_id: "dd04".into(),
+            note: None,
+            link: None,
+            status: "problem",
+            task_file: None,
+            route: None,
+        };
+        let failed_line = human_row(&remote, &[]).expect("remote failure");
+        assert!(failed_line.contains("failed"), "{failed_line}");
+        assert!(failed_line.contains("see warnings"), "{failed_line}");
         let report = SyncReport {
             ok: true,
             dry_run: false,
@@ -497,5 +598,132 @@ mod tests {
         };
         let text = with_nothing(&report, "header".into());
         assert!(text.ends_with("nothing new"), "{text}");
+    }
+
+    fn empty_fold() -> super::super::enroll::EnrollmentFold {
+        let temp = tempfile::tempdir().unwrap();
+        super::super::enroll::EnrollmentFold::load(temp.path()).unwrap()
+    }
+
+    fn filing_key(id: &str) -> ThreadKey {
+        ThreadKey::new("me@example.com", id).unwrap()
+    }
+
+    fn filed_result(id: &str) -> FilingResult {
+        FilingResult {
+            key: filing_key(id),
+            note: Some(format!("mail/2026/{id}.md")),
+            link: Some(format!("[[mail/2026/{id}.md|✉️ Title · Who]]")),
+            task_file: Some("job.md".into()),
+            status: "filed",
+            route: Some("job".into()),
+            via: Some(super::super::enroll::FiledVia::Route),
+            problem: None,
+            first_seen: false,
+        }
+    }
+
+    #[test]
+    fn permanent_fetch_failure_alone_counts_nothing_and_fails() {
+        let fold = empty_fold();
+        let outcome = FilingOutcome::default();
+        let extra = vec![SyncResult {
+            thread_id: "aa01".into(),
+            note: None,
+            link: None,
+            status: "problem",
+            task_file: None,
+            route: None,
+        }];
+        let report = from_outcome(
+            false,
+            outcome,
+            extra,
+            vec!["skipped Gmail thread aa01: not_found".into()],
+            &WatchScan::default(),
+            "me@example.com",
+            &fold,
+        );
+        assert_eq!(report.pulled, 0);
+        assert_eq!(report.watching, 0);
+        assert!(!report.ok);
+        assert_eq!(report.exit_code(), 1);
+    }
+
+    #[test]
+    fn mixed_success_and_failure_counts_only_durable_filings() {
+        let fold = empty_fold();
+        let mut outcome = FilingOutcome::default();
+        outcome.results.push(filed_result("aa01"));
+        outcome.failures.push(FilingFailure {
+            key: filing_key("bb02"),
+            kind: "not_found".into(),
+            message: "gone".into(),
+        });
+        let report = from_outcome(
+            false,
+            outcome,
+            Vec::new(),
+            Vec::new(),
+            &WatchScan::default(),
+            "me@example.com",
+            &fold,
+        );
+        assert_eq!(report.pulled, 1);
+        assert_eq!(report.watching, 1);
+        assert!(!report.ok);
+        assert!(report.warnings.iter().any(|w| w.contains("not_found")));
+    }
+
+    #[test]
+    fn filed_route_problem_counts_once_with_first_seen_failure() {
+        let fold = empty_fold();
+        let mut outcome = FilingOutcome::default();
+        outcome.results.push(FilingResult {
+            problem: Some(RouteProblem {
+                kind:
+                    crate::native::gmail::route::RouteProblemKind::UnknownNote,
+                label: "#/missing".into(),
+                message: "unknown note".into(),
+                hint: "create the note".into(),
+            }),
+            first_seen: true,
+            ..filed_result("aa01")
+        });
+        let report = from_outcome(
+            false,
+            outcome,
+            Vec::new(),
+            Vec::new(),
+            &WatchScan::default(),
+            "me@example.com",
+            &fold,
+        );
+        assert_eq!(report.pulled, 1);
+        assert_eq!(report.problems.len(), 1);
+        assert!(!report.ok);
+        assert!(report.problems[0].first_seen);
+    }
+
+    #[test]
+    fn dry_run_parity_counts_projected_filings() {
+        let fold = empty_fold();
+        let mut outcome = FilingOutcome::default();
+        outcome.results.push(FilingResult {
+            status: "would_file",
+            ..filed_result("aa01")
+        });
+        let report = from_outcome(
+            true,
+            outcome,
+            Vec::new(),
+            Vec::new(),
+            &WatchScan::default(),
+            "me@example.com",
+            &fold,
+        );
+        assert_eq!(report.pulled, 1);
+        assert_eq!(report.watching, 1);
+        assert!(report.dry_run);
     }
 }

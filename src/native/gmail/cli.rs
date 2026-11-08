@@ -94,7 +94,7 @@ fn sync_command() -> ClapCommand {
         .arg(quiet_arg())
         .arg(retry_timeout_arg())
         .after_help(
-            "Examples:\n  bob gmail sync\n  bob gmail sync -l 5\n  bob gmail sync -d -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH",
+            "Examples:\n  bob gmail sync\n  bob gmail sync -l 5\n  bob gmail sync -l 0\n  bob gmail sync -d -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      gog executable replacing `gog` on PATH",
         )
 }
 

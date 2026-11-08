@@ -736,7 +736,6 @@ pub(crate) fn plan_prepared_saves_with_parent_links(
 /// Install the shared save planner's images and write its mail notes together
 /// with caller-owned staged edits. Any failed text batch removes only images
 /// created by this attempt, preserving the save transaction's rollback rule.
-#[allow(dead_code)] // Consumed by the Gmail sync command phase.
 pub(crate) fn write_prepared_batch(
     vault: &Path,
     works: &BTreeMap<(String, String), PreparedSave>,

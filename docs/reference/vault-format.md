@@ -649,6 +649,19 @@ saved reference sources). Note walkers never scan it as vault notes:
 task archive, link repair, project and ready scans, task-status hooks,
 `bob query`, and the gkeep ledger skip it.
 
+`.bob/gmail/<host>.jsonl` holds body-free Gmail receipts, one JSON object
+per line with `v`, `ts`, `host`, `kind`, and `value`. Sync enrolls by
+identity (`account`, lowercase hex `thread_id`): `gmail.filed` carries
+`note`, `task_file`, `via` (`route`|`inbox`|`problem`), and optional
+`route`; `gmail.adopted` carries `note` and `task_file`; legacy
+`gmail.pulled` carries `inbox` and `note` and is read-only. `gmail.save`
+receipts carry `note`, `created`, and `added`. Values never contain bodies,
+snippets, or subjects. `.bob/gmail/sync-recovery.json` holds body-free
+ownership evidence for an unfinished scoped commit (owned note, task,
+image, and canonical hub paths plus deferred save, origin, and enrollment
+events); the next live sync finishes it before new enrollment and deletes
+the file. See [Bob Gmail](../gmail.md#sync).
+
 `old_lib/` is the archival predecessor of `lib/`. Capture routes select
 root-level notes: `@work` writes `work.md`. Nested notes are reached with
 path-aware `&` / `*` (`&projects/foo:bar`), not as `@` routes.
