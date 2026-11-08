@@ -32,7 +32,7 @@ Rendered line (canonical Markdown has no callout markers):
 | 5 | `[refresh:: 7]` | Per-task review interval in days. |
 | 6 | `[keeps:: 2]` | Keep streak on the current rung (WIP, Next, Ready, or P-level). Absence means 0. |
 | 7 | `[unblocked:: 2026-10-12]` | Date of an automatic Blocked → Ready recovery. |
-| 8 | `[scheduled:: 2026-10-20]` | Tasks scheduled date. Future dates keep the task Blocked. |
+| 8 | `[scheduled:: 2026-10-20]` | Tasks scheduled date. Future dates keep the task Blocked. While `#awaiting_reply` is present, this field is the Gmail reply-nudge date. |
 | 9 | `[created:: 2026-10-01]` | Capture date. Written by capture; not a freshness stamp. |
 | 10 | `[id:: work__queue]` | Tasks id, derived from the note path and block ID when Bob mints it. |
 | 11 | `[dependsOn:: work__prep]` | Derived projection of the Depends-On line. |
@@ -93,7 +93,7 @@ Edit the human-owned inputs. Reconciliation and capture project the rest.
 
 | Field | Form | Ownership |
 | --- | --- | --- |
-| `scheduled` | `[scheduled:: YYYY-MM-DD]` | Authored. Capture `s:<N>` and `$<N>`, Task Card, and `bob task reroll` write it. A date after today blocks the task. |
+| `scheduled` | `[scheduled:: YYYY-MM-DD]` | Authored. Capture `s:<N>` and `$<N>`, Task Card, and `bob task reroll` write it. A Gmail reply hold also writes it while exact `#awaiting_reply` is present (send-local date plus `gmail.sync.reply_wait_days`); a new outgoing turn replaces it, and a reply or bounce removes the tag and this field together. A date after today blocks the task. |
 | `due` | `[due:: YYYY-MM-DD]` | Authored Tasks field. Bob almost never writes it; date marks do not render it. |
 | `created` | `[created::YYYY-MM-DD]` | Written on capture (local date from `BOB_NOW`, `DATE`, or the clock). Not a confirmation stamp. |
 | `completion` | `[completion:: YYYY-MM-DD]` | Written when the task is Done. |
@@ -108,6 +108,14 @@ Edit the human-owned inputs. Reconciliation and capture project the rest.
 | `repeat` | `[repeat:: every day when done]` | Authored Tasks recurrence rule that must start with `every`; PRE/POST checklist rows need `when done`; rendered as a [recurrence mark](../date-marks.md#recurrence-not-a-date). |
 | `type` (`theme` legacy) | `[type:: NAME]` or `(type:: NAME)` (`[theme:: NAME]` / `(theme:: NAME)` still read) | Authored deliberate exception to the suggested type. Exactly one valid field across both keys sets the task; duplicates or an invalid value fall back to inheritance with a `repair` marker. Closed tasks keep the field as history. |
 | `root` | `[root:: NOTE]` or `(root:: NOTE)` | Authored as-if-residence home. Exactly one field whose value resolves to a note X attributes the task as if it lived in X; duplicates, invalid values, missing/ambiguous notes, and notes with no area or project are ignored with a stats lint. Closed tasks keep the field, and it keeps applying. |
+
+Exact `#awaiting_reply` is the Gmail reply-hold tag. Near-misses such as
+`#awaiting_reply_old` never count. Bob inserts it after `#task`, or after
+`#prj_is_blocked` when that token is present. While it is present, Gmail
+owns the sole `[scheduled::]` field as the nudge date. Between counted
+messages the line is Bryan's; reconcile never reasserts the tag or that
+date. See [Watch](../gmail.md#watch) and
+[Awaiting A Gmail Reply Is A Tagged Schedule Hold](../develop/decisions.md#gmail-reply-wait-is-a-tagged-hold).
 
 `start` on a task line is out of scope for date marks; Pomodoro entries use
 `[t:: 15m]` on the session row, not on the task.

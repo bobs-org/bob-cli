@@ -3,15 +3,16 @@
 `bob gmail` saves Gmail threads you choose as inert, append-only mail notes in
 the vault, swaps Gmail URLs in notes for readable links, and creates local
 compose and reply notes. It also files labelled threads into area or project
-notes (falling back to the Gmail inbox) and imports selected attachments.
+notes (falling back to the Gmail inbox), watches those open tasks for new
+outgoing and incoming messages, and imports selected attachments.
 Sending goes through a previewed Gmail draft:
 `draft` stores the draft and shows its exact preview, and `send` transmits it
 only after a confirmation bound to that preview. This page covers one-time
 setup through [gog](https://github.com/openclaw/gogcli) (≥ v0.44.0), config,
 login/logout, doctor, saving, linking, listing, search, previews, label sync,
-attachment imports, compose notes, drafts, and confirmed sends. `new` and
-`reply` write local notes without sending mail. Bare `bob gmail` lists saved
-threads offline.
+watch holds and lifts, attachment imports, compose notes, drafts, and confirmed
+sends. `new` and `reply` write local notes without sending mail. Bare
+`bob gmail` lists saved threads offline.
 
 Typical order: `bob gmail login` once, `bob gmail doctor` until every check is
 `ok` or an explained skip. Tests never touch Google: set `BOB_GMAIL_GOG` to a
@@ -36,6 +37,7 @@ fake executable.
 - [Search](#search)
 - [Peek](#peek)
 - [Sync](#sync)
+- [Watch](#watch)
 - [Attachments](#attachments)
 - [Try it](#try-it)
 - [Doctor](#doctor)
@@ -72,7 +74,9 @@ selected threads to the vault. `link` finds Gmail URLs in notes, saves each
 confirmed thread, and replaces those URL tokens with labelled wikilinks.
 `sync` reads the configured label and files saved threads into the area or
 project named by a routing label, or into the Gmail inbox when none or an
-invalid one is present, without changing Gmail labels. `attach` reads one listed attachment and writes
+invalid one is present, without changing Gmail labels. Each run also refreshes
+currently watched threads and applies a new counted turn to their open linking
+tasks. `attach` reads one listed attachment and writes
 its bytes into the vault. `new` and `reply` write local Markdown notes without
 login or network access. `draft` stores a Gmail draft and shows its exact
 preview without sending. `send` transmits only the stored draft after a
@@ -569,7 +573,15 @@ Immediately before dispatch, Bob rechecks the authored inputs, the attachment
 snapshots, and the stored draft contents, then sends with
 `drafts send <recorded id>` only — never `gmail send`, `messages send`, SMTP,
 or a replacement draft. On success it refreshes the thread through the save
-path so the sent card appears. A standalone compose note is promoted in place
+path so the sent card appears, then applies the same watch plan the next
+`sync` would under the existing send lock: no second Gmail send, no nested
+vault lock, and no extra commit. Sibling watched-thread metadata needed for
+multi-thread aggregation is fetched before that lock. Only an enrolled,
+currently watched thread changes tasks. A running-session deferral leaves the
+Gmail send successful and lets the next `sync` finish the hold; that deferral
+does not mark the turn applied. Complete-state recovery retries local
+finalization after an acknowledged send and never issues a second send.
+A standalone compose note is promoted in place
 at its original path: thread identity and the managed block are added, the
 submitted body is replaced with the conversation, and compose-only
 `status`/recipient/draft fields are removed. Parent, unknown frontmatter,
@@ -712,16 +724,18 @@ membership without needing the label again. `pulled` counts only durable
 `filed`/`would_file` rows, including filed route problems; fetch and
 planning failures never count. `watching` counts distinct enrolled threads
 with open watchers from the revalidated apply snapshot plus this run's
-filings and adoptions. `-d` reads and plans without writing, taking no guard
-or vault lock. `-d` is allowed on a non-writer host: the writer pin is
-live-only. `-r` is the remaining allowance for waiting (default 120
-seconds): guard contention, retry backoff, and vault-lock waits. Ordinary
-pacing (the 200 ms minimum gap between Gmail requests) always applies,
-including at `-r 0`, and never consumes the budget. `-r 0` means one
-attempt per operation with no contention, backoff, or lock-wait sleep. The
-label stays in Gmail: sync uses read-only access and never unlabels,
-archives, marks read, or changes a message. `pull` remains a hidden alias
-with the same behaviour.
+filings and adoptions. `awaiting` counts those currently watched threads
+whose open tasks still carry an exact `#awaiting_reply` token. Unwatched
+enrollments and unsuccessful new enrollments never count. `-d` reads and
+plans without writing, taking no guard or vault lock. `-d` is allowed on a
+non-writer host: the writer pin is live-only. `-r` is the remaining allowance
+for waiting (default 120 seconds): guard contention, retry backoff, and
+vault-lock waits. Ordinary pacing (the 200 ms minimum gap between Gmail
+requests) always applies, including at `-r 0`, and never consumes the budget.
+`-r 0` means one attempt per operation with no contention, backoff, or
+lock-wait sleep. The label stays in Gmail: sync uses read-only access and
+never unlabels, archives, marks read, or changes a message. `pull` remains a
+hidden alias with the same behaviour.
 
 A thread whose routing label does not resolve is still filed to the inbox
 with a managed `GMAIL ROUTE` child that names the offending label, the
@@ -731,11 +745,17 @@ and quiet rows show the route label, explanation, and hint for filed route
 problems while distinguishing remote failures with no durable row.
 
 JSON schema 1 keeps pull's `ok`, `dry_run`, `pulled`, `results`, and
-`warnings`, and adds `watch: []`, `problems`, and
-`summary: {watching, awaiting}`. Result statuses are `filed`, `would_file`,
-`adopted`, `already_filed`, `already_pulled`, and `problem`. Exit 0 on
-success, no-op, or contention skip; 1 on a runtime failure, deferred work,
-or first-seen route problem; 2 on setup (empty label, writer, bad `-l`).
+`warnings`, and adds `watch`, `problems`, and
+`summary: {watching, awaiting}`. Each `watch[]` row carries `thread_id`,
+`note`, `tasks` (each `path`, 1-based `line`, and nullable `block_id`),
+`turn`, `turn_since`, `action`, and optional `nudge_on`. Actions are
+`held`, `lifted`, `bounced`, `resurfaced`, `deferred_running`, `refreshed`,
+and `unchanged`. A missing or trashed thread is not an action: it is
+reported once through a `gmail.gone` journal event plus a human and warning
+row. Result statuses are `filed`, `would_file`, `adopted`, `already_filed`,
+`already_pulled`, and `problem`. Exit 0 on success, no-op, or contention
+skip; 1 on a runtime failure, deferred work, or first-seen route problem; 2
+on setup (empty label, writer, bad `-l`).
 
 ```bash
 bob gmail sync -d
@@ -748,6 +768,112 @@ The [phone filing guide](guides/file-email-from-your-phone.md) explains how
 to label the original conversation with `bob` plus one routing label. A
 `+bob` forwarding filter remains available only as a separate alternative
 that files the forwarded copy, not the original.
+
+## Watch
+
+The link is the wire. Every open `#task` whose own line, or a direct
+link-only child bullet, links a saved mail note watches that thread. The
+watch follows Ctrl+Shift+M moves and Task Merges. Enrollment is durable:
+removing the Gmail label never ends it. Fetching stops when every linking
+task is closed, cancelled, or deleted; a later open link restores
+membership without the label.
+
+Each `bob gmail sync` run, including `-l 0`, refreshes currently watched
+threads through the same coordinated read used by discovery. A first watch
+folds the whole thread; later runs fold after the latest applied
+`gmail.turn` marker. Bob changes a task only when a new counted move
+arrives. Between messages the line is Bryan's: polling that sees no new
+move consumes the turn without rewriting the task, so a hand-edited date or
+tag survives. Unknown order or direction changes no task and advances no
+marker. Automated and ignored messages may refresh the mail note and do not
+hold or lift. Events and recovery evidence contain no body, snippet,
+subject, or task title.
+
+The stored hold is an exact `#awaiting_reply` tag plus one `[scheduled::]`
+nudge date. Display draws a future-dated `[?]` as a hollow paper plane
+([Blocked-reason marks](blocked-marks.md)). Reconcile treats that date as an
+ordinary scheduled hold and never reasserts the tag
+([Task Status Hooks](task-status-hooks.md#derived-blocked-status)).
+[Awaiting A Gmail Reply Is A Tagged Schedule Hold](develop/decisions.md#gmail-reply-wait-is-a-tagged-hold)
+records why.
+
+Examples use `BOB_NOW=2026-11-03` and `gmail.sync.reply_wait_days: 3`.
+
+### Hold
+
+A new outgoing counted send holds every open linking task. The nudge date is
+the send's local calendar date plus `reply_wait_days`, not the sync date.
+Bob inserts exact `#awaiting_reply` after `#task`, or after `#prj_is_blocked`
+when that token is present, and replaces the sole `scheduled` field. A
+future nudge flips an open Ready, Next, or Pending box to `[?]`. An
+already-arrived date keeps the original box. Recurring rows (`repeat`) and
+duplicate `scheduled` fields are refused with a diagnostic. Freshness
+fields are never touched.
+
+```bob-task
+- [?] #task #awaiting_reply [[mail/2026/261103_lease_renewal|✉️ Lease renewal · Ada]] [scheduled:: 2026-11-06]
+```
+
+A later outgoing send replaces that nudge. Changing `reply_wait_days` never
+reschedules an existing hold.
+
+### Lift
+
+A new incoming counted move or bounce removes the exact awaiting token and
+then removes `scheduled` only if that token was present. `[?]` recovers to
+`[ ]` only with no `dependsOn` field, no exact `#prj_is_blocked`, and no
+remaining future schedule. After the hold date is gone, an eligible Ready
+row runs the existing `[unblocked::]` writer
+([Freshness §5](freshness.md#5-who-stamps), vectors UB16–UB18). WRITE skips
+stay: NEW, out of freshness scope, an existing scheduled tickler, or a Next
+or Pending landing. An unheld Next or Pending task is unchanged. Neither
+hold nor lift stamps, renames, closes, creates children, changes
+priority or keeps, or restores a pre-hold lane.
+
+When nobody replies, the nudge date arrives and the still-tagged Ready row
+walks as an ordinary scheduled tickler. The no-reply pill is display-only
+([Mail link marks](mail-link-marks.md)).
+
+### Running sessions
+
+A hold whose resolved identity has a live Task Link under today's open timed
+Pomodoro is deferred. Planned placeholders, closed entries, struck or
+dropped links, and mentions do not defer. An ambiguous running ledger
+reports and defers affected holds rather than guessing. The thread marker
+does not advance for that deferred hold; other eligible tasks on the same
+thread still receive the move. The next `sync` after the session closes
+finishes the hold.
+
+### Several threads, several tasks
+
+One effect is computed per task after gathering every linked watched
+thread, not in thread iteration order. Apply nothing without a new counted
+move. A new incoming move or bounce lifts even when other threads still
+wait. Hold only when every linked watched thread is known to be waiting,
+with the nudge date from the newest send. An unknown or unfetched sibling
+prevents claiming that all threads await replies. Several tasks on one
+thread are independent: a running deferral on one does not block the
+others.
+
+### Reports
+
+Human watch rows use inert title and who from mail metadata:
+
+| `action` | Human row |
+| --- | --- |
+| `held` | `✉ awaiting reply` plus `(nudge YYYY-MM-DD)` |
+| `lifted` | `✉ replied` |
+| `bounced` | `✉ bounced` |
+| `resurfaced` | `✉ resurfaced` |
+| `deferred_running` | `✉ deferred (running task)` |
+| `refreshed` | `✉ refreshed` |
+| `unchanged` | omitted from human output |
+
+Quiet (`-q`) suppresses ordinary rows and keeps failures, warnings, and
+running deferrals. A changed watch, a first-seen gone thread, or a new
+filing suppresses the header's `nothing new` suffix. Invalid grant aborts
+all writes. Isolated permanent errors and exhausted retries preserve
+successfully prepared independent work and report failure.
 
 ## Attachments
 
@@ -852,7 +978,8 @@ Every `-f json` output carries `schema_version: 1` and `ok`. Errors are typed
 [Writing and sending](#writing-and-sending) describe the compose documents.
 `bob gmail sync -f json` prints the schema-1 sync document (`ok`,
 `dry_run`, `pulled`, `results`, `warnings`, `watch`, `problems`, and
-`summary`). See [JSON outputs](reference/json-outputs.md) for the field
+`summary`). `watch[]` and `summary.{watching,awaiting}` are specified under
+[Watch](#watch). See [JSON outputs](reference/json-outputs.md) for the field
 list, statuses, and which counts include route-problem rows.
 
 ## Security

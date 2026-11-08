@@ -11,6 +11,7 @@ metadata:
   status: superseded-in-part
   superseded_by:
   - decisions:unblocked-tasks-are-offered
+  - decisions:gmail-reply-wait-is-a-tagged-hold
 ---
 
 **Applies to.** bob-cli, bob-plugins, vault.
@@ -68,3 +69,7 @@ stamps must remain the only freshness write.
 Superseded in part: project residents are now offered as successors and linked only
 when picked; the former rejected "successor-linking residents" behavior is an explicit
 offer. See [[decisions:unblocked-tasks-are-offered]].
+
+Superseded in part: the writer list gained Gmail reply lift, which removes the
+hold date before applying WRITE skips. See
+[[decisions:gmail-reply-wait-is-a-tagged-hold]].

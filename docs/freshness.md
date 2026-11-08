@@ -658,7 +658,7 @@ today on a canonical line is a no-op.
 | task-status-cycler     | Alt+[ / Alt+] (including counted and transcluded targets) when the result is an open status, including leaving Blocked by hand; Ctrl+Enter reopening a done task; **picked successor offers** on a Done close (Ctrl+Enter / Alt+] into Done), which stamp like Ctrl+Shift+Enter | closing the completed task itself (done or cancelled), unpicked recoveries, cancelled closes, Ctrl+Shift+] bullet → `#task` (that is creation), the dependency-ID normalizer, `recoverBlockedDependents` |
 | block-id-prompt        | Ctrl+Shift+Enter and `^^` when they rewrite the task line (Ready/Blocked → Next, a new block ID) | unlink, Task Link removal, Ctrl+6 rename |
 | `bob capture`          | dependency drop on an existing dependent; `plan_task_link` (the link direction of `@route+id!`, Ensure Next, solo `@route:id` / `^route:id`, link-then-close), the `x` rows that set `[/]`, an `&note:id` dependency capture that edits an existing open dependent (its Depends-On line, derived fields, or Blocked status), a `*note:id` capture that edits T (its Depends-On line, derived fields, or Blocked status), **picked `--pull-in` successor offers** (same stamp as a manual link); each open task an `--inbox-route` answer moves; each open task a project-note capture move bullet or `- ^^` pick moves (same stamp as Ctrl+Shift+M) | new tasks on any route (including new tasks with `&` or `*` modifiers), `x` complete of the closed task itself, unpicked successor recoveries, unlink, start rows, sub-bullets, prerequisite target-ID and lane promotion edits, an existing owner's target-ID and lane edits under `*`, an unchanged repeat `&` or `*` |
-| Automation             | — | hooks, `projects sync`, `task reroll`, `task move`, `gkeep pull`, `ref`, `task archive`, `nightly`, `vault-sync`, `capture-task-id` |
+| Automation             | — | hooks, `projects sync`, `task reroll`, `task move`, `gkeep pull`, `gmail sync`, `gmail send`, `ref`, `task archive`, `nightly`, `vault-sync`, `capture-task-id` |
 | `bob freshness seed`   | the one-time cutover (a documented exception) | — |
 | Hand editing           | — | not monitored; edit, then press Alt+F |
 
@@ -668,14 +668,17 @@ returns never stamp: `[unblocked::]` is a freshness input, not a stamp.
 A **picked successor offer** stamps like a manual link (Ctrl+Shift+Enter):
 `[fresh:: today]`, clearing `[unblocked::]` and `[keeps::]`. Unpicked
 recoveries keep the WRITE rule below and never stamp. Automation
-(hooks, sync, reroll, archive) still never stamps.
+(hooks, sync, reroll, archive, Gmail watch) still never stamps.
 
 **Who writes `[unblocked::]`.** On every automatic transition of an
 open task from Blocked `[?]` to Ready `[ ]` — reconcile Unblock;
 capture/cycler close recovery (including `project_member`); nav/cycler
 project recovery of residents; nav recoveries of lines other than the
-gesture's own line (the gesture stamps its own line) — evaluated on
-the recovered line. Skip when any of:
+gesture's own line (the gesture stamps its own line); and Gmail reply
+lift (`bob gmail sync` and acknowledged `bob gmail send`) — evaluated on
+the recovered line. Gmail lift removes the exact `#awaiting_reply` token
+and that hold's `[scheduled::]` **before** applying the WRITE skips, so a
+nudge-due Ready row still qualifies (UB16–UB18). Skip when any of:
 
 - the row is outside freshness scope (recurring, hidden, daily note, …);
 - it has no `[fresh::]` (NEW is already due);
@@ -1404,11 +1407,15 @@ non-Tasks key in the freshness group
 | UB13 | keep on an unblock tickler (`returned_by: unblocked`) | stamps `[fresh:: today]`; `[keeps::]` unchanged (neither increment nor reset); `decide` stays false; `[unblocked::]` cleared by the stamp |
 | UB14 | TICKLER tie order | two unblock ticklers with the same `due_on` sort by path ↑, then line ↑ (one project's residents are contiguous); `created` is not a key |
 | UB15 | `^prj` whose inline `[scheduled:: 2026-10-07]` arrived after `[fresh:: 2026-10-01]` | RESURFACED into PROJECTS, not TICKLER |
+| UB16 | Gmail reply lift (H7): `- [?] #task #awaiting_reply … [fresh:: 2026-10-01] [scheduled:: 2026-10-10]` | removes the tag and scheduled field, recovers `[?]` to `[ ]`, writes `[unblocked:: 2026-10-08]`; `returned_by: unblocked`; `due_on` 2026-10-08; tier TICKLER |
+| UB17 | Gmail overdue-nudge lift (H8): `- [ ] #task #awaiting_reply … [fresh:: 2026-10-01] [scheduled:: 2026-10-07]` | removes the tag and scheduled field first, then writes `[unblocked:: 2026-10-08]` (the hold date no longer trips the scheduled-tickler skip) |
+| UB18 | Gmail reply lift of NEW (H10): held row with no `[fresh::]` | recovers `[?]` to `[ ]`; no `[unblocked::]`; already due as NEW |
 
 WRITE skips that the recovered line is a canonical daily-note task
 follow UB5/UB6 (outside freshness scope). Capture/cycler close
 recovery and nav/cycler project recovery of residents follow UB1
-with the same skips.
+with the same skips. Gmail reply lift follows UB16–UB18, then the
+same skips on the recovered line.
 
 ## 11. Display: the freshness mark
 
@@ -1759,6 +1766,7 @@ There is no freshness trial: no ritual change, release, or tuning waits on a tri
 - 2026-10-10: closeout removed the transitional hidden-tag bypass for exact reference rows (schema 12, historical shape; ledger 1.39.0 / namespace v10): hidden rows stay out of the walk like any hidden task.
 - 2026-10-10: schema 13 and freshness namespace v11 removed the reference cadence and REFERENCES review group. References now use ordinary freshness, lane groups, keep/decay eligibility, and commitment/upkeep rules.
 - 2026-10-12: schema 14 and freshness namespace v12 add `[unblocked::]` (returned_by / unblocked_on, `markUnblockedLine`). Automatic Blocked → Ready recoveries resurface as TICKLER.
+- 2026-11-08: Gmail reply lift is another `[unblocked::]` writer (UB16–UB18). It removes `#awaiting_reply` and the hold date before applying WRITE skips, so a nudge-due Ready row still resurfaces.
 - 2026-10-23: Rotten Log went live — every counted keep asks "Why
   keep it as written?" and writes one dated `🥀 **ROTTEN LOG**` entry
   with the stamp (bob-navigation-hotkeys 2.53.0 grammar/reader, 2.54.0

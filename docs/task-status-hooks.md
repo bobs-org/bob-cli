@@ -573,6 +573,11 @@ Whitespace and other supported trailing Tasks metadata may appear in either
 order. The value must have the exact `YYYY-MM-DD` shape and name a real
 calendar date. It blocks only when it is strictly later than the effective
 daily anchor, so yesterday and today do not block while tomorrow and later do.
+A Gmail `#awaiting_reply` row is that ordinary scheduled hold: a future nudge
+date blocks it, and an arrived date does not. Reconcile never inserts, moves,
+or reasserts `#awaiting_reply`, and it never rewrites that scheduled field to
+match a Gmail send. Only a new counted Gmail message, or an acknowledged
+`bob gmail send`, changes the hold ([Watch](gmail.md#watch)).
 The project date lives as inline `[scheduled::]` on `^prj`;
 `bob projects sync` and Bob Navigation Hotkeys propagate it into ordinary
 task-level `scheduled` fields. From that point this command treats those
