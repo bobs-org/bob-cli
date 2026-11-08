@@ -23,12 +23,37 @@ fn capture_parse_teaches_link_start_operator_folding() {
         ("@foo:bar=3 ++2", "++2", "@foo:bar=3+2"),
         ("@foo:bar=fix2 ++", "++", "@foo:bar=fix2+"),
         ("^foo:bar=3 ++2", "++2", "^foo:bar=3+2"),
-        ("@foo:bar= --", "--", "put them on their own capture item"),
+        ("@foo:bar=#deep-work ++3", "++3", "@foo:bar=+3#deep-work"),
+        ("@foo:bar=3#deep-work ++2", "++2", "@foo:bar=3+2#deep-work"),
+        (
+            "@foo:bar=#\"DEEP WORK\" ++3",
+            "++3",
+            "@foo:bar=+3#\"DEEP WORK\"",
+        ),
+        ("++3 @foo:bar=", "++3", "@foo:bar=+3"),
+        (
+            "@foo:bar=+3 ++2",
+            "++2",
+            "each operator on its own capture item",
+        ),
+        (
+            "@foo:bar= ++3 ++2",
+            "++3",
+            "each operator on its own capture item",
+        ),
+        (
+            "@foo:bar= --",
+            "--",
+            "each operator on its own capture item",
+        ),
     ] {
         let value = parse(text);
         assert_eq!(
             value["mode"],
-            if text.starts_with('^') {
+            if text.starts_with('^')
+                || text.starts_with("++")
+                || text.starts_with("--")
+            {
                 "pomodoro_link"
             } else {
                 "pomodoro_task"
@@ -47,9 +72,15 @@ fn capture_parse_teaches_link_start_operator_folding() {
             "{value}"
         );
         let start = text.find(operator).unwrap();
+        let last_operator = text
+            .split_whitespace()
+            .filter(|token| token.starts_with('+') || token.starts_with('-'))
+            .next_back()
+            .unwrap();
+        let end = text.rfind(last_operator).unwrap() + last_operator.len();
         assert_eq!(
             diagnostic["range"],
-            serde_json::json!([start, start + operator.len()]),
+            serde_json::json!([start, end]),
             "{text}: {value}"
         );
     }
@@ -313,6 +344,103 @@ fn capture_parse_pomodoro_start_reports_later_units_additively() {
         stdout(&human).contains("=3+2 (15m, offset +2u)"),
         "{}",
         stdout(&human)
+    );
+}
+
+#[test]
+fn capture_parse_named_signed_refusals_preserve_names_and_timing_ranges() {
+    let parse = |text: &str| {
+        let output = bob_command()
+            .arg("capture-parse")
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(text)
+            .output()
+            .expect("run capture-parse");
+        assert_success(&output);
+        serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+            .expect("capture-parse JSON")
+    };
+    let parse_stdin = |draft: &str| {
+        let output = run_with_stdin(
+            bob_command().arg("capture-parse").arg("-f").arg("json"),
+            draft,
+        );
+        assert_success(&output);
+        serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+            .expect("capture-parse JSON")
+    };
+
+    for (text, range, first, second) in [
+        ("=fix2+00", [4, 8], "=fix2", "=fix2+"),
+        ("=2+00fix", [1, 5], "=2fix", "=2+fix"),
+        ("=fix3-1+2", [4, 9], "=fix3-1", "=fix3+2"),
+        ("=3-1+2fix", [1, 6], "=3-1fix", "=3+2fix"),
+        (
+            "=3+00#\"DEEP WORK\"",
+            [1, 5],
+            "=3#\"DEEP WORK\"",
+            "=3+#\"DEEP WORK\"",
+        ),
+    ] {
+        let value = parse(text);
+        assert_eq!(
+            value["diagnostics"][0]["code"], "invalid_pomodoro_start",
+            "{value}"
+        );
+        assert_eq!(
+            value["diagnostics"][0]["range"],
+            serde_json::json!(range),
+            "{text}: {value}"
+        );
+        let message = value["diagnostics"][0]["message"].as_str().unwrap();
+        assert!(message.contains(first), "{text}: {message}");
+        assert!(message.contains(second), "{text}: {message}");
+    }
+
+    for (text, timing, first, second) in [
+        (
+            "@foo:bar#deep-work=3-1+2",
+            "3-1+2",
+            "@foo:bar#deep-work=3-1",
+            "@foo:bar#deep-work=3+2",
+        ),
+        (
+            "@foo:bar=3-1+2#deep-work",
+            "3-1+2",
+            "@foo:bar=3-1#deep-work",
+            "@foo:bar=3+2#deep-work",
+        ),
+        (
+            "@foo:bar=+00#\"DEEP WORK\"",
+            "+00",
+            "@foo:bar=#\"DEEP WORK\"",
+            "@foo:bar=+#\"DEEP WORK\"",
+        ),
+    ] {
+        let value = parse(text);
+        assert_eq!(
+            value["diagnostics"][0]["code"], "invalid_pomodoro_start",
+            "{value}"
+        );
+        let start = text.find(timing).expect("timing");
+        assert_eq!(
+            value["diagnostics"][0]["range"],
+            serde_json::json!([start, start + timing.len()]),
+            "{text}: {value}"
+        );
+        let message = value["diagnostics"][0]["message"].as_str().unwrap();
+        assert!(message.contains(first), "{text}: {message}");
+        assert!(message.contains(second), "{text}: {message}");
+    }
+
+    let bulk = parse_stdin("=3\n\n=fix3-1+2\n");
+    assert_eq!(bulk["items"].as_array().unwrap().len(), 2, "{bulk}");
+    assert_eq!(
+        bulk["diagnostics"][0]["range"],
+        serde_json::json!([8, 13]),
+        "{bulk}"
     );
 }
 

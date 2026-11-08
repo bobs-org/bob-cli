@@ -1126,3 +1126,29 @@ fn glued_later_start_matches_start_then_shift_note_bytes() {
         assert_eq!(glued_day, spaced_day, "{glued} vs {spaced}");
     }
 }
+
+#[test]
+fn later_start_matches_start_then_shift_for_each_base_spelling() {
+    let now = "2026-07-10 09:42:00";
+    for (base, template) in [
+        ("=3", "=3{suffix}"),
+        ("=3fix", "=3{suffix}fix"),
+        ("=3#deep-work", "=3{suffix}#deep-work"),
+    ] {
+        for (suffix, shift) in [("+", "++"), ("+1", "++1"), ("+3", "++3")] {
+            let glued = template.replace("{suffix}", suffix);
+            let spaced = format!("{base} {shift}");
+            let glued_day = later_start_day_bytes(
+                &format!("bob-cli-later-matrix-glued-{glued}"),
+                now,
+                &[glued.as_str()],
+            );
+            let spaced_day = later_start_day_bytes(
+                &format!("bob-cli-later-matrix-spaced-{glued}"),
+                now,
+                &[spaced.as_str()],
+            );
+            assert_eq!(glued_day, spaced_day, "{glued} vs {spaced}");
+        }
+    }
+}

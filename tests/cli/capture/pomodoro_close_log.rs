@@ -386,14 +386,20 @@ fn capture_pomodoro_close_log_retired_tail() {
         &["x - 2 foo"],
     );
     assert!(error.contains("drop the stray `-`"), "{error}");
-    // A trailing Task Link is its own item, never entry text.
+    // A session operator beside a Pomodoro link start is diagnosed as a
+    // separate item before the close parser treats it as Work Log text.
     let error = run_close_expect_error(
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
         &["x ^bob:ready="],
     );
-    assert!(error.contains("can't end with the Task Link"), "{error}");
+    assert!(
+        error.contains(
+            "session operators beside a Pomodoro link start are not task text"
+        ),
+        "{error}"
+    );
     // `x 1` is now the dangling inline number with the `x1` hint.
     let error = run_close_expect_error(
         &vault,

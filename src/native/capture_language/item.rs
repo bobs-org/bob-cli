@@ -2254,6 +2254,9 @@ fn parse_capture_item_masked<'a>(
         }
         return Err(task_link_picker_error(token.text));
     }
+    if let Some(message) = early_link_operator_body_error(parent_line) {
+        return Err(message);
+    }
     if let Some(outcome) = parse_pomodoro_equals_item(
         item,
         parent_line,
@@ -2373,13 +2376,11 @@ fn parse_capture_item_masked<'a>(
         resolve_line(parent_tokens, true, detect_route)?
     };
     if let Some(route) = parent_outcome.route.as_ref()
-        && let CaptureKind::Pomodoro {
-            start: Some(start), ..
-        } = &route.token.kind
+        && let CaptureKind::Pomodoro { start: Some(_), .. } = &route.token.kind
         && let Some(message) = pomodoro_link_operator_body_error(
             parent_line.raw.text,
             &parent_outcome.body,
-            &start.raw,
+            &route.marker_text,
         )
     {
         return Err(message);
@@ -3999,39 +4000,246 @@ pub(super) fn is_session_chain_token(token: &str) -> bool {
     }
 }
 
-/// Reject a link-start body made only of session operators and suggest the
-/// equivalent glued later timing for the one unambiguous `++[N]` case.
-pub(super) fn pomodoro_link_operator_body_error(
-    parent_text: &str,
-    body: &str,
-    start_suffix: &str,
+/// An operator-only body beside a Pomodoro link start, with the original
+/// source range for editor diagnostics.
+pub(super) struct PomodoroLinkOperatorBodyError {
+    pub(super) message: String,
+    pub(super) range: (usize, usize),
+}
+
+/// Parse a link marker through the established route/link parsers and return
+/// its timing and name components. The original marker text stays available
+/// to the composer so quoted names, capitalization, and delimiters survive.
+fn pomodoro_link_start_parts(
+    marker: &str,
+) -> Option<(String, Option<String>, bool)> {
+    if marker.starts_with('^') {
+        let (_, parts) = parse_caret_link_token(marker).ok()?;
+        return Some((
+            parts.start?.raw,
+            parts.pomodoro_name,
+            parts.pomodoro_name_is_literal,
+        ));
+    }
+    let route = parse_terminal_route_token(marker).ok()??;
+    let CaptureKind::Pomodoro {
+        pomodoro_name,
+        pomodoro_name_is_literal,
+        start: Some(start),
+        ..
+    } = route.kind
+    else {
+        return None;
+    };
+    Some((start.raw, pomodoro_name, pomodoro_name_is_literal))
+}
+
+/// Add a later offset to a parsed link's existing unsigned start while
+/// retaining the exact route, block ID, name spelling, and literal bytes.
+fn folded_link_later_start(
+    marker: &str,
+    start_raw: &str,
+    name: Option<&str>,
+    name_is_literal: bool,
+    count: &str,
 ) -> Option<String> {
-    let operators: Vec<_> = body.split_whitespace().collect();
-    if operators.is_empty()
-        || !operators.iter().all(|token| is_session_chain_token(token))
+    if start_raw.bytes().any(|byte| matches!(byte, b'+' | b'-')) {
+        return None;
+    }
+    let equals = link_start_equals_offset(marker, name_is_literal)?;
+    let after_equals = marker.get(equals + 1..)?;
+    let later = format!("+{count}");
+    let insert = if let Some(name) = name {
+        if name_is_literal {
+            if marker.get(..equals)?.contains('#') {
+                marker.len()
+            } else {
+                if !after_equals.starts_with(start_raw) {
+                    return None;
+                }
+                let after_timing = after_equals.get(start_raw.len()..)?;
+                if !after_timing.starts_with('#') {
+                    return None;
+                }
+                equals + 1 + start_raw.len()
+            }
+        } else if can_spell_bare(name)
+            && let Some(name_len) = bare_start_name_len(after_equals)
+        {
+            // Bare names place their duration and offset after the name.
+            if after_equals.get(name_len..)? != start_raw {
+                return None;
+            }
+            marker.len()
+        } else if after_equals.starts_with(start_raw)
+            && after_equals.get(start_raw.len()..)?.starts_with('#')
+        {
+            equals + 1 + start_raw.len()
+        } else {
+            // A name before the `=` has no name bytes after the timing.
+            marker.len()
+        }
+    } else {
+        marker.len()
+    };
+    let mut folded = marker.to_string();
+    folded.insert_str(insert, &later);
+    Some(folded)
+}
+
+/// Find the timing separator without mistaking an equals byte inside an
+/// exact-name literal for the marker's suffix separator.
+fn link_start_equals_offset(
+    marker: &str,
+    name_is_literal: bool,
+) -> Option<usize> {
+    if !name_is_literal {
+        return marker.find('=');
+    }
+    let hash = marker.find('#')?;
+    let lex = lex_exact_name_after_hash(
+        marker.get(hash + 1..)?,
+        marker.len().saturating_sub(hash + 1),
+    )?;
+    if !lex.complete {
+        return None;
+    }
+    if let Some(equals) = marker.get(..hash)?.rfind('=') {
+        Some(equals)
+    } else {
+        let name_end = hash + 1 + lex.literal_len;
+        marker
+            .get(name_end..)?
+            .find('=')
+            .map(|offset| name_end + offset)
+    }
+}
+
+/// Shared operator-only body diagnostic for execution and editor parsing.
+/// It accepts only nonempty bodies made entirely of complete session-chain
+/// tokens; prose remains ordinary task text.
+pub(super) fn pomodoro_link_operator_body_diagnostic(
+    parent_text: &str,
+    marker_text: &str,
+    body_tokens: &[Token<'_>],
+) -> Option<PomodoroLinkOperatorBodyError> {
+    if body_tokens.is_empty()
+        || !body_tokens
+            .iter()
+            .all(|token| is_session_chain_token(token.text))
     {
         return None;
     }
-    let fold = if operators.len() == 1
-        && operators[0].starts_with("++")
-        && start_suffix
-            .bytes()
-            .all(|byte| !matches!(byte, b'+' | b'-'))
-    {
-        let count = &operators[0][2..];
-        let marker = parent_text.split_whitespace().next().unwrap_or_default();
-        marker.find('=').map(|_| format!("{marker}+{count}"))
+    let (start_raw, name, name_is_literal) =
+        pomodoro_link_start_parts(marker_text)?;
+    let range = (body_tokens.first()?.start, body_tokens.last()?.end);
+    let folded = if body_tokens.len() == 1 {
+        let token = body_tokens[0].text;
+        session_operator_token(token).and_then(|(operator, digits, len)| {
+            let SessionOperator::Shift { later: true } = operator else {
+                return None;
+            };
+            if len != token.len()
+                || (!digits.is_empty()
+                    && digits.parse::<u64>().ok().filter(|n| *n > 0).is_none())
+            {
+                return None;
+            }
+            folded_link_later_start(
+                marker_text,
+                &start_raw,
+                name.as_deref(),
+                name_is_literal,
+                digits,
+            )
+            .map(|spelling| {
+                (
+                    spelling,
+                    if digits.is_empty() {
+                        1
+                    } else {
+                        digits.parse::<u64>().ok().unwrap_or(0)
+                    },
+                )
+            })
+        })
     } else {
         None
     };
-    Some(match fold {
-        Some(folded) => format!(
-            "session operators after a Pomodoro link start are not task text; fold this shift into the start as `{folded}`"
+    let message = match folded {
+        Some((spelling, units)) => format!(
+            "session operators beside a Pomodoro link start are not task text; write `{spelling}` to link and start {} minutes later, or put the shift on its own capture item",
+            units.saturating_mul(5),
         ),
         None => format!(
-            "session operators after a Pomodoro link start are not task text; put them on their own capture item (in `{parent_text}`, keep the link start as one item)"
+            "session operators beside a Pomodoro link start are not task text; keep the link start as one item and put each operator on its own capture item (from `{parent_text}`)"
         ),
-    })
+    };
+    Some(PomodoroLinkOperatorBodyError { message, range })
+}
+
+/// Execution-facing wrapper for paths that already resolved the route and
+/// body but do not retain their original token spans.
+pub(super) fn pomodoro_link_operator_body_error(
+    parent_text: &str,
+    body: &str,
+    marker_text: &str,
+) -> Option<String> {
+    let tokens: Vec<_> = tokenize_with_spans(body)
+        .into_iter()
+        .map(|token| Token {
+            text: token.text,
+            start: token.start,
+            end: token.end,
+        })
+        .collect();
+    pomodoro_link_operator_body_diagnostic(parent_text, marker_text, &tokens)
+        .map(|error| error.message)
+}
+
+/// Catch operator bodies before the whole-item shift parser claims a leading
+/// `++N`. The parsed marker's complete token span is removed, so the same
+/// rule works when the link appears on either side of the operator body.
+pub(super) fn early_link_operator_body_diagnostic(
+    parent_line: &ItemLine<'_>,
+) -> Option<PomodoroLinkOperatorBodyError> {
+    let mut tokens = tokenize_line_with_spans(&parent_line.raw);
+    tokens = super::pomodoro_literal::merge_leading_literal_token(
+        &parent_line.raw,
+        tokens,
+    );
+    if tokens.len() < 2 {
+        return None;
+    }
+    for (marker_index, marker) in tokens.iter().enumerate() {
+        let Some(_) = pomodoro_link_start_parts(marker.text) else {
+            continue;
+        };
+        let body_tokens: Vec<_> = tokens
+            .iter()
+            .enumerate()
+            .filter_map(|(index, token)| {
+                (index != marker_index).then_some(*token)
+            })
+            .collect();
+        let parent_text = parent_line.raw.text.trim();
+        if let Some(mut error) = pomodoro_link_operator_body_diagnostic(
+            parent_text,
+            marker.text,
+            &body_tokens,
+        ) {
+            error.range.0 += parent_line.raw.start;
+            error.range.1 += parent_line.raw.start;
+            return Some(error);
+        }
+    }
+    None
+}
+
+fn early_link_operator_body_error(
+    parent_line: &ItemLine<'_>,
+) -> Option<String> {
+    early_link_operator_body_diagnostic(parent_line).map(|error| error.message)
 }
 
 /// Whether a whitespace-free token is a close-hash near miss: bare lowercase
@@ -4223,7 +4431,22 @@ fn named_token_error(
     }
     if let Err(message) = parse_pomodoro_start_suffix(effective) {
         if message.contains("`+0` moves nothing") {
-            return Some(plus_zero_named_error(name, suffix, timing_text));
+            return named_zero_timing_error(
+                token,
+                suffix,
+                timing_text,
+                spelling,
+            );
+        }
+        if message.contains("takes one offset")
+            && let Some(error) = named_multiple_offsets_error(
+                token,
+                suffix,
+                timing_text,
+                spelling,
+            )
+        {
+            return Some(error);
         }
         return Some(message);
     }
@@ -4269,34 +4492,144 @@ pub(super) fn doubled_plus_start_error(
     ))
 }
 
-/// `+0` after a named start, rewriting the unnamed `+0` message so both
-/// suggestions keep the typed name (`=fix2+0` → `=fix2` / `=fix2+`).
-pub(super) fn plus_zero_named_error(
-    name: &str,
-    suffix: &str,
-    timing_text: Option<&str>,
-) -> String {
-    let effective = timing_text.unwrap_or(suffix);
-    let stripped = effective.strip_suffix("+0").unwrap_or(effective);
-    let later_part = if stripped.is_empty() {
+fn strip_zero_later_offset(effective: &str) -> Option<&str> {
+    let duration_end = effective.bytes().take_while(u8::is_ascii_digit).count();
+    let offset = &effective[duration_end..];
+    (offset.starts_with('+')
+        && offset.len() > 1
+        && offset[1..].bytes().all(|byte| byte == b'0'))
+    .then_some(&effective[..duration_end])
+}
+
+fn replace_timing_range(
+    typed: &str,
+    raw_timing: &str,
+    start: usize,
+    replacement: &str,
+) -> Option<String> {
+    let end = start.checked_add(raw_timing.len())?;
+    Some(format!(
+        "{}{}{}",
+        typed.get(..start)?,
+        replacement,
+        typed.get(end..)?
+    ))
+}
+
+/// Preserve the full authored token, including exact-name quote delimiters,
+/// when teaching a named `+00` or other all-zero later count.
+pub(super) fn named_zero_timing_error_for_range(
+    typed: &str,
+    raw_timing: &str,
+    start: usize,
+) -> Option<String> {
+    let stripped = strip_zero_later_offset(raw_timing)?;
+    let later = if stripped.is_empty() {
         "+".to_string()
     } else {
         format!("{stripped}+")
     };
-    let (drop, later) = if timing_text.is_some() {
-        (
-            glued_named_start("", name, stripped),
-            glued_named_start("", name, &later_part),
-        )
-    } else {
-        (
-            glued_named_start(stripped, name, ""),
-            glued_named_start(&later_part, name, ""),
-        )
-    };
-    format!(
+    let drop = replace_timing_range(typed, raw_timing, start, stripped)?;
+    let later = replace_timing_range(typed, raw_timing, start, &later)?;
+    Some(format!(
         "`+0` moves nothing: drop it (`{drop}`), or write `{later}` to start 5 minutes later"
-    )
+    ))
+}
+
+pub(super) fn named_zero_timing_error(
+    token: &str,
+    suffix: &str,
+    timing_text: Option<&str>,
+    spelling: NameSpelling,
+) -> Option<String> {
+    let raw_timing = timing_text.unwrap_or(suffix);
+    let (typed, start) =
+        if timing_text.is_some() && spelling == NameSpelling::Bare {
+            (format!("{token}{raw_timing}"), token.len())
+        } else {
+            (token.to_string(), 1)
+        };
+    named_zero_timing_error_for_range(&typed, raw_timing, start)
+}
+
+/// Return the first two legal one-offset readings of a token that contains
+/// multiple signs. Missing counts teach one unit; typed counts stay intact.
+pub(super) fn multiple_offset_alternatives(
+    raw: &str,
+) -> Option<(String, String)> {
+    let duration_end = raw.bytes().take_while(u8::is_ascii_digit).count();
+    let duration = &raw[..duration_end];
+    let offsets = &raw[duration_end..];
+    let mut alternatives = Vec::new();
+    let mut cursor = 0;
+    while cursor < offsets.len() {
+        let sign = *offsets.as_bytes().get(cursor)? as char;
+        if !matches!(sign, '-' | '+') {
+            return None;
+        }
+        cursor += 1;
+        let digits_start = cursor;
+        while cursor < offsets.len()
+            && offsets.as_bytes()[cursor].is_ascii_digit()
+        {
+            cursor += 1;
+        }
+        let units = if digits_start == cursor {
+            "1"
+        } else {
+            &offsets[digits_start..cursor]
+        };
+        alternatives.push((sign, units.to_string()));
+    }
+    if alternatives.len() < 2 {
+        return None;
+    }
+    if alternatives[0].0 == alternatives[1].0 {
+        alternatives[1].0 = if alternatives[0].0 == '-' { '+' } else { '-' };
+    }
+    Some((
+        format!("{duration}{}{}", alternatives[0].0, alternatives[0].1),
+        format!("{duration}{}{}", alternatives[1].0, alternatives[1].1),
+    ))
+}
+
+/// Named counterpart to the unnamed multiple-offset diagnostic. `token`
+/// retains the exact typed name spelling; trailing bare timing is supplied
+/// separately by `timing_text` and appended after that name.
+pub(super) fn named_multiple_offsets_error(
+    token: &str,
+    suffix: &str,
+    timing_text: Option<&str>,
+    spelling: NameSpelling,
+) -> Option<String> {
+    let raw_timing = timing_text.unwrap_or(suffix);
+    let typed = if timing_text.is_some() {
+        format!("{token}{raw_timing}")
+    } else {
+        token.to_string()
+    };
+    let start = if timing_text.is_some() && spelling == NameSpelling::Bare {
+        token.len()
+    } else {
+        1
+    };
+    multiple_offsets_error_for_range(&typed, raw_timing, start)
+}
+
+pub(super) fn multiple_offsets_error_for_range(
+    typed: &str,
+    raw_timing: &str,
+    start: usize,
+) -> Option<String> {
+    let (first, second) = multiple_offset_alternatives(raw_timing)?;
+    let end = start.checked_add(raw_timing.len())?;
+    let prefix = typed.get(..start)?;
+    let suffix = typed.get(end..)?;
+    let first_token = format!("{prefix}{first}{suffix}");
+    let second_token = format!("{prefix}{second}{suffix}");
+    Some(format!(
+        "`{typed}` takes one offset: `-` starts earlier, `+` starts later (`{first_token}` or `{second_token}`)"
+    ))
 }
 
 /// `=x+` / `@r:id=x+`: close-shaped `x` with trailing plus is never a

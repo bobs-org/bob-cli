@@ -953,6 +953,69 @@ struct ParsedLinkStart {
     start_ranges: Vec<(usize, usize)>,
 }
 
+fn link_start_has_name(
+    typed_token: &str,
+    equals_offset: usize,
+    suffix_name: Option<&str>,
+) -> bool {
+    suffix_name.is_some()
+        || typed_token
+            .get(..equals_offset)
+            .is_some_and(|prefix| prefix.contains('#'))
+}
+
+fn link_timing_run<'a>(
+    suffix: &'a str,
+    timing: &'a Option<(usize, String)>,
+    equals_offset: usize,
+) -> Option<(&'a str, usize)> {
+    match timing.as_ref() {
+        Some((offset, text)) => {
+            Some((text, equals_offset.checked_add(offset.checked_sub(1)?)?))
+        }
+        None => Some((suffix, equals_offset.checked_add(1)?)),
+    }
+}
+
+/// Byte range of the complete timing run on a link-start token. This is used
+/// when the link suffix is invalid, so it repeats the parser's literal-aware
+/// search for the suffix separator before asking the shared start lexer for
+/// the timing fields.
+pub(super) fn pomodoro_link_start_timing_range(
+    token: &str,
+    route: &str,
+    rest: &str,
+) -> Option<(usize, usize)> {
+    let literal_span = rest.find('#').and_then(|hash| {
+        let after_hash = &rest[hash + 1..];
+        if !opens_exact_name(after_hash) {
+            return None;
+        }
+        lex_exact_name_after_hash(after_hash, after_hash.len()).and_then(
+            |lex| lex.complete.then(|| (hash + 1, hash + 1 + lex.literal_len)),
+        )
+    });
+    let split_at = match literal_span {
+        Some((start, end)) => rest[..start]
+            .find('=')
+            .or_else(|| rest[end..].find('=').map(|offset| end + offset)),
+        None => rest.find('='),
+    }?;
+    let raw = rest.get(split_at + 1..)?;
+    let equals_offset = (if token.starts_with("@!") { 2 } else { 1 })
+        + route.len()
+        + 1
+        + split_at;
+    let Some(EqualsToken::Start { suffix, timing, .. }) =
+        session_equals_token(&format!("={raw}"))
+    else {
+        return None;
+    };
+    let (timing_text, start) =
+        link_timing_run(&suffix, &timing, equals_offset)?;
+    Some((start, start + timing_text.len()))
+}
+
 /// Parse the text following a link's `=` through the same whole-item start
 /// lexer used by standalone `=name` starts. Link starts share its timing and
 /// name spellings, while dropping from a link remains disallowed.
@@ -1063,12 +1126,32 @@ fn parse_link_start_suffix(
     let spec = match parse_pomodoro_start_suffix(&effective) {
         Ok(spec) => spec,
         Err(message) if message.contains("`+0` moves nothing") => {
-            if let Some(name_str) = name.as_deref() {
-                return Err(plus_zero_named_error(
-                    name_str,
-                    &suffix,
-                    timing.as_ref().map(|(_, text)| text.as_str()),
-                ));
+            if link_start_has_name(typed_token, equals_offset, name.as_deref())
+                && let Some((raw_timing, timing_start)) =
+                    link_timing_run(&suffix, &timing, equals_offset)
+                && let Some(error) =
+                    super::item::named_zero_timing_error_for_range(
+                        typed_token,
+                        raw_timing,
+                        timing_start,
+                    )
+            {
+                return Err(error);
+            }
+            return Err(message);
+        }
+        Err(message) if message.contains("takes one offset") => {
+            if link_start_has_name(typed_token, equals_offset, name.as_deref())
+                && let Some((raw_timing, timing_start)) =
+                    link_timing_run(&suffix, &timing, equals_offset)
+                && let Some(error) =
+                    super::item::multiple_offsets_error_for_range(
+                        typed_token,
+                        raw_timing,
+                        timing_start,
+                    )
+            {
+                return Err(error);
             }
             return Err(message);
         }
@@ -2620,10 +2703,7 @@ pub(super) fn parse_pomodoro_link_item<'a>(
                     super::item::pomodoro_link_operator_body_error(
                         parent_trimmed,
                         trailing,
-                        parts
-                            .start
-                            .as_ref()
-                            .map_or("", |start| start.raw.as_str()),
+                        first,
                     )
             {
                 return Err(message);

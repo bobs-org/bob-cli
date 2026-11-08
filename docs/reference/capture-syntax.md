@@ -822,9 +822,8 @@ Contract: [Adjusting the current Pomodoro](../capture.md#adjusting-the-current-p
 
 ### `++[N]` {#plus-plus-shift}
 
-Shift the running timed Pomodoro N units later, keeping its duration.
-`++3` is +15 minutes. The item must contain only the operator. `+++` stays
-prose.
+Shift a running timed Pomodoro later, keeping its duration (`++3` is +15
+minutes). Use the operator alone; `+++` is prose.
 
 ```bash
 bob capture --dry-run '++3'
@@ -835,11 +834,11 @@ bob capture --dry-run '++3'
   WORK 1200-1225 (25m) to 1215-1240 (25m), +15m at line 8
 ```
 
-Contract: [Shifting the current Pomodoro](../capture.md#shifting-the-current-pomodoro).
+Link-start body rules: [linking and starting existing tasks](../capture.md#linking-and-starting-existing-tasks).
 
 ### `--[N]` {#minus-minus-shift}
 
-Shift N units earlier. Bare `--` is one unit; pass it after the option delimiter.
+Shift earlier by N units (default 1); pass bare `--` after the option delimiter.
 
 ```bash
 bob capture --dry-run -- '--'

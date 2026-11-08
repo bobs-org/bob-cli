@@ -345,7 +345,12 @@ fn past_capture_records_with_nothing_lost() {
 
 #[test]
 fn past_parse_named_later_offset_teaches_the_hash_spelling() {
-    for text in ["x=fix+", "x=fix2+", "x=c++"] {
+    for (text, literal) in [
+        ("x=fix+", "x=#fix+"),
+        ("x=fix2+", "x=#fix2+"),
+        ("x=bugs+", "x=#bugs+"),
+        ("x=c++", "x=#c++"),
+    ] {
         let value = parse(text);
         assert_eq!(value["mode"], "pomodoro_past", "{text}");
         assert_eq!(
@@ -360,8 +365,9 @@ fn past_parse_named_later_offset_teaches_the_hash_spelling() {
             "{text}: {message}"
         );
         assert!(
-            message
-                .contains("spell a name that ends in `+` with `#` (`x=#c++`)"),
+            message.contains(&format!(
+                "spell a name that ends in `+` with `#` (`{literal}`)"
+            )),
             "{text}: {message}"
         );
     }

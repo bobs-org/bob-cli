@@ -11,6 +11,12 @@ fn link_starts_refuse_operator_only_bodies_without_writing() {
         "@cash:work=fix2 ++",
         "@cash:work= --",
         "^cash:work=3 ++2",
+        "@cash:work=#deep-work ++3",
+        "@cash:work=3#deep-work ++2",
+        "@cash:work=#\"DEEP WORK\" ++3",
+        "++3 @cash:work=",
+        "@cash:work=+3 ++2",
+        "@cash:work= ++3 ++2",
     ];
     for (index, draft) in cases.iter().enumerate() {
         let temp = TempDir::new("bob-cli-link-operator-body");
@@ -41,7 +47,7 @@ fn link_starts_refuse_operator_only_bodies_without_writing() {
         );
         assert!(
             stdout(&output)
-                .contains("session operators after a Pomodoro link start"),
+                .contains("session operators beside a Pomodoro link start"),
             "{draft}: {}",
             format_output(&output)
         );
@@ -56,6 +62,46 @@ fn link_starts_refuse_operator_only_bodies_without_writing() {
             "case {index}: {draft}"
         );
     }
+}
+
+#[test]
+fn operator_only_link_body_rolls_back_earlier_items_in_a_bulk_draft() {
+    let temp = TempDir::new("bob-cli-link-operator-body-bulk");
+    let vault = temp.path().join("vault");
+    let target = vault.join("cash.md");
+    let day_file = vault.join("day.md");
+    let target_before = "# Cash\n## Tasks\n- [ ] #task Work ^work\n";
+    let day_before = "## Pomodoros\n- [ ] Untimed placeholder\n";
+    write_file(&target, target_before);
+    write_file(&day_file, day_before);
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("A new task that would otherwise be captured\n\n@cash:work= ++3")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:42:00")
+        .output()
+        .expect("run bulk operator-only link refusal");
+    assert!(!output.status.success(), "{}", format_output(&output));
+    assert!(
+        stdout(&output)
+            .contains("session operators beside a Pomodoro link start"),
+        "{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(&target).expect("read target after refusal"),
+        target_before
+    );
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read day after refusal"),
+        day_before
+    );
 }
 
 #[test]
@@ -1859,10 +1905,14 @@ fn glued_later_link_start_matches_two_item_draft_note_bytes() {
     let now = "2026-07-10 09:42:00";
     let target_before = "# Cash\n## Tasks\n- [ ] #task Work ^work\n";
     let day_before = "## Pomodoros\n- [ ] () — FIX\n";
-    for (glued, shift) in [
-        ("@cash:work=fix2+", "++"),
-        ("@cash:work=fix2+1", "++1"),
-        ("@cash:work=fix2+3", "++3"),
+    for (glued, start, shift) in [
+        ("@cash:work=fix2+", "@cash:work=fix2", "++"),
+        ("@cash:work=fix2+1", "@cash:work=fix2", "++1"),
+        ("@cash:work=fix2+3", "@cash:work=fix2", "++3"),
+        ("@cash:work=3+", "@cash:work=3", "++"),
+        ("@cash:work=3+1", "@cash:work=3", "++1"),
+        ("@cash:work=3+3", "@cash:work=3", "++3"),
+        ("@cash:work=+3", "@cash:work=", "++3"),
     ] {
         let glued_temp = TempDir::new("bob-cli-link-later-glued");
         let glued_vault = glued_temp.path().join("vault");
@@ -1899,19 +1949,19 @@ fn glued_later_link_start_matches_two_item_draft_note_bytes() {
                 .arg("json")
                 .env("BOB_DAY_FILE", &spaced_day)
                 .env("BOB_NOW", now),
-            &format!("@cash:work=fix2\n\n{shift}\n"),
+            &format!("{start}\n\n{shift}\n"),
         );
         assert_success(&spaced_out);
 
         assert_eq!(
             fs::read_to_string(&glued_day).expect("glued day"),
             fs::read_to_string(&spaced_day).expect("spaced day"),
-            "{glued} vs @cash:work=fix2 / {shift}"
+            "{glued} vs {start} / {shift}"
         );
         assert_eq!(
             fs::read_to_string(&glued_target).expect("glued target"),
             fs::read_to_string(&spaced_target).expect("spaced target"),
-            "{glued} vs @cash:work=fix2 / {shift} target"
+            "{glued} vs {start} / {shift} target"
         );
     }
 }

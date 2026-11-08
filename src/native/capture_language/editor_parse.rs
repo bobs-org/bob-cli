@@ -4533,6 +4533,23 @@ pub(super) fn parse_editor_item_inner<'a>(
         return parent_task;
     }
     if let Some(adjustment) = parse_editor_adjust_item(item) {
+        if let Some(error) = item
+            .lines
+            .first()
+            .and_then(super::item::early_link_operator_body_diagnostic)
+        {
+            let mut adjustment = adjustment;
+            adjustment.item.mode = EditorMode::PomodoroLink;
+            adjustment.item.pomodoro_shift = None;
+            adjustment.item.diagnostics = vec![Diagnostic {
+                severity: Severity::Error,
+                code: "invalid_pomodoro_link",
+                message: error.message,
+                range: Some(error.range),
+                rewrite: None,
+            }];
+            return adjustment;
+        }
         return attach_operator_dependency_rejection(adjustment, item);
     }
     if !has_clip {
@@ -5018,29 +5035,20 @@ pub(super) fn parse_editor_item_inner<'a>(
     // item, but point the diagnostic at those operators and teach the glued
     // `+` spelling when it is unambiguous.
     if mode == EditorMode::PomodoroTask
-        && let Some(start) = pomodoro_start.as_ref()
-        && let Some(message) = super::item::pomodoro_link_operator_body_error(
+        && let Some(marker_text) = parent_parse.marker_text.as_deref()
+        && let Some(error) = super::item::pomodoro_link_operator_body_diagnostic(
             parent_line.text,
-            &body,
-            &start.raw,
+            marker_text,
+            &parent_parse.body_tokens,
         )
     {
-        let operator_tokens: Vec<_> = parent_parse
-            .body_tokens
-            .iter()
-            .filter(|token| super::item::is_session_chain_token(token.text))
-            .collect();
-        if let (Some(first), Some(last)) =
-            (operator_tokens.first(), operator_tokens.last())
-        {
-            diagnostics.push(Diagnostic {
-                severity: Severity::Error,
-                code: "invalid_pomodoro_link",
-                message,
-                range: Some((first.start, last.end)),
-                rewrite: None,
-            });
-        }
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            code: "invalid_pomodoro_link",
+            message: error.message,
+            range: Some(error.range),
+            rewrite: None,
+        });
     }
 
     // A `=x` close suffix cannot combine with `s:<N>`, `$<N>`, or `%c`:
@@ -5423,9 +5431,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                         super::item::pomodoro_link_operator_body_error(
                             parent_line.text,
                             trailing,
-                            pomodoro_start
-                                .as_ref()
-                                .map_or("", |start| start.raw.as_str()),
+                            caret.token.text,
                         );
                     let (message, conflict_range) = match operator_error {
                         Some(operator_error) => {

@@ -1712,14 +1712,18 @@ are rejected with messages naming the `@route^block-id@` project-note and
 `^` item. Body-bearing `<text> @route:block-id[#name][=<X>]` keeps its exact
 current new-task meaning.
 
-After a link-start marker, a first-line remainder made only of session-operator
-tokens is refused as `invalid_pomodoro_link`, ranged on the operators, rather
-than captured as a task body. Fold one `++[N]` shift into an unsigned suffix:
-`@foo:bar= ++3` becomes `@foo:bar=+3`, and
-`@foo:bar=fix2 ++` becomes `@foo:bar=fix2+`; `^route:block-id=<X> ++N`
-gets the same hint. For other operator-only remainders, put the operators on
-their own capture item. Prose such as `@foo:bar= Fix the ++3 bug` remains a
-task body.
+If the first line beside a link-start marker contains only session-operator
+tokens, capture refuses it as `invalid_pomodoro_link` and ranges the operators
+wherever they appear before or after the marker. A single unsigned `++[N]`
+shift folds into the link's start while preserving its route, task link, and
+Pomodoro name: `@foo:bar= ++3` becomes `@foo:bar=+3`,
+`@foo:bar=fix2 ++` becomes `@foo:bar=fix2+`, and
+`@foo:bar=3#"DEEP WORK" ++3` becomes
+`@foo:bar=3+3#"DEEP WORK"`. The same rule applies to
+`^route:block-id=<X>`. Starts that already contain a signed offset and bodies
+with multiple operators stay separate: keep the link start as one item and put
+each operator on its own capture item. Prose such as
+`@foo:bar= Fix the ++3 bug` remains a task body.
 
 An explicit Pomodoro name on a whole-item existing-task link also lands by
 merging as described above. This includes the `^route:block-id` active-task

@@ -1928,6 +1928,20 @@ fn classify_pomodoro_link_start_suffix(
             } else {
                 "invalid_pomodoro_start"
             };
+            if (message.contains("`+0` moves nothing")
+                || message.contains("takes one offset"))
+                && let Some((start, end)) = pomodoro_link_start_timing_range(
+                    token.text, route_part, rest,
+                )
+            {
+                return TokenParse::Invalid(Diagnostic {
+                    severity: Severity::Error,
+                    code,
+                    message,
+                    range: Some((token.start + start, token.start + end)),
+                    rewrite: None,
+                });
+            }
             // A doubled-plus near miss is still a Pomodoro link: keep the
             // marker so a solo `@route:id=c++` reports `pomodoro_link`
             // with `invalid_pomodoro_link`, matching execution and the

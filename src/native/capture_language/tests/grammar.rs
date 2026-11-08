@@ -1259,6 +1259,124 @@ fn signed_start_refusals_are_teaching_errors_and_prose_stays_prose() {
 }
 
 #[test]
+fn named_signed_start_refusals_keep_typed_names_and_timing_ranges() {
+    for (raw, first, second, range) in [
+        ("=fix2+00", "=fix2", "=fix2+", (4, 8)),
+        ("=2+00fix", "=2fix", "=2+fix", (1, 5)),
+        ("=3+00#deep-work", "=3#deep-work", "=3+#deep-work", (1, 5)),
+        (
+            "=3+00#\"DEEP WORK\"",
+            "=3#\"DEEP WORK\"",
+            "=3+#\"DEEP WORK\"",
+            (1, 5),
+        ),
+        ("=fix3-1+2", "=fix3-1", "=fix3+2", (4, 9)),
+        ("=3-1+2fix", "=3-1fix", "=3+2fix", (1, 6)),
+    ] {
+        let error = execute(raw).expect_err(raw);
+        assert!(error.contains(first), "{raw}: {error}");
+        assert!(error.contains(second), "{raw}: {error}");
+        let edit = editor(raw);
+        assert_eq!(edit.mode, EditorMode::PomodoroStart, "{raw}");
+        assert_eq!(edit.diagnostics.len(), 1, "{raw}");
+        assert_eq!(edit.diagnostics[0].code, "invalid_pomodoro_start", "{raw}");
+        assert_eq!(edit.diagnostics[0].range, Some(range), "{raw}");
+        assert_eq!(edit.diagnostics[0].message, error, "{raw}");
+    }
+
+    for (raw, timing, first, second) in [
+        (
+            "@r:id#deep=3-1+2",
+            "3-1+2",
+            "@r:id#deep=3-1",
+            "@r:id#deep=3+2",
+        ),
+        (
+            "@r:id=3-1+2#deep-work",
+            "3-1+2",
+            "@r:id=3-1#deep-work",
+            "@r:id=3+2#deep-work",
+        ),
+        (
+            "@r:id=+00#\"DEEP WORK\"",
+            "+00",
+            "@r:id=#\"DEEP WORK\"",
+            "@r:id=+#\"DEEP WORK\"",
+        ),
+    ] {
+        let error = execute(raw).expect_err(raw);
+        assert!(error.contains(first), "{raw}: {error}");
+        assert!(error.contains(second), "{raw}: {error}");
+        let edit = editor(raw);
+        assert_eq!(edit.diagnostics.len(), 1, "{raw}");
+        assert_eq!(edit.diagnostics[0].code, "invalid_pomodoro_start", "{raw}");
+        assert_eq!(edit.diagnostics[0].message, error, "{raw}");
+        let start = raw.find(timing).expect("timing");
+        assert_eq!(
+            edit.diagnostics[0].range,
+            Some((start, start + timing.len())),
+            "{raw}"
+        );
+    }
+}
+
+#[test]
+fn pomodoro_link_operator_body_folds_only_unambiguous_unsigned_shifts() {
+    for (raw, folded, operator) in [
+        ("@r:id=#deep-work ++3", Some("@r:id=+3#deep-work"), "++3"),
+        ("@r:id=3#deep-work ++2", Some("@r:id=3+2#deep-work"), "++2"),
+        (
+            "@r:id=#\"DEEP WORK\" ++3",
+            Some("@r:id=+3#\"DEEP WORK\""),
+            "++3",
+        ),
+        ("++3 @r:id=", Some("@r:id=+3"), "++3"),
+        ("@r:id=+3 ++2", None, "++2"),
+        ("@r:id= ++3 ++2", None, "++3"),
+        ("^r:id=3 ++2", Some("^r:id=3+2"), "++2"),
+    ] {
+        let error = execute(raw).expect_err(raw);
+        assert!(
+            error.contains("session operators beside a Pomodoro link start"),
+            "{raw}: {error}"
+        );
+        match folded {
+            Some(folded) => {
+                assert!(error.contains(folded), "{raw}: {error}");
+                assert!(error.contains("minutes later"), "{raw}: {error}");
+                assert!(
+                    error.contains("put the shift on its own capture item"),
+                    "{raw}: {error}"
+                );
+            }
+            None => assert!(
+                !error.contains("fold this shift")
+                    && error.contains("each operator on its own capture item"),
+                "{raw}: {error}"
+            ),
+        }
+        let edit = editor(raw);
+        assert_eq!(edit.diagnostics.len(), 1, "{raw}");
+        assert_eq!(edit.diagnostics[0].code, "invalid_pomodoro_link", "{raw}");
+        assert_eq!(edit.diagnostics[0].message, error, "{raw}");
+        let start = raw.find(operator).expect("operator");
+        let last_operator = raw
+            .split_whitespace()
+            .filter(|token| token.starts_with('+') || token.starts_with('-'))
+            .next_back()
+            .expect("operator body");
+        let end = raw.rfind(last_operator).expect("last operator")
+            + last_operator.len();
+        assert_eq!(edit.diagnostics[0].range, Some((start, end)), "{raw}");
+    }
+
+    for raw in ["@r:id= ++3 fix", "Fix the ++3 issue @r:id="] {
+        execute(raw).expect(raw);
+        assert!(editor(raw).diagnostics.is_empty(), "{raw}");
+    }
+}
+
+#[test]
 fn execution_treats_leading_and_trailing_timing_as_equivalent() {
     fn assert_equivalent(bare: &str, hashed: &str) {
         match (execute_draft(bare), execute_draft(hashed)) {

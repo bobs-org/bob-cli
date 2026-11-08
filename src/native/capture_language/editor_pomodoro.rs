@@ -464,6 +464,9 @@ pub(super) fn parse_editor_named_start_item<'a>(
                         prefix_len,
                         name_start,
                         name_end,
+                        timing_offset: timing
+                            .as_ref()
+                            .map(|(offset, _)| *offset),
                         spelling,
                     },
                     is_literal,
@@ -495,6 +498,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
                 prefix_len,
                 name_start,
                 name_end,
+                timing_offset: timing.as_ref().map(|(offset, _)| *offset),
                 spelling,
             },
             is_literal,
@@ -636,6 +640,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
             prefix_len,
             name_start,
             name_end,
+            timing_offset: timing.as_ref().map(|(offset, _)| *offset),
             spelling,
         },
         is_literal,
@@ -876,6 +881,7 @@ struct NamedStartOffsets {
     prefix_len: usize,
     name_start: usize,
     name_end: usize,
+    timing_offset: Option<usize>,
     spelling: NameSpelling,
 }
 
@@ -899,6 +905,7 @@ fn named_start_token_diagnostic(
         prefix_len,
         name_start,
         name_end,
+        timing_offset,
         spelling,
     } = offsets;
     if name.is_empty() {
@@ -952,13 +959,64 @@ fn named_start_token_diagnostic(
     if let Err(message) = parse_pomodoro_start_suffix(effective) {
         if message.contains("`+0` moves nothing") {
             return Some((
-                plus_zero_named_error(name, suffix, timing_text),
-                (token_start, token_start + prefix_len),
+                super::item::named_zero_timing_error(
+                    token,
+                    suffix,
+                    timing_text,
+                    spelling,
+                )
+                .unwrap_or(message),
+                named_timing_error_range(
+                    token_start,
+                    prefix_len,
+                    suffix,
+                    timing_text,
+                    timing_offset,
+                ),
+            ));
+        }
+        if message.contains("takes one offset")
+            && let Some(named) = super::item::named_multiple_offsets_error(
+                token,
+                suffix,
+                timing_text,
+                spelling,
+            )
+        {
+            return Some((
+                named,
+                named_timing_error_range(
+                    token_start,
+                    prefix_len,
+                    suffix,
+                    timing_text,
+                    timing_offset,
+                ),
             ));
         }
         return Some((message, (token_start, token_start + prefix_len)));
     }
     None
+}
+
+fn named_timing_error_range(
+    token_start: usize,
+    prefix_len: usize,
+    suffix: &str,
+    timing_text: Option<&str>,
+    timing_offset: Option<usize>,
+) -> (usize, usize) {
+    if let (Some(text), Some(offset)) = (timing_text, timing_offset) {
+        let start = token_start + offset;
+        return (start, start + text.len());
+    }
+    let start = token_start + 1;
+    let len = if suffix.is_empty() {
+        prefix_len.saturating_sub(1)
+    } else {
+        suffix.len()
+    };
+    (start, start + len)
 }
 
 /// Range of the trimmed extra text after a whole-item token, mirroring the

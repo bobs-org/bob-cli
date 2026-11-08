@@ -877,7 +877,10 @@ fn past_rest_error(
                 &start_token,
                 duration_units,
                 later_units,
-                context.has_name,
+                context
+                    .name_is_bare
+                    .then_some(split.e_raw.as_str())
+                    .filter(|name| name.ends_with('+')),
             );
         }
     }
@@ -983,15 +986,17 @@ pub(crate) fn past_later_error(
     start_token: &str,
     duration_units: u64,
     later_units: u64,
-    named: bool,
+    bare_name_ending_plus: Option<&str>,
 ) -> String {
     let mut message = format!(
         "`{raw_token}` records finished work, so it takes no `+`: `{start_token}` starts a {}-minute session {} minutes from now, and `x {start_token}` closes the running session first",
         duration_units.saturating_mul(5),
         later_units.saturating_mul(5),
     );
-    if named {
-        message.push_str("; spell a name that ends in `+` with `#` (`x=#c++`)");
+    if let Some(name) = bare_name_ending_plus {
+        message.push_str(&format!(
+            "; spell a name that ends in `+` with `#` (`x=#{name}`)"
+        ));
     }
     message
 }

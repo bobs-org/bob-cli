@@ -252,10 +252,11 @@ fn numeric_past_later_offsets_teach_the_start_spelling() {
 
 #[test]
 fn named_past_later_offsets_teach_the_hash_spelling() {
-    for (typed, start, duration, later) in [
-        ("x=fix+", "=fix+", 25, 5),
-        ("x=fix2+", "=fix2+", 10, 5),
-        ("x=c++", "=c+", 25, 5),
+    for (typed, start, duration, later, literal) in [
+        ("x=fix+", "=fix+", 25, 5, "x=#fix+"),
+        ("x=fix2+", "=fix2+", 10, 5, "x=#fix2+"),
+        ("x=bugs+", "=bugs+", 25, 5, "x=#bugs+"),
+        ("x=c++", "=c+", 25, 5, "x=#c++"),
     ] {
         let error = execute(typed).expect_err(typed);
         assert!(error.contains("records finished work"), "{typed}: {error}");
@@ -266,9 +267,9 @@ fn named_past_later_offsets_teach_the_hash_spelling() {
             "{typed}: {error}"
         );
         assert!(
-            error.contains(
-                "; spell a name that ends in `+` with `#` (`x=#c++`)"
-            ),
+            error.contains(&format!(
+                "; spell a name that ends in `+` with `#` (`{literal}`)"
+            )),
             "{typed}: {error}"
         );
         let edit = editor(typed);
