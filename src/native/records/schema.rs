@@ -52,6 +52,8 @@ pub(crate) enum RecordDiagnosticCode {
     InvalidNumber,
     NumberOutOfRange,
     InvalidList,
+    MissingTitle,
+    NoteRead,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,6 +77,20 @@ impl RecordDiagnostic {
             code,
             config_path: Some(path.to_path_buf()),
             record_type: record_type.map(str::to_owned),
+            field: field.map(str::to_owned),
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn note(
+        field: Option<&str>,
+        code: RecordDiagnosticCode,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            code,
+            config_path: None,
+            record_type: None,
             field: field.map(str::to_owned),
             message: message.into(),
         }
@@ -114,15 +130,9 @@ impl fmt::Display for RecordDiagnostic {
 
 impl std::error::Error for RecordDiagnostic {}
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) struct RecordsConfig {
     pub(crate) types: Vec<RecordType>,
-}
-
-impl Default for RecordsConfig {
-    fn default() -> Self {
-        Self { types: Vec::new() }
-    }
 }
 
 impl RecordsConfig {
@@ -1344,7 +1354,7 @@ fn reject_unknown_keys(
 }
 
 fn mapping_get<'a>(mapping: &'a Mapping, key: &str) -> Option<&'a Value> {
-    mapping.get(&Value::String(key.to_owned()))
+    mapping.get(Value::String(key.to_owned()))
 }
 
 fn valid_identifier(value: &str) -> bool {

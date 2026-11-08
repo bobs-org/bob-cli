@@ -1,9 +1,15 @@
 #![allow(dead_code)]
 
+pub(crate) mod catalog;
 pub(crate) mod render;
 pub(crate) mod schema;
 pub(crate) mod stem;
 
+#[allow(unused_imports)]
+pub(crate) use catalog::{
+    FolderIndex, IndexedField, IndexedFieldValue, IndexedRecord, RecordCatalog,
+    StemLookup, ValueSuggestion,
+};
 #[allow(unused_imports)]
 pub(crate) use render::{
     AppliedRecordUpdate, RecordNoteInput, RecordRenderRequest,
