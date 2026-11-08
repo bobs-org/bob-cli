@@ -23,6 +23,7 @@ Code lives in this `bob-cli` repository. On the MacBook, use a checkout at
 - [PDFs open in Highlights](#pdfs-open-in-highlights)
 - [Scan, safety, and Git/ob behavior](#scan-safety-and-gitob-behavior)
 - [Generated body contract](#generated-body-contract)
+  - [Client contract](#client-contract)
   - [Image notes](#image-notes)
   - [Continuation highlights (`<`)](#continuation-highlights)
   - [Underline emphasis](#underline-emphasis)
@@ -1281,6 +1282,19 @@ readable record beyond the (usually empty) cron log.
 
 Highlights, image selections, comments on annotations, and standalone
 non-marker notes sync one way from the PDF/sidecar into the reference note.
+
+### Client contract
+
+bob-navigation-hotkeys reads the following generated shapes to resolve
+`Cmd+Enter` page jumps: the `<!-- highlights:begin -->` /
+`<!-- highlights:end -->` region markers; the H3/H4 page caption grammar
+(`Page N`, `Pages A–B`, `Pages 11, 14`, `p.`/`pp.`); `[!quote|Page N]`
+piece metadata; standalone `^h-` ID lines; the `Grouped highlight` /
+`Merged emphasis` / `Removed highlight` callout headers; and
+`annotated_pdf` on `ref_history` archives. Changing any of them requires a
+coordinated plugin update. Pages are physical and 1-based (the
+`Page N of M` number in Highlights). No annotated PDF has `/PageLabels`
+today.
 
 For `foo.pdf`, sidecar discovery looks for `foo.md` first. If there is no
 Markdown sidecar, it recognizes `foo.textbundle` only when the bundle contains
