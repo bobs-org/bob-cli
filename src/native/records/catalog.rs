@@ -36,8 +36,18 @@ pub(crate) struct RecordCatalog {
 pub(crate) struct FolderIndex {
     directory: String,
     notes: Vec<IndexedRecord>,
+    occupants: Vec<OccupiedRecordPath>,
     diagnostics: Vec<RecordDiagnostic>,
     files_opened: usize,
+    create_refusal: Option<String>,
+}
+
+/// A Markdown-named filesystem entry that reserves a record path even when
+/// it cannot be indexed as a note.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OccupiedRecordPath {
+    pub(crate) relative_path: PathBuf,
+    pub(crate) stem: String,
 }
 
 /// One Markdown file in a record folder, even when YAML or title is missing.
@@ -56,6 +66,8 @@ pub(crate) struct IndexedRecord {
 pub(crate) struct IndexedField {
     pub(crate) key: String,
     pub(crate) value: IndexedFieldValue,
+    /// Lossless YAML value for checkers; suggestions use `value` only.
+    pub(crate) raw_value: Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -229,11 +241,22 @@ impl FolderIndex {
             StemLookup::Ambiguous(notes) => {
                 Some(notes[0].relative_path.clone())
             }
-            StemLookup::None => reserved.iter().find_map(|path| {
-                reserved_matches(&self.directory, stem, path)
-                    .then(|| path.clone())
-            }),
+            StemLookup::None => self
+                .occupants
+                .iter()
+                .find(|path| fold_key(&path.stem) == fold_key(stem))
+                .map(|path| path.relative_path.clone())
+                .or_else(|| {
+                    reserved.iter().find_map(|path| {
+                        reserved_matches(&self.directory, stem, path)
+                            .then(|| path.clone())
+                    })
+                }),
         }
+    }
+
+    pub(crate) fn create_refusal(&self) -> Option<&str> {
+        self.create_refusal.as_deref()
     }
 }
 
@@ -265,22 +288,33 @@ fn empty_folder(
     FolderIndex {
         directory: directory.to_owned(),
         notes: Vec::new(),
+        occupants: Vec::new(),
         diagnostics,
         files_opened: 0,
+        create_refusal: None,
+    }
+}
+
+fn unusable_folder(directory: &str, message: String) -> FolderIndex {
+    FolderIndex {
+        directory: directory.to_owned(),
+        notes: Vec::new(),
+        occupants: Vec::new(),
+        diagnostics: vec![RecordDiagnostic::note(
+            None,
+            RecordDiagnosticCode::NoteRead,
+            message.clone(),
+        )],
+        files_opened: 0,
+        create_refusal: Some(message),
     }
 }
 
 fn load_folder(vault_root: &Path, directory: &str) -> FolderIndex {
     if !is_safe_segment(directory) {
-        return empty_folder(
+        return unusable_folder(
             directory,
-            vec![RecordDiagnostic::note(
-                None,
-                RecordDiagnosticCode::NoteRead,
-                format!(
-                    "record folder {directory:?} is not a single safe segment"
-                ),
-            )],
+            format!("record folder {directory:?} is not a single safe segment"),
         );
     }
 
@@ -291,60 +325,47 @@ fn load_folder(vault_root: &Path, directory: &str) -> FolderIndex {
             return empty_folder(directory, Vec::new());
         }
         Err(error) => {
-            return empty_folder(
+            return unusable_folder(
                 directory,
-                vec![RecordDiagnostic::note(
-                    None,
-                    RecordDiagnosticCode::NoteRead,
-                    format!(
-                        "could not read record folder {}: {error}",
-                        folder_path.display()
-                    ),
-                )],
+                format!(
+                    "could not read record folder {}: {error}",
+                    folder_path.display()
+                ),
             );
         }
     };
     if !metadata.is_dir() && !metadata.file_type().is_symlink() {
-        return empty_folder(
+        return unusable_folder(
             directory,
-            vec![RecordDiagnostic::note(
-                None,
-                RecordDiagnosticCode::NoteRead,
-                format!(
-                    "record folder {} is not a directory",
-                    folder_path.display()
-                ),
-            )],
+            format!(
+                "record folder {} is not a directory",
+                folder_path.display()
+            ),
         );
     }
 
     let Some(vault_canon) = fs::canonicalize(vault_root).ok() else {
-        return empty_folder(directory, Vec::new());
+        return unusable_folder(
+            directory,
+            format!("could not resolve vault root {}", vault_root.display()),
+        );
     };
     let Some(folder_canon) = fs::canonicalize(&folder_path).ok() else {
-        return empty_folder(
+        return unusable_folder(
             directory,
-            vec![RecordDiagnostic::note(
-                None,
-                RecordDiagnosticCode::NoteRead,
-                format!(
-                    "could not resolve record folder {}",
-                    folder_path.display()
-                ),
-            )],
+            format!(
+                "could not resolve record folder {}",
+                folder_path.display()
+            ),
         );
     };
     if !is_within(&folder_canon, &vault_canon) {
-        return empty_folder(
+        return unusable_folder(
             directory,
-            vec![RecordDiagnostic::note(
-                None,
-                RecordDiagnosticCode::NoteRead,
-                format!(
-                    "record folder {} resolves outside the vault",
-                    folder_path.display()
-                ),
-            )],
+            format!(
+                "record folder {} resolves outside the vault",
+                folder_path.display()
+            ),
         );
     }
 
@@ -354,36 +375,36 @@ fn load_folder(vault_root: &Path, directory: &str) -> FolderIndex {
             return empty_folder(directory, Vec::new());
         }
         Err(error) => {
-            return empty_folder(
+            return unusable_folder(
                 directory,
-                vec![RecordDiagnostic::note(
-                    None,
-                    RecordDiagnosticCode::NoteRead,
-                    format!(
-                        "could not list record folder {}: {error}",
-                        folder_path.display()
-                    ),
-                )],
+                format!(
+                    "could not list record folder {}: {error}",
+                    folder_path.display()
+                ),
             );
         }
     };
 
     let mut notes = Vec::new();
+    let mut occupants = Vec::new();
     let mut pending = Vec::new();
     let mut diagnostics = Vec::new();
+    let mut create_refusal = None;
     let mut files_opened = 0;
     for entry in entries {
         let entry = match entry {
             Ok(entry) => entry,
             Err(error) => {
+                let message = format!(
+                    "could not read an entry in {}: {error}",
+                    folder_path.display()
+                );
                 diagnostics.push(RecordDiagnostic::note(
                     None,
                     RecordDiagnosticCode::NoteRead,
-                    format!(
-                        "could not read an entry in {}: {error}",
-                        folder_path.display()
-                    ),
+                    message.clone(),
                 ));
+                create_refusal.get_or_insert(message);
                 continue;
             }
         };
@@ -395,6 +416,11 @@ fn load_folder(vault_root: &Path, directory: &str) -> FolderIndex {
             continue;
         };
         let path = entry.path();
+        let relative_path = PathBuf::from(directory).join(&file_name);
+        occupants.push(OccupiedRecordPath {
+            relative_path: relative_path.clone(),
+            stem: stem.clone(),
+        });
         let file_type = match entry.file_type() {
             Ok(file_type) => file_type,
             Err(error) => {
@@ -412,14 +438,23 @@ fn load_folder(vault_root: &Path, directory: &str) -> FolderIndex {
                 Ok(target)
                     if target.is_file()
                         && is_within(&target, &folder_canon) => {}
-                Ok(_) => continue,
-                Err(error) => {
-                    notes.push(unreadable_note(
-                        directory,
-                        &file_name,
-                        stem,
+                Ok(_) => {
+                    diagnostics.push(RecordDiagnostic::note(
+                        None,
+                        RecordDiagnosticCode::NoteRead,
                         format!(
-                            "could not follow symlink {}: {error}",
+                            "record path {} is occupied by a symlink outside the record folder",
+                            relative_path.display()
+                        ),
+                    ));
+                    continue;
+                }
+                Err(error) => {
+                    diagnostics.push(RecordDiagnostic::note(
+                        None,
+                        RecordDiagnosticCode::NoteRead,
+                        format!(
+                            "could not resolve occupied record symlink {}: {error}",
                             path.display()
                         ),
                     ));
@@ -427,6 +462,14 @@ fn load_folder(vault_root: &Path, directory: &str) -> FolderIndex {
                 }
             }
         } else if !file_type.is_file() {
+            diagnostics.push(RecordDiagnostic::note(
+                None,
+                RecordDiagnosticCode::NoteRead,
+                format!(
+                    "record path {} is occupied by a non-file entry",
+                    relative_path.display()
+                ),
+            ));
             continue;
         }
 
@@ -442,11 +485,15 @@ fn load_folder(vault_root: &Path, directory: &str) -> FolderIndex {
     }
     notes.extend(index_pending(directory, pending));
     notes.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    occupants
+        .sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     FolderIndex {
         directory: directory.to_owned(),
         notes,
+        occupants,
         diagnostics,
         files_opened,
+        create_refusal,
     }
 }
 
@@ -653,6 +700,7 @@ fn record_from_mapping(
         fields.push(IndexedField {
             key: name.to_owned(),
             value: field_value(&value),
+            raw_value: value,
         });
     }
     if title.is_none() {
@@ -728,11 +776,8 @@ fn trim_line_ending(line: &str) -> &str {
 }
 
 fn markdown_stem(filename: &str) -> Option<&str> {
-    let suffix = filename.get(filename.len().saturating_sub(3)..)?;
-    suffix
-        .eq_ignore_ascii_case(".md")
-        .then_some(&filename[..filename.len() - 3])
-        .filter(|stem| !stem.is_empty())
+    let (stem, extension) = filename.rsplit_once('.')?;
+    (extension.eq_ignore_ascii_case("md") && !stem.is_empty()).then_some(stem)
 }
 
 fn is_safe_segment(directory: &str) -> bool {
@@ -1037,6 +1082,39 @@ mod tests {
     }
 
     #[test]
+    fn short_names_unicode_extensions_and_directories_are_safe() {
+        let root = TempDir::new();
+        let eat_dir = root.path().join("eat");
+        fs::create_dir_all(&eat_dir).unwrap();
+        fs::write(eat_dir.join("a"), "ordinary file").unwrap();
+        fs::write(eat_dir.join("ab"), "ordinary file").unwrap();
+        fs::write(eat_dir.join("é.txt"), "ordinary file").unwrap();
+        fs::write(eat_dir.join(".md"), "empty stem").unwrap();
+        fs::create_dir(eat_dir.join("a.md")).unwrap();
+        fs::create_dir(eat_dir.join("ab.md")).unwrap();
+        write_note(&eat_dir, "Upper.MD", &restaurant("Upper", "Clark"));
+        write_note(&eat_dir, "Crème.md", &restaurant("Crème", "Cranford"));
+        write_note(&eat_dir, "東京.MD", &restaurant("Tokyo", "Tokyo"));
+
+        let mut catalog = catalog_at(root.path());
+        let folder = eat(&mut catalog);
+        let stems: Vec<&str> = folder
+            .notes()
+            .iter()
+            .map(|note| note.stem.as_str())
+            .collect();
+        assert_eq!(stems, ["Crème", "Upper", "東京"]);
+        assert_eq!(
+            folder.colliding_path("A", &[]),
+            Some(PathBuf::from("eat/a.md"))
+        );
+        assert_eq!(
+            folder.colliding_path("ab", &[]),
+            Some(PathBuf::from("eat/ab.md"))
+        );
+    }
+
+    #[test]
     fn two_consumers_reuse_one_read_and_skip_unrelated_folders() {
         let root = TempDir::new();
         write_note(
@@ -1283,6 +1361,7 @@ mod tests {
 
         let injected = FolderIndex {
             directory: "eat".into(),
+            occupants: Vec::new(),
             notes: vec![
                 IndexedRecord {
                     relative_path: PathBuf::from("eat/Alpha.md"),
@@ -1305,6 +1384,7 @@ mod tests {
             ],
             diagnostics: Vec::new(),
             files_opened: 0,
+            create_refusal: None,
         };
         match injected.lookup_stem("alpha") {
             StemLookup::Ambiguous(notes) => assert_eq!(notes.len(), 2),
@@ -1421,6 +1501,11 @@ mod tests {
         assert!(stems.contains(&"inside"));
         assert!(!stems.contains(&"escaped"));
         assert!(!stems.contains(&"child"));
+        #[cfg(unix)]
+        assert_eq!(
+            folder.colliding_path("escaped", &[]),
+            Some(PathBuf::from("eat/escaped.md"))
+        );
         assert_eq!(inserts(&folder.value_suggestions("location")), ["Clark"]);
     }
 
@@ -1447,7 +1532,74 @@ mod tests {
             note.field("count"),
             Some(&IndexedFieldValue::Scalar("0".into()))
         );
+        assert!(matches!(
+            &note
+                .fields
+                .iter()
+                .find(|field| field.key == "flag")
+                .unwrap()
+                .raw_value,
+            serde_yaml::Value::Bool(false)
+        ));
+        assert!(matches!(
+            &note
+                .fields
+                .iter()
+                .find(|field| field.key == "count")
+                .unwrap()
+                .raw_value,
+            serde_yaml::Value::Number(_)
+        ));
         assert!(folder.value_suggestions("lid").is_empty());
+    }
+
+    #[test]
+    fn unsupported_list_members_remain_raw_but_do_not_rank() {
+        let root = TempDir::new();
+        write_note(
+            &root.path().join("eat"),
+            "members.md",
+            "---\ntitle: Members\ntags:\n  - useful\n  - null\n  - {bad: map}\n  - false\n  - 'false'\n---\n# Members\n",
+        );
+        let mut catalog = catalog_at(root.path());
+        let folder = eat(&mut catalog);
+        let note = match folder.lookup_stem("members") {
+            StemLookup::Exact(note) => note,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            note.field("tags"),
+            Some(&IndexedFieldValue::List(vec![
+                "useful".into(),
+                "false".into(),
+                "false".into(),
+            ]))
+        );
+        let raw = &note
+            .fields
+            .iter()
+            .find(|field| field.key == "tags")
+            .unwrap()
+            .raw_value;
+        let serde_yaml::Value::Sequence(members) = raw else {
+            panic!("raw list value was retained: {raw:?}");
+        };
+        assert!(matches!(&members[1], serde_yaml::Value::Null));
+        assert!(matches!(&members[2], serde_yaml::Value::Mapping(_)));
+        assert!(matches!(&members[3], serde_yaml::Value::Bool(false)));
+        assert!(
+            matches!(&members[4], serde_yaml::Value::String(value) if value == "false")
+        );
+        let suggestions = folder.value_suggestions("tags");
+        assert!(suggestions
+            .iter()
+            .any(|suggestion| suggestion.insert == "useful"));
+        assert!(suggestions
+            .iter()
+            .any(|suggestion| suggestion.insert == "false"));
+        assert!(suggestions
+            .iter()
+            .all(|suggestion| suggestion.insert != "map"));
     }
 
     #[test]

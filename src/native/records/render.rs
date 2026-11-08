@@ -11,6 +11,7 @@ use super::schema::{
     RecordDiagnosticCode, RecordField, RecordScalar, RecordType, RecordValue,
     ValidatedFieldInput,
 };
+use crate::native::markdown;
 
 /// One first-level authored note plus its nested bullets.
 ///
@@ -429,6 +430,9 @@ struct KeySpan {
 
 fn parse_key_line(content: &str) -> Option<(String, String, String)> {
     let indent_len = content.len() - content.trim_start().len();
+    if indent_len != 0 {
+        return None;
+    }
     let indent = content[..indent_len].to_owned();
     let rest = &content[indent_len..];
     if rest.is_empty() {
@@ -467,20 +471,21 @@ fn parse_key_line(content: &str) -> Option<(String, String, String)> {
             cursor += 1;
         }
         let close = closing?;
-        let name = rest[1..close].to_owned();
+        let raw_key = rest[..close + 1].to_owned();
+        let name = decode_yaml_key(&raw_key)?;
         let after = &rest[close + 1..];
         let after_trimmed = after.trim_start();
         if !after_trimmed.starts_with(':') {
             return None;
         }
         let colon = after.find(':')?;
-        let raw_key = rest[..close + 1].to_owned();
         let prefix = format!("{indent}{raw_key}{}", &after[..colon + 1]);
         let after_colon = after[colon + 1..].to_owned();
         return Some((name, prefix, after_colon));
     }
     let colon = rest.find(':')?;
-    let name = rest[..colon].trim_end().to_owned();
+    let raw_key = rest[..colon].trim_end();
+    let name = decode_yaml_key(raw_key)?;
     if name.is_empty()
         || name.contains(' ')
         || name.contains('\t')
@@ -494,6 +499,13 @@ fn parse_key_line(content: &str) -> Option<(String, String, String)> {
     let prefix = format!("{indent}{}", &rest[..colon + 1]);
     let after_colon = rest[colon + 1..].to_owned();
     Some((name, prefix, after_colon))
+}
+
+fn decode_yaml_key(raw_key: &str) -> Option<String> {
+    serde_yaml::from_str::<serde_yaml::Value>(raw_key)
+        .ok()?
+        .as_str()
+        .map(str::to_owned)
 }
 
 fn is_list_item(content: &str) -> bool {
@@ -610,13 +622,23 @@ fn raw_value_has_unsafe_yaml(value_text: &str) -> bool {
             index += 1;
             continue;
         }
-        if byte == b'{' || byte == b'}' {
+        if matches!(byte, b'{' | b'}' | b'[' | b']') {
             return true;
+        }
+        if matches!(byte, b'&' | b'*' | b'!')
+            && (index == 0
+                || bytes[index - 1].is_ascii_whitespace()
+                || bytes[index - 1] == b'-')
+        {
+            return true;
+        }
+        if byte == b'#' && index > 0 && bytes[index - 1].is_ascii_whitespace() {
+            break;
         }
         index += 1;
     }
     let first = trimmed.chars().next().unwrap_or(' ');
-    matches!(first, '&' | '*' | '!' | '|' | '>' | '?')
+    matches!(first, '|' | '>' | '?')
 }
 
 fn collect_key_spans(lines: &[SplitLine]) -> (Vec<KeySpan>, Vec<String>) {
@@ -721,11 +743,12 @@ fn collect_key_spans(lines: &[SplitLine]) -> (Vec<KeySpan>, Vec<String>) {
         }
         let mut end = index;
         if is_quoted_multiline(&value_part) {
+            let quote = value_part.trim_start().chars().next().unwrap_or('"');
             let mut cursor = index + 1;
             let mut closed = false;
             while cursor < lines.len() {
                 end = cursor;
-                if closes_quote(&lines[cursor].content) {
+                if closes_quote(&lines[cursor].content, quote) {
                     closed = true;
                     break;
                 }
@@ -768,37 +791,32 @@ fn is_quoted_multiline(value_part: &str) -> bool {
         return false;
     }
     let quote = trimmed.chars().next().unwrap_or('"');
-    let mut escaped = false;
-    let mut seen_open = false;
-    let mut closed = false;
-    for character in trimmed.chars() {
-        if !seen_open {
-            seen_open = true;
-            continue;
-        }
-        if quote == '"' {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if character == '\\' {
-                escaped = true;
-                continue;
-            }
-            if character == '"' {
-                closed = true;
-            }
-        } else if character == '\'' {
-            closed = true;
-        }
-    }
-    seen_open && !closed
+    !quoted_text_closes(trimmed, quote, true)
 }
 
-fn closes_quote(content: &str) -> bool {
-    let trimmed = content.trim();
-    if trimmed.contains('"') || trimmed.contains('\'') {
-        return true;
+fn closes_quote(content: &str, quote: char) -> bool {
+    quoted_text_closes(content, quote, false)
+}
+
+fn quoted_text_closes(text: &str, quote: char, skip_opening: bool) -> bool {
+    let mut chars = text.char_indices().peekable();
+    if skip_opening {
+        chars.next();
+    }
+    while let Some((_, character)) = chars.next() {
+        if quote == '"' {
+            if character == '\\' {
+                chars.next();
+            } else if character == '"' {
+                return true;
+            }
+        } else if character == '\'' {
+            if chars.peek().is_some_and(|(_, next)| *next == '\'') {
+                chars.next();
+            } else {
+                return true;
+            }
+        }
     }
     false
 }
@@ -865,36 +883,25 @@ struct BodyHeading {
 
 fn parse_body_headings(body_lines: &[SplitLine]) -> Vec<BodyHeading> {
     let mut headings = Vec::new();
-    let mut in_fence = false;
+    let mut fence = None;
     for (index, line) in body_lines.iter().enumerate() {
-        let trimmed = line.content.trim();
-        if trimmed.starts_with("```") {
-            in_fence = !in_fence;
-            continue;
-        }
-        if in_fence {
-            continue;
-        }
-        let mut level = 0;
-        for byte in trimmed.bytes() {
-            if byte == b'#' {
-                level += 1;
-            } else {
-                break;
+        if let Some(open_fence) = fence {
+            if markdown::closes_fence(&line.content, open_fence) {
+                fence = None;
             }
-        }
-        if level == 0 || level > 6 {
             continue;
         }
-        let rest = trimmed[level..].trim_start();
-        if rest.is_empty() {
+        if let Some(open_fence) = markdown::fence_marker(&line.content) {
+            fence = Some(open_fence);
             continue;
         }
-        headings.push(BodyHeading {
-            line: index,
-            level,
-            title: rest.to_owned(),
-        });
+        if let Some((level, title)) = markdown::atx_heading(&line.content) {
+            headings.push(BodyHeading {
+                line: index,
+                level,
+                title: title.to_owned(),
+            });
+        }
     }
     headings
 }
@@ -918,6 +925,21 @@ fn last_nonblank_before(
         }
     }
     None
+}
+
+fn ensure_separator_before_insert(
+    lines: &mut [SplitLine],
+    insert_at: usize,
+    newline: &str,
+) {
+    if insert_at > 0
+        && lines
+            .get(insert_at - 1)
+            .is_some_and(|line| line.ending.is_empty())
+        && let Some(previous) = lines.get_mut(insert_at - 1)
+    {
+        previous.ending = newline.to_owned();
+    }
 }
 
 fn frontmatter_text(lines: &[SplitLine]) -> String {
@@ -955,6 +977,9 @@ fn collect_warnings(
                     record_type: None,
                     field: Some(field.key.clone()),
                     message: "required field is missing".to_owned(),
+                    suggestions: Vec::new(),
+                    allowed_keys: Vec::new(),
+                    source_ranges: None,
                 });
             }
             continue;
@@ -967,6 +992,9 @@ fn collect_warnings(
                 field: Some(field.key.clone()),
                 message: "null values are not written; remove the key or supply a value"
                     .to_owned(),
+                suggestions: Vec::new(),
+                allowed_keys: Vec::new(),
+                source_ranges: None,
             });
             continue;
         }
@@ -1006,6 +1034,9 @@ fn collect_warnings(
                 message:
                     "empty list members must use the explicit empty-field state"
                         .to_owned(),
+                suggestions: Vec::new(),
+                allowed_keys: Vec::new(),
+                source_ranges: None,
             });
             continue;
         }
@@ -1030,6 +1061,9 @@ fn collect_warnings(
                 field: Some(field.key.clone()),
                 message: "existing value fails current schema validation"
                     .to_owned(),
+                suggestions: Vec::new(),
+                allowed_keys: Vec::new(),
+                source_ranges: None,
             });
         }
     }
@@ -1082,21 +1116,6 @@ fn apply_frontmatter_edits(
         let position = spans.iter().position(|span| span.name == *key);
         match validated {
             ValidatedFieldInput::Empty => {
-                let Some(at) = position else {
-                    continue;
-                };
-                let span = spans[at].clone();
-                if raw_value_has_unsafe_yaml(&span_raw_text(front_lines, &span))
-                {
-                    return Err(refusal(
-                        RecordUpdateErrorCode::UnsupportedYaml,
-                        Some(key),
-                        format!(
-                            "existing {key:?} value uses flow or anchor syntax that cannot be edited safely"
-                        ),
-                        original,
-                    ));
-                }
                 let field =
                     field_by_key(record_type, key).ok_or_else(|| {
                         refusal(
@@ -1111,6 +1130,21 @@ fn apply_frontmatter_edits(
                         RecordUpdateErrorCode::RequiredEmpty,
                         Some(key),
                         format!("required field {key:?} cannot be cleared"),
+                        original,
+                    ));
+                }
+                let Some(at) = position else {
+                    continue;
+                };
+                let span = spans[at].clone();
+                if raw_value_has_unsafe_yaml(&span_raw_text(front_lines, &span))
+                {
+                    return Err(refusal(
+                        RecordUpdateErrorCode::UnsupportedYaml,
+                        Some(key),
+                        format!(
+                            "existing {key:?} value uses flow or anchor syntax that cannot be edited safely"
+                        ),
                         original,
                     ));
                 }
@@ -1355,6 +1389,7 @@ fn append_bullets_under_notes(
             last_nonblank_before(body_lines, notes_line + 1, next_boundary)
         {
             let insert_at = last + 1;
+            ensure_separator_before_insert(body_lines, insert_at, newline);
             for (offset, line) in rendered.iter().enumerate() {
                 body_lines.insert(
                     insert_at + offset,
@@ -1365,46 +1400,48 @@ fn append_bullets_under_notes(
                 );
             }
         } else {
-            let mut insert_at = notes_line + 1;
-            let mut skipped = 0;
-            while insert_at + skipped < next_boundary
+            let first_after_heading = notes_line + 1;
+            let mut blank_lines = 0;
+            while first_after_heading + blank_lines < next_boundary
                 && body_lines
-                    .get(insert_at + skipped)
+                    .get(first_after_heading + blank_lines)
                     .is_some_and(|line| line.content.trim().is_empty())
             {
-                skipped += 1;
+                blank_lines += 1;
             }
-            if skipped == 0 {
+            let mut insert_at = first_after_heading + blank_lines;
+            if blank_lines == 0 {
+                ensure_separator_before_insert(
+                    body_lines,
+                    first_after_heading,
+                    newline,
+                );
                 body_lines.insert(
-                    insert_at,
+                    first_after_heading,
                     SplitLine {
                         content: String::new(),
                         ending: newline.to_owned(),
                     },
                 );
                 insert_at += 1;
-            } else {
-                insert_at += 1;
             }
-            let insert_at = insert_at.min(next_boundary + skipped.min(1));
-            let clamped = insert_at.min(body_lines.len());
+            ensure_separator_before_insert(body_lines, insert_at, newline);
             for (offset, line) in rendered.iter().enumerate() {
                 body_lines.insert(
-                    clamped + offset,
+                    insert_at + offset,
                     SplitLine {
                         content: line.clone(),
                         ending: newline.to_owned(),
                     },
                 );
             }
-            if next_boundary < body_lines.len()
-                && !rendered.is_empty()
-                && body_lines
-                    .get(clamped + rendered.len())
-                    .is_some_and(|line| !line.content.trim().is_empty())
+            let after_rendered = insert_at + rendered.len();
+            if body_lines
+                .get(after_rendered)
+                .is_some_and(|line| !line.content.trim().is_empty())
             {
                 body_lines.insert(
-                    clamped + rendered.len(),
+                    after_rendered,
                     SplitLine {
                         content: String::new(),
                         ending: newline.to_owned(),
@@ -1480,6 +1517,7 @@ fn append_section_bullets(
             last_nonblank_before(body_lines, start + 1, next_boundary)
         {
             let insert_at = last + 1;
+            ensure_separator_before_insert(body_lines, insert_at, newline);
             for (offset, line) in rendered.iter().enumerate() {
                 body_lines.insert(
                     insert_at + offset,
@@ -1499,6 +1537,7 @@ fn append_section_bullets(
                 insert_at += 1;
             }
             let clamped = insert_at.min(body_lines.len());
+            ensure_separator_before_insert(body_lines, clamped, newline);
             for (offset, line) in rendered.iter().enumerate() {
                 body_lines.insert(
                     clamped + offset,
@@ -1596,15 +1635,37 @@ pub(crate) fn apply_record_update(
     }
 
     let joined = frontmatter_text(&front_lines);
-    if serde_yaml::from_str::<serde_yaml::Value>(&joined).is_err()
-        && !front_lines
-            .iter()
-            .all(|line| line.content.trim().is_empty())
-    {
+    let root =
+        serde_yaml::from_str::<serde_yaml::Value>(&joined).map_err(|_| {
+            refusal(
+                RecordUpdateErrorCode::MalformedFrontmatter,
+                None,
+                "frontmatter is not valid YAML",
+                original,
+            )
+        })?;
+    let root_is_mapping = matches!(root, serde_yaml::Value::Mapping(_));
+    let root_is_flow = front_lines
+        .iter()
+        .map(|line| line.content.trim())
+        .find(|line| !line.is_empty() && !line.starts_with('#'))
+        .is_some_and(|line| line.starts_with('{'));
+    let unsupported_root_line = front_lines.iter().any(|line| {
+        let trimmed = line.content.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            return false;
+        }
+        line.content
+            .chars()
+            .next()
+            .is_none_or(|character| !character.is_whitespace())
+            && parse_key_line(&line.content).is_none()
+    });
+    if !root_is_mapping || root_is_flow || unsupported_root_line {
         return Err(refusal(
-            RecordUpdateErrorCode::MalformedFrontmatter,
+            RecordUpdateErrorCode::UnsupportedYaml,
             None,
-            "frontmatter is not valid YAML",
+            "frontmatter must use an unambiguous block-style YAML mapping",
             original,
         ));
     }
@@ -1733,19 +1794,24 @@ pub(crate) fn apply_record_update(
     markdown.push_str(&all_lines[0].ending);
     markdown.push_str(&join_lines(&front_lines));
     markdown.push_str("---");
-    markdown.push_str(&closing_ending);
-    if closing_ending.is_empty() {
+    if !closing_ending.is_empty() {
+        markdown.push_str(&closing_ending);
+    } else if notes_changed {
         markdown.push_str(newline);
     }
     markdown.push_str(&join_lines(&body_lines));
-    if markdown.is_empty() || !markdown.ends_with('\n') {
-        if markdown.ends_with("\r") {
-            markdown.push('\n');
-        } else if !markdown.is_empty() && !markdown.ends_with('\n') {
-            markdown.push_str(newline);
-        }
+    let updated_yaml = frontmatter_text(&front_lines);
+    if !matches!(
+        serde_yaml::from_str::<serde_yaml::Value>(&updated_yaml),
+        Ok(serde_yaml::Value::Mapping(_))
+    ) {
+        return Err(refusal(
+            RecordUpdateErrorCode::UnsupportedYaml,
+            None,
+            "the field edit would not leave valid mapping YAML",
+            original,
+        ));
     }
-    let _ = notes_changed;
 
     Ok(AppliedRecordUpdate {
         markdown,
@@ -1986,6 +2052,7 @@ mod tests {
             state: FieldInputState::SuppliedValues(
                 values.iter().map(|value| (*value).to_owned()).collect(),
             ),
+            source_range: None,
         }
     }
 
@@ -1993,6 +2060,7 @@ mod tests {
         RecordFieldInput {
             key: key.to_owned(),
             state: FieldInputState::SuppliedEmpty,
+            source_range: None,
         }
     }
 
@@ -2429,6 +2497,7 @@ mod tests {
                 state: FieldInputState::SuppliedValues(vec![
                     "[[kelly]], [[bob]]".to_owned(),
                 ]),
+                source_range: None,
             }],
             notes: &[],
             note_date: Some(NOTE_DATE),
@@ -2474,12 +2543,25 @@ mod tests {
         .expect_err("required empty refuses");
         assert_eq!(error.code, RecordUpdateErrorCode::RequiredEmpty);
         assert_eq!(error.unchanged, original);
+
+        let missing = "---\nparent: \"[[eat]]\"\ntype: \"[[restaurant]]\"\ntitle: \"T\"\ncategory: \"Coffee\"\nlocation: \"Clark\"\ncreated: 2026-11-08T12:41:07-0500\n---\nbody";
+        let error = apply_record_update(&RecordUpdateRequest {
+            record_type: &record_type,
+            original: missing,
+            fields: &[empty_input("status")],
+            notes: &[],
+            note_date: Some(NOTE_DATE),
+            today: TODAY,
+        })
+        .expect_err("missing required field cannot be explicitly empty");
+        assert_eq!(error.code, RecordUpdateErrorCode::RequiredEmpty);
+        assert_eq!(error.unchanged, missing);
     }
 
     #[test]
     fn update_refuses_duplicate_flow_anchor_and_malformed() {
         let record_type = restaurant_type();
-        let duplicate = "---\nparent: \"[[eat]]\"\ntype: \"[[restaurant]]\"\ntitle: \"T\"\nstatus: liked\nstatus: not_liked\ncategory: \"Coffee\"\nlocation: \"Clark\"\ncreated: 2026-11-08T12:41:07-0500\n---\n\n# T\n\n## Notes\n";
+        let duplicate = "---\nparent: \"[[eat]]\"\ntype: \"[[restaurant]]\"\ntitle: \"T\"\nstatus: liked\n\"sta\\u0074us\": not_liked\ncategory: \"Coffee\"\nlocation: \"Clark\"\ncreated: 2026-11-08T12:41:07-0500\n---\n\n# T\n\n## Notes\n";
         let error = apply_record_update(&RecordUpdateRequest {
             record_type: &record_type,
             original: duplicate,
@@ -2505,18 +2587,26 @@ mod tests {
         assert_eq!(error.code, RecordUpdateErrorCode::UnsupportedYaml);
         assert_eq!(error.unchanged, flow);
 
-        let anchor = "---\nparent: \"[[eat]]\"\ntype: \"[[restaurant]]\"\ntitle: \"T\"\nstatus: &anchor liked\ncategory: \"Coffee\"\nlocation: \"Clark\"\ncreated: 2026-11-08T12:41:07-0500\n---\n\n# T\n\n## Notes\n";
-        let error = apply_record_update(&RecordUpdateRequest {
-            record_type: &record_type,
-            original: anchor,
-            fields: &[field_input("status", &["liked"])],
-            notes: &[],
-            note_date: Some(NOTE_DATE),
-            today: TODAY,
-        })
-        .expect_err("anchor refuses");
-        assert_eq!(error.code, RecordUpdateErrorCode::UnsupportedYaml);
-        assert_eq!(error.unchanged, anchor);
+        for targeted_yaml in [
+            "status: &anchor liked\ncategory: \"Coffee\"",
+            "other: &anchor liked\nstatus: *anchor\ncategory: \"Coffee\"",
+            "status: !custom liked\ncategory: \"Coffee\"",
+        ] {
+            let unsupported = format!(
+                "---\nparent: \"[[eat]]\"\ntype: \"[[restaurant]]\"\ntitle: \"T\"\n{targeted_yaml}\nlocation: \"Clark\"\ncreated: 2026-11-08T12:41:07-0500\n---\n\n# T\n\n## Notes\n"
+            );
+            let error = apply_record_update(&RecordUpdateRequest {
+                record_type: &record_type,
+                original: &unsupported,
+                fields: &[field_input("status", &["liked"])],
+                notes: &[],
+                note_date: Some(NOTE_DATE),
+                today: TODAY,
+            })
+            .expect_err("anchors, aliases, and tags refuse");
+            assert_eq!(error.code, RecordUpdateErrorCode::UnsupportedYaml);
+            assert_eq!(error.unchanged, unsupported);
+        }
 
         let malformed = "---\nparent: \"[[eat]]\"\ntype: \"[[restaurant]]\"\ntitle: \"T\"\nstatus: \"unterminated\ncategory: \"Coffee\"\n";
         let error = apply_record_update(&RecordUpdateRequest {
@@ -2534,34 +2624,117 @@ mod tests {
 
     #[test]
     fn update_preserves_quoted_keys_and_multiline_spans() {
-        let original = "---\nparent: \"[[eat]]\"\ntype: \"[[restaurant]]\"\ntitle: \"T\"\n\"status\": liked\ncategory: \"long\n  continued\"\nlocation: \"Clark\"\ncreated: 2026-11-08T12:41:07-0500\n---\n\n# T\n\n## Notes\n";
+        let original = "---\nparent: \"[[eat]]\"\ntype: \"[[restaurant]]\"\ntitle: \"T\"\n\"sta\\u0074us\": liked\ncategory: \"long\n  it's key: text\n  continued\"\nlocation: \"Clark\"\ncreated: 2026-11-08T12:41:07-0500\n---\n\n# T\n\n## Notes\n";
         let record_type = restaurant_type();
         let applied = apply_record_update(&RecordUpdateRequest {
             record_type: &record_type,
             original,
-            fields: &[field_input("location", &["Westfield"])],
+            fields: &[
+                field_input("status", &["not_liked"]),
+                field_input("category", &["Cafe"]),
+                field_input("location", &["Westfield"]),
+            ],
             notes: &[],
             note_date: Some(NOTE_DATE),
             today: TODAY,
         })
         .expect("quoted and multiline preserved");
         assert!(
-            applied.markdown.contains("\"status\": liked\n"),
+            applied.markdown.contains("\"sta\\u0074us\": not_liked\n"),
             "quoted key preserved:\n{}",
             applied.markdown
         );
         assert!(
-            applied
-                .markdown
-                .contains("category: \"long\n  continued\"\n"),
-            "multiline span preserved:\n{}",
+            applied.markdown.contains("category: \"Cafe\"\n"),
+            "multiline target replaced:\n{}",
             applied.markdown
         );
+        assert!(!applied.markdown.contains("it's key: text"));
+        assert!(serde_yaml::from_str::<serde_yaml::Value>(
+            applied
+                .markdown
+                .split("---\n")
+                .nth(1)
+                .unwrap()
+                .split("\n---")
+                .next()
+                .unwrap()
+        )
+        .is_ok());
         assert!(
             applied.markdown.contains("location: \"Westfield\"\n"),
             "target replaced:\n{}",
             applied.markdown
         );
+    }
+
+    #[test]
+    fn nested_keys_are_not_root_fields_and_unsupported_roots_refuse() {
+        let record_type = restaurant_type();
+        let nested = "---\nlegacy:\n  status: old\ncreated: 2026-11-08T12:41:07-0500\n---\nbody";
+        let applied = apply_record_update(&RecordUpdateRequest {
+            record_type: &record_type,
+            original: nested,
+            fields: &[field_input("status", &["liked"])],
+            notes: &[],
+            note_date: Some(NOTE_DATE),
+            today: TODAY,
+        })
+        .expect("root status is inserted independently of legacy.status");
+        assert_eq!(
+            applied.markdown,
+            "---\nlegacy:\n  status: old\nstatus: liked\ncreated: 2026-11-08T12:41:07-0500\n---\nbody"
+        );
+
+        for unsupported in [
+            "---\n{status: liked}\n---\nbody",
+            "---\n- status: liked\n---\nbody",
+            "---\njust a scalar\n---\nbody",
+        ] {
+            let error = apply_record_update(&RecordUpdateRequest {
+                record_type: &record_type,
+                original: unsupported,
+                fields: &[field_input("status", &["liked"])],
+                notes: &[],
+                note_date: Some(NOTE_DATE),
+                today: TODAY,
+            })
+            .expect_err("non-block mapping roots refuse");
+            assert_eq!(error.code, RecordUpdateErrorCode::UnsupportedYaml);
+            assert_eq!(error.unchanged, unsupported);
+        }
+    }
+
+    #[test]
+    fn field_only_and_noop_updates_keep_missing_eof_newlines() {
+        let record_type = restaurant_type();
+        let original = "---\nparent: \"[[eat]]\"\ntype: \"[[restaurant]]\"\ntitle: \"T\"\nstatus: liked\ncategory: \"Coffee\"\nlocation: \"Clark\"\ncreated: 2026-11-08T12:41:07-0500\n---\n\n# T\n\n## Notes\n\n- old";
+        let changed = apply_record_update(&RecordUpdateRequest {
+            record_type: &record_type,
+            original,
+            fields: &[field_input("status", &["not_liked"])],
+            notes: &[],
+            note_date: Some(NOTE_DATE),
+            today: TODAY,
+        })
+        .expect("field-only update succeeds");
+        assert!(changed.markdown.ends_with("- old"));
+        assert!(!changed.markdown.ends_with('\n'));
+        assert_eq!(
+            changed.markdown,
+            original.replace("status: liked", "status: not_liked")
+        );
+
+        let noop = apply_record_update(&RecordUpdateRequest {
+            record_type: &record_type,
+            original,
+            fields: &[],
+            notes: &[],
+            note_date: Some(NOTE_DATE),
+            today: TODAY,
+        })
+        .expect("no-op update succeeds");
+        assert_eq!(noop.markdown, original);
     }
 
     #[test]
@@ -2695,7 +2868,7 @@ mod tests {
     #[test]
     fn body_appends_ignore_fenced_headings_and_handle_crlf() {
         let record_type = restaurant_type();
-        let original = "---\nparent: \"[[eat]]\"\ntype: \"[[restaurant]]\"\ntitle: \"T\"\nstatus: liked\ncategory: \"Coffee\"\nlocation: \"Clark\"\ncreated: 2026-11-08T12:41:07-0500\n---\n\n# T\n\n## Notes\n\n- old\n\n```text\n## Notes\n```\n\n## Source\n";
+        let original = "---\nparent: \"[[eat]]\"\ntype: \"[[restaurant]]\"\ntitle: \"T\"\nstatus: liked\ncategory: \"Coffee\"\nlocation: \"Clark\"\ncreated: 2026-11-08T12:41:07-0500\n---\n\n# T\n\n## Notes\n\n- old\n\n```text\n## Notes\n```\n\n~~~~markdown\n## Notes\n~~~~\n\n````text\n```\n## Notes\n````\n\n## Source\n";
         let applied = apply_record_update(&RecordUpdateRequest {
             record_type: &record_type,
             original,
@@ -2709,7 +2882,7 @@ mod tests {
             .markdown
             .find("- 2026-11-08: new\n")
             .expect("new note");
-        let source_pos = applied.markdown.find("## Source\n").expect("source");
+        let source_pos = applied.markdown.rfind("## Source\n").expect("source");
         let fenced_pos =
             applied.markdown.find("```text\n## Notes").expect("fence");
         assert!(
@@ -2756,14 +2929,26 @@ mod tests {
         })
         .expect("no-final-newline appends");
         assert!(
-            no_newline_applied.markdown.ends_with('\n'),
-            "appended file ends with newline"
-        );
-        assert!(
-            no_newline_applied.markdown.contains("- 2026-11-08: tail\n"),
-            "tail note:\n{}",
+            no_newline_applied
+                .markdown
+                .ends_with("## Notes\n\n- 2026-11-08: tail\n"),
+            "heading and tail have complete boundaries:\n{}",
             no_newline_applied.markdown
         );
+
+        let final_bullet = "---\nparent: \"[[eat]]\"\ntype: \"[[restaurant]]\"\ntitle: \"T\"\nstatus: liked\ncategory: \"Coffee\"\nlocation: \"Clark\"\ncreated: 2026-11-08T12:41:07-0500\n---\n\n# T\n\n## Notes\n\n- old";
+        let appended = apply_record_update(&RecordUpdateRequest {
+            record_type: &record_type,
+            original: final_bullet,
+            fields: &[],
+            notes: &[RecordNoteInput::bullet("new")],
+            note_date: Some(NOTE_DATE),
+            today: TODAY,
+        })
+        .expect("append after final no-newline bullet");
+        assert!(appended
+            .markdown
+            .ends_with("## Notes\n\n- old\n- 2026-11-08: new\n"));
     }
 
     #[test]

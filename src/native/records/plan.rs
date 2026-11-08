@@ -5,7 +5,11 @@
 //! folder through [`RecordCatalog`], but it never creates folders or writes
 //! notes.
 
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashSet,
+    ops::Range,
+    path::{Path, PathBuf},
+};
 
 use chrono::{Duration, LocalResult, NaiveDateTime, Offset, TimeZone};
 use chrono_tz::Tz;
@@ -48,10 +52,30 @@ pub(crate) enum RecordPropertySource {
 /// State of one property in a planned record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RecordPropertyState {
-    Absent,
-    Empty,
-    Value,
+    Set,
+    Default,
+    Missing,
     Invalid,
+    None,
+}
+
+impl RecordPropertyState {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Set => "set",
+            Self::Default => "default",
+            Self::Missing => "missing",
+            Self::Invalid => "invalid",
+            Self::None => "none",
+        }
+    }
+}
+
+/// Where the planned filename stem came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecordStemSource {
+    Title,
+    Explicit,
 }
 
 /// One schema property as interpreted for this creation request.
@@ -66,6 +90,7 @@ pub(crate) struct PlannedRecordProperty {
     pub(crate) value: Option<RecordValue>,
     pub(crate) display: Option<String>,
     pub(crate) source: Option<RecordPropertySource>,
+    pub(crate) source_ranges: Option<Vec<Range<usize>>>,
 }
 
 /// A complete or incomplete, collision-checked creation plan.
@@ -74,6 +99,7 @@ pub(crate) struct RecordCreatePlan {
     pub(crate) record_type: String,
     pub(crate) title: String,
     pub(crate) stem: String,
+    pub(crate) stem_source: RecordStemSource,
     /// Vault-relative path. The containing folder may not exist yet.
     pub(crate) path: PathBuf,
     pub(crate) properties: Vec<PlannedRecordProperty>,
@@ -94,6 +120,20 @@ pub(crate) enum RecordPlanErrorCode {
     ExplicitStemRequired,
     InvalidExplicitStem,
     PathCollision,
+    FolderUnavailable,
+}
+
+impl RecordPlanErrorCode {
+    pub(crate) fn diagnostic_code(self) -> &'static str {
+        match self {
+            Self::EmptyTitle => "record_title",
+            Self::PathCollision => "record_exists",
+            Self::UnknownRecordType
+            | Self::ExplicitStemRequired
+            | Self::InvalidExplicitStem
+            | Self::FolderUnavailable => "record_invalid_value",
+        }
+    }
 }
 
 /// A typed refusal with optional existing paths or did-you-mean choices.
@@ -173,8 +213,24 @@ pub(crate) fn plan_create(
             )
         })?,
     };
+    let stem_source = if request.explicit_stem.is_some() {
+        RecordStemSource::Explicit
+    } else {
+        RecordStemSource::Title
+    };
 
     let folder = catalog.folder(&record_type.dir);
+    if let Some(reason) = folder.create_refusal() {
+        return Err(plan_error(
+            RecordPlanErrorCode::FolderUnavailable,
+            format!(
+                "cannot safely plan a record in {}: {reason}",
+                record_type.dir
+            ),
+            Vec::new(),
+            Vec::new(),
+        ));
+    }
     if let Some(error) =
         collision_error(folder, &record_type.dir, &stem, request.reserved_paths)
     {
@@ -198,12 +254,19 @@ pub(crate) fn plan_create(
                 state,
                 today,
                 &record_type.id,
+                source_ranges_for(request.fields, &field.key),
                 &mut missing,
                 &mut invalid,
             ),
-            Err(diagnostic) => {
+            Err(mut diagnostic) => {
+                diagnostic.source_ranges =
+                    source_ranges_for(request.fields, &field.key);
                 invalid.push(diagnostic);
-                empty_property(field, RecordPropertyState::Invalid)
+                empty_property(
+                    field,
+                    RecordPropertyState::Invalid,
+                    source_ranges_for(request.fields, &field.key),
+                )
             }
         };
         if let Some(value) = &property.value {
@@ -212,14 +275,17 @@ pub(crate) fn plan_create(
         properties.push(property);
     }
 
+    let mut unknown_seen = HashSet::new();
     for input in request.fields {
         if record_type.field(&input.key).is_none()
-            && !invalid.iter().any(|diagnostic| {
-                diagnostic.code == RecordDiagnosticCode::UnknownField
-                    && diagnostic.field.as_deref() == Some(input.key.as_str())
-            })
+            && unknown_seen.insert(input.key.as_str())
         {
-            invalid.push(RecordDiagnostic {
+            let allowed_keys = record_type
+                .fields
+                .iter()
+                .map(|field| field.key.clone())
+                .collect::<Vec<_>>();
+            let mut diagnostic = RecordDiagnostic {
                 code: RecordDiagnosticCode::UnknownField,
                 config_path: None,
                 record_type: Some(record_type.id.clone()),
@@ -235,7 +301,13 @@ pub(crate) fn plan_create(
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
-            });
+                suggestions: nearest_field_keys(&allowed_keys, &input.key),
+                allowed_keys,
+                source_ranges: source_ranges_for(request.fields, &input.key),
+            };
+            diagnostic.source_ranges =
+                source_ranges_for(request.fields, &input.key);
+            invalid.push(diagnostic);
         }
     }
 
@@ -261,6 +333,7 @@ pub(crate) fn plan_create(
         record_type: record_type.id.clone(),
         title: request.title.to_owned(),
         stem: stem.clone(),
+        stem_source,
         path: PathBuf::from(&record_type.dir).join(format!("{stem}.md")),
         properties,
         missing,
@@ -301,6 +374,9 @@ fn combine_field_inputs(
             message:
                 "cannot combine an explicitly empty field with supplied values"
                     .to_owned(),
+            suggestions: Vec::new(),
+            allowed_keys: Vec::new(),
+            source_ranges: None,
         });
     }
     if has_values {
@@ -317,36 +393,76 @@ fn build_property(
     input: FieldInputState,
     today: chrono::NaiveDate,
     record_type: &str,
+    source_ranges: Option<Vec<Range<usize>>>,
     missing: &mut Vec<String>,
     invalid: &mut Vec<RecordDiagnostic>,
 ) -> PlannedRecordProperty {
-    let mut state = RecordPropertyState::Absent;
+    let mut state = RecordPropertyState::None;
     let mut value = None;
     let mut source = None;
 
     match validate_field_input(field, &input, today) {
         Ok(ValidatedFieldInput::Absent) => {
             if let Some(default) = &field.default {
-                value = Some(default.clone());
-                source = Some(RecordPropertySource::Default);
-                state = RecordPropertyState::Value;
+                if is_empty_list(default) {
+                    if field.required {
+                        missing.push(field.key.clone());
+                        state = RecordPropertyState::Missing;
+                    }
+                } else {
+                    match resolve_value_dates(default, today) {
+                        Ok(resolved) => {
+                            value = Some(resolved);
+                            source = Some(RecordPropertySource::Default);
+                            state = RecordPropertyState::Default;
+                        }
+                        Err(message) => {
+                            let mut diagnostic = RecordDiagnostic::value(
+                                field,
+                                RecordDiagnosticCode::InvalidDate,
+                                message,
+                            );
+                            diagnostic.record_type =
+                                Some(record_type.to_owned());
+                            invalid.push(diagnostic);
+                            state = RecordPropertyState::Invalid;
+                        }
+                    }
+                }
             } else if field.required {
                 missing.push(field.key.clone());
+                state = RecordPropertyState::Missing;
             }
         }
         Ok(ValidatedFieldInput::Empty) => {
-            state = RecordPropertyState::Empty;
             if field.required {
                 missing.push(field.key.clone());
+                state = RecordPropertyState::Missing;
             }
         }
         Ok(ValidatedFieldInput::Value(validated)) => {
-            value = Some(validated);
-            source = Some(RecordPropertySource::Typed);
-            state = RecordPropertyState::Value;
+            match resolve_value_dates(&validated, today) {
+                Ok(resolved) => {
+                    value = Some(resolved);
+                    source = Some(RecordPropertySource::Typed);
+                    state = RecordPropertyState::Set;
+                }
+                Err(message) => {
+                    let mut diagnostic = RecordDiagnostic::value(
+                        field,
+                        RecordDiagnosticCode::InvalidDate,
+                        message,
+                    );
+                    diagnostic.record_type = Some(record_type.to_owned());
+                    diagnostic.source_ranges = source_ranges.clone();
+                    invalid.push(diagnostic);
+                    state = RecordPropertyState::Invalid;
+                }
+            }
         }
         Err(mut diagnostic) => {
             diagnostic.record_type = Some(record_type.to_owned());
+            diagnostic.source_ranges = source_ranges.clone();
             invalid.push(diagnostic);
             state = RecordPropertyState::Invalid;
         }
@@ -365,12 +481,14 @@ fn build_property(
         value,
         display,
         source,
+        source_ranges,
     }
 }
 
 fn empty_property(
     field: &RecordField,
     state: RecordPropertyState,
+    source_ranges: Option<Vec<Range<usize>>>,
 ) -> PlannedRecordProperty {
     PlannedRecordProperty {
         key: field.key.clone(),
@@ -382,7 +500,81 @@ fn empty_property(
         value: None,
         display: None,
         source: None,
+        source_ranges,
     }
+}
+
+fn is_empty_list(value: &RecordValue) -> bool {
+    matches!(value, RecordValue::List(values) if values.is_empty())
+}
+
+fn resolve_value_dates(
+    value: &RecordValue,
+    today: chrono::NaiveDate,
+) -> Result<RecordValue, String> {
+    fn resolve_scalar(
+        scalar: &RecordScalar,
+        today: chrono::NaiveDate,
+    ) -> Result<RecordScalar, String> {
+        match scalar {
+            RecordScalar::Date(date) => date
+                .resolve(today)
+                .map(|resolved| {
+                    RecordScalar::Date(super::schema::RecordDate::Resolved(
+                        resolved,
+                    ))
+                })
+                .ok_or_else(|| {
+                    "relative date default cannot be resolved at this date"
+                        .to_owned()
+                }),
+            other => Ok(other.clone()),
+        }
+    }
+
+    match value {
+        RecordValue::Scalar(scalar) => {
+            resolve_scalar(scalar, today).map(RecordValue::Scalar)
+        }
+        RecordValue::List(values) => values
+            .iter()
+            .map(|scalar| resolve_scalar(scalar, today))
+            .collect::<Result<Vec<_>, _>>()
+            .map(RecordValue::List),
+    }
+}
+
+fn source_ranges_for(
+    inputs: &[RecordFieldInput],
+    key: &str,
+) -> Option<Vec<Range<usize>>> {
+    let ranges: Vec<Range<usize>> = inputs
+        .iter()
+        .filter(|input| input.key == key)
+        .filter_map(|input| input.source_range.clone())
+        .collect();
+    (!ranges.is_empty()).then_some(ranges)
+}
+
+fn nearest_field_keys(allowed: &[String], query: &str) -> Vec<String> {
+    use crate::native::note_tasks::bounded_levenshtein;
+
+    let query = query.to_lowercase();
+    let mut candidates: Vec<(usize, &str)> = allowed
+        .iter()
+        .filter_map(|key| {
+            bounded_levenshtein(&query, &key.to_lowercase(), 2)
+                .map(|distance| (distance, key.as_str()))
+        })
+        .collect();
+    candidates.sort_by(|left, right| {
+        left.0.cmp(&right.0).then_with(|| left.1.cmp(right.1))
+    });
+    candidates
+        .into_iter()
+        .take(3)
+        .map(|(_, key)| key.to_owned())
+        .collect()
 }
 
 fn display_value(
@@ -564,6 +756,7 @@ fn format_created_timestamp(
 mod tests {
     use std::{
         fs,
+        ops::Range,
         path::{Path, PathBuf},
         time::{SystemTime, UNIX_EPOCH},
     };
@@ -572,14 +765,15 @@ mod tests {
 
     use super::{
         plan_create, RecordCreateRequest, RecordPlanErrorCode,
-        RecordPropertySource, RecordPropertyState,
+        RecordPropertySource, RecordPropertyState, RecordStemSource,
     };
     use crate::native::records::{
         catalog::RecordCatalog,
         render::RecordNoteInput,
         schema::{
-            parse_records_config, FieldInputState, RecordFieldInput,
-            RecordScalar, RecordValue, RecordsConfig,
+            parse_records_config, FieldInputState, RecordDate,
+            RecordDiagnosticCode, RecordFieldInput, RecordScalar, RecordValue,
+            RecordsConfig,
         },
     };
 
@@ -611,6 +805,19 @@ records:
         RecordFieldInput {
             key: key.to_owned(),
             state,
+            source_range: None,
+        }
+    }
+
+    fn ranged_input(
+        key: &str,
+        state: FieldInputState,
+        range: Range<usize>,
+    ) -> RecordFieldInput {
+        RecordFieldInput {
+            key: key.to_owned(),
+            state,
+            source_range: Some(range),
         }
     }
 
@@ -681,11 +888,16 @@ records:
         assert_eq!(result.path, PathBuf::from("eat/creme_and_co.md"));
         assert!(result.missing.is_empty());
         assert!(result.invalid.is_empty());
+        assert_eq!(result.stem_source, RecordStemSource::Title);
+        assert_eq!(result.properties[0].state, RecordPropertyState::Set);
         assert_eq!(
             result.properties[3].source,
             Some(RecordPropertySource::Default)
         );
+        assert_eq!(result.properties[3].state, RecordPropertyState::Default);
         assert_eq!(result.properties[3].display.as_deref(), Some("kelly"));
+        assert_eq!(result.properties[4].state, RecordPropertyState::None);
+        assert_eq!(result.properties[4].state.as_str(), "none");
         let markdown = result.markdown.expect("complete plan renders bytes");
         assert!(markdown.contains("parent: \"[[eat]]\"\n"));
         assert!(markdown.contains("created: 2026-11-08T12:41:07-0500\n"));
@@ -701,12 +913,32 @@ records:
         fields[2] = input("location", FieldInputState::SuppliedEmpty);
         let result = plan(&root, &config, &fields, &[]).unwrap();
         assert_eq!(result.missing, ["location"]);
-        assert_eq!(result.properties[2].state, RecordPropertyState::Empty);
+        assert_eq!(result.properties[2].state, RecordPropertyState::Missing);
         assert_eq!(
             result.properties[3].source,
             Some(RecordPropertySource::Default)
         );
         assert!(result.markdown.is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn explicit_empty_optional_suppresses_its_default() {
+        let root = temp_dir("clear-default");
+        let config = config();
+        let mut fields = required_fields();
+        fields.push(ranged_input(
+            "companions",
+            FieldInputState::SuppliedEmpty,
+            20..35,
+        ));
+        let result = plan(&root, &config, &fields, &[]).unwrap();
+        let companions = &result.properties[3];
+        assert_eq!(companions.state, RecordPropertyState::None);
+        assert_eq!(companions.value, None);
+        assert_eq!(companions.source, None);
+        assert_eq!(companions.source_ranges, Some(vec![20..35]));
+        assert!(!result.markdown.unwrap().contains("companions:"));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -720,9 +952,10 @@ records:
                 "companions",
                 FieldInputState::SuppliedValues(vec!["[[Kelly]]".to_owned()]),
             ),
-            input(
+            ranged_input(
                 "companions",
                 FieldInputState::SuppliedValues(vec!["Sam".to_owned()]),
+                40..43,
             ),
             input(
                 "score",
@@ -742,24 +975,28 @@ records:
                 RecordScalar::Link("[[Sam]]".to_owned()),
             ]))
         );
+        assert_eq!(result.properties[3].source_ranges, Some(vec![40..43]));
         assert_eq!(result.properties[5].display.as_deref(), Some("0"));
         assert_eq!(result.properties[6].display.as_deref(), Some("false"));
         assert!(result.markdown.unwrap().contains("score: 0\n"));
 
         let mut repeated_scalar = required_fields();
         repeated_scalar.extend([
-            input(
+            ranged_input(
                 "score",
                 FieldInputState::SuppliedValues(vec!["1".to_owned()]),
+                50..51,
             ),
-            input(
+            ranged_input(
                 "score",
                 FieldInputState::SuppliedValues(vec!["2".to_owned()]),
+                60..61,
             ),
         ]);
         let result = plan(&root, &config, &repeated_scalar, &[]).unwrap();
         assert_eq!(result.invalid.len(), 1);
         assert_eq!(result.invalid[0].field.as_deref(), Some("score"));
+        assert_eq!(result.invalid[0].source_ranges, Some(vec![50..51, 60..61]));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -768,9 +1005,15 @@ records:
         let root = temp_dir("unknown-field");
         let config = config();
         let mut fields = required_fields();
-        fields.push(input(
+        fields[2] = ranged_input(
+            "location",
+            FieldInputState::SuppliedValues(vec!["Cranford".to_owned()]),
+            3..11,
+        );
+        fields.push(ranged_input(
             "catagory",
             FieldInputState::SuppliedValues(vec!["Coffee".to_owned()]),
+            12..20,
         ));
         let result = plan(&root, &config, &fields, &[]).unwrap();
         assert_eq!(result.invalid.len(), 1);
@@ -779,6 +1022,22 @@ records:
             crate::native::records::schema::RecordDiagnosticCode::UnknownField
         );
         assert!(result.invalid[0].message.contains("category"));
+        assert_eq!(result.invalid[0].diagnostic_code(), "record_unknown_field");
+        assert_eq!(result.invalid[0].suggestions, ["category"]);
+        assert_eq!(
+            result.invalid[0].allowed_keys,
+            [
+                "status",
+                "category",
+                "location",
+                "companions",
+                "visited",
+                "score",
+                "active"
+            ]
+        );
+        assert_eq!(result.invalid[0].source_ranges, Some(vec![12..20]));
+        assert_eq!(result.properties[2].source_ranges, Some(vec![3..11]));
         assert!(result.markdown.is_none());
         fs::remove_dir_all(root).unwrap();
     }
@@ -792,6 +1051,7 @@ records:
         let config = config();
         let error = plan(&root, &config, &required_fields(), &[]).unwrap_err();
         assert_eq!(error.code, RecordPlanErrorCode::PathCollision);
+        assert_eq!(error.code.diagnostic_code(), "record_exists");
         assert_eq!(error.paths, [PathBuf::from("eat/CREME_AND_CO.md")]);
         assert_eq!(error.suggestions, ["@eat/CREME_AND_CO"]);
 
@@ -830,7 +1090,74 @@ records:
         )
         .unwrap_err();
         assert_eq!(error.code, RecordPlanErrorCode::ExplicitStemRequired);
+
+        let mut catalog = RecordCatalog::new(&root);
+        let explicit = plan_create(
+            RecordCreateRequest {
+                config: &config,
+                record_type: "restaurant",
+                title: "!!!",
+                explicit_stem: Some("manual-stem"),
+                fields: &fields,
+                notes: &[],
+                now: NaiveDateTime::default(),
+                timezone: None,
+                vault_root: &root,
+                reserved_paths: &[],
+            },
+            &mut catalog,
+        )
+        .unwrap();
+        assert_eq!(explicit.stem, "manual-stem");
+        assert_eq!(explicit.stem_source, RecordStemSource::Explicit);
+
+        let mut catalog = RecordCatalog::new(&root);
+        let empty_title = plan_create(
+            RecordCreateRequest {
+                config: &config,
+                record_type: "restaurant",
+                title: "  ",
+                explicit_stem: Some("manual-stem"),
+                fields: &fields,
+                notes: &[],
+                now: NaiveDateTime::default(),
+                timezone: None,
+                vault_root: &root,
+                reserved_paths: &[],
+            },
+            &mut catalog,
+        )
+        .unwrap_err();
+        assert_eq!(empty_title.code, RecordPlanErrorCode::EmptyTitle);
+        assert_eq!(empty_title.code.diagnostic_code(), "record_title");
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_unreadable_folder_never_yields_an_installable_plan() {
+        let root = temp_dir("folder-refusal");
+        fs::write(root.join("eat"), "not a directory").unwrap();
+        let config = config();
+        let error = plan(&root, &config, &required_fields(), &[]).unwrap_err();
+        assert_eq!(error.code, RecordPlanErrorCode::FolderUnavailable);
+        assert!(error.message.contains("not a directory"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_escaping_folder_symlink_never_yields_an_installable_plan() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_dir("escaping-folder");
+        let outside = temp_dir("outside-folder");
+        symlink(outside.join("."), root.join("eat")).unwrap();
+        let config = config();
+        let error = plan(&root, &config, &required_fields(), &[]).unwrap_err();
+        assert_eq!(error.code, RecordPlanErrorCode::FolderUnavailable);
+        assert!(error.message.contains("resolves outside the vault"));
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(outside).unwrap();
     }
 
     #[test]
@@ -876,5 +1203,219 @@ records:
             ),
             "2026-01-15T12:00:00-0500"
         );
+    }
+
+    #[test]
+    fn dynamic_scalar_and_list_defaults_match_typed_dates() {
+        let root = temp_dir("dynamic-dates");
+        let config = parse_records_config(
+            r#"
+records:
+  restaurant:
+    dir: eat
+    label: Restaurant
+    fields:
+      status: {required: true, values: {liked: Liked}}
+      category: {required: true}
+      location: {required: true}
+      visited: {values: date, default: yesterday}
+      dates: {values: date, list: true, default: [today, yesterday]}
+"#,
+            Path::new("/config.yml"),
+        )
+        .unwrap();
+        let today = NaiveDate::from_ymd_opt(2026, 11, 8).unwrap();
+        let now = today.and_hms_opt(12, 0, 0).unwrap();
+        let fields = required_fields();
+        let mut default_catalog = RecordCatalog::new(&root);
+        let defaults = plan_create(
+            RecordCreateRequest {
+                config: &config,
+                record_type: "restaurant",
+                title: "Date test",
+                explicit_stem: None,
+                fields: &fields,
+                notes: &[],
+                now,
+                timezone: Some(chrono_tz::UTC),
+                vault_root: &root,
+                reserved_paths: &[],
+            },
+            &mut default_catalog,
+        )
+        .unwrap();
+
+        let mut typed_fields = fields.clone();
+        typed_fields.extend([
+            input(
+                "visited",
+                FieldInputState::SuppliedValues(vec!["yesterday".to_owned()]),
+            ),
+            input(
+                "dates",
+                FieldInputState::SuppliedValues(vec![
+                    "today, yesterday".to_owned()
+                ]),
+            ),
+        ]);
+        let mut typed_catalog = RecordCatalog::new(&root);
+        let typed = plan_create(
+            RecordCreateRequest {
+                config: &config,
+                record_type: "restaurant",
+                title: "Date test",
+                explicit_stem: None,
+                fields: &typed_fields,
+                notes: &[],
+                now,
+                timezone: Some(chrono_tz::UTC),
+                vault_root: &root,
+                reserved_paths: &[],
+            },
+            &mut typed_catalog,
+        )
+        .unwrap();
+
+        let expected_scalar = RecordValue::Scalar(RecordScalar::Date(
+            RecordDate::Resolved(NaiveDate::from_ymd_opt(2026, 11, 7).unwrap()),
+        ));
+        let expected_list = RecordValue::List(vec![
+            RecordScalar::Date(RecordDate::Resolved(today)),
+            RecordScalar::Date(RecordDate::Resolved(
+                NaiveDate::from_ymd_opt(2026, 11, 7).unwrap(),
+            )),
+        ]);
+        assert_eq!(defaults.properties[3].state, RecordPropertyState::Default);
+        assert_eq!(defaults.properties[3].value, Some(expected_scalar.clone()));
+        assert_eq!(defaults.properties[4].value, Some(expected_list.clone()));
+        assert_eq!(typed.properties[3].state, RecordPropertyState::Set);
+        assert_eq!(typed.properties[3].value, Some(expected_scalar));
+        assert_eq!(typed.properties[4].value, Some(expected_list));
+        assert_eq!(defaults.properties[3].display, typed.properties[3].display);
+        assert_eq!(defaults.properties[4].display, typed.properties[4].display);
+        assert_eq!(defaults.markdown, typed.markdown);
+        assert!(defaults.markdown.unwrap().contains(
+            "visited: 2026-11-07\ndates:\n  - 2026-11-08\n  - 2026-11-07\n"
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unresolved_date_defaults_are_invalid_instead_of_becoming_today() {
+        let root = temp_dir("unresolved-date");
+        let config = parse_records_config(
+            "records:\n  restaurant:\n    dir: eat\n    label: Restaurant\n    fields:\n      status: {required: true, values: {liked: Liked}}\n      category: {required: true}\n      location: {required: true}\n      visited: {values: date, default: yesterday}\n",
+            Path::new("/config.yml"),
+        )
+        .unwrap();
+        let mut catalog = RecordCatalog::new(&root);
+        let fields = required_fields();
+        let now = NaiveDate::MIN.and_hms_opt(0, 0, 0).unwrap();
+        let result = plan_create(
+            RecordCreateRequest {
+                config: &config,
+                record_type: "restaurant",
+                title: "Date test",
+                explicit_stem: None,
+                fields: &fields,
+                notes: &[],
+                now,
+                timezone: Some(chrono_tz::UTC),
+                vault_root: &root,
+                reserved_paths: &[],
+            },
+            &mut catalog,
+        )
+        .unwrap();
+        assert_eq!(result.properties[3].state, RecordPropertyState::Invalid);
+        assert_eq!(result.invalid.len(), 1);
+        assert_eq!(result.invalid[0].code, RecordDiagnosticCode::InvalidDate);
+        assert_eq!(result.invalid[0].diagnostic_code(), "record_invalid_value");
+        assert!(result.markdown.is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_empty_optional_list_default_is_none_and_not_a_required_value() {
+        let root = temp_dir("empty-list-default");
+        let config = parse_records_config(
+            "records:\n  restaurant:\n    dir: eat\n    label: Restaurant\n    fields:\n      status: {required: true, values: {liked: Liked}}\n      category: {required: true}\n      location: {required: true}\n      optional_tags: {list: true, default: []}\n      required_tags: {list: true, required: true, default: []}\n",
+            Path::new("/config.yml"),
+        )
+        .unwrap();
+        let mut catalog = RecordCatalog::new(&root);
+        let result = plan_create(
+            RecordCreateRequest {
+                config: &config,
+                record_type: "restaurant",
+                title: "List test",
+                explicit_stem: None,
+                fields: &required_fields(),
+                notes: &[],
+                now: NaiveDateTime::default(),
+                timezone: None,
+                vault_root: &root,
+                reserved_paths: &[],
+            },
+            &mut catalog,
+        )
+        .unwrap();
+        assert_eq!(result.properties[3].state, RecordPropertyState::None);
+        assert_eq!(result.properties[3].value, None);
+        assert_eq!(result.properties[4].state, RecordPropertyState::Missing);
+        assert_eq!(result.missing, ["required_tags"]);
+        assert!(result.markdown.is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn configured_zone_and_bob_now_drive_the_real_planning_path() {
+        let root = temp_dir("bob-now-zone");
+        let config_path = root.join("config.yml");
+        fs::write(&config_path, "timezone: Pacific/Kiritimati\n").unwrap();
+        crate::native::env::pin_tz_utc0_for_test();
+        let result = crate::native::env::with_var(
+            "BOB_CONFIG_FILE",
+            config_path.as_os_str(),
+            || {
+                crate::native::env::with_var(
+                    "BOB_NOW",
+                    "2026-01-15 23:30:00",
+                    || {
+                        let now = crate::native::env::current_datetime();
+                        let timezone =
+                            crate::native::env::configured_timezone();
+                        assert_eq!(now.to_string(), "2026-01-15 23:30:00");
+                        assert_eq!(
+                            timezone,
+                            Some(chrono_tz::Pacific::Kiritimati)
+                        );
+                        let config = config();
+                        let mut catalog = RecordCatalog::new(&root);
+                        plan_create(
+                            RecordCreateRequest {
+                                config: &config,
+                                record_type: "restaurant",
+                                title: "Zone test",
+                                explicit_stem: None,
+                                fields: &required_fields(),
+                                notes: &[],
+                                now,
+                                timezone,
+                                vault_root: &root,
+                                reserved_paths: &[],
+                            },
+                            &mut catalog,
+                        )
+                        .unwrap()
+                    },
+                )
+            },
+        );
+        assert!(result
+            .markdown
+            .unwrap()
+            .contains("created: 2026-01-15T23:30:00+1400\n"));
+        fs::remove_dir_all(root).unwrap();
     }
 }

@@ -1,5 +1,6 @@
 use std::{
     fmt,
+    ops::Range,
     path::{Path, PathBuf},
 };
 
@@ -64,6 +65,12 @@ pub(crate) struct RecordDiagnostic {
     pub(crate) record_type: Option<String>,
     pub(crate) field: Option<String>,
     pub(crate) message: String,
+    /// Bounded suggestions for caller-supplied keys such as an unknown field.
+    pub(crate) suggestions: Vec<String>,
+    /// Allowed keys for structured correction UI.
+    pub(crate) allowed_keys: Vec<String>,
+    /// Caller-provided byte ranges; the engine never invents ranges.
+    pub(crate) source_ranges: Option<Vec<Range<usize>>>,
 }
 
 impl RecordDiagnostic {
@@ -80,6 +87,9 @@ impl RecordDiagnostic {
             record_type: record_type.map(str::to_owned),
             field: field.map(str::to_owned),
             message: message.into(),
+            suggestions: Vec::new(),
+            allowed_keys: Vec::new(),
+            source_ranges: None,
         }
     }
 
@@ -94,10 +104,13 @@ impl RecordDiagnostic {
             record_type: None,
             field: field.map(str::to_owned),
             message: message.into(),
+            suggestions: Vec::new(),
+            allowed_keys: Vec::new(),
+            source_ranges: None,
         }
     }
 
-    fn value(
+    pub(crate) fn value(
         field: &RecordField,
         code: RecordDiagnosticCode,
         message: impl Into<String>,
@@ -108,6 +121,25 @@ impl RecordDiagnostic {
             record_type: None,
             field: Some(field.key.clone()),
             message: message.into(),
+            suggestions: Vec::new(),
+            allowed_keys: Vec::new(),
+            source_ranges: None,
+        }
+    }
+
+    pub(crate) fn diagnostic_code(&self) -> &'static str {
+        match self.code {
+            RecordDiagnosticCode::UnknownField => "record_unknown_field",
+            RecordDiagnosticCode::MissingTitle => "record_title",
+            RecordDiagnosticCode::InvalidValue
+            | RecordDiagnosticCode::InvalidDate
+            | RecordDiagnosticCode::InvalidLink
+            | RecordDiagnosticCode::InvalidUrl
+            | RecordDiagnosticCode::InvalidNumber
+            | RecordDiagnosticCode::NumberOutOfRange
+            | RecordDiagnosticCode::InvalidList
+            | RecordDiagnosticCode::InvalidChoice => "record_invalid_value",
+            _ => "record_invalid_value",
         }
     }
 }
@@ -262,6 +294,7 @@ impl RecordDate {
 pub(crate) struct RecordFieldInput {
     pub(crate) key: String,
     pub(crate) state: FieldInputState,
+    pub(crate) source_range: Option<Range<usize>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1006,6 +1039,9 @@ fn parse_number(
             record_type: None,
             field,
             message: "expected a finite integer or decimal number".to_owned(),
+            suggestions: Vec::new(),
+            allowed_keys: Vec::new(),
+            source_ranges: None,
         });
     }
     let number = raw
@@ -1018,6 +1054,9 @@ fn parse_number(
             record_type: None,
             field: None,
             message: "expected a finite integer or decimal number".to_owned(),
+            suggestions: Vec::new(),
+            allowed_keys: Vec::new(),
+            source_ranges: None,
         })?;
     if min.is_some_and(|min| number < min)
         || max.is_some_and(|max| number > max)
@@ -1032,6 +1071,9 @@ fn parse_number(
                 min.map_or_else(|| "−∞".to_owned(), |value| value.to_string()),
                 max.map_or_else(|| "∞".to_owned(), |value| value.to_string())
             ),
+            suggestions: Vec::new(),
+            allowed_keys: Vec::new(),
+            source_ranges: None,
         });
     }
     Ok(number)

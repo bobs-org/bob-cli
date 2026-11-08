@@ -125,6 +125,20 @@ always present, including when empty. With `dated_notes: true`, each first-level
 note bullet gets today's date; nested bullets stay nested. An all-caps first-
 level bullet with nested bullets becomes a title-cased section.
 
+## Updating notes
+
+An update validates only the fields it changes. An explicitly empty optional
+field removes its key; an empty required field is refused. Repeated values for
+a list replace that field's current list in request order. Missing fields are
+inserted in schema order, before `created` when there is no earlier schema
+field to follow. Notes append under the existing `## Notes` section, and named
+sections reuse a matching heading instead of creating a duplicate.
+
+Bob edits the original YAML spans and preserves every untouched key, comment,
+body byte, and line ending. Existing unrelated schema problems are returned as
+warnings. Ambiguous or unsupported YAML, including a flow-style root or a
+non-mapping root, is refused with the original note unchanged.
+
 ## Filename rule
 
 The filename stem comes from the title: normalize Unicode with NFKD, remove
