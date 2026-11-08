@@ -5,6 +5,10 @@ use super::*;
 thread_local! {
     pub(super) static RENAME_FAIL_TARGET: std::cell::RefCell<Option<PathBuf>> =
         const { std::cell::RefCell::new(None) };
+    pub(super) static PLANT_BEFORE_INSTALL: std::cell::RefCell<Option<(PathBuf, String)>> =
+        const { std::cell::RefCell::new(None) };
+    pub(super) static FORCE_HARD_LINK_UNSUPPORTED: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
 }
 
 #[cfg(test)]
@@ -21,6 +25,18 @@ fn test_rename_failure(target: &Path) -> Option<CaptureError> {
         )));
     }
     None
+}
+
+#[cfg(test)]
+fn test_plant_before_install(target: &Path) {
+    PLANT_BEFORE_INSTALL.with(|plant| {
+        if let Some((path, bytes)) = plant.borrow().as_ref()
+            && path == target
+        {
+            fs::write(target, bytes)
+                .expect("plant foreign file before install");
+        }
+    });
 }
 
 pub(crate) fn validate_target_parent(
@@ -284,49 +300,33 @@ fn write_staged_files_guarded(
         if let Err(error) =
             validate_disk_preimages(std::slice::from_ref(pending_file.staged))
         {
-            remove_temporary_file(&pending_file.temporary);
-            if let Some(backup) = &pending_file.backup {
-                remove_temporary_file(backup);
-            }
-            cleanup_pending_text_files(&pending);
-            let mut message = error.message.clone();
-            append_rollback_message(
-                &mut message,
-                rollback_applied_files(&applied),
-            );
-            return Err(CaptureError::io(message));
+            return Err(fail_after_partial_apply(
+                error,
+                pending_file,
+                &pending,
+                &applied,
+            ));
         }
         #[cfg(test)]
         if let Some(error) = test_rename_failure(&pending_file.staged.target) {
-            remove_temporary_file(&pending_file.temporary);
-            if let Some(backup) = &pending_file.backup {
-                remove_temporary_file(backup);
-            }
-            cleanup_pending_text_files(&pending);
-            let mut message = error.message.clone();
-            append_rollback_message(
-                &mut message,
-                rollback_applied_files(&applied),
-            );
-            return Err(CaptureError::io(message));
+            return Err(fail_after_partial_apply(
+                error,
+                pending_file,
+                &pending,
+                &applied,
+            ));
         }
+        #[cfg(test)]
+        test_plant_before_install(&pending_file.staged.target);
         if let Err(error) =
-            fs::rename(&pending_file.temporary, &pending_file.staged.target)
+            install_staged_target(&pending_file.temporary, pending_file.staged)
         {
-            remove_temporary_file(&pending_file.temporary);
-            if let Some(backup) = &pending_file.backup {
-                remove_temporary_file(backup);
-            }
-            cleanup_pending_text_files(&pending);
-            let mut message = format!(
-                "replace target {}: {error}",
-                pending_file.staged.target.display()
-            );
-            append_rollback_message(
-                &mut message,
-                rollback_applied_files(&applied),
-            );
-            return Err(CaptureError::io(message));
+            return Err(fail_after_partial_apply(
+                error,
+                pending_file,
+                &pending,
+                &applied,
+            ));
         }
         applied.push(AppliedTextFile {
             target: pending_file.staged.target.clone(),
@@ -339,6 +339,120 @@ fn write_staged_files_guarded(
         if let Some(backup) = &file.backup {
             remove_temporary_file(backup);
         }
+    }
+    Ok(())
+}
+
+fn fail_after_partial_apply(
+    error: CaptureError,
+    pending_file: PendingTextFile<'_>,
+    pending: &[PendingTextFile<'_>],
+    applied: &[AppliedTextFile],
+) -> CaptureError {
+    remove_temporary_file(&pending_file.temporary);
+    if let Some(backup) = &pending_file.backup {
+        remove_temporary_file(backup);
+    }
+    cleanup_pending_text_files(pending);
+    let mut message = error.message.clone();
+    append_rollback_message(&mut message, rollback_applied_files(applied));
+    let mut wrapped = CaptureError::io(message);
+    if let Some(typed) = error.typed {
+        wrapped = wrapped.with_typed(typed);
+    }
+    wrapped
+}
+
+fn created_after_planning(target: &Path) -> CaptureError {
+    CaptureError::io(format!(
+        "refusing to overwrite {}: note was created on disk after planning",
+        target.display()
+    ))
+    .with_typed(CaptureFailureKind::NoteChanged)
+}
+
+pub(super) fn hard_link_unsupported(error: &io::Error) -> bool {
+    match error.kind() {
+        io::ErrorKind::Unsupported
+        | io::ErrorKind::PermissionDenied
+        | io::ErrorKind::CrossesDevices => true,
+        _ => matches!(
+            error.raw_os_error(),
+            Some(libc::EPERM | libc::EXDEV | libc::ENOTSUP)
+        ),
+    }
+}
+
+fn install_staged_target(
+    temporary: &Path,
+    staged: &StagedTextFile,
+) -> Result<(), CaptureError> {
+    if staged.target_existed {
+        fs::rename(temporary, &staged.target).map_err(|error| {
+            CaptureError::io(format!(
+                "replace target {}: {error}",
+                staged.target.display()
+            ))
+        })
+    } else {
+        install_new_file(temporary, &staged.target, &staged.updated_target)
+    }
+}
+
+/// Install a newly created note without replacing a path that appeared
+/// after planning. Prefer `hard_link(temp, target)` then unlink the temp;
+/// when hard links are unsupported, fall back to `create_new`.
+fn install_new_file(
+    temporary: &Path,
+    target: &Path,
+    contents: &str,
+) -> Result<(), CaptureError> {
+    #[cfg(test)]
+    if FORCE_HARD_LINK_UNSUPPORTED.with(std::cell::Cell::get) {
+        let result = install_new_file_create_new(target, contents);
+        remove_temporary_file(temporary);
+        return result;
+    }
+    match fs::hard_link(temporary, target) {
+        Ok(()) => {
+            remove_temporary_file(temporary);
+            Ok(())
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            Err(created_after_planning(target))
+        }
+        Err(error) if hard_link_unsupported(&error) => {
+            let result = install_new_file_create_new(target, contents);
+            remove_temporary_file(temporary);
+            result
+        }
+        Err(error) => Err(fs_error("install new file", target, error)),
+    }
+}
+
+fn install_new_file_create_new(
+    target: &Path,
+    contents: &str,
+) -> Result<(), CaptureError> {
+    let mut file = match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(target)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            return Err(created_after_planning(target));
+        }
+        Err(error) => {
+            return Err(fs_error("install new file", target, error));
+        }
+    };
+    if let Err(error) = file
+        .write_all(contents.as_bytes())
+        .and_then(|()| file.sync_all())
+    {
+        let _ = fs::remove_file(target);
+        return Err(fs_error("install new file", target, error));
     }
     Ok(())
 }

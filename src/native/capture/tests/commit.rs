@@ -155,6 +155,153 @@ fn refuses_when_existing_target_deleted_before_commit() {
 }
 
 #[test]
+fn new_note_install_refuses_when_file_lands_between_check_and_install() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let first = dir.path().join("first.md");
+    let created = dir.path().join("created.md");
+    let first_original = "- [ ] #task first\n";
+    fs::write(&first, first_original).expect("write first");
+
+    let planned = vec![
+        staged_existing(&first, first_original, "- [x] #task first\n"),
+        staged_new(&created, "- [ ] #task created\n"),
+    ];
+    let intervening = "- [ ] #task someone else\n";
+    PLANT_BEFORE_INSTALL.with(|plant| {
+        *plant.borrow_mut() = Some((created.clone(), intervening.to_string()));
+    });
+    let error = write_staged_files(&planned)
+        .expect_err("intervening create at install refuses");
+    PLANT_BEFORE_INSTALL.with(|plant| *plant.borrow_mut() = None);
+    assert_eq!(error.typed, Some(CaptureFailureKind::NoteChanged));
+    assert!(
+        error.message.contains("refusing to overwrite")
+            && error.message.contains("created.md")
+            && error
+                .message
+                .contains("note was created on disk after planning"),
+        "refusal message: {}",
+        error.message
+    );
+    assert!(
+        error.message.contains("rolled back earlier note writes"),
+        "earlier writes roll back: {}",
+        error.message
+    );
+    assert_eq!(
+        fs::read_to_string(&created).expect("read created"),
+        intervening,
+        "foreign bytes survive"
+    );
+    assert_eq!(
+        fs::read_to_string(&first).expect("read first"),
+        first_original,
+        "earlier edit rolls back"
+    );
+    no_capture_litter(dir.path());
+}
+
+#[test]
+fn new_note_install_commits_missing_target() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let created = dir.path().join("created.md");
+    let contents = "- [ ] #task created\n";
+    write_staged_files(&[staged_new(&created, contents)])
+        .expect("new note installs");
+    assert_eq!(
+        fs::read_to_string(&created).expect("read created"),
+        contents
+    );
+    no_capture_litter(dir.path());
+}
+
+#[test]
+fn new_note_install_falls_back_when_hard_links_are_unsupported() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let created = dir.path().join("created.md");
+    let contents = "- [ ] #task created\n";
+    FORCE_HARD_LINK_UNSUPPORTED.with(|flag| flag.set(true));
+    let result = write_staged_files(&[staged_new(&created, contents)]);
+    FORCE_HARD_LINK_UNSUPPORTED.with(|flag| flag.set(false));
+    result.expect("create_new fallback installs");
+    assert_eq!(
+        fs::read_to_string(&created).expect("read created"),
+        contents
+    );
+    no_capture_litter(dir.path());
+}
+
+#[test]
+fn new_note_fallback_refuses_when_file_lands_between_check_and_install() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let first = dir.path().join("first.md");
+    let created = dir.path().join("created.md");
+    let first_original = "- [ ] #task first\n";
+    fs::write(&first, first_original).expect("write first");
+    let planned = vec![
+        staged_existing(&first, first_original, "- [x] #task first\n"),
+        staged_new(&created, "- [ ] #task created\n"),
+    ];
+    let intervening = "- [ ] #task someone else\n";
+    FORCE_HARD_LINK_UNSUPPORTED.with(|flag| flag.set(true));
+    PLANT_BEFORE_INSTALL.with(|plant| {
+        *plant.borrow_mut() = Some((created.clone(), intervening.to_string()));
+    });
+    let error = write_staged_files(&planned)
+        .expect_err("create_new fallback refuses an intervening file");
+    FORCE_HARD_LINK_UNSUPPORTED.with(|flag| flag.set(false));
+    PLANT_BEFORE_INSTALL.with(|plant| *plant.borrow_mut() = None);
+    assert_eq!(error.typed, Some(CaptureFailureKind::NoteChanged));
+    assert_eq!(
+        fs::read_to_string(&created).expect("read created"),
+        intervening
+    );
+    assert_eq!(
+        fs::read_to_string(&first).expect("read first"),
+        first_original
+    );
+    no_capture_litter(dir.path());
+}
+
+#[test]
+fn existing_note_edits_still_rename_when_hard_link_fallback_is_forced() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let first = dir.path().join("first.md");
+    let original = "- [ ] #task first\n";
+    let updated = "- [x] #task first\n";
+    fs::write(&first, original).expect("write first");
+    FORCE_HARD_LINK_UNSUPPORTED.with(|flag| flag.set(true));
+    let result =
+        write_staged_files(&[staged_existing(&first, original, updated)]);
+    FORCE_HARD_LINK_UNSUPPORTED.with(|flag| flag.set(false));
+    result.expect("existing edits still commit");
+    assert_eq!(fs::read_to_string(&first).expect("read first"), updated);
+    no_capture_litter(dir.path());
+}
+
+#[test]
+fn hard_link_unsupported_classifies_fallback_kinds() {
+    assert!(hard_link_unsupported(&io::Error::from(
+        io::ErrorKind::Unsupported
+    )));
+    assert!(hard_link_unsupported(&io::Error::from(
+        io::ErrorKind::PermissionDenied
+    )));
+    assert!(hard_link_unsupported(&io::Error::from(
+        io::ErrorKind::CrossesDevices
+    )));
+    assert!(hard_link_unsupported(&io::Error::from_raw_os_error(
+        libc::EXDEV
+    )));
+    assert!(hard_link_unsupported(&io::Error::from_raw_os_error(
+        libc::EPERM
+    )));
+    assert!(!hard_link_unsupported(&io::Error::from(
+        io::ErrorKind::AlreadyExists
+    )));
+}
+
+#[test]
 fn commits_matching_multi_file_preimage() {
     let dir = tempfile::tempdir().expect("tempdir");
     let first = dir.path().join("first.md");

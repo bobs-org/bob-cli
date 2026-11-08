@@ -725,6 +725,8 @@ messages:
 - `refusing to overwrite <path>: note was deleted on disk after planning`
 - `refusing to overwrite <path>: note was created on disk after planning`
 
+A newly created note is installed by hard-linking the temporary file onto the planned path (or, when hard links are unsupported, by creating that path with `create_new`); if the path appears after the last check, Bob refuses with the created-on-disk message and never overwrites the foreign file.
+
 Reload the affected note and rerun the capture. The checks narrow the race
 with another writer; they do not lock the file. If a later replacement fails,
 Bob restores notes it already replaced in this batch. A successful rollback
