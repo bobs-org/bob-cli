@@ -16,7 +16,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from install_ui import estimate, history, parsers, state, term
+from install_ui import estimate, history, live, parsers, state, term
 
 PKG = Path(__file__).resolve().parents[1]
 
@@ -812,6 +812,47 @@ raise SystemExit(live.run(args))
         self.assertEqual({row["outcome"] for row in rows}, {"interrupted"})
         with self.assertRaises(ProcessLookupError):
             os.kill(child_pid, 0)
+
+
+class FailureExcerptTests(unittest.TestCase):
+    def _excerpt(self, lines: list[str]) -> list[str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "build.log"
+            log.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            return live._failure_excerpt(log)
+
+    def test_skips_swift6_warnings_for_real_compiler_error(self) -> None:
+        lines = [
+            "warning: task ... is isolated to the caller's actor; this is an error in the Swift 6 language mode",
+            "warning: another sendable warning; this is an error in the Swift 6 language mode",
+            "still building something",
+            "Sources/BobMacCapture/CapturePanelModel.swift:15612:9: error: switch must be exhaustive",
+            "note: add missing case: '.addTo'",
+            "tail line",
+        ]
+        excerpt = self._excerpt(lines)
+        self.assertTrue(excerpt)
+        self.assertEqual(
+            excerpt[0],
+            "Sources/BobMacCapture/CapturePanelModel.swift:15612:9: error: switch must be exhaustive",
+        )
+        self.assertIn("note: add missing case: '.addTo'", excerpt)
+
+    def test_rustc_and_caret_errors_match_real_error_label(self) -> None:
+        excerpt = self._excerpt(["ok line", "error[E0308]: mismatched types", "tail"])
+        self.assertEqual(excerpt[0], "error[E0308]: mismatched types")
+        excerpt = self._excerpt(["ok line", "|- error: something broke", "tail"])
+        self.assertEqual(excerpt[0], "|- error: something broke")
+
+    def test_capitalized_error_uses_substring_fallback(self) -> None:
+        lines = ["building", "Error: something failed", "tail"]
+        excerpt = self._excerpt(lines)
+        self.assertEqual(excerpt[0], "Error: something failed")
+
+    def test_no_error_falls_back_to_tail(self) -> None:
+        lines = [f"line {i}" for i in range(30)]
+        excerpt = self._excerpt(lines)
+        self.assertEqual(excerpt, lines[-20:])
 
 
 if __name__ == "__main__":

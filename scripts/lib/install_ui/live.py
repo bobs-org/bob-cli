@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import atexit
 import os
+import re
 import selectors
 import signal
 import subprocess
@@ -181,6 +182,9 @@ def _make_frame(
     return clipped
 
 
+_REAL_ERROR_RE = re.compile(r"(?:^|[\s:])error(?:\[[^\]]*\])?:")
+
+
 def _failure_excerpt(log_path: Optional[Path]) -> list[str]:
     if log_path is None:
         return []
@@ -188,6 +192,9 @@ def _failure_excerpt(log_path: Optional[Path]) -> list[str]:
         lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return []
+    start = next((i for i, line in enumerate(lines) if _REAL_ERROR_RE.search(line)), None)
+    if start is not None:
+        return lines[start : start + 40]
     start = next((i for i, line in enumerate(lines) if "error" in line.lower()), None)
     if start is not None:
         return lines[start : start + 40]
