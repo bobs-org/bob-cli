@@ -182,7 +182,10 @@ Ramen Nagi @eat/
 That writes `eat/ramen_nagi.md` with the same Markdown `bob records new`
 would plan. First-level `key:: value` bullets set fields; other first-level
 bullets become notes. `@eat/^ramen-nagi` sets an explicit stem.
-`@eat/ramen_nagi` without a caret is reserved until capture can append.
+`@eat/ramen_nagi` without a caret is an existing-record update intent.
+`capture-parse` resolves the exact stem and reports current and proposed
+fields, while `bob capture` still refuses the write with
+`record_update_reserved` until transactional update execution ships.
 `Blaze @eat` stays a task and warns `record_collection_route`, teaching
 `@eat/`.
 

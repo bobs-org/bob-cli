@@ -1187,7 +1187,7 @@ uses the normal successor-offer shape with `trigger: "note_pull"`, an empty
 `pull_in.groups[]` row carries `note` and Bob-authored copy. Capture remains
 unversioned; `capture-parse` reports `mode: "note_pull"`, `needs: []`, no
 diagnostics, the route spans, and the ordinary list summary with
-`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 20`.
+`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 21`.
 See [task-dependencies.md §12.20](task-dependencies.md#1220-note-pull-offers)
 for the JSON, copy, gate, and protocol contracts, and
 [§12.21](task-dependencies.md#1221-np-note-pull-vectors) for the NP vectors.
@@ -6487,10 +6487,15 @@ directory. Unknown `@notafolder/` stays literal task text. A malformed
 `records:` block yields `records_config_invalid` for record candidates;
 unrelated capture keeps working.
 
-`@eat/ramen_nagi` without a caret is the reserved update spelling. Capture
-refuses it with `record_update_reserved` and teaches that adding to the
-existing file comes later. Forced-destination flags (`--route` and friends)
-and escaped `\@eat/` keep the text literal. Task markers outside field
+`@eat/ramen_nagi` without a caret is an existing-record update. `capture-parse`
+reports mode `record_update`, resolves the exact stem, and shows the stored
+title, current field values, proposed values, and historical warnings. Parent
+text is the first note; authored bullets remain notes or `key:: value` field
+inputs. Only explicitly supplied fields are validated, so old missing or
+invalid fields do not become required inputs. The transactional writer is not
+active yet: `bob capture` fails closed with `record_update_reserved` and makes
+no changes. Forced-destination flags (`--route` and friends) and escaped
+`\@eat/` keep the text literal. Task markers outside field
 values (`#TYPE`, `s:N`, `$N`, `%c`, `%n`, `%l`, `&`, `*`, `~`, `!`, `+`,
 `:`, session operators, task-ID bullets) refuse with
 `record_marker_unsupported`.
@@ -8232,7 +8237,7 @@ bob capture-parse [-f|--format human|json] [-R|--no-ref] [--] [TEXT]...
 
 Reports the authoritative capture grammar's reading of `TEXT` so an editor can
 highlight capture syntax and Obsidian wikilinks while the user is still typing.
-Success JSON includes top-level `grammar: 20` while keeping `schema_version: 1`.
+Success JSON includes top-level `grammar: 21` while keeping `schema_version: 1`.
 It shares the tokenizer, terminal-marker extraction, and `@token`
 classification with `bob capture`. Parse does not validate vault targets
 or execute the draft, so a successful parse does not guarantee a capture
@@ -9593,7 +9598,7 @@ space), label `🍽️ New restaurant · 92`, and the same next-field
 continuation. See [Guided fields](#guided-fields).
 
 Every successful `capture-parse` and `capture-complete` response includes
-top-level `grammar: 20`; `schema_version` remains 1. An empty query opened by a
+top-level `grammar: 21`; `schema_version` remains 1. An empty query opened by a
 bare `#` or `%` adds `initial_selection: "none"`, so clients leave every row
 unselected. The field is omitted for typed queries and other contexts.
 

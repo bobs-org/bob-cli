@@ -2072,6 +2072,7 @@ pub(super) fn classify_local_marker(
             )
         }
         EditorMode::RecordNote
+        | EditorMode::RecordUpdate
         | EditorMode::Task
         | EditorMode::SubBullet
         | EditorMode::Bullet
@@ -2133,6 +2134,10 @@ pub(super) fn non_absorbable_marker_notice(
         ),
         EditorMode::RecordNote => format!(
             "@@ cannot take a record note: leave {} on this item, or delete it",
+            marker.text
+        ),
+        EditorMode::RecordUpdate => format!(
+            "@@ cannot take a record update: leave {} on this item, or delete it",
             marker.text
         ),
         EditorMode::TaskToggle => format!(

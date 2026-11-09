@@ -17,7 +17,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use super::draft::{classify_authored_line, AuthoredLineClass};
-use super::editor_model::{Diagnostic, Need, Severity, Span, SpanKind};
+use super::editor_model::{
+    Diagnostic, EditorMode, Need, Severity, Span, SpanKind,
+};
 use super::item::parsed_capture_item_outcome;
 use super::item::CaptureItemParseError;
 use super::line::normalize_task_text;
@@ -28,7 +30,7 @@ use super::model::*;
 use crate::native::capture_links::is_protected_markup_range;
 use crate::native::records::schema::RecordsConfig;
 
-/// Strict refusal when a `@dir/stem` update spelling is recognized.
+/// Strict execution refusal while record updates have not reached the writer.
 pub(crate) const RECORD_UPDATE_RESERVED_CODE: &str = "record_update_reserved";
 /// Strict refusal for task markers outside opaque field values.
 pub(crate) const RECORD_MARKER_UNSUPPORTED_CODE: &str =
@@ -241,17 +243,27 @@ pub(crate) struct RecordNoteGroup {
     pub(crate) lines: Vec<RecordNoteLine>,
 }
 
-/// Parsed record creation intent: raw title, folder, optional explicit
-/// stem, raw field inputs, grouped notes, and absolute UTF-8 source
-/// ranges. The `record-parse` adapter maps this onto the records engine.
+/// Whether a record route creates a note or updates an existing one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecordAction {
+    Create,
+    Update,
+}
+
+/// Parsed record intent: creation title or update parent-line note, folder,
+/// target stem, raw field inputs, grouped notes, and absolute UTF-8 ranges.
+/// The `record-parse` adapter maps this onto the records engine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RecordNoteIntent {
+    pub(crate) action: RecordAction,
     /// Lower-cased configured record directory.
     pub(crate) dir: String,
-    /// Raw title text (route token removed).
+    /// Creation title or update parent-line note (route token removed).
     pub(crate) title: String,
     /// Explicit stem from `@dir/^stem`, when typed.
     pub(crate) explicit_stem: Option<String>,
+    /// Existing target stem from `@dir/stem`, when updating.
+    pub(crate) update_stem: Option<String>,
     pub(crate) fields: Vec<RecordFieldInput>,
     pub(crate) notes: Vec<RecordNoteGroup>,
     pub(crate) route_range: (usize, usize),
@@ -334,7 +346,7 @@ enum RecordRouteStem {
     None,
     /// `@dir/^stem`: creation with an explicit stem.
     Explicit(String, (usize, usize)),
-    /// `@dir/stem`: reserved update spelling (no caret); only the
+    /// `@dir/stem`: existing-record update target (no caret); only the
     /// absolute range is kept (text re-slices from the source).
     Update((usize, usize)),
 }
@@ -365,11 +377,11 @@ fn parse_record_route_token(
             (stem_start, stem_start + stem.len()),
         )
     } else {
-        // Update spellings take plain word stems; task sigils in the
-        // tail (`@areas/a+f` is a nested task source) stay literal.
-        if !tail.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')
-        }) {
+        // Existing stems are not constrained by the explicit-new-stem
+        // alphabet. Keep task-route suffixes literal, but allow Unicode,
+        // underscores, punctuation, and other filename characters; the
+        // update resolver rejects unsafe path components.
+        if !is_update_stem_token(tail) {
             return None;
         }
         let stem_start = token.start + 1 + dir.len() + 1;
@@ -380,6 +392,28 @@ fn parse_record_route_token(
         stem,
         range: (token.start, token.end),
     })
+}
+
+fn is_update_stem_token(stem: &str) -> bool {
+    !stem.is_empty()
+        && stem.chars().all(|character| {
+            !character.is_whitespace()
+                && !matches!(
+                    character,
+                    '\0' | '@'
+                        | '^'
+                        | '+'
+                        | '#'
+                        | ':'
+                        | '!'
+                        | '%'
+                        | '~'
+                        | '&'
+                        | '*'
+                        | '='
+                        | ','
+                )
+        })
 }
 
 /// Explicit stems use the block-ID alphabet: ASCII letters, digits,
@@ -545,23 +579,8 @@ pub(crate) fn classify_record_item(
         RouteResolution::Literal => return None,
         RouteResolution::Configured => {}
     }
-    // Configured folder: creation. The update spelling refuses even
-    // though its folder is configured.
-    if let RecordRouteStem::Update(range) = &route.stem {
-        return Some(RecordClaim::refused(
-            RECORD_UPDATE_RESERVED_CODE,
-            format!(
-                "`{}` is a reserved record-update spelling \
-                 (`@<dir>/<stem>`); record updates are not supported yet, so \
-                 create a new record with `@{}/` and a title instead",
-                &item.source[route.range.0..route.range.1],
-                route.dir,
-            ),
-            Some(*range),
-        ));
-    }
-    let (explicit_stem, stem_range) = match &route.stem {
-        RecordRouteStem::None => (None, None),
+    let (action, explicit_stem, update_stem, stem_range) = match &route.stem {
+        RecordRouteStem::None => (RecordAction::Create, None, None, None),
         RecordRouteStem::Explicit(stem, range) => {
             if !is_valid_record_stem(stem) {
                 let message = if stem.is_empty() {
@@ -583,9 +602,14 @@ pub(crate) fn classify_record_item(
                     Some(route.range),
                 ));
             }
-            (Some(stem.clone()), Some(*range))
+            (RecordAction::Create, Some(stem.clone()), None, Some(*range))
         }
-        RecordRouteStem::Update(_) => unreachable!("handled above"),
+        RecordRouteStem::Update(range) => (
+            RecordAction::Update,
+            None,
+            Some(item.source[range.0..range.1].to_owned()),
+            Some(*range),
+        ),
     };
     let (mut title, title_range) = parent_title(parent, &route, &position);
     if let Some((start, end)) = title_range {
@@ -701,9 +725,11 @@ pub(crate) fn classify_record_item(
         notes.push(group);
     }
     let claim = RecordNoteIntent {
+        action,
         dir: route.dir.clone(),
         title,
         explicit_stem,
+        update_stem,
         fields,
         notes,
         route_range: route.range,
@@ -1262,7 +1288,10 @@ fn strict_record_outcome<'a>(
             body: intent.title.clone(),
             clip: None,
             route: Some(intent.dir.clone()),
-            kind: CaptureKind::RecordNote { intent },
+            kind: match intent.action {
+                RecordAction::Create => CaptureKind::RecordNote { intent },
+                RecordAction::Update => CaptureKind::RecordUpdate { intent },
+            },
             scheduled_offset: None,
             priority_level: None,
             sub_bullets: Vec::new(),
@@ -1304,7 +1333,10 @@ pub(super) fn claim_strict_record<'a>(
         .unwrap_or_default();
     match classify_record_item(item, options.record_policy) {
         None => Ok(None),
-        Some(RecordClaim::Note(intent)) if intent.title.trim().is_empty() => {
+        Some(RecordClaim::Note(intent))
+            if intent.action == RecordAction::Create
+                && intent.title.trim().is_empty() =>
+        {
             Err(CaptureItemParseError::coded(
                 RECORD_TITLE_CODE,
                 format!(
@@ -1330,6 +1362,7 @@ pub(super) fn claim_strict_record<'a>(
 /// completable); every other refusal reports an error diagnostic with
 /// the strict code so both surfaces share one vocabulary.
 pub(crate) struct RecordEditorView {
+    pub(crate) mode: EditorMode,
     pub(crate) body: String,
     pub(crate) route: Option<String>,
     pub(crate) needs: Vec<Need>,
@@ -1364,7 +1397,9 @@ pub(crate) fn editor_view_for_claim(claim: &RecordClaim) -> RecordEditorView {
                     key: None,
                 });
             }
-            if intent.title.trim().is_empty() {
+            if intent.action == RecordAction::Create
+                && intent.title.trim().is_empty()
+            {
                 needs.push(Need::RecordTitle);
             }
             for field in &intent.fields {
@@ -1391,6 +1426,10 @@ pub(crate) fn editor_view_for_claim(claim: &RecordClaim) -> RecordEditorView {
             }
             spans.sort_by_key(|span| (span.start, span.end));
             RecordEditorView {
+                mode: match intent.action {
+                    RecordAction::Create => EditorMode::RecordNote,
+                    RecordAction::Update => EditorMode::RecordUpdate,
+                },
                 body: intent.title.clone(),
                 route: Some(intent.dir.clone()),
                 needs,
@@ -1405,6 +1444,7 @@ pub(crate) fn editor_view_for_claim(claim: &RecordClaim) -> RecordEditorView {
         } => {
             if *code == RECORD_TITLE_CODE {
                 return RecordEditorView {
+                    mode: EditorMode::RecordNote,
                     body: String::new(),
                     route: None,
                     needs: vec![Need::RecordTitle],
@@ -1413,6 +1453,7 @@ pub(crate) fn editor_view_for_claim(claim: &RecordClaim) -> RecordEditorView {
                 };
             }
             RecordEditorView {
+                mode: EditorMode::RecordNote,
                 body: String::new(),
                 route: None,
                 needs: Vec::new(),

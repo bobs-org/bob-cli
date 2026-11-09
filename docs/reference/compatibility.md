@@ -68,7 +68,7 @@ Old top-level spellings remain as hidden aliases. See
 ## Capture-language revision
 
 `capture-parse` and `capture-complete` keep `schema_version: 1` and report the
-additive top-level `grammar: 20` revision. Clients can use it to distinguish
+additive top-level `grammar: 21` revision. Clients can use it to distinguish
 capture-language updates while continuing to read the same versioned JSON
 envelope. Grammar 20 claims `@dir/` record routes (older clients parse them as
 literal task text) and reports record parse metadata; `capture-complete` adds

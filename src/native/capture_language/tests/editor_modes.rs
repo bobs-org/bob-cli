@@ -1190,6 +1190,7 @@ fn editor_agrees_with_execution_for_resolved_captures() {
             // Record claims need a route policy; routing-off execution
             // never produces one, so this arm only satisfies the match.
             CaptureKind::RecordNote { .. } => EditorMode::RecordNote,
+            CaptureKind::RecordUpdate { .. } => EditorMode::RecordUpdate,
             CaptureKind::NotePull { .. } => EditorMode::NotePull,
         };
         assert_eq!(parse.mode, expected_mode, "{raw}");

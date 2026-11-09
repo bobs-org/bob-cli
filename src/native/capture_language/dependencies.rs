@@ -1923,7 +1923,7 @@ pub(crate) fn resolve_execution_ownership(
         CaptureKind::Transfer { .. } => {
             Err(unsupported_target_relation_error("task transfer", sigil))
         }
-        CaptureKind::RecordNote { .. } => {
+        CaptureKind::RecordNote { .. } | CaptureKind::RecordUpdate { .. } => {
             // Record items never carry modifiers: the record claim
             // refuses them before ownership resolves.
             Ok(None)

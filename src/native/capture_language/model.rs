@@ -209,6 +209,12 @@ pub(crate) enum CaptureKind {
     RecordNote {
         intent: RecordNoteIntent,
     },
+    /// An existing-record update (`@dir/stem`). The grammar and parse
+    /// preview understand the intent; capture execution stays fail closed
+    /// until the transactional update writer lands.
+    RecordUpdate {
+        intent: RecordNoteIntent,
+    },
     /// A whole-item `=/` Pomodoro split: split a merged Pomodoro's types
     /// into planned entries. The item must contain only the split token
     /// and have exactly one physical line; any extra text, markers, or

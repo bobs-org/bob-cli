@@ -727,7 +727,7 @@ fn capture_parse_reports_record_note_wire() {
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
     assert_eq!(json["schema_version"], 1);
-    assert_eq!(json["grammar"], 20);
+    assert_eq!(json["grammar"], 21);
     assert_eq!(json["mode"], "record_note");
     assert_eq!(json["record"]["assist_version"], 1);
     assert_eq!(json["route"], "eat");
@@ -739,4 +739,77 @@ fn capture_parse_reports_record_note_wire() {
         .map(|span| span["kind"].as_str().unwrap_or_default())
         .collect();
     assert!(kinds.contains(&"record_route"), "{kinds:?}");
+}
+
+#[test]
+fn capture_parse_reports_existing_record_values_and_update_ranges() {
+    let temp = TempDir::new("bob-cli-capture-record-update-parse");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(vault.join("eat")).expect("create eat folder");
+    let config = write_records_config(&temp);
+    write_file(
+        &vault.join("eat/ninja_sushi.md"),
+        "---\ntitle: Ninja Sushi\ntype: \"[[restaurant]]\"\ncreated: 2025-01-01 12:00\nstatus: to_try\ncategory: Sushi\nlocation: Clark\n---\n## Notes\n- 2025-01-02: First visit.\n",
+    );
+
+    let draft = "Went back, still great @eat/ninja_sushi\n- status:: liked";
+    let output = capture_parse(&vault, &config, draft);
+    assert_success(&output);
+    let json = json_output(&output);
+    assert_eq!(json["grammar"], 21);
+    assert_eq!(json["mode"], "record_update");
+    assert_eq!(json["body"], "Went back, still great");
+    assert_eq!(json["needs"], serde_json::json!([]));
+    let record = &json["record"];
+    assert_eq!(record["action"], "update");
+    assert_eq!(record["stem"], "ninja_sushi");
+    assert_eq!(record["stem_source"], "existing");
+    assert_eq!(record["title"], "Ninja Sushi");
+    assert_eq!(record["notes"], 1);
+    let status = record["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|field| field["key"] == "status")
+        .unwrap();
+    assert_eq!(status["value"], "liked");
+    assert_eq!(status["display"], "Liked");
+    assert_eq!(status["before"], "to_try");
+    assert_eq!(status["before_display"], "To try");
+    let (stem_start, stem_end) = json["spans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|span| span["kind"] == "record_stem")
+        .map(|span| {
+            (
+                span["start"].as_u64().unwrap() as usize,
+                span["end"].as_u64().unwrap() as usize,
+            )
+        })
+        .unwrap_or_else(|| {
+            panic!("record stem span missing: {}", json["spans"])
+        });
+    assert_eq!(&draft[stem_start..stem_end], "ninja_sushi");
+}
+
+#[test]
+fn capture_update_execution_stays_fail_closed() {
+    let (_temp, vault, config) = complete_fixture();
+    fs::create_dir_all(vault.join("eat")).expect("create eat folder");
+    let path = vault.join("eat/ninja_sushi.md");
+    let original = "---\ntitle: Ninja Sushi\ntype: \"[[restaurant]]\"\nstatus: liked\ncategory: Sushi\nlocation: Clark\n---\n## Notes\n";
+    write_file(&path, original);
+
+    let output = capture(
+        &vault,
+        &config,
+        &["--dry-run", "-f", "json", "Went back @eat/ninja_sushi"],
+    )
+    .output()
+    .expect("capture update remains reserved at the writer boundary");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    let json = json_output(&output);
+    assert_eq!(json["code"], "record_update_reserved");
+    assert_eq!(fs::read_to_string(path).unwrap(), original);
 }

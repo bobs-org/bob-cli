@@ -13,11 +13,11 @@ Report the authoritative capture grammar's view of TEXT.
 
 The grammar parse is lexical and read-only. For Pomodoro-name spans, the command also best-effort reads the configured vault's theme catalog and adds theme refs; if the catalog is unavailable, parsing still succeeds without those refs. It never writes to the vault or reads the clipboard, and takes no --bob-dir. A '%c' directive still succeeds without reading the clipboard.
 
-Success JSON reports `grammar: 20` for the capture-language revision while `schema_version` stays 1. Gmail URLs add `gmail_url` spans with offline `gmail: {verdict, date_hint?}`, decoded thread `key`, and saved-label `title`. No Gmail calls are made.
+Success JSON reports `grammar: 21` for the capture-language revision while `schema_version` stays 1. Gmail URLs add `gmail_url` spans with offline `gmail: {verdict, date_hint?}`, decoded thread `key`, and saved-label `title`. No Gmail calls are made.
 
 A lone task-list header `@route` with no section, bullets, or other text reports mode `note_pull`; `@route` with bullets remains a task list, and a lone `@route#section` remains an empty-list refusal.
 
-Configured record creation claims add a `record` object to the first item and its `items[]` row. It reports the selected type, destination, required fields, defaults, and field values; incomplete titles keep schema metadata and need `record_title`. Field `range` is present for one typed value, while `value_ranges[]` preserves separate source spans for repeated values.
+Configured record create and update claims add a `record` object to the first item and its `items[]` row. Updates resolve an exact existing stem and report the stored title, current/effective field values (`before` for changed fields), and historical warnings; only supplied required-empty fields need `record_value`. Creation reports required fields and defaults; incomplete titles need `record_title`. Field `range` is present for one typed value, while `value_ranges[]` preserves separate source spans for repeated values.
 
 Adjacent `@route+id` target markers at the start or end of one line fill one route slot. Capture-parse keeps one item and adds `targets[]` for runs; duplicate task identities and targets at opposite edges report the coded diagnostics `duplicate_capture_target` and `split_capture_targets`.
 
@@ -98,7 +98,7 @@ Examples:
   bob capture-parse -f json -- 'Ramen Nagi @eat/'
 
 Modes:
-  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_shift, pomodoro_link, pomodoro_close, pomodoro_past, pomodoro_start, task_dependency, task_complete, record_note, ref, incomplete
+  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_shift, pomodoro_link, pomodoro_close, pomodoro_past, pomodoro_start, task_dependency, task_complete, record_note, record_update, ref, incomplete
 
 Needs:
   route, section, block_id, pomodoro_id, pomodoro_name, task, drawer, active_task, task_link, task_goto, task_parent, pomodoro_close_task, pomodoro_close_log_text, pomodoro_start_task, task_dependency, blocked_task, relation_target, relation_label, dependency_target, task_complete, task_type, record_title, record_value

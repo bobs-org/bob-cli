@@ -5,8 +5,8 @@ description: Index of bob capture tokens with syntax, examples, and links into t
 
 # Capture syntax
 
-`bob capture` writes tasks, bullets, Record Notes, reference jobs, or Pomodoro changes from
-one draft; this index links the full [Capture contract](../capture.md).
+`bob capture` writes tasks, Record Notes, reference jobs, and Pomodoro changes.
+See the full [Capture contract](../capture.md).
 
 `@` chooses a destination; `#` names a section, drawer, or task type; `%` selects a
 capture directive. In completion, standalone `#` and `%` open menus.
@@ -20,8 +20,8 @@ Options precede the draft: an unknown alphabetic long option such as
 
 ## Token index
 
-Each row is a distinct operation; equivalent spellings share a heading.
-Incomplete picker input, labeled **picker**, is refused on submit.
+Each operation has one row; equivalent spellings share a heading. Submitting
+incomplete **picker** input is refused.
 
 | Token | Meaning | Heading |
 | --- | --- | --- |
@@ -34,7 +34,7 @@ Incomplete picker input, labeled **picker**, is refused on submit.
 | `%` | **Picker:** choose a capture directive | [Bare `%`](#percent-picker) |
 | `#` | **Picker:** choose a task type | [Bare `#`](#hash-picker) |
 | `@route` | Write a task to `<route>.md` | [`@route`](#at-route) |
-| `@dir/` / `@dir/^stem` / `@dir/stem` | Record create, explicit stem, or reserved update | [Record notes](#record-notes) |
+| `@dir/` / `@dir/^stem` / `@dir/stem` | Record create, explicit stem, or existing-record update | [Record notes](#record-notes) |
 | `@route#Section` | Ordinary bullet under a matching heading | [`@route#Section`](#at-route-section) |
 | `@route#` | Ordinary bullet under any non-`Tasks` heading | [`@route#`](#at-route-any-section) |
 | `@route^block-id` | New open task with a user-authored block ID | [`@route^block-id`](#at-route-caret) |
@@ -207,6 +207,9 @@ Ramen Nagi @eat/
 ```bash
 bob capture --dry-run -- "$(printf '%s\n' 'Ramen Nagi @eat/' '- status:: liked' '- category:: Ramen')"
 ```
+
+`@dir/stem` parses as `record_update`; the writer still refuses updates
+(`record_update_reserved`).
 
 ### `@@route` {#global-route}
 

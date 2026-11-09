@@ -412,7 +412,8 @@ pub(crate) fn parse_for_editor_with(
         .iter()
         .zip(item_outcomes.iter())
         .filter_map(|(raw_item, outcome)| {
-            (outcome.item.mode == EditorMode::RecordNote)
+            (outcome.item.mode == EditorMode::RecordNote
+                || outcome.item.mode == EditorMode::RecordUpdate)
                 .then(|| {
                     super::record::classify_record_item(
                         raw_item,
@@ -955,6 +956,7 @@ fn dependency_owner_mode_word(mode: EditorMode) -> &'static str {
         EditorMode::PomodoroStart => "Pomodoro-start",
         EditorMode::TaskComplete => "task-complete",
         EditorMode::RecordNote => "record-note",
+        EditorMode::RecordUpdate => "record-update",
         EditorMode::Ref => "reference",
         EditorMode::PomodoroLink | EditorMode::PomodoroTask => {
             "Pomodoro-ledger-link"
@@ -1611,8 +1613,8 @@ pub(super) fn parse_editor_item<'a>(
     parse_editor_item_with(item, &EditorParseOptions::routing_off())
 }
 
-/// Build the editor outcome for a claimed record item: mode
-/// `record_note` with the claim's needs, spans, and diagnostics.
+/// Build the editor outcome for a claimed record item with the claim's
+/// mode, needs, spans, and diagnostics.
 /// Notes stay out of `sub_bullets` so task-only editor tooling
 /// ignores them, exactly like the strict path.
 fn record_editor_outcome<'a>(
@@ -1627,7 +1629,7 @@ fn record_editor_outcome<'a>(
             line_start: item.line_start,
             line_end: item.line_end,
             body: view.body,
-            mode: EditorMode::RecordNote,
+            mode: view.mode,
             route: view.route,
             section: None,
             block_id: None,

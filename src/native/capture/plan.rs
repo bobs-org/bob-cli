@@ -166,16 +166,39 @@ pub(super) fn plan_capture_batch_with_config_path(
     )?;
     if (request.forced_clip.is_some()
         || parsed_draft.items.iter().any(|item| {
-            matches!(item.parsed.kind, CaptureKind::RecordNote { .. })
-                && item.parsed.clip.is_some()
+            matches!(
+                item.parsed.kind,
+                CaptureKind::RecordNote { .. }
+                    | CaptureKind::RecordUpdate { .. }
+            ) && item.parsed.clip.is_some()
         }))
         && parsed_draft.items.iter().any(|item| {
-            matches!(item.parsed.kind, CaptureKind::RecordNote { .. })
+            matches!(
+                item.parsed.kind,
+                CaptureKind::RecordNote { .. }
+                    | CaptureKind::RecordUpdate { .. }
+            )
         })
     {
         return Err(CaptureError::usage_code(
             "record notes do not support task clipboard modifiers; remove `--clip` or `%c`",
             "record_marker_unsupported",
+        ));
+    }
+    if let Some(intent) = parsed_draft.items.iter().find_map(|item| {
+        if let CaptureKind::RecordUpdate { intent } = &item.parsed.kind {
+            Some(intent)
+        } else {
+            None
+        }
+    }) {
+        return Err(CaptureError::usage_code(
+            format!(
+                "`@{}/{}` is recognized as a record update, but capture execution is not enabled yet; no files were changed",
+                intent.dir,
+                intent.update_stem.as_deref().unwrap_or_default(),
+            ),
+            capture_language::record::RECORD_UPDATE_RESERVED_CODE,
         ));
     }
     if parsed_draft.template.is_some() && request.forced_clip.is_some() {
@@ -209,7 +232,11 @@ pub(super) fn plan_capture_batch_with_config_path(
     let gmail_context = parsed_items
         .iter()
         .any(|item| {
-            if matches!(item.parsed.kind, CaptureKind::RecordNote { .. }) {
+            if matches!(
+                item.parsed.kind,
+                CaptureKind::RecordNote { .. }
+                    | CaptureKind::RecordUpdate { .. }
+            ) {
                 return false;
             }
             !crate::native::gmail::ids::find_gmail_urls(&item.parsed.body)
@@ -227,7 +254,11 @@ pub(super) fn plan_capture_batch_with_config_path(
     let gmail_previews: Vec<_> = parsed_items
         .iter_mut()
         .map(|item| {
-            if matches!(item.parsed.kind, CaptureKind::RecordNote { .. }) {
+            if matches!(
+                item.parsed.kind,
+                CaptureKind::RecordNote { .. }
+                    | CaptureKind::RecordUpdate { .. }
+            ) {
                 return Vec::new();
             }
             let Some(context) = &gmail_context else {
@@ -2595,6 +2626,9 @@ pub(super) fn plan_capture_item(
         CaptureKind::RecordNote { .. } => {
             unreachable!("record capture is planned by plan_record_note_item")
         }
+        CaptureKind::RecordUpdate { .. } => {
+            unreachable!("record update is refused before capture planning")
+        }
         CaptureKind::NotePull { .. } => {
             unreachable!("note-pull capture is planned by plan_note_pull_item")
         }
@@ -4352,6 +4386,7 @@ pub(super) fn capture_kind_label(kind: &CaptureKind) -> &'static str {
         CaptureKind::Ref(_) => "ref",
         CaptureKind::NotePull { .. } => "note_pull",
         CaptureKind::RecordNote { .. } => "record_note",
+        CaptureKind::RecordUpdate { .. } => "record_update",
     }
 }
 

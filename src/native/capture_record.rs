@@ -19,9 +19,9 @@ use super::{
     capture_language::record::RecordNoteIntent,
     config,
     records::{
-        self, FieldInputState, PlannedRecordProperty, RecordCatalog,
-        RecordDiagnostic, RecordFieldInput, RecordNoteInput, RecordPlanError,
-        RecordPlanErrorCode, RecordStemSource, RecordType,
+        self, FieldInputState, PlannedRecordProperty, PlannedUpdateProperty,
+        RecordCatalog, RecordDiagnostic, RecordFieldInput, RecordNoteInput,
+        RecordPlanError, RecordPlanErrorCode, RecordStemSource, RecordType,
     },
 };
 
@@ -72,15 +72,25 @@ impl CaptureRecordContext {
 pub(crate) struct RecordParseEntry {
     pub(crate) index: usize,
     pub(crate) intent: RecordNoteIntent,
+    pub(crate) action: RecordParseAction,
     pub(crate) record_type: RecordType,
+    pub(crate) title: Option<String>,
     pub(crate) path: Option<PathBuf>,
     pub(crate) stem: Option<String>,
     pub(crate) stem_source: Option<RecordStemSource>,
     pub(crate) properties: Vec<PlannedRecordProperty>,
+    pub(crate) update_properties: Vec<PlannedUpdateProperty>,
     pub(crate) missing: Vec<String>,
     pub(crate) invalid: Vec<RecordDiagnostic>,
+    pub(crate) warnings: Vec<RecordDiagnostic>,
     pub(crate) plan_issue: Option<RecordParseIssue>,
     pub(crate) near_values: Vec<records::NearValueHint>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecordParseAction {
+    Create,
+    Update,
 }
 
 #[derive(Debug, Clone)]
@@ -186,58 +196,207 @@ pub(crate) fn resolve_record_intents_with_catalog(
         let notes = record_note_inputs(intent);
         let near_values =
             collect_near_value_hints(catalog, record_type, intent);
-        let request = records::RecordCreateRequest {
-            config,
-            record_type: &record_type.id,
-            title: &intent.title,
-            explicit_stem: intent.explicit_stem.as_deref(),
-            fields: &field_inputs,
-            notes: &notes,
-            now,
-            timezone,
-            vault_root,
-            reserved_paths: &reserved_paths,
-        };
-        match records::plan_create(request, catalog) {
-            Ok(plan) => {
-                reserved_paths.push(plan.path.clone());
-                entries.push(RecordParseEntry {
-                    index: *index,
-                    intent: intent.clone(),
-                    record_type: record_type.clone(),
-                    path: Some(plan.path),
-                    stem: Some(plan.stem),
-                    stem_source: Some(plan.stem_source),
-                    properties: plan.properties,
-                    missing: plan.missing,
-                    invalid: plan.invalid,
-                    plan_issue: None,
-                    near_values,
-                });
-            }
-            Err(error) => {
-                let field_plan =
-                    records::plan_fields(record_type, &field_inputs, today);
-                let (stem, stem_source, path) =
-                    resolved_destination(intent, record_type);
-                if error.code != RecordPlanErrorCode::PathCollision
-                    && let Some(path) = path.as_ref()
-                {
-                    reserved_paths.push(path.clone());
+        match intent.action {
+            super::capture_language::record::RecordAction::Create => {
+                let request = records::RecordCreateRequest {
+                    config,
+                    record_type: &record_type.id,
+                    title: &intent.title,
+                    explicit_stem: intent.explicit_stem.as_deref(),
+                    fields: &field_inputs,
+                    notes: &notes,
+                    now,
+                    timezone,
+                    vault_root,
+                    reserved_paths: &reserved_paths,
+                };
+                match records::plan_create(request, catalog) {
+                    Ok(plan) => {
+                        reserved_paths.push(plan.path.clone());
+                        entries.push(RecordParseEntry {
+                            index: *index,
+                            intent: intent.clone(),
+                            action: RecordParseAction::Create,
+                            record_type: record_type.clone(),
+                            title: Some(plan.title.clone()),
+                            path: Some(plan.path),
+                            stem: Some(plan.stem),
+                            stem_source: Some(plan.stem_source),
+                            properties: plan.properties,
+                            update_properties: Vec::new(),
+                            missing: plan.missing,
+                            invalid: plan.invalid,
+                            warnings: Vec::new(),
+                            plan_issue: None,
+                            near_values,
+                        });
+                    }
+                    Err(error) => {
+                        let field_plan = records::plan_fields(
+                            record_type,
+                            &field_inputs,
+                            today,
+                        );
+                        let (stem, stem_source, path) =
+                            resolved_destination(intent, record_type);
+                        if error.code != RecordPlanErrorCode::PathCollision
+                            && let Some(path) = path.as_ref()
+                        {
+                            reserved_paths.push(path.clone());
+                        }
+                        entries.push(RecordParseEntry {
+                            index: *index,
+                            intent: intent.clone(),
+                            action: RecordParseAction::Create,
+                            record_type: record_type.clone(),
+                            title: Some(intent.title.clone()),
+                            path,
+                            stem,
+                            stem_source,
+                            properties: field_plan.properties,
+                            update_properties: Vec::new(),
+                            missing: field_plan.missing,
+                            invalid: field_plan.invalid,
+                            warnings: Vec::new(),
+                            plan_issue: Some(plan_issue(
+                                error,
+                                intent,
+                                record_type,
+                            )),
+                            near_values,
+                        });
+                    }
                 }
-                entries.push(RecordParseEntry {
-                    index: *index,
-                    intent: intent.clone(),
-                    record_type: record_type.clone(),
-                    path,
+            }
+            super::capture_language::record::RecordAction::Update => {
+                let stem = intent.update_stem.as_deref().unwrap_or_default();
+                let target = match records::resolve_update_target(
+                    config,
+                    catalog,
+                    &record_type.id,
                     stem,
-                    stem_source,
-                    properties: field_plan.properties,
-                    missing: field_plan.missing,
-                    invalid: field_plan.invalid,
-                    plan_issue: Some(plan_issue(error, intent, record_type)),
-                    near_values,
-                });
+                ) {
+                    Ok(target) => target,
+                    Err(error) => {
+                        entries.push(RecordParseEntry {
+                            index: *index,
+                            intent: intent.clone(),
+                            action: RecordParseAction::Update,
+                            record_type: record_type.clone(),
+                            title: None,
+                            path: None,
+                            stem: Some(stem.to_owned()),
+                            stem_source: Some(RecordStemSource::Existing),
+                            properties: Vec::new(),
+                            update_properties: Vec::new(),
+                            missing: Vec::new(),
+                            invalid: Vec::new(),
+                            warnings: Vec::new(),
+                            plan_issue: Some(RecordParseIssue {
+                                code: error.code.diagnostic_code(),
+                                message: error.message,
+                                range: intent
+                                    .stem_range
+                                    .map(|(start, end)| start..end),
+                            }),
+                            near_values,
+                        });
+                        continue;
+                    }
+                };
+                let original = match std::fs::read_to_string(
+                    vault_root.join(&target.path),
+                ) {
+                    Ok(original) => original,
+                    Err(error) => {
+                        entries.push(RecordParseEntry {
+                            index: *index,
+                            intent: intent.clone(),
+                            action: RecordParseAction::Update,
+                            record_type: record_type.clone(),
+                            title: Some(target.title.clone()),
+                            path: Some(target.path.clone()),
+                            stem: Some(target.stem.clone()),
+                            stem_source: Some(RecordStemSource::Existing),
+                            properties: Vec::new(),
+                            update_properties: Vec::new(),
+                            missing: Vec::new(),
+                            invalid: Vec::new(),
+                            warnings: Vec::new(),
+                            plan_issue: Some(RecordParseIssue {
+                                code: "record_invalid_value",
+                                message: format!(
+                                    "cannot read existing record {}: {error}",
+                                    target.path.display()
+                                ),
+                                range: intent
+                                    .stem_range
+                                    .map(|(start, end)| start..end),
+                            }),
+                            near_values,
+                        });
+                        continue;
+                    }
+                };
+                match records::plan_update(records::PlanUpdateRequest {
+                    target: &target,
+                    original: &original,
+                    fields: &field_inputs,
+                    notes: &notes,
+                    today,
+                }) {
+                    Ok(plan) => entries.push(RecordParseEntry {
+                        index: *index,
+                        intent: intent.clone(),
+                        action: RecordParseAction::Update,
+                        record_type: record_type.clone(),
+                        title: Some(plan.title.clone()),
+                        path: Some(plan.path),
+                        stem: Some(plan.stem),
+                        stem_source: Some(RecordStemSource::Existing),
+                        properties: Vec::new(),
+                        update_properties: plan.properties,
+                        missing: plan.missing,
+                        invalid: plan.invalid,
+                        warnings: plan.warnings,
+                        plan_issue: None,
+                        near_values,
+                    }),
+                    Err(error) => {
+                        let range = error
+                            .field
+                            .as_deref()
+                            .and_then(|key| {
+                                intent
+                                    .fields
+                                    .iter()
+                                    .find(|field| field.key == key)
+                                    .map(|field| field.value_range)
+                            })
+                            .or(intent.stem_range);
+                        entries.push(RecordParseEntry {
+                            index: *index,
+                            intent: intent.clone(),
+                            action: RecordParseAction::Update,
+                            record_type: record_type.clone(),
+                            title: Some(target.title),
+                            path: Some(target.path),
+                            stem: Some(target.stem),
+                            stem_source: Some(RecordStemSource::Existing),
+                            properties: Vec::new(),
+                            update_properties: Vec::new(),
+                            missing: Vec::new(),
+                            invalid: Vec::new(),
+                            warnings: Vec::new(),
+                            plan_issue: Some(RecordParseIssue {
+                                code: "record_invalid_value",
+                                message: error.to_string(),
+                                range: range.map(|(start, end)| start..end),
+                            }),
+                            near_values,
+                        });
+                    }
+                }
             }
         }
     }
@@ -361,6 +520,14 @@ pub(crate) fn record_note_inputs(
     intent: &RecordNoteIntent,
 ) -> Vec<RecordNoteInput> {
     let mut inputs = Vec::new();
+    if intent.action == super::capture_language::record::RecordAction::Update
+        && !intent.title.is_empty()
+    {
+        inputs.push(RecordNoteInput {
+            text: intent.title.clone(),
+            children: Vec::new(),
+        });
+    }
     for group in &intent.notes {
         if let Some(section) = group.section.as_deref() {
             let mut children = Vec::new();
@@ -420,7 +587,7 @@ fn note_child_texts(
 }
 
 /// Teaching copy for a path collision: name the existing file and the
-/// reserved update spelling without enabling an update.
+/// recognized update spelling without enabling an update write.
 pub(crate) fn collision_message(
     error: &RecordPlanError,
     intent: &RecordNoteIntent,
@@ -439,7 +606,7 @@ pub(crate) fn collision_message(
         .or(intent.explicit_stem.as_deref())
         .unwrap_or("<stem>");
     format!(
-        "record already exists: {path} (open it; adding to it with `@{}/{stem}` comes later)",
+        "record already exists: {path} (open it; capture recognizes `@{}/{stem}` for updates, but update writes are not active yet)",
         record_type.dir,
     )
 }

@@ -1920,6 +1920,7 @@ fn classify_merge_left(parsed: &ParsedCaptureText) -> MergeNeeds {
         | CaptureKind::Bullet { .. }
         | CaptureKind::PomodoroNote
         | CaptureKind::RecordNote { .. }
+        | CaptureKind::RecordUpdate { .. }
         | CaptureKind::NotePull { .. } => MergeNeeds::NoTask,
     }
 }

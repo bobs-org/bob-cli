@@ -633,6 +633,11 @@ pub(super) fn plan_capture_to_target(
                 "record-note capture invariant failed: wrong write planner",
             ));
         }
+        CaptureKind::RecordUpdate { .. } => {
+            return Err(CaptureError::io(
+                "record update was not refused before the write planner",
+            ));
+        }
     };
     planner.stage(target, updated)?;
     Ok(CaptureWritePlan {

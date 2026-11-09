@@ -81,6 +81,7 @@ impl RecordPropertyState {
 pub(crate) enum RecordStemSource {
     Title,
     Explicit,
+    Existing,
 }
 
 /// One schema property as interpreted for this creation request.

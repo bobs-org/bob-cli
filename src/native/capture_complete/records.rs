@@ -1088,6 +1088,14 @@ fn empty_entry(intent: &RecordNoteIntent) -> RecordParseEntry {
     RecordParseEntry {
         index: 0,
         intent: intent.clone(),
+        action: match intent.action {
+            super::super::capture_language::record::RecordAction::Create => {
+                super::super::capture_record::RecordParseAction::Create
+            }
+            super::super::capture_language::record::RecordAction::Update => {
+                super::super::capture_record::RecordParseAction::Update
+            }
+        },
         record_type: RecordType {
             id: intent.dir.clone(),
             dir: intent.dir.clone(),
@@ -1098,12 +1106,15 @@ fn empty_entry(intent: &RecordNoteIntent) -> RecordParseEntry {
             fields: Vec::new(),
             legacy: Vec::new(),
         },
+        title: None,
         path: None,
         stem: None,
         stem_source: None,
         properties: Vec::new(),
+        update_properties: Vec::new(),
         missing: Vec::new(),
         invalid: Vec::new(),
+        warnings: Vec::new(),
         plan_issue: None,
         near_values: Vec::new(),
     }

@@ -10,7 +10,7 @@ use super::super::record::{
     RecordRoutePolicy, RECORDS_CONFIG_INVALID_CODE, RECORD_FIELD_NESTED_CODE,
     RECORD_FOLDER_NOT_RECORD_CODE, RECORD_MARKER_UNSUPPORTED_CODE,
     RECORD_SHAPE_CODE, RECORD_STEM_CODE, RECORD_TITLE_CODE,
-    RECORD_TYPE_AS_FOLDER_CODE, RECORD_UPDATE_RESERVED_CODE,
+    RECORD_TYPE_AS_FOLDER_CODE,
 };
 use super::*;
 use crate::native::records::schema::parse_records_config;
@@ -199,12 +199,49 @@ fn forced_destination_keeps_record_text_literal() {
 }
 
 #[test]
-fn reserved_update_spelling_refuses_both_positions() {
-    assert_eq!(strict_code("@eat/ramen-nagi"), RECORD_UPDATE_RESERVED_CODE);
-    assert_eq!(
-        strict_code("Ramen @eat/ramen-nagi"),
-        RECORD_UPDATE_RESERVED_CODE
-    );
+fn update_spelling_claims_both_positions_and_keeps_existing_stems() {
+    for (raw, stem, note) in [
+        ("@eat/ninja_sushi Went back", "ninja_sushi", "Went back"),
+        ("Went back @eat/東京店", "東京店", "Went back"),
+    ] {
+        let parsed =
+            strict(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
+        let CaptureKind::RecordUpdate { intent } = parsed.kind else {
+            panic!("{raw}: expected RecordUpdate");
+        };
+        assert_eq!(intent.update_stem.as_deref(), Some(stem), "{raw}");
+        assert_eq!(intent.explicit_stem, None, "{raw}");
+        assert_eq!(intent.title, note, "{raw}");
+        assert_eq!(parsed.body, note, "{raw}");
+        assert_eq!(intent.action, super::super::record::RecordAction::Update);
+        let (start, end) = intent.stem_range.expect("target stem range");
+        assert_eq!(&raw[start..end], stem, "{raw}");
+        let editor = editor_parse(raw);
+        assert_eq!(editor.mode, EditorMode::RecordUpdate, "{raw}");
+        assert!(editor.needs.is_empty(), "{raw}");
+        assert!(editor.diagnostics.is_empty(), "{raw}");
+    }
+}
+
+#[test]
+fn route_only_update_has_no_title_need_and_parses_authored_notes() {
+    let only_route = editor_parse("@eat/ninja_sushi");
+    assert_eq!(only_route.mode, EditorMode::RecordUpdate);
+    assert!(only_route.needs.is_empty());
+    assert!(only_route.diagnostics.is_empty());
+
+    let parsed = strict(
+        "@eat/ninja_sushi\n- status:: liked\n- Still great\n  - Kelly agrees",
+    )
+    .expect("field-only and nested-note update");
+    let CaptureKind::RecordUpdate { intent } = parsed.kind else {
+        panic!("not a record update");
+    };
+    assert_eq!(intent.title, "");
+    assert_eq!(intent.fields[0].key, "status");
+    assert_eq!(intent.fields[0].value, "liked");
+    assert_eq!(intent.notes[0].lines[0].text, "Still great");
+    assert_eq!(intent.notes[0].lines[0].children[0].text, "Kelly agrees");
 }
 
 #[test]
@@ -577,14 +614,6 @@ fn editor_empty_values_need_record_value() {
     let item = editor_parse("@eat/ Ramen\n- location::");
     assert_eq!(item.mode, EditorMode::RecordNote);
     assert_eq!(item.needs, vec![Need::RecordValue]);
-}
-
-#[test]
-fn editor_update_spelling_reports_a_diagnostic() {
-    let item = editor_parse("@eat/ramen-nagi");
-    assert_eq!(item.mode, EditorMode::RecordNote);
-    assert_eq!(item.diagnostics.len(), 1);
-    assert_eq!(item.diagnostics[0].code, RECORD_UPDATE_RESERVED_CODE);
 }
 
 #[test]

@@ -46,9 +46,9 @@ pub(crate) mod transfer;
 mod type_marker;
 
 /// Revision of the capture grammar contract exposed to clients.
-/// Revision 20 claims `@dir/` record routes (see `record.rs`); older
-/// clients parse them as literal task text.
-pub(crate) const GRAMMAR_REVISION: u32 = 20;
+/// Revision 21 claims `@dir/stem` as a record update (see `record.rs`);
+/// older clients parse it as literal task text.
+pub(crate) const GRAMMAR_REVISION: u32 = 21;
 
 #[cfg(test)]
 mod tests;

@@ -186,18 +186,20 @@ command also best-effort reads the configured vault's theme catalog and adds \
 theme refs; if the catalog is unavailable, parsing still succeeds without \
 those refs. It never writes to the vault or reads the clipboard, and takes no \
 --bob-dir. A '%c' directive still succeeds without reading the clipboard.\n\n\
-Success JSON reports `grammar: 20` for the capture-language revision while \
+Success JSON reports `grammar: 21` for the capture-language revision while \
 `schema_version` stays 1. Gmail URLs add `gmail_url` spans with offline \
 `gmail: {verdict, date_hint?}`, decoded thread `key`, and saved-label `title`. \
 No Gmail calls are made.\n\n\
 A lone task-list header `@route` with no section, bullets, or other text \
 reports mode `note_pull`; `@route` with bullets remains a task list, and a \
 lone `@route#section` remains an empty-list refusal.\n\n\
-Configured record creation claims add a `record` object to the first item \
-and its `items[]` row. It reports the selected type, destination, required \
-fields, defaults, and field values; incomplete titles keep schema metadata \
-and need `record_title`. Field `range` is present for one typed value, while \
-`value_ranges[]` preserves separate source spans for repeated values.\n\n\
+Configured record create and update claims add a `record` object to the first \
+item and its `items[]` row. Updates resolve an exact existing stem and report \
+the stored title, current/effective field values (`before` for changed fields), \
+and historical warnings; only supplied required-empty fields need `record_value`. \
+Creation reports required fields and defaults; incomplete titles need `record_title`. \
+Field `range` is present for one typed value, while `value_ranges[]` preserves \
+separate source spans for repeated values.\n\n\
 Adjacent `@route+id` target markers at the start or end of one line fill one \
 route slot. Capture-parse keeps one item and adds `targets[]` for runs; \
 duplicate task identities and targets at opposite edges report the coded \
@@ -496,7 +498,7 @@ If TEXT is omitted and stdin is piped, it reads the complete piped stdin \
 stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-parse --format json -- 'Call bank @cash+'\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  bob capture-parse -f json -- '+5'\n  bob capture-parse -f json -- '-2'\n  bob capture-parse -f json -- '++3'\n  bob capture-parse -f json -- '--'\n  bob capture-parse -f json -- '+'\n  printf '++3\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n  bob capture-parse -f json -- 'x'\n  bob capture-parse -f json -- 'x1,3!2'\n  bob capture-parse -f json -- 'x1~2'\n  bob capture-parse -f json -- 'x0!2'\n  printf 'x\\n- 1 wired the lexer\\n' | bob capture-parse -f json\n  printf 'x\\n- 1\\n' | bob capture-parse -f json\n  printf 'x =\\n- 1 wired it\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '='\n  bob capture-parse -f json -- '=3'\n  bob capture-parse -f json -- '=~2'\n  bob capture-parse -f json -- '=bugs'\n  bob capture-parse -f json -- '=3bugs~1'\n  bob capture-parse -f json -- 'x =~2'\n  bob capture-parse -f json -- '@r:id=x'\n  bob capture-parse -f json -- '^r:id=x1'\n  printf 'x\\n\\n=\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '+2 x'\n  bob capture-parse -f json -- 'Buy Groceries! &foo:bar'\n  bob capture-parse -f json -- 'Ask Kelly *job:cleanup'\n  bob capture-parse -f json -- '&foo:bar @body+excercise'\n  bob capture-parse -f json -- '^r:id &foo:bar'\n  bob capture-parse -f json -- '&foo:bar +'\n  bob capture-parse -f json -- '&foo:bar'\n  bob capture-parse -f json -- 'Buy Groceries! &fo'\n  bob capture-parse -f json -- 'Fix trip ~work:foo'\n  bob capture-parse -f json -- 'Fix trip ~~work:foo|see'\n  bob capture-parse -f json -- '/fix'\n  bob capture-parse -f json -- 'Ramen Nagi @eat/'\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_shift, pomodoro_link, pomodoro_close, pomodoro_past, pomodoro_start, task_dependency, task_complete, record_note, ref, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, drawer, active_task, task_link, task_goto, task_parent, pomodoro_close_task, pomodoro_close_log_text, pomodoro_start_task, task_dependency, blocked_task, relation_target, relation_label, dependency_target, task_complete, task_type, record_title, record_value",
+            "Examples:\n  bob capture-parse --format json -- 'Call bank @cash+'\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  bob capture-parse -f json -- '+5'\n  bob capture-parse -f json -- '-2'\n  bob capture-parse -f json -- '++3'\n  bob capture-parse -f json -- '--'\n  bob capture-parse -f json -- '+'\n  printf '++3\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n  bob capture-parse -f json -- 'x'\n  bob capture-parse -f json -- 'x1,3!2'\n  bob capture-parse -f json -- 'x1~2'\n  bob capture-parse -f json -- 'x0!2'\n  printf 'x\\n- 1 wired the lexer\\n' | bob capture-parse -f json\n  printf 'x\\n- 1\\n' | bob capture-parse -f json\n  printf 'x =\\n- 1 wired it\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '='\n  bob capture-parse -f json -- '=3'\n  bob capture-parse -f json -- '=~2'\n  bob capture-parse -f json -- '=bugs'\n  bob capture-parse -f json -- '=3bugs~1'\n  bob capture-parse -f json -- 'x =~2'\n  bob capture-parse -f json -- '@r:id=x'\n  bob capture-parse -f json -- '^r:id=x1'\n  printf 'x\\n\\n=\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '+2 x'\n  bob capture-parse -f json -- 'Buy Groceries! &foo:bar'\n  bob capture-parse -f json -- 'Ask Kelly *job:cleanup'\n  bob capture-parse -f json -- '&foo:bar @body+excercise'\n  bob capture-parse -f json -- '^r:id &foo:bar'\n  bob capture-parse -f json -- '&foo:bar +'\n  bob capture-parse -f json -- '&foo:bar'\n  bob capture-parse -f json -- 'Buy Groceries! &fo'\n  bob capture-parse -f json -- 'Fix trip ~work:foo'\n  bob capture-parse -f json -- 'Fix trip ~~work:foo|see'\n  bob capture-parse -f json -- '/fix'\n  bob capture-parse -f json -- 'Ramen Nagi @eat/'\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_shift, pomodoro_link, pomodoro_close, pomodoro_past, pomodoro_start, task_dependency, task_complete, record_note, record_update, ref, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, drawer, active_task, task_link, task_goto, task_parent, pomodoro_close_task, pomodoro_close_log_text, pomodoro_start_task, task_dependency, blocked_task, relation_target, relation_label, dependency_target, task_complete, task_type, record_title, record_value",
         )
         .disable_help_flag(true)
         .arg(format_arg())
@@ -611,8 +613,8 @@ struct CaptureParseResult {
     /// byte-identical to today.
     #[serde(skip_serializing_if = "Option::is_none")]
     relation_grammar: Option<u8>,
-    /// Additive record creation metadata for the first item. Omitted for
-    /// ordinary task captures and reserved update spellings.
+    /// Additive record create/update metadata for the first item. Omitted for
+    /// ordinary task captures and unclaimed route spellings.
     #[serde(skip_serializing_if = "Option::is_none")]
     record: Option<ParseRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -901,6 +903,10 @@ struct ParseRecordField {
     state: &'static str,
     value: Option<serde_json::Value>,
     display: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    before: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    before_display: Option<String>,
     source: Option<&'static str>,
     range: Option<SourceRange>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -2710,6 +2716,14 @@ fn map_template_record_entry(
             }
         }
     }
+    for property in &mut entry.update_properties {
+        if let Some(ranges) = property.source_ranges.as_mut() {
+            for range in ranges {
+                let (start, end) = map((range.start, range.end));
+                *range = start..end;
+            }
+        }
+    }
     for hint in &mut entry.near_values {
         let (start, end) =
             map((hint.source_range.start, hint.source_range.end));
@@ -3123,7 +3137,10 @@ fn parse_record(
     entry: &super::capture_record::RecordParseEntry,
 ) -> ParseRecord {
     ParseRecord {
-        action: "create",
+        action: match entry.action {
+            super::capture_record::RecordParseAction::Create => "create",
+            super::capture_record::RecordParseAction::Update => "update",
+        },
         record_type: entry.record_type.id.clone(),
         label: entry.record_type.label.clone(),
         emoji: entry.record_type.emoji.clone(),
@@ -3133,8 +3150,12 @@ fn parse_record(
         stem_source: entry.stem_source.map(|source| match source {
             super::records::RecordStemSource::Title => "title",
             super::records::RecordStemSource::Explicit => "explicit",
+            super::records::RecordStemSource::Existing => "existing",
         }),
-        title: entry.intent.title.clone(),
+        title: entry
+            .title
+            .clone()
+            .unwrap_or_else(|| entry.intent.title.clone()),
         missing: entry.missing.clone(),
         notes: entry
             .intent
@@ -3142,8 +3163,22 @@ fn parse_record(
             .iter()
             .filter(|group| group.section.is_none())
             .map(|group| group.lines.len())
-            .sum(),
-        fields: entry.properties.iter().map(parse_record_field).collect(),
+            .sum::<usize>()
+            + usize::from(
+                entry.action
+                    == super::capture_record::RecordParseAction::Update
+                    && !entry.intent.title.is_empty(),
+            ),
+        fields: match entry.action {
+            super::capture_record::RecordParseAction::Create => {
+                entry.properties.iter().map(parse_record_field).collect()
+            }
+            super::capture_record::RecordParseAction::Update => entry
+                .update_properties
+                .iter()
+                .map(parse_update_record_field)
+                .collect(),
+        },
         assist_version: Some(super::capture_language::RECORD_ASSIST_VERSION),
     }
 }
@@ -3192,10 +3227,68 @@ fn parse_record_field(
             .as_ref()
             .map(super::capture_record::record_value_json),
         display: field.display.clone(),
+        before: None,
+        before_display: None,
         source: field.source.map(|source| match source {
             RecordPropertySource::Typed => "typed",
             RecordPropertySource::Default => "default",
         }),
+        range: (ranges.len() == 1).then(|| ranges[0]),
+        value_ranges: if ranges.len() > 1 { ranges } else { Vec::new() },
+        choices,
+    }
+}
+
+fn parse_update_record_field(
+    field: &super::records::PlannedUpdateProperty,
+) -> ParseRecordField {
+    use super::records::FieldKind;
+
+    let ranges = field
+        .source_ranges
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(|range| SourceRange {
+            start: range.start,
+            end: range.end,
+        })
+        .collect::<Vec<_>>();
+    let choices = match &field.kind {
+        FieldKind::Choices(choices) => choices
+            .iter()
+            .map(|choice| ParseRecordChoice {
+                value: choice.value.clone(),
+                label: choice.label.clone(),
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    ParseRecordField {
+        key: field.key.clone(),
+        label: field.label.clone(),
+        kind: match &field.kind {
+            FieldKind::Text => "text",
+            FieldKind::Choices(_) => "choices",
+            FieldKind::Date => "date",
+            FieldKind::Link => "link",
+            FieldKind::Url => "url",
+            FieldKind::Number => "number",
+        },
+        required: field.required,
+        list: field.list,
+        state: field.state.as_str(),
+        value: field
+            .value
+            .as_ref()
+            .map(super::capture_record::record_value_json),
+        display: field.display.clone(),
+        before: field
+            .current
+            .as_ref()
+            .map(super::capture_record::record_value_json),
+        before_display: field.current_display.clone(),
+        source: field.source.map(|_| "typed"),
         range: (ranges.len() == 1).then(|| ranges[0]),
         value_ranges: if ranges.len() > 1 { ranges } else { Vec::new() },
         choices,
@@ -3271,6 +3364,23 @@ fn record_parse_diagnostics(
                 range: range.filter(|(start, end)| {
                     *start <= *end && *end <= input.len()
                 }),
+                rewrite: None,
+            });
+        }
+        for warning in &entry.warnings {
+            let field = warning
+                .field
+                .as_deref()
+                .map(|field| format!(" `{field}`"))
+                .unwrap_or_default();
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                code: "record_existing_warning",
+                message: format!(
+                    "existing record{field}: {}; review it with `bob records check`",
+                    warning.message,
+                ),
+                range: None,
                 rewrite: None,
             });
         }
@@ -3471,6 +3581,10 @@ fn merge_spans(
                 previous.kind == span.kind
             } else {
                 previous.end > span.start
+                    && !(previous.kind
+                        == capture_language::SpanKind::RecordRoute
+                        && span.kind == capture_language::SpanKind::RecordStem
+                        && span.end <= previous.end)
             }
         }) {
             continue;
@@ -4645,7 +4759,7 @@ mod tests {
         let value = json("Call bank @Cash+");
         assert_eq!(value["ok"], true);
         assert_eq!(value["schema_version"], 1);
-        assert_eq!(value["grammar"], 20);
+        assert_eq!(value["grammar"], 21);
         assert_eq!(value["input"], "Call bank @Cash+");
         assert_eq!(value["body"], "Call bank");
         assert_eq!(value["mode"], "incomplete");
@@ -4709,7 +4823,7 @@ mod tests {
         // "start a list" from it.
         let value = json("@sase");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 20);
+        assert_eq!(value["grammar"], 21);
         assert_eq!(value["mode"], "note_pull");
         assert_eq!(value["route"], "sase");
         assert!(value["section"].is_null());
@@ -5494,10 +5608,10 @@ mod tests {
     }
 
     #[test]
-    fn json_reports_merge_in_wire_shape_and_grammar_20() {
+    fn json_reports_merge_in_wire_shape_and_grammar_21() {
         let value = json("New task < @a+x @b+y");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 20);
+        assert_eq!(value["grammar"], 21);
         assert_eq!(value["schema_version"], 1);
         assert_eq!(value["mode"], "task");
         let merge_in = value.get("merge_in").expect("merge_in");

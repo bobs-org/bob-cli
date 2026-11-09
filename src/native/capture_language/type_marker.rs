@@ -1073,7 +1073,8 @@ impl TypeMarkerSubject {
             CaptureKind::TaskToggle { .. } => Self::TaskToggle,
             // A record claim refuses type markers first, so a marker
             // never survives beside a record kind; unreachable.
-            CaptureKind::RecordNote { .. } => Self::NewTask,
+            CaptureKind::RecordNote { .. }
+            | CaptureKind::RecordUpdate { .. } => Self::NewTask,
             CaptureKind::PomodoroClose { .. } => Self::Close,
             CaptureKind::PomodoroPast { .. } => Self::Close,
             CaptureKind::PomodoroStart { .. } => Self::Start,

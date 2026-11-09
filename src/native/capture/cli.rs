@@ -23,8 +23,10 @@ pub(crate) fn build_cli() -> ClapCommand {
             "Capture one or more tasks, bullets, or record notes into the Bob Obsidian vault.\n\n\
 A configured `@dir/` or `@dir/^stem` item creates a Record Note in that folder \
 instead of a task. First-level `key:: value` bullets set schema fields; other \
-first-level bullets become notes. `@dir/stem` without a caret is reserved until \
-capture can append to an existing note. A local record route wins over a \
+first-level bullets become notes. `@dir/stem` identifies an existing record \
+update for parsing and preview, including current field values and exact source \
+ranges. Capture execution still refuses updates with `record_update_reserved` \
+until transactional writes are enabled. A local record route wins over a \
 draft-wide `@@route`. Incomplete or invalid records refuse the whole draft \
 before any writes. Record types come from the `records:` config block; they \
 are not Task Types (`#fix`). See docs/records.md and docs/capture.md \

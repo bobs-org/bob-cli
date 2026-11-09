@@ -281,6 +281,9 @@ pub(crate) enum EditorMode {
     /// A record creation item (`@dir/` route-first or title-first,
     /// with optional `@dir/^stem`). Retains raw syntax while typing.
     RecordNote,
+    /// An existing-record update (`@dir/stem`). Retains raw syntax while
+    /// typing and exposes the target's current fields through parse output.
+    RecordUpdate,
     /// A whole-item bare URL admitted by the routing policy.
     Ref,
     /// A lone `@route` header that pulls that note's tasks (§12.20).
@@ -312,6 +315,7 @@ impl EditorMode {
             Self::TaskDependency => "task_dependency",
             Self::TaskComplete => "task_complete",
             Self::RecordNote => "record_note",
+            Self::RecordUpdate => "record_update",
             Self::Ref => "ref",
             Self::NotePull => "note_pull",
             Self::Incomplete => "incomplete",
