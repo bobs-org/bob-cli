@@ -689,7 +689,7 @@ pub fn docs_catalog() -> Vec<DocsCatalogSection> {
 const SUBCOMMANDS: &[Subcommand] = &[
     Subcommand {
         name: "capture",
-        about: "Capture tasks, bullets, and Pomodoro commands into the vault",
+        about: "Capture tasks, bullets, record notes, and Pomodoro commands into the vault",
         section: Section::DailyWorkflow,
         target: Target::Leaf(Leaf {
             native_command: NativeCommand::Capture,
@@ -1019,7 +1019,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "capture-targets",
-        about: "List inbox, area, and active project capture routes",
+        about: "List capture routes for inbox, area, project, and record notes",
         section: Section::CaptureProtocol,
         target: Target::Leaf(Leaf {
             native_command: NativeCommand::CaptureTargets,

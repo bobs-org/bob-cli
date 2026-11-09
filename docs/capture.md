@@ -1,6 +1,6 @@
 # Capture
 
-`bob capture` writes tasks and bullets, queues bare public links as background
+`bob capture` writes tasks, bullets, and Record Notes, queues bare public links as background
 reference jobs, and manages Pomodoro sessions without opening desktop
 Obsidian. The job confirmation says reading queue. The background job files
 the note when it runs; a queued clip appears in `bob ref list` after the
@@ -58,6 +58,7 @@ workflow guide.
   - [Chaining session operators on one line](#chaining-session-operators-on-one-line)
   - [Project notes](#project-notes)
     - [Offer a new project's tasks](#offer-a-new-projects-tasks)
+  - [Record notes](#record-notes)
   - [Sub-bullets under existing tasks](#sub-bullets-under-existing-tasks)
     - [Moving and merging tasks with `>`](#moving-and-merging-tasks-with)
     - [Merging tasks into a new task with `<`](#merging-tasks-into-a-new-task-with)
@@ -98,6 +99,10 @@ anything is written, and any failure rolls the whole batch back.
 | `@@route` | Shared task destination, anywhere in the draft, for otherwise-unrouted items; also routes default (routeless) refs (source `global`) |
 | `%t` | Mark the draft's first item as a [template](#bulk-templates): expand one capture item per row below it; captures exactly like the expansion |
 | `@route` with task text | Write a task to `<route>.md` (default route is `mac_inbox`) |
+| `Title @dir/` or `@dir/ Title` | Create a Record Note in that configured folder (see [Record notes](#record-notes)) |
+| `Title @dir/^stem` | Same, with an explicit filename stem |
+| `Title @dir/stem` | Reserved: refused until capture can append to an existing note |
+| `Title @eat` | Stays a task; warns `record_collection_route` and teaches `@eat/` |
 | `@route+id @route+id <note>` | Apply the same note, child bullets, and item operations to each named existing task (see [Several tasks on one line](#several-tasks-on-one-line)) |
 | `@route` alone on its line, with no bullets or other markers | Pull the note's unlinked, unblocked Pending, Next, and Ready tasks into today's Pomodoros through the explicit Pull-In choice; see [Pulling ready tasks from a note](#pulling-ready-tasks-from-a-note) |
 | `- ^<id>` in a sealed project-note item | Move that open top-level task from the parent note into this slot in the new project's `## Tasks` section; see [Moving parent tasks in](#moving-parent-tasks-in) |
@@ -6439,6 +6444,76 @@ closes, blocks, or links a task this item created drops that task's offer
 draft stays atomic: a failure in a later item, an unknown pick, or a
 refusal writes nothing, including the project note.
 
+### Record notes
+
+A Record Note is one durable thing of a config-declared record type, such as
+a restaurant in `eat/`. Record types live under `records:` in Bob's
+configuration; they are not Task Types (`#fix`, `bob types`). See
+[Record notes](records.md) for schema, rendering, and `bob records`.
+
+When `records:` names a folder, a leading or trailing `@dir/` or
+`@dir/^stem` claims the item as record creation **before** transfer,
+dependency, directive, type, task-ID, or ordinary task-bullet parsing.
+Route-first (`@eat/ Ramen Nagi`) and title-first (`Ramen Nagi @eat/`) are
+the same claim. A bare `@eat/` needs a title (`record_title`); it is never
+a task-list header or a note pull. `%t` expands across record rows. A local
+record route wins over a draft-wide `@@route`; sibling tasks still inherit
+that declaration.
+
+```text
+Ramen Nagi @eat/
+- status:: liked
+- category:: Ramen
+- location:: Clark
+- visited:: today
+- Spicy tuna was great.
+```
+
+This creates `eat/ramen_nagi.md` through the records planner and the
+existing no-replace installer. First-level `key:: value` bullets become
+field inputs (unknown keys stay fields so validation can teach the
+correction). Other first-level bullets, including ALL-CAPS section titles
+with nested bullets, become notes. Field values are opaque: URLs, wikilinks,
+and task sigils inside a `key:: value` are schema-checked only. Nested
+bullets under a field refuse with `record_field_nested`. A first-level
+`key: value` with one colon stays a note and warns
+`record_field_single_colon`.
+
+Only a configured folder claims creation. An existing non-record folder
+yields `record_folder_not_record`. A configured type id used as the folder
+(`@restaurant/`) yields `record_type_as_folder` and names the real
+directory. Unknown `@notafolder/` stays literal task text. A malformed
+`records:` block yields `records_config_invalid` for record candidates;
+unrelated capture keeps working.
+
+`@eat/ramen_nagi` without a caret is the reserved update spelling. Capture
+refuses it with `record_update_reserved` and teaches that adding to the
+existing file comes later. Forced-destination flags (`--route` and friends)
+and escaped `\@eat/` keep the text literal. Task markers outside field
+values (`#TYPE`, `s:N`, `$N`, `%c`, `%n`, `%l`, `&`, `*`, `~`, `!`, `+`,
+`:`, session operators, task-ID bullets) refuse with
+`record_marker_unsupported`.
+
+`Blaze @eat` stays a task. Parse adds `record_collection_route` plus a
+rewrite that replaces only the route token with `@eat/`. Applying that
+rewrite parses as record creation. Heading, task-ID, escaped, and
+forced-literal routes do not get the warning.
+
+`--dry-run` prints `would create` plus the exact Markdown that commit
+writes. Success names the type emoji, `new restaurant` (or the configured
+label), path, field displays, and note count. JSON adds top-level
+`note_files` (omitted when empty) with `path`, `action: "create"`,
+`record_type`, `properties`, `body`, and `markdown`; dry-run and commit
+share those bytes. `kind` is `"record_note"`. Incomplete records exit 2
+without prompting and print a ready-to-copy draft; a later-item failure
+rolls the whole batch back, including earlier tasks. Collisions use
+`record_exists` and never suffix a filename. Record-only drafts do not
+touch the daily note or `mac_inbox.md`.
+
+Exact token forms live in
+[Capture syntax](reference/capture-syntax.md#record-notes). Wire examples
+live in [JSON outputs](reference/json-outputs.md#record-notes).
+
 ### Sub-bullets under existing tasks
 
 Use a leading or trailing `@<route>+<block-id>` marker to capture an ordinary
@@ -7250,10 +7325,12 @@ drafts without `%t` it returns the original text. The
 `kind` field is `"task"`, `"bullet"`, `"pomodoro_task"`,
 `"pomodoro_note"`, `"sub_bullet"`, `"task_toggle"`, `"project_note"`,
 `"pomodoro_adjust"`, `"pomodoro_shift"`, `"pomodoro_start"`,
-`"pomodoro_close"`, `"pomodoro_link"`, `"note_pull"`, `"task_dependency"`, `"task_complete"`, `"task_move"`, `"task_merge"`, or `"ref"`, and
+`"pomodoro_close"`, `"pomodoro_link"`, `"note_pull"`, `"task_dependency"`, `"task_complete"`, `"task_move"`, `"task_merge"`, `"record_note"`, or `"ref"`, and
 `task_line` holds the rendered line for any kind — for `"project_note"` it is
-the rendered `^prj` line, and for `"pomodoro_link"` it is the linked task's
-post-image line. On JSON-mode failures, stdout is still a
+the rendered `^prj` line, for `"record_note"` it is empty (the new file lives in
+`relative_target` and `note_files`), and for `"pomodoro_link"` it is the linked task's
+post-image line. A record creation also adds batch-level `note_files` (omitted
+when empty); see [Record notes](#record-notes). On JSON-mode failures, stdout is still a
 single object with `ok: false` and an `error` string. Template framing and
 refusal errors include their stable `template_*` code. `code` also appears on
 `pull_in_choice_required`,
@@ -8144,17 +8221,20 @@ complete piped stdin stream, like `bob capture`. Only a missing `TEXT` or a
 bad flag is an error (exit 2); every other input succeeds.
 
 When `records:` is configured, a claimed `@dir/` record draft adds a
-`record` object to the result and its item row. The object includes the type,
-label, destination `path` and `stem`, title, missing required fields, count of
+`record` object to the result and its item row. The object includes `action:
+"create"`, the type, label, emoji, `dir`, destination `path` and `stem`,
+`stem_source` (`title` or `explicit`), title, missing required fields, count of
 ordinary note bullets, and schema-ordered `fields`. Each field reports its
 kind, required/list flags, state (`set`, `default`, `missing`, `invalid`, or
 `none`), value, display text, and source. A single typed value has a `range`;
 repeated values use separate `value_ranges[]` so intervening note bullets are
-never included. Incomplete titles retain the schema fields and need
-`record_title`; missing required values need `record_value`. A `key: value`
-bullet stays a note and produces `record_field_single_colon`; use
+never included. Incomplete titles retain the schema fields, leave `path` null,
+and need `record_title`; missing required values need `record_value`. A
+`key: value` bullet stays a note and produces `record_field_single_colon`; use
 `key:: value` to set a declared field. The parser resolves defaults and
 validates typed values through the records planner without writing a note.
+See [Record notes](#record-notes) and
+[JSON outputs](reference/json-outputs.md#record-notes).
 
 `bob capture-targets` appends configured record folders after inbox, area, and
 project routes. JSON record rows have `kind: "record"`, `type`, `emoji`, and
@@ -9854,13 +9934,15 @@ list and call `bob capture` directly:
 
 On a successful scan, `capture-targets` returns `mac_inbox` first even when
 `mac_inbox.md` does not exist, followed by top-level area notes and
-non-terminal project notes, with each group sorted by route. Eligible note
+non-terminal project notes, with each group sorted by route, then configured
+record folders (route `dir/`, `kind: "record"`). Eligible note
 filenames must already be lowercase and may contain only ASCII letters,
 digits, `_`, and `-`. Area and project classification comes from YAML
 frontmatter `type: "[[area]]"` or `type: "[[project]]"`; the equivalent bare
 values are also accepted. Nested notes, projects whose status is `done`,
 `canceled`, or `cancelled` (case-insensitively), and other note types are
-omitted. Human output groups routes by kind. JSON output has `ok`, `bob_dir`,
+omitted. Record rows add `type`, `emoji`, and indexed note `count`; they are
+omitted when `records:` is absent or invalid. Human output groups routes by kind (record rows under “Record folders”). JSON output has `ok`, `bob_dir`,
 `count`, and an ordered `targets` array; each target has `route`, `name`,
 `label`, `kind`, `is_default`, `status`, `relative_path`, and
 `project_name_aliases` (the note's external names, `[]` when it has none;

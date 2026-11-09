@@ -18,6 +18,12 @@
   location: /reference/capture-syntax/#cli-route
 - query: "@@route"
   location: /reference/capture-syntax/#global-route
+- query: "@dir/"
+  location: /reference/capture-syntax/#record-notes
+- query: "@dir/^stem"
+  location: /reference/capture-syntax/#record-notes
+- query: "@dir/stem"
+  location: /reference/capture-syntax/#record-notes
 - query: "%t"
   location: /reference/capture-syntax/#template
 - query: "directive menu"

@@ -426,8 +426,8 @@ fn document_shape() {
             .collect::<Vec<_>>(),
         vec!["daily", "tasks", "vault", "integrations", "setup"]
     );
-    assert_eq!(catalog.entries.len(), 79);
-    assert_eq!(ENTRIES.len(), 79);
+    assert_eq!(catalog.entries.len(), 83);
+    assert_eq!(ENTRIES.len(), 83);
     assert!(catalog.entries.iter().any(|entry| entry.id == "plan"));
     assert!(catalog
         .entries

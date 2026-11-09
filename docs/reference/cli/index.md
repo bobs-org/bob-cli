@@ -12,7 +12,7 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 
 | Command | What it does |
 | --- | --- |
-| [`bob capture`](capture.md) | Capture tasks, bullets, and Pomodoro commands into the vault |
+| [`bob capture`](capture.md) | Capture tasks, bullets, record notes, and Pomodoro commands into the vault |
 | [`bob freshness`](freshness.md) | Walk the tiered freshness review queue |
 | [`bob plan`](plan.md) | Show today's plan budget, Today's tasks, and NEXT/PENDING lanes |
 | [`bob pomodoro`](pomodoro.md) | Show Pomodoro status, print the tmux line, or notify on completion |
@@ -105,7 +105,7 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob capture-related`](capture-related.md) | List existing tasks that a new capture may duplicate |
 | [`bob capture-rewrite`](capture-rewrite.md) | Apply the capture grammar's automatic draft rewrites |
 | [`bob capture-sections`](capture-sections.md) | List the non-Tasks sections of a capture note |
-| [`bob capture-targets`](capture-targets.md) | List inbox, area, and active project capture routes |
+| [`bob capture-targets`](capture-targets.md) | List capture routes for inbox, area, project, and record notes |
 | [`bob capture-task-id`](capture-task-id.md) | Write a block ID onto an open capture task |
 | [`bob capture-tasks`](capture-tasks.md) | List the open tasks of a capture note |
 | [`bob capture-templates`](capture-templates.md) | List, save, show, and manage saved capture templates |
@@ -127,7 +127,8 @@ its own options.
 Usage: bob <COMMAND>
 
 Daily workflow:
-  capture      Capture tasks, bullets, and Pomodoro commands into the vault
+  capture      Capture tasks, bullets, record notes, and Pomodoro commands into
+               the vault
   freshness    Walk the tiered freshness review queue
   plan         Show today's plan budget, Today's tasks, and NEXT/PENDING lanes
   pomodoro     Show Pomodoro status, print the tmux line, or notify on
@@ -173,7 +174,8 @@ Capture protocol:
   capture-related        List existing tasks that a new capture may duplicate
   capture-rewrite        Apply the capture grammar's automatic draft rewrites
   capture-sections       List the non-Tasks sections of a capture note
-  capture-targets        List inbox, area, and active project capture routes
+  capture-targets        List capture routes for inbox, area, project, and
+                         record notes
   capture-task-id        Write a block ID onto an open capture task
   capture-tasks          List the open tasks of a capture note
   capture-templates      List, save, show, and manage saved capture templates

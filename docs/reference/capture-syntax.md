@@ -5,17 +5,13 @@ description: Index of bob capture tokens with syntax, examples, and links into t
 
 # Capture syntax
 
-`bob capture` writes tasks, bullets, reference jobs, or Pomodoro changes from
+`bob capture` writes tasks, bullets, Record Notes, reference jobs, or Pomodoro changes from
 one draft; this index links the full [Capture contract](../capture.md).
 
 `@` chooses a destination; `#` names a section, drawer, or task type; `%` selects a
 capture directive. In completion, standalone `#` and `%` open menus.
 
-Examples use a synthetic vault (`BOB_NOW=2026-10-20 12:00:00`, `TZ=UTC`),
-with network, sync, and hooks disabled. [First Bob day](../start/first-bob-day.md)
-supplies a demo. Session examples need an open `## Pomodoros` entry;
-dependencies need Obsidian Tasks settings defining Blocked as `?`. Single-quote
-Zsh drafts (`'=focus'`, `'x =focus'`) to avoid shell expansion.
+Examples use a synthetic vault (`BOB_NOW=2026-10-20 12:00:00`, `TZ=UTC`).
 
 Options precede the draft: an unknown alphabetic long option such as
 `--anything` is rejected before draft text begins but literal after it, and
@@ -38,6 +34,7 @@ Incomplete picker input, labeled **picker**, is refused on submit.
 | `%` | **Picker:** choose a capture directive | [Bare `%`](#percent-picker) |
 | `#` | **Picker:** choose a task type | [Bare `#`](#hash-picker) |
 | `@route` | Write a task to `<route>.md` | [`@route`](#at-route) |
+| `@dir/` / `@dir/^stem` / `@dir/stem` | Record create, explicit stem, or reserved update | [Record notes](#record-notes) |
 | `@route#Section` | Ordinary bullet under a matching heading | [`@route#Section`](#at-route-section) |
 | `@route#` | Ordinary bullet under any non-`Tasks` heading | [`@route#`](#at-route-any-section) |
 | `@route^block-id` | New open task with a user-authored block ID | [`@route^block-id`](#at-route-caret) |
@@ -147,6 +144,7 @@ Bob teaches the replacement.
 | `@route^id+` / `@route:id+` (with or without `#pomodoro`) | Retired project-note forms; write `@route:id@` to choose which tasks to link or `@route^id@` to link none |
 | `@route^id#pomodoro@` / `@route:id#pomodoro@` | Error: the seal goes right after the ID (`@route:id@#pomodoro`) |
 | `@route::id` | Retired ordinary block-ID form; write `@route^id` |
+
 | `#now` / a free `#tag` at an item edge | Refused with `type_not_configured` unless the name is configured; a bare `@route` adds the heading hint |
 | `t:fix` | Ordinary prose; `t:` is retired as a type marker |
 | `x#bugs` | Error: `x` always closes the running session; write `x =bugs` to close then start |
@@ -193,6 +191,22 @@ bob capture 'Review the queue input'
 ```
 
 Contract: [Routing and insertion](../capture.md#routing-and-insertion).
+
+## Record notes
+
+### `@dir/` / `@dir/^stem` / `@dir/stem` {#record-notes}
+
+See [Capture](../capture.md#record-notes).
+
+```text
+Ramen Nagi @eat/
+- status:: liked
+- category:: Ramen
+```
+
+```bash
+bob capture --dry-run -- "$(printf '%s\n' 'Ramen Nagi @eat/' '- status:: liked' '- category:: Ramen')"
+```
 
 ### `@@route` {#global-route}
 

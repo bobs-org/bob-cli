@@ -95,10 +95,11 @@ Examples:
   bob capture-parse -f json -- 'Fix trip ~work:foo'
   bob capture-parse -f json -- 'Fix trip ~~work:foo|see'
   bob capture-parse -f json -- '/fix'
+  bob capture-parse -f json -- 'Ramen Nagi @eat/'
 
 Modes:
-  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_shift, pomodoro_link, pomodoro_close, pomodoro_past, pomodoro_start, task_dependency, task_complete, ref, incomplete
+  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_shift, pomodoro_link, pomodoro_close, pomodoro_past, pomodoro_start, task_dependency, task_complete, record_note, ref, incomplete
 
 Needs:
-  route, section, block_id, pomodoro_id, pomodoro_name, task, drawer, active_task, task_link, task_goto, task_parent, pomodoro_close_task, pomodoro_close_log_text, pomodoro_start_task, task_dependency, blocked_task, relation_target, relation_label, dependency_target, task_complete, task_type
+  route, section, block_id, pomodoro_id, pomodoro_name, task, drawer, active_task, task_link, task_goto, task_parent, pomodoro_close_task, pomodoro_close_log_text, pomodoro_start_task, task_dependency, blocked_task, relation_target, relation_label, dependency_target, task_complete, task_type, record_title, record_value
 ```

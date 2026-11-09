@@ -3,7 +3,8 @@ Bob — command-line tools for the Bob Obsidian vault and Pomodoro workflow
 Usage: bob <COMMAND>
 
 Daily workflow:
-  capture      Capture tasks, bullets, and Pomodoro commands into the vault
+  capture      Capture tasks, bullets, record notes, and Pomodoro commands into
+               the vault
   freshness    Walk the tiered freshness review queue
   plan         Show today's plan budget, Today's tasks, and NEXT/PENDING lanes
   pomodoro     Show Pomodoro status, print the tmux line, or notify on
@@ -25,6 +26,7 @@ Vault:
                period notes, vault-sync
   periods      Manage period notes: weeks, quarters, years, and all time
   query        Run Dataview or Tasks queries against the vault
+  records      List, inspect, check, and create configured Record Notes
   ref          Find, list, read, rename, and plan references for today; sync
                Highlights PDFs into them
   vault-sync   Reconcile the vault through Git (default: run) or show status

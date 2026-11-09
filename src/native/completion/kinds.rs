@@ -93,6 +93,21 @@ const TABLE: &[Entry] = &[
         kind: Kind::RecordType,
     },
     Entry {
+        path: &["records", "new"],
+        arg: "set",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["records", "new"],
+        arg: "stem",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["records", "new"],
+        arg: "note",
+        kind: Kind::FreeText,
+    },
+    Entry {
         path: &["records", "show"],
         arg: "type",
         kind: Kind::RecordType,

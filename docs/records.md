@@ -1,6 +1,6 @@
 ---
 title: Record notes
-description: Config-declared note collections, their schemas, and how Bob plans record-note files.
+description: Config-declared note collections, their schemas, capture creation, and how Bob plans record-note files.
 ---
 
 # Record notes
@@ -11,8 +11,11 @@ and owns one folder. The record type id names the Obsidian `type` link; the
 folder is where notes of that type live.
 
 This contract covers schema loading, value validation, filename planning, and
-the Markdown Bob writes. Capture syntax and the `bob records` commands are
-documented by the phases that add those interfaces.
+the Markdown Bob writes. Capture creates notes through the same planner;
+exact token forms live in [Capture syntax](reference/capture-syntax.md#record-notes)
+and the workflow in [Capture](capture.md#record-notes). Record types are
+config-declared collections (`records:`). They are not Task Types (`#fix`,
+`bob types`).
 
 ## Schema
 
@@ -162,6 +165,33 @@ capture, planning, hooks, and unrelated config sections keep their existing
 behavior. Loading the schema does not scan the vault or require type and
 collection notes to exist.
 
+## Capture
+
+`bob capture` creates a record when a configured folder appears as `@dir/` or
+`@dir/^stem` at either edge of the parent line:
+
+```text
+Ramen Nagi @eat/
+- status:: liked
+- category:: Ramen
+- location:: Clark
+- visited:: today
+- Spicy tuna was great.
+```
+
+That writes `eat/ramen_nagi.md` with the same Markdown `bob records new`
+would plan. First-level `key:: value` bullets set fields; other first-level
+bullets become notes. `@eat/^ramen-nagi` sets an explicit stem.
+`@eat/ramen_nagi` without a caret is reserved until capture can append.
+`Blaze @eat` stays a task and warns `record_collection_route`, teaching
+`@eat/`.
+
+`--dry-run` prints the exact bytes commit writes. A later-item failure,
+including an incomplete record after a task, writes nothing. Duplicate paths
+refuse with `record_exists` and never add a suffix. See
+[Capture](capture.md#record-notes) and
+[JSON outputs](reference/json-outputs.md#record-notes).
+
 ## `bob records`
 
 The `records` command group manages notes whose frontmatter `type` matches a
@@ -197,3 +227,11 @@ opens a successfully created note in Obsidian.
 The planner applies defaults only to fields that were not supplied, validates all
 provided values, and never writes incomplete notes. A completed write goes through
 the same staged writer as capture, including its no-replace install guard.
+
+## Related
+
+- [Capture](capture.md#record-notes)
+- [Capture syntax](reference/capture-syntax.md#record-notes)
+- [JSON outputs](reference/json-outputs.md#record-notes)
+- [Task types](task-types.md)
+- [`bob records` CLI](reference/cli/records.md)
