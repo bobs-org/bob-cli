@@ -13,8 +13,9 @@ default):
    prevented `HEAD` from moving.
 2. Read `git status --porcelain`; only stage when there are local changes.
 3. Detect displaced-plus-foreign-identity rewrites of tracked notes and quarantine
-   them (see [Clobbered notes](#clobbered-notes)) before staging. Dry runs report
-   `would quarantine` and write nothing.
+   them (see [Clobbered notes](#clobbered-notes)) before staging. Also look for task
+   block IDs this host removed and report confirmed losses (see [Lost tasks](#lost-tasks)).
+   Dry runs report what they would do and write nothing.
 4. Refuse any file at or above 95 MiB before staging, and warn at or above 50 MiB.
 5. Commit staged local changes with a generated `vault(<host>): ...` message, unless
    `--message` supplies one.
@@ -227,6 +228,42 @@ If a clobber was already committed:
    mirrors.
 4. `bob ref scan --dry-run`.
 5. `bob vault-sync`.
+
+## Lost tasks
+
+Before committing, vault-sync compares task block IDs in changed Markdown notes between
+the cached `origin/master` tip and this host's working tree. Remote-only changes are
+outside this scan. `_conflicts/`, `lib/`, `.bob/`, and the always-excluded note
+directories are skipped. An ID is not a loss when it still appears on a task line
+anywhere in the worktree, so moving a task or archiving it under `done/` is safe.
+
+A removed ID is reported as **linked** while a current `[[note#^id]]` or same-note
+`[[#^id]]` link still points to it. An **unlinked** loss is a vanished task that was
+open (`[ ]`, `[/]`, `[*]`, or `[?]`) and has no current inbound links. Links that
+already dangled at the base are not reported. Candidates remain pending in the status
+record until a later sync at least 30 seconds after first sight confirms the task is
+still absent and, for linked losses, still linked. If the task returns before then,
+the pending candidate is dropped. The guard only reports: it never edits a note or
+blocks the commit.
+
+Confirmed losses appear in `task_losses` for that cycle and in the capped
+`recent_task_losses` history in `bob vault-sync status --json`; the human status panel
+lists recent losses too. Each is appended to `_conflicts/sync_conflicts.md` with its
+base commit, task line, inbound-link paths, and a `restore_hint`. Linked losses send a
+best-effort desktop notification; unlinked losses are recorded without a notification
+(`BOB_VAULT_SYNC_NOTIFY=0` suppresses notifications). Dry runs print would-report
+lines without changing the status record, notes, or conflict log.
+
+To restore a reported task, use its `restore_hint` to inspect the exact source line,
+then re-apply that task in its original note and position. Review the current note and
+its children before copying anything back, so later edits are preserved. Commit the
+restoration through vault-sync:
+
+```bash
+bob vault-sync status --json
+# Run the restore_hint shown for the loss, then review and restore the task line.
+bob vault-sync
+```
 
 ## Credentials
 

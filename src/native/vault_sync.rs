@@ -23,6 +23,7 @@ use super::{
     style::Styler,
     vault_clobber,
     vault_merge_union::{self, UnionInput, UnionOutcome},
+    vault_task_loss::{self, PendingTaskLoss, TaskLossRecord},
 };
 
 const COMMAND_NAME: &str = "bob vault-sync";
@@ -32,6 +33,7 @@ const LARGE_FILE_WARNING_BYTES: u64 = 50 * 1024 * 1024;
 pub(crate) const LARGE_FILE_LIMIT_BYTES: u64 = 95 * 1024 * 1024;
 const MAX_PUSH_RETRIES: usize = 3;
 const RECENT_CLOBBER_CAP: usize = 10;
+const RECENT_TASK_LOSS_CAP: usize = 10;
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let args = default_run_args(args);
@@ -215,6 +217,12 @@ struct StatusRecord {
     clobbers: Vec<ClobberRecord>,
     #[serde(default)]
     recent_clobbers: Vec<ClobberRecord>,
+    #[serde(default)]
+    pending_task_losses: Vec<PendingTaskLoss>,
+    #[serde(default)]
+    task_losses: Vec<TaskLossRecord>,
+    #[serde(default)]
+    recent_task_losses: Vec<TaskLossRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -430,6 +438,7 @@ fn run_cycle_inner(
     status.interrupted_fast_forward_recovered =
         complete_interrupted_fast_forward(vault, child_env, options, styler)?;
 
+    status.task_losses.clear();
     let mut changed_paths = working_tree_status(vault, child_env)?;
     let clobber_force_add = handle_clobbers(
         vault,
@@ -442,12 +451,21 @@ fn run_cycle_inner(
     if !clobber_force_add.is_empty() {
         changed_paths = working_tree_status(vault, child_env)?;
     }
-    if changed_paths.is_empty() && clobber_force_add.is_empty() {
+    let task_loss_force_add =
+        handle_task_losses(vault, child_env, options, styler, status);
+    if !task_loss_force_add.is_empty() {
+        changed_paths = working_tree_status(vault, child_env)?;
+    }
+    let mut force_add = clobber_force_add;
+    force_add.extend(task_loss_force_add);
+    force_add.sort();
+    force_add.dedup();
+    if changed_paths.is_empty() && force_add.is_empty() {
         print_log(options, "working tree clean; skipping git add -A");
     } else {
         preflight_large_files(vault, &changed_paths, styler)?;
-        if !clobber_force_add.is_empty() {
-            let forced_entries = clobber_force_add
+        if !force_add.is_empty() {
+            let forced_entries = force_add
                 .iter()
                 .map(|path| StatusEntry {
                     code: "M ".to_string(),
@@ -465,7 +483,7 @@ fn run_cycle_inner(
             if changed_paths.is_empty() {
                 print_log(
                     options,
-                    "staging quarantined clobber paths with no other changes",
+                    "staging report paths with no other changes",
                 );
             } else {
                 print_log(
@@ -474,7 +492,7 @@ fn run_cycle_inner(
                 );
                 git_success(vault, child_env, ["add", "-A", "."])?;
             }
-            for path in &clobber_force_add {
+            for path in &force_add {
                 git_add_path(vault, child_env, path)?;
             }
         }
@@ -628,6 +646,151 @@ fn record_clobbers(status: &mut StatusRecord, records: Vec<ClobberRecord>) {
     recent.truncate(RECENT_CLOBBER_CAP);
     status.recent_clobbers = recent;
     status.clobbers = records;
+}
+
+/// Record task losses found in this host's diff. Detection and reporting are
+/// deliberately best-effort: a broken audit must never stop a vault commit.
+fn handle_task_losses(
+    vault: &Path,
+    child_env: &ChildEnv,
+    options: &RunOptions,
+    styler: &Styler,
+    status: &mut StatusRecord,
+) -> Vec<PathBuf> {
+    let now = now_rfc3339();
+    let scan = match vault_task_loss::scan(
+        vault,
+        child_env,
+        &status.pending_task_losses,
+        &status.recent_task_losses,
+        &now,
+    ) {
+        Ok(scan) => scan,
+        Err(error) => {
+            warn(styler, &format!("task-loss scan skipped: {error}"));
+            return Vec::new();
+        }
+    };
+
+    if options.dry_run {
+        for loss in &scan.confirmed {
+            task_loss_warn(
+                styler,
+                &format!(
+                    "would report {} task loss {} in {} ({} inbound link(s))",
+                    loss.kind,
+                    loss.id,
+                    loss.path,
+                    loss.inbound_links.len()
+                ),
+            );
+        }
+        for loss in scan.would_report {
+            task_loss_warn(
+                styler,
+                &format!(
+                    "would report {} task loss {} in {} ({} inbound link(s))",
+                    loss.kind,
+                    loss.id,
+                    loss.path,
+                    loss.inbound_links.len()
+                ),
+            );
+        }
+        return Vec::new();
+    }
+
+    status.pending_task_losses = scan.pending;
+    if scan.confirmed.is_empty() {
+        return Vec::new();
+    }
+
+    let timestamp = Local::now().format("%Y-%m-%dT%H%M%S%z").to_string();
+    let lines = scan
+        .confirmed
+        .iter()
+        .map(|loss| {
+            let links = if loss.inbound_links.is_empty() {
+                "no inbound links".to_string()
+            } else {
+                format!("links: {}", loss.inbound_links.join(", "))
+            };
+            format!(
+                "- {timestamp} task loss ({}) {} in {}: {} ({links}; restore: {})",
+                loss.kind, loss.id, loss.path, loss.task, loss.restore_hint
+            )
+        })
+        .collect::<Vec<_>>();
+    let conflict_log = PathBuf::from("_conflicts").join("sync_conflicts.md");
+    let log_written = match append_conflict_log(vault, &conflict_log, &lines) {
+        Ok(()) => true,
+        Err(error) => {
+            warn(
+                styler,
+                &format!(
+                    "could not append task-loss report: {}",
+                    error.message
+                ),
+            );
+            false
+        }
+    };
+
+    for loss in &scan.confirmed {
+        task_loss_warn(
+            styler,
+            &format!(
+                "lost {} task {} in {} ({} inbound link(s)); restore with {}",
+                loss.kind,
+                loss.id,
+                loss.path,
+                loss.inbound_links.len(),
+                loss.restore_hint
+            ),
+        );
+    }
+    record_task_losses(status, scan.confirmed.clone());
+    notify_task_losses(&status.task_losses);
+    if log_written {
+        vec![conflict_log]
+    } else {
+        Vec::new()
+    }
+}
+
+fn record_task_losses(status: &mut StatusRecord, records: Vec<TaskLossRecord>) {
+    let mut recent = records.clone();
+    recent.append(&mut status.recent_task_losses);
+    recent.truncate(RECENT_TASK_LOSS_CAP);
+    status.recent_task_losses = recent;
+    status.task_losses = records;
+}
+
+fn task_loss_warn(styler: &Styler, message: &str) {
+    eprintln!("[{}] {}: {message}", log_timestamp(), styler.red("warning"));
+}
+
+fn notify_task_losses(records: &[TaskLossRecord]) {
+    if !sync_notifications_enabled() {
+        return;
+    }
+    let linked = records
+        .iter()
+        .filter(|record| record.kind == "linked")
+        .collect::<Vec<_>>();
+    if linked.is_empty() {
+        return;
+    }
+    let body = match linked.as_slice() {
+        [loss] => format!(
+            "Lost task? ^{} left {}; {} link(s) dangle",
+            loss.id,
+            loss.path,
+            loss.inbound_links.len()
+        ),
+        _ => format!("Lost {} linked tasks", linked.len()),
+    };
+    send_sync_notification(&body);
 }
 
 fn restore_head_bytes(
@@ -2064,6 +2227,12 @@ fn print_status_panel(state_file: &Path, status: &StatusRecord) {
         "recent_clobbers",
         &status.recent_clobbers,
     );
+    print_task_loss_status_lines(styler, "task_losses", &status.task_losses);
+    print_task_loss_status_lines(
+        styler,
+        "recent_task_losses",
+        &status.recent_task_losses,
+    );
     match &status.last_error {
         Some(error) => println!("last_error: {}", styler.red(error)),
         None => println!("last_error: {}", styler.green("none")),
@@ -2094,6 +2263,31 @@ fn print_clobber_status_lines(
                 record.matched_note,
                 record.action,
                 record.evidence
+            ))
+        );
+    }
+}
+
+fn print_task_loss_status_lines(
+    styler: Styler,
+    label: &str,
+    records: &[TaskLossRecord],
+) {
+    if records.is_empty() {
+        println!("{label}: none");
+        return;
+    }
+    println!("{label}:");
+    for record in records {
+        println!(
+            "{}",
+            styler.red(&format!(
+                "  - {} task ^{} in {} ({} inbound link(s)); restore: {}",
+                record.kind,
+                record.id,
+                record.path,
+                record.inbound_links.len(),
+                record.restore_hint
             ))
         );
     }

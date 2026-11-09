@@ -1880,6 +1880,302 @@ fn vault_sync_quarantine_with_ignored_conflicts_dir_commits_and_pushes() {
     assert_eq!(status["recent_clobbers"].as_array().map(Vec::len), Some(1));
 }
 
+#[test]
+fn vault_sync_reports_confirmed_linked_task_loss_once_after_settle_window() {
+    let temp = TempDir::new("bob-cli-vault-sync-task-loss");
+    let (vault, remote, _peer) = init_vault_sync_pair(&temp);
+    let old = "- [ ] #task Auto-label Kelly's emails with Bob ^old-id\n\
+- [ ] #task Parent task ^parent\n\
+- [ ] #task Today task ^today\n\
+- [x] #task Archived task ^archived\n\
+[[#^old-id]]\n";
+    write_file(&vault.join("bob.md"), old);
+    write_file(
+        &vault.join("2026/20261109.md"),
+        "- [ ] #task Today task [[bob#^old-id]] ^today-link\n",
+    );
+    write_file(
+        &vault.join("done/bob_done.md"),
+        "- [x] #task Archived task [[bob#^old-id]] ^done-link\n",
+    );
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "seed loss replay"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+
+    let renamed = old
+        .replace(
+            "Auto-label Kelly's emails with Bob ^old-id",
+            "Auto-label Kelly's emails with Bob ^auto-label-kelly-emails",
+        )
+        .replace("^old-id", "^auto-label-kelly-emails");
+    write_file(&vault.join("bob.md"), &renamed);
+    write_file(
+        &vault.join("2026/20261109.md"),
+        "- [ ] #task Today task [[bob#^auto-label-kelly-emails]] ^today-link\n",
+    );
+    write_file(
+        &vault.join("done/bob_done.md"),
+        "- [x] #task Archived task [[bob#^auto-label-kelly-emails]] ^done-link\n",
+    );
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "rename task ID"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+
+    write_file(
+        &vault.join("bob.md"),
+        &renamed.replace(
+            "Auto-label Kelly's emails with Bob ^auto-label-kelly-emails",
+            "Auto-label Kelly's emails with Bob ^old-id",
+        ),
+    );
+    let first = vault_sync_command(&vault, &temp)
+        .output()
+        .expect("run first loss-detection cycle");
+    assert_success(&first);
+    let first_status = read_vault_sync_status(&temp);
+    assert_eq!(
+        first_status["task_losses"].as_array().map(Vec::len),
+        Some(0)
+    );
+    assert_eq!(
+        first_status["pending_task_losses"].as_array().map(Vec::len),
+        Some(1),
+        "the first cycle should save one pending linked loss: {first_status}"
+    );
+    assert_eq!(
+        first_status["pending_task_losses"][0]["id"],
+        "auto-label-kelly-emails"
+    );
+    assert_eq!(first_status["pending_task_losses"][0]["kind"], "linked");
+
+    make_pending_task_losses_old(&temp);
+    let second = vault_sync_command(&vault, &temp)
+        .output()
+        .expect("run settle confirmation cycle");
+    assert_success(&second);
+    let status = read_vault_sync_status(&temp);
+    assert_eq!(status["task_losses"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        status["recent_task_losses"].as_array().map(Vec::len),
+        Some(1)
+    );
+    let loss = &status["task_losses"][0];
+    assert_eq!(loss["id"], "auto-label-kelly-emails");
+    assert_eq!(loss["kind"], "linked");
+    assert_eq!(loss["path"], "bob.md");
+    assert_eq!(loss["inbound_links"].as_array().map(Vec::len), Some(3));
+    assert!(loss["restore_hint"].as_str().unwrap().contains("git -C "));
+    assert!(loss["restore_hint"]
+        .as_str()
+        .unwrap()
+        .contains("sed -n '1p'"));
+    let log = fs::read_to_string(vault.join("_conflicts/sync_conflicts.md"))
+        .expect("read task-loss log");
+    assert_eq!(log.matches("task loss (linked)").count(), 1, "{log}");
+    assert!(log.contains("auto-label-kelly-emails"), "{log}");
+    assert!(
+        log.contains(loss["restore_hint"].as_str().unwrap()),
+        "{log}"
+    );
+    assert_eq!(
+        stdout(&git([
+            "--git-dir",
+            path_str(&remote),
+            "show",
+            "master:_conflicts/sync_conflicts.md",
+        ])),
+        log,
+        "the report log should be committed and pushed"
+    );
+
+    let panel = vault_sync_command(&vault, &temp)
+        .arg("status")
+        .output()
+        .expect("run vault-sync status panel");
+    assert_success(&panel);
+    assert!(stdout(&panel).contains("recent_task_losses:"));
+    assert!(stdout(&panel).contains("auto-label-kelly-emails"));
+}
+
+#[test]
+fn vault_sync_ignores_task_moves_archives_and_rewritten_hand_renames() {
+    let temp = TempDir::new("bob-cli-vault-sync-task-loss-negatives");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
+    write_file(
+        &vault.join("bob.md"),
+        "- [ ] #task Move task ^move-id\n\
+- [ ] #task Archive task ^archive-id\n\
+- [ ] #task Rename task ^rename-old\n\
+- [ ] #task Deleted open task ^unlinked-id\n\
+[[#^move-id]] [[#^archive-id]] [[#^rename-old]]\n",
+    );
+    write_file(
+        &vault.join("legacy.md"),
+        "A pre-existing dangling link: [[missing#^legacy-dangling]].\n",
+    );
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "seed task-loss negatives"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+
+    write_file(
+        &vault.join("bob.md"),
+        "- [ ] #task Archive task ^archive-id\n\
+- [ ] #task Rename task ^rename-new\n\
+[[#^archive-id]] [[#^rename-new]]\n",
+    );
+    write_file(&vault.join("moved.md"), "- [ ] #task Move task ^move-id\n");
+    write_file(
+        &vault.join("done/archive.md"),
+        "- [ ] #task Archive task ^archive-id\n",
+    );
+    let output = vault_sync_command(&vault, &temp)
+        .output()
+        .expect("run move/archive/rename cycle");
+    assert_success(&output);
+    let status = read_vault_sync_status(&temp);
+    assert_eq!(status["task_losses"].as_array().map(Vec::len), Some(0));
+    assert_eq!(
+        status["pending_task_losses"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(status["pending_task_losses"][0]["id"], "unlinked-id");
+    assert_eq!(status["pending_task_losses"][0]["kind"], "unlinked");
+}
+
+#[test]
+fn vault_sync_drops_pending_loss_when_task_reappears() {
+    let temp = TempDir::new("bob-cli-vault-sync-task-loss-reappears");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
+    write_file(
+        &vault.join("tasks.md"),
+        "- [ ] #task Task to restore ^reappears\n",
+    );
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "seed pending loss"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+    write_file(&vault.join("tasks.md"), "- [ ] #task Other task ^other\n");
+
+    let first = vault_sync_command(&vault, &temp)
+        .output()
+        .expect("run candidate cycle");
+    assert_success(&first);
+    assert_eq!(
+        read_vault_sync_status(&temp)["pending_task_losses"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+    write_file(
+        &vault.join("tasks.md"),
+        "- [ ] #task Task to restore ^reappears\n- [ ] #task Other task ^other\n",
+    );
+    let second = vault_sync_command(&vault, &temp)
+        .output()
+        .expect("run reappearance cycle");
+    assert_success(&second);
+    let status = read_vault_sync_status(&temp);
+    assert_eq!(
+        status["pending_task_losses"].as_array().map(Vec::len),
+        Some(0)
+    );
+    assert_eq!(status["task_losses"].as_array().map(Vec::len), Some(0));
+    assert_eq!(
+        status["recent_task_losses"].as_array().map(Vec::len),
+        Some(0)
+    );
+    assert!(!vault.join("_conflicts/sync_conflicts.md").exists());
+}
+
+#[test]
+fn vault_sync_dry_run_reports_task_loss_without_writes() {
+    let temp = TempDir::new("bob-cli-vault-sync-task-loss-dry");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
+    write_file(
+        &vault.join("tasks.md"),
+        "- [ ] #task Task to lose ^dry-loss\n",
+    );
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "seed dry-run task"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+    write_file(&vault.join("tasks.md"), "- [ ] #task Other task ^other\n");
+
+    let output = vault_sync_command(&vault, &temp)
+        .arg("--dry-run")
+        .output()
+        .expect("run task-loss dry run");
+    assert_success(&output);
+    assert!(
+        stderr(&output).contains("would report unlinked task loss dry-loss"),
+        "dry run should explain the candidate:\n{}",
+        format_output(&output)
+    );
+    assert!(!vault_sync_state_file(&temp).exists());
+    assert!(!vault.join("_conflicts/sync_conflicts.md").exists());
+    assert_eq!(
+        stdout(&git_in(&vault, ["status", "--porcelain"]))
+            .lines()
+            .count(),
+        1
+    );
+    assert_eq!(
+        stdout(&git_in(&vault, ["show", "HEAD:tasks.md"])),
+        "- [ ] #task Task to lose ^dry-loss\n"
+    );
+}
+
+#[test]
+fn vault_sync_does_not_report_remote_only_task_removal() {
+    let temp = TempDir::new("bob-cli-vault-sync-task-loss-remote");
+    let (vault, _remote, peer) = init_vault_sync_pair(&temp);
+    write_file(
+        &vault.join("remote-task.md"),
+        "- [ ] #task Remote task ^remote-only\n",
+    );
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "seed remote-only case"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+    git_in(&peer, ["pull", "-q", "--ff-only", "origin", "master"]);
+    write_file(
+        &peer.join("remote-task.md"),
+        "- [ ] #task Changed remotely\n",
+    );
+    git_in(&peer, ["add", "."]);
+    git_in(&peer, ["commit", "-q", "-m", "remote task removal"]);
+    git_in(&peer, ["push", "-q", "origin", "master"]);
+
+    let output = vault_sync_command(&vault, &temp)
+        .output()
+        .expect("run remote-only removal cycle");
+    assert_success(&output);
+    let status = read_vault_sync_status(&temp);
+    assert_eq!(status["task_losses"].as_array().map(Vec::len), Some(0));
+    assert_eq!(
+        status["pending_task_losses"].as_array().map(Vec::len),
+        Some(0)
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("remote-task.md"))
+            .expect("read remote task"),
+        "- [ ] #task Changed remotely\n"
+    );
+}
+
+fn make_pending_task_losses_old(temp: &TempDir) {
+    let path = vault_sync_state_file(temp);
+    let mut status = read_vault_sync_status(temp);
+    for pending in status["pending_task_losses"]
+        .as_array_mut()
+        .expect("pending losses array")
+    {
+        pending["first_seen"] =
+            serde_json::Value::String("2020-01-01T00:00:00Z".to_string());
+    }
+    write_file(
+        &path,
+        &serde_json::to_string_pretty(&status).expect("encode status JSON"),
+    );
+}
+
 fn done_tasks_source(count: usize) -> String {
     let mut text = String::new();
     for index in 1..=count {

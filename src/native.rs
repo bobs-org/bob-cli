@@ -125,6 +125,7 @@ mod vault_links;
 mod vault_merge_union;
 mod vault_rewrite;
 mod vault_sync;
+mod vault_task_loss;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NativeCommand {
