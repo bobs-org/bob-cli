@@ -342,9 +342,9 @@ Bob Mac Capture also runs `bob vault-sync -q` when the Refs panel opens (throttl
 
 ## Mac scheduled maintenance
 
-The MacBook also runs four independent 15-minute cron jobs, staggered five minutes
-apart so their writes do not collide with each other or with the 15-second
-`bob-vault-sync` LaunchAgent. They live in the `cron:` data of `home/.chezmoidata.yaml`
+The MacBook also runs three independent 15-minute cron jobs plus an hourly Gmail
+sync, staggered by minute so their writes do not collide with each other or with
+the 15-second `bob-vault-sync` LaunchAgent. They live in the `cron:` data of `home/.chezmoidata.yaml`
 in the chezmoi dotfiles repo, the only source of truth for every machine's user crontab
 (see `cronctl`):
 
@@ -359,7 +359,7 @@ in the chezmoi dotfiles repo, the only source of truth for every machine's user 
   command: bob projects sync
 - name: bob-gmail-sync
   machines: [mac]
-  schedule: "7,22,37,52 * * * *"
+  schedule: "7 * * * *"
   command: bob gmail sync -q
 - name: bob-task-reconcile
   machines: [mac]
@@ -369,9 +369,12 @@ in the chezmoi dotfiles repo, the only source of truth for every machine's user 
 
 The old command name `bob task-status-hooks` keeps working as a permanent silent alias.
 
-Highlights intake precedes project reconciliation, then Gmail filing at `:07`, then
-task-status reconciliation, so reconcile tidies the same Gmail-filed rows minutes
-later. The 2-minute `--retry-timeout` on `bob task reconcile` fits
+Highlights intake precedes project reconciliation, then Gmail filing at `:07` once
+an hour, then task-status reconciliation, so reconcile tidies the same Gmail-filed
+rows minutes later. The hourly cadence keeps an awake Mac inside
+[Bob Gmail](gmail.md#where-it-runs)'s two-hour `sync` staleness warning, and a run
+that keeps busy-skipping exits 1, so cron mails it, only after more than two hours
+without a success. The 2-minute `--retry-timeout` on `bob task reconcile` fits
 comfortably inside the 15-minute cadence and absorbs transient maintenance-lock
 contention and concurrent-save races against the 15-second sync LaunchAgent; see
 [Retries](task-status-hooks.md#retries) for the backoff policy and its allowed failure
