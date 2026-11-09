@@ -2,13 +2,15 @@ use std::{
     ffi::{OsStr, OsString},
     fs::{self, File, OpenOptions},
     io::{self, Write},
-    path::Path,
+    path::{Component, Path, PathBuf},
 };
 
 use super::model::{
-    remaining_outputs, ApplyError, ApplySession, PlannedWrite, StagedWrite,
-    WritePlan,
+    remaining_outputs, ApplyError, ApplySession, CaptureError, PlannedWrite,
+    ReasonCode, StagedWrite, WritePlan,
 };
+
+const CREATE_FILE_MODE: u32 = 0o644;
 
 pub(super) fn stage_outputs(
     plan: &WritePlan,
@@ -17,7 +19,7 @@ pub(super) fn stage_outputs(
 ) -> Result<Vec<StagedWrite>, ApplyError> {
     let mut staged = Vec::new();
     for (index, output) in plan.outputs.iter().enumerate() {
-        match stage_one(output, &session.run_id, index) {
+        match stage_one(output, &plan.vault_canonical, &session.run_id, index) {
             Ok(item) => {
                 if let Some(fail) = &session.fail_staging
                     && let Err(error) = fail(&output.path)
@@ -36,7 +38,18 @@ pub(super) fn stage_outputs(
                 }
                 staged.push(item);
             }
-            Err(error) => {
+            Err(StageError::Unsupported { path, message }) => {
+                cleanup_temps(&staged, session.tool);
+                return Err(ApplyError {
+                    reason: ReasonCode::UnsupportedFile,
+                    message: CaptureError::Unsupported { path, message }
+                        .message(),
+                    applied_files: Vec::new(),
+                    deferred_files: remaining_outputs(plan, &[]),
+                    recovery_directory: Some(recovery_dir.to_path_buf()),
+                });
+            }
+            Err(StageError::Io(error)) => {
                 cleanup_temps(&staged, session.tool);
                 return Err(ApplyError::io(
                     format!(
@@ -53,27 +66,47 @@ pub(super) fn stage_outputs(
     Ok(staged)
 }
 
+enum StageError {
+    Io(io::Error),
+    Unsupported { path: PathBuf, message: String },
+}
+
+impl From<io::Error> for StageError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
 fn stage_one(
     output: &PlannedWrite,
+    vault_canonical: &Path,
     run_id: &str,
     index: usize,
-) -> io::Result<StagedWrite> {
-    let parent = output.path.parent().unwrap_or_else(|| Path::new("."));
+) -> Result<StagedWrite, StageError> {
+    let parent = ensure_destination_parent(
+        &output.path,
+        vault_canonical,
+        output.is_create(),
+    )?;
     let file_name = output.path.file_name().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("path has no file name: {}", output.path.display()),
         )
     })?;
+    let mode = if output.is_create() {
+        CREATE_FILE_MODE
+    } else {
+        output
+            .identity()
+            .map(|identity| identity.mode)
+            .unwrap_or(CREATE_FILE_MODE)
+    };
     let mut nonce = 0_u32;
     let temp = loop {
         let temp_name = staged_temp_name(file_name, run_id, index, nonce);
         let temp = parent.join(temp_name);
-        match create_exclusive_temp(
-            &temp,
-            &output.proposed_bytes,
-            output.identity.mode,
-        ) {
+        match create_exclusive_temp(&temp, &output.proposed_bytes, mode) {
             Ok(()) => break temp,
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                 nonce = nonce.checked_add(1).ok_or_else(|| {
@@ -83,18 +116,158 @@ fn stage_one(
                     )
                 })?;
             }
-            Err(error) => return Err(error),
+            Err(error) => return Err(error.into()),
         }
     };
-    if let Err(error) = copy_copied_metadata(&output.path, &temp) {
+    if !output.is_create()
+        && let Err(error) = copy_copied_metadata(&output.path, &temp)
+    {
         let _ = fs::remove_file(&temp);
-        return Err(error);
+        return Err(error.into());
     }
     Ok(StagedWrite {
         dest: output.path.clone(),
         temp,
         proposed_bytes: output.proposed_bytes.clone(),
+        is_create: output.is_create(),
     })
+}
+
+pub(super) fn inspect_destination_parent(
+    dest: &Path,
+    vault_canonical: &Path,
+    create_parents: bool,
+) -> Result<PathBuf, CaptureError> {
+    match ensure_destination_parent(dest, vault_canonical, create_parents) {
+        Ok(parent) => Ok(parent),
+        Err(StageError::Unsupported { path, message }) => {
+            Err(CaptureError::Unsupported { path, message })
+        }
+        Err(StageError::Io(error)) => Err(CaptureError::io(dest, error)),
+    }
+}
+
+fn ensure_destination_parent(
+    dest: &Path,
+    vault_canonical: &Path,
+    create_parents: bool,
+) -> Result<PathBuf, StageError> {
+    let dest_abs = if dest.is_absolute() {
+        dest.to_path_buf()
+    } else {
+        vault_canonical.join(dest)
+    };
+    let dest_norm = lexical_normalize(&dest_abs);
+    if !dest_norm.starts_with(vault_canonical) || dest_norm == vault_canonical {
+        return Err(StageError::Unsupported {
+            path: dest.to_path_buf(),
+            message: "destination is outside the canonical vault".to_string(),
+        });
+    }
+    let parent = dest_norm.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("path has no parent: {}", dest.display()),
+        )
+    })?;
+    let relative = match parent.strip_prefix(vault_canonical) {
+        Ok(relative) => relative,
+        Err(_) => {
+            return Err(StageError::Unsupported {
+                path: dest.to_path_buf(),
+                message: "destination is outside the canonical vault"
+                    .to_string(),
+            });
+        }
+    };
+
+    let vault_meta =
+        fs::symlink_metadata(vault_canonical).map_err(StageError::Io)?;
+    if vault_meta.file_type().is_symlink() || !vault_meta.is_dir() {
+        return Err(StageError::Unsupported {
+            path: dest.to_path_buf(),
+            message: "vault root is not a real directory".to_string(),
+        });
+    }
+
+    let mut current = vault_canonical.to_path_buf();
+    for component in relative.components() {
+        match component {
+            Component::Normal(_) => {}
+            Component::CurDir => continue,
+            _ => {
+                return Err(StageError::Unsupported {
+                    path: dest.to_path_buf(),
+                    message: "destination parent has an unsafe path component"
+                        .to_string(),
+                });
+            }
+        }
+        current.push(component);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) => {
+                refuse_unsafe_parent(&current, dest, &metadata)?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                if !create_parents {
+                    break;
+                }
+                match fs::create_dir(&current) {
+                    Ok(()) => {}
+                    Err(error)
+                        if error.kind() == io::ErrorKind::AlreadyExists =>
+                    {
+                        let metadata = fs::symlink_metadata(&current)?;
+                        refuse_unsafe_parent(&current, dest, &metadata)?;
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(parent.to_path_buf())
+}
+
+fn refuse_unsafe_parent(
+    path: &Path,
+    dest: &Path,
+    metadata: &fs::Metadata,
+) -> Result<(), StageError> {
+    if metadata.file_type().is_symlink() {
+        return Err(StageError::Unsupported {
+            path: dest.to_path_buf(),
+            message: format!("parent path is a symlink: {}", path.display()),
+        });
+    }
+    if !metadata.is_dir() {
+        return Err(StageError::Unsupported {
+            path: dest.to_path_buf(),
+            message: format!(
+                "parent path is not a directory: {}",
+                path.display()
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_)
+            | Component::RootDir
+            | Component::Normal(_) => {
+                out.push(component);
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+        }
+    }
+    out
 }
 
 fn staged_temp_name(

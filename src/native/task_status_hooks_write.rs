@@ -1,8 +1,8 @@
-//! Guarded note writes for `bob task reconcile`.
+//! Guarded note writes for `bob task reconcile` and later archive apply.
 //!
-//! Snapshot the planning read-set, stage replacements as uniquely created
-//! temporaries, retain recoverable originals, and refuse to overwrite a vault
-//! that changed underfoot. Scoped to this command; other writers are unchanged.
+//! Snapshot the planning read-set, stage replacements and creates as uniquely
+//! created temporaries, retain recoverable originals (including original
+//! absence), and refuse to overwrite a vault that changed underfoot.
 
 #![allow(clippy::result_large_err, clippy::type_complexity)]
 

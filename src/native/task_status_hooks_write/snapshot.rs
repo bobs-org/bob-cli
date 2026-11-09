@@ -44,25 +44,22 @@ pub(crate) fn planned_write(
     proposed_bytes: Vec<u8>,
     structural_regrouping: bool,
 ) -> Result<PlannedWrite, CaptureError> {
-    let (identity, original_bytes) = match &original.state {
-        InputState::Present { identity, bytes } => {
-            (identity.clone(), bytes.clone())
+    match &original.state {
+        InputState::Present { identity, .. } => {
+            if identity.nlink != 1 {
+                return Err(CaptureError::Unsupported {
+                    path,
+                    message: "refusing to replace a multiply linked file"
+                        .to_string(),
+                });
+            }
         }
-        InputState::Missing => {
-            return Err(CaptureError::NotFound(path));
-        }
-    };
-    if identity.nlink != 1 {
-        return Err(CaptureError::Unsupported {
-            path,
-            message: "refusing to replace a multiply linked file".to_string(),
-        });
+        InputState::Missing => {}
     }
     Ok(PlannedWrite {
         path,
-        original_bytes,
+        original: original.state.clone(),
         proposed_bytes,
-        identity,
         structural_regrouping,
     })
 }

@@ -149,12 +149,34 @@ impl InputSnapshot {
 #[derive(Debug, Clone)]
 pub(crate) struct PlannedWrite {
     pub path: PathBuf,
-    pub original_bytes: Vec<u8>,
+    /// Original destination state. `Missing` is a create; `Present` is a
+    /// replacement. Never synthesize an identity or empty existing file for a
+    /// create.
+    pub original: InputState,
     pub proposed_bytes: Vec<u8>,
-    pub identity: FileIdentity,
     /// Integration sets this for status-group rearrangements so the quiet
     /// interval applies without duplicating application logic.
     pub structural_regrouping: bool,
+}
+
+impl PlannedWrite {
+    pub(crate) fn is_create(&self) -> bool {
+        matches!(self.original, InputState::Missing)
+    }
+
+    pub(crate) fn original_bytes(&self) -> &[u8] {
+        match &self.original {
+            InputState::Present { bytes, .. } => bytes,
+            InputState::Missing => &[],
+        }
+    }
+
+    pub(crate) fn identity(&self) -> Option<&FileIdentity> {
+        match &self.original {
+            InputState::Present { identity, .. } => Some(identity),
+            InputState::Missing => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -378,6 +400,7 @@ pub(super) struct StagedWrite {
     pub(super) dest: PathBuf,
     pub(super) temp: PathBuf,
     pub(super) proposed_bytes: Vec<u8>,
+    pub(super) is_create: bool,
 }
 
 pub(super) struct AppliedWrite {

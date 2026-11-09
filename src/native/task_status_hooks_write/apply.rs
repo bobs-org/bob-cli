@@ -1,9 +1,12 @@
-use std::fs::{self, File};
+use std::{
+    fs::{self, File},
+    io,
+};
 
 use super::{
     model::{
         remaining_outputs, AppliedWrite, ApplyError, ApplyOutcome,
-        ApplySession, ReasonCode, WritePlan,
+        ApplySession, ReasonCode, StagedWrite, WritePlan,
     },
     preflight::{preflight, preflight_for_replacement, wait_quiet_period},
     recovery::{create_recovery, prune_completed, update_manifest},
@@ -58,15 +61,31 @@ pub(crate) fn apply_plan(
         if let Some(callback) = &session.before_replace {
             callback(&next.dest);
         }
-        if let Err(error) = preflight_for_replacement(plan, &next, &applied) {
-            cleanup_temps(&remaining_temps, session.tool);
+        if let Err(mut error) =
+            preflight_for_replacement(plan, session, &next, &applied)
+        {
+            cleanup_current_and_remaining(
+                &next,
+                &remaining_temps,
+                session.tool,
+            );
             let _ = update_manifest(
                 &recovery_dir,
                 plan,
                 session,
-                "partial",
+                if applied.is_empty() {
+                    "planned"
+                } else {
+                    "partial"
+                },
                 &applied,
             );
+            if error.recovery_directory.is_none() {
+                error.recovery_directory = Some(recovery_dir);
+            }
+            if applied.is_empty() {
+                return Err(error);
+            }
             let remaining = remaining_outputs(
                 plan,
                 &applied
@@ -83,30 +102,66 @@ pub(crate) fn apply_plan(
                 ),
                 applied_files: applied.iter().map(|item| item.path.clone()).collect(),
                 deferred_files: remaining,
-                    recovery_directory: Some(recovery_dir),
+                recovery_directory: error.recovery_directory,
             });
         }
-        if let Err(error) = fs::rename(&next.temp, &next.dest) {
-            cleanup_temps(&remaining_temps, session.tool);
-            let _ = fs::remove_file(&next.temp);
-            let _ = update_manifest(
-                &recovery_dir,
-                plan,
-                session,
-                "partial",
-                &applied,
-            );
-            let applied_paths = applied
-                .iter()
-                .map(|item| item.path.clone())
-                .collect::<Vec<_>>();
-            let remaining = remaining_outputs(plan, &applied_paths);
-            return Err(ApplyError::io(
-                format!("failed to replace {}: {error}", next.dest.display()),
-                applied_paths,
-                remaining,
-                Some(recovery_dir),
-            ));
+        match install_staged(&next) {
+            Ok(InstallResult::Applied { leftover_temp }) => {
+                if leftover_temp {
+                    eprintln!(
+                        "bob {}: warning: created {} but failed to remove staging file {}; recovery evidence remains",
+                        session.tool,
+                        next.dest.display(),
+                        next.temp.display()
+                    );
+                }
+            }
+            Err(error) => {
+                cleanup_current_and_remaining(
+                    &next,
+                    &remaining_temps,
+                    session.tool,
+                );
+                let _ = update_manifest(
+                    &recovery_dir,
+                    plan,
+                    session,
+                    if applied.is_empty() {
+                        "planned"
+                    } else {
+                        "partial"
+                    },
+                    &applied,
+                );
+                let applied_paths = applied
+                    .iter()
+                    .map(|item| item.path.clone())
+                    .collect::<Vec<_>>();
+                let remaining = remaining_outputs(plan, &applied_paths);
+                if next.is_create
+                    && error.kind() == io::ErrorKind::AlreadyExists
+                {
+                    return Err(ApplyError::vault_changed(
+                        plan,
+                        &applied_paths,
+                        Some(recovery_dir),
+                        format!(
+                            "destination {} already exists",
+                            next.dest.display()
+                        ),
+                    ));
+                }
+                return Err(ApplyError::io(
+                    format!(
+                        "failed to {} {}: {error}",
+                        if next.is_create { "create" } else { "replace" },
+                        next.dest.display()
+                    ),
+                    applied_paths,
+                    remaining,
+                    Some(recovery_dir),
+                ));
+            }
         }
         applied.push(AppliedWrite {
             path: next.dest.clone(),
@@ -148,4 +203,41 @@ pub(crate) fn apply_plan(
         applied_files: applied.into_iter().map(|item| item.path).collect(),
         recovery_directory: recovery_dir,
     })
+}
+
+enum InstallResult {
+    Applied { leftover_temp: bool },
+}
+
+fn install_staged(next: &StagedWrite) -> io::Result<InstallResult> {
+    if next.is_create {
+        fs::hard_link(&next.temp, &next.dest)?;
+        match fs::remove_file(&next.temp) {
+            Ok(()) => Ok(InstallResult::Applied {
+                leftover_temp: false,
+            }),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                Ok(InstallResult::Applied {
+                    leftover_temp: false,
+                })
+            }
+            Err(_) => Ok(InstallResult::Applied {
+                leftover_temp: true,
+            }),
+        }
+    } else {
+        fs::rename(&next.temp, &next.dest)?;
+        Ok(InstallResult::Applied {
+            leftover_temp: false,
+        })
+    }
+}
+
+fn cleanup_current_and_remaining(
+    current: &StagedWrite,
+    remaining: &[StagedWrite],
+    tool: &str,
+) {
+    cleanup_temps(std::slice::from_ref(current), tool);
+    cleanup_temps(remaining, tool);
 }

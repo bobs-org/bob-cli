@@ -1,17 +1,13 @@
-use std::{
-    collections::BTreeSet,
-    fs,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{collections::BTreeSet, fs, path::PathBuf, time::Duration};
 
 use super::{
     model::{
         remaining_outputs, AppliedWrite, ApplyError, ApplySession,
-        CaptureError, InputKind, PlannedWrite, ReasonCode, StagedWrite,
-        WritePlan,
+        CaptureError, InputKind, InputState, PlannedWrite, ReasonCode,
+        StagedWrite, WritePlan,
     },
-    snapshot::{capture_required, recapture},
+    snapshot::{capture_optional, capture_required, recapture},
+    staging::inspect_destination_parent,
 };
 
 pub(super) fn wait_quiet_period(
@@ -30,13 +26,19 @@ pub(super) fn wait_quiet_period(
     let now = session.now();
     let mut wait = Duration::ZERO;
     for output in &structural {
+        if output.is_create() {
+            continue;
+        }
         let metadata = fs::symlink_metadata(&output.path).map_err(|error| {
             ApplyError::quiet_period(
                 plan,
                 format!("could not read {}: {error}", output.path.display()),
             )
         })?;
-        let mtime = metadata.modified().ok().or(output.identity.mtime);
+        let mtime = metadata
+            .modified()
+            .ok()
+            .or_else(|| output.identity().and_then(|identity| identity.mtime));
         let Some(mtime) = mtime else {
             return Err(ApplyError::quiet_period(
                 plan,
@@ -127,38 +129,42 @@ pub(super) fn preflight(
         }
     }
 
-    let scanned = (session.rescan)().map_err(|error| {
-        ApplyError::io(
-            format!("failed to rescan vault: {error}"),
-            applied_paths.clone(),
-            remaining_outputs(plan, &applied_paths),
-            None,
-        )
-    })?;
-    let original: BTreeSet<&Path> =
-        plan.scan_paths.iter().map(PathBuf::as_path).collect();
-    let current: BTreeSet<&Path> =
-        scanned.iter().map(PathBuf::as_path).collect();
-    if original != current {
-        return Err(ApplyError::vault_changed(
-            plan,
-            &applied_paths,
-            None,
-            "the set of scanned notes changed",
-        ));
-    }
+    check_membership(plan, session, applied)?;
 
     for output in &plan.outputs {
         if applied.iter().any(|item| item.path == output.path) {
             continue;
         }
+        inspect_destination_parent(&output.path, &plan.vault_canonical, false)
+            .map_err(|error| {
+                let reason = match error {
+                    CaptureError::Unsupported { .. } => {
+                        ReasonCode::UnsupportedFile
+                    }
+                    _ => ReasonCode::Io,
+                };
+                if applied.is_empty() {
+                    ApplyError::capture(reason, error)
+                } else {
+                    ApplyError::vault_changed(
+                        plan,
+                        &applied_paths,
+                        None,
+                        error.message(),
+                    )
+                }
+            })?;
         check_unwritten_output(output).map_err(|error| {
-            ApplyError::vault_changed(
-                plan,
-                &applied_paths,
-                None,
-                error.message.clone(),
-            )
+            if applied.is_empty() {
+                error
+            } else {
+                ApplyError::vault_changed(
+                    plan,
+                    &applied_paths,
+                    None,
+                    error.message.clone(),
+                )
+            }
         })?;
     }
     Ok(())
@@ -166,6 +172,7 @@ pub(super) fn preflight(
 
 pub(super) fn preflight_for_replacement(
     plan: &WritePlan,
+    session: &ApplySession,
     next: &StagedWrite,
     applied: &[AppliedWrite],
 ) -> Result<(), ApplyError> {
@@ -189,15 +196,88 @@ pub(super) fn preflight_for_replacement(
             ));
         }
     }
+    check_membership(plan, session, applied)?;
     let output = plan
         .outputs
         .iter()
         .find(|output| output.path == next.dest)
         .expect("staged path is part of the plan");
+    inspect_destination_parent(&output.path, &plan.vault_canonical, false)
+        .map_err(|error| {
+            let reason = match error {
+                CaptureError::Unsupported { .. } => ReasonCode::UnsupportedFile,
+                _ => ReasonCode::Io,
+            };
+            ApplyError::capture(reason, error)
+        })?;
     check_unwritten_output(output)
 }
 
+fn check_membership(
+    plan: &WritePlan,
+    session: &ApplySession,
+    applied: &[AppliedWrite],
+) -> Result<(), ApplyError> {
+    let applied_paths = applied
+        .iter()
+        .map(|item| item.path.clone())
+        .collect::<Vec<_>>();
+    let scanned = (session.rescan)().map_err(|error| {
+        ApplyError::io(
+            format!("failed to rescan vault: {error}"),
+            applied_paths.clone(),
+            remaining_outputs(plan, &applied_paths),
+            None,
+        )
+    })?;
+    let original: BTreeSet<PathBuf> = plan.scan_paths.iter().cloned().collect();
+    let current: BTreeSet<PathBuf> = scanned.into_iter().collect();
+    let applied_creates: BTreeSet<PathBuf> = applied
+        .iter()
+        .filter(|item| {
+            plan.outputs
+                .iter()
+                .any(|output| output.path == item.path && output.is_create())
+        })
+        .map(|item| item.path.clone())
+        .collect();
+    let unplanned_addition = current
+        .difference(&original)
+        .any(|path| !applied_creates.contains(path));
+    if unplanned_addition || !original.is_subset(&current) {
+        return Err(ApplyError::vault_changed(
+            plan,
+            &applied_paths,
+            None,
+            "the set of scanned notes changed",
+        ));
+    }
+    Ok(())
+}
+
 fn check_unwritten_output(output: &PlannedWrite) -> Result<(), ApplyError> {
+    if output.is_create() {
+        let current = capture_optional(&output.path, InputKind::Note).map_err(
+            |error| {
+                let reason = match error {
+                    CaptureError::Unstable(_) => ReasonCode::UnstableRead,
+                    CaptureError::Unsupported { .. } => {
+                        ReasonCode::UnsupportedFile
+                    }
+                    _ => ReasonCode::Io,
+                };
+                ApplyError::capture(reason, error)
+            },
+        )?;
+        if !current.is_missing() {
+            return Err(ApplyError::capture(
+                ReasonCode::VaultChanged,
+                CaptureError::Unstable(output.path.clone()),
+            ));
+        }
+        return Ok(());
+    }
+
     let current =
         capture_required(&output.path, InputKind::Note).map_err(|error| {
             let reason = match error {
@@ -214,6 +294,15 @@ fn check_unwritten_output(output: &PlannedWrite) -> Result<(), ApplyError> {
             CaptureError::NotFound(output.path.clone()),
         )
     })?;
+    let planned_identity = match &output.original {
+        InputState::Present { identity, .. } => identity,
+        InputState::Missing => {
+            return Err(ApplyError::capture(
+                ReasonCode::VaultChanged,
+                CaptureError::NotFound(output.path.clone()),
+            ));
+        }
+    };
     if identity.nlink != 1 {
         return Err(ApplyError::capture(
             ReasonCode::UnsupportedFile,
@@ -224,13 +313,13 @@ fn check_unwritten_output(output: &PlannedWrite) -> Result<(), ApplyError> {
             },
         ));
     }
-    if identity != &output.identity {
+    if identity != planned_identity {
         return Err(ApplyError::capture(
             ReasonCode::VaultChanged,
             CaptureError::Unstable(output.path.clone()),
         ));
     }
-    if current.bytes() != Some(output.original_bytes.as_slice()) {
+    if current.bytes() != Some(output.original_bytes()) {
         return Err(ApplyError::capture(
             ReasonCode::VaultChanged,
             CaptureError::Unstable(output.path.clone()),

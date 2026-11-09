@@ -40,6 +40,9 @@ pub(super) struct RecoveryNote {
     pub(super) state: String,
     original_file: String,
     proposed_file: String,
+    /// Additive: old manifests omit this and deserialize as `false`.
+    #[serde(default)]
+    pub(super) original_missing: bool,
 }
 
 pub(super) fn sha256_hex(bytes: &[u8]) -> String {
@@ -103,7 +106,7 @@ pub(super) fn create_recovery(
         let proposed_name = format!("{index:04}.proposed");
         write_private_file(
             &recovery_dir.join(&original_name),
-            &output.original_bytes,
+            output.original_bytes(),
         )
         .and_then(|_| {
             write_private_file(
@@ -172,11 +175,12 @@ fn recovery_manifest(
                     };
                 RecoveryNote {
                     path: output.path.display().to_string(),
-                    original_hash: sha256_hex(&output.original_bytes),
+                    original_hash: sha256_hex(output.original_bytes()),
                     proposed_hash: sha256_hex(&output.proposed_bytes),
                     state: state.to_string(),
                     original_file: format!("{index:04}.original"),
                     proposed_file: format!("{index:04}.proposed"),
+                    original_missing: output.is_create(),
                 }
             })
             .collect(),
