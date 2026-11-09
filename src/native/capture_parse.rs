@@ -2708,6 +2708,11 @@ fn map_template_record_entry(
             }
         }
     }
+    for hint in &mut entry.near_values {
+        let (start, end) =
+            map((hint.source_range.start, hint.source_range.end));
+        hint.source_range = start..end;
+    }
     entry
 }
 
@@ -3267,6 +3272,21 @@ fn record_parse_diagnostics(
             });
         }
         diagnostics.extend(single_colon_diagnostics(entry));
+        for hint in &entry.near_values {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                code: "record_value_near",
+                message: format!(
+                    "`{}` looks like more common `{}`",
+                    hint.authored, hint.proposed
+                ),
+                range: Some((hint.source_range.start, hint.source_range.end))
+                    .filter(|(start, end)| {
+                        *start <= *end && *end <= input.len()
+                    }),
+                rewrite: None,
+            });
+        }
     }
     diagnostics
 }

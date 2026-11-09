@@ -1,0 +1,852 @@
+//! Record field/value completion for `capture-complete`.
+//!
+//! Reuses the capture record policy, editor parse, and `plan_fields` so
+//! menus never invent a second grammar. Catalog I/O happens only when a
+//! claimed record item needs values or counts.
+
+use std::cell::Cell;
+use std::collections::HashSet;
+use std::ops::Range;
+use std::path::Path;
+
+use super::engine::CompleteRequest;
+use super::model::{
+    CandidateContinuation, Candidates, CaptureCompleteDiagnostic,
+    CaptureCompleteResult, CompleteError, RecordCompletionMeta,
+    RecordFieldCandidate, RecordValueCandidate, Replacement,
+};
+use crate::native::capture_language::{
+    self, candidate_collection_routes, candidate_dirs, CompletionContext,
+    EditorItemParse, EditorParse, EditorParseOptions, RecordNoteIntent,
+};
+use crate::native::capture_record::{
+    record_policy_for_draft, resolve_record_intents_with_catalog,
+    RecordParseEntry,
+};
+use crate::native::records::{
+    self, FieldInputState, FieldKind, FolderIndex, NearValueHint,
+    RecordCatalog, RecordField, RecordPropertyState, RecordType,
+    ValidatedFieldInput,
+};
+
+thread_local! {
+    static LAST_CATALOG_FILES_OPENED: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(super) fn last_catalog_files_opened() -> usize {
+    LAST_CATALOG_FILES_OPENED.get()
+}
+
+fn set_files_opened(count: usize) {
+    LAST_CATALOG_FILES_OPENED.set(count);
+}
+
+pub(super) fn try_complete(
+    request: &CompleteRequest<'_>,
+) -> Result<Option<CaptureCompleteResult>, CompleteError> {
+    set_files_opened(0);
+    if request.next_missing_field {
+        return Ok(Some(next_missing_field(request)?));
+    }
+    if candidate_dirs(request.raw_text).is_empty()
+        && candidate_collection_routes(request.raw_text).is_empty()
+    {
+        return Ok(None);
+    }
+    let Some(mut session) = Session::open(request) else {
+        return Ok(None);
+    };
+    session.complete()
+}
+
+pub(super) fn next_missing_field(
+    request: &CompleteRequest<'_>,
+) -> Result<CaptureCompleteResult, CompleteError> {
+    set_files_opened(0);
+    let Some(mut session) = Session::open(request) else {
+        return Ok(CaptureCompleteResult::empty(request.cursor));
+    };
+    session.next_missing()
+}
+
+struct Session<'a> {
+    request: &'a CompleteRequest<'a>,
+    parsed: EditorParse,
+    catalog: RecordCatalog,
+    today: chrono::NaiveDate,
+}
+
+impl<'a> Session<'a> {
+    fn open(request: &'a CompleteRequest<'a>) -> Option<Self> {
+        let policy =
+            record_policy_for_draft(request.bob_dir, None, request.raw_text);
+        policy.records_config()?;
+        let parsed = capture_language::parse_for_editor_with(
+            request.raw_text,
+            &EditorParseOptions {
+                url_routing: None,
+                has_global_destination: false,
+                record_policy: Some(&policy),
+            },
+        );
+        Some(Self {
+            request,
+            parsed,
+            catalog: RecordCatalog::new(request.bob_dir),
+            today: crate::native::env::current_datetime().date(),
+        })
+    }
+
+    fn complete(
+        &mut self,
+    ) -> Result<Option<CaptureCompleteResult>, CompleteError> {
+        let Some((item, intent)) = self.record_item() else {
+            set_files_opened(self.catalog.files_opened());
+            return Ok(None);
+        };
+        let item = item.clone();
+        let intent = intent.cloned();
+        if let Some(intent) = intent.as_ref()
+            && let Some(probe) = value_probe(self.request, intent)
+        {
+            let result = self.value_menu(&item, intent, probe)?;
+            set_files_opened(self.catalog.files_opened());
+            return Ok(Some(result));
+        }
+        if let Some(intent) = intent.as_ref()
+            && let Some(probe) = field_key_probe(
+                self.request.raw_text,
+                &item,
+                self.request.cursor,
+            )
+        {
+            let result = self.field_menu(&item, intent, probe)?;
+            set_files_opened(self.catalog.files_opened());
+            return Ok(result);
+        }
+        set_files_opened(self.catalog.files_opened());
+        Ok(None)
+    }
+
+    fn next_missing(&mut self) -> Result<CaptureCompleteResult, CompleteError> {
+        let Some((item, intent)) = self.record_item() else {
+            set_files_opened(self.catalog.files_opened());
+            return Ok(CaptureCompleteResult::empty(self.request.cursor));
+        };
+        let item = item.clone();
+        let Some(intent) = intent.cloned() else {
+            set_files_opened(self.catalog.files_opened());
+            return Ok(CaptureCompleteResult::empty(self.request.cursor));
+        };
+        let entry = self.plan_entry(&intent);
+        let Some(missing_key) = entry.missing.first().cloned() else {
+            set_files_opened(self.catalog.files_opened());
+            return Ok(CaptureCompleteResult::empty(self.request.cursor));
+        };
+        let Some(field) = entry.record_type.field(&missing_key).cloned() else {
+            set_files_opened(self.catalog.files_opened());
+            return Ok(CaptureCompleteResult::empty(self.request.cursor));
+        };
+        let result =
+            if let Some(existing) = intent.fields.iter().find(|input| {
+                input.key == missing_key && input.value.is_empty()
+            }) {
+                let probe = ValueProbe {
+                    field: field.clone(),
+                    query: String::new(),
+                    replace: existing.value_range.0..existing.value_range.1,
+                    insert_bullet: None,
+                };
+                self.value_menu(&item, &intent, probe)?
+            } else {
+                let at = insert_point_after_fields(
+                    self.request.raw_text,
+                    &item,
+                    &intent,
+                );
+                let probe = ValueProbe {
+                    field: field.clone(),
+                    query: String::new(),
+                    replace: at..at,
+                    insert_bullet: Some(field.key.clone()),
+                };
+                self.value_menu(&item, &intent, probe)?
+            };
+        set_files_opened(self.catalog.files_opened());
+        Ok(result)
+    }
+
+    fn record_item(
+        &self,
+    ) -> Option<(&EditorItemParse, Option<&RecordNoteIntent>)> {
+        let cursor = self.request.cursor;
+        let item = self
+            .parsed
+            .items
+            .iter()
+            .find(|item| item.start <= cursor && cursor <= item.end)?;
+        let intent =
+            self.parsed
+                .record_intents
+                .iter()
+                .find_map(|(index, intent)| {
+                    (*index == item.index).then_some(intent)
+                });
+        Some((item, intent))
+    }
+
+    fn plan_entry(&mut self, intent: &RecordNoteIntent) -> RecordParseEntry {
+        let policy = record_policy_for_draft(
+            self.request.bob_dir,
+            None,
+            self.request.raw_text,
+        );
+        resolve_record_intents_with_catalog(
+            &[(0, intent.clone())],
+            Some(&policy),
+            &mut self.catalog,
+        )
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| empty_entry(intent))
+    }
+
+    fn record_type(&self, intent: &RecordNoteIntent) -> Option<RecordType> {
+        let policy = record_policy_for_draft(
+            self.request.bob_dir,
+            None,
+            self.request.raw_text,
+        );
+        policy
+            .records_config()
+            .and_then(|config| config.by_directory(&intent.dir))
+            .cloned()
+    }
+
+    fn field_menu(
+        &mut self,
+        item: &EditorItemParse,
+        intent: &RecordNoteIntent,
+        probe: FieldKeyProbe,
+    ) -> Result<Option<CaptureCompleteResult>, CompleteError> {
+        let Some(record_type) = self.record_type(intent) else {
+            return Ok(None);
+        };
+        let entry = self.plan_entry(intent);
+        let authored: HashSet<&str> = intent
+            .fields
+            .iter()
+            .map(|field| field.key.as_str())
+            .collect();
+        let mut required = Vec::new();
+        let mut optional = Vec::new();
+        for field in &record_type.fields {
+            if authored.contains(field.key.as_str()) {
+                continue;
+            }
+            if !query_matches(&probe.query, &field.key)
+                && !query_matches(&probe.query, &field.label)
+            {
+                continue;
+            }
+            let defaulted = entry
+                .properties
+                .iter()
+                .find(|property| property.key == field.key)
+                .is_some_and(|property| {
+                    property.state == RecordPropertyState::Default
+                });
+            if field.required {
+                required.push((field, defaulted));
+            } else {
+                optional.push((field, defaulted));
+            }
+        }
+        required.extend(optional);
+        if required.is_empty() {
+            return Ok(None);
+        }
+        let mut rows = Vec::new();
+        for (field, defaulted) in required {
+            let insert = format!("{}:: ", field.key);
+            let cursor_after = probe.replace.start + insert.len();
+            rows.push(RecordFieldCandidate {
+                replacement: insert,
+                key: field.key.clone(),
+                label: field.label.clone(),
+                kind: field.kind.kind_name(),
+                required: field.required,
+                list: field.list,
+                defaulted,
+                cursor_after,
+                continuation: CandidateContinuation {
+                    cursor: cursor_after,
+                    next_missing_field: false,
+                },
+            });
+        }
+        Ok(Some(self.finish(
+            item,
+            intent,
+            CompletionContext::RecordField,
+            probe.replace,
+            Candidates::RecordField(rows),
+            Some(probe.query),
+            None,
+            &entry,
+        )))
+    }
+
+    fn value_menu(
+        &mut self,
+        item: &EditorItemParse,
+        intent: &RecordNoteIntent,
+        probe: ValueProbe,
+    ) -> Result<CaptureCompleteResult, CompleteError> {
+        let entry = self.plan_entry(intent);
+        let folder = self.catalog.folder(&intent.dir).clone();
+        let rows = self.value_rows(item, &probe, &entry, &folder)?;
+        let query = probe.query.clone();
+        let field_key = probe.field.key.clone();
+        Ok(self.finish(
+            item,
+            intent,
+            CompletionContext::RecordValue,
+            probe.replace.clone(),
+            Candidates::RecordValue(rows),
+            Some(query),
+            Some(field_key),
+            &entry,
+        ))
+    }
+
+    fn value_rows(
+        &self,
+        item: &EditorItemParse,
+        probe: &ValueProbe,
+        entry: &RecordParseEntry,
+        folder: &FolderIndex,
+    ) -> Result<Vec<RecordValueCandidate>, CompleteError> {
+        let field = &probe.field;
+        let mut suggestions = match &field.kind {
+            FieldKind::Choices(choices) => choices
+                .iter()
+                .filter(|choice| {
+                    query_matches(&probe.query, &choice.value)
+                        || query_matches(&probe.query, &choice.label)
+                })
+                .map(|choice| SuggestedValue {
+                    insert: choice.value.clone(),
+                    display: choice.label.clone(),
+                    count: None,
+                })
+                .collect(),
+            FieldKind::Date => ["today", "yesterday"]
+                .into_iter()
+                .filter(|value| query_matches(&probe.query, value))
+                .map(|value| SuggestedValue {
+                    insert: value.to_string(),
+                    display: value.to_string(),
+                    count: None,
+                })
+                .collect(),
+            FieldKind::Text if field.suggest => folder
+                .value_suggestions(&field.key)
+                .into_iter()
+                .filter(|suggestion| {
+                    value_is_valid(field, &suggestion.insert, self.today)
+                        && (query_matches(&probe.query, &suggestion.insert)
+                            || query_matches(
+                                &probe.query,
+                                &suggestion.display(),
+                            ))
+                })
+                .map(|suggestion| SuggestedValue {
+                    display: suggestion.display(),
+                    count: Some(suggestion.count),
+                    insert: suggestion.insert,
+                })
+                .collect(),
+            FieldKind::Link => link_suggestions(
+                self.request.bob_dir,
+                field,
+                folder,
+                &probe.query,
+                self.today,
+            )?,
+            FieldKind::Text | FieldKind::Url | FieldKind::Number => Vec::new(),
+        };
+        if matches!(
+            field.kind,
+            FieldKind::Url | FieldKind::Number | FieldKind::Text
+        ) && !field.suggest
+            && suggestions.is_empty()
+            && probe.query.is_empty()
+        {
+            suggestions.push(SuggestedValue {
+                insert: String::new(),
+                display: String::new(),
+                count: None,
+            });
+        }
+        let remaining_after = remaining_missing(entry, &field.key);
+        let mut rows = Vec::new();
+        for suggestion in suggestions {
+            let insert = value_insert_text(
+                self.request.raw_text,
+                &probe.replace,
+                &suggestion.insert,
+                probe.insert_bullet.as_deref(),
+                item_newline(self.request.raw_text, item.start..item.end),
+            );
+            let cursor_after = probe.replace.start
+                + insert.trim_end_matches(['\n', '\r']).len();
+            let continuation = value_continuation(
+                cursor_after,
+                remaining_after,
+                &suggestion.insert,
+            );
+            rows.push(RecordValueCandidate {
+                replacement: insert,
+                value: suggestion.insert,
+                display: suggestion.display,
+                kind: field.kind.kind_name(),
+                count: suggestion.count,
+                cursor_after,
+                continuation,
+            });
+        }
+        Ok(rows)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn finish(
+        &self,
+        item: &EditorItemParse,
+        intent: &RecordNoteIntent,
+        context: CompletionContext,
+        replace: Range<usize>,
+        candidates: Candidates,
+        query: Option<String>,
+        field: Option<String>,
+        entry: &RecordParseEntry,
+    ) -> CaptureCompleteResult {
+        let mut result = CaptureCompleteResult::empty(self.request.cursor);
+        result.context = Some(context);
+        result.replacement = Replacement {
+            start: replace.start,
+            end: replace.end,
+        };
+        result.candidates = candidates;
+        result.query = query;
+        result.record = Some(RecordCompletionMeta {
+            record_type: entry.record_type.id.clone(),
+            dir: intent.dir.clone(),
+            label: entry.record_type.label.clone(),
+            emoji: entry.record_type.emoji.clone(),
+            field,
+            title: (!intent.title.is_empty()).then(|| intent.title.clone()),
+        });
+        result.diagnostics =
+            near_diagnostics(self.request.raw_text, &entry.near_values);
+        let _ = item;
+        result
+    }
+}
+
+struct FieldKeyProbe {
+    query: String,
+    replace: Range<usize>,
+}
+
+struct ValueProbe {
+    field: RecordField,
+    query: String,
+    replace: Range<usize>,
+    insert_bullet: Option<String>,
+}
+
+struct SuggestedValue {
+    insert: String,
+    display: String,
+    count: Option<usize>,
+}
+
+fn field_key_probe(
+    raw_text: &str,
+    item: &EditorItemParse,
+    cursor: usize,
+) -> Option<FieldKeyProbe> {
+    for line in capture_language::split_physical_lines(raw_text) {
+        if cursor < line.start || cursor > line.end {
+            continue;
+        }
+        if line.start == item.line_start {
+            return None;
+        }
+        if line.start < item.start || line.start > item.end {
+            return None;
+        }
+        let (body_offset, body) = first_level_dash_body(line.text)?;
+        let body_start = line.start + body_offset;
+        if cursor < body_start {
+            return None;
+        }
+        if body.contains("::") {
+            return None;
+        }
+        let typed = raw_text.get(body_start..cursor).unwrap_or("");
+        if !typed.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(byte, b'_' | b'-' | b' ' | b'\t')
+        }) {
+            return None;
+        }
+        let query = typed.trim().to_string();
+        let body_end = body_start + body.trim_end().len();
+        return Some(FieldKeyProbe {
+            query,
+            replace: body_start..body_end,
+        });
+    }
+    None
+}
+
+fn first_level_dash_body(line_text: &str) -> Option<(usize, &str)> {
+    let bytes = line_text.as_bytes();
+    if bytes.first() != Some(&b'-') {
+        return None;
+    }
+    let separator = *bytes.get(1)?;
+    if !matches!(separator, b' ' | b'\t') {
+        return None;
+    }
+    let mut end = 2;
+    while end < bytes.len() && matches!(bytes[end], b' ' | b'\t') {
+        end += 1;
+    }
+    Some((end, &line_text[end..]))
+}
+
+fn value_probe(
+    request: &CompleteRequest<'_>,
+    intent: &RecordNoteIntent,
+) -> Option<ValueProbe> {
+    let cursor = request.cursor;
+    let policy =
+        record_policy_for_draft(request.bob_dir, None, request.raw_text);
+    let record_type = policy.records_config()?.by_directory(&intent.dir)?;
+    for input in &intent.fields {
+        let schema =
+            record_type.field(&input.key).cloned().unwrap_or_else(|| {
+                RecordField {
+                    key: input.key.clone(),
+                    label: input.key.clone(),
+                    kind: FieldKind::Text,
+                    required: false,
+                    list: false,
+                    default: None,
+                    suggest: false,
+                    min: None,
+                    max: None,
+                }
+            });
+        let value_start = input.value_range.0;
+        let value_end = input.value_range.1;
+        let colon_end = input.key_range.1 + 2;
+        let in_value = cursor >= colon_end.min(value_start)
+            && cursor <= value_end.max(colon_end);
+        if !in_value {
+            continue;
+        }
+        if schema.list {
+            let (member_start, member_end) = list_member_at(
+                request.raw_text,
+                value_start,
+                value_end,
+                cursor,
+            );
+            let query = request
+                .raw_text
+                .get(member_start..cursor.min(member_end))
+                .unwrap_or("")
+                .trim_start()
+                .to_string();
+            return Some(ValueProbe {
+                field: schema,
+                query,
+                replace: member_start..member_end,
+                insert_bullet: None,
+            });
+        }
+        let query_end = cursor.min(value_end);
+        let query = request
+            .raw_text
+            .get(value_start..query_end)
+            .unwrap_or("")
+            .to_string();
+        return Some(ValueProbe {
+            field: schema,
+            query,
+            replace: value_start..value_end,
+            insert_bullet: None,
+        });
+    }
+    None
+}
+
+fn list_member_at(
+    raw: &str,
+    value_start: usize,
+    value_end: usize,
+    cursor: usize,
+) -> (usize, usize) {
+    let value = raw.get(value_start..value_end).unwrap_or("");
+    let relative = cursor.saturating_sub(value_start).min(value.len());
+    let mut start = 0;
+    let mut in_wikilink = false;
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index..].starts_with(b"[[") {
+            in_wikilink = true;
+            index += 2;
+            continue;
+        }
+        if bytes[index..].starts_with(b"]]") {
+            in_wikilink = false;
+            index += 2;
+            continue;
+        }
+        if bytes[index] == b',' && !in_wikilink {
+            if relative <= index {
+                let member = &value[start..index];
+                let trim_start = member.len() - member.trim_start().len();
+                let trim_end = member.trim_end().len();
+                let member_start = value_start + start + trim_start;
+                let member_end = value_start + start + trim_end.max(trim_start);
+                return (member_start, member_end);
+            }
+            start = index + 1;
+        }
+        index += value[index..]
+            .chars()
+            .next()
+            .map(char::len_utf8)
+            .unwrap_or(1);
+    }
+    let member = &value[start..];
+    let trim_start = member.len() - member.trim_start().len();
+    let trim_end = member.trim_end().len();
+    let member_start = value_start + start + trim_start;
+    let member_end = value_start + start + trim_end.max(trim_start);
+    (member_start, member_end)
+}
+
+fn insert_point_after_fields(
+    raw_text: &str,
+    item: &EditorItemParse,
+    intent: &RecordNoteIntent,
+) -> usize {
+    if let Some(last) = intent.fields.last() {
+        let end = last.value_range.1.max(last.key_range.1);
+        return after_line_containing(raw_text, end);
+    }
+    after_line_containing(raw_text, item.start)
+}
+
+fn after_line_containing(raw_text: &str, offset: usize) -> usize {
+    for line in capture_language::split_physical_lines(raw_text) {
+        if offset >= line.start && offset <= line.end {
+            let mut index = line.end;
+            if raw_text.as_bytes().get(index) == Some(&b'\r') {
+                index += 1;
+            }
+            if raw_text.as_bytes().get(index) == Some(&b'\n') {
+                index += 1;
+            }
+            return index;
+        }
+    }
+    raw_text.len()
+}
+
+fn item_newline(raw_text: &str, range: Range<usize>) -> &'static str {
+    if raw_text
+        .get(range)
+        .is_some_and(|slice| slice.contains("\r\n"))
+    {
+        "\r\n"
+    } else {
+        "\n"
+    }
+}
+
+fn value_insert_text(
+    raw: &str,
+    replace: &Range<usize>,
+    value: &str,
+    insert_bullet: Option<&str>,
+    newline: &str,
+) -> String {
+    if let Some(key) = insert_bullet {
+        let bullet = format!("- {key}:: {value}");
+        let at = replace.start;
+        let at_end = at == raw.len();
+        let preceded_by_nl = at > 0 && raw.as_bytes()[at - 1] == b'\n';
+        if at_end && !preceded_by_nl {
+            format!("{newline}{bullet}")
+        } else if at_end {
+            bullet
+        } else {
+            format!("{bullet}{newline}")
+        }
+    } else if replace.start == replace.end
+        && replace.start > 0
+        && !raw.as_bytes()[replace.start - 1].is_ascii_whitespace()
+        && !value.is_empty()
+    {
+        format!(" {value}")
+    } else {
+        value.to_string()
+    }
+}
+
+fn value_continuation(
+    cursor: usize,
+    remaining_after: bool,
+    insert: &str,
+) -> Option<CandidateContinuation> {
+    if insert.is_empty() {
+        return None;
+    }
+    remaining_after.then_some(CandidateContinuation {
+        cursor,
+        next_missing_field: true,
+    })
+}
+
+fn remaining_missing(entry: &RecordParseEntry, filled: &str) -> bool {
+    entry.missing.iter().any(|key| key != filled)
+}
+
+fn query_matches(query: &str, text: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    text.to_lowercase().contains(&query.to_lowercase())
+}
+
+fn value_is_valid(
+    field: &RecordField,
+    value: &str,
+    today: chrono::NaiveDate,
+) -> bool {
+    matches!(
+        records::schema::validate_field_input(
+            field,
+            &FieldInputState::SuppliedValues(vec![value.to_string()]),
+            today,
+        ),
+        Ok(ValidatedFieldInput::Value(_))
+    )
+}
+
+fn link_suggestions(
+    bob_dir: &Path,
+    field: &RecordField,
+    folder: &FolderIndex,
+    query: &str,
+    today: chrono::NaiveDate,
+) -> Result<Vec<SuggestedValue>, CompleteError> {
+    let mut rows = Vec::new();
+    let mut seen = HashSet::new();
+    for suggestion in folder.value_suggestions(&field.key) {
+        if !value_is_valid(field, &suggestion.insert, today) {
+            continue;
+        }
+        if !query_matches(query, &suggestion.insert)
+            && !query_matches(query, &suggestion.display())
+        {
+            continue;
+        }
+        let fold = suggestion.display().to_lowercase();
+        if !seen.insert(fold) {
+            continue;
+        }
+        rows.push(SuggestedValue {
+            display: suggestion.display(),
+            count: Some(suggestion.count),
+            insert: suggestion.insert,
+        });
+    }
+    let index = crate::native::capture_links::NoteIndex::read(bob_dir)
+        .map_err(CompleteError::io)?;
+    for (insert_target, stem) in index.matching_note_inserts(query) {
+        let insert = format!("[[{insert_target}]]");
+        if !value_is_valid(field, &insert, today) {
+            continue;
+        }
+        let fold = stem.to_lowercase();
+        if !seen.insert(fold) {
+            continue;
+        }
+        rows.push(SuggestedValue {
+            insert,
+            display: stem,
+            count: None,
+        });
+    }
+    Ok(rows)
+}
+
+fn near_diagnostics(
+    raw_text: &str,
+    hints: &[NearValueHint],
+) -> Vec<CaptureCompleteDiagnostic> {
+    hints
+        .iter()
+        .filter(|hint| hint.source_range.end <= raw_text.len())
+        .map(|hint| CaptureCompleteDiagnostic {
+            severity: "warning",
+            code: "record_value_near",
+            message: format!(
+                "`{}` looks like more common `{}`",
+                hint.authored, hint.proposed
+            ),
+            range: Some(Replacement {
+                start: hint.source_range.start,
+                end: hint.source_range.end,
+            }),
+            field: Some(hint.field.clone()),
+            authored: Some(hint.authored.clone()),
+            proposed: Some(hint.proposed.clone()),
+        })
+        .collect()
+}
+
+fn empty_entry(intent: &RecordNoteIntent) -> RecordParseEntry {
+    RecordParseEntry {
+        index: 0,
+        intent: intent.clone(),
+        record_type: RecordType {
+            id: intent.dir.clone(),
+            dir: intent.dir.clone(),
+            label: intent.dir.clone(),
+            emoji: None,
+            parent: None,
+            dated_notes: false,
+            fields: Vec::new(),
+            legacy: Vec::new(),
+        },
+        path: None,
+        stem: None,
+        stem_source: None,
+        properties: Vec::new(),
+        missing: Vec::new(),
+        invalid: Vec::new(),
+        plan_issue: None,
+        near_values: Vec::new(),
+    }
+}

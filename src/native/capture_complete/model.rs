@@ -44,6 +44,26 @@ pub(super) struct RouteCandidate {
     /// is unchanged for older inputs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) match_kind: Option<&'static str>,
+    /// Record type emoji, present only on configured record-folder rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) emoji: Option<String>,
+    /// Indexed note count, present only on configured record-folder rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) count: Option<usize>,
+    /// Record type id, present only on configured record-folder rows.
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub(super) record_type: Option<String>,
+    /// Follow-up request after accepting this record route.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) continuation: Option<CandidateContinuation>,
+}
+
+/// Cursor and request kind a client should use after accepting a candidate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct CandidateContinuation {
+    /// UTF-8 byte offset in the draft after this candidate's replacement.
+    pub(super) cursor: usize,
+    pub(super) next_missing_field: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -71,6 +91,104 @@ pub(super) struct SectionCandidate {
     pub(super) replacement: String,
     pub(super) title: String,
     pub(super) level: usize,
+}
+
+/// Mixed section menu: ordinary heading rows plus an optional record-create
+/// row. Untagged so heading JSON stays `{replacement, title, level}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub(super) enum SectionMenuRow {
+    Create(RecordCreateCandidate),
+    Section(SectionCandidate),
+}
+
+impl SectionMenuRow {
+    pub(super) fn as_section(&self) -> Option<&SectionCandidate> {
+        match self {
+            Self::Section(row) => Some(row),
+            Self::Create(_) => None,
+        }
+    }
+
+    pub(super) fn replacement(&self) -> &str {
+        match self {
+            Self::Section(row) => &row.replacement,
+            Self::Create(row) => &row.replacement,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RecordCreateCandidate {
+    pub(super) kind: &'static str,
+    pub(super) replacement: String,
+    pub(super) label: String,
+    pub(super) route: String,
+    #[serde(rename = "type")]
+    pub(super) record_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) emoji: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) count: Option<usize>,
+    pub(super) cursor_after: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) continuation: Option<CandidateContinuation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RecordFieldCandidate {
+    pub(super) replacement: String,
+    pub(super) key: String,
+    pub(super) label: String,
+    pub(super) kind: &'static str,
+    pub(super) required: bool,
+    pub(super) list: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub(super) defaulted: bool,
+    pub(super) cursor_after: usize,
+    pub(super) continuation: CandidateContinuation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RecordValueCandidate {
+    pub(super) replacement: String,
+    pub(super) value: String,
+    pub(super) display: String,
+    pub(super) kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) count: Option<usize>,
+    pub(super) cursor_after: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) continuation: Option<CandidateContinuation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RecordCompletionMeta {
+    #[serde(rename = "type")]
+    pub(super) record_type: String,
+    pub(super) dir: String,
+    pub(super) label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) emoji: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) field: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) title: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct CaptureCompleteDiagnostic {
+    pub(super) severity: &'static str,
+    pub(super) code: &'static str,
+    pub(super) message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) range: Option<Replacement>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) field: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) authored: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) proposed: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -799,7 +917,9 @@ pub(super) struct PomodoroNameCandidate {
 #[serde(untagged)]
 pub(super) enum Candidates {
     Route(Vec<RouteCandidate>),
-    Section(Vec<SectionCandidate>),
+    Section(Vec<SectionMenuRow>),
+    RecordField(Vec<RecordFieldCandidate>),
+    RecordValue(Vec<RecordValueCandidate>),
     Task(Vec<TaskCandidate>),
     Drawer(Vec<DrawerCandidate>),
     PomodoroName(Vec<PomodoroNameCandidate>),
@@ -868,6 +988,8 @@ impl Candidates {
         match self {
             Self::Route(items) => items.len(),
             Self::Section(items) => items.len(),
+            Self::RecordField(items) => items.len(),
+            Self::RecordValue(items) => items.len(),
             Self::Task(items) => items.len(),
             Self::Drawer(items) => items.len(),
             Self::PomodoroName(items) => items.len(),
@@ -1003,6 +1125,14 @@ pub(super) struct CaptureCompleteResult {
     pub(super) project_task_move: Option<ProjectTaskMoveContext>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) hidden_count: Option<usize>,
+    /// Record item, type, and active field for record field/value/create
+    /// menus. Omitted outside those contexts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) record: Option<RecordCompletionMeta>,
+    /// Structured nonblocking hints such as `record_value_near`. Omitted
+    /// when empty so older responses stay byte-identical.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) diagnostics: Vec<CaptureCompleteDiagnostic>,
 }
 
 impl CaptureCompleteResult {
@@ -1036,6 +1166,8 @@ impl CaptureCompleteResult {
             project_task_move: None,
             hidden_count: None,
             one_off: None,
+            record: None,
+            diagnostics: Vec::new(),
         }
     }
 }

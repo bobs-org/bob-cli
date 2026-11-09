@@ -86,6 +86,10 @@ pub(crate) enum CompletionContext {
     /// accept inserts a backend-formatted `[[target#^id]]` replacement.
     /// Draft-only trigger, never stored syntax.
     WikilinkTask,
+    /// A first-level record field-name bullet (`- sta`, `- `).
+    RecordField,
+    /// A record field value, including an explicit next-missing-field request.
+    RecordValue,
 }
 
 /// The active marker component at one cursor position, ready for a

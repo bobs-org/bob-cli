@@ -80,6 +80,7 @@ pub(crate) struct RecordParseEntry {
     pub(crate) missing: Vec<String>,
     pub(crate) invalid: Vec<RecordDiagnostic>,
     pub(crate) plan_issue: Option<RecordParseIssue>,
+    pub(crate) near_values: Vec<records::NearValueHint>,
 }
 
 #[derive(Debug, Clone)]
@@ -183,6 +184,8 @@ pub(crate) fn resolve_record_intents_with_catalog(
         };
         let field_inputs = field_inputs_from_intent(intent);
         let notes = record_note_inputs(intent);
+        let near_values =
+            collect_near_value_hints(catalog, record_type, intent);
         let request = records::RecordCreateRequest {
             config,
             record_type: &record_type.id,
@@ -209,6 +212,7 @@ pub(crate) fn resolve_record_intents_with_catalog(
                     missing: plan.missing,
                     invalid: plan.invalid,
                     plan_issue: None,
+                    near_values,
                 });
             }
             Err(error) => {
@@ -232,11 +236,79 @@ pub(crate) fn resolve_record_intents_with_catalog(
                     missing: field_plan.missing,
                     invalid: field_plan.invalid,
                     plan_issue: Some(plan_issue(error, intent, record_type)),
+                    near_values,
                 });
             }
         }
     }
     entries
+}
+
+fn collect_near_value_hints(
+    catalog: &mut RecordCatalog,
+    record_type: &RecordType,
+    intent: &RecordNoteIntent,
+) -> Vec<records::NearValueHint> {
+    let needs_index = record_type.fields.iter().any(|field| {
+        field.suggest && matches!(field.kind, records::FieldKind::Text)
+    });
+    if !needs_index {
+        return Vec::new();
+    }
+    let folder = catalog.folder(&intent.dir);
+    let mut hints = Vec::new();
+    for field in &intent.fields {
+        let Some(schema) = record_type.field(&field.key) else {
+            continue;
+        };
+        if !schema.suggest || !matches!(schema.kind, records::FieldKind::Text) {
+            continue;
+        }
+        if field.value.is_empty() {
+            continue;
+        }
+        if schema.list {
+            for (member, range) in
+                list_member_ranges(&field.value, field.value_range.0)
+            {
+                if let Some(hint) =
+                    folder.near_value_hint(&field.key, &member, range)
+                {
+                    hints.push(hint);
+                }
+            }
+        } else if let Some(hint) = folder.near_value_hint(
+            &field.key,
+            &field.value,
+            field.value_range.0..field.value_range.1,
+        ) {
+            hints.push(hint);
+        }
+    }
+    hints
+}
+
+fn list_member_ranges(
+    value: &str,
+    value_start: usize,
+) -> Vec<(String, std::ops::Range<usize>)> {
+    let Ok(members) = records::schema::split_list_members(value) else {
+        return vec![(
+            value.to_string(),
+            value_start..value_start + value.len(),
+        )];
+    };
+    let mut ranges = Vec::new();
+    let mut search_from = 0;
+    for member in members {
+        let Some(relative) = value[search_from..].find(&member) else {
+            continue;
+        };
+        let start = value_start + search_from + relative;
+        ranges.push((member.clone(), start..start + member.len()));
+        search_from += relative + member.len();
+    }
+    ranges
 }
 
 fn resolved_destination(

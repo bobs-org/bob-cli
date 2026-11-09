@@ -232,7 +232,7 @@ impl FieldKind {
         }
     }
 
-    fn display_name(&self) -> &'static str {
+    pub(crate) fn kind_name(&self) -> &'static str {
         match self {
             Self::Text => "text",
             Self::Choices(_) => "choices",
@@ -241,6 +241,10 @@ impl FieldKind {
             Self::Url => "url",
             Self::Number => "number",
         }
+    }
+
+    fn display_name(&self) -> &'static str {
+        self.kind_name()
     }
 }
 
@@ -1110,7 +1114,7 @@ fn is_decimal_syntax(raw: &str) -> bool {
     }
 }
 
-fn split_list_members(raw: &str) -> Result<Vec<String>, String> {
+pub(crate) fn split_list_members(raw: &str) -> Result<Vec<String>, String> {
     if raw.is_empty() {
         return Err(
             "a list value cannot be empty; use an explicit empty field instead"

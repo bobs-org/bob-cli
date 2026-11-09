@@ -62,7 +62,7 @@ except `capture-task-id`/`capture-pomodoro-name` (write; `-d` previews) and
 | `bob clipboard` | `-f json` | Read-only selection and provider diagnostics; reports `would_succeed`, the selected provider and entry ages on success, or a refusal `code` and message. Clipboard and history text are never included | `schema_version: 1` | [Capture](../capture.md#clipboard) |
 | `bob capture` | `-f json` | Item results plus batch `captures`, `warnings`, `plan_budget`, `pomodoro_blocks`, `task_blocks`, `section_blocks`, `open_notes`, `pull_in`, `inbox_route`, `move_choice`, and `note_files`. Operation-specific payloads include `fanout` for target runs; `list` for list bullets; `note_pull` for a lone route; `project_note.moved_tasks` for project moves; `moves`/`merges` and `merge_offers` for transfers; `drawer`, `notes`, and `drawers` for task children; `clip.history` for clipboard history; and relation updates, label hides, cancel/complete effects. Session results carry start/close/adjust/shift data, effective clock fields, and applicable event conflicts. Incomplete dry runs can add `transfer_pending` or `merge_in_pending` to error results. The contract specifies each payload and warning | Unversioned (`ok`, no `schema_version`) | [Capture JSON](../capture.md#input-stdin-and-json-output), [task relations](../task-relations.md) |
 | `bob capture-parse` | `-f json` | Per-item modes, spans, diagnostics, and needs; `grammar: 20` identifies the language revision. Pomodoro starts expose `duration_units`, earlier-only `offset_units`, and nonzero `later_units`; Gmail URLs add `gmail_url` spans and optional thread key, saved title, and verdict/date hint. Multi-target runs expose `targets[]` for 2+ members; legacy fields describe the first, `needs` is their ordered union, and spans keep absolute ranges. Duplicate/split targets are coded. `>` transfers report `task_move`/`task_merge`, source/arrow/destination and spans; partial or malformed forms use targeted needs or `transfer_*` diagnostics. Move bullets add `sub_bullet_moves[]`, ID/marker spans, and `sub_bullet_move_choices[]` beside the choice marker; unfinished bullets need `project_task_move`, other failures use `move_bullet_*`. A lone `@route` is `note_pull`; with bullets it remains a list. Lists report per-bullet items and header ranges; empty sections need `list_item`. Other spans cover sections, relations, drawers, and `<` merge-in metadata; unterminated sections and incomplete drawers keep dedicated needs and codes. | `schema_version: 1` | [Capture](../capture.md), [cancel labels](../task-relations.md#17-cancel-labels), [complete labels](../task-relations.md#18-complete-labels) |
-| `bob capture-complete` | `-f json` | Completion context, candidates, replacement ranges, and `grammar: 19`. Optional `picker` metadata describes scope and continuation keys/aliases; `initial_selection` controls preselection. Rows can include target identity, disabled reasons, consequences, and creation choices. Contexts cover routes, tasks, types, directives, drawers, sections, relations, project moves, transfers, merge-in sources, and past-session segments. Relation labels report configured effects and hide replacements; block-ID contexts report used IDs, with owner/splice locations for nested task IDs. The contract defines each context and its optional fields | `schema_version: 1` | [Capture completion](../capture.md#bob-capture-complete) |
+| `bob capture-complete` | `-f json` | Completion context, candidates, replacement ranges, and `grammar: 20`. Optional `picker` metadata describes scope and continuation keys/aliases; `initial_selection` controls preselection. Rows can include target identity, disabled reasons, consequences, and creation choices. Contexts cover routes, tasks, types, directives, drawers, sections, `record_field`, `record_value`, relations, project moves, transfers, merge-in sources, and past-session segments. `-n/--next-missing-field` plus candidate `continuation: {cursor, next_missing_field}` walk required record fields; `record` metadata and `record_value_near` are omitted outside record contexts. Relation labels report configured effects and hide replacements; block-ID contexts report used IDs, with owner/splice locations for nested task IDs. The contract defines each context and its optional fields | `schema_version: 1` | [Capture completion](../capture.md#bob-capture-complete) |
 | `bob capture-pomodoro-name` | `-f json` | Name write (or `-d` plan) for one open Pomodoro, plus optional `warnings` | `schema_version: 1` | [Capture](../capture.md) |
 | `bob capture-pomodoros` | `-f json` | Ledger entries, `warnings`, and `max_task_link_count`; Pomodoro rows include `start_token` when selectable and their slug is non-empty; `--tasks` adds task agendas, optional `events` calendar rows/hints, event chips, `off_clock` and deprecated `untracked` fields plus `clock_source` (`on_tag`\|`off_tag`\|`note`\|`invalid_note`\|`default`) and `clock_note` (deciding note path or null), completed off-clock totals, and buffer objects with occupied spans on buffered Event Tasks | `schema_version: 1` | [Capture](../capture.md), [Pomodoro homes](../pomodoro-homes.md) |
 | `bob capture-related` | `-f json` | Candidate matches, UTF-8 draft anchors, verified actions, and already-linked tasks; `--query` adds scores | `schema_version: 1` | [Capture](../capture.md#bob-capture-related) |
@@ -103,6 +103,30 @@ human `display`: a choice is `"liked"` / `"Liked"`, a list is an array such
 as `["hot", "soup"]`, and a number stays numeric (`4.5`). Dates are ISO
 strings; links and URLs are strings. Empty optional fields omit both values.
 See [Capture](../capture.md#record-notes) for the full representation.
+
+```bash
+bob capture-complete -n -c 16 -f json -- 'Ramen Nagi @eat/'
+```
+
+```text { .no-copy title="Output (selected fields)" }
+{"ok":true,"schema_version":1,"grammar":20,"cursor":16,"context":"record_value","record":{"type":"restaurant","dir":"eat","label":"Restaurant","field":"status"},"candidates":[{"replacement":"\n- status:: liked","value":"liked","display":"Liked","kind":"choices","cursor_after":33,"continuation":{"cursor":33,"next_missing_field":true}}]}
+```
+
+Accepting inserts `- status:: liked`; `-n` at `continuation.cursor` walks
+remaining required fields, and the last omits `continuation`. `@` inserts
+`eat/ ` (`kind: "record"`). Empty `@eat#` expands `replacement` to the
+token and prepends `kind: "record_create"`:
+
+```bash
+bob capture-complete -c 5 -f json -- '@eat#'
+```
+
+```text { .no-copy title="Output (selected fields)" }
+{"ok":true,"schema_version":1,"grammar":20,"cursor":5,"replacement":{"start":0,"end":5},"context":"section","candidates":[{"kind":"record_create","replacement":"@eat/ ","label":"🍽️ New restaurant · eat/","route":"eat/","type":"restaurant","cursor_after":6,"continuation":{"cursor":6,"next_missing_field":true}},{"replacement":"@eat#Ideas","title":"Ideas","level":1}]}
+```
+
+Near-spellings warn `record_value_near` with no rewrite. Parse reports
+`severity`/`code`/`message`/`range`; complete adds `authored`/`proposed`.
 
 Past results are `kind: "pomodoro_past"` with `placement`; batches report
 `recorded`/`trimmed`, warn `pomodoro_past_trim`, omit `pomodoro_close`.

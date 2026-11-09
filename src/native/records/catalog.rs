@@ -94,6 +94,23 @@ pub(crate) struct ValueSuggestion {
     fold: String,
 }
 
+impl ValueSuggestion {
+    /// Display spelling that collapsed aliases share (wikilink phrase or
+    /// the original text).
+    pub(crate) fn display(&self) -> String {
+        value_display(&self.insert)
+    }
+}
+
+/// A nonblocking near-miss hint for an authored open-text value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NearValueHint {
+    pub(crate) field: String,
+    pub(crate) authored: String,
+    pub(crate) proposed: String,
+    pub(crate) source_range: std::ops::Range<usize>,
+}
+
 impl RecordCatalog {
     pub(crate) fn new(vault_root: impl Into<PathBuf>) -> Self {
         Self {
@@ -186,6 +203,17 @@ impl FolderIndex {
         field: &str,
     ) -> Vec<ValueSuggestion> {
         suggestions_for(self.notes.iter(), field)
+    }
+
+    /// Near-miss hint for an authored open-text value: a different display
+    /// spelling within edit distance 2 that has greater folder frequency.
+    pub(crate) fn near_value_hint(
+        &self,
+        field: &str,
+        authored: &str,
+        source_range: std::ops::Range<usize>,
+    ) -> Option<NearValueHint> {
+        near_value_hint(self, field, authored, source_range)
     }
 
     pub(crate) fn nearest_values(
@@ -795,6 +823,83 @@ fn is_within(path: &Path, root: &Path) -> bool {
 
 fn fold_key(value: &str) -> String {
     value.to_lowercase()
+}
+
+fn near_value_hint(
+    folder: &FolderIndex,
+    field: &str,
+    authored: &str,
+    source_range: std::ops::Range<usize>,
+) -> Option<NearValueHint> {
+    let authored = authored.trim();
+    if authored.is_empty() {
+        return None;
+    }
+    let authored_fold = fold_key(&value_display(authored));
+    let authored_insert_fold = fold_key(authored);
+    let suggestions = folder.value_suggestions(field);
+    let authored_count = suggestions
+        .iter()
+        .find(|suggestion| {
+            suggestion.fold == authored_fold
+                || fold_key(&suggestion.insert) == authored_insert_fold
+        })
+        .map(|suggestion| suggestion.count)
+        .unwrap_or(0);
+    let mut best: Option<(usize, &ValueSuggestion)> = None;
+    for suggestion in &suggestions {
+        if suggestion.fold == authored_fold
+            || fold_key(&suggestion.insert) == authored_insert_fold
+            || fold_key(&suggestion.display()) == authored_fold
+        {
+            continue;
+        }
+        if suggestion.count <= authored_count {
+            continue;
+        }
+        let Some(distance) = bounded_levenshtein(
+            &authored_fold,
+            &suggestion.fold,
+            NEAREST_DISTANCE,
+        )
+        .into_iter()
+        .chain(bounded_levenshtein(
+            &authored_insert_fold,
+            &fold_key(&suggestion.insert),
+            NEAREST_DISTANCE,
+        ))
+        .chain(bounded_levenshtein(
+            &authored_fold,
+            &fold_key(&suggestion.display()),
+            NEAREST_DISTANCE,
+        ))
+        .min() else {
+            continue;
+        };
+        if distance == 0 {
+            continue;
+        }
+        let better = match best {
+            None => true,
+            Some((best_distance, best_suggestion)) => {
+                suggestion.count > best_suggestion.count
+                    || (suggestion.count == best_suggestion.count
+                        && (distance < best_distance
+                            || (distance == best_distance
+                                && suggestion.insert < best_suggestion.insert)))
+            }
+        };
+        if better {
+            best = Some((distance, suggestion));
+        }
+    }
+    let (_, suggestion) = best?;
+    Some(NearValueHint {
+        field: field.to_owned(),
+        authored: authored.to_owned(),
+        proposed: suggestion.display(),
+        source_range,
+    })
 }
 
 fn value_display(original: &str) -> String {

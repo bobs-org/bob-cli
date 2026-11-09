@@ -242,6 +242,8 @@ fn json_shape_is_stable() {
         hidden_count: None,
         one_off: None,
         project_task_move: None,
+        record: None,
+        diagnostics: Vec::new(),
     })
     .expect("pomodoro json");
 
@@ -284,6 +286,10 @@ fn json_shape_is_stable() {
             kind: RouteCandidateKind::Area,
             status: None,
             match_kind: None,
+            emoji: None,
+            count: None,
+            record_type: None,
+            continuation: None,
         }]),
         theme_suggestion: None,
         r#override: None,
@@ -300,6 +306,8 @@ fn json_shape_is_stable() {
         hidden_count: None,
         one_off: None,
         project_task_move: None,
+        record: None,
+        diagnostics: Vec::new(),
     })
     .expect("json");
 
@@ -599,6 +607,10 @@ fn human_output_is_plain_without_color() {
                 kind: RouteCandidateKind::Area,
                 status: None,
                 match_kind: None,
+                emoji: None,
+                count: None,
+                record_type: None,
+                continuation: None,
             }]),
             theme_suggestion: None,
             r#override: None,
@@ -615,6 +627,8 @@ fn human_output_is_plain_without_color() {
             hidden_count: None,
             one_off: None,
             project_task_move: None,
+            record: None,
+            diagnostics: Vec::new(),
         },
         &styler,
     );

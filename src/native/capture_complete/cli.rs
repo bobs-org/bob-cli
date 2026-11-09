@@ -12,7 +12,6 @@ use clap::{
 
 use super::COMMAND_NAME;
 use super::{
-    engine::build_result,
     model::{CompleteError, OutputFormat},
     render::{print_error, print_success},
 };
@@ -47,6 +46,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let output_format = OutputFormat::from_matches(&matches);
     let all_tasks = matches.get_flag("all-tasks");
     let closed_tasks = matches.get_flag("closed-tasks");
+    let next_missing_field = matches.get_flag("next-missing-field");
     let bob_dir = bob_dir_from_matches(&matches);
     let cursor = *matches.get_one::<usize>("cursor").expect("required");
 
@@ -65,7 +65,14 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         );
     }
 
-    match build_result(&bob_dir, &raw_text, cursor, all_tasks, closed_tasks) {
+    match super::engine::build_result_for(&super::engine::CompleteRequest {
+        bob_dir: &bob_dir,
+        raw_text: &raw_text,
+        cursor,
+        all_tasks,
+        closed_tasks,
+        next_missing_field,
+    }) {
         Ok(result) => {
             print_success(&result, output_format);
             0
@@ -245,8 +252,20 @@ never inserts it. The response includes the subject's \
 A bare `%` opens the `directive` context with Bob-authored Clip, Pomodoro \
 note, and Template rows; bare-URL items also offer Listen. A typed letter \
 filters the rows, and opening the menu never reads the clipboard. Bare `#` \
-opens `task_type` with no row preselected. Every success response reports \
-`grammar: 19` while `schema_version` stays 1; an empty bare `#` or `%` \
+opens `task_type` with no row preselected. Record field-name completion covers a fresh first-level `- ` bullet \
+and a partial `- sta` key on a claimed record item (required keys first, \
+schema order within each group). Record value completion covers the caret \
+inside a `key:: value` (and list member) and `-n/--next-missing-field`, \
+which asks for the first missing required field in schema order. Satisfied \
+defaults count as present; an explicit empty required field stays missing. \
+Accepting a field name lands in `key:: ` and requests ordinary value \
+completion; accepting a route, create row, or value requests the next \
+missing field when any remain. Candidate `continuation` is that follow-up \
+request and is separate from picker `continuation`. Typed record values \
+own `%`, `#`, `@`, `~`, URLs, and `((` before task pickers. A local \
+`@eat#` section menu prepends a `record_create` row on an empty query.\n\n\
+Every success response reports \
+`grammar: 20` while `schema_version` stays 1; an empty bare `#` or `%` \
 query, an empty `=*` merge source, or an empty drawer query after `@route+id#`, adds \
 `initial_selection: \"none\"`. \
 A solo leading `:` token \
@@ -311,7 +330,7 @@ nothing for this field. The replacement covers the `((query` token \
 up to the cursor.",
         )
         .after_help(
-            "Examples:\n  bob capture-complete --cursor 1 --format json -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 20 -f json -- 'Fix flaky test @sase^'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file'\n  bob capture-complete -c 5 -- '[[sas'\n  bob capture-complete -c 1 -- '^'\n  bob capture-complete -c 1 -- ':'\n  bob capture-complete -c 1 -f json -- '/'\n  bob capture-complete -C -c 1 -f json -- '/'\n  bob capture-complete -c 13 -f json -- 'Follow up ((s'\n  bob capture-complete -c 7 -- '@inbox+ > @db'\n  bob capture-complete -c 21 -f json -- '@inbox+bench > @db+up'\n  bob capture-complete -c 16 -f json -- '@inbox+bench > +'\n\nContexts:\n  route, section, pomodoro_block_id, task_block_id, project_task_block_id, project_task_move, pomodoro_name, pomodoro_start_name, pomodoro_past_name, pomodoro_past_segment, task, drawer, active_task, task_type, directive, task_link, task_goto, task_parent, task_dependency, blocked_task, relation_to, relation_from, relation_label, task_complete, wikilink_note, wikilink_heading, wikilink_block, wikilink_task",
+            "Examples:\n  bob capture-complete --cursor 1 --format json -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 20 -f json -- 'Fix flaky test @sase^'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file'\n  bob capture-complete -c 5 -- '[[sas'\n  bob capture-complete -c 1 -- '^'\n  bob capture-complete -c 1 -- ':'\n  bob capture-complete -c 1 -f json -- '/'\n  bob capture-complete -C -c 1 -f json -- '/'\n  bob capture-complete -c 13 -f json -- 'Follow up ((s'\n  bob capture-complete -c 7 -- '@inbox+ > @db'\n  bob capture-complete -c 21 -f json -- '@inbox+bench > @db+up'\n  bob capture-complete -c 16 -f json -- '@inbox+bench > +'\n  bob capture-complete -n -c 16 -f json -- 'Ramen Nagi @eat/'\n\nContexts:\n  route, section, record_field, record_value, pomodoro_block_id, task_block_id, project_task_block_id, project_task_move, pomodoro_name, pomodoro_start_name, pomodoro_past_name, pomodoro_past_segment, task, drawer, active_task, task_type, directive, task_link, task_goto, task_parent, task_dependency, blocked_task, relation_to, relation_from, relation_label, task_complete, wikilink_note, wikilink_heading, wikilink_block, wikilink_task",
         )
         .disable_help_flag(true)
         .arg(all_tasks_arg())
@@ -320,6 +339,7 @@ up to the cursor.",
         .arg(cursor_arg())
         .arg(format_arg())
         .arg(help_arg())
+        .arg(next_missing_field_arg())
         .arg(text_arg())
 }
 
@@ -370,6 +390,16 @@ pub(super) fn format_arg() -> Arg {
         .value_parser(["human", "json"])
         .default_value("human")
         .help("Output format: human or json")
+}
+
+pub(super) fn next_missing_field_arg() -> Arg {
+    Arg::new("next-missing-field")
+        .long("next-missing-field")
+        .short('n')
+        .action(ArgAction::SetTrue)
+        .help(
+            "Offer the first missing required field of the record item containing the cursor",
+        )
 }
 
 pub(super) fn help_arg() -> Arg {

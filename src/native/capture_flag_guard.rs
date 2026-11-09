@@ -106,11 +106,12 @@ pub(crate) fn capture_complete_spec() -> GuardSpec {
         long("cursor", true),
         FORMAT,
         HELP,
+        long("next-missing-field", false),
     ];
     GuardSpec {
         longs: LONGS,
         short_values: "bcf",
-        short_flags: "aCh",
+        short_flags: "aChn",
         equals_only_shorts: "",
     }
 }

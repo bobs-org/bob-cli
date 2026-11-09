@@ -17,6 +17,7 @@ mod merge_in;
 mod output;
 mod parent_tasks;
 mod pomodoros;
+mod records;
 mod relations;
 mod routes_tasks;
 mod task_links;

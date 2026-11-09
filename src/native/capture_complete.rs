@@ -10,6 +10,7 @@ mod engine;
 mod merge;
 mod model;
 mod pomodoros;
+mod records;
 mod render;
 mod shell;
 mod successor;

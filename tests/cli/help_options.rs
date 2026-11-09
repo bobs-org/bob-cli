@@ -194,9 +194,11 @@ fn capture_complete_help_lists_options_alphabetically() {
         &[
             "-a, --all-tasks",
             "-b, --bob-dir",
+            "-C, --closed-tasks",
             "-c, --cursor",
             "-f, --format",
             "-h, --help",
+            "-n, --next-missing-field",
         ],
     );
     assert_stdout_has_no_ansi(&output);

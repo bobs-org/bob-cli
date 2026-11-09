@@ -8,7 +8,8 @@ use super::{
         task_candidates, task_complete_candidates, task_link_candidates,
         task_parent_candidates, TaskSearch,
     },
-    model::{Candidates, RouteCandidateKind},
+    engine::CompleteRequest,
+    model::{Candidates, RouteCandidateKind, SectionMenuRow},
     pomodoros::{apply_bare_start_name_replacements, pomodoro_candidates},
 };
 use crate::native::{
@@ -67,6 +68,20 @@ pub(crate) fn shell_completion(
             .is_some_and(|field| field.context == CompletionContext::Directive);
     if template && !directive_owns_cursor {
         return Ok(None);
+    }
+    let record_request = CompleteRequest {
+        bob_dir,
+        raw_text,
+        cursor,
+        all_tasks: false,
+        closed_tasks: false,
+        next_missing_field: false,
+    };
+    if let Some(result) = super::records::try_complete(&record_request)
+        .map_err(|error| error.message)?
+        && let Some(completion) = shell_from_record_result(result)
+    {
+        return Ok(Some(completion));
     }
     // Wikilinks are deferred: return before the ~300 ms `NoteIndex::read`.
     let current_route = capture_language::editor_item_at(raw_text, cursor)
@@ -157,6 +172,11 @@ pub(crate) fn shell_completion(
                         ("records", "record folder".to_string())
                     }
                 };
+                let full = if item.kind == RouteCandidateKind::Record {
+                    format!("{}{}", marker_prefix, item.replacement.trim_end())
+                } else {
+                    full
+                };
                 rows.push(ShellRow {
                     nospace: ends_in_continuation(&full),
                     full,
@@ -175,7 +195,20 @@ pub(crate) fn shell_completion(
                 return Ok(None);
             };
             let group = format!("sections in {route_for_group}");
+            if field.query.is_empty()
+                && let Some(create) = record_section_create_shell_row(
+                    bob_dir,
+                    raw_text,
+                    route,
+                    marker_start,
+                )
+            {
+                rows.push(create);
+            }
             for item in items {
+                let SectionMenuRow::Section(item) = item else {
+                    continue;
+                };
                 let full = format!("{}{}", marker_prefix, item.replacement);
                 if full.is_empty() {
                     continue;
@@ -1069,7 +1102,9 @@ pub(crate) fn shell_completion(
         CompletionContext::WikilinkNote
         | CompletionContext::WikilinkHeading
         | CompletionContext::WikilinkBlock
-        | CompletionContext::WikilinkTask => return Ok(None),
+        | CompletionContext::WikilinkTask
+        | CompletionContext::RecordField
+        | CompletionContext::RecordValue => return Ok(None),
     }
     Ok(Some(ShellCompletion { marker_start, rows }))
 }
@@ -1077,6 +1112,60 @@ pub(crate) fn shell_completion(
 /// A value ending in a continuation character expects more typing.
 pub(super) fn ends_in_continuation(value: &str) -> bool {
     value.ends_with([':', '+', '#', '=', '^', '@'])
+}
+
+fn shell_from_record_result(
+    result: super::model::CaptureCompleteResult,
+) -> Option<ShellCompletion> {
+    let marker_start = result.replacement.start;
+    let mut rows = Vec::new();
+    match result.candidates {
+        Candidates::RecordField(items) => {
+            for item in items {
+                rows.push(ShellRow {
+                    nospace: ends_in_continuation(item.replacement.trim_end()),
+                    full: item.replacement,
+                    description: item.label,
+                    group: "record fields".to_string(),
+                });
+            }
+        }
+        Candidates::RecordValue(items) => {
+            for item in items {
+                rows.push(ShellRow {
+                    nospace: ends_in_continuation(item.replacement.trim_end()),
+                    full: item.replacement,
+                    description: item.display,
+                    group: "record values".to_string(),
+                });
+            }
+        }
+        _ => return None,
+    }
+    Some(ShellCompletion { marker_start, rows })
+}
+
+fn record_section_create_shell_row(
+    _bob_dir: &Path,
+    raw_text: &str,
+    route: &str,
+    marker_start: usize,
+) -> Option<ShellRow> {
+    let dir = route.trim_end_matches('/');
+    let records = crate::native::config::records::load_records_config().ok()?;
+    let record_type = records.by_directory(dir)?;
+    if marker_start > 0
+        && raw_text.as_bytes().get(marker_start - 1) == Some(&b'@')
+    {
+        return None;
+    }
+    let full = format!("@{}/", record_type.dir);
+    Some(ShellRow {
+        nospace: ends_in_continuation(&full),
+        full,
+        description: format!("new {}", record_type.label.to_lowercase()),
+        group: "records".to_string(),
+    })
 }
 
 fn task_type_description(item: &super::model::TaskTypeCandidate) -> String {

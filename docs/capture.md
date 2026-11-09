@@ -59,6 +59,7 @@ workflow guide.
   - [Project notes](#project-notes)
     - [Offer a new project's tasks](#offer-a-new-projects-tasks)
   - [Record notes](#record-notes)
+    - [Guided fields](#guided-fields)
   - [Sub-bullets under existing tasks](#sub-bullets-under-existing-tasks)
     - [Moving and merging tasks with `>`](#moving-and-merging-tasks-with)
     - [Merging tasks into a new task with `<`](#merging-tasks-into-a-new-task-with)
@@ -1186,7 +1187,7 @@ uses the normal successor-offer shape with `trigger: "note_pull"`, an empty
 `pull_in.groups[]` row carries `note` and Bob-authored copy. Capture remains
 unversioned; `capture-parse` reports `mode: "note_pull"`, `needs: []`, no
 diagnostics, the route spans, and the ordinary list summary with
-`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 19`.
+`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 20`.
 See [task-dependencies.md §12.20](task-dependencies.md#1220-note-pull-offers)
 for the JSON, copy, gate, and protocol contracts, and
 [§12.21](task-dependencies.md#1221-np-note-pull-vectors) for the NP vectors.
@@ -6518,6 +6519,52 @@ Exact token forms live in
 [Capture syntax](reference/capture-syntax.md#record-notes). Wire examples
 live in [JSON outputs](reference/json-outputs.md#record-notes).
 
+#### Guided fields
+
+`bob capture-complete` walks a claimed record item through its required
+fields. A local `@` route menu offers the collection as
+`🍽️ New restaurant · 92` (emoji, lowercased label, indexed count). Accept
+inserts `@eat/ ` with a trailing space and a candidate
+`continuation: {cursor, next_missing_field: true}` that asks for the first
+missing required field of that item. `-n/--next-missing-field` is the same
+request at an explicit cursor: satisfied defaults count as present; an
+explicit empty required field stays missing; a complete record, non-record
+item, or separator returns empty success.
+
+On `Ramen Nagi @eat/`, `-n` offers status choices in schema order. Accepting
+`Liked` inserts `- status:: liked` after the field block (or after the
+parent when none exists), then opens category, then location. The last
+required value omits `continuation`. A fresh first-level `- ` offers field
+names, required first, then optional keys still available for override
+(defaulted keys stay listed and marked defaulted). A caret inside an
+existing `key:: value` opens that field's value menu without previous menu
+state. List members replace only the member under the caret. All
+replacements are ordinary visible draft edits.
+
+Value menus follow the field kind: choices in schema order after query
+filter; suggested open text as collapsed folder values (Westfield and
+`[[nj_towns#^town|westfield]]` share one row that inserts the most-used
+original); dates as `today` then `yesterday`; links as used folder links
+then existing notes; URL, number, and nonsuggested text keep the field
+context even with zero suggestions. Typed values remain allowed. A
+near-spelling such as `Cheeseteaks` next to a more frequent `Cheesesteaks`
+adds a nonblocking `record_value_near` warning in parse and complete, with
+no rewrite.
+
+The `@eat#` section menu on an empty query starts with highlighted
+`🍽️ New restaurant · eat/` (`kind: "record_create"`). Accepting it replaces
+the whole `@eat#` token with `@eat/ ` and begins the same field chain.
+Existing heading rows still resolve their headings; the JSON replacement
+range covers the entire local route/section token so every row is a
+complete token (`@eat/ ` or `@eat#Ideas`). Typed queries omit the create
+row. Global `@@eat#`, transfer/merge destinations, and notes that are not
+record collections never offer it.
+
+Typed record field values own `%`, `#`, `@`, `~`, URLs, and `((` before
+task pickers. Link-kind values reuse note/heading/block sources while
+keeping record edit ownership. Template argument rows are not record items.
+Ordinary drafts with no `@dir/` or collection route skip the record catalog.
+
 ### Sub-bullets under existing tasks
 
 Use a leading or trailing `@<route>+<block-id>` marker to capture an ordinary
@@ -9156,7 +9203,7 @@ prints a dim `no rewrite` line plus the notices.
 ## `bob capture-complete`
 
 ```bash
-bob capture-complete --cursor BYTE [-a|--all-tasks] [-b|--bob-dir DIR] [-f|--format human|json] [--] [TEXT]...
+bob capture-complete --cursor BYTE [-a|--all-tasks] [-b|--bob-dir DIR] [-C|--closed-tasks] [-f|--format human|json] [-n|--next-missing-field] [--] [TEXT]...
 ```
 
 In a `<` source slot, `< +` / `< +query` opens the
@@ -9225,6 +9272,12 @@ back to that heading: the raw title when it is one unquoted token, else the
 hyphen slug (`future-work` for `## Future Work`), else a quoted `"Title"`
 with `"` and `\` escaped. Partial quoted queries decode to the inner text
 and the replacement range covers the whole literal, opening quote included.
+A local record collection's empty `@eat#` query prepends one
+`kind: "record_create"` row (`🍽️ New restaurant · eat/`) and expands the
+response replacement to the whole `@eat#` token so every row inserts a
+complete token (`@eat/ ` or `@eat#Ideas`). Typed heading queries, `@@`
+global destinations, transfer/merge lines, and non-record notes omit that
+row. See [Guided fields](#guided-fields).
 Drawer completion
 covers `@route+id#prefix` and a bare `@route+id#` once the item has body text,
 backed by the same scanner as `bob capture-drawers`; the candidate
@@ -9497,8 +9550,29 @@ the Pomodoro `%n` would receive and whether a listen command is configured;
 the menu never reads the clipboard. Disabled rows explain composition rules
 such as `%n` beside a route, `%t` on a later item, and `%c` in a template.
 
+Record field-name completion (`record_field`) covers a fresh first-level
+`- ` bullet and a partial `- sta` key on a claimed record item: required
+keys first, schema order within each group. Record value completion
+(`record_value`) covers the caret inside a `key:: value` (and the list
+member under the caret) and `-n/--next-missing-field`, which asks for the
+first missing required field in schema order of the record item containing
+`--cursor`. Satisfied defaults count as present; an explicit empty required
+field stays missing. Accepting a field name lands in `key:: ` and requests
+ordinary value completion (`continuation.next_missing_field: false`);
+accepting a route, create row, or value requests the next missing field
+when any remain. Candidate `continuation: {cursor, next_missing_field}` is
+that follow-up request, computed from the resulting field state, and is
+separate from picker `continuation`. The last required value omits it.
+Responses add `record` metadata (type, dir, label, optional field/title)
+only in these contexts. A near-spelling warning uses code
+`record_value_near` with `authored` and `proposed` on complete (parse
+reports the same message and code with no rewrite). Configured record
+folders in the local route menu insert `eat/ ` (trailing space), label
+`🍽️ New restaurant · 92`, and the same next-field continuation. See
+[Guided fields](#guided-fields).
+
 Every successful `capture-parse` and `capture-complete` response includes
-top-level `grammar: 19`; `schema_version` remains 1. An empty query opened by a
+top-level `grammar: 20`; `schema_version` remains 1. An empty query opened by a
 bare `#` or `%` adds `initial_selection: "none"`, so clients leave every row
 unselected. The field is omitted for typed queries and other contexts.
 

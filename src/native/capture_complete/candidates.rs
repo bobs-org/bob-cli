@@ -6,10 +6,11 @@ use std::{
 
 use super::model::{
     ActiveTaskCandidate, ActiveTaskPomodoroCandidate, BlockedTaskCandidate,
-    Candidates, CompleteError, DependencyCandidate, PickerRelationEntry,
-    PickerRelationship, PickerRelationshipEntry, ProjectTaskMoveCandidate,
-    ProjectTaskMoveContext, RelationCandidate, RelationLabelSuggestion,
-    RouteCandidate, SectionCandidate, TaskCandidate, TaskCompleteCandidate,
+    CandidateContinuation, Candidates, CompleteError, DependencyCandidate,
+    PickerRelationEntry, PickerRelationship, PickerRelationshipEntry,
+    ProjectTaskMoveCandidate, ProjectTaskMoveContext, RecordCreateCandidate,
+    RelationCandidate, RelationLabelSuggestion, Replacement, RouteCandidate,
+    SectionCandidate, SectionMenuRow, TaskCandidate, TaskCompleteCandidate,
     TaskGotoCandidate, TaskLinkCandidate, TaskParentCandidate,
 };
 use crate::native::{
@@ -38,16 +39,77 @@ pub(super) fn route_candidates(
     Ok(Candidates::Route(
         ranked
             .into_iter()
-            .map(|(target, match_kind)| RouteCandidate {
-                replacement: target.route.clone(),
-                route: target.route,
-                label: target.label,
-                kind: target.kind.into(),
-                status: target.status,
-                match_kind,
+            .map(|(target, match_kind)| {
+                record_aware_route_candidate(target, match_kind)
             })
             .collect(),
     ))
+}
+
+fn record_aware_route_candidate(
+    target: capture_targets::CaptureTarget,
+    match_kind: Option<&'static str>,
+) -> RouteCandidate {
+    let record = target.kind == capture_targets::CaptureTargetKind::Record;
+    RouteCandidate {
+        replacement: if record {
+            format!("{} ", target.route)
+        } else {
+            target.route.clone()
+        },
+        route: target.route,
+        label: if record {
+            record_new_count_label(
+                target.emoji.as_deref(),
+                &target.label,
+                target.count.unwrap_or(0),
+            )
+        } else {
+            target.label
+        },
+        kind: target.kind.into(),
+        status: target.status,
+        match_kind,
+        emoji: target.emoji,
+        count: target.count,
+        record_type: target.record_type,
+        continuation: None,
+    }
+}
+
+fn record_new_count_label(
+    emoji: Option<&str>,
+    label: &str,
+    count: usize,
+) -> String {
+    let name = label.to_lowercase();
+    match emoji {
+        Some(emoji) if !emoji.is_empty() => {
+            format!("{emoji} New {name} · {count}")
+        }
+        _ => format!("New {name} · {count}"),
+    }
+}
+
+/// Patch record-route continuation cursors once the response replacement
+/// start is known.
+pub(super) fn annotate_record_route_continuations(
+    candidates: &mut Candidates,
+    replacement_start: usize,
+) {
+    let Candidates::Route(rows) = candidates else {
+        return;
+    };
+    for row in rows {
+        if row.kind != super::model::RouteCandidateKind::Record {
+            continue;
+        }
+        let cursor = replacement_start + row.replacement.len();
+        row.continuation = Some(CandidateContinuation {
+            cursor,
+            next_missing_field: true,
+        });
+    }
 }
 
 /// Route ranking with `project_name_aliases`: canonical prefix matches
@@ -100,13 +162,98 @@ pub(super) fn section_candidates(
     Ok(Candidates::Section(
         ranked
             .into_iter()
-            .map(|section| SectionCandidate {
-                replacement: section.replacement,
-                title: section.title,
-                level: section.level,
+            .map(|section| {
+                SectionMenuRow::Section(SectionCandidate {
+                    replacement: section.replacement,
+                    title: section.title,
+                    level: section.level,
+                })
             })
             .collect(),
     ))
+}
+
+/// For a configured record collection's local `@dir#` token, expand the
+/// response range to the whole token and make every row a complete
+/// replacement. Prepend the create row only on an empty query.
+pub(super) fn mix_record_section_create(
+    bob_dir: &Path,
+    raw_text: &str,
+    field: &crate::native::capture_language::CompletionField,
+    candidates: &mut Candidates,
+) -> Option<Replacement> {
+    let Candidates::Section(rows) = candidates else {
+        return None;
+    };
+    let dir = field.route.as_deref()?.trim_end_matches('/');
+    let records = crate::native::config::records::load_records_config().ok()?;
+    let record_type = records.by_directory(dir)?.clone();
+    let token_start =
+        record_section_token_start(raw_text, field.replacement.0)?;
+    if token_start > 0
+        && raw_text.as_bytes().get(token_start - 1) == Some(&b'@')
+    {
+        return None;
+    }
+    let token_prefix = raw_text.get(token_start..field.replacement.0)?;
+    if !token_prefix.starts_with('@') || !token_prefix.ends_with('#') {
+        return None;
+    }
+    for row in rows.iter_mut() {
+        if let SectionMenuRow::Section(section) = row {
+            section.replacement =
+                format!("{token_prefix}{}", section.replacement);
+        }
+    }
+    if field.query.is_empty() {
+        let mut catalog = crate::native::records::RecordCatalog::new(bob_dir);
+        let count = catalog.folder(&record_type.dir).notes().len();
+        let route = format!("{}/", record_type.dir);
+        let replacement = format!("@{route} ");
+        let cursor_after = token_start + replacement.len();
+        let label = match record_type.emoji.as_deref() {
+            Some(emoji) if !emoji.is_empty() => format!(
+                "{} New {} · {route}",
+                emoji,
+                record_type.label.to_lowercase()
+            ),
+            _ => format!("New {} · {route}", record_type.label.to_lowercase()),
+        };
+        rows.insert(
+            0,
+            SectionMenuRow::Create(RecordCreateCandidate {
+                kind: "record_create",
+                replacement,
+                label,
+                route,
+                record_type: record_type.id,
+                emoji: record_type.emoji,
+                count: Some(count),
+                cursor_after,
+                continuation: Some(CandidateContinuation {
+                    cursor: cursor_after,
+                    next_missing_field: true,
+                }),
+            }),
+        );
+    }
+    Some(Replacement {
+        start: token_start,
+        end: field.replacement.1,
+    })
+}
+
+fn record_section_token_start(
+    raw_text: &str,
+    replacement_start: usize,
+) -> Option<usize> {
+    let before = raw_text.get(..replacement_start)?;
+    let hash = before.rfind('#')?;
+    let at = before[..hash].rfind('@')?;
+    if before[at + 1..hash].chars().any(char::is_whitespace) {
+        return None;
+    }
+    Some(at)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

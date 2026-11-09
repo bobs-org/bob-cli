@@ -439,9 +439,11 @@ fn scope_transfer_sections(
     }
     let slug = capture_language::selector_slug(query);
     let exact = items.iter().any(|item| {
-        item.title.eq_ignore_ascii_case(query)
-            || item.replacement == *query
-            || item.replacement == slug
+        item.as_section().is_some_and(|item| {
+            item.title.eq_ignore_ascii_case(query)
+                || item.replacement == *query
+                || item.replacement == slug
+        })
     });
     if exact {
         return Ok(());
@@ -478,11 +480,13 @@ fn scope_transfer_sections(
         }
         return Ok(());
     }
-    items.push(super::model::SectionCandidate {
-        replacement: section_creation_selector(&title),
-        title,
-        level: 2,
-    });
+    items.push(super::model::SectionMenuRow::Section(
+        super::model::SectionCandidate {
+            replacement: section_creation_selector(&title),
+            title,
+            level: 2,
+        },
+    ));
     Ok(())
 }
 

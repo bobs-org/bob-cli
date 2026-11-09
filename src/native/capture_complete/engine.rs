@@ -37,6 +37,16 @@ pub(super) fn cursor_in_close_log_text(raw_text: &str, cursor: usize) -> bool {
     capture_language::cursor_in_close_log_text(raw_text, cursor)
 }
 
+pub(super) struct CompleteRequest<'a> {
+    pub(super) bob_dir: &'a Path,
+    pub(super) raw_text: &'a str,
+    pub(super) cursor: usize,
+    pub(super) all_tasks: bool,
+    pub(super) closed_tasks: bool,
+    pub(super) next_missing_field: bool,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn build_result(
     bob_dir: &Path,
     raw_text: &str,
@@ -44,33 +54,49 @@ pub(super) fn build_result(
     all_tasks: bool,
     closed_tasks: bool,
 ) -> Result<CaptureCompleteResult, CompleteError> {
-    let directive_owns_cursor =
-        capture_language::completion_field_at(raw_text, cursor)
-            .is_some_and(|field| field.context == CompletionContext::Directive);
-    let mut result = if directive_owns_cursor {
-        build_result_inner(bob_dir, raw_text, cursor, all_tasks, closed_tasks)?
-    } else if let Some(result) = template_completion_gate(
+    build_result_for(&CompleteRequest {
         bob_dir,
         raw_text,
         cursor,
         all_tasks,
         closed_tasks,
-    )? {
-        result
-    } else {
-        build_result_inner(bob_dir, raw_text, cursor, all_tasks, closed_tasks)?
-    };
-    result.initial_selection = initial_selection(raw_text, &result);
+        next_missing_field: false,
+    })
+}
+
+pub(super) fn build_result_for(
+    request: &CompleteRequest<'_>,
+) -> Result<CaptureCompleteResult, CompleteError> {
+    let directive_owns_cursor =
+        capture_language::completion_field_at(request.raw_text, request.cursor)
+            .is_some_and(|field| field.context == CompletionContext::Directive);
+    if !directive_owns_cursor
+        && let Some(mut result) = template_completion_gate(request)?
+    {
+        result.initial_selection = initial_selection(request.raw_text, &result);
+        return Ok(result);
+    }
+    if request.next_missing_field {
+        let mut result = super::records::next_missing_field(request)?;
+        result.initial_selection = initial_selection(request.raw_text, &result);
+        return Ok(result);
+    }
+    let mut result = build_result_inner(request)?;
+    result.initial_selection = initial_selection(request.raw_text, &result);
     Ok(result)
 }
 
 fn build_result_inner(
-    bob_dir: &Path,
-    raw_text: &str,
-    cursor: usize,
-    all_tasks: bool,
-    closed_tasks: bool,
+    request: &CompleteRequest<'_>,
 ) -> Result<CaptureCompleteResult, CompleteError> {
+    let bob_dir = request.bob_dir;
+    let raw_text = request.raw_text;
+    let cursor = request.cursor;
+    let all_tasks = request.all_tasks;
+    let closed_tasks = request.closed_tasks;
+    if let Some(result) = super::records::try_complete(request)? {
+        return Ok(result);
+    }
     let current_route = capture_language::editor_item_at(raw_text, cursor)
         .and_then(|item| item.route);
     let current_note_path = current_route
@@ -130,7 +156,9 @@ fn build_result_inner(
             | CompletionContext::PomodoroSplitType
             | CompletionContext::PomodoroMergeSrc
             | CompletionContext::PomodoroMergeDest
-            | CompletionContext::WikilinkTask => {
+            | CompletionContext::WikilinkTask
+            | CompletionContext::RecordField
+            | CompletionContext::RecordValue => {
                 unreachable!("link field context")
             }
         };
@@ -164,6 +192,8 @@ fn build_result_inner(
             hidden_count: None,
             one_off: None,
             project_task_move: None,
+            record: None,
+            diagnostics: Vec::new(),
         });
     }
 
@@ -229,6 +259,8 @@ fn build_result_inner(
             hidden_count: None,
             one_off: None,
             project_task_move: None,
+            record: None,
+            diagnostics: Vec::new(),
         });
     }
 
@@ -322,6 +354,8 @@ fn build_result_inner(
             }),
             project_task_move: Some(built.context),
             hidden_count: None,
+            record: None,
+            diagnostics: Vec::new(),
         });
     }
 
@@ -400,6 +434,8 @@ fn build_result_inner(
             hidden_count: None,
             one_off: None,
             project_task_move: None,
+            record: None,
+            diagnostics: Vec::new(),
         });
     }
 
@@ -777,7 +813,9 @@ fn build_result_inner(
         CompletionContext::WikilinkNote
         | CompletionContext::WikilinkHeading
         | CompletionContext::WikilinkBlock
-        | CompletionContext::WikilinkTask => {
+        | CompletionContext::WikilinkTask
+        | CompletionContext::RecordField
+        | CompletionContext::RecordValue => {
             unreachable!("marker field context")
         }
     };
@@ -786,6 +824,7 @@ fn build_result_inner(
     // so narrow them here — movable-or-mergeable sources, minus-source
     // merge targets with a merge consequence, the `+` hint on complete
     // bare destinations, and section creation plus the §3.4 refusal.
+    let mix_record_create = transfer_role.is_none() && merge_in_role.is_none();
     if let Some(role) = transfer_role {
         super::transfer_assist::apply(
             bob_dir,
@@ -802,6 +841,28 @@ fn build_result_inner(
             role,
             &mut candidates,
         )?;
+    }
+
+    let mut replacement = Replacement {
+        start: field.replacement.0,
+        end: field.replacement.1,
+    };
+    if field.context == CompletionContext::Route {
+        super::candidates::annotate_record_route_continuations(
+            &mut candidates,
+            replacement.start,
+        );
+    }
+    if field.context == CompletionContext::Section
+        && mix_record_create
+        && let Some(expanded) = super::candidates::mix_record_section_create(
+            bob_dir,
+            raw_text,
+            &field,
+            &mut candidates,
+        )
+    {
+        replacement = expanded;
     }
 
     // Bob owns the search query for task pickers and relation completion.
@@ -914,10 +975,7 @@ fn build_result_inner(
         schema_version: SCHEMA_VERSION,
         grammar: capture_language::GRAMMAR_REVISION,
         cursor,
-        replacement: Replacement {
-            start: field.replacement.0,
-            end: field.replacement.1,
-        },
+        replacement,
         context: Some(field.context),
         initial_selection: None,
         subject,
@@ -938,18 +996,18 @@ fn build_result_inner(
         hidden_count,
         one_off: one_off.then_some(true),
         project_task_move: None,
+        record: None,
+        diagnostics: Vec::new(),
     })
 }
 
 /// Template completion uses a same-length masked draft so template syntax and
 /// row values never become picker queries.
 fn template_completion_gate(
-    bob_dir: &Path,
-    raw_text: &str,
-    cursor: usize,
-    all_tasks: bool,
-    closed_tasks: bool,
+    request: &CompleteRequest<'_>,
 ) -> Result<Option<CaptureCompleteResult>, CompleteError> {
+    let raw_text = request.raw_text;
+    let cursor = request.cursor;
     let analysis = crate::native::capture_language::template::analyze(raw_text);
     if analysis.directive.is_none() {
         return Ok(None);
@@ -969,8 +1027,11 @@ fn template_completion_gate(
     }
 
     let masked = crate::native::capture_language::template::masked(raw_text);
-    let result =
-        build_result_inner(bob_dir, &masked, cursor, all_tasks, closed_tasks)?;
+    let masked_request = CompleteRequest {
+        raw_text: &masked,
+        ..*request
+    };
+    let result = build_result_inner(&masked_request)?;
     if matches!(
         result.context,
         Some(

@@ -484,7 +484,37 @@ pub(super) fn candidate_lines(
             .collect(),
         Candidates::Section(items) => items
             .iter()
-            .map(|item| (item.replacement.clone(), format!("H{}", item.level)))
+            .map(|item| match item {
+                super::model::SectionMenuRow::Create(row) => {
+                    (row.label.clone(), "new record".to_string())
+                }
+                super::model::SectionMenuRow::Section(row) => {
+                    (item.replacement().to_string(), format!("H{}", row.level))
+                }
+            })
+            .collect(),
+        Candidates::RecordField(items) => items
+            .iter()
+            .map(|item| {
+                let detail = if item.required {
+                    format!("{}  required", item.label)
+                } else if item.defaulted {
+                    format!("{}  default", item.label)
+                } else {
+                    format!("{}  optional", item.label)
+                };
+                (item.key.clone(), detail)
+            })
+            .collect(),
+        Candidates::RecordValue(items) => items
+            .iter()
+            .map(|item| {
+                let detail = match item.count {
+                    Some(count) => format!("{}  · {count}", item.kind),
+                    None => item.kind.to_string(),
+                };
+                (item.display.clone(), detail)
+            })
             .collect(),
         Candidates::Task(items) => items
             .iter()
@@ -783,6 +813,8 @@ pub(super) fn context_label(context: CompletionContext) -> &'static str {
         CompletionContext::WikilinkHeading => "wikilink_heading",
         CompletionContext::WikilinkBlock => "wikilink_block",
         CompletionContext::WikilinkTask => "wikilink_task",
+        CompletionContext::RecordField => "record_field",
+        CompletionContext::RecordValue => "record_value",
     }
 }
 

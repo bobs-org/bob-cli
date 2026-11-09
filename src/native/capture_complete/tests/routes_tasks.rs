@@ -1,8 +1,17 @@
 use super::{
-    super::model::{Candidates, Replacement},
+    super::model::{Candidates, Replacement, SectionCandidate},
     result, write_file, write_settings, TempDir,
 };
 use crate::native::{capture_block_ids, capture_language::CompletionContext};
+
+fn section_rows(candidates: &Candidates) -> Vec<&SectionCandidate> {
+    let Candidates::Section(rows) = candidates else {
+        panic!("expected section candidates");
+    };
+    rows.iter()
+        .map(|row| row.as_section().expect("heading row"))
+        .collect()
+}
 #[test]
 fn route_completion_ranks_prefix_matches_before_substring_matches() {
     let temp = TempDir::new("bob-cli-capture-complete-routes");
@@ -132,9 +141,7 @@ fn section_completion_lists_headings_of_the_resolved_route() {
 
     let value = result(temp.path(), "Idea @notes#Id", 14);
     assert_eq!(value.context, Some(CompletionContext::Section));
-    let Candidates::Section(sections) = &value.candidates else {
-        panic!("expected section candidates");
-    };
+    let sections = section_rows(&value.candidates);
     let titles: Vec<&str> = sections
         .iter()
         .map(|section| section.title.as_str())
@@ -164,9 +171,7 @@ fn section_completion_round_trips_slug_and_quoted_replacements() {
     );
 
     let value = result(temp.path(), "@sase#", 6);
-    let Candidates::Section(sections) = &value.candidates else {
-        panic!("expected section candidates");
-    };
+    let sections = section_rows(&value.candidates);
     let by_title: std::collections::HashMap<&str, &str> = sections
         .iter()
         .map(|section| (section.title.as_str(), section.replacement.as_str()))
@@ -177,9 +182,7 @@ fn section_completion_round_trips_slug_and_quoted_replacements() {
     assert_eq!(by_title["A \"Q\""], "\"A \\\"Q\\\"\"");
 
     let slug_query = result(temp.path(), "@sase#future-w", 14);
-    let Candidates::Section(slug_rows) = &slug_query.candidates else {
-        panic!("expected section candidates");
-    };
+    let slug_rows = section_rows(&slug_query.candidates);
     let slug_titles: Vec<&str> =
         slug_rows.iter().map(|row| row.title.as_str()).collect();
     assert!(slug_titles.contains(&"Future Work"), "{slug_titles:?}");
@@ -196,9 +199,7 @@ fn section_completion_partial_quoted_query_covers_the_literal() {
     assert_eq!(value.context, Some(CompletionContext::Section));
     assert_eq!(value.replacement.start, 6);
     assert_eq!(value.replacement.end, raw.len());
-    let Candidates::Section(sections) = &value.candidates else {
-        panic!("expected section candidates");
-    };
+    let sections = section_rows(&value.candidates);
     assert_eq!(sections[0].title, "Future Work");
     assert_eq!(sections[0].replacement, "future-work");
 }
@@ -211,9 +212,7 @@ fn section_completion_on_a_list_header_with_bullets() {
     let raw = "@sase#Fu\n- boom";
     let value = result(temp.path(), raw, "@sase#Fu".len());
     assert_eq!(value.context, Some(CompletionContext::Section));
-    let Candidates::Section(sections) = &value.candidates else {
-        panic!("expected section candidates");
-    };
+    let sections = section_rows(&value.candidates);
     assert_eq!(sections[0].title, "Future Work");
     assert_eq!(sections[0].replacement, "future-work");
 }
@@ -237,9 +236,7 @@ fn section_completion_quote_leading_titles_use_exact_fallback() {
     );
 
     let value = result(temp.path(), "@sase#", 6);
-    let Candidates::Section(sections) = &value.candidates else {
-        panic!("expected section candidates");
-    };
+    let sections = section_rows(&value.candidates);
     let by_title: std::collections::HashMap<&str, &str> = sections
         .iter()
         .map(|section| (section.title.as_str(), section.replacement.as_str()))
@@ -254,9 +251,7 @@ fn section_completion_quote_leading_titles_use_exact_fallback() {
     assert_eq!(partial.context, Some(CompletionContext::Section));
     assert_eq!(partial.replacement.start, 6);
     assert_eq!(partial.replacement.end, "@sase#\"Fu".len());
-    let Candidates::Section(partial_rows) = &partial.candidates else {
-        panic!("expected section candidates");
-    };
+    let partial_rows = section_rows(&partial.candidates);
     let quoted = partial_rows
         .iter()
         .find(|row| row.title == "\"Future Work\"")

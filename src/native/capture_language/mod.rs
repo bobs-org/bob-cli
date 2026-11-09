@@ -104,7 +104,6 @@ pub(crate) use self::editor_model::EditorGlobalDestination;
 pub(crate) use self::editor_model::EditorItemParse;
 pub(crate) use self::editor_model::EditorMergeIn;
 pub(crate) use self::editor_model::EditorMode;
-#[cfg(test)]
 pub(crate) use self::editor_model::EditorParse;
 pub(crate) use self::editor_model::EditorTarget;
 pub(crate) use self::editor_model::EditorTransfer;
@@ -185,6 +184,7 @@ pub(crate) use self::pomodoro_literal::canonicalize_exact_name;
 pub(crate) use self::project_tasks::split_leading_checkbox;
 pub(crate) use self::record::candidate_collection_routes;
 pub(crate) use self::record::candidate_dirs;
+pub(crate) use self::record::RecordNoteIntent;
 pub(crate) use self::record::RecordRoutePolicy;
 pub(crate) use self::rewrite::rewrite_draft;
 pub(crate) use self::rewrite::DraftRewrite;

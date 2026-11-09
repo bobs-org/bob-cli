@@ -232,6 +232,28 @@ impl NoteIndex {
     pub(crate) fn warnings(&self) -> Vec<String> {
         self.warnings.clone()
     }
+
+    /// Note insert targets matching `query`, as `(insert_target, stem)`.
+    /// Used by record link-kind value completion.
+    pub(crate) fn matching_note_inserts(
+        &self,
+        query: &str,
+    ) -> Vec<(String, String)> {
+        let lowered = query.to_lowercase();
+        self.notes
+            .iter()
+            .filter(|note| {
+                query.is_empty()
+                    || note.stem.to_lowercase().contains(&lowered)
+                    || note.path.to_lowercase().contains(&lowered)
+                    || note
+                        .aliases
+                        .iter()
+                        .any(|alias| alias.to_lowercase().contains(&lowered))
+            })
+            .map(|note| (note.insert_target.clone(), note.stem.clone()))
+            .collect()
+    }
 }
 
 pub(crate) fn note_candidates(
