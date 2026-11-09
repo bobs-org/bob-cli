@@ -76,7 +76,7 @@ once bob reports success (see [Bob Mac Capture Is A Thin Client Of bob](../devel
 the draft into capture items, each a parent line plus optional authored child bullets,
 and each item's markers decide what it does. That is far more than GTD inbox capture: an
 item may create a task (default `mac_inbox.md`, an [Inbox File](#inbox-file)), bullet, sub-bullet,
-project note, or record note (a note of a config-declared record type, see `docs/records.md`); queue a bare public URL as a background reference job, never touching
+project note (a [Project Note Capture](#project-note-capture)), or record note (a note of a config-declared record type, see `docs/records.md`); queue a bare public URL as a background reference job, never touching
 the network; link, start, complete, or relate existing tasks (`@route:id`, `!note:id`,
 `&`, `*`); or start, adjust, shift, or close today's Pomodoro (`=`, `+N`, `++N`, `x`).
 bob plans every edit against in-memory snapshots of the target notes and today's daily
@@ -88,6 +88,58 @@ unfinished picker query (`:dee`, `/fix`, `!fix`, `&`, `Call the bank +`) is refu
 never captured as prose. The editor-facing `capture-*` companion commands are not
 captures, nor are `bob gkeep pull`, `bob ref create`, or Obsidian keymaps. A draft with
 two or more items is a [Bulk Capture](#bulk-capture); the grammar lives in `docs/capture.md`.
+
+### Capture Alias {#capture-alias}
+
+*Aliases: sigil alias.*
+
+A keystroke substitution in Bob Mac Capture's editor: an easy-to-reach key that the app
+swaps for the [Capture](#capture) sigil it stands for, only where that sigil would act at the
+caret by opening its picker or filling a close slot. bob decides every one
+([Bob Mac Capture Is A Thin Client Of bob](../develop/decisions.md#mac-capture-is-a-thin-client)). The app sends the post-key draft and caret
+to `bob capture-rewrite --cursor`, which answers with rule `expand_sigil_alias` (summary
+`Typed ^ for .`), and the app applies that one edit natively, so Undo restores the typed
+key. The aliases:
+
+- `.` → `^` right after `@route` (`@errands.` → `@errands^`); `;` → `:` there, and as a
+  whole item (Task Link picker). In a [Project Note Capture](#project-note-capture), a first-level `- .` or
+  `- ;` opens the Move picker and `- ^.` gives `- ^^`.
+- `.` → `@` after body text and a space or tab, wherever a bare `@` opens route
+  completion (`Buy milk .` → `Buy milk @`).
+- `,` → `+` wherever the Parent Task picker would open (`@cash,` → `@cash+`); glued to a
+  complete `@route+id` target, it inserts ` +` for the next pick.
+- `\` or `/` → `#` wherever a `#` menu would open (task type, section, Pomodoro name,
+  wikilink heading, and the rest). Never at a line start, glued to a word, or after
+  another `\`/`/`; `/` stays literal where it is already field text (`=/`, `[[folder/`,
+  `@@` routes).
+- `-` → `~` inside an `x=` past token (`x=2-` → `x=2~`); a spaced `-` stays literal.
+- `=` → `~` after a space or tab where the Links To relation picker would open, while
+  `~=` / `~~=` flip to `~~` / `~` ([Relation Equals Alias And Flips](../develop/decisions.md#relation-equals-alias-and-flips)).
+- `x` / `s` → `!` / `*` (complete / park) when the lowercase letter ends a close
+  selection: `xx` → `x!`, `+2 xs` → `+2 x*`, `2xx` → `2x!`, `@r:id=xx` → `@r:id=x!`.
+
+Open pickers honour bob's `action_continuation_aliases`: `,` acts as `+` in the lone-`+`
+Parent Task picker, and `.` acts as `^` in the `- ^` Move picker. In the relation picker
+and label card, `=` flips direction like `~`. The only app-local alias is a blank
+draft's `\` → `/`, which opens Go To. Each alias can be escaped: by Undo; by a fast
+second `=` or spaced `.` (350 ms), which types one literal (`===` gives `==`); by a
+second `\`/`/` at any speed; or by Space or Escape on the still-empty picker the alias
+opened. Aliases that change meaning (`x`/`s`, and `-` in `x=`) hold later edits and
+Return until bob answers. On a timeout the key stays literal and Return is dropped ("Bob
+did not answer; press Return again"). An older bob leaves every alias literal.
+
+Aliases exist only while typing. `bob capture`, `capture-parse`, paste, and piped stdin
+keep the text, so a pasted `Buy milk .` captures a dot and `xx` closes nothing. Template
+drafts and `#"…"` exact-name literals are never rewritten. Rewrites in the same lane
+that edit an existing marker are not aliases: the block-ID separator toggle
+(`@route:id^` → `@route^id`), the glued `~`/`=` relation direction flip, the `|` label
+attach, and `@@` absorption. None of these is a capture alias either: the Mac's "Capture
+alias" hotkey (Settings › Hotkey's global `Command-\`), a frontmatter or
+`project_name_aliases` route alias, a wikilink `|alias`, a deprecated tag spelling
+(`#offclock`), the bare owner alias `^route:id`, Tab's `--` → `—` snippet, or the
+close-list comma (`x1` then `2` → `x1,2`). See bob-cli `docs/capture.md`
+(`bob capture-rewrite`, "Sigil alias") and Bob Mac Capture's `docs/keyboard.md` and
+`docs/capture-panel.md`.
 
 ### Command Mode {#command-mode}
 
@@ -363,6 +415,47 @@ outcome. A closed project remains a project note if its `^prj` task is archived.
 `offclock: true|false` key sets the clock default for tasks on the root walk
 beneath it (see [Off-Clock Follows Tag Then Note Default](../develop/decisions.md#off-clock-follows-tag-then-note-default)). `offclock_types` sets the clock off only for tasks whose effective type is listed and wins when both keys are present (see [Off-Clock Note Defaults Filter By Task Type](../develop/decisions.md#off-clock-note-defaults-filter-by-task-type)). See
 `docs/projects.md`.
+
+### Project Note Capture {#project-note-capture}
+
+*Aliases: project capture, project-note capture.*
+
+A [Capture](#capture) item whose route marker is sealed with a trailing `@`, `@<route>^<id>@` or
+`@<route>:<id>@` (optionally followed by `#<pomodoro>`), so it creates a brand-new
+[Project Note](#project-note) instead of a task. The marker may lead the item or trail any of its
+lines. bob writes `<route>_<id>.md` at the vault root (each `-` in the ID becomes `_`)
+with `parent: "[[<route>]]"`, `type: "[[project]]"`, `status: wip`, and the
+`template: "[[new_project]]"` line, in the same shape as the Obsidian **Create project
+note from task** command, which instead promotes an existing task. The item's parent
+text becomes the [Project Task](#project-task) line `- [ ] #task #prj <text> #hide ^prj` (`[?]`
+once the item resolves a schedule), which is never linked. `<route>.md` must already
+be an area or non-terminal project note, a target note that already exists or is staged
+refuses the capture, and `bob projects sync` later adds the note to the parent's
+Sub-projects line.
+
+The sigil before the ID picks the form. The `^` (create) form links only the item's
+explicit `:` bullets. The `:` (offer) form creates the same note, then offers its open,
+unhidden, not-yet-linked `## Tasks` rows as [Successor Offer](#successor-offer)s of the new `^prj`,
+linking none until picked with `-p` (Bob Mac Capture's Pull-In card). A `#<pomodoro>`
+after the seal names the Pomodoro those links land under, created on demand, and is
+refused when the item has nothing to link or offer.
+
+First-level bullets mirror the new note
+([Capture Bullets Mirror The Task Block](../develop/decisions.md#capture-bullets-mirror-the-task-block)). Each becomes a `## Tasks` row: a
+trailing ` :<id>` names it, makes it Next, and adds its [Task Link](#task-link) under the
+Pomodoro its type places (or the `#<pomodoro>` one), while ` ^<id>` only names it. An
+ALL-CAPS bullet with nested notes becomes a `## Title Case` section instead. A bullet
+that is only `^<id>` or `:<id>` moves an existing open top-level task out of the parent
+note (`:` also links it), and `- ^^` chooses several from a Move card before writing.
+The new note, the moved blocks, and today's ledger write in one all-or-nothing batch.
+
+`%c`, `--clip`, `=<X>` and `=x` session suffixes, `!`, and `@@` declarations are
+refused, and the retired `+` seals (`@route^id+`, `@route:id+`) teach the `@` spelling.
+Not `@route^id` (an ordinary task with a block ID), `@route:id` (a task linked into a
+Pomodoro), `@route+id` (a note under an existing task), or record-note capture
+(`@dir/^stem`). `capture-parse` reports mode `project_note`, or `pomodoro_project_note`
+once the item links a task. See `docs/capture.md` ("Project notes") and
+`docs/reference/capture-syntax.md` ("Project captures").
 
 ### Project Task {#project-task}
 
