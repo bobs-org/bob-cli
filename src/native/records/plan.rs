@@ -11,12 +11,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use chrono::{Duration, LocalResult, NaiveDateTime, Offset, TimeZone};
+use chrono::{
+    Duration, LocalResult, NaiveDate, NaiveDateTime, Offset, TimeZone,
+};
 use chrono_tz::Tz;
 
 use super::{
     catalog::{FolderIndex, RecordCatalog, StemLookup},
-    render::{render_record, RecordNoteInput, RecordRenderRequest},
+    render::{
+        apply_record_update, render_record, RecordNoteInput,
+        RecordRenderRequest, RecordUpdateRequest,
+    },
     schema::{
         validate_field_input, FieldInputState, RecordDiagnostic,
         RecordDiagnosticCode, RecordField, RecordFieldInput, RecordScalar,
@@ -601,7 +606,7 @@ fn nearest_field_keys(allowed: &[String], query: &str) -> Vec<String> {
         .collect()
 }
 
-fn display_value(
+pub(crate) fn display_value(
     field: &RecordField,
     value: &RecordValue,
     today: chrono::NaiveDate,
@@ -616,7 +621,7 @@ fn display_value(
     }
 }
 
-fn display_scalar(
+pub(crate) fn display_scalar(
     field: &RecordField,
     scalar: &RecordScalar,
     today: chrono::NaiveDate,
@@ -776,6 +781,648 @@ fn format_created_timestamp(
     }
 }
 
+/// An existing record resolved through the lazy folder catalog.
+///
+/// The catalog owns identity: `path` and `stem` always use the on-disk
+/// spelling, never the caller's casing. The caller supplies the note snapshot
+/// separately so current values come from the same bytes that will be edited.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ResolvedUpdateTarget {
+    pub(crate) record_type: RecordType,
+    pub(crate) path: PathBuf,
+    pub(crate) stem: String,
+    pub(crate) title: String,
+}
+
+/// Structural errors that prevent an update plan from being formed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecordUpdateTargetErrorCode {
+    UnknownRecordType,
+    UnknownStem,
+    AmbiguousStem,
+    FolderUnavailable,
+    UnsafeTarget,
+}
+
+impl RecordUpdateTargetErrorCode {
+    pub(crate) fn diagnostic_code(self) -> &'static str {
+        match self {
+            Self::UnknownStem | Self::AmbiguousStem => "record_not_found",
+            Self::UnknownRecordType
+            | Self::FolderUnavailable
+            | Self::UnsafeTarget => "record_invalid_value",
+        }
+    }
+}
+
+/// A typed refusal with optional existing paths or did-you-mean choices.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RecordUpdateTargetError {
+    pub(crate) code: RecordUpdateTargetErrorCode,
+    pub(crate) message: String,
+    pub(crate) paths: Vec<PathBuf>,
+    pub(crate) suggestions: Vec<String>,
+}
+
+impl std::fmt::Display for RecordUpdateTargetError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for RecordUpdateTargetError {}
+
+/// Resolve a configured record type plus an existing stem to its on-disk
+/// identity. Fuzzy matches are suggestions only and are never returned as the
+/// target. Unsafe stems refuse without touching the filesystem beyond the
+/// already-loaded folder index.
+pub(crate) fn resolve_update_target(
+    config: &RecordsConfig,
+    catalog: &mut RecordCatalog,
+    record_type: &str,
+    stem: &str,
+) -> Result<ResolvedUpdateTarget, RecordUpdateTargetError> {
+    let Some(record_type) = config.record_type(record_type) else {
+        let suggestions = nearest_record_types(config, record_type);
+        let message = if suggestions.is_empty() {
+            format!("unknown record type `{record_type}`")
+        } else {
+            format!(
+                "unknown record type `{record_type}`; did you mean {}?",
+                suggestions
+                    .iter()
+                    .map(|value| format!("`{value}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        return Err(RecordUpdateTargetError {
+            code: RecordUpdateTargetErrorCode::UnknownRecordType,
+            message,
+            paths: Vec::new(),
+            suggestions,
+        });
+    };
+    if !is_safe_update_stem(stem) {
+        return Err(RecordUpdateTargetError {
+            code: RecordUpdateTargetErrorCode::UnsafeTarget,
+            message: format!(
+                "unsafe record stem {stem:?}; update targets must name one existing note"
+            ),
+            paths: Vec::new(),
+            suggestions: Vec::new(),
+        });
+    }
+    let folder = catalog.folder(&record_type.dir);
+    if let Some(reason) = folder.create_refusal() {
+        return Err(RecordUpdateTargetError {
+            code: RecordUpdateTargetErrorCode::FolderUnavailable,
+            message: format!(
+                "cannot safely update a record in {}: {reason}",
+                record_type.dir
+            ),
+            paths: Vec::new(),
+            suggestions: Vec::new(),
+        });
+    }
+    match folder.lookup_stem(stem) {
+        StemLookup::Exact(note) => Ok(ResolvedUpdateTarget {
+            record_type: record_type.clone(),
+            path: note.relative_path.clone(),
+            stem: note.stem.clone(),
+            title: note.title.clone().unwrap_or_else(|| note.stem.clone()),
+        }),
+        StemLookup::Ambiguous(notes) => {
+            let paths = notes
+                .iter()
+                .map(|note| note.relative_path.clone())
+                .collect::<Vec<_>>();
+            let suggestions = notes
+                .iter()
+                .map(|note| format!("@{}/{}", record_type.dir, note.stem))
+                .collect::<Vec<_>>();
+            let path_list = paths
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(RecordUpdateTargetError {
+                code: RecordUpdateTargetErrorCode::AmbiguousStem,
+                message: format!(
+                    "record stem {stem:?} is ambiguous: {path_list}"
+                ),
+                paths,
+                suggestions,
+            })
+        }
+        StemLookup::None => {
+            let nearby = folder.nearest_stems(stem);
+            let suggestions = nearby
+                .iter()
+                .map(|note| format!("@{}/{}", record_type.dir, note.stem))
+                .collect::<Vec<_>>();
+            let message = if suggestions.is_empty() {
+                format!("record `{stem}` does not exist in {}", record_type.dir)
+            } else {
+                format!(
+                    "record `{stem}` does not exist in {}; did you mean {}?",
+                    record_type.dir,
+                    suggestions
+                        .iter()
+                        .map(|value| format!("`{value}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            Err(RecordUpdateTargetError {
+                code: RecordUpdateTargetErrorCode::UnknownStem,
+                message,
+                paths: Vec::new(),
+                suggestions,
+            })
+        }
+    }
+}
+
+fn is_safe_update_stem(stem: &str) -> bool {
+    if stem.is_empty()
+        || stem.contains('\0')
+        || stem.contains('\n')
+        || stem.contains('\r')
+        || stem.contains('/')
+        || stem.contains('\\')
+    {
+        return false;
+    }
+    if stem == "." || stem == ".." {
+        return false;
+    }
+    let mut components = std::path::Path::new(stem).components();
+    matches!(components.next(), Some(std::path::Component::Normal(_)))
+        && components.next().is_none()
+}
+
+/// Inputs needed to plan one existing-record update. `target` is the
+/// catalog-resolved identity; `original` is the caller-owned full-text
+/// snapshot that will be edited; `today` is Bob's already-resolved wall-clock
+/// date for typed validation and dated notes.
+pub(crate) struct PlanUpdateRequest<'a> {
+    pub(crate) target: &'a ResolvedUpdateTarget,
+    pub(crate) original: &'a str,
+    pub(crate) fields: &'a [RecordFieldInput],
+    pub(crate) notes: &'a [RecordNoteInput],
+    pub(crate) today: NaiveDate,
+}
+
+/// One schema property with its snapshot current value and its planned
+/// effective value. Absent fields mirror the snapshot; only supplied fields
+/// can be missing or invalid. Historical defects stay in plan warnings.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PlannedUpdateProperty {
+    pub(crate) key: String,
+    pub(crate) label: String,
+    pub(crate) kind: super::schema::FieldKind,
+    pub(crate) required: bool,
+    pub(crate) list: bool,
+    pub(crate) state: RecordPropertyState,
+    pub(crate) value: Option<RecordValue>,
+    pub(crate) display: Option<String>,
+    pub(crate) current: Option<RecordValue>,
+    pub(crate) current_display: Option<String>,
+    pub(crate) source: Option<RecordPropertySource>,
+    pub(crate) source_ranges: Option<Vec<Range<usize>>>,
+}
+
+/// A complete or incomplete side-effect-free update plan. `markdown` and
+/// `body` are present only when every supplied field is valid; historical
+/// snapshot defects are reported in `warnings` and never block planning.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct RecordUpdatePlan {
+    pub(crate) record_type: String,
+    pub(crate) title: String,
+    pub(crate) stem: String,
+    pub(crate) path: PathBuf,
+    pub(crate) original: String,
+    pub(crate) markdown: Option<String>,
+    pub(crate) body: Option<String>,
+    pub(crate) changed: Vec<String>,
+    pub(crate) properties: Vec<PlannedUpdateProperty>,
+    pub(crate) missing: Vec<String>,
+    pub(crate) invalid: Vec<RecordDiagnostic>,
+    pub(crate) warnings: Vec<RecordDiagnostic>,
+}
+
+/// Plan an existing-record update without writing anything.
+///
+/// Only supplied fields are validated and no defaults apply. Current values
+/// are read from `request.original`, never from a possibly stale catalog
+/// value. Edits run through the shared byte-preserving renderer.
+pub(crate) fn plan_update(
+    request: PlanUpdateRequest<'_>,
+) -> Result<RecordUpdatePlan, super::render::RecordUpdateError> {
+    let record_type = &request.target.record_type;
+    let snapshot = parse_update_snapshot(request.original);
+    let title = snapshot
+        .title
+        .clone()
+        .unwrap_or_else(|| request.target.title.clone());
+
+    let mut missing = Vec::new();
+    let mut invalid = Vec::new();
+    let mut effective: BTreeMap<String, RecordValue> = BTreeMap::new();
+    let mut removed: Vec<String> = Vec::new();
+    let mut invalid_keys: Vec<String> = Vec::new();
+    let mut missing_keys: Vec<String> = Vec::new();
+
+    for field in &record_type.fields {
+        let ranges = source_ranges_for(request.fields, &field.key);
+        match combine_field_inputs(field, request.fields, &record_type.id) {
+            Ok(FieldInputState::Absent) => {}
+            Ok(FieldInputState::SuppliedEmpty) => {
+                if field.required {
+                    missing.push(field.key.clone());
+                    missing_keys.push(field.key.clone());
+                } else {
+                    removed.push(field.key.clone());
+                }
+                let _ = ranges;
+            }
+            Ok(FieldInputState::SuppliedValues(_)) => {
+                let combined = combine_field_inputs(
+                    field,
+                    request.fields,
+                    &record_type.id,
+                )
+                .expect("combined state is deterministic");
+                match validate_field_input(field, &combined, request.today) {
+                    Ok(ValidatedFieldInput::Value(validated)) => {
+                        match resolve_value_dates(&validated, request.today) {
+                            Ok(resolved) => {
+                                effective.insert(field.key.clone(), resolved);
+                            }
+                            Err(message) => {
+                                let mut diagnostic = RecordDiagnostic::value(
+                                    field,
+                                    RecordDiagnosticCode::InvalidDate,
+                                    message,
+                                );
+                                diagnostic.record_type =
+                                    Some(record_type.id.clone());
+                                diagnostic.source_ranges = ranges.clone();
+                                invalid.push(diagnostic);
+                                invalid_keys.push(field.key.clone());
+                            }
+                        }
+                    }
+                    Ok(ValidatedFieldInput::Empty) => {
+                        if field.required {
+                            missing.push(field.key.clone());
+                            missing_keys.push(field.key.clone());
+                        } else {
+                            removed.push(field.key.clone());
+                        }
+                    }
+                    Ok(ValidatedFieldInput::Absent) => {}
+                    Err(mut diagnostic) => {
+                        diagnostic.record_type = Some(record_type.id.clone());
+                        diagnostic.source_ranges = ranges.clone();
+                        invalid.push(diagnostic);
+                        invalid_keys.push(field.key.clone());
+                    }
+                }
+            }
+            Err(mut diagnostic) => {
+                diagnostic.record_type = Some(record_type.id.clone());
+                diagnostic.source_ranges = ranges;
+                invalid.push(diagnostic);
+                invalid_keys.push(field.key.clone());
+            }
+        }
+    }
+
+    let mut unknown_seen = HashSet::new();
+    for input in request.fields {
+        if record_type.field(&input.key).is_none()
+            && unknown_seen.insert(input.key.as_str())
+        {
+            let allowed_keys = record_type
+                .fields
+                .iter()
+                .map(|field| field.key.clone())
+                .collect::<Vec<_>>();
+            let diagnostic = RecordDiagnostic {
+                code: RecordDiagnosticCode::UnknownField,
+                config_path: None,
+                record_type: Some(record_type.id.clone()),
+                field: Some(input.key.clone()),
+                message: format!(
+                    "`{}` is not a {} field; fields: {}",
+                    input.key,
+                    record_type.label,
+                    record_type
+                        .fields
+                        .iter()
+                        .map(|field| field.key.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                suggestions: nearest_field_keys(&allowed_keys, &input.key),
+                allowed_keys,
+                source_ranges: source_ranges_for(request.fields, &input.key),
+            };
+            invalid.push(diagnostic);
+            invalid_keys.push(input.key.clone());
+        }
+    }
+
+    let currents: BTreeMap<String, Option<RecordValue>> =
+        snapshot_currents(record_type, &snapshot.mapping, request.today);
+
+    let properties = update_properties(
+        record_type,
+        request.fields,
+        &currents,
+        &effective,
+        &removed,
+        &missing_keys,
+        &invalid_keys,
+        request.today,
+    );
+
+    if !missing.is_empty() || !invalid.is_empty() {
+        return Ok(RecordUpdatePlan {
+            record_type: record_type.id.clone(),
+            title,
+            stem: request.target.stem.clone(),
+            path: request.target.path.clone(),
+            original: request.original.to_owned(),
+            markdown: None,
+            body: None,
+            changed: Vec::new(),
+            properties,
+            missing,
+            invalid,
+            warnings: Vec::new(),
+        });
+    }
+
+    let note_date = record_type
+        .dated_notes
+        .then(|| request.today.format("%Y-%m-%d").to_string());
+    let applied = apply_record_update(&RecordUpdateRequest {
+        record_type,
+        original: request.original,
+        fields: request.fields,
+        notes: request.notes,
+        note_date: note_date.as_deref(),
+        today: request.today,
+    })?;
+    let body =
+        super::super::highlights_ref::split_frontmatter(&applied.markdown)
+            .map(|(_, body)| body)
+            .unwrap_or_default();
+
+    Ok(RecordUpdatePlan {
+        record_type: record_type.id.clone(),
+        title,
+        stem: request.target.stem.clone(),
+        path: request.target.path.clone(),
+        original: request.original.to_owned(),
+        markdown: Some(applied.markdown),
+        body: Some(body),
+        changed: applied.changed,
+        properties,
+        missing,
+        invalid,
+        warnings: applied.warnings,
+    })
+}
+
+#[derive(Debug, Clone, Default)]
+struct UpdateSnapshot {
+    mapping: Option<serde_yaml::Mapping>,
+    title: Option<String>,
+}
+
+fn parse_update_snapshot(original: &str) -> UpdateSnapshot {
+    let Some((front, _)) =
+        super::super::highlights_ref::split_frontmatter(original)
+    else {
+        return UpdateSnapshot::default();
+    };
+    let joined = front.join("\n");
+    let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(&joined) else {
+        return UpdateSnapshot::default();
+    };
+    let Some(mapping) = value.as_mapping().cloned() else {
+        return UpdateSnapshot::default();
+    };
+    let title = mapping
+        .get(serde_yaml::Value::String("title".to_owned()))
+        .and_then(|value| value.as_str())
+        .filter(|text| !text.is_empty())
+        .map(str::to_owned);
+    UpdateSnapshot {
+        mapping: Some(mapping),
+        title,
+    }
+}
+
+fn snapshot_currents(
+    record_type: &RecordType,
+    mapping: &Option<serde_yaml::Mapping>,
+    today: NaiveDate,
+) -> BTreeMap<String, Option<RecordValue>> {
+    let mut currents = BTreeMap::new();
+    let Some(mapping) = mapping else {
+        for field in &record_type.fields {
+            currents.insert(field.key.clone(), None);
+        }
+        return currents;
+    };
+    for field in &record_type.fields {
+        let key = serde_yaml::Value::String(field.key.clone());
+        let Some(raw) = mapping.get(&key) else {
+            currents.insert(field.key.clone(), None);
+            continue;
+        };
+        currents.insert(field.key.clone(), yaml_to_current(field, raw, today));
+    }
+    currents
+}
+
+fn yaml_to_current(
+    field: &RecordField,
+    raw: &serde_yaml::Value,
+    today: NaiveDate,
+) -> Option<RecordValue> {
+    let inputs = yaml_to_inputs(raw)?;
+    if inputs.is_empty() {
+        return None;
+    }
+    match super::schema::validate_field_values(field, &inputs, today) {
+        Ok(value) => Some(value),
+        Err(_) => Some(fallback_current(field, &inputs)),
+    }
+}
+
+fn yaml_to_inputs(raw: &serde_yaml::Value) -> Option<Vec<String>> {
+    match raw {
+        serde_yaml::Value::String(text) => Some(vec![text.clone()]),
+        serde_yaml::Value::Bool(flag) => Some(vec![flag.to_string()]),
+        serde_yaml::Value::Number(number) => Some(vec![number.to_string()]),
+        serde_yaml::Value::Null => None,
+        serde_yaml::Value::Sequence(items) => {
+            let mut members = Vec::new();
+            for item in items {
+                match item {
+                    serde_yaml::Value::String(text) => {
+                        members.push(text.clone());
+                    }
+                    serde_yaml::Value::Bool(flag) => {
+                        members.push(flag.to_string());
+                    }
+                    serde_yaml::Value::Number(number) => {
+                        members.push(number.to_string());
+                    }
+                    serde_yaml::Value::Null => {
+                        members.push(String::new());
+                    }
+                    _ => {}
+                }
+            }
+            Some(members)
+        }
+        _ => None,
+    }
+}
+
+fn fallback_current(field: &RecordField, inputs: &[String]) -> RecordValue {
+    if field.list {
+        RecordValue::List(
+            inputs
+                .iter()
+                .map(|member| RecordScalar::Text(member.clone()))
+                .collect(),
+        )
+    } else {
+        RecordValue::Scalar(RecordScalar::Text(
+            inputs.first().cloned().unwrap_or_default(),
+        ))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn update_properties(
+    record_type: &RecordType,
+    inputs: &[RecordFieldInput],
+    currents: &BTreeMap<String, Option<RecordValue>>,
+    effective: &BTreeMap<String, RecordValue>,
+    removed: &[String],
+    missing_keys: &[String],
+    invalid_keys: &[String],
+    today: NaiveDate,
+) -> Vec<PlannedUpdateProperty> {
+    record_type
+        .fields
+        .iter()
+        .map(|field| {
+            let source_ranges = source_ranges_for(inputs, &field.key);
+            let current = currents.get(&field.key).cloned().flatten();
+            let current_display = current
+                .as_ref()
+                .map(|value| display_value(field, value, today));
+            if missing_keys.iter().any(|key| key == &field.key) {
+                return PlannedUpdateProperty {
+                    key: field.key.clone(),
+                    label: field.label.clone(),
+                    kind: field.kind.clone(),
+                    required: field.required,
+                    list: field.list,
+                    state: RecordPropertyState::Missing,
+                    value: None,
+                    display: None,
+                    current,
+                    current_display,
+                    source: None,
+                    source_ranges,
+                };
+            }
+            if invalid_keys.iter().any(|key| key == &field.key) {
+                return PlannedUpdateProperty {
+                    key: field.key.clone(),
+                    label: field.label.clone(),
+                    kind: field.kind.clone(),
+                    required: field.required,
+                    list: field.list,
+                    state: RecordPropertyState::Invalid,
+                    value: None,
+                    display: None,
+                    current,
+                    current_display,
+                    source: None,
+                    source_ranges,
+                };
+            }
+            if removed.iter().any(|key| key == &field.key) {
+                return PlannedUpdateProperty {
+                    key: field.key.clone(),
+                    label: field.label.clone(),
+                    kind: field.kind.clone(),
+                    required: field.required,
+                    list: field.list,
+                    state: RecordPropertyState::None,
+                    value: None,
+                    display: None,
+                    current,
+                    current_display,
+                    source: None,
+                    source_ranges,
+                };
+            }
+            if let Some(value) = effective.get(&field.key) {
+                let display = Some(display_value(field, value, today));
+                return PlannedUpdateProperty {
+                    key: field.key.clone(),
+                    label: field.label.clone(),
+                    kind: field.kind.clone(),
+                    required: field.required,
+                    list: field.list,
+                    state: RecordPropertyState::Set,
+                    value: Some(value.clone()),
+                    display,
+                    current,
+                    current_display,
+                    source: Some(RecordPropertySource::Typed),
+                    source_ranges,
+                };
+            }
+            let (state, value, display) = match &current {
+                Some(value) => (
+                    RecordPropertyState::Set,
+                    Some(value.clone()),
+                    Some(display_value(field, value, today)),
+                ),
+                None => (RecordPropertyState::None, None, None),
+            };
+            PlannedUpdateProperty {
+                key: field.key.clone(),
+                label: field.label.clone(),
+                kind: field.kind.clone(),
+                required: field.required,
+                list: field.list,
+                state,
+                value,
+                display,
+                current,
+                current_display,
+                source: None,
+                source_ranges,
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -788,8 +1435,9 @@ mod tests {
     use chrono::{NaiveDate, NaiveDateTime};
 
     use super::{
-        plan_create, RecordCreateRequest, RecordPlanErrorCode,
-        RecordPropertySource, RecordPropertyState, RecordStemSource,
+        plan_create, plan_update, resolve_update_target, PlanUpdateRequest,
+        RecordCreateRequest, RecordPlanErrorCode, RecordPropertySource,
+        RecordPropertyState, RecordStemSource, RecordUpdateTargetErrorCode,
     };
     use crate::native::records::{
         catalog::RecordCatalog,
@@ -1441,6 +2089,619 @@ records:
             .markdown
             .unwrap()
             .contains("created: 2026-01-15T23:30:00+1400\n"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    const UPDATE_TODAY: NaiveDate = match NaiveDate::from_ymd_opt(2026, 11, 8) {
+        Some(date) => date,
+        None => panic!("test date is valid"),
+    };
+
+    fn update_values(key: &str, values: &[&str]) -> RecordFieldInput {
+        RecordFieldInput {
+            key: key.to_owned(),
+            state: FieldInputState::SuppliedValues(
+                values.iter().map(|value| (*value).to_owned()).collect(),
+            ),
+            source_range: None,
+        }
+    }
+
+    fn update_empty(key: &str) -> RecordFieldInput {
+        RecordFieldInput {
+            key: key.to_owned(),
+            state: FieldInputState::SuppliedEmpty,
+            source_range: None,
+        }
+    }
+
+    fn write_update_note(root: &Path, relative: &str, contents: &str) {
+        let path = root.join(relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, contents).unwrap();
+    }
+
+    #[test]
+    fn update_resolves_unique_stem_case_insensitively_with_actual_spelling() {
+        let root = temp_dir("update-resolve");
+        write_update_note(
+            &root,
+            "eat/Ninja_Sushi.md",
+            "---\ntitle: Ninja Sushi\nstatus: liked\ncategory: Coffee\nlocation: Clark\ncreated: 2026-11-08T12:00:00+0000\n---\n\n# Ninja Sushi\n",
+        );
+        let config = config();
+        let mut catalog = RecordCatalog::new(&root);
+        let target = resolve_update_target(
+            &config,
+            &mut catalog,
+            "restaurant",
+            "ninja_sushi",
+        )
+        .unwrap();
+        assert_eq!(target.stem, "Ninja_Sushi");
+        assert_eq!(target.path, PathBuf::from("eat/Ninja_Sushi.md"));
+        assert_eq!(target.title, "Ninja Sushi");
+        let mut catalog = RecordCatalog::new(&root);
+        let upper = resolve_update_target(
+            &config,
+            &mut catalog,
+            "restaurant",
+            "NINJA_SUSHI",
+        )
+        .unwrap();
+        assert_eq!(upper, target);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn update_missing_stem_reports_not_found_with_nearby_suggestions() {
+        let root = temp_dir("update-missing");
+        write_update_note(
+            &root,
+            "eat/ninja_sushi.md",
+            "---\ntitle: Ninja Sushi\nstatus: liked\ncategory: Coffee\nlocation: Clark\ncreated: 2026-11-08T12:00:00+0000\n---\n\n# Ninja Sushi\n",
+        );
+        let config = config();
+        let mut catalog = RecordCatalog::new(&root);
+        let error = resolve_update_target(
+            &config,
+            &mut catalog,
+            "restaurant",
+            "ninja_sushy",
+        )
+        .unwrap_err();
+        assert_eq!(error.code, RecordUpdateTargetErrorCode::UnknownStem);
+        assert_eq!(error.code.diagnostic_code(), "record_not_found");
+        assert!(
+            error.suggestions.contains(&"@eat/ninja_sushi".to_owned()),
+            "suggestions: {:?}",
+            error.suggestions
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn update_ambiguous_stem_lists_candidates_as_not_found() {
+        let root = temp_dir("update-ambiguous");
+        let note = |title: &str| {
+            format!(
+                "---\ntitle: {title}\nstatus: liked\ncategory: Coffee\nlocation: Clark\ncreated: 2026-11-08T12:00:00+0000\n---\n\n# {title}\n"
+            )
+        };
+        write_update_note(&root, "eat/Alpha.md", &note("Alpha"));
+        write_update_note(&root, "eat/ALPHA.md", &note("ALPHA"));
+        let entries = fs::read_dir(root.join("eat")).unwrap().count();
+        let config = config();
+        if entries < 2 {
+            let mut catalog = RecordCatalog::new(&root);
+            let target = resolve_update_target(
+                &config,
+                &mut catalog,
+                "restaurant",
+                "alpha",
+            )
+            .unwrap();
+            assert!(
+                target.path.as_path() == Path::new("eat/Alpha.md")
+                    || target.path.as_path() == Path::new("eat/ALPHA.md")
+            );
+            fs::remove_dir_all(root).unwrap();
+            return;
+        }
+        let mut catalog = RecordCatalog::new(&root);
+        let error =
+            resolve_update_target(&config, &mut catalog, "restaurant", "alpha")
+                .unwrap_err();
+        assert_eq!(error.code, RecordUpdateTargetErrorCode::AmbiguousStem);
+        assert_eq!(error.code.diagnostic_code(), "record_not_found");
+        assert_eq!(error.paths.len(), 2);
+        assert_eq!(error.suggestions.len(), 2);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn update_unsafe_stems_refuse_before_folder_access() {
+        let root = temp_dir("update-unsafe");
+        let config = config();
+        for stem in ["../escape", "a/b", "", ".", "..", "a\\b"] {
+            let mut catalog = RecordCatalog::new(&root);
+            let error = resolve_update_target(
+                &config,
+                &mut catalog,
+                "restaurant",
+                stem,
+            )
+            .unwrap_err();
+            assert_eq!(
+                error.code,
+                RecordUpdateTargetErrorCode::UnsafeTarget,
+                "stem {stem:?}"
+            );
+            assert_eq!(error.code.diagnostic_code(), "record_invalid_value");
+        }
+        let mut catalog = RecordCatalog::new(&root);
+        let error = resolve_update_target(&config, &mut catalog, "nope", "x")
+            .unwrap_err();
+        assert_eq!(error.code, RecordUpdateTargetErrorCode::UnknownRecordType);
+        fs::write(root.join("eat"), "not a directory").unwrap();
+        let mut catalog = RecordCatalog::new(&root);
+        let error =
+            resolve_update_target(&config, &mut catalog, "restaurant", "x")
+                .unwrap_err();
+        assert_eq!(error.code, RecordUpdateTargetErrorCode::FolderUnavailable);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn update_absent_fields_never_apply_creation_defaults() {
+        let root = temp_dir("update-no-defaults");
+        let original = "---\ntitle: No Default\nstatus: liked\ncategory: Coffee\nlocation: Clark\ncreated: 2026-11-08T12:00:00+0000\n---\n\n# No Default\n\n## Notes\n";
+        write_update_note(&root, "eat/no_default.md", original);
+        let config = config();
+        let mut catalog = RecordCatalog::new(&root);
+        let target = resolve_update_target(
+            &config,
+            &mut catalog,
+            "restaurant",
+            "no_default",
+        )
+        .unwrap();
+        let plan = plan_update(PlanUpdateRequest {
+            target: &target,
+            original,
+            fields: &[],
+            notes: &[],
+            today: UPDATE_TODAY,
+        })
+        .unwrap();
+        assert!(plan.missing.is_empty());
+        assert!(plan.invalid.is_empty());
+        assert_eq!(plan.markdown.as_deref(), Some(original));
+        assert!(plan.changed.is_empty());
+        let companions = plan
+            .properties
+            .iter()
+            .find(|property| property.key == "companions")
+            .expect("companions property");
+        assert_eq!(companions.state, RecordPropertyState::None);
+        assert_eq!(companions.value, None);
+        assert_eq!(companions.source, None);
+        assert!(plan
+            .properties
+            .iter()
+            .all(|property| property.source
+                != Some(RecordPropertySource::Default)));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn update_optional_empty_removes_key_and_required_empty_is_missing() {
+        let root = temp_dir("update-empty");
+        let original = "---\ntitle: Empty\nstatus: liked\ncategory: Coffee\nlocation: Clark\ncompanions:\n  - \"[[kelly]]\"\ncreated: 2026-11-08T12:00:00+0000\n---\n\n# Empty\n\n## Notes\n";
+        write_update_note(&root, "eat/empty.md", original);
+        let config = config();
+        let mut catalog = RecordCatalog::new(&root);
+        let target =
+            resolve_update_target(&config, &mut catalog, "restaurant", "empty")
+                .unwrap();
+        let plan = plan_update(PlanUpdateRequest {
+            target: &target,
+            original,
+            fields: &[update_empty("companions")],
+            notes: &[],
+            today: UPDATE_TODAY,
+        })
+        .unwrap();
+        assert!(plan.missing.is_empty());
+        assert!(plan.invalid.is_empty());
+        let markdown = plan.markdown.expect("removal completes");
+        assert!(!markdown.contains("companions"));
+        assert_eq!(plan.changed, vec!["companions".to_owned()]);
+        let missing = plan_update(PlanUpdateRequest {
+            target: &target,
+            original,
+            fields: &[update_empty("status")],
+            notes: &[],
+            today: UPDATE_TODAY,
+        })
+        .unwrap();
+        assert_eq!(missing.missing, vec!["status".to_owned()]);
+        assert!(missing.markdown.is_none());
+        assert_eq!(
+            missing
+                .properties
+                .iter()
+                .find(|property| property.key == "status")
+                .expect("status property")
+                .state,
+            RecordPropertyState::Missing
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn update_replaces_whole_lists_in_request_order() {
+        let root = temp_dir("update-list");
+        let original = "---\ntitle: Lists\nstatus: liked\ncategory: Coffee\nlocation: Clark\ncompanions:\n  - \"[[kelly]]\"\ncreated: 2026-11-08T12:00:00+0000\n---\n\n# Lists\n\n## Notes\n";
+        write_update_note(&root, "eat/lists.md", original);
+        let config = config();
+        let mut catalog = RecordCatalog::new(&root);
+        let target =
+            resolve_update_target(&config, &mut catalog, "restaurant", "lists")
+                .unwrap();
+        let fields = vec![
+            update_values("companions", &["[[bob]]"]),
+            update_values("companions", &["[[alice]]"]),
+        ];
+        let plan = plan_update(PlanUpdateRequest {
+            target: &target,
+            original,
+            fields: &fields,
+            notes: &[],
+            today: UPDATE_TODAY,
+        })
+        .unwrap();
+        let markdown = plan.markdown.expect("list replace completes");
+        let bob_at = markdown.find("[[bob]]").expect("bob");
+        let alice_at = markdown.find("[[alice]]").expect("alice");
+        assert!(bob_at < alice_at);
+        assert!(!markdown.contains("[[kelly]]"));
+        assert_eq!(plan.changed, vec!["companions".to_owned()]);
+        assert_eq!(
+            plan.properties
+                .iter()
+                .find(|property| property.key == "companions")
+                .expect("companions property")
+                .value,
+            Some(RecordValue::List(vec![
+                RecordScalar::Link("[[bob]]".to_owned()),
+                RecordScalar::Link("[[alice]]".to_owned()),
+            ]))
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn update_supplied_invalid_values_are_invalid_not_warnings() {
+        let root = temp_dir("update-invalid");
+        let original = "---\ntitle: Invalid\nstatus: liked\ncategory: Coffee\nlocation: Clark\ncreated: 2026-11-08T12:00:00+0000\n---\n\n# Invalid\n\n## Notes\n";
+        write_update_note(&root, "eat/invalid.md", original);
+        let config = config();
+        let mut catalog = RecordCatalog::new(&root);
+        let target = resolve_update_target(
+            &config,
+            &mut catalog,
+            "restaurant",
+            "invalid",
+        )
+        .unwrap();
+        let plan = plan_update(PlanUpdateRequest {
+            target: &target,
+            original,
+            fields: &[update_values("status", &["bogus"])],
+            notes: &[],
+            today: UPDATE_TODAY,
+        })
+        .unwrap();
+        assert!(plan.markdown.is_none());
+        assert!(plan.missing.is_empty());
+        assert_eq!(plan.invalid.len(), 1);
+        assert!(plan.warnings.is_empty());
+        assert_eq!(
+            plan.properties
+                .iter()
+                .find(|property| property.key == "status")
+                .expect("status property")
+                .state,
+            RecordPropertyState::Invalid
+        );
+        let unknown = plan_update(PlanUpdateRequest {
+            target: &target,
+            original,
+            fields: &[update_values("nope", &["x"])],
+            notes: &[],
+            today: UPDATE_TODAY,
+        })
+        .unwrap();
+        assert!(unknown.markdown.is_none());
+        assert!(unknown
+            .invalid
+            .iter()
+            .any(|diagnostic| diagnostic.code
+                == RecordDiagnosticCode::UnknownField));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn update_historical_defects_are_warnings_with_snapshot_currents() {
+        let root = temp_dir("update-warnings");
+        let original = "---\ntitle: Warnings\nstatus: bogus\ncategory: Coffee\nlocation: Clark\ncreated: 2026-11-08T12:00:00+0000\n---\n\n# Warnings\n\n## Notes\n";
+        write_update_note(&root, "eat/warnings.md", original);
+        let config = config();
+        let mut catalog = RecordCatalog::new(&root);
+        let target = resolve_update_target(
+            &config,
+            &mut catalog,
+            "restaurant",
+            "warnings",
+        )
+        .unwrap();
+        let plan = plan_update(PlanUpdateRequest {
+            target: &target,
+            original,
+            fields: &[update_values("location", &["Westfield"])],
+            notes: &[],
+            today: UPDATE_TODAY,
+        })
+        .unwrap();
+        assert!(plan.missing.is_empty());
+        assert!(plan.invalid.is_empty());
+        assert!(plan.markdown.is_some());
+        assert_eq!(plan.changed, vec!["location".to_owned()]);
+        assert!(plan
+            .warnings
+            .iter()
+            .any(|warning| warning.field.as_deref() == Some("status")));
+        let status = plan
+            .properties
+            .iter()
+            .find(|property| property.key == "status")
+            .expect("status property");
+        assert_eq!(status.current_display.as_deref(), Some("bogus"));
+        assert_eq!(status.state, RecordPropertyState::Set);
+        assert_eq!(status.value, status.current);
+        let location = plan
+            .properties
+            .iter()
+            .find(|property| property.key == "location")
+            .expect("location property");
+        assert_eq!(location.current_display.as_deref(), Some("Clark"));
+        assert_eq!(location.display.as_deref(), Some("Westfield"));
+
+        let missing_original = "---\ntitle: M\nstatus: liked\ncategory: Coffee\ncreated: 2026-11-08T12:00:00+0000\n---\n\n# M\n\n## Notes\n";
+        write_update_note(&root, "eat/missing_req.md", missing_original);
+        let mut catalog = RecordCatalog::new(&root);
+        let target = resolve_update_target(
+            &config,
+            &mut catalog,
+            "restaurant",
+            "missing_req",
+        )
+        .unwrap();
+        let plan = plan_update(PlanUpdateRequest {
+            target: &target,
+            original: missing_original,
+            fields: &[],
+            notes: &[],
+            today: UPDATE_TODAY,
+        })
+        .unwrap();
+        assert!(plan.markdown.is_some());
+        assert!(plan.missing.is_empty());
+        assert!(plan
+            .warnings
+            .iter()
+            .any(|warning| warning.field.as_deref() == Some("location")));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn update_current_values_come_from_the_supplied_snapshot() {
+        let root = temp_dir("update-snapshot");
+        let on_disk = "---\ntitle: Snapshot\nstatus: liked\ncategory: Coffee\nlocation: Clark\ncreated: 2026-11-08T12:00:00+0000\n---\n\n# Snapshot\n\n## Notes\n";
+        write_update_note(&root, "eat/snapshot.md", on_disk);
+        let snapshot = on_disk.replace("Clark", "Westfield");
+        let config = config();
+        let mut catalog = RecordCatalog::new(&root);
+        let target = resolve_update_target(
+            &config,
+            &mut catalog,
+            "restaurant",
+            "snapshot",
+        )
+        .unwrap();
+        let plan = plan_update(PlanUpdateRequest {
+            target: &target,
+            original: &snapshot,
+            fields: &[],
+            notes: &[],
+            today: UPDATE_TODAY,
+        })
+        .unwrap();
+        assert_eq!(plan.original, snapshot);
+        assert_eq!(
+            plan.properties
+                .iter()
+                .find(|property| property.key == "location")
+                .expect("location property")
+                .current_display
+                .as_deref(),
+            Some("Westfield")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn update_structural_snapshot_defects_refuse_with_unchanged_bytes() {
+        let root = temp_dir("update-refusals");
+        let config = config();
+        let malformed =
+            "---\ntitle: Bad\nstatus: \"unterminated\ncategory: Coffee\n";
+        write_update_note(&root, "eat/bad.md", malformed);
+        let mut catalog = RecordCatalog::new(&root);
+        let target =
+            resolve_update_target(&config, &mut catalog, "restaurant", "bad")
+                .unwrap();
+        let error = plan_update(PlanUpdateRequest {
+            target: &target,
+            original: malformed,
+            fields: &[update_values("location", &["Clark"])],
+            notes: &[],
+            today: UPDATE_TODAY,
+        })
+        .unwrap_err();
+        assert_eq!(
+            error.code,
+            crate::native::records::render::RecordUpdateErrorCode::MalformedFrontmatter
+        );
+        assert_eq!(error.unchanged, malformed);
+
+        let duplicate = "---\ntitle: Dup\nstatus: liked\nstatus: not_liked\ncategory: Coffee\nlocation: Clark\ncreated: 2026-11-08T12:00:00+0000\n---\n\n# Dup\n";
+        write_update_note(&root, "eat/dup.md", duplicate);
+        let mut catalog = RecordCatalog::new(&root);
+        let target =
+            resolve_update_target(&config, &mut catalog, "restaurant", "dup")
+                .unwrap();
+        let error = plan_update(PlanUpdateRequest {
+            target: &target,
+            original: duplicate,
+            fields: &[update_values("status", &["liked"])],
+            notes: &[],
+            today: UPDATE_TODAY,
+        })
+        .unwrap_err();
+        assert_eq!(
+            error.code,
+            crate::native::records::render::RecordUpdateErrorCode::DuplicateKey
+        );
+        assert_eq!(error.unchanged, duplicate);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn update_real_note_goldens_match_complete_expected_bytes() {
+        let ahrres = include_str!(
+            "../../../tests/fixtures/records/source/eat/ahrres.md"
+        );
+        let talk_python = include_str!(
+            "../../../tests/fixtures/records/source/podcasts/talk_python.md"
+        );
+        let root = temp_dir("update-goldens");
+        write_update_note(&root, "eat/ahrres.md", ahrres);
+        write_update_note(&root, "podcasts/talk_python.md", talk_python);
+        let config = parse_records_config(
+            r#"
+records:
+  restaurant:
+    dir: eat
+    label: Restaurant
+    dated_notes: true
+    fields:
+      status: {required: true, values: {liked: Liked, to_try: To try, not_liked: Not liked}}
+      category: {required: true}
+      location: {required: true}
+      companions: {values: link, list: true}
+      visited: {values: date}
+      url: {values: url}
+  podcast:
+    dir: podcasts
+    label: Podcast
+    dated_notes: false
+    fields:
+      status: {required: true, values: {subscribed: Subscribed, to_try: To try, unsubscribed: Unsubscribed}}
+      category: {required: true}
+      url: {values: url}
+"#,
+            Path::new("/config.yml"),
+        )
+        .unwrap();
+
+        let mut catalog = RecordCatalog::new(&root);
+        let target = resolve_update_target(
+            &config,
+            &mut catalog,
+            "restaurant",
+            "ahrres",
+        )
+        .unwrap();
+        assert_eq!(target.stem, "ahrres");
+        assert_eq!(target.path, PathBuf::from("eat/ahrres.md"));
+        assert_eq!(target.title, "Ahrres");
+        let plan = plan_update(PlanUpdateRequest {
+            target: &target,
+            original: ahrres,
+            fields: &[update_values("location", &["Clark"])],
+            notes: &[RecordNoteInput::bullet("Revisit was great")],
+            today: UPDATE_TODAY,
+        })
+        .unwrap();
+        let expected = ahrres
+            .replacen("location: \"Westfield\"\n", "location: \"Clark\"\n", 1)
+            .replacen(
+                "## Notes\n\n## Source",
+                "## Notes\n\n- 2026-11-08: Revisit was great\n\n## Source",
+                1,
+            );
+        assert_eq!(plan.markdown.as_deref(), Some(expected.as_str()));
+        assert_eq!(plan.changed, vec!["location".to_owned()]);
+        assert!(plan.warnings.is_empty());
+        let expected_body =
+            crate::native::highlights_ref::split_frontmatter(&expected)
+                .map(|(_, body)| body)
+                .unwrap_or_default();
+        assert_eq!(plan.body.as_deref(), Some(expected_body.as_str()));
+        let location = plan
+            .properties
+            .iter()
+            .find(|property| property.key == "location")
+            .expect("location property");
+        assert_eq!(location.current_display.as_deref(), Some("Westfield"));
+        assert_eq!(location.display.as_deref(), Some("Clark"));
+
+        let mut catalog = RecordCatalog::new(&root);
+        let target = resolve_update_target(
+            &config,
+            &mut catalog,
+            "podcast",
+            "talk_python",
+        )
+        .unwrap();
+        let plan = plan_update(PlanUpdateRequest {
+            target: &target,
+            original: talk_python,
+            fields: &[update_values("category", &["rust"])],
+            notes: &[RecordNoteInput::bullet("Listened to the async episode")],
+            today: UPDATE_TODAY,
+        })
+        .unwrap();
+        let expected = talk_python
+            .replacen("category: python\n", "category: \"rust\"\n", 1)
+            .replacen(
+                "## Notes\n\n## Source",
+                "## Notes\n\n- Listened to the async episode\n\n## Source",
+                1,
+            );
+        assert_eq!(plan.markdown.as_deref(), Some(expected.as_str()));
+        assert_eq!(plan.changed, vec!["category".to_owned()]);
+        let category = plan
+            .properties
+            .iter()
+            .find(|property| property.key == "category")
+            .expect("category property");
+        assert_eq!(category.current_display.as_deref(), Some("python"));
+        assert_eq!(category.display.as_deref(), Some("rust"));
         fs::remove_dir_all(root).unwrap();
     }
 }
