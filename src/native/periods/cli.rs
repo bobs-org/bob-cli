@@ -92,7 +92,7 @@ pub(crate) fn brief_command() -> ClapCommand {
     ClapCommand::new("bob periods brief")
         .about("Print the agent review bundle for a week, quarter, or year")
         .long_about(
-            "Print the deterministic, versioned agent bundle (brief v1) for \
+            "Print the deterministic, versioned agent bundle (brief v2) for \
              a week, quarter, or year: header, facts, time, parts, finished, \
              started and dropped, still open, practice (year only), Bryan's \
              words, this note and its neighbours, off-clock counts, and \
@@ -130,8 +130,9 @@ pub(crate) fn draft_command() -> ClapCommand {
         .long_about(
             "Replace the `## Review` section of a week, quarter, or year note \
              with the draft text from -i/--input (a file path, or - for \
-             stdin). The text must open with a `**Headline:**` line and stay \
-             within the kind's word cap (week 250, quarter 400, year 600). \
+             stdin). The text must open with a `**Headline:**` paragraph \
+             (joined onto one line on save) and stay within the kind's word \
+             cap (week 250, quarter 400, year 600). \
              An open or future period, or a Review Bryan already edited or \
              reflected, is refused unless -F/--force is passed. The note must \
              exist and contain `## Review`; all_time has no review. See \
@@ -278,7 +279,7 @@ fn format_arg() -> Arg {
 }
 
 /// `brief` prints Markdown for agents, so its human format is `md`; the
-/// v1 agent callouts run `bob periods brief <id> -f md`. `human` stays a
+/// agent callouts run `bob periods brief <id> -f md`. `human` stays a
 /// hidden alias for symmetry with the other period commands.
 fn brief_format_arg() -> Arg {
     use clap::builder::{PossibleValue, PossibleValuesParser};

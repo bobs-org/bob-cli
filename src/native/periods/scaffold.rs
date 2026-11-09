@@ -247,7 +247,7 @@ mod tests {
         assert!(first.contains("```bob-period-parts"));
         assert!(first.contains("## Review"));
         assert!(first.contains("## Reflection"));
-        assert!(first.contains("Agent instructions · weekly v1"));
+        assert!(first.contains("Agent instructions · weekly v2"));
     }
 
     #[test]

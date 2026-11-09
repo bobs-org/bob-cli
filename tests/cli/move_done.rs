@@ -942,6 +942,71 @@ fn move_done_tasks_rewrites_stayed_pathless_links_in_archive() {
     );
 }
 
+#[test]
+fn move_done_tasks_keeps_a_drafted_period_review_drafted() {
+    // Archiving a task rewrites a period Review's link to `done/`. The
+    // rewrite is bob's, not Bryan's, so the Review must stay `drafted`
+    // (and redraftable without -F) instead of turning `edited`.
+    let temp = TempDir::new("bob-cli-move-done-tasks-period-review");
+    let stub_bin = temp.path().join("bin");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&stub_bin).expect("create stub bin");
+    write_successful_ob_stub(&stub_bin);
+    write_file(
+        &vault.join("work.md"),
+        "- [x] #task Ship decay ✅ 2026-11-04 ^decay\n- [ ] #task Active\n",
+    );
+    let period = |args: &[&str]| {
+        bob_command()
+            .arg("periods")
+            .args(args)
+            .env("BOB_DIR", &vault)
+            .env("BOB_NOW", "2026-11-10")
+            .env("XDG_CACHE_HOME", temp.path().join("cache"))
+            .output()
+            .expect("run bob periods")
+    };
+    assert_success(&period(&["ensure", "-d", "2026-11-04", "-q"]));
+    let draft = temp.path().join("draft.md");
+    write_file(
+        &draft,
+        "**Headline:** Shipped decay.\n\n**Shipped:**\n\n- [[work#^decay|Decay]]\n",
+    );
+    assert_success(&period(&[
+        "draft",
+        "2026-W45",
+        "-i",
+        draft.to_str().expect("utf-8 path"),
+    ]));
+
+    let output = bob_command()
+        .args(["task", "archive"])
+        .arg("-t1")
+        .env("BOB_DIR", &vault)
+        .env("PATH", path_with_prefix(&stub_bin))
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob task archive with a drafted period review");
+    assert_success(&output);
+
+    let note = fs::read_to_string(vault.join("2026/2026-W45.md"))
+        .expect("read period note");
+    assert!(
+        note.contains("[[done/work_done#^decay|Decay]]"),
+        "expected the Review link to move to done/:\n{note}"
+    );
+    let list = stdout(&period(&["list", "-f", "json", "-k", "week"]));
+    let rows: serde_json::Value =
+        serde_json::from_str(&list).expect("list json");
+    let w45 = rows["rows"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .find(|row| row["id"] == "2026-W45")
+        .expect("W45 row");
+    assert_eq!(w45["review_state"], "drafted", "{note}");
+}
+
 fn init_git_vault_with_remote(temp: &TempDir) -> (PathBuf, PathBuf) {
     let vault = temp.path().join("vault");
     let remote = temp.path().join("remote.git");

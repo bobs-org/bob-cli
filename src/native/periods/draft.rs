@@ -182,6 +182,10 @@ fn execute(matches: &clap::ArgMatches) -> Result<DraftReport, DraftError> {
     }
     let raw = read_input(matches)?;
     let text = strip_blank_edges(&raw);
+    // A soft-wrapped Headline paragraph is joined onto one physical line
+    // before the checks, so the cap counts the whole sentence and parents
+    // never show half of it.
+    let text = note::unwrap_headline(&text).unwrap_or(text);
     if text.is_empty() {
         return Err(DraftError::usage(
             "missing_headline",
@@ -360,7 +364,8 @@ fn strip_blank_edges(text: &str) -> String {
     kept.join("\n").trim_end().to_string()
 }
 
-/// The `**Headline:** <text>` opener, else none.
+/// The `**Headline:** <text>` opener, else none. `execute` has already
+/// joined a soft-wrapped Headline paragraph onto this first line.
 fn headline_of(text: &str) -> Option<String> {
     let first = text.lines().next().unwrap_or("").trim();
     first

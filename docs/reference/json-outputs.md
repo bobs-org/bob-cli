@@ -453,18 +453,18 @@ Day strip is a plugin view, not a `day_strip` field in CLI JSON. See
 
 ## Period notes
 
-All period JSON envelopes use `schema_version: 1`. `brief_version: "brief v1"` names
-an additional agent-brief contract. `show`, `brief`, and `draft` accept
-`last-week`, `last-quarter`, and `last-year`, resolving them to canonical IDs.
+Period JSON uses `schema_version: 1`; brief successes use `2` and
+`brief_version: "brief v2"`. `show`, `brief`, and `draft` accept
+`last-week`, `last-quarter`, `last-year`.
 
 | Command | Flag | Shape | Contract |
 | --- | --- | --- | --- |
-| `bob periods` and `bob periods list` | `-f json` | `rows[]` with identity, path, review state, and Headline; `-p` adds `problems[]` | [CLI](../periods.md#cli-so-far) |
-| `bob periods ensure` | `-f json` | `created`, `filled`, `existing`, `dry_run`; `-R` instead reports `refreshed`, `skipped_reflected`, `up_to_date`, and commit identity | [CLI](../periods.md#cli-so-far) |
-| `bob periods show` | `-f json` | Period and note metadata, navigation, facts, lanes, columns, groups, children, catalogs, and warnings | [Reports](../periods.md#period-reports) |
-| `bob periods brief` | `-f json` (default is Markdown) | Facts, time, parts, task outcomes, still-open work, authored words, caveats, and truncation totals | [Agent briefs](../periods.md#agent-briefs-brief-v1) |
-| `bob periods draft` | `-f json` | `id`, `words`, `review_state: drafted`; typed refusals carry `error` | [Drafting reviews](../periods.md#drafting-reviews) |
-| `bob periods migrate` | `-f json` | Dry-run/write status, path changes, skipped navigation, sample diff, ISO years, and commit identity | [Migration](../periods.md#migration) |
+| `bob periods` and `bob periods list` | `-f json` | `rows[]` with identity, path, review state, Headline; `-p` adds `problems[]` | [CLI](../periods.md#cli-so-far) |
+| `bob periods ensure` | `-f json` | `created`, `filled`, `existing`, `dry_run`; `-R` reports `refreshed`, `skipped_reflected`, `up_to_date`, commit | [CLI](../periods.md#cli-so-far) |
+| `bob periods show` | `-f json` | Period/note metadata, navigation, facts, lanes, columns, groups, children, catalogs, warnings | [Reports](../periods.md#period-reports) |
+| `bob periods brief` | `-f json` (default Markdown) | Facts, time, parts, grouped completions, open work, previous Review, quotes, caveats | [Agent briefs](../periods.md#agent-briefs-brief-v2) |
+| `bob periods draft` | `-f json` | `id`, `words`, `review_state: drafted`; refusals carry `error` | [Drafting reviews](../periods.md#drafting-reviews) |
+| `bob periods migrate` | `-f json` | Dry-run/write status, path changes, skipped navigation, sample diff, ISO years, commit | [Migration](../periods.md#migration) |
 
 ## Task types and relation labels
 

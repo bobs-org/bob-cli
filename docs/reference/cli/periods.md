@@ -50,7 +50,7 @@ Run 'bob periods <command> --help' for more information on a command.
 Print the agent review bundle for a week, quarter, or year
 
 ```text title="bob periods brief --help"
-Print the deterministic, versioned agent bundle (brief v1) for a week, quarter, or year: header, facts, time, parts, finished, started and dropped, still open, practice (year only), Bryan's words, this note and its neighbours, off-clock counts, and caveats. The command is read-only. all_time has no review. See docs/periods.md for the brief contract and token budgets.
+Print the deterministic, versioned agent bundle (brief v2) for a week, quarter, or year: header, facts, time, parts, finished, started and dropped, still open, practice (year only), Bryan's words, this note and its neighbours, off-clock counts, and caveats. The command is read-only. all_time has no review. See docs/periods.md for the brief contract and token budgets.
 
 Usage: bob periods brief [OPTIONS] [PERIOD]
 
@@ -95,7 +95,7 @@ See docs/periods.md for the brief contract and token budgets.
 Draft a period's Review section (never overwrites Bryan)
 
 ```text title="bob periods draft --help"
-Replace the `## Review` section of a week, quarter, or year note with the draft text from -i/--input (a file path, or - for stdin). The text must open with a `**Headline:**` line and stay within the kind's word cap (week 250, quarter 400, year 600). An open or future period, or a Review Bryan already edited or reflected, is refused unless -F/--force is passed. The note must exist and contain `## Review`; all_time has no review. See docs/periods.md for the draft rules and JSON errors.
+Replace the `## Review` section of a week, quarter, or year note with the draft text from -i/--input (a file path, or - for stdin). The text must open with a `**Headline:**` paragraph (joined onto one line on save) and stay within the kind's word cap (week 250, quarter 400, year 600). An open or future period, or a Review Bryan already edited or reflected, is refused unless -F/--force is passed. The note must exist and contain `## Review`; all_time has no review. See docs/periods.md for the draft rules and JSON errors.
 
 Usage: bob periods draft [OPTIONS] [PERIOD]
 

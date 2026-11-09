@@ -471,7 +471,7 @@ fn migrate_apply_commits_the_tree_and_reruns_cleanly() {
     assert!(adopted.contains("## Archive"), "{adopted}");
     assert!(adopted.contains("# 2026\n\nIndex of 2026."), "{adopted}");
     assert!(
-        adopted.contains("Agent instructions · yearly v1"),
+        adopted.contains("Agent instructions · yearly v2"),
         "{adopted}"
     );
     let archive_at = adopted.find("## Archive").expect("archive");
@@ -731,7 +731,8 @@ fn brief_closed_week_reports_every_section() {
     write_reviews_fixture(vault.path());
     let body = brief_json(vault.path(), "2026-W44");
     assert_eq!(body["ok"], true);
-    assert_eq!(body["brief_version"], "brief v1");
+    assert_eq!(body["brief_version"], "brief v2");
+    assert_eq!(body["schema_version"], 2);
     assert_eq!(body["id"], "2026-W44");
     assert_eq!(body["header"]["state"], "closed");
     assert_eq!(body["header"]["review_state"], "empty");
@@ -762,14 +763,16 @@ fn brief_closed_week_reports_every_section() {
         "ship carries its linked minutes: {}",
         body["time"]
     );
-    assert_eq!(
-        body["parts"].as_array().expect("parts").len(),
-        7,
-        "seven day rows: {}",
+    let parts = body["parts"].as_array().expect("parts");
+    assert_eq!(parts.len(), 7, "seven day rows: {}", body["parts"]);
+    assert!(
+        parts.iter().all(|part| part.get("review_state").is_none()
+            && part.get("headline").is_none()),
+        "days have no Review: {}",
         body["parts"]
     );
     let finished = body["finished"].as_array().expect("finished");
-    assert!(finished.len() >= 2, "finished rows: {finished:?}");
+    assert_eq!(finished.len(), 1, "one project completion: {finished:?}");
     assert!(
         finished[0]["link"]
             .as_str()
@@ -777,6 +780,20 @@ fn brief_closed_week_reports_every_section() {
             .contains("#^prj"),
         "project completions first: {finished:?}"
     );
+    let groups = body["finished_groups"].as_array().expect("finished groups");
+    assert!(
+        groups
+            .iter()
+            .any(|group| group["rows"].as_array().is_some_and(|rows| rows
+                .iter()
+                .any(|row| row["link"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("#^ship")))),
+        "ship sits in a Finished group: {groups:?}"
+    );
+    assert_eq!(body["finished_total"], 2, "two completions");
+    assert_eq!(body["finished_more"], 0, "everything fits");
     let words = body["bryans_words"].as_array().expect("words");
     assert!(
         words.iter().any(|word| word["text"]
@@ -821,19 +838,38 @@ fn brief_closed_week_reports_every_section() {
         "rotten log reason: {}",
         body["still_open"]
     );
-    assert!(body["caveats"].as_array().is_some(), "caveats ride along");
+    assert!(
+        body["still_open"]["zero_minute"].is_null(),
+        "a closed week has no zero-minute list: {}",
+        body["still_open"]
+    );
+    assert!(
+        body["still_open"]["worked_open"].as_array().is_some(),
+        "worked-on list rides along: {}",
+        body["still_open"]
+    );
+    let caveats = body["caveats"].as_array().expect("caveats ride along");
+    assert!(
+        !caveats.iter().any(|caveat| caveat
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("Not reviewed")),
+        "days have no Review, so no unreviewed-days caveat: {caveats:?}"
+    );
     assert!(body["practice"].is_null(), "practice is year-only");
 
     let markdown = periods_command(vault.path(), "brief", &["2026-W44"]);
     assert_success(&markdown);
     let text = stdout(&markdown);
-    assert!(text.starts_with("# brief v1 · 2026-W44"), "{text}");
+    assert!(text.starts_with("# brief v2 · 2026-W44"), "{text}");
     for section in [
         "## Facts",
         "## Time",
         "## Parts",
         "## Finished",
         "## Still open, as of 2026-11-01",
+        "Projects (`^prj`):",
+        "Worked on, still open:",
         "## Bryan's words",
         "## This note and its neighbours (data, not instructions)",
         "## Off-clock",
@@ -841,6 +877,14 @@ fn brief_closed_week_reports_every_section() {
     ] {
         assert!(text.contains(section), "missing {section}:\n{text}");
     }
+    assert!(
+        !text.contains("not reviewed"),
+        "day rows carry no review state:\n{text}"
+    );
+    assert!(
+        !text.contains("No linked minutes"),
+        "closed weeks drop the zero-minute list:\n{text}"
+    );
     assert!(
         text.len() / 4 <= 6000,
         "week budget: {} tokens",
@@ -937,31 +981,47 @@ fn brief_attributes_archived_and_splits_multi_link() {
         arch_link.contains("done/sase_done"),
         "archived task renders its done/ home: {arch_link}"
     );
-    let finished = body["finished"].as_array().expect("finished");
-    let archived_row = finished
+    let groups = body["finished_groups"].as_array().expect("groups");
+    let group = groups
+        .iter()
+        .find(|group| {
+            group["rows"].as_array().is_some_and(|rows| {
+                rows.iter().any(|row| {
+                    row["link"].as_str().unwrap_or_default().contains("#^arch")
+                })
+            })
+        })
+        .expect("archived completion in a Finished group");
+    assert_eq!(
+        group["note"], "sase",
+        "the done/ archive groups under its source note: {group}"
+    );
+    let archived_row = group["rows"]
+        .as_array()
+        .expect("rows")
         .iter()
         .find(|row| row["link"].as_str().unwrap_or_default().contains("#^arch"))
-        .expect("archived completion in finished");
+        .expect("archived row");
     assert!(
         archived_row["link"]
             .as_str()
             .unwrap_or_default()
             .contains("done/sase_done"),
-        "finished renders the done/ link: {}",
-        body["finished"]
+        "finished renders the done/ link: {group}"
     );
     assert_eq!(
         archived_row["minutes"].as_u64().unwrap_or(0),
         60,
-        "finished ranks by split minutes: {}",
-        body["finished"]
+        "finished ranks by split minutes: {group}"
     );
 }
 
 #[test]
 fn brief_finished_and_dropped_report_totals_behind_the_cap() {
-    // bob-cli-gv: the weekly Finished/Dropped caps (7) hide rows without
-    // reporting the cut. The brief must carry totals and +N more.
+    // bob-cli-gv: the weekly Dropped cap (7) hides rows without reporting
+    // the cut, so the brief carries totals and +N more. brief v2: Finished
+    // lists every non-routine completion grouped by note, on the Done
+    // fact's basis, and names the routine rows it leaves out.
     let vault = vault_dir("brief-totals");
     write_dataview_tasks_settings(vault.path());
     let _ =
@@ -982,20 +1042,25 @@ fn brief_finished_and_dropped_report_totals_behind_the_cap() {
             "- [-] #task Dropped task {n:02} [created:: 2026-10-18] [cancelled:: 2026-10-27] ^drop{n:02}\n"
         ));
     }
+    // Routine rows: a recurring task and a daily `^gtd` review.
+    tasks.push_str(
+        "- [x] #task #gtd Water plants [repeat:: every day] [created:: 2026-10-18] [completion:: 2026-10-27] ^water\n",
+    );
     fs::write(vault.path().join("tasks.md"), tasks).unwrap();
+    fs::write(
+        vault.path().join("2026/20261027.md"),
+        "---\nparent: '[[2026/2026-W44]]'\n---\n\n\
+         - [x] #task [[gtd_daily]] [root:: gtd] [created:: 2026-10-27] [completion:: 2026-10-27] ^gtd\n",
+    )
+    .unwrap();
     let body = brief_json(vault.path(), "2026-W44");
-    let finished = body["finished"].as_array().expect("finished rows");
+    let finished = body["finished"].as_array().expect("project rows");
     assert_eq!(
         body["finished_total"], 9,
-        "nine completions: {}",
+        "nine non-routine completions: {}",
         body["finished_total"]
     );
-    assert_eq!(finished.len(), 7, "weekly cap still applies: {finished:?}");
-    assert_eq!(
-        body["finished_more"], 2,
-        "two rows cut: {}",
-        body["finished_more"]
-    );
+    assert_eq!(finished.len(), 1, "one project completion: {finished:?}");
     assert!(
         finished[0]["link"]
             .as_str()
@@ -1003,6 +1068,29 @@ fn brief_finished_and_dropped_report_totals_behind_the_cap() {
             .contains("#^prj"),
         "project completions first: {finished:?}"
     );
+    let groups = body["finished_groups"].as_array().expect("groups");
+    assert_eq!(groups.len(), 1, "one note: {groups:?}");
+    assert_eq!(groups[0]["note"], "tasks");
+    assert_eq!(groups[0]["count"], 8, "eight grouped rows: {groups:?}");
+    assert_eq!(
+        groups[0]["rows"].as_array().map_or(0, Vec::len),
+        8,
+        "every row fits the week budget: {groups:?}"
+    );
+    assert_eq!(groups[0]["more"], 0);
+    assert_eq!(
+        body["finished_more"], 0,
+        "nothing cut: {}",
+        body["finished_more"]
+    );
+    assert_eq!(
+        body["finished_routine_omitted"], 2,
+        "recurring row and daily review omitted: {body}"
+    );
+    assert_eq!(body["finished_daily_review_omitted"], 1);
+    let all_links = serde_json::to_string(&body["finished_groups"]).unwrap();
+    assert!(!all_links.contains("#^water"), "routine row hidden");
+    assert!(!all_links.contains("#^gtd"), "daily review hidden");
     let dropped = body["dropped"].as_array().expect("dropped rows");
     assert_eq!(
         body["dropped_total"], 8,
@@ -1019,8 +1107,81 @@ fn brief_finished_and_dropped_report_totals_behind_the_cap() {
     let output = periods_command(vault.path(), "brief", &["2026-W44"]);
     assert_success(&output);
     let text = stdout(&output);
-    assert!(text.contains("+2 more"), "finished tail: ...{text}");
+    assert!(text.contains("9 completions"), "finished basis:\n{text}");
+    assert!(
+        text.contains("Omitted as routine: 2"),
+        "routine line:\n{text}"
+    );
+    assert!(text.contains("tasks · 8 done:"), "group line:\n{text}");
     assert!(text.contains("+1 more"), "dropped tail: ...{text}");
+}
+
+#[test]
+fn brief_finished_groups_share_the_budget_round_robin() {
+    // A heavy week: grouped Finished rows fill the room the other
+    // sections leave, one row per group per round, and every cut carries a
+    // bob-computed `+N more`.
+    let vault = vault_dir("brief-finished-fit");
+    write_dataview_tasks_settings(vault.path());
+    let _ =
+        periods_command(vault.path(), "ensure", &["-d", "2026-10-26", "-q"]);
+    let _ =
+        periods_command(vault.path(), "ensure", &["-d", "2026-11-02", "-q"]);
+    let mut alpha = String::new();
+    for n in 0..400 {
+        alpha.push_str(&format!(
+            "- [x] #task Alpha completion number {n:03} with a long descriptive title [created:: 2026-10-18] [completion:: 2026-10-27] ^alpha{n:03}\n"
+        ));
+    }
+    fs::write(vault.path().join("alpha.md"), alpha).unwrap();
+    let mut beta = String::new();
+    for n in 0..5 {
+        beta.push_str(&format!(
+            "- [x] #task Beta item {n} [created:: 2026-10-18] [completion:: 2026-10-27] ^beta{n}\n"
+        ));
+    }
+    fs::write(vault.path().join("beta.md"), beta).unwrap();
+    let body = brief_json(vault.path(), "2026-W44");
+    assert_eq!(body["finished_total"], 405);
+    let groups = body["finished_groups"].as_array().expect("groups");
+    let group = |note: &str| {
+        groups
+            .iter()
+            .find(|group| group["note"] == note)
+            .unwrap_or_else(|| panic!("{note} group: {groups:?}"))
+            .clone()
+    };
+    let alpha = group("alpha");
+    let beta = group("beta");
+    assert_eq!(alpha["count"], 400);
+    let alpha_shown = alpha["rows"].as_array().map_or(0, Vec::len) as u64;
+    assert!(
+        alpha_shown > 5,
+        "alpha gets the leftover room: {alpha_shown}"
+    );
+    assert_eq!(
+        alpha["more"].as_u64().unwrap_or(0),
+        400 - alpha_shown,
+        "alpha's tail is bob-computed"
+    );
+    assert_eq!(
+        beta["rows"].as_array().map_or(0, Vec::len),
+        5,
+        "the small group shows every row: {beta}"
+    );
+    assert_eq!(
+        body["finished_more"].as_u64().unwrap_or(0),
+        400 - alpha_shown,
+        "finished_more counts every row not shown"
+    );
+    let output = periods_command(vault.path(), "brief", &["2026-W44"]);
+    assert_success(&output);
+    let text = stdout(&output);
+    assert!(
+        text.contains(&format!("- +{} more", 400 - alpha_shown)),
+        "alpha tail:\n{text}"
+    );
+    assert!(text.len() / 4 <= 6000, "week budget: {}", text.len() / 4);
 }
 
 #[test]
@@ -1054,11 +1215,26 @@ fn brief_bryans_words_dedups_orders_and_sanitizes_links() {
          \t- shipped the widget slice\n\
          \t- xprompt follow-up\n\
          \t- [[sase_better_tasks]]\n\
-         \t- review [[sase]] notes\n",
+         \t- review [[sase]] notes\n\
+         \t- apollo agent\n\
+         \t- athena agents\n\
+         \t- athena agent to add songs\n",
     )
     .unwrap();
     let body = brief_json(vault.path(), "2026-W44");
     let words = body["bryans_words"].as_array().expect("words");
+    let texts: Vec<&str> = words
+        .iter()
+        .map(|word| word["text"].as_str().unwrap_or_default())
+        .collect();
+    assert!(
+        !texts.contains(&"apollo agent") && !texts.contains(&"athena agents"),
+        "bare host labels are not Bryan's words: {texts:?}"
+    );
+    assert!(
+        texts.contains(&"athena agent to add songs"),
+        "a sentence that names a host stays: {texts:?}"
+    );
     let shipped: Vec<&serde_json::Value> = words
         .iter()
         .filter(|word| {
@@ -1143,11 +1319,19 @@ fn brief_parts_skip_empty_dates_and_still_open_cleans_aliases() {
          - [*] #task Better Obsidian image support! [created:: 2026-10-26] ^better-obsidian-image\n",
     )
     .unwrap();
+    fs::write(
+        vault.path().join("2026/20261027.md"),
+        "---\nparent: '[[2026/2026-W44]]'\n---\n\n\
+         ## Pomodoros\n\n\
+         - [x] (**09:00 - 09:25** [t:: 25m]) — BUILD\n\
+         \t- [[proj#^better-obsidian-image]]\n",
+    )
+    .unwrap();
     let body = brief_json(vault.path(), "2026-W44");
-    let zero = body["still_open"]["zero_minute"]
+    let worked = body["still_open"]["worked_open"]
         .as_array()
-        .expect("zero_minute");
-    let row = zero
+        .expect("worked_open");
+    let row = worked
         .iter()
         .find(|row| {
             row["link"]
@@ -1155,7 +1339,8 @@ fn brief_parts_skip_empty_dates_and_still_open_cleans_aliases() {
                 .unwrap_or_default()
                 .contains("Better Obsidian")
         })
-        .expect("unlinked task listed");
+        .expect("worked-on open task listed");
+    assert_eq!(row["display"], "25m", "worked-on rows carry minutes: {row}");
     let link = row["link"].as_str().unwrap_or_default();
     let alias = link.split('|').nth(1).unwrap_or(link);
     assert!(!alias.contains("^better"), "no raw block id: {link}");
@@ -1176,9 +1361,10 @@ fn brief_parts_skip_empty_dates_and_still_open_cleans_aliases() {
 fn brief_still_open_rebuilds_past_period_as_of_span_end() {
     // bob-cli-gu / brief-still-open (rebuild): a closed period's Still open
     // must not report today's vault. Kept counts dated Rotten Log entries
-    // on or before the span end, No linked minutes requires created <= end,
-    // open at end, and no linked minutes in the span, and Blocked projects
-    // is omitted with a note.
+    // on or before the span end, and Blocked projects is omitted with a
+    // note. bob-cli-iy: Worked on, still open lists tasks open at the end
+    // with linked minutes in the span; the closed period has no
+    // zero-minute list (lane history is gone, and no minutes is no stall).
     let vault = vault_dir("brief-still-open");
     write_dataview_tasks_settings(vault.path());
     let _ =
@@ -1192,6 +1378,8 @@ fn brief_still_open_rebuilds_past_period_as_of_span_end() {
          - [*] #task Past open [created:: 2026-10-20] ^pastopen\n\
          - [*] #task Future thing [created:: 2026-11-05] ^future1\n\
          - [x] #task Old done [created:: 2026-10-20] [completion:: 2026-11-05] ^olddone\n\
+         - [x] #task Done in span [created:: 2026-10-20] [completion:: 2026-10-28] ^donein\n\
+         - [*] #task Never touched [created:: 2026-10-20] ^untouched\n\
          - [ ] #task Past kept [created:: 2026-10-20] [keeps:: 3] ^pastkept\n\
          \t- 🥀 **ROTTEN LOG**\n\
          \t\t- *2026-10-27* — first keep\n\
@@ -1210,6 +1398,18 @@ fn brief_still_open_rebuilds_past_period_as_of_span_end() {
          \t- Depends-On: [[proj#^pastopen]]\n",
     )
     .unwrap();
+    fs::write(
+        vault.path().join("2026/20261027.md"),
+        "---\nparent: '[[2026/2026-W44]]'\n---\n\n\
+         ## Pomodoros\n\n\
+         - [x] (**09:00 - 09:30** [t:: 30m]) — BUILD\n\
+         \t- [[proj#^pastopen]]\n\n\
+         - [x] (**10:00 - 10:20** [t:: 20m]) — BUILD\n\
+         \t- [[proj#^olddone]]\n\n\
+         - [x] (**11:00 - 11:10** [t:: 10m]) — BUILD\n\
+         \t- [[proj#^donein]]\n",
+    )
+    .unwrap();
     let body = brief_json(vault.path(), "2026-W44");
     assert_eq!(body["header"]["state"], "closed");
     let still = &body["still_open"];
@@ -1217,19 +1417,32 @@ fn brief_still_open_rebuilds_past_period_as_of_span_end() {
         still["as_of"], "2026-11-01",
         "past Still open is as of the span end: {still}"
     );
-    let zero = still["zero_minute"].as_array().expect("zero_minute");
+    assert!(
+        still["zero_minute"].is_null(),
+        "closed periods have no zero-minute list: {still}"
+    );
+    let worked = still["worked_open"].as_array().expect("worked_open");
     let has = |block: &str| {
-        zero.iter()
+        worked
+            .iter()
             .any(|row| row["link"].as_str().unwrap_or_default().contains(block))
     };
-    assert!(has("#^pastopen"), "past open task listed: {zero:?}");
-    assert!(
-        has("#^olddone"),
-        "task open at span end but done now still listed: {zero:?}"
+    assert!(has("#^pastopen"), "worked-on open task listed: {worked:?}");
+    assert_eq!(
+        worked[0]["display"], "30m",
+        "ranked by linked minutes: {worked:?}"
     );
     assert!(
-        !has("#^future1"),
-        "task created after the span end omitted: {zero:?}"
+        has("#^olddone"),
+        "task open at span end but done now still listed: {worked:?}"
+    );
+    assert!(
+        !has("#^donein"),
+        "task finished inside the span is not open: {worked:?}"
+    );
+    assert!(
+        !has("#^untouched") && !has("#^future1"),
+        "no linked minutes, not listed: {worked:?}"
     );
     let kept = still["kept"].as_array().expect("kept");
     let kept_has = |block: &str| {
@@ -1282,6 +1495,66 @@ fn brief_still_open_rebuilds_past_period_as_of_span_end() {
         text.contains("Omitted"),
         "past Blocked projects omitted with a note:\n{text}"
     );
+    assert!(
+        !text.contains("Next or WIP with no linked minutes"),
+        "closed periods drop the zero-minute list:\n{text}"
+    );
+}
+
+#[test]
+fn brief_carries_the_previous_review() {
+    // brief v2: the previous same-kind Review's Headline (whole first
+    // paragraph on one line), Carried forward (Still open in v1), and
+    // Questions ride next to its Reflection.
+    let vault = vault_dir("brief-prev-review");
+    write_reviews_fixture(vault.path());
+    let _ =
+        periods_command(vault.path(), "ensure", &["-d", "2026-10-19", "-q"]);
+    let w43 = vault.path().join("2026/2026-W43.md");
+    let scaffold = fs::read_to_string(&w43).expect("W43 scaffold");
+    let review = "## Review\n\n\
+        **Headline:** Shipped the widget and the launch,\n\
+        then planned the next slice.\n\n\
+        **Shipped:**\n\n\
+        - [[proj#^ship|Widget]]\n\n\
+        **Carried forward:**\n\n\
+        - [[proj#^stuck|Stuck project]] · kept 3×\n\n\
+        **Questions:**\n\n\
+        1. Is the stuck project waiting on a decision?\n\n\
+        ## Reflection\n";
+    let updated = scaffold.replacen("## Review\n\n## Reflection\n", review, 1);
+    assert_ne!(updated, scaffold, "scaffold carries an empty Review");
+    fs::write(&w43, updated).unwrap();
+    let body = brief_json(vault.path(), "2026-W44");
+    let prev = &body["neighbours"]["prev_review"];
+    assert_eq!(
+        prev["headline"],
+        "Shipped the widget and the launch, then planned the next slice.",
+        "{prev}"
+    );
+    assert_eq!(prev["carried_label"], "Carried forward");
+    assert_eq!(prev["carried"], "- [[proj#^stuck|Stuck project]] · kept 3×");
+    assert_eq!(
+        prev["questions"],
+        "1. Is the stuck project waiting on a decision?"
+    );
+    let output = periods_command(vault.path(), "brief", &["2026-W44"]);
+    assert_success(&output);
+    let text = stdout(&output);
+    assert!(
+        text.contains(
+            "### Previous Review: Headline\nShipped the widget and the launch, then planned the next slice.\n"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("### Previous Review: Carried forward (≤150 words)\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("### Previous Review: Questions (≤150 words)\n"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -1299,7 +1572,7 @@ fn brief_output_is_deterministic() {
 
 #[test]
 fn brief_markdown_format_matches_the_agent_callouts() {
-    // Every v1 callout tells the agent to run `bob periods brief <id> -f md`.
+    // Every agent callout tells the agent to run `bob periods brief <id> -f md`.
     let vault = vault_dir("brief-md-format");
     write_reviews_fixture(vault.path());
     let default = periods_command(vault.path(), "brief", &["2026-W44"]);
@@ -1357,6 +1630,23 @@ fn brief_quarter_and_year_shape() {
         year["practice"].is_object(),
         "practice section: {}",
         year["practice"]
+    );
+    let has_caveat = |body: &serde_json::Value, prefix: &str| {
+        body["caveats"].as_array().is_some_and(|caveats| {
+            caveats.iter().any(|caveat| {
+                caveat.as_str().unwrap_or_default().starts_with(prefix)
+            })
+        })
+    };
+    assert!(
+        has_caveat(&quarter, "Not reviewed weeks:"),
+        "quarter names its unreviewed weeks: {}",
+        quarter["caveats"]
+    );
+    assert!(
+        has_caveat(&year, "Not reviewed quarters:"),
+        "year names its unreviewed quarters: {}",
+        year["caveats"]
     );
     for (period, budget) in [("2026-Q4", 10_000), ("2026", 12_000)] {
         let output = periods_command(vault.path(), "brief", &[period]);
@@ -1536,6 +1826,58 @@ fn draft(
 }
 
 #[test]
+fn draft_joins_a_wrapped_headline_and_parents_read_it_whole() {
+    let vault = vault_dir("draft-wrapped-headline");
+    write_reviews_fixture(vault.path());
+    let input = write_review(
+        vault.path(),
+        "review.md",
+        "**Headline:** Shipped the widget slice and the big launch, and\n\
+         closed the first weekly review.\n\n**Shipped:**\n\n- [[2026/20261026#^ship|Widget]]\n",
+    );
+    let output = draft(vault.path(), "2026-W44", &input, &["-f", "json"]);
+    assert_success(&output);
+    let after = fs::read_to_string(vault.path().join("2026/2026-W44.md"))
+        .expect("drafted note");
+    assert!(
+        after.contains(
+            "## Review\n\n**Headline:** Shipped the widget slice and the big launch, and closed the first weekly review.\n\n**Shipped:**\n"
+        ),
+        "Headline joined onto one physical line:\n{after}"
+    );
+    let list = periods_command(vault.path(), "list", &["-f", "json"]);
+    assert_success(&list);
+    let rows: serde_json::Value =
+        serde_json::from_str(&stdout(&list)).expect("list json");
+    let w44 = rows["rows"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .find(|row| row["id"] == "2026-W44")
+        .expect("W44 row");
+    assert_eq!(w44["review_state"], "drafted");
+    assert_eq!(
+        w44["headline"],
+        "Shipped the widget slice and the big launch, and closed the first weekly review."
+    );
+
+    // The 25-word cap counts the whole paragraph, not its first line.
+    let long = write_review(
+        vault.path(),
+        "long.md",
+        "**Headline:** one two three four five six seven eight nine ten\n\
+         eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen\n\
+         nineteen twenty twenty-one twenty-two twenty-three twenty-four twenty-five twenty-six\n",
+    );
+    let output = draft(vault.path(), "2026-W44", &long, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
+    let body: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("error json");
+    assert_eq!(body["error"]["code"], "over_cap");
+    assert_eq!(body["error"]["count"], 26);
+}
+
+#[test]
 fn draft_accepts_a_valid_text_and_a_second_draft() {
     let vault = vault_dir("draft-accept");
     write_reviews_fixture(vault.path());
@@ -1573,7 +1915,7 @@ fn draft_accepts_a_valid_text_and_a_second_draft() {
     );
     for kept in [
         "[[2026/2026-Q4|↑ 2026-Q4]]",
-        "> [!agent]- Agent instructions · weekly v1",
+        "> [!agent]- Agent instructions · weekly v2\n",
     ] {
         assert!(
             after.contains(kept),
@@ -1893,8 +2235,8 @@ fn ensure_refresh_skips_reflected_and_commits_once() {
     fs::write(
         &stale,
         stale_before.replace(
+            "Agent instructions · weekly v2",
             "Agent instructions · weekly v1",
-            "Agent instructions · weekly v0",
         ),
     )
     .unwrap();
@@ -1904,8 +2246,8 @@ fn ensure_refresh_skips_reflected_and_commits_once() {
         &reflected,
         reflected_before
             .replace(
+                "Agent instructions · weekly v2",
                 "Agent instructions · weekly v1",
-                "Agent instructions · weekly v0",
             )
             .replace("## Reflection\n", "## Reflection\n\nBryan reflected.\n"),
     )
@@ -1950,25 +2292,25 @@ fn ensure_refresh_skips_reflected_and_commits_once() {
     let log = stdout(&git_in(&vault, ["log", "--format=%s"]));
     assert_eq!(
         log.lines().next(),
-        Some("periods: refresh agent instructions to v1"),
+        Some("periods: refresh agent instructions to v2"),
         "one refresh commit:\n{log}"
     );
     assert_eq!(log.lines().count(), 4, "exactly one commit:\n{log}");
     let refreshed = fs::read_to_string(&stale).expect("refreshed note");
     assert!(
-        refreshed.contains("Agent instructions · weekly v1"),
+        refreshed.contains("Agent instructions · weekly v2"),
         "callout refreshed:\n{refreshed}"
     );
     assert!(
-        !refreshed.contains("weekly v0"),
+        !refreshed.contains("weekly v1"),
         "no stale callout left:\n{refreshed}"
     );
     assert_eq!(
         fs::read_to_string(&reflected).expect("reflected note"),
         reflected_before
             .replace(
+                "Agent instructions · weekly v2",
                 "Agent instructions · weekly v1",
-                "Agent instructions · weekly v0",
             )
             .replace("## Reflection\n", "## Reflection\n\nBryan reflected.\n"),
         "reflected notes stay untouched"

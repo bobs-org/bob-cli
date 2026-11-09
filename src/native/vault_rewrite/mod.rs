@@ -29,6 +29,7 @@ use std::{
 use crate::native::{
     collect_done,
     ob::{self, LockWaitError},
+    periods,
     ref_library::migrate_tasks,
     style::Styler,
     vault_sync,
@@ -192,7 +193,17 @@ pub(crate) fn run<C>(
         }
     }
 
-    let ready = plan()?;
+    let mut ready = plan()?;
+    // A rewrite that touches a still-drafted period Review restamps its
+    // digest in the same write, so bob's own edits never read as Bryan's.
+    for file in &mut ready.files {
+        if let Some(before) = file.before_contents.as_deref() {
+            file.after_contents = periods::note::carry_review_digest(
+                before,
+                &file.after_contents,
+            );
+        }
+    }
     let touched_relative: BTreeSet<PathBuf> = ready
         .files
         .iter()

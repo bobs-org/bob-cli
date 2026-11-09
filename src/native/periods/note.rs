@@ -104,18 +104,144 @@ pub(crate) fn review_digest(review_body: &str) -> String {
     format!("sha256:{}", &hex_digest[..16])
 }
 
-/// First `## Review` line matching `**Headline:** <text>`, else none.
-pub(crate) fn parse_headline(review_body: &str) -> Option<String> {
-    for line in review_body.lines() {
+/// Keep a bob rewrite from reading as Bryan's edit.
+///
+/// When a vault rewrite (`bob task archive` moving links to `done/`, a
+/// type or relation-label rename, …) changes the `## Review` of a note
+/// whose Review was still `drafted` in `before`, restamp its
+/// `review_digest` in `after` so the state stays `drafted`. `edited` is
+/// the only automatic sign that Bryan corrected a draft, and it also
+/// blocks redrafting without `-F`. Every other note, and every note
+/// whose Review is unchanged or not `drafted`, returns `after` as is.
+pub(crate) fn carry_review_digest(before: &str, after: &str) -> String {
+    // Cheap pre-filter: only period notes stamped by `draft` qualify.
+    if before == after || !before.contains("review_digest:") {
+        return after.to_string();
+    }
+    if parse(before).review_state != ReviewState::Drafted {
+        return after.to_string();
+    }
+    let parsed_after = parse(after);
+    if parsed_after.review_state != ReviewState::Edited {
+        return after.to_string();
+    }
+    let review = parsed_after
+        .sections
+        .get("Review")
+        .cloned()
+        .unwrap_or_default();
+    let digest = review_digest(&review);
+    let mut lines = after.split_inclusive('\n');
+    let mut out = String::with_capacity(after.len());
+    let Some(first) = lines.next() else {
+        return after.to_string();
+    };
+    if first.trim() != "---" {
+        return after.to_string();
+    }
+    out.push_str(first);
+    let mut stamped = false;
+    for line in lines.by_ref() {
         let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("**Headline:**") {
-            let headline = rest.trim().to_string();
-            if !headline.is_empty() {
-                return Some(headline);
-            }
+        if trimmed == "---" {
+            out.push_str(line);
+            break;
         }
+        if !stamped
+            && line
+                .split_once(':')
+                .is_some_and(|(key, _)| key.trim() == "review_digest")
+        {
+            let ending = if line.ends_with("\r\n") {
+                "\r\n"
+            } else if line.ends_with('\n') {
+                "\n"
+            } else {
+                ""
+            };
+            out.push_str(&format!("review_digest: {digest}{ending}"));
+            stamped = true;
+            continue;
+        }
+        out.push_str(line);
+    }
+    if !stamped {
+        return after.to_string();
+    }
+    out.extend(lines);
+    out
+}
+
+/// The Headline: the whole paragraph that opens with the first
+/// `**Headline:** <text>` line, soft-wrapped lines joined with single
+/// spaces, else none. The paragraph ends at a blank line, a list item,
+/// or the next bold `**Part:**` label, so a hard-wrapped Headline still
+/// reaches parent notes as one sentence.
+pub(crate) fn parse_headline(review_body: &str) -> Option<String> {
+    let mut lines = review_body.lines();
+    while let Some(line) = lines.next() {
+        let Some(rest) = line.trim().strip_prefix("**Headline:**") else {
+            continue;
+        };
+        let mut words: Vec<&str> = rest.split_whitespace().collect();
+        for next in lines.by_ref() {
+            if ends_headline_paragraph(next) {
+                break;
+            }
+            words.extend(next.split_whitespace());
+        }
+        if words.is_empty() {
+            continue;
+        }
+        return Some(words.join(" "));
     }
     None
+}
+
+/// The opening `**Headline:**` paragraph of `text` with its soft-wrapped
+/// continuation lines joined onto one physical line; every other byte is
+/// kept. `None` when `text` does not open with a Headline.
+pub(crate) fn unwrap_headline(text: &str) -> Option<String> {
+    let mut lines = text.lines();
+    let first = lines.next()?;
+    let rest = first.trim().strip_prefix("**Headline:**")?;
+    let mut words: Vec<&str> = rest.split_whitespace().collect();
+    let mut tail: Vec<&str> = Vec::new();
+    let mut in_paragraph = true;
+    for line in lines {
+        if in_paragraph && !ends_headline_paragraph(line) {
+            words.extend(line.split_whitespace());
+            continue;
+        }
+        in_paragraph = false;
+        tail.push(line);
+    }
+    let mut out = format!("**Headline:** {}", words.join(" "));
+    for line in tail {
+        out.push('\n');
+        out.push_str(line);
+    }
+    Some(out)
+}
+
+/// Whether `line` ends the Headline paragraph: a blank line, a list
+/// item, or another bold `**Part:**` label.
+fn ends_headline_paragraph(line: &str) -> bool {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
+        return true;
+    }
+    let digits = trimmed.chars().take_while(char::is_ascii_digit).count();
+    if digits > 0 && trimmed[digits..].starts_with(". ") {
+        return true;
+    }
+    trimmed.starts_with("**")
+        && trimmed[2..]
+            .find("**")
+            .is_some_and(|end| trimmed[2..2 + end].ends_with(':'))
 }
 
 /// First sentence of `## Reflection`: ends at `.`, `?`, or `!`
@@ -388,11 +514,76 @@ mod tests {
             Some("One two three".to_string())
         );
         assert_eq!(parse_headline("No headline here\n"), None);
+        // A hard-wrapped Headline reaches parents whole.
+        assert_eq!(
+            parse_headline(
+                "**Headline:** A 24h 45m week, put 45% into bob, led by WIP/Next\nauto-decay and templates.\n\n**Shipped:**\n"
+            ),
+            Some(
+                "A 24h 45m week, put 45% into bob, led by WIP/Next auto-decay and templates."
+                    .to_string()
+            )
+        );
+        // The paragraph stops at a list item or the next bold label.
+        assert_eq!(
+            parse_headline("**Headline:** Shipped X.\n**Shipped:**\n- [[a]]\n"),
+            Some("Shipped X.".to_string())
+        );
+        assert_eq!(
+            parse_headline("**Headline:** Shipped X.\n- [[a]]\n"),
+            Some("Shipped X.".to_string())
+        );
+        assert_eq!(
+            unwrap_headline(
+                "**Headline:** One\ntwo  three\n\n**Shipped:**\n- x"
+            ),
+            Some(
+                "**Headline:** One two three\n\n**Shipped:**\n- x".to_string()
+            )
+        );
+        assert_eq!(unwrap_headline("Body first\n**Headline:** x"), None);
         assert_eq!(
             parse_reflection_lead("It was good. Then more."),
             Some("It was good.".to_string())
         );
         assert_eq!(parse_reflection_lead("   "), None);
+    }
+
+    #[test]
+    fn bob_rewrites_keep_a_drafted_review_drafted() {
+        let before = drafted_note()
+            .replace("Did the work.", "Shipped [[bob#^decay|decay]].");
+        // Re-stamp the fixture so `before` is genuinely drafted.
+        let review =
+            "**Headline:** A calm week\n\nShipped [[bob#^decay|decay]].";
+        let before = before.replace(
+            &review_digest("**Headline:** A calm week\n\nDid the work.\n"),
+            &review_digest(review),
+        );
+        assert_eq!(parse(&before).review_state, ReviewState::Drafted);
+
+        // An archive moves the link to `done/`: still drafted afterwards.
+        let after = before.replace("[[bob#^decay", "[[done/bob_done#^decay");
+        assert_eq!(parse(&after).review_state, ReviewState::Edited);
+        let carried = carry_review_digest(&before, &after);
+        assert_eq!(parse(&carried).review_state, ReviewState::Drafted);
+        assert!(carried.contains("[[done/bob_done#^decay|decay]]"));
+        assert_eq!(
+            carried.lines().count(),
+            after.lines().count(),
+            "only the digest line changes"
+        );
+
+        // An edited Review stays edited; other notes pass through.
+        let edited = after.clone();
+        assert_eq!(carry_review_digest(&edited, &edited), edited);
+        let moved_edit = edited.replace("A calm", "A busy");
+        assert_eq!(carry_review_digest(&edited, &moved_edit), moved_edit);
+        let plain = "# Note\n\n[[bob#^decay]]\n";
+        assert_eq!(
+            carry_review_digest(plain, "# Note\n\n[[done/bob_done#^decay]]\n"),
+            "# Note\n\n[[done/bob_done#^decay]]\n"
+        );
     }
 
     #[test]

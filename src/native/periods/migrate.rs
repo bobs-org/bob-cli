@@ -1030,7 +1030,7 @@ mod tests {
         assert!(adopted.contains("## Archive"), "{adopted}");
         assert!(adopted.contains("# 2026\n\nIndex of 2026."), "{adopted}");
         assert!(
-            adopted.contains("Agent instructions · yearly v1"),
+            adopted.contains("Agent instructions · yearly v2"),
             "{adopted}"
         );
         let archive_at = adopted.find("## Archive").expect("archive");

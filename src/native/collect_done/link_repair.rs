@@ -196,7 +196,14 @@ pub(super) fn apply_link_repairs_to_plan(
             repair.link_count += pathless.link_count;
         }
         if repair.link_count > 0 || repair.dependency_metadata_count > 0 {
-            planned_contents.insert(relative_path.clone(), repair.contents);
+            // Moving a link to `done/` inside a still-drafted period
+            // Review restamps its digest, so the archive never reads as
+            // Bryan's edit.
+            let repaired = crate::native::periods::note::carry_review_digest(
+                &contents,
+                &repair.contents,
+            );
+            planned_contents.insert(relative_path.clone(), repaired);
             link_repair_counts.insert(
                 relative_path,
                 (repair.link_count, repair.dependency_metadata_count),
