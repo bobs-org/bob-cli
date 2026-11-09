@@ -36,9 +36,10 @@ Open pickers honour bob's `action_continuation_aliases`: `,` acts as `+` in the 
 Parent Task picker, and `.` acts as `^` in the `- ^` Move picker. In the relation picker
 and label card, `=` flips direction like `~`. The only app-local alias is a blank
 draft's `\` → `/`, which opens Go To. Each alias can be escaped: by Undo; by a fast
-second `=` or spaced `.` (350 ms), which types one literal (`===` gives `==`); by a
-second `\`/`/` at any speed; or by Space or Escape on the still-empty picker the alias
-opened. Aliases that change meaning (`x`/`s`, and `-` in `x=`) hold later edits and
+second `=` or the spaced `.`/`;` fallbacks (350 ms), which type one literal (`===`
+gives `==`; `..` and `;;` give one `.` or `;`); by a second `\`/`/` at any speed; or
+by Space or Escape on the still-empty picker the alias opened. Aliases that change
+meaning (`x`/`s`, and `-` in `x=`) hold later edits and
 Return until bob answers. On a timeout the key stays literal and Return is dropped ("Bob
 did not answer; press Return again"). An older bob leaves every alias literal.
 
