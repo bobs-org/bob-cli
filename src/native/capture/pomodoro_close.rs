@@ -290,6 +290,7 @@ pub(super) fn build_close_summary_json(
     plan: &capture_pomodoro_close::PomodoroClosePlan,
     now: chrono::NaiveDateTime,
     types: Option<&CloseTypes>,
+    sized: Option<&SizedCloseStaging>,
 ) -> (PomodoroCloseSummaryJson, Vec<String>) {
     use chrono::Timelike;
     let running = &plan.summary.running;
@@ -475,8 +476,21 @@ pub(super) fn build_close_summary_json(
     } else {
         spec.complete.clone()
     };
+    let size = spec.size.as_ref().zip(sized).map(|(size, staging)| {
+        PomodoroCloseSizeJson {
+            raw: size.raw.clone(),
+            blocks: size.blocks,
+            minutes: size.minutes,
+            from: PomodoroCloseSizeFromJson {
+                time_range: staging.from_time_range.clone(),
+                duration_minutes: staging.from_duration,
+            },
+            delta_minutes: staging.delta_minutes,
+        }
+    });
     let mut summary = PomodoroCloseSummaryJson {
         raw: spec.raw.clone(),
+        size,
         in_progress: spec.in_progress.clone(),
         park: resolved_park,
         park_all: spec.park_all,
@@ -1848,19 +1862,240 @@ fn selection_from_spec(
     )
 }
 
-fn reject_sized_pomodoro_close(
-    spec: &PomodoroCloseSpec,
-) -> Result<(), CaptureError> {
-    if spec.size.is_some() {
-        return Err(CaptureError::usage_code(
-            format!(
-                "`{}` closes at a size, which this bob cannot execute yet; nothing was written",
-                spec.raw
-            ),
-            "pomodoro_close_size_unavailable",
+/// Sized-close staging: the sized day text, the close datetime `C`, and
+/// the `size.from` / `delta_minutes` JSON inputs.
+pub(super) struct SizedCloseStaging {
+    pub(super) sized_contents: String,
+    pub(super) close_now: chrono::NaiveDateTime,
+    pub(super) from_time_range: String,
+    pub(super) from_duration: u64,
+    pub(super) delta_minutes: i64,
+}
+
+/// Pure sized-close timing for direct boundary and midnight tests.
+/// `wall_minutes` is `T` (0..1440), `start_minutes` is `S`, `blocks` is `N`.
+/// Returns `(elapsed `e`, fits, sized end `E'`, lag `e - m`)` with `e`
+/// normalized into `(-720, 720]` exactly like `close_timing`.
+pub(crate) fn sized_close_timing(
+    start_minutes: u64,
+    wall_minutes: u64,
+    blocks: u32,
+) -> (i64, u32, u64, i64) {
+    let minutes = u64::from(blocks).saturating_mul(5);
+    let elapsed = capture_pomodoro_close::signed_minute_delta(
+        wall_minutes,
+        start_minutes,
+    );
+    let fits = if elapsed <= 0 {
+        0
+    } else {
+        u32::try_from((elapsed + 4) / 5).unwrap_or(u32::MAX)
+    };
+    let sized_end = (start_minutes + minutes) % 1440;
+    let lag = elapsed - i64::try_from(minutes).unwrap_or(i64::MAX);
+    (elapsed, fits, sized_end, lag)
+}
+
+fn sized_close_extra(
+    size: &crate::native::capture_language::CloseSize,
+    elapsed: Option<i64>,
+    fits: Option<u32>,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let mut size_map = serde_json::Map::new();
+    size_map.insert(
+        "raw".to_string(),
+        serde_json::Value::String(size.raw.clone()),
+    );
+    size_map.insert(
+        "blocks".to_string(),
+        serde_json::Value::Number(size.blocks.into()),
+    );
+    size_map.insert(
+        "minutes".to_string(),
+        serde_json::Value::Number(size.minutes.into()),
+    );
+    if let Some(elapsed) = elapsed {
+        size_map.insert(
+            "elapsed_minutes".to_string(),
+            serde_json::Value::Number(elapsed.into()),
+        );
+    }
+    if let Some(fits) = fits {
+        size_map.insert(
+            "fits_blocks".to_string(),
+            serde_json::Value::Number(fits.into()),
+        );
+    }
+    let mut extra = serde_json::Map::new();
+    extra.insert(
+        "close_size".to_string(),
+        serde_json::Value::Object(size_map),
+    );
+    Some(extra)
+}
+
+fn sized_not_elapsed_error(
+    spec_raw: &str,
+    size: &crate::native::capture_language::CloseSize,
+    running_name: Option<&str>,
+    start_minutes: u64,
+    elapsed: i64,
+    fits: u32,
+) -> CaptureError {
+    let display = running_name
+        .filter(|name| !name.is_empty())
+        .unwrap_or("the running session");
+    let start_text = format_close_hhmm(start_minutes);
+    let minutes = size.minutes;
+    let first = if elapsed == 0 {
+        format!(
+            "`{spec_raw}` asks for {minutes}m, but {display} started at {start_text} and has run 0m; nothing was written"
+        )
+    } else {
+        format!(
+            "`{spec_raw}` asks for {minutes}m, but {display} has run {elapsed}m since {start_text}; nothing was written"
+        )
+    };
+    let second = if fits == 0 {
+        "`x0` resets it".to_string()
+    } else {
+        let at = format_close_hhmm(
+            (start_minutes + u64::from(fits).saturating_mul(5)) % 1440,
+        );
+        format!("`{fits}x` closes at {at} · `x` closes now")
+    };
+    let message = format!("{first}\n  {second}");
+    let mut error =
+        CaptureError::usage_code(message, "pomodoro_close_size_not_elapsed");
+    error.extra = sized_close_extra(size, Some(elapsed), Some(fits));
+    error
+}
+
+fn sized_not_started_error(
+    spec_raw: &str,
+    size: &crate::native::capture_language::CloseSize,
+    running_name: Option<&str>,
+    start_minutes: u64,
+) -> CaptureError {
+    let display = running_name
+        .filter(|name| !name.is_empty())
+        .unwrap_or("the running session");
+    let start_text = format_close_hhmm(start_minutes);
+    let message = format!(
+        "`{spec_raw}` cannot size {display}: it starts at {start_text} and has not begun; nothing was written\n  `x0` resets it"
+    );
+    let mut error =
+        CaptureError::usage_code(message, "pomodoro_close_size_not_started");
+    error.extra = sized_close_extra(size, None, None);
+    error
+}
+
+fn sized_unparseable_error(
+    spec_raw: &str,
+    size: &crate::native::capture_language::CloseSize,
+    running_name: Option<&str>,
+) -> CaptureError {
+    let display = running_name
+        .filter(|name| !name.is_empty())
+        .map(|name| format!("{name}'s"))
+        .unwrap_or_else(|| "the running session's".to_string());
+    let message = format!(
+        "`{spec_raw}` needs {display} time range, but it could not be parsed; nothing was written\n  fix the range, or close with `x`"
+    );
+    let mut error =
+        CaptureError::usage_code(message, "pomodoro_close_size_unparseable");
+    error.extra = sized_close_extra(size, None, None);
+    error
+}
+
+/// Stage exactly `5N` minutes from the running session start on staged
+/// daily text, returning the sized text, the close datetime `C`, and the
+/// `size.from` / delta inputs. Refuses without writing on unparseable,
+/// not-started, or not-elapsed ranges. For unsized specs the contents and
+/// `now` pass through untouched.
+pub(super) fn stage_sized_pomodoro_close(
+    staged: &str,
+    running_line: usize,
+    running_name: Option<&str>,
+    spec_raw: &str,
+    size: Option<&crate::native::capture_language::CloseSize>,
+    now: chrono::NaiveDateTime,
+) -> Result<Option<SizedCloseStaging>, CaptureError> {
+    use chrono::Timelike;
+    let Some(size) = size else {
+        return Ok(None);
+    };
+    let spans = line_spans(staged);
+    let line_texts = spans.iter().map(|span| span.text).collect::<Vec<_>>();
+    let entry_index = running_line.saturating_sub(1);
+    let headline = line_texts.get(entry_index).copied().unwrap_or("");
+    let Some(range) = parse_adjustment_range(headline) else {
+        return Err(sized_unparseable_error(spec_raw, size, running_name));
+    };
+    let start_minutes = range.start_minutes;
+    let wall_minutes = u64::from(now.hour()) * 60 + u64::from(now.minute());
+    let minutes = u64::from(size.minutes);
+    let (elapsed, fits, sized_end, lag) =
+        sized_close_timing(start_minutes, wall_minutes, size.blocks);
+    if elapsed < 0 {
+        return Err(sized_not_started_error(
+            spec_raw,
+            size,
+            running_name,
+            start_minutes,
         ));
     }
-    Ok(())
+    if i64::try_from(minutes).unwrap_or(i64::MAX) - elapsed >= 5 {
+        return Err(sized_not_elapsed_error(
+            spec_raw,
+            size,
+            running_name,
+            start_minutes,
+            elapsed,
+            fits,
+        ));
+    }
+    let from_duration = adjustment_duration_for_range(&range);
+    let from_time_range = format!(
+        "{}-{}",
+        format_close_hhmm(range.start_minutes),
+        format_close_hhmm(range.end_minutes)
+    );
+    let delta_minutes =
+        i64::try_from(minutes).unwrap_or(i64::MAX) - from_duration as i64;
+    let new_end = u16::try_from(sized_end).unwrap_or(0);
+    let new_range_text =
+        format_adjusted_range(start_minutes, new_end, minutes, &range.metadata);
+    let segment_start = if entry_index == 0 {
+        0
+    } else {
+        spans.get(entry_index - 1).map(|span| span.end).unwrap_or(0)
+    };
+    let Some(sized_contents) =
+        splice_adjusted_range(staged, segment_start, &range, &new_range_text)
+    else {
+        return Err(CaptureError::io(
+            "Pomodoro close invariant failed: target range is not on a character boundary",
+        ));
+    };
+    let base = now
+        .with_second(0)
+        .and_then(|value| value.with_nanosecond(0))
+        .unwrap_or(now);
+    let lag_minutes = lag.max(0);
+    let close_now = if lag_minutes > 0 {
+        base.checked_sub_signed(chrono::Duration::minutes(lag_minutes))
+            .unwrap_or(base)
+    } else {
+        base
+    };
+    Ok(Some(SizedCloseStaging {
+        sized_contents,
+        close_now,
+        from_time_range,
+        from_duration,
+        delta_minutes,
+    }))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1875,7 +2110,6 @@ pub(super) fn plan_pomodoro_close_item(
     dependency_ctx: &mut DependencyContext,
     task_theme_context: &mut CaptureTaskThemeContext,
 ) -> Result<PlannedCaptureItem, CaptureError> {
-    reject_sized_pomodoro_close(&spec)?;
     reject_pomodoro_close_conflicts(&parsed, request)?;
     let selection = selection_from_spec(&spec);
     let day_file = pomodoro::day_file_for(&request.bob_dir);
@@ -1889,6 +2123,214 @@ pub(super) fn plan_pomodoro_close_item(
     // Already-planned baseline for successor linking (§12.2): the day
     // text before this item struck, moved, or retired anything.
     let pre_day_baseline = Some(day_contents.clone());
+    if spec.size.is_some() {
+        let running =
+            capture_pomodoro_close::find_running_pomodoro(&day_contents)
+                .map_err(|error| {
+                    map_close_plan_error(
+                capture_pomodoro_close::PomodoroClosePlanError::FindRunning(
+                    error,
+                ),
+                &rel,
+                None,
+            )
+                })?;
+        let staging = stage_sized_pomodoro_close(
+            &day_contents,
+            running.line,
+            running.name.as_deref(),
+            &spec.raw,
+            spec.size.as_ref(),
+            now,
+        )?
+        .ok_or_else(|| {
+            CaptureError::io(
+                "pomodoro close capture invariant failed: missing sized staging",
+            )
+        })?;
+        let close_now = staging.close_now;
+        planner.stage(&day_file, staging.sized_contents.clone())?;
+        let sized_contents = staging.sized_contents.clone();
+        let vault = SnapshotCloseVault::from_planner(planner, &request.bob_dir);
+        let types = task_theme_context.close_types(
+            planner,
+            &vault,
+            &day_file,
+            &sized_contents,
+            warnings,
+        );
+        let plan = capture_pomodoro_close::plan_pomodoro_close(
+            &day_file,
+            &sized_contents,
+            close_now,
+            &vault,
+            selection.as_ref(),
+            types.as_ref().map(|types| &types.naming),
+        )
+        .map_err(|error| map_close_plan_error(error, &rel, None))?;
+        let (mut summary, extra_warnings) = build_close_summary_json(
+            &spec,
+            &rel,
+            &plan,
+            close_now,
+            types.as_ref(),
+            Some(&staging),
+        );
+        emit_close_clock_warning(&plan, warnings);
+        warnings
+            .extend(plan.warnings.iter().cloned().map(CaptureWarning::from));
+        warnings
+            .extend(extra_warnings.iter().cloned().map(CaptureWarning::from));
+        let mut all_warnings = plan.warnings.clone();
+        all_warnings.extend(extra_warnings);
+        for warning in &all_warnings {
+            if !warnings
+                .iter()
+                .any(|known| known.as_text() == Some(warning.as_str()))
+            {
+                warnings.push(warning.clone().into());
+            }
+        }
+        stage_close_plan(planner, &plan)?;
+        // Recovery plus successor linking on the post-close day text
+        // (§12): successors land in the closed entry's continuation.
+        let mut task_block_refs = Vec::new();
+        let successors = plan_close_successors(
+            request,
+            today,
+            planner,
+            dependency_ctx,
+            &plan,
+            pre_day_baseline,
+            &day_file,
+            &rel,
+            &mut task_block_refs,
+        )?;
+        name_successor_continuation(&mut summary, &successors);
+        summary.unblocked = successors.unblocked;
+        summary.keep_moving = successors.keep_moving;
+        summary.relation_successors = successors.relation_successors;
+        summary.relation_held = successors.relation_held;
+        summary.relation_check = successors.relation_check;
+        summary.relation_groups = successors.relation_groups;
+        summary.still_blocked = successors.still_blocked;
+        summary.unblocked_check = successors.unblocked_check;
+        summary.project_folds = successors.project_folds;
+        summary.keep_moving_folds = successors.keep_moving_folds;
+        let post_day = planner.read_existing(&day_file)?;
+        let closed_line = refresh_close_headline(&post_day, &mut summary);
+        let mut pomodoro_refs = vec![PomodoroBlockRef::at(
+            PomodoroBlockRole::Closed,
+            plan.summary.running.line.saturating_sub(1),
+            closed_line,
+        )];
+        if let Some(next) = summary.next_pomodoro.as_ref() {
+            let after = locate_next_headline(&post_day, next);
+            pomodoro_refs.push(if next.created {
+                PomodoroBlockRef::created(PomodoroBlockRole::Next, after)
+            } else {
+                PomodoroBlockRef::resolved(PomodoroBlockRole::Next, after)
+            });
+        }
+        let relative_target = day_file
+            .strip_prefix(&request.bob_dir)
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|_| day_file.clone());
+        return Ok(PlannedCaptureItem {
+            result: CaptureItemResult {
+                note_pull: None,
+                record_note: None,
+                task_theme: None,
+                type_relocation: None,
+                ok: true,
+                dry_run: request.dry_run,
+                routed: false,
+                route: None,
+                route_label: String::new(),
+                relative_target: relative_target.to_string_lossy().into_owned(),
+                target: day_file.display().to_string(),
+                text: spec.raw.clone(),
+                task_line: summary.entry_line.clone(),
+                kind: capture_kind_label(&parsed.kind),
+                fanout: None,
+                created: date_string(today),
+                scheduled: None,
+                priority: None,
+                priority_label: None,
+                placement: Placement::Closed,
+                sub_bullets: Vec::new(),
+                notes: Vec::new(),
+                drawers: Vec::new(),
+                clip: None,
+                schedule_log: None,
+                block_id: None,
+                day_file: Some(day_file.display().to_string()),
+                block_link: None,
+                pomodoro_link_placement: None,
+                parent_line: None,
+                parent_text: None,
+                drawer: None,
+                parent_status_symbol: None,
+                parent_status_name: None,
+                toggle_direction: None,
+                previous_task_line: None,
+                status_symbol: None,
+                status_name: None,
+                previous_status_symbol: None,
+                previous_status_name: None,
+                pomodoro_name: summary.pomodoro_name.clone(),
+                creates_pomodoro: None,
+                pomodoro_already_linked: None,
+                removed_pomodoro_links: None,
+                removed_scheduled: None,
+                pomodoro_selector_unused: None,
+                toggle_behavior: None,
+                status_changed: None,
+                pomodoro_link_action: None,
+                pomodoro_link_source: None,
+                pomodoro_link_destination: None,
+                project_note: None,
+                pomodoro_start: None,
+                pomodoro_adjust: None,
+                pomodoro_shift: None,
+                pomodoro_split: None,
+                pomodoro_merge: None,
+                pomodoro_close: Some(summary),
+                pomodoro_past: None,
+                pomodoro_reset: None,
+                dependency_update: None,
+                consumed_links: Vec::new(),
+                task_complete: None,
+                toggle_task_description: None,
+                r#ref: None,
+                gmail: Vec::new(),
+                link_guard: None,
+                dropped_dependencies: Vec::new(),
+                blocks_line_updates: Vec::new(),
+                minted_dependent_block_id: None,
+                dependency_updates: Vec::new(),
+                minted_blocker_block_id: None,
+                relation_updates: Vec::new(),
+                relation_cancels: Vec::new(),
+                relation_completes: Vec::new(),
+                relation_merge_output: Default::default(),
+                transfer_move_output: Default::default(),
+                linked_from_line_updates: Vec::new(),
+                minted_relation_block_ids: Vec::new(),
+                mirror_skipped: Vec::new(),
+                list: None,
+                relation_label_hides: Vec::new(),
+                relation_successors: Vec::new(),
+                relation_held: Vec::new(),
+                relation_check: None,
+                relation_groups: Vec::new(),
+            },
+            clip_plan: None,
+            pomodoro_refs,
+            task_block_refs,
+            project_move_landings: Vec::new(),
+        });
+    }
     let vault = SnapshotCloseVault::from_planner(planner, &request.bob_dir);
     let types = task_theme_context.close_types(
         planner,
@@ -1919,7 +2361,7 @@ pub(super) fn plan_pomodoro_close_item(
         ));
     };
     let (mut summary, extra_warnings) =
-        build_close_summary_json(&spec, &rel, &plan, now, types.as_ref());
+        build_close_summary_json(&spec, &rel, &plan, now, types.as_ref(), None);
     emit_close_clock_warning(&plan, warnings);
     warnings.extend(plan.warnings.iter().cloned().map(CaptureWarning::from));
     warnings.extend(extra_warnings.iter().cloned().map(CaptureWarning::from));
@@ -2362,7 +2804,6 @@ pub(super) fn plan_pomodoro_close_link_item(
     dependency_ctx: &mut DependencyContext,
     task_theme_context: &mut CaptureTaskThemeContext,
 ) -> Result<PlannedCaptureItem, CaptureError> {
-    reject_sized_pomodoro_close(&close_spec)?;
     reject_pomodoro_link_conflicts(&parsed, request)?;
     let selection = selection_from_spec(&close_spec);
     let route = parsed.route.clone().ok_or_else(|| {
@@ -2639,66 +3080,122 @@ pub(super) fn plan_pomodoro_close_link_item(
     }
     planner.stage(&day_file, linked_day.clone())?;
     day_contents = linked_day;
+    let (sized_staging, effective_contents, effective_now) = if close_spec
+        .size
+        .is_some()
+    {
+        let running =
+            capture_pomodoro_close::find_running_pomodoro(&day_contents)
+                .map_err(|error| {
+                    map_close_plan_error(
+                capture_pomodoro_close::PomodoroClosePlanError::FindRunning(
+                    error,
+                ),
+                &rel,
+                Some(&link_hint),
+            )
+                })?;
+        let staging = stage_sized_pomodoro_close(
+                &day_contents,
+                running.line,
+                running.name.as_deref(),
+                &close_spec.raw,
+                close_spec.size.as_ref(),
+                now,
+            )?
+            .ok_or_else(|| {
+                CaptureError::io(
+                    "pomodoro close capture invariant failed: missing sized staging",
+                )
+            })?;
+        let close_now = staging.close_now;
+        let sized_contents = staging.sized_contents.clone();
+        planner.stage(&day_file, sized_contents.clone())?;
+        (Some(staging), sized_contents, close_now)
+    } else {
+        (None, day_contents.clone(), now)
+    };
     // Close _R_ on the staged ledger (or reset it when note-free).
     let vault = SnapshotCloseVault::from_planner(planner, &request.bob_dir);
     let types = task_theme_context.close_types(
         planner,
         &vault,
         &day_file,
-        &day_contents,
+        &effective_contents,
         warnings,
     );
-    let outcome = capture_pomodoro_close::plan_pomodoro_close_outcome(
-        &day_file,
-        &day_contents,
-        now,
-        &vault,
-        selection.as_ref(),
-        types.as_ref().map(|types| &types.naming),
-    )
-    .map_err(|error| map_close_plan_error(error, &rel, Some(&link_hint)))?;
-    if let capture_pomodoro_close::PomodoroCloseOutcome::Reset(reset) = outcome
-    {
-        return plan_reset_link_item(
-            request,
-            parsed,
-            today,
-            planner,
-            warnings,
+    let (plan, sized_for_summary) = if let Some(staging) = &sized_staging {
+        let plan = capture_pomodoro_close::plan_pomodoro_close(
             &day_file,
-            &rel,
-            &reset,
-            &close_spec,
-            &route,
-            block_id,
-            &target,
-            &rel_target,
-            &staged_task_contents,
-            &updated_task,
-            &settings,
-            action,
-            source,
-            destination,
-            link_placement,
-            created,
-            previous_task_line.clone(),
-            previous_status_symbol,
-            previous_status_name.clone(),
-            task_plan.schedule_log.clone(),
-            task_description.clone(),
-            dropped_dependencies,
-            close_task_block_ref,
-            close_blocks_updates,
-        );
-    }
-    let capture_pomodoro_close::PomodoroCloseOutcome::Close(plan) = outcome
-    else {
-        return Err(CaptureError::io(
-            "pomodoro close capture invariant failed: missing close plan",
-        ));
+            &effective_contents,
+            effective_now,
+            &vault,
+            selection.as_ref(),
+            types.as_ref().map(|types| &types.naming),
+        )
+        .map_err(|error| map_close_plan_error(error, &rel, Some(&link_hint)))?;
+        (plan, Some(staging as &SizedCloseStaging))
+    } else {
+        let outcome = capture_pomodoro_close::plan_pomodoro_close_outcome(
+            &day_file,
+            &effective_contents,
+            effective_now,
+            &vault,
+            selection.as_ref(),
+            types.as_ref().map(|types| &types.naming),
+        )
+        .map_err(|error| map_close_plan_error(error, &rel, Some(&link_hint)))?;
+        if let capture_pomodoro_close::PomodoroCloseOutcome::Reset(reset) =
+            outcome
+        {
+            return plan_reset_link_item(
+                request,
+                parsed,
+                today,
+                planner,
+                warnings,
+                &day_file,
+                &rel,
+                &reset,
+                &close_spec,
+                &route,
+                block_id,
+                &target,
+                &rel_target,
+                &staged_task_contents,
+                &updated_task,
+                &settings,
+                action,
+                source,
+                destination,
+                link_placement,
+                created,
+                previous_task_line.clone(),
+                previous_status_symbol,
+                previous_status_name.clone(),
+                task_plan.schedule_log.clone(),
+                task_description.clone(),
+                dropped_dependencies,
+                close_task_block_ref,
+                close_blocks_updates,
+            );
+        }
+        let capture_pomodoro_close::PomodoroCloseOutcome::Close(plan) = outcome
+        else {
+            return Err(CaptureError::io(
+                "pomodoro close capture invariant failed: missing close plan",
+            ));
+        };
+        (plan, None)
     };
-    let (mut summary, extra_warnings) =
-        build_close_summary_json(&close_spec, &rel, &plan, now, types.as_ref());
+    let (mut summary, extra_warnings) = build_close_summary_json(
+        &close_spec,
+        &rel,
+        &plan,
+        effective_now,
+        types.as_ref(),
+        sized_for_summary,
+    );
     emit_close_clock_warning(&plan, warnings);
     for warning in plan.warnings.iter().chain(extra_warnings.iter()) {
         if !warnings
@@ -2903,7 +3400,6 @@ pub(super) fn plan_pomodoro_close_task_item(
     dependency_ctx: &mut DependencyContext,
     task_theme_context: &mut CaptureTaskThemeContext,
 ) -> Result<PlannedCaptureItem, CaptureError> {
-    reject_sized_pomodoro_close(close_spec)?;
     let selection = selection_from_spec(close_spec);
     // Body-bearing `<text> @route:block-id=x`: today's `:` new-task capture
     // forced into _R_, then close. This helper stages the new task and the
@@ -2982,51 +3478,107 @@ pub(super) fn plan_pomodoro_close_task_item(
             }
         })?;
     planner.stage(&day_file, linked_day.clone())?;
+    let (sized_staging, effective_contents, effective_now) = if close_spec
+        .size
+        .is_some()
+    {
+        let running =
+            capture_pomodoro_close::find_running_pomodoro(&linked_day)
+                .map_err(|error| {
+                    map_close_plan_error(
+                capture_pomodoro_close::PomodoroClosePlanError::FindRunning(
+                    error,
+                ),
+                &rel,
+                Some(&link_hint),
+            )
+                })?;
+        let staging = stage_sized_pomodoro_close(
+                &linked_day,
+                running.line,
+                running.name.as_deref(),
+                &close_spec.raw,
+                close_spec.size.as_ref(),
+                now,
+            )?
+            .ok_or_else(|| {
+                CaptureError::io(
+                    "pomodoro close capture invariant failed: missing sized staging",
+                )
+            })?;
+        let close_now = staging.close_now;
+        let sized_contents = staging.sized_contents.clone();
+        planner.stage(&day_file, sized_contents.clone())?;
+        (Some(staging), sized_contents, close_now)
+    } else {
+        (None, linked_day.clone(), now)
+    };
     let vault = SnapshotCloseVault::from_planner(planner, &request.bob_dir);
     let types = task_theme_context.close_types(
         planner,
         &vault,
         &day_file,
-        &linked_day,
+        &effective_contents,
         warnings,
     );
-    let outcome = capture_pomodoro_close::plan_pomodoro_close_outcome(
-        &day_file,
-        &linked_day,
-        now,
-        &vault,
-        selection.as_ref(),
-        types.as_ref().map(|types| &types.naming),
-    )
-    .map_err(|error| map_close_plan_error(error, &rel, Some(&link_hint)))?;
-    if let capture_pomodoro_close::PomodoroCloseOutcome::Reset(reset) = outcome
-    {
-        return plan_reset_task_item(
-            request,
-            parsed,
-            today,
-            planner,
+    let (plan, sized_for_summary) = if let Some(staging) = &sized_staging {
+        let plan = capture_pomodoro_close::plan_pomodoro_close(
             &day_file,
-            &rel,
-            &reset,
-            close_spec,
-            route,
-            block_id,
-            capture_block,
-            placement,
-            close_dependencies,
-            link_source,
-            running_dest,
-        );
-    }
-    let capture_pomodoro_close::PomodoroCloseOutcome::Close(plan) = outcome
-    else {
-        return Err(CaptureError::io(
-            "pomodoro close capture invariant failed: missing close plan",
-        ));
+            &effective_contents,
+            effective_now,
+            &vault,
+            selection.as_ref(),
+            types.as_ref().map(|types| &types.naming),
+        )
+        .map_err(|error| map_close_plan_error(error, &rel, Some(&link_hint)))?;
+        (plan, Some(staging as &SizedCloseStaging))
+    } else {
+        let outcome = capture_pomodoro_close::plan_pomodoro_close_outcome(
+            &day_file,
+            &effective_contents,
+            effective_now,
+            &vault,
+            selection.as_ref(),
+            types.as_ref().map(|types| &types.naming),
+        )
+        .map_err(|error| map_close_plan_error(error, &rel, Some(&link_hint)))?;
+        if let capture_pomodoro_close::PomodoroCloseOutcome::Reset(reset) =
+            outcome
+        {
+            return plan_reset_task_item(
+                request,
+                parsed,
+                today,
+                planner,
+                &day_file,
+                &rel,
+                &reset,
+                close_spec,
+                route,
+                block_id,
+                capture_block,
+                placement,
+                close_dependencies,
+                link_source,
+                running_dest,
+            );
+        }
+        let capture_pomodoro_close::PomodoroCloseOutcome::Close(plan) = outcome
+        else {
+            return Err(CaptureError::io(
+                "pomodoro close capture invariant failed: missing close plan",
+            ));
+        };
+        (plan, None)
     };
-    let (mut summary, extra_warnings) =
-        build_close_summary_json(close_spec, &rel, &plan, now, types.as_ref());
+    let (mut summary, extra_warnings) = build_close_summary_json(
+        close_spec,
+        &rel,
+        &plan,
+        effective_now,
+        types.as_ref(),
+        sized_for_summary,
+    );
     emit_close_clock_warning(&plan, warnings);
     for warning in plan.warnings.iter().chain(extra_warnings.iter()) {
         if !warnings

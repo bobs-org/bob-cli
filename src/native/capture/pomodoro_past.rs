@@ -1458,6 +1458,7 @@ pub(super) fn record_one_member(
             &plan,
             closed_at_dt,
             types.as_ref(),
+            None,
         );
     // Surface clock warnings like ordinary closes.
     for warning in plan.warnings.iter() {

@@ -22,7 +22,7 @@ fn capture_parse_json_exposes_transfer_contract_and_partial_needs() {
     let raw = "@inbox+bench > @db";
     let moved = parse(raw);
     assert_eq!(moved["schema_version"], 1);
-    assert_eq!(moved["grammar"], 21);
+    assert_eq!(moved["grammar"], 22);
     assert_eq!(moved["mode"], "task_move");
     assert_eq!(moved["route"], "db");
     assert!(moved["block_id"].is_null());
@@ -165,7 +165,7 @@ fn capture_parse_json_reports_public_target_runs_and_batch_offsets() {
 
     let leading_raw = "@work+a @dev+b note";
     let leading = parse(leading_raw);
-    assert_eq!(leading["grammar"], 21);
+    assert_eq!(leading["grammar"], 22);
     assert_eq!(leading["body"], "note");
     assert_eq!(leading["route"], "work");
     assert!(leading.get("items").is_none(), "{leading}");
@@ -399,7 +399,7 @@ fn capture_parse_and_dry_run_use_the_same_public_target_run_in_scratch_vault() {
     assert_success(&parsed);
     let parsed_json: serde_json::Value =
         serde_json::from_str(stdout(&parsed).trim()).expect("parse JSON");
-    assert_eq!(parsed_json["grammar"], 21);
+    assert_eq!(parsed_json["grammar"], 22);
     assert_eq!(parsed_json["body"], "note");
     assert_eq!(parsed_json["targets"].as_array().unwrap().len(), 2);
 
@@ -2104,7 +2104,7 @@ fn capture_parse_json_reports_move_bullets() {
     assert_success(&output);
     let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
         .expect("capture-parse JSON");
-    assert_eq!(json["grammar"], 21);
+    assert_eq!(json["grammar"], 22);
     assert_eq!(json["mode"], "incomplete");
     assert_eq!(json["needs"], serde_json::json!(["project_task_move"]));
     assert_eq!(
@@ -2201,7 +2201,7 @@ fn capture_parse_json_reports_move_choice() {
     assert_success(&output);
     let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
         .expect("capture-parse JSON");
-    assert_eq!(json["grammar"], 21);
+    assert_eq!(json["grammar"], 22);
     assert_eq!(json["mode"], "project_note");
     assert!(json["needs"].as_array().unwrap().is_empty());
     assert_eq!(

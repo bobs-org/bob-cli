@@ -40,6 +40,9 @@ pub(crate) fn is_reset_selection(selection: &CloseSelection) -> bool {
 /// Same eligibility from the capture spec, so whole/link/new-task callers
 /// cannot diverge from the shared planner.
 pub(crate) fn is_reset_spec(spec: &PomodoroCloseSpec) -> bool {
+    if spec.size.is_some() {
+        return false;
+    }
     matches!(&spec.in_progress, Some(numbers) if numbers.is_empty())
         && spec.park.is_empty()
         && !spec.park_all

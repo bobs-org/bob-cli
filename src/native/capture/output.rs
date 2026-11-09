@@ -185,8 +185,25 @@ pub(super) struct PomodoroCloseNextJson {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PomodoroCloseSizeFromJson {
+    pub(super) time_range: String,
+    pub(super) duration_minutes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PomodoroCloseSizeJson {
+    pub(super) raw: String,
+    pub(super) blocks: u32,
+    pub(super) minutes: u32,
+    pub(super) from: PomodoroCloseSizeFromJson,
+    pub(super) delta_minutes: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct PomodoroCloseSummaryJson {
     pub(super) raw: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) size: Option<PomodoroCloseSizeJson>,
     pub(super) in_progress: Option<Vec<u32>>,
     /// Parked `*<P>` list, omitted when empty. Parked links get normal
     /// In Progress work effects but are not carried forward.
@@ -2245,6 +2262,48 @@ fn print_human_past_trims(trims: &[PomodoroPastTrimJson]) {
     }
 }
 
+/// Dim human-only tip for an adjust + unsized whole-item close pair that
+/// could have been one sized close. Returns the tip line without styling.
+fn sized_close_tip(
+    adjust_item: &CaptureItemResult,
+    close_item: &CaptureItemResult,
+) -> Option<String> {
+    let adjust = adjust_item.pomodoro_adjust.as_ref()?;
+    if adjust_item.pomodoro_shift.is_some() {
+        return None;
+    }
+    let close = close_item.pomodoro_close.as_ref()?;
+    if close.size.is_some() {
+        return None;
+    }
+    if close_item.placement != Placement::Closed {
+        return None;
+    }
+    if close.decremented_minutes != 0 {
+        return None;
+    }
+    let duration = close.closed.duration_minutes;
+    if duration == 0 || duration % 5 != 0 {
+        return None;
+    }
+    let blocks = duration / 5;
+    if !(1..=99).contains(&blocks) {
+        return None;
+    }
+    // Same daily-note row: the adjust target and the close entry share
+    // the pre-close line and day file. Comparing refreshed post-close
+    // lines or names alone can fail when logs move the section.
+    if adjust.pomodoro_line != close.pomodoro_line {
+        return None;
+    }
+    if adjust_item.relative_target != close.day_relative {
+        return None;
+    }
+    let suffix = close.raw.strip_prefix('x').unwrap_or(&close.raw);
+    let token = format!("{blocks}x{suffix}");
+    Some(format!("tip: {token} closes at {duration}m in one step"))
+}
+
 pub(super) fn print_human_success(result: &CaptureResult) {
     if let Some(global) = &result.global_destination {
         print_global_destination_summary(global);
@@ -2292,6 +2351,12 @@ pub(super) fn print_human_success(result: &CaptureResult) {
             &result.theme_refs,
         );
         print_human_merge_block_unless_task_merge(item);
+        if index > 0
+            && let Some(tip) =
+                sized_close_tip(&result.captures[index - 1], item)
+        {
+            println!("  {}", Styler::detect().dim(&tip));
+        }
     }
     let past_trims: Vec<PomodoroPastTrimJson> = result
         .captures
@@ -4509,12 +4574,33 @@ pub(super) fn print_human_pomodoro_close_success(
         }
         _ => String::new(),
     };
-    let decremented = close.decremented_minutes;
     let off_clock = crate::native::pomodoro_homes::off_clock_via_label(
         close.off_clock,
         close.clock_note.as_deref(),
     );
-    let range_text = if decremented > 0 {
+    let range_text = if let Some(size) = close.size.as_ref() {
+        let from = &size.from.time_range;
+        let closed_range =
+            format!("{}-{}", close.closed.start, close.closed.end);
+        let delta_text = if size.delta_minutes == 0 {
+            String::new()
+        } else if size.delta_minutes < 0 {
+            format!(", \u{2212}{}m", size.delta_minutes.abs())
+        } else {
+            format!(", +{}m", size.delta_minutes)
+        };
+        if from == &closed_range || size.delta_minutes == 0 {
+            format!(
+                "{closed_range} ({}m{off_clock} · {}x)",
+                close.closed.duration_minutes, size.raw,
+            )
+        } else {
+            format!(
+                "{from} → {closed_range} ({}m{off_clock} · {}x{delta_text})",
+                close.closed.duration_minutes, size.raw,
+            )
+        }
+    } else if close.decremented_minutes > 0 {
         format!(
             "{}-{} → {}-{} ({}m{}, −{}m)",
             close.planned.start,
@@ -4523,7 +4609,7 @@ pub(super) fn print_human_pomodoro_close_success(
             close.closed.end,
             close.closed.duration_minutes,
             off_clock,
-            decremented
+            close.decremented_minutes
         )
     } else {
         format!(
@@ -4538,7 +4624,7 @@ pub(super) fn print_human_pomodoro_close_success(
         "{verb} {name} {range_text}{narrowed_from} · {} line {}",
         close.day_relative, close.pomodoro_line
     );
-    if close.remaining_minutes < 0 {
+    if close.size.is_none() && close.remaining_minutes < 0 {
         header.push_str(&format!(
             " (ran {}m over)",
             close.remaining_minutes.abs()

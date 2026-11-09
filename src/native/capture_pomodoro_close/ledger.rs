@@ -734,7 +734,7 @@ pub(crate) fn plan_ledger_close_with_parked(
     }
 }
 
-fn signed_minute_delta(end_minutes: u64, now_minutes: u64) -> i64 {
+pub(crate) fn signed_minute_delta(end_minutes: u64, now_minutes: u64) -> i64 {
     let delta = end_minutes as i64 - now_minutes as i64;
     let mut wrapped = delta.rem_euclid(DAY_MINUTES);
     if wrapped > HALF_DAY_MINUTES {

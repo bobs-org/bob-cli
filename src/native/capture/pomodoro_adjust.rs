@@ -327,20 +327,13 @@ pub(super) fn plan_pomodoro_adjust_item(
         new_duration,
         &range.metadata,
     );
-    let global_start = segment_start + range.start_ch;
-    let global_end = segment_start + range.end_ch;
-    if !staged.is_char_boundary(global_start)
-        || !staged.is_char_boundary(global_end)
-    {
+    let Some(updated) =
+        splice_adjusted_range(&staged, segment_start, &range, &new_range_text)
+    else {
         return Err(CaptureError::io(
             "Pomodoro adjustment invariant failed: target range is not on a character boundary",
         ));
-    }
-    let mut updated =
-        String::with_capacity(staged.len() + new_range_text.len());
-    updated.push_str(&staged[..global_start]);
-    updated.push_str(&new_range_text);
-    updated.push_str(&staged[global_end..]);
+    };
     planner.stage(&day_file, updated.clone())?;
     let before_start = format!(
         "{:02}{:02}",
@@ -556,20 +549,13 @@ pub(super) fn plan_pomodoro_shift_item(
         duration,
         &range.metadata,
     );
-    let global_start = segment_start + range.start_ch;
-    let global_end = segment_start + range.end_ch;
-    if !staged.is_char_boundary(global_start)
-        || !staged.is_char_boundary(global_end)
-    {
+    let Some(updated) =
+        splice_adjusted_range(&staged, segment_start, &range, &new_range_text)
+    else {
         return Err(CaptureError::io(
             "Pomodoro shift invariant failed: target range is not on a character boundary",
         ));
-    }
-    let mut updated =
-        String::with_capacity(staged.len() + new_range_text.len());
-    updated.push_str(&staged[..global_start]);
-    updated.push_str(&new_range_text);
-    updated.push_str(&staged[global_end..]);
+    };
     planner.stage(&day_file, updated.clone())?;
     let before_start = format!(
         "{:02}{:02}",
@@ -1222,6 +1208,32 @@ pub(crate) fn format_adjusted_range(
 
 pub(crate) fn normalize_minutes(value: i64) -> u64 {
     value.rem_euclid(1440) as u64
+}
+
+/// UTF-8-safe splice of a rewritten session range into staged daily text.
+/// `segment_start` is the byte offset of the running headline within
+/// `staged`, exactly as `select_running_session` computes it. Returns
+/// `None` when the range is not on a character boundary, preserving every
+/// surrounding byte and line ending.
+pub(crate) fn splice_adjusted_range(
+    staged: &str,
+    segment_start: usize,
+    range: &AdjustRange,
+    new_range_text: &str,
+) -> Option<String> {
+    let global_start = segment_start.checked_add(range.start_ch)?;
+    let global_end = segment_start.checked_add(range.end_ch)?;
+    if !staged.is_char_boundary(global_start)
+        || !staged.is_char_boundary(global_end)
+    {
+        return None;
+    }
+    let mut updated =
+        String::with_capacity(staged.len() + new_range_text.len());
+    updated.push_str(&staged[..global_start]);
+    updated.push_str(new_range_text);
+    updated.push_str(&staged[global_end..]);
+    Some(updated)
 }
 
 /// Move a parenthesized session ledger between clocks, preserving its

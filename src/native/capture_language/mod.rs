@@ -46,9 +46,9 @@ pub(crate) mod transfer;
 mod type_marker;
 
 /// Revision of the capture grammar contract exposed to clients.
-/// Revision 21 claims `@dir/stem` as a record update (see `record.rs`);
-/// older clients parse it as literal task text.
-pub(crate) const GRAMMAR_REVISION: u32 = 21;
+/// Revision 22 makes sized `Nx` closes execute (see `sized_pomodoro_close.md`);
+/// older clients parse the size as literal task text.
+pub(crate) const GRAMMAR_REVISION: u32 = 22;
 
 #[cfg(test)]
 mod tests;

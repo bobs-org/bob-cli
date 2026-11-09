@@ -33,9 +33,9 @@ pub(crate) use ledger::plan_ledger_close;
 #[allow(unused_imports)]
 pub(crate) use ledger::{
     find_running_pomodoro, plan_ledger_close_with_parked,
-    plan_ledger_close_with_policy, sub_bullet_range, target_from_token,
-    BlockLinkTarget, FindRunningError, LedgerClosePlan, LedgerClosePolicy,
-    LedgerLinkRole, RunningPomodoro, WorkLogNode,
+    plan_ledger_close_with_policy, signed_minute_delta, sub_bullet_range,
+    target_from_token, BlockLinkTarget, FindRunningError, LedgerClosePlan,
+    LedgerClosePolicy, LedgerLinkRole, RunningPomodoro, WorkLogNode,
 };
 #[allow(unused_imports)]
 pub(crate) use linked_tasks::{

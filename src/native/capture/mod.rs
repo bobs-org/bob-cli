@@ -173,7 +173,7 @@ pub(crate) use plan::{format_task_line, inbox_route, route_label};
 pub(crate) use pomodoro_adjust::{
     adjustment_duration_for_range, clock_stamp, format_adjusted_range,
     normalize_minutes, parse_adjustment_range, session_clock, set_ledger_clock,
-    AdjustRange, ClockKind, ClockStamp, SessionClock,
+    splice_adjusted_range, AdjustRange, ClockKind, ClockStamp, SessionClock,
 };
 pub(crate) use pomodoro_insert::{
     insertion_text_preserving_line_endings, select_default_pomodoro_line,
