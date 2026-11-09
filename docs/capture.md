@@ -9380,7 +9380,56 @@ them left-to-right yields `text`; `text` always equals `input` when
 `changed` is `false`. `summary` is omitted when nothing changed; `notices`
 is omitted when empty. Human output prints a header naming the rule, the
 before/after draft, the summary, and any notices; when nothing changed it
-prints a dim `no rewrite` line plus the notices.
+prints a dim `no rewrite` line plus the notices, then one dim
+`tip  next time . → @ after a word` line when a typing tip is proved.
+
+**Typing tips.** Two additive fields keep `schema_version` at `1`. `alias`
+appears on every `rule: "expand_sigil_alias"` response and names the forward
+alias that fired: `"alias": { "id": "route_after_text", "key": ".", "sigil": "@" }`.
+`sigil_alias_tip` appears on every response that has `--cursor` and
+`changed: false`: an object when bob proves that an unshifted key would have
+typed the sigil that ends at the caret, and an explicit `null` otherwise. It is
+absent without `--cursor` or when `changed` is `true`, so the `null` doubles as
+the capability marker: an older bob omits the key entirely.
+
+```bash
+bob capture-rewrite --cursor 10 --format json -- 'Buy milk @'
+```
+
+```json
+{
+  "ok": true,
+  "schema_version": 1,
+  "input": "Buy milk @",
+  "text": "Buy milk @",
+  "changed": false,
+  "cursor": 10,
+  "edits": [],
+  "sigil_alias_tip": {
+    "id": "route_after_text",
+    "sigil": "@",
+    "keys": ["."],
+    "range": { "start": 9, "end": 10 },
+    "where": "after a word"
+  }
+}
+```
+
+bob proves a tip by running the forward rewrite, never by a table. For the
+sigil `@ # ^ : + ~ & *` at the caret, it swaps each candidate key (`.`, `/` then
+`\`, `.`, `;`, `,`, `=`, `.`, `;` respectively) in for that byte and runs the
+whole rewrite pipeline; a key is kept only when the result is an
+`expand_sigil_alias` that yields exactly the original draft with the caret
+unchanged and a tipped alias id. `range` is the UTF-8 byte range of the typed
+sigil, `keys` lists the kept keys in bob's preference order for the first
+proved id, and `where` is a short true phrase (`after a word`,
+`right after a route`, `at an item start`, `on a move bullet`, `once routed`)
+that bob omits when none applies. Template drafts never tip. The tipped ids are
+`route_after_text`, `hash_menu`, `block_id_after_route`, `link_after_route`,
+`task_link_item`, `move_bullet_caret`, `move_bullet_colon`, `parent_task`,
+`relation`, `dependency`, and `blocked_task`. The other forward aliases still
+carry an `alias` id (`relation_flip`, `move_choice`, `next_parent`,
+`past_segment`, `close_complete`, `close_park`) but are never taught.
 
 ## `bob capture-complete`
 

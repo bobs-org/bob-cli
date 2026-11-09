@@ -1295,3 +1295,249 @@ fn capture_parse_and_capture_keep_xx_as_prose() {
         "xx dry-run should stay a task, got {json}"
     );
 }
+
+#[test]
+fn capture_rewrite_json_reports_a_typing_tip_for_a_hard_typed_sigil() {
+    let json = capture_rewrite_json("Buy milk @", Some(10));
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "ok": true,
+            "schema_version": 1,
+            "input": "Buy milk @",
+            "text": "Buy milk @",
+            "changed": false,
+            "cursor": 10,
+            "edits": [],
+            "sigil_alias_tip": {
+                "id": "route_after_text",
+                "sigil": "@",
+                "keys": ["."],
+                "range": { "start": 9, "end": 10 },
+                "where": "after a word",
+            },
+        })
+    );
+}
+
+#[test]
+fn capture_rewrite_json_tips_name_every_key_that_would_have_typed_the_sigil() {
+    for (draft, id, keys, position) in [
+        (
+            "@errands^",
+            "block_id_after_route",
+            vec!["."],
+            Some("right after a route"),
+        ),
+        (
+            "@errands:",
+            "link_after_route",
+            vec![";"],
+            Some("right after a route"),
+        ),
+        (
+            "@cash+",
+            "parent_task",
+            vec![","],
+            Some("right after a route"),
+        ),
+        (
+            "Buy milk #",
+            "hash_menu",
+            vec!["/", "\\"],
+            Some("after a word"),
+        ),
+        ("Fix it ~", "relation", vec!["="], Some("after a word")),
+        ("@home &", "dependency", vec!["."], Some("once routed")),
+        (
+            "Buy milk *",
+            "blocked_task",
+            vec![";"],
+            Some("after a word"),
+        ),
+        (
+            "@cash^goog-exit@\n- ^",
+            "move_bullet_caret",
+            vec!["."],
+            Some("on a move bullet"),
+        ),
+        ("=*fix#", "hash_menu", vec!["\\"], None),
+    ] {
+        let json = capture_rewrite_json(draft, Some(draft.len()));
+        let tip = &json["sigil_alias_tip"];
+        assert_eq!(json["changed"], false, "{draft:?}: {json}");
+        assert_eq!(tip["id"], id, "{draft:?}: {json}");
+        assert_eq!(tip["keys"], serde_json::json!(keys), "{draft:?}");
+        assert_eq!(
+            tip["range"],
+            serde_json::json!({ "start": draft.len() - 1, "end": draft.len() }),
+            "{draft:?}"
+        );
+        match position {
+            Some(position) => assert_eq!(tip["where"], position, "{draft:?}"),
+            None => assert!(
+                tip.get("where").is_none(),
+                "{draft:?} serialized an absent where: {json}"
+            ),
+        }
+    }
+}
+
+#[test]
+fn capture_rewrite_json_tip_ranges_are_utf8_byte_offsets() {
+    let draft = "Caf\u{e9} run @";
+    let json = capture_rewrite_json(draft, Some(draft.len()));
+    assert_eq!(json["sigil_alias_tip"]["id"], "route_after_text");
+    assert_eq!(
+        json["sigil_alias_tip"]["range"],
+        serde_json::json!({ "start": 10, "end": 11 })
+    );
+}
+
+#[test]
+fn capture_rewrite_json_sends_an_explicit_null_when_no_tip_is_proved() {
+    // The explicit `null` is the capability marker an older bob never sends.
+    for (draft, cursor) in [
+        ("Buy milk &", 10),
+        ("Buy milk", 8),
+        ("@", 1),
+        ("Do work @file:{0}^ %t\n\nrow", 18),
+        ("xx", 1),
+    ] {
+        let json = capture_rewrite_json(draft, Some(cursor));
+        assert_eq!(json["changed"], false, "{draft:?}: {json}");
+        assert_eq!(
+            json.get("sigil_alias_tip"),
+            Some(&serde_json::Value::Null),
+            "{draft:?}: {json}"
+        );
+    }
+}
+
+#[test]
+fn capture_rewrite_json_omits_the_tip_without_a_cursor_or_after_a_change() {
+    let without_cursor = capture_rewrite_json("Buy milk @", None);
+    assert_eq!(without_cursor["changed"], false);
+    assert!(
+        without_cursor.get("sigil_alias_tip").is_none(),
+        "{without_cursor}"
+    );
+
+    let changed = capture_rewrite_json("Buy milk .", Some(10));
+    assert_eq!(changed["changed"], true);
+    assert!(changed.get("sigil_alias_tip").is_none(), "{changed}");
+
+    let absorbed = capture_rewrite_json("Buy milk @dev @@", Some(16));
+    assert_eq!(absorbed["changed"], true);
+    assert!(absorbed.get("sigil_alias_tip").is_none(), "{absorbed}");
+}
+
+#[test]
+fn capture_rewrite_json_stamps_the_alias_on_forward_sigil_aliases() {
+    for (draft, id, key, sigil) in [
+        ("Buy milk .", "route_after_text", ".", "@"),
+        ("Buy milk /", "hash_menu", "/", "#"),
+        ("@errands\\", "hash_menu", "\\", "#"),
+        ("@errands.", "block_id_after_route", ".", "^"),
+        ("@errands;", "link_after_route", ";", ":"),
+        (";", "task_link_item", ";", ":"),
+        ("@cash^goog-exit@\n- .", "move_bullet_caret", ".", "^"),
+        ("@cash:goog-exit@\n- ;", "move_bullet_colon", ";", ":"),
+        ("@cash^goog-exit@\n- ^.", "move_choice", ".", "^"),
+        ("@cash,", "parent_task", ",", "+"),
+        ("@cash+goog-exit,", "next_parent", ",", "+"),
+        ("Fix it =", "relation", "=", "~"),
+        ("Fix it ~=", "relation_flip", "=", "~"),
+        ("Fix it ~~=", "relation_flip", "=", "~"),
+        ("@home .", "dependency", ".", "&"),
+        ("Buy milk ;", "blocked_task", ";", "*"),
+        ("x=2-", "past_segment", "-", "~"),
+        ("xx", "close_complete", "x", "!"),
+        ("xs", "close_park", "s", "*"),
+    ] {
+        let json = capture_rewrite_json(draft, Some(draft.len()));
+        assert_eq!(json["rule"], "expand_sigil_alias", "{draft:?}: {json}");
+        assert_eq!(
+            json["alias"],
+            serde_json::json!({ "id": id, "key": key, "sigil": sigil }),
+            "{draft:?}: {json}"
+        );
+        assert!(json.get("sigil_alias_tip").is_none(), "{draft:?}: {json}");
+    }
+}
+
+#[test]
+fn capture_rewrite_json_stamps_no_alias_on_other_rules_or_no_change() {
+    for (draft, cursor) in [
+        ("Buy milk @dev @@", Some(16)),
+        ("Do work @file:id^", Some(17)),
+        ("Fix trip ~work:foo |", Some(20)),
+        ("Buy milk @dev", None),
+        ("Buy milk @", Some(10)),
+    ] {
+        let json = capture_rewrite_json(draft, cursor);
+        assert!(json.get("alias").is_none(), "{draft:?}: {json}");
+    }
+}
+
+#[test]
+fn capture_rewrite_human_output_adds_one_dim_tip_line_when_a_tip_is_proved() {
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg("10")
+        .arg("--")
+        .arg("Buy milk @")
+        .output()
+        .expect("run bob capture-rewrite human tip");
+
+    assert_success(&output);
+    assert!(stderr(&output).is_empty(), "{}", format_output(&output));
+    assert_eq!(
+        stdout(&output),
+        "no rewrite\ntip  next time . \u{2192} @ after a word\n"
+    );
+    assert_stdout_has_no_ansi(&output);
+
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg("10")
+        .arg("--")
+        .arg("Buy milk &")
+        .output()
+        .expect("run bob capture-rewrite human without a tip");
+    assert_success(&output);
+    assert_eq!(stdout(&output), "no rewrite\n");
+}
+
+#[test]
+fn capture_rewrite_human_tip_line_omits_a_missing_position_phrase() {
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg("6")
+        .arg("--")
+        .arg("=*fix#")
+        .output()
+        .expect("run bob capture-rewrite human tip without a phrase");
+    assert_success(&output);
+    assert_eq!(
+        stdout(&output),
+        "no rewrite\ntip  next time \\ \u{2192} #\n"
+    );
+}
+
+#[test]
+fn capture_rewrite_help_documents_typing_tips() {
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("--help")
+        .output()
+        .expect("run bob capture-rewrite help");
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(out.contains("Typing tips"), "{out}");
+    assert!(out.contains("sigil_alias_tip"), "{out}");
+    assert!(out.contains("'Buy milk @'"), "{out}");
+}

@@ -1,5 +1,6 @@
 //! Shared test helpers for capture-language tests.
 
+use super::alias_tip::AliasId;
 use super::*;
 
 fn editor(raw: &str) -> EditorParse {
@@ -47,6 +48,39 @@ fn field(raw: &str, cursor: usize) -> Option<CompletionField> {
     completion_field_at(raw, cursor)
 }
 
+/// The one place a positive `expand_sigil_alias` assertion lives, so a new
+/// alias fixture cannot skip the typing-tip reverse check. `rewrite` must be
+/// the forward rewrite of `raw`: it fired the alias rule and stamped an alias
+/// id. For a tipped id, the reverse check on the output must prove the same
+/// id and the typed key; an untipped id must never be taught back.
+fn assert_alias_applied(raw: &str, rewrite: &DraftRewrite) -> AliasId {
+    assert_eq!(rewrite.rule, Some(RewriteRule::ExpandSigilAlias), "{raw:?}");
+    let stamp = rewrite
+        .alias
+        .as_ref()
+        .unwrap_or_else(|| panic!("{raw:?} fired an alias without an id"));
+    let cursor = rewrite
+        .cursor
+        .unwrap_or_else(|| panic!("{raw:?} alias lost the cursor"));
+    let tip = sigil_alias_tip(&rewrite.text, cursor);
+    if stamp.id.tipped() {
+        let tip = tip.unwrap_or_else(|| {
+            panic!(
+                "{raw:?} -> {:?} ({}) proves no tip",
+                rewrite.text,
+                stamp.id.code()
+            )
+        });
+        assert_eq!(tip.id, stamp.id, "{raw:?}");
+        assert_eq!(tip.sigil, stamp.sigil, "{raw:?}");
+        assert!(tip.keys.contains(&stamp.key), "{raw:?}: {:?}", tip.keys);
+        assert_eq!(tip.range, (cursor - 1, cursor), "{raw:?}");
+    } else if let Some(tip) = tip {
+        assert_ne!(tip.id, stamp.id, "{raw:?} taught an untipped alias");
+    }
+    stamp.id
+}
+
 fn line_texts(raw: &str) -> Vec<&str> {
     split_physical_lines(raw)
         .iter()
@@ -88,6 +122,7 @@ fn draft_items(raw: &str) -> Vec<(usize, usize, &str)> {
         .collect()
 }
 
+mod alias_tip;
 mod bare_close;
 mod chain;
 mod completion;

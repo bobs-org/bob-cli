@@ -3,6 +3,7 @@
 use super::super::editor_model::{EditorMode, Severity, SpanKind};
 use super::super::editor_parse::*;
 use super::super::rewrite::*;
+use super::assert_alias_applied;
 
 #[test]
 fn rewrite_draft_absorbs_a_trailing_local_marker() {
@@ -723,11 +724,7 @@ fn rewrite_draft_expands_sigil_aliases_in_route_picker_positions() {
     ] {
         let cursor = raw.len();
         let rewrite = rewrite_draft(raw, Some(cursor));
-        assert_eq!(
-            rewrite.rule,
-            Some(RewriteRule::ExpandSigilAlias),
-            "{raw:?}"
-        );
+        assert_alias_applied(raw, &rewrite);
         assert_eq!(rewrite.text, expected, "{raw:?}");
         assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
         assert_eq!(
@@ -753,7 +750,7 @@ fn rewrite_draft_expands_sigil_aliases_in_route_picker_positions() {
 
     let raw = "café @r.";
     let rewrite = rewrite_draft(raw, Some(raw.len()));
-    assert_eq!(rewrite.rule, Some(RewriteRule::ExpandSigilAlias));
+    assert_alias_applied(raw, &rewrite);
     assert_eq!(rewrite.text, "café @r^");
     assert_eq!(rewrite.edits[0].start, raw.len() - 1);
     assert!(raw.is_char_boundary(rewrite.edits[0].start));
@@ -769,7 +766,7 @@ fn rewrite_draft_expands_sigil_aliases_in_route_picker_positions() {
         })
     {
         let rewrite = rewrite_draft(transfer, Some(cursor));
-        assert_eq!(rewrite.rule, Some(RewriteRule::ExpandSigilAlias));
+        assert_alias_applied(transfer, &rewrite);
         assert_eq!(rewrite.text, "@inbox: > @db");
     }
 }
@@ -789,11 +786,7 @@ fn rewrite_draft_expands_relation_equals_alias() {
     ] {
         let cursor = raw.len();
         let rewrite = rewrite_draft(raw, Some(cursor));
-        assert_eq!(
-            rewrite.rule,
-            Some(RewriteRule::ExpandSigilAlias),
-            "{raw:?}"
-        );
+        assert_alias_applied(raw, &rewrite);
         assert_eq!(rewrite.text, expected, "{raw:?}");
         assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
         assert_eq!(
@@ -875,11 +868,7 @@ fn rewrite_draft_expands_dot_route_alias() {
         let cursor = raw.len();
         assert!(raw.is_char_boundary(cursor), "{raw:?}");
         let rewrite = rewrite_draft(raw, Some(cursor));
-        assert_eq!(
-            rewrite.rule,
-            Some(RewriteRule::ExpandSigilAlias),
-            "{raw:?}"
-        );
+        assert_alias_applied(raw, &rewrite);
         assert_eq!(rewrite.text, expected, "{raw:?}");
         assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
         assert_eq!(
@@ -948,7 +937,7 @@ fn assert_modifier_alias(raw: &str, expected: &str, key: &str, sigil: &str) {
     let cursor = raw.len();
     assert!(raw.is_char_boundary(cursor), "{raw:?}");
     let rewrite = rewrite_draft(raw, Some(cursor));
-    assert_eq!(rewrite.rule, Some(RewriteRule::ExpandSigilAlias), "{raw:?}");
+    assert_alias_applied(raw, &rewrite);
     assert_eq!(rewrite.text, expected, "{raw:?}");
     assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
     assert_eq!(
@@ -1090,11 +1079,7 @@ fn rewrite_draft_expands_comma_to_parent_task_picker() {
         let cursor = raw.len();
         assert!(raw.is_char_boundary(cursor), "{raw:?}");
         let rewrite = rewrite_draft(raw, Some(cursor));
-        assert_eq!(
-            rewrite.rule,
-            Some(RewriteRule::ExpandSigilAlias),
-            "{raw:?}"
-        );
+        assert_alias_applied(raw, &rewrite);
         assert_eq!(rewrite.text, expected, "{raw:?}");
         assert_eq!(rewrite.cursor, Some(expected.len()), "{raw:?}");
         assert_eq!(
@@ -1215,11 +1200,7 @@ fn rewrite_draft_expands_move_bullet_sigil_aliases() {
         let cursor = raw.len();
         assert!(raw.is_char_boundary(cursor));
         let rewrite = rewrite_draft(raw, Some(cursor));
-        assert_eq!(
-            rewrite.rule,
-            Some(RewriteRule::ExpandSigilAlias),
-            "{raw:?}"
-        );
+        assert_alias_applied(raw, &rewrite);
         assert_eq!(rewrite.text, expected, "{raw:?}");
         assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
         assert_eq!(rewrite.edits.len(), 1, "{raw:?}");
@@ -1250,11 +1231,7 @@ fn rewrite_draft_expands_move_choice_dot_alias() {
     ] {
         let cursor = raw.len();
         let rewrite = rewrite_draft(raw, Some(cursor));
-        assert_eq!(
-            rewrite.rule,
-            Some(RewriteRule::ExpandSigilAlias),
-            "{raw:?}"
-        );
+        assert_alias_applied(raw, &rewrite);
         assert_eq!(rewrite.text, expected, "{raw:?}");
         assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
         assert_eq!(rewrite.summary.as_deref(), Some("Typed ^ for ."));
@@ -1465,7 +1442,7 @@ fn rewrite_draft_switches_and_continues_merge_in_sources() {
 
     let raw = "Create task < @cash+line,";
     let continued = rewrite_draft(raw, Some(raw.len()));
-    assert_eq!(continued.rule, Some(RewriteRule::ExpandSigilAlias));
+    assert_alias_applied(raw, &continued);
     assert_eq!(continued.text, "Create task < @cash+line +");
     let cursor = continued.cursor.expect("next picker caret");
     let field =
@@ -1501,11 +1478,7 @@ fn rewrite_draft_expands_backslash_hash_alias() {
         let cursor = raw.len();
         assert!(raw.is_char_boundary(cursor), "{raw:?}");
         let rewrite = rewrite_draft(raw, Some(cursor));
-        assert_eq!(
-            rewrite.rule,
-            Some(RewriteRule::ExpandSigilAlias),
-            "{raw:?}"
-        );
+        assert_alias_applied(raw, &rewrite);
         assert_eq!(rewrite.text, expected, "{raw:?}");
         assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
         assert_eq!(
@@ -1532,7 +1505,7 @@ fn rewrite_draft_expands_backslash_hash_alias() {
     let raw = "@cash+goog-exit\\ Buy milk";
     let cursor = "@cash+goog-exit\\".len();
     let rewrite = rewrite_draft(raw, Some(cursor));
-    assert_eq!(rewrite.rule, Some(RewriteRule::ExpandSigilAlias));
+    assert_alias_applied(raw, &rewrite);
     assert_eq!(rewrite.text, "@cash+goog-exit# Buy milk");
     assert_eq!(rewrite.cursor, Some(cursor));
     assert_eq!(rewrite.summary.as_deref(), Some("Typed # for \\"));
@@ -1550,7 +1523,7 @@ fn rewrite_draft_expands_backslash_hash_alias() {
 
     let raw = "caf\u{e9} \\";
     let rewrite = rewrite_draft(raw, Some(raw.len()));
-    assert_eq!(rewrite.rule, Some(RewriteRule::ExpandSigilAlias));
+    assert_alias_applied(raw, &rewrite);
     assert_eq!(rewrite.text, "caf\u{e9} #");
     assert!(raw.is_char_boundary(rewrite.edits[0].start));
     assert_eq!(rewrite.edits[0].start, raw.len() - 1);
@@ -1645,11 +1618,7 @@ fn rewrite_draft_expands_slash_hash_alias() {
         let cursor = raw.len();
         assert!(raw.is_char_boundary(cursor), "{raw:?}");
         let rewrite = rewrite_draft(raw, Some(cursor));
-        assert_eq!(
-            rewrite.rule,
-            Some(RewriteRule::ExpandSigilAlias),
-            "{raw:?}"
-        );
+        assert_alias_applied(raw, &rewrite);
         assert_eq!(rewrite.text, expected, "{raw:?}");
         assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
         assert_eq!(
@@ -1746,11 +1715,7 @@ fn rewrite_draft_keeps_backslash_hash_alias_where_slash_stays_literal() {
         ("=*fix\\", "=*fix#"),
     ] {
         let rewrite = rewrite_draft(raw, Some(raw.len()));
-        assert_eq!(
-            rewrite.rule,
-            Some(RewriteRule::ExpandSigilAlias),
-            "{raw:?}"
-        );
+        assert_alias_applied(raw, &rewrite);
         assert_eq!(rewrite.text, expected, "{raw:?}");
         assert_eq!(
             rewrite.summary.as_deref(),
@@ -1794,11 +1759,7 @@ fn rewrite_draft_expands_relation_flip_alias() {
         let cursor = raw.len();
         assert!(raw.is_char_boundary(cursor), "{raw:?}");
         let rewrite = rewrite_draft(raw, Some(cursor));
-        assert_eq!(
-            rewrite.rule,
-            Some(RewriteRule::ExpandSigilAlias),
-            "{raw:?}"
-        );
+        assert_alias_applied(raw, &rewrite);
         assert_eq!(rewrite.text, expected, "{raw:?}");
         assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
         assert_eq!(
@@ -1835,11 +1796,7 @@ fn rewrite_draft_expands_relation_reverse_flip_alias() {
         let cursor = raw.len();
         assert!(raw.is_char_boundary(cursor), "{raw:?}");
         let rewrite = rewrite_draft(raw, Some(cursor));
-        assert_eq!(
-            rewrite.rule,
-            Some(RewriteRule::ExpandSigilAlias),
-            "{raw:?}"
-        );
+        assert_alias_applied(raw, &rewrite);
         assert_eq!(rewrite.text, expected, "{raw:?}");
         assert_eq!(rewrite.cursor, Some(cursor - 2), "{raw:?}");
         assert_eq!(
@@ -2050,11 +2007,7 @@ fn rewrite_draft_expands_past_segment_dash_alias() {
     ] {
         let cursor = raw.len();
         let rewrite = rewrite_draft(raw, Some(cursor));
-        assert_eq!(
-            rewrite.rule,
-            Some(RewriteRule::ExpandSigilAlias),
-            "{raw:?}"
-        );
+        assert_alias_applied(raw, &rewrite);
         assert_eq!(rewrite.text, expected, "{raw:?}");
         assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
         assert_eq!(rewrite.edits.len(), 1, "{raw:?}");
@@ -2103,7 +2056,7 @@ fn assert_close_outcome_alias(
 ) {
     let cursor = raw.len();
     let rewrite = rewrite_draft(raw, Some(cursor));
-    assert_eq!(rewrite.rule, Some(RewriteRule::ExpandSigilAlias), "{raw:?}");
+    assert_alias_applied(raw, &rewrite);
     assert_eq!(rewrite.text, expected, "{raw:?}");
     assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
     assert_eq!(rewrite.edits.len(), 1, "{raw:?}");
@@ -2257,7 +2210,7 @@ fn rewrite_draft_close_outcome_alias_utf8_and_crlf() {
     let emoji = "🚀\n\nxs";
     let cursor = emoji.len();
     let rewrite = rewrite_draft(emoji, Some(cursor));
-    assert_eq!(rewrite.rule, Some(RewriteRule::ExpandSigilAlias));
+    assert_alias_applied(emoji, &rewrite);
     assert_eq!(rewrite.text, "🚀\n\nx*");
     assert_eq!(rewrite.cursor, Some(cursor));
     assert!(emoji.is_char_boundary(rewrite.edits[0].start));
@@ -2266,7 +2219,7 @@ fn rewrite_draft_close_outcome_alias_utf8_and_crlf() {
 
     let crlf = "Plan\r\n\r\nxx";
     let rewrite = rewrite_draft(crlf, Some(crlf.len()));
-    assert_eq!(rewrite.rule, Some(RewriteRule::ExpandSigilAlias));
+    assert_alias_applied(crlf, &rewrite);
     assert_eq!(rewrite.text, "Plan\r\n\r\nx!");
     assert_close_parse(&rewrite.text);
 }

@@ -354,7 +354,7 @@ fn rewrite_draft_expands_sized_close_outcome_aliases() {
     ] {
         let cursor = raw.len();
         let rewrite = rewrite_draft(raw, Some(cursor));
-        assert_eq!(rewrite.rule, Some(RewriteRule::ExpandSigilAlias), "{raw}");
+        assert_alias_applied(raw, &rewrite);
         assert_eq!(rewrite.text, expected, "{raw}");
         assert_eq!(rewrite.edits[0].start, cursor - 1, "{raw}");
         assert_eq!(rewrite.edits[0].replacement, sigil.to_string(), "{raw}");

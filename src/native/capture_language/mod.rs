@@ -13,6 +13,7 @@
 //! `capture/` wraps the returned message in `CaptureError::usage(...)`, so
 //! the message text is the single source of truth for both callers.
 
+mod alias_tip;
 mod bare_name;
 mod close_log;
 mod close_selection;
@@ -53,6 +54,9 @@ pub(crate) const GRAMMAR_REVISION: u32 = 22;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use self::alias_tip::sigil_alias_tip;
+pub(crate) use self::alias_tip::AliasStamp;
+pub(crate) use self::alias_tip::SigilAliasTip;
 pub(crate) use self::bare_name::can_spell_bare;
 pub(crate) use self::bare_name::glued_named_start;
 pub(crate) use self::bare_name::named_start_token;

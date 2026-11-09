@@ -1,5 +1,6 @@
 //! Draft absorption and text edits.
 
+use super::alias_tip::{AliasId, AliasStamp};
 use super::close_selection::{
     classify_whole_item_close, close_marker_may_follow,
     is_sized_whole_item_close_shape, lex_close_prefix, lex_close_selection,
@@ -34,6 +35,9 @@ pub(crate) struct DraftRewrite {
     pub(crate) summary: Option<String>,
     /// Rule A5 (and future) explanations for why no rewrite happened.
     pub(crate) notices: Vec<String>,
+    /// Which forward alias fired: `Some` exactly for
+    /// [`RewriteRule::ExpandSigilAlias`].
+    pub(crate) alias: Option<AliasStamp>,
 }
 
 /// One `[start, end)` replacement into the original `raw_text`. Applying
@@ -188,8 +192,6 @@ fn expand_semicolon_colon_alias(
     start: usize,
     cursor: usize,
 ) -> Option<DraftRewrite> {
-    let sigil = ':';
-    let alias = ";";
     let allowed_context = super::completion::CompletionContext::PomodoroBlockId;
     let token = tokenize_with_spans(raw_text)
         .into_iter()
@@ -198,7 +200,7 @@ fn expand_semicolon_colon_alias(
         return None;
     }
     let mut candidate = raw_text.to_string();
-    candidate.replace_range(start..cursor, &sigil.to_string());
+    candidate.replace_range(start..cursor, ":");
     if let Some(field) =
         super::completion::completion_field_at(&candidate, cursor)
     {
@@ -212,8 +214,30 @@ fn expand_semicolon_colon_alias(
                     && field.replacement == (cursor, cursor))
         };
         if allowed {
+            let stamp = AliasStamp::new(
+                match field.context {
+                    super::completion::CompletionContext::PomodoroBlockId => {
+                        AliasId::LinkAfterRoute
+                    }
+                    super::completion::CompletionContext::TaskLink => {
+                        AliasId::TaskLinkItem
+                    }
+                    _ => AliasId::MoveBulletColon,
+                },
+                ";",
+                ':',
+            )
+            .at(match field.context {
+                super::completion::CompletionContext::PomodoroBlockId => {
+                    "right after a route"
+                }
+                super::completion::CompletionContext::TaskLink => {
+                    "at an item start"
+                }
+                _ => "on a move bullet",
+            });
             return Some(finish_sigil_alias(
-                raw_text, &candidate, start, cursor, sigil, alias,
+                raw_text, &candidate, start, cursor, stamp,
             ));
         }
     }
@@ -250,8 +274,17 @@ fn expand_dot_block_id_alias(
                 == super::completion::CompletionContext::ProjectTaskMove
                 && field.replacement == (cursor, cursor));
         if allowed {
+            let stamp = if field.context
+                == super::completion::CompletionContext::TaskBlockId
+            {
+                AliasStamp::new(AliasId::BlockIdAfterRoute, ".", '^')
+                    .at("right after a route")
+            } else {
+                AliasStamp::new(AliasId::MoveBulletCaret, ".", '^')
+                    .at("on a move bullet")
+            };
             return Some(finish_sigil_alias(
-                raw_text, &candidate, start, cursor, '^', ".",
+                raw_text, &candidate, start, cursor, stamp,
             ));
         }
     }
@@ -292,7 +325,11 @@ fn expand_dot_block_id_alias(
         _ => return None,
     }
     Some(finish_sigil_alias(
-        raw_text, &candidate, start, cursor, '^', ".",
+        raw_text,
+        &candidate,
+        start,
+        cursor,
+        AliasStamp::new(AliasId::MoveChoice, ".", '^'),
     ))
 }
 
@@ -326,7 +363,11 @@ fn expand_dot_route_alias(
         return None;
     }
     Some(finish_sigil_alias(
-        raw_text, &candidate, start, cursor, '@', ".",
+        raw_text,
+        &candidate,
+        start,
+        cursor,
+        AliasStamp::new(AliasId::RouteAfterText, ".", '@').at("after a word"),
     ))
 }
 
@@ -342,8 +383,7 @@ fn expand_dot_dependency_alias(
         raw_text,
         start,
         cursor,
-        '&',
-        ".",
+        AliasStamp::new(AliasId::Dependency, ".", '&').at("once routed"),
         super::completion::CompletionContext::TaskDependency,
     )
 }
@@ -360,8 +400,7 @@ fn expand_semicolon_blocked_task_alias(
         raw_text,
         start,
         cursor,
-        '*',
-        ";",
+        AliasStamp::new(AliasId::BlockedTask, ";", '*').at("after a word"),
         super::completion::CompletionContext::BlockedTask,
     )
 }
@@ -374,8 +413,7 @@ fn expand_modifier_fallback_alias(
     raw_text: &str,
     start: usize,
     cursor: usize,
-    sigil: char,
-    alias: &str,
+    stamp: AliasStamp,
     wanted: super::completion::CompletionContext,
 ) -> Option<DraftRewrite> {
     if !spaced_alias_position_ok(raw_text, start) {
@@ -388,7 +426,7 @@ fn expand_modifier_fallback_alias(
         return None;
     }
     let mut candidate = raw_text.to_string();
-    candidate.replace_range(start..cursor, &sigil.to_string());
+    candidate.replace_range(start..cursor, &stamp.sigil.to_string());
     if wikilink_claims(&candidate, cursor) {
         return None;
     }
@@ -397,7 +435,7 @@ fn expand_modifier_fallback_alias(
         return None;
     }
     Some(finish_sigil_alias(
-        raw_text, &candidate, start, cursor, sigil, alias,
+        raw_text, &candidate, start, cursor, stamp,
     ))
 }
 
@@ -411,9 +449,9 @@ fn expand_close_outcome_alias(
     cursor: usize,
 ) -> Option<DraftRewrite> {
     let alias = raw_text.get(start..cursor)?;
-    let sigil = match alias {
-        "x" => '!',
-        "s" => '*',
+    let (sigil, id) = match alias {
+        "x" => ('!', AliasId::CloseComplete),
+        "s" => ('*', AliasId::ClosePark),
         _ => return None,
     };
     if odd_backtick_parity_before(raw_text, start) {
@@ -456,7 +494,11 @@ fn expand_close_outcome_alias(
         return None;
     }
     Some(finish_sigil_alias(
-        raw_text, &candidate, start, cursor, sigil, alias,
+        raw_text,
+        &candidate,
+        start,
+        cursor,
+        AliasStamp::new(id, alias, sigil),
     ))
 }
 
@@ -593,7 +635,11 @@ fn expand_past_segment_dash_alias(
         return None;
     }
     Some(finish_sigil_alias(
-        raw_text, &candidate, start, cursor, '~', "-",
+        raw_text,
+        &candidate,
+        start,
+        cursor,
+        AliasStamp::new(AliasId::PastSegment, "-", '~'),
     ))
 }
 
@@ -622,7 +668,11 @@ fn expand_relation_equals_alias(
     }
 
     Some(finish_sigil_alias(
-        raw_text, &candidate, start, cursor, '~', "=",
+        raw_text,
+        &candidate,
+        start,
+        cursor,
+        AliasStamp::new(AliasId::Relation, "=", '~').at("after a word"),
     ))
 }
 
@@ -751,7 +801,11 @@ fn expand_relation_flip_alias(
                 return None;
             }
             Some(finish_sigil_alias(
-                raw_text, &candidate, start, cursor, '~', "=",
+                raw_text,
+                &candidate,
+                start,
+                cursor,
+                AliasStamp::new(AliasId::RelationFlip, "=", '~'),
             ))
         }
         _ => None,
@@ -779,6 +833,7 @@ fn finish_relation_double_flip_alias(
         cursor: Some(candidate_cursor),
         summary: Some("Typed ~ for ~~=".to_string()),
         notices: Vec::new(),
+        alias: Some(AliasStamp::new(AliasId::RelationFlip, "=", '~')),
     }
 }
 
@@ -819,8 +874,18 @@ fn expand_parent_task_comma_alias(
             _ => false,
         };
         if allowed {
+            // Only the note-scoped picker follows a route directly.
+            let position = if field.context == CompletionContext::Task {
+                "right after a route"
+            } else {
+                "after a word"
+            };
             return Some(finish_sigil_alias(
-                raw_text, &swapped, start, cursor, '+', ",",
+                raw_text,
+                &swapped,
+                start,
+                cursor,
+                AliasStamp::new(AliasId::ParentTask, ",", '+').at(position),
             ));
         }
     }
@@ -869,6 +934,7 @@ fn expand_parent_task_comma_alias(
         cursor: Some(continued_cursor),
         summary: Some("Typed + for ,".to_string()),
         notices: Vec::new(),
+        alias: Some(AliasStamp::new(AliasId::NextParent, ",", '+')),
     })
 }
 
@@ -955,6 +1021,7 @@ fn expand_merge_in_source_comma_alias(
         cursor: Some(continued_cursor),
         summary: Some("Typed + for ,".to_string()),
         notices: Vec::new(),
+        alias: Some(AliasStamp::new(AliasId::NextParent, ",", '+')),
     })
 }
 
@@ -1023,7 +1090,11 @@ fn expand_hash_alias(
             && field.replacement.0 == cursor
         {
             return Some(finish_sigil_alias(
-                raw_text, &candidate, start, cursor, '#', alias,
+                raw_text,
+                &candidate,
+                start,
+                cursor,
+                hash_alias_stamp(raw_text, start, cursor, alias),
             ));
         }
         return None;
@@ -1052,8 +1123,39 @@ fn expand_hash_alias(
         return None;
     }
     Some(finish_sigil_alias(
-        raw_text, &candidate, start, cursor, '#', alias,
+        raw_text,
+        &candidate,
+        start,
+        cursor,
+        hash_alias_stamp(raw_text, start, cursor, alias),
     ))
+}
+
+/// Stamp a `\` or `/` -> `#` alias. The position phrase describes only what
+/// the key itself is attached to: a space or tab before it reads `after a
+/// word`, a route glued to it reads `right after a route`, and anything else
+/// gets no phrase.
+fn hash_alias_stamp(
+    raw_text: &str,
+    start: usize,
+    cursor: usize,
+    alias: &str,
+) -> AliasStamp {
+    let stamp = AliasStamp::new(AliasId::HashMenu, alias, '#');
+    let glued_route = tokenize_with_spans(raw_text)
+        .into_iter()
+        .find(|token| token.end == cursor)
+        .and_then(|token| token.text.get(..start.checked_sub(token.start)?))
+        .and_then(|prefix| prefix.strip_prefix('@'))
+        .is_some_and(is_route_token);
+    let before = start
+        .checked_sub(1)
+        .and_then(|index| raw_text.as_bytes().get(index));
+    stamp.at_optional(match before {
+        Some(b' ' | b'\t') => Some("after a word"),
+        _ if glued_route => Some("right after a route"),
+        _ => None,
+    })
 }
 
 fn finish_sigil_alias(
@@ -1061,10 +1163,9 @@ fn finish_sigil_alias(
     candidate: &str,
     start: usize,
     cursor: usize,
-    sigil: char,
-    alias: &str,
+    stamp: AliasStamp,
 ) -> DraftRewrite {
-    let replacement = sigil.to_string();
+    let replacement = stamp.sigil.to_string();
     let edits = vec![TextEdit {
         start,
         end: cursor,
@@ -1077,8 +1178,9 @@ fn finish_sigil_alias(
         edits,
         text,
         cursor: Some(cursor),
-        summary: Some(format!("Typed {sigil} for {alias}")),
+        summary: Some(format!("Typed {} for {}", stamp.sigil, stamp.key)),
         notices: Vec::new(),
+        alias: Some(stamp),
     }
 }
 
@@ -1273,6 +1375,7 @@ fn switch_task_bullet_id_separator(
         cursor: Some(token.start + replacement.len()),
         summary: Some(format!("Changed {current} to {replacement}")),
         notices: Vec::new(),
+        alias: None,
     })
 }
 
@@ -1444,6 +1547,7 @@ fn switch_block_id_separator(
         cursor: Some(token_start + replacement.len()),
         summary: Some(summary),
         notices: Vec::new(),
+        alias: None,
     })
 }
 
@@ -1510,6 +1614,7 @@ fn switch_transfer_block_id_separator(
                     cursor: Some(token_start + switched_marker.len()),
                     summary: Some(summary),
                     notices: Vec::new(),
+                    alias: None,
                 });
             }
             if merge_claimed {
@@ -1550,6 +1655,7 @@ fn switch_transfer_block_id_separator(
                     cursor: Some(token_start + switched_marker.len()),
                     summary: Some(summary),
                     notices: Vec::new(),
+                    alias: None,
                 });
             }
         }
@@ -1655,6 +1761,7 @@ fn attach_relation_label(
         cursor: Some(candidate_cursor),
         summary: Some(format!("Attached {} to {token_text}", token.text)),
         notices: Vec::new(),
+        alias: None,
     })
 }
 
@@ -1799,6 +1906,7 @@ fn toggle_relation_direction(
         cursor: Some(new_cursor),
         summary: Some(summary.to_string()),
         notices: Vec::new(),
+        alias: None,
     })
 }
 
@@ -2017,6 +2125,7 @@ pub(super) fn unchanged_rewrite(
         cursor,
         summary: None,
         notices,
+        alias: None,
     }
 }
 
@@ -2397,6 +2506,7 @@ pub(super) fn finish_absorption(
         cursor,
         summary: Some(summary),
         notices: Vec::new(),
+        alias: None,
     }
 }
 

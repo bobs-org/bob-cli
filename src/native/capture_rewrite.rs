@@ -13,7 +13,9 @@ use serde_json::json;
 
 use super::{
     capture_flag_guard,
-    capture_language::{self, DraftRewrite, RewriteRule, TextEdit},
+    capture_language::{
+        self, AliasStamp, DraftRewrite, RewriteRule, SigilAliasTip, TextEdit,
+    },
     style::Styler,
 };
 
@@ -199,6 +201,18 @@ trigger. A whole-item `x[<N>][!<M>]` close item is never rewritten or \
 absorbed, and a `@@` declaration never applies to it. A `>` transfer line \
 never absorbs either: a bare `@@` on the line is left untouched with an \
 `@@ cannot take a capture transfer` notice naming the destination.\n\n\
+Typing tips (requires --cursor): when nothing changed, the JSON \
+'sigil_alias_tip' field says whether an unshifted alias key would have typed \
+the sigil that ends at --cursor. bob proves it by swapping each candidate \
+key ('.' for '@' '^' '&', ';' for ':' '*', ',' for '+', '=' for '~', '/' or \
+'\\' for '#') in for the sigil and running the whole rewrite; a key counts \
+only when that forward rewrite yields exactly TEXT with the caret unchanged. \
+The object carries the lesson 'id', the 'sigil', the preferred 'keys', the \
+sigil's UTF-8 byte 'range', and an optional 'where' phrase. An explicit null \
+means no tip is proved and marks a bob that reports tips; the field is \
+absent without --cursor or when the draft changed. Every rewrite that fires \
+the sigil alias rule also carries an 'alias' object with its 'id', 'key', \
+and 'sigil'. Human output keeps 'no rewrite' and adds one dim 'tip' line.\n\n\
 These assists are editor-only: 'bob capture' and 'bob capture-parse' keep \
 the literal TEXT, so '@file:id^' is not silently rewritten there. Only a \
 missing TEXT or a bad flag is an error; every other input succeeds with \
@@ -206,7 +220,7 @@ missing TEXT or a bad flag is an error; every other input succeeds with \
 stdin is piped, it reads the complete piped stdin stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id^'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id+'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file^id+'\n  bob capture-rewrite -c 20 -f json -- 'Fix trip ~work:foo |'\n  bob capture-rewrite -c 9 -f json -- '@errands.'\n  bob capture-rewrite -c 8 -f json -- 'Fix it ='\n  bob capture-rewrite -c 9 -f json -- 'Fix it ~='\n  bob capture-rewrite -c 21 -f json -- 'Fix it ~tasks:target='\n  bob capture-rewrite -c 6 -f json -- '@cash,'\n  bob capture-rewrite -c 16 -f json -- '@cash+goog-exit,'\n  bob capture-rewrite -c 1 -f json -- ';'\n  bob capture-rewrite -c 10 -f json -- 'Buy milk \\'\n  printf '@cash^goog-exit@\\n- .' | bob capture-rewrite -c 20 -f json\n  bob capture-rewrite -c 10 -f json -- 'Buy milk /'\n  bob capture-rewrite -c 16 -f json -- 'Buy milk @dev @@'\n  bob capture-rewrite -- 'Called Morgan Stanley @cash+goog-exit @@'\n  bob capture-rewrite -c 13 -f json -- '@inbox:bench+ > @db'\n  bob capture-rewrite -f json -- '@a+x > @c @@'\n  printf 'Buy milk @dev @@' | bob capture-rewrite -f json\n  printf '@@foo\\nBuy milk @@\\n' | bob capture-rewrite -f json\n  printf 'Buy milk @dev\\n- more detail @@\\n' | bob capture-rewrite -f json",
+            "Examples:\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id^'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id+'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file^id+'\n  bob capture-rewrite -c 20 -f json -- 'Fix trip ~work:foo |'\n  bob capture-rewrite -c 9 -f json -- '@errands.'\n  bob capture-rewrite -c 8 -f json -- 'Fix it ='\n  bob capture-rewrite -c 9 -f json -- 'Fix it ~='\n  bob capture-rewrite -c 21 -f json -- 'Fix it ~tasks:target='\n  bob capture-rewrite -c 6 -f json -- '@cash,'\n  bob capture-rewrite -c 16 -f json -- '@cash+goog-exit,'\n  bob capture-rewrite -c 1 -f json -- ';'\n  bob capture-rewrite -c 10 -f json -- 'Buy milk \\'\n  printf '@cash^goog-exit@\\n- .' | bob capture-rewrite -c 20 -f json\n  bob capture-rewrite -c 10 -f json -- 'Buy milk /'\n  bob capture-rewrite -c 10 -f json -- 'Buy milk @'\n  bob capture-rewrite -c 16 -f json -- 'Buy milk @dev @@'\n  bob capture-rewrite -- 'Called Morgan Stanley @cash+goog-exit @@'\n  bob capture-rewrite -c 13 -f json -- '@inbox:bench+ > @db'\n  bob capture-rewrite -f json -- '@a+x > @c @@'\n  printf 'Buy milk @dev @@' | bob capture-rewrite -f json\n  printf '@@foo\\nBuy milk @@\\n' | bob capture-rewrite -f json\n  printf 'Buy milk @dev\\n- more detail @@\\n' | bob capture-rewrite -f json",
         )
         .disable_help_flag(true)
         .arg(cursor_arg())
@@ -312,6 +326,34 @@ struct CaptureRewriteResult {
     summary: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     notices: Vec<String>,
+    /// The forward alias that fired; present exactly on
+    /// `rule: "expand_sigil_alias"` responses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    alias: Option<AliasJson>,
+    /// Present exactly when `--cursor` was given and nothing changed: an
+    /// object when bob proves an alias for the sigil ending at the cursor,
+    /// an explicit `null` otherwise. The `null` marks a bob that reports
+    /// tips, so a client can tell it apart from an older bob that omits the
+    /// key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sigil_alias_tip: Option<Option<TipJson>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct AliasJson {
+    id: &'static str,
+    key: String,
+    sigil: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct TipJson {
+    id: &'static str,
+    sigil: String,
+    keys: Vec<String>,
+    range: SourceRange,
+    #[serde(rename = "where", skip_serializing_if = "Option::is_none")]
+    position: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -329,10 +371,21 @@ struct SourceRange {
 impl CaptureRewriteResult {
     fn new(input: String, cursor: Option<usize>) -> Self {
         let rewrite = capture_language::rewrite_draft(&input, cursor);
-        Self::from_rewrite(input, rewrite)
+        let sigil_alias_tip = match cursor {
+            Some(position) if rewrite.rule.is_none() => Some(
+                capture_language::sigil_alias_tip(&input, position)
+                    .map(tip_json),
+            ),
+            _ => None,
+        };
+        Self::from_rewrite(input, rewrite, sigil_alias_tip)
     }
 
-    fn from_rewrite(input: String, rewrite: DraftRewrite) -> Self {
+    fn from_rewrite(
+        input: String,
+        rewrite: DraftRewrite,
+        sigil_alias_tip: Option<Option<TipJson>>,
+    ) -> Self {
         let changed = rewrite.rule.is_some();
         Self {
             ok: true,
@@ -345,7 +398,30 @@ impl CaptureRewriteResult {
             edits: rewrite.edits.iter().map(edit_json).collect(),
             summary: rewrite.summary,
             notices: rewrite.notices,
+            alias: rewrite.alias.map(alias_json),
+            sigil_alias_tip,
         }
+    }
+}
+
+fn alias_json(stamp: AliasStamp) -> AliasJson {
+    AliasJson {
+        id: stamp.id.code(),
+        key: stamp.key,
+        sigil: stamp.sigil.to_string(),
+    }
+}
+
+fn tip_json(tip: SigilAliasTip) -> TipJson {
+    TipJson {
+        id: tip.id.code(),
+        sigil: tip.sigil.to_string(),
+        keys: tip.keys,
+        range: SourceRange {
+            start: tip.range.0,
+            end: tip.range.1,
+        },
+        position: tip.position,
     }
 }
 
@@ -380,6 +456,9 @@ fn print_human_success_with_styler(
         for notice in &result.notices {
             println!("  {notice}");
         }
+        if let Some(Some(tip)) = &result.sigil_alias_tip {
+            println!("{}", styler.dim(&tip_line(tip)));
+        }
         return;
     }
 
@@ -399,6 +478,17 @@ fn print_human_success_with_styler(
     for notice in &result.notices {
         println!("  {notice}");
     }
+}
+
+/// The one dim human line for a proved tip, naming bob's first key.
+fn tip_line(tip: &TipJson) -> String {
+    let key = tip.keys.first().map_or("", String::as_str);
+    let mut line = format!("tip  next time {key} \u{2192} {}", tip.sigil);
+    if let Some(position) = tip.position {
+        line.push(' ');
+        line.push_str(position);
+    }
+    line
 }
 
 fn success_json(result: &CaptureRewriteResult) -> String {

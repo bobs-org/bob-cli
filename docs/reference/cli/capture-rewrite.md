@@ -23,6 +23,8 @@ Relation direction toggle (requires --cursor): typing '~' or '=' immediately aft
 
 Bare '@@' absorption: typing a bare '@@' inside an item that already carries a local destination marker (or, absent that, when the draft already carries exactly one other '@@' declaration) rewrites the bare token to '@@<payload>', deletes the token it absorbed, and deletes every other declaration token in the draft, so the result always carries at most one declaration. Only the bare '@@' at --cursor (or, when --cursor is omitted, the last bare '@@' in source order) is a candidate. An item whose single local marker cannot be expressed as a declaration -- '@route#Section', '@route+block-id' (an existing task destination), '@route+block-id#section', '@route+block-id!' (a task toggle), '@route^block-id', '@route:block-id', or a trailing bare '#' -- is left untouched with a notice explaining why; an item with more than one local marker is left untouched with no notice, since 'bob capture-parse' already reports that duplicate. Feeding a rewrite's own output back in is a no-op, because the claiming token is no longer bare and no longer ends in a toggle trigger. A whole-item `x[<N>][!<M>]` close item is never rewritten or absorbed, and a `@@` declaration never applies to it. A `>` transfer line never absorbs either: a bare `@@` on the line is left untouched with an `@@ cannot take a capture transfer` notice naming the destination.
 
+Typing tips (requires --cursor): when nothing changed, the JSON 'sigil_alias_tip' field says whether an unshifted alias key would have typed the sigil that ends at --cursor. bob proves it by swapping each candidate key ('.' for '@' '^' '&', ';' for ':' '*', ',' for '+', '=' for '~', '/' or '\' for '#') in for the sigil and running the whole rewrite; a key counts only when that forward rewrite yields exactly TEXT with the caret unchanged. The object carries the lesson 'id', the 'sigil', the preferred 'keys', the sigil's UTF-8 byte 'range', and an optional 'where' phrase. An explicit null means no tip is proved and marks a bob that reports tips; the field is absent without --cursor or when the draft changed. Every rewrite that fires the sigil alias rule also carries an 'alias' object with its 'id', 'key', and 'sigil'. Human output keeps 'no rewrite' and adds one dim 'tip' line.
+
 These assists are editor-only: 'bob capture' and 'bob capture-parse' keep the literal TEXT, so '@file:id^' is not silently rewritten there. Only a missing TEXT or a bad flag is an error; every other input succeeds with 'changed: false' when nothing needed to change. If TEXT is omitted and stdin is piped, it reads the complete piped stdin stream.
 
 Usage: bob capture-rewrite [OPTIONS] [TEXT]...
@@ -59,6 +61,7 @@ Examples:
   bob capture-rewrite -c 10 -f json -- 'Buy milk \'
   printf '@cash^goog-exit@\n- .' | bob capture-rewrite -c 20 -f json
   bob capture-rewrite -c 10 -f json -- 'Buy milk /'
+  bob capture-rewrite -c 10 -f json -- 'Buy milk @'
   bob capture-rewrite -c 16 -f json -- 'Buy milk @dev @@'
   bob capture-rewrite -- 'Called Morgan Stanley @cash+goog-exit @@'
   bob capture-rewrite -c 13 -f json -- '@inbox:bench+ > @db'
