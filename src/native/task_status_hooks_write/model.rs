@@ -150,10 +150,12 @@ impl InputSnapshot {
 pub(crate) struct PlannedWrite {
     pub path: PathBuf,
     /// Original destination state. `Missing` is a create; `Present` is a
-    /// replacement. Never synthesize an identity or empty existing file for a
-    /// create.
+    /// replacement or removal. Never synthesize an identity or empty existing
+    /// file for a create.
     pub original: InputState,
-    pub proposed_bytes: Vec<u8>,
+    /// Proposed postimage. `None` is an explicit removal of a captured present
+    /// file. An empty `Some` writes an empty file; it is never a deletion.
+    pub proposed_bytes: Option<Vec<u8>>,
     /// Integration sets this for status-group rearrangements so the quiet
     /// interval applies without duplicating application logic.
     pub structural_regrouping: bool,
@@ -164,11 +166,19 @@ impl PlannedWrite {
         matches!(self.original, InputState::Missing)
     }
 
+    pub(crate) fn is_remove(&self) -> bool {
+        self.proposed_bytes.is_none()
+    }
+
     pub(crate) fn original_bytes(&self) -> &[u8] {
         match &self.original {
             InputState::Present { bytes, .. } => bytes,
             InputState::Missing => &[],
         }
+    }
+
+    pub(crate) fn proposed_bytes_or_empty(&self) -> &[u8] {
+        self.proposed_bytes.as_deref().unwrap_or(&[])
     }
 
     pub(crate) fn identity(&self) -> Option<&FileIdentity> {
@@ -401,14 +411,26 @@ pub(crate) enum ApplyOutcome {
 
 pub(super) struct StagedWrite {
     pub(super) dest: PathBuf,
-    pub(super) temp: PathBuf,
-    pub(super) proposed_bytes: Vec<u8>,
+    pub(super) temp: Option<PathBuf>,
+    pub(super) proposed_bytes: Option<Vec<u8>>,
     pub(super) is_create: bool,
+}
+
+impl StagedWrite {
+    pub(super) fn is_remove(&self) -> bool {
+        self.proposed_bytes.is_none()
+    }
 }
 
 pub(super) struct AppliedWrite {
     pub(super) path: PathBuf,
-    pub(super) proposed_bytes: Vec<u8>,
+    pub(super) proposed_bytes: Option<Vec<u8>>,
+}
+
+impl AppliedWrite {
+    pub(super) fn is_remove(&self) -> bool {
+        self.proposed_bytes.is_none()
+    }
 }
 
 pub(crate) fn new_run_id() -> String {

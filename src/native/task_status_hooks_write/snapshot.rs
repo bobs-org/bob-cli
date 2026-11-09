@@ -44,24 +44,48 @@ pub(crate) fn planned_write(
     proposed_bytes: Vec<u8>,
     structural_regrouping: bool,
 ) -> Result<PlannedWrite, CaptureError> {
-    match &original.state {
-        InputState::Present { identity, .. } => {
-            if identity.nlink != 1 {
-                return Err(CaptureError::Unsupported {
-                    path,
-                    message: "refusing to replace a multiply linked file"
-                        .to_string(),
-                });
-            }
-        }
-        InputState::Missing => {}
-    }
+    reject_multiply_linked(&path, original, "replace")?;
     Ok(PlannedWrite {
         path,
         original: original.state.clone(),
-        proposed_bytes,
+        proposed_bytes: Some(proposed_bytes),
         structural_regrouping,
     })
+}
+
+/// Build an explicit removal. Archive rename-following is the first
+/// production caller; unit tests exercise the writer until that lands.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn planned_remove(
+    path: PathBuf,
+    original: &InputSnapshot,
+) -> Result<PlannedWrite, CaptureError> {
+    if original.is_missing() {
+        return Err(CaptureError::NotFound(path));
+    }
+    reject_multiply_linked(&path, original, "remove")?;
+    Ok(PlannedWrite {
+        path,
+        original: original.state.clone(),
+        proposed_bytes: None,
+        structural_regrouping: false,
+    })
+}
+
+fn reject_multiply_linked(
+    path: &Path,
+    original: &InputSnapshot,
+    verb: &str,
+) -> Result<(), CaptureError> {
+    match &original.state {
+        InputState::Present { identity, .. } if identity.nlink != 1 => {
+            Err(CaptureError::Unsupported {
+                path: path.to_path_buf(),
+                message: format!("refusing to {verb} a multiply linked file"),
+            })
+        }
+        _ => Ok(()),
+    }
 }
 
 pub(crate) fn snapshot_for_path<'a>(

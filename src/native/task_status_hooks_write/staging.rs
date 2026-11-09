@@ -96,6 +96,18 @@ fn stage_one(
         vault_canonical,
         output.is_create(),
     )?;
+    if output.is_remove() {
+        return Ok(StagedWrite {
+            dest: output.path.clone(),
+            temp: None,
+            proposed_bytes: None,
+            is_create: false,
+        });
+    }
+    let proposed_bytes = output
+        .proposed_bytes
+        .clone()
+        .expect("create and replace stage proposed bytes");
     let file_name = output.path.file_name().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -114,7 +126,7 @@ fn stage_one(
     let temp = loop {
         let temp_name = staged_temp_name(file_name, run_id, index, nonce);
         let temp = parent.join(temp_name);
-        match create_exclusive_temp(&temp, &output.proposed_bytes, mode) {
+        match create_exclusive_temp(&temp, &proposed_bytes, mode) {
             Ok(()) => break temp,
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                 nonce = nonce.checked_add(1).ok_or_else(|| {
@@ -135,8 +147,8 @@ fn stage_one(
     }
     Ok(StagedWrite {
         dest: output.path.clone(),
-        temp,
-        proposed_bytes: output.proposed_bytes.clone(),
+        temp: Some(temp),
+        proposed_bytes: Some(proposed_bytes),
         is_create: output.is_create(),
     })
 }
@@ -345,12 +357,15 @@ fn copy_copied_metadata(from: &Path, to: &Path) -> io::Result<()> {
 
 pub(super) fn cleanup_temps(staged: &[StagedWrite], tool: &str) {
     for item in staged {
-        if let Err(error) = fs::remove_file(&item.temp)
+        let Some(temp) = &item.temp else {
+            continue;
+        };
+        if let Err(error) = fs::remove_file(temp)
             && error.kind() != io::ErrorKind::NotFound
         {
             eprintln!(
                 "bob {tool}: warning: failed to remove staging file {}: {error}",
-                item.temp.display()
+                temp.display()
             );
         }
     }

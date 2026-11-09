@@ -1,10 +1,15 @@
-use std::{collections::BTreeSet, fs, path::PathBuf, time::Duration};
+use std::{
+    collections::BTreeSet,
+    fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use super::{
     model::{
         remaining_outputs, AppliedWrite, ApplyError, ApplySession,
-        CaptureError, InputKind, InputState, PlannedWrite, ReasonCode,
-        StagedWrite, WritePlan,
+        CaptureError, InputKind, InputSnapshot, InputState, PlannedWrite,
+        ReasonCode, StagedWrite, WritePlan,
     },
     snapshot::{capture_optional, capture_required, recapture},
     staging::inspect_destination_parent,
@@ -82,6 +87,19 @@ pub(super) fn preflight(
         .map(|item| item.path.clone())
         .collect::<Vec<_>>();
     for input in &plan.inputs {
+        if let Some(applied_item) = applied.iter().find(|item| {
+            item.path == input.path
+                || fs::canonicalize(&item.path).ok().is_some_and(
+                    |applied_canonical| {
+                        input.identity().is_some_and(|identity| {
+                            identity.canonical_path == applied_canonical
+                        })
+                    },
+                )
+        }) {
+            check_applied_input(plan, applied_item, input, &applied_paths)?;
+            continue;
+        }
         let current = recapture(input).map_err(|error| {
             let reason = match error {
                 CaptureError::Unstable(_) => ReasonCode::UnstableRead,
@@ -99,26 +117,6 @@ pub(super) fn preflight(
                 )
             }
         })?;
-        if let Some(applied_item) = applied.iter().find(|item| {
-            item.path == input.path
-                || current.identity().is_some_and(|identity| {
-                    fs::canonicalize(&item.path).ok().as_ref()
-                        == Some(&identity.canonical_path)
-                })
-        }) {
-            if current.bytes() != Some(applied_item.proposed_bytes.as_slice()) {
-                return Err(ApplyError::vault_changed(
-                    plan,
-                    &applied_paths,
-                    None,
-                    format!(
-                        "already-written {} changed after replacement",
-                        applied_item.path.display()
-                    ),
-                ));
-            }
-            continue;
-        }
         if !input.matches(&current) {
             return Err(ApplyError::vault_changed(
                 plan,
@@ -179,25 +177,12 @@ pub(super) fn preflight_for_replacement(
     next: &StagedWrite,
     applied: &[AppliedWrite],
 ) -> Result<(), ApplyError> {
+    let applied_paths = applied
+        .iter()
+        .map(|item| item.path.clone())
+        .collect::<Vec<_>>();
     for item in applied {
-        let current =
-            capture_required(&item.path, InputKind::Note).map_err(|error| {
-                ApplyError::capture(ReasonCode::VaultChanged, error)
-            })?;
-        if current.bytes() != Some(item.proposed_bytes.as_slice()) {
-            return Err(ApplyError::vault_changed(
-                plan,
-                &applied
-                    .iter()
-                    .map(|item| item.path.clone())
-                    .collect::<Vec<_>>(),
-                None,
-                format!(
-                    "already-written {} changed after replacement",
-                    item.path.display()
-                ),
-            ));
-        }
+        check_applied_output(plan, item, &applied_paths)?;
     }
     check_membership(plan, session, applied)?;
     let output = plan
@@ -249,15 +234,92 @@ fn check_membership(
         })
         .map(|item| item.path.clone())
         .collect();
+    let applied_removes: BTreeSet<PathBuf> = applied
+        .iter()
+        .filter(|item| item.is_remove())
+        .map(|item| item.path.clone())
+        .collect();
     let unplanned_addition = current
         .difference(&original)
         .any(|path| !applied_creates.contains(path));
-    if unplanned_addition || !original.is_subset(&current) {
+    let unplanned_removal = original
+        .difference(&current)
+        .any(|path| !applied_removes.contains(path));
+    let reappeared = applied_removes.iter().any(|path| current.contains(path));
+    if unplanned_addition || unplanned_removal || reappeared {
+        let detail = if reappeared {
+            "a removed note reappeared"
+        } else {
+            "the set of scanned notes changed"
+        };
         return Err(ApplyError::vault_changed(
             plan,
             &applied_paths,
             None,
-            "the set of scanned notes changed",
+            detail,
+        ));
+    }
+    Ok(())
+}
+
+fn check_applied_input(
+    plan: &WritePlan,
+    applied_item: &AppliedWrite,
+    input: &InputSnapshot,
+    applied_paths: &[PathBuf],
+) -> Result<(), ApplyError> {
+    check_applied_path(plan, applied_item, &input.path, applied_paths)
+}
+
+fn check_applied_output(
+    plan: &WritePlan,
+    applied_item: &AppliedWrite,
+    applied_paths: &[PathBuf],
+) -> Result<(), ApplyError> {
+    check_applied_path(plan, applied_item, &applied_item.path, applied_paths)
+}
+
+fn check_applied_path(
+    plan: &WritePlan,
+    applied_item: &AppliedWrite,
+    path: &Path,
+    applied_paths: &[PathBuf],
+) -> Result<(), ApplyError> {
+    if applied_item.is_remove() {
+        let current =
+            capture_optional(path, InputKind::Note).map_err(|error| {
+                ApplyError::vault_changed(
+                    plan,
+                    applied_paths,
+                    None,
+                    error.message(),
+                )
+            })?;
+        if !current.is_missing() {
+            return Err(ApplyError::vault_changed(
+                plan,
+                applied_paths,
+                None,
+                format!(
+                    "already-removed {} reappeared",
+                    applied_item.path.display()
+                ),
+            ));
+        }
+        return Ok(());
+    }
+    let current = capture_required(path, InputKind::Note).map_err(|error| {
+        ApplyError::vault_changed(plan, applied_paths, None, error.message())
+    })?;
+    if current.bytes() != applied_item.proposed_bytes.as_deref() {
+        return Err(ApplyError::vault_changed(
+            plan,
+            applied_paths,
+            None,
+            format!(
+                "already-written {} changed after replacement",
+                applied_item.path.display()
+            ),
         ));
     }
     Ok(())
@@ -312,12 +374,16 @@ fn check_unwritten_output(output: &PlannedWrite) -> Result<(), ApplyError> {
         }
     };
     if identity.nlink != 1 {
+        let verb = if output.is_remove() {
+            "remove"
+        } else {
+            "replace"
+        };
         return Err(ApplyError::capture(
             ReasonCode::UnsupportedFile,
             CaptureError::Unsupported {
                 path: output.path.clone(),
-                message: "refusing to replace a multiply linked file"
-                    .to_string(),
+                message: format!("refusing to {verb} a multiply linked file"),
             },
         ));
     }

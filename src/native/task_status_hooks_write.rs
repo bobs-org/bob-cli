@@ -1,8 +1,9 @@
 //! Guarded note writes for `bob task reconcile` and later archive apply.
 //!
 //! Snapshot the planning read-set, stage replacements and creates as uniquely
-//! created temporaries, retain recoverable originals (including original
-//! absence), and refuse to overwrite a vault that changed underfoot.
+//! created temporaries, apply explicit removals as a missing postimage, retain
+//! recoverable originals (including original absence and proposed absence),
+//! and refuse to overwrite a vault that changed underfoot.
 
 #![allow(clippy::result_large_err, clippy::type_complexity)]
 
@@ -23,3 +24,6 @@ pub(crate) use model::{
 pub(crate) use snapshot::{
     capture_optional, capture_required, planned_write, snapshot_for_path,
 };
+// Archive rename-following is the first production caller.
+#[cfg_attr(not(test), allow(unused_imports))]
+pub(crate) use snapshot::planned_remove;

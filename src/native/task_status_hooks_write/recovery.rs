@@ -43,6 +43,10 @@ pub(super) struct RecoveryNote {
     /// Additive: old manifests omit this and deserialize as `false`.
     #[serde(default)]
     pub(super) original_missing: bool,
+    /// Additive: old manifests omit this and deserialize as `false`.
+    /// `true` records a removal whose proposed postimage is absence.
+    #[serde(default)]
+    pub(super) proposed_missing: bool,
 }
 
 pub(super) fn sha256_hex(bytes: &[u8]) -> String {
@@ -111,7 +115,7 @@ pub(super) fn create_recovery(
         .and_then(|_| {
             write_private_file(
                 &recovery_dir.join(&proposed_name),
-                &output.proposed_bytes,
+                output.proposed_bytes_or_empty(),
             )
         })
         .map_err(|error| ApplyError {
@@ -176,11 +180,12 @@ fn recovery_manifest(
                 RecoveryNote {
                     path: output.path.display().to_string(),
                     original_hash: sha256_hex(output.original_bytes()),
-                    proposed_hash: sha256_hex(&output.proposed_bytes),
+                    proposed_hash: sha256_hex(output.proposed_bytes_or_empty()),
                     state: state.to_string(),
                     original_file: format!("{index:04}.original"),
                     proposed_file: format!("{index:04}.proposed"),
                     original_missing: output.is_create(),
+                    proposed_missing: output.is_remove(),
                 }
             })
             .collect(),

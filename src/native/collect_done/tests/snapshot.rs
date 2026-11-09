@@ -19,8 +19,16 @@ fn write_plan_outputs(vault: &Path) {
         if let Some(parent) = output.path.parent() {
             fs::create_dir_all(parent).expect("create output parent");
         }
-        fs::write(&output.path, &output.proposed_bytes)
-            .expect("install output");
+        match &output.proposed_bytes {
+            Some(bytes) => {
+                fs::write(&output.path, bytes).expect("install output");
+            }
+            None => {
+                if output.path.exists() {
+                    fs::remove_file(&output.path).expect("install removal");
+                }
+            }
+        }
     }
 }
 

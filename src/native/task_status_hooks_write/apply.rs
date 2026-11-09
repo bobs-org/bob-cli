@@ -108,11 +108,15 @@ pub(crate) fn apply_plan(
         match install_staged(&next) {
             Ok(InstallResult::Applied { leftover_temp }) => {
                 if leftover_temp {
+                    let temp = next
+                        .temp
+                        .as_ref()
+                        .expect("leftover staging implies a temp path");
                     eprintln!(
                         "bob {}: warning: created {} but failed to remove staging file {}; recovery evidence remains",
                         session.tool,
                         next.dest.display(),
-                        next.temp.display()
+                        temp.display()
                     );
                 }
             }
@@ -151,10 +155,27 @@ pub(crate) fn apply_plan(
                         ),
                     ));
                 }
+                if next.is_remove() && error.kind() == io::ErrorKind::NotFound {
+                    return Err(ApplyError::vault_changed(
+                        plan,
+                        &applied_paths,
+                        Some(recovery_dir),
+                        format!(
+                            "destination {} is already missing",
+                            next.dest.display()
+                        ),
+                    ));
+                }
+                let verb = if next.is_create {
+                    "create"
+                } else if next.is_remove() {
+                    "remove"
+                } else {
+                    "replace"
+                };
                 return Err(ApplyError::io(
                     format!(
-                        "failed to {} {}: {error}",
-                        if next.is_create { "create" } else { "replace" },
+                        "failed to {verb} {}: {error}",
                         next.dest.display()
                     ),
                     applied_paths,
@@ -210,9 +231,19 @@ enum InstallResult {
 }
 
 fn install_staged(next: &StagedWrite) -> io::Result<InstallResult> {
+    if next.is_remove() {
+        fs::remove_file(&next.dest)?;
+        return Ok(InstallResult::Applied {
+            leftover_temp: false,
+        });
+    }
+    let temp = next
+        .temp
+        .as_ref()
+        .expect("create and replace stage a temporary");
     if next.is_create {
-        fs::hard_link(&next.temp, &next.dest)?;
-        match fs::remove_file(&next.temp) {
+        fs::hard_link(temp, &next.dest)?;
+        match fs::remove_file(temp) {
             Ok(()) => Ok(InstallResult::Applied {
                 leftover_temp: false,
             }),
@@ -226,7 +257,7 @@ fn install_staged(next: &StagedWrite) -> io::Result<InstallResult> {
             }),
         }
     } else {
-        fs::rename(&next.temp, &next.dest)?;
+        fs::rename(temp, &next.dest)?;
         Ok(InstallResult::Applied {
             leftover_temp: false,
         })

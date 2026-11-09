@@ -110,6 +110,22 @@ fn plan_for(
     }
 }
 
+fn add_removes(plan: &mut WritePlan, paths: &[&Path]) {
+    for path in paths {
+        let original =
+            capture_required(path, InputKind::Note).unwrap_or_else(|error| {
+                panic!("capture {}: {}", path.display(), error.message())
+            });
+        if !plan.inputs.iter().any(|input| input.path == original.path) {
+            plan.inputs.push(original.clone());
+        }
+        plan.outputs.push(
+            planned_remove(path.to_path_buf(), &original)
+                .expect("planned remove"),
+        );
+    }
+}
+
 fn make_session(
     temp: &TempDir,
     scan_paths: Vec<PathBuf>,
@@ -924,8 +940,10 @@ fn planned_write_accepts_a_missing_snapshot_as_a_create() {
         planned_write(dest.clone(), &original, b"created\n".to_vec(), false)
             .expect("create");
     assert!(planned.is_create());
+    assert!(!planned.is_remove());
     assert!(planned.identity().is_none());
     assert!(planned.original_bytes().is_empty());
+    assert_eq!(planned.proposed_bytes.as_deref(), Some(&b"created\n"[..]));
     let _ = (temp, first, second);
 }
 
@@ -976,7 +994,9 @@ fn create_under_absent_nested_directory_applies() {
     )
     .unwrap();
     assert!(manifest.notes[0].original_missing);
+    assert!(!manifest.notes[0].proposed_missing);
     assert!(!manifest.notes[1].original_missing);
+    assert!(!manifest.notes[1].proposed_missing);
     assert_eq!(
         fs::read(recovery_directory.join("0000.original")).unwrap(),
         b""
@@ -1237,8 +1257,10 @@ fn partial_after_create_preserves_bytes_and_missing_original() {
     .unwrap();
     assert_eq!(manifest.outcome, "partial");
     assert!(manifest.notes[0].original_missing);
+    assert!(!manifest.notes[0].proposed_missing);
     assert_eq!(manifest.notes[0].state, "applied");
     assert!(!manifest.notes[1].original_missing);
+    assert!(!manifest.notes[1].proposed_missing);
     assert_eq!(manifest.notes[1].state, "planned");
     assert_eq!(fs::read(recovery.join("0000.original")).unwrap(), b"");
     assert_eq!(
@@ -1346,4 +1368,443 @@ fn unplanned_note_after_create_still_invalidates_plan() {
     assert_eq!(fs::read_to_string(&dest).unwrap(), "archive-bytes\n");
     assert_eq!(fs::read_to_string(&first).unwrap(), "alpha\n");
     let _ = second;
+}
+
+fn leftover_run_temp(dir: &Path, run_id: &str) -> bool {
+    dir.exists()
+        && fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(&format!(".bob-tsh.{run_id}."))
+            })
+}
+
+#[test]
+fn planned_remove_requires_a_captured_present_file() {
+    let (temp, vault, first, second) = fixture();
+    let missing = vault.join("gone.md");
+    let original = capture_optional(&missing, InputKind::Note).unwrap();
+    assert!(original.is_missing());
+    let error =
+        planned_remove(missing.clone(), &original).expect_err("missing");
+    assert!(matches!(error, CaptureError::NotFound(_)));
+    let present = snapshot(&first, InputKind::Note);
+    let planned = planned_remove(first.clone(), &present).expect("remove");
+    assert!(planned.is_remove());
+    assert!(!planned.is_create());
+    assert_eq!(planned.original_bytes(), b"alpha\n");
+    assert!(planned.proposed_bytes.is_none());
+    let _ = (temp, second);
+}
+
+#[test]
+fn empty_proposed_bytes_write_an_empty_file_not_a_removal() {
+    let (temp, vault, first, second) = fixture();
+    let scan = vec![first.clone(), second.clone()];
+    let plan = plan_for(
+        &vault,
+        vec![(first.as_path(), "", false)],
+        Vec::new(),
+        scan.clone(),
+    );
+    assert!(!plan.outputs[0].is_remove());
+    assert_eq!(plan.outputs[0].proposed_bytes.as_deref(), Some(&b""[..]));
+    let session = make_session(&temp, scan, "empty-write");
+    apply_ok(&plan, &session);
+    assert!(first.exists());
+    assert_eq!(fs::read(&first).unwrap(), b"");
+    let _ = second;
+}
+
+#[test]
+fn create_replace_remove_combination_applies_in_order() {
+    let (temp, vault, first, second) = fixture();
+    let created = vault.join("done/area/note_done.md");
+    let scan = vec![first.clone(), second.clone()];
+    let mut plan = plan_for(
+        &vault,
+        vec![
+            (created.as_path(), "archived\n", false),
+            (first.as_path(), "alpha-new\n", false),
+        ],
+        Vec::new(),
+        scan.clone(),
+    );
+    add_removes(&mut plan, &[second.as_path()]);
+    plan.scan_paths.push(second.clone());
+    let session = recursive_scan_session(&temp, &vault, "combo");
+    let outcome = apply_ok(&plan, &session);
+    let ApplyOutcome::Applied {
+        applied_files,
+        recovery_directory,
+    } = outcome
+    else {
+        panic!("expected applied outcome");
+    };
+    assert_eq!(
+        applied_files,
+        vec![created.clone(), first.clone(), second.clone()]
+    );
+    assert_eq!(fs::read_to_string(&created).unwrap(), "archived\n");
+    assert_eq!(fs::read_to_string(&first).unwrap(), "alpha-new\n");
+    assert!(!second.exists());
+    assert!(!leftover_run_temp(created.parent().unwrap(), "combo"));
+    assert!(!leftover_run_temp(&vault, "combo"));
+    let manifest: RecoveryManifest = serde_json::from_str(
+        &fs::read_to_string(recovery_directory.join("manifest.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(manifest.outcome, "applied");
+    assert!(manifest.notes[0].original_missing);
+    assert!(!manifest.notes[0].proposed_missing);
+    assert!(!manifest.notes[1].original_missing);
+    assert!(!manifest.notes[1].proposed_missing);
+    assert!(!manifest.notes[2].original_missing);
+    assert!(manifest.notes[2].proposed_missing);
+    assert_eq!(
+        fs::read(recovery_directory.join("0002.original")).unwrap(),
+        b"bravo\n"
+    );
+    assert_eq!(
+        fs::read(recovery_directory.join("0002.proposed")).unwrap(),
+        b""
+    );
+    assert_eq!(manifest.notes[2].proposed_hash, sha256_hex(b""));
+}
+
+#[test]
+fn stale_removal_target_is_left_byte_identical() {
+    let (temp, vault, first, second) = fixture();
+    let scan = vec![first.clone(), second.clone()];
+    let mut plan = plan_for(&vault, Vec::new(), Vec::new(), scan.clone());
+    add_removes(&mut plan, &[first.as_path()]);
+    let mut session = make_session(&temp, scan, "stale-remove");
+    session.before_preflight = Some(Box::new({
+        let first = first.clone();
+        move || fs::write(&first, "keep-me\n").unwrap()
+    }));
+    let error = apply_plan(&plan, &session).expect_err("stale");
+    assert_eq!(error.reason, ReasonCode::VaultChanged);
+    assert!(error.applied_files.is_empty());
+    assert_eq!(fs::read_to_string(&first).unwrap(), "keep-me\n");
+    let _ = second;
+}
+
+#[cfg(unix)]
+#[test]
+fn multiply_linked_remove_is_rejected() {
+    let (temp, vault, first, second) = fixture();
+    let linked = vault.join("link.md");
+    fs::hard_link(&first, &linked).unwrap();
+    let original = snapshot(&first, InputKind::Note);
+    let error = planned_remove(first.clone(), &original).expect_err("nlink");
+    assert!(matches!(error, CaptureError::Unsupported { .. }));
+    assert!(error.message().contains("remove"));
+    assert!(first.exists());
+    let _ = (temp, second, linked);
+}
+
+#[cfg(unix)]
+#[test]
+fn symlink_removal_target_is_unsupported() {
+    let (temp, vault, first, second) = fixture();
+    fs::remove_file(&first).unwrap();
+    std::os::unix::fs::symlink(&second, &first).unwrap();
+    let error = capture_required(&first, InputKind::Note).expect_err("symlink");
+    assert!(matches!(error, CaptureError::Unsupported { .. }));
+    let original = snapshot(&second, InputKind::Note);
+    let mut planned =
+        planned_remove(second.clone(), &original).expect("remove");
+    planned.path = first.clone();
+    let scan = vec![second.clone()];
+    let plan = WritePlan {
+        vault_path: vault.clone(),
+        vault_canonical: vault.canonicalize().unwrap(),
+        inputs: vec![original],
+        scan_paths: scan.clone(),
+        outputs: vec![planned],
+    };
+    let session = make_session(&temp, scan, "symlink-remove");
+    let error = apply_plan(&plan, &session).expect_err("unsupported");
+    assert_eq!(error.reason, ReasonCode::UnsupportedFile);
+    assert!(error.applied_files.is_empty());
+    assert_eq!(fs::read_to_string(&second).unwrap(), "bravo\n");
+}
+
+#[test]
+fn unplanned_note_after_capture_invalidates_a_removal() {
+    let (temp, vault, first, second) = fixture();
+    let scan = list_markdown_recursive(&vault).unwrap();
+    let mut plan = plan_for(&vault, Vec::new(), Vec::new(), scan);
+    add_removes(&mut plan, &[first.as_path()]);
+    let mut session = recursive_scan_session(&temp, &vault, "remove-unplanned");
+    session.before_preflight = Some(Box::new({
+        let extra = vault.join("extra.md");
+        move || fs::write(&extra, "new\n").unwrap()
+    }));
+    let error = apply_plan(&plan, &session).expect_err("unplanned");
+    assert_eq!(error.reason, ReasonCode::VaultChanged);
+    assert!(error.applied_files.is_empty());
+    assert_eq!(fs::read_to_string(&first).unwrap(), "alpha\n");
+    let _ = second;
+}
+
+#[test]
+fn applied_remove_is_not_a_membership_change() {
+    let (temp, vault, first, second) = fixture();
+    let created = vault.join("done/area/archive.md");
+    let scan = list_markdown_recursive(&vault).unwrap();
+    let mut plan = plan_for(
+        &vault,
+        vec![
+            (created.as_path(), "archive-bytes\n", false),
+            (first.as_path(), "alpha-new\n", false),
+        ],
+        Vec::new(),
+        scan,
+    );
+    add_removes(&mut plan, &[second.as_path()]);
+    let session = recursive_scan_session(&temp, &vault, "remove-membership");
+    let outcome = apply_ok(&plan, &session);
+    assert!(matches!(outcome, ApplyOutcome::Applied { .. }));
+    assert_eq!(fs::read_to_string(&created).unwrap(), "archive-bytes\n");
+    assert_eq!(fs::read_to_string(&first).unwrap(), "alpha-new\n");
+    assert!(!second.exists());
+}
+
+#[test]
+fn removed_file_reappearance_is_a_vault_change() {
+    let (temp, vault, first, second) = fixture();
+    let scan = list_markdown_recursive(&vault).unwrap();
+    let mut plan = plan_for(
+        &vault,
+        vec![(first.as_path(), "alpha-new\n", false)],
+        Vec::new(),
+        scan,
+    );
+    add_removes(&mut plan, &[second.as_path()]);
+    plan.outputs.swap(0, 1);
+    let mut session = recursive_scan_session(&temp, &vault, "remove-reappear");
+    session.before_replace = Some(Box::new({
+        let first = first.clone();
+        let second = second.clone();
+        move |path| {
+            if path == first {
+                fs::write(&second, "back\n").unwrap();
+            }
+        }
+    }));
+    let error = apply_plan(&plan, &session).expect_err("reappear");
+    assert_eq!(error.reason, ReasonCode::PartialApply);
+    assert_eq!(error.applied_files, vec![second.clone()]);
+    assert_eq!(error.deferred_files, vec![first.clone()]);
+    assert_eq!(fs::read_to_string(&second).unwrap(), "back\n");
+    assert_eq!(fs::read_to_string(&first).unwrap(), "alpha\n");
+    assert!(error.recovery_directory.is_some());
+}
+
+#[test]
+fn failure_before_removal_changes_nothing() {
+    let (temp, vault, first, second) = fixture();
+    let scan = vec![first.clone(), second.clone()];
+    let mut plan = plan_for(&vault, Vec::new(), Vec::new(), scan.clone());
+    add_removes(&mut plan, &[first.as_path()]);
+    let mut session = make_session(&temp, scan, "remove-stage-fail");
+    session.fail_staging = Some(Box::new({
+        let first = first.clone();
+        move |path| {
+            if path == first {
+                Err(io::Error::other("injected staging failure"))
+            } else {
+                Ok(())
+            }
+        }
+    }));
+    let error = apply_plan(&plan, &session).expect_err("stage fail");
+    assert_eq!(error.reason, ReasonCode::Io);
+    assert!(error.applied_files.is_empty());
+    assert_eq!(fs::read_to_string(&first).unwrap(), "alpha\n");
+    assert!(!leftover_run_temp(&vault, "remove-stage-fail"));
+    let _ = second;
+}
+
+#[test]
+fn failure_after_removal_reports_partial_and_keeps_originals() {
+    let (temp, vault, first, second) = fixture();
+    let created = vault.join("done/area/archive.md");
+    let scan = vec![first.clone(), second.clone()];
+    let mut plan = plan_for(
+        &vault,
+        vec![
+            (created.as_path(), "archive-bytes\n", false),
+            (first.as_path(), "alpha-new\n", false),
+        ],
+        Vec::new(),
+        scan.clone(),
+    );
+    add_removes(&mut plan, &[second.as_path()]);
+    // Install create, then remove, then fail the remaining replace.
+    plan.outputs.swap(1, 2);
+    let mut session = make_session(&temp, scan, "partial-remove");
+    session.before_replace = Some(Box::new({
+        let first = first.clone();
+        move |path| {
+            if path == first {
+                fs::write(&first, "keep-source\n").unwrap();
+            }
+        }
+    }));
+    let error = apply_plan(&plan, &session).expect_err("partial");
+    assert_eq!(error.reason, ReasonCode::PartialApply);
+    assert_eq!(error.applied_files, vec![created.clone(), second.clone()]);
+    assert_eq!(error.deferred_files, vec![first.clone()]);
+    assert_eq!(fs::read_to_string(&created).unwrap(), "archive-bytes\n");
+    assert!(!second.exists());
+    assert_eq!(fs::read_to_string(&first).unwrap(), "keep-source\n");
+    let recovery = error.recovery_directory.expect("recovery");
+    let manifest: RecoveryManifest = serde_json::from_str(
+        &fs::read_to_string(recovery.join("manifest.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(manifest.outcome, "partial");
+    assert!(manifest.notes[0].original_missing);
+    assert!(!manifest.notes[0].proposed_missing);
+    assert_eq!(manifest.notes[0].state, "applied");
+    assert!(manifest.notes[1].proposed_missing);
+    assert_eq!(manifest.notes[1].state, "applied");
+    assert!(!manifest.notes[2].proposed_missing);
+    assert_eq!(manifest.notes[2].state, "planned");
+    assert_eq!(
+        fs::read(recovery.join("0001.original")).unwrap(),
+        b"bravo\n"
+    );
+    assert_eq!(fs::read(recovery.join("0001.proposed")).unwrap(), b"");
+    assert_eq!(
+        fs::read(recovery.join("0002.original")).unwrap(),
+        b"alpha\n"
+    );
+    assert!(!leftover_run_temp(
+        created.parent().unwrap(),
+        "partial-remove"
+    ));
+}
+
+#[test]
+fn removal_records_original_bytes_and_proposed_absence() {
+    let (temp, vault, first, second) = fixture();
+    let scan = vec![first.clone(), second.clone()];
+    let mut plan = plan_for(&vault, Vec::new(), Vec::new(), scan.clone());
+    add_removes(&mut plan, &[first.as_path()]);
+    let session = make_session(&temp, scan, "remove-recovery");
+    let outcome = apply_ok(&plan, &session);
+    let ApplyOutcome::Applied {
+        applied_files,
+        recovery_directory,
+    } = outcome
+    else {
+        panic!("expected applied outcome");
+    };
+    assert_eq!(applied_files, vec![first.clone()]);
+    assert!(!first.exists());
+    let manifest: RecoveryManifest = serde_json::from_str(
+        &fs::read_to_string(recovery_directory.join("manifest.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(manifest.notes[0].proposed_missing);
+    assert!(!manifest.notes[0].original_missing);
+    assert_eq!(manifest.notes[0].original_hash, sha256_hex(b"alpha\n"));
+    assert_eq!(manifest.notes[0].proposed_hash, sha256_hex(b""));
+    assert_eq!(
+        fs::read(recovery_directory.join("0000.original")).unwrap(),
+        b"alpha\n"
+    );
+    assert_eq!(
+        fs::read(recovery_directory.join("0000.proposed")).unwrap(),
+        b""
+    );
+    let _ = second;
+}
+
+#[test]
+fn legacy_create_replace_manifest_deserializes_and_still_prunes() {
+    let json = r#"{
+        "tool":"task-status-hooks",
+        "schema_version":1,
+        "vault":"x",
+        "vault_hash":"h",
+        "run_id":"legacy",
+        "started_at":"1",
+        "started_at_unix":1,
+        "completed_at":"1",
+        "completed_at_unix":1,
+        "outcome":"applied",
+        "notes":[{
+            "path":"one.md",
+            "original_hash":"aa",
+            "proposed_hash":"bb",
+            "state":"applied",
+            "original_file":"0000.original",
+            "proposed_file":"0000.proposed"
+        }]
+    }"#;
+    let manifest: RecoveryManifest = serde_json::from_str(json).unwrap();
+    assert!(!manifest.notes[0].original_missing);
+    assert!(!manifest.notes[0].proposed_missing);
+
+    let (temp, vault, first, second) = fixture();
+    let scan = vec![first.clone(), second.clone()];
+    let plan = plan_for(
+        &vault,
+        vec![(first.as_path(), "alpha-new\n", false)],
+        Vec::new(),
+        scan.clone(),
+    );
+    let hash = vault_hash(&vault.canonicalize().unwrap());
+    let root = temp
+        .path()
+        .join("state/bob-cli/task-status-hooks")
+        .join(&hash);
+    let legacy = root.join("legacy-complete");
+    fs::create_dir_all(&legacy).unwrap();
+    let now = SystemTime::now();
+    let old = unix_secs(now).saturating_sub(31 * 24 * 60 * 60);
+    write_file(
+        &legacy.join("manifest.json"),
+        &format!(
+            r#"{{"tool":"{TOOL}","schema_version":1,"vault":"x","vault_hash":"{hash}","run_id":"legacy-complete","started_at":"{old}","started_at_unix":{old},"completed_at":"{old}","completed_at_unix":{old},"outcome":"applied","notes":[{{"path":"one.md","original_hash":"aa","proposed_hash":"bb","state":"applied","original_file":"0000.original","proposed_file":"0000.proposed"}}]}}"#
+        ),
+    );
+    let session = make_session(&temp, scan, "legacy-prune");
+    apply_ok(&plan, &session);
+    assert!(
+        !legacy.exists(),
+        "expired legacy create/replace manifests must still prune"
+    );
+}
+
+#[test]
+fn removal_outside_vault_is_unsupported() {
+    let (temp, vault, first, second) = fixture();
+    let dest = temp.path().join("outside.md");
+    write_file(&dest, "secret\n");
+    let original = snapshot(&dest, InputKind::Note);
+    let scan = vec![first.clone(), second.clone()];
+    let plan = WritePlan {
+        vault_path: vault.clone(),
+        vault_canonical: vault.canonicalize().unwrap(),
+        inputs: vec![original.clone()],
+        scan_paths: scan.clone(),
+        outputs: vec![
+            planned_remove(dest.clone(), &original).expect("planned remove")
+        ],
+    };
+    let session = make_session(&temp, scan, "outside-remove");
+    let error = apply_plan(&plan, &session).expect_err("outside vault");
+    assert_eq!(error.reason, ReasonCode::UnsupportedFile);
+    assert_eq!(fs::read_to_string(&dest).unwrap(), "secret\n");
+    let _ = (first, second);
 }
