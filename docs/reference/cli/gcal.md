@@ -56,6 +56,7 @@ Examples:
   bob gcal calendars          List calendars with ids for config
   bob gcal doctor             Diagnose gog, the client, and the vault
   bob gcal sync               Write today's Events and MEET links
+  bob gcal sync -F            Rewrite today's Events from Google as on a first sync
   bob gcal sync -d            Preview the exact Markdown a sync writes
   bob gcal logout -y          Remove Bob's Calendar grant only
 

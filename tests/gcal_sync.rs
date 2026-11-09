@@ -310,6 +310,214 @@ fn deleted_row_and_removed_link_are_never_readded() {
 }
 
 #[test]
+fn force_reset_restores_clobbered_rows_with_old_ids_and_then_noops() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-force-restore");
+    prepare(&env);
+    let template = today_note(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+
+    let first = sync_output(&env, &fake, &[]);
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    let original_id = journal_lines(&env)
+        .iter()
+        .find(|row| {
+            row["kind"] == "gcal.row" && row["key"]["event_id"] == "interview"
+        })
+        .expect("interview row record")["block_id"]
+        .as_str()
+        .expect("block id")
+        .to_string();
+
+    fs::write(env.vault().join("2026/20261030.md"), template)
+        .expect("clobber today's Events section");
+    let removed = sync_output(&env, &fake, &[]);
+    assert_eq!(removed.status.code(), Some(0), "{}", stderr(&removed));
+    assert!(
+        journal_lines(&env).iter().any(|row| {
+            row["kind"] == "gcal.gone" && row["key"]["event_id"] == "interview"
+        }),
+        "normal sync records the deletion"
+    );
+
+    let reset = sync_output(&env, &fake, &["-F", "-f", "json"]);
+    assert_eq!(reset.status.code(), Some(0), "{}", stderr(&reset));
+    let report: Value = serde_json::from_slice(&reset.stdout).expect("JSON");
+    assert_eq!(report["force"], true);
+    assert_eq!(report["status"], "written");
+    assert!(
+        report["rows"].as_array().is_some_and(|rows| {
+            rows.iter().any(|row| {
+                row["action"] == "restored"
+                    && row["title"] == "Product interview"
+            })
+        }),
+        "{report}"
+    );
+    let note = today_note(&env);
+    assert!(
+        note.lines().any(|line| {
+            line.starts_with("- [x] #task")
+                && line.contains("Product interview")
+                && line.ends_with(&format!("^{original_id}"))
+        }),
+        "the past row is born done under its old ID:\n{note}"
+    );
+    let journal = journal_lines(&env);
+    let reset_at = journal
+        .iter()
+        .position(|row| row["kind"] == "gcal.reset")
+        .expect("reset record");
+    assert_eq!(journal[reset_at]["reason"], "force");
+    assert!(journal.iter().skip(reset_at + 1).any(|row| {
+        row["kind"] == "gcal.row"
+            && row["key"]["event_id"] == "interview"
+            && row["block_id"] == original_id
+    }));
+    assert_eq!(status(&env)["forced"], true);
+
+    let count_after_reset = journal.len();
+    let rerun = sync_output(&env, &fake, &[]);
+    assert_eq!(rerun.status.code(), Some(0), "{}", stderr(&rerun));
+    assert!(
+        stdout(&rerun).contains("✓ Events unchanged"),
+        "{}",
+        stdout(&rerun)
+    );
+    assert_eq!(journal_lines(&env).len(), count_after_reset);
+}
+
+#[test]
+fn force_reset_reapplies_span_edits_and_refiles_a_removed_link() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-force-edits");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+    let first = sync_output(&env, &fake, &[]);
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+
+    let mut lines: Vec<String> =
+        today_note(&env).lines().map(str::to_string).collect();
+    let index = lines
+        .iter()
+        .position(|line| line.contains("^dentist"))
+        .expect("dentist row");
+    let row = lines[index]
+        .replace("- [ ]", "- [x]")
+        .replace("- [*]", "- [x]")
+        .replace("Dentist", "My dentist")
+        .replace("[root:: body]", "[root:: health]");
+    lines[index] = row;
+    lines.insert(index + 1, "\t- Keep this note".to_string());
+    let edited = lines.join("\n").trim_end_matches('\n').to_string() + "\n";
+    let edited = edited.replace("[[#^dentist]]", "");
+    fs::write(env.vault().join("2026/20261030.md"), &edited)
+        .expect("edit the event and remove its link");
+
+    let reset = sync_output(&env, &fake, &["-F", "-f", "json"]);
+    assert_eq!(reset.status.code(), Some(0), "{}", stderr(&reset));
+    let report: Value = serde_json::from_slice(&reset.stdout).expect("JSON");
+    let dentist = report["rows"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .find(|row| row["title"] == "Dentist")
+        .expect("updated dentist");
+    assert_eq!(dentist["action"], "updated");
+    assert!(
+        dentist["detail"].as_str().is_some_and(|detail| {
+            detail.contains("title") && detail.contains("root")
+        }),
+        "{dentist}"
+    );
+    assert_eq!(report["pomodoro"]["links_added"], 1);
+    let note = today_note(&env);
+    let dentist_line = note
+        .lines()
+        .find(|line| line.contains("^dentist"))
+        .expect("dentist row after reset");
+    assert!(dentist_line.starts_with("- [x] #task"), "{dentist_line}");
+    assert!(
+        dentist_line.contains("**1830-1900** Dentist"),
+        "{dentist_line}"
+    );
+    assert!(dentist_line.contains("[root:: body]"), "{dentist_line}");
+    assert!(note.contains("\t- Keep this note\n"), "{note}");
+    assert_eq!(note.matches("[[#^dentist]]").count(), 1, "{note}");
+}
+
+#[test]
+fn force_reset_reuses_a_dangling_link_without_duplicate_filing() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-force-dangling-link");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+    let first = sync_output(&env, &fake, &[]);
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+
+    let mut lines: Vec<String> =
+        today_note(&env).lines().map(str::to_string).collect();
+    let index = lines
+        .iter()
+        .position(|line| line.contains("^dentist"))
+        .expect("dentist row");
+    lines.remove(index);
+    let without_row = lines.join("\n") + "\n";
+    assert_eq!(without_row.matches("[[#^dentist]]").count(), 1);
+    fs::write(env.vault().join("2026/20261030.md"), without_row)
+        .expect("leave the link dangling");
+
+    let reset = sync_output(&env, &fake, &["-F"]);
+    assert_eq!(reset.status.code(), Some(0), "{}", stderr(&reset));
+    assert!(today_note(&env).contains("Dentist"));
+    assert_eq!(today_note(&env).matches("[[#^dentist]]").count(), 1);
+    assert!(stdout(&reset).contains("↺"), "{}", stdout(&reset));
+}
+
+#[test]
+fn force_dry_run_and_waiting_do_not_write() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-force-dry-waiting");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let note_before = today_note(&env);
+    let journal_before = journal_lines(&env);
+    let dry = sync_output(&env, &fake, &["-F", "-d"]);
+    assert_eq!(dry.status.code(), Some(0), "{}", stderr(&dry));
+    assert_eq!(today_note(&env), note_before);
+    assert_eq!(journal_lines(&env), journal_before);
+
+    let raw = write_raw_template_note(&env);
+    let waiting = sync_output(&env, &fake, &["-F", "-f", "json"]);
+    assert_eq!(waiting.status.code(), Some(0), "{}", stderr(&waiting));
+    let report: Value = serde_json::from_slice(&waiting.stdout).expect("JSON");
+    assert_eq!(report["force"], true);
+    assert_eq!(report["status"], "waiting");
+    assert_eq!(today_note(&env), raw);
+    assert_eq!(journal_lines(&env), journal_before);
+}
+
+#[test]
+fn force_reset_respects_the_configured_writer() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-force-writer");
+    prepare(&env);
+    let config = fs::read_to_string(env.config()).expect("config");
+    fs::write(
+        env.config(),
+        config.replace("writer: test-host", "writer: other-host"),
+    )
+    .expect("move writer host");
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+
+    let output = sync_output(&env, &fake, &["-F"]);
+    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
+    assert!(stderr(&output).contains("gcal.writer is other-host"));
+    assert!(!env.vault().join(".bob/gcal/test-host.jsonl").exists());
+}
+
+#[test]
 fn crash_recovery_adopts_unjournaled_rows() {
     let env = GcalEnv::new("bob-cli-gcal-sync-adopt");
     prepare(&env);

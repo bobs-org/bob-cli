@@ -154,10 +154,24 @@ pub(crate) fn load_state(
     let mut newest: Option<(DateTime<FixedOffset>, String)> = None;
     for event in ordered {
         let is_gcal = event.kind.starts_with("gcal.");
-        if !is_gcal {
+        if !is_gcal || event.kind == "gcal.series_root" {
             continue;
         }
         newest = Some((event.ts, event.host.clone()));
+        if event.kind == "gcal.reset" {
+            if let Some(day) = parse_reset(event) {
+                state.retain(|(_, state_day), _| state_day != day);
+            } else {
+                malformed += 1;
+                if malformed <= pref_journal::MAX_MALFORMED_WARNINGS {
+                    warnings.push(format!(
+                        "skipping malformed gcal journal line {}:{}",
+                        event.path, event.line
+                    ));
+                }
+            }
+            continue;
+        }
         match parse_record(event) {
             Some((key, day, update)) => {
                 let entry = state.entry((key, day)).or_default();
@@ -287,6 +301,17 @@ fn parse_record(event: &StoredEvent) -> Option<(String, String, Update)> {
         _ => return None,
     };
     Some((key, day, update))
+}
+
+fn parse_reset(event: &StoredEvent) -> Option<&str> {
+    if event.kind != "gcal.reset" {
+        return None;
+    }
+    let object = event.value.as_object()?;
+    if object.get("reason").and_then(Value::as_str) != Some("force") {
+        return None;
+    }
+    object.get("day")?.as_str()
 }
 
 /// Fold every `gcal.series_root` record into a series-keyed map of
@@ -448,6 +473,7 @@ pub(crate) fn malformed_count(vault: &Path) -> usize {
             };
             if parse_record(&event).is_none()
                 && parse_series_root(&event).is_none()
+                && parse_reset(&event).is_none()
             {
                 count += 1;
             }
@@ -573,6 +599,28 @@ pub(crate) fn append_mark(
     Ok(line)
 }
 
+/// Append a key-less reset marker that clears one day's folded sync state.
+pub(crate) fn append_reset(
+    vault: &Path,
+    host: &str,
+    day: &str,
+) -> std::io::Result<String> {
+    let value = json!({
+        "v": 1,
+        "ts": pref_journal::event_timestamp()
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
+        "host": host,
+        "kind": "gcal.reset",
+        "day": day,
+        "reason": "force",
+    });
+    let line = serde_json::to_string(&value)
+        .unwrap_or_else(|_| "{}".to_string())
+        + "\n";
+    pref_journal::append_line(vault, NAMESPACE, host, &line)?;
+    Ok(line)
+}
+
 /// Host-local sync status, read by `list` and `doctor`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SyncStatus {
@@ -587,6 +635,8 @@ pub(crate) struct SyncStatus {
     pub error: Option<String>,
     /// Waiting reason code for a `waiting` outcome (additive).
     pub reason: Option<String>,
+    /// Whether the last sync explicitly reset the day.
+    pub forced: bool,
 }
 
 fn status_path() -> PathBuf {
@@ -613,6 +663,7 @@ pub(crate) fn write_status(status: &SyncStatus) -> std::io::Result<()> {
         "links_refiled": status.links_refiled,
         "error": status.error,
         "reason": status.reason,
+        "forced": status.forced,
     });
     fs::write(path, serde_json::to_string(&value).unwrap_or_default())
 }
@@ -666,6 +717,10 @@ pub(crate) fn read_status() -> Option<SyncStatus> {
             .get("reason")
             .and_then(Value::as_str)
             .map(str::to_string),
+        forced: object
+            .get("forced")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     })
 }
 
@@ -766,6 +821,103 @@ mod tests {
         assert!(gone.gone);
         assert!(gone.row.is_none());
         assert_eq!(newest.expect("newest").1, host);
+    }
+
+    #[test]
+    fn reset_clears_only_its_day_and_later_records_survive() {
+        let dir = tempfile::tempdir().expect("vault");
+        let host = "mac";
+        let append_row_for = |day: &str, block_id: &str| {
+            append_row(
+                dir.path(),
+                host,
+                &NewRow {
+                    calendar_id: "primary".to_string(),
+                    event_id: "e1".to_string(),
+                    ical_uid: None,
+                    series_id: None,
+                    day: day.to_string(),
+                    path: "2026/20261030.md".to_string(),
+                    block_id: block_id.to_string(),
+                    url: None,
+                    row_kind: "task".to_string(),
+                    spans: BTreeMap::new(),
+                    root: None,
+                    source: None,
+                    description: DescriptionState::Absent,
+                },
+            )
+            .expect("row")
+        };
+        append_row_for("2026-10-30", "old");
+        append_mark(
+            dir.path(),
+            host,
+            "gcal.link",
+            &NewMark {
+                calendar_id: "primary".to_string(),
+                event_id: "e1".to_string(),
+                day: "2026-10-30".to_string(),
+                block_id: Some("old".to_string()),
+                reason: None,
+            },
+        )
+        .expect("link before reset");
+        append_mark(
+            dir.path(),
+            host,
+            "gcal.flag",
+            &NewMark {
+                calendar_id: "primary".to_string(),
+                event_id: "e1".to_string(),
+                day: "2026-10-30".to_string(),
+                block_id: None,
+                reason: Some("kept_edit".to_string()),
+            },
+        )
+        .expect("flag before reset");
+        append_row_for("2026-10-31", "next-day");
+        append_series_root(
+            dir.path(),
+            host,
+            "primary",
+            "series",
+            "body",
+            "2026-10-30",
+            "old",
+        )
+        .expect("series root");
+
+        append_reset(dir.path(), host, "2026-10-30").expect("reset");
+        append_row_for("2026-10-30", "restored");
+        append_mark(
+            dir.path(),
+            host,
+            "gcal.link",
+            &NewMark {
+                calendar_id: "primary".to_string(),
+                event_id: "e1".to_string(),
+                day: "2026-10-30".to_string(),
+                block_id: Some("restored".to_string()),
+                reason: None,
+            },
+        )
+        .expect("link after reset");
+
+        let (state, warnings, _) = load_state(dir.path()).expect("fold");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let day = state
+            .get(&(occurrence_key("primary", "e1"), "2026-10-30".to_string()))
+            .expect("day state after reset");
+        assert_eq!(day.row.as_ref().expect("row").block_id, "restored");
+        assert!(day.link);
+        assert!(day.flags.is_empty());
+        let next_day = state
+            .get(&(occurrence_key("primary", "e1"), "2026-10-31".to_string()))
+            .expect("other day remains");
+        assert_eq!(next_day.row.as_ref().expect("row").block_id, "next-day");
+        assert_eq!(load_series_roots(dir.path()).expect("series").len(), 1);
+        assert_eq!(malformed_count(dir.path()), 0);
     }
 
     fn raw_record(dir: &Path, ts: &str, kind: &str, extra: serde_json::Value) {

@@ -408,6 +408,8 @@ template already has a Pomodoros section.
 bob gcal sync
 bob gcal sync -D tomorrow
 bob gcal sync -d
+bob gcal sync -F
+bob gcal sync -F -d
 bob gcal sync -q
 ```
 
@@ -419,10 +421,11 @@ tombstones journaled rows whose line is gone, and files
 each created Event Task under a past, running, or planned MEET Pomodoro in
 the same write. A tombstone is written once: a rerun while the line is still
 missing is unchanged and appends nothing. A tombstoned row is never
-re-created, but if you paste its line back (matched by block ID, then `📅`
-URL or text) the next sync adopts it again and journals a fresh `gcal.row`,
-so Google updates apply and `list` shows `task` once more. A removed link is
-never re-added. A moved event can re-file
+re-created by an ordinary sync, but if you paste its line back (matched by
+block ID, then `📅` URL or text) the next sync adopts it again and journals a
+fresh `gcal.row`. `-F` also restores missing rows from Google, reusing their
+old block IDs when available. A removed link is never re-added by an ordinary
+sync. A moved event can re-file
 its existing link when Google changes its occupied span and the filing is
 still Bob-owned. An unchanged
 calendar can still write the Events stamp when the stamp is due (missing,
@@ -433,6 +436,29 @@ same-minute rerun writes nothing. A plan that is byte-identical after
 that step writes nothing and appends nothing. Sync keeps a
 blank line between the `## Events` heading and its first line, and adds the gap
 to an existing section that lacks it, even when there are no calendar changes.
+
+### Reset a day (`-F`)
+
+`bob gcal sync -F` forgets the day's prior sync decisions and applies the
+current Google snapshot again. It keeps the note's task state, notes, and
+Pomodoro history while restoring removed rows and links. The reset still
+requires the configured writer host, a rendered daily note, and the matching
+Google account. `-D` selects another existing daily note; `-d` previews the
+same reset without changing the note or journal.
+
+| Reset forgets | Reset keeps |
+| --- | --- |
+| Tombstones, removed MEET links, and once-only notices for that day | Checkboxes, existing block IDs, child notes, `[type::]`, and Pomodoro sessions |
+| Your edits to the time, title, badges, and `[root::]` on present rows; Google values are applied again | The day note and its other content, including the task drawer and completion history |
+| Missing rows are restored from Google, with their old block IDs when those IDs are unused | Learned series roots and journal state for every other day |
+
+Description bullets continue through their usual ownership rule: untouched
+bullets follow Google, while edited bullets and nested notes stay yours. A
+restored past event is born done for the note's date. Existing Pomodoro links
+to a restored block ID are reused instead of duplicated. The journal records
+`gcal.reset` before the new row and link records, so the next ordinary sync is
+idempotent. Older bob versions ignore the keyless `gcal.reset` journal line
+and may count it as one unknown malformed entry until an updated bob runs.
 
 Every Event Task row this run creates (a new row, or a Maybe context row
 upgraded in place) is linked by phase, on any day:
@@ -625,7 +651,7 @@ account, or set `gcal.account` to the stamp's account.
 | Other child bullets (your notes) | You | Never touched |
 | MEET Task Link | Google until you edit it | A Google time or buffer change re-files Bob's untouched placeholder or Bob-shaped closed filing; a hand-edited filing is kept and reported once |
 | MEET Pomodoro entries | Google until you edit them | Created with their first link; only Bob-shaped closed entries are retimed or regrouped after a Google time or buffer change |
-| The whole row | You | Deleted or moved away: tombstoned once and skipped on every later run. Paste the line back and sync adopts it again |
+| The whole row | You | Deleted or moved away: tombstoned once and skipped on ordinary runs. Paste the line back to adopt it, or run `bob gcal sync -F` to restore it from Google |
 | Events stamp | Bob | Re-rendered when the note is written or the stamp is due; a deleted or edited line is restored |
 
 In Obsidian, each MEET Task Link to an Event Task wears that event's time pill
@@ -889,6 +915,12 @@ render of its event:
   gains `[type:: MEET]` when the line has none; an existing `[type::]`
   stays. A `[root::]` you edited is kept and reported once as a
   `kept_root` warning when Google later routes elsewhere.
+- `bob gcal sync -F` resets the span and root baselines to the current note,
+  then reapplies Google's time, title, badges, and chosen root. A reset span
+  appears as `reset your title edit` (and likewise for time, badges, or root).
+  Checkboxes, block IDs, child notes, `[type::]`, and Pomodoro history stay in
+  place. A worked row's clock flip remains protected by the ordinary
+  worked-row rule.
 - Description bullets follow Google until you edit them. A block that
   still matches what Bob last wrote is rewritten in place (or removed
   when Google clears the description). Your edit, a nested note, or a
@@ -1037,11 +1069,13 @@ attendee list, and carries `clock`, `clock_source`, `clock_note`,
 (`{reason, detail, hint}` or `null`; see [Skipped events](#skipped-events)).
 The raw `reason` values and existing `vault` strings are unchanged.
 
-`sync -f json`: `ok`, `day`, `path`, `status`, `rows`, `in_sync`, `skipped`,
+`sync -f json`: `ok`, `day`, `path`, `status`, `force`, `rows`, `in_sync`, `skipped`,
 `pomodoro`, `waiting`, `warnings`, `deprecations`, and `stamp`. `skipped`
 lists `{time, title, calendar_id, event_id, reason, detail, hint}` for every
-event the run leaves out; `rows` entries gain `detail`. `waiting` is `null`
-unless `status` is `waiting`, then `{reason, detail, hint, line}` with
+event the run leaves out; `rows` entries gain `detail`. A forced run sets
+`force: true`; restored rows use action `restored`, and forced span updates
+include their reset detail. `waiting` is `null` unless `status` is `waiting`,
+then `{reason, detail, hint, line}` with
 `reason` one of `note_missing`, `note_unrendered`, or `pomodoros_missing`
 and `line` the 1-based line of the pending Templater tag (else `null`).
 `stamp` is `{account, synced_at, refreshed}` or `null`. `pomodoro` carries
@@ -1077,6 +1111,9 @@ immediately. The `bob-gcal` client is a separate bucket from Gmail. Tests use
 ## Known limits
 
 - One writer: `gcal.writer` pins the single host allowed to sync.
+- An older bob binary ignores the keyless `gcal.reset` journal record and may
+  report it as one unknown malformed entry. Run an updated bob to fold the
+  reset and its following row records correctly.
 - Description bullets are a flat first-child block. A nested note under a
   Google bullet, or deleting the block, makes them yours; Bob never
   re-adds them. Sibling notes and managed lines above or below do not.

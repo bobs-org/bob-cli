@@ -47,6 +47,7 @@ use super::{
         AbsentVerdict, KeptNotice, LearnedSeries, LifecycleItem,
     },
     render::{render_context_row, render_task_row, ContextRowInput},
+    reset::DayReset,
     root::RootSourceKind,
     stamp::{self, Stamp},
 };
@@ -157,6 +158,8 @@ pub(crate) struct SyncPlanInput<'a> {
     /// Journaled occurrences with no included snapshot row, each already
     /// resolved to a verdict (declined, deleted, moved, left alone).
     pub lifecycle: Vec<LifecycleItem>,
+    /// Pre-reset and synthesized state for `bob gcal sync -F`.
+    pub reset: Option<&'a DayReset>,
     /// Vault-learned series roots: the planner learns only what the
     /// journal does not already teach.
     pub series_roots:
@@ -191,6 +194,8 @@ pub(crate) struct PlannedRow {
     /// Bullet lines this run wrote for the row, 0 when the block was
     /// left alone or adopted without writing.
     pub wrote_description_lines: usize,
+    /// Explanation for a force reset of a Google-owned span.
+    pub detail: Option<String>,
 }
 
 /// One adopted crash-recovery row, for the journal and the report.
@@ -267,6 +272,8 @@ pub(crate) struct SyncPlan {
     pub contents: String,
     pub changed: bool,
     pub rows_added: Vec<PlannedRow>,
+    /// Rows restored from a prior day's journal by a forced reset.
+    pub rows_restored: Vec<PlannedRow>,
     pub rows_adopted: Vec<AdoptedRow>,
     pub rows_gone: Vec<GoneRow>,
     pub links_added: Vec<PlannedLink>,
@@ -284,6 +291,9 @@ pub(crate) struct SyncPlan {
     pub rows_removed: Vec<GoneRow>,
     /// Context rows upgraded in place to Event Tasks (Maybe went Yes).
     pub rows_upgraded: Vec<PlannedRow>,
+    /// Unchanged rows that need a current `gcal.row` after reset clears
+    /// their previous journal records.
+    pub journal_refreshes: Vec<PlannedRow>,
     /// Lifecycle notices reported once (kept edits, worked tasks, …).
     pub kept: Vec<KeptNotice>,
     /// Vault edits that teach a recurring series its root.
@@ -358,7 +368,7 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
 
     for occurrence in &input.occurrences {
         let key = occurrence_key(&occurrence.calendar_id, &occurrence.event_id);
-        let state = input.journal.get(&(key, input.day_string.clone()));
+        let state = input.journal.get(&(key.clone(), input.day_string.clone()));
         let journaled = state.and_then(|state| state.row.as_ref());
         let gone = state.is_some_and(|state| state.gone);
         // Context rows without a 📅 URL match by their full rendered
@@ -480,14 +490,30 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
                     );
                     continue;
                 }
+                let prior_row = input
+                    .reset
+                    .and_then(|reset| {
+                        reset
+                            .previous
+                            .get(&(key.clone(), input.day_string.clone()))
+                    })
+                    .and_then(|state| state.row.as_ref());
+                let restored_id = prior_row
+                    .map(|row| row.block_id.clone())
+                    .filter(|id| !id.is_empty() && !used.contains(id));
                 let block_id = if occurrence.task {
-                    let minted =
-                        crate::native::capture_block_ids::mint_block_id(
-                            &occurrence.id_hint,
-                            &used.iter().map(String::as_str).collect(),
-                        );
-                    used.insert(minted.clone());
-                    minted
+                    if let Some(block_id) = restored_id {
+                        used.insert(block_id.clone());
+                        block_id
+                    } else {
+                        let minted =
+                            crate::native::capture_block_ids::mint_block_id(
+                                &occurrence.id_hint,
+                                &used.iter().map(String::as_str).collect(),
+                            );
+                        used.insert(minted.clone());
+                        minted
+                    }
                 } else {
                     String::new()
                 };
@@ -510,7 +536,7 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
                     }
                 }
                 working.insert_block(slot, &block);
-                plan.rows_added.push(PlannedRow {
+                let row = PlannedRow {
                     calendar_id: occurrence.calendar_id.clone(),
                     event_id: occurrence.event_id.clone(),
                     ical_uid: occurrence.ical_uid.clone(),
@@ -531,7 +557,13 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
                         .as_ref()
                         .map(|bullets| bullets.bullets.len())
                         .unwrap_or(0),
-                });
+                    detail: None,
+                };
+                if prior_row.is_some() {
+                    plan.rows_restored.push(row);
+                } else {
+                    plan.rows_added.push(row);
+                }
             }
         }
     }
@@ -577,12 +609,16 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
     plan_stamp(input, &mut working, &mut plan);
 
     plan.contents = working.finish();
+    if input.reset.is_some() {
+        plan.journal_refreshes = reset_refreshes(input, &plan);
+    }
     // A no-op plan writes nothing and appends nothing: identical
     // contents and no records. A tombstone-only run leaves the note
     // alone but still records `gcal.gone`, so it is not a no-op; kept
     // notices, series learning, and root reroutes likewise append
     // journal records.
     let records_empty = plan.rows_added.is_empty()
+        && plan.rows_restored.is_empty()
         && plan.rows_adopted.is_empty()
         && plan.rows_gone.is_empty()
         && plan.rows_removed.is_empty()
@@ -591,11 +627,13 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
         && plan.rows_updated.is_empty()
         && plan.rows_cancelled.is_empty()
         && plan.rows_upgraded.is_empty()
+        && plan.journal_refreshes.is_empty()
         && plan.kept.is_empty()
         && plan.learned.is_empty();
     plan.changed = plan.contents != input.contents || !records_empty;
     if !plan.changed {
         plan.rows_added.clear();
+        plan.rows_restored.clear();
         plan.rows_adopted.clear();
         plan.rows_gone.clear();
         plan.rows_removed.clear();
@@ -606,6 +644,7 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
         plan.rows_updated.clear();
         plan.rows_cancelled.clear();
         plan.rows_upgraded.clear();
+        plan.journal_refreshes.clear();
         plan.kept.clear();
         plan.learned.clear();
         plan.extra_link_wants.clear();
@@ -616,6 +655,100 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
         // reports the line the note already carries.
     }
     plan
+}
+
+/// Emit current row records for previously journaled rows whose visible
+/// contents needed no normal update. The reset marker clears all old row
+/// records, so these snapshots make the following ordinary sync a no-op.
+fn reset_refreshes(
+    input: &SyncPlanInput<'_>,
+    plan: &SyncPlan,
+) -> Vec<PlannedRow> {
+    let Some(reset) = input.reset else {
+        return Vec::new();
+    };
+    let lines: Vec<String> =
+        plan.contents.lines().map(str::to_string).collect();
+    let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let events = event_task::events_section_range(&refs);
+    let mut refreshed = Vec::new();
+    for occurrence in &input.occurrences {
+        let key = occurrence_key(&occurrence.calendar_id, &occurrence.event_id);
+        let Some(old_row) = reset
+            .previous
+            .get(&(key.clone(), reset.day.clone()))
+            .and_then(|state| state.row.as_ref())
+        else {
+            continue;
+        };
+        let already_recorded =
+            plan.rows_added
+                .iter()
+                .chain(&plan.rows_restored)
+                .any(|row| {
+                    row.calendar_id == occurrence.calendar_id
+                        && row.event_id == occurrence.event_id
+                })
+                || plan.rows_adopted.iter().any(|row| {
+                    row.calendar_id == occurrence.calendar_id
+                        && row.event_id == occurrence.event_id
+                })
+                || plan.rows_updated.iter().chain(&plan.rows_upgraded).any(
+                    |row| {
+                        row.calendar_id == occurrence.calendar_id
+                            && row.event_id == occurrence.event_id
+                    },
+                );
+        if already_recorded {
+            continue;
+        }
+        let text_match = (!occurrence.task && occurrence.html_link.is_none())
+            .then(|| render_occurrence(occurrence, "", note_day(input)));
+        let Some(line_index) = find_row_line(
+            &lines,
+            events.clone(),
+            &old_row.block_id,
+            occurrence.html_link.as_deref(),
+            occurrence.task,
+            text_match.as_deref(),
+        ) else {
+            continue;
+        };
+        let line = &lines[line_index];
+        let Some(spans) = split_row_spans(line) else {
+            continue;
+        };
+        let block_id = trailing_block_id(line);
+        let root = line_root(line);
+        refreshed.push(PlannedRow {
+            calendar_id: occurrence.calendar_id.clone(),
+            event_id: occurrence.event_id.clone(),
+            ical_uid: occurrence.ical_uid.clone(),
+            series_id: occurrence.series_id.clone(),
+            block_id: if block_id.is_empty() {
+                old_row.block_id.clone()
+            } else {
+                block_id
+            },
+            url: occurrence.html_link.clone(),
+            row_kind: row_kind(spans.task),
+            spans: spans.hashes(),
+            root: root.clone(),
+            source: if root == occurrence.root {
+                occurrence.source.clone()
+            } else {
+                old_row.source.clone()
+            },
+            time_label: occurrence.time_label.clone(),
+            title: occurrence.title.clone(),
+            off_clock: occurrence.off_clock,
+            buffer: buffer_for_row(occurrence),
+            description: old_row.description.clone(),
+            wrote_description_lines: 0,
+            detail: None,
+        });
+    }
+    refreshed
 }
 
 /// Adopt the line at `line_index` as this occurrence's row: crash
@@ -1023,7 +1156,52 @@ fn apply_span_updates(
             journaled.description.clone()
         },
         wrote_description_lines: description.wrote_lines,
+        detail: forced_reset_detail(
+            input,
+            occurrence,
+            &current_line,
+            keep_off_clock,
+        ),
     });
+}
+
+fn forced_reset_detail(
+    input: &SyncPlanInput<'_>,
+    occurrence: &PlannedOccurrence,
+    line: &str,
+    keep_off_clock: bool,
+) -> Option<String> {
+    let reset = input.reset?;
+    let key = occurrence_key(&occurrence.calendar_id, &occurrence.event_id);
+    let old = reset
+        .previous
+        .get(&(key, reset.day.clone()))?
+        .row
+        .as_ref()?;
+    let current = split_row_spans(line)?.hashes();
+    let mut edited = Vec::new();
+    for name in ["time", "title", "badges"] {
+        if name == "badges" && keep_off_clock {
+            continue;
+        }
+        if current.get(name) != occurrence.spans.get(name)
+            && current.get(name) != old.spans.get(name)
+        {
+            edited.push(name);
+        }
+    }
+    let current_root = line_root(line);
+    let fresh_root = nonempty_root(occurrence.root.as_deref());
+    if current_root.as_deref() != fresh_root
+        && current_root.as_deref() != nonempty_root(old.root.as_deref())
+    {
+        edited.push("root");
+    }
+    match edited.as_slice() {
+        [] => None,
+        [name] => Some(format!("reset your {name} edit")),
+        names => Some(format!("reset your {} edits", names.join(" and "))),
+    }
 }
 
 /// What to do with one journaled task row's `[root::]`.
@@ -1248,6 +1426,7 @@ fn upgrade_context_row(
             .as_ref()
             .map(|bullets| bullets.bullets.len())
             .unwrap_or(0),
+        detail: None,
     });
     plan.extra_link_wants.push((
         occurrence.calendar_id.clone(),
@@ -1554,7 +1733,7 @@ fn row_kind(task: bool) -> String {
     }
 }
 
-fn render_occurrence(
+pub(super) fn render_occurrence(
     occurrence: &PlannedOccurrence,
     block_id: &str,
     completion_day: NaiveDate,
@@ -1752,7 +1931,7 @@ fn parse_trailing_block_id(line: &str) -> Option<String> {
     Some(id.to_string())
 }
 
-fn trailing_block_id(line: &str) -> String {
+pub(super) fn trailing_block_id(line: &str) -> String {
     parse_trailing_block_id(line).unwrap_or_default()
 }
 
@@ -1835,7 +2014,7 @@ fn is_top_level_row(line: &str) -> bool {
 /// journaled `^block_id` first, then its `📅` URL; a context row
 /// matches its `📅` URL, or its full rendered text when it has none.
 /// URL and text matching consider only top-level lines.
-fn find_row_line(
+pub(super) fn find_row_line(
     lines: &[String],
     events_range: Option<Range<usize>>,
     block_id: &str,
@@ -2335,7 +2514,8 @@ fn collect_wanted_links<C: ClockLookup + ?Sized>(
         if !occurrence.task {
             continue;
         }
-        let created = row_was_created(plan, occurrence);
+        let created =
+            input.reset.is_some() || row_was_created(plan, occurrence);
         if !created && (!input.is_today || matches!(phase, LinkPhase::Past)) {
             continue;
         }
@@ -2366,6 +2546,9 @@ fn collect_wanted_links<C: ClockLookup + ?Sized>(
         ) else {
             continue;
         };
+        if pomodoro_link_present(&working.lines, &block_id) {
+            continue;
+        }
         let off_clock = resolved_off_clock(
             &mut clock,
             daily_rel,
@@ -2375,7 +2558,9 @@ fn collect_wanted_links<C: ClockLookup + ?Sized>(
         wanted.push(wanted_link(occurrence, block_id, phase, off_clock));
     }
     for (calendar_id, event_id, block_id) in &plan.extra_link_wants {
-        if wanted.iter().any(|link| link.block_id == *block_id) {
+        if wanted.iter().any(|link| link.block_id == *block_id)
+            || pomodoro_link_present(&working.lines, block_id)
+        {
             continue;
         }
         let key = occurrence_key(calendar_id, event_id);
@@ -2519,6 +2704,10 @@ fn wanted_link(
 
 fn row_was_created(plan: &SyncPlan, occurrence: &PlannedOccurrence) -> bool {
     plan.rows_added.iter().any(|row| {
+        row.calendar_id == occurrence.calendar_id
+            && row.event_id == occurrence.event_id
+            && row.row_kind == "task"
+    }) || plan.rows_restored.iter().any(|row| {
         row.calendar_id == occurrence.calendar_id
             && row.event_id == occurrence.event_id
             && row.row_kind == "task"
@@ -2771,6 +2960,12 @@ fn journaled_or_planned_block_id(
             && row.event_id == occurrence.event_id
     }) {
         return Some(added.block_id.clone());
+    }
+    if let Some(restored) = plan.rows_restored.iter().find(|row| {
+        row.calendar_id == occurrence.calendar_id
+            && row.event_id == occurrence.event_id
+    }) {
+        return Some(restored.block_id.clone());
     }
     plan.rows_adopted
         .iter()

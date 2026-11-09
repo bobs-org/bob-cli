@@ -10,6 +10,7 @@ metadata:
   superseded_by:
     - decisions:gcal-root-follows-google-until-edited
     - decisions:meet-filing-follows-google-until-edited
+    - decisions:gcal-force-resets-the-day
 ---
 
 # Bob Gcal Is Read-Only And Proposes Once
@@ -54,3 +55,7 @@ Google later changes them. Other child notes remain yours. Evidence:
 and § Who owns each part of a row, and `tests/gcal_lifecycle.rs`.
 
 Superseded in part: a qualifying Google time or buffer move can re-file Bob-owned MEET links; the rule that each link is written once is retired. See [[decisions:meet-filing-follows-google-until-edited]].
+
+Superseded in part: tombstoned rows can be restored by `bob gcal sync -F`,
+and a replaced Events section holds instead of tombstoning. See
+[[decisions:gcal-force-resets-the-day]].

@@ -74,6 +74,7 @@ fn record_last_error(args: &SyncArgs, error: &GcalError) {
             warnings: Vec::new(),
             deprecations: Vec::new(),
             quiet: true,
+            force: args.force,
             json: false,
             diff: None,
             stamp: None,
@@ -100,6 +101,8 @@ struct ReportRow {
     description_lines: usize,
     /// Why a removed row left the note, for `removed` rows.
     skip: Option<SkipReason>,
+    /// Additional detail such as a span reset.
+    detail: Option<String>,
 }
 
 struct SyncReport {
@@ -114,6 +117,7 @@ struct SyncReport {
     warnings: Vec<String>,
     deprecations: Vec<diagnostics::Deprecation>,
     quiet: bool,
+    force: bool,
     json: bool,
     diff: Option<String>,
     stamp: Option<Stamp>,
@@ -159,7 +163,7 @@ fn snapshot_diagnostics(
 fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
     let config = GcalConfig::resolve()?;
     let host = journal::host_label();
-    if !args.dry_run
+    if (!args.dry_run || args.force)
         && let Some(writer) = config.writer()
         && writer != host
     {
@@ -245,21 +249,34 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
         }
         occurrences.push(occurrence);
     }
+    let mut reset = args.force.then(|| {
+        super::reset::prepare(
+            &contents,
+            &day.to_string(),
+            &journal_state,
+            &occurrences,
+        )
+    });
+    let active_journal = reset
+        .as_ref()
+        .map(|reset| &reset.journal)
+        .unwrap_or(&journal_state);
     // Lifecycle verdicts for journaled occurrences with no included
     // snapshot row. A failed lookup makes the snapshot incomplete, so
     // nothing is written.
     let lifecycle =
-        resolve_absent(&snapshot, &occurrences, &journal_state, &day)?;
+        resolve_absent(&snapshot, &occurrences, active_journal, &day)?;
 
     let plan = plan::plan_with_clock(
         &plan::SyncPlanInput {
             contents: &contents,
             is_today,
             occurrences: occurrences.clone(),
-            journal: &journal_state,
+            journal: active_journal,
             day_string: day.to_string(),
             today: now.date(),
             lifecycle: lifecycle.clone(),
+            reset: reset.as_ref(),
             series_roots: &snapshot.series_roots,
             account: &snapshot.account,
             now,
@@ -270,7 +287,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
 
     if args.dry_run {
         let diff = unified_diff(&contents, &plan.contents, &display_path);
-        let skips = day_skips(&snapshot, &journal_state, &plan, is_today);
+        let skips = day_skips(&snapshot, active_journal, &plan, is_today);
         return Ok(SyncReport {
             day,
             path: display_path,
@@ -283,6 +300,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
             warnings: merge_warnings(warnings, &plan.warnings),
             deprecations,
             quiet: args.quiet,
+            force: args.force,
             json: args.format.is_json(),
             diff: Some(diff),
             stamp: plan.stamp.clone(),
@@ -293,8 +311,9 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
         });
     }
 
-    if !plan.changed {
-        let skips = day_skips(&snapshot, &journal_state, &plan, is_today);
+    let reset_record = reset.as_ref().is_some_and(|reset| reset.had_state);
+    if !plan.changed && !reset_record {
+        let skips = day_skips(&snapshot, active_journal, &plan, is_today);
         let report = SyncReport {
             day,
             path: display_path.clone(),
@@ -307,6 +326,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
             warnings,
             deprecations,
             quiet: args.quiet,
+            force: args.force,
             json: args.format.is_json(),
             diff: None,
             stamp: plan.stamp.clone(),
@@ -384,15 +404,34 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
                     &display_path,
                 )?;
                 resolver.refresh();
+                reset = args.force.then(|| {
+                    super::reset::prepare(
+                        &current,
+                        &day.to_string(),
+                        &journal_state,
+                        &occurrences,
+                    )
+                });
+                let active_journal = reset
+                    .as_ref()
+                    .map(|reset| &reset.journal)
+                    .unwrap_or(&journal_state);
+                let retry_lifecycle = resolve_absent(
+                    &snapshot,
+                    &occurrences,
+                    active_journal,
+                    &day,
+                )?;
                 plan = plan::plan_with_clock(
                     &plan::SyncPlanInput {
                         contents: &current,
                         is_today,
                         occurrences: occurrences.clone(),
-                        journal: &journal_state,
+                        journal: active_journal,
                         day_string: day.to_string(),
                         today: now.date(),
-                        lifecycle: lifecycle.clone(),
+                        lifecycle: retry_lifecycle,
+                        reset: reset.as_ref(),
                         series_roots: &snapshot.series_roots,
                         account: &snapshot.account,
                         now,
@@ -400,9 +439,11 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
                     Some(daily_rel.as_path()),
                     Some(&mut resolver),
                 );
-                if !plan.changed {
+                let reset_record =
+                    reset.as_ref().is_some_and(|reset| reset.had_state);
+                if !plan.changed && !reset_record {
                     let skips =
-                        day_skips(&snapshot, &journal_state, &plan, is_today);
+                        day_skips(&snapshot, active_journal, &plan, is_today);
                     let report = SyncReport {
                         day,
                         path: display_path.clone(),
@@ -415,6 +456,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
                         warnings: warnings.clone(),
                         deprecations: deprecations.clone(),
                         quiet: args.quiet,
+                        force: args.force,
                         json: args.format.is_json(),
                         diff: None,
                         stamp: plan.stamp.clone(),
@@ -437,14 +479,25 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
     }
 
     // Append the journal only after the note write succeeds.
-    append_journal(&vault, &host, &plan, &display_path, day)?;
+    append_journal(
+        &vault,
+        &host,
+        &plan,
+        &display_path,
+        day,
+        reset.as_ref().is_some_and(|reset| reset.had_state),
+    )?;
 
     for kept in &plan.kept {
         warnings.push(format!("{}: {}", kept.title, kept.detail));
     }
     warnings.extend(plan.warnings.iter().cloned());
 
-    let skips = day_skips(&snapshot, &journal_state, &plan, is_today);
+    let active_journal = reset
+        .as_ref()
+        .map(|reset| &reset.journal)
+        .unwrap_or(&journal_state);
+    let skips = day_skips(&snapshot, active_journal, &plan, is_today);
     let report = SyncReport {
         day,
         path: display_path,
@@ -457,6 +510,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
         warnings,
         deprecations,
         quiet: args.quiet,
+        force: args.force,
         json: args.format.is_json(),
         diff: None,
         stamp: plan.stamp.clone(),
@@ -490,6 +544,7 @@ fn waiting(
         warnings,
         deprecations,
         quiet: args.quiet,
+        force: args.force,
         json: args.format.is_json(),
         diff: None,
         stamp: None,
@@ -1008,6 +1063,27 @@ fn report_rows(
             buffer: added.buffer,
             description_lines: written_description_lines(&added.description),
             skip: None,
+            detail: added.detail.clone(),
+        });
+    }
+    for restored in &plan.rows_restored {
+        rows.push(ReportRow {
+            action: "restored",
+            kind: if restored.row_kind == "task" {
+                "task"
+            } else {
+                "context"
+            },
+            time: restored.time_label.clone(),
+            title: restored.title.clone(),
+            root: restored.root.clone(),
+            source: restored.source.clone(),
+            off_clock: restored.off_clock,
+            untracked: restored.off_clock,
+            buffer: restored.buffer,
+            description_lines: written_description_lines(&restored.description),
+            skip: None,
+            detail: restored.detail.clone(),
         });
     }
     for adopted in &plan.rows_adopted {
@@ -1027,6 +1103,7 @@ fn report_rows(
             buffer: adopted.buffer,
             description_lines: 0,
             skip: None,
+            detail: None,
         });
     }
     for gone in &plan.rows_gone {
@@ -1061,6 +1138,7 @@ fn report_rows(
             buffer: crate::native::event_task::EventBuffer::default(),
             description_lines: 0,
             skip: Some(skip),
+            detail: None,
         });
     }
     for updated in &plan.rows_updated {
@@ -1080,6 +1158,7 @@ fn report_rows(
             buffer: updated.buffer,
             description_lines: updated.wrote_description_lines,
             skip: None,
+            detail: updated.detail.clone(),
         });
     }
     for cancelled in &plan.rows_cancelled {
@@ -1095,6 +1174,7 @@ fn report_rows(
             buffer: crate::native::event_task::EventBuffer::default(),
             description_lines: 0,
             skip: None,
+            detail: None,
         });
     }
     for removed in &plan.rows_removed {
@@ -1110,6 +1190,7 @@ fn report_rows(
             buffer: crate::native::event_task::EventBuffer::default(),
             description_lines: 0,
             skip: Some(SkipReason::removed_in_google(&removed.reason)),
+            detail: None,
         });
     }
     for upgraded in &plan.rows_upgraded {
@@ -1125,6 +1206,7 @@ fn report_rows(
             buffer: upgraded.buffer,
             description_lines: written_description_lines(&upgraded.description),
             skip: None,
+            detail: upgraded.detail.clone(),
         });
     }
     for learned in &plan.learned {
@@ -1140,6 +1222,7 @@ fn report_rows(
             buffer: crate::native::event_task::EventBuffer::default(),
             description_lines: 0,
             skip: None,
+            detail: None,
         });
     }
     rows
@@ -1229,9 +1312,18 @@ fn append_journal(
     plan: &plan::SyncPlan,
     display_path: &str,
     day: NaiveDate,
+    reset: bool,
 ) -> Result<(), GcalError> {
     let day_string = day.to_string();
-    for added in &plan.rows_added {
+    if reset {
+        journal::append_reset(vault, host, &day_string).map_err(|error| {
+            GcalError::runtime(
+                "journal",
+                format!("append the gcal reset record: {error}"),
+            )
+        })?;
+    }
+    for added in plan.rows_added.iter().chain(&plan.rows_restored) {
         append_row_record(
             vault,
             host,
@@ -1305,6 +1397,25 @@ fn append_journal(
             upgraded.root.as_deref(),
             upgraded.source.as_deref(),
             &upgraded.description,
+        )?;
+    }
+    for refreshed in &plan.journal_refreshes {
+        append_row_record(
+            vault,
+            host,
+            &day_string,
+            display_path,
+            &refreshed.calendar_id,
+            &refreshed.event_id,
+            refreshed.ical_uid.as_deref(),
+            refreshed.series_id.as_deref(),
+            &refreshed.block_id,
+            refreshed.url.as_deref(),
+            &refreshed.row_kind,
+            &refreshed.spans,
+            refreshed.root.as_deref(),
+            refreshed.source.as_deref(),
+            &refreshed.description,
         )?;
     }
     for adopted in &plan.rows_adopted {
@@ -1424,6 +1535,7 @@ fn record_status(
             .waiting
             .as_ref()
             .map(|reason| reason.code().to_string()),
+        forced: report.force,
     });
 }
 
@@ -1480,7 +1592,9 @@ fn print_json(report: &SyncReport) {
                 "untracked": row.untracked,
                 "buffer": buffer_json(row.buffer),
                 "description_lines": row.description_lines,
-                "detail": row.skip.as_ref().map(|skip| skip.detail.as_str()),
+                "detail": row.detail.as_deref().or_else(|| {
+                    row.skip.as_ref().map(|skip| skip.detail.as_str())
+                }),
             })
         })
         .collect();
@@ -1501,6 +1615,7 @@ fn print_json(report: &SyncReport) {
             "day": report.day.to_string(),
             "path": report.path,
             "status": report.status,
+            "force": report.force,
             "rows": rows,
             "in_sync": report.in_sync,
             "skipped": skipped,
@@ -1550,7 +1665,8 @@ fn print_human(report: &SyncReport) {
         return;
     }
     if report.status == "waiting" {
-        println!("bob gcal sync · {}", report.path);
+        let reset_suffix = if report.force { " · reset" } else { "" };
+        println!("bob gcal sync · {}{reset_suffix}", report.path);
         match report.waiting.as_ref() {
             Some(reason) => {
                 println!("waiting for {} · {}", report.path, reason.detail());
@@ -1564,13 +1680,15 @@ fn print_human(report: &SyncReport) {
         print_warnings_stderr(report);
         return;
     }
-    println!("bob gcal sync · {}", report.path);
+    let reset_suffix = if report.force { " · reset" } else { "" };
+    println!("bob gcal sync · {}{reset_suffix}", report.path);
     for row in &report.rows {
         let sigil = match row.action {
             "added" => "+",
             "adopted" => "=",
             "updated" => "~",
             "upgraded" => "^",
+            "restored" => "↺",
             "learned" => "*",
             _ => "-",
         };
@@ -1593,7 +1711,14 @@ fn print_human(report: &SyncReport) {
                 removed_row_text(row, skip, &styler)
             }
             ("removed", _) => format!("removed ({})", row.title),
-            _ => format!("{time}  {}{root}{source}", row.title),
+            _ => {
+                let detail = row
+                    .detail
+                    .as_deref()
+                    .map(|detail| format!("  {}", styler.dim(detail)))
+                    .unwrap_or_default();
+                format!("{time}  {}{root}{source}{detail}", row.title)
+            }
         };
         let bullets = if row.description_lines > 0 {
             styler.dim(&format!(" ≡ {}", row.description_lines))
@@ -1690,6 +1815,50 @@ fn print_human(report: &SyncReport) {
             pomodoros.push_str(&format!(", ↪{} refiled", report.links_refiled));
         }
         pomodoros
+    };
+    let summary = if report.force && report.status == "written" {
+        if report.rows.is_empty()
+            && report.links_added == 0
+            && report.links_refiled == 0
+            && report.links_sorted == 0
+            && report.entries.is_empty()
+            && !report.stamp_refreshed
+        {
+            "✓ Events reset · nothing to rewrite".to_string()
+        } else if report.rows.is_empty()
+            && report.links_added == 0
+            && report.links_refiled == 0
+            && report.links_sorted == 0
+            && report.stamp_refreshed
+        {
+            "✓ Events reset · stamp refreshed".to_string()
+        } else {
+            let restored =
+                count("restored", "task") + count("restored", "context");
+            let updated =
+                count("updated", "task") + count("updated", "context");
+            let added = count("added", "task") + count("added", "context");
+            let mut changes = Vec::new();
+            if restored > 0 {
+                changes.push(format!("↺{restored} restored"));
+            }
+            if updated > 0 {
+                changes.push(format!("~{updated} reset"));
+            }
+            if added > 0 {
+                changes.push(format!("+{added} added"));
+            }
+            if changes.is_empty() {
+                changes.push("rows reconciled".to_string());
+            }
+            format!(
+                "✓ Events reset · {} · Pomodoros +{} links",
+                changes.join(", "),
+                report.links_added
+            )
+        }
+    } else {
+        summary
     };
     println!("{summary}{}", counts_tail(report));
     if let Some(stamp) = &report.stamp {

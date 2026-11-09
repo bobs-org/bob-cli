@@ -166,7 +166,7 @@ a separate crate.
 
 ## Bob Gcal Is Read-Only And Proposes Once {#bob-gcal-is-read-only-and-proposes-once}
 
-**Status:** Superseded in part by [Gcal Root Follows Google Until Edited](#gcal-root-follows-google-until-edited), [meet-filing-follows-google-until-edited](#meet-filing-follows-google-until-edited)
+**Status:** Superseded in part by [Gcal Root Follows Google Until Edited](#gcal-root-follows-google-until-edited), [meet-filing-follows-google-until-edited](#meet-filing-follows-google-until-edited), [A Forced Sync Resets The Day](#gcal-force-resets-the-day)
 
 Google Calendar stays read-only; Bob writes each row and link once, updates only untouched Google spans, tombstones deletions, and cancels only untouched tasks.
 
@@ -210,6 +210,10 @@ Google later changes them. Other child notes remain yours. Evidence:
 and § Who owns each part of a row, and `tests/gcal_lifecycle.rs`.
 
 Superseded in part: a qualifying Google time or buffer move can re-file Bob-owned MEET links; the rule that each link is written once is retired. See [meet-filing-follows-google-until-edited](#meet-filing-follows-google-until-edited).
+
+Superseded in part: tombstoned rows can be restored by `bob gcal sync -F`,
+and a replaced Events section holds instead of tombstoning. See
+[A Forced Sync Resets The Day](#gcal-force-resets-the-day).
 
 ## Buffer Reasons Ride The Description Bullets {#buffer-reasons-ride-description-bullets}
 
@@ -914,6 +918,44 @@ Evidence: `plan:202610/bob_gcal_daily_events.md`,
 `docs/capture.md` § Closing the running Pomodoro,
 `docs/reference/vault-format.md` § Events section and Event Tasks, and
 `tests/fixtures/event_task_close/vectors.json`.
+
+## A Forced Sync Resets The Day {#gcal-force-resets-the-day}
+
+**Status:** Accepted
+
+`bob gcal sync -F` explicitly resets one day's sync journal and restores missing rows from Google while keeping task and Pomodoro history.
+
+**Applies to.** bob-cli and the vault.
+
+**Claim.** A journaled row missing from the note is treated as your deletion
+and tombstoned. When every row Bob wrote for the day and the Events stamp
+vanish together, sync holds instead of tombstoning them. Only an explicit
+`bob gcal sync -F` restores missing rows from Google: it resets that day's
+sync journal and rewrites the day as on a first sync. A row Bryan pastes back
+remains adoptable as crash recovery. For rows still present, Google replaces
+the time, title, badges, and chosen root; the checkbox, block ID, child notes,
+`[type::]`, Pomodoro sessions, and learned series roots stay. Existing
+Pomodoro links to reused block IDs are not duplicated, and a removed link is
+filed again. The accepted `force_edits = reset` branch applies.
+
+**Why.** The 2026-11-09 Haircut race report showed sync writing an Event Task
+before Templater replaced the raw daily note, then recording the missing row
+as a permanent deletion. Auto-restoring every missing row would re-add rows
+without consent; a permanent tombstone with only hand-paste recovery leaves a
+clobbered day stuck; and sticky tombstones make explicit recovery impossible.
+`-F` makes recovery explicit while rebuilding the day from the authoritative
+Google snapshot.
+
+**Cost.** A held day gets no new events until `-F`. A forced reset also
+disregards edits to the Google-owned spans and `[root::]` on present rows,
+while retaining task state, notes, Pomodoro history, and series memory.
+
+**Reopens when.** Bob can tell an editor clobber from a deliberate deletion
+directly.
+
+Evidence: `research:202611/gcal_haircut_lost_to_daily_note_race.md`,
+`plan:202611/gcal_sync_race_force_and_skip_reasons.md`, `docs/gcal.md` § Sync
+› Reset a day, and `tests/gcal_sync.rs`.
 
 ## Gcal Root Follows Google Until Edited {#gcal-root-follows-google-until-edited}
 

@@ -36,7 +36,7 @@ pub(crate) fn build_cli() -> ClapCommand {
 }
 
 fn top_after_help() -> &'static str {
-    "Running `bob gcal` with no command runs `bob gcal list`.\n\nExamples:\n  bob gcal                    Show today's events and what sync would do\n  bob gcal -D tomorrow        List tomorrow in Bob's timezone\n  bob gcal -a -f json         Include omitted events as JSON\n  bob gcal login              Connect Google Calendar in one guided step\n  bob gcal login -a EMAIL     Sign in as this account\n  bob gcal login -c PATH      Replace Bob's stored Desktop-app client JSON\n  bob gcal login -m           Paste the redirect address (automatic over SSH)\n  bob gcal calendars          List calendars with ids for config\n  bob gcal doctor             Diagnose gog, the client, and the vault\n  bob gcal sync               Write today's Events and MEET links\n  bob gcal sync -d            Preview the exact Markdown a sync writes\n  bob gcal logout -y          Remove Bob's Calendar grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH\n  BOB_GCAL_BROWSER   Browser executable; selects browser sign-in (otherwise automatic)"
+    "Running `bob gcal` with no command runs `bob gcal list`.\n\nExamples:\n  bob gcal                    Show today's events and what sync would do\n  bob gcal -D tomorrow        List tomorrow in Bob's timezone\n  bob gcal -a -f json         Include omitted events as JSON\n  bob gcal login              Connect Google Calendar in one guided step\n  bob gcal login -a EMAIL     Sign in as this account\n  bob gcal login -c PATH      Replace Bob's stored Desktop-app client JSON\n  bob gcal login -m           Paste the redirect address (automatic over SSH)\n  bob gcal calendars          List calendars with ids for config\n  bob gcal doctor             Diagnose gog, the client, and the vault\n  bob gcal sync               Write today's Events and MEET links\n  bob gcal sync -F            Rewrite today's Events from Google as on a first sync\n  bob gcal sync -d            Preview the exact Markdown a sync writes\n  bob gcal logout -y          Remove Bob's Calendar grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH\n  BOB_GCAL_BROWSER   Browser executable; selects browser sign-in (otherwise automatic)"
 }
 
 fn calendars_command() -> ClapCommand {
@@ -80,7 +80,8 @@ fn sync_command() -> ClapCommand {
             "Write one day's Events rows and MEET links: reconcile one \
              bounded, idempotent day (default today, `-D` for another day \
              whose note exists). `-d` prints the exact unified diff of the \
-             plan and writes nothing. Never overwrites your edits. Writes \
+             plan and writes nothing. `-F` resets the day's sync journal and \
+             reapplies Google over its Events rows and MEET links. Writes \
              nothing, and exits 0 with a reason and hint, while the note is \
              missing, has no `## Pomodoros`, or still has Templater tags \
              (`<% … %>`) Templater has not rendered.",
@@ -90,13 +91,14 @@ fn sync_command() -> ClapCommand {
         .arg(bob_dir_arg())
         .arg(day_arg())
         .arg(dry_run_arg())
+        .arg(sync_force_arg())
         .arg(human_format_arg())
         .arg(help_arg())
         .arg(quiet_arg())
 }
 
 fn sync_after_help() -> &'static str {
-    "Examples:\n  bob gcal sync\n  bob gcal sync -D tomorrow\n  bob gcal sync -d\n  bob gcal sync -q\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH\n  BOB_NOW            Local datetime override for default day selection"
+    "Examples:\n  bob gcal sync\n  bob gcal sync -D tomorrow\n  bob gcal sync -d\n  bob gcal sync -F\n  bob gcal sync -F -d\n  bob gcal sync -q\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH\n  BOB_NOW            Local datetime override for default day selection"
 }
 
 fn doctor_command() -> ClapCommand {
@@ -256,6 +258,14 @@ fn dry_run_arg() -> Arg {
         .short('d')
         .action(ArgAction::SetTrue)
         .help("Preview the exact Markdown a sync would write")
+}
+
+fn sync_force_arg() -> Arg {
+    Arg::new("force")
+        .long("force")
+        .short('F')
+        .action(ArgAction::SetTrue)
+        .help("Reset this day: forget your deletions and edits and rewrite its Events and MEET links from Google, as on a first sync")
 }
 
 fn quiet_arg() -> Arg {
@@ -428,6 +438,7 @@ pub(crate) struct SyncArgs {
     pub bob_dir: Option<PathBuf>,
     pub day: String,
     pub dry_run: bool,
+    pub force: bool,
     pub format: HumanFormat,
     pub quiet: bool,
 }
@@ -441,6 +452,7 @@ impl SyncArgs {
                 .map(|value| value.to_string_lossy().trim().to_string())
                 .unwrap_or_else(|| "today".to_string()),
             dry_run: matches.get_flag("dry-run"),
+            force: matches.get_flag("force"),
             format: HumanFormat::from_matches(matches),
             quiet: matches.get_flag("quiet"),
         }
@@ -548,13 +560,14 @@ mod tests {
         let args = SyncArgs::from_matches(&sub_matches_for(
             &[
                 "bob gcal", "sync", "-b", "~/vault", "-D", "tomorrow", "-d",
-                "-f", "json", "-q",
+                "-f", "json", "-q", "-F",
             ],
             "sync",
         ));
         assert_eq!(args.bob_dir(), bob_env::home_dir().join("vault"));
         assert_eq!(args.day, "tomorrow");
         assert!(args.dry_run);
+        assert!(args.force);
         assert!(args.format.is_json());
         assert!(args.quiet);
         assert_eq!(args.error_format(), "json");
