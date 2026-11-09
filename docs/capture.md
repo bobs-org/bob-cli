@@ -4570,8 +4570,9 @@ what `x!2` selects, and `2x0` closes while deferring every plain link (never
 a reset). `02x` is valid (2 blocks, matching `=03` and `x=03`); after `x`,
 the text must already be close-shaped. On a 25-minute session, `2x!2` writes
 the same span and the same task outcomes as `-3 x!2`, but in one gesture and
-with honest clocks: Work Log entries stamp at the sized end `C`, not at wall
-time.
+with honest clocks: Work Log entries stamp at `C`, the earlier of the sized
+end and now (so the `2x` @ 09:08 round-up stamps at wall time 09:08, not at
+the 09:10 sized end).
 
 Unlike `x`, a sized close may lengthen the session, and it never records time
 that has not happened. Let the running session be `[S, E)`, `T` be now's
@@ -4583,7 +4584,7 @@ exactly the way `close_timing` normalizes `remaining`, and `m = 5N`:
 | The running row's time range does not parse | Refused with `pomodoro_close_size_unparseable`; plain `x` keeps its "left as written" warning, but a sized close cannot honor its number, so it refuses |
 | The session has not started (`e < 0`) | Refused with `pomodoro_close_size_not_started` |
 | The size has not elapsed (`m − e ≥ 5`) | Refused with `pomodoro_close_size_not_elapsed`; this allows exactly the five-minute round-up plain `x` already makes, and the message names the largest size that fits (`fits = ⌈e / 5⌉` blocks, 0 when `e = 0`) |
-| Otherwise | Stage `E′ = (S + m) mod 1440` in the session's own clock key (`[t::]` or `[off::]`), and close at `C = now − max(e − m, 0)` minutes (seconds zeroed), so the date stays right across midnight |
+| Otherwise | Stage `E′ = (S + m) mod 1440` in the session's own clock key (`[t::]` or `[off::]`), and close at `C = now − max(e − m, 0)` minutes (seconds zeroed) — that is, `C = min(S + m, now)` — so the date stays right across midnight |
 
 At `C`, `close_timing` sees `remaining = E′ − C ∈ [0, 5)`, so it never trims
 again and never reports an overrun. Every refusal writes nothing: the whole
@@ -4614,7 +4615,9 @@ error: `2x` needs BUILD's time range, but it could not be parsed; nothing was wr
   fix the range, or close with `x`
 ```
 
-JSON errors carry the `code` above plus `extra.close_size`
+JSON errors carry the `code` above plus a top-level `close_size` member
+(the internal `CaptureError.extra` map is flattened into the JSON object;
+the wire format keeps `close_size` at the top level, not under `extra`)
 (`{"raw":"7","blocks":7,"minutes":35,"elapsed_minutes":12,"fits_blocks":3}`;
 `elapsed_minutes`/`fits_blocks` are omitted when not computed). The closed
 caption reads from the sized span: shrink prints

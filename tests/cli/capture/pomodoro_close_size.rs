@@ -435,17 +435,22 @@ fn sized_close_refusals_name_fixes_and_codes() {
         "bob-cli-sized-refuse-unnamed",
         "- [ ] (**0900-0925** [t:: 25m])",
     );
+    let before = vault_files(&vault);
     let json =
         run_sized_error(&vault, &day_file, "2026-09-28 09:03:00", &[], &["2x"]);
-    if json["code"] == "pomodoro_close_size_not_elapsed" {
-        assert!(
-            json["error"]
-                .as_str()
-                .unwrap_or("")
-                .contains("the running session"),
-            "{json}"
-        );
-    }
+    assert_eq!(json["code"], "pomodoro_close_size_not_elapsed", "{json}");
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("the running session"),
+        "{json}"
+    );
+    assert_eq!(
+        vault_files(&vault),
+        before,
+        "unnamed refusal writes nothing"
+    );
 
     // No session and multiple running keep existing diagnostics.
     let temp = TempDir::new("bob-cli-sized-no-running");
@@ -453,9 +458,34 @@ fn sized_close_refusals_name_fixes_and_codes() {
     let day_file = vault.join("2026").join("20260928.md");
     write_toggle_task_settings(&vault);
     write_file(&day_file, "## Pomodoros\n\n- [ ] () — NEXT\n");
+    let before = vault_files(&vault);
     let json =
         run_sized_error(&vault, &day_file, "2026-09-28 09:50:00", &[], &["2x"]);
     assert!(json["code"] != "pomodoro_close_size_not_elapsed", "{json}");
+    assert_eq!(
+        vault_files(&vault),
+        before,
+        "no-session refusal writes nothing"
+    );
+
+    // Several running keeps the existing several-running diagnostic.
+    let temp = TempDir::new("bob-cli-sized-several-running");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026").join("20260928.md");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &day_file,
+        "## Pomodoros\n\n- [ ] (**0900-0925** [t:: 25m]) — ONE\n- [ ] (**0900-0925** [t:: 25m]) — TWO\n- [ ] () — NEXT\n",
+    );
+    let before = vault_files(&vault);
+    let json =
+        run_sized_error(&vault, &day_file, "2026-09-28 09:50:00", &[], &["2x"]);
+    assert!(json["code"] != "pomodoro_close_size_not_elapsed", "{json}");
+    assert_eq!(
+        vault_files(&vault),
+        before,
+        "several-running refusal writes nothing"
+    );
 }
 
 #[test]
@@ -518,27 +548,54 @@ fn sized_close_matches_plain_close_outcomes() {
     let (_temp, vault, day_file) = sized_linked_vault("bob-cli-sized-equiv-a");
     let sized =
         run_close_json(&vault, &day_file, "2026-09-28 09:12:00", &["2x!2"]);
+    let sized_day = fs::read_to_string(&day_file).expect("sized day");
     let (_temp, vault2, day2) = sized_linked_vault("bob-cli-sized-equiv-b");
     let chained =
         run_close_json(&vault2, &day2, "2026-09-28 09:12:00", &["-3 x!2"]);
+    let chained_day = fs::read_to_string(&day2).expect("chained day");
     let chained_close = chained
         .get("pomodoro_close")
         .filter(|v| !v.is_null())
         .cloned()
         .unwrap_or_else(|| chained["captures"][1]["pomodoro_close"].clone());
+    let sized_close = &sized["pomodoro_close"];
     assert_eq!(
-        sized["pomodoro_close"]["closed"]["time_range"],
+        sized_close["closed"]["time_range"],
         chained_close["closed"]["time_range"],
         "same span {sized} vs {chained}"
     );
-    assert_eq!(sized["pomodoro_close"]["closed_at"], "0910", "{sized}");
+    assert_eq!(sized_close["closed_at"], "0910", "{sized}");
+    assert_eq!(
+        sized_close["task_links"], chained_close["task_links"],
+        "same selection {sized} vs {chained}"
+    );
+    assert_eq!(
+        sized_close["carried"], chained_close["carried"],
+        "same carry {sized} vs {chained}"
+    );
+    assert_eq!(
+        sized_close["tasks"], chained_close["tasks"],
+        "same task statuses {sized} vs {chained}"
+    );
+    assert_eq!(sized_day, chained_day, "same ledger outcomes");
     // Sized has no overrun line; the unsized chain trims with an overrun.
     assert!(
-        sized["pomodoro_close"]["remaining_minutes"]
-            .as_i64()
-            .unwrap_or(0)
-            >= 0,
+        sized_close["remaining_minutes"].as_i64().unwrap_or(0) >= 0,
         "{sized}"
+    );
+
+    // Sized versus unsized equivalent selections agree on outcomes.
+    let (_temp, vault, day_file) =
+        sized_linked_vault("bob-cli-sized-equiv-unsized-a");
+    let sized =
+        run_close_json(&vault, &day_file, "2026-09-28 09:12:00", &["2x!2"]);
+    let (_temp, vault2, day2) =
+        sized_linked_vault("bob-cli-sized-equiv-unsized-b");
+    let plain = run_close_json(&vault2, &day2, "2026-09-28 09:12:00", &["x!2"]);
+    assert_eq!(
+        sized["pomodoro_close"]["task_links"],
+        plain["pomodoro_close"]["task_links"],
+        "sized vs unsized selection {sized} vs {plain}"
     );
 
     // `2x0` really closes and defers every plain link.
@@ -547,10 +604,12 @@ fn sized_close_matches_plain_close_outcomes() {
         run_close_json(&vault, &day_file, "2026-09-28 09:50:00", &["2x0"]);
     let close = &json["pomodoro_close"];
     assert_eq!(close["closed"]["time_range"], "0900-0910", "{json}");
-    for link in close["task_links"].as_array().expect("links") {
-        assert!(
-            link["outcome"] == "deferred" || link["outcome"] == "in_progress",
-            "2x0 defers plain links: {link}"
+    let links = close["task_links"].as_array().expect("links");
+    assert!(!links.is_empty(), "2x0 has links to defer: {json}");
+    for link in links {
+        assert_eq!(
+            link["outcome"], "deferred",
+            "2x0 defers every plain link: {link} in {json}"
         );
     }
 }
@@ -664,7 +723,7 @@ fn sized_close_tip_for_adjust_then_close() {
         "{human}"
     );
 
-    // Negative: a sized close never tips.
+    // Negative: a sized close never tips, and the sized chain succeeds.
     let (_temp, vault, day_file) = sized_linked_vault("bob-cli-sized-tip-no");
     let output = bob_command()
         .arg("capture")
@@ -676,10 +735,40 @@ fn sized_close_tip_for_adjust_then_close() {
         .env("BOB_NOW", "2026-09-28 09:12:00")
         .output()
         .expect("sized batch");
-    // Either succeeds without a tip or refuses on the chain shape; either
-    // way no `tip:` line appears for a sized close.
-    let human = stdout(&output) + &stderr(&output);
+    assert_success(&output);
+    let human = stdout(&output);
     assert!(!human.contains("tip:"), "sized closes never tip: {human}");
+
+    // Shift, link-close, further-trimming, and JSON paths never tip either.
+    for draft in ["++1 x!2", "@bob:ready=x!2", "-3 x!2"] {
+        let (_temp, vault, day_file) =
+            sized_linked_vault("bob-cli-sized-tip-other");
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("--")
+            .arg(draft)
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-09-28 09:12:00")
+            .output()
+            .expect("other batch");
+        if draft == "-3 x!2" {
+            assert_success(&output);
+            assert!(stdout(&output).contains("tip:"), "{draft}: {output:?}");
+        } else {
+            let human = stdout(&output) + &stderr(&output);
+            assert!(!human.contains("tip:"), "{draft} never tips: {human}");
+        }
+    }
+    // JSON never tips even for the positive shape.
+    let (_temp, vault, day_file) = sized_linked_vault("bob-cli-sized-tip-json");
+    let json =
+        run_close_json(&vault, &day_file, "2026-09-28 09:12:00", &["-3 x!2"]);
+    assert!(
+        !json.to_string().contains("tip:"),
+        "JSON never tips: {json}"
+    );
 }
 
 #[test]
@@ -692,11 +781,27 @@ fn sized_close_composition_uses_wall_now() {
     );
     let json =
         run_close_json(&vault, &day_file, "2026-09-28 09:50:00", &["2x ="]);
-    // One close plus one start: the close object exists and the day has
-    // both a completed and a new open entry.
+    let close = &json["captures"][0]["pomodoro_close"];
+    assert_eq!(close["closed"]["time_range"], "0900-0910", "{json}");
+    assert_eq!(close["closed_at"], "0910", "{json}");
+    let start = &json["captures"][1]["pomodoro_start"];
+    assert_eq!(start["start"], "0950", "{json}");
+    assert_eq!(start["end"], "1015", "{json}");
     assert!(
-        json["pomodoro_close"].is_object() || json["captures"].is_array(),
+        start["time_range"]
+            .as_str()
+            .unwrap_or("")
+            .contains("0950-1015"),
         "{json}"
+    );
+    let day = fs::read_to_string(&day_file).expect("day");
+    assert!(
+        day.contains("- [x] (**0900-0910** [t:: 10m]) — BUILD"),
+        "{day}"
+    );
+    assert!(
+        day.contains("- [ ] (**0950-1015** [t:: 25m]) — NEXT"),
+        "{day}"
     );
 
     // `--1 2x` sizes from the shifted start (0900 -> 0855, then 2x).
@@ -704,10 +809,32 @@ fn sized_close_composition_uses_wall_now() {
         "bob-cli-sized-compose-shift",
         "- [ ] (**0900-0925** [t:: 25m]) — BUILD",
     );
-    let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:50:00", &["--1 2x"]);
+    let json = run_close_json_flags(
+        &vault,
+        &day_file,
+        "2026-09-28 09:50:00",
+        &["--dry-run"],
+        &["--1 2x"],
+    );
     let text = json.to_string();
     assert!(text.contains("0855-0905"), "{json}");
+    assert!(text.contains("0855-0920"), "{json}");
+
+    // `2x x=fix~` closes at the sized end, then records past work since it.
+    let (_temp, vault, day_file) = sized_day_vault(
+        "bob-cli-sized-compose-past",
+        "- [ ] (**0900-0925** [t:: 25m]) — BUILD",
+    );
+    let json = run_close_json_flags(
+        &vault,
+        &day_file,
+        "2026-09-28 09:50:00",
+        &["--dry-run"],
+        &["2x x=fix~"],
+    );
+    let text = json.to_string();
+    assert!(text.contains("0900-0910"), "{json}");
+    assert!(text.contains("0910-0935"), "{json}");
 
     // Link and new-task closes use the post-link lineup.
     let (_temp, vault, day_file) =
@@ -719,4 +846,240 @@ fn sized_close_composition_uses_wall_now() {
         &["@bob:ready=2x"],
     );
     assert_eq!(json["ok"], true, "{json}");
+}
+
+fn two_meeting_vault(name: &str) -> (TempDir, PathBuf, PathBuf) {
+    let temp = TempDir::new(name);
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026").join("20260928.md");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &day_file,
+        concat!(
+            "## Events\n",
+            "- [ ] #task **0900-0930** Design review ^design-review\n",
+            "- [ ] #task **0930-1000** Vendor sync ^vendor-sync\n",
+            "\n## Pomodoros\n",
+            "- [ ] (**0900-1000** [t:: 60m]) — MEET\n",
+            "  - [[#^design-review]]\n",
+            "  - [[#^vendor-sync]]\n",
+            "- [ ] () — NEXT\n",
+        ),
+    );
+    write_file(
+        &vault.join("bob.md"),
+        "## Tasks\n\n- [*] #task Build task [created::2026-09-26] ^build\n",
+    );
+    (temp, vault, day_file)
+}
+
+#[test]
+fn sized_close_two_meetings_classifies_at_sized_end() {
+    // `6x` at 10:15 closes 0900-0930 at C=0930: Design completes, Vendor
+    // carries as not_started. Tasks, ledger, and reported classes agree.
+    let (_temp, vault, day_file) = two_meeting_vault("bob-cli-sized-two-meet");
+    let json =
+        run_close_json(&vault, &day_file, "2026-09-28 10:15:00", &["6x"]);
+    let close = &json["pomodoro_close"];
+    assert_eq!(close["closed"]["time_range"], "0900-0930", "{json}");
+    assert_eq!(close["closed_at"], "0930", "{json}");
+    let links = close["task_links"].as_array().expect("links");
+    assert_eq!(links.len(), 2, "{json}");
+    assert_eq!(links[0]["outcome"], "complete", "{json}");
+    assert_eq!(links[0]["clock"]["class"], "ended_inside", "{json}");
+    assert_eq!(links[1]["outcome"], "deferred", "{json}");
+    assert_eq!(links[1]["clock"]["class"], "not_started", "{json}");
+    let tasks = close["tasks"].as_array().expect("tasks");
+    assert!(
+        tasks[0]["status_changed"].as_bool().unwrap_or(false),
+        "{json}"
+    );
+    assert!(
+        !tasks[1]["status_changed"].as_bool().unwrap_or(true),
+        "{json}"
+    );
+    let day = fs::read_to_string(&day_file).expect("day");
+    assert!(
+        day.contains("- [x] (**0900-0930** [t:: 30m]) — MEET"),
+        "{day}"
+    );
+
+    // Explicitly selecting the vendor completes it even though not_started.
+    let (_temp, vault, day_file) =
+        two_meeting_vault("bob-cli-sized-two-meet-explicit");
+    let json =
+        run_close_json(&vault, &day_file, "2026-09-28 10:15:00", &["6x!2"]);
+    let links = json["pomodoro_close"]["task_links"]
+        .as_array()
+        .expect("links");
+    assert_eq!(links[1]["outcome"], "complete", "{json}");
+    assert_eq!(links[1]["clock"]["class"], "not_started", "{json}");
+
+    // Within-round-up classifies at wall-time C, not the rounded range end:
+    // an event ending at 0909 is still running at C=0908.
+    let temp = TempDir::new("bob-cli-sized-roundup-clock");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026").join("20260928.md");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &day_file,
+        concat!(
+            "## Events\n",
+            "- [ ] #task **0900-0909** Edge event ^edge\n",
+            "\n## Pomodoros\n",
+            "- [ ] (**0900-0925** [t:: 25m]) — BUILD\n",
+            "  - [[#^edge]]\n",
+            "- [ ] () — NEXT\n",
+        ),
+    );
+    write_file(
+        &vault.join("bob.md"),
+        "## Tasks\n\n- [*] #task Build task [created::2026-09-26] ^build\n",
+    );
+    let json =
+        run_close_json(&vault, &day_file, "2026-09-28 09:08:00", &["2x"]);
+    let links = json["pomodoro_close"]["task_links"]
+        .as_array()
+        .expect("links");
+    assert_eq!(links[0]["clock"]["class"], "running", "{json}");
+    assert_eq!(json["pomodoro_close"]["closed_at"], "0908", "{json}");
+}
+
+#[test]
+fn sized_close_link_and_new_task_use_post_link_lineup() {
+    // `^r:id=2x!1`-style link closes number after the link insertion,
+    // stamp Work Log entries at C, and roll back on refusal.
+    let (_temp, vault, day_file) =
+        close_worked_vault("bob-cli-sized-link-postlineup");
+    let json = run_close_json(
+        &vault,
+        &day_file,
+        "2026-09-28 09:50:00",
+        &["@bob:ready=2x!3"],
+    );
+    let close = json
+        .get("pomodoro_close")
+        .filter(|v| !v.is_null())
+        .cloned()
+        .or_else(|| {
+            json.get("captures")
+                .and_then(|c| c.as_array())
+                .and_then(|caps| {
+                    caps.iter().find_map(|cap| {
+                        cap.get("pomodoro_close")
+                            .filter(|v| !v.is_null())
+                            .cloned()
+                    })
+                })
+        })
+        .expect("close");
+    assert_eq!(close["closed_at"], "0930", "{json}");
+    let links = close["task_links"].as_array().expect("links");
+    assert!(
+        links.len() >= 3,
+        "post-link lineup has the new link: {json}"
+    );
+    let ready = links
+        .iter()
+        .find(|l| l["block_id"] == "ready")
+        .expect("ready link");
+    assert_eq!(ready["outcome"], "complete", "{json}");
+
+    // New task with a sized suffix closes at C as well.
+    let (_temp, vault, day_file) =
+        close_worked_vault("bob-cli-sized-newtask-postlineup");
+    let json = run_close_json(
+        &vault,
+        &day_file,
+        "2026-09-28 09:50:00",
+        &["Draft docs @bob:draft-docs=2x"],
+    );
+    assert_eq!(json["ok"], true, "{json}");
+    let close = json
+        .get("pomodoro_close")
+        .filter(|v| !v.is_null())
+        .cloned()
+        .or_else(|| {
+            json.get("captures")
+                .and_then(|c| c.as_array())
+                .and_then(|caps| {
+                    caps.iter().find_map(|cap| {
+                        cap.get("pomodoro_close")
+                            .filter(|v| !v.is_null())
+                            .cloned()
+                    })
+                })
+        })
+        .expect("close");
+    assert_eq!(close["closed_at"], "0930", "{json}");
+
+    // A sized refusal rolls back the new task/link and earlier batch items.
+    let (_temp, vault, day_file) =
+        close_worked_vault("bob-cli-sized-rollback-newtask");
+    let before = vault_files(&vault);
+    let json = run_sized_error(
+        &vault,
+        &day_file,
+        "2026-09-28 09:22:00",
+        &[],
+        &["Draft docs @bob:draft-docs=2x"],
+    );
+    assert_eq!(json["code"], "pomodoro_close_size_not_elapsed", "{json}");
+    assert_eq!(vault_files(&vault), before, "new-task refusal rolls back");
+
+    let (_temp, vault, day_file) =
+        close_worked_vault("bob-cli-sized-rollback-link");
+    let before = vault_files(&vault);
+    let json = run_sized_error(
+        &vault,
+        &day_file,
+        "2026-09-28 09:22:00",
+        &[],
+        &["@bob:ready=2x"],
+    );
+    assert_eq!(json["code"], "pomodoro_close_size_not_elapsed", "{json}");
+    assert_eq!(vault_files(&vault), before, "link refusal rolls back");
+}
+
+#[test]
+fn sized_close_output_covers_off_clock_and_additive_size() {
+    // Off-clock sized caption keeps the off-clock marker with size text.
+    let temp = TempDir::new("bob-cli-sized-offclock");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026").join("20260928.md");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &day_file,
+        "## Pomodoros\n\n- [ ] (**0900-0925** [t:: 25m]) — BUILD #off\n- [ ] () — NEXT\n",
+    );
+    write_file(
+        &vault.join("bob.md"),
+        "## Tasks\n\n- [*] #task Build task [created::2026-09-26] ^build\n",
+    );
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--")
+        .arg("2x")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-09-28 09:50:00")
+        .output()
+        .expect("off-clock caption");
+    assert_success(&output);
+    let human = stdout(&output);
+    assert!(human.contains("0900-0910 (10m"), "{human}");
+
+    // JSON keeps additive `size` only when sized; unsized stays byte-identical.
+    let (_temp, vault, day_file) =
+        close_worked_vault("bob-cli-sized-additive-json");
+    let json =
+        run_close_json(&vault, &day_file, "2026-09-28 09:50:00", &["2x!2"]);
+    let close = &json["pomodoro_close"];
+    assert!(close.get("size").is_some(), "{json}");
+    assert_eq!(close["size"]["blocks"], 2, "{json}");
+    let (_temp, vault, day_file) =
+        close_worked_vault("bob-cli-sized-additive-unsized");
+    let json = run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x"]);
+    assert!(json["pomodoro_close"].get("size").is_none(), "{json}");
 }
