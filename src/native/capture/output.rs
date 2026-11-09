@@ -953,8 +953,10 @@ pub(super) struct CaptureItemResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) note_pull: Option<NotePullSummaryJson>,
     /// Record-note summary used for human output and to collect
-    /// top-level `note_files`. Never serialized on the item.
-    #[serde(skip)]
+    /// top-level `note_files`. Additive per-item metadata so Mac Capture
+    /// can render the committed success line without the full Markdown.
+    /// Ordinary items omit it.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) record_note: Option<RecordNoteSummary>,
 }
 
@@ -989,15 +991,23 @@ pub(super) struct NoteFilePropertyJson {
 }
 
 /// Human-facing record create/update summary plus the `note_files` row.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// The wire shape carries only committed metadata (`action`, `label`,
+/// optional `emoji`, `path`, `notes`, `properties`); the full Markdown
+/// stays in top-level `note_files[].markdown` and is never duplicated
+/// here. Internal `markdown`/`note_file` members stay skipped.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct RecordNoteSummary {
     pub(super) action: &'static str,
-    pub(super) emoji: Option<String>,
     pub(super) label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) emoji: Option<String>,
     pub(super) path: String,
     pub(super) notes: usize,
     pub(super) properties: Vec<NoteFilePropertyJson>,
+    #[serde(skip)]
     pub(super) markdown: String,
+    #[serde(skip)]
     pub(super) note_file: NoteFileJson,
 }
 

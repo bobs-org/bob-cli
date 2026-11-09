@@ -300,6 +300,81 @@ fn capture_mixed_task_and_record_succeeds() {
 }
 
 #[test]
+fn capture_record_note_summary_shape_matches_dry_run_and_commit() {
+    let (_temp, vault, config) = complete_fixture();
+    let dry = capture(
+        &vault,
+        &config,
+        &["--dry-run", "-f", "json", COMPLETE_RAMEN],
+    )
+    .output()
+    .expect("dry-run record capture");
+    assert_success(&dry);
+    let dry_json = json_output(&dry);
+    let summary = &dry_json["record_note"];
+    assert_eq!(summary["action"], "create");
+    assert_eq!(summary["label"], "Restaurant");
+    assert_eq!(summary["emoji"], "🍽️");
+    assert_eq!(summary["path"], "eat/ramen_nagi.md");
+    assert_eq!(summary["notes"], 1);
+    assert!(
+        summary["properties"].as_array().is_some(),
+        "summary properties: {summary}"
+    );
+    assert!(
+        summary.get("markdown").is_none(),
+        "summary must not duplicate markdown: {summary}"
+    );
+    assert!(
+        summary.get("note_file").is_none(),
+        "summary must not duplicate note_file: {summary}"
+    );
+    assert_eq!(
+        summary["properties"], dry_json["note_files"][0]["properties"],
+        "summary properties match note_files"
+    );
+
+    let committed = capture(&vault, &config, &["-f", "json", COMPLETE_RAMEN])
+        .output()
+        .expect("commit record capture");
+    assert_success(&committed);
+    let committed_json = json_output(&committed);
+    assert_eq!(
+        committed_json["record_note"], dry_json["record_note"],
+        "dry-run and commit summaries agree"
+    );
+
+    let task = capture(&vault, &config, &["-f", "json", "Buy milk"])
+        .output()
+        .expect("ordinary task capture");
+    assert_success(&task);
+    assert!(
+        json_output(&task).get("record_note").is_none(),
+        "ordinary items omit record_note"
+    );
+
+    let (_temp, mixed_vault, mixed_config) = complete_fixture();
+    let mixed = format!("Buy milk\n\n{COMPLETE_RAMEN}");
+    let mixed_output =
+        capture(&mixed_vault, &mixed_config, &["-f", "json", &mixed])
+            .output()
+            .expect("mixed capture");
+    assert_success(&mixed_output);
+    let mixed_json = json_output(&mixed_output);
+    let captures = mixed_json["captures"].as_array().expect("captures");
+    assert_eq!(captures.len(), 2);
+    assert!(
+        captures[0].get("record_note").is_none(),
+        "mixed task item omits record_note"
+    );
+    assert_eq!(captures[1]["record_note"]["path"], "eat/ramen_nagi.md");
+    assert!(
+        mixed_json.get("record_note").is_none(),
+        "top-level mirror follows the first (task) item: {mixed_json}"
+    );
+}
+
+#[test]
 fn capture_later_item_failure_writes_nothing() {
     let (_temp, vault, config) = complete_fixture();
     let draft = "Buy milk\n\nRamen Nagi @eat/\n- status:: liked";
