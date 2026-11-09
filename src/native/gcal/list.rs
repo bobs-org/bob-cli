@@ -13,6 +13,7 @@ use super::{
     lifecycle::split_row_spans,
     model::MyAnswer,
     plan::journaled_title,
+    skip::{restore_command, SkipReason},
     snapshot::{self, SnapshotEvent},
     ui, GcalError, ListArgs,
 };
@@ -119,6 +120,20 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
         (None, false) => Err(WAITING_FOR_NOTE),
     };
     let day_string = day.to_string();
+    let is_today = day == bob_env::current_datetime().date();
+    let cells: Vec<VaultCell> = events
+        .iter()
+        .map(|event| {
+            vault_cell(
+                event,
+                &snapshot.window,
+                &journal_state,
+                &day_string,
+                note_view,
+                is_today,
+            )
+        })
+        .collect();
     // Missed meetings stay open and surface here; nothing auto-cancels.
     let past_open = past_open_meetings(&vault, day);
     if args.format.is_json() {
@@ -129,9 +144,7 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
             events,
             &counts,
             args.include_omitted,
-            &journal_state,
-            &day_string,
-            note_view,
+            &cells,
             last_sync_json(&newest),
             &past_open,
             &journal_warnings,
@@ -146,9 +159,8 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
             events,
             &counts,
             args.include_omitted,
-            &journal_state,
-            &day_string,
-            note_view,
+            &cells,
+            (day, is_today),
             &last_sync_human(&newest, unrendered),
             &journal_warnings,
             &diag_warnings,
@@ -203,70 +215,120 @@ const WAITING_FOR_TEMPLATER: &str = "waiting for Templater";
 /// note is missing or still unrendered.
 type NoteView<'a> = Result<&'a [&'a str], &'static str>;
 
+/// One event's VAULT cell and, when sync leaves it out, the shared skip
+/// reason behind it.
+struct VaultCell {
+    vault: String,
+    skip: Option<SkipReason>,
+}
+
+impl VaultCell {
+    fn skip_json(&self) -> Value {
+        self.skip
+            .as_ref()
+            .map(SkipReason::json)
+            .unwrap_or(Value::Null)
+    }
+
+    fn removed_by_you(&self) -> bool {
+        self.skip
+            .as_ref()
+            .is_some_and(|skip| skip.code == "removed_by_you")
+    }
+}
+
 /// What sync did, or would do, with one event: `task · MEET`, `task`,
-/// `context`, `waiting for note`, or `removed by you`, each with
-/// ` · off-clock` (or ` · off-clock via love`) appended for off-clock
-/// tasks. Omitted events keep their omission reason.
-fn vault_status(
+/// `context`, `waiting for note`, or `removed by you 05:28`, each task
+/// with ` · off-clock` (or ` · off-clock via love`) appended when it is
+/// off-clock. Omitted events keep their omission reason. A tombstoned
+/// row whose line is back reads as managed: the next sync adopts it.
+fn vault_cell(
     event: &ListedEvent,
+    window: &classify::DayWindow,
     journal: &std::collections::BTreeMap<
         (String, String),
         journal::OccurrenceState,
     >,
     day: &str,
     note: NoteView<'_>,
-) -> String {
+    is_today: bool,
+) -> VaultCell {
     if let Inclusion::Omitted(reason) = &event.inclusion {
-        return reason.clone();
+        return VaultCell {
+            vault: reason.clone(),
+            skip: Some(SkipReason::omitted(reason, &event.event, window)),
+        };
     }
     let lines = match note {
         Ok(lines) => lines,
-        Err(label) => return label.to_string(),
+        Err(label) => {
+            return VaultCell {
+                vault: label.to_string(),
+                skip: None,
+            };
+        }
     };
     let key = journal::occurrence_key(
         &event.event.key.calendar_id,
         &event.event.key.event_id,
     );
     let state = journal.get(&(key, day.to_string()));
-    if state.is_some_and(|state| state.gone) {
-        return "removed by you".to_string();
+    let task = event.inclusion == Inclusion::Task;
+    // Whether the journaled row is in the note. A context row without a
+    // URL is matched by its rendered text, which list does not render, so
+    // its presence is unknown: only a tombstone can say it is removed.
+    let present: Option<bool> =
+        state.and_then(|state| state.row.as_ref()).and_then(|row| {
+            if !task && event_url(event).is_none_or(str::is_empty) {
+                return None;
+            }
+            let block_id = if task { row.block_id.as_str() } else { "" };
+            Some(row_present(lines, block_id, event_url(event), task))
+        });
+    let removed = match state {
+        Some(state) if state.gone && present != Some(true) => {
+            Some(SkipReason::removed(state, window.day, is_today))
+        }
+        Some(state) if !state.gone && present == Some(false) => {
+            Some(SkipReason::removed_by_you(None, window.day, is_today))
+        }
+        _ => None,
+    };
+    if let Some(skip) = removed {
+        return VaultCell {
+            vault: skip.vault_label(),
+            skip: Some(skip),
+        };
     }
     // Context rows strip the token, so only tasks show the off-clock mark;
     // JSON booleans carry the effective clock for tasks and tag-only
     // values for context/omitted events.
-    let off_clock_suffix = if event.inclusion == Inclusion::Task {
+    let off_clock_suffix = if task {
         clock::off_clock_status_suffix(&event.clock)
     } else {
         String::new()
     };
-    match &event.inclusion {
-        Inclusion::Omitted(_) => unreachable!("filtered above"),
-        Inclusion::Context(_) => {
-            if state.and_then(|state| state.row.as_ref()).is_some()
-                && !row_present(lines, "", event_url(event), false)
-            {
-                return "removed by you".to_string();
-            }
-            "context".to_string()
-        }
+    let vault = match &event.inclusion {
+        Inclusion::Omitted(_) => unreachable!("handled above"),
+        Inclusion::Context(_) => "context".to_string(),
         Inclusion::Task => {
             if let Some(row) = state.and_then(|state| state.row.as_ref()) {
-                if !row_present(lines, &row.block_id, event_url(event), true) {
-                    return "removed by you".to_string();
-                }
                 if meet_link_present(lines, &row.block_id) {
-                    return format!("task · MEET{off_clock_suffix}");
-                }
-                return format!("task{off_clock_suffix}");
-            }
-            match adopted_block_id(lines, event_url(event)) {
-                Some(block_id) if meet_link_present(lines, &block_id) => {
                     format!("task · MEET{off_clock_suffix}")
+                } else {
+                    format!("task{off_clock_suffix}")
                 }
-                _ => format!("task{off_clock_suffix}"),
+            } else {
+                match adopted_block_id(lines, event_url(event)) {
+                    Some(block_id) if meet_link_present(lines, &block_id) => {
+                        format!("task · MEET{off_clock_suffix}")
+                    }
+                    _ => format!("task{off_clock_suffix}"),
+                }
             }
         }
-    }
+    };
+    VaultCell { vault, skip: None }
 }
 
 fn event_url(event: &ListedEvent) -> Option<&str> {
@@ -464,12 +526,7 @@ fn print_json(
     events: &[ListedEvent],
     counts: &Counts,
     include_omitted: bool,
-    journal: &std::collections::BTreeMap<
-        (String, String),
-        journal::OccurrenceState,
-    >,
-    day_string: &str,
-    note: NoteView<'_>,
+    cells: &[VaultCell],
     last_sync: Value,
     past_open: &[(NaiveDate, String)],
     journal_warnings: &[String],
@@ -478,8 +535,9 @@ fn print_json(
 ) -> Result<(), GcalError> {
     let rows: Vec<Value> = events
         .iter()
-        .filter(|event| include_omitted || !matches!(event.inclusion, Inclusion::Omitted(_)))
-        .map(|event| {
+        .zip(cells)
+        .filter(|(event, _)| include_omitted || !matches!(event.inclusion, Inclusion::Omitted(_)))
+        .map(|(event, cell)| {
             let root = event.root.as_ref();
             json!({
                 "time": event.time,
@@ -499,7 +557,8 @@ fn print_json(
                     "source": root.and_then(|root| root.source.as_deref()),
                     "warnings": root.map(|root| root.warnings.as_slice()).unwrap_or(&[]),
                 },
-                "vault": vault_status(event, journal, day_string, note),
+                "vault": cell.vault,
+                "skip": cell.skip_json(),
             })
         })
         .collect();
@@ -535,12 +594,8 @@ fn print_table(
     events: &[ListedEvent],
     counts: &Counts,
     include_omitted: bool,
-    journal: &std::collections::BTreeMap<
-        (String, String),
-        journal::OccurrenceState,
-    >,
-    day_string: &str,
-    note: NoteView<'_>,
+    cells: &[VaultCell],
+    (day_for_hint, is_today): (NaiveDate, bool),
     sync_state: &str,
     journal_warnings: &[String],
     diag_warnings: &[String],
@@ -561,16 +616,21 @@ fn print_table(
     );
     let headers = ["TIME", "EVENT", "RSVP", "ROOT", "VAULT"];
     let mut rows = Vec::new();
-    for event in events.iter().filter(|event| {
-        include_omitted || !matches!(event.inclusion, Inclusion::Omitted(_))
-    }) {
+    let shown: Vec<(&ListedEvent, &VaultCell)> = events
+        .iter()
+        .zip(cells)
+        .filter(|(event, _)| {
+            include_omitted || !matches!(event.inclusion, Inclusion::Omitted(_))
+        })
+        .collect();
+    for (event, cell) in &shown {
         let root_label = event
             .root
             .as_ref()
             .and_then(|root| root.value.as_ref())
             .map(|root| format!("● {root}"))
             .unwrap_or_else(|| "—".to_string());
-        let vault = vault_status(event, journal, day_string, note);
+        let vault = cell.vault.clone();
         let time = match buffer_label(event) {
             Some(label) => format!("{} {label}", event.time),
             None => event.time.clone(),
@@ -605,13 +665,7 @@ fn print_table(
         &styler.dim(&format_row(&headers.map(str::to_string), &widths)),
     );
     output.push('\n');
-    for (event, row) in events
-        .iter()
-        .filter(|event| {
-            include_omitted || !matches!(event.inclusion, Inclusion::Omitted(_))
-        })
-        .zip(rows.iter())
-    {
+    for ((event, _), row) in shown.iter().zip(rows.iter()) {
         let mut cells = row.clone();
         if let Some(label) = buffer_label(event) {
             cells[0] = format!("{} {}", event.time, styler.dim(&label));
@@ -647,6 +701,18 @@ fn print_table(
         "{} tasks · {} context · {} awaiting your reply\n",
         counts.tasks, counts.context, counts.awaiting_reply
     ));
+    let removed = cells.iter().filter(|cell| cell.removed_by_you()).count();
+    if removed > 0 {
+        let whose = if is_today {
+            "today's".to_string()
+        } else {
+            format!("{day_for_hint}'s")
+        };
+        output.push_str(&format!(
+            "{removed} removed by you · {} restores {whose} Events\n",
+            styler.cyan(&restore_command(day_for_hint, is_today)),
+        ));
+    }
     if !past_open.is_empty() {
         let items: Vec<String> = past_open
             .iter()

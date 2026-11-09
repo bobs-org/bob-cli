@@ -27,6 +27,7 @@ mod plan;
 mod refile;
 mod render;
 mod root;
+mod skip;
 mod snapshot;
 pub(crate) mod stamp;
 mod sync;

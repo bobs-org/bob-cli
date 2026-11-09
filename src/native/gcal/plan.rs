@@ -227,6 +227,11 @@ pub(crate) struct GoneRow {
     /// Why the row stays gone: `line_removed` for vault edits, or the
     /// Google-side cancel reason for lifecycle removals.
     pub reason: String,
+    /// The occurrence's time label (`1400-1500`, `all day`) and bare
+    /// title, so the tombstoning run can name the row it lost. Empty
+    /// when the event is not in this run's snapshot.
+    pub time_label: String,
+    pub title: String,
 }
 
 /// One cancelled Event Task, for the report.
@@ -353,10 +358,9 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
 
     for occurrence in &input.occurrences {
         let key = occurrence_key(&occurrence.calendar_id, &occurrence.event_id);
-        let journaled = input
-            .journal
-            .get(&(key, input.day_string.clone()))
-            .and_then(|state| state.row.as_ref());
+        let state = input.journal.get(&(key, input.day_string.clone()));
+        let journaled = state.and_then(|state| state.row.as_ref());
+        let gone = state.is_some_and(|state| state.gone);
         // Context rows without a 📅 URL match by their full rendered
         // text, so URL-less events stay idempotent.
         let text_match = if !occurrence.task && occurrence.url().is_none() {
@@ -375,14 +379,29 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
                     text_match.as_deref(),
                 );
                 let Some(line_index) = line_index else {
-                    plan.rows_gone.push(GoneRow {
-                        calendar_id: occurrence.calendar_id.clone(),
-                        event_id: occurrence.event_id.clone(),
-                        block_id: journaled.block_id.clone(),
-                        reason: "line_removed".to_string(),
-                    });
+                    // A tombstoned row whose line is still missing stays
+                    // gone: no new record, no report row, so a rerun is
+                    // unchanged. Only a first sighting tombstones.
+                    if !gone {
+                        plan.rows_gone.push(GoneRow {
+                            calendar_id: occurrence.calendar_id.clone(),
+                            event_id: occurrence.event_id.clone(),
+                            block_id: journaled.block_id.clone(),
+                            reason: "line_removed".to_string(),
+                            time_label: occurrence.time_label.clone(),
+                            title: occurrence.title.clone(),
+                        });
+                    }
                     continue;
                 };
+                if gone {
+                    // Pasted back: adopt the line again. Its `gcal.row`
+                    // revives the occurrence in the journal fold.
+                    adopt_occurrence(
+                        &working, &mut plan, &mut used, occurrence, line_index,
+                    );
+                    continue;
+                }
                 let journaled_kind_is_task = journaled.row_kind == "task";
                 if journaled_kind_is_task == occurrence.task {
                     // Learn before span updates: a time change re-slots
@@ -456,35 +475,9 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
                     text_match.as_deref(),
                 ) {
                     // Crash recovery: adopt the unjournaled line.
-                    let block_id =
-                        trailing_block_id(&working.lines[line_index]);
-                    let link_adopted = !block_id.is_empty()
-                        && pomodoro_link_present(&working.lines, &block_id);
-                    if !block_id.is_empty() {
-                        used.insert(block_id.clone());
-                    }
-                    plan.rows_adopted.push(AdoptedRow {
-                        calendar_id: occurrence.calendar_id.clone(),
-                        event_id: occurrence.event_id.clone(),
-                        ical_uid: occurrence.ical_uid.clone(),
-                        series_id: occurrence.series_id.clone(),
-                        block_id,
-                        url: occurrence.html_link.clone(),
-                        row_kind: row_kind(occurrence.task),
-                        spans: occurrence.spans.clone(),
-                        root: occurrence.root.clone(),
-                        source: occurrence.source.clone(),
-                        link_adopted,
-                        time_label: occurrence.time_label.clone(),
-                        title: occurrence.title.clone(),
-                        off_clock: occurrence.off_clock,
-                        buffer: buffer_for_row(occurrence),
-                        description: adopt_description(
-                            &working.lines,
-                            line_index,
-                            occurrence,
-                        ),
-                    });
+                    adopt_occurrence(
+                        &working, &mut plan, &mut used, occurrence, line_index,
+                    );
                     continue;
                 }
                 let block_id = if occurrence.task {
@@ -623,6 +616,43 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
         // reports the line the note already carries.
     }
     plan
+}
+
+/// Adopt the line at `line_index` as this occurrence's row: crash
+/// recovery for an unjournaled line, or a tombstoned row pasted back.
+/// The new `gcal.row` records what Google says now; a line that differs
+/// reads as your edit on the next run.
+fn adopt_occurrence(
+    working: &WorkingNote,
+    plan: &mut SyncPlan,
+    used: &mut HashSet<String>,
+    occurrence: &PlannedOccurrence,
+    line_index: usize,
+) {
+    let block_id = trailing_block_id(&working.lines[line_index]);
+    let link_adopted = !block_id.is_empty()
+        && pomodoro_link_present(&working.lines, &block_id);
+    if !block_id.is_empty() {
+        used.insert(block_id.clone());
+    }
+    plan.rows_adopted.push(AdoptedRow {
+        calendar_id: occurrence.calendar_id.clone(),
+        event_id: occurrence.event_id.clone(),
+        ical_uid: occurrence.ical_uid.clone(),
+        series_id: occurrence.series_id.clone(),
+        block_id,
+        url: occurrence.html_link.clone(),
+        row_kind: row_kind(occurrence.task),
+        spans: occurrence.spans.clone(),
+        root: occurrence.root.clone(),
+        source: occurrence.source.clone(),
+        link_adopted,
+        time_label: occurrence.time_label.clone(),
+        title: occurrence.title.clone(),
+        off_clock: occurrence.off_clock,
+        buffer: buffer_for_row(occurrence),
+        description: adopt_description(&working.lines, line_index, occurrence),
+    });
 }
 
 /// Outcome of the description-bullet three-way for one journaled row.
@@ -1262,6 +1292,8 @@ fn apply_lifecycle(
                     .verdict
                     .cancel_reason()
                     .unwrap_or_else(|| "line_removed".to_string()),
+                time_label: String::new(),
+                title: String::new(),
             });
             continue;
         };
@@ -1444,6 +1476,8 @@ fn remove_lifecycle_context(
         event_id: event_id.to_string(),
         block_id: journaled.block_id.clone(),
         reason: reason.to_string(),
+        time_label: String::new(),
+        title: journaled_title(current_line),
     });
 }
 

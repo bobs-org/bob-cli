@@ -2960,3 +2960,414 @@ fn list_keeps_google_root_when_vault_root_differs() {
         "{note}"
     );
 }
+
+fn fixture_with_evening_news() -> String {
+    let mut fixture: Value =
+        serde_json::from_str(include_str!("fixtures/gcal/events.json"))
+            .expect("fixture");
+    fixture["events"]
+        .as_array_mut()
+        .expect("events")
+        .push(serde_json::json!({
+            "id": "evening-news",
+            "summary": "Evening news",
+            "status": "confirmed",
+            "eventType": "default",
+            "start": {"dateTime": "2026-10-29T23:30:00-04:00"},
+            "end": {"dateTime": "2026-10-30T00:30:00-04:00"},
+            "htmlLink": "https://calendar.google.com/event?eid=evening-news",
+            "attendees": [{"self": true, "responseStatus": "accepted"}],
+        }));
+    serde_json::to_string(&fixture).expect("fixture JSON")
+}
+
+fn json_report(output: &std::process::Output) -> Value {
+    serde_json::from_str(&stdout(output)).expect("JSON report")
+}
+
+fn skipped_by_title<'a>(report: &'a Value, title: &str) -> &'a Value {
+    report["skipped"]
+        .as_array()
+        .expect("skipped array")
+        .iter()
+        .find(|event| event["title"] == title)
+        .unwrap_or_else(|| panic!("no skipped {title}: {report}"))
+}
+
+fn delete_dentist_row(env: &GcalEnv) {
+    let note = today_note(env)
+        .lines()
+        .filter(|line| !line.contains("**1830-1900** Dentist "))
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    fs::write(env.vault().join("2026/20261030.md"), note).expect("edit");
+}
+
+#[test]
+fn every_left_out_event_is_named_with_its_reason() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-skipped");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&fixture_with_evening_news());
+
+    let first = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    let report = json_report(&first);
+    assert_eq!(report["status"], "written");
+    assert_eq!(report["in_sync"], 0, "{report}");
+    assert_eq!(report["skipped"].as_array().expect("skipped").len(), 4);
+
+    let declined = skipped_by_title(&report, "Declined invitation");
+    assert_eq!(declined["reason"], "declined");
+    assert_eq!(declined["detail"], "declined in Google Calendar");
+    assert_eq!(declined["time"], "1300-1330");
+    assert_eq!(declined["hint"], Value::Null);
+    assert_eq!(declined["calendar_id"], "primary");
+    assert_eq!(declined["event_id"], "declined");
+
+    let reply = skipped_by_title(&report, "Design review");
+    assert_eq!(reply["reason"], "awaiting_reply");
+    assert_eq!(reply["detail"], "awaiting your reply");
+    assert_eq!(reply["hint"], "RSVP in Google Calendar to add it");
+
+    let focus = skipped_by_title(&report, "Focus time");
+    assert_eq!(focus["reason"], "event_type");
+    assert_eq!(focus["detail"], "Google focusTime events are not synced");
+
+    let news = skipped_by_title(&report, "Evening news");
+    assert_eq!(news["reason"], "outside_day");
+    assert_eq!(news["detail"], "belongs to Thu 2026-10-29's note");
+    assert_eq!(
+        news["hint"],
+        "sync that day with bob gcal sync -D 2026-10-29"
+    );
+
+    // A rerun changes nothing, so every included row is in sync and the
+    // same four events are still named.
+    let second = sync_output(&env, &fake, &["-f", "json"]);
+    let report = json_report(&second);
+    assert_eq!(report["status"], "unchanged");
+    assert_eq!(report["in_sync"], 10, "{report}");
+    assert_eq!(report["skipped"].as_array().expect("skipped").len(), 4);
+
+    let human = sync_output(&env, &fake, &[]);
+    let out = stdout(&human);
+    assert!(
+        out.contains(
+            "  ⊘ skipped 12:00–12:30  Design review  awaiting your reply \
+             · RSVP in Google Calendar to add it"
+        ),
+        "{out}"
+    );
+    assert!(
+        out.contains(
+            "  ⊘ skipped 13:00–13:30  Declined invitation  \
+             declined in Google Calendar"
+        ),
+        "{out}"
+    );
+    assert!(
+        out.contains(
+            "✓ Events unchanged · Pomodoros unchanged · 10 in sync · 4 skipped"
+        ),
+        "{out}"
+    );
+}
+
+#[test]
+fn skipped_rows_follow_change_rows_and_json_rows_carry_detail() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-skipped-order");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+    let output = sync_output(&env, &fake, &[]);
+    let out = stdout(&output);
+    let last_change = out.rfind("  + ").expect("a change row");
+    let first_skip = out.find("  ⊘ skipped").expect("a skipped row");
+    let summary = out.find("✓ Events").expect("summary");
+    assert!(last_change < first_skip && first_skip < summary, "{out}");
+    assert!(out.contains("· 3 skipped"), "{out}");
+    assert!(
+        !out.contains(" in sync"),
+        "no zero count on a first sync: {out}"
+    );
+
+    let json = json_report(&sync_output(&env, &fake, &["-f", "json"]));
+    assert!(json["rows"].as_array().expect("rows").is_empty());
+}
+
+#[test]
+fn rerun_after_a_tombstone_is_unchanged_and_names_the_skip() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-retombstone");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    delete_dentist_row(&env);
+
+    // The tombstoning run names the row it lost.
+    let tombstoning = sync_output(&env, &fake, &[]);
+    assert_eq!(
+        tombstoning.status.code(),
+        Some(0),
+        "{}",
+        stderr(&tombstoning)
+    );
+    let out = stdout(&tombstoning);
+    assert!(
+        out.contains(
+            "  - task    18:30–19:00  Dentist  removed by you \
+             · restore with bob gcal sync -F"
+        ),
+        "{out}"
+    );
+    assert!(
+        out.contains("✓ Events -1 removed · Pomodoros +0 entries, +0 links"),
+        "{out}"
+    );
+    let gone = journal_lines(&env)
+        .into_iter()
+        .filter(|line| line["kind"] == "gcal.gone")
+        .collect::<Vec<_>>();
+    assert_eq!(gone.len(), 1, "{gone:?}");
+    let tombstoned_at = gone[0]["ts"].as_str().expect("ts")[11..16].to_string();
+
+    // Every later run is unchanged, appends nothing, and still says why.
+    let journal_before = journal_lines(&env).len();
+    let note_before = today_note(&env);
+    for _ in 0..2 {
+        let rerun = sync_output(&env, &fake, &["-f", "json"]);
+        assert_eq!(rerun.status.code(), Some(0), "{}", stderr(&rerun));
+        let report = json_report(&rerun);
+        assert_eq!(report["status"], "unchanged", "{report}");
+        let dentist = skipped_by_title(&report, "Dentist");
+        assert_eq!(dentist["reason"], "removed_by_you");
+        assert_eq!(dentist["time"], "1830-1900");
+        assert_eq!(
+            dentist["detail"],
+            format!("removed by you at {tombstoned_at}")
+        );
+        assert_eq!(dentist["hint"], "restore with bob gcal sync -F");
+        assert_eq!(report["in_sync"], 9, "{report}");
+    }
+    assert_eq!(
+        journal_lines(&env).len(),
+        journal_before,
+        "a rerun after a tombstone appends nothing"
+    );
+    assert_eq!(today_note(&env), note_before, "and never re-adds the row");
+    let gone = journal_lines(&env)
+        .into_iter()
+        .filter(|line| line["kind"] == "gcal.gone")
+        .count();
+    assert_eq!(gone, 1, "one tombstone, ever");
+    assert_eq!(status(&env)["outcome"], "unchanged");
+
+    let human = stdout(&sync_output(&env, &fake, &[]));
+    assert!(
+        human.contains(&format!(
+            "  ⊘ skipped 18:30–19:00  Dentist  removed by you at \
+             {tombstoned_at} · restore with bob gcal sync -F"
+        )),
+        "{human}"
+    );
+    assert!(human.contains("· 9 in sync · 4 skipped"), "{human}");
+}
+
+#[test]
+fn tombstoning_run_json_carries_the_removed_row_detail() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-tombstone-json");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    delete_dentist_row(&env);
+
+    let report = json_report(&sync_output(&env, &fake, &["-f", "json"]));
+    let rows = report["rows"].as_array().expect("rows");
+    let removed = rows
+        .iter()
+        .find(|row| row["action"] == "removed")
+        .expect("removed row");
+    assert_eq!(removed["title"], "Dentist");
+    assert_eq!(removed["time"], "1830-1900");
+    assert_eq!(removed["detail"], "removed by you");
+    // The fresh tombstone reports as a change row, not as a skip.
+    assert!(
+        report["skipped"]
+            .as_array()
+            .expect("skipped")
+            .iter()
+            .all(|event| event["title"] != "Dentist"),
+        "{report}"
+    );
+}
+
+#[test]
+fn pasted_back_row_is_managed_again() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-revive");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let original = today_note(&env);
+    delete_dentist_row(&env);
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let mut list = env.command();
+    fake.install(&mut list).args(["gcal", "list", "-f", "json"]);
+    let listed = json_report(&list.output().expect("list"));
+    let dentist = listed["events"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .find(|row| row["title"] == "Dentist")
+        .expect("dentist")
+        .clone();
+    assert!(
+        dentist["vault"]
+            .as_str()
+            .expect("vault")
+            .starts_with("removed by you "),
+        "{dentist}"
+    );
+    assert_eq!(dentist["skip"]["reason"], "removed_by_you");
+    assert_eq!(dentist["skip"]["hint"], "restore with bob gcal sync -F");
+
+    // Paste the row back (the whole note as it was).
+    fs::write(env.vault().join("2026/20261030.md"), &original)
+        .expect("paste back");
+    let revived = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(revived.status.code(), Some(0), "{}", stderr(&revived));
+    let report = json_report(&revived);
+    let adopted = report["rows"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .find(|row| row["action"] == "adopted")
+        .expect("adopted row")
+        .clone();
+    assert_eq!(adopted["title"], "Dentist");
+    assert_eq!(today_note(&env), original, "the pasted row is kept as is");
+    assert_eq!(report["in_sync"], 9, "{report}");
+    assert!(
+        report["skipped"]
+            .as_array()
+            .expect("skipped")
+            .iter()
+            .all(|event| event["title"] != "Dentist"),
+        "{report}"
+    );
+    // A new `gcal.row` after the tombstone revives it.
+    let journal = journal_lines(&env);
+    let last_dentist = journal
+        .iter()
+        .rfind(|line| {
+            line["key"]["event_id"] == "dentist"
+                && matches!(
+                    line["kind"].as_str(),
+                    Some("gcal.row" | "gcal.gone")
+                )
+        })
+        .expect("dentist journal line");
+    assert_eq!(last_dentist["kind"], "gcal.row");
+
+    // Managed again: list shows a task, a rerun is unchanged, and a later
+    // Google title change applies.
+    let mut list = env.command();
+    fake.install(&mut list).args(["gcal", "list", "-f", "json"]);
+    let listed = json_report(&list.output().expect("list"));
+    let dentist = listed["events"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .find(|row| row["title"] == "Dentist")
+        .expect("dentist")
+        .clone();
+    assert_eq!(dentist["vault"], "task · MEET", "{dentist}");
+    assert_eq!(dentist["skip"], Value::Null);
+    let rerun = json_report(&sync_output(&env, &fake, &["-f", "json"]));
+    assert_eq!(rerun["status"], "unchanged", "{rerun}");
+    assert_eq!(rerun["in_sync"], 10, "{rerun}");
+
+    fake.events_json(
+        &include_str!("fixtures/gcal/events.json")
+            .replace("Dentist @body", "Dentist visit @body"),
+    );
+    let renamed = sync_output(&env, &fake, &[]);
+    assert_eq!(renamed.status.code(), Some(0), "{}", stderr(&renamed));
+    assert!(
+        today_note(&env).contains("**1830-1900** Dentist visit "),
+        "{}",
+        today_note(&env)
+    );
+}
+
+#[test]
+fn list_shares_the_skip_words_and_footer() {
+    let env = GcalEnv::new("bob-cli-gcal-list-skips");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    delete_dentist_row(&env);
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let tombstoned_at = journal_lines(&env)
+        .into_iter()
+        .find(|line| line["kind"] == "gcal.gone")
+        .expect("tombstone")["ts"]
+        .as_str()
+        .expect("ts")[11..16]
+        .to_string();
+
+    let mut table = env.command();
+    fake.install(&mut table).args(["gcal", "list", "-a"]);
+    let output = table.output().expect("list");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let out = stdout(&output);
+    let dentist = out
+        .lines()
+        .find(|line| line.contains("Dentist"))
+        .expect("dentist row");
+    assert!(
+        dentist.contains(&format!("removed by you {tombstoned_at}")),
+        "{dentist}"
+    );
+    assert!(
+        out.contains(
+            "1 removed by you · bob gcal sync -F restores today's Events"
+        ),
+        "{out}"
+    );
+    // Omitted rows keep the classifier's own words in the VAULT column.
+    let declined = out
+        .lines()
+        .find(|line| line.contains("Declined invitation"))
+        .expect("declined row");
+    assert!(declined.trim_end().ends_with("declined"), "{declined}");
+
+    let mut json = env.command();
+    fake.install(&mut json)
+        .args(["gcal", "list", "-a", "-f", "json"]);
+    let report = json_report(&json.output().expect("list"));
+    let by_title = |title: &str| {
+        report["events"]
+            .as_array()
+            .expect("events")
+            .iter()
+            .find(|row| row["title"] == title)
+            .unwrap_or_else(|| panic!("no {title}"))
+            .clone()
+    };
+    let declined = by_title("Declined invitation");
+    assert_eq!(declined["reason"], "declined", "raw reason unchanged");
+    assert_eq!(declined["vault"], "declined");
+    assert_eq!(declined["skip"]["reason"], "declined");
+    assert_eq!(declined["skip"]["detail"], "declined in Google Calendar");
+    assert_eq!(
+        by_title("Design review")["skip"]["reason"],
+        "awaiting_reply"
+    );
+    assert_eq!(by_title("Product interview")["skip"], Value::Null);
+    assert_eq!(by_title("Dentist")["skip"]["reason"], "removed_by_you");
+}

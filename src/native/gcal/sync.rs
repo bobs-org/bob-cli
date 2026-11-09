@@ -22,6 +22,7 @@ use super::{
     model::{EventDateTime, GcalEvent},
     plan::{self, LinkPhase, MeetPomodoroEntry, PlannedOccurrence},
     render,
+    skip::{self, SkipReason, SkippedEvent},
     snapshot::{self},
     stamp::{self, Stamp},
     ui, GcalError, SyncArgs,
@@ -78,6 +79,8 @@ fn record_last_error(args: &SyncArgs, error: &GcalError) {
             stamp: None,
             stamp_refreshed: false,
             waiting: None,
+            skipped: Vec::new(),
+            in_sync: 0,
         },
         Some(format!("{}: {}", error.kind(), error.message())),
     );
@@ -95,6 +98,8 @@ struct ReportRow {
     buffer: crate::native::event_task::EventBuffer,
     /// Bullet lines this run wrote for the row, 0 otherwise.
     description_lines: usize,
+    /// Why a removed row left the note, for `removed` rows.
+    skip: Option<SkipReason>,
 }
 
 struct SyncReport {
@@ -115,6 +120,10 @@ struct SyncReport {
     stamp_refreshed: bool,
     /// Why the run wrote nothing, for `waiting` results only.
     waiting: Option<WaitingReason>,
+    /// Every Google event this run leaves out of the note, with why.
+    skipped: Vec<SkippedEvent>,
+    /// Included events already in the note that needed no change.
+    in_sync: usize,
 }
 
 /// Deprecation diagnostics for the complete fetched snapshot, before any
@@ -261,11 +270,12 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
 
     if args.dry_run {
         let diff = unified_diff(&contents, &plan.contents, &display_path);
+        let skips = day_skips(&snapshot, &journal_state, &plan, is_today);
         return Ok(SyncReport {
             day,
             path: display_path,
             status: "dry_run",
-            rows: report_rows(&plan),
+            rows: report_rows(&plan, &snapshot, is_today),
             entries: plan.pomodoro_entries.clone(),
             links_added: plan.links_added.len(),
             links_refiled: plan.links_refiled.len(),
@@ -278,10 +288,13 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
             stamp: plan.stamp.clone(),
             stamp_refreshed: plan.stamp_refreshed,
             waiting: None,
+            skipped: skips.skipped,
+            in_sync: skips.in_sync,
         });
     }
 
     if !plan.changed {
+        let skips = day_skips(&snapshot, &journal_state, &plan, is_today);
         let report = SyncReport {
             day,
             path: display_path.clone(),
@@ -299,6 +312,8 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
             stamp: plan.stamp.clone(),
             stamp_refreshed: plan.stamp_refreshed,
             waiting: None,
+            skipped: skips.skipped,
+            in_sync: skips.in_sync,
         };
         record_status(&host, day, "unchanged", &report, None);
         return Ok(report);
@@ -386,6 +401,8 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
                     Some(&mut resolver),
                 );
                 if !plan.changed {
+                    let skips =
+                        day_skips(&snapshot, &journal_state, &plan, is_today);
                     let report = SyncReport {
                         day,
                         path: display_path.clone(),
@@ -403,6 +420,8 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
                         stamp: plan.stamp.clone(),
                         stamp_refreshed: plan.stamp_refreshed,
                         waiting: None,
+                        skipped: skips.skipped,
+                        in_sync: skips.in_sync,
                     };
                     record_status(&host, day, "unchanged", &report, None);
                     return Ok(report);
@@ -425,11 +444,12 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
     }
     warnings.extend(plan.warnings.iter().cloned());
 
+    let skips = day_skips(&snapshot, &journal_state, &plan, is_today);
     let report = SyncReport {
         day,
         path: display_path,
         status: "written",
-        rows: report_rows(&plan),
+        rows: report_rows(&plan, &snapshot, is_today),
         entries: plan.pomodoro_entries.clone(),
         links_added: plan.links_added.len(),
         links_refiled: plan.links_refiled.len(),
@@ -442,6 +462,8 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
         stamp: plan.stamp.clone(),
         stamp_refreshed: plan.stamp_refreshed,
         waiting: None,
+        skipped: skips.skipped,
+        in_sync: skips.in_sync,
     };
     record_status(&host, day, "written", &report, None);
     Ok(report)
@@ -473,6 +495,8 @@ fn waiting(
         stamp: None,
         stamp_refreshed: false,
         waiting: Some(reason),
+        skipped: Vec::new(),
+        in_sync: 0,
     };
     if !args.dry_run {
         record_status(host, day, "waiting", &report, None);
@@ -714,7 +738,7 @@ fn task_buffer(
 }
 
 /// `(all_day, start_min, end_min, time_label)` for one event in vault-local time.
-fn row_time(
+pub(super) fn row_time(
     window: &classify::DayWindow,
     event: &super::model::GcalEvent,
 ) -> (bool, i32, i32, String) {
@@ -944,7 +968,28 @@ fn written_description_lines(state: &journal::DescriptionState) -> usize {
     }
 }
 
-fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
+/// Skipped events and the in-sync count for the finished plan.
+fn day_skips(
+    snapshot: &snapshot::DaySnapshot,
+    journal: &BTreeMap<(String, String), OccurrenceState>,
+    plan: &plan::SyncPlan,
+    is_today: bool,
+) -> skip::DaySkips {
+    skip::summarize(
+        &snapshot.events,
+        &snapshot.window,
+        journal,
+        plan,
+        is_today,
+        &|event| row_time(&snapshot.window, event).3,
+    )
+}
+
+fn report_rows(
+    plan: &plan::SyncPlan,
+    snapshot: &snapshot::DaySnapshot,
+    is_today: bool,
+) -> Vec<ReportRow> {
     let mut rows = Vec::new();
     for added in &plan.rows_added {
         rows.push(ReportRow {
@@ -962,6 +1007,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             untracked: added.off_clock,
             buffer: added.buffer,
             description_lines: written_description_lines(&added.description),
+            skip: None,
         });
     }
     for adopted in &plan.rows_adopted {
@@ -980,20 +1026,41 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             untracked: adopted.off_clock,
             buffer: adopted.buffer,
             description_lines: 0,
+            skip: None,
         });
     }
-    for _ in &plan.rows_gone {
+    for gone in &plan.rows_gone {
+        // A lifecycle tombstone has no occurrence in the plan; borrow
+        // the time and title from the snapshot when the event is there.
+        let listed = snapshot.events.iter().find(|listed| {
+            listed.event.key.calendar_id == gone.calendar_id
+                && listed.event.key.event_id == gone.event_id
+        });
+        let time = match (gone.time_label.is_empty(), listed) {
+            (true, Some(listed)) => row_time(&snapshot.window, &listed.event).3,
+            _ => gone.time_label.clone(),
+        };
+        let title = match (gone.title.is_empty(), listed) {
+            (true, Some(listed)) => listed.event.title.clone(),
+            _ => gone.title.clone(),
+        };
+        let skip = if gone.reason == "line_removed" {
+            SkipReason::removed_by_you(None, snapshot.day, is_today)
+        } else {
+            SkipReason::removed_in_google(&gone.reason)
+        };
         rows.push(ReportRow {
             action: "removed",
             kind: "task",
-            time: String::new(),
-            title: String::new(),
+            time,
+            title,
             root: None,
             source: None,
             off_clock: false,
             untracked: false,
             buffer: crate::native::event_task::EventBuffer::default(),
             description_lines: 0,
+            skip: Some(skip),
         });
     }
     for updated in &plan.rows_updated {
@@ -1012,6 +1079,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             untracked: updated.off_clock,
             buffer: updated.buffer,
             description_lines: updated.wrote_description_lines,
+            skip: None,
         });
     }
     for cancelled in &plan.rows_cancelled {
@@ -1026,6 +1094,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             untracked: false,
             buffer: crate::native::event_task::EventBuffer::default(),
             description_lines: 0,
+            skip: None,
         });
     }
     for removed in &plan.rows_removed {
@@ -1040,6 +1109,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             untracked: false,
             buffer: crate::native::event_task::EventBuffer::default(),
             description_lines: 0,
+            skip: Some(SkipReason::removed_in_google(&removed.reason)),
         });
     }
     for upgraded in &plan.rows_upgraded {
@@ -1054,6 +1124,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             untracked: upgraded.off_clock,
             buffer: upgraded.buffer,
             description_lines: written_description_lines(&upgraded.description),
+            skip: None,
         });
     }
     for learned in &plan.learned {
@@ -1068,6 +1139,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             untracked: false,
             buffer: crate::native::event_task::EventBuffer::default(),
             description_lines: 0,
+            skip: None,
         });
     }
     rows
@@ -1408,9 +1480,12 @@ fn print_json(report: &SyncReport) {
                 "untracked": row.untracked,
                 "buffer": buffer_json(row.buffer),
                 "description_lines": row.description_lines,
+                "detail": row.skip.as_ref().map(|skip| skip.detail.as_str()),
             })
         })
         .collect();
+    let skipped: Vec<Value> =
+        report.skipped.iter().map(SkippedEvent::json).collect();
     let stamp = report.stamp.as_ref().map(|stamp| {
         json!({
             "account": stamp.account,
@@ -1427,6 +1502,8 @@ fn print_json(report: &SyncReport) {
             "path": report.path,
             "status": report.status,
             "rows": rows,
+            "in_sync": report.in_sync,
+            "skipped": skipped,
             "pomodoro": {
                 "entry_line": first_open_entry(report).map(|entry| entry.line),
                 "created": first_open_entry(report)
@@ -1511,9 +1588,11 @@ fn print_human(report: &SyncReport) {
             .as_deref()
             .map(|source| format!("  via {source}"))
             .unwrap_or_default();
-        let detail = match row.action {
-            "removed" if row.kind == "task" => "removed by you".to_string(),
-            "removed" => format!("removed ({})", row.title),
+        let detail = match (row.action, row.skip.as_ref()) {
+            ("removed", Some(skip)) if row.kind == "task" => {
+                removed_row_text(row, skip, &styler)
+            }
+            ("removed", _) => format!("removed ({})", row.title),
             _ => format!("{time}  {}{root}{source}", row.title),
         };
         let bullets = if row.description_lines > 0 {
@@ -1525,6 +1604,9 @@ fn print_human(report: &SyncReport) {
     }
     for entry in &report.entries {
         println!("  {}", meet_human_line(entry));
+    }
+    for skipped in &report.skipped {
+        println!("{}", skipped.human_line(&styler, &human_time));
     }
     let count = |action: &str, kind: &str| {
         report
@@ -1579,6 +1661,7 @@ fn print_human(report: &SyncReport) {
                 count("updated", "task") + count("updated", "context")
             ),
             format!("-{} cancelled", count("cancelled", "task")),
+            format!("-{} removed", count("removed", "task")),
             format!("^{} upgraded", count("upgraded", "task")),
         ];
         parts.retain(|part| {
@@ -1608,11 +1691,47 @@ fn print_human(report: &SyncReport) {
         }
         pomodoros
     };
-    println!("{summary}");
+    println!("{summary}{}", counts_tail(report));
     if let Some(stamp) = &report.stamp {
         println!("{}", styler.dim(&stamp.echo(report.day)));
     }
     print_warnings_stderr(report);
+}
+
+/// ` · 3 in sync · 2 skipped`, dropping zero counts so a quiet day stays
+/// short.
+fn counts_tail(report: &SyncReport) -> String {
+    let mut tail = String::new();
+    if report.in_sync > 0 {
+        tail.push_str(&format!(" · {} in sync", report.in_sync));
+    }
+    if !report.skipped.is_empty() {
+        tail.push_str(&format!(" · {} skipped", report.skipped.len()));
+    }
+    tail
+}
+
+/// A removed task row's text: `{time}  {title}  removed by you · restore
+/// with bob gcal sync -F`. Parts the plan could not name are left out.
+fn removed_row_text(
+    row: &ReportRow,
+    skip: &SkipReason,
+    styler: &Styler,
+) -> String {
+    let mut parts = Vec::new();
+    if !row.time.is_empty() {
+        parts.push(human_time(&row.time));
+    }
+    if !row.title.is_empty() {
+        parts.push(row.title.clone());
+    }
+    let mut tail = styler.dim(&skip.detail);
+    if let Some(hint) = &skip.hint {
+        tail.push_str(&styler.dim(" · "));
+        tail.push_str(&hint.styled(styler));
+    }
+    parts.push(tail);
+    parts.join("  ")
 }
 
 fn merge_warnings(mut warnings: Vec<String>, extra: &[String]) -> Vec<String> {
@@ -1656,7 +1775,7 @@ fn meet_human_line(entry: &MeetPomodoroEntry) -> String {
 }
 
 /// `0800-0830` → `08:00–08:30`; `all day` stays as written.
-fn human_time(time: &str) -> String {
+pub(super) fn human_time(time: &str) -> String {
     if time.len() == 9 && time.as_bytes().get(4) == Some(&b'-') {
         format!(
             "{}:{}–{}:{}",

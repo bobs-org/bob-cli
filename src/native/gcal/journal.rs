@@ -33,6 +33,12 @@ pub(crate) struct OccurrenceState {
     pub row: Option<RowRecord>,
     pub link: bool,
     pub gone: bool,
+    /// When the first `gcal.gone` tombstone was written; `None` while
+    /// the occurrence is not gone.
+    pub gone_at: Option<DateTime<FixedOffset>>,
+    /// Why the first tombstone was written: `line_removed` for your
+    /// deletion, or the Google-side lifecycle reason.
+    pub gone_reason: Option<String>,
     /// Once-reported lifecycle notices (`kept_edit`, `kept_root`,
     /// `worked_kept`, `now_maybe`, `awaiting_reply`, …).
     pub flags: HashSet<String>,
@@ -155,7 +161,7 @@ pub(crate) fn load_state(
         match parse_record(event) {
             Some((key, day, update)) => {
                 let entry = state.entry((key, day)).or_default();
-                update.apply(entry);
+                update.apply(entry, event.ts);
             }
             None => {
                 malformed += 1;
@@ -178,16 +184,31 @@ pub(crate) fn load_state(
 enum Update {
     Row(RowRecord),
     Link,
-    Gone,
+    Gone(Option<String>),
     Flag(String),
 }
 
 impl Update {
-    fn apply(self, state: &mut OccurrenceState) {
+    /// Fold one record in writer order. A `gcal.row` after a `gcal.gone`
+    /// revives the occurrence (a pasted-back row is managed again); a
+    /// later tombstone starts a fresh `gone_at`. Repeat tombstones keep
+    /// the first one's time and reason.
+    fn apply(self, state: &mut OccurrenceState, ts: DateTime<FixedOffset>) {
         match self {
-            Self::Row(row) => state.row = Some(row),
+            Self::Row(row) => {
+                state.row = Some(row);
+                state.gone = false;
+                state.gone_at = None;
+                state.gone_reason = None;
+            }
             Self::Link => state.link = true,
-            Self::Gone => state.gone = true,
+            Self::Gone(reason) => {
+                if !state.gone {
+                    state.gone_at = Some(ts);
+                    state.gone_reason = reason;
+                }
+                state.gone = true;
+            }
             Self::Flag(reason) => {
                 state.flags.insert(reason);
             }
@@ -250,7 +271,12 @@ fn parse_record(event: &StoredEvent) -> Option<(String, String, Update)> {
                 .to_string(),
         }),
         "gcal.link" => Update::Link,
-        "gcal.gone" => Update::Gone,
+        "gcal.gone" => Update::Gone(
+            object
+                .get("reason")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        ),
         "gcal.flag" => Update::Flag(
             object
                 .get("reason")
@@ -740,5 +766,144 @@ mod tests {
         assert!(gone.gone);
         assert!(gone.row.is_none());
         assert_eq!(newest.expect("newest").1, host);
+    }
+
+    fn raw_record(dir: &Path, ts: &str, kind: &str, extra: serde_json::Value) {
+        let mut value = json!({
+            "v": 1,
+            "ts": ts,
+            "host": "mac",
+            "kind": kind,
+            "key": {"calendar_id": "primary", "event_id": "e1"},
+            "day": "2026-10-30",
+        });
+        for (name, field) in extra.as_object().expect("object") {
+            value[name] = field.clone();
+        }
+        let line = serde_json::to_string(&value).expect("json") + "\n";
+        pref_journal::append_line(dir, NAMESPACE, "mac", &line)
+            .expect("append");
+    }
+
+    fn row_extra() -> serde_json::Value {
+        json!({
+            "block_id": "haircut",
+            "row": "task",
+            "spans": {"title": span_hash("Haircut")},
+            "path": "2026/20261030.md",
+        })
+    }
+
+    fn folded(dir: &Path) -> OccurrenceState {
+        let (state, warnings, _) = load_state(dir).expect("fold");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        state
+            .get(&(occurrence_key("primary", "e1"), "2026-10-30".to_string()))
+            .cloned()
+            .expect("occurrence state")
+    }
+
+    #[test]
+    fn tombstone_keeps_its_first_time_and_reason() {
+        let dir = tempfile::tempdir().expect("vault");
+        raw_record(
+            dir.path(),
+            "2026-10-30T05:24:20-04:00",
+            "gcal.row",
+            row_extra(),
+        );
+        raw_record(
+            dir.path(),
+            "2026-10-30T05:28:01-04:00",
+            "gcal.gone",
+            json!({"reason": "line_removed"}),
+        );
+        raw_record(
+            dir.path(),
+            "2026-10-30T05:40:00-04:00",
+            "gcal.gone",
+            json!({"reason": "Declined in Google Calendar"}),
+        );
+        let entry = folded(dir.path());
+        assert!(entry.gone);
+        assert_eq!(entry.gone_reason.as_deref(), Some("line_removed"));
+        assert_eq!(
+            entry
+                .gone_at
+                .expect("first tombstone")
+                .format("%H:%M")
+                .to_string(),
+            "05:28"
+        );
+        assert!(entry.row.is_some(), "the tombstone keeps the row record");
+    }
+
+    #[test]
+    fn row_after_gone_revives_the_occurrence() {
+        let dir = tempfile::tempdir().expect("vault");
+        raw_record(
+            dir.path(),
+            "2026-10-30T05:24:20-04:00",
+            "gcal.row",
+            row_extra(),
+        );
+        raw_record(
+            dir.path(),
+            "2026-10-30T05:28:01-04:00",
+            "gcal.gone",
+            json!({"reason": "line_removed"}),
+        );
+        raw_record(
+            dir.path(),
+            "2026-10-30T06:00:00-04:00",
+            "gcal.row",
+            row_extra(),
+        );
+        let entry = folded(dir.path());
+        assert!(!entry.gone, "a later row revives the occurrence");
+        assert_eq!(entry.gone_at, None);
+        assert_eq!(entry.gone_reason, None);
+        assert_eq!(entry.row.as_ref().expect("row").block_id, "haircut");
+    }
+
+    #[test]
+    fn gone_after_row_stays_gone_and_a_later_tombstone_restarts() {
+        let dir = tempfile::tempdir().expect("vault");
+        raw_record(
+            dir.path(),
+            "2026-10-30T05:24:20-04:00",
+            "gcal.row",
+            row_extra(),
+        );
+        raw_record(
+            dir.path(),
+            "2026-10-30T05:28:01-04:00",
+            "gcal.gone",
+            json!({"reason": "line_removed"}),
+        );
+        assert!(folded(dir.path()).gone);
+        // Revived, then removed again: the clock restarts.
+        raw_record(
+            dir.path(),
+            "2026-10-30T06:00:00-04:00",
+            "gcal.row",
+            row_extra(),
+        );
+        raw_record(
+            dir.path(),
+            "2026-10-30T07:15:00-04:00",
+            "gcal.gone",
+            json!({"reason": "line_removed"}),
+        );
+        let entry = folded(dir.path());
+        assert!(entry.gone);
+        assert_eq!(
+            entry
+                .gone_at
+                .expect("second tombstone")
+                .format("%H:%M")
+                .to_string(),
+            "07:15"
+        );
     }
 }

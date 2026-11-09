@@ -894,6 +894,8 @@ fn journal_task(
             }),
             link,
             gone: false,
+            gone_at: None,
+            gone_reason: None,
             flags: HashSet::new(),
         },
     )
@@ -1307,6 +1309,8 @@ fn upgraded_ended_maybe_gets_closed_meet() {
             }),
             link: false,
             gone: false,
+            gone_at: None,
+            gone_reason: None,
             flags: HashSet::new(),
         },
     );
@@ -3015,6 +3019,8 @@ fn context_upgrade_resolves_the_upgraded_line() {
             }),
             link: false,
             gone: false,
+            gone_at: None,
+            gone_reason: None,
             flags: HashSet::new(),
         },
     );
@@ -3320,4 +3326,124 @@ fn moved_meeting_under_a_running_entry_is_left_silently() {
         .contains("- [ ] (**0800-0830** [t:: 30m]) — MEET"));
     assert_eq!(plan.links_refiled.len(), 0);
     assert!(plan.kept.iter().all(|notice| notice.flag != "kept_meet"));
+}
+
+fn tombstone(
+    journal: &mut BTreeMap<(String, String), OccurrenceState>,
+    event_id: &str,
+    reason: &str,
+) {
+    let key = (
+        occurrence_key("primary", event_id),
+        "2026-10-30".to_string(),
+    );
+    let state = journal.get_mut(&key).expect("journaled");
+    state.gone = true;
+    state.gone_at = FixedOffset::east_opt(0)
+        .expect("offset")
+        .with_ymd_and_hms(2026, 10, 30, 12, 5, 0)
+        .single();
+    state.gone_reason = Some(reason.to_string());
+}
+
+fn without_row(contents: &str, block_id: &str) -> String {
+    let needle = format!("^{block_id}");
+    contents
+        .lines()
+        .filter(|line| !line.contains(&needle))
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n"
+}
+
+#[test]
+fn first_missing_line_tombstones_with_its_time_and_title() {
+    let (contents, journal, occ, block_id) = seed_task(occurrence(
+        "design",
+        "Design review",
+        true,
+        "1400-1500",
+        840,
+    ));
+    let contents = without_row(&contents, &block_id);
+    let plan = run_with_journal(&contents, vec![occ], &journal);
+    assert!(plan.changed);
+    assert_eq!(plan.rows_gone.len(), 1);
+    assert_eq!(plan.rows_gone[0].reason, "line_removed");
+    assert_eq!(plan.rows_gone[0].time_label, "1400-1500");
+    assert_eq!(plan.rows_gone[0].title, "Design review");
+}
+
+#[test]
+fn tombstoned_row_with_a_missing_line_is_never_tombstoned_again() {
+    let (contents, mut journal, occ, block_id) = seed_task(occurrence(
+        "design",
+        "Design review",
+        true,
+        "1400-1500",
+        840,
+    ));
+    let contents = without_row(&contents, &block_id);
+    tombstone(&mut journal, "design", "line_removed");
+    let plan = run_with_journal(&contents, vec![occ], &journal);
+    assert!(plan.rows_gone.is_empty(), "no second tombstone");
+    assert!(plan.rows_added.is_empty(), "never re-added");
+    assert!(plan.rows_adopted.is_empty());
+    assert!(
+        !plan.contents.contains("Design review"),
+        "{}",
+        plan.contents
+    );
+}
+
+#[test]
+fn tombstoned_row_pasted_back_is_adopted_again() {
+    let (contents, mut journal, occ, block_id) = seed_task(occurrence(
+        "design",
+        "Design review",
+        true,
+        "1400-1500",
+        840,
+    ));
+    tombstone(&mut journal, "design", "line_removed");
+    let plan = run_with_journal(&contents, vec![occ], &journal);
+    assert!(plan.rows_gone.is_empty());
+    assert!(
+        plan.rows_added.is_empty(),
+        "the pasted row is not duplicated"
+    );
+    assert_eq!(plan.rows_adopted.len(), 1);
+    assert_eq!(plan.rows_adopted[0].block_id, block_id);
+    assert!(!plan.rows_adopted[0].link_adopted);
+    assert_eq!(plan.contents.matches("Design review").count(), 1);
+}
+
+#[test]
+fn pasted_back_row_with_its_link_adopts_the_link_too() {
+    let first = run_at(
+        empty_ledger(),
+        vec![with_phase(
+            occurrence("design", "Design review", true, "1400-1500", 840),
+            LinkPhase::Future,
+        )],
+        ACCOUNT,
+        now_at(12, 0),
+        true,
+    );
+    let mut journal = journal_from_added(&first);
+    tombstone(&mut journal, "design", "line_removed");
+    let occ = with_phase(
+        occurrence("design", "Design review", true, "1400-1500", 840),
+        LinkPhase::Future,
+    );
+    let plan = run_journaled_at(
+        &first.contents,
+        vec![occ],
+        &journal,
+        now_at(12, 5),
+        true,
+    );
+    assert_eq!(plan.rows_adopted.len(), 1);
+    assert!(plan.rows_adopted[0].link_adopted, "{}", first.contents);
+    assert!(plan.links_added.is_empty(), "no second MEET link");
 }

@@ -339,8 +339,8 @@ snapshot.
 
 The table shows local time, title, RSVP, selected root, and the VAULT column:
 what sync did, or would do, with the event — `task · MEET`, `task`,
-`context`, `waiting for note`, `waiting for Templater`, or `removed by you`,
-each with ` · off-clock` appended for Google off-clock tasks
+`context`, `waiting for note`, `waiting for Templater`, or
+`removed by you 05:28` (the time sync noticed your deletion), each with ` · off-clock` appended for Google off-clock tasks
 (`task · MEET · off-clock`). While the day's note still has Templater tags,
 every VAULT cell and the header read `waiting for Templater`, the state sync
 refuses to write into. The TIME column appends the buffer label for
@@ -349,7 +349,12 @@ buffered tasks (`12:00-13:00 −30m +15m`, dimmed on a TTY); see
 of each Event Task with N bullet lines sync would write, reasons
 included; see
 [Description bullets](#description-bullets). Omitted events keep their
-omission reason. `-a` also shows omitted events. Counts include omitted events
+omission reason. `-a` also shows omitted events. A footer line,
+`1 removed by you · bob gcal sync -F restores today's Events`, counts the
+rows you removed (`-D` days name the day in the command). A tombstoned row
+you pasted back reads as managed (`task`): the next sync adopts it again. The
+VAULT words come from the same vocabulary sync uses to name every event it
+leaves out; see [Skipped events](#skipped-events). Counts include omitted events
 even when their rows are hidden. The header carries the last sync: `synced
 3 min ago on kellys-macbook-pro`, falling back to the newest journal record,
 else `never synced`.
@@ -362,8 +367,9 @@ reports `time`, `title`, `answer`, `inclusion`, `reason`, `clock` (`"off"`,
 (the deciding note path or `null`), `off_clock`, deprecated `untracked`,
 `buffer` (`{"before_minutes", "after_minutes"}`, or `null` when the row
 carries no buffer), `description_lines` (bullet lines sync would write,
-reasons included, 0 otherwise), `vault`, and `root.value`, `root.source`,
-and `root.warnings`. `vault` appends ` · off-clock` for explicit off tags
+reasons included, 0 otherwise), `vault`, `skip` (the [skip reason](#skipped-events) as
+`{reason, detail, hint}` for an omitted or removed event, else `null`), and
+`root.value`, `root.source`, and `root.warnings`. `vault` appends ` · off-clock` for explicit off tags
 and ` · off-clock via <stem>` for inherited clocks. Descriptions and
 attendee details are omitted. A root may be null when no candidate is
 valid; per-event `root.warnings` explain each rejected candidate and its
@@ -409,9 +415,14 @@ The run fetches every configured calendar outside any lock, classifies each
 event, chooses roots, and folds the per-host journal. The plan then inserts
 new rows in time order (never reordering existing lines), adopts rows whose
 `📅` URL is already in the note without a journal record (crash recovery),
-tombstones journaled rows whose line is gone (never re-created), and files
+tombstones journaled rows whose line is gone, and files
 each created Event Task under a past, running, or planned MEET Pomodoro in
-the same write. A removed link is never re-added. A moved event can re-file
+the same write. A tombstone is written once: a rerun while the line is still
+missing is unchanged and appends nothing. A tombstoned row is never
+re-created, but if you paste its line back (matched by block ID, then `📅`
+URL or text) the next sync adopts it again and journals a fresh `gcal.row`,
+so Google updates apply and `list` shows `task` once more. A removed link is
+never re-added. A moved event can re-file
 its existing link when Google changes its occupied span and the filing is
 still Bob-owned. An unchanged
 calendar can still write the Events stamp when the stamp is due (missing,
@@ -491,8 +502,11 @@ diagnostics.
 `status` (`written`, `unchanged`, `waiting`, or `dry_run`), `rows`
 (`action`, `kind`, `time`, `title`, `root`, `source`, `off_clock`, deprecated
 `untracked`, `buffer` as `{"before_minutes", "after_minutes"}` or
-`null`, and `description_lines`, the bullet lines this run wrote for the
-row, reasons included, 0 otherwise), `pomodoro`
+`null`, `description_lines`, the bullet lines this run wrote for the
+row, reasons included, 0 otherwise, and `detail`, the reason text of a
+`removed` row — `removed by you` or the lifecycle reason — else `null`),
+`in_sync` (included events already in the note that needed no change),
+`skipped` (see [Skipped events](#skipped-events)), `pomodoro`
 (`entry_line`, `created`, `links_added`, `links_refiled`, `links_sorted`, `entries`),
 `warnings`, `deprecations`, and `stamp`
 (`account`, `synced_at`, `refreshed`, or `null` when there is no Events
@@ -513,6 +527,54 @@ into meeting-time order. A sort-only human summary looks like
 `✓ Events unchanged · Pomodoros ↕2 links sorted`; a refile-only summary looks
 like `✓ Events updated · Pomodoros ↪1 refiled`; other Pomodoro summaries append
 `, ↕2 sorted` or `, ↪1 refiled` when applicable.
+
+### Skipped events
+
+Every sync names every Google event it leaves out, with a reason and, when
+you can act, the exact fix. `bob gcal list` uses the same words. Skipped rows
+come after the change rows and MEET lines, in time order, and the summary
+line ends with `· N in sync · M skipped` (zero counts are dropped):
+
+```text
+bob gcal sync · 2026/20261109.md
+  + task    16:00–17:00 −15m  Haircut (The Wolves Den)  ● body ≡ 1
+  + MEET    () — MEET · linked 1
+  ⊘ skipped 09:00–09:30  Team sync  declined in Google Calendar
+  ⊘ skipped 12:00–12:30  Lunch with Sam  awaiting your reply · RSVP in Google Calendar to add it
+✓ Events +1 task · Pomodoros +1 entry, +1 link · 3 in sync · 2 skipped
+↻ synced 05:49 · you@example.com
+```
+
+An unchanged run answers "where is my event?":
+
+```text
+bob gcal sync · 2026/20261109.md
+  ⊘ skipped 16:00–17:00  Haircut (The Wolves Den)  removed by you at 05:28 · restore with bob gcal sync -F
+✓ Events unchanged · Pomodoros unchanged · 3 in sync · 1 skipped
+```
+
+Actionable skips (`removed_by_you`, `awaiting_reply`) show a yellow `⊘`; by-design
+omissions show a dim one. The detail is dim and a command in a hint is cyan.
+`-q` still prints nothing on success. An omission (the Google side) wins over
+a tombstone.
+
+| `reason`            | Detail                                              | Hint                                           |
+| ------------------- | --------------------------------------------------- | ---------------------------------------------- |
+| `declined`          | declined in Google Calendar                         | —                                              |
+| `cancelled`         | cancelled in Google Calendar                        | —                                              |
+| `awaiting_reply`    | awaiting your reply                                 | RSVP in Google Calendar to add it              |
+| `event_type`        | Google `focusTime` (for example) events are not synced | —                                           |
+| `outside_day`       | belongs to `Thu 2026-10-29`'s note, or: does not cover this day | `bob gcal sync -D <day>` for a timed event of another day |
+| `invalid_time`      | Google sent an invalid time range                   | —                                              |
+| `removed_by_you`    | removed by you at `05:28`                           | restore with `bob gcal sync -F`                |
+| `removed_in_google` | the lifecycle reason (`Declined in Google Calendar`)| —                                              |
+
+`in sync` counts included events already in the note that this run did not
+change. A row tombstoned in this very run reports as a `-` change row
+(`- task 14:00–15:00  Design review  removed by you · restore with bob gcal
+sync -F`), not as a skip; later runs list it as skipped. A row whose
+tombstone came from a Google decline or delete reads `removed_in_google` with
+Google's own reason text.
 
 ### Events stamp
 
@@ -563,7 +625,7 @@ account, or set `gcal.account` to the stamp's account.
 | Other child bullets (your notes) | You | Never touched |
 | MEET Task Link | Google until you edit it | A Google time or buffer change re-files Bob's untouched placeholder or Bob-shaped closed filing; a hand-edited filing is kept and reported once |
 | MEET Pomodoro entries | Google until you edit them | Created with their first link; only Bob-shaped closed entries are retimed or regrouped after a Google time or buffer change |
-| The whole row | You | Deleted or moved away: tombstoned, never re-added |
+| The whole row | You | Deleted or moved away: tombstoned once and skipped on every later run. Paste the line back and sync adopts it again |
 | Events stamp | Bob | Re-rendered when the note is written or the stamp is due; a deleted or edited line is restored |
 
 In Obsidian, each MEET Task Link to an Event Task wears that event's time pill
@@ -971,10 +1033,14 @@ including the `last_sync` check.
 `counts`, `last_sync`, `past_open`, `warnings`, and `deprecations`. `-a`
 adds omitted event rows. Each event contains no provider description or
 attendee list, and carries `clock`, `clock_source`, `clock_note`,
-`off_clock`, deprecated `untracked`, and the `vault` state.
+`off_clock`, deprecated `untracked`, the `vault` state, and `skip`
+(`{reason, detail, hint}` or `null`; see [Skipped events](#skipped-events)).
+The raw `reason` values and existing `vault` strings are unchanged.
 
-`sync -f json`: `ok`, `day`, `path`, `status`, `rows`, `pomodoro`,
-`waiting`, `warnings`, `deprecations`, and `stamp`. `waiting` is `null`
+`sync -f json`: `ok`, `day`, `path`, `status`, `rows`, `in_sync`, `skipped`,
+`pomodoro`, `waiting`, `warnings`, `deprecations`, and `stamp`. `skipped`
+lists `{time, title, calendar_id, event_id, reason, detail, hint}` for every
+event the run leaves out; `rows` entries gain `detail`. `waiting` is `null`
 unless `status` is `waiting`, then `{reason, detail, hint, line}` with
 `reason` one of `note_missing`, `note_unrendered`, or `pomodoros_missing`
 and `line` the 1-based line of the pending Templater tag (else `null`).
