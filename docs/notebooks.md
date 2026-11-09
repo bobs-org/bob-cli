@@ -96,6 +96,16 @@ are inert and keep physical line numbers. Findings never rewrite a file.
 `summary:` is one plain line describing scope, not contents. Creation
 requires it; `check` warns when it is missing.
 
+## Capture
+
+Notebook routes parse as `notebook_note` or `notebook_sub_note`. Use
+`@notes` for a note, `@notes#Ideas` for a section, `@notes^id` for an
+authored block ID, or `@notes+id` for a sub-note. The body stays opaque to
+task-marker parsing. `bob capture` refuses these modes until notebook writing
+is implemented; routes to other note types keep their existing behavior. See
+[JSON outputs](reference/json-outputs.md#capture-and-protocol-helpers) for the
+parse spans.
+
 ## Commands
 
 `bob notebooks` lives in the Vault section of `bob --help`. Bare

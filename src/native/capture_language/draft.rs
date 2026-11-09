@@ -1043,6 +1043,17 @@ pub(crate) fn parse_capture_text_with_options(
     // draft parser but keeps ordinary items on the unfanned singleton parser.
     let mut item_outcomes = Vec::new();
     for item in &draft.items {
+        if let Some(outcome) = super::notebook::claim_strict_notebook(
+            item,
+            forced_route,
+            forced_section,
+            &options,
+        )
+        .map_err(|error| error.message)?
+        {
+            item_outcomes.push(outcome);
+            continue;
+        }
         if let Some(outcome) = super::record::claim_strict_record(
             item,
             forced_route,
@@ -1082,7 +1093,6 @@ pub(crate) fn parse_capture_text_with_options(
         declarations.extend(outcome.declarations.iter().copied());
     }
     let global = resolve_global_declaration_strict(&declarations)?;
-
     if item_outcomes.len() > 1 {
         return Err(
             "capture text contains multiple blank-line-separated items"
@@ -1941,7 +1951,9 @@ fn classify_merge_left(parsed: &ParsedCaptureText) -> MergeNeeds {
         | CaptureKind::PomodoroNote
         | CaptureKind::RecordNote { .. }
         | CaptureKind::RecordUpdate { .. }
-        | CaptureKind::NotePull { .. } => MergeNeeds::NoTask,
+        | CaptureKind::NotePull { .. }
+        | CaptureKind::NotebookNote { .. }
+        | CaptureKind::NotebookSubNote { .. } => MergeNeeds::NoTask,
     }
 }
 

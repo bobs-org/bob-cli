@@ -13,10 +13,8 @@ capture directive. In completion, standalone `#` and `%` open menus.
 
 Examples use a synthetic vault (`BOB_NOW=2026-10-20 12:00:00`, `TZ=UTC`).
 
-Options precede the draft: an unknown alphabetic long option such as
-`--anything` is rejected before draft text begins but literal after it, and
-`--` ends option parsing (`bob capture -- '--anything'` captures that text;
-`bob capture --dry-run -- '--'` previews the bare shift token).
+Options come before the draft. Unknown long options fail there but stay literal
+after it. `--` ends option parsing.
 
 ## Token index
 
@@ -36,6 +34,7 @@ incomplete **picker** input is refused.
 | `@route` | Write a task to `<route>.md` | [`@route`](#at-route) |
 | `@dir/` / `@dir/^stem` / `@dir/stem` | Record create, explicit stem, or existing-record update | [Record notes](#record-notes) |
 | `@route#Section` | Ordinary bullet under a matching heading | [`@route#Section`](#at-route-section) |
+| Notebook `@route`, `@route#section`, `@route^id`, `@route+id` | Parse a notebook note or sub-note | [Notebook capture](../notebooks.md#capture) |
 | `@route#` | Ordinary bullet under any non-`Tasks` heading | [`@route#`](#at-route-any-section) |
 | `@route^block-id` | New open task with a user-authored block ID | [`@route^block-id`](#at-route-caret) |
 | `@route:block-id` | New Next task plus a Pomodoro Task Link | [`@route:block-id`](#at-route-colon) |

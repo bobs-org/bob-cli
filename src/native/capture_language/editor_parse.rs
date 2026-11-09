@@ -957,6 +957,9 @@ fn dependency_owner_mode_word(mode: EditorMode) -> &'static str {
         EditorMode::TaskComplete => "task-complete",
         EditorMode::RecordNote => "record-note",
         EditorMode::RecordUpdate => "record-update",
+        EditorMode::NotebookNote | EditorMode::NotebookSubNote => {
+            "notebook note"
+        }
         EditorMode::Ref => "reference",
         EditorMode::PomodoroLink | EditorMode::PomodoroTask => {
             "Pomodoro-ledger-link"
@@ -1661,10 +1664,57 @@ fn record_editor_outcome<'a>(
     }
 }
 
+fn notebook_editor_outcome<'a>(
+    item: &CaptureItem<'a>,
+    view: super::notebook::NotebookEditorView,
+) -> EditorItemOutcome<'a> {
+    EditorItemOutcome {
+        item: EditorItemParse {
+            index: item.index,
+            start: item.start,
+            end: item.end,
+            line_start: item.line_start,
+            line_end: item.line_end,
+            body: view.body,
+            mode: view.mode,
+            route: Some(view.route),
+            section: view.section,
+            block_id: view.block_id,
+            needs: view.needs,
+            ref_listen: false,
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_split: None,
+            pomodoro_merge: None,
+            pomodoro_close: None,
+            pomodoro_past: None,
+            dependencies: Vec::new(),
+            blocked_tasks: Vec::new(),
+            relations: Vec::new(),
+            dependency_target: None,
+            task_complete: None,
+            list: item.list.clone(),
+            spans: view.spans,
+            diagnostics: view.diagnostics,
+            sub_bullets: Vec::new(),
+            has_local_destination: true,
+            local_destination_markers: Vec::new(),
+            drawer_bullet_target: None,
+            targets: Vec::new(),
+            merge_in: None,
+        },
+        declarations: Vec::new(),
+    }
+}
+
 pub(super) fn parse_editor_item_with<'a>(
     item: &CaptureItem<'a>,
     options: &EditorParseOptions<'_>,
 ) -> EditorItemOutcome<'a> {
+    if let Some(view) = super::notebook::editor_view_for_item(item, options) {
+        return notebook_editor_outcome(item, view);
+    }
     // Record creation claims before transfers: a record field value may
     // hold `>`/`<` prose that must stay opaque.
     if let Some(view) = super::record::claim_editor_record(item, options) {

@@ -645,6 +645,13 @@ pub(super) fn plan_capture_to_target(
                 "record update was not refused before the write planner",
             ));
         }
+        CaptureKind::NotebookNote { .. }
+        | CaptureKind::NotebookSubNote { .. } => {
+            return Err(CaptureError::usage_code(
+                "notebook capture is recognized but its writer has not landed yet",
+                "notebook_capture_unavailable",
+            ));
+        }
     };
     planner.stage(target, updated)?;
     Ok(CaptureWritePlan {

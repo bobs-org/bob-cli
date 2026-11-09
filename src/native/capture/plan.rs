@@ -142,6 +142,19 @@ pub(super) fn plan_capture_batch_with_config_path(
         config_path,
         &request.raw_text,
     );
+    let notebook_policy = if let Some(route) = request.forced_route.as_deref() {
+        super::super::capture_notebooks::notebook_policy_for_forced_route(
+            &request.bob_dir,
+            route,
+        )
+    } else if forced_literal {
+        super::super::capture_language::NotebookRoutePolicy::absent()
+    } else {
+        super::super::capture_notebooks::notebook_policy_for_draft(
+            &request.bob_dir,
+            &request.raw_text,
+        )
+    };
     let options = CaptureParseOptions {
         // A forced clipboard request keeps bare URLs on the task path. Keep
         // record claiming enabled so a claimed record can refuse `--clip`
@@ -152,6 +165,7 @@ pub(super) fn plan_capture_batch_with_config_path(
             routing
         },
         record_policy: (!forced_literal).then_some(&record_policy),
+        notebook_policy: (!forced_literal).then_some(&notebook_policy),
         explicit_destination: request.forced_section.is_some()
             || request.forced_sub_bullet_target.is_some()
             || request.forced_drawer.is_some(),
@@ -164,6 +178,22 @@ pub(super) fn plan_capture_batch_with_config_path(
         request.forced_section.as_deref(),
         &options,
     )?;
+    if parsed_draft.items.iter().any(|item| {
+        matches!(
+            item.parsed.kind,
+            CaptureKind::NotebookNote { .. }
+                | CaptureKind::NotebookSubNote { .. }
+        ) || item
+            .parsed
+            .route
+            .as_deref()
+            .is_some_and(|route| notebook_policy.get(route).is_some())
+    }) {
+        return Err(CaptureError::usage_code(
+            "notebook capture is recognized but its guarded note writer has not landed yet; no files were changed",
+            "notebook_capture_unavailable",
+        ));
+    }
     if (request.forced_clip.is_some()
         || parsed_draft.items.iter().any(|item| {
             matches!(
@@ -2620,6 +2650,13 @@ pub(super) fn plan_capture_item(
         CaptureKind::NotePull { .. } => {
             unreachable!("note-pull capture is planned by plan_note_pull_item")
         }
+        CaptureKind::NotebookNote { .. }
+        | CaptureKind::NotebookSubNote { .. } => {
+            return Err(CaptureError::usage_code(
+                "notebook capture is recognized but its writer has not landed yet",
+                "notebook_capture_unavailable",
+            ));
+        }
     };
     let kind_label = capture_kind_label(&parsed.kind);
     let mut task_block_id = match &parsed.kind {
@@ -4375,6 +4412,8 @@ pub(super) fn capture_kind_label(kind: &CaptureKind) -> &'static str {
         CaptureKind::NotePull { .. } => "note_pull",
         CaptureKind::RecordNote { .. } => "record_note",
         CaptureKind::RecordUpdate { .. } => "record_update",
+        CaptureKind::NotebookNote { .. } => "notebook_note",
+        CaptureKind::NotebookSubNote { .. } => "notebook_sub_note",
     }
 }
 

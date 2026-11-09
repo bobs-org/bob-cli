@@ -29,6 +29,7 @@ mod capture_flag_guard;
 mod capture_language;
 mod capture_link_tasks;
 mod capture_links;
+pub(crate) mod capture_notebooks;
 mod capture_parse;
 mod capture_pomodoro_close;
 mod capture_pomodoro_name;

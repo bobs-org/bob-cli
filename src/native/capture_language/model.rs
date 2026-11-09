@@ -17,6 +17,10 @@ pub(crate) struct CaptureParseOptions<'a> {
     /// creation. `None` keeps every record candidate literal. Callers
     /// outside the grammar build exactly one policy per invocation.
     pub(crate) record_policy: Option<&'a super::record::RecordRoutePolicy>,
+    /// Immutable index of notebook route candidates for this invocation.
+    /// `None` keeps notebook-looking text on its established grammar path.
+    pub(crate) notebook_policy:
+        Option<&'a super::notebook::NotebookRoutePolicy>,
     /// A forced destination (`-r -s -t -S`, `--task-ref`) keeps record-like
     /// text literal. Task-only execution modifiers such as `--clip` are
     /// checked after claiming so a configured record can refuse them.
@@ -38,6 +42,7 @@ impl<'a> CaptureParseOptions<'a> {
         Self {
             url_routing: None,
             record_policy: None,
+            notebook_policy: None,
             explicit_destination: false,
             has_global_destination: false,
             recognize_lists: true,
@@ -63,6 +68,9 @@ pub(crate) struct EditorParseOptions<'a> {
     /// Immutable record route policy, shared with the strict path.
     /// `None` keeps every record candidate literal.
     pub(crate) record_policy: Option<&'a super::record::RecordRoutePolicy>,
+    /// Immutable notebook route policy, shared with the strict parser.
+    pub(crate) notebook_policy:
+        Option<&'a super::notebook::NotebookRoutePolicy>,
 }
 
 impl<'a> EditorParseOptions<'a> {
@@ -72,6 +80,7 @@ impl<'a> EditorParseOptions<'a> {
             url_routing: None,
             has_global_destination: false,
             record_policy: None,
+            notebook_policy: None,
         }
     }
 }
@@ -214,6 +223,18 @@ pub(crate) enum CaptureKind {
     /// until the transactional update writer lands.
     RecordUpdate {
         intent: RecordNoteIntent,
+    },
+    /// A note bullet routed to an existing notebook, optionally under a
+    /// section or with an authored block ID. The writer phase consumes it.
+    NotebookNote {
+        section: Option<String>,
+        exact_section: bool,
+        block_id: Option<String>,
+    },
+    /// A note nested under an existing notebook note bullet. The writer
+    /// phase resolves `parent_block_id` against the notebook file.
+    NotebookSubNote {
+        parent_block_id: String,
     },
     /// A whole-item `=/` Pomodoro split: split a merged Pomodoro's types
     /// into planned entries. The item must contain only the split token

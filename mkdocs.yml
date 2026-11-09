@@ -68,6 +68,8 @@ plugins:
   - search
   - redirects:
       redirect_maps:
+        capture-panel.md: reference/mac-capture/capture-panel.md
+        keyboard.md: reference/mac-capture/keyboard.md
         pomodoro-themes.md: task-types.md
         reference/cli/capture-task-sections.md: reference/cli/capture-drawers.md
         reference/cli/themes.md: reference/cli/types.md
@@ -131,6 +133,7 @@ plugins:
           - vault-git-sync.md
           - attachments.md
           - records.md
+          - notebooks.md
 
 markdown_extensions:
   - admonition

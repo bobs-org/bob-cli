@@ -21,6 +21,7 @@ fn editor_active() -> EditorParseOptions<'static> {
         url_routing: None,
         has_global_destination: false,
         record_policy: None,
+        notebook_policy: None,
     }
 }
 

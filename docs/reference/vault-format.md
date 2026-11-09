@@ -395,7 +395,7 @@ generated `## Notebooks` catalog of the notebooks beneath them. See
 `docs/notebooks.md` for the contract, the catalog, `bob notebooks list`,
 `check`, `sync`, and `create`, and the teaching refusals.
 
-Contract: [Notebooks](../../notebooks.md).
+Contract: [Notebooks](../notebooks.md).
 
 ### Inbox notes
 

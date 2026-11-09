@@ -32,6 +32,7 @@ mod markers;
 pub(crate) mod merge_in;
 mod model;
 mod move_bullet;
+pub(crate) mod notebook;
 pub(crate) mod past;
 mod pomodoro_literal;
 mod project_tasks;
@@ -185,6 +186,10 @@ pub(crate) use self::model::RefParentSource;
 pub(crate) use self::model::SubBulletTarget;
 pub(crate) use self::model::TaskToggleIntent;
 pub(crate) use self::model::TemplateRowSummary;
+pub(crate) use self::notebook::{
+    candidate_notebook_route, candidate_notebook_routes, NotebookRouteInfo,
+    NotebookRoutePolicy,
+};
 pub(crate) use self::pomodoro_literal::canonicalize_exact_name;
 pub(crate) use self::project_tasks::split_leading_checkbox;
 pub(crate) use self::record::candidate_collection_routes;

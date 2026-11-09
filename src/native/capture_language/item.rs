@@ -513,6 +513,14 @@ pub(super) fn parse_capture_item<'a>(
     options: &CaptureParseOptions<'_>,
     target_run: Option<&TargetRunContext>,
 ) -> Result<ParsedCaptureItemOutcome<'a>, CaptureItemParseError> {
+    if let Some(outcome) = super::notebook::claim_strict_notebook(
+        item,
+        forced_route,
+        forced_section,
+        options,
+    )? {
+        return Ok(outcome);
+    }
     // Record creation also claims here so list-context bullets and
     // template rows carrying a record route never parse as tasks. The
     // draft/singleton entry points already claimed above, so this only

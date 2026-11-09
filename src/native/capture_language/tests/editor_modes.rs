@@ -1191,6 +1191,8 @@ fn editor_agrees_with_execution_for_resolved_captures() {
             // never produces one, so this arm only satisfies the match.
             CaptureKind::RecordNote { .. } => EditorMode::RecordNote,
             CaptureKind::RecordUpdate { .. } => EditorMode::RecordUpdate,
+            CaptureKind::NotebookNote { .. } => EditorMode::NotebookNote,
+            CaptureKind::NotebookSubNote { .. } => EditorMode::NotebookSubNote,
             CaptureKind::NotePull { .. } => EditorMode::NotePull,
         };
         assert_eq!(parse.mode, expected_mode, "{raw}");

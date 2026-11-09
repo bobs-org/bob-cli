@@ -52,6 +52,7 @@ pub(crate) fn parse_template_protocol(text: &str) -> TemplateProtocolParse {
         url_routing: None,
         has_global_destination: false,
         record_policy: None,
+        notebook_policy: None,
     };
     let parsed = CaptureParseResult::new(draft, &options);
     let route = parsed.items.first().and_then(|item| item.route.clone());
@@ -125,16 +126,20 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         None,
         &raw_text,
     );
+    let bob_dir = super::env::bob_dir();
+    let notebook_policy = super::capture_notebooks::notebook_policy_for_draft(
+        &bob_dir, &raw_text,
+    );
     let options = EditorParseOptions {
         url_routing: policy.as_ref(),
         has_global_destination: false,
         record_policy: Some(&record_policy),
+        notebook_policy: Some(&notebook_policy),
     };
     let mut result = CaptureParseResult::new(raw_text, &options);
     attach_gmail_spans(&mut result);
     let theme_keys = theme_component_keys(&result);
     if !theme_keys.is_empty() {
-        let bob_dir = super::env::bob_dir();
         let day_file = super::pomodoro::day_file_for(&bob_dir);
         let today = super::capture_pomodoros_agenda::agenda_date(&day_file);
         if let Ok(catalog) =
@@ -200,6 +205,12 @@ and historical warnings; only supplied required-empty fields need `record_value`
 Creation reports required fields and defaults; incomplete titles need `record_title`. \
 Field `range` is present for one typed value, while `value_ranges[]` preserves \
 separate source spans for repeated values.\n\n\
+When a route resolves to an existing notebook note, individual `@route`, \
+`@route#section`, `@route^id`, and `@route+id` items report \
+`notebook_note` or `notebook_sub_note`. Their `notebook_route`, \
+`notebook_section`, `notebook_block_id`, and \
+`notebook_parent_block_id` spans keep the authored body opaque. `bob capture` \
+refuses these captures until the notebook writer is available.\n\n\
 Adjacent `@route+id` target markers at the start or end of one line fill one \
 route slot. Capture-parse keeps one item and adds `targets[]` for runs; \
 duplicate task identities and targets at opposite edges report the coded \
@@ -500,7 +511,7 @@ If TEXT is omitted and stdin is piped, it reads the complete piped stdin \
 stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-parse --format json -- 'Call bank @cash+'\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  bob capture-parse -f json -- '+5'\n  bob capture-parse -f json -- '-2'\n  bob capture-parse -f json -- '++3'\n  bob capture-parse -f json -- '--'\n  bob capture-parse -f json -- '+'\n  printf '++3\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n  bob capture-parse -f json -- 'x'\n  bob capture-parse -f json -- 'x1,3!2'\n  bob capture-parse -f json -- 'x1~2'\n  bob capture-parse -f json -- 'x0!2'\n  printf 'x\\n- 1 wired the lexer\\n' | bob capture-parse -f json\n  printf 'x\\n- 1\\n' | bob capture-parse -f json\n  printf 'x =\\n- 1 wired it\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '='\n  bob capture-parse -f json -- '=3'\n  bob capture-parse -f json -- '=~2'\n  bob capture-parse -f json -- '=bugs'\n  bob capture-parse -f json -- '=3bugs~1'\n  bob capture-parse -f json -- 'x =~2'\n  bob capture-parse -f json -- '@r:id=x'\n  bob capture-parse -f json -- '^r:id=x1'\n  printf 'x\\n\\n=\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '+2 x'\n  bob capture-parse -f json -- 'Buy Groceries! &foo:bar'\n  bob capture-parse -f json -- 'Ask Kelly *job:cleanup'\n  bob capture-parse -f json -- '&foo:bar @body+excercise'\n  bob capture-parse -f json -- '^r:id &foo:bar'\n  bob capture-parse -f json -- '&foo:bar +'\n  bob capture-parse -f json -- '&foo:bar'\n  bob capture-parse -f json -- 'Buy Groceries! &fo'\n  bob capture-parse -f json -- 'Fix trip ~work:foo'\n  bob capture-parse -f json -- 'Fix trip ~~work:foo|see'\n  bob capture-parse -f json -- '/fix'\n  bob capture-parse -f json -- 'Ramen Nagi @eat/'\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_shift, pomodoro_link, pomodoro_close, pomodoro_past, pomodoro_start, task_dependency, task_complete, record_note, record_update, ref, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, drawer, active_task, task_link, task_goto, task_parent, pomodoro_close_task, pomodoro_close_log_text, pomodoro_start_task, task_dependency, blocked_task, relation_target, relation_label, dependency_target, task_complete, task_type, record_title, record_value",
+            "Examples:\n  bob capture-parse --format json -- 'Call bank @cash+'\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  bob capture-parse -f json -- '+5'\n  bob capture-parse -f json -- '-2'\n  bob capture-parse -f json -- '++3'\n  bob capture-parse -f json -- '--'\n  bob capture-parse -f json -- '+'\n  printf '++3\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n  bob capture-parse -f json -- 'x'\n  bob capture-parse -f json -- 'x1,3!2'\n  bob capture-parse -f json -- 'x1~2'\n  bob capture-parse -f json -- 'x0!2'\n  printf 'x\\n- 1 wired the lexer\\n' | bob capture-parse -f json\n  printf 'x\\n- 1\\n' | bob capture-parse -f json\n  printf 'x =\\n- 1 wired it\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '='\n  bob capture-parse -f json -- '=3'\n  bob capture-parse -f json -- '=~2'\n  bob capture-parse -f json -- '=bugs'\n  bob capture-parse -f json -- '=3bugs~1'\n  bob capture-parse -f json -- 'x =~2'\n  bob capture-parse -f json -- '@r:id=x'\n  bob capture-parse -f json -- '^r:id=x1'\n  printf 'x\\n\\n=\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '+2 x'\n  bob capture-parse -f json -- 'Buy Groceries! &foo:bar'\n  bob capture-parse -f json -- 'Ask Kelly *job:cleanup'\n  bob capture-parse -f json -- '&foo:bar @body+excercise'\n  bob capture-parse -f json -- '^r:id &foo:bar'\n  bob capture-parse -f json -- '&foo:bar +'\n  bob capture-parse -f json -- '&foo:bar'\n  bob capture-parse -f json -- 'Buy Groceries! &fo'\n  bob capture-parse -f json -- 'Fix trip ~work:foo'\n  bob capture-parse -f json -- 'Fix trip ~~work:foo|see'\n  bob capture-parse -f json -- '/fix'\n  bob capture-parse -f json -- 'Ramen Nagi @eat/'\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_shift, pomodoro_link, pomodoro_close, pomodoro_past, pomodoro_start, task_dependency, task_complete, record_note, record_update, notebook_note, notebook_sub_note, ref, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, drawer, active_task, task_link, task_goto, task_parent, pomodoro_close_task, pomodoro_close_log_text, pomodoro_start_task, task_dependency, blocked_task, relation_target, relation_label, dependency_target, task_complete, task_type, record_title, record_value, notebook_note",
         )
         .disable_help_flag(true)
         .arg(format_arg())
@@ -4309,6 +4320,7 @@ mod tests {
             url_routing: None,
             has_global_destination: false,
             record_policy: Some(&policy),
+            notebook_policy: None,
         };
         CaptureParseResult::new(input.to_string(), &options)
     }
@@ -4457,6 +4469,7 @@ mod tests {
             url_routing: None,
             has_global_destination: false,
             record_policy: Some(&policy),
+            notebook_policy: None,
         };
         let parsed = CaptureParseResult::new(input.to_string(), &options);
         let value = serde_json::to_value(parsed).unwrap();
@@ -4823,6 +4836,7 @@ mod tests {
             url_routing: None,
             has_global_destination: false,
             record_policy: None,
+            notebook_policy: None,
         };
         let result = CaptureParseResult::new(raw.to_string(), &options);
         let value = serde_json::to_value(&result).unwrap();

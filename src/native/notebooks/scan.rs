@@ -47,6 +47,11 @@ pub(crate) struct Analysis {
     pub(crate) plan: CatalogPlan,
 }
 
+/// Expose the scanner's parsed first alias to notebook route parsing.
+pub(crate) fn first_alias(contents: &str) -> Option<String> {
+    super::snapshot::first_alias(contents)
+}
+
 /// Read-only report for `list`, `check`, and completion.
 pub(crate) fn scan_notebooks(bob_dir: &Path) -> ScanOutput {
     let snapshot = VaultSnapshot::load(bob_dir);
@@ -776,7 +781,11 @@ fn validate_chain(
     walk(start, lites, index, cache, &mut Vec::new())
 }
 
-fn derive_title(body: &str, aliases_first: Option<&str>, stem: &str) -> String {
+pub(crate) fn derive_title(
+    body: &str,
+    aliases_first: Option<&str>,
+    stem: &str,
+) -> String {
     let body_start = rules::body_start_line(body);
     let lines: Vec<&str> = rules::physical_lines(body);
     let mut fence = None;

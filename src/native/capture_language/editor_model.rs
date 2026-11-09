@@ -80,6 +80,14 @@ pub(crate) enum SpanKind {
     RecordFieldKey,
     /// A record field bullet's value (without the `key::`).
     RecordFieldValue,
+    /// An existing notebook route, with the resolved notebook title.
+    NotebookRoute,
+    /// A notebook's `#section` selector.
+    NotebookSection,
+    /// A note bullet's authored block ID in `@notebook^id`.
+    NotebookBlockId,
+    /// The parent note ID in `@notebook+id`.
+    NotebookParentBlockId,
     /// A whole-item bare URL admitted by the routing policy.
     RefUrl,
     GmailUrl,
@@ -170,6 +178,10 @@ impl SpanKind {
             Self::RecordStem => "record_stem",
             Self::RecordFieldKey => "record_field_key",
             Self::RecordFieldValue => "record_field_value",
+            Self::NotebookRoute => "notebook_route",
+            Self::NotebookSection => "notebook_section",
+            Self::NotebookBlockId => "notebook_block_id",
+            Self::NotebookParentBlockId => "notebook_parent_block_id",
             Self::RefUrl => "ref_url",
             Self::GmailUrl => "Gmail link",
             Self::TaskCompleteSigil => "task_complete_sigil",
@@ -284,6 +296,10 @@ pub(crate) enum EditorMode {
     /// An existing-record update (`@dir/stem`). Retains raw syntax while
     /// typing and exposes the target's current fields through parse output.
     RecordUpdate,
+    /// A note bullet routed to an existing notebook.
+    NotebookNote,
+    /// A note nested under an existing notebook note bullet.
+    NotebookSubNote,
     /// A whole-item bare URL admitted by the routing policy.
     Ref,
     /// A lone `@route` header that pulls that note's tasks (§12.20).
@@ -316,6 +332,8 @@ impl EditorMode {
             Self::TaskComplete => "task_complete",
             Self::RecordNote => "record_note",
             Self::RecordUpdate => "record_update",
+            Self::NotebookNote => "notebook_note",
+            Self::NotebookSubNote => "notebook_sub_note",
             Self::Ref => "ref",
             Self::NotePull => "note_pull",
             Self::Incomplete => "incomplete",
@@ -348,6 +366,8 @@ pub(crate) enum Need {
     RecordTitle,
     /// A record field with no value: fill it or drop the bullet.
     RecordValue,
+    /// A notebook route needs a note body.
+    NotebookNote,
     /// A bare-plus parent-task selector has not been accepted yet.
     TaskParent,
     PomodoroCloseTask,
@@ -399,6 +419,7 @@ impl Need {
             Self::TaskGoto => "task_goto",
             Self::RecordTitle => "record_title",
             Self::RecordValue => "record_value",
+            Self::NotebookNote => "notebook_note",
             Self::TaskParent => "task_parent",
             Self::PomodoroCloseTask => "pomodoro_close_task",
             Self::PomodoroCloseLogText => "pomodoro_close_log_text",

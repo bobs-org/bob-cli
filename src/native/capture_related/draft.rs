@@ -39,10 +39,16 @@ pub(super) fn draft_related(
         None,
         &request.draft,
     );
+    let notebook_policy =
+        crate::native::capture_notebooks::notebook_policy_for_draft(
+            &request.bob_dir,
+            &request.draft,
+        );
     let options = EditorParseOptions {
         url_routing: policy.as_ref(),
         has_global_destination: false,
         record_policy: Some(&record_policy),
+        notebook_policy: Some(&notebook_policy),
     };
     let parsed =
         capture_language::parse_for_editor_with(&request.draft, &options);

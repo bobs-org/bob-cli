@@ -1039,6 +1039,7 @@ pub(crate) enum TypeMarkerSubject {
     Bullet,
     SubBullet,
     ProjectNote,
+    NotebookNote,
     Reference,
     PomodoroNote,
     TaskComplete,
@@ -1075,6 +1076,8 @@ impl TypeMarkerSubject {
             // never survives beside a record kind; unreachable.
             CaptureKind::RecordNote { .. }
             | CaptureKind::RecordUpdate { .. } => Self::NewTask,
+            CaptureKind::NotebookNote { .. }
+            | CaptureKind::NotebookSubNote { .. } => Self::NotebookNote,
             CaptureKind::PomodoroClose { .. } => Self::Close,
             CaptureKind::PomodoroPast { .. } => Self::Close,
             CaptureKind::PomodoroStart { .. } => Self::Start,
@@ -1107,6 +1110,10 @@ pub(crate) fn type_marker_not_applicable_error(
         TypeMarkerSubject::ProjectNote => {
             ("creates a project note", "set `task_type:` in the new note")
         }
+        TypeMarkerSubject::NotebookNote => (
+            "writes a notebook note",
+            "remove the task type marker; notebook notes do not have task types",
+        ),
         TypeMarkerSubject::Reference => (
             "queues a reference typed by `plan.reading_type`",
             "add `-R` to keep it as a task",

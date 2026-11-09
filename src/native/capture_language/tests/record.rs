@@ -38,6 +38,7 @@ fn strict_options(
     CaptureParseOptions {
         url_routing: None,
         record_policy: policy,
+        notebook_policy: None,
         explicit_destination: false,
         has_global_destination: false,
         recognize_lists: true,
@@ -51,6 +52,7 @@ fn editor_options(
         url_routing: None,
         has_global_destination: false,
         record_policy: policy,
+        notebook_policy: None,
     }
 }
 

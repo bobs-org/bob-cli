@@ -252,6 +252,7 @@ fn directive_refusal(
             // Record-aware completion rows belong to a later phase;
             // completion probes keep the literal fallback here.
             record_policy: None,
+            notebook_policy: None,
         },
     );
     parsed

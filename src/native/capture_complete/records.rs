@@ -124,6 +124,7 @@ impl<'a> Session<'a> {
                 url_routing: None,
                 has_global_destination: false,
                 record_policy: Some(&policy),
+                notebook_policy: None,
             },
         );
         Some(Self {
