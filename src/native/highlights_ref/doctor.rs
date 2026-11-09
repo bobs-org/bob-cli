@@ -674,11 +674,12 @@ fn append_ref_tasks_row(
 /// alias problems collected by `capture_targets`.
 fn append_parents_row(bob_dir: &Path, warnings: &mut Vec<String>) {
     let report = crate::native::capture_targets::scan_capture_targets(bob_dir);
+    let parent_targets = report.targets.iter().filter(|target| {
+        target.kind != crate::native::capture_targets::CaptureTargetKind::Record
+    });
     if report.alias_warnings.is_empty() {
-        let notes = report.targets.len();
-        let aliases: usize = report
-            .targets
-            .iter()
+        let notes = parent_targets.clone().count();
+        let aliases: usize = parent_targets
             .map(|target| target.project_name_aliases.len())
             .sum();
         println!("parents: ok ({notes} parent notes · {aliases} aliases)",);

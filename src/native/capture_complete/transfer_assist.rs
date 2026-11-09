@@ -178,6 +178,11 @@ fn route_alias_paths(bob_dir: &Path) -> HashMap<String, String> {
     let report = crate::native::capture_targets::scan_capture_targets(bob_dir);
     let mut paths = HashMap::new();
     for target in report.targets {
+        if target.kind
+            == crate::native::capture_targets::CaptureTargetKind::Record
+        {
+            continue;
+        }
         paths.insert(
             target.route.to_ascii_lowercase(),
             target.relative_path.clone(),

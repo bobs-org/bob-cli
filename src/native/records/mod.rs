@@ -18,9 +18,9 @@ pub(crate) use catalog::{
 };
 #[allow(unused_imports)]
 pub(crate) use plan::{
-    PlannedRecordProperty, RecordCreatePlan, RecordCreateRequest,
-    RecordPlanError, RecordPlanErrorCode, RecordPropertySource,
-    RecordPropertyState, RecordStemSource,
+    plan_create, plan_fields, PlannedRecordProperty, RecordCreatePlan,
+    RecordCreateRequest, RecordFieldPlan, RecordPlanError, RecordPlanErrorCode,
+    RecordPropertySource, RecordPropertyState, RecordStemSource,
 };
 #[allow(unused_imports)]
 pub(crate) use render::{

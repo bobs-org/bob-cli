@@ -193,6 +193,11 @@ No Gmail calls are made.\n\n\
 A lone task-list header `@route` with no section, bullets, or other text \
 reports mode `note_pull`; `@route` with bullets remains a task list, and a \
 lone `@route#section` remains an empty-list refusal.\n\n\
+Configured record creation claims add a `record` object to the first item \
+and its `items[]` row. It reports the selected type, destination, required \
+fields, defaults, and field values; incomplete titles keep schema metadata \
+and need `record_title`. Field `range` is present for one typed value, while \
+`value_ranges[]` preserves separate source spans for repeated values.\n\n\
 Adjacent `@route+id` target markers at the start or end of one line fill one \
 route slot. Capture-parse keeps one item and adds `targets[]` for runs; \
 duplicate task identities and targets at opposite edges report the coded \
@@ -606,6 +611,10 @@ struct CaptureParseResult {
     /// byte-identical to today.
     #[serde(skip_serializing_if = "Option::is_none")]
     relation_grammar: Option<u8>,
+    /// Additive record creation metadata for the first item. Omitted for
+    /// ordinary task captures and reserved update spellings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    record: Option<ParseRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ref_parent: Option<RefParentParse>,
     /// Whether the `%l` directive requested companion audio.
@@ -858,6 +867,50 @@ struct CaptureParseItem {
     /// Omitted unless the item is a multi-member run.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     targets: Vec<ParseTarget>,
+    /// Additive record creation metadata for this item, when claimed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    record: Option<ParseRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ParseRecord {
+    action: &'static str,
+    #[serde(rename = "type")]
+    record_type: String,
+    label: String,
+    emoji: Option<String>,
+    dir: String,
+    path: Option<String>,
+    stem: Option<String>,
+    stem_source: Option<&'static str>,
+    title: String,
+    missing: Vec<String>,
+    notes: usize,
+    fields: Vec<ParseRecordField>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ParseRecordField {
+    key: String,
+    label: String,
+    kind: &'static str,
+    required: bool,
+    list: bool,
+    state: &'static str,
+    value: Option<serde_json::Value>,
+    display: Option<String>,
+    source: Option<&'static str>,
+    range: Option<SourceRange>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    value_ranges: Vec<SourceRange>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    choices: Vec<ParseRecordChoice>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ParseRecordChoice {
+    value: String,
+    label: String,
 }
 
 /// Wire projection of a validated whole-item `x=` past spec. `minutes` is
@@ -1280,6 +1333,10 @@ impl CaptureParseResult {
         }
 
         let parse = capture_language::parse_for_editor_with(&input, options);
+        let record_plans = super::capture_record::resolve_record_intents(
+            &parse.record_intents,
+            options.record_policy,
+        );
         let mut spans = wire_spans(merge_spans(
             parse.spans,
             capture_links::wikilink_spans(&input),
@@ -1294,7 +1351,12 @@ impl CaptureParseResult {
         stamp_complete_spans(&mut spans, &input, &close_policy);
         stamp_merge_spans(&mut spans, &input, &close_policy);
         stamp_successor_spans(&mut spans, &input, &close_policy);
-        let items = parse_items(&parse.items, &parse.transfers);
+        let items = parse_items(&parse.items, &parse.transfers, &record_plans);
+        let record = parse
+            .items
+            .first()
+            .and_then(|item| record_entry(&record_plans, item.index))
+            .map(parse_record);
         let transfer = parse.items.first().and_then(|item| {
             parse
                 .transfers
@@ -1328,6 +1390,12 @@ impl CaptureParseResult {
                 .filter(|issue| issue.code() == "template_directive_misplaced")
                 .map(template_issue_diagnostic),
         );
+        diagnostics.extend(record_parse_diagnostics(&input, &record_plans));
+        diagnostics.extend(collection_route_diagnostics(
+            &input,
+            &parse.items,
+            options.record_policy,
+        ));
         diagnostics.extend(parse.diagnostics.into_iter().filter(
             |diagnostic| {
                 !analysis.issues.iter().any(|issue| {
@@ -1356,10 +1424,21 @@ impl CaptureParseResult {
             route: parse.route,
             section: parse.section,
             block_id: parse.block_id,
-            needs: parse.needs,
+            needs: {
+                let mut needs = parse.needs;
+                if record_plans
+                    .first()
+                    .is_some_and(|entry| !entry.missing.is_empty())
+                    && !needs.contains(&Need::RecordValue)
+                {
+                    needs.push(Need::RecordValue);
+                }
+                needs
+            },
             list: top_list,
             header_range: top_header_range,
             relation_grammar,
+            record,
             ref_parent,
             ref_listen,
             spans,
@@ -1580,6 +1659,7 @@ impl CaptureParseResult {
                     header_range: None,
                     template_row: Some(template_row),
                     targets: Vec::new(),
+                    record: None,
                 });
             } else {
                 row_items.push(CaptureParseItem {
@@ -1621,6 +1701,7 @@ impl CaptureParseResult {
                     header_range: None,
                     template_row: Some(summary.clone()),
                     targets: Vec::new(),
+                    record: None,
                 });
             }
             row_summaries.push(summary);
@@ -1742,7 +1823,7 @@ impl CaptureParseResult {
         let mut template_item = parsed
             .items
             .first()
-            .map(|item| wire_item(item, &parsed.transfers))
+            .map(|item| wire_item(item, &parsed.transfers, &[]))
             .unwrap_or_else(empty_wire_item);
         template_item.index = 1;
         template_item.range = SourceRange {
@@ -1809,6 +1890,7 @@ impl CaptureParseResult {
             list: None,
             header_range: None,
             relation_grammar,
+            record: None,
             ref_parent,
             ref_listen: parsed.ref_listen,
             spans,
@@ -2722,6 +2804,7 @@ fn empty_wire_item() -> CaptureParseItem {
         header_range: None,
         template_row: None,
         targets: Vec::new(),
+        record: None,
     }
 }
 
@@ -2766,6 +2849,7 @@ fn ref_parent_for(
 fn parse_items(
     items: &[EditorItemParse],
     transfers: &[capture_language::EditorTransferItem],
+    records: &[super::capture_record::RecordParseEntry],
 ) -> Vec<CaptureParseItem> {
     // One `items[]` entry per list bullet, even when a lone header carries
     // a single bullet: the list object lives on the entry, not the batch.
@@ -2775,14 +2859,24 @@ fn parse_items(
     }
     items
         .iter()
-        .map(|item| wire_item(item, transfers))
+        .map(|item| wire_item(item, transfers, records))
         .collect()
 }
 
 fn wire_item(
     item: &EditorItemParse,
     transfers: &[capture_language::EditorTransferItem],
+    records: &[super::capture_record::RecordParseEntry],
 ) -> CaptureParseItem {
+    let record = record_entry(records, item.index).map(parse_record);
+    let mut needs = item.needs.clone();
+    if record
+        .as_ref()
+        .is_some_and(|record| !record.missing.is_empty())
+        && !needs.contains(&Need::RecordValue)
+    {
+        needs.push(Need::RecordValue);
+    }
     CaptureParseItem {
         index: item.index + 1,
         range: SourceRange {
@@ -2801,7 +2895,7 @@ fn wire_item(
             .find(|transfer| transfer.index == item.index)
             .map(|transfer| transfer.transfer.clone()),
         merge_in: item.merge_in.clone(),
-        needs: item.needs.clone(),
+        needs,
         list: item.list.clone(),
         header_range: item.list.as_ref().map(|list| SourceRange {
             start: list.header_start,
@@ -2843,7 +2937,285 @@ fn wire_item(
         }),
         template_row: None,
         targets: parse_targets(&item.targets),
+        record,
     }
+}
+
+fn record_entry(
+    entries: &[super::capture_record::RecordParseEntry],
+    index: usize,
+) -> Option<&super::capture_record::RecordParseEntry> {
+    entries.iter().find(|entry| entry.index == index)
+}
+
+fn parse_record(
+    entry: &super::capture_record::RecordParseEntry,
+) -> ParseRecord {
+    ParseRecord {
+        action: "create",
+        record_type: entry.record_type.id.clone(),
+        label: entry.record_type.label.clone(),
+        emoji: entry.record_type.emoji.clone(),
+        dir: entry.record_type.dir.clone(),
+        path: entry.path.as_ref().map(|path| path.display().to_string()),
+        stem: entry.stem.clone(),
+        stem_source: entry.stem_source.map(|source| match source {
+            super::records::RecordStemSource::Title => "title",
+            super::records::RecordStemSource::Explicit => "explicit",
+        }),
+        title: entry.intent.title.clone(),
+        missing: entry.missing.clone(),
+        notes: entry
+            .intent
+            .notes
+            .iter()
+            .filter(|group| group.section.is_none())
+            .map(|group| group.lines.len())
+            .sum(),
+        fields: entry.properties.iter().map(parse_record_field).collect(),
+    }
+}
+
+fn parse_record_field(
+    field: &super::records::PlannedRecordProperty,
+) -> ParseRecordField {
+    use super::records::{FieldKind, RecordPropertySource};
+
+    let ranges = field
+        .source_ranges
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(|range| SourceRange {
+            start: range.start,
+            end: range.end,
+        })
+        .collect::<Vec<_>>();
+    let choices = match &field.kind {
+        FieldKind::Choices(choices) => choices
+            .iter()
+            .map(|choice| ParseRecordChoice {
+                value: choice.value.clone(),
+                label: choice.label.clone(),
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    ParseRecordField {
+        key: field.key.clone(),
+        label: field.label.clone(),
+        kind: match &field.kind {
+            FieldKind::Text => "text",
+            FieldKind::Choices(_) => "choices",
+            FieldKind::Date => "date",
+            FieldKind::Link => "link",
+            FieldKind::Url => "url",
+            FieldKind::Number => "number",
+        },
+        required: field.required,
+        list: field.list,
+        state: field.state.as_str(),
+        value: field.value.as_ref().map(record_value_json),
+        display: field.display.clone(),
+        source: field.source.map(|source| match source {
+            RecordPropertySource::Typed => "typed",
+            RecordPropertySource::Default => "default",
+        }),
+        range: (ranges.len() == 1).then(|| ranges[0]),
+        value_ranges: if ranges.len() > 1 { ranges } else { Vec::new() },
+        choices,
+    }
+}
+
+fn record_value_json(value: &super::records::RecordValue) -> serde_json::Value {
+    use super::records::{RecordDate, RecordScalar, RecordValue};
+
+    fn scalar(value: &RecordScalar) -> serde_json::Value {
+        match value {
+            RecordScalar::Text(value) | RecordScalar::Choice(value) => {
+                json!(value)
+            }
+            RecordScalar::Date(RecordDate::Resolved(date)) => {
+                json!(date.format("%Y-%m-%d").to_string())
+            }
+            RecordScalar::Date(RecordDate::Today) => json!("today"),
+            RecordScalar::Date(RecordDate::Yesterday) => json!("yesterday"),
+            RecordScalar::Link(value) => json!(value),
+            RecordScalar::Url(value) => json!(value.to_string()),
+            RecordScalar::Number(value) => json!(value),
+        }
+    }
+
+    match value {
+        RecordValue::Scalar(value) => scalar(value),
+        RecordValue::List(values) => {
+            serde_json::Value::Array(values.iter().map(scalar).collect())
+        }
+    }
+}
+
+fn record_parse_diagnostics(
+    input: &str,
+    entries: &[super::capture_record::RecordParseEntry],
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for entry in entries {
+        if let Some(issue) = &entry.plan_issue
+            && !(issue.code == "record_title"
+                && entry.intent.title.trim().is_empty())
+        {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code: issue.code,
+                message: issue.message.clone(),
+                range: issue
+                    .range
+                    .as_ref()
+                    .map(|range| (range.start, range.end)),
+                rewrite: None,
+            });
+        }
+        for issue in &entry.invalid {
+            let code = issue.diagnostic_code();
+            let mut message = issue.message.clone();
+            if !issue.suggestions.is_empty() {
+                message.push_str("; did you mean ");
+                message.push_str(
+                    &issue
+                        .suggestions
+                        .iter()
+                        .map(|value| format!("`{value}`"))
+                        .collect::<Vec<_>>()
+                        .join(" or "),
+                );
+                message.push('?');
+            }
+            let range = issue
+                .field
+                .as_deref()
+                .and_then(|key| {
+                    if code == "record_unknown_field" {
+                        entry
+                            .intent
+                            .fields
+                            .iter()
+                            .find(|field| field.key == key)
+                            .map(|field| field.key_range)
+                    } else {
+                        issue
+                            .source_ranges
+                            .as_ref()
+                            .and_then(|ranges| ranges.first())
+                            .map(|range| (range.start, range.end))
+                    }
+                })
+                .or_else(|| {
+                    issue
+                        .source_ranges
+                        .as_ref()
+                        .and_then(|ranges| ranges.first())
+                        .map(|range| (range.start, range.end))
+                });
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code,
+                message,
+                range: range.filter(|(start, end)| {
+                    *start <= *end && *end <= input.len()
+                }),
+                rewrite: None,
+            });
+        }
+        diagnostics.extend(single_colon_diagnostics(entry));
+    }
+    diagnostics
+}
+
+fn single_colon_diagnostics(
+    entry: &super::capture_record::RecordParseEntry,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for group in &entry.intent.notes {
+        if group.section.is_some() {
+            continue;
+        }
+        for line in &group.lines {
+            for field in &entry.record_type.fields {
+                let Some(rest) = line.text.strip_prefix(&field.key) else {
+                    continue;
+                };
+                if !rest.starts_with(':') || rest.starts_with("::") {
+                    continue;
+                }
+                let end = line.range.0 + field.key.len() + 1;
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Warning,
+                    code: "record_field_single_colon",
+                    message: format!(
+                        "`{}:` stays a note; use `{}:: value` to set the {} field",
+                        field.key, field.key, entry.record_type.label,
+                    ),
+                    range: Some((line.range.0, end.min(line.range.1))),
+                    rewrite: None,
+                });
+                break;
+            }
+        }
+    }
+    diagnostics
+}
+
+fn collection_route_diagnostics(
+    input: &str,
+    items: &[EditorItemParse],
+    policy: Option<&capture_language::RecordRoutePolicy>,
+) -> Vec<Diagnostic> {
+    let Some(policy) = policy else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            if item.mode != EditorMode::Task
+                || !item.has_local_destination
+                || item.section.is_some()
+                || item.block_id.is_some()
+                || item.list.is_some()
+            {
+                return None;
+            }
+            let route = item.route.as_deref()?;
+            let record_type = policy.configured_dir(route)?;
+            let span = item
+                .spans
+                .iter()
+                .find(|span| span.kind == capture_language::SpanKind::Route)?;
+            let token = input.get(span.start..span.end)?;
+            if token != format!("@{route}") {
+                return None;
+            }
+            let label = policy
+                .records_config()?
+                .record_type(record_type)?
+                .label
+                .as_str();
+            Some(Diagnostic {
+                severity: Severity::Warning,
+                code: "record_collection_route",
+                message: format!(
+                    "{}.md is the {label} collection — `@{route}/` creates a record note",
+                    route,
+                ),
+                range: Some((span.start, span.end)),
+                rewrite: Some(DiagnosticRewrite {
+                    start: span.start,
+                    end: span.end,
+                    replacement: format!("@{route}/"),
+                    label: format!("Use `@{route}/` to create a {label} note"),
+                }),
+            })
+        })
+        .collect()
 }
 
 fn sub_bullet_bodies(sub_bullets: &[AuthoredSubBullet]) -> Vec<String> {
@@ -3580,6 +3952,322 @@ mod tests {
 
     fn json(input: &str) -> serde_json::Value {
         serde_json::from_str(&success_json(&parse(input))).expect("json")
+    }
+
+    fn record_parse_config(vault: &std::path::Path) -> std::path::PathBuf {
+        let path = vault.join("config.yml");
+        std::fs::write(
+            &path,
+            r#"records:
+  restaurant:
+    dir: eat
+    label: Restaurant
+    emoji: "🍽️"
+    dated_notes: true
+    fields:
+      status:
+        required: true
+        values:
+          to_try: "🔖 To try"
+          liked: "💚 Liked"
+      category:
+        required: true
+      location:
+        required: true
+      companions:
+        values: link
+        list: true
+        default: ["[[kelly]]"]
+      visited:
+        values: date
+"#,
+        )
+        .expect("write record test config");
+        path
+    }
+
+    fn parse_with_records(
+        input: &str,
+        vault: &std::path::Path,
+    ) -> CaptureParseResult {
+        let config = record_parse_config(vault);
+        let policy = super::super::capture_record::record_policy_for_draft(
+            vault,
+            Some(&config),
+            input,
+        );
+        let options = EditorParseOptions {
+            url_routing: None,
+            has_global_destination: false,
+            record_policy: Some(&policy),
+        };
+        CaptureParseResult::new(input.to_string(), &options)
+    }
+
+    fn record_json(input: &str, vault: &std::path::Path) -> serde_json::Value {
+        serde_json::to_value(parse_with_records(input, vault)).unwrap()
+    }
+
+    #[test]
+    fn record_parse_projects_engine_fields_defaults_and_source_ranges() {
+        let vault = tempfile::tempdir().expect("scratch vault");
+        let input = concat!(
+            "Ninja Sushi @eat/\n",
+            "- status:: liked\n",
+            "- category:: Sushi\n",
+            "- location:: Clark\n",
+            "- visited:: today\n",
+            "- Great lunch.\n",
+        );
+        let value = record_json(input, vault.path());
+        let record = &value["record"];
+        assert_eq!(record["action"], "create");
+        assert_eq!(record["type"], "restaurant");
+        assert_eq!(record["label"], "Restaurant");
+        assert_eq!(record["emoji"], "🍽️");
+        assert_eq!(record["dir"], "eat");
+        assert_eq!(record["path"], "eat/ninja_sushi.md");
+        assert_eq!(record["stem"], "ninja_sushi");
+        assert_eq!(record["stem_source"], "title");
+        assert_eq!(record["title"], "Ninja Sushi");
+        assert_eq!(record["missing"], serde_json::json!([]));
+        assert_eq!(record["notes"], 1);
+
+        let fields = record["fields"].as_array().unwrap();
+        let status = fields
+            .iter()
+            .find(|field| field["key"] == "status")
+            .unwrap();
+        assert_eq!(status["kind"], "choices");
+        assert_eq!(status["state"], "set");
+        assert_eq!(status["value"], "liked");
+        assert_eq!(status["display"], "💚 Liked");
+        assert_eq!(status["source"], "typed");
+        assert_eq!(status["choices"][1]["value"], "liked");
+        assert!(status.get("value_ranges").is_none());
+        let status_range = &status["range"];
+        assert_eq!(
+            &input[status_range["start"].as_u64().unwrap() as usize
+                ..status_range["end"].as_u64().unwrap() as usize],
+            "liked"
+        );
+
+        let companions = fields
+            .iter()
+            .find(|field| field["key"] == "companions")
+            .unwrap();
+        assert_eq!(companions["state"], "default");
+        assert_eq!(companions["source"], "default");
+        assert_eq!(companions["value"][0], "[[kelly]]");
+    }
+
+    #[test]
+    fn record_parse_retains_empty_missing_and_invalid_field_states() {
+        let vault = tempfile::tempdir().expect("scratch vault");
+        let missing = record_json(
+            "Ninja Sushi @eat/\n- status:: liked\n- category:: Sushi\n",
+            vault.path(),
+        );
+        assert_eq!(
+            missing["record"]["missing"],
+            serde_json::json!(["location"])
+        );
+        assert_eq!(missing["needs"][0], "record_value");
+        assert_eq!(missing["record"]["fields"][2]["state"], "missing");
+
+        let none = record_json(
+            "Ninja Sushi @eat/\n- status:: liked\n- category:: Sushi\n- location:: Clark\n- companions::\n",
+            vault.path(),
+        );
+        let companions = none["record"]["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|field| field["key"] == "companions")
+            .unwrap();
+        assert_eq!(companions["state"], "none");
+        assert!(companions["value"].is_null());
+        assert_eq!(companions["range"]["start"], companions["range"]["end"]);
+
+        let invalid = record_json(
+            "Ninja Sushi @eat/\n- status:: loved\n- category:: Sushi\n- location:: Clark\n",
+            vault.path(),
+        );
+        let status = invalid["record"]["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|field| field["key"] == "status")
+            .unwrap();
+        assert_eq!(status["state"], "invalid");
+        assert!(invalid["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|diagnostic| diagnostic["code"] == "record_invalid_value"));
+    }
+
+    #[test]
+    fn record_parse_keeps_schema_for_incomplete_titles_and_unknown_fields() {
+        let vault = tempfile::tempdir().expect("scratch vault");
+        let incomplete = record_json("@eat/", vault.path());
+        assert_eq!(incomplete["mode"], "record_note");
+        assert!(incomplete["needs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|need| need == "record_title"));
+        assert!(incomplete["record"]["path"].is_null());
+        assert_eq!(incomplete["record"]["type"], "restaurant");
+        assert_eq!(incomplete["record"]["fields"].as_array().unwrap().len(), 5);
+
+        let unknown = record_json(
+            "Ninja Sushi @eat/\n- status:: liked\n- category:: Sushi\n- location:: Clark\n- occasion:: birthday\n",
+            vault.path(),
+        );
+        assert!(unknown["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|diagnostic| diagnostic["code"] == "record_unknown_field"));
+    }
+
+    #[test]
+    fn record_parse_reports_invalid_records_configuration() {
+        let vault = tempfile::tempdir().expect("scratch vault");
+        let config = vault.path().join("config.yml");
+        std::fs::write(&config, "records: [not, a, mapping]\n")
+            .expect("write malformed record config");
+        let input = "Ninja Sushi @eat/";
+        let policy = super::super::capture_record::record_policy_for_draft(
+            vault.path(),
+            Some(&config),
+            input,
+        );
+        let options = EditorParseOptions {
+            url_routing: None,
+            has_global_destination: false,
+            record_policy: Some(&policy),
+        };
+        let parsed = CaptureParseResult::new(input.to_string(), &options);
+        let value = serde_json::to_value(parsed).unwrap();
+        assert!(value["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|diagnostic| diagnostic["code"] == "records_config_invalid"));
+    }
+
+    #[test]
+    fn record_parse_keeps_repeated_field_ranges_disjoint_from_notes() {
+        let vault = tempfile::tempdir().expect("scratch vault");
+        let input = concat!(
+            "Ninja Sushi @eat/\n",
+            "- status:: liked\n",
+            "- category:: Sushi\n",
+            "- location:: Clark\n",
+            "- companions:: [[kelly]]\n",
+            "- A note between values.\n",
+            "- companions:: [[sam]]\n",
+        );
+        let value = record_json(input, vault.path());
+        let companions = value["record"]["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|field| field["key"] == "companions")
+            .unwrap();
+        assert!(companions["range"].is_null());
+        let ranges = companions["value_ranges"].as_array().unwrap();
+        assert_eq!(ranges.len(), 2);
+        for (range, expected) in ranges.iter().zip(["[[kelly]]", "[[sam]]"]) {
+            assert_eq!(
+                &input[range["start"].as_u64().unwrap() as usize
+                    ..range["end"].as_u64().unwrap() as usize],
+                expected
+            );
+        }
+        assert!(input[ranges[0]["end"].as_u64().unwrap() as usize
+            ..ranges[1]["start"].as_u64().unwrap() as usize]
+            .contains("A note between values."));
+        assert_eq!(value["record"]["notes"], 1);
+    }
+
+    #[test]
+    fn record_parse_maps_explicit_stems_single_colon_and_collection_fix() {
+        let vault = tempfile::tempdir().expect("scratch vault");
+        let explicit = record_json(
+            "@eat/^nagi-shop Ninja Sushi\n- location:: Clark\n",
+            vault.path(),
+        );
+        assert_eq!(explicit["record"]["path"], "eat/nagi-shop.md");
+        assert_eq!(explicit["record"]["stem_source"], "explicit");
+
+        let hint = record_json(
+            "Ninja Sushi @eat/\n- status:: liked\n- category:: Sushi\n- location: upstairs\n",
+            vault.path(),
+        );
+        let single_colon = hint["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|diagnostic| {
+                diagnostic["code"] == "record_field_single_colon"
+            })
+            .expect("single-colon hint");
+        assert_eq!(single_colon["severity"], "warning");
+
+        let collection = record_json("Blaze @eat", vault.path());
+        let warning = collection["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|diagnostic| diagnostic["code"] == "record_collection_route")
+            .expect("collection near-miss warning");
+        let start = warning["rewrite"]["start"].as_u64().unwrap() as usize;
+        let end = warning["rewrite"]["end"].as_u64().unwrap() as usize;
+        let fixed = format!(
+            "{}{}{}",
+            "Blaze @eat"[..start].to_string(),
+            warning["rewrite"]["replacement"].as_str().unwrap(),
+            "Blaze @eat"[end..].to_string(),
+        );
+        assert_eq!(record_json(&fixed, vault.path())["mode"], "record_note");
+
+        for literal in ["Blaze \\@eat", "Blaze @eat+task-id", "@eat#Dinner"] {
+            let value = record_json(literal, vault.path());
+            assert!(value["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|diagnostic| diagnostic["code"]
+                    != "record_collection_route"));
+        }
+    }
+
+    #[test]
+    fn record_parse_reports_per_item_and_same_draft_collisions() {
+        let vault = tempfile::tempdir().expect("scratch vault");
+        let input = concat!(
+            "Ninja Sushi @eat/\n",
+            "- status:: liked\n- category:: Sushi\n- location:: Clark\n\n",
+            "Ninja Sushi @eat/\n",
+            "- status:: liked\n- category:: Sushi\n- location:: Clark\n",
+        );
+        let value = record_json(input, vault.path());
+        let items = value["items"].as_array().expect("item projections");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["record"]["path"], "eat/ninja_sushi.md");
+        assert_eq!(items[1]["record"]["path"], "eat/ninja_sushi.md");
+        assert!(value["diagnostics"].as_array().unwrap().iter().any(
+            |diagnostic| {
+                diagnostic["code"] == "record_exists"
+                    && diagnostic["message"]
+                        .as_str()
+                        .unwrap()
+                        .contains("@eat/ninja_sushi")
+            }
+        ));
     }
 
     fn task_type_catalog() -> (tempfile::TempDir, ThemeCatalog) {

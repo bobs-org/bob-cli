@@ -18,6 +18,7 @@ use super::{
         is_markdown_file, parse_frontmatter, project_name_aliases,
         ProjectStatus,
     },
+    records::RecordCatalog,
     style::{display_width, pad_right, Styler},
 };
 
@@ -68,13 +69,12 @@ fn print_clap_error(error: clap::Error) -> i32 {
 
 pub(crate) fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
-        .about("List capture routes for inbox, area, and active project notes")
+        .about("List capture routes for inbox, area, project, and record notes")
         .long_about(
-            "List the routable Bob notes that the task-capture picker can \
-offer.\n\n\
-The command reads only top-level markdown files in the vault, includes area \
-notes and non-terminal project notes, and always pins mac_inbox first as the \
-default. It is read-only.",
+            "List the routable Bob notes that capture pickers can offer.\n\n\
+The command reads top-level area and non-terminal project notes, plus \
+configured record folders. It always pins mac_inbox first as the default \
+task-capture target. It is read-only.",
         )
         .after_help(
             "Examples:\n  bob capture-targets --format json\n  bob capture-targets\n  bob capture-targets -f json\n  bob capture-targets -b ~/bob",
@@ -217,6 +217,15 @@ pub(crate) struct CaptureTarget {
     pub(crate) status: Option<String>,
     pub(crate) relative_path: String,
     pub(crate) project_name_aliases: Vec<String>,
+    /// Record type id, present only on configured record-folder rows.
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub(crate) record_type: Option<String>,
+    /// Record type emoji, present only on configured record-folder rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) emoji: Option<String>,
+    /// Indexed note count, present only on configured record-folder rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) count: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -225,9 +234,17 @@ pub(crate) enum CaptureTargetKind {
     Inbox,
     Area,
     Project,
+    Record,
 }
 
 pub(crate) fn scan_capture_targets(bob_dir: &Path) -> CaptureTargetsReport {
+    scan_capture_targets_with_config(bob_dir, &super::config::config_path())
+}
+
+fn scan_capture_targets_with_config(
+    bob_dir: &Path,
+    config_path: &Path,
+) -> CaptureTargetsReport {
     let mut report = CaptureTargetsReport {
         targets: vec![default_inbox_target()],
         warnings: Vec::new(),
@@ -256,6 +273,7 @@ pub(crate) fn scan_capture_targets(bob_dir: &Path) -> CaptureTargetsReport {
     sort_targets(&mut projects);
     report.targets.extend(areas);
     report.targets.extend(projects);
+    append_record_targets(bob_dir, config_path, &mut report.targets);
     let conflicts = alias_conflict_warnings(&report.targets);
     report.warnings.extend(conflicts.iter().cloned());
     report.alias_warnings.extend(conflicts);
@@ -427,6 +445,9 @@ fn default_inbox_target() -> CaptureTarget {
         status: None,
         relative_path: capture::INBOX_FILE.to_string(),
         project_name_aliases: Vec::new(),
+        record_type: None,
+        emoji: None,
+        count: None,
     }
 }
 
@@ -446,6 +467,49 @@ fn target_from_route(
         status,
         relative_path: label,
         project_name_aliases,
+        record_type: None,
+        emoji: None,
+        count: None,
+    }
+}
+
+fn append_record_targets(
+    bob_dir: &Path,
+    config_path: &Path,
+    targets: &mut Vec<CaptureTarget>,
+) {
+    let Ok(records) =
+        super::config::records::load_records_config_from(&config_path)
+    else {
+        return;
+    };
+    if records.types.is_empty() {
+        return;
+    }
+    let mut record_types = records.types;
+    record_types.sort_by(|left, right| {
+        left.dir
+            .to_ascii_lowercase()
+            .cmp(&right.dir.to_ascii_lowercase())
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    let mut catalog = RecordCatalog::new(bob_dir);
+    for record_type in record_types {
+        let count = catalog.folder(&record_type.dir).notes().len();
+        let route = format!("{}/", record_type.dir);
+        targets.push(CaptureTarget {
+            route: route.clone(),
+            name: route.clone(),
+            label: record_type.label.clone(),
+            kind: CaptureTargetKind::Record,
+            is_default: false,
+            status: None,
+            relative_path: route,
+            project_name_aliases: Vec::new(),
+            record_type: Some(record_type.id),
+            emoji: record_type.emoji,
+            count: Some(count),
+        });
     }
 }
 
@@ -486,6 +550,7 @@ fn print_human_success_with_styler(
     let inbox = targets_of_kind(result, CaptureTargetKind::Inbox);
     let areas = targets_of_kind(result, CaptureTargetKind::Area);
     let projects = targets_of_kind(result, CaptureTargetKind::Project);
+    let records = targets_of_kind(result, CaptureTargetKind::Record);
 
     println!("Capture targets {} {}", styler.separator(), result.bob_dir);
     println!();
@@ -498,14 +563,18 @@ fn print_human_success_with_styler(
         println!();
         print_group("Active projects", &projects, &widths, styler);
     }
-    if areas.is_empty() && projects.is_empty() {
+    if !records.is_empty() {
+        println!();
+        print_group("Record folders", &records, &widths, styler);
+    }
+    if areas.is_empty() && projects.is_empty() && records.is_empty() {
         println!();
         println!("  No area or active project targets found.");
     }
 
     println!();
     println!(
-        "{} {} {} {} {} {} {} {} {} {}",
+        "{} {} {} {} {} {} {} {} {} {} {} {} {}",
         result.count,
         plural(result.count, "target", "targets"),
         styler.separator(),
@@ -515,7 +584,10 @@ fn print_human_success_with_styler(
         areas.len(),
         plural(areas.len(), "area", "areas"),
         styler.separator(),
-        active_project_count_label(projects.len())
+        active_project_count_label(projects.len()),
+        styler.separator(),
+        records.len(),
+        plural(records.len(), "record folder", "record folders")
     );
 }
 
@@ -572,7 +644,12 @@ fn target_detail(target: &CaptureTarget, styler: &Styler) -> String {
     }
 
     if target.kind != CaptureTargetKind::Project {
-        return aka;
+        if target.kind != CaptureTargetKind::Record {
+            return aka;
+        }
+        let emoji = target.emoji.as_deref().unwrap_or("");
+        let count = target.count.unwrap_or(0);
+        return format!("{emoji} {count} {}", plural(count, "note", "notes"));
     }
 
     let status = target.status.as_deref().unwrap_or("wip");
@@ -751,7 +828,10 @@ mod tests {
         );
         write_file(&temp.path().join("Bad.md"), "---\ntype: [[area]]\n---\n");
 
-        let report = scan_capture_targets(temp.path());
+        let report = scan_capture_targets_with_config(
+            temp.path(),
+            &temp.path().join("records-config.yml"),
+        );
         let routes = report
             .targets
             .iter()
@@ -769,6 +849,89 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn scan_appends_indexed_record_folders_after_note_targets() {
+        let temp = TempDir::new("bob-cli-capture-targets-records");
+        let config = temp.path().join("config.yml");
+        write_file(
+            &config,
+            "records:\n  restaurant:\n    dir: eat\n    label: Restaurant\n    emoji: \"🍽️\"\n    fields:\n      status:\n        required: true\n        values: {liked: \"💚 Liked\"}\n  podcast:\n    dir: podcasts\n    label: Podcast\n    fields:\n      status:\n        required: true\n        values: {subscribed: \"Subscribed\"}\n",
+        );
+        write_file(&temp.path().join("cash.md"), "---\ntype: [[area]]\n---\n");
+        write_file(
+            &temp.path().join("eat/ninja_sushi.md"),
+            "---\ntype: [[restaurant]]\ntitle: Ninja Sushi\nstatus: liked\n---\n",
+        );
+
+        let report = scan_capture_targets_with_config(temp.path(), &config);
+        assert!(report.issues.is_empty());
+        let routes = report
+            .targets
+            .iter()
+            .map(|target| target.route.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(routes, ["mac_inbox", "cash", "eat/", "podcasts/"]);
+        let restaurant = report
+            .targets
+            .iter()
+            .find(|target| target.kind == CaptureTargetKind::Record)
+            .expect("restaurant folder target");
+        assert_eq!(restaurant.route, "eat/");
+        assert_eq!(restaurant.record_type.as_deref(), Some("restaurant"));
+        assert_eq!(restaurant.label, "Restaurant");
+        assert_eq!(restaurant.emoji.as_deref(), Some("🍽️"));
+        assert_eq!(restaurant.count, Some(1));
+        assert_eq!(restaurant.relative_path, "eat/");
+        let podcast = report
+            .targets
+            .iter()
+            .find(|target| target.route == "podcasts/")
+            .unwrap();
+        assert_eq!(podcast.count, Some(0));
+
+        let value: serde_json::Value =
+            serde_json::from_str(&success_json(&report.result(temp.path())))
+                .unwrap();
+        let record_row = value["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|target| target["route"] == "eat/")
+            .unwrap();
+        assert_eq!(record_row["kind"], "record");
+        assert_eq!(record_row["type"], "restaurant");
+        assert_eq!(record_row["label"], "Restaurant");
+        assert_eq!(record_row["emoji"], "🍽️");
+        assert_eq!(record_row["count"], 1);
+    }
+
+    #[test]
+    fn absent_or_invalid_record_config_keeps_task_targets() {
+        let temp = TempDir::new("bob-cli-capture-targets-records-isolation");
+        write_file(&temp.path().join("cash.md"), "---\ntype: [[area]]\n---\n");
+        let missing = temp.path().join("missing-config.yml");
+        let report = scan_capture_targets_with_config(temp.path(), &missing);
+        assert!(report.issues.is_empty());
+        assert_eq!(
+            report
+                .targets
+                .iter()
+                .map(|target| target.route.as_str())
+                .collect::<Vec<_>>(),
+            ["mac_inbox", "cash"]
+        );
+
+        let malformed = temp.path().join("malformed-config.yml");
+        write_file(&malformed, "records: [not, a, mapping]\n");
+        let report = scan_capture_targets_with_config(temp.path(), &malformed);
+        assert!(report.issues.is_empty());
+        assert_eq!(report.targets.len(), 2);
+        assert!(report
+            .targets
+            .iter()
+            .all(|target| target.kind != CaptureTargetKind::Record));
     }
 
     #[test]
@@ -837,7 +1000,10 @@ mod tests {
             "---\ntype: [[area]]\nproject_name_aliases: [\"bob-cli\"]\n---\n",
         );
 
-        let report = scan_capture_targets(temp.path());
+        let report = scan_capture_targets_with_config(
+            temp.path(),
+            &temp.path().join("records-config.yml"),
+        );
         let bob = report
             .targets
             .iter()
@@ -878,7 +1044,10 @@ mod tests {
             "---\ntype: [[area]]\nproject_name_aliases: [\"bob\"]\n---\n",
         );
 
-        let report = scan_capture_targets(temp.path());
+        let report = scan_capture_targets_with_config(
+            temp.path(),
+            &temp.path().join("records-config.yml"),
+        );
         let warnings = report
             .warnings
             .iter()

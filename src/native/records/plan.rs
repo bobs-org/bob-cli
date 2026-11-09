@@ -6,7 +6,7 @@
 //! notes.
 
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     ops::Range,
     path::{Path, PathBuf},
 };
@@ -110,6 +110,17 @@ pub(crate) struct RecordCreatePlan {
     /// supplied value is valid.
     pub(crate) markdown: Option<String>,
     pub(crate) body: Option<String>,
+}
+
+/// Schema-ordered interpretation of the supplied fields, independent of a
+/// title or destination path. Capture parsing uses this for incomplete title
+/// drafts while sharing the planner's exact validation and defaults.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct RecordFieldPlan {
+    pub(crate) properties: Vec<PlannedRecordProperty>,
+    pub(crate) missing: Vec<String>,
+    pub(crate) invalid: Vec<RecordDiagnostic>,
+    values: BTreeMap<String, RecordValue>,
 }
 
 /// Structural errors that prevent a creation plan from being formed.
@@ -237,78 +248,13 @@ pub(crate) fn plan_create(
     }
 
     let today = request.now.date();
-    let mut properties = Vec::with_capacity(record_type.fields.len());
-    let mut missing = Vec::new();
-    let mut invalid = Vec::new();
-    let mut values = std::collections::BTreeMap::new();
-
-    for field in &record_type.fields {
-        let property = match combine_field_inputs(
-            field,
-            request.fields,
-            &record_type.id,
-        ) {
-            Ok(state) => build_property(
-                field,
-                state,
-                today,
-                &record_type.id,
-                source_ranges_for(request.fields, &field.key),
-                &mut missing,
-                &mut invalid,
-            ),
-            Err(mut diagnostic) => {
-                diagnostic.source_ranges =
-                    source_ranges_for(request.fields, &field.key);
-                invalid.push(diagnostic);
-                empty_property(
-                    field,
-                    RecordPropertyState::Invalid,
-                    source_ranges_for(request.fields, &field.key),
-                )
-            }
-        };
-        if let Some(value) = &property.value {
-            values.insert(field.key.clone(), value.clone());
-        }
-        properties.push(property);
-    }
-
-    let mut unknown_seen = HashSet::new();
-    for input in request.fields {
-        if record_type.field(&input.key).is_none()
-            && unknown_seen.insert(input.key.as_str())
-        {
-            let allowed_keys = record_type
-                .fields
-                .iter()
-                .map(|field| field.key.clone())
-                .collect::<Vec<_>>();
-            let mut diagnostic = RecordDiagnostic {
-                code: RecordDiagnosticCode::UnknownField,
-                config_path: None,
-                record_type: Some(record_type.id.clone()),
-                field: Some(input.key.clone()),
-                message: format!(
-                    "`{}` is not a {} field; fields: {}",
-                    input.key,
-                    record_type.label,
-                    record_type
-                        .fields
-                        .iter()
-                        .map(|field| field.key.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-                suggestions: nearest_field_keys(&allowed_keys, &input.key),
-                allowed_keys,
-                source_ranges: source_ranges_for(request.fields, &input.key),
-            };
-            diagnostic.source_ranges =
-                source_ranges_for(request.fields, &input.key);
-            invalid.push(diagnostic);
-        }
-    }
+    let field_plan = plan_fields(record_type, request.fields, today);
+    let RecordFieldPlan {
+        properties,
+        missing,
+        invalid,
+        values,
+    } = field_plan;
 
     let (markdown, body) = if missing.is_empty() && invalid.is_empty() {
         let parent = resolve_parent(&request, record_type);
@@ -341,6 +287,85 @@ pub(crate) fn plan_create(
         markdown,
         body,
     })
+}
+
+/// Validate inputs and apply defaults using the same path as
+/// [`plan_create`], without resolving a title, stem, collision, or Markdown.
+pub(crate) fn plan_fields(
+    record_type: &RecordType,
+    inputs: &[RecordFieldInput],
+    today: chrono::NaiveDate,
+) -> RecordFieldPlan {
+    let mut properties = Vec::with_capacity(record_type.fields.len());
+    let mut missing = Vec::new();
+    let mut invalid = Vec::new();
+    let mut values = BTreeMap::new();
+
+    for field in &record_type.fields {
+        let ranges = source_ranges_for(inputs, &field.key);
+        let property =
+            match combine_field_inputs(field, inputs, &record_type.id) {
+                Ok(state) => build_property(
+                    field,
+                    state,
+                    today,
+                    &record_type.id,
+                    ranges.clone(),
+                    &mut missing,
+                    &mut invalid,
+                ),
+                Err(mut diagnostic) => {
+                    diagnostic.source_ranges = ranges.clone();
+                    invalid.push(diagnostic);
+                    empty_property(field, RecordPropertyState::Invalid, ranges)
+                }
+            };
+        if let Some(value) = &property.value {
+            values.insert(field.key.clone(), value.clone());
+        }
+        properties.push(property);
+    }
+
+    let mut unknown_seen = HashSet::new();
+    for input in inputs {
+        if record_type.field(&input.key).is_none()
+            && unknown_seen.insert(input.key.as_str())
+        {
+            let allowed_keys = record_type
+                .fields
+                .iter()
+                .map(|field| field.key.clone())
+                .collect::<Vec<_>>();
+            let diagnostic = RecordDiagnostic {
+                code: RecordDiagnosticCode::UnknownField,
+                config_path: None,
+                record_type: Some(record_type.id.clone()),
+                field: Some(input.key.clone()),
+                message: format!(
+                    "`{}` is not a {} field; fields: {}",
+                    input.key,
+                    record_type.label,
+                    record_type
+                        .fields
+                        .iter()
+                        .map(|field| field.key.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                suggestions: nearest_field_keys(&allowed_keys, &input.key),
+                allowed_keys,
+                source_ranges: source_ranges_for(inputs, &input.key),
+            };
+            invalid.push(diagnostic);
+        }
+    }
+
+    RecordFieldPlan {
+        properties,
+        missing,
+        invalid,
+        values,
+    }
 }
 
 fn combine_field_inputs(

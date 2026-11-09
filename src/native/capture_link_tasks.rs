@@ -118,6 +118,9 @@ pub(crate) fn discover_at(
     let settings = note_tasks::read_settings(bob_dir);
     let mut notes = Vec::new();
     for target in &report.targets {
+        if target.kind == CaptureTargetKind::Record {
+            continue;
+        }
         let relative = &target.relative_path;
         match fs::read_to_string(bob_dir.join(relative)) {
             Ok(contents) => notes.push((target, contents)),

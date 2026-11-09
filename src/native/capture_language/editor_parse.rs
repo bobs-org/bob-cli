@@ -404,6 +404,27 @@ pub(crate) fn parse_for_editor_with(
         }
     }
     attach_list_duplicate_id_diagnostics(&mut item_outcomes);
+    let record_intents = draft
+        .items
+        .iter()
+        .zip(item_outcomes.iter())
+        .filter_map(|(raw_item, outcome)| {
+            (outcome.item.mode == EditorMode::RecordNote)
+                .then(|| {
+                    super::record::classify_record_item(
+                        raw_item,
+                        options.record_policy,
+                    )
+                })
+                .flatten()
+                .and_then(|claim| match claim {
+                    super::record::RecordClaim::Note(intent) => {
+                        Some((outcome.item.index, intent))
+                    }
+                    super::record::RecordClaim::Refused { .. } => None,
+                })
+        })
+        .collect::<Vec<_>>();
     let transfers = draft
         .items
         .iter()
@@ -593,6 +614,7 @@ pub(crate) fn parse_for_editor_with(
             diagnostics: global_diagnostics,
             sub_bullets: Vec::new(),
             items,
+            record_intents,
             global_destination,
             targets: Vec::new(),
             transfers,
@@ -660,6 +682,7 @@ pub(crate) fn parse_for_editor_with(
         diagnostics,
         sub_bullets,
         items,
+        record_intents,
         global_destination,
         targets,
         transfers,

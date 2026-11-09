@@ -183,6 +183,7 @@ pub(crate) use self::model::TaskToggleIntent;
 pub(crate) use self::model::TemplateRowSummary;
 pub(crate) use self::pomodoro_literal::canonicalize_exact_name;
 pub(crate) use self::project_tasks::split_leading_checkbox;
+pub(crate) use self::record::candidate_collection_routes;
 pub(crate) use self::record::candidate_dirs;
 pub(crate) use self::record::RecordRoutePolicy;
 pub(crate) use self::record::RECORD_EXECUTION_UNWIRED_MESSAGE;

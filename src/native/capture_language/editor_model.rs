@@ -603,6 +603,10 @@ pub(crate) struct EditorParse {
     /// diagnostic instead and excluded here.
     pub(crate) sub_bullets: Vec<AuthoredSubBullet>,
     pub(crate) items: Vec<EditorItemParse>,
+    /// Parsed record creation intents keyed by the zero-based capture item
+    /// index. Kept beside, rather than inside, `EditorItemParse` so the
+    /// lexical model remains reusable by clients that need no records data.
+    pub(crate) record_intents: Vec<(usize, super::record::RecordNoteIntent)>,
     pub(crate) global_destination: Option<EditorGlobalDestination>,
     /// Additive first-item target-run members, projected from the first
     /// item. Empty unless the first item is a multi-member run.

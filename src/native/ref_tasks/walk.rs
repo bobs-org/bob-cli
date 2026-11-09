@@ -158,6 +158,10 @@ impl RefTaskIndex {
                     report
                         .targets
                         .iter()
+                        .filter(|target| {
+                            target.kind
+                                != crate::native::capture_targets::CaptureTargetKind::Record
+                        })
                         .map(|t| t.route.to_ascii_lowercase())
                         .collect(),
                 );

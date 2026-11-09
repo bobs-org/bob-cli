@@ -13,7 +13,7 @@
 //! their bodies are never repaired afterward.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::draft::{classify_authored_line, AuthoredLineClass};
 use super::editor_model::{Diagnostic, Need, Severity, Span, SpanKind};
@@ -71,6 +71,12 @@ pub(crate) struct RecordRoutePolicy {
     config_path: Option<String>,
     /// Malformed `records` block message, when the config failed to parse.
     config_error: Option<String>,
+    /// Parsed schema retained for the native capture adapter. The grammar
+    /// itself only consults the directory/type maps above.
+    records_config: Option<RecordsConfig>,
+    /// Vault root used to build this policy, for invocation-local indexing
+    /// by the native adapter.
+    vault_root: Option<PathBuf>,
     /// Lower-cased existing vault-relative directories that are not
     /// record folders.
     existing_dirs: HashSet<String>,
@@ -88,6 +94,8 @@ impl RecordRoutePolicy {
         Self {
             config_path: Some(config_path.display().to_string()),
             config_error: Some(message),
+            records_config: None,
+            vault_root: None,
             ..Self::default()
         }
     }
@@ -114,6 +122,8 @@ impl RecordRoutePolicy {
             type_dirs,
             config_path: config_path.map(|path| path.display().to_string()),
             config_error: None,
+            records_config: Some(config.clone()),
+            vault_root: None,
             existing_dirs: HashSet::new(),
         }
     }
@@ -129,6 +139,19 @@ impl RecordRoutePolicy {
     /// folder. Callers check this before any filesystem inspection.
     pub(crate) fn configured_dir(&self, dir: &str) -> Option<&str> {
         self.dirs.get(dir).map(String::as_str)
+    }
+
+    pub(crate) fn records_config(&self) -> Option<&RecordsConfig> {
+        self.records_config.as_ref()
+    }
+
+    pub(crate) fn vault_root(&self) -> Option<&Path> {
+        self.vault_root.as_deref()
+    }
+
+    pub(crate) fn with_vault_root(mut self, vault_root: &Path) -> Self {
+        self.vault_root = Some(vault_root.to_path_buf());
+        self
     }
 }
 
@@ -155,6 +178,30 @@ pub(crate) fn candidate_dirs(raw_text: &str) -> Vec<String> {
         let dir = dir.to_ascii_lowercase();
         if seen.insert(dir.clone()) {
             candidates.push(dir);
+        }
+    }
+    candidates
+}
+
+/// Bare, plain `@route` tokens at the end of a physical line. These need
+/// the records schema for the `@dir` collection near-miss warning, but they
+/// never trigger a record-folder stat or index read.
+pub(crate) fn candidate_collection_routes(raw_text: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut candidates = Vec::new();
+    for line in raw_text.lines() {
+        let Some(token) = line.split_whitespace().last() else {
+            continue;
+        };
+        let Some(route) = token.strip_prefix('@') else {
+            continue;
+        };
+        if route.starts_with('@') || !is_route_token(route) {
+            continue;
+        }
+        let route = route.to_ascii_lowercase();
+        if seen.insert(route.clone()) {
+            candidates.push(route);
         }
     }
     candidates
@@ -497,17 +544,6 @@ pub(crate) fn classify_record_item(
         RecordRouteStem::Update(_) => unreachable!("handled above"),
     };
     let (title, title_range) = parent_title(parent, &route, &position);
-    if title.trim().is_empty() {
-        return Some(RecordClaim::refused(
-            RECORD_TITLE_CODE,
-            format!(
-                "record in `{}/` needs a title: write `@{}/ <title>` or \
-                 `<title> @{}/`",
-                route.dir, route.dir, route.dir,
-            ),
-            Some(route.range),
-        ));
-    }
     let mut fields = Vec::new();
     let mut field_value_ranges = Vec::new();
     let mut notes = Vec::new();
@@ -1118,6 +1154,16 @@ pub(super) fn claim_strict_record<'a>(
         .unwrap_or_default();
     match classify_record_item(item, options.record_policy) {
         None => Ok(None),
+        Some(RecordClaim::Note(intent)) if intent.title.trim().is_empty() => {
+            Err(CaptureItemParseError::coded(
+                RECORD_TITLE_CODE,
+                format!(
+                    "record in `{}/` needs a title: write `@{}/ <title>` or \
+                     `<title> @{}/`",
+                    intent.dir, intent.dir, intent.dir,
+                ),
+            ))
+        }
         Some(RecordClaim::Note(intent)) => {
             Ok(Some(strict_record_outcome(item, intent, &route_text)))
         }
@@ -1165,6 +1211,9 @@ pub(crate) fn editor_view_for_claim(claim: &RecordClaim) -> RecordEditorView {
                     title: None,
                     key: None,
                 });
+            }
+            if intent.title.trim().is_empty() {
+                needs.push(Need::RecordTitle);
             }
             for field in &intent.fields {
                 spans.push(Span {

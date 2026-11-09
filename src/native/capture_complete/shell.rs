@@ -153,6 +153,9 @@ pub(crate) fn shell_completion(
                             .map(|status| format!("project \u{00B7} {status}"))
                             .unwrap_or_else(|| "project".to_string()),
                     ),
+                    RouteCandidateKind::Record => {
+                        ("records", "record folder".to_string())
+                    }
                 };
                 rows.push(ShellRow {
                     nospace: ends_in_continuation(&full),

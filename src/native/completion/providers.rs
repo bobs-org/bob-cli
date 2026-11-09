@@ -178,6 +178,19 @@ fn routes(bob_dir: &Path) -> Vec<String> {
                     .map(|status| format!("project · {status}"))
                     .unwrap_or_else(|| "project".to_string()),
             ),
+            capture_targets::CaptureTargetKind::Record => (
+                "records",
+                format!(
+                    "{} · {} {}",
+                    target.record_type.as_deref().unwrap_or("record"),
+                    target.count.unwrap_or(0),
+                    if target.count == Some(1) {
+                        "note"
+                    } else {
+                        "notes"
+                    },
+                ),
+            ),
         };
         if let Some(line) = protocol::candidate_line(
             OsStr::new(&target.route),

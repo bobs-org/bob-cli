@@ -132,7 +132,7 @@ See also the [command catalog protocol](command-catalog.md) (`bob __catalog`).
   can never delay the prompt; on timeout bob answers nothing.
   - `--route` (on `capture`, `capture-sections`, `capture-tasks`,
     `capture-task-id`, `capture-drawers`): routes in
-    capture-targets scan order, grouped `inbox` / `areas` / `projects`.
+    capture-targets scan order, grouped `inbox` / `areas` / `projects` / `records`.
   - `capture --section`: non-Tasks sections of the routed note, grouped
     `sections in <route>`.
   - `capture --task` and `capture-drawers --block-id`: open tasks

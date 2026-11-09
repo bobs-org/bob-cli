@@ -33,6 +33,7 @@ pub(crate) fn parent_candidates(bob_dir: &Path) -> Vec<ParentCandidate> {
     capture_targets::scan_capture_targets(bob_dir)
         .targets
         .into_iter()
+        .filter(|target| target.kind != CaptureTargetKind::Record)
         .map(|target| ParentCandidate {
             route: target.route,
             kind: target.kind,
@@ -97,6 +98,7 @@ pub(crate) fn parent_kind_name(kind: &CaptureTargetKind) -> &'static str {
         CaptureTargetKind::Inbox => "inbox",
         CaptureTargetKind::Area => "area",
         CaptureTargetKind::Project => "project",
+        CaptureTargetKind::Record => "record",
     }
 }
 

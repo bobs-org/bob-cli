@@ -9,9 +9,9 @@ description: "List inbox, area, and active project capture routes"
 List inbox, area, and active project capture routes
 
 ```text title="bob capture-targets --help"
-List the routable Bob notes that the task-capture picker can offer.
+List the routable Bob notes that capture pickers can offer.
 
-The command reads only top-level markdown files in the vault, includes area notes and non-terminal project notes, and always pins mac_inbox first as the default. It is read-only.
+The command reads top-level area and non-terminal project notes, plus configured record folders. It always pins mac_inbox first as the default task-capture target. It is read-only.
 
 Usage: bob capture-targets [OPTIONS]
 

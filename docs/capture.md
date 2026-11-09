@@ -8088,7 +8088,7 @@ bob capture-parse [-f|--format human|json] [-R|--no-ref] [--] [TEXT]...
 
 Reports the authoritative capture grammar's reading of `TEXT` so an editor can
 highlight capture syntax and Obsidian wikilinks while the user is still typing.
-Success JSON includes top-level `grammar: 19` while keeping `schema_version: 1`.
+Success JSON includes top-level `grammar: 20` while keeping `schema_version: 1`.
 It shares the tokenizer, terminal-marker extraction, and `@token`
 classification with `bob capture`. Parse does not validate vault targets
 or execute the draft, so a successful parse does not guarantee a capture
@@ -8142,6 +8142,25 @@ catalog read never writes to the vault. A nonexistent `BOB_DIR` and a `%c`
 directive still succeed. If `TEXT` is omitted and stdin is piped, it reads the
 complete piped stdin stream, like `bob capture`. Only a missing `TEXT` or a
 bad flag is an error (exit 2); every other input succeeds.
+
+When `records:` is configured, a claimed `@dir/` record draft adds a
+`record` object to the result and its item row. The object includes the type,
+label, destination `path` and `stem`, title, missing required fields, count of
+ordinary note bullets, and schema-ordered `fields`. Each field reports its
+kind, required/list flags, state (`set`, `default`, `missing`, `invalid`, or
+`none`), value, display text, and source. A single typed value has a `range`;
+repeated values use separate `value_ranges[]` so intervening note bullets are
+never included. Incomplete titles retain the schema fields and need
+`record_title`; missing required values need `record_value`. A `key: value`
+bullet stays a note and produces `record_field_single_colon`; use
+`key:: value` to set a declared field. The parser resolves defaults and
+validates typed values through the records planner without writing a note.
+
+`bob capture-targets` appends configured record folders after inbox, area, and
+project routes. JSON record rows have `kind: "record"`, `type`, `emoji`, and
+an indexed note `count`; their route is the directory followed by `/`.
+Human output groups these rows under “Record folders”. Missing or invalid
+record configuration leaves ordinary capture-target discovery available.
 
 ### Template drafts
 

@@ -104,6 +104,9 @@ pub(super) fn discover(bob_dir: &Path, days: u32) -> Discovery {
     let mut candidates = Vec::new();
 
     for target in &report.targets {
+        if target.kind == capture_targets::CaptureTargetKind::Record {
+            continue;
+        }
         let relative = &target.relative_path;
         let path = bob_dir.join(relative);
         match fs::read_to_string(&path) {

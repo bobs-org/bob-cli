@@ -52,6 +52,7 @@ pub(super) enum RouteCandidateKind {
     Inbox,
     Area,
     Project,
+    Record,
 }
 
 impl From<CaptureTargetKind> for RouteCandidateKind {
@@ -60,6 +61,7 @@ impl From<CaptureTargetKind> for RouteCandidateKind {
             CaptureTargetKind::Inbox => Self::Inbox,
             CaptureTargetKind::Area => Self::Area,
             CaptureTargetKind::Project => Self::Project,
+            CaptureTargetKind::Record => Self::Record,
         }
     }
 }
