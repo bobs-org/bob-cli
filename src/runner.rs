@@ -170,8 +170,7 @@ pub(crate) const ALIASES: &[Alias] = &[
 const TASK_MEMBERS: &[Member] = &[
     Member {
         name: "archive",
-        about:
-            "Move done and canceled tasks into done/ archives and repair links",
+        about: "Move done and canceled tasks from area and project notes",
         leaf: Leaf {
             native_command: NativeCommand::MoveDoneTasks,
             script_command: None,

@@ -2313,8 +2313,8 @@ fn mg17_production_reconciliation_is_a_noop_after_merge() {
 #[test]
 fn mg18_archive_planner_repairs_merged_from_to_tombstone_archive() {
     let vault = tempfile::tempdir().expect("temporary vault");
-    let source = "- [-] #task Source [created:: 2026-10-20] [cancelled:: 2026-11-03] ^src\n\t- 🪢 **LINKS:** merged into [[dest#^dst]]\n";
-    let target_note = "- [ ] #task Target ^dst\n\t- 🪢 **LINKED FROM:** [[src#^src]] (merged into)\n";
+    let source = "---\ntype: [[area]]\n---\n\n- [-] #task Source [created:: 2026-10-20] [cancelled:: 2026-11-03] ^src\n\t- 🪢 **LINKS:** merged into [[dest#^dst]]\n";
+    let target_note = "---\ntype: [[area]]\n---\n\n- [ ] #task Target ^dst\n\t- 🪢 **LINKED FROM:** [[src#^src]] (merged into)\n";
     std::fs::write(vault.path().join("src.md"), source)
         .expect("write source fixture");
     std::fs::write(vault.path().join("dest.md"), target_note)

@@ -17,10 +17,12 @@ fn move_done_tasks_commits_and_pushes_collection_changes_only() {
     write_successful_ob_stub(&stub_bin);
     write_file(
         &source,
-        "\
+        &area_note(
+            "\
 - [x] done #task
 - [ ] active #task
 ",
+        ),
     );
     write_file(&unrelated, "- [ ] unrelated #task\n");
     git_in(&vault, ["add", "."]);
@@ -51,6 +53,7 @@ fn move_done_tasks_commits_and_pushes_collection_changes_only() {
         fs::read_to_string(&source).expect("read source"),
         "\
 ---
+type: [[area]]
 done_tasks: \"[[done/obsidian_done]]\"
 ---
 
@@ -115,10 +118,12 @@ fn move_done_tasks_commits_link_repairs_with_collection_changes() {
     write_successful_ob_stub(&stub_bin);
     write_file(
         &source,
-        "\
+        &area_note(
+            "\
 - [x] done #task ^abc123
 - [ ] active #task
 ",
+        ),
     );
     write_file(
         &daily,
@@ -462,10 +467,12 @@ fn move_done_tasks_warns_and_skips_git_for_non_repo_vault() {
     write_successful_ob_stub(&stub_bin);
     write_file(
         &source,
-        "\
+        &area_note(
+            "\
 - [x] done #task
 - [ ] active #task
 ",
+        ),
     );
 
     let output = bob_command()
@@ -493,6 +500,7 @@ fn move_done_tasks_warns_and_skips_git_for_non_repo_vault() {
         fs::read_to_string(&source).expect("read source"),
         "\
 ---
+type: [[area]]
 done_tasks: \"[[done/obsidian_done]]\"
 ---
 
@@ -509,11 +517,13 @@ fn move_done_tasks_moves_canceled_tasks_in_non_repo_vault() {
     let archive = vault.join("done/obsidian_done.md");
     write_file(
         &source,
-        "\
+        &area_note(
+            "\
 - [-] canceled one #task
 - [-] canceled two #task
 - [ ] active #task
 ",
+        ),
     );
 
     let output = bob_command()
@@ -539,6 +549,7 @@ fn move_done_tasks_moves_canceled_tasks_in_non_repo_vault() {
         fs::read_to_string(&source).expect("read source"),
         "\
 ---
+type: [[area]]
 done_tasks: \"[[done/obsidian_done]]\"
 ---
 
@@ -569,11 +580,13 @@ fn move_done_tasks_rewrites_dirty_link_repair_files() {
     let archive = vault.join("done/obsidian_done.md");
     fs::create_dir_all(&stub_bin).expect("create stub bin");
     write_successful_ob_stub(&stub_bin);
-    let source_contents = "\
+    let source_contents = area_note(
+        "\
 - [x] done #task ^abc123
 - [ ] active #task
-";
-    write_file(&source, source_contents);
+",
+    );
+    write_file(&source, &source_contents);
     write_file(&daily, "Reference [[obsidian#^abc123]].\n");
     git_in(&vault, ["add", "."]);
     git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
@@ -604,6 +617,7 @@ fn move_done_tasks_rewrites_dirty_link_repair_files() {
         fs::read_to_string(&source).expect("read source"),
         "\
 ---
+type: [[area]]
 done_tasks: \"[[done/obsidian_done]]\"
 ---
 
@@ -648,20 +662,24 @@ fn move_done_tasks_rewrites_dirty_candidate_files() {
     write_successful_ob_stub(&stub_bin);
     write_file(
         &source,
-        "\
+        &area_note(
+            "\
 - [x] done #task
 - [ ] active #task
 ",
+        ),
     );
     git_in(&vault, ["add", "."]);
     git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
     git_in(&vault, ["push", "-q", "-u", "origin", "HEAD"]);
-    let dirty_source = "\
+    let dirty_source = area_note(
+        "\
 - [x] done #task
 - [ ] active #task
 local edit
-";
-    write_file(&source, dirty_source);
+",
+    );
+    write_file(&source, &dirty_source);
 
     let output = bob_command()
         .args(["task", "archive"])
@@ -686,6 +704,7 @@ local edit
         fs::read_to_string(&source).expect("read source"),
         "\
 ---
+type: [[area]]
 done_tasks: \"[[done/obsidian_done]]\"
 ---
 
@@ -913,7 +932,9 @@ fn move_done_tasks_rewrites_stayed_pathless_links_in_archive() {
     write_successful_ob_stub(&stub_bin);
     write_file(
         &source,
-        "- [x] #task Archived ^moved\n  - ⛓️ **DEPENDS ON:** [[#^stayed]]\n- [ ] #task Stayed ^stayed\n",
+        &area_note(
+            "- [x] #task Archived ^moved\n  - ⛓️ **DEPENDS ON:** [[#^stayed]]\n- [ ] #task Stayed ^stayed\n",
+        ),
     );
 
     let output = bob_command()
@@ -954,7 +975,9 @@ fn move_done_tasks_keeps_a_drafted_period_review_drafted() {
     write_successful_ob_stub(&stub_bin);
     write_file(
         &vault.join("work.md"),
-        "- [x] #task Ship decay ✅ 2026-11-04 ^decay\n- [ ] #task Active\n",
+        &area_note(
+            "- [x] #task Ship decay ✅ 2026-11-04 ^decay\n- [ ] #task Active\n",
+        ),
     );
     let period = |args: &[&str]| {
         bob_command()
@@ -1005,6 +1028,10 @@ fn move_done_tasks_keeps_a_drafted_period_review_drafted() {
         .find(|row| row["id"] == "2026-W45")
         .expect("W45 row");
     assert_eq!(w45["review_state"], "drafted", "{note}");
+}
+
+fn area_note(body: &str) -> String {
+    format!("---\ntype: [[area]]\n---\n\n{body}")
 }
 
 fn init_git_vault_with_remote(temp: &TempDir) -> (PathBuf, PathBuf) {

@@ -133,6 +133,7 @@ pub(crate) fn run_collection(threshold: usize, child_env: &ChildEnv) -> i32 {
     println!("  markdown files: {}", plan.scanned_files);
     println!("  files meeting threshold: {}", plan.task_move_file_count());
     println!("  task blocks: {}", plan.total_task_count());
+    print_selection_report(&plan);
     println!(
         "  source done_tasks updates: {}",
         plan.source_metadata_update_count()
@@ -372,7 +373,7 @@ fn parse_threshold_text(value: &str) -> Result<usize, String> {
 }
 pub(crate) fn completion_descriptor() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
-        .about("Move done and canceled tasks and maintain done links")
+        .about("Move done and canceled tasks from area and project notes")
         .disable_help_flag(true)
         .arg(
             Arg::new("threshold")
@@ -396,8 +397,9 @@ pub(crate) fn help_text() -> String {
         "\
 usage: {COMMAND_NAME} [-t|--threshold N]
 
-Move done and canceled Bob task blocks into archive notes, link sources,
-repair archive metadata, and repair Obsidian links to moved block ids.
+Move done and canceled Bob task blocks from area and project notes into
+done/ archives, link sources, repair archive metadata, and repair Obsidian
+links to moved block ids. See docs/task-archive.md.
 
 example:
   {COMMAND_NAME} --threshold 10
@@ -408,6 +410,38 @@ options:
                    minimum completed/canceled task count per source note \
 (default: {DEFAULT_THRESHOLD})"
     )
+}
+
+fn print_selection_report(plan: &CollectionPlan) {
+    println!("holds:");
+    if plan.holds.is_empty() {
+        println!("  none");
+    } else {
+        for hold in &plan.holds {
+            println!(
+                "  {}:{} {}",
+                hold.relative_path.display(),
+                hold.line,
+                hold.reason
+            );
+        }
+    }
+    println!("skips:");
+    if plan.skip_counts.is_empty() {
+        println!("  none");
+    } else {
+        for (reason, count) in &plan.skip_counts {
+            println!("  {reason}: {count}");
+        }
+    }
+    println!("grandfathered:");
+    if plan.grandfathered.is_empty() {
+        println!("  none");
+    } else {
+        for path in &plan.grandfathered {
+            println!("  {}", path.display());
+        }
+    }
 }
 
 fn print_help() {

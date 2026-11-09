@@ -1378,8 +1378,9 @@ Warnings do not make the command fail and are not auto-fixed:
 - An ordinary task has multiple inline `scheduled` fields. That line is left
   unchanged until it contains exactly one.
 
-Terminal projects are allowed to be missing `^prj`; `bob task archive` may
-archive the checked or canceled task later.
+Terminal projects are allowed to be missing `^prj`. `bob task archive`
+skips a finished project entirely, so remaining closed tasks stay on that
+note.
 
 ## Examples
 

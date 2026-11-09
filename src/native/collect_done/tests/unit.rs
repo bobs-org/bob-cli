@@ -198,27 +198,21 @@ fn extracts_nested_blocks_and_continuations() {
 }
 
 #[test]
-fn completed_child_moves_without_collecting_active_parent() {
-    let transform = transform_markdown(
-        "\
+fn completed_child_stays_with_open_parent() {
+    let contents = "\
 - [ ] active parent #task
   - [x] done child #task
     child continuation
   - [/] active child #task
-",
-    );
+";
+    let transform = transform_markdown(contents);
 
-    assert_eq!(transform.task_count, 1);
+    assert_eq!(transform.task_count, 0);
+    assert_eq!(transform.source_contents, contents);
+    assert!(transform.archive_append.is_empty());
     assert_eq!(
-        transform.source_contents,
-        "\
-- [ ] active parent #task
-  - [/] active child #task
-"
-    );
-    assert_eq!(
-        transform.archive_append,
-        "  - [x] done child #task\n    child continuation\n"
+        transform.skip_counts.get(SKIP_OPEN_PARENT).copied(),
+        Some(1)
     );
 }
 
@@ -280,10 +274,12 @@ fn duplicate_moved_block_ids_become_unique_archive_ids() {
     let vault = TempDir::new("bob-cli-collect-done-duplicate-ids");
     write_file(
         &vault.path().join("obsidian.md"),
-        "\
+        &area_note(
+            "\
 - [x] first #task ^dup
 - [x] second #task ^dup
 ",
+        ),
     );
 
     let plan = build_collection_plan(vault.path(), 1).expect("build plan");
@@ -375,11 +371,13 @@ fn block_id_suffix_selection_preserves_distinct_moved_ids() {
     let vault = TempDir::new("bob-cli-collect-done-preserve-distinct-id");
     write_file(
         &vault.path().join("obsidian.md"),
-        "\
+        &area_note(
+            "\
 - [x] first #task ^dup
 - [x] second #task ^dup
 - [x] distinct #task ^dup-1
 ",
+        ),
     );
 
     let plan = build_collection_plan(vault.path(), 1).expect("build plan");
@@ -407,7 +405,7 @@ fn block_id_deduplication_preserves_crlf_line_endings() {
     let vault = TempDir::new("bob-cli-collect-done-crlf-id-dedup");
     write_file(
         &vault.path().join("obsidian.md"),
-        "- [x] first #task ^dup\r\n- [x] second #task ^dup\r\n",
+        "---\r\ntype: [[area]]\r\n---\r\n\r\n- [x] first #task ^dup\r\n- [x] second #task ^dup\r\n",
     );
 
     let plan = build_collection_plan(vault.path(), 1).expect("build plan");
@@ -501,7 +499,7 @@ fn below_threshold_block_ids_do_not_trigger_link_repair() {
     let vault = TempDir::new("bob-cli-collect-done-below-threshold-links");
     write_file(
         &vault.path().join("obsidian.md"),
-        "- [x] below threshold #task ^abc123\n",
+        &area_note("- [x] below threshold #task ^abc123\n"),
     );
     write_file(
         &vault.path().join("daily.md"),
@@ -979,4 +977,97 @@ fn preserves_crlf_when_adding_done_tasks_frontmatter() {
             contents,
             "---\r\ntitle: Project\r\ndone_tasks: \"[[done/project_done]]\"\r\n---\r\n\r\n# Project\r\n"
         );
+}
+
+#[test]
+fn default_settings_classify_x_x_and_dash_as_closed() {
+    let settings = default_archive_settings();
+    let transform = transform_markdown_with_settings(
+        "- [x] done #task\n- [X] uppercase #task\n- [-] canceled #task\n- [ ] open #task\n",
+        &settings,
+    );
+    assert_eq!(transform.task_count, 3);
+    assert_eq!(
+        transform.archive_append,
+        "- [x] done #task\n- [X] uppercase #task\n- [-] canceled #task\n"
+    );
+    assert_eq!(transform.source_contents, "- [ ] open #task\n");
+}
+
+#[test]
+fn closed_status_follows_tasks_settings_not_hardcoded_checkboxes() {
+    let mut settings = default_archive_settings();
+    settings.status_types.remove(&'x');
+    settings.status_types.remove(&'X');
+    settings.status_types.insert(
+        'd',
+        super::super::super::task_status_hooks::TaskStatusType::Done,
+    );
+    let transform = transform_markdown_with_settings(
+        "- [d] custom done #task\n- [x] no longer done #task\n- [-] still canceled #task\n",
+        &settings,
+    );
+    assert_eq!(transform.task_count, 2);
+    assert_eq!(
+        transform.archive_append,
+        "- [d] custom done #task\n- [-] still canceled #task\n"
+    );
+    assert_eq!(transform.source_contents, "- [x] no longer done #task\n");
+}
+
+#[test]
+fn fenced_closed_task_is_not_collected() {
+    let transform =
+        transform_markdown("- [x] real #task\n```\n- [x] fenced #task\n```\n");
+    assert_eq!(transform.task_count, 1);
+    assert_eq!(transform.archive_append, "- [x] real #task\n");
+    assert!(transform.source_contents.contains("- [x] fenced #task"));
+}
+
+#[test]
+fn percent_comment_closed_task_is_not_collected() {
+    let transform =
+        transform_markdown("- [x] real #task\n%%\n- [x] commented #task\n%%\n");
+    assert_eq!(transform.task_count, 1);
+    assert_eq!(transform.archive_append, "- [x] real #task\n");
+    assert!(transform.source_contents.contains("- [x] commented #task"));
+}
+
+#[test]
+fn frontmatter_closed_task_is_not_collected() {
+    let transform =
+        transform_markdown("---\n- [x] yaml #task\n---\n\n- [x] real #task\n");
+    assert_eq!(transform.task_count, 1);
+    assert_eq!(transform.archive_append, "- [x] real #task\n");
+    assert!(transform.source_contents.contains("- [x] yaml #task"));
+}
+
+#[test]
+fn prj_anchor_line_stays_while_sibling_moves() {
+    let transform = transform_markdown(
+        "- [x] #task Ship #hide ^prj\n- [x] sibling #task\n",
+    );
+    assert_eq!(transform.task_count, 1);
+    assert_eq!(transform.archive_append, "- [x] sibling #task\n");
+    assert!(transform.source_contents.contains("^prj"));
+    assert_eq!(transform.skip_counts.get(SKIP_PRJ).copied(), Some(1));
+}
+
+#[test]
+fn holds_closed_root_with_open_task_descendant() {
+    let contents = "\
+- [x] parent #task
+  - [ ] child #task
+";
+    let transform = transform_markdown(contents);
+    assert_eq!(transform.task_count, 0);
+    assert_eq!(transform.source_contents, contents);
+    assert!(transform.archive_append.is_empty());
+    assert_eq!(
+        transform.holds,
+        vec![HeldTask {
+            line: 1,
+            reason: HOLD_OPEN_SUBTASK,
+        }]
+    );
 }

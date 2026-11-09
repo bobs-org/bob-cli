@@ -6,6 +6,16 @@ pub(super) struct CollectionPlan {
     pub(super) scanned_files: usize,
     pub(super) files: Vec<FilePlan>,
     pub(super) link_repairs: Vec<LinkRepairPlan>,
+    pub(super) holds: Vec<HeldRoot>,
+    pub(super) skip_counts: BTreeMap<String, usize>,
+    pub(super) grandfathered: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct HeldRoot {
+    pub(super) relative_path: PathBuf,
+    pub(super) line: usize,
+    pub(super) reason: &'static str,
 }
 
 impl CollectionPlan {
@@ -148,6 +158,84 @@ impl CollectionPlan {
         file_bytes + link_repair_bytes
     }
 }
+
+fn bump_skip(counts: &mut BTreeMap<String, usize>, reason: &str) {
+    *counts.entry(reason.to_string()).or_insert(0) += 1;
+}
+
+fn merge_skips(
+    counts: &mut BTreeMap<String, usize>,
+    extra: &BTreeMap<String, usize>,
+) {
+    for (reason, count) in extra {
+        *counts.entry(reason.clone()).or_insert(0) += count;
+    }
+}
+
+fn has_type_frontmatter(contents: &str) -> bool {
+    super::super::projects::parse_frontmatter(contents).is_some_and(
+        |frontmatter| {
+            !super::super::projects::frontmatter_type_names(&frontmatter)
+                .is_empty()
+        },
+    )
+}
+
+fn paths_equal(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+fn is_daily_source(
+    relative_path: &Path,
+    absolute_path: &Path,
+    daily_path: &Path,
+) -> bool {
+    super::super::task_status_hooks::canonical_daily_date(relative_path)
+        .is_some()
+        || paths_equal(absolute_path, daily_path)
+}
+
+enum SourceEligibility {
+    Eligible { grandfathered: bool },
+    Skip(&'static str),
+}
+
+fn classify_source(
+    relative_path: &Path,
+    absolute_path: &Path,
+    contents: &str,
+    daily_path: &Path,
+    archive_exists: bool,
+) -> SourceEligibility {
+    if !has_type_frontmatter(contents) && archive_exists {
+        return SourceEligibility::Eligible {
+            grandfathered: true,
+        };
+    }
+    if is_daily_source(relative_path, absolute_path, daily_path) {
+        return SourceEligibility::Skip(SKIP_DAILY);
+    }
+    if super::super::projects::project_is_finished(relative_path, contents) {
+        return SourceEligibility::Skip(SKIP_FINISHED_PROJECT);
+    }
+    if !super::super::task_status_hooks::grouping_eligible_note(
+        relative_path,
+        absolute_path,
+        contents,
+        daily_path,
+    ) {
+        return SourceEligibility::Skip(SKIP_NOT_AREA_OR_PROJECT);
+    }
+    SourceEligibility::Eligible {
+        grandfathered: false,
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct FilePlan {
     pub(super) relative_source_path: PathBuf,
@@ -238,7 +326,12 @@ pub(super) fn build_collection_plan(
         })
         .collect::<io::Result<BTreeMap<_, _>>>()?;
     validate_dependency_identity_index(vault, &note_contents)?;
+    let settings = super::super::task_status_hooks::read_tasks_settings(vault);
+    let daily_path = super::super::pomodoro::day_file_for(vault);
     let mut files = Vec::new();
+    let mut holds = Vec::new();
+    let mut skip_counts = BTreeMap::new();
+    let mut grandfathered = Vec::new();
 
     for path in &markdown_files {
         let contents = note_contents
@@ -260,9 +353,35 @@ pub(super) fn build_collection_plan(
             .to_path_buf();
         let relative_archive_path =
             archive_relative_path(&relative_source_path)?;
-        let transform = transform_markdown(&contents);
-        let moves_tasks = transform.task_count >= threshold;
         let archive_path = vault.join(&relative_archive_path);
+        let archive_exists = archive_path.is_file();
+        match classify_source(
+            &relative_source_path,
+            path,
+            &contents,
+            &daily_path,
+            archive_exists,
+        ) {
+            SourceEligibility::Skip(reason) => {
+                bump_skip(&mut skip_counts, reason);
+                continue;
+            }
+            SourceEligibility::Eligible {
+                grandfathered: is_grandfathered,
+            } => {
+                if is_grandfathered {
+                    grandfathered.push(relative_source_path.clone());
+                }
+            }
+        }
+        let transform = transform_markdown_with_settings(&contents, &settings);
+        merge_skips(&mut skip_counts, &transform.skip_counts);
+        holds.extend(transform.holds.iter().map(|hold| HeldRoot {
+            relative_path: relative_source_path.clone(),
+            line: hold.line,
+            reason: hold.reason,
+        }));
+        let moves_tasks = transform.task_count >= threshold;
         let existing_archive = read_optional_string(&archive_path)?;
         let archive_exists = existing_archive.is_some();
         let deduplicated_archive_append = if moves_tasks {
@@ -378,11 +497,20 @@ pub(super) fn build_collection_plan(
     }
 
     let link_repairs = apply_link_repairs_to_plan(vault, &mut files)?;
+    grandfathered.sort();
+    holds.sort_by(|left, right| {
+        left.relative_path
+            .cmp(&right.relative_path)
+            .then(left.line.cmp(&right.line))
+    });
 
     Ok(CollectionPlan {
         scanned_files: markdown_files.len(),
         files,
         link_repairs,
+        holds,
+        skip_counts,
+        grandfathered,
     })
 }
 pub(super) fn validate_dependency_identity_index(

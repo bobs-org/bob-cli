@@ -600,7 +600,7 @@ exit 64
     );
     write_file(
         &vault.join("obsidian.md"),
-        "- [x] done #task\n- [ ] active #task\n",
+        "---\ntype: [[area]]\n---\n\n- [x] done #task\n- [ ] active #task\n",
     );
     git_in(&vault, ["add", "."]);
     git_in(&vault, ["commit", "-q", "-m", "initial vault"]);

@@ -2,6 +2,13 @@
 use super::super::is_always_excluded_note_directory_name;
 use super::*;
 
+pub(super) const SKIP_DAILY: &str = "daily";
+pub(super) const SKIP_NOT_AREA_OR_PROJECT: &str = "not_area_or_project";
+pub(super) const SKIP_FINISHED_PROJECT: &str = "finished_project";
+pub(super) const SKIP_OPEN_PARENT: &str = "open_parent";
+pub(super) const SKIP_PRJ: &str = "prj";
+pub(super) const HOLD_OPEN_SUBTASK: &str = "open_subtask";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Transform {
     pub(super) task_count: usize,
@@ -10,6 +17,14 @@ pub(super) struct Transform {
     pub(super) moved_block_ids: BTreeSet<String>,
     pub(super) ambiguous_moved_block_ids: BTreeSet<String>,
     pub(super) moved_block_id_occurrences: Vec<BlockIdOccurrence>,
+    pub(super) holds: Vec<HeldTask>,
+    pub(super) skip_counts: BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct HeldTask {
+    pub(super) line: usize,
+    pub(super) reason: &'static str,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BlockIdOccurrence {
@@ -17,13 +32,8 @@ pub(crate) struct BlockIdOccurrence {
     pub(crate) start: usize,
     pub(crate) end: usize,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct TaskLine {
-    pub(super) indent: usize,
-}
 pub(super) fn markdown_files(vault: &Path) -> io::Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-    collect_markdown_files(vault, vault, false, &mut files)?;
+    let mut files = super::super::task_status_hooks::markdown_files(vault)?;
     files.sort();
     Ok(files)
 }
@@ -71,6 +81,7 @@ pub(super) fn should_skip_directory(
             component,
             Component::Normal(name)
                 if (!include_done && name == OsStr::new("done"))
+                    || name.to_str().is_some_and(|name| name.starts_with('.'))
                     || is_always_excluded_note_directory_name(name)
         )
     })
@@ -134,24 +145,108 @@ pub(crate) fn vault_relative_link_target(
     )
 }
 pub(super) use super::super::task_dependencies::dependency_id;
+#[cfg(test)]
 pub(super) fn transform_markdown(contents: &str) -> Transform {
+    transform_markdown_with_settings(contents, &default_archive_settings())
+}
+
+#[cfg(test)]
+pub(super) fn default_archive_settings(
+) -> super::super::task_status_hooks::TasksSettings {
+    super::super::task_status_hooks::read_tasks_settings(Path::new(""))
+}
+
+pub(super) fn transform_markdown_with_settings(
+    contents: &str,
+    settings: &super::super::task_status_hooks::TasksSettings,
+) -> Transform {
     let lines: Vec<&str> = contents.split_inclusive('\n').collect();
+    let masked = super::super::markdown::non_content_line_indexes(&lines);
+    let parsed =
+        super::super::task_status_hooks::parse_tasks(contents, settings);
+    let mut open_lines = BTreeSet::new();
+    let mut closed_lines = BTreeSet::new();
+    for task in &parsed {
+        let line = lines
+            .get(task.line_index)
+            .map(|line| split_line_ending(line).0)
+            .unwrap_or_default();
+        if !has_task_tag(line) {
+            continue;
+        }
+        if task.status_type.is_open() {
+            open_lines.insert(task.line_index);
+        } else if is_closed_status(task.status_type) {
+            closed_lines.insert(task.line_index);
+        }
+    }
     let mut source_contents = String::with_capacity(contents.len());
     let mut archive_append = String::new();
     let mut moved_block_ids = BTreeSet::new();
     let mut ambiguous_moved_block_ids = BTreeSet::new();
     let mut moved_block_id_occurrences = Vec::new();
+    let mut holds = Vec::new();
+    let mut skip_counts = BTreeMap::new();
+    let mut open_task_indents: Vec<usize> = Vec::new();
     let mut task_count = 0;
     let mut index = 0;
 
     while index < lines.len() {
-        let Some(task_line) = collectible_task_line(lines[index]) else {
+        let (content, _) = split_line_ending(lines[index]);
+        if content.trim().is_empty() || masked.contains(&index) {
             source_contents.push_str(lines[index]);
             index += 1;
             continue;
-        };
+        }
 
-        let end = task_block_end(&lines, index, task_line.indent);
+        let indent = leading_indent_len(content);
+        while open_task_indents
+            .last()
+            .is_some_and(|&open_indent| open_indent >= indent)
+        {
+            open_task_indents.pop();
+        }
+
+        if open_lines.contains(&index) {
+            open_task_indents.push(indent);
+            source_contents.push_str(lines[index]);
+            index += 1;
+            continue;
+        }
+
+        if !closed_lines.contains(&index) {
+            source_contents.push_str(lines[index]);
+            index += 1;
+            continue;
+        }
+
+        if super::super::projects::has_trailing_prj_anchor(content) {
+            bump_skip(&mut skip_counts, SKIP_PRJ);
+            source_contents.push_str(lines[index]);
+            index += 1;
+            continue;
+        }
+
+        if !open_task_indents.is_empty() {
+            bump_skip(&mut skip_counts, SKIP_OPEN_PARENT);
+            source_contents.push_str(lines[index]);
+            index += 1;
+            continue;
+        }
+
+        let end = task_block_end(&lines, index, indent);
+        if block_has_open_task(index, end, &open_lines, &masked) {
+            holds.push(HeldTask {
+                line: index + 1,
+                reason: HOLD_OPEN_SUBTASK,
+            });
+            for line in &lines[index..end] {
+                source_contents.push_str(line);
+            }
+            index = end;
+            continue;
+        }
+
         task_count += 1;
         for line in &lines[index..end] {
             let line_offset = archive_append.len();
@@ -179,7 +274,33 @@ pub(super) fn transform_markdown(contents: &str) -> Transform {
         moved_block_ids,
         ambiguous_moved_block_ids,
         moved_block_id_occurrences,
+        holds,
+        skip_counts,
     }
+}
+
+pub(super) fn is_closed_status(
+    status_type: super::super::task_status_hooks::TaskStatusType,
+) -> bool {
+    matches!(
+        status_type,
+        super::super::task_status_hooks::TaskStatusType::Done
+            | super::super::task_status_hooks::TaskStatusType::Cancelled
+    )
+}
+
+fn bump_skip(counts: &mut BTreeMap<String, usize>, reason: &str) {
+    *counts.entry(reason.to_string()).or_insert(0) += 1;
+}
+
+fn block_has_open_task(
+    start: usize,
+    end: usize,
+    open_lines: &BTreeSet<usize>,
+    masked: &BTreeSet<usize>,
+) -> bool {
+    ((start + 1)..end)
+        .any(|index| !masked.contains(&index) && open_lines.contains(&index))
 }
 pub(crate) fn block_ids_in_markdown(contents: &str) -> Vec<String> {
     let mut block_ids = Vec::new();
@@ -257,54 +378,6 @@ pub(crate) fn task_block_end(
     }
 
     include_end
-}
-pub(super) fn collectible_task_line(line: &str) -> Option<TaskLine> {
-    let (content, _) = split_line_ending(line);
-    let indent = leading_indent_len(content);
-    let rest = &content[indent..];
-    let rest = strip_list_marker(rest)?.trim_start();
-    let checkbox = rest.get(..3)?;
-
-    if !matches!(checkbox, "[x]" | "[X]" | "[-]") {
-        return None;
-    }
-
-    let after_checkbox = &rest[3..];
-    if !after_checkbox.is_empty()
-        && !after_checkbox.starts_with(char::is_whitespace)
-    {
-        return None;
-    }
-
-    has_task_tag(content).then_some(TaskLine { indent })
-}
-pub(super) fn strip_list_marker(line: &str) -> Option<&str> {
-    let first = line.chars().next()?;
-    if matches!(first, '-' | '*' | '+') {
-        let after_marker = &line[first.len_utf8()..];
-        if after_marker.starts_with(char::is_whitespace) {
-            return Some(after_marker);
-        }
-    }
-
-    let digit_len = line
-        .bytes()
-        .take_while(|byte| byte.is_ascii_digit())
-        .count();
-    if digit_len == 0 {
-        return None;
-    }
-
-    let after_digits = &line[digit_len..];
-    let marker = after_digits.chars().next()?;
-    if !matches!(marker, '.' | ')') {
-        return None;
-    }
-
-    let after_marker = &after_digits[marker.len_utf8()..];
-    after_marker
-        .starts_with(char::is_whitespace)
-        .then_some(after_marker)
 }
 pub(crate) fn has_task_tag(text: &str) -> bool {
     let mut rest = text;

@@ -6,12 +6,17 @@ fn scans_markdown_files_with_exclusions_and_threshold() {
     let vault = TempDir::new("bob-cli-collect-done-vault");
     write_file(
         &vault.path().join("obsidian.md"),
-        "\
+        &area_note(
+            "\
 - [x] one #task
 - [-] two #task
 ",
+        ),
     );
-    write_file(&vault.path().join("foo/bar.md"), "- [x] nested #task\n");
+    write_file(
+        &vault.path().join("foo/bar.md"),
+        &area_note("- [x] nested #task\n"),
+    );
     write_file(&vault.path().join("foo/not-markdown.txt"), "#task\n");
     write_file(&vault.path().join("done/old.md"), "- [x] archived #task\n");
     write_file(
@@ -55,6 +60,7 @@ type: [[project]]
         file.source_contents,
         "\
 ---
+type: [[area]]
 done_tasks: \"[[done/obsidian_done]]\"
 ---
 
@@ -83,11 +89,13 @@ fn canceled_only_tasks_move_when_threshold_is_met() {
     let vault = TempDir::new("bob-cli-collect-done-canceled-only");
     write_file(
         &vault.path().join("obsidian.md"),
-        "\
+        &area_note(
+            "\
 - [-] canceled one #task
   detail
 - [-] canceled two #task
 ",
+        ),
     );
 
     let plan = build_collection_plan(vault.path(), 2).expect("build plan");
@@ -99,6 +107,7 @@ fn canceled_only_tasks_move_when_threshold_is_met() {
         file.source_contents,
         "\
 ---
+type: [[area]]
 done_tasks: \"[[done/obsidian_done]]\"
 ---
 
@@ -129,7 +138,8 @@ fn canceled_only_tasks_below_threshold_remain_in_source() {
 
     let vault = TempDir::new("bob-cli-collect-done-canceled-below");
     let source = vault.path().join("obsidian.md");
-    write_file(&source, contents);
+    let contents = area_note(contents);
+    write_file(&source, &contents);
 
     let plan = build_collection_plan(vault.path(), 2).expect("build plan");
 
@@ -142,10 +152,12 @@ fn task_moving_plan_writes_archive_with_nested_source_parent() {
     let vault = TempDir::new("bob-cli-collect-done-nested-parent");
     write_file(
         &vault.path().join("foo/bar.md"),
-        "\
+        &area_note(
+            "\
 - [x] nested #task
 - [ ] active #task
 ",
+        ),
     );
 
     let plan = build_collection_plan(vault.path(), 1).expect("build plan");
@@ -171,7 +183,10 @@ type: \"[[done]]\"
 #[test]
 fn includes_nested_path_note_when_it_meets_threshold() {
     let vault = TempDir::new("bob-cli-collect-done-nested-vault");
-    write_file(&vault.path().join("foo/bar.md"), "- [x] nested #task\n");
+    write_file(
+        &vault.path().join("foo/bar.md"),
+        &area_note("- [x] nested #task\n"),
+    );
 
     let plan = build_collection_plan(vault.path(), 1).expect("build plan");
 
@@ -191,7 +206,9 @@ fn task_moves_repair_dependency_ids_in_archive_and_all_dependents() {
     let vault = TempDir::new("bob-cli-collect-done-dependency-metadata");
     write_file(
         &vault.path().join("projects/Shared.md"),
-        "- [x] #task Review [id:: projects__Shared__review] ^review\n",
+        &area_note(
+            "- [x] #task Review [id:: projects__Shared__review] ^review\n",
+        ),
     );
     write_file(
         &vault.path().join("A.md"),
@@ -238,10 +255,12 @@ fn collecting_tasks_adds_done_tasks_to_source() {
     let vault = TempDir::new("bob-cli-collect-done-source-link");
     write_file(
         &vault.path().join("foo/bar.md"),
-        "\
+        &area_note(
+            "\
 - [x] nested #task
 - [ ] active #task
 ",
+        ),
     );
 
     let plan = build_collection_plan(vault.path(), 1).expect("build plan");
@@ -254,6 +273,7 @@ fn collecting_tasks_adds_done_tasks_to_source() {
         file.source_contents,
         "\
 ---
+type: [[area]]
 done_tasks: \"[[done/foo/bar_done]]\"
 ---
 
@@ -292,6 +312,7 @@ type: \"[[done]]\"
     assert!(file.archive_contents.is_none());
     assert!(file.source_metadata_updated);
     assert!(!file.archive_metadata_updated);
+    assert_eq!(plan.grandfathered, vec![PathBuf::from("obsidian.md")]);
     assert_eq!(
         file.source_contents,
         "\
@@ -387,10 +408,12 @@ fn missing_archive_without_threshold_tasks_is_not_planned() {
     let vault = TempDir::new("bob-cli-collect-done-missing-archive");
     write_file(
         &vault.path().join("obsidian.md"),
-        "\
+        &area_note(
+            "\
 - [x] below threshold #task
 - [ ] active #task
 ",
+        ),
     );
 
     let plan = build_collection_plan(vault.path(), 2).expect("build plan");
@@ -403,10 +426,12 @@ fn task_moving_plan_repairs_links_in_separate_notes() {
     let vault = TempDir::new("bob-cli-collect-done-link-plan");
     write_file(
         &vault.path().join("obsidian.md"),
-        "\
+        &area_note(
+            "\
 - [x] done #task ^abc123
 - [ ] active #task
 ",
+        ),
     );
     write_file(
         &vault.path().join("daily.md"),
@@ -474,7 +499,7 @@ fn link_repair_scan_includes_done_notes() {
     let vault = TempDir::new("bob-cli-collect-done-repair-done-notes");
     write_file(
         &vault.path().join("obsidian.md"),
-        "- [x] done #task ^abc123\n",
+        &area_note("- [x] done #task ^abc123\n"),
     );
     write_file(
         &vault.path().join("done/old.md"),
@@ -499,10 +524,12 @@ fn generated_tag_pages_do_not_make_source_basename_ambiguous() {
     let vault = TempDir::new("bob-cli-collect-done-generated-basename-link");
     write_file(
         &vault.path().join("sase.md"),
-        "\
+        &area_note(
+            "\
 - [x] done #task ^auto-pair
 - [ ] active #task
 ",
+        ),
     );
     write_file(
         &vault.path().join("_generated/tag_pages/topic/sase.md"),
@@ -707,10 +734,12 @@ fn duplicate_moved_block_ids_do_not_rewrite_links() {
     let vault = TempDir::new("bob-cli-collect-done-duplicate-link-plan");
     write_file(
         &vault.path().join("obsidian.md"),
-        "\
+        &area_note(
+            "\
 - [x] first #task ^dup
 - [x] second #task ^dup
 ",
+        ),
     );
     write_file(&vault.path().join("daily.md"), "[[obsidian#^dup]]\n");
 
@@ -737,10 +766,12 @@ fn archive_preserves_distinctive_theme_field() {
     let vault = TempDir::new("bob-cli-collect-done-theme-history");
     write_file(
         &vault.path().join("sase.md"),
-        "\
+        &area_note(
+            "\
 - [x] Shipped #task (theme::  WRITE) [completion:: 2026-10-01]
 - [ ] Active #task
 ",
+        ),
     );
 
     let plan = build_collection_plan(vault.path(), 1).expect("build plan");
@@ -764,10 +795,12 @@ fn archive_preserves_canonical_type_field() {
     let vault = TempDir::new("bob-cli-collect-done-type-history");
     write_file(
         &vault.path().join("sase.md"),
-        "\
+        &area_note(
+            "\
 - [x] Shipped #task [type:: WRITE] [completion:: 2026-10-01]
 - [ ] Active #task
 ",
+        ),
     );
 
     let plan = build_collection_plan(vault.path(), 1).expect("build plan");
@@ -794,10 +827,12 @@ fn archive_preserves_distinctive_root_field() {
     let vault = TempDir::new("bob-cli-collect-done-root-history");
     write_file(
         &vault.path().join("sase.md"),
-        "\
+        &area_note(
+            "\
 - [x] Shipped #task (root::  sase) [completion:: 2026-10-01]
 - [ ] Active #task
 ",
+        ),
     );
 
     let plan = build_collection_plan(vault.path(), 1).expect("build plan");
@@ -813,5 +848,153 @@ fn archive_preserves_distinctive_root_field() {
             "- [x] Shipped #task (root::  sase) [completion:: 2026-10-01]"
         ),
         "{archived}"
+    );
+}
+
+#[test]
+fn skips_untyped_note_without_a_paired_archive() {
+    let vault = TempDir::new("bob-cli-collect-done-untyped-skip");
+    write_file(
+        &vault.path().join("loose.md"),
+        "- [x] one #task\n- [x] two #task\n",
+    );
+
+    let plan = build_collection_plan(vault.path(), 1).expect("build plan");
+
+    assert!(plan.files.is_empty());
+    assert_eq!(
+        plan.skip_counts.get(SKIP_NOT_AREA_OR_PROJECT).copied(),
+        Some(1)
+    );
+}
+
+#[test]
+fn skips_daily_notes() {
+    let vault = TempDir::new("bob-cli-collect-done-daily-skip");
+    write_file(
+        &vault.path().join("2026/20260621.md"),
+        &area_note("- [x] one #task\n- [x] two #task\n"),
+    );
+
+    let plan = build_collection_plan(vault.path(), 1).expect("build plan");
+
+    assert!(plan.files.is_empty());
+    assert_eq!(plan.skip_counts.get(SKIP_DAILY).copied(), Some(1));
+}
+
+#[test]
+fn skips_ref_notes() {
+    let vault = TempDir::new("bob-cli-collect-done-ref-skip");
+    write_file(
+        &vault.path().join("ref/paper.md"),
+        "\
+---
+type: [[reference]]
+---
+
+- [x] one #task
+- [x] two #task
+",
+    );
+
+    let plan = build_collection_plan(vault.path(), 1).expect("build plan");
+
+    assert!(plan.files.is_empty());
+    assert_eq!(
+        plan.skip_counts.get(SKIP_NOT_AREA_OR_PROJECT).copied(),
+        Some(1)
+    );
+}
+
+#[test]
+fn skips_finished_project_with_closed_prj() {
+    let vault = TempDir::new("bob-cli-collect-done-finished-prj");
+    write_file(
+        &vault.path().join("projects/Shipped.md"),
+        "\
+---
+type: [[project]]
+---
+
+- [x] #task Ship #hide ^prj
+- [x] leftover #task
+",
+    );
+
+    let plan = build_collection_plan(vault.path(), 1).expect("build plan");
+
+    assert!(plan.files.is_empty());
+    assert_eq!(
+        plan.skip_counts.get(SKIP_FINISHED_PROJECT).copied(),
+        Some(1)
+    );
+}
+
+#[test]
+fn skips_finished_project_with_terminal_status() {
+    let vault = TempDir::new("bob-cli-collect-done-terminal-status");
+    write_file(
+        &vault.path().join("projects/Done.md"),
+        "\
+---
+type: [[project]]
+status: done
+---
+
+- [ ] #task Ship #hide ^prj
+- [x] leftover #task
+",
+    );
+
+    let plan = build_collection_plan(vault.path(), 1).expect("build plan");
+
+    assert!(plan.files.is_empty());
+    assert_eq!(
+        plan.skip_counts.get(SKIP_FINISHED_PROJECT).copied(),
+        Some(1)
+    );
+}
+
+#[test]
+fn reports_open_subtask_hold_without_moving() {
+    let vault = TempDir::new("bob-cli-collect-done-open-subtask-hold");
+    write_file(
+        &vault.path().join("work.md"),
+        &area_note(
+            "\
+- [x] parent #task
+  - [ ] child #task
+",
+        ),
+    );
+
+    let plan = build_collection_plan(vault.path(), 1).expect("build plan");
+
+    assert!(plan.files.is_empty());
+    assert_eq!(plan.holds.len(), 1);
+    assert_eq!(plan.holds[0].relative_path, PathBuf::from("work.md"));
+    assert_eq!(plan.holds[0].reason, HOLD_OPEN_SUBTASK);
+    assert_eq!(plan.holds[0].line, 5);
+}
+
+#[test]
+fn dot_directories_are_not_scanned_as_archive_sources() {
+    let vault = TempDir::new("bob-cli-collect-done-dot-dir");
+    write_file(
+        &vault.path().join(".hidden/note.md"),
+        &area_note("- [x] one #task\n- [x] two #task\n"),
+    );
+    write_file(
+        &vault.path().join("visible.md"),
+        &area_note("- [x] one #task\n- [x] two #task\n"),
+    );
+
+    let plan = build_collection_plan(vault.path(), 2).expect("build plan");
+
+    assert_eq!(plan.scanned_files, 1);
+    assert_eq!(plan.files.len(), 1);
+    assert_eq!(
+        plan.files[0].relative_source_path,
+        PathBuf::from("visible.md")
     );
 }

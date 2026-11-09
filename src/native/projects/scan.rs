@@ -92,6 +92,24 @@ pub(super) fn scan_markdown_file(
     projects.push(project);
 }
 
+/// A project note is finished when its `^prj` line is closed or its
+/// frontmatter `status` is terminal (`done` / `canceled`).
+pub(crate) fn project_is_finished(
+    relative_path: &Path,
+    contents: &str,
+) -> bool {
+    let mut issues = Vec::new();
+    let Some(project) = parse_project(relative_path, contents, &mut issues)
+    else {
+        return false;
+    };
+    project.status.is_terminal()
+        || matches!(
+            project.prj_task.state,
+            PrjTaskState::Done | PrjTaskState::Canceled
+        )
+}
+
 pub(super) fn parse_project(
     relative_path: &Path,
     contents: &str,

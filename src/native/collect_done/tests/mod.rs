@@ -54,6 +54,10 @@ fn os_args<const N: usize>(args: [&str; N]) -> Vec<OsString> {
     args.into_iter().map(OsString::from).collect()
 }
 
+fn area_note(body: &str) -> String {
+    format!("---\ntype: [[area]]\n---\n\n{body}")
+}
+
 fn write_file(path: &Path, contents: &str) {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).unwrap_or_else(|error| {

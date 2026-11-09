@@ -61,6 +61,7 @@ queued intake; full scans also synchronize annotations. The
 | [task-dependencies.md](task-dependencies.md) | Task dependency links: Depends-On line, BLOCKS mirror, successor offers, project-dependency contract, plus conformance vectors |
 | [task-relations.md](task-relations.md) | Task relations: directed LINKS edges, the generated LINKED FROM mirror, inert text mentions, and `~` / `~~` capture |
 | [task-move.md](task-move.md) | `bob task move` selection, preservation, link repair, guarded writes, and sync behavior |
+| [task-archive.md](task-archive.md) | `bob task archive` eligibility, holds, pairing, link repair, and Git behavior |
 | [task-merge.md](task-merge.md) | `bob task merge` folding tasks into a task, drawer, or section, merge labels, and guarded writes |
 | [task-split.md](task-split.md) | `bob task split` promoting bullets into tasks, stubs, mentions, and conformance vectors |
 | [task-status-hooks.md](task-status-hooks.md) | `bob task reconcile` Pomodoro-driven task status |

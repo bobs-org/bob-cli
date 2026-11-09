@@ -16,7 +16,7 @@ Every `bob task` command rewrites task lines across the whole vault.
 Usage: bob task <COMMAND>
 
 Commands:
-  archive    Move done and canceled tasks into done/ archives and repair links
+  archive    Move done and canceled tasks from area and project notes
   merge      Fold tasks into a task, drawer, or note section
   move       Move open tasks between notes and repair vault links
   reconcile  Reconcile task statuses from the Pomodoro ledger and dependencies
@@ -40,13 +40,14 @@ Run 'bob task <command> --help' for more information on a command.
 
 ## bob task archive
 
-Move done and canceled tasks into done/ archives and repair links
+Move done and canceled tasks from area and project notes
 
 ```text title="bob task archive --help"
 usage: bob task archive [-t|--threshold N]
 
-Move done and canceled Bob task blocks into archive notes, link sources,
-repair archive metadata, and repair Obsidian links to moved block ids.
+Move done and canceled Bob task blocks from area and project notes into
+done/ archives, link sources, repair archive metadata, and repair Obsidian
+links to moved block ids. See docs/task-archive.md.
 
 example:
   bob task archive --threshold 10
@@ -364,4 +365,5 @@ A task locator is note:block-id or [[note#^block-id]].
 
 ## Related
 
+- [Archive done tasks from area and project notes](../../task-archive.md)
 - [Task dependency links](../../task-dependencies.md)

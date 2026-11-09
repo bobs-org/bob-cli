@@ -171,6 +171,41 @@ pub(crate) fn is_indented_code_line(line: &str) -> bool {
         && line.bytes().take_while(|byte| *byte == b' ').count() >= 4
 }
 
+/// Line indexes that are not live Markdown content: strictly closed YAML
+/// frontmatter, fenced code, and multiline `%%` / `<!-- -->` comments.
+///
+/// Fences are excluded before comments so an example comment inside a
+/// code fence cannot hide real prose after the fence.
+pub(crate) fn non_content_line_indexes(lines: &[&str]) -> BTreeSet<usize> {
+    let logical: Vec<&str> =
+        lines.iter().map(|line| split_line_ending(line).0).collect();
+    let mut masked = BTreeSet::new();
+    let body_start =
+        if let Some(end) = strictly_closed_frontmatter_end(&logical) {
+            masked.extend(0..=end);
+            end + 1
+        } else {
+            0
+        };
+    let fenced = fenced_lines(&logical, body_start..logical.len());
+    masked.extend(&fenced);
+    let comment_input: Vec<&str> = logical
+        .iter()
+        .enumerate()
+        .map(
+            |(index, line)| {
+                if fenced.contains(&index) {
+                    ""
+                } else {
+                    *line
+                }
+            },
+        )
+        .collect();
+    masked.extend(multiline_comment_lines(&comment_input));
+    masked
+}
+
 /// Line indexes hidden inside multiline `%%` / HTML comment spans.
 /// Callers exclude fences themselves.
 pub(crate) fn multiline_comment_lines(lines: &[&str]) -> BTreeSet<usize> {
@@ -245,5 +280,60 @@ mod tests {
         assert_eq!(split_line_ending("ab\r\n"), ("ab", "\r\n"));
         assert_eq!(split_line_ending("ab\n"), ("ab", "\n"));
         assert_eq!(split_line_ending("ab"), ("ab", ""));
+    }
+
+    #[test]
+    fn non_content_indexes_mask_frontmatter_fences_and_comments() {
+        let contents = "\
+---
+type: [[area]]
+---
+visible
+```
+- [x] fenced #task
+%%
+comment in fence
+%%
+```
+%%
+- [x] percent comment #task
+%%
+<!--
+- [x] html comment #task
+-->
+after
+";
+        let lines: Vec<&str> = contents.split_inclusive('\n').collect();
+        let masked = non_content_line_indexes(&lines);
+        let visible: Vec<&str> = lines
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !masked.contains(index))
+            .map(|(_, line)| split_line_ending(line).0)
+            .collect();
+        assert_eq!(visible, ["visible", "after"]);
+    }
+
+    #[test]
+    fn non_content_indexes_do_not_let_fenced_comments_hide_prose() {
+        let contents = "\
+```
+%%
+still in fence
+```
+visible after fence
+%%
+hidden
+%%
+";
+        let lines: Vec<&str> = contents.split_inclusive('\n').collect();
+        let masked = non_content_line_indexes(&lines);
+        let visible: Vec<&str> = lines
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !masked.contains(index))
+            .map(|(_, line)| split_line_ending(line).0)
+            .collect();
+        assert_eq!(visible, ["visible after fence"]);
     }
 }
