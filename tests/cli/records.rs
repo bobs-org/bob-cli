@@ -717,3 +717,181 @@ fn update_preserves_foreign_bytes_and_catalog_covers_update() {
     assert!(slots.contains("STEM:record-stem"), "STEM slot: {slots:?}");
     assert!(slots.contains("SET:record-set"), "SET slot: {slots:?}");
 }
+
+const INIT_CONFIG: &str = r#"
+records:
+  widget:
+    dir: widgets
+    label: Widget
+    emoji: "🧩"
+    fields:
+      status:
+        required: true
+        values:
+          to_try: "🔖 To try"
+          done: "✅ Done"
+"#;
+
+fn init_fixture() -> RecordsFixture {
+    let temp = TempDir::new("bob-cli-records-init");
+    let vault = temp.path().join("vault");
+    let config = temp.path().join("config.yml");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_file(&config, INIT_CONFIG);
+    RecordsFixture {
+        _temp: temp,
+        vault,
+        config,
+    }
+}
+
+fn piece<'a>(payload: &'a Value, kind: &str) -> &'a Value {
+    payload["pieces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|piece| piece["kind"] == kind)
+        .unwrap_or_else(|| panic!("missing piece {kind}: {payload}"))
+}
+
+#[test]
+fn init_scaffolds_on_a_temporary_vault_without_creating_the_folder() {
+    let fixture = init_fixture();
+    let dry_run = records_command(&fixture)
+        .args(["init", "widget", "-p", "stuff", "-d", "-f", "json"])
+        .output()
+        .expect("dry-run init");
+    assert_success(&dry_run);
+    let dry_json = json(&dry_run);
+    assert_eq!(dry_json["status"], "planned");
+    assert_eq!(piece(&dry_json, "type_note")["action"], "create");
+    assert_eq!(piece(&dry_json, "collection")["action"], "create");
+    assert_eq!(piece(&dry_json, "base")["action"], "create");
+    assert!(!fixture.vault.join("widget.md").exists());
+    assert!(!fixture.vault.join("widgets.md").exists());
+    assert!(!fixture.vault.join("widgets.base").exists());
+    assert!(!fixture.vault.join("widgets").exists());
+
+    let written = records_command(&fixture)
+        .args(["init", "widget", "-p", "stuff", "-f", "json"])
+        .output()
+        .expect("init widget");
+    assert_success(&written);
+    let payload = json(&written);
+    assert_eq!(payload["status"], "written");
+    assert_eq!(payload["type"], "widget");
+    assert_eq!(payload["dir"], "widgets");
+
+    let type_note = fs::read_to_string(fixture.vault.join("widget.md"))
+        .expect("read type note");
+    assert!(type_note.contains("parent: \"[[type]]\""), "{type_note}");
+    assert!(
+        type_note.contains("Schema: `bob records show widget`"),
+        "{type_note}"
+    );
+
+    let collection = fs::read_to_string(fixture.vault.join("widgets.md"))
+        .expect("read collection");
+    assert!(collection.contains("parent: \"[[stuff]]\""), "{collection}");
+    assert!(collection.contains("![[widgets.base]]"), "{collection}");
+
+    let base = fs::read_to_string(fixture.vault.join("widgets.base"))
+        .expect("read Base");
+    let parsed: Value =
+        serde_yaml::from_str(&base).expect("starter Base parses as YAML");
+    assert!(
+        parsed["filters"]["and"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item.as_str() == Some(r#"file.inFolder("widgets")"#)),
+        "{base}"
+    );
+    assert_eq!(
+        parsed["views"][0]["groupBy"]["property"].as_str(),
+        Some("formula.status_label")
+    );
+    assert!(
+        base.contains(r#"if(status == "to_try", "🔖 To try""#),
+        "{base}"
+    );
+    assert!(
+        !fixture.vault.join("widgets").exists(),
+        "init must not create an empty record folder"
+    );
+}
+
+#[test]
+fn init_is_idempotent_and_never_overwrites() {
+    let fixture = init_fixture();
+    let first = records_command(&fixture)
+        .args(["init", "widget", "-p", "stuff"])
+        .output()
+        .expect("first init");
+    assert_success(&first);
+
+    write_file(&fixture.vault.join("widget.md"), "KEEP THE TYPE NOTE\n");
+    write_file(&fixture.vault.join("widgets.md"), "KEEP THE COLLECTION\n");
+    let original_base =
+        fs::read_to_string(fixture.vault.join("widgets.base")).unwrap();
+
+    let second = records_command(&fixture)
+        .args(["init", "widget", "-p", "other", "-f", "json"])
+        .output()
+        .expect("second init");
+    assert_success(&second);
+    let payload = json(&second);
+    assert_eq!(piece(&payload, "type_note")["action"], "keep");
+    assert_eq!(piece(&payload, "collection")["action"], "keep");
+    assert_eq!(piece(&payload, "base")["action"], "keep");
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("widget.md")).unwrap(),
+        "KEEP THE TYPE NOTE\n"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("widgets.md")).unwrap(),
+        "KEEP THE COLLECTION\n"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("widgets.base")).unwrap(),
+        original_base
+    );
+}
+
+#[test]
+fn init_keeps_an_existing_collection_without_requiring_parent() {
+    let fixture = init_fixture();
+    write_file(&fixture.vault.join("widgets.md"), "already here\n");
+    let output = records_command(&fixture)
+        .args(["init", "widget", "-f", "json"])
+        .output()
+        .expect("init without parent");
+    assert_success(&output);
+    let payload = json(&output);
+    assert_eq!(piece(&payload, "collection")["action"], "keep");
+    assert_eq!(piece(&payload, "type_note")["action"], "create");
+    assert_eq!(piece(&payload, "base")["action"], "create");
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("widgets.md")).unwrap(),
+        "already here\n"
+    );
+}
+
+#[test]
+fn init_refuses_a_missing_collection_without_parent() {
+    let fixture = init_fixture();
+    let output = records_command(&fixture)
+        .args(["init", "widget", "-f", "json"])
+        .output()
+        .expect("init missing parent");
+    assert_eq!(output.status.code(), Some(2));
+    let payload = json(&output);
+    let message = payload["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("-p/--parent") && message.contains("widgets.md"),
+        "{message}"
+    );
+    assert!(!fixture.vault.join("widget.md").exists());
+    assert!(!fixture.vault.join("widgets.md").exists());
+    assert!(!fixture.vault.join("widgets.base").exists());
+}

@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 use super::{
     catalog::RecordCatalog,
     check::TypeReport,
+    init::{plan_init, PieceAction, PlannedPiece},
     plan::{plan_create, RecordCreateRequest},
     render::RecordNoteInput,
     schema::{
@@ -56,6 +57,15 @@ pub(crate) fn run_update(args: Vec<OsString>) -> i32 {
         Err(code) => return code,
     };
     execute_update(&matches)
+}
+
+pub(crate) fn run_init(args: Vec<OsString>) -> i32 {
+    let mut command = build_cli_init();
+    let matches = match matches_for(&mut command, "bob records init", args) {
+        Ok(matches) => matches,
+        Err(code) => return code,
+    };
+    execute_init(&matches)
 }
 
 pub(crate) fn run_show(args: Vec<OsString>) -> i32 {
@@ -278,6 +288,32 @@ pub(crate) fn build_cli_update() -> ClapCommand {
                 .value_name("KEY=VALUE")
                 .action(ArgAction::Append)
                 .help("Set a configured field; may be repeated"),
+        )
+}
+
+pub(crate) fn build_cli_init() -> ClapCommand {
+    ClapCommand::new("bob records init")
+        .about("Scaffold a record type's notes and starter Base")
+        .long_about(
+            "Create the type note, collection note, and starter Base for a configured record type. Existing files are kept and never overwritten. The collection note's parent comes from required --parent when that note is missing. Init does not create an empty record folder; the first record creates it.",
+        )
+        .after_help(
+            "Examples:\n  bob records init show\n  bob records init movie -p fun\n  bob records init movie -p fun -d\n  bob records init movie -p fun -f json\n\nSee docs/records.md for adding a record type.",
+        )
+        .disable_help_flag(true)
+        .arg(record_type_arg(true))
+        .arg(bob_dir_arg())
+        .arg(dry_run_arg().help("Print the planned files without writing"))
+        .arg(format_arg())
+        .arg(help_arg())
+        .arg(
+            Arg::new("parent")
+                .short('p')
+                .long("parent")
+                .value_name("NOTE")
+                .help(
+                    "Parent note for a missing collection note; required when <dir>.md does not exist",
+                ),
         )
 }
 
@@ -774,6 +810,142 @@ fn execute_update(matches: &ArgMatches) -> i32 {
         eprintln!("bob records update: warning: {message}");
     }
     0
+}
+
+fn execute_init(matches: &ArgMatches) -> i32 {
+    let output_format = format_from(matches);
+    let vault = vault_from(matches);
+    let type_id = matches.get_one::<String>("type").expect("required by clap");
+    let config = match load_config() {
+        Ok(config) => config,
+        Err(error) => {
+            return report_config_error(
+                "bob records init",
+                output_format,
+                error,
+            );
+        }
+    };
+    let Some(record_type) = config.record_type(type_id) else {
+        return report_error(
+            "bob records init",
+            output_format,
+            &format!("unknown record type `{type_id}`"),
+            2,
+        );
+    };
+    let created = crate::native::capture_project_note::format_created_timestamp(
+        bob_env::current_datetime(),
+    );
+    let parent = matches.get_one::<String>("parent").map(String::as_str);
+    let plan = match plan_init(&vault, record_type, parent, &created) {
+        Ok(plan) => plan,
+        Err(message) => {
+            return report_error(
+                "bob records init",
+                output_format,
+                &message,
+                2,
+            );
+        }
+    };
+    if matches.get_flag("dry-run") {
+        print_init_result(&plan, "planned", output_format);
+        return 0;
+    }
+
+    let mut staged = Vec::new();
+    for piece in plan.creates() {
+        let Some(markdown) = piece.markdown.as_deref() else {
+            continue;
+        };
+        let target = vault.join(&piece.path);
+        staged.push(StagedTextFile {
+            target,
+            target_existed: false,
+            original_target: String::new(),
+            updated_target: markdown.to_owned(),
+        });
+    }
+    if !staged.is_empty()
+        && let Err(error) = write_staged_files(&staged)
+    {
+        return report_error(
+            "bob records init",
+            output_format,
+            &error.message,
+            2,
+        );
+    }
+    print_init_result(&plan, "written", output_format);
+    0
+}
+
+fn print_init_result(
+    plan: &super::init::InitPlan,
+    status: &str,
+    format: OutputFormat,
+) {
+    if format == OutputFormat::Json {
+        println!(
+            "{}",
+            json!({
+                "schema_version": SCHEMA_VERSION,
+                "status": status,
+                "type": plan.record_type,
+                "label": plan.label,
+                "dir": plan.dir,
+                "emoji": plan.emoji,
+                "pieces": plan.pieces.iter().map(init_piece_json).collect::<Vec<_>>(),
+            })
+        );
+        return;
+    }
+    let styler = Styler::detect();
+    let emoji = plan.emoji.as_deref().unwrap_or("");
+    let verb = if status == "planned" {
+        "would scaffold"
+    } else if plan.creates().next().is_some() {
+        "scaffolded"
+    } else {
+        "already scaffolded"
+    };
+    println!(
+        "{}  {} {} {}",
+        styler.green("✓"),
+        emoji,
+        verb,
+        styler.bold(&plan.label)
+    );
+    for piece in &plan.pieces {
+        let tag = match piece.action {
+            PieceAction::Create => styler.green("create"),
+            PieceAction::Keep => styler.dim("keep"),
+        };
+        println!("  {tag}  {}", piece.path.display());
+        if status == "planned"
+            && piece.action == PieceAction::Create
+            && let Some(markdown) = piece.markdown.as_deref()
+        {
+            println!(
+                "{}",
+                styler.dim(&format!("--- {} ---", piece.path.display()))
+            );
+            print!("{markdown}");
+            if !markdown.ends_with('\n') {
+                println!();
+            }
+        }
+    }
+}
+
+fn init_piece_json(piece: &PlannedPiece) -> Value {
+    json!({
+        "kind": piece.kind.as_str(),
+        "path": piece.path.display().to_string(),
+        "action": piece.action.as_str(),
+        "markdown": piece.markdown,
+    })
 }
 
 fn parse_field_inputs(

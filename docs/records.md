@@ -203,6 +203,7 @@ Types. Bare `bob records` runs the read-only `list` command.
 | Command | Purpose |
 | --- | --- |
 | `bob records check [TYPE]` | Lint configured folders and find typed records filed outside them. Exits 1 when it finds errors. |
+| `bob records init TYPE` | Scaffold the type note, collection note, and starter Base. Existing files are kept. |
 | `bob records list` | Show each configured type, its folder, note count, and required fields. |
 | `bob records new TYPE TITLE` | Create one record through the same planner used by capture. |
 | `bob records show TYPE` | Show the schema, choice labels, defaults, and common suggested values. |
@@ -256,6 +257,40 @@ Usage, missing targets, and supplied-value refusals exit 2. A no-op update succe
 without rewriting the note. Human and JSON results report changed fields with
 before and effective values, notes, and warnings; warnings name `bob records check`
 and never block the update.
+
+## Adding a record type
+
+A new type is config plus scaffold. Add the type to `records:` in
+`config.yml`, then run `bob records init TYPE`. Shipped types are
+`restaurant` (`eat/`), `podcast` (`podcasts/`), `show` (`tv/`), and
+`movie` (`movies/`).
+
+```sh
+bob records init movie -p fun
+bob records init show
+```
+
+`--parent` is required when the collection note (`<dir>.md`) is missing, so
+bob never guesses the parent. If that note already exists, `init` keeps it
+and `--parent` is unused. `-d/--dry-run` prints the planned files without
+writing.
+
+Init creates these pieces when they are missing:
+
+- the type note `<type>.md`, with `parent: "[[type]]"` and a
+  `bob records show` pointer
+- the collection note `<dir>.md`, whose parent comes from `-p/--parent`,
+  embedding the Base view
+- a starter `<dir>.base` that filters `file.inFolder(dir)` and
+  `note.type == link(type)`, with a table view grouped by status labels
+
+It never edits an existing file: those pieces are reported as `keep`. It
+does not create an empty `<dir>/` folder, because git cannot sync one. The
+records planner creates the folder when it writes the first record. Writes
+use the same no-replace install as capture.
+
+After the scaffold, create records with capture (`<title> @<dir>/`) or
+`bob records new`.
 
 ## Related
 

@@ -144,6 +144,9 @@ impl NativeCommand {
             NativeCommand::RecordsCheck => {
                 crate::native::records::cli::build_cli_check()
             }
+            NativeCommand::RecordsInit => {
+                crate::native::records::cli::build_cli_init()
+            }
             NativeCommand::RecordsList => {
                 crate::native::records::cli::build_cli_list()
             }

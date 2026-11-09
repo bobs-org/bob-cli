@@ -6,6 +6,7 @@
 pub(crate) mod catalog;
 pub(crate) mod check;
 pub(crate) mod cli;
+pub(crate) mod init;
 pub(crate) mod plan;
 pub(crate) mod render;
 pub(crate) mod schema;

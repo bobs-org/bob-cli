@@ -683,10 +683,11 @@ fn records_help_lists_subcommands_and_options_alphabetically() {
     let help = stdout(&output);
     assert!(
         help.contains(
-            "List, inspect, check, and create or update configured Record Notes"
+            "List, inspect, check, scaffold, and create or update configured Record Notes"
         ) && help.contains("Bare `bob records` runs the read-only list")
             && help.contains("(default)")
             && help.contains("\n  check ")
+            && help.contains("\n  init ")
             && help.contains("\n  list ")
             && help.contains("\n  new ")
             && help.contains("\n  show ")
@@ -697,10 +698,40 @@ fn records_help_lists_subcommands_and_options_alphabetically() {
         &help,
         &[
             "\n  check ",
+            "\n  init ",
             "\n  list ",
             "\n  new ",
             "\n  show ",
             "\n  update ",
+        ],
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn records_init_help_lists_options_alphabetically() {
+    let output = bob_command()
+        .args(["records", "init", "--help"])
+        .output()
+        .expect("run bob records init --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains(
+            "Create the type note, collection note, and starter Base"
+        ) && help.contains("never overwritten")
+            && help.contains("bob records init movie -p fun"),
+        "expected records init help:\n{help}"
+    );
+    assert_text_order(
+        &help,
+        &[
+            "-b, --bob-dir",
+            "-d, --dry-run",
+            "-f, --format",
+            "-h, --help",
+            "-p, --parent",
         ],
     );
     assert_stdout_has_no_ansi(&output);

@@ -352,6 +352,14 @@ const RECORDS_MEMBERS: &[Member] = &[
         },
     },
     Member {
+        name: "init",
+        about: "Scaffold a record type's notes and starter Base",
+        leaf: Leaf {
+            native_command: NativeCommand::RecordsInit,
+            script_command: None,
+        },
+    },
+    Member {
         name: "list",
         about: "List configured Record Note collections (default)",
         leaf: Leaf {
@@ -392,6 +400,7 @@ Examples:
   bob records                                      List record types and counts
   bob records show restaurant                     Inspect a schema and common values
   bob records check -f json                       Lint every configured record folder
+  bob records init movie -p fun                   Scaffold movie.md, movies.md, and movies.base
   bob records new restaurant 'Ramen Nagi' -s status=to_try
 
 See docs/records.md for the schema, CLI, and lint contract.
@@ -869,13 +878,13 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "records",
-        about: "List, inspect, check, and create or update configured Record Notes",
+        about: "List, inspect, check, scaffold, and create or update configured Record Notes",
         section: Section::Vault,
         target: Target::Group(Group {
             members: RECORDS_MEMBERS,
             default: Some("list"),
             extra_about: Some(
-                "Bare `bob records` runs the read-only list. `new` creates a note through the shared records planner and refuses missing fields or duplicates. `update` edits an existing note in place.",
+                "Bare `bob records` runs the read-only list. `init` scaffolds a type note, collection note, and starter Base and never edits an existing file. `new` creates a note through the shared records planner and refuses missing fields or duplicates. `update` edits an existing note in place.",
             ),
             after_help: RECORDS_AFTER_HELP,
             usage: "bob records [COMMAND]",
@@ -2362,6 +2371,7 @@ mod tests {
             NativeCommand::RelationsRename,
             NativeCommand::RelationsUnhide,
             NativeCommand::RecordsCheck,
+            NativeCommand::RecordsInit,
             NativeCommand::RecordsList,
             NativeCommand::RecordsNew,
             NativeCommand::RecordsShow,

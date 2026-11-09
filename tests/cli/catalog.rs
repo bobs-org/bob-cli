@@ -39,7 +39,7 @@ fn protocol_1_parses_with_schema_version_one() {
         serde_json::json!(["clicolor-force", "progress-env", "run-receipt"])
     );
     let entries = json["entries"].as_array().expect("entries");
-    assert_eq!(entries.len(), 84);
+    assert_eq!(entries.len(), 85);
     assert!(entries.iter().any(|entry| {
         entry["id"] == "clipboard"
             && entry["path"] == serde_json::json!(["clipboard"])
@@ -105,9 +105,11 @@ fn protocol_1_parses_with_schema_version_one() {
     }));
     for (id, command) in [
         ("records-check", "check"),
+        ("records-init", "init"),
         ("records-list", "list"),
         ("records-new", "new"),
         ("records-show", "show"),
+        ("records-update", "update"),
     ] {
         assert!(
             entries.iter().any(|entry| {
