@@ -522,6 +522,37 @@ fn archive_closed_window_respects_mtime() {
     );
 }
 
+#[test]
+fn archive_candidates_follow_resolved_source_after_rename() {
+    let temp = TempDir::new("bob-cli-capture-related-renamed-archive");
+    let root = temp.path();
+    write_settings(root);
+    write_file(
+        &root.join("new.md"),
+        "---\ntype: [[area]]\ndone_tasks: \"[[done/legacy/old_done]]\"\n---\n\n# New route\n",
+    );
+    let archive = root.join("done/legacy/old_done.md");
+    write_file(
+        &archive,
+        "---\nparent: \"[[new]]\"\n---\n\n- [x] #task Archive ships from renamed source [completion:: 2026-10-18] ^archive-ship\n",
+    );
+    set_mtime(&archive, archive_mtime_on(2026, 10, 18));
+    let _now = TestEnvGuard::set(&[(
+        "BOB_NOW",
+        Some(std::ffi::OsStr::new("2026-10-20 12:00:00")),
+    )]);
+
+    let discovery = corpus::discover(root, 30);
+    let candidate = discovery
+        .candidates
+        .iter()
+        .find(|candidate| candidate.title.contains("Archive ships"))
+        .expect("renamed archive candidate");
+    assert_eq!(candidate.note_path, "done/legacy/old_done.md");
+    assert_eq!(candidate.route, "new");
+    assert_eq!(candidate.locator, "new");
+}
+
 struct SyntheticPerfVaults {
     big: TempDir,
     tiny: TempDir,

@@ -403,7 +403,9 @@ fn is_in_sync_with(
     if finalize_annotation_task_plans(config, &mut plans, &ctx).is_err() {
         return false;
     }
-    reserve_preview_ids(config, &mut plans, &ctx);
+    if reserve_preview_ids(config, &mut plans, &ctx).is_err() {
+        return false;
+    }
     let reading_unchanged_or_adopted =
         plan.reading_task_plan.as_ref().is_some_and(|reading| {
             reading.action == ReadingTaskAction::NoWrite

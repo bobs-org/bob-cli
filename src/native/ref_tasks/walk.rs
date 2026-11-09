@@ -37,6 +37,8 @@ pub(crate) struct RefTaskIndex {
     candidates: BTreeMap<String, Vec<LocatedRefTask>>,
     follow_ups: BTreeMap<String, Vec<RefFollowUp>>,
     orphans: Vec<OrphanRefTask>,
+    archive_pairs:
+        Option<Result<crate::native::collect_done::ArchivePairIndex, String>>,
 }
 
 /// True when a file name is a conflict copy.
@@ -57,6 +59,7 @@ impl RefTaskIndex {
                     candidates: BTreeMap::new(),
                     follow_ups: BTreeMap::new(),
                     orphans: Vec::new(),
+                    archive_pairs: None,
                 }
             }
         };
@@ -140,6 +143,23 @@ impl RefTaskIndex {
         let mut ordered: Vec<(PathBuf, String)> =
             contents_map.into_iter().collect();
         ordered.sort_by(|a, b| a.0.cmp(&b.0));
+        // Build from the full vault census, independently of the `#ref` body
+        // prefilter above, so non-task source notes can establish pairs.
+        // Keep the no-archive fast path lazy and share the result with batch
+        // preview reservation callers.
+        let archive_pairs = ordered
+            .iter()
+            .any(|(path, _)| {
+                crate::native::task_dependencies::is_archive_path(path)
+            })
+            .then(|| {
+                crate::native::collect_done::ArchivePairIndex::read_vault(
+                    bob_dir,
+                )
+                .map_err(|error| {
+                    format!("could not resolve archive pairs: {error}")
+                })
+            });
 
         // Lazy capture routes.
         let mut routes: Option<std::collections::BTreeSet<String>> = None;
@@ -211,7 +231,12 @@ impl RefTaskIndex {
                 .to_string();
             // done/ residence from frontmatter parent.
             let done_residence = if archived {
-                done_parent_stem(contents)
+                archive_pairs
+                    .as_ref()
+                    .and_then(|result| result.as_ref().ok())
+                    .and_then(|pairs| {
+                        done_parent_stem(pairs, Path::new(&forward))
+                    })
             } else {
                 None
             };
@@ -468,6 +493,7 @@ impl RefTaskIndex {
             candidates,
             follow_ups,
             orphans,
+            archive_pairs,
         }
     }
 
@@ -490,6 +516,15 @@ impl RefTaskIndex {
     /// Every orphan task line.
     pub(crate) fn orphans(&self) -> &[OrphanRefTask] {
         &self.orphans
+    }
+
+    /// Pair census captured while resolving archived reading-task residence.
+    /// Preview planners can reuse it rather than walking the vault again.
+    pub(crate) fn archive_pairs(
+        &self,
+    ) -> Option<&Result<crate::native::collect_done::ArchivePairIndex, String>>
+    {
+        self.archive_pairs.as_ref()
     }
 
     /// The indexed reference note a located reading task belongs to.
@@ -567,17 +602,20 @@ fn push_candidate(
         });
 }
 
-fn done_parent_stem(contents: &str) -> Option<String> {
-    // Read from the already-loaded contents with `collect_done`'s
-    // `archive_parent_target` (promoted to `pub(crate)` with a re-export).
-    let target = crate::native::collect_done::archive_parent_target(contents)?;
-    // Stem: last path segment without .md.
-    let last = target.rsplit('/').next().unwrap_or(&target);
-    let stem = last
-        .strip_suffix(".md")
-        .or_else(|| last.strip_suffix(".MD"))
-        .unwrap_or(last);
-    (!stem.is_empty()).then(|| stem.to_string())
+fn done_parent_stem(
+    pairs: &crate::native::collect_done::ArchivePairIndex,
+    archive: &Path,
+) -> Option<String> {
+    let crate::native::collect_done::ArchiveLookup::Bound(pair) =
+        pairs.for_archive(archive)
+    else {
+        return None;
+    };
+    pair.source
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .map(str::to_string)
 }
 
 /// Every `[[target|🔖]]` link on the line whose alias is exactly `🔖`,

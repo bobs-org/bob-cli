@@ -406,6 +406,67 @@ fn unmapped_refuses_write_and_map_wins() {
 }
 
 #[test]
+fn migrated_task_preview_reserves_id_from_renamed_nested_archive() {
+    let parent = "---\ntype: \"[[area]]\"\ndone_tasks: \"[[done/legacy/old_done]]\"\n---\n\n# Sase\n\n## Tasks\n";
+    let (_temp, vault) = vault_with(
+        "bob-cli-migrate-tasks-renamed-archive-id",
+        &[
+            ("sase.md", parent),
+            (
+                "done/legacy/old_done.md",
+                "---\nparent: \"[[sase]]\"\n---\n\n- [x] #task Historical reading ^ref-a\n",
+            ),
+            (
+                "ref/papers/a.md",
+                &ref_note(
+                    "A Title",
+                    "sase",
+                    "2026-10-01",
+                    "- [ ] #task #ref [[lib/papers/a.pdf]] #hide ^ref",
+                ),
+            ),
+        ],
+    );
+    let document = run_json(&vault, &[]);
+    assert_eq!(document["tasks"][0]["block_id"], "ref-a-2");
+}
+
+#[test]
+fn contradictory_archive_reservation_marks_plan_unmapped_and_refuses_write() {
+    let parent = "---\ntype: \"[[area]]\"\ndone_tasks: \"[[done/legacy/old_done]]\"\n---\n\n# Sase\n\n## Tasks\n";
+    let (_temp, vault) = git_vault(
+        "bob-cli-migrate-tasks-contradictory-archive",
+        &[
+            ("sase.md", parent),
+            ("other.md", "# Other\n"),
+            (
+                "done/legacy/old_done.md",
+                "---\nparent: \"[[other]]\"\n---\n\n- [x] #task Historical reading ^ref-a\n",
+            ),
+            (
+                "ref/papers/a.md",
+                &ref_note(
+                    "A Title",
+                    "sase",
+                    "2026-10-01",
+                    "- [ ] #task #ref [[lib/papers/a.pdf]] #hide ^ref",
+                ),
+            ),
+        ],
+    );
+    let document = run_json(&vault, &[]);
+    let reason = document["unmapped"][0]["reason"]
+        .as_str()
+        .expect("reservation refusal reason");
+    assert!(reason.contains("contradictory_metadata"), "{reason}");
+
+    let before = worktree_snapshot(&vault);
+    let write = run_write(&vault, &[]);
+    assert!(!write.status.success(), "unsafe reservation refuses write");
+    assert_eq!(worktree_snapshot(&vault), before, "writes nothing");
+}
+
+#[test]
 fn tsv_round_trip_with_comments_and_extra_columns() {
     let (_temp, vault) = vault_with(
         "bob-cli-migrate-tasks-tsv",

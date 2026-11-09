@@ -526,7 +526,19 @@ pub(super) fn scan_library_json(
             ScanPlanOutcome::Held(_) | ScanPlanOutcome::Failed(_) => None,
         })
         .collect::<Vec<_>>();
-    reserve_preview_ids(config, &mut plans_to_finalize, &ctx);
+    if let Err(error) =
+        reserve_preview_ids(config, &mut plans_to_finalize, &ctx)
+    {
+        return print_scan_error_envelope(
+            config,
+            options,
+            mode,
+            &intake,
+            completed_intake,
+            &error,
+            true,
+        );
+    }
     if let Err(error) =
         finalize_annotation_task_plans(config, &mut plans_to_finalize, &ctx)
     {

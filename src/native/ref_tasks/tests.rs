@@ -341,6 +341,53 @@ fn residence_covers_root_done_and_other_with_outside_area() {
 }
 
 #[test]
+fn archived_residence_follows_reciprocal_pair_after_nested_source_rename() {
+    let temp = tempfile::tempdir().expect("temp vault");
+    let root = temp.path();
+    minimal_ref(root, "ref/papers/renamed.md");
+    // The renamed source has no #ref marker, but its frontmatter still
+    // participates in pair resolution before the reading-task prefilter.
+    write_vault_file(
+        root,
+        "projects/current/field_notes.md",
+        "---\ndone_tasks: \"[[done/legacy/field_notes_done]]\"\n---\n\n# Field notes\n",
+    );
+    write_vault_file(
+        root,
+        "done/legacy/field_notes_done.md",
+        "---\nparent: \"[[projects/current/field_notes]]\"\n---\n\n- [x] #task #ref [[ref/papers/renamed]] [completion:: 2026-10-12] ^old-reading\n",
+    );
+
+    let index = build(root);
+    let archived = index.candidates("ref/papers/renamed.md");
+    assert_eq!(archived.len(), 1);
+    assert_eq!(archived[0].residence.as_deref(), Some("field_notes"));
+}
+
+#[test]
+fn archived_residence_stays_unknown_for_contradictory_pair() {
+    let temp = tempfile::tempdir().expect("temp vault");
+    let root = temp.path();
+    minimal_ref(root, "ref/papers/conflict.md");
+    write_vault_file(
+        root,
+        "projects/current.md",
+        "---\ndone_tasks: \"[[done/legacy/old_done]]\"\n---\n\n# Current\n",
+    );
+    write_vault_file(root, "projects/other.md", "# Other\n");
+    write_vault_file(
+        root,
+        "done/legacy/old_done.md",
+        "---\nparent: \"[[projects/other]]\"\n---\n\n- [x] #task #ref [[ref/papers/conflict]] [completion:: 2026-10-12] ^old-conflict\n",
+    );
+
+    let index = build(root);
+    let archived = index.candidates("ref/papers/conflict.md");
+    assert_eq!(archived.len(), 1);
+    assert_eq!(archived[0].residence, None);
+}
+
+#[test]
 fn follow_up_full_path_is_attributed_but_same_note_is_not() {
     let temp = tempfile::tempdir().expect("temp vault");
     let root = temp.path();

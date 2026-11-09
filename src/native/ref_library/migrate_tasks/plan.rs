@@ -195,6 +195,11 @@ pub(crate) fn plan_migration(
     let mut multi = Vec::new();
     let mut map_warnings = Vec::new();
     let mut reserved: BTreeSet<String> = BTreeSet::new();
+    // One archive census per migration, initialized only when an open task
+    // reaches ID reservation.
+    let mut archive_pairs: Option<
+        Result<crate::native::collect_done::ArchivePairIndex, String>,
+    > = ref_tasks_index.archive_pairs().cloned();
     // Track which map rows matched an open v1 tracker.
     let mut map_matched: BTreeSet<String> = BTreeSet::new();
 
@@ -328,6 +333,25 @@ pub(crate) fn plan_migration(
         let parent_path = format!("{parent_route}.md");
         let parent_abs = bob_dir.join(&parent_path);
 
+        let pair_result = archive_pairs.get_or_insert_with(|| {
+            crate::native::collect_done::ArchivePairIndex::read_vault(bob_dir)
+                .map_err(|error| {
+                    format!(
+                        "could not resolve archive ID reservations: {error}"
+                    )
+                })
+        });
+        let pairs = match pair_result {
+            Ok(pairs) => pairs,
+            Err(reason) => {
+                unmapped.push(UnmappedRow {
+                    ref_note: ref_note.clone(),
+                    reason: reason.clone(),
+                });
+                continue;
+            }
+        };
+
         // Title: H1, else frontmatter title, else stem.
         let title = ref_title(&contents, ref_note);
         let created = ref_created(&contents);
@@ -336,9 +360,19 @@ pub(crate) fn plan_migration(
         let _ = slug;
 
         // Preview block id against destination + archive + reserved.
-        let taken = taken_ids(bob_dir, &parent_abs, &reserved);
+        let taken = match taken_ids(bob_dir, &parent_abs, pairs, &reserved) {
+            Ok(taken) => taken,
+            Err(reason) => {
+                unmapped.push(UnmappedRow {
+                    ref_note: ref_note.clone(),
+                    reason,
+                });
+                continue;
+            }
+        };
         let preview = allocate_ref_block_id(&stem, &|id| taken.contains(id));
-        reserved.insert(preview.clone());
+        let mut task_reserved = reserved.clone();
+        task_reserved.insert(preview.clone());
 
         let ref_target = ref_target_without_md(ref_note);
         let v1_line_full = body_lines[tracker_idx].to_string();
@@ -360,18 +394,29 @@ pub(crate) fn plan_migration(
         }
 
         // Follow-ups from ## Tasks.
-        let follow_ups = collect_follow_ups(
+        let follow_ups = match collect_follow_ups(
             &body_lines,
             ref_note,
             bob_dir,
             &parent_abs,
-            &reserved,
-        );
+            pairs,
+            &task_reserved,
+        ) {
+            Ok(follow_ups) => follow_ups,
+            Err(reason) => {
+                unmapped.push(UnmappedRow {
+                    ref_note: ref_note.clone(),
+                    reason,
+                });
+                continue;
+            }
+        };
         for fu in &follow_ups {
             if !fu.block_id.is_empty() {
-                reserved.insert(fu.block_id.clone());
+                task_reserved.insert(fu.block_id.clone());
             }
         }
+        reserved = task_reserved;
 
         tasks.push(PlannedTask {
             ref_note: ref_note.clone(),
@@ -388,7 +433,6 @@ pub(crate) fn plan_migration(
             old_dep_id: old_dep,
             new_dep_id_preview: new_dep,
         });
-        let _ = ref_tasks_index;
     }
 
     // Unknown map rows are warnings, not migrations.
@@ -762,53 +806,65 @@ fn ref_created(contents: &str) -> String {
 fn taken_ids(
     bob_dir: &Path,
     dest_abs: &Path,
+    pairs: &crate::native::collect_done::ArchivePairIndex,
     reserved: &BTreeSet<String>,
-) -> BTreeSet<String> {
+) -> Result<BTreeSet<String>, String> {
     let mut taken = BTreeSet::new();
     if let Ok(contents) = std::fs::read_to_string(dest_abs) {
         taken.extend(crate::native::collect_done::block_ids_in_markdown(
             &contents,
         ));
-        // Archive.
-        if let Some(archive_rel) = archive_rel_for(bob_dir, dest_abs, &contents)
-            && let Ok(archive) =
-                std::fs::read_to_string(bob_dir.join(&archive_rel))
-        {
-            taken.extend(crate::native::collect_done::block_ids_in_markdown(
-                &archive,
+    }
+    let Ok(relative) = dest_abs.strip_prefix(bob_dir) else {
+        taken.extend(reserved.iter().cloned());
+        return Ok(taken);
+    };
+    let (archive_rel, required) = match pairs.for_source(relative) {
+        crate::native::collect_done::SourceLookup::Bound(pair) => {
+            (Some(pair.archive), true)
+        }
+        crate::native::collect_done::SourceLookup::Missing {
+            canonical_archive,
+        } => (canonical_archive, false),
+        crate::native::collect_done::SourceLookup::Refused {
+            reason,
+            related,
+            ..
+        } => {
+            return Err(format!(
+                "refusing to reserve archive IDs for {}: {reason} ({})",
+                dest_abs.display(),
+                related
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
             ));
+        }
+    };
+    if let Some(archive_rel) = archive_rel {
+        let archive_path = bob_dir.join(&archive_rel);
+        match std::fs::read_to_string(&archive_path) {
+            Ok(archive) => {
+                taken.extend(
+                    crate::native::collect_done::block_ids_in_markdown(
+                        &archive,
+                    ),
+                );
+            }
+            Err(error)
+                if !required
+                    && error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "read {} for archive ID reservation: {error}",
+                    archive_path.display()
+                ));
+            }
         }
     }
     taken.extend(reserved.iter().cloned());
-    taken
-}
-
-fn archive_rel_for(
-    bob_dir: &Path,
-    dest_abs: &Path,
-    dest_contents: &str,
-) -> Option<String> {
-    for line in dest_contents.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("done_tasks:")
-            && let Some(start) = trimmed.find("[[")
-            && let Some(end) = trimmed[start..].find("]]")
-        {
-            let target = &trimmed[start + 2..start + end];
-            let mut rel = target.trim().to_string();
-            if !rel.ends_with(".md") {
-                rel.push_str(".md");
-            }
-            return Some(rel);
-        }
-    }
-    let relative = dest_abs.strip_prefix(bob_dir).unwrap_or(dest_abs);
-    if relative.components().count() == 1
-        && let Some(stem) = dest_abs.file_stem().and_then(|s| s.to_str())
-    {
-        return Some(format!("done/{stem}_done.md"));
-    }
-    None
+    Ok(taken)
 }
 
 fn dependency_id_for(note_rel: &str, block_id: &str) -> Option<String> {
@@ -820,10 +876,11 @@ fn dependency_id_for(note_rel: &str, block_id: &str) -> Option<String> {
 fn collect_follow_ups(
     body_lines: &[&str],
     ref_note: &str,
-    _bob_dir: &Path,
+    bob_dir: &Path,
     dest_abs: &Path,
+    pairs: &crate::native::collect_done::ArchivePairIndex,
     reserved: &BTreeSet<String>,
-) -> Vec<PlannedFollowUp> {
+) -> Result<Vec<PlannedFollowUp>, String> {
     // Find ## Tasks section.
     let mut section_start: Option<usize> = None;
     for (i, line) in body_lines.iter().enumerate() {
@@ -833,7 +890,7 @@ fn collect_follow_ups(
         }
     }
     let Some(start) = section_start else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     // Section ends at next ## heading or end.
     let mut section_end = body_lines.len();
@@ -895,7 +952,7 @@ fn collect_follow_ups(
             String::new()
         } else {
             // Check freeness against destination+archive+reserved.
-            let taken = taken_ids(_bob_dir, dest_abs, reserved);
+            let taken = taken_ids(bob_dir, dest_abs, pairs, reserved)?;
             if !taken.contains(&existing) {
                 existing.clone()
             } else {
@@ -916,7 +973,7 @@ fn collect_follow_ups(
         });
         i = end;
     }
-    out
+    Ok(out)
 }
 
 fn strip_blockquote(line: &str) -> &str {

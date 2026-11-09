@@ -971,7 +971,8 @@ fn write_id_marker_with_saved(
     let mut plans = [&mut plan];
     finalize_annotation_task_plans(config, &mut plans, &context)
         .map_err(|error| format!("finalize marker sync plan: {error}"))?;
-    reserve_preview_ids(config, &mut plans, &context);
+    reserve_preview_ids(config, &mut plans, &context)
+        .map_err(|error| error.message)?;
 
     let safe = plan.marker_write_needed
         && plan.reading_task_plan.as_ref().is_some_and(|reading| {

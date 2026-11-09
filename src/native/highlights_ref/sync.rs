@@ -47,7 +47,7 @@ pub(super) fn plan_single_pdf_sync(
     let mut plan = plan_pdf_sync(config, pdf, options, &ctx)?;
     let mut plans_to_finalize = [&mut plan];
     finalize_annotation_task_plans(config, &mut plans_to_finalize, &ctx)?;
-    reserve_preview_ids(config, &mut plans_to_finalize, &ctx);
+    reserve_preview_ids(config, &mut plans_to_finalize, &ctx)?;
     Ok(plan)
 }
 
@@ -142,7 +142,7 @@ fn scan_library_dry_run(
         })
         .collect::<Vec<_>>();
     finalize_annotation_task_plans(config, &mut plans_to_finalize, &ctx)?;
-    reserve_preview_ids(config, &mut plans_to_finalize, &ctx);
+    reserve_preview_ids(config, &mut plans_to_finalize, &ctx)?;
     let plans = plan_outcomes
         .iter()
         .filter_map(|outcome| match outcome {
@@ -272,7 +272,12 @@ fn scan_library_write(
         receipt.write_error(&error);
         return Err(error);
     }
-    reserve_preview_ids(config, &mut plans_to_finalize, &ctx);
+    if let Err(error) =
+        reserve_preview_ids(config, &mut plans_to_finalize, &ctx)
+    {
+        receipt.write_error(&error);
+        return Err(error);
+    }
     let plans = plan_outcomes
         .iter()
         .filter_map(|outcome| match outcome {
@@ -1496,8 +1501,46 @@ pub(super) fn reserve_preview_ids(
     config: &Config,
     plans: &mut [&mut PdfSyncPlan],
     ctx: &ScanContext,
-) {
-    let _ = ctx;
+) -> Result<()> {
+    let has_inserts = plans.iter().any(|plan| {
+        matches!(
+            plan.reading_task_plan
+                .as_ref()
+                .map(|reading_plan| &reading_plan.action),
+            Some(ReadingTaskAction::Insert { .. })
+        )
+    });
+    if !has_inserts {
+        return Ok(());
+    }
+    // RefTaskIndex captures the pair census when it had archived reference
+    // tasks to index. Otherwise build it once for this preview batch. This
+    // keeps preview and execution on the same resolver without a vault walk
+    // for each candidate.
+    let owned_pairs = match ctx.index.archive_pairs() {
+        Some(Ok(_)) => None,
+        Some(Err(reason)) => {
+            return Err(CommandError::new(reason.clone()));
+        }
+        None => Some(
+            crate::native::collect_done::ArchivePairIndex::read_vault(
+                &config.bob_dir,
+            )
+            .map_err(|error| {
+                CommandError::new(format!(
+                    "could not resolve archive ID reservations: {error}"
+                ))
+            })?,
+        ),
+    };
+    let pairs = owned_pairs
+        .as_ref()
+        .or_else(|| {
+            ctx.index
+                .archive_pairs()
+                .and_then(|result| result.as_ref().ok())
+        })
+        .expect("archive pair index was loaded for insertion previews");
     let mut taken: BTreeMap<PathBuf, BTreeSet<String>> = BTreeMap::new();
     for plan in plans.iter_mut() {
         let (destination_route, prefer_block_id, reading) = match plan
@@ -1519,9 +1562,17 @@ pub(super) fn reserve_preview_ids(
         };
         let destination =
             config.bob_dir.join(format!("{destination_route}.md"));
-        let taken_set = taken.entry(destination.clone()).or_insert_with(|| {
-            preview_taken_for_destination(&config.bob_dir, &destination)
-        });
+        if !taken.contains_key(&destination) {
+            taken.insert(
+                destination.clone(),
+                preview_taken_for_destination(
+                    &config.bob_dir,
+                    &destination,
+                    pairs,
+                )?,
+            );
+        }
+        let taken_set = taken.get_mut(&destination).expect("inserted above");
         let is_taken = |id: &str| taken_set.contains(id);
         let stem = plan
             .pdf
@@ -1562,6 +1613,7 @@ pub(super) fn reserve_preview_ids(
         }
         plan.preview_block_id = Some(preview);
     }
+    Ok(())
 }
 
 /// Block IDs already taken for preview allocation: the destination's live
@@ -1569,52 +1621,72 @@ pub(super) fn reserve_preview_ids(
 fn preview_taken_for_destination(
     bob_dir: &Path,
     destination: &Path,
-) -> BTreeSet<String> {
+    pairs: &crate::native::collect_done::ArchivePairIndex,
+) -> Result<BTreeSet<String>> {
     let mut taken = BTreeSet::new();
-    let dest_contents = fs::read_to_string(destination).unwrap_or_default();
+    let dest_contents = match fs::read_to_string(destination) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            String::new()
+        }
+        Err(error) => {
+            return Err(CommandError::new(format!(
+                "read {} for archive ID reservation: {error}",
+                destination.display()
+            )));
+        }
+    };
     taken.extend(crate::native::collect_done::block_ids_in_markdown(
         &dest_contents,
     ));
-    if let Some(archive_rel) =
-        preview_archive_rel_for(bob_dir, destination, &dest_contents)
-    {
-        let archive_contents =
-            fs::read_to_string(bob_dir.join(&archive_rel)).unwrap_or_default();
+    let Ok(relative) = destination.strip_prefix(bob_dir) else {
+        return Ok(taken);
+    };
+    let (archive_rel, required) = match pairs.for_source(relative) {
+        crate::native::collect_done::SourceLookup::Bound(pair) => {
+            (Some(pair.archive), true)
+        }
+        crate::native::collect_done::SourceLookup::Missing {
+            canonical_archive,
+        } => (canonical_archive, false),
+        crate::native::collect_done::SourceLookup::Refused {
+            reason,
+            related,
+            ..
+        } => {
+            return Err(CommandError::new(format!(
+                "refusing to reserve archive IDs for {}: {reason} ({})",
+                destination.display(),
+                related
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            )));
+        }
+    };
+    if let Some(archive_rel) = archive_rel {
+        let archive_path = bob_dir.join(&archive_rel);
+        let archive_contents = match fs::read_to_string(&archive_path) {
+            Ok(contents) => contents,
+            Err(error)
+                if !required
+                    && error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                return Ok(taken);
+            }
+            Err(error) => {
+                return Err(CommandError::new(format!(
+                    "read {} for archive ID reservation: {error}",
+                    archive_path.display()
+                )));
+            }
+        };
         taken.extend(crate::native::collect_done::block_ids_in_markdown(
             &archive_contents,
         ));
     }
-    taken
-}
-
-/// Archive relative path for preview seeding: the note's own `done_tasks`
-/// link when present, else the vault-root default `done/<stem>_done.md`.
-fn preview_archive_rel_for(
-    bob_dir: &Path,
-    destination: &Path,
-    dest_contents: &str,
-) -> Option<String> {
-    for line in dest_contents.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("done_tasks:")
-            && let Some(start) = trimmed.find("[[")
-            && let Some(end) = trimmed[start..].find("]]")
-        {
-            let target = &trimmed[start + 2..start + end];
-            let mut rel = target.trim().to_string();
-            if !rel.ends_with(".md") {
-                rel.push_str(".md");
-            }
-            return Some(rel);
-        }
-    }
-    let relative = destination.strip_prefix(bob_dir).unwrap_or(destination);
-    if relative.components().count() == 1
-        && let Some(stem) = destination.file_stem().and_then(|s| s.to_str())
-    {
-        return Some(format!("done/{stem}_done.md"));
-    }
-    None
+    Ok(taken)
 }
 
 pub(super) fn finalize_annotation_task_plans(
@@ -2822,5 +2894,81 @@ pub(super) fn ensure_pdf_unchanged_for_write(plan: &PdfSyncPlan) -> Result<()> {
             "PDF changed during sync; rerun: {}",
             plan.pdf.display()
         )))
+    }
+}
+
+#[cfg(test)]
+mod archive_pair_preview_tests {
+    use super::*;
+
+    fn write_file(root: &Path, relative: &str, contents: &str) {
+        let path = root.join(relative);
+        fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        fs::write(path, contents).expect("write");
+    }
+
+    #[test]
+    fn preview_and_execution_reserve_the_same_nested_renamed_archive_id() {
+        let temp = tempfile::tempdir().expect("temp vault");
+        let bob_dir = temp.path();
+        let destination = bob_dir.join("projects/new.md");
+        write_file(
+            bob_dir,
+            "projects/new.md",
+            "---\ndone_tasks: \"[[done/legacy/old_done]]\"\n---\n\n# New\n",
+        );
+        write_file(
+            bob_dir,
+            "done/legacy/old_done.md",
+            "---\nparent: \"[[projects/new]]\"\n---\n\n- [x] #task Historical ^ref-shared\n",
+        );
+
+        let pairs =
+            crate::native::collect_done::ArchivePairIndex::read_vault(bob_dir)
+                .expect("pair census");
+        let taken =
+            preview_taken_for_destination(bob_dir, &destination, &pairs)
+                .expect("preview reservations");
+        assert!(taken.contains("ref-shared"));
+        let preview =
+            ref_tasks_mod::allocate_unique_block_id("ref-shared", &|id| {
+                taken.contains(id)
+            });
+        let inserted = ref_tasks_mod::insert_ref_task_with_preferred_id(
+            bob_dir,
+            &destination,
+            "- [ ] #task #ref [[ref/papers/x]] ^ref-preview",
+            &[],
+            Some("ref-shared"),
+            None,
+        )
+        .expect("execution reservation");
+        assert_eq!(preview, "ref-shared-2");
+        assert_eq!(inserted.block_id, preview);
+    }
+
+    #[test]
+    fn preview_refuses_contradictory_archive_binding() {
+        let temp = tempfile::tempdir().expect("temp vault");
+        let bob_dir = temp.path();
+        let destination = bob_dir.join("current.md");
+        write_file(
+            bob_dir,
+            "current.md",
+            "---\ndone_tasks: \"[[done/old_done]]\"\n---\n\n# Current\n",
+        );
+        write_file(bob_dir, "other.md", "# Other\n");
+        write_file(
+            bob_dir,
+            "done/old_done.md",
+            "---\nparent: \"[[other]]\"\n---\n\n- [x] #task Historical ^old-id\n",
+        );
+        let pairs =
+            crate::native::collect_done::ArchivePairIndex::read_vault(bob_dir)
+                .expect("pair census");
+        let error =
+            preview_taken_for_destination(bob_dir, &destination, &pairs)
+                .expect_err("contradictory reservations must fail closed");
+        assert!(error.message.contains("contradictory_metadata"));
     }
 }

@@ -269,6 +269,19 @@ fn collect_from_archives(
     let done_root = bob_dir.join("done");
     let mut archives = Vec::new();
     collect_done_archives(&done_root, &mut archives);
+    archives.retain(|archive| archive_mtime_in_window(archive, earliest));
+    if archives.is_empty() {
+        return;
+    }
+    let pairs = match collect_done::ArchivePairIndex::read_vault(bob_dir) {
+        Ok(pairs) => pairs,
+        Err(error) => {
+            warnings.push(capture_active_tasks::bounded_warning(format!(
+                "could not resolve done archive sources: {error}"
+            )));
+            return;
+        }
+    };
     let routes: Vec<(String, String)> = report
         .targets
         .iter()
@@ -278,13 +291,21 @@ fn collect_from_archives(
         let Ok(relative) = archive.strip_prefix(bob_dir) else {
             continue;
         };
-        if !archive_mtime_in_window(&archive, earliest) {
-            continue;
-        }
-        let Some(source) =
-            collect_done::source_relative_path_from_archive(relative)
-        else {
-            continue;
+        let source = match pairs.for_archive(relative) {
+            collect_done::ArchiveLookup::Bound(pair) => pair.source,
+            collect_done::ArchiveLookup::Orphan { .. } => continue,
+            collect_done::ArchiveLookup::Refused { reason, related } => {
+                warnings.push(capture_active_tasks::bounded_warning(format!(
+                    "could not attribute done archive {}: {reason} ({})",
+                    relative.display(),
+                    related
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                )));
+                continue;
+            }
         };
         if task_status_hooks::canonical_daily_date(&source).is_some() {
             continue;
