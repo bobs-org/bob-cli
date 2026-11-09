@@ -26,6 +26,12 @@ const RECORDS_CONFIG: &str = r#"records:
       location:
         required: true
         suggest: true
+      visited:
+        values: date
+      companions:
+        values: link
+        list: true
+        default: ["[[kelly]]"]
 "#;
 
 fn write_records_config(temp: &TempDir) -> std::path::PathBuf {
@@ -302,4 +308,135 @@ fn capture_complete_next_missing_on_a_non_record_is_empty_success() {
     assert_eq!(json["ok"], true);
     assert!(json["context"].is_null(), "{json}");
     assert_eq!(json["candidates"], serde_json::json!([]));
+}
+
+fn apply_edit(raw: &str, json: &Value) -> String {
+    let edit = &json["record"]["edit"];
+    let start = edit["replacement_range"]["start"].as_u64().unwrap() as usize;
+    let end = edit["replacement_range"]["end"].as_u64().unwrap() as usize;
+    format!(
+        "{}{}{}",
+        &raw[..start],
+        edit["replacement"].as_str().unwrap(),
+        &raw[end..]
+    )
+}
+
+#[test]
+fn capture_complete_named_field_inserts_and_reparses() {
+    let (_temp, vault, config) = fixture();
+    let draft = "Ramen Nagi @eat/";
+    let output =
+        complete(&vault, &config, draft.len(), draft, &["-F", "status"]);
+    assert_success(&output);
+    let json = json_output(&output);
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["context"], "record_value");
+    assert_eq!(json["record"]["field"], "status");
+    assert_eq!(json["record"]["assist_version"], 1);
+    let liked = find_candidate(&json, "liked");
+    assert_eq!(liked["continuation"]["next_missing_field"], true);
+    let applied = apply(draft, &json, liked["replacement"].as_str().unwrap());
+    assert_eq!(applied, "Ramen Nagi @eat/\n- status:: liked");
+    let parsed = parse(&vault, &config, &applied);
+    assert_success(&parsed);
+    let parsed_json = json_output(&parsed);
+    assert_eq!(parsed_json["record"]["assist_version"], 1);
+    let status = parsed_json["record"]["fields"]
+        .as_array()
+        .expect("fields")
+        .iter()
+        .find(|field| field["key"] == "status")
+        .expect("status");
+    assert_eq!(status["state"], "set");
+    assert_eq!(status["value"], "liked");
+}
+
+#[test]
+fn capture_complete_named_field_edit_authors_empty_optional_and_reparses() {
+    let (_temp, vault, config) = fixture();
+    let draft = "Ramen Nagi @eat/\n- leftover note";
+    let output = complete(
+        &vault,
+        &config,
+        draft.len(),
+        draft,
+        &["--record-field", "visited"],
+    );
+    assert_success(&output);
+    let json = json_output(&output);
+    assert_eq!(
+        json["record"]["edit"]["continuation"]["next_missing_field"],
+        false
+    );
+    let applied = apply_edit(draft, &json);
+    assert_eq!(applied, "Ramen Nagi @eat/\n- visited:: \n- leftover note");
+    let parsed = parse(&vault, &config, &applied);
+    assert_success(&parsed);
+    let parsed_json = json_output(&parsed);
+    let visited = parsed_json["record"]["fields"]
+        .as_array()
+        .expect("fields")
+        .iter()
+        .find(|field| field["key"] == "visited")
+        .expect("visited");
+    assert_eq!(visited["state"], "none");
+}
+
+#[test]
+fn capture_complete_named_field_edit_materializes_default() {
+    let (_temp, vault, config) = fixture();
+    let draft = "Ramen Nagi @eat/";
+    let output =
+        complete(&vault, &config, draft.len(), draft, &["-F", "companions"]);
+    assert_success(&output);
+    let json = json_output(&output);
+    let applied = apply_edit(draft, &json);
+    assert_eq!(applied, "Ramen Nagi @eat/\n- companions:: [[kelly]]");
+    let parsed = parse(&vault, &config, &applied);
+    assert_success(&parsed);
+    let parsed_json = json_output(&parsed);
+    let companions = parsed_json["record"]["fields"]
+        .as_array()
+        .expect("fields")
+        .iter()
+        .find(|field| field["key"] == "companions")
+        .expect("companions");
+    assert_eq!(companions["state"], "set");
+    assert_eq!(companions["source"], "typed");
+}
+
+#[test]
+fn capture_complete_named_field_conflicts_with_next_missing() {
+    let (_temp, vault, config) = fixture();
+    let draft = "Ramen Nagi @eat/";
+    let output =
+        complete(&vault, &config, draft.len(), draft, &["-n", "-F", "status"]);
+    assert_ne!(output.status.code(), Some(0));
+    let err = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(err.contains("cannot be used with"), "{err}");
+}
+
+#[test]
+fn capture_complete_named_field_on_a_non_record_is_empty_success() {
+    let (_temp, vault, config) = fixture();
+    let draft = "Buy milk";
+    let output =
+        complete(&vault, &config, draft.len(), draft, &["-F", "status"]);
+    assert_success(&output);
+    let json = json_output(&output);
+    assert_eq!(json["ok"], true);
+    assert!(json["context"].is_null(), "{json}");
+    assert!(json.get("record").is_none(), "{json}");
+    assert_eq!(json["candidates"], serde_json::json!([]));
+}
+
+#[test]
+fn capture_parse_record_advertises_assist_version() {
+    let (_temp, vault, config) = fixture();
+    let parsed = parse(&vault, &config, "Ramen Nagi @eat/");
+    assert_success(&parsed);
+    let json = json_output(&parsed);
+    assert_eq!(json["record"]["assist_version"], 1);
+    assert!(json.get("assist_version").is_none());
 }

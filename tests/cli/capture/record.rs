@@ -729,6 +729,7 @@ fn capture_parse_reports_record_note_wire() {
     assert_eq!(json["schema_version"], 1);
     assert_eq!(json["grammar"], 20);
     assert_eq!(json["mode"], "record_note");
+    assert_eq!(json["record"]["assist_version"], 1);
     assert_eq!(json["route"], "eat");
     assert_eq!(json["body"], "Ramen Nagi");
     let kinds: Vec<&str> = json["spans"]

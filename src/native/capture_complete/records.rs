@@ -13,11 +13,12 @@ use super::engine::CompleteRequest;
 use super::model::{
     CandidateContinuation, Candidates, CaptureCompleteDiagnostic,
     CaptureCompleteResult, CompleteError, RecordCompletionMeta,
-    RecordFieldCandidate, RecordValueCandidate, Replacement,
+    RecordEditAction, RecordFieldCandidate, RecordValueCandidate, Replacement,
 };
 use crate::native::capture_language::{
     self, candidate_collection_routes, candidate_dirs, CompletionContext,
     EditorItemParse, EditorParse, EditorParseOptions, RecordNoteIntent,
+    RECORDS_CONFIG_INVALID_CODE, RECORD_ASSIST_VERSION,
 };
 use crate::native::capture_record::{
     record_policy_for_draft, resolve_record_intents_with_catalog,
@@ -25,8 +26,8 @@ use crate::native::capture_record::{
 };
 use crate::native::records::{
     self, FieldInputState, FieldKind, FolderIndex, NearValueHint,
-    RecordCatalog, RecordField, RecordPropertyState, RecordType,
-    ValidatedFieldInput,
+    RecordCatalog, RecordDate, RecordField, RecordPropertyState, RecordScalar,
+    RecordType, RecordValue, ValidatedFieldInput,
 };
 
 thread_local! {
@@ -49,6 +50,9 @@ pub(super) fn try_complete(
     if request.next_missing_field {
         return Ok(Some(next_missing_field(request)?));
     }
+    if request.record_field.is_some() {
+        return Ok(Some(named_field(request)?));
+    }
     if candidate_dirs(request.raw_text).is_empty()
         && candidate_collection_routes(request.raw_text).is_empty()
     {
@@ -68,6 +72,36 @@ pub(super) fn next_missing_field(
         return Ok(CaptureCompleteResult::empty(request.cursor));
     };
     session.next_missing()
+}
+
+pub(super) fn named_field(
+    request: &CompleteRequest<'_>,
+) -> Result<CaptureCompleteResult, CompleteError> {
+    set_files_opened(0);
+    let key = request.record_field.unwrap_or("");
+    let policy =
+        record_policy_for_draft(request.bob_dir, None, request.raw_text);
+    if let Some(detail) = policy.config_error() {
+        let path = policy.config_path_display().unwrap_or("<config>");
+        let mut result = CaptureCompleteResult::empty(request.cursor);
+        result.diagnostics.push(CaptureCompleteDiagnostic {
+            severity: "error",
+            code: RECORDS_CONFIG_INVALID_CODE,
+            message: format!(
+                "records config `{path}` is invalid: {detail}; fix the \
+                 `records:` block and retry"
+            ),
+            range: None,
+            field: Some(key.to_string()),
+            authored: None,
+            proposed: None,
+        });
+        return Ok(result);
+    }
+    let Some(mut session) = Session::open(request) else {
+        return Ok(CaptureCompleteResult::empty(request.cursor));
+    };
+    session.named_field(key)
 }
 
 struct Session<'a> {
@@ -173,6 +207,51 @@ impl<'a> Session<'a> {
                 };
                 self.value_menu(&item, &intent, probe)?
             };
+        set_files_opened(self.catalog.files_opened());
+        Ok(result)
+    }
+
+    fn named_field(
+        &mut self,
+        key: &str,
+    ) -> Result<CaptureCompleteResult, CompleteError> {
+        let Some((item, intent)) = self.record_item() else {
+            set_files_opened(self.catalog.files_opened());
+            return Ok(CaptureCompleteResult::empty(self.request.cursor));
+        };
+        let item = item.clone();
+        let Some(intent) = intent.cloned() else {
+            set_files_opened(self.catalog.files_opened());
+            return Ok(CaptureCompleteResult::empty(self.request.cursor));
+        };
+        let Some(record_type) = self.record_type(&intent) else {
+            set_files_opened(self.catalog.files_opened());
+            return Ok(CaptureCompleteResult::empty(self.request.cursor));
+        };
+        let entry = self.plan_entry(&intent);
+        let Some(field) = record_type.field(key).cloned() else {
+            let mut result = self.finish(
+                &item,
+                &intent,
+                CompletionContext::RecordValue,
+                self.request.cursor..self.request.cursor,
+                Candidates::RecordValue(Vec::new()),
+                None,
+                Some(key.to_string()),
+                &entry,
+            );
+            result
+                .diagnostics
+                .push(unknown_field_diagnostic(key, &record_type));
+            set_files_opened(self.catalog.files_opened());
+            return Ok(result);
+        };
+        let probe = named_value_probe(self.request, &item, &intent, &field);
+        let mut result = self.value_menu(&item, &intent, probe.clone())?;
+        if let Some(record) = result.record.as_mut() {
+            record.edit =
+                Some(record_edit_action(self.request, &item, &probe, &entry));
+        }
         set_files_opened(self.catalog.files_opened());
         Ok(result)
     }
@@ -447,6 +526,8 @@ impl<'a> Session<'a> {
             emoji: entry.record_type.emoji.clone(),
             field,
             title: (!intent.title.is_empty()).then(|| intent.title.clone()),
+            assist_version: Some(RECORD_ASSIST_VERSION),
+            edit: None,
         });
         result.diagnostics =
             near_diagnostics(self.request.raw_text, &entry.near_values);
@@ -460,6 +541,7 @@ struct FieldKeyProbe {
     replace: Range<usize>,
 }
 
+#[derive(Clone)]
 struct ValueProbe {
     field: RecordField,
     query: String,
@@ -594,6 +676,182 @@ fn value_probe(
         });
     }
     None
+}
+
+fn named_value_probe(
+    request: &CompleteRequest<'_>,
+    item: &EditorItemParse,
+    intent: &RecordNoteIntent,
+    field: &RecordField,
+) -> ValueProbe {
+    let authored: Vec<_> = intent
+        .fields
+        .iter()
+        .filter(|input| input.key == field.key)
+        .collect();
+    if authored.is_empty() {
+        let at = insert_point_after_fields(request.raw_text, item, intent);
+        return ValueProbe {
+            field: field.clone(),
+            query: String::new(),
+            replace: at..at,
+            insert_bullet: Some(field.key.clone()),
+        };
+    }
+    let selected = authored
+        .iter()
+        .copied()
+        .find(|input| caret_in_field_value(request, input))
+        .unwrap_or(authored[authored.len() - 1]);
+    if field.list {
+        let cursor = if caret_in_field_value(request, selected) {
+            request.cursor
+        } else {
+            selected.value_range.1
+        };
+        let (member_start, member_end) = list_member_at(
+            request.raw_text,
+            selected.value_range.0,
+            selected.value_range.1,
+            cursor,
+        );
+        return ValueProbe {
+            field: field.clone(),
+            query: String::new(),
+            replace: member_start..member_end,
+            insert_bullet: None,
+        };
+    }
+    ValueProbe {
+        field: field.clone(),
+        query: String::new(),
+        replace: selected.value_range.0..selected.value_range.1,
+        insert_bullet: None,
+    }
+}
+
+fn caret_in_field_value(
+    request: &CompleteRequest<'_>,
+    input: &crate::native::capture_language::record::RecordFieldInput,
+) -> bool {
+    let value_start = input.value_range.0;
+    let value_end = input.value_range.1;
+    let colon_end = input.key_range.1 + 2;
+    let cursor = request.cursor;
+    cursor >= colon_end.min(value_start) && cursor <= value_end.max(colon_end)
+}
+
+fn record_edit_action(
+    request: &CompleteRequest<'_>,
+    item: &EditorItemParse,
+    probe: &ValueProbe,
+    entry: &RecordParseEntry,
+) -> RecordEditAction {
+    let newline = item_newline(request.raw_text, item.start..item.end);
+    if let Some(key) = probe.insert_bullet.as_deref() {
+        let defaulted = entry.properties.iter().any(|property| {
+            property.key == key
+                && property.state == RecordPropertyState::Default
+        });
+        let spelling = if defaulted {
+            probe
+                .field
+                .default
+                .as_ref()
+                .map(capture_value_spelling)
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let replacement = value_insert_text(
+            request.raw_text,
+            &probe.replace,
+            &spelling,
+            Some(key),
+            newline,
+        );
+        let cursor_after =
+            edit_value_cursor(probe.replace.start, &replacement, &spelling);
+        return RecordEditAction {
+            replacement_range: Replacement {
+                start: probe.replace.start,
+                end: probe.replace.end,
+            },
+            replacement,
+            cursor_after,
+            continuation: CandidateContinuation {
+                cursor: cursor_after,
+                next_missing_field: false,
+            },
+        };
+    }
+    let current = request
+        .raw_text
+        .get(probe.replace.clone())
+        .unwrap_or("")
+        .to_string();
+    RecordEditAction {
+        replacement_range: Replacement {
+            start: probe.replace.start,
+            end: probe.replace.end,
+        },
+        replacement: current,
+        cursor_after: probe.replace.start,
+        continuation: CandidateContinuation {
+            cursor: probe.replace.start,
+            next_missing_field: false,
+        },
+    }
+}
+
+fn edit_value_cursor(replace_start: usize, insert: &str, value: &str) -> usize {
+    let trimmed = insert.trim_end_matches(['\n', '\r']);
+    replace_start + trimmed.len().saturating_sub(value.len())
+}
+
+fn capture_value_spelling(value: &RecordValue) -> String {
+    let one = |scalar: &RecordScalar| match scalar {
+        RecordScalar::Text(text)
+        | RecordScalar::Choice(text)
+        | RecordScalar::Link(text) => text.clone(),
+        RecordScalar::Date(RecordDate::Resolved(date)) => {
+            date.format("%Y-%m-%d").to_string()
+        }
+        RecordScalar::Date(RecordDate::Today) => "today".to_owned(),
+        RecordScalar::Date(RecordDate::Yesterday) => "yesterday".to_owned(),
+        RecordScalar::Url(url) => url.to_string(),
+        RecordScalar::Number(number) => number.to_string(),
+    };
+    match value {
+        RecordValue::Scalar(scalar) => one(scalar),
+        RecordValue::List(values) => {
+            values.iter().map(one).collect::<Vec<_>>().join(", ")
+        }
+    }
+}
+
+fn unknown_field_diagnostic(
+    key: &str,
+    record_type: &RecordType,
+) -> CaptureCompleteDiagnostic {
+    let fields = record_type
+        .fields
+        .iter()
+        .map(|field| field.key.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    CaptureCompleteDiagnostic {
+        severity: "error",
+        code: "record_unknown_field",
+        message: format!(
+            "`{key}` is not a {} field; fields: {fields}",
+            record_type.label
+        ),
+        range: None,
+        field: Some(key.to_string()),
+        authored: Some(key.to_string()),
+        proposed: None,
+    }
 }
 
 fn list_member_at(

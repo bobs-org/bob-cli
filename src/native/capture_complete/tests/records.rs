@@ -4,14 +4,18 @@ use super::super::{
     engine::{build_result, build_result_for, CompleteRequest},
     model::{
         CandidateContinuation, Candidates, CaptureCompleteResult,
-        RecordValueCandidate, Replacement, RouteCandidateKind, SectionMenuRow,
+        RecordEditAction, RecordValueCandidate, Replacement,
+        RouteCandidateKind, SectionMenuRow,
     },
     records::last_catalog_files_opened,
     render::candidate_lines,
     shell::shell_completion,
 };
 use super::{write_file, TempDir};
-use crate::native::{capture_language::CompletionContext, env::TestEnvGuard};
+use crate::native::capture_language::{
+    CompletionContext, RECORDS_CONFIG_INVALID_CODE, RECORD_ASSIST_VERSION,
+};
+use crate::native::env::TestEnvGuard;
 use std::ffi::OsStr;
 use std::path::Path;
 
@@ -46,6 +50,10 @@ const RECORDS_CONFIG: &str = r#"records:
         values: number
       related:
         values: link
+      companions:
+        values: link
+        list: true
+        default: ["[[kelly]]"]
 "#;
 
 struct RecordVault {
@@ -77,33 +85,44 @@ impl RecordVault {
     }
 
     fn complete(&self, raw: &str, cursor: usize) -> CaptureCompleteResult {
-        self.complete_for(raw, cursor, false)
+        self.request(raw, cursor, false, None)
     }
 
     fn next_missing(&self, raw: &str, cursor: usize) -> CaptureCompleteResult {
-        self.complete_for(raw, cursor, true)
+        self.request(raw, cursor, true, None)
     }
 
-    fn complete_for(
+    fn named_field(
+        &self,
+        raw: &str,
+        cursor: usize,
+        key: &str,
+    ) -> CaptureCompleteResult {
+        self.request(raw, cursor, false, Some(key))
+    }
+
+    fn request(
         &self,
         raw: &str,
         cursor: usize,
         next_missing: bool,
+        record_field: Option<&str>,
     ) -> CaptureCompleteResult {
         let _guard = TestEnvGuard::set(&[
             ("BOB_CONFIG_FILE", Some(self.config.as_os_str())),
             ("BOB_NOW", Some(OsStr::new(NOW))),
         ]);
-        if next_missing {
+        if next_missing || record_field.is_some() {
             build_result_for(&CompleteRequest {
                 bob_dir: self.path(),
                 raw_text: raw,
                 cursor,
                 all_tasks: false,
                 closed_tasks: false,
-                next_missing_field: true,
+                next_missing_field: next_missing,
+                record_field,
             })
-            .expect("next-missing complete")
+            .expect("targeted complete")
         } else {
             build_result(self.path(), raw, cursor, false, false)
                 .expect("complete")
@@ -122,6 +141,23 @@ fn apply(
         replacement,
         &raw[result.replacement.end..]
     )
+}
+
+fn apply_edit(raw: &str, edit: &RecordEditAction) -> String {
+    format!(
+        "{}{}{}",
+        &raw[..edit.replacement_range.start],
+        edit.replacement,
+        &raw[edit.replacement_range.end..]
+    )
+}
+
+fn record_edit(result: &CaptureCompleteResult) -> &RecordEditAction {
+    result
+        .record
+        .as_ref()
+        .and_then(|meta| meta.edit.as_ref())
+        .expect("record.edit")
 }
 
 fn value_rows(result: &CaptureCompleteResult) -> &[RecordValueCandidate] {
@@ -443,6 +479,9 @@ fn template_argument_rows_are_not_record_items() {
     assert!(value.context.is_none(), "{value:?}");
     let next = vault.next_missing(raw, cursor);
     assert!(next.context.is_none(), "{next:?}");
+    let named = vault.named_field(raw, cursor, "status");
+    assert!(named.context.is_none(), "{named:?}");
+    assert!(named.record.is_none());
 }
 
 #[test]
@@ -484,4 +523,274 @@ fn shell_record_route_strips_the_trailing_space() {
         .unwrap_or_else(|| panic!("missing @eat/: {completion:?}"));
     assert!(!eat.nospace, "{eat:?}");
     assert_eq!(eat.group, "records");
+}
+
+#[test]
+fn named_field_opens_an_unfiltered_value_menu_without_a_bullet() {
+    let vault = RecordVault::new("bob-cli-complete-named-status");
+    let raw = "Ramen Nagi @eat/";
+    let value = vault.named_field(raw, raw.len(), "status");
+    assert_eq!(value.context, Some(CompletionContext::RecordValue));
+    let meta = value.record.as_ref().expect("record");
+    assert_eq!(meta.field.as_deref(), Some("status"));
+    assert_eq!(meta.assist_version, Some(RECORD_ASSIST_VERSION));
+    let rows = value_rows(&value);
+    let values: Vec<&str> = rows.iter().map(|row| row.value.as_str()).collect();
+    assert_eq!(values, ["to_try", "liked"], "{values:?}");
+    let liked = find_value(rows, "liked");
+    assert!(liked
+        .continuation
+        .as_ref()
+        .is_some_and(|c| c.next_missing_field));
+    let applied = apply(raw, &value, &liked.replacement);
+    assert_eq!(applied, "Ramen Nagi @eat/\n- status:: liked");
+}
+
+#[test]
+fn named_field_edit_authors_an_empty_optional_bullet() {
+    let vault = RecordVault::new("bob-cli-complete-named-optional");
+    let raw = "Ramen Nagi @eat/\n- leftover note";
+    let value = vault.named_field(raw, raw.len(), "visited");
+    assert_eq!(value.context, Some(CompletionContext::RecordValue));
+    let dates: Vec<&str> = value_rows(&value)
+        .iter()
+        .map(|row| row.value.as_str())
+        .collect();
+    assert_eq!(dates, ["today", "yesterday"], "{dates:?}");
+    let edit = record_edit(&value);
+    assert!(!edit.continuation.next_missing_field);
+    let applied = apply_edit(raw, edit);
+    assert_eq!(applied, "Ramen Nagi @eat/\n- visited:: \n- leftover note");
+    assert_eq!(
+        &applied[..edit.cursor_after],
+        "Ramen Nagi @eat/\n- visited:: "
+    );
+    let again = vault.complete(&applied, edit.cursor_after);
+    assert_eq!(again.context, Some(CompletionContext::RecordValue));
+    assert_eq!(
+        again.record.as_ref().and_then(|meta| meta.field.as_deref()),
+        Some("visited")
+    );
+}
+
+#[test]
+fn named_field_edit_materializes_the_default_spelling() {
+    let vault = RecordVault::new("bob-cli-complete-named-default");
+    let raw = "Ramen Nagi @eat/";
+    let value = vault.named_field(raw, raw.len(), "companions");
+    let edit = record_edit(&value);
+    let applied = apply_edit(raw, edit);
+    assert_eq!(applied, "Ramen Nagi @eat/\n- companions:: [[kelly]]");
+    assert_eq!(&applied[edit.cursor_after..], "[[kelly]]");
+    assert!(!edit.continuation.next_missing_field);
+}
+
+#[test]
+fn named_field_empty_suggested_text_folder_still_has_edit() {
+    let vault = RecordVault::new("bob-cli-complete-named-empty-folder");
+    let raw = "Ramen Nagi @eat/";
+    let value = vault.named_field(raw, raw.len(), "category");
+    assert_eq!(value.context, Some(CompletionContext::RecordValue));
+    assert!(value_rows(&value).is_empty(), "{value:?}");
+    let edit = record_edit(&value);
+    let applied = apply_edit(raw, edit);
+    assert_eq!(applied, "Ramen Nagi @eat/\n- category:: ");
+}
+
+#[test]
+fn named_field_on_an_invalid_value_is_unfiltered() {
+    let vault = RecordVault::new("bob-cli-complete-named-invalid");
+    let raw = "Ramen Nagi @eat/\n- status:: bogus";
+    let caret = vault.complete(raw, raw.len());
+    assert!(
+        value_rows(&caret).iter().all(|row| row.value != "liked"),
+        "caret completion should filter by the authored value: {caret:?}"
+    );
+    let value = vault.named_field(raw, raw.len(), "status");
+    let rows = value_rows(&value);
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.value.as_str())
+            .collect::<Vec<_>>(),
+        ["to_try", "liked"]
+    );
+    let edit = record_edit(&value);
+    assert_eq!(apply_edit(raw, edit), raw);
+    assert_eq!(&raw[edit.cursor_after..], "bogus");
+}
+
+#[test]
+fn named_field_preserves_an_explicit_empty() {
+    let vault = RecordVault::new("bob-cli-complete-named-empty");
+    let raw = "Ramen Nagi @eat/\n- visited:: ";
+    let value = vault.named_field(raw, raw.len(), "visited");
+    let edit = record_edit(&value);
+    assert_eq!(apply_edit(raw, edit), raw);
+    let today = find_value(value_rows(&value), "today");
+    let applied = apply(raw, &value, &today.replacement);
+    assert_eq!(applied, "Ramen Nagi @eat/\n- visited:: today");
+}
+
+#[test]
+fn named_field_list_uses_caret_member_else_the_final_member() {
+    let vault = RecordVault::new("bob-cli-complete-named-list");
+    write_file(
+        &vault.path().join("eat/nagi.md"),
+        "---\nparent: \"[[eat]]\"\ntype: \"[[restaurant]]\"\n\
+         title: Nagi\nstatus: liked\ncategory: Ramen\nlocation: Clark\n\
+         tags: soup\n---\n# Nagi\n",
+    );
+    let raw = "Ramen Nagi @eat/\n- tags:: hot, so";
+    let in_first = raw.find("hot").expect("hot");
+    let first = vault.named_field(raw, in_first, "tags");
+    let soup = find_value(value_rows(&first), "soup");
+    assert_eq!(
+        apply(raw, &first, &soup.replacement),
+        "Ramen Nagi @eat/\n- tags:: soup, so"
+    );
+    let last = vault.named_field(raw, raw.find('@').expect("route"), "tags");
+    let soup = find_value(value_rows(&last), "soup");
+    assert_eq!(
+        apply(raw, &last, &soup.replacement),
+        "Ramen Nagi @eat/\n- tags:: hot, soup"
+    );
+}
+
+#[test]
+fn named_field_crlf_inserts_crlf_bullets() {
+    let vault = RecordVault::new("bob-cli-complete-named-crlf");
+    let draft = "Ramen Nagi @eat/\r\n- keep this note";
+    let value = vault.named_field(draft, draft.len(), "status");
+    let liked = find_value(value_rows(&value), "liked");
+    assert!(liked.replacement.contains("\r\n"), "{}", liked.replacement);
+    assert_eq!(
+        apply(draft, &value, &liked.replacement),
+        "Ramen Nagi @eat/\r\n- status:: liked\r\n- keep this note"
+    );
+    let edit = record_edit(&value);
+    assert!(edit.replacement.contains("\r\n"), "{}", edit.replacement);
+    assert_eq!(
+        apply_edit(draft, edit),
+        "Ramen Nagi @eat/\r\n- status:: \r\n- keep this note"
+    );
+}
+
+#[test]
+fn named_field_unicode_prefix_keeps_byte_offsets() {
+    let vault = RecordVault::new("bob-cli-complete-named-unicode");
+    let raw = "🎉 party\n\nRamen Nagi @eat/";
+    let value = vault.named_field(raw, raw.len(), "status");
+    let liked = find_value(value_rows(&value), "liked");
+    assert_eq!(
+        apply(raw, &value, &liked.replacement),
+        "🎉 party\n\nRamen Nagi @eat/\n- status:: liked"
+    );
+}
+
+#[test]
+fn named_field_targets_the_record_item_containing_the_cursor() {
+    let vault = RecordVault::new("bob-cli-complete-named-multi");
+    let raw = "First @eat/\n\nSecond @eat/";
+    let first_cursor = raw.find('\n').expect("split");
+    let first = vault.named_field(raw, first_cursor, "status");
+    let liked = find_value(value_rows(&first), "liked");
+    assert_eq!(
+        apply(raw, &first, &liked.replacement),
+        "First @eat/\n- status:: liked\n\nSecond @eat/"
+    );
+    let second = vault.named_field(raw, raw.len(), "status");
+    let liked = find_value(value_rows(&second), "liked");
+    assert_eq!(
+        apply(raw, &second, &liked.replacement),
+        "First @eat/\n\nSecond @eat/\n- status:: liked"
+    );
+}
+
+#[test]
+fn named_field_unknown_is_read_only() {
+    let vault = RecordVault::new("bob-cli-complete-named-unknown");
+    let raw = "Ramen Nagi @eat/";
+    let value = vault.named_field(raw, raw.len(), "occasion");
+    assert_eq!(value.context, Some(CompletionContext::RecordValue));
+    assert!(value_rows(&value).is_empty());
+    assert!(value
+        .record
+        .as_ref()
+        .is_some_and(|meta| meta.edit.is_none()));
+    assert!(
+        value.diagnostics.iter().any(|diag| {
+            diag.code == "record_unknown_field"
+                && diag.field.as_deref() == Some("occasion")
+        }),
+        "{:?}",
+        value.diagnostics
+    );
+    assert_eq!(apply(raw, &value, ""), raw);
+}
+
+#[test]
+fn named_field_on_a_non_record_is_empty_success() {
+    let vault = RecordVault::new("bob-cli-complete-named-non-record");
+    let raw = "Buy milk";
+    let value = vault.named_field(raw, raw.len(), "status");
+    assert!(value.context.is_none(), "{value:?}");
+    assert!(value.record.is_none());
+    assert_eq!(last_catalog_files_opened(), 0);
+}
+
+#[test]
+fn named_field_does_not_fall_into_task_completion() {
+    let vault = RecordVault::new("bob-cli-complete-named-task-link");
+    let raw = "Follow up :";
+    let value = vault.named_field(raw, raw.len(), "status");
+    assert!(value.context.is_none(), "{value:?}");
+    assert!(value.record.is_none());
+    assert!(
+        matches!(value.candidates, Candidates::Route(ref rows) if rows.is_empty())
+    );
+}
+
+#[test]
+fn named_field_malformed_config_is_read_only() {
+    let vault = RecordVault::new("bob-cli-complete-named-malformed");
+    write_file(&vault.config, "records: []\n");
+    let raw = "Ramen Nagi @eat/";
+    let value = vault.named_field(raw, raw.len(), "status");
+    assert!(value.context.is_none(), "{value:?}");
+    assert!(value.record.is_none());
+    assert!(
+        value.diagnostics.iter().any(|diag| {
+            diag.code == RECORDS_CONFIG_INVALID_CODE
+                && diag.field.as_deref() == Some("status")
+        }),
+        "{:?}",
+        value.diagnostics
+    );
+    assert_eq!(apply(raw, &value, ""), raw);
+}
+
+#[test]
+fn named_field_missing_title_still_addresses_the_field() {
+    let vault = RecordVault::new("bob-cli-complete-named-title");
+    let raw = "@eat/";
+    let value = vault.named_field(raw, raw.len(), "status");
+    assert_eq!(value.context, Some(CompletionContext::RecordValue));
+    assert!(find_value(value_rows(&value), "liked")
+        .continuation
+        .as_ref()
+        .is_some_and(|c| c.next_missing_field));
+}
+
+#[test]
+fn caret_and_next_missing_advertise_assist_version_without_edit() {
+    let vault = RecordVault::new("bob-cli-complete-assist-version");
+    let raw = "Ramen Nagi @eat/\n- status:: ";
+    let caret = vault.complete(raw, raw.len());
+    let meta = caret.record.as_ref().expect("record");
+    assert_eq!(meta.assist_version, Some(RECORD_ASSIST_VERSION));
+    assert!(meta.edit.is_none());
+    let next = vault.next_missing("Ramen Nagi @eat/", "Ramen Nagi @eat/".len());
+    let meta = next.record.as_ref().expect("record");
+    assert_eq!(meta.assist_version, Some(RECORD_ASSIST_VERSION));
+    assert!(meta.edit.is_none());
 }

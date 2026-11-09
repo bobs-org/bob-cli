@@ -48,6 +48,9 @@ pub(crate) const RECORD_FOLDER_NOT_RECORD_CODE: &str =
 pub(crate) const RECORD_TYPE_AS_FOLDER_CODE: &str = "record_type_as_folder";
 /// Strict refusal for record candidates under a malformed records block.
 pub(crate) const RECORDS_CONFIG_INVALID_CODE: &str = "records_config_invalid";
+/// Additive assist contract for named-field addressing and `record.edit`.
+/// Present on parse record objects and record completion metadata.
+pub(crate) const RECORD_ASSIST_VERSION: u32 = 1;
 
 /// Immutable record route policy, built outside the grammar (which never
 /// touches the filesystem or the config). Callers memoize one policy per
@@ -137,6 +140,14 @@ impl RecordRoutePolicy {
 
     pub(crate) fn records_config(&self) -> Option<&RecordsConfig> {
         self.records_config.as_ref()
+    }
+
+    pub(crate) fn config_error(&self) -> Option<&str> {
+        self.config_error.as_deref()
+    }
+
+    pub(crate) fn config_path_display(&self) -> Option<&str> {
+        self.config_path.as_deref()
     }
 
     pub(crate) fn vault_root(&self) -> Option<&Path> {

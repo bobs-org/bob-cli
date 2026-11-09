@@ -44,6 +44,7 @@ pub(super) struct CompleteRequest<'a> {
     pub(super) all_tasks: bool,
     pub(super) closed_tasks: bool,
     pub(super) next_missing_field: bool,
+    pub(super) record_field: Option<&'a str>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -61,6 +62,7 @@ pub(super) fn build_result(
         all_tasks,
         closed_tasks,
         next_missing_field: false,
+        record_field: None,
     })
 }
 
@@ -78,6 +80,11 @@ pub(super) fn build_result_for(
     }
     if request.next_missing_field {
         let mut result = super::records::next_missing_field(request)?;
+        result.initial_selection = initial_selection(request.raw_text, &result);
+        return Ok(result);
+    }
+    if request.record_field.is_some() {
+        let mut result = super::records::named_field(request)?;
         result.initial_selection = initial_selection(request.raw_text, &result);
         return Ok(result);
     }

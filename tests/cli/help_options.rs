@@ -199,6 +199,7 @@ fn capture_complete_help_lists_options_alphabetically() {
             "-f, --format",
             "-h, --help",
             "-n, --next-missing-field",
+            "-F, --record-field",
         ],
     );
     assert_stdout_has_no_ansi(&output);

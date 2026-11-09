@@ -637,6 +637,13 @@ const TABLE: &[Entry] = &[
         arg: "query",
         kind: Kind::FreeText,
     },
+    // Named Record Card field key; the live complete request, not this
+    // argv slot, is what offers field values.
+    Entry {
+        path: &["capture-complete"],
+        arg: "record-field",
+        kind: Kind::FreeText,
+    },
     Entry {
         path: &[],
         arg: "email",

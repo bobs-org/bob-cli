@@ -6529,17 +6529,33 @@ inserts `@eat/ ` with a trailing space and a candidate
 missing required field of that item. `-n/--next-missing-field` is the same
 request at an explicit cursor: satisfied defaults count as present; an
 explicit empty required field stays missing; a complete record, non-record
-item, or separator returns empty success.
+item, or separator returns empty success. `-F/--record-field KEY` is
+mutually exclusive with `-n` and targets a declared field on that same
+item even when no bullet exists. The named-field value menu is unfiltered
+(caret-based completion still filters by the authored value). A missing
+field inserts at the end of the field block; a set field uses the existing
+value/member replacement, taking the list member under the caret when the
+caret is in that value and otherwise the final authored member. Named-field
+responses include `record.edit`, Bob's explicit edit-in-draft action:
+an absent field gets an empty `- key:: ` bullet, a defaulted field
+materializes the server's default spelling, and an authored field keeps its
+bytes with the caret in the selected value. `record.edit` carries ordinary
+value-completion continuation (`next_missing_field: false`) even when
+value suggestions are empty; clients must not apply it merely because a
+response refreshed. Unknown fields, non-record cursors, and malformed
+`records:` config stay read-only (empty success plus the usual diagnostic
+codes) and never fall through to a task completion context.
 
 On `Ramen Nagi @eat/`, `-n` offers status choices in schema order. Accepting
 `Liked` inserts `- status:: liked` after the field block (or after the
 parent when none exists), then opens category, then location. The last
-required value omits `continuation`. A fresh first-level `- ` offers field
-names, required first, then optional keys still available for override
-(defaulted keys stay listed and marked defaulted). A caret inside an
-existing `key:: value` opens that field's value menu without previous menu
-state. List members replace only the member under the caret. All
-replacements are ordinary visible draft edits.
+required value omits `continuation`. `-F visited` on the same draft opens
+the date menu and `record.edit` that inserts `- visited:: `. A fresh
+first-level `- ` offers field names, required first, then optional keys
+still available for override (defaulted keys stay listed and marked
+defaulted). A caret inside an existing `key:: value` opens that field's
+value menu without previous menu state. List members replace only the
+member under the caret. All replacements are ordinary visible draft edits.
 
 Value menus follow the field kind: choices in schema order after query
 filter; suggested open text as collapsed folder values (Westfield and
@@ -9203,7 +9219,7 @@ prints a dim `no rewrite` line plus the notices.
 ## `bob capture-complete`
 
 ```bash
-bob capture-complete --cursor BYTE [-a|--all-tasks] [-b|--bob-dir DIR] [-C|--closed-tasks] [-f|--format human|json] [-n|--next-missing-field] [--] [TEXT]...
+bob capture-complete --cursor BYTE [-a|--all-tasks] [-b|--bob-dir DIR] [-C|--closed-tasks] [-f|--format human|json] [-n|--next-missing-field] [-F|--record-field KEY] [--] [TEXT]...
 ```
 
 In a `<` source slot, `< +` / `< +query` opens the
@@ -9556,20 +9572,25 @@ keys first, schema order within each group. Record value completion
 (`record_value`) covers the caret inside a `key:: value` (and the list
 member under the caret) and `-n/--next-missing-field`, which asks for the
 first missing required field in schema order of the record item containing
-`--cursor`. Satisfied defaults count as present; an explicit empty required
-field stays missing. Accepting a field name lands in `key:: ` and requests
-ordinary value completion (`continuation.next_missing_field: false`);
-accepting a route, create row, or value requests the next missing field
-when any remain. Candidate `continuation: {cursor, next_missing_field}` is
-that follow-up request, computed from the resulting field state, and is
-separate from picker `continuation`. The last required value omits it.
-Responses add `record` metadata (type, dir, label, optional field/title)
-only in these contexts. A near-spelling warning uses code
-`record_value_near` with `authored` and `proposed` on complete (parse
-reports the same message and code with no rewrite). Configured record
-folders in the local route menu insert `eat/ ` (trailing space), label
-`🍽️ New restaurant · 92`, and the same next-field continuation. See
-[Guided fields](#guided-fields).
+`--cursor`. `-F/--record-field KEY` targets that declared field even when
+no bullet exists, returns the unfiltered value menu, and adds
+`record.edit` (Bob-authored `replacement_range` / `replacement` /
+`cursor_after`, ordinary value-completion continuation). Satisfied defaults
+count as present; an explicit empty required field stays missing. Accepting
+a field name lands in `key:: ` and requests ordinary value completion
+(`continuation.next_missing_field: false`); accepting a route, create row,
+or value requests the next missing field when any remain. Candidate
+`continuation: {cursor, next_missing_field}` is that follow-up request,
+computed from the resulting field state, and is separate from picker
+`continuation`. The last required value omits it. Responses add `record`
+metadata (type, dir, label, optional field/title, `assist_version: 1`) only
+in these contexts; `record.edit` is present only on named-field responses.
+Parse record objects carry the same `assist_version: 1`. A near-spelling
+warning uses code `record_value_near` with `authored` and `proposed` on
+complete (parse reports the same message and code with no rewrite).
+Configured record folders in the local route menu insert `eat/ ` (trailing
+space), label `🍽️ New restaurant · 92`, and the same next-field
+continuation. See [Guided fields](#guided-fields).
 
 Every successful `capture-parse` and `capture-complete` response includes
 top-level `grammar: 20`; `schema_version` remains 1. An empty query opened by a

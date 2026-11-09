@@ -887,6 +887,8 @@ struct ParseRecord {
     missing: Vec<String>,
     notes: usize,
     fields: Vec<ParseRecordField>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    assist_version: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -3142,6 +3144,7 @@ fn parse_record(
             .map(|group| group.lines.len())
             .sum(),
         fields: entry.properties.iter().map(parse_record_field).collect(),
+        assist_version: Some(super::capture_language::RECORD_ASSIST_VERSION),
     }
 }
 

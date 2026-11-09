@@ -162,6 +162,17 @@ pub(super) struct RecordValueCandidate {
     pub(super) continuation: Option<CandidateContinuation>,
 }
 
+/// Explicit "edit in draft" action for a named field request. Separate
+/// from ranked value candidates so empty entry never masquerades as a
+/// valid choice or auto-advances.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RecordEditAction {
+    pub(super) replacement_range: Replacement,
+    pub(super) replacement: String,
+    pub(super) cursor_after: usize,
+    pub(super) continuation: CandidateContinuation,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct RecordCompletionMeta {
     #[serde(rename = "type")]
@@ -174,6 +185,10 @@ pub(super) struct RecordCompletionMeta {
     pub(super) field: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) assist_version: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) edit: Option<RecordEditAction>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -186,6 +186,8 @@ pub(crate) use self::record::candidate_collection_routes;
 pub(crate) use self::record::candidate_dirs;
 pub(crate) use self::record::RecordNoteIntent;
 pub(crate) use self::record::RecordRoutePolicy;
+pub(crate) use self::record::RECORDS_CONFIG_INVALID_CODE;
+pub(crate) use self::record::RECORD_ASSIST_VERSION;
 pub(crate) use self::rewrite::rewrite_draft;
 pub(crate) use self::rewrite::DraftRewrite;
 pub(crate) use self::rewrite::RewriteRule;
