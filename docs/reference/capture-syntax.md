@@ -989,9 +989,9 @@ Contract: [Starting the next Pomodoro](../capture.md#starting-the-next-pomodoro)
 
 ### `x` {#x-close}
 
-Lowercase `x` closes today's timed Pomodoro. Numeric lists defer unlisted ordinary
-plain links; Event Tasks keep their [clock outcomes](../capture.md#event-task-links-close-by-the-clock).
-Authored markers stay. Order is free; `0` selects none; `@<N>` puts the keep-list last.
+`x` closes today's timed Pomodoro. Numeric lists defer unlisted links; Event Tasks keep
+[clock outcomes](../capture.md#event-task-links-close-by-the-clock).
+Authored markers stay. Order is free; `0` selects none; `@<N>` keep-list last.
 
 ```bash
 bob capture --dry-run 'x'
@@ -1003,8 +1003,9 @@ bob capture --dry-run 'x'
   next: WORK (created) at line 10 · carries 1 link
 ```
 
-A mid-body `x` stays prose (`Plan x`). `xx`, `x-ray`, and capital `X` never
-close.
+Mid-body `x` is prose. Grammar/paste/`capture-parse`/`bob capture` never close
+`xx`, `x-ray`, or capital `X`; Mac typing maps eligible `xx`/`xs` to `x!`/`x*`
+([sigil alias](../capture.md#bob-capture-rewrite)).
 
 Contract: [Closing the running Pomodoro](../capture.md#closing-the-running-pomodoro).
 
