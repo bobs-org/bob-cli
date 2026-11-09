@@ -396,6 +396,72 @@ fn capture_rewrite_json_expands_a_dot_route_alias() {
 }
 
 #[test]
+fn capture_rewrite_json_expands_a_dot_dependency_alias() {
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg("7")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@home .")
+        .output()
+        .expect("run bob capture-rewrite . alias");
+
+    assert_success(&output);
+    assert!(stderr(&output).is_empty(), "{}", format_output(&output));
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["input"], "@home .");
+    assert_eq!(json["text"], "@home &");
+    assert_eq!(json["changed"], true);
+    assert_eq!(json["cursor"], 7);
+    assert_eq!(json["rule"], "expand_sigil_alias");
+    assert_eq!(
+        json["edits"],
+        serde_json::json!([
+            { "range": { "start": 6, "end": 7 }, "replacement": "&" },
+        ])
+    );
+    assert_eq!(json["summary"], "Typed & for .");
+}
+
+#[test]
+fn capture_rewrite_json_expands_a_semicolon_blocked_task_alias() {
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg("10")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Buy milk ;")
+        .output()
+        .expect("run bob capture-rewrite ; alias");
+
+    assert_success(&output);
+    assert!(stderr(&output).is_empty(), "{}", format_output(&output));
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["input"], "Buy milk ;");
+    assert_eq!(json["text"], "Buy milk *");
+    assert_eq!(json["changed"], true);
+    assert_eq!(json["cursor"], 10);
+    assert_eq!(json["rule"], "expand_sigil_alias");
+    assert_eq!(
+        json["edits"],
+        serde_json::json!([
+            { "range": { "start": 9, "end": 10 }, "replacement": "*" },
+        ])
+    );
+    assert_eq!(json["summary"], "Typed * for ;");
+}
+
+#[test]
 fn capture_rewrite_json_leaves_a_third_at_alone() {
     let output = bob_command()
         .arg("capture-rewrite")

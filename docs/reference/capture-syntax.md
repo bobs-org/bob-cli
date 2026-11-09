@@ -101,7 +101,7 @@ incomplete **picker** input is refused.
 | --- | --- | --- |
 | `+` | `+[N]`, `++[N]`, `+query` | Resize, shift, or open the parent-task picker |
 | `,` | Parent Task picker positions only | Alias `+`; after a complete target run, insert ` +` to open the next picker |
-| `.` | Right after `@route`; after a space following text | Alias `^`; alias `@` |
+| `.` | Right after `@route`; after a space following text | Alias `^`, `@`, or `&`; spaced `;` aliases `*` |
 | `+` | `@route+id`; typed-last owner; after `#name` | Child/Ensure Next, typed-last alias, or name suffix |
 | `%n` | Item edge | Pomodoro note |
 | `#` | `@route#Section`, edge `#type`, existing-task `#type` | Heading, task type, or retype |
@@ -130,8 +130,8 @@ becomes `@route:id`, `!note:id`, `&note:id`, `*note:id`,
 `=#`) are incomplete too. A bare `=name` start is complete (`=bugs`); an empty `=#` needs a non-bare name (`pomodoro_name`).
 
 A signed count with extra prose (`+2 more`, `=3 more`) is an error.
-A sign or `=` followed by prose (`Plan +5`, `= foo`) stays task text. Capital `X` never closes; `X *job:cleanup` is how you capture a
-task that must start with the word `x`.
+A sign or `=` followed by prose (`Plan +5`, `= foo`) stays task text. Capital `X` never closes; `X *job:cleanup` captures a
+task starting with the word `x`.
 
 ## Retired and rejected forms
 
@@ -166,7 +166,7 @@ Contract: [Retired close spellings](../capture.md#retired-close-spellings).
 `x=E[s][!][=X]` records a past Pomodoro. `E` is empty (25 minutes), a
 positive count, or a name. Counts can go before or after bare names
 (`x=3fix`, `x=fix3`); names with `-`, a trailing digit or `+`, or close
-shape use `#` (`x=#c++`). `@N` timing is retired. Records stack backward from the
+shape use `#` (`x=#c++`). Records stack backward from the
 next five-minute boundary unless a segment suffix (`~…`) places them;
 `!` permits trimming an older closed edge. See the
 [past Pomodoro contract](../capture.md#placing-it-on-todays-timeline).
@@ -380,7 +380,8 @@ Contract: [Bulk templates](../capture.md#bulk-templates).
 ## Block IDs and linked tasks
 
 Mac Capture uses `capture-rewrite` for `@route.` / `@route;` → `^` / `:`,
-whole-item `;` → `:`, and spaced `.` → `@`; direct input stays literal.
+whole-item `;` → `:`, spaced `.` → `@`, and spaced `.` / `;` → `&` / `*`;
+direct input stays literal.
 
 ### `@route^block-id` {#at-route-caret}
 
@@ -460,7 +461,7 @@ Contract: [Starting the session atomically](../capture.md#starting-the-session-a
 
 ### `@route:block-id` with no other text {#link-existing}
 
-Link the existing `^block-id` task in `route.md` into today's ledger. No new
+Link the existing `^block-id` task in `route.md` into today's ledger. No
 task is created. A task Blocked only by its own prerequisites drops those
 links first, then the gesture runs. `=<X>` starts the resolved session.
 

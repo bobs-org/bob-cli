@@ -17,6 +17,9 @@ key. The aliases:
   `- ;` opens the Move picker and `- ^.` gives `- ^^`.
 - `.` → `@` after body text and a space or tab, wherever a bare `@` opens route
   completion (`Buy milk .` → `Buy milk @`).
+- `.` → `&` and `;` → `*` after text or a marker and a space or tab, where a bare `&` /
+  `*` opens the Depends On / Blocks picker and no `^`, `@`, or `:` alias applies
+  (`@home .` → `@home &`, `Buy milk ;` → `Buy milk *`; `Buy milk .` stays `@`).
 - `,` → `+` wherever the Parent Task picker would open (`@cash,` → `@cash+`); glued to a
   complete `@route+id` target, it inserts ` +` for the next pick.
 - `\` or `/` → `#` wherever a `#` menu would open (task type, section, Pomodoro name,

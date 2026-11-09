@@ -917,7 +917,6 @@ fn rewrite_draft_dot_route_alias_stays_literal() {
         ("=deep .", 7),
         ("+5 .", 4),
         ("x log work .", 12),
-        ("@sase Buy milk .", 16),
         ("run `cargo .", 12),
         ("see [[foo .", 11),
         ("Fix ((foo .", 11),
@@ -940,6 +939,130 @@ fn rewrite_draft_dot_route_alias_stays_literal() {
     let rewrite = rewrite_draft(raw, Some(raw.len()));
     assert_eq!(rewrite.rule, None);
     assert_eq!(rewrite.text, raw);
+}
+
+/// Assert one `expand_sigil_alias` rewrite: rule, text, cursor, the single
+/// one-byte edit at the typed key, the summary, and that rewriting the output
+/// is a no-op.
+fn assert_modifier_alias(raw: &str, expected: &str, key: &str, sigil: &str) {
+    let cursor = raw.len();
+    assert!(raw.is_char_boundary(cursor), "{raw:?}");
+    let rewrite = rewrite_draft(raw, Some(cursor));
+    assert_eq!(rewrite.rule, Some(RewriteRule::ExpandSigilAlias), "{raw:?}");
+    assert_eq!(rewrite.text, expected, "{raw:?}");
+    assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
+    assert_eq!(
+        rewrite.summary.as_deref(),
+        Some(format!("Typed {sigil} for {key}").as_str()),
+        "{raw:?}"
+    );
+    assert_eq!(rewrite.edits.len(), 1, "{raw:?}");
+    assert_eq!(rewrite.edits[0].start, cursor - 1, "{raw:?}");
+    assert_eq!(rewrite.edits[0].end, cursor, "{raw:?}");
+    assert_eq!(rewrite.edits[0].replacement, sigil, "{raw:?}");
+    assert!(raw.is_char_boundary(rewrite.edits[0].start), "{raw:?}");
+
+    let again = rewrite_draft(&rewrite.text, rewrite.cursor);
+    assert_eq!(again.rule, None, "idempotent {raw:?}");
+    assert_eq!(again.text, expected, "idempotent {raw:?}");
+}
+
+#[test]
+fn rewrite_draft_expands_dot_dependency_alias() {
+    for (raw, expected) in [
+        ("@home .", "@home &"),
+        ("@home\t.", "@home\t&"),
+        ("@sase Buy milk .", "@sase Buy milk &"),
+        ("@sase Buy #fix .", "@sase Buy #fix &"),
+        ("@sase Buy &foo:bar .", "@sase Buy &foo:bar &"),
+        ("@sase:abc .", "@sase:abc &"),
+        ("@home Caf\u{e9} .", "@home Caf\u{e9} &"),
+        ("@sase Buy\n\n@home Fix .", "@sase Buy\n\n@home Fix &"),
+    ] {
+        assert_modifier_alias(raw, expected, ".", "&");
+    }
+}
+
+#[test]
+fn rewrite_draft_expands_semicolon_blocked_task_alias() {
+    for (raw, expected) in [
+        ("Buy milk ;", "Buy milk *"),
+        ("Buy milk\t;", "Buy milk\t*"),
+        ("@home ;", "@home *"),
+        ("@sase Buy #fix ;", "@sase Buy #fix *"),
+        ("Buy &foo:bar ;", "Buy &foo:bar *"),
+        ("Buy milk *foo:bar ;", "Buy milk *foo:bar *"),
+        ("Buy milk\n- note ;", "Buy milk\n- note *"),
+        ("- [ ] Buy ;", "- [ ] Buy *"),
+        ("Buy milk 2026-11-10 ;", "Buy milk 2026-11-10 *"),
+        ("^sase:abc ;", "^sase:abc *"),
+        ("Buy milk\n\nFix it ;", "Buy milk\n\nFix it *"),
+        ("Caf\u{e9} run ;", "Caf\u{e9} run *"),
+    ] {
+        assert_modifier_alias(raw, expected, ";", "*");
+    }
+}
+
+#[test]
+fn rewrite_draft_modifier_aliases_keep_existing_alias_precedence() {
+    for (raw, expected, key, sigil) in [
+        ("Buy milk .", "Buy milk @", ".", "@"),
+        ("Buy &foo:bar .", "Buy &foo:bar @", ".", "@"),
+        ("@errands.", "@errands^", ".", "^"),
+        ("@cash^goog-exit@\n- .", "@cash^goog-exit@\n- ^", ".", "^"),
+        (";", ":", ";", ":"),
+        ("  ;", "  :", ";", ":"),
+        ("@errands;", "@errands:", ";", ":"),
+        ("@cash:goog-exit@\n- ;", "@cash:goog-exit@\n- :", ";", ":"),
+    ] {
+        assert_modifier_alias(raw, expected, key, sigil);
+    }
+}
+
+#[test]
+fn rewrite_draft_modifier_aliases_stay_literal() {
+    let mut cases = vec![
+        ("- ;", 3),
+        ("- [ ] ;", 7),
+        ("Buy milk\n;", "Buy milk\n;".len()),
+        ("Buy milk;", "Buy milk;".len()),
+        ("Buy\n  - foo ;", "Buy\n  - foo ;".len()),
+        ("@cash\n- ;", "@cash\n- ;".len()),
+        ("x ;", 3),
+        ("=deep ;", 7),
+        ("+5 ;", 4),
+        ("x log work ;", 12),
+        ("@a+x > @db ;", 12),
+        ("run `cargo ;", 12),
+        ("see [[foo ;", 11),
+        ("Fix ((foo ;", 11),
+        ("@sase Fix `code .", 17),
+        ("@sase see [[foo .", 17),
+        ("@cash\n- .", "@cash\n- .".len()),
+    ];
+    for raw in ["Buy ; milk", "Buy ;foo"] {
+        cases.push((raw, raw.find(';').expect("semicolon") + 1));
+    }
+    for raw in ["@sase Buy . milk", "@sase Buy .foo"] {
+        cases.push((raw, raw.find('.').expect("dot") + 1));
+    }
+    for (raw, cursor) in cases {
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(rewrite.rule, None, "{raw:?} at {cursor}");
+        assert_eq!(rewrite.text, raw, "{raw:?} at {cursor}");
+    }
+
+    for raw in ["Buy milk ;", "@sase Buy milk ."] {
+        let rewrite = rewrite_draft(raw, None);
+        assert_eq!(rewrite.rule, None, "no cursor {raw:?}");
+        assert_eq!(rewrite.text, raw, "no cursor {raw:?}");
+    }
+
+    for raw in ["Task {0} %t\n\nBuy milk ;", "Task {0} %t\n\n@sase Buy ."] {
+        let rewrite = rewrite_draft(raw, Some(raw.len()));
+        assert_eq!(rewrite.rule, None, "template {raw:?}");
+        assert_eq!(rewrite.text, raw, "template {raw:?}");
+    }
 }
 
 #[test]

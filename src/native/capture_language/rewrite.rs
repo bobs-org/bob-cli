@@ -138,6 +138,13 @@ pub(crate) fn rewrite_draft(
 /// task checkbox). A lowercase `x` or `s` that
 /// ends a close selection aliases `!` or `*`. Everywhere else `=` stays
 /// literal, including inside a wikilink.
+///
+/// Two completion-gated fallbacks run after every rule above, so they never
+/// change an existing alias. A spaced `.` that did not become `^` or `@`
+/// aliases `&` wherever a bare `&` would open the Depends On picker, and a
+/// spaced `;` that did not become `:` aliases `*` wherever a bare `*` would
+/// open the Blocks picker. Both share the spaced `.` -> `@` position guard,
+/// so a line-initial `.` or `;` stays literal.
 fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
     let start = cursor.checked_sub(1)?;
     let alias = raw_text.get(start..cursor)?;
@@ -162,15 +169,31 @@ fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
     }
     if alias == "." {
         return expand_dot_block_id_alias(raw_text, start, cursor)
-            .or_else(|| expand_dot_route_alias(raw_text, start, cursor));
+            .or_else(|| expand_dot_route_alias(raw_text, start, cursor))
+            .or_else(|| expand_dot_dependency_alias(raw_text, start, cursor));
     }
+    if alias == ";" {
+        return expand_semicolon_colon_alias(raw_text, start, cursor).or_else(
+            || expand_semicolon_blocked_task_alias(raw_text, start, cursor),
+        );
+    }
+    None
+}
+
+/// Typing `;` where `:` would open a Pomodoro Block ID, Task Link, or Move
+/// picker aliases `:`. Everywhere else the `;` handling falls through to
+/// [`expand_semicolon_blocked_task_alias`].
+fn expand_semicolon_colon_alias(
+    raw_text: &str,
+    start: usize,
+    cursor: usize,
+) -> Option<DraftRewrite> {
+    let sigil = ':';
+    let alias = ";";
+    let allowed_context = super::completion::CompletionContext::PomodoroBlockId;
     let token = tokenize_with_spans(raw_text)
         .into_iter()
         .find(|token| token.end == cursor)?;
-    let (sigil, allowed_context) = match alias {
-        ";" => (':', super::completion::CompletionContext::PomodoroBlockId),
-        _ => return None,
-    };
     if token.end != cursor {
         return None;
     }
@@ -196,8 +219,7 @@ fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
     }
     // Choice alias: `.` that completes a `- ^^` marker while the picker is
     // closed. `;` never aliases here: `- ::` is the `move_choice_colon`
-    // teaching error. (This tail is now only reachable for `;`,
-    // which never aliases here.)
+    // teaching error.
     None
 }
 
@@ -283,7 +305,7 @@ fn expand_dot_route_alias(
     start: usize,
     cursor: usize,
 ) -> Option<DraftRewrite> {
-    if !dot_route_alias_position_ok(raw_text, start) {
+    if !spaced_alias_position_ok(raw_text, start) {
         return None;
     }
     if tokenize_with_spans(raw_text)
@@ -305,6 +327,77 @@ fn expand_dot_route_alias(
     }
     Some(finish_sigil_alias(
         raw_text, &candidate, start, cursor, '@', ".",
+    ))
+}
+
+/// Typing `.` after a space or tab that follows body text, where neither `^`
+/// nor `@` applies, aliases `&` only where a bare `&` would open the Depends
+/// On picker. Item and bullet starts stay literal, like the `.` -> `@` alias.
+fn expand_dot_dependency_alias(
+    raw_text: &str,
+    start: usize,
+    cursor: usize,
+) -> Option<DraftRewrite> {
+    expand_modifier_fallback_alias(
+        raw_text,
+        start,
+        cursor,
+        '&',
+        ".",
+        super::completion::CompletionContext::TaskDependency,
+    )
+}
+
+/// Typing `;` after a space or tab that follows body text, where `:` does not
+/// apply, aliases `*` only where a bare `*` would open the Blocks picker. A
+/// line-initial `*` is a Markdown bullet, so those positions stay literal.
+fn expand_semicolon_blocked_task_alias(
+    raw_text: &str,
+    start: usize,
+    cursor: usize,
+) -> Option<DraftRewrite> {
+    expand_modifier_fallback_alias(
+        raw_text,
+        start,
+        cursor,
+        '*',
+        ";",
+        super::completion::CompletionContext::BlockedTask,
+    )
+}
+
+/// Shared gate for the `&` and `*` fallbacks: the spaced position guard, a
+/// whole-token key ending at the cursor, no wikilink claim, and Bob's own
+/// completion grammar opening exactly the wanted picker on the sigil byte.
+/// The grammar is followed as-is; the alias adds no exclusions of its own.
+fn expand_modifier_fallback_alias(
+    raw_text: &str,
+    start: usize,
+    cursor: usize,
+    sigil: char,
+    alias: &str,
+    wanted: super::completion::CompletionContext,
+) -> Option<DraftRewrite> {
+    if !spaced_alias_position_ok(raw_text, start) {
+        return None;
+    }
+    if tokenize_with_spans(raw_text)
+        .into_iter()
+        .all(|token| token.end != cursor)
+    {
+        return None;
+    }
+    let mut candidate = raw_text.to_string();
+    candidate.replace_range(start..cursor, &sigil.to_string());
+    if wikilink_claims(&candidate, cursor) {
+        return None;
+    }
+    let field = super::completion::completion_field_at(&candidate, cursor)?;
+    if field.context != wanted || field.replacement != (start, cursor) {
+        return None;
+    }
+    Some(finish_sigil_alias(
+        raw_text, &candidate, start, cursor, sigil, alias,
     ))
 }
 
@@ -537,10 +630,10 @@ fn relation_alias_position_ok(raw_text: &str, alias_start: usize) -> bool {
     sigil_alias_position_ok(raw_text, alias_start, false)
 }
 
-/// Spaced `.` aliases `@` everywhere `=` aliases `~`, except after a bare
-/// task checkbox: `- [ ] .` keeps its literal dot while `- [ ] =` still
-/// becomes `- [ ] ~`.
-fn dot_route_alias_position_ok(raw_text: &str, alias_start: usize) -> bool {
+/// Spaced `.` and `;` aliases (`@`, `&`, `*`) fire everywhere `=` aliases
+/// `~`, except after a bare task checkbox: `- [ ] .` keeps its literal dot
+/// while `- [ ] =` still becomes `- [ ] ~`.
+fn spaced_alias_position_ok(raw_text: &str, alias_start: usize) -> bool {
     sigil_alias_position_ok(raw_text, alias_start, true)
 }
 
