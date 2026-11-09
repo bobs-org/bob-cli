@@ -479,7 +479,7 @@ fn append_record_targets(
     targets: &mut Vec<CaptureTarget>,
 ) {
     let Ok(records) =
-        super::config::records::load_records_config_from(&config_path)
+        super::config::records::load_records_config_from(config_path)
     else {
         return;
     };

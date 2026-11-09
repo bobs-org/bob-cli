@@ -1081,6 +1081,7 @@ pub(super) fn plan_pomodoro_start_item(
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             note_pull: None,
+            record_note: None,
             task_theme: None,
             type_relocation: None,
             ok: true,
@@ -1338,6 +1339,7 @@ fn plan_override_restart_item(
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             note_pull: None,
+            record_note: None,
             task_theme: None,
             type_relocation: None,
             ok: true,
@@ -1954,6 +1956,7 @@ fn plan_override_swap_item(
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             note_pull: None,
+            record_note: None,
             task_theme: None,
             type_relocation: None,
             ok: true,
@@ -2750,6 +2753,7 @@ fn plan_named_pomodoro_start_item(
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             note_pull: None,
+            record_note: None,
             task_theme: None,
             type_relocation: None,
             ok: true,

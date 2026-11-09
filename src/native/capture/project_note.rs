@@ -1709,6 +1709,7 @@ pub(super) fn plan_project_note_item(
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             note_pull: None,
+            record_note: None,
             task_theme,
             type_relocation: None,
             ok: true,

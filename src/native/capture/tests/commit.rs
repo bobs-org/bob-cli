@@ -202,6 +202,45 @@ fn new_note_install_refuses_when_file_lands_between_check_and_install() {
 }
 
 #[test]
+fn new_note_creates_missing_parent_directory() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let created = dir.path().join("eat").join("ramen_nagi.md");
+    let contents = "# Ramen Nagi\n";
+    write_staged_files(&[staged_new(&created, contents)])
+        .expect("new note creates missing parent");
+    assert_eq!(
+        fs::read_to_string(&created).expect("read created"),
+        contents
+    );
+    assert!(dir.path().join("eat").is_dir());
+    no_capture_litter(&dir.path().join("eat"));
+}
+
+#[test]
+fn new_note_install_race_in_missing_parent_preserves_foreign_bytes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let created = dir.path().join("eat").join("ramen_nagi.md");
+    let contents = "# Ramen Nagi\n";
+    let intervening = "# someone else\n";
+    PLANT_BEFORE_INSTALL.with(|plant| {
+        *plant.borrow_mut() = Some((created.clone(), intervening.to_string()));
+    });
+    let error = write_staged_files(&[staged_new(&created, contents)])
+        .expect_err("intervening create at install refuses");
+    PLANT_BEFORE_INSTALL.with(|plant| *plant.borrow_mut() = None);
+    assert_eq!(error.typed, Some(CaptureFailureKind::NoteChanged));
+    assert_eq!(
+        fs::read_to_string(&created).expect("read created"),
+        intervening,
+        "foreign bytes survive"
+    );
+    assert!(
+        dir.path().join("eat").is_dir(),
+        "planted file keeps the created folder"
+    );
+}
+
+#[test]
 fn new_note_install_commits_missing_target() {
     let dir = tempfile::tempdir().expect("tempdir");
     let created = dir.path().join("created.md");

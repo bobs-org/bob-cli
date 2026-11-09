@@ -119,27 +119,15 @@ pub(crate) fn resolve_record_intents(
         let Some(record_type) = config.by_directory(&intent.dir) else {
             continue;
         };
-        let field_inputs = intent
-            .fields
-            .iter()
-            .map(|field| RecordFieldInput {
-                key: field.key.clone(),
-                state: if field.value.is_empty() {
-                    FieldInputState::SuppliedEmpty
-                } else {
-                    FieldInputState::SuppliedValues(vec![field.value.clone()])
-                },
-                source_range: Some(field.value_range.0..field.value_range.1),
-            })
-            .collect::<Vec<_>>();
-        let no_notes: Vec<RecordNoteInput> = Vec::new();
+        let field_inputs = field_inputs_from_intent(intent);
+        let notes = record_note_inputs(intent);
         let request = records::RecordCreateRequest {
             config,
             record_type: &record_type.id,
             title: &intent.title,
             explicit_stem: intent.explicit_stem.as_deref(),
             fields: &field_inputs,
-            notes: &no_notes,
+            notes: &notes,
             now,
             timezone,
             vault_root,
@@ -165,7 +153,7 @@ pub(crate) fn resolve_record_intents(
                 let field_plan =
                     records::plan_fields(record_type, &field_inputs, today);
                 let (stem, stem_source, path) =
-                    resolved_destination(intent, &record_type);
+                    resolved_destination(intent, record_type);
                 if error.code != RecordPlanErrorCode::PathCollision
                     && let Some(path) = path.as_ref()
                 {
@@ -181,7 +169,7 @@ pub(crate) fn resolve_record_intents(
                     properties: field_plan.properties,
                     missing: field_plan.missing,
                     invalid: field_plan.invalid,
-                    plan_issue: Some(plan_issue(error, intent, &record_type)),
+                    plan_issue: Some(plan_issue(error, intent, record_type)),
                 });
             }
         }
@@ -212,6 +200,84 @@ fn resolved_destination(
     (stem, source, path)
 }
 
+/// Convert parsed field bullets into engine inputs. Repeated list
+/// bullets stay separate so `plan_create` can combine them.
+pub(crate) fn field_inputs_from_intent(
+    intent: &RecordNoteIntent,
+) -> Vec<RecordFieldInput> {
+    intent
+        .fields
+        .iter()
+        .map(|field| RecordFieldInput {
+            key: field.key.clone(),
+            state: if field.value.is_empty() {
+                FieldInputState::SuppliedEmpty
+            } else {
+                FieldInputState::SuppliedValues(vec![field.value.clone()])
+            },
+            source_range: Some(field.value_range.0..field.value_range.1),
+        })
+        .collect()
+}
+
+/// Convert grouped capture notes into engine note inputs. ALL-CAPS
+/// sections become one section input with flattened children; ordinary
+/// groups become one input per first-level line.
+pub(crate) fn record_note_inputs(
+    intent: &RecordNoteIntent,
+) -> Vec<RecordNoteInput> {
+    let mut inputs = Vec::new();
+    for group in &intent.notes {
+        if let Some(section) = group.section.as_deref() {
+            let mut children = Vec::new();
+            for line in &group.lines {
+                children.push(line.text.clone());
+                children.extend(note_child_texts(&line.children));
+            }
+            inputs.push(RecordNoteInput::section(section, children));
+        } else {
+            for line in &group.lines {
+                inputs.push(RecordNoteInput {
+                    text: line.text.clone(),
+                    children: note_child_texts(&line.children),
+                });
+            }
+        }
+    }
+    inputs
+}
+
+fn note_child_texts(
+    lines: &[crate::native::capture_language::record::RecordNoteLine],
+) -> Vec<String> {
+    lines.iter().map(|line| line.text.clone()).collect()
+}
+
+/// Teaching copy for a path collision: name the existing file and the
+/// reserved update spelling without enabling an update.
+pub(crate) fn collision_message(
+    error: &RecordPlanError,
+    intent: &RecordNoteIntent,
+    record_type: &RecordType,
+) -> String {
+    let path = error
+        .paths
+        .first()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "the requested path".to_string());
+    let stem = error
+        .paths
+        .first()
+        .and_then(|path| path.file_stem())
+        .and_then(|stem| stem.to_str())
+        .or(intent.explicit_stem.as_deref())
+        .unwrap_or("<stem>");
+    format!(
+        "record already exists: {path} (open it; adding to it with `@{}/{stem}` comes later)",
+        record_type.dir,
+    )
+}
+
 fn plan_issue(
     error: RecordPlanError,
     intent: &RecordNoteIntent,
@@ -220,22 +286,7 @@ fn plan_issue(
     let code = error.code.diagnostic_code();
     let message = match error.code {
         RecordPlanErrorCode::PathCollision => {
-            let path = error
-                .paths
-                .first()
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|| "the requested path".to_string());
-            let stem = error
-                .paths
-                .first()
-                .and_then(|path| path.file_stem())
-                .and_then(|stem| stem.to_str())
-                .or(intent.explicit_stem.as_deref())
-                .unwrap_or("<stem>");
-            format!(
-                "record already exists: {path} (open it; adding to it with `@{}/{stem}` comes later)",
-                record_type.dir,
-            )
+            collision_message(&error, intent, record_type)
         }
         _ => error.message,
     };

@@ -186,7 +186,6 @@ pub(crate) use self::project_tasks::split_leading_checkbox;
 pub(crate) use self::record::candidate_collection_routes;
 pub(crate) use self::record::candidate_dirs;
 pub(crate) use self::record::RecordRoutePolicy;
-pub(crate) use self::record::RECORD_EXECUTION_UNWIRED_MESSAGE;
 pub(crate) use self::rewrite::rewrite_draft;
 pub(crate) use self::rewrite::DraftRewrite;
 pub(crate) use self::rewrite::RewriteRule;

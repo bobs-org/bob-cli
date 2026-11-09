@@ -83,10 +83,12 @@ pub(crate) fn run_show(args: Vec<OsString>) -> i32 {
                     let choices: Vec<Value> = match &field.kind {
                         FieldKind::Choices(choices) => choices
                             .iter()
-                            .map(|choice| json!({
-                                "value": choice.value,
-                                "label": choice.label,
-                            }))
+                            .map(|choice| {
+                                json!({
+                                    "value": choice.value,
+                                    "label": choice.label,
+                                })
+                            })
                             .collect(),
                         _ => Vec::new(),
                     };
@@ -95,10 +97,12 @@ pub(crate) fn run_show(args: Vec<OsString>) -> i32 {
                             .value_suggestions(&field.key)
                             .into_iter()
                             .take(5)
-                            .map(|value| json!({
-                                "value": value.insert,
-                                "count": value.count,
-                            }))
+                            .map(|value| {
+                                json!({
+                                    "value": value.insert,
+                                    "count": value.count,
+                                })
+                            })
                             .collect()
                     } else {
                         Vec::new()
@@ -109,7 +113,7 @@ pub(crate) fn run_show(args: Vec<OsString>) -> i32 {
                         "kind": kind,
                         "required": field.required,
                         "list": field.list,
-                        "default": field.default.as_ref().map(|value| value_display(value)),
+                        "default": field.default.as_ref().map(value_display),
                         "choices": choices,
                         "top_values": top_values,
                     })

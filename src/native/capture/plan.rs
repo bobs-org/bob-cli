@@ -181,6 +181,9 @@ pub(super) fn plan_capture_batch_with_config_path(
     let gmail_context = parsed_items
         .iter()
         .any(|item| {
+            if matches!(item.parsed.kind, CaptureKind::RecordNote { .. }) {
+                return false;
+            }
             !crate::native::gmail::ids::find_gmail_urls(&item.parsed.body)
                 .is_empty()
                 || item.parsed.sub_bullets.iter().any(|bullet| {
@@ -196,6 +199,9 @@ pub(super) fn plan_capture_batch_with_config_path(
     let gmail_previews: Vec<_> = parsed_items
         .iter_mut()
         .map(|item| {
+            if matches!(item.parsed.kind, CaptureKind::RecordNote { .. }) {
+                return Vec::new();
+            }
             let Some(context) = &gmail_context else {
                 return Vec::new();
             };
@@ -1463,6 +1469,7 @@ fn plan_ref_item(
     let planned = PlannedCaptureItem {
         result: CaptureItemResult {
             note_pull: None,
+            record_note: None,
             task_theme: None,
             type_relocation: None,
             ok: true,
@@ -1704,13 +1711,15 @@ pub(super) fn plan_capture_item(
     earlier_items: &[PlannedCaptureItem],
     project_moves: &[ProjectMoveLanding],
 ) -> Result<PlannedCaptureItem, CaptureError> {
-    // Claimed record notes refuse fail-closed until the `record-writes`
-    // phase lands: they never create an inbox task.
     if matches!(parsed_item.parsed.kind, CaptureKind::RecordNote { .. }) {
-        return Err(CaptureError::usage(
-            crate::native::capture_language::RECORD_EXECUTION_UNWIRED_MESSAGE
-                .to_string(),
-        ));
+        return plan_record_note_item(
+            request,
+            parsed_item,
+            now,
+            today,
+            planner,
+            config_path,
+        );
     }
     // Staged `>` transfers run before every other planner: a bare-note
     // destination moves through `batch_move`; other destinations merge.
@@ -2073,6 +2082,7 @@ pub(super) fn plan_capture_item(
         let mut planned = PlannedCaptureItem {
             result: CaptureItemResult {
                 note_pull: None,
+                record_note: None,
                 ok: true,
                 dry_run: request.dry_run,
                 routed: true,
@@ -2553,7 +2563,7 @@ pub(super) fn plan_capture_item(
             unreachable!("reference capture is planned before this point")
         }
         CaptureKind::RecordNote { .. } => {
-            unreachable!("record capture is refused before this point")
+            unreachable!("record capture is planned by plan_record_note_item")
         }
         CaptureKind::NotePull { .. } => {
             unreachable!("note-pull capture is planned by plan_note_pull_item")
@@ -3070,6 +3080,7 @@ pub(super) fn plan_capture_item(
             return Ok(PlannedCaptureItem {
                 result: CaptureItemResult {
                     note_pull: None,
+                    record_note: None,
                     ok: true,
                     dry_run: request.dry_run,
                     routed: parsed.route.is_some(),
@@ -3977,6 +3988,7 @@ pub(super) fn plan_capture_item(
     let mut planned = PlannedCaptureItem {
         result: CaptureItemResult {
             note_pull: None,
+            record_note: None,
             ok: true,
             dry_run: request.dry_run,
             routed: parsed.route.is_some(),
@@ -5254,6 +5266,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             note_pull: None,
+            record_note: None,
             ok: true,
             dry_run: request.dry_run,
             routed: parsed.route.is_some(),

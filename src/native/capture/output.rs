@@ -539,6 +539,10 @@ pub(super) struct CaptureResult {
     /// Additive and omitted when empty, so older decoders stay valid.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) type_agreement: Vec<TypeAgreementJson>,
+    /// Planned record files this batch creates. Additive: omitted when
+    /// empty so older capture JSON stays byte-identical.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) note_files: Vec<NoteFileJson>,
 }
 
 /// One Pomodoro name agreement applied to today's daily note.
@@ -575,6 +579,14 @@ impl CaptureResult {
         move_choice: super::move_choice::MoveChoiceReport,
         type_agreement: Vec<TypeAgreementJson>,
     ) -> Self {
+        let note_files = items
+            .iter()
+            .filter_map(|item| {
+                item.record_note
+                    .as_ref()
+                    .map(|summary| summary.note_file.clone())
+            })
+            .collect();
         let item = items
             .first()
             .cloned()
@@ -601,6 +613,7 @@ impl CaptureResult {
             inbox_route,
             move_choice,
             type_agreement,
+            note_files,
         }
     }
 }
@@ -922,6 +935,46 @@ pub(super) struct CaptureItemResult {
     /// (`docs/task-dependencies.md` §12.20). Additive: omitted otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) note_pull: Option<NotePullSummaryJson>,
+    /// Record-note summary used for human output and to collect
+    /// top-level `note_files`. Never serialized on the item.
+    #[serde(skip)]
+    pub(super) record_note: Option<RecordNoteSummary>,
+}
+
+/// One planned record file in top-level `note_files`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct NoteFileJson {
+    pub(super) path: String,
+    pub(super) action: &'static str,
+    pub(super) record_type: String,
+    pub(super) properties: Vec<NoteFilePropertyJson>,
+    pub(super) body: String,
+    pub(super) markdown: String,
+}
+
+/// One schema property on a planned record file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct NoteFilePropertyJson {
+    pub(super) key: String,
+    pub(super) label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) display: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) source: Option<&'static str>,
+}
+
+/// Human-facing record create summary plus the `note_files` row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RecordNoteSummary {
+    pub(super) emoji: Option<String>,
+    pub(super) label: String,
+    pub(super) path: String,
+    pub(super) notes: usize,
+    pub(super) properties: Vec<NoteFilePropertyJson>,
+    pub(super) markdown: String,
+    pub(super) note_file: NoteFileJson,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -3847,6 +3900,19 @@ pub(super) fn print_human_item_success(
             result, reference, &styler, &prefix, &ordinal,
         );
         print_consumed_links(result, &styler);
+        return;
+    }
+    if result.kind == "record_note"
+        && let Some(record) = result.record_note.as_ref()
+    {
+        print_human_record_note_success(
+            result,
+            record,
+            &styler,
+            &prefix,
+            &ordinal,
+            &target_label,
+        );
         return;
     }
     if result.note_pull.is_some() {
@@ -7072,6 +7138,43 @@ pub(super) fn success_json(result: &CaptureResult) -> String {
     serde_json::to_string(&value).expect("serialize capture result JSON")
 }
 
+fn print_human_record_note_success(
+    result: &CaptureItemResult,
+    record: &RecordNoteSummary,
+    styler: &Styler,
+    prefix: &str,
+    ordinal: &str,
+    target_label: &str,
+) {
+    let emoji = record
+        .emoji
+        .as_deref()
+        .map(|emoji| format!("{emoji} "))
+        .unwrap_or_default();
+    let kind = record.label.to_lowercase();
+    if result.dry_run {
+        println!(
+            "{prefix} would create  {ordinal}{emoji}new {kind}  {target_label}"
+        );
+        print!("{}", record.markdown);
+        if !record.markdown.ends_with('\n') {
+            println!();
+        }
+        return;
+    }
+    println!("{prefix} {emoji}new {kind}  {ordinal}{target_label}");
+    for property in &record.properties {
+        let Some(display) = property.display.as_deref() else {
+            continue;
+        };
+        println!("  {}  {}", styler.dim(&property.label), display);
+    }
+    if record.notes > 0 {
+        let word = if record.notes == 1 { "note" } else { "notes" };
+        println!("  {}", styler.dim(&format!("{} {word}", record.notes)));
+    }
+}
+
 pub(super) fn print_capture_error(
     error: CaptureError,
     output_format: OutputFormat,
@@ -7079,6 +7182,25 @@ pub(super) fn print_capture_error(
     match output_format {
         OutputFormat::Human => {
             eprintln!("{COMMAND_NAME}: {}", error.message);
+            if let Some(extra) = &error.extra {
+                if let Some(draft) =
+                    extra.get("draft").and_then(|value| value.as_str())
+                {
+                    eprintln!("{draft}");
+                }
+                if let Some(invalid) =
+                    extra.get("invalid").and_then(|value| value.as_array())
+                {
+                    for diagnostic in invalid {
+                        if let Some(message) = diagnostic
+                            .get("message")
+                            .and_then(|value| value.as_str())
+                        {
+                            eprintln!("  error: {message}");
+                        }
+                    }
+                }
+            }
             if !error.human_unblocked.is_empty()
                 || !error.human_note_pull_rows.is_empty()
             {
@@ -7862,6 +7984,7 @@ mod tests {
     fn minimal_result() -> CaptureItemResult {
         CaptureItemResult {
             note_pull: None,
+            record_note: None,
             task_theme: None,
             type_relocation: None,
             ok: true,

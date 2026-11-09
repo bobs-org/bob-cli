@@ -246,6 +246,7 @@ fn write_staged_files_guarded(
     validate_reads()?;
     // Refuse a stale batch before creating any temporary files.
     validate_disk_preimages(files)?;
+    let created_dirs = ensure_new_file_parents(files)?;
     let mut pending = Vec::new();
     for (index, staged) in files.iter().enumerate() {
         let role = format!("batch-{index}");
@@ -257,6 +258,7 @@ fn write_staged_files_guarded(
             Ok(path) => path,
             Err(error) => {
                 cleanup_pending_text_files(&pending);
+                rollback_created_dirs(&created_dirs);
                 return Err(error);
             }
         };
@@ -270,6 +272,7 @@ fn write_staged_files_guarded(
                 Err(error) => {
                     remove_temporary_file(&temporary);
                     cleanup_pending_text_files(&pending);
+                    rollback_created_dirs(&created_dirs);
                     return Err(error);
                 }
             }
@@ -289,6 +292,7 @@ fn write_staged_files_guarded(
         validate_reads().and_then(|()| validate_disk_preimages(files))
     {
         cleanup_pending_text_files(&pending);
+        rollback_created_dirs(&created_dirs);
         return Err(error);
     }
 
@@ -305,6 +309,7 @@ fn write_staged_files_guarded(
                 pending_file,
                 &pending,
                 &applied,
+                &created_dirs,
             ));
         }
         #[cfg(test)]
@@ -314,6 +319,7 @@ fn write_staged_files_guarded(
                 pending_file,
                 &pending,
                 &applied,
+                &created_dirs,
             ));
         }
         #[cfg(test)]
@@ -326,6 +332,7 @@ fn write_staged_files_guarded(
                 pending_file,
                 &pending,
                 &applied,
+                &created_dirs,
             ));
         }
         applied.push(AppliedTextFile {
@@ -343,11 +350,63 @@ fn write_staged_files_guarded(
     Ok(())
 }
 
+fn ensure_new_file_parents(
+    files: &[StagedTextFile],
+) -> Result<Vec<PathBuf>, CaptureError> {
+    let mut created = Vec::new();
+    for staged in files {
+        if staged.target_existed {
+            continue;
+        }
+        let Some(parent) = staged.target.parent() else {
+            continue;
+        };
+        if parent.as_os_str().is_empty() || parent.exists() {
+            continue;
+        }
+        let mut missing = Vec::new();
+        let mut cursor = parent;
+        loop {
+            if cursor.exists() {
+                break;
+            }
+            missing.push(cursor.to_path_buf());
+            match cursor.parent() {
+                Some(next) if next != cursor => cursor = next,
+                _ => break,
+            }
+        }
+        missing.reverse();
+        for dir in &missing {
+            match fs::create_dir(dir) {
+                Ok(()) => created.push(dir.clone()),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => {
+                    rollback_created_dirs(&created);
+                    return Err(fs_error(
+                        "create parent directory for",
+                        &staged.target,
+                        error,
+                    ));
+                }
+            }
+        }
+    }
+    Ok(created)
+}
+
+fn rollback_created_dirs(created: &[PathBuf]) {
+    for dir in created.iter().rev() {
+        let _ = fs::remove_dir(dir);
+    }
+}
+
 fn fail_after_partial_apply(
     error: CaptureError,
     pending_file: PendingTextFile<'_>,
     pending: &[PendingTextFile<'_>],
     applied: &[AppliedTextFile],
+    created_dirs: &[PathBuf],
 ) -> CaptureError {
     remove_temporary_file(&pending_file.temporary);
     if let Some(backup) = &pending_file.backup {
@@ -356,6 +415,7 @@ fn fail_after_partial_apply(
     cleanup_pending_text_files(pending);
     let mut message = error.message.clone();
     append_rollback_message(&mut message, rollback_applied_files(applied));
+    rollback_created_dirs(created_dirs);
     let mut wrapped = CaptureError::io(message);
     if let Some(typed) = error.typed {
         wrapped = wrapped.with_typed(typed);

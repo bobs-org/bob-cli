@@ -629,11 +629,8 @@ pub(super) fn plan_capture_to_target(
             ));
         }
         CaptureKind::RecordNote { .. } => {
-            // Fail-closed until the `record-writes` phase lands:
-            // never stage an inbox task for a claimed record.
-            return Err(CaptureError::usage(
-                crate::native::capture_language::RECORD_EXECUTION_UNWIRED_MESSAGE
-                    .to_string(),
+            return Err(CaptureError::io(
+                "record-note capture invariant failed: wrong write planner",
             ));
         }
     };

@@ -1718,6 +1718,7 @@ pub(super) fn record_one_member(
     Ok(super::plan::PlannedCaptureItem {
         result: super::output::CaptureItemResult {
             note_pull: None,
+            record_note: None,
             task_theme: None,
             type_relocation: None,
             ok: true,

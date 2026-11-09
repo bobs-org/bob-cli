@@ -3,9 +3,10 @@
 //! Phase `record-language` (bob-cli-ir.5.1.1) owns this file: route-first
 //! and title-first `@dir/` / `@dir/^stem` claiming, the immutable route
 //! policy callers build outside the grammar, opaque field/note parsing,
-//! marker refusals, editor spans, and fail-closed execution scaffolding.
-//! The `record-parse` phase maps [`RecordNoteIntent`] onto the records
-//! engine; this file never reads the vault or the config itself.
+//! marker refusals, and editor spans. The `record-parse` phase maps
+//! [`RecordNoteIntent`] onto the records engine; `record-writes` stages
+//! the planned Markdown. This file never reads the vault or the config
+//! itself.
 //!
 //! A record item is claimed before transfer, dependency, directive,
 //! ref-job, type, task-ID, and generic task-bullet parsing, in both the
@@ -47,13 +48,6 @@ pub(crate) const RECORD_FOLDER_NOT_RECORD_CODE: &str =
 pub(crate) const RECORD_TYPE_AS_FOLDER_CODE: &str = "record_type_as_folder";
 /// Strict refusal for record candidates under a malformed records block.
 pub(crate) const RECORDS_CONFIG_INVALID_CODE: &str = "records_config_invalid";
-
-/// Temporary fail-closed execution message for claimed record items.
-/// Record creation lands with the `record-writes` phase; until then a
-/// claimed record must refuse rather than create an inbox task.
-pub(crate) const RECORD_EXECUTION_UNWIRED_MESSAGE: &str =
-    "record notes are recognized but record creation is not wired yet; \
-     record writes land with a later phase, so this draft changes nothing";
 
 /// Immutable record route policy, built outside the grammar (which never
 /// touches the filesystem or the config). Callers memoize one policy per

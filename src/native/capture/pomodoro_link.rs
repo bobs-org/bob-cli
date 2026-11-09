@@ -816,6 +816,7 @@ fn planned_item_from_pomodoro_link_plan(
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             note_pull: None,
+            record_note: None,
             task_theme: None,
             type_relocation: None,
             ok: true,
