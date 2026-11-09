@@ -240,12 +240,7 @@ fn task_moves_repair_dependency_ids_in_archive_and_all_dependents() {
             .contains("[dependsOn:: done__projects__Shared_done__review"));
     }
 
-    for file in &plan.files {
-        apply_file_plan(vault.path(), file).unwrap();
-    }
-    for repair in &plan.link_repairs {
-        apply_link_repair_plan(vault.path(), repair).unwrap();
-    }
+    apply_archive(vault.path(), 1);
     let rerun = build_collection_plan(vault.path(), 1).expect("rerun plan");
     assert_eq!(rerun.dependency_metadata_repair_count(), 0);
 }

@@ -837,9 +837,10 @@ tasks is removed. A row inside a managed group fails closed with
 Legacy `<!-- bob:task-status-badges:v1 -->` comments are removed on the next
 rewrite.
 
-Badge counts are a written snapshot, not a live Obsidian view. `bob capture`,
-manual checkbox edits, and `bob task archive` can make them stale; the next
-`bob task reconcile` run reconciles the row idempotently.
+Badge counts are a written snapshot, not a live Obsidian view. `bob capture`
+and manual checkbox edits can make them stale, as can `bob task archive` in a
+note it did not rewrite (it regroups every source it rewrites in the same
+write); the next `bob task reconcile` run reconciles the row idempotently.
 
 The command preserves authored topic headings under a `Tasks` section. Direct
 task blocks are grouped locally inside the container where they already live,
@@ -848,7 +849,7 @@ than losing its context. Re-running on unchanged semantic input is
 byte-identical. A rewritten container keeps whether it ended with a blank line,
 its line endings, and its end-of-file shape, but the gap before the next heading
 is normalized to at most one blank line: a heading for an empty group that the
-rewrite drops takes its separator with it, so the gap left after
+rewrite drops takes its separator with it, so the gap left when
 `bob task archive` empties `Done & Canceled` does not grow across archive
 cycles.
 

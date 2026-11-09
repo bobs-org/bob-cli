@@ -12,9 +12,44 @@ use std::{
 
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
+mod execution;
 mod plan;
 mod snapshot;
 mod unit;
+
+use super::super::task_status_hooks_write::{
+    apply_plan, new_run_id, ApplySession,
+};
+use super::snapshot::scan_membership;
+use std::time::Duration;
+
+/// A guarded-apply session rooted in a temporary state directory, with the
+/// same membership scope production uses and no real sleeping.
+fn test_session(state_dir: &Path, vault: &Path) -> ApplySession {
+    let rescan_vault = vault.to_path_buf();
+    ApplySession {
+        tool: "task-archive",
+        state_home: state_dir.to_path_buf(),
+        quiet_period: Duration::from_secs(2),
+        retention: Duration::from_secs(30 * 24 * 60 * 60),
+        run_id: new_run_id(),
+        now_system: Box::new(SystemTime::now),
+        sleep: Box::new(|_| {}),
+        rescan: Box::new(move || scan_membership(&rescan_vault)),
+        before_preflight: None,
+        after_staging: None,
+        before_replace: None,
+        fail_staging: None,
+    }
+}
+
+/// Plan the whole archive collection and apply it through the guarded engine.
+fn apply_archive(vault: &Path, threshold: usize) {
+    let state = TempDir::new("bob-cli-archive-test-state");
+    let planned = plan_archive(vault, threshold).expect("plan archive");
+    apply_plan(&planned.write_plan, &test_session(state.path(), vault))
+        .unwrap_or_else(|error| panic!("apply archive: {}", error.message));
+}
 
 fn note_index<const N: usize>(paths: [&str; N]) -> NoteIndex {
     NoteIndex::from_paths(paths.into_iter().map(PathBuf::from))

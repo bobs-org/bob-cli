@@ -4,6 +4,8 @@ use crate::support::*;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
+use std::process::Output;
 
 #[test]
 fn move_done_tasks_commits_and_pushes_collection_changes_only() {
@@ -1056,4 +1058,396 @@ fi
 exit 64
 "#,
     );
+}
+
+fn archive_command(vault: &Path, temp: &TempDir) -> Command {
+    let mut command = bob_command();
+    command
+        .args(["task", "archive"])
+        .env("BOB_DIR", vault)
+        .env("BOB_NOW", "2026-06-02")
+        .env(
+            "BOB_VAULT_SYNC_LOCK_FILE",
+            temp.path().join("bob_sync.lock"),
+        )
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .env("XDG_STATE_HOME", temp.path().join("state"));
+    command
+}
+
+fn archive_json(output: &Output) -> serde_json::Value {
+    let text = stdout(output);
+    assert_eq!(
+        text.trim_end().lines().count(),
+        1,
+        "JSON mode prints exactly one document on stdout:\n{}",
+        format_output(output)
+    );
+    serde_json::from_str(text.trim()).unwrap_or_else(|error| {
+        panic!("stdout is JSON ({error}):\n{}", format_output(output))
+    })
+}
+
+fn init_committed_git_vault(temp: &TempDir) -> (PathBuf, PathBuf) {
+    let (vault, remote) = init_git_vault_with_remote(temp);
+    write_file(
+        &vault.join("obsidian.md"),
+        &area_note(
+            "\
+- [x] done #task ^d1
+- [ ] active #task
+",
+        ),
+    );
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
+    git_in(&vault, ["push", "-q", "-u", "origin", "HEAD"]);
+    (vault, remote)
+}
+
+#[test]
+fn archive_dry_run_has_no_side_effects_with_a_held_lock_and_sentinel_git() {
+    let temp = TempDir::new("bob-cli-archive-dry-run-held");
+    let (vault, _remote) = init_committed_git_vault(&temp);
+    let stub_bin = temp.path().join("bin");
+    let marker = temp.path().join("git-was-invoked");
+    fs::create_dir_all(&stub_bin).expect("create stub bin");
+    write_executable(
+        &stub_bin.join("git"),
+        &format!(
+            "#!/bin/sh\necho invoked >> {}\nexit 99\n",
+            shell_single_quote(path_str(&marker))
+        ),
+    );
+    // A competing process holds the maintenance lock for the whole run.
+    let lock_path = temp.path().join("bob_sync.lock");
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .expect("open lock");
+    fs2::FileExt::try_lock_exclusive(&lock).expect("hold lock");
+    let before_source =
+        fs::read(vault.join("obsidian.md")).expect("read source");
+
+    let output = archive_command(&vault, &temp)
+        .args(["--dry-run", "--format", "json", "-t", "1"])
+        .env("PATH", path_with_prefix(&stub_bin))
+        .output()
+        .expect("run bob task archive --dry-run");
+
+    assert_success(&output);
+    let report = archive_json(&output);
+    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["dry_run"], true);
+    assert_eq!(report["exit"]["outcome"], "preview");
+    assert_eq!(report["exit"]["code"], 0);
+    assert_eq!(report["git"]["outcome"], "not_run");
+    assert_eq!(report["moves"][0]["source"], "obsidian.md");
+    assert_eq!(report["moves"][0]["archive"], "done/obsidian_done.md");
+    assert_eq!(report["moves"][0]["block_ids"], serde_json::json!(["d1"]));
+    assert!(!marker.exists(), "dry run must never invoke git");
+    assert!(!vault.join("done").exists(), "no archive directory created");
+    assert_eq!(fs::read(vault.join("obsidian.md")).unwrap(), before_source);
+    assert!(
+        !temp.path().join("state").exists(),
+        "no recovery state created"
+    );
+    let status = stdout(&git_in(&vault, ["status", "--short"]));
+    assert_eq!(status, "", "vault stays clean:\n{status}");
+}
+
+#[test]
+fn archive_dry_run_never_creates_the_lock_file() {
+    let temp = TempDir::new("bob-cli-archive-dry-run-no-lock");
+    let (vault, _remote) = init_committed_git_vault(&temp);
+    let missing_lock = temp.path().join("no-such-dir/bob_sync.lock");
+
+    let output = archive_command(&vault, &temp)
+        .arg("--dry-run")
+        .arg("-t1")
+        .env("BOB_VAULT_SYNC_LOCK_FILE", &missing_lock)
+        .output()
+        .expect("run bob task archive --dry-run");
+
+    assert_success(&output);
+    let text = stdout(&output);
+    assert!(
+        text.contains("dry run")
+            && text.contains("obsidian.md -> done/obsidian_done.md")
+            && text.contains("task blocks to move: 1")
+            && text.contains("git:\n  not run: dry run"),
+        "expected a human preview:\n{}",
+        format_output(&output)
+    );
+    assert!(!temp.path().join("no-such-dir").exists());
+    assert!(!vault.join("done").exists());
+}
+
+#[test]
+fn archive_json_reports_a_noop_run() {
+    let temp = TempDir::new("bob-cli-archive-json-noop");
+    let (vault, _remote) = init_git_vault_with_remote(&temp);
+    write_file(
+        &vault.join("obsidian.md"),
+        &area_note("- [ ] active #task\n"),
+    );
+
+    let output = archive_command(&vault, &temp)
+        .args(["-f", "json"])
+        .output()
+        .expect("run bob task archive -f json");
+
+    assert_success(&output);
+    let report = archive_json(&output);
+    assert_eq!(report["dry_run"], false);
+    assert_eq!(report["moves"], serde_json::json!([]));
+    assert_eq!(report["holds"], serde_json::json!([]));
+    assert_eq!(report["grandfathered"], serde_json::json!([]));
+    assert_eq!(report["link_repairs"]["files"], serde_json::json!([]));
+    assert_eq!(report["link_repairs"]["link_count"], 0);
+    assert_eq!(report["exit"]["outcome"], "noop");
+    assert_eq!(report["exit"]["code"], 0);
+    assert_eq!(
+        report["exit"]["recovery_directory"],
+        serde_json::Value::Null
+    );
+    assert_eq!(report["git"]["outcome"], "skipped");
+    assert_eq!(report["git"]["skip_reason"], "no_changes");
+    assert!(!vault.join("done").exists());
+}
+
+#[test]
+fn archive_json_reports_the_applied_commit_and_push() {
+    let temp = TempDir::new("bob-cli-archive-json-applied");
+    let (vault, remote) = init_committed_git_vault(&temp);
+    write_file(
+        &vault.join("daily.md"),
+        "Link [[obsidian#^d1]] stays valid.\n",
+    );
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "add daily"]);
+    git_in(&vault, ["push", "-q"]);
+
+    let output = archive_command(&vault, &temp)
+        .args(["--format=json", "--threshold=1"])
+        .output()
+        .expect("run bob task archive");
+
+    assert_success(&output);
+    let report = archive_json(&output);
+    assert_eq!(report["exit"]["outcome"], "applied");
+    assert_eq!(report["exit"]["code"], 0);
+    assert_eq!(
+        report["exit"]["applied_paths"],
+        serde_json::json!(["done/obsidian_done.md", "obsidian.md", "daily.md"])
+    );
+    assert_eq!(report["exit"]["deferred_paths"], serde_json::json!([]));
+    assert!(report["exit"]["recovery_directory"].is_string());
+    assert_eq!(report["git"]["outcome"], "pushed");
+    assert_eq!(report["git"]["committed"], true);
+    assert_eq!(report["git"]["pushed"], true);
+    assert_eq!(
+        report["git"]["commit_message"],
+        "bob task archive 2026-06-02"
+    );
+    assert_eq!(
+        report["git"]["paths"],
+        serde_json::json!(["daily.md", "done/obsidian_done.md", "obsidian.md"])
+    );
+    assert_eq!(
+        report["link_repairs"],
+        serde_json::json!({
+            "files": ["daily.md"],
+            "link_count": 1,
+            "dependency_metadata_count": 0
+        })
+    );
+    assert_eq!(report["moves"][0]["task_count"], 1);
+    let remote_head =
+        stdout(&git(["--git-dir", path_str(&remote), "rev-parse", "HEAD"]));
+    let local_head = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
+    assert_eq!(remote_head, local_head, "push should update bare remote");
+}
+
+#[test]
+fn archive_json_reports_skipped_git_for_a_non_worktree_vault() {
+    let temp = TempDir::new("bob-cli-archive-json-non-worktree");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("obsidian.md"),
+        &area_note("- [x] done #task\n- [ ] active #task\n"),
+    );
+
+    let output = archive_command(&vault, &temp)
+        .args(["-f", "json", "-t", "1"])
+        .output()
+        .expect("run bob task archive in a non-worktree");
+
+    assert_success(&output);
+    let report = archive_json(&output);
+    assert_eq!(report["exit"]["outcome"], "applied");
+    assert_eq!(report["git"]["outcome"], "skipped");
+    assert_eq!(report["git"]["skip_reason"], "not_worktree");
+    assert!(report["git"]["warning"]
+        .as_str()
+        .unwrap()
+        .contains("not a git worktree"));
+    assert!(vault.join("done/obsidian_done.md").exists());
+}
+
+#[test]
+fn archive_git_failure_is_nonzero_and_reports_the_applied_changes() {
+    let temp = TempDir::new("bob-cli-archive-json-git-failure");
+    let (vault, remote) = init_committed_git_vault(&temp);
+    // The initial push registered the remote; removing it makes `git push`
+    // fail after the vault write and the commit already succeeded.
+    git_in(&vault, ["remote", "remove", "origin"]);
+    drop(remote);
+
+    let output = archive_command(&vault, &temp)
+        .args(["-f", "json", "-t", "1"])
+        .output()
+        .expect("run bob task archive with a failing push");
+
+    assert!(
+        !output.status.success(),
+        "a Git failure is nonzero:\n{}",
+        format_output(&output)
+    );
+    let report = archive_json(&output);
+    assert_eq!(report["exit"]["outcome"], "failed");
+    assert_eq!(report["exit"]["reason"], "git_failed");
+    assert_eq!(
+        report["exit"]["code"].as_i64(),
+        output.status.code().map(i64::from),
+        "JSON exit code matches the process exit code"
+    );
+    assert!(report["exit"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("vault changes were applied"));
+    assert_eq!(
+        report["exit"]["applied_paths"],
+        serde_json::json!(["done/obsidian_done.md", "obsidian.md"])
+    );
+    assert_eq!(report["git"]["outcome"], "failed");
+    assert_eq!(report["git"]["committed"], true);
+    assert_eq!(report["git"]["pushed"], false);
+    assert_eq!(report["git"]["failure"]["step"], "git push");
+    assert!(
+        stderr(&output).contains("git push failed"),
+        "subprocess diagnostics go to stderr:\n{}",
+        format_output(&output)
+    );
+    let archive =
+        fs::read_to_string(vault.join("done/obsidian_done.md")).unwrap();
+    assert!(archive.contains("done #task ^d1"), "{archive}");
+    let commits = stdout(&git_in(&vault, ["log", "--format=%s"]));
+    assert_eq!(
+        commits.lines().next(),
+        Some("bob task archive 2026-06-02"),
+        "the commit already happened:\n{commits}"
+    );
+}
+
+#[test]
+fn archive_reports_holds_for_custom_open_statuses() {
+    let temp = TempDir::new("bob-cli-archive-json-custom-hold");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("obsidian.md"),
+        &area_note(
+            "\
+- [x] parent #task ^p
+  - [?] blocked child #task ^c
+- [x] other #task
+",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+
+    let output = archive_command(&vault, &temp)
+        .args(["-n", "-f", "json", "-t", "1"])
+        .output()
+        .expect("run bob task archive with custom statuses");
+
+    assert_success(&output);
+    let report = archive_json(&output);
+    assert_eq!(
+        report["holds"],
+        serde_json::json!([{
+            "path": "obsidian.md",
+            "line": 5,
+            "block_id": "p",
+            "reason": "open_subtask"
+        }])
+    );
+    assert_eq!(report["moves"][0]["task_count"], 1);
+    assert_eq!(
+        report["moves"][0]["roots"],
+        serde_json::json!([{"line": 7, "block_id": null}])
+    );
+}
+
+#[test]
+fn archive_option_spellings_are_equivalent() {
+    let temp = TempDir::new("bob-cli-archive-spellings");
+    let (vault, _remote) = init_committed_git_vault(&temp);
+    let spellings: [&[&str]; 4] = [
+        &["-n", "-f", "json", "-t", "1"],
+        &["--dry-run", "--format", "json", "--threshold", "1"],
+        &["--dry-run", "--format=json", "--threshold=1"],
+        &["-n", "-fjson", "-t1"],
+    ];
+    let mut outputs = Vec::new();
+    for args in spellings {
+        let output = archive_command(&vault, &temp)
+            .args(args)
+            .output()
+            .expect("run bob task archive spelling");
+        assert_success(&output);
+        outputs.push(stdout(&output));
+    }
+    for output in &outputs[1..] {
+        assert_eq!(output, &outputs[0], "spellings print the same report");
+    }
+    assert_eq!(
+        stdout(&git_in(&vault, ["status", "--short"])),
+        "",
+        "preview left the vault clean"
+    );
+}
+
+#[test]
+fn archive_usage_errors_exit_two_without_a_report() {
+    let temp = TempDir::new("bob-cli-archive-usage");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    for args in [
+        &["--format", "xml"][..],
+        &["-f"][..],
+        &["--format=yaml"][..],
+        &["--dry-run=1"][..],
+        &["extra"][..],
+    ] {
+        let output = archive_command(&vault, &temp)
+            .args(args)
+            .output()
+            .expect("run bob task archive with bad usage");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{args:?} is a usage error:\n{}",
+            format_output(&output)
+        );
+        assert_eq!(stdout(&output), "", "{args:?} prints no report");
+        assert!(
+            stderr(&output).contains("Try 'bob task archive --help'"),
+            "{args:?}:\n{}",
+            format_output(&output)
+        );
+    }
 }

@@ -14,21 +14,24 @@ use super::{
 };
 
 mod archive;
+mod command;
 mod git;
 mod link_repair;
 mod plan;
+mod report;
 mod snapshot;
 #[cfg(test)]
 mod tests;
 mod transform;
 
 use archive::*;
-use git::*;
 use link_repair::*;
 use plan::*;
+use report::OutputFormat;
 use transform::*;
 
 pub(crate) use archive::atomic_write;
+pub(crate) use command::run_collection;
 pub(crate) use link_repair::{
     archive_parent_target, source_relative_path_from_archive,
 };
@@ -79,24 +82,27 @@ pub(crate) fn collection_postimages_for_tests(
 
 pub(super) const COMMAND_NAME: &str = "bob task archive";
 pub(crate) const DEFAULT_THRESHOLD: usize = 10;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Args {
     threshold: usize,
+    dry_run: bool,
+    format: OutputFormat,
 }
 
 impl Default for Args {
     fn default() -> Self {
         Self {
             threshold: DEFAULT_THRESHOLD,
+            dry_run: false,
+            format: OutputFormat::Human,
         }
     }
 }
+
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     match parse_args(args) {
-        ParseResult::Run(args) => {
-            let child_env = ob::child_env();
-            run_collection(args.threshold, &child_env)
-        }
+        ParseResult::Run(args) => command::run_standalone(args),
         ParseResult::Help => {
             print_help();
             0
@@ -108,190 +114,20 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         }
     }
 }
-/// Run the archive collection against the vault and commit/push the result.
-///
-/// This does **not** reconcile the full vault; `nightly` runs vault-sync
-/// before and after it. The standalone `run()` wraps this directly.
-pub(crate) fn run_collection(threshold: usize, child_env: &ChildEnv) -> i32 {
-    let vault = bob_env::bob_dir();
 
-    println!("Move done tasks");
-    println!("vault: {}", vault.display());
-    println!("threshold: {threshold}");
-
-    let plan = match build_collection_plan(&vault, threshold) {
-        Ok(plan) => plan,
-        Err(error) => {
-            eprintln!(
-                "{COMMAND_NAME}: failed to scan {}: {error}",
-                vault.display()
-            );
-            return 1;
-        }
-    };
-
-    println!("scan:");
-    println!("  markdown files: {}", plan.scanned_files);
-    println!("  files meeting threshold: {}", plan.task_move_file_count());
-    println!("  task blocks: {}", plan.total_task_count());
-    print_selection_report(&plan);
-    println!(
-        "  source done_tasks updates: {}",
-        plan.source_metadata_update_count()
-    );
-    println!(
-        "  archive metadata repairs: {}",
-        plan.archive_metadata_update_count()
-    );
-    println!("  moved block ids: {}", plan.moved_block_id_count());
-    println!(
-        "  ambiguous moved block ids: {}",
-        plan.ambiguous_moved_block_id_count()
-    );
-    println!(
-        "  moved block id renames: {}",
-        plan.moved_block_id_rename_count()
-    );
-    println!("  Obsidian links repaired: {}", plan.link_repair_count());
-    println!(
-        "  dependency metadata repaired: {}",
-        plan.dependency_metadata_repair_count()
-    );
-    println!("  link-repair files: {}", plan.link_repair_file_count());
-    println!("  planned bytes: {}", plan.planned_bytes());
-
-    if plan.is_empty() {
-        println!("moves:");
-        println!("  none");
-        println!("git:");
-        println!("  skipped: no vault changes");
-        println!("summary:");
-        println!("  no task blocks met the threshold; no vault changes made.");
-        return 0;
-    }
-
-    let git_state = match prepare_git(&vault, child_env, &plan) {
-        Ok(git_state) => git_state,
-        Err(GitPrepareError::Command(exit_code)) => return exit_code,
-    };
-
-    println!("moves:");
-    let mut archives_created = 0;
-    let mut archives_updated = 0;
-    for file in &plan.files {
-        if file.writes_archive() {
-            if file.task_count > 0 {
-                println!(
-                    "  {} -> {} ({} task blocks)",
-                    file.relative_source_path.display(),
-                    file.relative_archive_path.display(),
-                    file.task_count
-                );
-            } else if file.source_metadata_updated {
-                println!(
-                    "  {} -> {} (source/archive metadata)",
-                    file.relative_source_path.display(),
-                    file.relative_archive_path.display()
-                );
-            } else if file.archive_link_repair_count > 0 {
-                println!(
-                    "  {} ({} Obsidian link repairs)",
-                    file.relative_archive_path.display(),
-                    file.archive_link_repair_count
-                );
-            } else {
-                println!(
-                    "  {} -> {} (archive metadata)",
-                    file.relative_source_path.display(),
-                    file.relative_archive_path.display()
-                );
-            }
-        } else if file.source_link_repair_count > 0
-            && !file.source_metadata_updated
-        {
-            println!(
-                "  {} ({} Obsidian link repairs)",
-                file.relative_source_path.display(),
-                file.source_link_repair_count
-            );
-        } else {
-            println!(
-                "  {} -> {} (done_tasks metadata)",
-                file.relative_source_path.display(),
-                file.relative_archive_path.display()
-            );
-        }
-        match apply_file_plan(&vault, file) {
-            Ok(Some(ArchiveWrite::Created)) => archives_created += 1,
-            Ok(Some(ArchiveWrite::Updated)) => archives_updated += 1,
-            Ok(None) => {}
-            Err(error) => {
-                eprintln!(
-                    "{COMMAND_NAME}: failed to write vault changes: {error}"
-                );
-                return 1;
-            }
-        }
-    }
-    for repair in &plan.link_repairs {
-        println!(
-            "  {} ({} Obsidian link repairs, {} dependency metadata repairs)",
-            repair.relative_path.display(),
-            repair.link_count,
-            repair.dependency_metadata_count
-        );
-        if let Err(error) = apply_link_repair_plan(&vault, repair) {
-            eprintln!("{COMMAND_NAME}: failed to write vault changes: {error}");
-            return 1;
-        }
-    }
-    println!("git:");
-    if let Err(exit_code) = finish_git(&vault, child_env, &git_state) {
-        return exit_code;
-    }
-    println!("summary:");
-    println!("  moved task blocks: {}", plan.total_task_count());
-    println!(
-        "  source files updated: {}",
-        plan.source_file_update_count()
-    );
-    println!(
-        "  source done_tasks updated: {}",
-        plan.source_metadata_update_count()
-    );
-    println!(
-        "  archive metadata repaired: {}",
-        plan.archive_metadata_update_count()
-    );
-    println!("  moved block ids: {}", plan.moved_block_id_count());
-    println!(
-        "  moved block id renames: {}",
-        plan.moved_block_id_rename_count()
-    );
-    println!("  Obsidian links repaired: {}", plan.link_repair_count());
-    println!(
-        "  dependency metadata repaired: {}",
-        plan.dependency_metadata_repair_count()
-    );
-    println!(
-        "  link-repair files updated: {}",
-        plan.link_repair_file_count()
-    );
-    println!("  archive files created: {archives_created}");
-    println!("  archive files updated: {archives_updated}");
-    0
-}
 fn merged_output(output: &Output) -> String {
     let mut merged = String::new();
     merged.push_str(&String::from_utf8_lossy(&output.stdout));
     merged.push_str(&String::from_utf8_lossy(&output.stderr));
     merged
 }
+
 fn write_stderr_output(output: &str) {
     if !output.is_empty() {
         eprint!("{output}");
     }
 }
+
 fn parse_args(args: Vec<OsString>) -> ParseResult {
     let mut parsed = Args::default();
     let mut args = args.into_iter();
@@ -300,6 +136,7 @@ fn parse_args(args: Vec<OsString>) -> ParseResult {
         let text = bob_env::os_to_string(&arg);
         match text.as_str() {
             "-h" | "--help" => return ParseResult::Help,
+            "-n" | "--dry-run" => parsed.dry_run = true,
             "-t" | "--threshold" => {
                 let option = text.as_str();
                 let Some(value) = args.next() else {
@@ -311,6 +148,19 @@ fn parse_args(args: Vec<OsString>) -> ParseResult {
                     Ok(threshold) => threshold,
                     Err(message) => return ParseResult::Error(message),
                 };
+            }
+            "-f" | "--format" => {
+                let option = text.as_str();
+                let Some(value) = args.next() else {
+                    return ParseResult::Error(format!(
+                        "option {option} requires a value"
+                    ));
+                };
+                parsed.format =
+                    match parse_format(&bob_env::os_to_string(&value)) {
+                        Ok(format) => format,
+                        Err(message) => return ParseResult::Error(message),
+                    };
             }
             "--" => {
                 if let Some(extra) = args.next() {
@@ -326,9 +176,21 @@ fn parse_args(args: Vec<OsString>) -> ParseResult {
                     Err(message) => return ParseResult::Error(message),
                 };
             }
+            _ if let Some(value) = text.strip_prefix("--format=") => {
+                parsed.format = match parse_format(value) {
+                    Ok(format) => format,
+                    Err(message) => return ParseResult::Error(message),
+                };
+            }
             _ if let Some(value) = text.strip_prefix("-t=") => {
                 parsed.threshold = match parse_threshold_text(value) {
                     Ok(threshold) => threshold,
+                    Err(message) => return ParseResult::Error(message),
+                };
+            }
+            _ if let Some(value) = text.strip_prefix("-f=") => {
+                parsed.format = match parse_format(value) {
+                    Ok(format) => format,
                     Err(message) => return ParseResult::Error(message),
                 };
             }
@@ -336,6 +198,13 @@ fn parse_args(args: Vec<OsString>) -> ParseResult {
                 let value = &text[2..];
                 parsed.threshold = match parse_threshold_text(value) {
                     Ok(threshold) => threshold,
+                    Err(message) => return ParseResult::Error(message),
+                };
+            }
+            _ if text.starts_with("-f") => {
+                let value = &text[2..];
+                parsed.format = match parse_format(value) {
+                    Ok(format) => format,
                     Err(message) => return ParseResult::Error(message),
                 };
             }
@@ -354,14 +223,27 @@ fn parse_args(args: Vec<OsString>) -> ParseResult {
 
     ParseResult::Run(parsed)
 }
+
 enum ParseResult {
     Run(Args),
     Help,
     Error(String),
 }
+
+fn parse_format(value: &str) -> Result<OutputFormat, String> {
+    match value {
+        "human" => Ok(OutputFormat::Human),
+        "json" => Ok(OutputFormat::Json),
+        _ => Err(format!(
+            "invalid --format value: {value} (expected human or json)"
+        )),
+    }
+}
+
 fn parse_threshold(value: &OsString) -> Result<usize, String> {
     parse_threshold_text(&bob_env::os_to_string(value))
 }
+
 fn parse_threshold_text(value: &str) -> Result<usize, String> {
     let threshold = value
         .parse::<usize>()
@@ -372,17 +254,25 @@ fn parse_threshold_text(value: &str) -> Result<usize, String> {
 
     Ok(threshold)
 }
+
 pub(crate) fn completion_descriptor() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
         .about("Move done and canceled tasks from area and project notes")
         .disable_help_flag(true)
         .arg(
-            Arg::new("threshold")
-                .long("threshold")
-                .short('t')
-                .value_name("N")
-                .value_parser(clap::value_parser!(usize))
-                .help("Minimum completed/canceled task count per source note"),
+            Arg::new("dry-run")
+                .long("dry-run")
+                .short('n')
+                .action(ArgAction::SetTrue)
+                .help("Plan and report without writing or touching Git"),
+        )
+        .arg(
+            Arg::new("format")
+                .long("format")
+                .short('f')
+                .value_name("FORMAT")
+                .value_parser(["human", "json"])
+                .help("Output format: human (default) or json"),
         )
         .arg(
             Arg::new("help")
@@ -391,58 +281,41 @@ pub(crate) fn completion_descriptor() -> ClapCommand {
                 .action(ArgAction::Help)
                 .help("Show this help message and exit"),
         )
+        .arg(
+            Arg::new("threshold")
+                .long("threshold")
+                .short('t')
+                .value_name("N")
+                .value_parser(clap::value_parser!(usize))
+                .help("Minimum completed/canceled task count per source note"),
+        )
 }
 
 pub(crate) fn help_text() -> String {
     format!(
         "\
-usage: {COMMAND_NAME} [-t|--threshold N]
+usage: {COMMAND_NAME} [-n|--dry-run] [-f|--format human|json] [-t|--threshold N]
 
 Move done and canceled Bob task blocks from area and project notes into
 done/ archives, link sources, repair archive metadata, and repair Obsidian
-links to moved block ids. See docs/task-archive.md.
+links to moved block ids. Writes go through the guarded writer under the
+vault maintenance lock (waiting up to 30 seconds). See docs/task-archive.md.
 
-example:
+examples:
   {COMMAND_NAME} --threshold 10
+  {COMMAND_NAME} --dry-run
+  {COMMAND_NAME} -n -f json
 
 options:
+  -n, --dry-run    plan and report only: no lock, writes, or Git
+  -f, --format human|json
+                   output format (default: human); json prints one
+                   schema_version 1 document
   -h, --help       show this help message and exit
   -t, --threshold N
                    minimum completed/canceled task count per source note \
 (default: {DEFAULT_THRESHOLD})"
     )
-}
-
-fn print_selection_report(plan: &CollectionPlan) {
-    println!("holds:");
-    if plan.holds.is_empty() {
-        println!("  none");
-    } else {
-        for hold in &plan.holds {
-            println!(
-                "  {}:{} {}",
-                hold.relative_path.display(),
-                hold.line,
-                hold.reason
-            );
-        }
-    }
-    println!("skips:");
-    if plan.skip_counts.is_empty() {
-        println!("  none");
-    } else {
-        for (reason, count) in &plan.skip_counts {
-            println!("  {reason}: {count}");
-        }
-    }
-    println!("grandfathered:");
-    if plan.grandfathered.is_empty() {
-        println!("  none");
-    } else {
-        for path in &plan.grandfathered {
-            println!("  {}", path.display());
-        }
-    }
 }
 
 fn print_help() {

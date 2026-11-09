@@ -22,6 +22,8 @@ pub(super) struct HeldRoot {
     pub(super) relative_path: PathBuf,
     pub(super) line: usize,
     pub(super) reason: &'static str,
+    /// The held root line's own trailing block id, when it carries one.
+    pub(super) block_id: Option<String>,
     pub(super) block_ids: Vec<String>,
 }
 
@@ -130,7 +132,7 @@ impl CollectionPlan {
                 .sum::<usize>()
     }
 
-    pub(super) fn link_repair_file_count(&self) -> usize {
+    pub(super) fn link_repair_files(&self) -> BTreeSet<PathBuf> {
         let mut paths = BTreeSet::new();
         for file in &self.files {
             if file.source_link_repair_count > 0
@@ -153,7 +155,11 @@ impl CollectionPlan {
                 })
                 .map(|repair| repair.relative_path.clone()),
         );
-        paths.len()
+        paths
+    }
+
+    pub(super) fn link_repair_file_count(&self) -> usize {
+        self.link_repair_files().len()
     }
 
     pub(super) fn planned_bytes(&self) -> usize {
@@ -301,6 +307,8 @@ pub(super) struct FilePlan {
     pub(super) task_count: usize,
     pub(super) source_contents: String,
     pub(super) archive_contents: Option<String>,
+    /// The archive does not exist yet: its write is a create.
+    pub(super) archive_created: bool,
     pub(super) source_metadata_updated: bool,
     pub(super) archive_metadata_updated: bool,
     pub(super) moved_block_ids: BTreeSet<String>,
@@ -335,70 +343,39 @@ pub(super) struct LinkRepairPlan {
     pub(super) link_count: usize,
     pub(super) dependency_metadata_count: usize,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ArchiveWrite {
-    Created,
-    Updated,
-}
-pub(super) fn apply_file_plan(
+/// Capture every planning input once and plan the whole archive collection.
+///
+/// The returned [`PlannedArchive`] carries the report-facing
+/// [`CollectionPlan`] and the guarded [`WritePlan`] the command applies under
+/// the maintenance lock: one output per actually changed path, archive writes
+/// before source removals, repair-only outputs last. An unstable capture
+/// surfaces as a retryable `ErrorKind::Interrupted` error so the command
+/// rebuilds the plan instead of writing.
+pub(super) fn plan_archive(
     vault: &Path,
-    file: &FilePlan,
-) -> io::Result<Option<ArchiveWrite>> {
-    let source_path = vault.join(&file.relative_source_path);
-    let archive_path = vault.join(&file.relative_archive_path);
-    let archive_write =
-        if let Some(archive_contents) = file.archive_contents.as_deref() {
-            let archive_write = if archive_path.is_file() {
-                ArchiveWrite::Updated
-            } else {
-                ArchiveWrite::Created
-            };
-            atomic_write(&archive_path, archive_contents)?;
-            Some(archive_write)
-        } else {
-            None
-        };
-
-    if file.writes_source() {
-        atomic_write(&source_path, &file.source_contents)?;
-    }
-
-    Ok(archive_write)
+    threshold: usize,
+) -> io::Result<PlannedArchive> {
+    let captured = capture_inputs(vault)?;
+    plan_from_captured(&captured, threshold)
 }
-pub(super) fn apply_link_repair_plan(
-    vault: &Path,
-    repair: &LinkRepairPlan,
-) -> io::Result<()> {
-    atomic_write(
-        vault.join(&repair.relative_path).as_path(),
-        &repair.contents,
-    )
-}
+
+#[cfg(test)]
 pub(super) fn build_collection_plan(
     vault: &Path,
     threshold: usize,
 ) -> io::Result<CollectionPlan> {
-    let captured = capture_inputs(vault)?;
-    plan_from_captured(&captured, threshold).map(|planned| planned.collection)
+    plan_archive(vault, threshold).map(|planned| planned.collection)
 }
 
-/// Build the guarded apply inputs for the archive collection.
-///
-/// Same captured pipeline as [`build_collection_plan`], returning the
-/// [`WritePlan`] a later command applies under the maintenance lock: one
-/// output per actually changed path, archive writes before source removals,
-/// repair-only outputs last. Unstable captures surface as retryable
-/// `ErrorKind::Interrupted` errors so the command rebuilds instead of
-/// writing.
-#[cfg_attr(not(test), allow(dead_code))] // Shared by the archive-command phase.
+#[cfg(test)]
 pub(super) fn build_write_plan(
     vault: &Path,
     threshold: usize,
 ) -> io::Result<WritePlan> {
-    let captured = capture_inputs(vault)?;
-    plan_from_captured(&captured, threshold).map(|planned| planned.write_plan)
+    plan_archive(vault, threshold).map(|planned| planned.write_plan)
 }
 
+#[derive(Debug)]
 pub(super) struct PlannedArchive {
     pub(super) collection: CollectionPlan,
     pub(super) write_plan: WritePlan,
@@ -445,11 +422,17 @@ fn plan_from_captured(
         let transform =
             transform_markdown_with_settings(&contents, &captured.settings);
         merge_skips(&mut skip_counts, &transform.skip_counts);
-        holds.extend(transform.holds.iter().map(|hold| HeldRoot {
-            relative_path: relative_source_path.clone(),
-            line: hold.line,
-            reason: hold.reason,
-            block_ids: hold.block_ids.clone(),
+        holds.extend(transform.holds.iter().map(|hold| {
+            HeldRoot {
+                relative_path: relative_source_path.clone(),
+                line: hold.line,
+                reason: hold.reason,
+                block_id: contents
+                    .lines()
+                    .nth(hold.line.saturating_sub(1))
+                    .and_then(trailing_block_id_in_line),
+                block_ids: hold.block_ids.clone(),
+            }
         }));
         let moves_tasks = transform.task_count >= threshold;
         let existing_archive = captured
@@ -555,6 +538,7 @@ fn plan_from_captured(
             relative_archive_path,
             task_count,
             source_contents,
+            archive_created: archive_contents.is_some() && !archive_exists,
             archive_contents,
             source_metadata_updated,
             archive_metadata_updated,
@@ -1038,6 +1022,27 @@ fn verify_archive_postimages(
     Ok(())
 }
 
+/// A validation refusal: the proposed plan violates an archive invariant.
+///
+/// Distinguished from capture and I/O errors so the command can report a
+/// plan-wide refusal (no retry, no writes) instead of a generic failure.
+#[derive(Debug)]
+pub(super) struct PlanRefusal(String);
+
+impl std::fmt::Display for PlanRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for PlanRefusal {}
+
+pub(super) fn is_plan_refusal(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|inner| inner.downcast_ref::<PlanRefusal>().is_some())
+}
+
 fn refusal(
     path: &Path,
     line: usize,
@@ -1049,10 +1054,10 @@ fn refusal(
         .unwrap_or_default();
     io::Error::new(
         io::ErrorKind::InvalidData,
-        format!(
-            "{COMMAND_NAME}: refusing archive plan for {}:{line}{id}: {reason}",
+        PlanRefusal(format!(
+            "refusing archive plan for {}:{line}{id}: {reason}",
             path.display()
-        ),
+        )),
     )
 }
 

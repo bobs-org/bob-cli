@@ -142,6 +142,20 @@ pub(super) fn capture_inputs(vault: &Path) -> io::Result<CapturedInputs> {
     })
 }
 
+/// The note membership the planner scans: the source walker plus the wider
+/// link-repair walker, sorted and deduplicated.
+///
+/// The guarded apply compares this same scope against the captured plan, so a
+/// note discovered after planning invalidates the plan instead of being
+/// silently missed.
+pub(super) fn scan_membership(vault: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut paths = markdown_files(vault)?;
+    paths.extend(link_repair_markdown_files(vault)?);
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
 fn input_kind_for(relative_path: &Path) -> InputKind {
     if super::super::task_dependencies::is_archive_path(relative_path) {
         InputKind::Archive

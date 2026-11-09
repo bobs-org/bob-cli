@@ -95,7 +95,7 @@ groups:
         summary: "`bob task move` selection, preservation, link repair, guarded writes, and sync behavior"
         order: 29
       - stem: task-archive
-        summary: "`bob task archive` eligibility, holds, pairing, link repair, and Git behavior"
+        summary: "`bob task archive` eligibility, holds, pairing, link repair, guarded writes, preview, JSON, and Git behavior"
         order: 30
       - stem: task-merge
         summary: "`bob task merge` folding tasks into a task, drawer, or section, merge labels, and guarded writes"

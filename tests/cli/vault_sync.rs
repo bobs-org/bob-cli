@@ -1203,6 +1203,11 @@ fn nightly_runs_vault_sync_move_done_tasks_vault_sync_in_order() {
 
     assert_success(&output);
     let out = stdout(&output);
+    assert!(
+        !stderr(&output).contains("holds the lock"),
+        "nightly owns the lock, so its archive step must not wait on it:\n{}",
+        stderr(&output)
+    );
 
     let subjects = stdout(&git_in(&vault, ["log", "--format=%s"]));
     let lines: Vec<&str> = subjects.lines().collect();

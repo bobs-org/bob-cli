@@ -14,7 +14,13 @@ fn parses_default_threshold() {
 #[test]
 fn parses_threshold_option() {
     match parse_args(os_args(["--threshold", "15"])) {
-        ParseResult::Run(args) => assert_eq!(args, Args { threshold: 15 }),
+        ParseResult::Run(args) => assert_eq!(
+            args,
+            Args {
+                threshold: 15,
+                ..Args::default()
+            }
+        ),
         _ => panic!("expected runnable args"),
     }
 }
@@ -103,7 +109,13 @@ fn unqualifiable_paths_do_not_abort_identity_indexing() {
 #[test]
 fn parses_short_threshold_option() {
     match parse_args(os_args(["-t", "15"])) {
-        ParseResult::Run(args) => assert_eq!(args, Args { threshold: 15 }),
+        ParseResult::Run(args) => assert_eq!(
+            args,
+            Args {
+                threshold: 15,
+                ..Args::default()
+            }
+        ),
         _ => panic!("expected runnable args"),
     }
 }
@@ -111,7 +123,13 @@ fn parses_short_threshold_option() {
 #[test]
 fn parses_threshold_equals_option() {
     match parse_args(os_args(["--threshold=3"])) {
-        ParseResult::Run(args) => assert_eq!(args, Args { threshold: 3 }),
+        ParseResult::Run(args) => assert_eq!(
+            args,
+            Args {
+                threshold: 3,
+                ..Args::default()
+            }
+        ),
         _ => panic!("expected runnable args"),
     }
 }
@@ -119,7 +137,13 @@ fn parses_threshold_equals_option() {
 #[test]
 fn parses_short_threshold_equals_option() {
     match parse_args(os_args(["-t=3"])) {
-        ParseResult::Run(args) => assert_eq!(args, Args { threshold: 3 }),
+        ParseResult::Run(args) => assert_eq!(
+            args,
+            Args {
+                threshold: 3,
+                ..Args::default()
+            }
+        ),
         _ => panic!("expected runnable args"),
     }
 }
@@ -127,7 +151,13 @@ fn parses_short_threshold_equals_option() {
 #[test]
 fn parses_attached_short_threshold_option() {
     match parse_args(os_args(["-t3"])) {
-        ParseResult::Run(args) => assert_eq!(args, Args { threshold: 3 }),
+        ParseResult::Run(args) => assert_eq!(
+            args,
+            Args {
+                threshold: 3,
+                ..Args::default()
+            }
+        ),
         _ => panic!("expected runnable args"),
     }
 }

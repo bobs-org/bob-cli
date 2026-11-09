@@ -43,16 +43,23 @@ Run 'bob task <command> --help' for more information on a command.
 Move done and canceled tasks from area and project notes
 
 ```text title="bob task archive --help"
-usage: bob task archive [-t|--threshold N]
+usage: bob task archive [-n|--dry-run] [-f|--format human|json] [-t|--threshold N]
 
 Move done and canceled Bob task blocks from area and project notes into
 done/ archives, link sources, repair archive metadata, and repair Obsidian
-links to moved block ids. See docs/task-archive.md.
+links to moved block ids. Writes go through the guarded writer under the
+vault maintenance lock (waiting up to 30 seconds). See docs/task-archive.md.
 
-example:
+examples:
   bob task archive --threshold 10
+  bob task archive --dry-run
+  bob task archive -n -f json
 
 options:
+  -n, --dry-run    plan and report only: no lock, writes, or Git
+  -f, --format human|json
+                   output format (default: human); json prints one
+                   schema_version 1 document
   -h, --help       show this help message and exit
   -t, --threshold N
                    minimum completed/canceled task count per source note (default: 10)

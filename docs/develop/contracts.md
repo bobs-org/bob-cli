@@ -39,7 +39,7 @@ These pages specify behavior that Bob components and their tests must agree on.
 - [Task dependency links](../task-dependencies.md) — Task dependency links: Depends-On line, BLOCKS mirror, successor offers, project-dependency contract, plus conformance vectors
 - [Task relations](../task-relations.md) — Task relations: directed LINKS edges, the generated LINKED FROM mirror, inert text mentions, and `~` / `~~` capture
 - [Move open tasks between notes](../task-move.md) — `bob task move` selection, preservation, link repair, guarded writes, and sync behavior
-- [Archive done tasks from area and project notes](../task-archive.md) — `bob task archive` eligibility, holds, pairing, link repair, and Git behavior
+- [Archive done tasks from area and project notes](../task-archive.md) — `bob task archive` eligibility, holds, pairing, link repair, guarded writes, preview, JSON, and Git behavior
 - [Merge tasks into a task, drawer, or section](../task-merge.md) — `bob task merge` folding tasks into a task, drawer, or section, merge labels, and guarded writes
 - [Split bullets out into tasks](../task-split.md) — `bob task split` promoting bullets into tasks, stubs, mentions, and conformance vectors
 - [Task Status Hooks](../task-status-hooks.md) — `bob task reconcile` Pomodoro-driven task status
