@@ -1550,13 +1550,18 @@ fn append_section_bullets(
         }
     } else {
         if !body_lines.is_empty()
-            && body_lines
+            && !body_lines
                 .last()
-                .is_some_and(|line| !line.content.trim().is_empty())
-            && body_lines.last().is_some_and(|line| line.ending.is_empty())
-            && let Some(last) = body_lines.last_mut()
+                .is_some_and(|line| line.content.trim().is_empty())
+            && !body_lines.last().is_some_and(|line| {
+                line.ending.is_empty() && line.content.is_empty()
+            })
         {
-            last.ending = newline.to_owned();
+            if body_lines.last().is_some_and(|line| line.ending.is_empty())
+                && let Some(last) = body_lines.last_mut()
+            {
+                last.ending = newline.to_owned();
+            }
             body_lines.push(SplitLine {
                 content: String::new(),
                 ending: newline.to_owned(),
@@ -2978,6 +2983,68 @@ mod tests {
             "section children appended:\n{}",
             applied.markdown
         );
+    }
+
+    #[test]
+    fn new_named_section_gets_a_blank_line_before_the_heading() {
+        let record_type = restaurant_type();
+        let front = "---\nparent: \"[[eat]]\"\ntype: \"[[restaurant]]\"\ntitle: \"T\"\nstatus: liked\ncategory: \"Coffee\"\nlocation: \"Clark\"\ncreated: 2026-11-08T12:41:07-0500\n---\n";
+        let notes = [RecordNoteInput::section(
+            "MUST ORDER",
+            vec!["Dragon roll".to_owned()],
+        )];
+        let apply = |original: &str| {
+            apply_record_update(&RecordUpdateRequest {
+                record_type: &record_type,
+                original,
+                fields: &[],
+                notes: &notes,
+                note_date: Some(NOTE_DATE),
+                today: TODAY,
+            })
+            .expect("new section")
+            .markdown
+        };
+
+        let after_bullet = format!("{front}\n# T\n\n## Notes\n\n- old\n");
+        assert_eq!(
+            apply(&after_bullet),
+            format!(
+                "{front}\n# T\n\n## Notes\n\n- old\n\n## Must Order\n\n- Dragon roll\n"
+            ),
+        );
+
+        let after_fence =
+            format!("{front}\n# T\n\n## Source\n\n```text\nlegacy row\n```\n");
+        assert_eq!(
+            apply(&after_fence),
+            format!(
+                "{front}\n# T\n\n## Source\n\n```text\nlegacy row\n```\n\n## Must Order\n\n- Dragon roll\n"
+            ),
+        );
+
+        let no_newline = format!("{front}\n# T\n\n## Notes\n\n- old");
+        assert_eq!(
+            apply(&no_newline),
+            format!(
+                "{front}\n# T\n\n## Notes\n\n- old\n\n## Must Order\n\n- Dragon roll\n"
+            ),
+        );
+
+        let already_blank = format!("{front}\n# T\n\n## Notes\n\n- old\n\n");
+        assert_eq!(
+            apply(&already_blank),
+            format!(
+                "{front}\n# T\n\n## Notes\n\n- old\n\n## Must Order\n\n- Dragon roll\n"
+            ),
+        );
+
+        let crlf = after_bullet.replace('\n', "\r\n");
+        let expected_crlf = format!(
+            "{front}\n# T\n\n## Notes\n\n- old\n\n## Must Order\n\n- Dragon roll\n"
+        )
+        .replace('\n', "\r\n");
+        assert_eq!(apply(&crlf), expected_crlf);
     }
 
     #[test]
