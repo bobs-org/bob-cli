@@ -13,7 +13,8 @@ use std::{
 };
 
 use super::capture_language::{
-    candidate_collection_routes, candidate_dirs, RecordRoutePolicy,
+    candidate_collection_routes, candidate_dirs, DiagnosticRewrite,
+    RecordRoutePolicy,
 };
 use super::{
     capture_language::record::RecordNoteIntent,
@@ -86,6 +87,46 @@ pub(crate) struct RecordParseEntry {
     pub(crate) warnings: Vec<RecordDiagnostic>,
     pub(crate) plan_issue: Option<RecordParseIssue>,
     pub(crate) near_values: Vec<records::NearValueHint>,
+    /// Exact existing or staged target for a safe `record_exists` rewrite.
+    pub(crate) duplicate_target_stem: Option<String>,
+}
+
+/// Build the item-scoped create-to-update fix shared by `record_exists` and
+/// the similar-record picker. The splice covers only the create route and
+/// title on the parent line, leaving bullets and surrounding draft bytes
+/// untouched. An explicit-new route is a create too, so it is rewritten in
+/// exactly the same way when its target is known.
+pub(crate) fn create_to_update_rewrite(
+    input: &str,
+    intent: &RecordNoteIntent,
+    target_dir: &str,
+    target_stem: &str,
+) -> Option<DiagnosticRewrite> {
+    if intent.action != super::capture_language::record::RecordAction::Create
+        || !intent.dir.eq_ignore_ascii_case(target_dir)
+    {
+        return None;
+    }
+    let title = intent.title_range?;
+    let (start, end) = (
+        intent.route_range.0.min(title.0),
+        intent.route_range.1.max(title.1),
+    );
+    if start > end
+        || end > input.len()
+        || !input.is_char_boundary(start)
+        || !input.is_char_boundary(end)
+        || input[start..end].contains('\r')
+        || input[start..end].contains('\n')
+    {
+        return None;
+    }
+    Some(DiagnosticRewrite {
+        start,
+        end,
+        replacement: format!("@{target_dir}/{target_stem}"),
+        label: "Add to it".to_owned(),
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -242,6 +283,7 @@ pub(crate) fn resolve_record_intents_with_catalog(
                             warnings: Vec::new(),
                             plan_issue: None,
                             near_values,
+                            duplicate_target_stem: None,
                         });
                     }
                     Err(error) => {
@@ -252,6 +294,13 @@ pub(crate) fn resolve_record_intents_with_catalog(
                         );
                         let (stem, stem_source, path) =
                             resolved_destination(intent, record_type);
+                        let duplicate_target_stem = safe_duplicate_target_stem(
+                            catalog,
+                            record_type,
+                            stem.as_deref(),
+                            &error,
+                            &overlay,
+                        );
                         if error.code != RecordPlanErrorCode::PathCollision
                             && let Some(path) = path.as_ref()
                         {
@@ -277,6 +326,7 @@ pub(crate) fn resolve_record_intents_with_catalog(
                                 record_type,
                             )),
                             near_values,
+                            duplicate_target_stem,
                         });
                     }
                 }
@@ -317,6 +367,7 @@ pub(crate) fn resolve_record_intents_with_catalog(
                                     .map(|(start, end)| start..end),
                             }),
                             near_values,
+                            duplicate_target_stem: None,
                         });
                         continue;
                     }
@@ -356,6 +407,7 @@ pub(crate) fn resolve_record_intents_with_catalog(
                             warnings: plan.warnings,
                             plan_issue: None,
                             near_values,
+                            duplicate_target_stem: None,
                         });
                     }
                     Err(error) => {
@@ -390,6 +442,7 @@ pub(crate) fn resolve_record_intents_with_catalog(
                                 range: range.map(|(start, end)| start..end),
                             }),
                             near_values,
+                            duplicate_target_stem: None,
                         });
                     }
                 }
@@ -422,6 +475,37 @@ struct OverlayResolved {
 
 fn overlay_key(dir: &str, stem: &str) -> String {
     format!("{}/{}", dir.to_lowercase(), stem.to_lowercase())
+}
+
+fn safe_duplicate_target_stem(
+    catalog: &mut RecordCatalog,
+    record_type: &RecordType,
+    stem: Option<&str>,
+    error: &RecordPlanError,
+    overlay: &HashMap<String, OverlaySnapshot>,
+) -> Option<String> {
+    if error.code != RecordPlanErrorCode::PathCollision {
+        return None;
+    }
+    let [collision_path] = error.paths.as_slice() else {
+        return None;
+    };
+    let stem = stem?;
+    if let Some(snapshot) = overlay.get(&overlay_key(&record_type.dir, stem))
+        && snapshot.path == *collision_path
+    {
+        return Some(snapshot.stem.clone());
+    }
+    match catalog.folder(&record_type.dir).lookup_stem(stem) {
+        records::StemLookup::Exact(note)
+            if note.relative_path == *collision_path =>
+        {
+            Some(note.stem.clone())
+        }
+        records::StemLookup::Exact(_)
+        | records::StemLookup::Ambiguous(_)
+        | records::StemLookup::None => None,
+    }
 }
 
 fn resolve_update_snapshot(
@@ -823,5 +907,53 @@ mod tests {
         let task_context = CaptureRecordContext::new(absent, root);
         assert!(!task_context.catalog_is_loaded("eat"));
         assert_eq!(task_context.catalog_files_opened(), 0);
+    }
+
+    #[test]
+    fn create_to_update_rewrite_is_item_scoped_for_both_route_positions() {
+        let cases = [
+            (
+                "@eat/^ninja_sushi Ninja Sushi\n- keep Café\n\nSibling",
+                "@eat/^ninja_sushi",
+                "Ninja Sushi",
+                "ninja_sushi",
+                "@eat/ninja_sushi\n- keep Café\n\nSibling",
+            ),
+            (
+                "Café Nagi @eat/^nagi-shop\n- keep this bullet\n\nNext item",
+                "@eat/^nagi-shop",
+                "Café Nagi",
+                "nagi-shop",
+                "@eat/nagi-shop\n- keep this bullet\n\nNext item",
+            ),
+        ];
+        for (input, route, title, target_stem, expected) in cases {
+            let route_start = input.find(route).expect("route");
+            let title_start = input.find(title).expect("title");
+            let intent = RecordNoteIntent {
+                action:
+                    super::super::capture_language::record::RecordAction::Create,
+                dir: "eat".to_owned(),
+                title: title.to_owned(),
+                explicit_stem: Some("new-stem".to_owned()),
+                update_stem: None,
+                fields: Vec::new(),
+                notes: Vec::new(),
+                route_range: (route_start, route_start + route.len()),
+                title_range: Some((title_start, title_start + title.len())),
+                stem_range: None,
+            };
+            let rewrite =
+                create_to_update_rewrite(input, &intent, "eat", target_stem)
+                    .expect("target rewrite");
+            assert_eq!(rewrite.label, "Add to it");
+            let result = format!(
+                "{}{}{}",
+                &input[..rewrite.start],
+                rewrite.replacement,
+                &input[rewrite.end..]
+            );
+            assert_eq!(result, expected);
+        }
     }
 }

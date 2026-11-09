@@ -493,6 +493,19 @@ pub(super) fn candidate_lines(
                 }
             })
             .collect(),
+        Candidates::RecordTarget(items) => items
+            .iter()
+            .map(|item| {
+                let mut details = vec![item.title.clone()];
+                if let Some(status) = item.status.as_deref() {
+                    details.push(status.to_string());
+                }
+                details.extend(
+                    item.fields.iter().map(|field| field.value.clone()),
+                );
+                (item.replacement.clone(), details.join(" · "))
+            })
+            .collect(),
         Candidates::RecordField(items) => items
             .iter()
             .map(|item| {
@@ -502,6 +515,10 @@ pub(super) fn candidate_lines(
                     format!("{}  default", item.label)
                 } else {
                     format!("{}  optional", item.label)
+                };
+                let detail = match item.current.as_deref() {
+                    Some(current) => format!("{detail}  · current: {current}"),
+                    None => detail,
                 };
                 (item.key.clone(), detail)
             })
@@ -815,6 +832,7 @@ pub(super) fn context_label(context: CompletionContext) -> &'static str {
         CompletionContext::WikilinkTask => "wikilink_task",
         CompletionContext::RecordField => "record_field",
         CompletionContext::RecordValue => "record_value",
+        CompletionContext::RecordTarget => "record_target",
     }
 }
 

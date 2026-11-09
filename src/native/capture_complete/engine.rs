@@ -164,6 +164,7 @@ fn build_result_inner(
             | CompletionContext::PomodoroMergeSrc
             | CompletionContext::PomodoroMergeDest
             | CompletionContext::WikilinkTask
+            | CompletionContext::RecordTarget
             | CompletionContext::RecordField
             | CompletionContext::RecordValue => {
                 unreachable!("link field context")
@@ -821,6 +822,7 @@ fn build_result_inner(
         | CompletionContext::WikilinkHeading
         | CompletionContext::WikilinkBlock
         | CompletionContext::WikilinkTask
+        | CompletionContext::RecordTarget
         | CompletionContext::RecordField
         | CompletionContext::RecordValue => {
             unreachable!("marker field context")

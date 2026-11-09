@@ -145,6 +145,29 @@ pub(super) struct RecordFieldCandidate {
     pub(super) list: bool,
     #[serde(skip_serializing_if = "is_false")]
     pub(super) defaulted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) current: Option<String>,
+    pub(super) cursor_after: usize,
+    pub(super) continuation: CandidateContinuation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RecordTargetField {
+    pub(super) key: String,
+    pub(super) label: String,
+    pub(super) value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RecordTargetCandidate {
+    pub(super) replacement: String,
+    pub(super) route: String,
+    pub(super) stem: String,
+    pub(super) title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) status: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) fields: Vec<RecordTargetField>,
     pub(super) cursor_after: usize,
     pub(super) continuation: CandidateContinuation,
 }
@@ -185,6 +208,8 @@ pub(super) struct RecordCompletionMeta {
     pub(super) field: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) current: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) assist_version: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -933,6 +958,7 @@ pub(super) struct PomodoroNameCandidate {
 pub(super) enum Candidates {
     Route(Vec<RouteCandidate>),
     Section(Vec<SectionMenuRow>),
+    RecordTarget(Vec<RecordTargetCandidate>),
     RecordField(Vec<RecordFieldCandidate>),
     RecordValue(Vec<RecordValueCandidate>),
     Task(Vec<TaskCandidate>),
@@ -1003,6 +1029,7 @@ impl Candidates {
         match self {
             Self::Route(items) => items.len(),
             Self::Section(items) => items.len(),
+            Self::RecordTarget(items) => items.len(),
             Self::RecordField(items) => items.len(),
             Self::RecordValue(items) => items.len(),
             Self::Task(items) => items.len(),

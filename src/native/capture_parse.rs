@@ -3305,6 +3305,18 @@ fn record_parse_diagnostics(
             && !(issue.code == "record_title"
                 && entry.intent.title.trim().is_empty())
         {
+            let rewrite = (issue.code == "record_exists")
+                .then(|| {
+                    entry.duplicate_target_stem.as_deref().and_then(|stem| {
+                        super::capture_record::create_to_update_rewrite(
+                            input,
+                            &entry.intent,
+                            &entry.record_type.dir,
+                            stem,
+                        )
+                    })
+                })
+                .flatten();
             diagnostics.push(Diagnostic {
                 severity: Severity::Error,
                 code: issue.code,
@@ -3313,7 +3325,7 @@ fn record_parse_diagnostics(
                     .range
                     .as_ref()
                     .map(|range| (range.start, range.end)),
-                rewrite: None,
+                rewrite,
             });
         }
         for issue in &entry.invalid {

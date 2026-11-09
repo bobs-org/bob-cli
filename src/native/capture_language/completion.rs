@@ -90,6 +90,8 @@ pub(crate) enum CompletionContext {
     RecordField,
     /// A record field value, including an explicit next-missing-field request.
     RecordValue,
+    /// An existing Record Note target after a configured `@dir/` route.
+    RecordTarget,
 }
 
 /// The active marker component at one cursor position, ready for a

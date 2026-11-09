@@ -13,7 +13,8 @@ use super::engine::CompleteRequest;
 use super::model::{
     CandidateContinuation, Candidates, CaptureCompleteDiagnostic,
     CaptureCompleteResult, CompleteError, RecordCompletionMeta,
-    RecordEditAction, RecordFieldCandidate, RecordValueCandidate, Replacement,
+    RecordEditAction, RecordFieldCandidate, RecordTargetCandidate,
+    RecordTargetField, RecordValueCandidate, Replacement,
 };
 use crate::native::capture_language::{
     self, candidate_collection_routes, candidate_dirs, CompletionContext,
@@ -25,9 +26,10 @@ use crate::native::capture_record::{
     RecordParseEntry,
 };
 use crate::native::records::{
-    self, FieldInputState, FieldKind, FolderIndex, NearValueHint,
-    RecordCatalog, RecordDate, RecordField, RecordPropertyState, RecordScalar,
-    RecordType, RecordValue, ValidatedFieldInput,
+    self, FieldInputState, FieldKind, FolderIndex, IndexedFieldValue,
+    IndexedRecord, NearValueHint, RecordCatalog, RecordDate, RecordField,
+    RecordPropertyState, RecordScalar, RecordType, RecordValue,
+    ValidatedFieldInput,
 };
 
 thread_local! {
@@ -159,8 +161,124 @@ impl<'a> Session<'a> {
             set_files_opened(self.catalog.files_opened());
             return Ok(result);
         }
+        if let Some(intent) = intent.as_ref()
+            && let Some(probe) = target_probe(self.request, intent)
+        {
+            let result = self.target_menu(intent, probe);
+            set_files_opened(self.catalog.files_opened());
+            return Ok(Some(result));
+        }
         set_files_opened(self.catalog.files_opened());
         Ok(None)
+    }
+
+    fn target_menu(
+        &mut self,
+        intent: &RecordNoteIntent,
+        probe: TargetProbe,
+    ) -> CaptureCompleteResult {
+        let policy = record_policy_for_draft(
+            self.request.bob_dir,
+            None,
+            self.request.raw_text,
+        );
+        let Some(config) = policy.records_config().cloned() else {
+            return CaptureCompleteResult::empty(self.request.cursor);
+        };
+        let Some(record_type) = config.by_directory(&intent.dir).cloned()
+        else {
+            return CaptureCompleteResult::empty(self.request.cursor);
+        };
+        let notes = self.catalog.folder(&intent.dir).notes().to_vec();
+        let mut ranked = Vec::new();
+        for note in notes {
+            let Ok(target) = records::resolve_update_target(
+                &config,
+                &mut self.catalog,
+                &record_type.id,
+                &note.stem,
+            ) else {
+                // An ambiguous or unsafe filesystem identity is not an
+                // actionable completion target.
+                continue;
+            };
+            let title = note.title.clone().unwrap_or_else(|| note.stem.clone());
+            let Some((rank, distance)) =
+                target_match_rank(&probe.query, &target.stem, &title)
+            else {
+                continue;
+            };
+            let status = record_type
+                .field("status")
+                .and_then(|field| indexed_field_display(field, &note));
+            let fields = record_type
+                .fields
+                .iter()
+                .filter(|field| field.suggest)
+                .take(2)
+                .filter_map(|field| {
+                    indexed_field_display(field, &note).map(|value| {
+                        RecordTargetField {
+                            key: field.key.clone(),
+                            label: field.label.clone(),
+                            value,
+                        }
+                    })
+                })
+                .collect::<Vec<_>>();
+            let route = format!("@{}/{}", record_type.dir, target.stem);
+            let cursor_after = probe.replace.start + route.len();
+            ranked.push((
+                rank,
+                distance,
+                title.to_lowercase(),
+                target.stem.to_lowercase(),
+                target.path.to_string_lossy().into_owned(),
+                RecordTargetCandidate {
+                    replacement: route.clone(),
+                    route,
+                    stem: target.stem,
+                    title,
+                    status,
+                    fields,
+                    cursor_after,
+                    continuation: CandidateContinuation {
+                        cursor: cursor_after,
+                        next_missing_field: true,
+                    },
+                },
+            ));
+        }
+        ranked.sort_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+                .then_with(|| left.2.cmp(&right.2))
+                .then_with(|| left.3.cmp(&right.3))
+                .then_with(|| left.4.cmp(&right.4))
+        });
+        let mut result = CaptureCompleteResult::empty(self.request.cursor);
+        result.context = Some(CompletionContext::RecordTarget);
+        result.replacement = Replacement {
+            start: probe.replace.start,
+            end: probe.replace.end,
+        };
+        result.query = Some(probe.query);
+        result.candidates = Candidates::RecordTarget(
+            ranked.into_iter().map(|row| row.5).collect(),
+        );
+        result.record = Some(RecordCompletionMeta {
+            record_type: record_type.id,
+            dir: record_type.dir,
+            label: record_type.label,
+            emoji: record_type.emoji,
+            field: None,
+            title: None,
+            current: None,
+            assist_version: Some(RECORD_ASSIST_VERSION),
+            edit: None,
+        });
+        result
     }
 
     fn next_missing(&mut self) -> Result<CaptureCompleteResult, CompleteError> {
@@ -350,6 +468,11 @@ impl<'a> Session<'a> {
         for (field, defaulted) in required {
             let insert = format!("{}:: ", field.key);
             let cursor_after = probe.replace.start + insert.len();
+            let current = entry
+                .update_properties
+                .iter()
+                .find(|property| property.key == field.key)
+                .and_then(|property| property.current_display.clone());
             rows.push(RecordFieldCandidate {
                 replacement: insert,
                 key: field.key.clone(),
@@ -357,7 +480,10 @@ impl<'a> Session<'a> {
                 kind: field.kind.kind_name(),
                 required: field.required,
                 list: field.list,
-                defaulted,
+                defaulted: defaulted
+                    && entry.action
+                        == super::super::capture_record::RecordParseAction::Create,
+                current,
                 cursor_after,
                 continuation: CandidateContinuation {
                     cursor: cursor_after,
@@ -519,6 +645,13 @@ impl<'a> Session<'a> {
         };
         result.candidates = candidates;
         result.query = query;
+        let current = field.as_ref().and_then(|key| {
+            entry
+                .update_properties
+                .iter()
+                .find(|property| &property.key == key)
+                .and_then(|property| property.current_display.clone())
+        });
         result.record = Some(RecordCompletionMeta {
             record_type: entry.record_type.id.clone(),
             dir: intent.dir.clone(),
@@ -526,6 +659,7 @@ impl<'a> Session<'a> {
             emoji: entry.record_type.emoji.clone(),
             field,
             title: (!intent.title.is_empty()).then(|| intent.title.clone()),
+            current,
             assist_version: Some(RECORD_ASSIST_VERSION),
             edit: None,
         });
@@ -553,6 +687,95 @@ struct SuggestedValue {
     insert: String,
     display: String,
     count: Option<usize>,
+}
+
+struct TargetProbe {
+    query: String,
+    replace: Range<usize>,
+}
+
+fn target_probe(
+    request: &CompleteRequest<'_>,
+    intent: &RecordNoteIntent,
+) -> Option<TargetProbe> {
+    if intent.explicit_stem.is_some()
+        || request.cursor < intent.route_range.0
+        || request.cursor > intent.route_range.1
+    {
+        return None;
+    }
+    let query = match intent.action {
+        crate::native::capture_language::record::RecordAction::Create => {
+            String::new()
+        }
+        crate::native::capture_language::record::RecordAction::Update => {
+            intent.update_stem.clone().unwrap_or_default()
+        }
+    };
+    Some(TargetProbe {
+        query,
+        replace: intent.route_range.0..intent.route_range.1,
+    })
+}
+
+fn target_match_rank(
+    query: &str,
+    stem: &str,
+    title: &str,
+) -> Option<(u8, usize)> {
+    let query = query.to_lowercase();
+    if query.is_empty() {
+        return Some((0, 0));
+    }
+    let stem = stem.to_lowercase();
+    let title = title.to_lowercase();
+    if query == stem || query == title {
+        Some((0, 0))
+    } else if stem.starts_with(&query) || title.starts_with(&query) {
+        Some((1, 0))
+    } else {
+        crate::native::note_tasks::bounded_levenshtein(&query, &title, 2)
+            .map(|distance| (2, distance))
+    }
+}
+
+fn indexed_field_display(
+    field: &RecordField,
+    note: &IndexedRecord,
+) -> Option<String> {
+    let indexed = note.fields.iter().find(|value| value.key == field.key)?;
+    let display_scalar = |raw: &str| {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return None;
+        }
+        let display = match &field.kind {
+            FieldKind::Choices(choices) => choices
+                .iter()
+                .find(|choice| choice.value == raw)
+                .map(|choice| choice.label.clone())
+                .unwrap_or_else(|| raw.to_owned()),
+            FieldKind::Link => raw
+                .strip_prefix("[[")
+                .and_then(|inner| inner.strip_suffix("]]"))
+                .map(crate::native::capture_block_ids::wikilink_phrase)
+                .unwrap_or_else(|| raw.to_owned()),
+            _ => raw.to_owned(),
+        };
+        (!display.is_empty()).then_some(display)
+    };
+    match &indexed.value {
+        IndexedFieldValue::Scalar(value) => display_scalar(value),
+        IndexedFieldValue::List(values) => {
+            let display = values
+                .iter()
+                .filter_map(|value| display_scalar(value))
+                .collect::<Vec<_>>()
+                .join(", ");
+            (!display.is_empty()).then_some(display)
+        }
+        IndexedFieldValue::Null | IndexedFieldValue::Unsupported => None,
+    }
 }
 
 fn field_key_probe(
@@ -1117,5 +1340,6 @@ fn empty_entry(intent: &RecordNoteIntent) -> RecordParseEntry {
         warnings: Vec::new(),
         plan_issue: None,
         near_values: Vec::new(),
+        duplicate_target_stem: None,
     }
 }

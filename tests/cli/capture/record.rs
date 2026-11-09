@@ -116,6 +116,16 @@ fn capture_parse(vault: &Path, config: &Path, draft: &str) -> Output {
         .expect("run capture-parse")
 }
 
+fn apply_rewrite(input: &str, diagnostic: &Value) -> String {
+    let rewrite = &diagnostic["rewrite"];
+    let start = rewrite["start"].as_u64().expect("rewrite start") as usize;
+    let end = rewrite["end"].as_u64().expect("rewrite end") as usize;
+    let replacement = rewrite["replacement"]
+        .as_str()
+        .expect("rewrite replacement");
+    format!("{}{}{}", &input[..start], replacement, &input[end..])
+}
+
 #[test]
 fn capture_record_dry_run_and_commit_share_markdown() {
     let (_temp, vault, config) = complete_fixture();
@@ -376,6 +386,112 @@ fn capture_on_disk_and_case_insensitive_collisions() {
         fs::read_to_string(vault.join("eat/RAMEN_NAGI.md")).unwrap(),
         "# Case\n"
     );
+}
+
+#[test]
+fn record_exists_fix_updates_the_existing_record_without_appending_title() {
+    let (_temp, vault, config) = complete_fixture();
+    write_ninja(&vault);
+    let draft = "Ninja Sushi @eat/\n- Visited again with Kelly.";
+    let parsed = json_output(&capture_parse(&vault, &config, draft));
+    let diagnostic = parsed["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["code"] == "record_exists")
+        .expect("duplicate diagnostic");
+    assert_eq!(diagnostic["rewrite"]["label"], "Add to it");
+    let rewritten = apply_rewrite(draft, diagnostic);
+    assert_eq!(rewritten, "@eat/ninja_sushi\n- Visited again with Kelly.");
+    let update = json_output(&capture_parse(&vault, &config, &rewritten));
+    assert_eq!(update["record"]["action"], "update");
+    assert_eq!(update["record"]["stem"], "ninja_sushi");
+
+    let preview =
+        capture(&vault, &config, &["--dry-run", "-f", "json", &rewritten])
+            .output()
+            .expect("dry-run Add to it rewrite");
+    assert_success(&preview);
+    let preview = json_output(&preview);
+    let file = preview["note_files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|file| file["path"] == "eat/ninja_sushi.md")
+        .expect("updated note file");
+    assert_eq!(file["action"], "update");
+    assert!(file["body"].as_str().unwrap().contains("Visited again"));
+    assert!(
+        !file["body"]
+            .as_str()
+            .unwrap()
+            .contains("2026-10-07: Ninja Sushi"),
+        "the removed duplicate title is not appended as a note"
+    );
+}
+
+#[test]
+fn record_exists_fix_uses_a_staged_target_but_not_an_incomplete_or_unsafe_one()
+{
+    let (_temp, vault, config) = complete_fixture();
+    let first = "Ramen Nagi @eat/\n- status:: liked\n- category:: Ramen\n- location:: Clark";
+    let second = "Ramen Nagi @eat/\n- Visited again.";
+    let draft = format!("{first}\n\n{second}");
+    let parsed = json_output(&capture_parse(&vault, &config, &draft));
+    let diagnostic = parsed["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["code"] == "record_exists")
+        .expect("same-draft duplicate");
+    let rewritten = apply_rewrite(&draft, diagnostic);
+    assert!(rewritten.contains("@eat/ramen_nagi\n- Visited again."));
+    let parsed_update =
+        json_output(&capture_parse(&vault, &config, &rewritten));
+    assert_eq!(parsed_update["items"][1]["record"]["action"], "update");
+    let dry =
+        capture(&vault, &config, &["--dry-run", "-f", "json", &rewritten])
+            .output()
+            .expect("dry-run staged update");
+    assert_success(&dry);
+
+    let incomplete = concat!(
+        "Ramen Nagi @eat/\n- status:: liked\n\n",
+        "Ramen Nagi @eat/\n- category:: Ramen\n- location:: Clark"
+    );
+    let parsed = json_output(&capture_parse(&vault, &config, incomplete));
+    let duplicate = parsed["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["code"] == "record_exists")
+        .expect("incomplete staged duplicate");
+    assert!(duplicate.get("rewrite").is_none());
+
+    fs::create_dir_all(vault.join("eat/ghost.md"))
+        .expect("non-record path collision");
+    let non_record =
+        "Ghost @eat/\n- status:: liked\n- category:: Ramen\n- location:: Clark";
+    let parsed = json_output(&capture_parse(&vault, &config, non_record));
+    let collision = parsed["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["code"] == "record_exists")
+        .expect("non-record path collision");
+    assert!(collision.get("rewrite").is_none());
+
+    write_file(&vault.join("eat/ninja_sushi.md"), NINJA);
+    write_file(&vault.join("eat/NINJA_SUSHI.md"), NINJA);
+    let ambiguous = "Ninja Sushi @eat/\n- Another visit.";
+    let parsed = json_output(&capture_parse(&vault, &config, ambiguous));
+    let collision = parsed["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["code"] == "record_exists")
+        .expect("ambiguous record collision");
+    assert!(collision.get("rewrite").is_none());
 }
 
 #[test]

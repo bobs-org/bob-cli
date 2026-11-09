@@ -208,6 +208,113 @@ fn route_menu_offers_eat_with_new_label_and_continuation() {
 }
 
 #[test]
+fn record_target_menu_ranks_matches_and_shows_stored_values() {
+    let vault = RecordVault::new("bob-cli-complete-record-targets");
+    vault.write_note("west_1", "Pizza", "Westfield");
+    vault.write_note("west_2", "Pizza", "Westfield");
+    write_file(
+        &vault.path().join("eat/wast.md"),
+        "---\ntitle: Wast\nstatus: liked\ncategory: Italian\nlocation: Clark\n---\n# Wast\n",
+    );
+
+    let raw = "@eat/wes";
+    let result = vault.complete(raw, raw.len());
+    assert_eq!(result.context, Some(CompletionContext::RecordTarget));
+    assert_eq!(
+        result.replacement,
+        Replacement {
+            start: 0,
+            end: raw.len()
+        }
+    );
+    let Candidates::RecordTarget(rows) = &result.candidates else {
+        panic!("expected record targets: {result:?}");
+    };
+    let fuzzy = rows
+        .iter()
+        .position(|row| row.stem == "wast")
+        .expect("fuzzy title match");
+    assert!(
+        rows[..fuzzy].iter().all(|row| row.stem.starts_with("west")),
+        "prefix rows must precede fuzzy title matches: {rows:?}"
+    );
+    let west = rows
+        .iter()
+        .find(|row| row.stem == "west_1")
+        .expect("west_1 target");
+    assert_eq!(west.replacement, "@eat/west_1");
+    assert_eq!(west.route, "@eat/west_1");
+    assert_eq!(west.title, "west_1");
+    assert_eq!(west.status.as_deref(), Some("Liked"));
+    assert_eq!(
+        west.fields
+            .iter()
+            .map(|field| (field.key.as_str(), field.value.as_str()))
+            .collect::<Vec<_>>(),
+        [("category", "Pizza"), ("location", "Westfield")]
+    );
+    assert!(west.continuation.next_missing_field);
+    assert_eq!(west.continuation.cursor, west.cursor_after);
+
+    let explicit = "@eat/^west-1";
+    let explicit_result = vault.complete(explicit, explicit.len());
+    assert_ne!(
+        explicit_result.context,
+        Some(CompletionContext::RecordTarget),
+        "explicit-new stems keep the create path"
+    );
+}
+
+#[test]
+fn update_field_assistance_uses_current_values_without_legacy_prompts() {
+    let vault = RecordVault::new("bob-cli-complete-record-update-assist");
+    vault.write_note("nagi", "Ramen", "\"Clark\"");
+
+    let field_draft = "@eat/nagi\n- sta";
+    let fields = vault.complete(field_draft, field_draft.len());
+    assert_eq!(fields.context, Some(CompletionContext::RecordField));
+    let Candidates::RecordField(rows) = &fields.candidates else {
+        panic!("expected field candidates: {fields:?}");
+    };
+    let status = rows
+        .iter()
+        .find(|row| row.key == "status")
+        .expect("status field");
+    assert_eq!(status.current.as_deref(), Some("Liked"));
+    assert!(!status.defaulted, "updates do not apply create defaults");
+
+    let value_draft = "@eat/nagi\n- status:: ";
+    let values = vault.complete(value_draft, value_draft.len());
+    assert_eq!(values.context, Some(CompletionContext::RecordValue));
+    assert_eq!(
+        values
+            .record
+            .as_ref()
+            .and_then(|record| record.current.as_deref()),
+        Some("Liked")
+    );
+
+    let explicit_empty = vault.next_missing(value_draft, value_draft.len());
+    assert_eq!(
+        explicit_empty.context,
+        Some(CompletionContext::RecordValue),
+        "an explicitly empty required edit remains correctable"
+    );
+
+    write_file(
+        &vault.path().join("eat/legacy.md"),
+        "---\ntitle: Legacy\nstatus: liked\n---\n# Legacy\n",
+    );
+    let legacy = "@eat/legacy";
+    let next = vault.next_missing(legacy, legacy.len());
+    assert!(
+        next.context.is_none(),
+        "untouched old gaps are warnings only"
+    );
+    assert!(next.candidates.is_empty());
+}
+
+#[test]
 fn field_menu_lists_required_keys_first_on_a_fresh_dash() {
     let vault = RecordVault::new("bob-cli-complete-record-fields");
     let raw = "Ramen Nagi @eat/\n- ";

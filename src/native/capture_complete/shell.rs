@@ -1104,6 +1104,7 @@ pub(crate) fn shell_completion(
         | CompletionContext::WikilinkHeading
         | CompletionContext::WikilinkBlock
         | CompletionContext::WikilinkTask
+        | CompletionContext::RecordTarget
         | CompletionContext::RecordField
         | CompletionContext::RecordValue => return Ok(None),
     }
@@ -1121,6 +1122,21 @@ fn shell_from_record_result(
     let marker_start = result.replacement.start;
     let mut rows = Vec::new();
     match result.candidates {
+        Candidates::RecordTarget(items) => {
+            for item in items {
+                let mut description = item.title;
+                if let Some(status) = item.status {
+                    description.push_str(" · ");
+                    description.push_str(&status);
+                }
+                rows.push(ShellRow {
+                    nospace: false,
+                    full: item.replacement,
+                    description,
+                    group: "record targets".to_string(),
+                });
+            }
+        }
         Candidates::RecordField(items) => {
             for item in items {
                 rows.push(ShellRow {

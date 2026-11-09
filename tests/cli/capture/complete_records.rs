@@ -172,6 +172,48 @@ fn capture_complete_record_route_offers_new_restaurant() {
 }
 
 #[test]
+fn capture_complete_record_target_replaces_only_the_route() {
+    let (_temp, vault, config) = fixture();
+    let draft = "Went back @eat/nag\n- Sushi was good";
+    let cursor = "Went back @eat/nag".len();
+    let output = complete(&vault, &config, cursor, draft, &[]);
+    assert_success(&output);
+    let json = json_output(&output);
+    assert_eq!(json["context"], "record_target", "{json:#}");
+    assert_eq!(
+        json["replacement"],
+        serde_json::json!({"start": 10, "end": 18})
+    );
+    let target = json["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|candidate| candidate["stem"] == "nagi")
+        .expect("Nagi target");
+    assert_eq!(target["replacement"], "@eat/nagi");
+    assert_eq!(target["title"], "Nagi");
+    assert_eq!(target["status"], "Liked");
+    assert_eq!(target["fields"][0]["key"], "category");
+    assert_eq!(target["fields"][0]["value"], "Ramen");
+    assert_eq!(target["fields"][1]["key"], "location");
+    assert_eq!(target["fields"][1]["value"], "Clark");
+    assert_eq!(target["continuation"]["next_missing_field"], true);
+
+    let rewritten =
+        apply(draft, &json, target["replacement"].as_str().unwrap());
+    assert_eq!(rewritten, "Went back @eat/nagi\n- Sushi was good");
+    let parsed = json_output(&parse(&vault, &config, &rewritten));
+    assert_eq!(parsed["record"]["action"], "update");
+    assert_eq!(parsed["record"]["notes"], 2);
+
+    let explicit_new = "@eat/^nagi";
+    let explicit =
+        complete(&vault, &config, explicit_new.len(), explicit_new, &[]);
+    assert_success(&explicit);
+    assert_ne!(json_output(&explicit)["context"], "record_target");
+}
+
+#[test]
 fn capture_complete_next_missing_walks_required_fields() {
     let (_temp, vault, config) = fixture();
     let mut draft = "Ramen Nagi @eat/".to_string();

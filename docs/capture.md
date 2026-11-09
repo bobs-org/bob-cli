@@ -6501,6 +6501,15 @@ markers outside field values (`#TYPE`, `s:N`, `$N`, `%c`, `%n`, `%l`, `&`,
 `*`, `~`, `!`, `+`, `:`, session operators, task-ID bullets) refuse with
 `record_marker_unsupported`.
 
+A duplicate create refusal (`record_exists`) offers one `Add to it` rewrite
+when the colliding path resolves to exactly one existing or earlier staged
+record. The rewrite removes the create title and changes the route to the
+record's exact `@dir/stem`, leaving authored bullets and neighboring draft
+items untouched. Ambiguous stems and non-record filesystem collisions have
+no rewrite. This is the same create-to-update rewrite used by the later
+Similar records picker; accepting a `record_target` row below keeps authored
+parent text as the update's first note.
+
 `Blaze @eat` stays a task. Parse adds `record_collection_route` plus a
 rewrite that replaces only the route token with `@eat/`. Applying that
 rewrite parses as record creation. Heading, task-ID, escaped, and
@@ -6553,6 +6562,23 @@ value suggestions are empty; clients must not apply it merely because a
 response refreshed. Unknown fields, non-record cursors, and malformed
 `records:` config stay read-only (empty success plus the usual diagnostic
 codes) and never fall through to a task completion context.
+
+With the caret in a configured `@dir/` route or partial existing stem,
+`record_target` offers existing notes from that folder's lazy index. Exact
+and prefix matches on stem or title rank before fuzzy title matches, with
+stable title/stem ties. Rows show the stored title, status label, and up to
+the first two nonempty fields marked `suggest` in schema order. Accept
+replaces only the route with the canonical `@dir/stem` and continues through
+the ordinary missing-field request; authored parent text and bullets remain
+in place. Explicit-new `@dir/^stem` routes do not open this menu.
+
+Update field rows and named-value responses use the target note's snapshot.
+Field candidates may include a `current` display, and value responses include
+`record.current` for the selected field. Existing values do not count as
+missing, create defaults never apply to updates, and `-n` does not turn
+untouched historical required-field gaps into a questionnaire. Explicitly
+empty required edits remain in the next-field walk; explicitly invalid edits
+can be corrected from their field-value menu.
 
 On `Ramen Nagi @eat/`, `-n` offers status choices in schema order. Accepting
 `Liked` inserts `- status:: liked` after the field block (or after the
