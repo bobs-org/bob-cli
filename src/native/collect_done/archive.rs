@@ -85,6 +85,92 @@ pub(super) fn deduplicate_archive_append_block_ids(
         rename_count,
     }
 }
+
+/// Rewrite a moved block's own pathless links to their final IDs.
+///
+/// When `deduplicate_archive_append_block_ids` renames an incoming `^x` to
+/// `^x-1` because the archive already holds `^x`, a pathless `[[#^x]]`
+/// inside the moved block would otherwise resolve to the older archived
+/// `^x`. This rewrites those self-references (with alias and embed intact)
+/// to the final ID before the block is appended. Fenced blocks and inline
+/// code spans are never rewritten.
+pub(super) fn rewrite_renamed_pathless_links(
+    archive_append: &str,
+    renames: &BTreeMap<String, String>,
+) -> String {
+    let renames: BTreeMap<&str, &str> = renames
+        .iter()
+        .filter(|(from, to)| from != to)
+        .map(|(from, to)| (from.as_str(), to.as_str()))
+        .collect();
+    if renames.is_empty() || archive_append.is_empty() {
+        return archive_append.to_string();
+    }
+    let lines: Vec<&str> = archive_append.lines().collect();
+    let fenced = super::super::markdown::fenced_lines(&lines, 0..lines.len());
+    let mut repaired = String::with_capacity(archive_append.len());
+    for (line_index, segment) in
+        archive_append.split_inclusive('\n').enumerate()
+    {
+        let (line, ending) = super::split_line_ending(segment);
+        if fenced.contains(&line_index) {
+            repaired.push_str(segment);
+            continue;
+        }
+        let code_spans =
+            super::super::task_dependencies::inline_code_spans(line);
+        let mut cursor = 0;
+        let mut rewritten = String::with_capacity(line.len());
+        while let Some(relative_start) = line[cursor..].find("[[") {
+            let start = cursor + relative_start;
+            let inner_start = start + 2;
+            let Some(relative_end) = line[inner_start..].find("]]") else {
+                break;
+            };
+            let end = inner_start + relative_end;
+            let candidate = &line[inner_start..end];
+            let replacement = if code_spans
+                .iter()
+                .any(|span| start < span.end && end + 2 > span.start)
+            {
+                None
+            } else {
+                renamed_pathless_link(candidate, &renames)
+            };
+            if let Some(new_inner) = replacement {
+                rewritten.push_str(&line[cursor..start]);
+                rewritten.push_str("[[");
+                rewritten.push_str(&new_inner);
+                rewritten.push_str("]]");
+            } else {
+                rewritten.push_str(&line[cursor..end + 2]);
+            }
+            cursor = end + 2;
+        }
+        rewritten.push_str(&line[cursor..]);
+        repaired.push_str(&rewritten);
+        repaired.push_str(ending);
+    }
+    repaired
+}
+
+fn renamed_pathless_link(
+    inner: &str,
+    renames: &BTreeMap<&str, &str>,
+) -> Option<String> {
+    let (target_with_fragment, alias) = match inner.find('|') {
+        Some(index) => (&inner[..index], &inner[index..]),
+        None => (inner, ""),
+    };
+    let (note_target, fragment) =
+        super::split_block_fragment(target_with_fragment)?;
+    if !note_target.trim().is_empty() {
+        return None;
+    }
+    let block_id = fragment.strip_prefix('^')?;
+    let final_id = renames.get(block_id)?;
+    Some(format!("#^{final_id}{alias}"))
+}
 pub(crate) fn next_available_block_id(
     original_id: &str,
     used: &BTreeSet<String>,

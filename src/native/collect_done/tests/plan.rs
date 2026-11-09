@@ -725,7 +725,7 @@ type: \"[[done]]\"
 }
 
 #[test]
-fn duplicate_moved_block_ids_do_not_rewrite_links() {
+fn duplicate_moved_block_ids_are_held_with_exit_flag() {
     let vault = TempDir::new("bob-cli-collect-done-duplicate-link-plan");
     write_file(
         &vault.path().join("obsidian.md"),
@@ -740,17 +740,22 @@ fn duplicate_moved_block_ids_do_not_rewrite_links() {
 
     let plan = build_collection_plan(vault.path(), 1).expect("build plan");
 
-    assert_eq!(plan.files.len(), 1);
-    assert_eq!(plan.moved_block_id_count(), 1);
-    assert_eq!(plan.ambiguous_moved_block_id_count(), 1);
-    assert_eq!(plan.moved_block_id_rename_count(), 1);
+    assert!(plan.files.is_empty());
+    assert_eq!(plan.moved_block_id_count(), 0);
+    assert_eq!(plan.ambiguous_moved_block_id_count(), 0);
     assert_eq!(plan.link_repair_count(), 0);
     assert!(plan.link_repairs.is_empty());
-    assert!(plan.files[0]
-        .archive_contents
-        .as_deref()
-        .expect("archive contents")
-        .contains("- [x] first #task ^dup\n- [x] second #task ^dup-1\n"));
+    assert_eq!(plan.holds.len(), 2);
+    assert!(plan
+        .holds
+        .iter()
+        .all(|hold| hold.reason == "duplicate_block_id"));
+    let mut report =
+        super::super::report::Report::new(vault.path().to_path_buf(), 1, true);
+    report.plan = Some(plan);
+    report.preview();
+    assert_eq!(report.exit_code(), 1);
+    assert_eq!(report.exit.reason, Some("duplicate_block_id"));
 }
 
 /// Preservation contract (PT13): `bob task archive` carries a closed

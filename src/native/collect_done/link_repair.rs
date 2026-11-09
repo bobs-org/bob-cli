@@ -37,11 +37,12 @@ impl NoteIndex {
         I: IntoIterator<Item = PathBuf>,
     {
         let mut relative_paths = BTreeSet::new();
-        let mut basename_paths = BTreeMap::new();
+        let mut basename_paths: BTreeMap<String, Option<PathBuf>> =
+            BTreeMap::new();
 
         for path in paths {
             if let Some(stem) = path.file_stem().and_then(OsStr::to_str) {
-                match basename_paths.entry(stem.to_string()) {
+                match basename_paths.entry(stem.to_lowercase()) {
                     std::collections::btree_map::Entry::Vacant(entry) => {
                         entry.insert(Some(path.clone()));
                     }
@@ -71,33 +72,24 @@ impl NoteIndex {
         }
 
         let candidate = target_to_relative_markdown_path(target)?;
-        let target_has_path = target.contains('/');
-        let target_has_markdown_extension = has_markdown_extension(target);
-        if (target_has_path || target_has_markdown_extension)
-            && self.relative_paths.contains(&candidate)
-        {
+        if self.relative_paths.contains(&candidate) {
             return Some(candidate);
         }
 
-        if target_has_path {
-            return None;
-        }
-
-        let basename = target
-            .strip_suffix(".md")
-            .or_else(|| target.strip_suffix(".MD"))
-            .unwrap_or(target);
+        let basename = target_basename(target);
+        let stripped = strip_markdown_suffix_case_insensitive(basename);
         self.basename_paths
-            .get(basename)
+            .get(&stripped.to_lowercase())
             .and_then(|path| path.clone())
     }
 }
 
 /// Note-path resolver used by vault-wide moved-block link repair.
 ///
-/// Archive discovery keeps the case-sensitive [`NoteIndex`] above. The mover
-/// supplies the shared case-insensitive vault index without changing archive
-/// lookup rules.
+/// Archive discovery follows the shared case-insensitive [`NoteIndex`] rules
+/// from `vault_links`: exact vault-relative paths match case-sensitively,
+/// basename stems match case-insensitively. The mover supplies the shared
+/// vault index without changing archive lookup rules.
 pub(crate) trait ResolveMovedNote {
     fn resolve_moved_note(
         &self,
@@ -178,17 +170,20 @@ pub(super) fn apply_link_repairs_to_plan(
             &note_index,
             &moved_targets,
         );
-        if let Some((source_target, stayed)) = archive_stayed_block_ids(
-            &relative_path,
-            &contents,
-            &note_index,
-            &planned_contents,
-            &moved_targets,
-        )? {
+        if let Some((source_target, stayed, stayed_headings)) =
+            archive_stayed_block_ids(
+                &relative_path,
+                &contents,
+                &note_index,
+                &planned_contents,
+                &moved_targets,
+            )?
+        {
             let pathless = repair_pathless_archive_links(
                 &repair.contents,
                 &source_target,
                 &stayed,
+                &stayed_headings,
             );
             repair.contents = pathless.contents;
             repair.link_count += pathless.link_count;
@@ -495,14 +490,14 @@ pub(crate) fn repair_links_in_note(
         current_path,
         note_index,
         moved_targets,
-        false,
+        true,
     )
 }
 
 /// Vault-wide moved-block repair with an explicit resolver and code-context flag.
 ///
 /// `skip_code` leaves fenced blocks, frontmatter, and inline code spans
-/// untouched. Archive callers keep `skip_code = false`.
+/// untouched. Archive callers pass `skip_code = true`.
 pub(crate) fn repair_links_in_note_with<R: ResolveMovedNote>(
     contents: &str,
     current_path: &Path,
@@ -534,20 +529,20 @@ pub(crate) fn repair_links_in_note_with<R: ResolveMovedNote>(
     }
 }
 
-/// Source note and stayed-behind block ids for an archive note.
+/// Source note and stayed-behind block ids plus headings for an archive note.
 ///
 /// When a task block is archived, its Depends-On lines and legacy
 /// children move with it, but a pathless `[[#^x]]` whose target stayed
 /// behind would silently re-resolve inside the archive note. Returns the
-/// source link target plus the block ids that stayed when `current_path`
-/// is an archive note whose parent source exists.
+/// source link target plus the block ids and headings that stayed when
+/// `current_path` is an archive note whose parent source exists.
 pub(super) fn archive_stayed_block_ids(
     current_path: &Path,
     current_contents: &str,
     note_index: &NoteIndex,
     planned_contents: &BTreeMap<PathBuf, String>,
     moved_targets: &MovedBlockTargets,
-) -> io::Result<Option<(String, BTreeSet<String>)>> {
+) -> io::Result<Option<(String, BTreeSet<String>, BTreeSet<String>)>> {
     let Some(source_relative_path) =
         source_relative_path_from_archive(current_path)
     else {
@@ -572,24 +567,54 @@ pub(super) fn archive_stayed_block_ids(
         .into_iter()
         .filter(|block_id| !moved.contains(block_id))
         .collect();
-    if stayed.is_empty() {
+    let stayed_headings = headings_in_markdown(&source_contents);
+    if stayed.is_empty() && stayed_headings.is_empty() {
         return Ok(None);
     }
     let source_target =
         vault_relative_link_target(&source_relative_path, "source")?;
-    Ok(Some((source_target, stayed)))
+    Ok(Some((source_target, stayed, stayed_headings)))
 }
 
-/// Qualify pathless block links that stayed behind.
+/// ATX headings that stayed in a note, for pathless heading-link repair.
+///
+/// Collects `markdown::atx_heading` titles outside frontmatter, fences, and
+/// multiline comments. Titles are stored lowercased for case-insensitive
+/// Obsidian heading matching; the original link fragment is preserved on
+/// rewrite.
+pub(super) fn headings_in_markdown(contents: &str) -> BTreeSet<String> {
+    let lines: Vec<&str> = contents.split_inclusive('\n').collect();
+    let logical: Vec<&str> =
+        lines.iter().map(|line| split_line_ending(line).0).collect();
+    let masked = markdown::non_content_line_indexes(&lines);
+    let mut headings = BTreeSet::new();
+    for (index, line) in logical.iter().enumerate() {
+        if masked.contains(&index) {
+            continue;
+        }
+        if let Some((_, title)) = markdown::atx_heading(line) {
+            let trimmed = title.trim();
+            if !trimmed.is_empty() {
+                headings.insert(trimmed.to_lowercase());
+            }
+        }
+    }
+    headings
+}
+
+/// Qualify pathless block and heading links that stayed behind.
 ///
 /// Rewrites `[[#^x]]` (with optional alias and `!`) to
-/// `[[<source>#^x]]` when `x` stayed in the source note, so archived
-/// Depends-On lines and child links keep pointing at the target
-/// that did not move. Fenced code and inline code spans are untouched.
+/// `[[<source>#^x]]` when `x` stayed in the source note, and rewrites a
+/// pathless heading link `[[#Heading]]` to `[[<source>#Heading]]` when that
+/// heading stayed in the source, so archived Depends-On lines and child
+/// links keep pointing at the target that did not move. Fenced code and
+/// inline code spans are untouched.
 pub(super) fn repair_pathless_archive_links(
     contents: &str,
     source_target: &str,
     stayed: &BTreeSet<String>,
+    stayed_headings: &BTreeSet<String>,
 ) -> LinkRepairResult {
     let lines = contents.lines().collect::<Vec<_>>();
     let fenced = markdown::fenced_lines(&lines, 0..lines.len());
@@ -619,7 +644,12 @@ pub(super) fn repair_pathless_archive_links(
             {
                 None
             } else {
-                qualify_stayed_link(candidate, source_target, stayed)
+                qualify_stayed_link(
+                    candidate,
+                    source_target,
+                    stayed,
+                    stayed_headings,
+                )
             };
             if let Some(new_inner) = replacement {
                 rewritten.push_str(&line[cursor..start]);
@@ -647,20 +677,35 @@ fn qualify_stayed_link(
     inner: &str,
     source_target: &str,
     stayed: &BTreeSet<String>,
+    stayed_headings: &BTreeSet<String>,
 ) -> Option<String> {
     let (target_with_fragment, alias) = match inner.find('|') {
         Some(index) => (&inner[..index], &inner[index..]),
         None => (inner, ""),
     };
-    let (note_target, fragment) = split_block_fragment(target_with_fragment)?;
+    if let Some((note_target, fragment)) =
+        split_block_fragment(target_with_fragment)
+    {
+        if !note_target.trim().is_empty() {
+            return None;
+        }
+        let block_id = fragment.strip_prefix('^')?;
+        if !stayed.contains(block_id) {
+            return None;
+        }
+        return Some(format!("{source_target}#^{block_id}{alias}"));
+    }
+    let (note_target, fragment) = target_with_fragment.split_once('#')?;
     if !note_target.trim().is_empty() {
         return None;
     }
-    let block_id = fragment.strip_prefix('^')?;
-    if !stayed.contains(block_id) {
+    if fragment.is_empty() || fragment.starts_with('^') {
         return None;
     }
-    Some(format!("{source_target}#^{block_id}{alias}"))
+    if !stayed_headings.contains(&fragment.trim().to_lowercase()) {
+        return None;
+    }
+    Some(format!("{source_target}#{fragment}{alias}"))
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DependencyMetadataRepair {
@@ -1049,6 +1094,16 @@ pub(super) fn has_markdown_extension(target: &str) -> bool {
         .unwrap_or(target)
         .to_ascii_lowercase()
         .ends_with(".md")
+}
+fn target_basename(target: &str) -> &str {
+    target.rsplit(['/', '\\']).next().unwrap_or(target)
+}
+fn strip_markdown_suffix_case_insensitive(name: &str) -> &str {
+    if name.len() >= 3 && name[name.len() - 3..].eq_ignore_ascii_case(".md") {
+        &name[..name.len() - 3]
+    } else {
+        name
+    }
 }
 pub(super) fn is_normal_relative_path(path: &Path) -> bool {
     let mut has_component = false;

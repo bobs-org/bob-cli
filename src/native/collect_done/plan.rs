@@ -710,6 +710,10 @@ fn partition_selected_roots(
         &new_append,
         &new_occurrences,
     );
+    let rewritten_append = rewrite_renamed_pathless_links(
+        &deduplicated.archive_append,
+        &deduplicated.final_block_ids,
+    );
     let mut final_block_ids = deduplicated.final_block_ids.clone();
     let mut final_ids = BTreeSet::new();
     final_ids.extend(deduplicated.aligned_final_ids.iter().cloned());
@@ -740,7 +744,7 @@ fn partition_selected_roots(
         });
     }
     Ok(PartitionedArchive {
-        archive_append: deduplicated.archive_append,
+        archive_append: rewritten_append,
         final_block_ids,
         final_ids,
         rename_count: deduplicated.rename_count,

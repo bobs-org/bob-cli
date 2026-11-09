@@ -287,7 +287,7 @@ fn extracts_block_ids_from_every_moved_task_block_line() {
 }
 
 #[test]
-fn duplicate_moved_block_ids_are_ambiguous() {
+fn duplicate_moved_block_ids_are_held() {
     let transform = transform_markdown(
         "\
 - [x] first #task ^dup
@@ -295,12 +295,18 @@ fn duplicate_moved_block_ids_are_ambiguous() {
 ",
     );
 
-    assert_eq!(transform.moved_block_ids, string_set(["dup"]));
-    assert_eq!(transform.ambiguous_moved_block_ids, string_set(["dup"]));
+    assert_eq!(transform.task_count, 0);
+    assert!(transform.moved_block_ids.is_empty());
+    assert!(transform.ambiguous_moved_block_ids.is_empty());
+    assert_eq!(transform.holds.len(), 2);
+    assert!(transform
+        .holds
+        .iter()
+        .all(|hold| hold.reason == "duplicate_block_id"));
 }
 
 #[test]
-fn duplicate_moved_block_ids_become_unique_archive_ids() {
+fn duplicate_moved_block_ids_are_held_not_archived() {
     let vault = TempDir::new("bob-cli-collect-done-duplicate-ids");
     write_file(
         &vault.path().join("obsidian.md"),
@@ -314,24 +320,14 @@ fn duplicate_moved_block_ids_become_unique_archive_ids() {
 
     let plan = build_collection_plan(vault.path(), 1).expect("build plan");
 
-    assert_eq!(plan.files.len(), 1);
-    assert_eq!(plan.moved_block_id_count(), 1);
-    assert_eq!(plan.ambiguous_moved_block_id_count(), 1);
-    assert_eq!(plan.moved_block_id_rename_count(), 1);
-    assert_eq!(
-        plan.files[0].archive_contents.as_deref(),
-        Some(
-            "\
----
-parent: \"[[obsidian]]\"
-type: \"[[done]]\"
----
-
-- [x] first #task ^dup
-- [x] second #task ^dup-1
-"
-        )
-    );
+    assert!(plan.files.is_empty());
+    assert_eq!(plan.moved_block_id_count(), 0);
+    assert_eq!(plan.ambiguous_moved_block_id_count(), 0);
+    assert_eq!(plan.holds.len(), 2);
+    assert!(plan
+        .holds
+        .iter()
+        .all(|hold| hold.reason == "duplicate_block_id"));
 }
 
 #[test]
@@ -412,22 +408,18 @@ fn block_id_suffix_selection_preserves_distinct_moved_ids() {
 
     let plan = build_collection_plan(vault.path(), 1).expect("build plan");
 
-    assert_eq!(plan.moved_block_id_rename_count(), 1);
-    assert_eq!(
-        plan.files[0].archive_contents.as_deref(),
-        Some(
-            "\
----
-parent: \"[[obsidian]]\"
-type: \"[[done]]\"
----
-
-- [x] first #task ^dup
-- [x] second #task ^dup-2
-- [x] distinct #task ^dup-1
-"
-        )
-    );
+    assert_eq!(plan.moved_block_id_rename_count(), 0);
+    assert_eq!(plan.holds.len(), 2);
+    assert!(plan
+        .holds
+        .iter()
+        .all(|hold| hold.reason == "duplicate_block_id"));
+    assert_eq!(plan.files.len(), 1);
+    assert!(plan.files[0]
+        .archive_contents
+        .as_deref()
+        .expect("archive contents")
+        .contains("- [x] distinct #task ^dup-1\n"));
 }
 
 #[test]
@@ -440,13 +432,12 @@ fn block_id_deduplication_preserves_crlf_line_endings() {
 
     let plan = build_collection_plan(vault.path(), 1).expect("build plan");
 
-    assert_eq!(plan.moved_block_id_rename_count(), 1);
-    assert_eq!(
-            plan.files[0].archive_contents.as_deref(),
-            Some(
-                "---\r\nparent: \"[[obsidian]]\"\r\ntype: \"[[done]]\"\r\n---\r\n\r\n- [x] first #task ^dup\r\n- [x] second #task ^dup-1\r\n"
-            )
-        );
+    assert!(plan.files.is_empty());
+    assert_eq!(plan.holds.len(), 2);
+    assert!(plan
+        .holds
+        .iter()
+        .all(|hold| hold.reason == "duplicate_block_id"));
 }
 
 #[test]
@@ -462,10 +453,12 @@ fn pathless_archive_links_gain_the_source_note_path() {
         "related".to_string(),
         "source".to_string(),
     ]);
+    let stayed_headings = BTreeSet::new();
     let repair = repair_pathless_archive_links(
         "- [x] #task Archived ^moved\n  - ⛓️ **DEPENDS ON:** [[#^open]] • [[#^moved]]\n  - 🧱 **BLOCKS:** [[#^blocks]]\n  - 🪢 **LINKS:** [[#^related]]\n  - 🪢 **LINKED FROM:** [[#^source]]\n  - ![[#^held]]\n  - [[other#^open]]\n```\n- [[#^open]]\n```\n`[[#^open]]`\n",
         "projects/Work",
         &stayed,
+        &stayed_headings,
     );
     assert_eq!(repair.link_count, 5);
     assert!(repair.contents.contains(
@@ -672,6 +665,110 @@ fn markdown_repair_skips_wikilink_spans() {
             repair.contents,
             "[[note|[alias](obsidian.md#^abc123)]] [real](done/obsidian_done.md#^abc123)\n"
         );
+}
+
+#[test]
+fn renamed_id_rewrites_own_pathless_links() {
+    let vault = TempDir::new("bob-cli-collect-done-renamed-self-link");
+    write_file(
+        &vault.path().join("obsidian.md"),
+        &area_note(
+            "\
+- [x] new #task ^dup
+  - see [[#^dup]] and [[#^dup|alias]] and ![[#^dup]]
+",
+        ),
+    );
+    write_file(
+        &vault.path().join("done/obsidian_done.md"),
+        "\
+---
+parent: \"[[obsidian]]\"
+type: \"[[done]]\"
+---
+
+- [x] old #task ^dup
+",
+    );
+
+    let plan = build_collection_plan(vault.path(), 1).expect("build plan");
+    let archived = plan.files[0]
+        .archive_contents
+        .as_deref()
+        .expect("archive contents")
+        .to_string();
+    assert!(
+        archived.contains("^dup-1"),
+        "renamed id present: {archived}"
+    );
+    assert!(
+        archived.contains("[[#^dup-1]]"),
+        "pathless self link rewritten: {archived}"
+    );
+    assert!(
+        archived.contains("[[#^dup-1|alias]]"),
+        "aliased self link rewritten: {archived}"
+    );
+    assert!(
+        !archived.contains("[[#^dup]]") || archived.contains("[[#^dup-1]]"),
+        "no stale self link: {archived}"
+    );
+}
+
+#[test]
+fn pathless_heading_links_gain_source_path() {
+    let stayed_headings = BTreeSet::from(["keep".to_string()]);
+    let stayed = BTreeSet::new();
+    let repair = repair_pathless_archive_links(
+        "- [x] #task ^a\n  - see [[#Keep]] and [[#Keep|alias]] and ![[#keep]]\n",
+        "obsidian",
+        &stayed,
+        &stayed_headings,
+    );
+    assert_eq!(repair.link_count, 3);
+    assert!(repair.contents.contains("[[obsidian#Keep]]"));
+    assert!(repair.contents.contains("[[obsidian#Keep|alias]]"));
+    assert!(repair.contents.contains("![[obsidian#keep]]"));
+}
+
+#[test]
+fn archive_link_repair_skips_code() {
+    let index = note_index(["obsidian.md", "done/obsidian_done.md"]);
+    let moved_targets =
+        moved_targets([("obsidian.md", "abc123", "done/obsidian_done")]);
+
+    let repair = repair_links_in_note(
+        "---\nparent: \"[[obsidian#^abc123]]\"\n---\n[[obsidian#^abc123]]\n```\n[[obsidian#^abc123]]\n```\n`[[obsidian#^abc123]]`\n",
+        Path::new("daily.md"),
+        &index,
+        &moved_targets,
+    );
+
+    assert_eq!(repair.link_count, 1);
+    assert!(repair.contents.contains("parent: \"[[obsidian#^abc123]]\""));
+    assert!(repair.contents.contains("[[done/obsidian_done#^abc123]]\n"));
+    assert!(repair.contents.contains("```\n[[obsidian#^abc123]]\n```"));
+    assert!(repair.contents.contains("`[[obsidian#^abc123]]`"));
+}
+
+#[test]
+fn archive_link_repair_matches_case_insensitive_basename() {
+    let index = note_index(["obsidian.md", "done/obsidian_done.md"]);
+    let moved_targets =
+        moved_targets([("obsidian.md", "abc123", "done/obsidian_done")]);
+
+    let repair = repair_links_in_note(
+        "[[OBSIDIAN#^abc123]] [[Obsidian#^abc123|alias]]\n",
+        Path::new("daily.md"),
+        &index,
+        &moved_targets,
+    );
+
+    assert_eq!(repair.link_count, 2);
+    assert!(repair.contents.contains("[[done/obsidian_done#^abc123]]"));
+    assert!(repair
+        .contents
+        .contains("[[done/obsidian_done#^abc123|alias]]"));
 }
 
 #[test]

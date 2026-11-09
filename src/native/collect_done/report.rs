@@ -104,6 +104,7 @@ impl Report {
             deferred_paths: Vec::new(),
             recovery_directory: None,
         };
+        self.flag_duplicate_holds();
     }
 
     pub(super) fn noop(&mut self) {
@@ -117,6 +118,7 @@ impl Report {
             deferred_paths: Vec::new(),
             recovery_directory: None,
         };
+        self.flag_duplicate_holds();
     }
 
     pub(super) fn applied(
@@ -144,7 +146,32 @@ impl Report {
                 "vault changes were applied, but {} (the archive was not rerun)",
                 failure.message
             ));
+        } else {
+            self.flag_duplicate_holds();
         }
+    }
+
+    fn flag_duplicate_holds(&mut self) {
+        let Some(plan) = &self.plan else {
+            return;
+        };
+        let mut notes: Vec<String> = plan
+            .holds
+            .iter()
+            .filter(|hold| hold.reason == "duplicate_block_id")
+            .map(|hold| path_text(&hold.relative_path))
+            .collect();
+        if notes.is_empty() {
+            return;
+        }
+        notes.sort();
+        notes.dedup();
+        self.exit.code = 1;
+        self.exit.reason = Some("duplicate_block_id");
+        self.exit.message = Some(format!(
+            "held blocks with duplicate ids in {}; fix duplicates and rerun",
+            notes.join(", ")
+        ));
     }
 
     pub(super) fn fail(&mut self, reason: &'static str, message: String) {

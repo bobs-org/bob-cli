@@ -8,6 +8,7 @@ pub(super) const SKIP_FINISHED_PROJECT: &str = "finished_project";
 pub(super) const SKIP_OPEN_PARENT: &str = "open_parent";
 pub(super) const SKIP_PRJ: &str = "prj";
 pub(super) const HOLD_OPEN_SUBTASK: &str = "open_subtask";
+pub(super) const HOLD_DUPLICATE_BLOCK_ID: &str = "duplicate_block_id";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Transform {
@@ -202,22 +203,27 @@ pub(super) fn transform_markdown_with_settings(
             closed_lines.insert(task.line_index);
         }
     }
-    let mut source_contents = String::with_capacity(contents.len());
-    let mut archive_append = String::new();
-    let mut moved_block_ids = BTreeSet::new();
-    let mut ambiguous_moved_block_ids = BTreeSet::new();
-    let mut moved_block_id_occurrences = Vec::new();
-    let mut moved_roots = Vec::new();
+    struct PendingMove {
+        source_line: usize,
+        root_id: Option<String>,
+        block_lines: Vec<String>,
+        contained_ids: Vec<String>,
+    }
+    enum ScanAction {
+        SourceLine(String),
+        HoldOpen(Vec<String>),
+        Candidate(PendingMove),
+    }
+    let mut actions: Vec<ScanAction> = Vec::new();
     let mut holds = Vec::new();
     let mut skip_counts = BTreeMap::new();
     let mut open_task_indents: Vec<usize> = Vec::new();
-    let mut task_count = 0;
     let mut index = 0;
 
     while index < lines.len() {
         let (content, _) = split_line_ending(lines[index]);
         if content.trim().is_empty() || masked.contains(&index) {
-            source_contents.push_str(lines[index]);
+            actions.push(ScanAction::SourceLine(lines[index].to_string()));
             index += 1;
             continue;
         }
@@ -232,27 +238,27 @@ pub(super) fn transform_markdown_with_settings(
 
         if open_lines.contains(&index) {
             open_task_indents.push(indent);
-            source_contents.push_str(lines[index]);
+            actions.push(ScanAction::SourceLine(lines[index].to_string()));
             index += 1;
             continue;
         }
 
         if !closed_lines.contains(&index) {
-            source_contents.push_str(lines[index]);
+            actions.push(ScanAction::SourceLine(lines[index].to_string()));
             index += 1;
             continue;
         }
 
         if super::super::projects::has_trailing_prj_anchor(content) {
             bump_skip(&mut skip_counts, SKIP_PRJ);
-            source_contents.push_str(lines[index]);
+            actions.push(ScanAction::SourceLine(lines[index].to_string()));
             index += 1;
             continue;
         }
 
         if !open_task_indents.is_empty() {
             bump_skip(&mut skip_counts, SKIP_OPEN_PARENT);
-            source_contents.push_str(lines[index]);
+            actions.push(ScanAction::SourceLine(lines[index].to_string()));
             index += 1;
             continue;
         }
@@ -264,14 +270,15 @@ pub(super) fn transform_markdown_with_settings(
                 reason: HOLD_OPEN_SUBTASK,
                 block_ids: held_block_ids(&lines[index..end]),
             });
-            for line in &lines[index..end] {
-                source_contents.push_str(line);
-            }
+            let block_lines = lines[index..end]
+                .iter()
+                .map(|line| line.to_string())
+                .collect();
+            actions.push(ScanAction::HoldOpen(block_lines));
             index = end;
             continue;
         }
 
-        task_count += 1;
         let (root_content, _) = split_line_ending(lines[index]);
         let root_id = if masked.contains(&index) {
             None
@@ -281,33 +288,99 @@ pub(super) fn transform_markdown_with_settings(
                 .next()
                 .map(|occurrence| occurrence.id)
         };
-        let span_start = archive_append.len();
+        let mut contained_ids = Vec::new();
         for (relative_line, line) in lines[index..end].iter().enumerate() {
-            let line_offset = archive_append.len();
-            archive_append.push_str(line);
             let (content, _) = split_line_ending(line);
             if !masked.contains(&(index + relative_line)) {
                 for occurrence in content_anchor_occurrences_in_line(content) {
-                    moved_block_id_occurrences.push(BlockIdOccurrence {
-                        id: occurrence.id.clone(),
-                        start: line_offset + occurrence.start,
-                        end: line_offset + occurrence.end,
-                    });
-                    let block_id = occurrence.id;
-                    if !moved_block_ids.insert(block_id.clone()) {
-                        ambiguous_moved_block_ids.insert(block_id);
-                    }
+                    contained_ids.push(occurrence.id);
                 }
             }
         }
-        moved_roots.push(MovedRootSpan {
+        let block_lines = lines[index..end]
+            .iter()
+            .map(|line| line.to_string())
+            .collect();
+        actions.push(ScanAction::Candidate(PendingMove {
             source_line: index + 1,
             root_id,
-            start: span_start,
-            end: archive_append.len(),
-        });
+            block_lines,
+            contained_ids,
+        }));
         index = end;
     }
+
+    let mut id_counts: BTreeMap<String, usize> = BTreeMap::new();
+    for action in &actions {
+        if let ScanAction::Candidate(pending) = action {
+            for id in &pending.contained_ids {
+                *id_counts.entry(id.clone()).or_insert(0) += 1;
+            }
+        }
+    }
+    let duplicate_ids: BTreeSet<String> = id_counts
+        .into_iter()
+        .filter_map(|(id, count)| (count > 1).then_some(id))
+        .collect();
+
+    let mut source_contents = String::with_capacity(contents.len());
+    let mut archive_append = String::new();
+    let mut moved_block_ids = BTreeSet::new();
+    let ambiguous_moved_block_ids = BTreeSet::new();
+    let mut moved_block_id_occurrences = Vec::new();
+    let mut moved_roots = Vec::new();
+    let mut task_count = 0;
+    for action in actions {
+        match action {
+            ScanAction::SourceLine(line) => source_contents.push_str(&line),
+            ScanAction::HoldOpen(block_lines) => {
+                for line in block_lines {
+                    source_contents.push_str(&line);
+                }
+            }
+            ScanAction::Candidate(pending) => {
+                let is_duplicate = pending
+                    .contained_ids
+                    .iter()
+                    .any(|id| duplicate_ids.contains(id));
+                if is_duplicate {
+                    holds.push(HeldTask {
+                        line: pending.source_line,
+                        reason: HOLD_DUPLICATE_BLOCK_ID,
+                        block_ids: pending.contained_ids.clone(),
+                    });
+                    for line in pending.block_lines {
+                        source_contents.push_str(&line);
+                    }
+                    continue;
+                }
+                task_count += 1;
+                let span_start = archive_append.len();
+                for line in &pending.block_lines {
+                    let line_offset = archive_append.len();
+                    archive_append.push_str(line);
+                    let (content, _) = split_line_ending(line);
+                    for occurrence in
+                        content_anchor_occurrences_in_line(content)
+                    {
+                        moved_block_id_occurrences.push(BlockIdOccurrence {
+                            id: occurrence.id.clone(),
+                            start: line_offset + occurrence.start,
+                            end: line_offset + occurrence.end,
+                        });
+                        moved_block_ids.insert(occurrence.id);
+                    }
+                }
+                moved_roots.push(MovedRootSpan {
+                    source_line: pending.source_line,
+                    root_id: pending.root_id,
+                    start: span_start,
+                    end: archive_append.len(),
+                });
+            }
+        }
+    }
+    holds.sort_by_key(|hold| hold.line);
 
     Transform {
         task_count,

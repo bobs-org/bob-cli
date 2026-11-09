@@ -84,9 +84,13 @@ Untagged checklist items and prose under that root travel with it.
 
 A closed root with an open `#task` descendant is **held**. The run names it as
 `path:line` with reason `open_subtask` and leaves the whole block in the
-source. A closed `#task` under an open parent is not a root: it stays with
-that parent and is counted under skips as `open_parent`. A closed `^prj` line
-is skipped as `prj` and is never moved; siblings still evaluate on their own.
+source. A block id that occurs more than once among one note's moved blocks is
+never moved silently with unrepaired links: every block carrying that id is
+**held** with reason `duplicate_block_id`, the other moves still apply, and the
+run exits 1 with reason `duplicate_block_id` so nightly flags it. A closed
+`#task` under an open parent is not a root: it stays with that parent and is
+counted under skips as `open_parent`. A closed `^prj` line is skipped as `prj`
+and is never moved; siblings still evaluate on their own.
 
 The human scan report always prints `holds`, `skips`, and `grandfathered`
 after the file counts.
@@ -105,8 +109,10 @@ type: "[[done]]"
 
 The source gains `done_tasks: "[[done/..._done]]"` in frontmatter. An existing
 archive appends newly moved blocks after its current body. Duplicate block
-ids in the archive receive a numeric suffix; ambiguous moved ids do not
-rewrite links.
+ids against the existing archive receive a numeric suffix (`^x` → `^x-1`); a
+moved block's own pathless links (`[[#^x]]`, with alias and `!`) are rewritten
+to the final id before the append so they do not resolve to the older archived
+`^x`.
 
 ### Exact replay
 
@@ -126,11 +132,15 @@ still count toward the threshold. This is what finishes an interrupted run (see
 
 After a move, wikilinks, embeds, aliases, Markdown block links, and matching
 `[id::]` / `[dependsOn::]` tokens that pointed at a moved unique block id are
-rewritten to the archive path and final id. The scan includes `done/` notes
-and daily notes. Pathless `[[#^id]]` links inside a moved block whose target
-stayed behind gain the source note path. Fenced and inline code are left
-alone. Self-healing also rewrites stale source-path links that already belong
-to an existing archive.
+rewritten to the archive path and final id. Note targets follow the shared
+`NoteIndex` case rules: exact vault-relative paths match case-sensitively and
+basename stems match case-insensitively, the way Obsidian resolves them. The
+scan includes `done/` notes and daily notes. A moved block's pathless heading
+link (`[[#Heading]]`) whose heading stayed in the source becomes
+`[[<source>#Heading]]`, and a pathless `[[#^id]]` link inside a moved block
+whose target stayed behind gains the source note path. Fenced blocks,
+frontmatter, and inline code spans are never rewritten. Self-healing also
+rewrites stale source-path links that already belong to an existing archive.
 
 ## Same-write grouping
 
@@ -211,7 +221,7 @@ to stderr. Usage errors are plain stderr with exit 2. The schema is
 | `vault`, `threshold` | Vault root and effective threshold |
 | `scan` | Counts for the plan (`null` when planning failed): `markdown_files`, `files_meeting_threshold`, `task_blocks`, `source_done_tasks_updates`, `archive_metadata_repairs`, `moved_block_ids`, `ambiguous_moved_block_ids`, `moved_block_id_renames`, `planned_bytes` |
 | `moves` | Deterministic list ordered by `source`; each entry has `source`, `archive`, `task_count`, `writes_source`, `writes_archive`, `creates_archive`, `roots`, `block_ids`, `id_renames`, `replays` |
-| `holds` | `path`, one-based `line`, nullable `block_id`, `reason` |
+| `holds` | `path`, one-based `line`, nullable `block_id`, `reason` (`open_subtask` or `duplicate_block_id`) |
 | `skips` | Reason-to-count object |
 | `grandfathered` | Path list |
 | `link_repairs` | `files` (affected paths), `link_count`, `dependency_metadata_count` |
@@ -244,7 +254,7 @@ vault-relative with `/` separators.
 | --- | --- |
 | `code` | The process exit code |
 | `outcome` | `preview`, `noop`, `applied`, or `failed` |
-| `reason` | `null` on success; otherwise `lock_timeout`, `lock_error`, `plan_failed`, `plan_refused`, `retry_exhausted`, `write_failed`, `partial_apply`, or `git_failed` |
+| `reason` | `null` on success; otherwise `lock_timeout`, `lock_error`, `plan_failed`, `plan_refused`, `retry_exhausted`, `write_failed`, `partial_apply`, `git_failed`, or `duplicate_block_id` (moves applied, exit 1) |
 | `message` | Human-readable failure detail, else `null` |
 | `applied_paths` | Vault-relative paths actually installed, in apply order |
 | `deferred_paths` | Planned paths not installed (partial apply, retry exhaustion) |
