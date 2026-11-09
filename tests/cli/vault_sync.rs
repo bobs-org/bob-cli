@@ -2124,6 +2124,176 @@ fn vault_sync_dry_run_reports_task_loss_without_writes() {
 }
 
 #[test]
+fn vault_sync_legacy_same_id_danglers_are_unlinked_not_linked() {
+    let temp = TempDir::new("bob-cli-vault-sync-task-loss-legacy-id");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
+    write_file(
+        &vault.join("tasks.md"),
+        "- [ ] #task Shared id task ^shared-id\n\
+- [ ] #task Surviving task ^surviving\n",
+    );
+    write_file(
+        &vault.join("legacy.md"),
+        "A pre-existing local dangler: [[#^shared-id]]\n\
+And an unrelated explicit target: [[other#^shared-id]]\n",
+    );
+    write_file(&vault.join("other.md"), "unrelated note\n");
+    git_in(&vault, ["add", "."]);
+    git_in(
+        &vault,
+        ["commit", "-q", "-m", "seed shared-id with legacy danglers"],
+    );
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+
+    write_file(
+        &vault.join("tasks.md"),
+        "- [ ] #task Surviving task ^surviving\n",
+    );
+    let first = vault_sync_command(&vault, &temp)
+        .output()
+        .expect("run legacy-dangler candidate cycle");
+    assert_success(&first);
+    let first_status = read_vault_sync_status(&temp);
+    assert_eq!(
+        first_status["pending_task_losses"].as_array().map(Vec::len),
+        Some(1),
+        "legacy danglers must not mint a linked loss: {first_status}"
+    );
+    assert_eq!(first_status["pending_task_losses"][0]["id"], "shared-id");
+    assert_eq!(first_status["pending_task_losses"][0]["kind"], "unlinked");
+    assert_eq!(
+        first_status["pending_task_losses"][0]["inbound_links"]
+            .as_array()
+            .map(Vec::len),
+        Some(0)
+    );
+
+    make_pending_task_losses_old(&temp);
+    let second = vault_sync_command(&vault, &temp)
+        .output()
+        .expect("run legacy-dangler settle cycle");
+    assert_success(&second);
+    let status = read_vault_sync_status(&temp);
+    assert_eq!(status["task_losses"].as_array().map(Vec::len), Some(1));
+    assert_eq!(status["task_losses"][0]["kind"], "unlinked");
+    assert_eq!(
+        status["task_losses"][0]["inbound_links"]
+            .as_array()
+            .map(Vec::len),
+        Some(0),
+        "unlinked losses record no inbound links and do not notify"
+    );
+}
+
+#[test]
+fn vault_sync_closed_task_with_legacy_dangler_is_not_a_loss() {
+    let temp = TempDir::new("bob-cli-vault-sync-task-loss-closed-legacy");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
+    write_file(
+        &vault.join("tasks.md"),
+        "- [x] #task Closed shared id ^shared-id\n\
+- [ ] #task Surviving task ^surviving\n",
+    );
+    write_file(&vault.join("legacy.md"), "[[#^shared-id]]\n");
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "seed closed shared-id"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+    write_file(
+        &vault.join("tasks.md"),
+        "- [ ] #task Surviving task ^surviving\n",
+    );
+
+    let output = vault_sync_command(&vault, &temp)
+        .output()
+        .expect("run closed-task legacy-dangler cycle");
+    assert_success(&output);
+    let status = read_vault_sync_status(&temp);
+    assert_eq!(status["task_losses"].as_array().map(Vec::len), Some(0));
+    assert_eq!(
+        status["pending_task_losses"].as_array().map(Vec::len),
+        Some(0),
+        "a closed deletion with only a legacy dangler is not a loss: {status}"
+    );
+}
+
+#[test]
+fn vault_sync_counts_resolved_same_note_and_path_alias_links() {
+    let temp = TempDir::new("bob-cli-vault-sync-task-loss-resolved-links");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
+    write_file(
+        &vault.join("tasks.md"),
+        "- [ ] #task Linked task ^keep-id\n[[#^keep-id]]\n",
+    );
+    write_file(
+        &vault.join("daily.md"),
+        "[[tasks#^keep-id]] [[tasks.md#^keep-id|the task]]\n",
+    );
+    git_in(&vault, ["add", "."]);
+    git_in(
+        &vault,
+        ["commit", "-q", "-m", "seed resolved inbound links"],
+    );
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+    write_file(&vault.join("tasks.md"), "[[#^keep-id]]\n");
+
+    let first = vault_sync_command(&vault, &temp)
+        .output()
+        .expect("run resolved-link candidate cycle");
+    assert_success(&first);
+    let first_status = read_vault_sync_status(&temp);
+    assert_eq!(
+        first_status["pending_task_losses"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(first_status["pending_task_losses"][0]["kind"], "linked");
+    let mut inbound = first_status["pending_task_losses"][0]["inbound_links"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    inbound.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
+    assert_eq!(
+        inbound,
+        vec![
+            serde_json::Value::String("daily.md".to_string()),
+            serde_json::Value::String("tasks.md".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn vault_sync_detects_whole_note_deletion_from_remaining_links() {
+    let temp = TempDir::new("bob-cli-vault-sync-task-loss-whole-note");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
+    write_file(
+        &vault.join("tasks.md"),
+        "- [ ] #task Whole note task ^gone-id\n",
+    );
+    write_file(&vault.join("daily.md"), "[[tasks#^gone-id]]\n");
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "seed whole-note deletion"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+    fs::remove_file(vault.join("tasks.md")).expect("delete tasks.md");
+
+    let first = vault_sync_command(&vault, &temp)
+        .output()
+        .expect("run whole-note deletion cycle");
+    assert_success(&first);
+    let first_status = read_vault_sync_status(&temp);
+    assert_eq!(
+        first_status["pending_task_losses"].as_array().map(Vec::len),
+        Some(1),
+        "deleting the note must still count remaining links: {first_status}"
+    );
+    assert_eq!(first_status["pending_task_losses"][0]["id"], "gone-id");
+    assert_eq!(first_status["pending_task_losses"][0]["path"], "tasks.md");
+    assert_eq!(first_status["pending_task_losses"][0]["kind"], "linked");
+    assert_eq!(
+        first_status["pending_task_losses"][0]["inbound_links"][0],
+        "daily.md"
+    );
+}
+
+#[test]
 fn vault_sync_does_not_report_remote_only_task_removal() {
     let temp = TempDir::new("bob-cli-vault-sync-task-loss-remote");
     let (vault, _remote, peer) = init_vault_sync_pair(&temp);

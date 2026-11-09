@@ -237,8 +237,11 @@ outside this scan. `_conflicts/`, `lib/`, `.bob/`, and the always-excluded note
 directories are skipped. An ID is not a loss when it still appears on a task line
 anywhere in the worktree, so moving a task or archiving it under `done/` is safe.
 
-A removed ID is reported as **linked** while a current `[[note#^id]]` or same-note
-`[[#^id]]` link still points to it. An **unlinked** loss is a vanished task that was
+A removed ID is reported as **linked** while a current wikilink still resolves to that
+task's note: `[[note#^id]]`, `[[note.md#^id]]`, an aliased `[[note#^id|label]]`, or a
+same-note `[[#^id]]` in the removed note. A link that only shares the ID — an unrelated
+local `[[#^id]]`, or `[[other#^id]]` — is not inbound. Ambiguous note paths are not
+guessed into a newly broken link. An **unlinked** loss is a vanished task that was
 open (`[ ]`, `[/]`, `[*]`, or `[?]`) and has no current inbound links. Links that
 already dangled at the base are not reported. Candidates remain pending in the status
 record until a later sync at least 30 seconds after first sight confirms the task is

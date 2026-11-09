@@ -52,7 +52,8 @@ Capture protocol:
   capture-parse          Explain what in-progress capture text currently means
   capture-pomodoro-name  Write a name onto an open unnamed Pomodoro
   capture-pomodoros      List today's Pomodoro ledger entries
-  capture-related        List existing tasks that a new capture may duplicate
+  capture-related        List existing tasks and record notes a new capture may
+                         duplicate
   capture-rewrite        Apply the capture grammar's automatic draft rewrites
   capture-sections       List the non-Tasks sections of a capture note
   capture-targets        List capture routes for inbox, area, project, and

@@ -19,6 +19,7 @@ use super::{
     collect_done, is_always_excluded_note_directory_name,
     ob::{self, ChildEnv},
     projects,
+    vault_links::NoteIndex,
 };
 
 const SETTLE_WINDOW: Duration = Duration::from_secs(30);
@@ -248,9 +249,14 @@ fn detect_candidates(
         .chain(raw.values().map(|(task, _)| task.signature.clone()))
         .filter(|term| !term.is_empty())
         .collect::<BTreeSet<_>>();
+    let notes = markdown_note_index(
+        vault,
+        child_env,
+        raw.keys().map(|(_, path)| path.as_str()),
+    )?;
     let mut current_task_ids = BTreeSet::new();
     let mut current_signatures = current_signatures;
-    let mut inbound = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut inbound = BTreeMap::<(String, String), BTreeSet<String>>::new();
     for (path, contents) in
         current_files_with_needles(vault, child_env, &search_terms)?
     {
@@ -264,10 +270,11 @@ fn detect_candidates(
             }
             current_signatures.insert((task.id, task.signature));
         }
-        for id in task_links(&contents, &ids) {
-            if ids.contains(&id) {
-                inbound.entry(id).or_default().insert(display.clone());
-            }
+        for (id, target) in task_links(&contents, &display, &ids, &notes) {
+            inbound
+                .entry((id, target))
+                .or_default()
+                .insert(display.clone());
         }
     }
 
@@ -278,7 +285,7 @@ fn detect_candidates(
             continue;
         }
         let links = inbound
-            .get(&id)
+            .get(&(id.clone(), path.clone()))
             .map(|paths| paths.iter().cloned().collect::<Vec<_>>())
             .unwrap_or_default();
         // A same-prose task whose ID changed, with no stale inbound links,
@@ -549,8 +556,63 @@ fn visible_lines(contents: &str) -> Vec<(usize, &str)> {
     visible
 }
 
-fn task_links(contents: &str, ids: &BTreeSet<String>) -> Vec<String> {
+fn markdown_note_index(
+    vault: &Path,
+    child_env: &ChildEnv,
+    extra: impl IntoIterator<Item = impl AsRef<str>>,
+) -> Result<NoteIndex, String> {
+    let mut paths = git_markdown_paths(vault, child_env)?;
+    for path in extra {
+        let path = PathBuf::from(path.as_ref());
+        if is_scan_path(&path) {
+            paths.insert(path);
+        }
+    }
+    Ok(NoteIndex::from_paths(
+        paths.into_iter().filter(|path| is_scan_path(path)),
+    ))
+}
+
+fn git_markdown_paths(
+    vault: &Path,
+    child_env: &ChildEnv,
+) -> Result<BTreeSet<PathBuf>, String> {
+    let output = ob::git_command(vault, child_env)
+        .args([
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            "*.md",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| format!("failed to list Markdown notes: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "git ls-files for Markdown notes failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| PathBuf::from(String::from_utf8_lossy(path).into_owned()))
+        .collect())
+}
+
+fn task_links(
+    contents: &str,
+    linking_path: &str,
+    ids: &BTreeSet<String>,
+    notes: &NoteIndex,
+) -> Vec<(String, String)> {
     let mut links = Vec::new();
+    let source = Path::new(linking_path);
     for (_, line) in visible_lines(contents) {
         let mut rest = line;
         while let Some(start) = rest.find("[[") {
@@ -571,7 +633,10 @@ fn task_links(contents: &str, ids: &BTreeSet<String>) -> Vec<String> {
                 if id_len > 0 {
                     let id = target[id_start..id_start + id_len].to_string();
                     if ids.contains(&id) {
-                        links.push(id);
+                        let note = target[..anchor].trim();
+                        if let Some(path) = notes.resolve(Some(source), note) {
+                            links.push((id, display_path(&path)));
+                        }
                     }
                 }
             }
@@ -664,16 +729,93 @@ mod tests {
 
     #[test]
     fn task_links_match_same_note_and_other_note_targets_exactly() {
+        let notes = NoteIndex::from_paths([
+            PathBuf::from("bob.md"),
+            PathBuf::from("legacy.md"),
+        ]);
         let ids = ["alpha".to_string(), "alpha-long".to_string()]
             .into_iter()
             .collect();
         let found = task_links(
             "[[#^alpha]] [[bob#^alpha-long|task]] [[bob#^alpha-extra]]",
+            "bob.md",
             &ids,
+            &notes,
         );
-        assert_eq!(found.len(), 2);
-        assert_eq!(found[0], "alpha");
-        assert_eq!(found[1], "alpha-long");
+        assert_eq!(
+            found,
+            [
+                ("alpha".to_string(), "bob.md".to_string()),
+                ("alpha-long".to_string(), "bob.md".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn task_links_count_only_links_that_resolve_to_the_removed_note() {
+        let ids = ["shared-id".to_string()].into_iter().collect();
+        let notes = NoteIndex::from_paths([
+            PathBuf::from("tasks.md"),
+            PathBuf::from("legacy.md"),
+            PathBuf::from("other.md"),
+        ]);
+
+        assert_eq!(
+            task_links("[[#^shared-id]]", "legacy.md", &ids, &notes),
+            [("shared-id".to_string(), "legacy.md".to_string())]
+        );
+        assert_eq!(
+            task_links("[[other#^shared-id]]", "legacy.md", &ids, &notes),
+            [("shared-id".to_string(), "other.md".to_string())]
+        );
+        assert_eq!(
+            task_links("[[tasks#^shared-id]]", "legacy.md", &ids, &notes),
+            [("shared-id".to_string(), "tasks.md".to_string())]
+        );
+        assert_eq!(
+            task_links(
+                "[[tasks.md#^shared-id|the task]]",
+                "legacy.md",
+                &ids,
+                &notes,
+            ),
+            [("shared-id".to_string(), "tasks.md".to_string())]
+        );
+        assert_eq!(
+            task_links("[[#^shared-id]]", "tasks.md", &ids, &notes),
+            [("shared-id".to_string(), "tasks.md".to_string())]
+        );
+    }
+
+    #[test]
+    fn task_links_leave_ambiguous_basenames_unresolved() {
+        let ids = ["shared-id".to_string()].into_iter().collect();
+        let notes = NoteIndex::from_paths([
+            PathBuf::from("a/tasks.md"),
+            PathBuf::from("b/tasks.md"),
+            PathBuf::from("legacy.md"),
+        ]);
+        assert!(
+            task_links("[[tasks#^shared-id]]", "legacy.md", &ids, &notes)
+                .is_empty()
+        );
+        assert_eq!(
+            task_links("[[a/tasks#^shared-id]]", "legacy.md", &ids, &notes),
+            [("shared-id".to_string(), "a/tasks.md".to_string())]
+        );
+    }
+
+    #[test]
+    fn task_links_resolve_a_deleted_note_from_its_indexed_path() {
+        let ids = ["gone".to_string()].into_iter().collect();
+        let notes = NoteIndex::from_paths([
+            PathBuf::from("tasks.md"),
+            PathBuf::from("other.md"),
+        ]);
+        assert_eq!(
+            task_links("[[tasks#^gone]]", "other.md", &ids, &notes),
+            [("gone".to_string(), "tasks.md".to_string())]
+        );
     }
 
     #[test]
