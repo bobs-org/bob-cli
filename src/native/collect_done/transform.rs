@@ -35,6 +35,14 @@ pub(crate) struct BlockIdOccurrence {
     pub(crate) end: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct LocatedBlockIdOccurrence {
+    pub(super) id: String,
+    pub(super) start: usize,
+    pub(super) end: usize,
+    pub(super) line_index: usize,
+}
+
 /// One selected archive root with its source position and byte span.
 ///
 /// `start`/`end` are byte offsets into the transform's `archive_append`;
@@ -265,21 +273,30 @@ pub(super) fn transform_markdown_with_settings(
 
         task_count += 1;
         let (root_content, _) = split_line_ending(lines[index]);
-        let root_id = trailing_block_id_in_line(root_content);
+        let root_id = if masked.contains(&index) {
+            None
+        } else {
+            content_anchor_occurrences_in_line(root_content)
+                .into_iter()
+                .next()
+                .map(|occurrence| occurrence.id)
+        };
         let span_start = archive_append.len();
-        for line in &lines[index..end] {
+        for (relative_line, line) in lines[index..end].iter().enumerate() {
             let line_offset = archive_append.len();
             archive_append.push_str(line);
             let (content, _) = split_line_ending(line);
-            for occurrence in block_id_occurrences_in_text(content) {
-                moved_block_id_occurrences.push(BlockIdOccurrence {
-                    id: occurrence.id.clone(),
-                    start: line_offset + occurrence.start,
-                    end: line_offset + occurrence.end,
-                });
-                let block_id = occurrence.id;
-                if !moved_block_ids.insert(block_id.clone()) {
-                    ambiguous_moved_block_ids.insert(block_id);
+            if !masked.contains(&(index + relative_line)) {
+                for occurrence in content_anchor_occurrences_in_line(content) {
+                    moved_block_id_occurrences.push(BlockIdOccurrence {
+                        id: occurrence.id.clone(),
+                        start: line_offset + occurrence.start,
+                        end: line_offset + occurrence.end,
+                    });
+                    let block_id = occurrence.id;
+                    if !moved_block_ids.insert(block_id.clone()) {
+                        ambiguous_moved_block_ids.insert(block_id);
+                    }
                 }
             }
         }
@@ -313,6 +330,57 @@ fn held_block_ids(span: &[&str]) -> Vec<String> {
         ids.extend(block_ids_in_text(content));
     }
     ids
+}
+
+/// Block-id syntax on a live content line, excluding tokens inside inline
+/// code. Callers that scan a document also exclude masked frontmatter,
+/// fences, and multiline comments with `non_content_line_indexes`.
+pub(super) fn content_anchor_occurrences_in_line(
+    text: &str,
+) -> Vec<BlockIdOccurrence> {
+    let code_spans = super::super::task_dependencies::inline_code_spans(text);
+    block_id_occurrences_in_text(text)
+        .into_iter()
+        .filter(|occurrence| {
+            !code_spans.iter().any(|span| {
+                occurrence.start < span.end && occurrence.end > span.start
+            })
+        })
+        .collect()
+}
+
+/// Content-aware anchor occurrences with byte offsets and line positions.
+/// This is the common scanner used by archive identity collection and
+/// postimage validation.
+pub(super) fn content_anchor_occurrences(
+    contents: &str,
+) -> Vec<LocatedBlockIdOccurrence> {
+    let lines: Vec<&str> = contents.split_inclusive('\n').collect();
+    let masked = super::super::markdown::non_content_line_indexes(&lines);
+    let mut occurrences = Vec::new();
+    let mut offset = 0;
+    for (line_index, segment) in lines.iter().enumerate() {
+        let (content, _) = split_line_ending(segment);
+        if !masked.contains(&line_index) {
+            for occurrence in content_anchor_occurrences_in_line(content) {
+                occurrences.push(LocatedBlockIdOccurrence {
+                    id: occurrence.id,
+                    start: offset + occurrence.start,
+                    end: offset + occurrence.end,
+                    line_index,
+                });
+            }
+        }
+        offset += segment.len();
+    }
+    occurrences
+}
+
+pub(super) fn content_anchor_ids(contents: &str) -> Vec<String> {
+    content_anchor_occurrences(contents)
+        .into_iter()
+        .map(|occurrence| occurrence.id)
+        .collect()
 }
 
 pub(super) fn is_closed_status(

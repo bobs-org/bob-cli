@@ -181,6 +181,9 @@ impl PlannedWrite {
 
 #[derive(Debug, Clone)]
 pub(crate) struct WritePlan {
+    /// The vault root as supplied by the caller. It may be reached through a
+    /// symlink alias; `vault_canonical` records the verified directory identity.
+    pub vault_path: PathBuf,
     pub vault_canonical: PathBuf,
     pub inputs: Vec<InputSnapshot>,
     /// Vault note membership captured at plan time, compared against a fresh

@@ -19,7 +19,13 @@ pub(super) fn stage_outputs(
 ) -> Result<Vec<StagedWrite>, ApplyError> {
     let mut staged = Vec::new();
     for (index, output) in plan.outputs.iter().enumerate() {
-        match stage_one(output, &plan.vault_canonical, &session.run_id, index) {
+        match stage_one(
+            output,
+            &plan.vault_path,
+            &plan.vault_canonical,
+            &session.run_id,
+            index,
+        ) {
             Ok(item) => {
                 if let Some(fail) = &session.fail_staging
                     && let Err(error) = fail(&output.path)
@@ -79,12 +85,14 @@ impl From<io::Error> for StageError {
 
 fn stage_one(
     output: &PlannedWrite,
+    vault_path: &Path,
     vault_canonical: &Path,
     run_id: &str,
     index: usize,
 ) -> Result<StagedWrite, StageError> {
     let parent = ensure_destination_parent(
         &output.path,
+        vault_path,
         vault_canonical,
         output.is_create(),
     )?;
@@ -135,10 +143,16 @@ fn stage_one(
 
 pub(super) fn inspect_destination_parent(
     dest: &Path,
+    vault_path: &Path,
     vault_canonical: &Path,
     create_parents: bool,
 ) -> Result<PathBuf, CaptureError> {
-    match ensure_destination_parent(dest, vault_canonical, create_parents) {
+    match ensure_destination_parent(
+        dest,
+        vault_path,
+        vault_canonical,
+        create_parents,
+    ) {
         Ok(parent) => Ok(parent),
         Err(StageError::Unsupported { path, message }) => {
             Err(CaptureError::Unsupported { path, message })
@@ -149,19 +163,21 @@ pub(super) fn inspect_destination_parent(
 
 fn ensure_destination_parent(
     dest: &Path,
+    vault_path: &Path,
     vault_canonical: &Path,
     create_parents: bool,
 ) -> Result<PathBuf, StageError> {
+    let vault_root = absolute_path(vault_path)?;
     let dest_abs = if dest.is_absolute() {
         dest.to_path_buf()
     } else {
-        vault_canonical.join(dest)
+        vault_root.join(dest)
     };
     let dest_norm = lexical_normalize(&dest_abs);
-    if !dest_norm.starts_with(vault_canonical) || dest_norm == vault_canonical {
+    if !dest_norm.starts_with(&vault_root) || dest_norm == vault_root {
         return Err(StageError::Unsupported {
             path: dest.to_path_buf(),
-            message: "destination is outside the canonical vault".to_string(),
+            message: "destination is outside the vault".to_string(),
         });
     }
     let parent = dest_norm.parent().ok_or_else(|| {
@@ -170,27 +186,34 @@ fn ensure_destination_parent(
             format!("path has no parent: {}", dest.display()),
         )
     })?;
-    let relative = match parent.strip_prefix(vault_canonical) {
+    let relative = match parent.strip_prefix(&vault_root) {
         Ok(relative) => relative,
         Err(_) => {
             return Err(StageError::Unsupported {
                 path: dest.to_path_buf(),
-                message: "destination is outside the canonical vault"
-                    .to_string(),
+                message: "destination is outside the vault".to_string(),
             });
         }
     };
 
-    let vault_meta =
-        fs::symlink_metadata(vault_canonical).map_err(StageError::Io)?;
-    if vault_meta.file_type().is_symlink() || !vault_meta.is_dir() {
+    let canonical_root =
+        fs::canonicalize(&vault_root).map_err(StageError::Io)?;
+    if canonical_root != vault_canonical {
         return Err(StageError::Unsupported {
             path: dest.to_path_buf(),
-            message: "vault root is not a real directory".to_string(),
+            message: "vault root alias no longer names the verified vault"
+                .to_string(),
+        });
+    }
+    let vault_meta = fs::metadata(&vault_root).map_err(StageError::Io)?;
+    if !vault_meta.is_dir() {
+        return Err(StageError::Unsupported {
+            path: dest.to_path_buf(),
+            message: "vault root is not a directory".to_string(),
         });
     }
 
-    let mut current = vault_canonical.to_path_buf();
+    let mut current = vault_root;
     for component in relative.components() {
         match component {
             Component::Normal(_) => {}
@@ -227,6 +250,15 @@ fn ensure_destination_parent(
         }
     }
     Ok(parent.to_path_buf())
+}
+
+fn absolute_path(path: &Path) -> Result<PathBuf, StageError> {
+    if path.is_absolute() {
+        return Ok(lexical_normalize(path));
+    }
+    std::env::current_dir()
+        .map(|current| lexical_normalize(&current.join(path)))
+        .map_err(StageError::Io)
 }
 
 fn refuse_unsafe_parent(

@@ -7,6 +7,55 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::process::Output;
 
+#[cfg(unix)]
+#[test]
+fn task_archive_accepts_a_symlinked_vault_root() {
+    let temp = TempDir::new("bob-cli-move-done-vault-alias");
+    let stub_bin = temp.path().join("bin");
+    let (vault, _remote) = init_git_vault_with_remote(&temp);
+    fs::create_dir_all(&stub_bin).expect("create stub bin");
+    write_successful_ob_stub(&stub_bin);
+    let alias = temp.path().join("vault-alias");
+    std::os::unix::fs::symlink(&vault, &alias).expect("create vault alias");
+    write_file(
+        &vault.join("work.md"),
+        &area_note("- [x] finished #task ^gone\n- [ ] active #task\n"),
+    );
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
+    git_in(&vault, ["push", "-q", "-u", "origin", "HEAD"]);
+
+    let output = bob_command()
+        .args(["task", "archive", "-t", "1", "-f", "json"])
+        .env("BOB_DIR", &alias)
+        .env("BOB_NOW", "2026-06-02")
+        .env(
+            "BOB_VAULT_SYNC_LOCK_FILE",
+            temp.path().join("bob_sync.lock"),
+        )
+        .env("PATH", path_with_prefix(&stub_bin))
+        .env("XDG_STATE_HOME", temp.path().join("state"))
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .env("XDG_CONFIG_HOME", temp.path().join("config"))
+        .output()
+        .expect("run archive through a vault alias");
+
+    assert_success(&output);
+    let json = stdout(&output);
+    assert!(
+        json.contains("\"outcome\":\"applied\"")
+            || json.contains("\"outcome\": \"applied\""),
+        "archive JSON reports an applied write:\n{}",
+        format_output(&output)
+    );
+    let archive = fs::read_to_string(vault.join("done/work_done.md"))
+        .expect("archive created under real vault");
+    assert!(archive.contains("- [x] finished #task ^gone"));
+    assert!(fs::read_to_string(vault.join("work.md"))
+        .unwrap()
+        .contains("- [ ] active #task"));
+}
+
 #[test]
 fn move_done_tasks_commits_and_pushes_collection_changes_only() {
     let temp = TempDir::new("bob-cli-move-done-tasks-git");

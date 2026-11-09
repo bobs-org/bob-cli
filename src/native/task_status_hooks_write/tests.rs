@@ -102,6 +102,7 @@ fn plan_for(
         );
     }
     WritePlan {
+        vault_path: vault.to_path_buf(),
         vault_canonical: vault.canonicalize().expect("canonical vault"),
         inputs,
         scan_paths,
@@ -228,6 +229,7 @@ fn noop_creates_no_recovery_or_staging() {
     let (temp, vault, first, second) = fixture();
     let scan = vec![first, second];
     let plan = WritePlan {
+        vault_path: vault.clone(),
         vault_canonical: vault.canonicalize().unwrap(),
         inputs: Vec::new(),
         scan_paths: scan.clone(),
@@ -986,6 +988,75 @@ fn create_under_absent_nested_directory_applies() {
     let _ = second;
 }
 
+#[cfg(unix)]
+fn apply_through_vault_alias(
+    temp: &TempDir,
+    vault_path: &Path,
+    canonical_vault: &Path,
+    run_id: &str,
+) {
+    let replacement = vault_path.join("notes/replace.md");
+    let archive = vault_path.join("done/area/deep/note_done.md");
+    write_file(&replacement, "before\n");
+    let scan = vec![replacement.clone()];
+    let plan = plan_for(
+        vault_path,
+        vec![
+            (replacement.as_path(), "after\n", false),
+            (archive.as_path(), "archived\n", false),
+        ],
+        Vec::new(),
+        scan,
+    );
+    assert_eq!(plan.vault_path, vault_path);
+    assert_eq!(plan.vault_canonical, canonical_vault);
+    let session = recursive_scan_session(temp, vault_path, run_id);
+    let outcome = apply_ok(&plan, &session);
+    assert!(matches!(outcome, ApplyOutcome::Applied { .. }));
+    assert_eq!(fs::read_to_string(&replacement).unwrap(), "after\n");
+    assert_eq!(fs::read_to_string(&archive).unwrap(), "archived\n");
+    assert!(
+        canonical_vault.join("done/area/deep/note_done.md").exists(),
+        "the nested create lands under the verified vault"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn verified_symlink_vault_root_allows_replacement_and_nested_create() {
+    let temp = TempDir::new("bob-cli-guarded-write-root-alias");
+    let real_vault = temp.path().join("real-vault");
+    fs::create_dir_all(&real_vault).unwrap();
+    let alias = temp.path().join("alias");
+    std::os::unix::fs::symlink(&real_vault, &alias).unwrap();
+
+    apply_through_vault_alias(
+        &temp,
+        &alias,
+        &real_vault.canonicalize().unwrap(),
+        "root-alias",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn verified_aliased_ancestor_allows_replacement_and_nested_create() {
+    let temp = TempDir::new("bob-cli-guarded-write-ancestor-alias");
+    let real_parent = temp.path().join("real-parent");
+    let real_vault = real_parent.join("vault");
+    fs::create_dir_all(&real_vault).unwrap();
+    let alias_parent = temp.path().join("alias-parent");
+    std::os::unix::fs::symlink(&real_parent, &alias_parent).unwrap();
+    let aliased_vault = alias_parent.join("vault");
+
+    apply_through_vault_alias(
+        &temp,
+        &aliased_vault,
+        &real_vault.canonicalize().unwrap(),
+        "ancestor-alias",
+    );
+}
+
 #[test]
 fn create_file_appearing_before_preflight_is_left_byte_identical() {
     let (temp, vault, first, second) = fixture();
@@ -1083,6 +1154,7 @@ fn create_refuses_file_parent() {
     let scan = vec![first.clone(), second.clone()];
     let original = InputSnapshot::missing(dest.clone(), InputKind::Note);
     let plan = WritePlan {
+        vault_path: vault.clone(),
         vault_canonical: vault.canonicalize().unwrap(),
         inputs: Vec::new(),
         scan_paths: scan.clone(),
@@ -1109,6 +1181,7 @@ fn create_refuses_destination_outside_vault() {
     let scan = vec![first.clone(), second.clone()];
     let original = InputSnapshot::missing(dest.clone(), InputKind::Note);
     let plan = WritePlan {
+        vault_path: vault.clone(),
         vault_canonical: vault.canonicalize().unwrap(),
         inputs: vec![original.clone()],
         scan_paths: scan.clone(),

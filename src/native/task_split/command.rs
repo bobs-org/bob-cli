@@ -569,6 +569,7 @@ fn build_write_plan(
         );
     }
     Ok(WritePlan {
+        vault_path: vault.to_path_buf(),
         vault_canonical: vault
             .canonicalize()
             .unwrap_or_else(|_| vault.to_path_buf()),

@@ -342,6 +342,7 @@ pub(super) struct LinkRepairPlan {
     pub(super) contents: String,
     pub(super) link_count: usize,
     pub(super) dependency_metadata_count: usize,
+    pub(super) structural_regrouping: bool,
 }
 /// Capture every planning input once and plan the whole archive collection.
 ///
@@ -381,7 +382,7 @@ pub(super) struct PlannedArchive {
     pub(super) write_plan: WritePlan,
 }
 
-fn plan_from_captured(
+pub(super) fn plan_from_captured(
     captured: &CapturedInputs,
     threshold: usize,
 ) -> io::Result<PlannedArchive> {
@@ -556,9 +557,9 @@ fn plan_from_captured(
         });
     }
 
-    let link_repairs =
+    let mut link_repairs =
         apply_link_repairs_to_plan(&captured.contents, &mut files)?;
-    apply_same_write_grouping(captured, &mut files)?;
+    apply_same_write_grouping(captured, &mut files, &mut link_repairs)?;
     verify_planned_postimages(captured, &files, &link_repairs)?;
     let write_plan = write_plan_for(captured, &files, &link_repairs)?;
     grandfathered.sort();
@@ -668,7 +669,11 @@ fn partition_selected_roots(
     let mut pending = Vec::new();
     for span in &transform.moved_roots {
         let raw = transform.archive_append[span.start..span.end].to_string();
-        let contained = contained_block_ids(&raw);
+        let occurrences = content_anchor_occurrences(&raw);
+        let contained = occurrences
+            .iter()
+            .map(|occurrence| occurrence.id.clone())
+            .collect::<Vec<_>>();
         let replayed = match inventory.get_mut(&raw) {
             Some(count) if *count > 0 => {
                 *count -= 1;
@@ -680,18 +685,13 @@ fn partition_selected_roots(
         let mut occurrence_count = 0;
         if !replayed {
             let base = new_append.len();
-            let mut line_offset = 0;
-            for segment in raw.split_inclusive('\n') {
-                let (content, _) = split_line_ending(segment);
-                for occurrence in block_id_occurrences_in_text(content) {
-                    new_occurrences.push(BlockIdOccurrence {
-                        id: occurrence.id.clone(),
-                        start: base + line_offset + occurrence.start,
-                        end: base + line_offset + occurrence.end,
-                    });
-                    occurrence_count += 1;
-                }
-                line_offset += segment.len();
+            for occurrence in &occurrences {
+                new_occurrences.push(BlockIdOccurrence {
+                    id: occurrence.id.clone(),
+                    start: base + occurrence.start,
+                    end: base + occurrence.end,
+                });
+                occurrence_count += 1;
             }
             new_append.push_str(&raw);
         }
@@ -748,16 +748,6 @@ fn partition_selected_roots(
     })
 }
 
-/// Every block id on a moved root's lines, in line order.
-fn contained_block_ids(raw: &str) -> Vec<String> {
-    let mut ids = Vec::new();
-    for segment in raw.split_inclusive('\n') {
-        let (content, _) = split_line_ending(segment);
-        ids.extend(block_ids_in_text(content));
-    }
-    ids
-}
-
 /// Multiset of complete archive blocks, frontmatter excluded.
 ///
 /// Blocks are segmented with the same [`task_block_end`] rule the source
@@ -800,6 +790,7 @@ fn archive_block_inventory(
 fn apply_same_write_grouping(
     captured: &CapturedInputs,
     files: &mut [FilePlan],
+    link_repairs: &mut [LinkRepairPlan],
 ) -> io::Result<()> {
     let classification = task_group_classification(&captured.settings);
     for file in files.iter_mut() {
@@ -826,6 +817,29 @@ fn apply_same_write_grouping(
         if grouped.contents != file.source_contents {
             file.source_contents = grouped.contents;
             file.source_structural = true;
+        }
+    }
+    for repair in link_repairs {
+        let snapshot = snapshot_for_path(
+            &captured.snapshots,
+            &captured.vault.join(&repair.relative_path),
+        )?;
+        let original = captured.contents(&repair.relative_path)?;
+        if !grouping_eligible_for(
+            &repair.relative_path,
+            snapshot,
+            original,
+            captured,
+        ) {
+            continue;
+        }
+        let grouped = super::super::task_status_groups::transform(
+            &repair.contents,
+            &classification,
+        );
+        if grouped.contents != repair.contents {
+            repair.contents = grouped.contents;
+            repair.structural_regrouping = true;
         }
     }
     Ok(())
@@ -860,12 +874,13 @@ fn verify_planned_postimages(
     for repair in link_repairs {
         overlay.insert(repair.relative_path.clone(), repair.contents.clone());
     }
-    verify_moved_identities(&overlay, files)?;
+    verify_moved_identities(captured, &overlay, files)?;
     verify_archive_postimages(captured, &overlay, files, link_repairs)?;
     Ok(())
 }
 
-fn verify_moved_identities(
+pub(super) fn verify_moved_identities(
+    captured: &CapturedInputs,
     overlay: &BTreeMap<PathBuf, String>,
     files: &[FilePlan],
 ) -> io::Result<()> {
@@ -880,8 +895,29 @@ fn verify_moved_identities(
         if file.task_count == 0 {
             continue;
         }
+        let original_source = captured.contents(&file.relative_source_path)?;
+        let original_source_census = anchor_id_lines(original_source);
+        let source_census = census
+            .get(&file.relative_source_path)
+            .expect("source belongs to overlay");
+        let mut moved_original_counts = BTreeMap::new();
         for record in &file.moved_roots {
-            for final_id in &record.final_ids {
+            if record.contained_ids.len() != record.final_ids.len() {
+                return Err(refusal(
+                    &file.relative_source_path,
+                    record.source_line,
+                    record.root_id.clone(),
+                    "moved block identity alignment is incomplete".to_string(),
+                ));
+            }
+            for original_id in &record.contained_ids {
+                *moved_original_counts
+                    .entry(original_id.clone())
+                    .or_insert(0usize) += 1;
+            }
+            for (original_id, final_id) in
+                record.contained_ids.iter().zip(&record.final_ids)
+            {
                 let at_destination = census
                     .get(&file.relative_archive_path)
                     .and_then(|counts| counts.get(final_id))
@@ -897,47 +933,59 @@ fn verify_moved_identities(
                         ),
                     ));
                 }
-                let at_source = census
-                    .get(&file.relative_source_path)
-                    .and_then(|counts| counts.get(final_id))
-                    .map(Vec::len)
-                    .unwrap_or(0);
-                if at_source != 0 {
-                    return Err(refusal(
-                        &file.relative_source_path,
-                        record.source_line,
-                        Some(final_id),
-                        format!(
-                            "moved block id ^{final_id} still occurs at its source"
-                        ),
+                if !file.ambiguous_moved_block_ids.contains(original_id) {
+                    let resolved = targets.get(&(
+                        file.relative_source_path.clone(),
+                        original_id.clone(),
                     ));
+                    let matches = resolved.is_some_and(|target| {
+                        target.block_id == *final_id
+                            && target.archive_target
+                                == vault_relative_link_target(
+                                    &file.relative_archive_path,
+                                    "archive",
+                                )
+                                .unwrap_or_default()
+                    });
+                    if !matches {
+                        return Err(refusal(
+                            &file.relative_source_path,
+                            record.source_line,
+                            Some(original_id),
+                            "moved block id does not resolve to its destination archive"
+                                .to_string(),
+                        ));
+                    }
                 }
             }
-            if let Some(root_id) = &record.root_id
-                && !file.ambiguous_moved_block_ids.contains(root_id)
-                && !record.replayed
-            {
-                let expected_final = record.final_ids.first().cloned();
-                let resolved = targets
-                    .get(&(file.relative_source_path.clone(), root_id.clone()));
-                let matches = resolved.is_some_and(|target| {
-                    Some(target.block_id.clone()) == expected_final
-                        && target.archive_target
-                            == vault_relative_link_target(
-                                &file.relative_archive_path,
-                                "archive",
-                            )
-                            .unwrap_or_default()
-                });
-                if !matches {
-                    return Err(refusal(
-                        &file.relative_source_path,
-                        record.source_line,
-                        Some(root_id),
-                        "moved block id does not resolve to its destination archive"
-                            .to_string(),
-                    ));
-                }
+        }
+        for (original_id, moved_count) in moved_original_counts {
+            let original_count = original_source_census
+                .get(&original_id)
+                .map(Vec::len)
+                .unwrap_or(0);
+            if moved_count > original_count {
+                return Err(refusal(
+                    &file.relative_source_path,
+                    1,
+                    Some(&original_id),
+                    format!(
+                        "moved block id ^{original_id} has {moved_count} recorded occurrences but only {original_count} at its source"
+                    ),
+                ));
+            }
+            let expected_remaining = original_count - moved_count;
+            let actual_remaining =
+                source_census.get(&original_id).map(Vec::len).unwrap_or(0);
+            if actual_remaining != expected_remaining {
+                return Err(refusal(
+                    &file.relative_source_path,
+                    1,
+                    Some(&original_id),
+                    format!(
+                        "moved block id ^{original_id} has {actual_remaining} occurrences at its source after moving {moved_count}; expected {expected_remaining}"
+                    ),
+                ));
             }
         }
     }
@@ -947,27 +995,12 @@ fn verify_moved_identities(
 /// Content-aware block-id census: one entry per anchor outside masked code,
 /// comments, and frontmatter, skipping inline-code spans.
 fn anchor_id_lines(contents: &str) -> BTreeMap<String, Vec<usize>> {
-    let lines: Vec<&str> = contents.split_inclusive('\n').collect();
-    let masked = super::super::markdown::non_content_line_indexes(&lines);
     let mut census = BTreeMap::new();
-    for (index, segment) in lines.iter().enumerate() {
-        if masked.contains(&index) {
-            continue;
-        }
-        let (content, _) = split_line_ending(segment);
-        let code_spans =
-            super::super::task_dependencies::inline_code_spans(content);
-        for occurrence in block_id_occurrences_in_text(content) {
-            if code_spans.iter().any(|span| {
-                occurrence.start < span.end && occurrence.end > span.start
-            }) {
-                continue;
-            }
-            census
-                .entry(occurrence.id)
-                .or_insert_with(Vec::new)
-                .push(index + 1);
-        }
+    for occurrence in content_anchor_occurrences(contents) {
+        census
+            .entry(occurrence.id)
+            .or_insert_with(Vec::new)
+            .push(occurrence.line_index + 1);
     }
     census
 }
@@ -1113,7 +1146,7 @@ fn write_plan_for(
                 path,
                 original,
                 repair.contents.as_bytes().to_vec(),
-                false,
+                repair.structural_regrouping,
             )
             .map_err(capture_error)?,
         );
@@ -1127,6 +1160,7 @@ fn write_plan_for(
     scan_paths.sort();
     scan_paths.dedup();
     Ok(WritePlan {
+        vault_path: captured.vault.clone(),
         vault_canonical: captured.vault_canonical.clone(),
         inputs: captured.snapshots.clone(),
         scan_paths,

@@ -1261,6 +1261,7 @@ fn build_write_plan(
         );
     }
     Ok(WritePlan {
+        vault_path: report.vault.clone(),
         vault_canonical: report
             .vault
             .canonicalize()

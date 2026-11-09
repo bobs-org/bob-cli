@@ -135,25 +135,28 @@ pub(super) fn preflight(
         if applied.iter().any(|item| item.path == output.path) {
             continue;
         }
-        inspect_destination_parent(&output.path, &plan.vault_canonical, false)
-            .map_err(|error| {
-                let reason = match error {
-                    CaptureError::Unsupported { .. } => {
-                        ReasonCode::UnsupportedFile
-                    }
-                    _ => ReasonCode::Io,
-                };
-                if applied.is_empty() {
-                    ApplyError::capture(reason, error)
-                } else {
-                    ApplyError::vault_changed(
-                        plan,
-                        &applied_paths,
-                        None,
-                        error.message(),
-                    )
-                }
-            })?;
+        inspect_destination_parent(
+            &output.path,
+            &plan.vault_path,
+            &plan.vault_canonical,
+            false,
+        )
+        .map_err(|error| {
+            let reason = match error {
+                CaptureError::Unsupported { .. } => ReasonCode::UnsupportedFile,
+                _ => ReasonCode::Io,
+            };
+            if applied.is_empty() {
+                ApplyError::capture(reason, error)
+            } else {
+                ApplyError::vault_changed(
+                    plan,
+                    &applied_paths,
+                    None,
+                    error.message(),
+                )
+            }
+        })?;
         check_unwritten_output(output).map_err(|error| {
             if applied.is_empty() {
                 error
@@ -202,14 +205,19 @@ pub(super) fn preflight_for_replacement(
         .iter()
         .find(|output| output.path == next.dest)
         .expect("staged path is part of the plan");
-    inspect_destination_parent(&output.path, &plan.vault_canonical, false)
-        .map_err(|error| {
-            let reason = match error {
-                CaptureError::Unsupported { .. } => ReasonCode::UnsupportedFile,
-                _ => ReasonCode::Io,
-            };
-            ApplyError::capture(reason, error)
-        })?;
+    inspect_destination_parent(
+        &output.path,
+        &plan.vault_path,
+        &plan.vault_canonical,
+        false,
+    )
+    .map_err(|error| {
+        let reason = match error {
+            CaptureError::Unsupported { .. } => ReasonCode::UnsupportedFile,
+            _ => ReasonCode::Io,
+        };
+        ApplyError::capture(reason, error)
+    })?;
     check_unwritten_output(output)
 }
 

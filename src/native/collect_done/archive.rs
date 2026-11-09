@@ -27,7 +27,7 @@ pub(super) fn deduplicate_archive_append_block_ids(
 
     let mut used = BTreeSet::new();
     if let Some(existing_archive) = existing_archive {
-        used.extend(block_ids_in_markdown(existing_archive));
+        used.extend(super::content_anchor_ids(existing_archive));
     }
 
     let mut occurrence_counts = BTreeMap::new();

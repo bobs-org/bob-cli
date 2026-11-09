@@ -273,6 +273,7 @@ pub(super) fn apply_link_repairs_to_plan(
                 contents,
                 link_count,
                 dependency_metadata_count,
+                structural_regrouping: false,
             });
         }
     }

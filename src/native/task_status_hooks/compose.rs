@@ -322,6 +322,7 @@ pub(super) fn apply_guarded_outputs(
     }));
     match apply_plan(
         &WritePlan {
+            vault_path: vault.to_path_buf(),
             vault_canonical,
             inputs: inputs.to_vec(),
             scan_paths: scan_paths.to_vec(),

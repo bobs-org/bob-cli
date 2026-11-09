@@ -1012,6 +1012,7 @@ fn build_write_plan(
         .map(|write| outputs.push(write))?;
     }
     Ok(WritePlan {
+        vault_path: report.vault.clone(),
         vault_canonical,
         inputs: scan
             .inputs
