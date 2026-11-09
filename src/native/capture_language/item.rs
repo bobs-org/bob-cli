@@ -501,6 +501,18 @@ pub(super) fn parse_capture_item<'a>(
     options: &CaptureParseOptions<'_>,
     target_run: Option<&TargetRunContext>,
 ) -> Result<ParsedCaptureItemOutcome<'a>, CaptureItemParseError> {
+    // Record creation also claims here so list-context bullets and
+    // template rows carrying a record route never parse as tasks. The
+    // draft/singleton entry points already claimed above, so this only
+    // fires where those paths did not run.
+    if let Some(outcome) = super::record::claim_strict_record(
+        item,
+        forced_route,
+        forced_section,
+        options,
+    )? {
+        return Ok(outcome);
+    }
     let occurrences = super::type_marker::collect_item(item);
     let type_masked_source =
         super::type_marker::masked_source(item, &occurrences);

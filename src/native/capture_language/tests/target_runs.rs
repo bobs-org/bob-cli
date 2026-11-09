@@ -20,6 +20,7 @@ fn editor_active() -> EditorParseOptions<'static> {
     EditorParseOptions {
         url_routing: None,
         has_global_destination: false,
+        record_policy: None,
     }
 }
 

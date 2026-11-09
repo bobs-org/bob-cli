@@ -51,6 +51,7 @@ pub(crate) fn parse_template_protocol(text: &str) -> TemplateProtocolParse {
     let options = EditorParseOptions {
         url_routing: None,
         has_global_destination: false,
+        record_policy: None,
     };
     let parsed = CaptureParseResult::new(draft, &options);
     let route = parsed.items.first().and_then(|item| item.route.clone());
@@ -117,9 +118,17 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
     // unchanged: routing turns off and the URL stays a task.
     let no_ref = matches.get_flag("no-ref");
     let policy = load_parse_routing(no_ref);
+    // One memoized record route policy per invocation; ordinary drafts
+    // skip config and filesystem reads via lexical preflight.
+    let record_policy = super::capture_record::record_policy_for_draft(
+        &super::env::bob_dir(),
+        None,
+        &raw_text,
+    );
     let options = EditorParseOptions {
         url_routing: policy.as_ref(),
         has_global_destination: false,
+        record_policy: Some(&record_policy),
     };
     let mut result = CaptureParseResult::new(raw_text, &options);
     attach_gmail_spans(&mut result);
@@ -177,7 +186,7 @@ command also best-effort reads the configured vault's theme catalog and adds \
 theme refs; if the catalog is unavailable, parsing still succeeds without \
 those refs. It never writes to the vault or reads the clipboard, and takes no \
 --bob-dir. A '%c' directive still succeeds without reading the clipboard.\n\n\
-Success JSON reports `grammar: 19` for the capture-language revision while \
+Success JSON reports `grammar: 20` for the capture-language revision while \
 `schema_version` stays 1. Gmail URLs add `gmail_url` spans with offline \
 `gmail: {verdict, date_hint?}`, decoded thread `key`, and saved-label `title`. \
 No Gmail calls are made.\n\n\
@@ -1028,6 +1037,23 @@ fn attach_gmail_spans(result: &mut CaptureParseResult) {
     if matches.is_empty() {
         return;
     }
+    // Record regions stay opaque: a URL inside a record field value (or
+    // any other record span) is validated by its schema kind, never by
+    // Gmail rewriting.
+    let record_ranges: Vec<(usize, usize)> = result
+        .spans
+        .iter()
+        .filter(|span| {
+            matches!(
+                span.kind,
+                capture_language::SpanKind::RecordRoute
+                    | capture_language::SpanKind::RecordStem
+                    | capture_language::SpanKind::RecordFieldKey
+                    | capture_language::SpanKind::RecordFieldValue
+            )
+        })
+        .map(|span| (span.start, span.end))
+        .collect();
     let context =
         super::gmail::capture::OfflineContext::load(&super::env::bob_dir());
     for found in matches {
@@ -1038,6 +1064,12 @@ fn attach_gmail_spans(result: &mut CaptureParseResult) {
                 .find(&found.url)
                 .unwrap_or(0);
         let end = start + found.url.len();
+        if record_ranges
+            .iter()
+            .any(|range| range.0 < end && start < range.1)
+        {
+            continue;
+        }
         let mut span = wire_spans(vec![Span {
             start,
             end,
@@ -3762,7 +3794,7 @@ mod tests {
         let value = json("Call bank @Cash+");
         assert_eq!(value["ok"], true);
         assert_eq!(value["schema_version"], 1);
-        assert_eq!(value["grammar"], 19);
+        assert_eq!(value["grammar"], 20);
         assert_eq!(value["input"], "Call bank @Cash+");
         assert_eq!(value["body"], "Call bank");
         assert_eq!(value["mode"], "incomplete");
@@ -3793,6 +3825,7 @@ mod tests {
         let options = EditorParseOptions {
             url_routing: None,
             has_global_destination: false,
+            record_policy: None,
         };
         let result = CaptureParseResult::new(raw.to_string(), &options);
         let value = serde_json::to_value(&result).unwrap();
@@ -3825,7 +3858,7 @@ mod tests {
         // "start a list" from it.
         let value = json("@sase");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 19);
+        assert_eq!(value["grammar"], 20);
         assert_eq!(value["mode"], "note_pull");
         assert_eq!(value["route"], "sase");
         assert!(value["section"].is_null());
@@ -4610,10 +4643,10 @@ mod tests {
     }
 
     #[test]
-    fn json_reports_merge_in_wire_shape_and_grammar_19() {
+    fn json_reports_merge_in_wire_shape_and_grammar_20() {
         let value = json("New task < @a+x @b+y");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 19);
+        assert_eq!(value["grammar"], 20);
         assert_eq!(value["schema_version"], 1);
         assert_eq!(value["mode"], "task");
         let merge_in = value.get("merge_in").expect("merge_in");

@@ -84,6 +84,7 @@ mod project_close;
 mod project_note;
 mod project_note_offer;
 mod project_pull_in;
+mod record;
 mod r#ref;
 mod ref_grammar;
 mod relate_existing;

@@ -72,6 +72,14 @@ pub(crate) enum SpanKind {
     RelationBlockId,
     RelationLabelSeparator,
     RelationLabel,
+    /// A record creation's `@dir/` route token.
+    RecordRoute,
+    /// A record creation's explicit `^stem` (without the `@dir/`).
+    RecordStem,
+    /// A record field bullet's key (without the `::`).
+    RecordFieldKey,
+    /// A record field bullet's value (without the `key::`).
+    RecordFieldValue,
     /// A whole-item bare URL admitted by the routing policy.
     RefUrl,
     GmailUrl,
@@ -158,6 +166,10 @@ impl SpanKind {
             Self::RelationBlockId => "relation_block_id",
             Self::RelationLabelSeparator => "relation_label_separator",
             Self::RelationLabel => "relation_label",
+            Self::RecordRoute => "record_route",
+            Self::RecordStem => "record_stem",
+            Self::RecordFieldKey => "record_field_key",
+            Self::RecordFieldValue => "record_field_value",
             Self::RefUrl => "ref_url",
             Self::GmailUrl => "Gmail link",
             Self::TaskCompleteSigil => "task_complete_sigil",
@@ -266,6 +278,9 @@ pub(crate) enum EditorMode {
     TaskDependency,
     /// A whole-item `!note:block-id` task completion.
     TaskComplete,
+    /// A record creation item (`@dir/` route-first or title-first,
+    /// with optional `@dir/^stem`). Retains raw syntax while typing.
+    RecordNote,
     /// A whole-item bare URL admitted by the routing policy.
     Ref,
     /// A lone `@route` header that pulls that note's tasks (§12.20).
@@ -296,6 +311,7 @@ impl EditorMode {
             Self::PomodoroStart => "pomodoro_start",
             Self::TaskDependency => "task_dependency",
             Self::TaskComplete => "task_complete",
+            Self::RecordNote => "record_note",
             Self::Ref => "ref",
             Self::NotePull => "note_pull",
             Self::Incomplete => "incomplete",
@@ -324,6 +340,10 @@ pub(crate) enum Need {
     TaskLink,
     /// A whole-draft `/query` Go To picker is still open.
     TaskGoto,
+    /// A record route with no title: name the record before capture.
+    RecordTitle,
+    /// A record field with no value: fill it or drop the bullet.
+    RecordValue,
     /// A bare-plus parent-task selector has not been accepted yet.
     TaskParent,
     PomodoroCloseTask,
@@ -373,6 +393,8 @@ impl Need {
             Self::ActiveTask => "active_task",
             Self::TaskLink => "task_link",
             Self::TaskGoto => "task_goto",
+            Self::RecordTitle => "record_title",
+            Self::RecordValue => "record_value",
             Self::TaskParent => "task_parent",
             Self::PomodoroCloseTask => "pomodoro_close_task",
             Self::PomodoroCloseLogText => "pomodoro_close_log_text",

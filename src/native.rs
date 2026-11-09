@@ -36,6 +36,7 @@ mod capture_pomodoro_start;
 mod capture_pomodoros;
 mod capture_pomodoros_agenda;
 mod capture_project_note;
+pub(crate) mod capture_record;
 mod capture_related;
 mod capture_rewrite;
 mod capture_schedule_log;

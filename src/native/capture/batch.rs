@@ -628,6 +628,14 @@ pub(super) fn plan_capture_to_target(
                 "note-pull capture is planned by plan_note_pull_item",
             ));
         }
+        CaptureKind::RecordNote { .. } => {
+            // Fail-closed until the `record-writes` phase lands:
+            // never stage an inbox task for a claimed record.
+            return Err(CaptureError::usage(
+                crate::native::capture_language::RECORD_EXECUTION_UNWIRED_MESSAGE
+                    .to_string(),
+            ));
+        }
     };
     planner.stage(target, updated)?;
     Ok(CaptureWritePlan {

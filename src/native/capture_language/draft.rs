@@ -1023,6 +1023,17 @@ pub(crate) fn parse_capture_text_with_options(
     // draft parser but keeps ordinary items on the unfanned singleton parser.
     let mut item_outcomes = Vec::new();
     for item in &draft.items {
+        if let Some(outcome) = super::record::claim_strict_record(
+            item,
+            forced_route,
+            forced_section,
+            &options,
+        )
+        .map_err(|error| error.message)?
+        {
+            item_outcomes.push(outcome);
+            continue;
+        }
         if let Some(outcomes) =
             parse_transfer_claim(item, forced_route, forced_section, &options)
                 .map_err(|error| error.message)?
@@ -1470,6 +1481,16 @@ fn parse_capture_item_members<'a>(
     forced_section: Option<&str>,
     options: &CaptureParseOptions<'_>,
 ) -> Result<Vec<ParsedCaptureItemOutcome<'a>>, CaptureItemParseError> {
+    // Record creation claims before transfers: a record field value may
+    // hold `>`/`<` prose that must stay opaque.
+    if let Some(outcome) = super::record::claim_strict_record(
+        item,
+        forced_route,
+        forced_section,
+        options,
+    )? {
+        return Ok(vec![outcome]);
+    }
     if let Some(outcomes) =
         parse_transfer_claim(item, forced_route, forced_section, options)?
     {
@@ -1896,6 +1917,7 @@ fn classify_merge_left(parsed: &ParsedCaptureText) -> MergeNeeds {
         CaptureKind::Ref(_)
         | CaptureKind::Bullet { .. }
         | CaptureKind::PomodoroNote
+        | CaptureKind::RecordNote { .. }
         | CaptureKind::NotePull { .. } => MergeNeeds::NoTask,
     }
 }

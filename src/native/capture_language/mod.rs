@@ -34,6 +34,7 @@ mod move_bullet;
 pub(crate) mod past;
 mod pomodoro_literal;
 mod project_tasks;
+pub(crate) mod record;
 mod relations;
 mod rewrite;
 mod start_selection;
@@ -45,7 +46,9 @@ pub(crate) mod transfer;
 mod type_marker;
 
 /// Revision of the capture grammar contract exposed to clients.
-pub(crate) const GRAMMAR_REVISION: u32 = 19;
+/// Revision 20 claims `@dir/` record routes (see `record.rs`); older
+/// clients parse them as literal task text.
+pub(crate) const GRAMMAR_REVISION: u32 = 20;
 
 #[cfg(test)]
 mod tests;
@@ -180,6 +183,9 @@ pub(crate) use self::model::TaskToggleIntent;
 pub(crate) use self::model::TemplateRowSummary;
 pub(crate) use self::pomodoro_literal::canonicalize_exact_name;
 pub(crate) use self::project_tasks::split_leading_checkbox;
+pub(crate) use self::record::candidate_dirs;
+pub(crate) use self::record::RecordRoutePolicy;
+pub(crate) use self::record::RECORD_EXECUTION_UNWIRED_MESSAGE;
 pub(crate) use self::rewrite::rewrite_draft;
 pub(crate) use self::rewrite::DraftRewrite;
 pub(crate) use self::rewrite::RewriteRule;

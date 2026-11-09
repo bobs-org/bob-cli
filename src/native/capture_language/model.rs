@@ -3,6 +3,7 @@
 use serde::Serialize;
 use std::num::NonZeroUsize;
 
+use super::record::RecordNoteIntent;
 use crate::native::url_routing::{RefIntent, UrlRoutingPolicy};
 
 /// Grammar-level parse options shared by `bob capture` and
@@ -12,6 +13,10 @@ use crate::native::url_routing::{RefIntent, UrlRoutingPolicy};
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CaptureParseOptions<'a> {
     pub(crate) url_routing: Option<&'a UrlRoutingPolicy>,
+    /// Immutable record route policy: which `@dir/` folders claim record
+    /// creation. `None` keeps every record candidate literal. Callers
+    /// outside the grammar build exactly one policy per invocation.
+    pub(crate) record_policy: Option<&'a super::record::RecordRoutePolicy>,
     /// A forced destination or clip flag (`-r -s -t -S -c`, `--task-ref`)
     /// keeps the item a task.
     pub(crate) explicit_destination: bool,
@@ -31,6 +36,7 @@ impl<'a> CaptureParseOptions<'a> {
     pub(crate) fn routing_off() -> Self {
         Self {
             url_routing: None,
+            record_policy: None,
             explicit_destination: false,
             has_global_destination: false,
             recognize_lists: true,
@@ -53,6 +59,9 @@ impl<'a> CaptureParseOptions<'a> {
 pub(crate) struct EditorParseOptions<'a> {
     pub(crate) url_routing: Option<&'a UrlRoutingPolicy>,
     pub(crate) has_global_destination: bool,
+    /// Immutable record route policy, shared with the strict path.
+    /// `None` keeps every record candidate literal.
+    pub(crate) record_policy: Option<&'a super::record::RecordRoutePolicy>,
 }
 
 impl<'a> EditorParseOptions<'a> {
@@ -61,6 +70,7 @@ impl<'a> EditorParseOptions<'a> {
         Self {
             url_routing: None,
             has_global_destination: false,
+            record_policy: None,
         }
     }
 }
@@ -187,6 +197,16 @@ pub(crate) enum CaptureKind {
     /// already lower-cased, matching task capture resolution.
     NotePull {
         route: String,
+    },
+    /// A record creation item (`@dir/` route-first or title-first, with
+    /// optional `@dir/^stem`): create the record note `<dir>/<stem>.md`
+    /// through the records engine. Claimed before transfer, dependency,
+    /// directive, ref-job, type, task-ID, and generic task-bullet
+    /// parsing. Until the `record-writes` phase lands, execution
+    /// refuses claimed records with a temporary message and never
+    /// creates an inbox task.
+    RecordNote {
+        intent: RecordNoteIntent,
     },
     /// A whole-item `=/` Pomodoro split: split a merged Pomodoro's types
     /// into planned entries. The item must contain only the split token

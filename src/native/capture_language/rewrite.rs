@@ -2071,7 +2071,8 @@ pub(super) fn classify_local_marker(
                 marker.route.clone().unwrap_or_default(),
             )
         }
-        EditorMode::Task
+        EditorMode::RecordNote
+        | EditorMode::Task
         | EditorMode::SubBullet
         | EditorMode::Bullet
         | EditorMode::PomodoroTask
@@ -2128,6 +2129,10 @@ pub(super) fn non_absorbable_marker_notice(
         ),
         EditorMode::ProjectNote | EditorMode::PomodoroProjectNote => format!(
             "@@ cannot take a project note: leave {} on this item, or delete it",
+            marker.text
+        ),
+        EditorMode::RecordNote => format!(
+            "@@ cannot take a record note: leave {} on this item, or delete it",
             marker.text
         ),
         EditorMode::TaskToggle => format!(

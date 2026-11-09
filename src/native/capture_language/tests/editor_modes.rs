@@ -1187,6 +1187,9 @@ fn editor_agrees_with_execution_for_resolved_captures() {
             CaptureKind::PomodoroStart { .. } => EditorMode::PomodoroStart,
             CaptureKind::TaskComplete { .. } => EditorMode::TaskComplete,
             CaptureKind::Ref(_) => EditorMode::Ref,
+            // Record claims need a route policy; routing-off execution
+            // never produces one, so this arm only satisfies the match.
+            CaptureKind::RecordNote { .. } => EditorMode::RecordNote,
             CaptureKind::NotePull { .. } => EditorMode::NotePull,
         };
         assert_eq!(parse.mode, expected_mode, "{raw}");

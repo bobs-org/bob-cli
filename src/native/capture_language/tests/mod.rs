@@ -104,6 +104,7 @@ mod merge_in;
 mod move_bullet;
 mod past;
 mod pomodoro_merge;
+mod record;
 mod ref_grammar;
 mod retired_close;
 mod rewrite;

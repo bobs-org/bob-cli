@@ -928,6 +928,7 @@ fn dependency_owner_mode_word(mode: EditorMode) -> &'static str {
         EditorMode::PomodoroPast => "Pomodoro-past",
         EditorMode::PomodoroStart => "Pomodoro-start",
         EditorMode::TaskComplete => "task-complete",
+        EditorMode::RecordNote => "record-note",
         EditorMode::Ref => "reference",
         EditorMode::PomodoroLink | EditorMode::PomodoroTask => {
             "Pomodoro-ledger-link"
@@ -1584,10 +1585,63 @@ pub(super) fn parse_editor_item<'a>(
     parse_editor_item_with(item, &EditorParseOptions::routing_off())
 }
 
+/// Build the editor outcome for a claimed record item: mode
+/// `record_note` with the claim's needs, spans, and diagnostics.
+/// Notes stay out of `sub_bullets` so task-only editor tooling
+/// ignores them, exactly like the strict path.
+fn record_editor_outcome<'a>(
+    item: &CaptureItem<'a>,
+    view: super::record::RecordEditorView,
+) -> EditorItemOutcome<'a> {
+    EditorItemOutcome {
+        item: EditorItemParse {
+            index: item.index,
+            start: item.start,
+            end: item.end,
+            line_start: item.line_start,
+            line_end: item.line_end,
+            body: view.body,
+            mode: EditorMode::RecordNote,
+            route: view.route,
+            section: None,
+            block_id: None,
+            needs: view.needs,
+            ref_listen: false,
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_split: None,
+            pomodoro_merge: None,
+            pomodoro_close: None,
+            pomodoro_past: None,
+            dependencies: Vec::new(),
+            blocked_tasks: Vec::new(),
+            relations: Vec::new(),
+            dependency_target: None,
+            task_complete: None,
+            list: item.list.clone(),
+            spans: view.spans,
+            diagnostics: view.diagnostics,
+            sub_bullets: Vec::new(),
+            has_local_destination: true,
+            local_destination_markers: Vec::new(),
+            drawer_bullet_target: None,
+            targets: Vec::new(),
+            merge_in: None,
+        },
+        declarations: Vec::new(),
+    }
+}
+
 pub(super) fn parse_editor_item_with<'a>(
     item: &CaptureItem<'a>,
     options: &EditorParseOptions<'_>,
 ) -> EditorItemOutcome<'a> {
+    // Record creation claims before transfers: a record field value may
+    // hold `>`/`<` prose that must stay opaque.
+    if let Some(view) = super::record::claim_editor_record(item, options) {
+        return record_editor_outcome(item, view);
+    }
     let transfer = item.lines.first().map(|parent| {
         super::transfer::scan_transfer_line(
             &parent.raw,

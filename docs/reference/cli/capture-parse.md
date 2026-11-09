@@ -13,7 +13,7 @@ Report the authoritative capture grammar's view of TEXT.
 
 The grammar parse is lexical and read-only. For Pomodoro-name spans, the command also best-effort reads the configured vault's theme catalog and adds theme refs; if the catalog is unavailable, parsing still succeeds without those refs. It never writes to the vault or reads the clipboard, and takes no --bob-dir. A '%c' directive still succeeds without reading the clipboard.
 
-Success JSON reports `grammar: 19` for the capture-language revision while `schema_version` stays 1. Gmail URLs add `gmail_url` spans with offline `gmail: {verdict, date_hint?}`, decoded thread `key`, and saved-label `title`. No Gmail calls are made.
+Success JSON reports `grammar: 20` for the capture-language revision while `schema_version` stays 1. Gmail URLs add `gmail_url` spans with offline `gmail: {verdict, date_hint?}`, decoded thread `key`, and saved-label `title`. No Gmail calls are made.
 
 A lone task-list header `@route` with no section, bullets, or other text reports mode `note_pull`; `@route` with bullets remains a task list, and a lone `@route#section` remains an empty-list refusal.
 

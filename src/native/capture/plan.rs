@@ -135,8 +135,16 @@ pub(super) fn plan_capture_batch_with_config_path(
         || request.forced_section.is_some()
         || request.forced_sub_bullet_target.is_some()
         || request.forced_drawer.is_some();
+    // One memoized record route policy per batch: lexical candidates
+    // first, so ordinary drafts skip config and filesystem reads.
+    let record_policy = super::super::capture_record::record_policy_for_draft(
+        &request.bob_dir,
+        config_path,
+        &request.raw_text,
+    );
     let options = CaptureParseOptions {
         url_routing: routing,
+        record_policy: (!forced_literal).then_some(&record_policy),
         explicit_destination: request.forced_section.is_some()
             || request.forced_sub_bullet_target.is_some()
             || request.forced_drawer.is_some()
@@ -1696,6 +1704,14 @@ pub(super) fn plan_capture_item(
     earlier_items: &[PlannedCaptureItem],
     project_moves: &[ProjectMoveLanding],
 ) -> Result<PlannedCaptureItem, CaptureError> {
+    // Claimed record notes refuse fail-closed until the `record-writes`
+    // phase lands: they never create an inbox task.
+    if matches!(parsed_item.parsed.kind, CaptureKind::RecordNote { .. }) {
+        return Err(CaptureError::usage(
+            crate::native::capture_language::RECORD_EXECUTION_UNWIRED_MESSAGE
+                .to_string(),
+        ));
+    }
     // Staged `>` transfers run before every other planner: a bare-note
     // destination moves through `batch_move`; other destinations merge.
     if matches!(parsed_item.parsed.kind, CaptureKind::Transfer { .. }) {
@@ -2535,6 +2551,9 @@ pub(super) fn plan_capture_item(
         }
         CaptureKind::Ref(_) => {
             unreachable!("reference capture is planned before this point")
+        }
+        CaptureKind::RecordNote { .. } => {
+            unreachable!("record capture is refused before this point")
         }
         CaptureKind::NotePull { .. } => {
             unreachable!("note-pull capture is planned by plan_note_pull_item")
@@ -4290,6 +4309,7 @@ pub(super) fn capture_kind_label(kind: &CaptureKind) -> &'static str {
         CaptureKind::TaskComplete { .. } => "task_complete",
         CaptureKind::Ref(_) => "ref",
         CaptureKind::NotePull { .. } => "note_pull",
+        CaptureKind::RecordNote { .. } => "record_note",
     }
 }
 

@@ -37,6 +37,9 @@ pub(super) fn draft_related(
     let options = EditorParseOptions {
         url_routing: policy.as_ref(),
         has_global_destination: false,
+        // Record-aware discovery rows belong to a later phase; related
+        // scans keep the literal fallback here.
+        record_policy: None,
     };
     let parsed =
         capture_language::parse_for_editor_with(&request.draft, &options);

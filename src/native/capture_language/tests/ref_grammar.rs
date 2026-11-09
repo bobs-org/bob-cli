@@ -22,6 +22,7 @@ fn routing_options(
 ) -> CaptureParseOptions<'_> {
     CaptureParseOptions {
         url_routing: policy,
+        record_policy: None,
         explicit_destination: false,
         has_global_destination: false,
         recognize_lists: true,
@@ -48,6 +49,7 @@ fn editor_routing(raw: &str, policy: Option<&UrlRoutingPolicy>) -> EditorParse {
         &EditorParseOptions {
             url_routing: policy,
             has_global_destination: false,
+            record_policy: None,
         },
     )
 }
