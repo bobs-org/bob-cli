@@ -103,13 +103,17 @@ pub(crate) enum HealthEvent {
     },
 }
 
-/// Host-local last-attempt / last-success timestamps.
+/// Host-local last-attempt / last-success timestamps plus the busy-skip streak.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct SyncState {
     #[serde(default)]
     pub(crate) last_attempt_at: Option<String>,
     #[serde(default)]
     pub(crate) last_success_at: Option<String>,
+    /// RFC 3339 UTC of the first consecutive live busy-skip after the last
+    /// success. Old files still parse via the default.
+    #[serde(default)]
+    pub(crate) skipping_since: Option<String>,
 }
 
 impl HealthEvent {
@@ -247,6 +251,7 @@ pub(crate) fn record_success() -> Result<(), GmailError> {
     let mut state = load_state().unwrap_or_default();
     state.last_attempt_at = Some(now.clone());
     state.last_success_at = Some(now);
+    state.skipping_since = None;
     write_state(&state).map_err(|error| {
         GmailError::runtime(
             "sync_state",
@@ -256,6 +261,7 @@ pub(crate) fn record_success() -> Result<(), GmailError> {
 }
 
 /// When a quiet busy-skip should fail: `last_success_at` older than two hours.
+/// Kept for the doctor `sync` row, which is unchanged by the streak rule.
 pub(crate) fn stale_skip_message(busy_what: &str) -> Option<String> {
     let state = load_state().ok()?;
     let last = state.last_success_at.as_deref()?;
@@ -272,6 +278,81 @@ pub(crate) fn stale_skip_message(busy_what: &str) -> Option<String> {
          is busy. Wait for it to finish, then retry, or run `bob gmail doctor`.",
         ago_from(age)
     ))
+}
+
+/// Live busy-skip streak: record this skip and report whether it must fail.
+///
+/// - If `skipping_since` is absent or older than `last_success_at`, set it to
+///   now and do not alarm (the streak starts after the last success).
+/// - Otherwise, when `now - skipping_since > STALE_AFTER`, return the existing
+///   actionable message, naming the last success or "never".
+/// - `record_success` clears the streak; other failures leave it alone.
+/// - Dry runs must not call this (they write no state).
+pub(crate) fn note_busy_skip(
+    busy_what: &str,
+) -> Result<Option<String>, GmailError> {
+    let now = save::current_utc();
+    let now_text = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mut state = load_state().unwrap_or_default();
+    state.last_attempt_at = Some(now_text.clone());
+    let success_ts = state
+        .last_success_at
+        .as_deref()
+        .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
+        .map(|dt| dt.with_timezone(&Utc));
+    let skipping_ts = state
+        .skipping_since
+        .as_deref()
+        .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
+        .map(|dt| dt.with_timezone(&Utc));
+    let restart = match (skipping_ts, success_ts) {
+        (None, _) => true,
+        (Some(skip), Some(success)) => skip <= success,
+        (Some(_), None) => false,
+    };
+    if restart {
+        state.skipping_since = Some(now_text);
+        write_state(&state).map_err(|error| {
+            GmailError::runtime(
+                "sync_state",
+                format!("could not write Gmail sync state: {error}"),
+            )
+        })?;
+        return Ok(None);
+    }
+    let skip_ts =
+        skipping_ts.expect("restart false means skipping_since parses");
+    let age = now
+        .signed_duration_since(skip_ts)
+        .to_std()
+        .unwrap_or_default();
+    // Persist the attempt even when alarming.
+    write_state(&state).map_err(|error| {
+        GmailError::runtime(
+            "sync_state",
+            format!("could not write Gmail sync state: {error}"),
+        )
+    })?;
+    if age <= STALE_AFTER {
+        return Ok(None);
+    }
+    let last_text = state.last_success_at.as_deref().unwrap_or("never");
+    let last_age = success_ts
+        .map(|ts| now.signed_duration_since(ts).to_std().unwrap_or_default());
+    let age_text = match last_age {
+        Some(age) => ago_from(age),
+        None => {
+            let skip_age = now
+                .signed_duration_since(skip_ts)
+                .to_std()
+                .unwrap_or_default();
+            ago_from(skip_age)
+        }
+    };
+    Ok(Some(format!(
+        "gmail sync skipped: last successful run was {age_text} ({last_text}); {busy_what} \
+         is busy. Wait for it to finish, then retry, or run `bob gmail doctor`.",
+    )))
 }
 
 /// Relative age for the doctor `sync` row (`3 min ago`, `2 h ago`).
@@ -386,6 +467,7 @@ pub(crate) fn plan(
                 already_conflicted,
                 config,
                 ids,
+                route_ctx,
             ) {
                 intents.push(intent);
             }
@@ -446,6 +528,7 @@ fn conflict_intent(
     already_conflicted: &BTreeSet<ThreadKey>,
     config: &HealthConfig,
     ids: &BTreeSet<String>,
+    route_ctx: &RouteContext,
 ) -> Option<HealthIntent> {
     let RouteVerdict::Route(parent) = verdict else {
         return None;
@@ -467,28 +550,82 @@ fn conflict_intent(
         action: HealthAction::Conflict {
             dest_file: dest,
             route: parent.route.clone(),
-            label: winning_label(config, ids, &parent.route),
+            label: winning_label(config, ids, &parent.route, route_ctx),
         },
     })
 }
 
 /// The Gmail label name that resolved to `dest_route`, when it is still on
-/// the thread.
-fn winning_label(
+/// the thread: the actual prefixed label whose remainder resolves to the
+/// route through the same `RouteContext` (stem or alias, case-insensitive).
+pub(crate) fn winning_label(
     config: &HealthConfig,
     ids: &BTreeSet<String>,
     dest_route: &str,
+    route_ctx: &RouteContext,
 ) -> String {
     for id in ids {
         let Some(label) = config.labels_by_id.get(id) else {
             continue;
         };
         let name = label.name.as_str();
-        if name == dest_route || name.rsplit('/').next() == Some(dest_route) {
+        if label_resolves_to_route(
+            name,
+            &config.route_prefixes,
+            route_ctx,
+            dest_route,
+        ) {
+            return label.name.clone();
+        }
+    }
+    // Case-insensitive stem fallback for labels that resolve outside prefix
+    // mode or predate the context scan.
+    for id in ids {
+        let Some(label) = config.labels_by_id.get(id) else {
+            continue;
+        };
+        let name = label.name.as_str();
+        let stem = name.rsplit('/').next().unwrap_or(name);
+        if stem.eq_ignore_ascii_case(dest_route) {
             return label.name.clone();
         }
     }
     dest_route.to_string()
+}
+
+fn label_resolves_to_route(
+    name: &str,
+    prefixes: &[String],
+    route_ctx: &RouteContext,
+    dest_route: &str,
+) -> bool {
+    if prefixes.is_empty() {
+        return route_ctx
+            .resolve_route(name)
+            .is_some_and(|p| p.route == dest_route);
+    }
+    for prefix in prefixes {
+        let Some(rest) = name
+            .strip_prefix(prefix.as_str())
+            .and_then(|s| s.strip_prefix('/'))
+        else {
+            continue;
+        };
+        if rest.contains('/') {
+            continue;
+        }
+        if route_ctx
+            .resolve_route(rest)
+            .is_some_and(|p| p.route == dest_route)
+        {
+            return true;
+        }
+        // Alias/case fallback when the context scan missed the note.
+        if rest.eq_ignore_ascii_case(dest_route) {
+            return true;
+        }
+    }
+    false
 }
 
 /// The current managed warning line under `task_line`, when present.
@@ -601,31 +738,204 @@ fn remove_physical_line(contents: &str, index: usize) -> String {
     physical.concat()
 }
 
+/// Whether `line` is an open `#task` row (same statuses scan watches).
+fn is_open_task_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let Some(after) = trimmed.strip_prefix("- [") else {
+        return false;
+    };
+    let status = after.chars().next();
+    if !matches!(status, Some(' ') | Some('*') | Some('/') | Some('?')) {
+        return false;
+    }
+    let body = after.get(status.map(|c| c.len_utf8()).unwrap_or(0)..);
+    if !body.is_some_and(|b| b.starts_with("] ")) {
+        return false;
+    }
+    line.split_whitespace().any(|token| token == "#task")
+}
+
+/// The vault-relative markdown path a wikilink inner text names, with alias,
+/// `#heading`/`#^block`, escaped pipe, and leading `/` dropped — the way
+/// `scan.rs` matches watching tasks (no `.md` in the source link).
+fn link_target_path(inner: &str) -> Option<PathBuf> {
+    let before_alias = inner.split('|').next().unwrap_or("");
+    let before_alias = before_alias.strip_suffix('\\').unwrap_or(before_alias);
+    let target = before_alias.split('#').next().unwrap_or("").trim();
+    let target = target.strip_prefix('/').unwrap_or(target);
+    if target.is_empty() {
+        return None;
+    }
+    crate::native::vault_links::target_to_markdown_path(target)
+}
+
+fn normalized_note_path(note: &str) -> Option<PathBuf> {
+    let trimmed = note.trim().trim_start_matches("./").replace('\\', "/");
+    let trimmed = trimmed
+        .trim()
+        .strip_prefix('/')
+        .unwrap_or(&trimmed)
+        .to_string();
+    crate::native::vault_links::target_to_markdown_path(&trimmed)
+}
+
+/// Whether wikilink `inner` names mail note `note` (alias/`#` tolerant).
+fn link_names_note(inner: &str, note_path: &Path) -> bool {
+    let Some(link_path) = link_target_path(inner) else {
+        return false;
+    };
+    let link_slashes = save::path_to_slashes(&link_path);
+    let note_slashes = save::path_to_slashes(note_path);
+    link_slashes == note_slashes
+        || link_slashes.eq_ignore_ascii_case(&note_slashes)
+}
+
+/// All 1-based lines of open `#task` rows in `contents` linking `note`,
+/// either on the task line or through a direct link-only child bullet.
+fn task_lines_for_note(contents: &str, note: &str) -> Vec<usize> {
+    let Some(note_path_buf) = normalized_note_path(note) else {
+        return Vec::new();
+    };
+    let note_path = note_path_buf.as_path();
+    let lines: Vec<&str> = contents.lines().collect();
+    let mut matches = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        let (content, _) = split_line_ending(line);
+        if !is_open_task_line(content) {
+            continue;
+        }
+        // Links on the task line itself.
+        let mut linked =
+            crate::native::task_dependencies::raw_wikilink_spans(content)
+                .into_iter()
+                .filter(|span| !content[..span.open].ends_with('!'))
+                .map(|span| &content[span.open + 2..span.end - 2])
+                .any(|inner| link_names_note(inner, note_path));
+        // Direct link-only child bullets.
+        if !linked {
+            let task_width = indent_width_columns(content);
+            let mut open_items: Vec<usize> = Vec::new();
+            let mut child = index + 1;
+            while child < lines.len() {
+                let (child_content, _) = split_line_ending(lines[child]);
+                if child_content.trim().is_empty() {
+                    let next = lines[child + 1..]
+                        .iter()
+                        .position(|l| !l.trim().is_empty())
+                        .map(|off| child + 1 + off);
+                    if next.is_some_and(|n| {
+                        indent_width_columns(lines[n]) > task_width
+                    }) {
+                        child += 1;
+                        continue;
+                    }
+                    break;
+                }
+                let width = indent_width_columns(child_content);
+                if width <= task_width {
+                    break;
+                }
+                if let Some(inner) = link_only_inner(child_content) {
+                    while open_items.last().is_some_and(|o| *o >= width) {
+                        open_items.pop();
+                    }
+                    if open_items.is_empty()
+                        && link_names_note(inner, note_path)
+                    {
+                        linked = true;
+                        break;
+                    }
+                    open_items.push(width);
+                } else if is_list_item(child_content) {
+                    while open_items.last().is_some_and(|o| *o >= width) {
+                        open_items.pop();
+                    }
+                    // A prose child still opens a nesting level.
+                    open_items.push(width);
+                }
+                child += 1;
+            }
+        }
+        if linked {
+            matches.push(index + 1);
+        }
+    }
+    matches
+}
+
+fn indent_width_columns(line: &str) -> usize {
+    let mut width = 0;
+    for c in line.chars() {
+        match c {
+            ' ' => width += 1,
+            '\t' => width += 4 - width % 4,
+            _ => break,
+        }
+    }
+    width
+}
+
+fn link_only_inner(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    let rest = trimmed.strip_prefix(['-', '*', '+'])?;
+    let content = rest.strip_prefix([' ', '\t'])?;
+    // Only the bullet content, trimmed; must be exactly one wikilink.
+    let content = content.trim();
+    let inner = content.strip_prefix("[[")?.strip_suffix("]]")?;
+    (!inner.contains("[[") && !inner.contains("]]")).then_some(inner)
+}
+
+fn is_list_item(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    if let Some(rest) = trimmed.strip_prefix(['-', '*', '+']) {
+        return rest.starts_with([' ', '\t']);
+    }
+    let digits = trimmed.bytes().take_while(u8::is_ascii_digit).count();
+    digits > 0
+        && trimmed[digits..].starts_with(['.', ')'])
+        && trimmed[digits + 1..].starts_with([' ', '\t'])
+}
+
+/// Locate the open `#task` row for `note` in the current staged contents.
+///
+/// Prefers `recorded_line` when it still links the note; otherwise takes the
+/// unique matching row. Returns `None` when missing or ambiguous (caller
+/// skips the intent with a body-free warning).
+pub(crate) fn locate_task_line(
+    contents: &str,
+    note: &str,
+    recorded_line: usize,
+) -> Option<usize> {
+    let candidates = task_lines_for_note(contents, note);
+    if candidates.is_empty() {
+        return None;
+    }
+    if candidates.contains(&recorded_line) {
+        // Confirm the recorded row is still an open task linking the note.
+        return Some(recorded_line);
+    }
+    if candidates.len() == 1 {
+        return Some(candidates[0]);
+    }
+    None
+}
+
 /// 1-based line of the open `#task` in `contents` that links `note`.
+/// Matches link targets the way `scan.rs` does (no `.md`, alias/`#`
+/// tolerant), not by substring.
+#[allow(dead_code)]
 pub(crate) fn find_task_line_for_note(
     contents: &str,
     note: &str,
 ) -> Option<usize> {
-    contents.lines().enumerate().find_map(|(index, line)| {
-        let (content, _) = split_line_ending(line);
-        let trimmed = content.trim_start();
-        if !trimmed.starts_with("- [") {
-            return None;
-        }
-        let status = trimmed.as_bytes().get(3)?;
-        if !matches!(status, b' ' | b'*' | b'/' | b'?') {
-            return None;
-        }
-        if !content.contains("#task") {
-            return None;
-        }
-        if !content.contains(note)
-            && !content.contains(&note.replace('\\', "/"))
-        {
-            return None;
-        }
-        Some(index + 1)
-    })
+    // Unique-match lookup; callers needing recorded-line preference and
+    // ambiguity detection use `locate_task_line`.
+    let mut found = task_lines_for_note(contents, note).into_iter();
+    let first = found.next()?;
+    if found.next().is_some() {
+        return None;
+    }
+    Some(first)
 }
 
 /// Count open inbox tasks that still carry a managed route warning.
@@ -730,12 +1040,128 @@ mod tests {
 
     #[test]
     fn find_task_line_matches_the_mail_note() {
-        let contents = "## Tasks\n- [ ] #task [[mail/2026/a.md|✉️ A]]\n";
+        // Real rows link without `.md`; alias and `#heading` tolerant.
+        let contents = "## Tasks\n- [ ] #task [[mail/2026/a|✉️ A]]\n";
         assert_eq!(
             find_task_line_for_note(contents, "mail/2026/a.md"),
             Some(2)
         );
+        let aliased = "## Tasks\n- [ ] #task [[mail/2026/a|✉️ A]]\n";
+        assert_eq!(find_task_line_for_note(aliased, "mail/2026/a.md"), Some(2));
+        let headed = "## Tasks\n- [ ] #task [[mail/2026/a#Notes|✉️ A]]\n";
+        assert_eq!(find_task_line_for_note(headed, "mail/2026/a.md"), Some(2));
         assert_eq!(find_task_line_for_note(contents, "mail/2026/b.md"), None);
+        // Ambiguous rows do not resolve.
+        let two = "## Tasks\n- [ ] #task [[mail/a|✉️ A]]\n- [ ] #task [[mail/a|✉️ A]]\n";
+        assert_eq!(find_task_line_for_note(two, "mail/a.md"), None);
+    }
+
+    #[test]
+    fn locate_prefers_recorded_line_then_unique_row() {
+        let contents = "## Tasks\n- [ ] #task [[mail/a|✉️ A]]\n- [ ] #task [[mail/b|✉️ B]]\n";
+        // Recorded line still matches.
+        assert_eq!(locate_task_line(contents, "mail/b.md", 3), Some(3));
+        // Stale recorded line falls through to the unique match.
+        assert_eq!(locate_task_line(contents, "mail/b.md", 2), Some(3));
+        // Child-bullet links count.
+        let child = "## Tasks\n- [ ] #task Root\n\t- [[mail/a]]\n- [ ] #task [[mail/b]]\n";
+        assert_eq!(locate_task_line(child, "mail/a.md", 2), Some(2));
+        // Ambiguous or missing skips.
+        let two = "## Tasks\n- [ ] #task [[mail/a]]\n- [ ] #task [[mail/a]]\n";
+        assert_eq!(locate_task_line(two, "mail/a.md", 99), None);
+        assert_eq!(locate_task_line(contents, "mail/missing.md", 2), None);
+        // Closed rows never match.
+        let closed = "## Tasks\n- [x] #task [[mail/a]]\n";
+        assert_eq!(locate_task_line(closed, "mail/a.md", 2), None);
+    }
+
+    #[test]
+    fn busy_skip_streak_vectors() {
+        let (_temp, _env) = isolated_state("gmail-health-streak");
+        // No state: first skip starts the streak, no alarm.
+        assert!(note_busy_skip("the Gmail sync guard")
+            .expect("skip")
+            .is_none());
+        let state = load_state().unwrap();
+        assert!(state.skipping_since.is_some(), "streak starts");
+        assert!(state.last_success_at.is_none());
+        // Still within the window: quiet.
+        assert!(note_busy_skip("the Gmail sync guard")
+            .expect("skip")
+            .is_none());
+        // A skip 2h1m after the streak start alarms with "never".
+        let old_skip = (save::current_utc()
+            - chrono::Duration::hours(2)
+            - chrono::Duration::minutes(1))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let mut state = load_state().unwrap();
+        state.skipping_since = Some(old_skip);
+        write_state(&state).unwrap();
+        let alarm = note_busy_skip("the Gmail sync guard")
+            .expect("skip")
+            .expect("alarms");
+        assert!(alarm.contains("never"), "{alarm}");
+        assert!(alarm.contains("bob gmail doctor"), "{alarm}");
+
+        // Success clears the streak.
+        record_success().expect("success");
+        let cleared = load_state().unwrap();
+        assert!(cleared.skipping_since.is_none());
+        assert!(cleared.last_success_at.is_some());
+        // With a success at T, the first skip at T+10h does not alarm.
+        let mut state = load_state().unwrap();
+        let success_t = (save::current_utc() - chrono::Duration::hours(10))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        state.last_success_at = Some(success_t);
+        state.skipping_since = None;
+        write_state(&state).unwrap();
+        assert!(note_busy_skip("the Gmail sync guard")
+            .expect("skip")
+            .is_none());
+        let restarted = load_state().unwrap();
+        assert!(restarted.skipping_since.is_some());
+        // A skip at T+12h1m (streak 2h1m, still after the success) alarms.
+        let mut state = load_state().unwrap();
+        // Keep the T success; push the streak start to 2h1m ago.
+        let old = (save::current_utc()
+            - chrono::Duration::hours(2)
+            - chrono::Duration::minutes(1))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        state.skipping_since = Some(old);
+        write_state(&state).unwrap();
+        let alarm = note_busy_skip("the Gmail sync guard")
+            .expect("skip")
+            .expect("alarms");
+        assert!(alarm.contains("bob gmail doctor"), "{alarm}");
+        assert!(!alarm.contains("never"), "{alarm}");
+    }
+
+    #[test]
+    fn winning_label_reports_the_actual_prefixed_case() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path();
+        fs::write(
+            vault.join("job.md"),
+            "---\ntype: \"[[area]]\"\n---\n## Tasks\n",
+        )
+        .unwrap();
+        let ctx = RouteContext::load(vault);
+        let mut labels = LabelsById::new();
+        labels.insert(
+            "Label_1".into(),
+            crate::native::gmail::gog::GmailLabel {
+                id: "Label_1".into(),
+                name: "+/Job".into(),
+                kind: Some("user".into()),
+            },
+        );
+        let config = HealthConfig {
+            labels_by_id: labels,
+            enrollment_label: Some("bob".into()),
+            route_prefixes: vec!["+".into(), "#".into()],
+        };
+        let ids = BTreeSet::from(["Label_1".to_string()]);
+        assert_eq!(winning_label(&config, &ids, "job", &ctx), "+/Job");
     }
 
     #[test]
@@ -769,7 +1195,7 @@ mod tests {
         let vault = temp.path();
         fs::write(
             vault.join("gmail_inbox.md"),
-            "## Tasks\n- [ ] #task [[mail/a.md|✉️ A]]\n\t- ⚠️ **GMAIL ROUTE:** `#/job` unknown note\n",
+            "## Tasks\n- [ ] #task [[mail/a|✉️ A]]\n\t- ⚠️ **GMAIL ROUTE:** `#/job` unknown note\n",
         )
         .unwrap();
         fs::write(
@@ -786,7 +1212,7 @@ mod tests {
         let inbox_task = WatchingTask {
             path: "gmail_inbox.md".into(),
             line: 2,
-            text: "- [ ] #task [[mail/a.md|✉️ A]]".into(),
+            text: "- [ ] #task [[mail/a|✉️ A]]".into(),
             block_id: None,
             status: ' ',
             targets: vec![WatchTarget {
@@ -798,7 +1224,7 @@ mod tests {
         let outside = WatchingTask {
             path: "body.md".into(),
             line: 4,
-            text: "- [ ] #task [[mail/a.md|✉️ A]]".into(),
+            text: "- [ ] #task [[mail/a|✉️ A]]".into(),
             block_id: None,
             status: ' ',
             targets: inbox_task.targets.clone(),

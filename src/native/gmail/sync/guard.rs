@@ -203,10 +203,20 @@ mod tests {
             "second acquisition while held is busy"
         );
         drop(first);
-        assert!(
-            matches!(try_acquire(&account).unwrap(), GuardAttempt::Acquired(_)),
-            "release frees the guard"
-        );
+        // Another test thread's fork can inherit the guard fd until it execs,
+        // so the immediate re-acquire can see WouldBlock. Poll briefly like
+        // ob.rs lock_wait_behavior (fd is CLOEXEC; production unaffected).
+        let start = std::time::Instant::now();
+        let limit = Duration::from_secs(10);
+        loop {
+            match try_acquire(&account).expect("re-acquire") {
+                GuardAttempt::Acquired(_) => break,
+                GuardAttempt::Busy => {
+                    assert!(start.elapsed() < limit, "release frees the guard");
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+            }
+        }
     }
 
     #[test]

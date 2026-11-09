@@ -544,6 +544,10 @@ pub(crate) struct FilingOutcome {
     /// First-time gone reports; they are warning/human rows, not `watch[]`
     /// actions because the public watch action set has no `gone` value.
     pub(crate) watch_gone: Vec<WatchGoneOutcome>,
+    /// Threads whose health warning/refile touched the vault this run
+    /// (SetWarning, ClearWarning, or Refile that staged bytes). Used for the
+    /// commit subject so warning-only and refile-only runs count.
+    pub(crate) health_touched: Vec<ThreadKey>,
 }
 
 #[derive(Debug, Clone)]
@@ -1353,6 +1357,8 @@ fn build_attempt(
         enrollment,
         watchers,
         &watches,
+        &watch_failures,
+        &watch_deferred,
         health,
         dry_run,
         &mut staged,
@@ -1497,6 +1503,8 @@ fn apply_health_edits(
     enrollment: &EnrollmentFold,
     watchers: &WatchScan,
     watches: &[PreparedWatch],
+    watch_failures: &[WatchFailure],
+    watch_deferred: &[ThreadKey],
     health: Option<&HealthConfig>,
     dry_run: bool,
     staged: &mut Vec<StagedTextFile>,
@@ -1507,10 +1515,26 @@ fn apply_health_edits(
     let Some(config) = health else {
         return;
     };
+    // Health routing uses only watches whose metadata was actually fetched
+    // this run: gone reports, refresh failures, and deferrals keep their
+    // warning untouched.
+    let deferred_set: BTreeSet<ThreadKey> =
+        watch_deferred.iter().cloned().collect();
+    let failed_set: BTreeSet<ThreadKey> =
+        watch_failures.iter().map(|f| f.key.clone()).collect();
     let mut label_ids = BTreeMap::new();
     for watch in watches {
-        label_ids
-            .insert(watch.observation.key.clone(), watch.label_ids.clone());
+        let key = &watch.observation.key;
+        if watch.report_gone {
+            continue;
+        }
+        if watch.refresh_failure.is_some() {
+            continue;
+        }
+        if deferred_set.contains(key) || failed_set.contains(key) {
+            continue;
+        }
+        label_ids.insert(key.clone(), watch.label_ids.clone());
     }
     let already = health::load_conflicts(vault);
     let route_ctx = RouteContext::load(vault);
@@ -1518,6 +1542,15 @@ fn apply_health_edits(
         vault, inbox, enrollment, watchers, &label_ids, config, &route_ctx,
         &already,
     );
+    // Vault-wide link-repair snapshot, loaded at most once per run and only
+    // when at least one Refile intent exists.
+    let mut vault_wide: Option<BTreeMap<PathBuf, String>> = None;
+    if intents
+        .iter()
+        .any(|i| matches!(i.action, HealthAction::Refile { .. }))
+    {
+        vault_wide = load_vault_wide_notes(vault);
+    }
     for intent in &intents {
         match &intent.action {
             HealthAction::PersistProblem { problem }
@@ -1538,73 +1571,71 @@ fn apply_health_edits(
                     },
                 );
             }
-            HealthAction::Refile { dest_file, route } => {
-                upsert_health_result(
-                    outcome,
-                    FilingResult {
-                        key: intent.key.clone(),
-                        note: intent.note.clone(),
-                        link: None,
-                        task_file: Some(dest_file.clone()),
-                        status: if dry_run {
-                            "would_refile"
-                        } else {
-                            "refiled"
-                        },
-                        route: Some(route.clone()),
-                        via: None,
-                        problem: None,
-                        first_seen: false,
-                        watch_member: true,
-                    },
-                );
-            }
             HealthAction::ClearWarning | HealthAction::Conflict { .. } => {}
+            HealthAction::Refile { .. } => {}
         }
     }
     for intent in &intents {
         match &intent.action {
             HealthAction::SetWarning { problem } => {
                 let warning = health::route_warning_child(problem);
-                apply_overlay_warning(
+                if apply_located_warning(
                     vault,
                     staged,
                     task_commit_paths,
-                    &intent.task_path,
-                    intent.task_line,
+                    intent,
                     Some(&warning),
                     outcome,
-                );
+                ) && !outcome.health_touched.contains(&intent.key)
+                {
+                    outcome.health_touched.push(intent.key.clone());
+                }
             }
             HealthAction::ClearWarning => {
-                apply_overlay_warning(
+                if apply_located_warning(
                     vault,
                     staged,
                     task_commit_paths,
-                    &intent.task_path,
-                    intent.task_line,
+                    intent,
                     None,
                     outcome,
-                );
+                ) && !outcome.health_touched.contains(&intent.key)
+                {
+                    outcome.health_touched.push(intent.key.clone());
+                }
             }
             HealthAction::Refile { dest_file, route } => {
-                apply_overlay_warning(
-                    vault,
-                    staged,
-                    task_commit_paths,
-                    &intent.task_path,
-                    intent.task_line,
-                    None,
-                    outcome,
-                );
-                match refile_inbox_task(
+                match refile_inbox_task_atomic(
                     vault,
                     staged,
                     task_commit_paths,
                     intent,
                     dest_file,
+                    vault_wide.as_ref(),
                 ) {
                     Ok(()) => {
+                        upsert_health_result(
+                            outcome,
+                            FilingResult {
+                                key: intent.key.clone(),
+                                note: intent.note.clone(),
+                                link: None,
+                                task_file: Some(dest_file.clone()),
+                                status: if dry_run {
+                                    "would_refile"
+                                } else {
+                                    "refiled"
+                                },
+                                route: Some(route.clone()),
+                                via: None,
+                                problem: None,
+                                first_seen: false,
+                                watch_member: true,
+                            },
+                        );
+                        if !outcome.health_touched.contains(&intent.key) {
+                            outcome.health_touched.push(intent.key.clone());
+                        }
                         if !dry_run {
                             health_events.push(HealthEvent::Refiled {
                                 key: intent.key.clone(),
@@ -1615,7 +1646,12 @@ fn apply_health_edits(
                         }
                     }
                     Err(message) => {
+                        // Atomic failure: staged source untouched (warning
+                        // stays), no refiled row, body-free warning, exit 1
+                        // under per-thread isolation.
+                        outcome.results.retain(|r| r.key != intent.key);
                         outcome.warnings.push(message);
+                        outcome.failed = true;
                     }
                 }
             }
@@ -1643,6 +1679,73 @@ fn apply_health_edits(
     }
 }
 
+/// Locate the intent's row in the current staged contents and apply the
+/// warning edit there. Skips with a body-free warning when ambiguous or
+/// missing. Returns true when bytes changed.
+fn apply_located_warning(
+    vault: &Path,
+    staged: &mut Vec<StagedTextFile>,
+    task_commit_paths: &mut Vec<PathBuf>,
+    intent: &health::HealthIntent,
+    warning: Option<&str>,
+    outcome: &mut FilingOutcome,
+) -> bool {
+    let Some((target, contents)) =
+        overlay_text(vault, staged, &intent.task_path)
+    else {
+        outcome.warnings.push(format!(
+            "could not read {} to update a Gmail route warning",
+            intent.task_path
+        ));
+        return false;
+    };
+    let task_line = match &intent.note {
+        Some(note) => {
+            match health::locate_task_line(&contents, note, intent.task_line) {
+                Some(line) => line,
+                None => {
+                    outcome.warnings.push(format!(
+                        "skipped Gmail route warning for {}: task row moved or ambiguous",
+                        intent.key.thread_id()
+                    ));
+                    return false;
+                }
+            }
+        }
+        None => intent.task_line,
+    };
+    let Some(updated) =
+        health::apply_warning_edit(&contents, task_line, warning)
+    else {
+        return false;
+    };
+    write_overlay(
+        staged,
+        task_commit_paths,
+        &target,
+        &intent.task_path,
+        updated,
+    );
+    true
+}
+
+/// Same note set the other move callers use for vault-wide link repair.
+fn load_vault_wide_notes(vault: &Path) -> Option<BTreeMap<PathBuf, String>> {
+    let paths =
+        crate::native::collect_done::link_repair_markdown_files(vault).ok()?;
+    let mut notes = BTreeMap::new();
+    for path in paths {
+        let Ok(relative) = path.strip_prefix(vault) else {
+            continue;
+        };
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        notes.insert(relative.to_path_buf(), text);
+    }
+    Some(notes)
+}
+
 fn upsert_health_result(outcome: &mut FilingOutcome, result: FilingResult) {
     if let Some(existing) =
         outcome.results.iter_mut().find(|row| row.key == result.key)
@@ -1653,6 +1756,7 @@ fn upsert_health_result(outcome: &mut FilingOutcome, result: FilingResult) {
     }
 }
 
+#[allow(dead_code)]
 fn apply_overlay_warning(
     vault: &Path,
     staged: &mut Vec<StagedTextFile>,
@@ -1676,23 +1780,62 @@ fn apply_overlay_warning(
     write_overlay(staged, task_commit_paths, &target, relative, updated);
 }
 
-fn refile_inbox_task(
+/// Atomic refile: build the warning-free source in a scratch copy, plan the
+/// move on that copy over the vault-wide snapshot, and stage postimages only
+/// when the plan succeeds. On failure the staged source is untouched.
+fn refile_inbox_task_atomic(
     vault: &Path,
     staged: &mut Vec<StagedTextFile>,
     task_commit_paths: &mut Vec<PathBuf>,
     intent: &health::HealthIntent,
     dest_file: &str,
+    vault_wide: Option<&BTreeMap<PathBuf, String>>,
 ) -> Result<(), String> {
+    let failed = |reason: String| {
+        format!(
+            "skipped refiling Gmail thread {}: {reason}",
+            intent.key.thread_id()
+        )
+    };
     let dest_path = vault.join(dest_file);
     if !dest_path.is_file()
         && !staged.iter().any(|file| file.target == dest_path)
     {
-        return Err(format!(
-            "skipped refiling Gmail thread {}: destination {dest_file} is missing",
-            intent.key.thread_id()
-        ));
+        return Err(failed(format!("destination {dest_file} is missing")));
     }
-    let mut notes = BTreeMap::new();
+    let Some((_, contents)) = overlay_text(vault, staged, &intent.task_path)
+    else {
+        return Err(failed(format!("could not read {}", intent.task_path)));
+    };
+    // Locate in the current staged contents; stale lines/ambiguous rows skip.
+    let located = if intent.block_id.is_some() {
+        // Block-id moves still need a live row: locate via note when known,
+        // otherwise trust the recorded line only when it is still an open
+        // task row.
+        match &intent.note {
+            Some(note) => {
+                health::locate_task_line(&contents, note, intent.task_line)
+                    .ok_or_else(|| {
+                        failed("task row moved or ambiguous".to_string())
+                    })?
+            }
+            None => intent.task_line,
+        }
+    } else if let Some(note) = &intent.note {
+        health::locate_task_line(&contents, note, intent.task_line)
+            .ok_or_else(|| failed("task row moved or ambiguous".to_string()))?
+    } else {
+        return Err(failed("task row moved or ambiguous".to_string()));
+    };
+    // Warning-free scratch source for planning.
+    let scratch_source = health::apply_warning_edit(&contents, located, None)
+        .unwrap_or_else(|| contents.clone());
+    // Snapshot: vault-wide repair set overlaid with current staged contents,
+    // with the scratch source in place of the live source.
+    let mut notes: BTreeMap<PathBuf, String> = BTreeMap::new();
+    if let Some(wide) = vault_wide {
+        notes.extend(wide.iter().map(|(k, v)| (k.clone(), v.clone())));
+    }
     for file in staged.iter() {
         if let Ok(relative) = file.target.strip_prefix(vault) {
             notes.insert(relative.to_path_buf(), file.updated_target.clone());
@@ -1708,25 +1851,19 @@ fn refile_inbox_task(
                 notes.insert(path, text);
             }
             Err(error) => {
-                return Err(format!(
-                    "skipped refiling Gmail thread {}: could not read {relative}: {error}",
-                    intent.key.thread_id()
-                ));
+                return Err(failed(format!(
+                    "could not read {relative}: {error}"
+                )));
             }
         }
     }
+    // Swap in the warning-free scratch for the source.
+    notes.insert(PathBuf::from(&intent.task_path), scratch_source);
     let snapshot = VaultSnapshot::from_notes(notes);
     let selector = if let Some(id) = &intent.block_id {
         MoveSelector::Block(id.clone())
-    } else if let Some(note) = &intent.note {
-        overlay_text(vault, staged, &intent.task_path)
-            .and_then(|(_, contents)| {
-                health::find_task_line_for_note(&contents, note)
-            })
-            .map(|line| MoveSelector::Line(line.saturating_sub(1)))
-            .unwrap_or_else(|| MoveSelector::Match(intent.task_text.clone()))
     } else {
-        MoveSelector::Match(intent.task_text.clone())
+        MoveSelector::Line(located.saturating_sub(1))
     };
     let request = MoveRequest {
         source: intent.task_path.clone(),
@@ -1736,23 +1873,41 @@ fn refile_inbox_task(
         placement: MovePlacement::Append,
         id_collision: IdCollisionPolicy::Rename,
     };
-    let plan = plan_task_move(&snapshot, &request).map_err(|error| {
-        format!(
-            "skipped refiling Gmail thread {}: {error}",
-            intent.key.thread_id()
-        )
-    })?;
-    for (relative, contents) in plan.postimages {
+    let plan = plan_task_move(&snapshot, &request)
+        .map_err(|error| failed(error.to_string()))?;
+    // Success: stage every postimage (source, destination, and repaired
+    // notes) so link-repaired notes join the scoped commit. The staged
+    // postimages carry their on-disk originals via write_overlay, so the
+    // apply transaction revalidates them like any other staged file.
+    for (relative, postimage) in plan.postimages {
         let target = vault.join(&relative);
         write_overlay(
             staged,
             task_commit_paths,
             &target,
             &save::path_to_slashes(&relative),
-            contents,
+            postimage,
         );
     }
     Ok(())
+}
+
+#[allow(dead_code)]
+fn refile_inbox_task(
+    vault: &Path,
+    staged: &mut Vec<StagedTextFile>,
+    task_commit_paths: &mut Vec<PathBuf>,
+    intent: &health::HealthIntent,
+    dest_file: &str,
+) -> Result<(), String> {
+    refile_inbox_task_atomic(
+        vault,
+        staged,
+        task_commit_paths,
+        intent,
+        dest_file,
+        None,
+    )
 }
 
 fn overlay_text(
@@ -1860,7 +2015,7 @@ fn persist_attempt(
     };
 
     if is_worktree && !commit_paths.is_empty() {
-        let count = plan.enrollment_events.len() + recovery.threads.len();
+        let count = sync_commit_thread_count(&plan, recovery);
         if let Err(error) = ob::commit_paths(
             vault,
             child_env,
@@ -3395,6 +3550,44 @@ fn commit_paths(
     paths.sort();
     paths.dedup();
     Ok(paths)
+}
+
+/// Distinct threads with any committed change: enrollment, recovery, watch
+/// edit or refresh, refile, or warning edit. Keeps the `gmail: sync N
+/// threads` subject format.
+fn sync_commit_thread_count(
+    plan: &AttemptPlan,
+    recovery: &RecoveryData,
+) -> usize {
+    let mut threads: BTreeSet<(String, String)> = BTreeSet::new();
+    for event in &plan.enrollment_events {
+        threads.insert(event.key().index_key());
+    }
+    for thread in &recovery.threads {
+        threads.insert((thread.account.clone(), thread.thread_id.clone()));
+    }
+    for result in &plan.outcome.results {
+        if matches!(result.status, "filed" | "adopted" | "problem" | "refiled")
+        {
+            threads.insert(result.key.index_key());
+        }
+    }
+    for event in &plan.health_events {
+        let key = match event {
+            HealthEvent::Refiled { key, .. }
+            | HealthEvent::RouteConflict { key, .. } => key,
+        };
+        threads.insert(key.index_key());
+    }
+    for watch in &plan.outcome.watch_threads {
+        if watch.action != "unchanged" {
+            threads.insert(watch.key.index_key());
+        }
+    }
+    for key in &plan.outcome.health_touched {
+        threads.insert(key.index_key());
+    }
+    threads.len()
 }
 
 fn acquire_vault_lock<S: Sleeper, C: Clock>(

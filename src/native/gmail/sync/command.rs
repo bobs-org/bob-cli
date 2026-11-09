@@ -107,9 +107,8 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
                 Some(guard)
             }
             GuardAttempt::Busy => {
-                health::record_attempt()?;
                 if let Some(message) =
-                    health::stale_skip_message("the Gmail sync guard")
+                    health::note_busy_skip("the Gmail sync guard")?
                 {
                     return Err(GmailError::runtime("stale", message));
                 }
@@ -420,7 +419,7 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
     }
     if !args.dry_run
         && outcome.busy
-        && let Some(message) = health::stale_skip_message("the vault lock")
+        && let Some(message) = health::note_busy_skip("the vault lock")?
     {
         return Err(GmailError::runtime("stale", message));
     }

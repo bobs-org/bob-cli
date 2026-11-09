@@ -744,8 +744,11 @@ Each later run recomputes that inbox row: a resolving route moves the task
 through the task-move engine with no freshness stamp and appends
 `gmail.refiled`; a persisting problem updates the warning and reports
 `first_seen: false` without failing the run; leftover unrouted labels drop
-the warning. Rows outside the inbox never move. A routing label that names
-a different note is reported once (`gmail.route_conflict`). Each live run
+the warning. A failed refile leaves the row and its warning in the inbox,
+adds a warning, and exits 1. A refile repairs links to the moved block
+across the vault, as Ctrl+Shift+M does. Rows outside the inbox never move.
+A routing label that names a different note is reported once
+(`gmail.route_conflict`). Each live run
 lists account labels once, including `-l 0`. Failures carry their body-free
 `kind` and `message` in warnings, and human and quiet rows show the route
 label, explanation, and hint for filed route problems while distinguishing
@@ -762,9 +765,9 @@ reported once through a `gmail.gone` journal event plus a human and warning
 row. Result statuses are `filed`, `would_file`, `adopted`, `already_filed`,
 `already_pulled`, `problem`, `refiled`, and `would_refile`. Exit 0 on
 success, no-op, or a quiet contention skip; 1 on a runtime failure,
-deferred work, a first-seen route problem, or a quiet busy-skip whose last
-successful run is older than two hours; 2 on setup (empty label, writer,
-bad `-l`).
+deferred work, a first-seen route problem, or a quiet busy-skip once live
+runs have kept skipping for more than two hours with no successful run in
+between; 2 on setup (empty label, writer, bad `-l`).
 
 ```bash
 bob gmail sync -d
@@ -975,8 +978,9 @@ Live sync holds a host-local per-account guard at
 `$XDG_STATE_HOME/bob/gmail/sync-<digest>.lock`. Each live run records
 `last_attempt_at` and, when it completes, `last_success_at` in
 `$XDG_STATE_HOME/bob/gmail/sync-state.json` (including first-seen route
-problems). A quiet busy-skip exits 1 when `last_success_at` is older than
-two hours. Dry-run writes neither file. If a scoped commit or journal
+problems). A quiet busy-skip exits 1 once live runs have kept skipping for
+more than two hours with no successful run in between. Dry-run writes
+neither file. If a scoped commit or journal
 append fails, body-free recovery evidence at
 `$XDG_STATE_HOME/bob/gmail/sync-recovery-<digest>.json` lets a later live
 run on this host finish that work before new enrollment. The digest keys
@@ -987,7 +991,8 @@ vault.
 
 0 success, 1 runtime failure, 2 usage or setup error. Config errors name the
 key (for example `gmail.account`). A quiet Gmail sync busy-skip is 0 unless
-the last successful run is older than two hours, in which case it is 1.
+live runs have kept skipping for more than two hours with no successful run
+in between, in which case it is 1.
 
 ## JSON output
 
