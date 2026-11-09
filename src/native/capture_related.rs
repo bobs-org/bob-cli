@@ -3,6 +3,7 @@
 mod bands;
 mod corpus;
 mod draft;
+mod records;
 mod score;
 #[cfg(test)]
 mod tests;
@@ -72,15 +73,20 @@ fn print_clap_error(error: clap::Error) -> i32 {
 
 pub(crate) fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
-        .about("List existing tasks that a new capture may duplicate")
+        .about(
+            "List existing tasks and record notes a new capture may duplicate",
+        )
         .long_about(
             "List existing tasks that each new task in a capture draft may \
-duplicate or relate to.\n\n\
+duplicate or relate to, plus same-folder record notes for each new record \
+item.\n\n\
 The command is read-only and never writes the vault. Draft mode accepts \
-capture text after --, checks task-creating items, and emits the additive \
-schema_version 1 contract without scores. The --query evaluation harness \
-ranks TEXT as one task title and includes scores in JSON. Use --exclude \
-NOTE:LINE to leave one existing task out of calibration.",
+capture text after --, checks task-creating and record-create items, and \
+emits the additive schema_version 1 contract without scores. Record rows \
+carry scope record with status and field displays and add_to/open/discard \
+actions. The --query evaluation harness ranks TEXT as one task title and \
+includes scores in JSON. Use --exclude NOTE:LINE to leave one existing \
+task out of calibration.",
         )
         .after_help(
             "Examples:\n  \
@@ -349,6 +355,39 @@ pub(super) struct RelatedMatch {
     pub(super) default_action: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) score: Option<f64>,
+    /// Present only on record rows (`"record"`). Task rows omit it so
+    /// schema_version 1 stays additive for older clients.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) scope: Option<String>,
+    /// Record type id (for example `"restaurant"`), record rows only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) record_type: Option<String>,
+    /// Record stem (for example `"ninja_sushi"`), record rows only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) stem: Option<String>,
+    /// Record status display (for example `"💚 Liked"`), record rows only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) status: Option<String>,
+    /// Two suggest-field displays, record rows only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) fields: Option<Vec<RecordFieldDisplay>>,
+    /// Bob-authored create-to-update rewrite for `add_to`, record rows only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) add_to: Option<RecordAddTo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RecordFieldDisplay {
+    pub(super) key: String,
+    pub(super) label: String,
+    pub(super) value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RecordAddTo {
+    pub(super) start: usize,
+    pub(super) end: usize,
+    pub(super) replacement: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -442,6 +481,12 @@ pub(super) fn query_related_in(
             actions: None,
             default_action: None,
             score: Some(ranked.score),
+            scope: None,
+            record_type: None,
+            stem: None,
+            status: None,
+            fields: None,
+            add_to: None,
         })
         .collect();
     CaptureRelatedResult {
@@ -499,7 +544,22 @@ fn print_human(result: &CaptureRelatedResult, styler: &Styler) {
             let title =
                 bold_title(&related.title, &related.matched_ranges, styler);
             let tag = band_tag(related);
-            let locator = if related.status_name.is_empty() {
+            let locator = if related.scope.as_deref() == Some("record") {
+                let mut parts = vec![related.locator.clone()];
+                if let Some(status) = related.status.as_deref()
+                    && !status.is_empty()
+                {
+                    parts.push(status.to_string());
+                }
+                if let Some(fields) = related.fields.as_deref() {
+                    for field in fields.iter().take(2) {
+                        if !field.value.is_empty() {
+                            parts.push(field.value.clone());
+                        }
+                    }
+                }
+                parts.join(" · ")
+            } else if related.status_name.is_empty() {
                 related.locator.clone()
             } else {
                 format!("{} · {}", related.locator, related.status_name)

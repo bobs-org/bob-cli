@@ -34,12 +34,15 @@ pub(super) fn draft_related(
     }
 
     let policy = capture_parse::load_parse_routing(false);
+    let record_policy = crate::native::capture_record::record_policy_for_draft(
+        &request.bob_dir,
+        None,
+        &request.draft,
+    );
     let options = EditorParseOptions {
         url_routing: policy.as_ref(),
         has_global_destination: false,
-        // Record-aware discovery rows belong to a later phase; related
-        // scans keep the literal fallback here.
-        record_policy: None,
+        record_policy: Some(&record_policy),
     };
     let parsed =
         capture_language::parse_for_editor_with(&request.draft, &options);
@@ -48,8 +51,29 @@ pub(super) fn draft_related(
         .iter()
         .filter(|item| is_task_creating_mode(item.mode))
         .collect::<Vec<_>>();
-    if eligible.is_empty() {
+    let has_record_items = parsed
+        .items
+        .iter()
+        .any(|item| item.mode == EditorMode::RecordNote);
+    if eligible.is_empty() && !has_record_items {
         return empty_result();
+    }
+
+    // Record create items are scored against their own folder below;
+    // update items are never eligible (no rows on update items).
+    let mut record_result_items =
+        super::records::record_items(request, &parsed, &options);
+
+    if eligible.is_empty() {
+        record_result_items.sort_by_key(|item| item.index);
+        let warnings =
+            corpus::discover(&request.bob_dir, request.days).warnings;
+        return super::CaptureRelatedResult {
+            ok: true,
+            schema_version: SCHEMA_VERSION,
+            warnings,
+            items: record_result_items,
+        };
     }
 
     let discovery = corpus::discover(&request.bob_dir, request.days);
@@ -194,11 +218,15 @@ pub(super) fn draft_related(
         })
         .collect();
 
+    let mut items: Vec<RelatedItem> = result_items;
+    items.append(&mut record_result_items);
+    items.sort_by_key(|item| item.index);
+
     super::CaptureRelatedResult {
         ok: true,
         schema_version: SCHEMA_VERSION,
         warnings: discovery.warnings,
-        items: result_items,
+        items,
     }
 }
 
@@ -228,7 +256,7 @@ fn is_task_creating_mode(mode: EditorMode) -> bool {
     )
 }
 
-fn marker_at(draft: &str, item: &EditorItemParse) -> usize {
+pub(super) fn marker_at(draft: &str, item: &EditorItemParse) -> usize {
     if let Some(merge_in) = item.merge_in.as_ref() {
         return merge_in.arrow.start;
     }
@@ -326,7 +354,7 @@ fn physical_line_range(
     (line == line_number).then_some((start, draft.len()))
 }
 
-fn discard_range(
+pub(super) fn discard_range(
     draft: &str,
     item: &EditorItemParse,
     all_items: &[EditorItemParse],
@@ -571,6 +599,12 @@ fn draft_match(
         actions: Some(actions),
         default_action: Some(default_action),
         score: None,
+        scope: None,
+        record_type: None,
+        stem: None,
+        status: None,
+        fields: None,
+        add_to: None,
     }
 }
 

@@ -11,6 +11,7 @@ use super::{
     bands, corpus, query_related_in, score, tokenize, CaptureRelatedResult,
 };
 use crate::native::env::TestEnvGuard;
+use std::ffi::OsStr;
 
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -726,4 +727,162 @@ fn cosine_is_symmetric_on_identical_titles() {
     };
     let scores = score::cosine_scores(&left, std::slice::from_ref(&right));
     assert!(scores[0] > 0.99, "{}", scores[0]);
+}
+
+const RECORDS_CONFIG: &str = r#"records:
+  restaurant:
+    dir: eat
+    label: Restaurant
+    emoji: "🍽️"
+    dated_notes: true
+    fields:
+      status:
+        required: true
+        values:
+          to_try: "🔖 To try"
+          liked: "💚 Liked"
+      category:
+        required: true
+        suggest: true
+      location:
+        required: true
+        suggest: true
+"#;
+
+fn record_vault() -> (TempDir, PathBuf) {
+    let temp = TempDir::new("bob-cli-capture-related-records");
+    write_settings(temp.path());
+    let config = temp.path().join("config.yml");
+    write_file(&config, RECORDS_CONFIG);
+    write_file(
+        &temp.path().join("eat/ninja_sushi.md"),
+        "---\nparent: \"[[eat]]\"\ntype: \"[[restaurant]]\"\ntitle: \"Ninja Sushi\"\nstatus: liked\ncategory: \"Sushi\"\nlocation: \"Clark\"\n---\n# Ninja Sushi\n\n## Notes\n",
+    );
+    write_file(
+        &temp.path().join("eat/ramen_nagi.md"),
+        "---\nparent: \"[[eat]]\"\ntype: \"[[restaurant]]\"\ntitle: \"Ramen Nagi\"\nstatus: liked\ncategory: \"Ramen\"\nlocation: \"Clark\"\n---\n# Ramen Nagi\n\n## Notes\n",
+    );
+    write_file(
+        &temp.path().join("eat/burger_31.md"),
+        "---\nparent: \"[[eat]]\"\ntype: \"[[restaurant]]\"\ntitle: \"31 Burger\"\nstatus: liked\ncategory: \"Burgers\"\nlocation: \"Clark\"\n---\n# 31 Burger\n\n## Notes\n",
+    );
+    (temp, config)
+}
+
+fn record_draft(
+    root: &Path,
+    config: &Path,
+    draft: &str,
+) -> CaptureRelatedResult {
+    let _guard = TestEnvGuard::set(&[
+        ("BOB_CONFIG_FILE", Some(config.as_os_str())),
+        ("BOB_NOW", Some(OsStr::new("2026-10-20 12:00:00"))),
+    ]);
+    super::draft::draft_related(&super::DraftRequest {
+        bob_dir: root.to_path_buf(),
+        days: 30,
+        limit: 5,
+        draft: draft.to_string(),
+    })
+}
+
+#[test]
+fn record_near_title_match_carries_scope_and_add_to() {
+    let (temp, config) = record_vault();
+    let result = record_draft(temp.path(), &config, "Ninja Sushi Bar @eat/");
+    assert_eq!(result.items.len(), 1, "{result:?}");
+    let item = &result.items[0];
+    assert_eq!(item.mode, "record_note", "{result:?}");
+    let related = item
+        .matches
+        .iter()
+        .find(|related| related.stem.as_deref() == Some("ninja_sushi"))
+        .expect("ninja_sushi match");
+    assert_eq!(related.scope.as_deref(), Some("record"), "{related:?}");
+    assert_eq!(related.kind, "record", "{related:?}");
+    assert_eq!(
+        related.record_type.as_deref(),
+        Some("restaurant"),
+        "{related:?}"
+    );
+    assert!(
+        matches!(related.band.as_str(), "possible_duplicate" | "similar"),
+        "unexpected band {} in {related:?}",
+        related.band
+    );
+    assert!(
+        related
+            .status
+            .as_deref()
+            .is_some_and(|status| !status.is_empty()),
+        "status display missing in {related:?}"
+    );
+    let fields = related.fields.as_deref().expect("field displays");
+    assert!(
+        fields.len() <= 2 && !fields.is_empty(),
+        "expected one or two field displays in {related:?}"
+    );
+    let actions = related.actions.as_deref().expect("actions");
+    assert!(actions.contains(&"add_to".to_string()), "{related:?}");
+    assert!(actions.contains(&"open".to_string()), "{related:?}");
+    assert!(actions.contains(&"discard".to_string()), "{related:?}");
+    if related.band == "possible_duplicate" {
+        assert_eq!(
+            related.default_action.as_deref(),
+            Some("add_to"),
+            "{related:?}"
+        );
+    }
+    let add_to = related.add_to.as_ref().expect("add_to replacement");
+    assert_eq!(add_to.replacement, "@eat/ninja_sushi", "{related:?}");
+    assert!(
+        add_to.end > add_to.start
+            && add_to.end <= "Ninja Sushi Bar @eat/".len(),
+        "{add_to:?}"
+    );
+}
+
+#[test]
+fn record_unrelated_title_has_no_rows() {
+    let (temp, config) = record_vault();
+    let result =
+        record_draft(temp.path(), &config, "Completely unrelated xyzzy @eat/");
+    assert_eq!(result.items.len(), 1, "{result:?}");
+    assert!(
+        result.items[0].matches.is_empty(),
+        "unrelated title must not match: {result:?}"
+    );
+}
+
+#[test]
+fn record_number_guard_never_reports_duplicate() {
+    let (temp, config) = record_vault();
+    let result = record_draft(temp.path(), &config, "30 Burger @eat/");
+    let bands: Vec<String> = result.items[0]
+        .matches
+        .iter()
+        .filter(|related| related.stem.as_deref() == Some("burger_31"))
+        .map(|related| related.band.clone())
+        .collect();
+    assert!(
+        !bands.iter().any(|band| {
+            band == "possible_duplicate" || band == "closed_duplicate"
+        }),
+        "30 vs 31 must never be a duplicate: {result:?}"
+    );
+}
+
+#[test]
+fn record_update_items_have_no_rows() {
+    let (temp, config) = record_vault();
+    for draft in [
+        "@eat/ninja_sushi",
+        "Went back, still great @eat/ninja_sushi",
+    ] {
+        let result = record_draft(temp.path(), &config, draft);
+        assert!(
+            result.items.is_empty(),
+            "update item must have no rows for {draft:?}: {result:?}"
+        );
+    }
 }

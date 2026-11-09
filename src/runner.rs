@@ -1000,7 +1000,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "capture-related",
-        about: "List existing tasks that a new capture may duplicate",
+        about: "List existing tasks and record notes a new capture may duplicate",
         section: Section::CaptureProtocol,
         target: Target::Leaf(Leaf {
             native_command: NativeCommand::CaptureRelated,

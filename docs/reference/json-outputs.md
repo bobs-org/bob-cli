@@ -379,9 +379,8 @@ syntax, guard errors, and atomic-write guarantees.
 ### Similar-task draft results
 
 `bob capture-related -f json -- DRAFT` returns one `items` entry per
-task-creating draft item. `index` is the item's 0-based position in the full draft,
-including items that do not create tasks. Templates and drafts without new
-tasks return `items: []`.
+task-creating or record-create item. `index` is the item's draft position.
+Templates and drafts without new tasks/records return `items: []`.
 
 | Field | Wire representation |
 | --- | --- |
@@ -393,14 +392,16 @@ tasks return `items: []`.
 | `matches[].band` | `same_title`, `possible_duplicate`, `similar`, `closed_duplicate`, or `hold` |
 | `matches[].actions`, `matches[].default_action` | Available actions and the recommended default; clients apply draft edits only after user selection |
 | `matches[].replacements` | Present for targets with block IDs; ID-less targets use `requires_block_id` and `block_id_suggestions` |
+| `matches[].scope` + record fields | Record rows only (`scope` `"record"`): type, stem, status/fields, `add_to` |
 | `linked` | Keys already referenced by the item, with their link kind |
 
 A candidate appears under only the item with its highest match score; ties
 go to the earliest eligible item. Tasks explicitly linked by any task-creating
-item are excluded from every item's matches. Non-exact matches need at least
+item are excluded from every item's matches. Record matches use the item's folder.
+Non-exact matches need at least
 two distinct meaningful terms. A `hold` row is below the display threshold;
 clients use it only to retain an already-visible suggestion while wording
-changes. Bob can return it even if the client has never displayed it.
+changes.
 Draft results omit scores. `--query TEXT` is a separate
 calibration shape with scores and without draft anchors or actions.
 

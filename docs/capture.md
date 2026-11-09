@@ -8877,28 +8877,34 @@ bob capture-related [-b|--bob-dir DIR] [-d|--days N] [-e|--exclude NOTE:LINE] [-
 ```
 
 This read-only command shows existing tasks that a capture draft may duplicate
-or relate to. Draft mode follows the capture editor grammar and examines only
-items that create tasks: `task`, `pomodoro_task`, `project_note`, and
-`pomodoro_project_note`. For a project-note item it matches the title. A
-`%t` template draft and a draft with no task-creating items return an empty
-`items` array before Bob scans the vault.
+or relate to, plus same-folder record notes for record-create items. Draft mode
+follows the capture editor grammar and examines items that create tasks
+(`task`, `pomodoro_task`, `project_note`, and `pomodoro_project_note`) and
+items that create records (`record_note`). For a project-note item it matches
+the title; for a record item it matches the record title against the same
+folder's titles. Record-update items (`record_update`) are never eligible. A
+`%t` template draft and a draft with no task-creating or record-create items
+return an empty `items` array before Bob scans the vault.
 
 Open candidates are tasks in routable inbox, area, and active project notes.
 Closed candidates are tasks completed or canceled in the last `--days` days,
 including recent `done/` archives. Checklist rows, recurring tasks in closed
 state, and daily notes are excluded. A task already named by a draft
 dependency, blocked-task marker, relation, task destination, or parent-task
-destination is listed under `linked` and omitted from the matches.
+destination is listed under `linked` and omitted from the matches. Record
+candidates are the same folder's record notes, excluding the exact colliding
+stem (already refused as `record_exists`).
 
-Each item is tokenized with Bob's task-title rules and ranked against the
+Each item is tokenized with Bob's task-title rules and ranked against its
 candidate set. The bands are `same_title`, `possible_duplicate`, `similar`,
 `closed_duplicate`, and `hold`; same-title matching is case-insensitive and
 ignores punctuation, tags, fields, and emoji. Titles that name different
-numbers, such as `Part 1` and `Part 2` or `2025` and `2026`, can be
+numbers, such as `Part 1` and `Part 2` or `2025` and `2026` (or `30 Burger`
+and `31 Burger`), can be
 `similar` but are never `possible_duplicate` or `closed_duplicate`. The
 exact score bars and default action mapping can change without a
 schema-version bump. Draft JSON never includes scores. The separate
-`--query TEXT` harness ranks one title and includes numeric scores for
+`--query TEXT` harness ranks one task title and includes numeric scores for
 calibration. With `--query`, `-e|--exclude NOTE:LINE` removes exactly one
 candidate before scoring and ranking, for example `--exclude dev.md:42`. The
 note is vault-relative and the line is 1-based. This allows leave-one-out
@@ -8909,7 +8915,7 @@ otherwise suppress. It is invalid in draft mode; no file is edited.
 `ok`, `warnings`, and `items`. Each item contains:
 
 - `index`: its 0-based position in the full capture draft;
-- `mode`: its task-creating capture mode;
+- `mode`: its task-creating capture mode (`record_note` for record creates);
 - `range`: the item's half-open UTF-8 byte range in the original draft;
 - `marker_at`: the UTF-8 byte offset where an action marker can be inserted
   on the parent line before a trailing Pomodoro suffix (for a `<` clause,
@@ -8955,12 +8961,23 @@ set `requires_block_id: true`, and include `route`, `note_path`, `ref`, and
 suggested IDs; the existing `capture-task-id` flow supplies replacements
 after the user chooses or enters an ID.
 
+Record rows carry `scope: "record"` with `record_type`, `stem`, a `status`
+display, and up to two `fields` displays (`{key, label, value}`), plus a
+Bob-authored `add_to` rewrite (`{start, end, replacement}`) equal to the
+`record_exists` fix. Their `kind` is `"record"`, `route` and `locator` are the
+record folder, `key` and `note_path` are the vault-relative note path,
+`target` is the absolute path, `line` is `1`, and `task_ref` is empty. They
+omit `replacements`, `requires_block_id`, and `block_id_suggestions`.
+
 `actions` contains only edits that Bob verified by applying the replacement
 to a copy of the draft and parsing it again. Open rows may offer `relate`,
 `note`, `needs`, and `blocks`, plus `open` and `discard` when their anchors
-allow those actions. Closed rows offer only `open` and `discard`. The default
+allow those actions. Closed rows offer only `open` and `discard`. Record rows
+offer `add_to`, `open`, and `discard`. The default
 is `discard` for an exact title, `note` for a possible duplicate, `relate`
-for a similar or held row, and `open` for a non-exact closed duplicate.
+for a similar or held row, and `open` for a non-exact closed duplicate;
+record rows default to `add_to` for a possible duplicate and `open` otherwise
+(`same_title` still discards).
 Return remains the capture submit action; these are explicit draft edits and
 never create a link by themselves.
 

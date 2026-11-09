@@ -103,7 +103,7 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob capture-parse`](capture-parse.md) | Explain what in-progress capture text currently means |
 | [`bob capture-pomodoro-name`](capture-pomodoro-name.md) | Write a name onto an open unnamed Pomodoro |
 | [`bob capture-pomodoros`](capture-pomodoros.md) | List today's Pomodoro ledger entries |
-| [`bob capture-related`](capture-related.md) | List existing tasks that a new capture may duplicate |
+| [`bob capture-related`](capture-related.md) | List existing tasks and record notes a new capture may duplicate |
 | [`bob capture-rewrite`](capture-rewrite.md) | Apply the capture grammar's automatic draft rewrites |
 | [`bob capture-sections`](capture-sections.md) | List the non-Tasks sections of a capture note |
 | [`bob capture-targets`](capture-targets.md) | List capture routes for inbox, area, project, and record notes |
@@ -173,7 +173,8 @@ Capture protocol:
   capture-parse          Explain what in-progress capture text currently means
   capture-pomodoro-name  Write a name onto an open unnamed Pomodoro
   capture-pomodoros      List today's Pomodoro ledger entries
-  capture-related        List existing tasks that a new capture may duplicate
+  capture-related        List existing tasks and record notes a new capture may
+                         duplicate
   capture-rewrite        Apply the capture grammar's automatic draft rewrites
   capture-sections       List the non-Tasks sections of a capture note
   capture-targets        List capture routes for inbox, area, project, and
