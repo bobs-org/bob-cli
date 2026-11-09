@@ -84,7 +84,7 @@ struct Report {
 pub(crate) fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
         .about("Fold tasks into a task, drawer, or note section")
-        .long_about("Merge one or more source tasks into a destination-shaped container: another task, one of its drawers, or a note's H2 section. Sources retire as cancelled tombstones with a merged-into link; the destination owns the moved notes. A live run uses the task maintenance lock, guarded writes, a scoped commit, and vault sync; --dry-run prints the same plan without changing the vault.")
+        .long_about("Merge one or more source tasks into a destination-shaped container: another task, one of its drawers, or a note's H2 section. Sources retire as cancelled tombstones with a merged-into link and keep their notes; the destination receives a copy. A live run uses the task maintenance lock, guarded writes, a scoped commit, and vault sync; --dry-run prints the same plan without changing the vault.")
         .after_help("Examples:\n  bob task merge -i db:upgrade inbox:bench\n                                 Fold one task into ^upgrade\n  bob task merge -i db:upgrade -D 'future work' inbox:bench\n                                 Fold into ^upgrade's FUTURE WORK drawer\n  bob task merge -i dev -s 'Future Work' mac_inbox:ws-proto\n                                 Fold into dev.md's ## Future Work\n  bob task merge -d -f json -i db:upgrade inbox:bench\n                                 Preview the same merge as JSON\n\nA task locator is note:block-id or [[note#^block-id]]. Quote capture drafts that use >: bob capture '@a+x > @c'.")
         .disable_help_flag(true)
         .arg(Arg::new("into").long("into").short('i').value_name("TASK|NOTE").required(true).help("A task, or a note when --section is given"))
@@ -968,7 +968,7 @@ fn print_report(report: &Report) {
         };
         let moved = if record.moved_notes > 0 {
             format!(
-                " · {} {} moved",
+                " · {} {} copied",
                 record.moved_notes,
                 if record.moved_notes == 1 {
                     "note"

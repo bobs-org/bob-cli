@@ -248,7 +248,7 @@ fn transfer_plus_picker_filters_merge_targets_and_round_trips() {
             let id = row["block_id"].as_str().unwrap_or_default();
             row["consequence"]
                 == format!(
-                    "⤵ merge into [[{route}#^{id}]] — cuts the source notes under this task and retires the source"
+                    "⤵ merge into [[{route}#^{id}]] — copies the source notes under this task and retires the source"
                 )
         }),
         "every identified target carries the merge consequence: {json}"

@@ -406,7 +406,7 @@ fn same_route(left: &str, right: &str) -> bool {
 
 fn merge_consequence(route: &str, id: &str) -> String {
     format!(
-        "⤵ merge into [[{route}#^{id}]] — cuts the source notes under this task and retires the source",
+        "⤵ merge into [[{route}#^{id}]] — copies the source notes under this task and retires the source",
     )
 }
 

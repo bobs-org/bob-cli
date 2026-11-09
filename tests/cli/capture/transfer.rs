@@ -803,7 +803,7 @@ fn markdown_snapshot(
 }
 
 #[test]
-fn transfer_merge_task_cuts_retires_repairs_and_preserves_target() {
+fn transfer_merge_task_copies_retires_and_keeps_source_notes() {
     let (_temp, vault, day) = setup_merge_vault("transfer-merge-task");
     write_file(&vault.join("inbox.md"), &area_with_tasks(concat!(
         "- [*] #task Benchmark logical replication [created:: 2026-10-28] ^bench\n",
@@ -840,13 +840,25 @@ fn transfer_merge_task_cuts_retires_repairs_and_preserves_target() {
     assert_eq!(blocks[2]["block_id"], "bench");
     assert!(json.get("section_blocks").is_none(), "{json}");
     assert!(json.get("moves").is_none());
-    assert!(!json["repaired_files"].as_array().unwrap().is_empty());
+    let repaired = json
+        .get("repaired_files")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !repaired.iter().any(|file| file["path"] == "referrer.md"),
+        "inbound links stay on S: {json}"
+    );
     let target = fs::read_to_string(vault.join("db.md")).unwrap();
     assert!(
         target.contains("- [ ] #task Upgrade Postgres [priority:: 2]"),
         "{target}"
     );
-    assert!(target.contains("Try pgbench ^detail"), "{target}");
+    assert!(target.contains("Try pgbench"), "{target}");
+    assert!(
+        !target.contains("Try pgbench ^detail"),
+        "copy strips descendant anchors: {target}"
+    );
     assert!(
         target.find("Dump production").unwrap()
             < target.find("Benchmark logical replication\n").unwrap()
@@ -856,11 +868,20 @@ fn transfer_merge_task_cuts_retires_repairs_and_preserves_target() {
     assert!(source.contains("- [-] #task Benchmark"), "{source}");
     assert!(source.contains("[cancelled:: 2026-11-03]"));
     assert!(source.contains("old schedule"));
-    assert!(!source.contains("Try pgbench"));
+    assert!(
+        source.contains("Try pgbench ^detail"),
+        "S keeps the original note: {source}"
+    );
     assert!(source.contains("DEPENDS ON:** [[db#^upgrade]]"), "{source}");
-    assert!(fs::read_to_string(vault.join("referrer.md"))
-        .unwrap()
-        .contains("[[db#^detail]]"));
+    let referrer = fs::read_to_string(vault.join("referrer.md")).unwrap();
+    assert!(
+        referrer.contains("[[inbox#^detail]]"),
+        "inbound link stays on S: {referrer}"
+    );
+    assert!(
+        referrer.contains("[[inbox#^bench]]"),
+        "inbound task link stays on S: {referrer}"
+    );
     let merged = markdown_snapshot(&vault);
     let again = capture_json(&vault, &day, draft, false);
     assert_success(&again);
@@ -931,7 +952,10 @@ fn transfer_merge_drawers_and_sections_preserve_selector_intent() {
         );
         assert!(text[heading_at..].contains("Try pgbench"), "{text}");
         let source = fs::read_to_string(vault.join("inbox.md")).unwrap();
-        assert!(!source.contains("Try pgbench"), "{source}");
+        assert!(
+            source.contains("Try pgbench"),
+            "S keeps the original note: {source}"
+        );
         if destination.starts_with("@db#") {
             assert!(source.contains("CANCEL LOG"), "{source}");
             let sections = json["section_blocks"]
@@ -1644,7 +1668,7 @@ fn transfer_merge_origins_cover_renamed_anchors_and_drawers() {
         .find(|block| block["block_id"] == "upgrade")
         .expect("target")
         .clone();
-    let renamed = target["lines"]
+    let copied = target["lines"]
         .as_array()
         .expect("lines")
         .iter()
@@ -1656,13 +1680,13 @@ fn transfer_merge_origins_cover_renamed_anchors_and_drawers() {
                 && line.get("origin").and_then(|o| o.as_str())
                     == Some("inbox.md#^bench")
         })
-        .expect("renamed payload line keeps origin");
+        .expect("copied payload line keeps origin");
     assert!(
-        !renamed["text"]
+        !copied["text"]
             .as_str()
             .unwrap_or_default()
-            .contains("^detail "),
-        "descendant anchor was renamed: {renamed}"
+            .contains("^detail"),
+        "copy strips descendant anchors: {copied}"
     );
 
     let (_temp, vault, day) =

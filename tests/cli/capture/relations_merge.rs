@@ -99,6 +99,10 @@ fn to_relation_merges_existing_owner_into_the_link_target() {
         source.contains("merged into [[target#^target]]"),
         "{source}"
     );
+    assert!(
+        source.contains("source note"),
+        "S keeps the original note: {source}"
+    );
     assert!(target.contains("source note"), "{target}");
     assert!(target.contains("[[source#^src]] (merged into)"), "{target}");
 }
@@ -125,6 +129,10 @@ fn from_relation_merges_a_picked_task_into_a_new_capture_task() {
     let source = fs::read_to_string(vault.join("source.md"))
         .expect("read merged source");
     assert!(source.contains("- [-] #task Source"), "{source}");
+    assert!(
+        source.contains("source note"),
+        "S keeps the original note: {source}"
+    );
 }
 
 #[test]

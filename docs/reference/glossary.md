@@ -765,8 +765,8 @@ aka merge, merged into
 
 Task Merge folds one or more source tasks into a target task, one of its drawers, or a
 note section through `bob task merge`, capture's `>` or `<`, or the configured
-`merged into` relation. It cuts the selected source blocks and appends their notes to the destination,
-retiring each source as a cancelled tombstone rather than copying and deleting it.
+`merged into` relation. It copies the source's notes to the destination and retires
+each source as a cancelled tombstone that keeps them.
 Dependent tasks and affected links are repaired, and the source records the target in
 its `🪢 LINKS: merged into` line. See `docs/task-merge.md` for the contract and edge
 cases. This task-outline operation is distinct from a [Merged Pomodoro](#merged-pomodoro), which
@@ -786,8 +786,8 @@ the source task's 🪢 **LINKS:** line and mirrored on the target task's generat
 gestures. A relation is distinct from a Pomodoro [Task Link](#task-link): it never blocks a task,
 counts as a Pomodoro Task Link, or changes its schedule, priority, or freshness.
 Committing a configured cancel, complete, or merge label through capture or the Links
-stage cancels the source, completes it, or merges it into the target (moving its notes
-and cancelling it), respectively, at commit time; see [Task Merge](#task-merge).
+stage cancels the source, completes it, or merges it into the target by copying its notes
+and cancelling it, respectively, at commit time; see [Task Merge](#task-merge).
 
 A relation whose label is a configured successor label (such as `starts after`) also
 offers its source as a [Successor Offer](#successor-offer) when its target is parked (left Pending with

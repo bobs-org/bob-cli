@@ -22,11 +22,12 @@ doc first in the same change.
 ## 1. The rule
 
 > Merging S into T writes T first. S's description becomes one plain title
-> bullet in the container. S's authored children are **cut** beneath it, and
-> their anchors' inbound links are repaired. Bob then re-points S's open
-> dependents to T, prunes S's live links under today's open Pomodoros, and
-> offers T in their place. S is written last: it is cancelled, carrying
-> `🪢 LINKS: merged into [[T]]`.
+> bullet in the container. S's authored children are **copied** beneath it.
+> Copies carry no anchors or `[id::]`; same-note links in the copy name S's
+> note. Bob then re-points S's open dependents to T, prunes S's live links
+> under today's open Pomodoros, and offers T in their place. S is written
+> last: it is cancelled, carrying `🪢 LINKS: merged into [[T]]`, and keeps
+> its original notes.
 
 Vocabulary used below:
 
@@ -38,9 +39,10 @@ Vocabulary used below:
 A task holds notes, so `>` to a bare note **moves** them (identity kept,
 links repaired, no back-pointer). A task, a task's drawer, or a note's
 section holds notes, so `>` to any of these **merges** the sources into it
-(source retires as a cancelled tombstone, `🪢 LINKS: merged into [[T]]` on S,
-which T shows as _merged from_). Split turns notes back into tasks (new tasks
-are born, live `[[#^id|Title]]` stubs stay in the parent).
+(S's notes are copied, S retires as a cancelled tombstone that keeps them,
+`🪢 LINKS: merged into [[T]]` on S, which T shows as _merged from_). Split
+turns notes back into tasks (new tasks are born, live `[[#^id|Title]]` stubs
+stay in the parent).
 
 ## 2. The fate of everything a merge touches
 
@@ -48,7 +50,7 @@ are born, live `[[#^id|Title]]` stubs stay in the parent).
 | --- | --- |
 | S's task line | `[-]` with `[cancelled:: today]`. `^id`, fields, and the creation date are kept, so every link to S still resolves. |
 | S's description | Becomes the group title bullet `- <description>` in the container. The text comes from Bob's description extractor (`note_tasks::clean_description`). It carries **no link back to S**: a ring would draw ⊘ beside live work, and S would gain a reverse mention. Provenance is T's _merged from_ chip. |
-| S's authored body (continuation paragraphs, tables, fences, and authored children) | Cut under the title bullet with relative structure kept, including bytes before the first child and body text without a list wrapper. Descendant anchors move, with transplant link repair and collision renaming. Same-named drawers are **not** flattened into T's drawers. |
+| S's authored body (continuation paragraphs, tables, fences, and authored children) | Copied under the title bullet with relative structure kept, including bytes before the first child and body text without a list wrapper. S keeps the originals. Copies carry no `^id` anchors or `[id::]` fields. Same-note block links in the copy (`[[#^x]]`, `(#^x)`) name S's note. Same-named drawers are **not** flattened into T's drawers. |
 | S's open nested tasks | The merge is refused (`merge_source_open_subtasks`). |
 | S's managed children: Depends-On, BLOCKS, LINKS, LINKED FROM, and the Schedule, Work, Rotten, and Cancel logs | Stay on S as history. An existing Cancel Log gets `*date* — 🪢 merged into [[T]]` prepended, as relation cancels do today. |
 | Open tasks that depend on S (other than T) | The production dependency graph finds direct and inherited project dependents. Resolved Depends-On links to any source are replaced with T and deduplicated; unresolved or ambiguous links stay byte-for-byte and are reported, with their field IDs retained as breadcrumbs. A dependent without a block ID refuses the merge because it cannot be safely rewritten. BLOCKS mirrors follow the configured relation policy. A resulting cycle refuses the whole operation (`merge_dependency_cycle`). Re-pointing happens before the cancel, so cancel recovery never releases them. |
@@ -219,7 +221,7 @@ bob task merge [OPTIONS] -i <TASK|NOTE> [-D TITLE | -s TITLE] <TASK>...
     - `label`, `outcome` (`merged`, `unchanged`, or `already_closed`),
       `previous_status`, `previous_status_name`, `status_symbol`, `status_name`
       (the source's status after the merge: `-`, Cancelled, using the vault's names);
-    - `moved_lines`, `moved_notes`;
+    - `moved_lines`, `moved_notes` (copied line and note counts; field names stay);
     - `dependents_repointed[]`, `prerequisites_left[]`,
       `successors_orphaned[]`;
     - `links_pruned`, `consequences[]` (`{kind, tone, text, keys}` with titled
@@ -231,7 +233,7 @@ bob task merge [OPTIONS] -i <TASK|NOTE> [-D TITLE | -s TITLE] <TASK>...
 
 ```text
 ⤵ Merged 1 task into “Upgrade Postgres to 17” · db.md › FUTURE WORK
-  ⊘ Benchmark logical replication   inbox.md:1 · Next → Cancelled · 2 notes moved
+  ⊘ Benchmark logical replication   inbox.md:1 · Next → Cancelled · 2 notes copied
   ⛓ Cut over prod                   now waits on “Upgrade Postgres to 17”
   ◌ BUILD link removed              offer 1: link “Upgrade Postgres to 17” under BUILD (-p 1)
   ↻ repaired 1 link in 1 note
@@ -252,7 +254,7 @@ clients render them.
 | --- | --- |
 | merge header | `⤵ Merged N task(s) into “T” · c.md[ › CONTAINER]` / `Would merge …` |
 | merge header (new target) | `⤵ Merged N tasks into new “T” · c.md` / `⤵ Would merge N tasks into new “T” · c.md` |
-| source row | `⊘ S  path:line · Prev → Cancelled · N notes moved` (or `· title only`; singular `1 note moved`) |
+| source row | `⊘ S  path:line · Prev → Cancelled · N notes copied` (or `· title only`; singular `1 note copied`) |
 | dependent row | `⛓ “D” now waits on “T”` (from `consequences[]`, titles never keys) |
 | prune/offer row | `◌ ENTRY link removed  offer N: link “T” under ENTRY` |
 | link leaves row | `“S” leaves ENTRY` (one per open Pomodoro entry that lost S's link) |
@@ -278,7 +280,7 @@ clients render them.
 | transfer_source_suffix | `sources are whole tasks; drop #drawer from @a+x` |
 | transfer_arrow_spacing | `put spaces around >: @a+x > @c` |
 | shell_ate_transfer_arrow | `your shell ate “>”: quote the draft (bob capture '@a+x > @c') and delete the empty file “@c”` |
-| nav merge strip | `⤵ Merges “S” into “T” · moves N notes · cancels “S” · N dependent(s) now wait on “T” · offers “T” under ENTRY` |
+| nav merge strip | `⤵ Merges “S” into “T” · copies N notes · cancels “S” · N dependent(s) now wait on “T” · offers “T” under ENTRY` |
 | nav mobile | `⤵ merging needs the desktop app` |
 
 Glyphs: ↪ move, ⤵ merge, ✂ split, ⊘ cancelled, ⛓ dependency, ◌ removed
@@ -299,8 +301,8 @@ promised instead:
 
 Property tests (Rust) must hold for merge, split, and many-source move:
 
-1. Every block link that resolved before still resolves, to the moved task,
-   the tombstone, or the relocated anchor.
+1. Every block link that resolved before still resolves to the same block as
+   before.
 2. `bob task reconcile` is a no-op afterwards: mirrors, BLOCKS, fields,
    and LINKED FROM all converge.
 3. A dry run equals the result except for `dry_run`.
@@ -316,8 +318,8 @@ expectation. The implementation tests live in
 | ID | Covers | Preimage → gesture → postimage |
 | --- | --- | --- |
 | MG1 | Title-only S into T | S with no children merges as one title bullet under T's plain-child anchor; S retires with `merged into` |
-| MG2 | Nested drawers travel | S with nested drawers cuts them under the title bullet; same-named drawers are not flattened |
-| MG3 | Anchors linked from a daily note | Descendant anchors move with transplant link repair and collision renaming; daily-note links still resolve |
+| MG2 | Nested drawers travel | S with nested drawers copies them under the title bullet; the originals stay on S; same-named drawers are not flattened |
+| MG3 | Anchors linked from a daily note | A daily-note link to an anchor under S is byte-unchanged and still resolves to S. The copy has no `^` anchors, and there is no collision rename, including when S and T share a note (MI4) |
 | MG4 | Authored body | Continuation prose before children, wrapper-free tables and fences, and authored children travel; direct managed logs stay on S |
 | MG5 | Re-point dependents | The production graph finds direct and inherited project dependents; resolved links re-point, unresolved links and field breadcrumbs remain, and ID-less dependents refuse |
 | MG6 | T depends on S | Left in place; cancel recovery may recover T with `[unblocked::]` |
@@ -342,7 +344,7 @@ The current test names for those vectors are:
 | --- | --- |
 | MG1 | `mg1_title_only_source_is_prepared_as_one_plain_child` |
 | MG2 | `mg2_nested_drawers_travel_under_the_source_title_without_flattening` |
-| MG3 | `mg3_descendant_anchor_collision_repairs_external_links` |
+| MG3 | `mg3_daily_note_link_stays_on_source_and_copy_has_no_anchors` |
 | MG4 | `mg4_tables_and_fences_are_rebased_as_authored_payload`, `mg_successful_merge_fixtures_hold_identity_reconcile_and_repeatability` (wrapper-free body fixture) |
 | MG5 | `mg5_open_dependents_repoint_with_mirrors_and_provenance`, `mg5_shared_dependent_dedups_to_one_target_link`, `repoint_preserves_unresolved_links_and_field_breadcrumbs`, `idless_open_dependents_are_refused_for_task_and_section_merges`, `relation_policy_controls_mirrors_and_preserves_existing_mentions`, `malformed_linked_from_refuses_only_when_mirror_is_enabled` |
 | MG6 | `mg6_target_prerequisite_on_source_is_never_repointed` |
@@ -356,7 +358,7 @@ The current test names for those vectors are:
 | MG14 | `mg14_section_slug_near_duplicate_refuses` |
 | MG15 | `mg15_section_slug_title_cases_and_exact_literal_preserves_text` |
 | MG16 | `mg16_rerun_against_same_target_is_unchanged`, `mg16_public_planner_rerun_has_no_writes_and_serializes_source_order`, `planner_validates_duplicates_and_source_structure_before_retry_filtering`, `unchanged_retry_skips_unrelated_preexisting_dependency_cycles`, `closed_label_gesture_writes_only_relations_and_keeps_unrelated_entries` |
-| MG17 | `mg17_production_reconciliation_is_a_noop_after_merge` |
+| MG17 | `mg17_production_reconciliation_is_a_noop_after_merge`, `mg17_closed_nested_task_copy_strips_identity_and_reconcile_is_noop` |
 | MG18 | `mg18_archive_planner_repairs_merged_from_to_tombstone_archive` |
 | MG19 | `mg19_shared_key_with_merge_labels_drops_everywhere_once`, `mg19_three_list_warnings_stay_byte_identical` |
 | MG20 | `mg20_source_groups_keep_typed_order_after_existing_entries` |
@@ -375,7 +377,7 @@ grammar and picker vectors remain owned by their sibling phases.
 | MI1 | `T @n^t < @a+x`: T created; x's title bullet and notes land under T; x is `[-]` with `merged into [[n#^t]]`; T has LINKED FROM | execute |
 | MI2 | Several sources keep typed order after T's authored children and drawers | execute |
 | MI3 | Equivalence: `<` item identical to two-item `>` draft, vault bytes identical | execute |
-| MI4 | Same-note T and source stage one postimage; same-note descendant-anchor collisions | execute |
+| MI4 | Same-note T and source stage one postimage; same-note copy has no anchors and no collisions | execute |
 | MI5 | Dependents re-point to T; a cycle through T's own `&` refuses; shared dependents counted once | execute |
 | MI6 | Closed, recurring, `^prj`, open-subtask, duplicate, alias, overlapping, and missing sources refuse; vault byte-identical | execute |
 | MI7 | Every context-table refusal row with its code; `@n+t < @a+x` and `@db < @a+x` carry the `>` rewrite | grammar |
@@ -397,7 +399,7 @@ The acceptance and earlier-phase test names for these vectors are:
 | --- | --- |
 | MI1–MI2 | `merge_in_creates_target_and_appends_sources_after_authored_notes` |
 | MI3 | `merge_in_bytes_match_the_equivalent_two_item_transfer`, `merge_in_equivalence_covers_same_note_drawers_and_configured_labels`, `selected_merge_in_offer_matches_two_item_transfer_without_freshness`, `merge_in_selected_and_unselected_offer_bytes_match_transfer` |
-| MI4 | `merge_in_same_note_anchor_collision_repairs_payload_and_inbound_link`, `merge_in_equivalence_covers_same_note_drawers_and_configured_labels`, `transfer_merge_origins_cover_renamed_anchors_and_drawers` (shared merge engine) |
+| MI4 | `merge_in_same_note_anchor_collision_repairs_payload_and_inbound_link`, `merge_in_equivalence_covers_same_note_drawers_and_configured_labels`, `transfer_merge_origins_cover_renamed_anchors_and_drawers` (shared merge engine; copies strip anchors) |
 | MI5 | `merge_in_repoints_shared_dependents_and_cycle_refusal_is_atomic`, `transfer_merge_refusals_are_atomic_and_coded`, `structural_refusals_cover_nested_open_tasks_and_destination_relationships`, `mg5_shared_dependent_dedups_to_one_target_link` |
 | MI6 | `merge_in_source_refusal_matrix_is_atomic`, `merge_in_invalid_second_source_refuses_without_writes`, `canonical_duplicate_sources_refuse_without_writes`, `source_identity_and_task_structure_refusals_are_specific` |
 | MI7 | `execution_needs_new_task_for_existing_destination`, `execution_needs_new_task_for_empty_left`, `editor_needs_new_task_carries_use_rewrite` |

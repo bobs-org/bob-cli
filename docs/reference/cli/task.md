@@ -70,7 +70,7 @@ options:
 Fold tasks into a task, drawer, or note section
 
 ```text title="bob task merge --help"
-Merge one or more source tasks into a destination-shaped container: another task, one of its drawers, or a note's H2 section. Sources retire as cancelled tombstones with a merged-into link; the destination owns the moved notes. A live run uses the task maintenance lock, guarded writes, a scoped commit, and vault sync; --dry-run prints the same plan without changing the vault.
+Merge one or more source tasks into a destination-shaped container: another task, one of its drawers, or a note's H2 section. Sources retire as cancelled tombstones with a merged-into link and keep their notes; the destination receives a copy. A live run uses the task maintenance lock, guarded writes, a scoped commit, and vault sync; --dry-run prints the same plan without changing the vault.
 
 Usage: bob task merge [OPTIONS] --into <TASK|NOTE> <TASK>...
 

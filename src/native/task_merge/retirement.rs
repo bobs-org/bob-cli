@@ -1,12 +1,12 @@
 //! Snapshot-only dependency retirement for task merges.
 //!
-//! The payload phase cuts authored children into the destination container
+//! The payload phase copies authored children into the destination container
 //! and leaves every source tombstone in place. This module repoints open
 //! dependents from each source to the target task, validates the proposed
 //! batch graph for cycles, stages relation (or Cancel Log) provenance,
 //! composes `plan_task_cancel` per source, and reports prerequisites and
 //! orphaned successors. It also owns the idempotency classifier the
-//! integration phase consults before cutting.
+//! integration phase consults before copying.
 //!
 //! All helpers are pure: they read the supplied snapshot plus the staged
 //! note map and never touch the filesystem, clock, or configuration.

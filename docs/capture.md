@@ -7113,7 +7113,7 @@ mergeable rows stay, with `requires_block_id: true` and their `route`, so
 the existing Add block ID flow returns `parent_replacement`
 (`@route+id`). Accepted rows return `continuation: " +"` so `,` opens the
 next picker. Each row carries Bob-authored `detail` such as
-`⤵ merge in · 2 notes` (`⤵ merge in · title only` when no notes would move).
+`⤵ merge in · 2 notes` (`⤵ merge in · title only` when no notes would be copied).
 `capture-rewrite` in a `<`
 source slot switches `+` typed right after `@route:id` or `@route^id` to
 `@route+id`, exactly as on a `>` line; `:`/`^` after a source `+id` stays

@@ -101,6 +101,7 @@ fn merge_into_task_reports_canonical_human_and_json() {
     assert!(stdout.contains("⤵"), "{stdout}");
     assert!(stdout.contains("Upgrade Postgres"), "{stdout}");
     assert!(stdout.contains("Bench task"), "{stdout}");
+    assert!(stdout.contains("1 note copied"), "{stdout}");
 
     let json_output = run_merge(
         &temp,
@@ -133,6 +134,10 @@ fn merge_into_task_writes_payload_and_retires_source() {
         fs::read_to_string(vault.join("inbox.md")).expect("read inbox");
     assert!(source.contains("[-]"), "{source}");
     assert!(source.contains("merged into"), "{source}");
+    assert!(
+        source.contains("Try pgbench"),
+        "S keeps the original note: {source}"
+    );
 }
 
 #[test]

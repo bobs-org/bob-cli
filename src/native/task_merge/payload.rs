@@ -7,14 +7,15 @@ use super::{
     super::{
         capture,
         collect_done::{
-            repair_links_in_note_with, vault_relative_link_target,
-            MovedBlockTarget, MovedBlockTargets,
+            has_task_tag, split_line_ending, vault_relative_link_target,
+            MovedBlockTargets,
         },
-        note_tasks, task_children, task_complete, task_dependencies,
+        markdown, note_tasks, projects, task_children, task_complete,
+        task_dependencies::inline_code_spans,
         task_locator::{self, LocatedTask},
         task_move::{
-            transplant::{self, LineRange},
-            IdCollisionPolicy, VaultSnapshot,
+            transplant::{self, LineRange, RepairedFile},
+            VaultSnapshot,
         },
     },
     containers::{self, ResolvedDestination},
@@ -194,8 +195,8 @@ pub(crate) fn validate_merge_request(
     Ok(())
 }
 
-/// Prepare destination payloads and anchor/link repair without retiring
-/// sources or applying dependency, cancellation, and offer effects.
+/// Prepare destination payloads by copying each source's authored body.
+/// Sources are not cut here: retirement later cancels them in place.
 pub(crate) fn prepare_task_merge(
     snapshot: &VaultSnapshot,
     request: &MergeRequest,
@@ -328,79 +329,24 @@ pub(crate) fn prepare_task_merge(
         source.child_fragments = child_fragments;
     }
 
-    let mut source_ranges: BTreeMap<PathBuf, Vec<LineRange>> = BTreeMap::new();
-    for source in &sources {
-        if source.prepared.disposition == SourceDisposition::Closed {
-            continue;
-        }
-        source_ranges
-            .entry(source.prepared.path.clone())
-            .or_default()
-            .extend(source.child_ranges.iter().cloned());
-    }
-    let mut staged = snapshot.clone();
-    for (path, ranges) in &source_ranges {
-        let original = note_contents(snapshot, path)?;
-        let retained = transplant::remove_line_ranges(original, ranges);
-        staged.notes.insert(path.clone(), retained);
-    }
-
-    // Resolve against staged bytes. Source cuts may have shifted every saved
-    // line and byte offset in a shared destination note.
-    let staged_destination =
-        containers::resolve_destination(&staged, &request.target, context)?;
-    staged.notes.insert(
-        staged_destination.container.path.clone(),
-        staged_destination.contents.clone(),
-    );
-
+    let destination = initial_destination;
     let note_index = context
         .note_index
         .with_additional(snapshot.notes.keys().cloned());
-    let raw_payloads = build_payloads(&sources, &staged_destination);
-    let raw_fragments: Vec<String> = raw_payloads
-        .iter()
-        .map(|payload| payload.contents.clone())
-        .collect();
-    let destination_ids: BTreeSet<String> =
-        transplant::live_block_ids(&staged_destination.contents)
-            .into_iter()
-            .collect();
-    let (renamed, renamed_block_ids, _) = transplant::rename_fragments(
-        &raw_fragments,
-        &staged_destination.container.path,
-        &destination_ids,
-        IdCollisionPolicy::Rename,
-    )
-    .map_err(|error| match error {
-        transplant::RenameError::Collision { block_id, .. } => MergeError::new(
-            "merge_anchor_collision",
-            format!("could not relocate descendant anchor {block_id}"),
-        ),
-    })?;
-
-    let source_id_maps = source_id_maps(&raw_payloads, &renamed)?;
-    let moved_targets = moved_targets(
-        &raw_payloads,
-        &renamed,
-        &staged_destination.container.path,
-    )?;
-    let mut prepared_payloads = Vec::with_capacity(renamed.len());
+    let raw_payloads = build_payloads(&sources, &destination);
+    let empty_targets = MovedBlockTargets::new();
+    let empty_id_map = BTreeMap::new();
+    let mut prepared_payloads = Vec::with_capacity(raw_payloads.len());
     let mut payload_link_count = 0;
     let mut payload_dependency_count = 0;
-    for (raw, fragment) in raw_payloads.iter().zip(renamed.iter()) {
-        let source_index = raw.source_index;
-        let source = &sources[source_index];
+    for raw in &raw_payloads {
+        let source = &sources[raw.source_index];
         let source_target =
             vault_relative_link_target(&source.prepared.path, "merge source")
                 .map_err(|error| {
                 MergeError::new("merge_invalid_path", error.to_string())
             })?;
-        let id_map = source_id_maps
-            .get(&source.prepared.path)
-            .cloned()
-            .unwrap_or_default();
-        let stayed_source_ids = staged
+        let stayed_source_ids = snapshot
             .notes
             .get(&source.prepared.path)
             .map(|contents| {
@@ -409,72 +355,35 @@ pub(crate) fn prepare_task_merge(
                     .collect::<BTreeSet<_>>()
             })
             .unwrap_or_default();
+        let sanitized = sanitize_copied_payload(&raw.contents);
         let repaired = transplant::repair_moved_fragment(
-            fragment,
+            &sanitized,
             &source.prepared.path,
             &source_target,
             &note_index,
-            &moved_targets,
+            &empty_targets,
             &stayed_source_ids,
-            &id_map,
+            &empty_id_map,
         );
         payload_link_count += repaired.link_count;
         payload_dependency_count += repaired.dependency_count;
         prepared_payloads.push(PreparedPayload {
-            source_index,
+            source_index: raw.source_index,
             source_path: raw.source_path.clone(),
             contents: repaired.contents,
         });
     }
 
-    let repaired_destination = repair_links_in_note_with(
-        &staged_destination.contents,
-        &staged_destination.container.path,
-        &note_index,
-        &moved_targets,
-        true,
-    );
-    staged.notes.insert(
-        staged_destination.container.path.clone(),
-        repaired_destination.contents.clone(),
-    );
-    let mut final_destination =
-        containers::resolve_destination(&staged, &request.target, context)?;
-    let staged_created = match &staged_destination.container.kind {
-        super::types::PreparedContainerKind::Drawer { created, .. }
-        | super::types::PreparedContainerKind::Section { created, .. } => {
-            *created
-        }
-        _ => false,
-    };
-    let initial_created = match &initial_destination.container.kind {
-        super::types::PreparedContainerKind::Drawer { created, .. }
-        | super::types::PreparedContainerKind::Section { created, .. } => {
-            *created
-        }
-        _ => false,
-    };
-    if staged_created || initial_created {
-        match &mut final_destination.container.kind {
-            super::types::PreparedContainerKind::Drawer { created, .. }
-            | super::types::PreparedContainerKind::Section {
-                created, ..
-            } => {
-                *created = true;
-            }
-            _ => {}
-        }
-    }
     let fragments: Vec<String> = prepared_payloads
         .iter()
         .map(|payload| payload.contents.clone())
         .collect();
     let (destination_postimage, landing_lines) =
         transplant::insert_fragments_at_byte(
-            &final_destination.contents,
-            final_destination.container.insertion_offset,
+            &destination.contents,
+            destination.container.insertion_offset,
             &fragments,
-            final_destination.container.empty_heading,
+            destination.container.empty_heading,
         )
         .ok_or_else(|| {
             MergeError::new(
@@ -483,7 +392,7 @@ pub(crate) fn prepare_task_merge(
             )
         })?;
     // Capture exact insertion extents in destination-postimage coordinates
-    // using the repaired fragments. Each payload group's lines share its
+    // using the sanitized fragments. Each payload group's lines share its
     // source identity; coincident text stays distinct by range, never by
     // search.
     let mut insertion_origins = Vec::with_capacity(raw_payloads.len());
@@ -506,48 +415,38 @@ pub(crate) fn prepare_task_merge(
         });
     }
 
-    let source_postimages: BTreeMap<PathBuf, String> = source_ranges
-        .keys()
-        .filter_map(|path| {
-            staged
-                .notes
-                .get(path)
-                .map(|contents| (path.clone(), contents.clone()))
-        })
-        .collect();
-    let repair_counts = BTreeMap::from([(
-        final_destination.container.path.clone(),
-        (
-            repaired_destination.link_count + payload_link_count,
-            repaired_destination.dependency_metadata_count
-                + payload_dependency_count,
-        ),
-    )]);
-    let repaired = transplant::repair_vault_postimages(
-        &snapshot.notes,
-        &source_postimages,
-        &final_destination.container.path,
-        destination_postimage,
-        &note_index,
-        &moved_targets,
-        repair_counts,
-    );
-    let mut warnings = Vec::new();
-    if let Some(warning) =
-        staged_destination.warning.or(initial_destination.warning)
+    let mut repaired_files = Vec::new();
+    if payload_link_count > 0 || payload_dependency_count > 0 {
+        repaired_files.push(RepairedFile {
+            path: destination.container.path.clone(),
+            link_count: payload_link_count,
+            dependency_token_count: payload_dependency_count,
+        });
+    }
+    let mut postimages = BTreeMap::new();
+    if snapshot
+        .notes
+        .get(&destination.container.path)
+        .map(String::as_str)
+        != Some(destination_postimage.as_str())
     {
+        postimages
+            .insert(destination.container.path.clone(), destination_postimage);
+    }
+    let mut warnings = Vec::new();
+    if let Some(warning) = destination.warning {
         warnings.push(warning);
     }
+    let insertion_dest = Some(destination.container.path.clone());
     let sources = sources.into_iter().map(|source| source.prepared).collect();
 
-    let insertion_dest = Some(final_destination.container.path.clone());
     Ok(PreparedMerge {
-        container: Some(final_destination.container),
+        container: Some(destination.container),
         sources,
         payloads: prepared_payloads,
-        postimages: repaired.postimages,
-        renamed_block_ids,
-        repaired_files: repaired.repaired_files,
+        postimages,
+        renamed_block_ids: Vec::new(),
+        repaired_files,
         read_paths: snapshot.notes.keys().cloned().collect(),
         warnings,
         insertion_dest,
@@ -597,8 +496,8 @@ fn source_payload(
     });
     // Direct list roots define the boundaries of managed child blocks, but
     // authored bytes also include continuations before the first root and
-    // paragraphs, tables, or fences with no wrapper bullet. Move the whole
-    // task body, cutting out only direct managed roots and their nested bodies.
+    // paragraphs, tables, or fences with no wrapper bullet. Copy the whole
+    // task body, skipping only direct managed roots and their nested bodies.
     let body_start = source.task.line_index + 1;
     let mut ranges = Vec::new();
     let mut cursor = body_start;
@@ -703,75 +602,109 @@ fn first_fragment_indent(fragment: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn source_id_maps(
-    payloads: &[RawPayload],
-    renamed: &[String],
-) -> Result<BTreeMap<PathBuf, BTreeMap<String, String>>, MergeError> {
-    let mut maps = BTreeMap::<PathBuf, BTreeMap<String, String>>::new();
-    for (payload, new_fragment) in payloads.iter().zip(renamed.iter()) {
-        let old_ids = transplant::live_block_ids(&payload.contents);
-        let new_ids = transplant::live_block_ids(new_fragment);
-        if old_ids.len() != new_ids.len() {
-            return Err(MergeError::new(
-                "merge_source_ambiguous_anchor",
-                "descendant anchor repair changed the number of anchors",
-            ));
-        }
-        let map = maps.entry(payload.source_path.clone()).or_default();
-        for (old, new) in old_ids.into_iter().zip(new_ids) {
-            if let Some(previous) = map.insert(old.clone(), new.clone())
-                && previous != new
-            {
-                return Err(MergeError::new(
-                    "merge_source_ambiguous_anchor",
-                    format!(
-                        "^{} is repeated in source note {}",
-                        old,
-                        payload.source_path.display()
-                    ),
-                ));
-            }
-        }
-    }
-    Ok(maps)
+/// Strip identity from a copied payload, then leave fenced and inline-code
+/// text untouched. Live `^id` anchors and `[id:: …]` fields stay on S.
+fn sanitize_copied_payload(fragment: &str) -> String {
+    strip_copied_id_fields(&strip_copied_anchors(fragment))
 }
 
-fn moved_targets(
-    payloads: &[RawPayload],
-    renamed: &[String],
-    destination: &Path,
-) -> Result<MovedBlockTargets, MergeError> {
-    let destination_target =
-        vault_relative_link_target(destination, "merge destination").map_err(
-            |error| MergeError::new("merge_invalid_path", error.to_string()),
-        )?;
-    let mut targets = MovedBlockTargets::new();
-    for (payload, new_fragment) in payloads.iter().zip(renamed.iter()) {
-        let old_ids = transplant::live_block_ids(&payload.contents);
-        let new_ids = transplant::live_block_ids(new_fragment);
-        for (old_id, new_id) in old_ids.into_iter().zip(new_ids) {
-            let old_dependency_id =
-                task_dependencies::dependency_id(&payload.source_path, &old_id)
-                    .map_err(|error| {
-                        MergeError::new("merge_invalid_path", error.to_string())
-                    })?;
-            let new_dependency_id =
-                task_dependencies::dependency_id(destination, &new_id)
-                    .map_err(|error| {
-                        MergeError::new("merge_invalid_path", error.to_string())
-                    })?;
-            targets.insert(
-                (payload.source_path.clone(), old_id),
-                MovedBlockTarget {
-                    archive_target: destination_target.clone(),
-                    block_id: new_id,
-                    old_dependency_id,
-                    new_dependency_id,
-                },
-            );
+fn strip_copied_anchors(fragment: &str) -> String {
+    let fenced = copied_fenced_lines(fragment);
+    let occurrences = transplant::fragment_occurrences(fragment);
+    let mut updated = fragment.to_string();
+    for occurrence in occurrences.iter().rev() {
+        let line_index = fragment[..occurrence.start].matches('\n').count();
+        if fenced.contains(&line_index) {
+            continue;
+        }
+        let line_start = fragment[..occurrence.start]
+            .rfind('\n')
+            .map_or(0, |index| index + 1);
+        let line_end = fragment[occurrence.end..]
+            .find('\n')
+            .map_or(fragment.len(), |rel| occurrence.end + rel);
+        let line = &fragment[line_start..line_end];
+        let relative = occurrence.start.saturating_sub(line_start);
+        if inline_code_spans(split_line_ending(line).0)
+            .iter()
+            .any(|span| {
+                relative < span.end && occurrence.end - line_start > span.start
+            })
+        {
+            continue;
+        }
+        let caret = occurrence.start.saturating_sub(1);
+        if updated.as_bytes().get(caret) != Some(&b'^') {
+            continue;
+        }
+        let mut strip_start = caret;
+        if strip_start > 0 {
+            let previous = updated.as_bytes()[strip_start - 1];
+            if previous == b' ' || previous == b'\t' {
+                strip_start -= 1;
+            }
+        }
+        updated.replace_range(strip_start..occurrence.end, "");
+    }
+    updated
+}
+
+fn strip_copied_id_fields(fragment: &str) -> String {
+    let lines: Vec<&str> = fragment.split_inclusive('\n').collect();
+    let fenced = copied_fenced_lines(fragment);
+    let mut result = String::with_capacity(fragment.len());
+    for (index, line) in lines.iter().enumerate() {
+        let (content, ending) = split_line_ending(line);
+        if fenced.contains(&index) || !has_task_tag(content) {
+            result.push_str(line);
+            continue;
+        }
+        let cleaned = projects::edits::remove_all_inline_fields(content, "id");
+        result.push_str(&cleaned);
+        result.push_str(ending);
+    }
+    result
+}
+
+fn copied_fenced_lines(fragment: &str) -> BTreeSet<usize> {
+    let lines: Vec<&str> = fragment.split_inclusive('\n').collect();
+    let logical: Vec<&str> =
+        lines.iter().map(|line| split_line_ending(line).0).collect();
+    let mut fenced = markdown::fenced_lines(&logical, 0..logical.len());
+    let mut marker = None;
+    for (index, line) in logical.iter().enumerate() {
+        let trimmed = line.trim_start_matches([' ', '\t']);
+        if let Some(open) = marker {
+            fenced.insert(index);
+            if copied_fence_closes(trimmed, open) {
+                marker = None;
+            }
+        } else if let Some(open) = copied_fence_marker(trimmed) {
+            fenced.insert(index);
+            marker = Some(open);
         }
     }
-    Ok(targets)
+    fenced
+}
+
+fn copied_fence_marker(line: &str) -> Option<char> {
+    let marker = line.chars().next()?;
+    if marker != '`' && marker != '~' {
+        return None;
+    }
+    let count = line
+        .chars()
+        .take_while(|character| *character == marker)
+        .count();
+    (count >= 3).then_some(marker)
+}
+
+fn copied_fence_closes(line: &str, marker: char) -> bool {
+    let count = line
+        .chars()
+        .take_while(|character| *character == marker)
+        .count();
+    count >= 3 && line[count..].trim().is_empty()
 }
 
 fn validate_target_and_source_ranges(

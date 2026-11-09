@@ -495,21 +495,24 @@ fn merge_in_same_note_anchor_collision_repairs_payload_and_inbound_link() {
         })
         .expect("source child row carries its merge origin");
     let moved_text = moved["text"].as_str().unwrap();
-    let moved_anchor = moved_text
-        .split('^')
-        .next_back()
-        .expect("source child anchor");
-    assert!(!moved_anchor.is_empty(), "{moved_text}");
-    let target_note = fs::read_to_string(vault.join("a.md")).unwrap();
-    assert_eq!(target_note.matches("^detail\n").count(), 1, "{target_note}");
     assert!(
-        target_note.contains(&format!("source note ^{moved_anchor}")),
-        "moved row retains its unique anchor: {target_note}"
+        !moved_text.contains('^'),
+        "copy strips descendant anchors: {moved_text}"
+    );
+    let target_note = fs::read_to_string(vault.join("a.md")).unwrap();
+    assert_eq!(
+        target_note.matches("source note ^detail").count(),
+        1,
+        "original descendant anchor stays on S and the copy has none: {target_note}"
+    );
+    assert!(
+        target_note.contains("- source note\n"),
+        "T receives a copy without identity: {target_note}"
     );
     let referrer = fs::read_to_string(vault.join("referrer.md")).unwrap();
     assert!(
-        referrer.contains(&format!("[[a#^{moved_anchor}]]")),
-        "inbound link follows the merged payload: {referrer}"
+        referrer.contains("[[a#^detail]]"),
+        "inbound link stays on S: {referrer}"
     );
 }
 
@@ -1186,7 +1189,7 @@ fn merge_in_human_output_prints_new_target_header_once() {
     );
     assert!(
         text.contains("Fix the flaky login test")
-            && text.contains("→ Cancelled · 1 note moved"),
+            && text.contains("→ Cancelled · 1 note copied"),
         "{text}"
     );
 }

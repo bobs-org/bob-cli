@@ -104,6 +104,48 @@ fn block_ids(notes: &BTreeMap<PathBuf, String>) -> BTreeSet<(PathBuf, String)> {
         .collect()
 }
 
+fn authored_child_text(
+    contents: &str,
+    task: &note_tasks::NoteTask,
+    settings: &note_tasks::NoteTaskSettings,
+) -> String {
+    let lines = crate::native::capture::line_spans(contents);
+    let children = crate::native::task_children::classify_direct_children(
+        contents, task, settings,
+    );
+    let end_line = lines
+        .iter()
+        .position(|line| line.end > task.block_end)
+        .unwrap_or(lines.len());
+    let mut ranges = Vec::new();
+    let mut cursor = task.line_index + 1;
+    for (offset, child) in children.iter().enumerate() {
+        if !child.kind.is_managed() {
+            continue;
+        }
+        let end = children
+            .get(offset + 1)
+            .map(|next| next.line_index)
+            .unwrap_or(end_line);
+        if cursor < child.line_index {
+            ranges.push(cursor..child.line_index);
+        }
+        cursor = cursor.max(end);
+    }
+    if cursor < end_line {
+        ranges.push(cursor..end_line);
+    }
+    let all_lines: Vec<&str> = contents.split_inclusive('\n').collect();
+    ranges
+        .into_iter()
+        .filter_map(|range| {
+            all_lines
+                .get(range.start..range.end)
+                .map(|slice| slice.concat())
+        })
+        .collect()
+}
+
 fn block_link_targets(
     notes: &BTreeMap<PathBuf, String>,
 ) -> Vec<(PathBuf, String)> {
@@ -209,9 +251,9 @@ fn assert_planner_invariants(
             let moved = if record.moved_notes == 0 {
                 "title only".to_string()
             } else if record.moved_notes == 1 {
-                "1 note moved".to_string()
+                "1 note copied".to_string()
             } else {
-                format!("{} notes moved", record.moved_notes)
+                format!("{} notes copied", record.moved_notes)
             };
             assert_eq!(
                 record.message,
@@ -337,35 +379,12 @@ fn assert_planner_invariants(
         if source_descendants.iter().any(|(source_path, ids)| {
             source_path == &path && ids.contains(&block_id)
         }) {
-            let renames = first
-                .renamed_block_ids
-                .iter()
-                .filter(|rename| {
-                    rename.path == target_path
-                        && rename.old_block_id == block_id
-                })
-                .collect::<Vec<_>>();
-            if renames.is_empty() {
-                assert!(
-                    after_blocks
-                        .contains(&(target_path.clone(), block_id.clone())),
-                    "{case}: moved anchor identity disappeared: {}#^{}",
-                    target_path.display(),
-                    block_id,
-                );
-            } else {
-                for rename in renames {
-                    assert!(
-                        after_blocks.contains(&(
-                            target_path.clone(),
-                            rename.new_block_id.clone(),
-                        )),
-                        "{case}: renamed anchor identity disappeared: {}#^{}",
-                        target_path.display(),
-                        rename.new_block_id,
-                    );
-                }
-            }
+            assert!(
+                after_blocks.contains(&(path.clone(), block_id.clone())),
+                "{case}: source descendant identity disappeared: {}#^{}",
+                path.display(),
+                block_id,
+            );
             continue;
         }
         assert!(
@@ -373,6 +392,46 @@ fn assert_planner_invariants(
             "{case}: previously linked identity disappeared: {}#^{}",
             path.display(),
             block_id,
+        );
+    }
+    assert!(
+        first.renamed_block_ids.is_empty(),
+        "{case}: copies never rename anchors"
+    );
+    for source in &source_tasks {
+        if !source.task.status_type.is_open() {
+            continue;
+        }
+        let Some(before_text) = before.notes.get(&source.path) else {
+            continue;
+        };
+        let Some(after_text) = after.get(&source.path) else {
+            panic!(
+                "{case}: source note missing after merge: {}",
+                source.path.display()
+            );
+        };
+        let after_scan = note_tasks::scan(after_text, &settings);
+        let after_task = after_scan
+            .tasks()
+            .iter()
+            .find(|task| task.block_id == source.task.block_id)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{case}: source ^{} missing after merge",
+                    source.task.block_id.as_deref().unwrap_or("?")
+                )
+            });
+        assert_eq!(
+            after_task.status_symbol,
+            '-',
+            "{case}: source ^{} was not cancelled",
+            source.task.block_id.as_deref().unwrap_or("?")
+        );
+        assert_eq!(
+            authored_child_text(before_text, &source.task, &settings),
+            authored_child_text(after_text, after_task, &settings),
+            "{case}: source authored body changed"
         );
     }
     for target in block_link_targets(&after) {
@@ -449,7 +508,7 @@ fn mg2_nested_drawers_travel_under_the_source_title_without_flattening() {
 }
 
 #[test]
-fn mg3_descendant_anchor_collision_repairs_external_links() {
+fn mg3_daily_note_link_stays_on_source_and_copy_has_no_anchors() {
     let snapshot = snapshot(&[
         ("src.md", "- [ ] #task Source ^src\n\t- Note ^detail\n"),
         (
@@ -463,17 +522,32 @@ fn mg3_descendant_anchor_collision_repairs_external_links() {
         &request(&["src:src"], MergeContainer::Task(locator("dest:target"))),
     )
     .expect("merge payload");
+    let destination = post(&plan, "dest.md");
     assert!(
-        post(&plan, "dest.md").contains("\t\t- Note ^detail-1"),
-        "{}",
-        post(&plan, "dest.md")
+        destination.contains("\t- Source\n\t\t- Note\n"),
+        "{destination}"
     );
-    assert_eq!(post(&plan, "daily.md"), "See [[dest#^detail-1]]\n");
-    assert_eq!(plan.renamed_block_ids.len(), 1);
+    assert!(
+        !destination.contains("- Note ^"),
+        "copy carries no descendant anchors: {destination}"
+    );
+    assert!(
+        !plan.postimages.contains_key(Path::new("daily.md")),
+        "daily-note links stay on S and are not rewritten"
+    );
+    assert!(plan.renamed_block_ids.is_empty());
+    assert_eq!(
+        snapshot.notes[Path::new("src.md")].as_str(),
+        "- [ ] #task Source ^src\n\t- Note ^detail\n"
+    );
+    assert_eq!(
+        snapshot.notes[Path::new("daily.md")].as_str(),
+        "See [[src#^detail]]\n"
+    );
 }
 
 #[test]
-fn colliding_descendant_ids_are_scoped_to_each_source_note() {
+fn colliding_descendant_ids_stay_on_each_source_note() {
     let snapshot = snapshot(&[
         ("first.md", "- [ ] #task First ^first\n\t- Note ^detail\n"),
         (
@@ -496,13 +570,65 @@ fn colliding_descendant_ids_are_scoped_to_each_source_note() {
     .expect("merge payloads");
 
     let destination = post(&plan, "dest.md");
-    assert!(destination.contains("\t\t- Note ^detail-1"));
-    assert!(destination.contains("\t\t- Note ^detail-2"));
     assert_eq!(
-        post(&plan, "daily.md"),
-        "[[dest#^detail-1]] and [[dest#^detail-2]]\n"
+        destination.matches("\t\t- Note\n").count(),
+        2,
+        "{destination}"
     );
-    assert_eq!(plan.renamed_block_ids.len(), 2);
+    assert!(
+        !destination.contains("- Note ^"),
+        "copies carry no descendant anchors: {destination}"
+    );
+    assert!(
+        !plan.postimages.contains_key(Path::new("daily.md")),
+        "inbound links stay on each source and are not rewritten"
+    );
+    assert!(plan.renamed_block_ids.is_empty());
+}
+
+#[test]
+fn intra_copy_same_note_links_name_the_source_note() {
+    let snapshot = snapshot(&[
+        (
+            "src.md",
+            concat!(
+                "- [ ] #task Source ^src\n",
+                "\t- See [[#^detail]] and [[#^src]]\n",
+                "\t- Keep `[[#^detail]]` and [[other#^related]]\n",
+                "\t- Note ^detail\n",
+                "\t  ```text\n",
+                "\t  [[#^detail]]\n",
+                "\t  ```\n",
+            ),
+        ),
+        ("dest.md", "- [ ] #task Target ^target\n"),
+        ("other.md", "- [ ] #task Related ^related\n"),
+    ]);
+    let plan = prepare(
+        &snapshot,
+        &request(&["src:src"], MergeContainer::Task(locator("dest:target"))),
+    )
+    .expect("merge payload");
+    let destination = post(&plan, "dest.md");
+    assert!(
+        destination.contains("See [[src#^detail]] and [[src#^src]]"),
+        "{destination}"
+    );
+    assert!(
+        destination.contains("Keep `[[#^detail]]` and [[other#^related]]"),
+        "{destination}"
+    );
+    assert!(
+        destination.contains("```text\n\t\t  [[#^detail]]\n"),
+        "{destination}"
+    );
+    assert!(
+        !destination.contains("^detail\n"),
+        "copy strips live anchors: {destination}"
+    );
+    assert_eq!(plan.repaired_files.len(), 1);
+    assert_eq!(plan.repaired_files[0].path, PathBuf::from("dest.md"));
+    assert!(plan.repaired_files[0].link_count >= 2, "{plan:?}");
 }
 
 #[test]
@@ -741,7 +867,8 @@ fn task_drawers_and_project_h2_drawers_resolve_for_merge() {
 }
 
 #[test]
-fn same_note_destinations_and_nested_sources_are_rebased_after_cuts() {
+fn same_note_destinations_and_nested_sources_keep_originals_and_receive_copies()
+{
     for contents in [
         "- [ ] #task Target ^target\n\t- Existing\n- [ ] #task Source ^source\n\t- Note\n",
         "- [ ] #task Source ^source\n\t- Note\n- [ ] #task Target ^target\n\t- Existing\n",
@@ -786,7 +913,7 @@ fn same_note_destinations_and_nested_sources_are_rebased_after_cuts() {
     let postimage = post(&plan, "same.md");
     assert_eq!(
         postimage,
-        "- [ ] #task Parent ^parent\n  - [ ] #task Source ^source\n- [ ] #task Target ^target\n  - Source\n    - Note\n"
+        "- [ ] #task Parent ^parent\n  - [ ] #task Source ^source\n    - Note\n- [ ] #task Target ^target\n  - Source\n    - Note\n"
     );
 }
 
@@ -812,12 +939,16 @@ fn authored_payload_moves_while_managed_history_stays_on_source() {
     .expect("managed children remain on source");
 
     assert!(post(&plan, "dest.md").contains("\t\t- Authored note\n"));
-    let source_postimage = post(&plan, "src.md");
-    assert!(!source_postimage.contains("Authored note"));
-    assert!(source_postimage.contains("🪢 **LINKS:** [[other#^related]]"));
-    assert!(source_postimage.contains("🛠️ **WORK LOG**"));
-    assert!(source_postimage.contains("❌ **CANCEL LOG**"));
-    assert!(source_postimage.contains("earlier reason"));
+    assert!(
+        !plan.postimages.contains_key(Path::new("src.md")),
+        "prepare copies notes and leaves the source note uncut"
+    );
+    let source_note = snapshot.notes[Path::new("src.md")].as_str();
+    assert!(source_note.contains("Authored note"));
+    assert!(source_note.contains("🪢 **LINKS:** [[other#^related]]"));
+    assert!(source_note.contains("🛠️ **WORK LOG**"));
+    assert!(source_note.contains("❌ **CANCEL LOG**"));
+    assert!(source_note.contains("earlier reason"));
 }
 
 #[test]
@@ -836,7 +967,13 @@ fn payload_moves_unwrapped_authored_bytes_around_managed_logs() {
     .expect("paragraph-only payload");
     assert!(post(&plan, "dest.md")
         .contains("\t\tA paragraph without a wrapper bullet."));
-    assert!(!post(&plan, "src.md").contains("paragraph without"));
+    assert!(
+        !plan.postimages.contains_key(Path::new("src.md")),
+        "prepare copies the paragraph and leaves the source uncut"
+    );
+    assert!(
+        paragraph_only.notes[Path::new("src.md")].contains("paragraph without")
+    );
     assert_eq!(plan.sources[0].moved_notes, 1);
 
     let source = concat!(
@@ -862,21 +999,25 @@ fn payload_moves_unwrapped_authored_bytes_around_managed_logs() {
         &snapshot,
         &request(&["src:src"], MergeContainer::Task(locator("dest:target"))),
     )
-    .expect("all task-owned authored ranges move");
+    .expect("all task-owned authored ranges copy");
     let destination = post(&plan, "dest.md");
-    for moved in [
+    for copied in [
         "Prose before the first child.",
         "| Name | Value |",
         "fenced - [ ] #task example ^fake",
         "Authored before the logs",
         "Authored after the logs",
     ] {
-        assert_eq!(destination.matches(moved).count(), 1, "{moved}");
+        assert_eq!(destination.matches(copied).count(), 1, "{copied}");
     }
-    let retained = post(&plan, "src.md");
-    assert!(!retained.contains("Prose before the first child"));
-    assert!(!retained.contains("Authored before the logs"));
-    assert!(!retained.contains("Authored after the logs"));
+    assert!(
+        !plan.postimages.contains_key(Path::new("src.md")),
+        "prepare copies authored bytes and leaves the source uncut"
+    );
+    let retained = snapshot.notes[Path::new("src.md")].as_str();
+    assert!(retained.contains("Prose before the first child"));
+    assert!(retained.contains("Authored before the logs"));
+    assert!(retained.contains("Authored after the logs"));
     assert!(retained.contains("🪢 **LINKS:** [[other#^related]]"));
     assert!(retained.contains("❌ **CANCEL LOG**"));
     assert!(retained.contains("earlier reason"));
@@ -898,7 +1039,11 @@ fn payload_cut_preserves_crlf_and_missing_final_newline() {
     assert!(destination.match_indices('\n').all(|(index, _)| {
         index > 0 && destination.as_bytes()[index - 1] == b'\r'
     }));
-    let source = post(&plan, "src.md");
+    assert!(
+        !plan.postimages.contains_key(Path::new("src.md")),
+        "prepare copies CRLF notes and leaves the source uncut"
+    );
+    let source = snapshot.notes[Path::new("src.md")].as_str();
     assert!(source.starts_with("- [ ] #task Source ^src\r\n"));
 }
 
@@ -2311,6 +2456,60 @@ fn mg17_production_reconciliation_is_a_noop_after_merge() {
 }
 
 #[test]
+fn mg17_closed_nested_task_copy_strips_identity_and_reconcile_is_noop() {
+    let before = snapshot(&[
+        (
+            "src.md",
+            concat!(
+                "- [ ] #task Source ^src\n",
+                "\t- [x] #task Nested [id:: src__nested] ^nested\n",
+                "\t\t- ⛓️ **DEPENDS ON:** [[pre#^pre]]\n",
+            ),
+        ),
+        ("pre.md", "- [ ] #task Prerequisite [id:: pre__pre] ^pre\n"),
+        ("dest.md", "- [ ] #task Target ^dst\n"),
+    ]);
+    let request =
+        request(&["src:src"], MergeContainer::Task(locator("dest:dst")));
+    let first = plan(&before, &request).expect("merge plan");
+    let destination = first
+        .postimages
+        .get(Path::new("dest.md"))
+        .expect("destination postimage");
+    assert!(
+        destination.contains("\t\t- [x] #task Nested"),
+        "{destination}"
+    );
+    assert!(
+        !destination.contains("[id:: src__nested]"),
+        "copy strips [id::]: {destination}"
+    );
+    assert!(
+        !destination.contains("^nested"),
+        "copy strips nested ^id: {destination}"
+    );
+    assert!(
+        destination.contains("DEPENDS ON:** [[pre#^pre]]"),
+        "{destination}"
+    );
+    let source = first
+        .postimages
+        .get(Path::new("src.md"))
+        .map(String::as_str)
+        .unwrap_or(before.notes[Path::new("src.md")].as_str());
+    assert!(source.contains("[id:: src__nested]"), "{source}");
+    assert!(source.contains("^nested"), "{source}");
+    let mut merged = before.notes.clone();
+    merged.extend(first.postimages);
+    let settings = note_tasks::read_settings(Path::new("/no-bob-vault"));
+    let reconciled =
+        crate::native::task_status_hooks::reconcile_merge_snapshot_for_tests(
+            &merged, &settings,
+        );
+    assert_eq!(reconciled, merged);
+}
+
+#[test]
 fn mg18_archive_planner_repairs_merged_from_to_tombstone_archive() {
     let vault = tempfile::tempdir().expect("temporary vault");
     let source = "---\ntype: [[area]]\n---\n\n- [-] #task Source [created:: 2026-10-20] [cancelled:: 2026-11-03] ^src\n\t- 🪢 **LINKS:** merged into [[dest#^dst]]\n";
@@ -2373,7 +2572,7 @@ fn mg_successful_merge_fixtures_hold_identity_reconcile_and_repeatability() {
             request(&["src:src"], MergeContainer::Task(locator("dest:dst"))),
         ),
         (
-            "MG3 relocated collision",
+            "MG3 source-owned anchors",
             snapshot(&[
                 ("src.md", "- [ ] #task Source ^src\n  - Detail ^detail\n"),
                 ("dest.md", "- [ ] #task Target ^dst\n  - Existing ^detail\n"),
@@ -2550,7 +2749,7 @@ fn mg_successful_merge_fixtures_hold_identity_reconcile_and_repeatability() {
         ),
     ];
 
-    // Exercise source ordering, same-note cuts, cross-note cuts, and both
+    // Exercise source ordering, same-note copies, cross-note copies, and both
     // common indentation units with generated fixture variants.
     for indent in ["  ", "\t"] {
         for same_note in [false, true] {

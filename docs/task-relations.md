@@ -110,7 +110,7 @@ A relation write, a relation line, or a relation gesture never:
   complete of [§18](#18-complete-labels), which may mark the source
   Done, retire its links from today's open Pomodoros, recover
   blocked dependents, and offer successors; and the commit-time
-  merge of [§21](#21-merge-labels), which moves the source's notes
+  merge of [§21](#21-merge-labels), which copies the source's notes
   into the target and cancels the source. A configured successor
   label [offers its source when the target is parked or done](#20-successor-labels),
   but never fires when the relation is committed.
@@ -2324,7 +2324,7 @@ byte-for-byte; bob-cli is authoritative.
 A **merge label** is a relation label listed in
 `relations.merge_labels`. Committing one through an explicit
 relation gesture merges the relation's **source** into the target at
-commit time: the source's notes move under the target and the source
+commit time: the source's notes are copied under the target and the source
 is cancelled.
 
 > [!NOTE] Contract only: the `merge-label` phase lands the config,
@@ -2368,7 +2368,7 @@ relations:
   successor_labels:
     - starts after
   # Committing a link with one of these labels merges the source task into
-  # the target ("S merged into T"): S's notes move under T, S's open
+  # the target ("S merged into T"): S's notes are copied under T, S's open
   # dependents wait on T, and S is cancelled. The first entry is the label
   # `>` and `bob task merge` write. Empty disables only the label trigger;
   # `>` still merges and writes "merged into".
@@ -2388,7 +2388,7 @@ relations:
   four lists. A key found in more than one of `cancel_labels`,
   `complete_labels`, `successor_labels`, and `merge_labels` is dropped from
   all of them, and the warning names `merge_labels`. That way an upgrade
-  never quietly turns a cancel-only `merged into` into a content move.
+  never quietly turns a cancel-only `merged into` into a content copy.
 - **Hide is not disable.** A hidden or `||` one-off merge label still
   merges when typed. To turn the effect off, change the config.
 - **Catalog overlay.** A configured merge label appears in suggestions and
@@ -2424,7 +2424,7 @@ T" merges S into T.
 The commit runs the merge engine with gesture `Label` and the container
 at T's plain-child anchor, then the relation write:
 
-1. The engine validates, cuts each source's notes into the container,
+1. The engine validates, copies each source's notes into the container,
    re-points dependents, writes the relation or Cancel Log provenance,
    cancels the source, prunes today's links, and computes the offer —
    exactly as `bob task merge` would (see
@@ -2442,7 +2442,7 @@ at T's plain-child anchor, then the relation write:
 
 | Source state | Verdict | Effect |
 | --- | --- | --- |
-| Open: `[ ]` Ready, `[*]` Next, `[/]` In Progress, `[?]` Blocked | `merged` | link and merge (notes move, dependents re-point, source cancels) |
+| Open: `[ ]` Ready, `[*]` Next, `[/]` In Progress, `[?]` Blocked | `merged` | link and merge (notes copy, dependents re-point, source cancels) |
 | Already merged into this same T (`Unchanged` re-add) | `unchanged` | nothing written; retries are safe |
 | Closed with another label or another target | `already_closed` | link or relabel only; keep the original date |
 | Recurring (`is_recurring_task_line`) | `recurring` | refused before writing; merge-label rows disabled |
@@ -2494,7 +2494,7 @@ Name the task, use ⤵, stay calm.
 | Row meta (nav) / capsule (Mac) / `relations list` / zsh | `⤵ merges` / `arrow.triangle.merge merges` / `⤵ merges source` / `N links · merges source` |
 | Live sentence (nav, Mac) | `⤵ {S} — {label} → {T}`, source dimmed |
 | Verdict `merged` | `⤵ Merges “{S}” into “{T}”` |
-| Consequence strip (nav) | `⤵ Merges “{S}” into “{T}” · moves N notes · cancels “{S}” · N dependent(s) now wait on “{T}” · offers “{T}” under ENTRY` |
+| Consequence strip (nav) | `⤵ Merges “{S}” into “{T}” · copies N notes · cancels “{S}” · N dependent(s) now wait on “{T}” · offers “{T}” under ENTRY` |
 | Return hint (nav) | `↵ link & merge` |
 | Verdict `already_closed` (muted) | `Already Cancelled · link only` |
 | Verdict `recurring` (disabled row) | `“{S}” repeats — merge it by hand first` |

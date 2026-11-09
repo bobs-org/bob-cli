@@ -105,7 +105,7 @@ pub(crate) fn plan_task_merge_with_selected_freshness(
         sources.push(SourceState { located, outcome });
     }
 
-    // The public planner never cuts an unchanged or label-only closed source.
+    // The public planner never copies an unchanged or label-only closed source.
     let new_locators = request
         .sources
         .iter()
@@ -680,9 +680,9 @@ fn build_records(
                     let moved = if moved_notes == 0 {
                         "title only".to_string()
                     } else if moved_notes == 1 {
-                        "1 note moved".to_string()
+                        "1 note copied".to_string()
                     } else {
-                        format!("{moved_notes} notes moved")
+                        format!("{moved_notes} notes copied")
                     };
                     format!(
                         "⊘ {source_title}  {}:{} · {} → Cancelled · {moved}",

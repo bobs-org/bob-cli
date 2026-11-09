@@ -422,6 +422,24 @@ pub(crate) fn live_block_ids(contents: &str) -> Vec<String> {
         .collect()
 }
 
+fn fragment_hidden_line_indexes(logical: &[&str]) -> BTreeSet<usize> {
+    let mut hidden = hidden_markdown_indexes(logical);
+    let mut marker = None;
+    for (index, line) in logical.iter().enumerate() {
+        let trimmed = line.trim_start_matches([' ', '\t']);
+        if let Some(open) = marker {
+            hidden.insert(index);
+            if closes_fragment_fence(trimmed, open) {
+                marker = None;
+            }
+        } else if let Some(open) = fragment_fence_marker(trimmed) {
+            hidden.insert(index);
+            marker = Some(open);
+        }
+    }
+    hidden
+}
+
 fn hidden_markdown_indexes(logical: &[&str]) -> BTreeSet<usize> {
     let frontmatter_end = markdown::strictly_closed_frontmatter_end(logical);
     let scan_start = frontmatter_end.map_or(0, |end| end + 1);
@@ -610,7 +628,7 @@ fn repair_fragment_wiki_links(
         .split_inclusive('\n')
         .map(|line| split_line_ending(line).0)
         .collect();
-    let fenced = markdown::fenced_lines(&lines, 0..lines.len());
+    let fenced = fragment_hidden_line_indexes(&lines);
     let mut repaired = String::with_capacity(contents.len());
     let mut link_count = 0;
     let mut cursor = 0;
@@ -704,7 +722,7 @@ fn repair_fragment_markdown_links(
         .split_inclusive('\n')
         .map(|line| split_line_ending(line).0)
         .collect();
-    let fenced = markdown::fenced_lines(&lines, 0..lines.len());
+    let fenced = fragment_hidden_line_indexes(&lines);
     let mut repaired = String::with_capacity(contents.len());
     let mut link_count = 0;
     let mut cursor = 0;

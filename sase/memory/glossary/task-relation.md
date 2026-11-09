@@ -16,8 +16,8 @@ the source task's 🪢 **LINKS:** line and mirrored on the target task's generat
 gestures. A relation is distinct from a Pomodoro [[task-link]]: it never blocks a task,
 counts as a Pomodoro Task Link, or changes its schedule, priority, or freshness.
 Committing a configured cancel, complete, or merge label through capture or the Links
-stage cancels the source, completes it, or merges it into the target (moving its notes
-and cancelling it), respectively, at commit time; see [[task-merge]].
+stage cancels the source, completes it, or merges it into the target by copying its notes
+and cancelling it, respectively, at commit time; see [[task-merge]].
 
 A relation whose label is a configured successor label (such as `starts after`) also
 offers its source as a [[successor-offer]] when its target is parked (left Pending with

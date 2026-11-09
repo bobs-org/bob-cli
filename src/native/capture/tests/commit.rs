@@ -1000,7 +1000,14 @@ fn transfer_merge_same_note_stages_one_file() {
     let result = fs::read_to_string(source_path).unwrap();
     assert!(result.contains("- [-] #task Source"), "{result}");
     assert!(
-        result.find("^local\n").unwrap() < result.find("Payload").unwrap(),
-        "{result}"
+        result.contains("  - Payload\n"),
+        "S keeps the original note: {result}"
+    );
+    let local = result
+        .find("- [ ] #task Local target ^local")
+        .expect("destination stays in the same note");
+    assert!(
+        result[local..].contains("    - Payload\n"),
+        "T receives a copy: {result}"
     );
 }
