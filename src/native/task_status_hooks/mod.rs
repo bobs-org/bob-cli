@@ -288,7 +288,6 @@ use reconcile::*;
 use references::*;
 use relations::*;
 use retry::*;
-use settings::*;
 use structure::*;
 use sync::*;
 
@@ -304,7 +303,14 @@ pub(crate) use reconcile::{
 pub(crate) use references::{
     leading_indentation_width, nearest_parent_list_item,
 };
-pub(crate) use settings::{read_tasks_settings, validate_blocked_status};
+pub(crate) use settings::{
+    parse_tasks_settings, read_tasks_settings, validate_blocked_status,
+};
+
+/// Vault-relative path of the Obsidian Tasks plugin settings file.
+pub(crate) fn tasks_settings_relative_path() -> &'static Path {
+    Path::new(TASKS_SETTINGS)
+}
 pub(crate) use structure::fenced_lines;
 pub(crate) use sync::{canonical_daily_date, daily_anchor_date};
 // Shared completion-engine surface: the scoped ledger retirement and

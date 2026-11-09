@@ -18,7 +18,7 @@ mod tests;
 pub(crate) use apply::{acquire_maintenance_lock, apply_plan};
 pub(crate) use model::{
     new_run_id, ApplyError, ApplyOutcome, ApplySession, CaptureError,
-    InputKind, InputSnapshot, ReasonCode, WritePlan,
+    InputKind, InputSnapshot, PlannedWrite, ReasonCode, WritePlan,
 };
 pub(crate) use snapshot::{
     capture_optional, capture_required, planned_write, snapshot_for_path,

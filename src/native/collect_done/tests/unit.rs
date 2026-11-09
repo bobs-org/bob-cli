@@ -1068,6 +1068,7 @@ fn holds_closed_root_with_open_task_descendant() {
         vec![HeldTask {
             line: 1,
             reason: HOLD_OPEN_SUBTASK,
+            block_ids: Vec::new(),
         }]
     );
 }

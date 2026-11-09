@@ -7,14 +7,9 @@ pub(super) const DONE_TASKS_KEY: &str = "done_tasks:";
 pub(super) struct DeduplicatedArchiveAppend {
     pub(super) archive_append: String,
     pub(super) final_block_ids: BTreeMap<String, String>,
+    /// Destination id per input occurrence, aligned with the input slice.
+    pub(super) aligned_final_ids: Vec<String>,
     pub(super) rename_count: usize,
-}
-pub(super) fn read_optional_string(path: &Path) -> io::Result<Option<String>> {
-    match fs::read_to_string(path) {
-        Ok(contents) => Ok(Some(contents)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(fs_error("read", path, error)),
-    }
 }
 pub(super) fn deduplicate_archive_append_block_ids(
     existing_archive: Option<&str>,
@@ -25,6 +20,7 @@ pub(super) fn deduplicate_archive_append_block_ids(
         return DeduplicatedArchiveAppend {
             archive_append: archive_append.to_string(),
             final_block_ids: BTreeMap::new(),
+            aligned_final_ids: Vec::new(),
             rename_count: 0,
         };
     }
@@ -85,6 +81,7 @@ pub(super) fn deduplicate_archive_append_block_ids(
     DeduplicatedArchiveAppend {
         archive_append: deduplicated,
         final_block_ids,
+        aligned_final_ids: final_ids.clone(),
         rename_count,
     }
 }

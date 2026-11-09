@@ -129,17 +129,16 @@ impl ResolveMovedNote for crate::native::vault_links::NoteIndex {
         )
     }
 }
+/// Fold link and dependency-metadata repairs into the plan.
+///
+/// Every byte comes from `captured`, the planning input set: no vault reads
+/// happen here, so a note that changed underfoot is a missing entry (a
+/// planning error) rather than a silently reread file.
 pub(super) fn apply_link_repairs_to_plan(
-    vault: &Path,
+    captured: &BTreeMap<PathBuf, String>,
     files: &mut [FilePlan],
 ) -> io::Result<Vec<LinkRepairPlan>> {
-    let note_files = link_repair_markdown_files(vault)?;
-    let mut disk_note_paths = BTreeSet::new();
-    for path in &note_files {
-        disk_note_paths.insert(vault_relative_path(vault, path, "note")?);
-    }
-
-    let mut planned_contents = BTreeMap::new();
+    let mut planned_contents = captured.clone();
     for file in files.iter() {
         if file.task_count > 0 || file.source_metadata_updated {
             planned_contents.insert(
@@ -155,11 +154,11 @@ pub(super) fn apply_link_repairs_to_plan(
         }
     }
 
-    let mut note_paths = disk_note_paths;
-    note_paths.extend(planned_contents.keys().cloned());
+    let note_paths: BTreeSet<PathBuf> =
+        planned_contents.keys().cloned().collect();
 
     let moved_targets =
-        moved_block_targets(vault, &note_paths, &planned_contents, files)?;
+        moved_block_targets(&note_paths, &planned_contents, files)?;
     if moved_targets.is_empty() {
         return Ok(Vec::new());
     }
@@ -169,10 +168,10 @@ pub(super) fn apply_link_repairs_to_plan(
 
     let mut link_repair_counts = BTreeMap::new();
     for relative_path in repair_paths {
-        let contents = match planned_contents.get(&relative_path) {
-            Some(contents) => contents.clone(),
-            None => fs::read_to_string(vault.join(&relative_path))?,
-        };
+        let contents = planned_contents
+            .get(&relative_path)
+            .cloned()
+            .ok_or_else(|| missing_planned_contents(&relative_path))?;
         let mut repair = repair_links_in_note(
             &contents,
             &relative_path,
@@ -180,7 +179,6 @@ pub(super) fn apply_link_repairs_to_plan(
             &moved_targets,
         );
         if let Some((source_target, stayed)) = archive_stayed_block_ids(
-            vault,
             &relative_path,
             &contents,
             &note_index,
@@ -283,18 +281,15 @@ pub(super) fn apply_link_repairs_to_plan(
     Ok(link_repairs)
 }
 pub(super) fn moved_block_targets(
-    vault: &Path,
     note_paths: &BTreeSet<PathBuf>,
     planned_contents: &BTreeMap<PathBuf, String>,
     files: &[FilePlan],
 ) -> io::Result<MovedBlockTargets> {
-    let mut targets =
-        archived_block_targets(vault, note_paths, planned_contents)?;
+    let mut targets = archived_block_targets(note_paths, planned_contents)?;
     overlay_current_run_block_targets(files, &mut targets)?;
     Ok(targets)
 }
 pub(super) fn archived_block_targets(
-    vault: &Path,
     note_paths: &BTreeSet<PathBuf>,
     planned_contents: &BTreeMap<PathBuf, String>,
 ) -> io::Result<MovedBlockTargets> {
@@ -311,7 +306,7 @@ pub(super) fn archived_block_targets(
         }
 
         let archive_contents =
-            note_contents(vault, archive_relative_path, planned_contents)?;
+            note_contents(archive_relative_path, planned_contents)?;
         if !archive_parent_matches_source(
             &archive_contents,
             archive_relative_path,
@@ -322,7 +317,7 @@ pub(super) fn archived_block_targets(
         }
 
         let source_contents =
-            note_contents(vault, &source_relative_path, planned_contents)?;
+            note_contents(&source_relative_path, planned_contents)?;
         let source_block_ids: BTreeSet<String> =
             block_ids_in_markdown(&source_contents)
                 .into_iter()
@@ -404,17 +399,18 @@ pub(super) fn overlay_current_run_block_targets(
     }
     Ok(())
 }
+/// Read a planning input from the captured set.
+///
+/// There is no vault fallback: every path the planner touches was captured
+/// up front, so a missing entry means the vault changed underfoot.
 pub(super) fn note_contents(
-    vault: &Path,
     relative_path: &Path,
     planned_contents: &BTreeMap<PathBuf, String>,
 ) -> io::Result<String> {
-    if let Some(contents) = planned_contents.get(relative_path) {
-        return Ok(contents.clone());
-    }
-
-    let path = vault.join(relative_path);
-    fs::read_to_string(&path).map_err(|error| fs_error("read", &path, error))
+    planned_contents
+        .get(relative_path)
+        .cloned()
+        .ok_or_else(|| missing_planned_contents(relative_path))
 }
 pub(crate) fn source_relative_path_from_archive(
     archive_relative_path: &Path,
@@ -545,7 +541,6 @@ pub(crate) fn repair_links_in_note_with<R: ResolveMovedNote>(
 /// source link target plus the block ids that stayed when `current_path`
 /// is an archive note whose parent source exists.
 pub(super) fn archive_stayed_block_ids(
-    vault: &Path,
     current_path: &Path,
     current_contents: &str,
     note_index: &NoteIndex,
@@ -566,7 +561,7 @@ pub(super) fn archive_stayed_block_ids(
         return Ok(None);
     }
     let source_contents =
-        note_contents(vault, &source_relative_path, planned_contents)?;
+        note_contents(&source_relative_path, planned_contents)?;
     let moved: BTreeSet<String> = moved_targets
         .keys()
         .filter(|(path, _)| path == &source_relative_path)

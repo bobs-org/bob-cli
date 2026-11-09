@@ -17,6 +17,7 @@ pub(super) struct Transform {
     pub(super) moved_block_ids: BTreeSet<String>,
     pub(super) ambiguous_moved_block_ids: BTreeSet<String>,
     pub(super) moved_block_id_occurrences: Vec<BlockIdOccurrence>,
+    pub(super) moved_roots: Vec<MovedRootSpan>,
     pub(super) holds: Vec<HeldTask>,
     pub(super) skip_counts: BTreeMap<String, usize>,
 }
@@ -25,12 +26,25 @@ pub(super) struct Transform {
 pub(super) struct HeldTask {
     pub(super) line: usize,
     pub(super) reason: &'static str,
+    pub(super) block_ids: Vec<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BlockIdOccurrence {
     pub(crate) id: String,
     pub(crate) start: usize,
     pub(crate) end: usize,
+}
+
+/// One selected archive root with its source position and byte span.
+///
+/// `start`/`end` are byte offsets into the transform's `archive_append`;
+/// `root_id` is the trailing block id on the root line when present.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct MovedRootSpan {
+    pub(super) source_line: usize,
+    pub(super) root_id: Option<String>,
+    pub(super) start: usize,
+    pub(super) end: usize,
 }
 pub(super) fn markdown_files(vault: &Path) -> io::Result<Vec<PathBuf>> {
     let mut files = super::super::task_status_hooks::markdown_files(vault)?;
@@ -185,6 +199,7 @@ pub(super) fn transform_markdown_with_settings(
     let mut moved_block_ids = BTreeSet::new();
     let mut ambiguous_moved_block_ids = BTreeSet::new();
     let mut moved_block_id_occurrences = Vec::new();
+    let mut moved_roots = Vec::new();
     let mut holds = Vec::new();
     let mut skip_counts = BTreeMap::new();
     let mut open_task_indents: Vec<usize> = Vec::new();
@@ -239,6 +254,7 @@ pub(super) fn transform_markdown_with_settings(
             holds.push(HeldTask {
                 line: index + 1,
                 reason: HOLD_OPEN_SUBTASK,
+                block_ids: held_block_ids(&lines[index..end]),
             });
             for line in &lines[index..end] {
                 source_contents.push_str(line);
@@ -248,6 +264,9 @@ pub(super) fn transform_markdown_with_settings(
         }
 
         task_count += 1;
+        let (root_content, _) = split_line_ending(lines[index]);
+        let root_id = trailing_block_id_in_line(root_content);
+        let span_start = archive_append.len();
         for line in &lines[index..end] {
             let line_offset = archive_append.len();
             archive_append.push_str(line);
@@ -264,6 +283,12 @@ pub(super) fn transform_markdown_with_settings(
                 }
             }
         }
+        moved_roots.push(MovedRootSpan {
+            source_line: index + 1,
+            root_id,
+            start: span_start,
+            end: archive_append.len(),
+        });
         index = end;
     }
 
@@ -274,9 +299,20 @@ pub(super) fn transform_markdown_with_settings(
         moved_block_ids,
         ambiguous_moved_block_ids,
         moved_block_id_occurrences,
+        moved_roots,
         holds,
         skip_counts,
     }
+}
+
+/// Block ids carried by a held root block, root first, in line order.
+fn held_block_ids(span: &[&str]) -> Vec<String> {
+    let mut ids = Vec::new();
+    for line in span {
+        let (content, _) = split_line_ending(line);
+        ids.extend(block_ids_in_text(content));
+    }
+    ids
 }
 
 pub(super) fn is_closed_status(

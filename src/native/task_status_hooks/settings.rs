@@ -9,7 +9,7 @@ pub(crate) fn read_tasks_settings(vault: &Path) -> TasksSettings {
     }
 }
 
-pub(super) fn parse_tasks_settings(
+pub(crate) fn parse_tasks_settings(
     path: &Path,
     contents: Option<&str>,
 ) -> TasksSettings {

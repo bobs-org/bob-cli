@@ -17,6 +17,7 @@ mod archive;
 mod git;
 mod link_repair;
 mod plan;
+mod snapshot;
 #[cfg(test)]
 mod tests;
 mod transform;

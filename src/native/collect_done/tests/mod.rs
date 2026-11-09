@@ -13,6 +13,7 @@ use std::{
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 mod plan;
+mod snapshot;
 mod unit;
 
 fn note_index<const N: usize>(paths: [&str; N]) -> NoteIndex {
