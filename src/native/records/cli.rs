@@ -49,6 +49,15 @@ pub(crate) fn run_new(args: Vec<OsString>) -> i32 {
     execute_new(&matches)
 }
 
+pub(crate) fn run_update(args: Vec<OsString>) -> i32 {
+    let mut command = build_cli_update();
+    let matches = match matches_for(&mut command, "bob records update", args) {
+        Ok(matches) => matches,
+        Err(code) => return code,
+    };
+    execute_update(&matches)
+}
+
 pub(crate) fn run_show(args: Vec<OsString>) -> i32 {
     let mut command = build_cli_show();
     let matches = match matches_for(&mut command, "bob records show", args) {
@@ -221,6 +230,54 @@ pub(crate) fn build_cli_new() -> ClapCommand {
                 .long("stem")
                 .value_name("STEM")
                 .help("Use an explicit filename stem"),
+        )
+}
+
+pub(crate) fn build_cli_update() -> ClapCommand {
+    ClapCommand::new("bob records update")
+        .about("Update one existing Record Note in place")
+        .long_about(
+            "Resolve an existing record by TYPE and STEM, then edit only the supplied YAML value spans and append notes with repeated --note arguments. Field-only and note-only updates work without repeating required creation fields. --dry-run prints the exact Markdown without writing.",
+        )
+        .after_help(
+            "Examples:\n  bob records update restaurant ninja_sushi -s status=liked -n 'Went back, still great'\n  bob records update restaurant ninja_sushi -s location= -d\n  bob records update podcast talk_python -n 'Listened to the async episode' -d -f json\n\nSee docs/records.md for update semantics, optional clearing, and failure behavior.",
+        )
+        .disable_help_flag(true)
+        .arg(record_type_arg(true))
+        .arg(
+            Arg::new("stem")
+                .value_name("STEM")
+                .required(true)
+                .value_hint(ValueHint::Other)
+                .help("Existing filename stem of the record note"),
+        )
+        .arg(bob_dir_arg())
+        .arg(dry_run_arg())
+        .arg(format_arg())
+        .arg(help_arg())
+        .arg(
+            Arg::new("note")
+                .short('n')
+                .long("note")
+                .value_name("TEXT")
+                .action(ArgAction::Append)
+                .help("Append a note bullet; may be repeated"),
+        )
+        .arg(
+            Arg::new("open")
+                .short('o')
+                .long("open")
+                .action(ArgAction::SetTrue)
+                .conflicts_with("dry-run")
+                .help("Open the updated note in Obsidian"),
+        )
+        .arg(
+            Arg::new("set")
+                .short('s')
+                .long("set")
+                .value_name("KEY=VALUE")
+                .action(ArgAction::Append)
+                .help("Set a configured field; may be repeated"),
         )
 }
 
@@ -600,6 +657,125 @@ fn execute_new(matches: &ArgMatches) -> i32 {
     0
 }
 
+fn execute_update(matches: &ArgMatches) -> i32 {
+    let output_format = format_from(matches);
+    let vault = vault_from(matches);
+    let type_id = matches.get_one::<String>("type").expect("required by clap");
+    let stem = matches.get_one::<String>("stem").expect("required by clap");
+    let config = match load_config() {
+        Ok(config) => config,
+        Err(error) => {
+            return report_config_error(
+                "bob records update",
+                output_format,
+                error,
+            );
+        }
+    };
+    let fields = match parse_field_inputs(matches) {
+        Ok(fields) => fields,
+        Err(message) => {
+            return report_error(
+                "bob records update",
+                output_format,
+                &message,
+                2,
+            );
+        }
+    };
+    let notes: Vec<RecordNoteInput> = matches
+        .get_many::<String>("note")
+        .into_iter()
+        .flatten()
+        .map(|text| RecordNoteInput::bullet(text.clone()))
+        .collect();
+    let today = bob_env::current_datetime().date();
+    let mut catalog = RecordCatalog::new(&vault);
+    let target = match super::plan::resolve_update_target(
+        &config,
+        &mut catalog,
+        type_id,
+        stem,
+    ) {
+        Ok(target) => target,
+        Err(error) => {
+            return report_error(
+                "bob records update",
+                output_format,
+                &error.to_string(),
+                2,
+            );
+        }
+    };
+    let absolute = vault.join(&target.path);
+    let original = match fs::read_to_string(&absolute) {
+        Ok(original) => original,
+        Err(error) => {
+            return report_error(
+                "bob records update",
+                output_format,
+                &format!(
+                    "could not read record {}: {error}",
+                    target.path.display()
+                ),
+                2,
+            );
+        }
+    };
+    let plan = match super::plan::plan_update(super::plan::PlanUpdateRequest {
+        target: &target,
+        original: &original,
+        fields: &fields,
+        notes: &notes,
+        today,
+    }) {
+        Ok(plan) => plan,
+        Err(error) => {
+            return report_error(
+                "bob records update",
+                output_format,
+                &error.to_string(),
+                2,
+            );
+        }
+    };
+    if !plan.missing.is_empty() || !plan.invalid.is_empty() {
+        return report_update_incomplete(&config, &plan, output_format);
+    }
+    let Some(markdown) = plan.markdown.as_deref() else {
+        return report_update_incomplete(&config, &plan, output_format);
+    };
+    if matches.get_flag("dry-run") {
+        print_update_dry_run(&config, &plan, markdown, output_format);
+        return 0;
+    }
+    if markdown == original {
+        print_update_success(&config, &plan, &notes, output_format);
+        return 0;
+    }
+    let staged = StagedTextFile {
+        target: absolute.clone(),
+        target_existed: true,
+        original_target: original.clone(),
+        updated_target: markdown.to_owned(),
+    };
+    if let Err(error) = write_staged_files(&[staged]) {
+        return report_error(
+            "bob records update",
+            output_format,
+            &error.message,
+            1,
+        );
+    }
+    print_update_success(&config, &plan, &notes, output_format);
+    if matches.get_flag("open")
+        && let Err(message) = open_in_obsidian(&vault, &plan.path)
+    {
+        eprintln!("bob records update: warning: {message}");
+    }
+    0
+}
+
 fn parse_field_inputs(
     matches: &ArgMatches,
 ) -> Result<Vec<RecordFieldInput>, String> {
@@ -697,6 +873,232 @@ fn report_incomplete(
         ),
     }
     2
+}
+
+fn report_update_incomplete(
+    config: &RecordsConfig,
+    plan: &super::plan::RecordUpdatePlan,
+    format: OutputFormat,
+) -> i32 {
+    let record_type = config.record_type(&plan.record_type);
+    let mut draft = format!(
+        "@{}/{}",
+        record_type.map_or("", |kind| kind.dir.as_str()),
+        plan.stem
+    );
+    if let Some(record_type) = record_type {
+        for field in &record_type.fields {
+            if !plan.missing.contains(&field.key) {
+                continue;
+            }
+            let choices = match &field.kind {
+                FieldKind::Choices(values) => values
+                    .iter()
+                    .map(|choice| choice.value.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" · "),
+                _ => String::new(),
+            };
+            draft.push_str(&format!("\n- {}:: …", field.key));
+            if !choices.is_empty() {
+                draft.push_str(&format!("    {choices}"));
+            }
+        }
+    }
+    let label = record_type
+        .map_or(plan.record_type.as_str(), |kind| kind.label.as_str());
+    let message = if !plan.missing.is_empty() {
+        format!(
+            "a {label} note needs {} more required field{}",
+            plan.missing.len(),
+            if plan.missing.len() == 1 { "" } else { "s" },
+        )
+    } else {
+        format!("the {label} note has invalid field values")
+    };
+    match format {
+        OutputFormat::Human => {
+            eprintln!("bob records update: {message}");
+            eprintln!("  {draft}");
+            for diagnostic in &plan.invalid {
+                eprintln!("  error: {diagnostic}");
+            }
+        }
+        OutputFormat::Json => println!(
+            "{}",
+            json!({
+                "schema_version": SCHEMA_VERSION,
+                "status": "incomplete",
+                "type": plan.record_type,
+                "title": plan.title,
+                "stem": plan.stem,
+                "path": plan.path.display().to_string(),
+                "missing": plan.missing,
+                "invalid": plan.invalid.iter().map(|diagnostic| json!({
+                    "field": diagnostic.field,
+                    "code": diagnostic.diagnostic_code(),
+                    "message": diagnostic.message,
+                })).collect::<Vec<_>>(),
+                "draft": draft,
+            })
+        ),
+    }
+    2
+}
+
+fn update_property_json(
+    property: &super::plan::PlannedUpdateProperty,
+) -> Value {
+    let value = property
+        .value
+        .as_ref()
+        .map(crate::native::capture_record::record_value_json);
+    let before = property
+        .current
+        .as_ref()
+        .map(crate::native::capture_record::record_value_json);
+    let source = property.source.map(|source| match source {
+        super::plan::RecordPropertySource::Typed => "typed",
+        super::plan::RecordPropertySource::Default => "default",
+    });
+    json!({
+        "key": property.key,
+        "label": property.label,
+        "state": property.state.as_str(),
+        "value": value,
+        "display": property.display,
+        "before": before,
+        "before_display": property.current_display,
+        "source": source,
+    })
+}
+
+fn update_warning_text(warning: &super::schema::RecordDiagnostic) -> String {
+    let field = warning
+        .field
+        .as_deref()
+        .map(|field| format!(" `{field}`"))
+        .unwrap_or_default();
+    format!(
+        "existing record{field}: {}; review it with `bob records check`",
+        warning.message
+    )
+}
+
+fn print_update_dry_run(
+    _config: &RecordsConfig,
+    plan: &super::plan::RecordUpdatePlan,
+    markdown: &str,
+    format: OutputFormat,
+) {
+    if format == OutputFormat::Json {
+        println!(
+            "{}",
+            json!({
+                "schema_version": SCHEMA_VERSION,
+                "status": "planned",
+                "type": plan.record_type,
+                "title": plan.title,
+                "stem": plan.stem,
+                "path": plan.path.display().to_string(),
+                "markdown": markdown,
+                "body": plan.body,
+                "changed": plan.changed,
+                "properties": plan.properties.iter().map(update_property_json).collect::<Vec<_>>(),
+                "warnings": plan.warnings.iter().map(|warning| json!({
+                    "field": warning.field,
+                    "code": warning.diagnostic_code(),
+                    "message": warning.message,
+                })).collect::<Vec<_>>(),
+            })
+        );
+        return;
+    }
+    print!("{markdown}");
+}
+
+fn print_update_success(
+    config: &RecordsConfig,
+    plan: &super::plan::RecordUpdatePlan,
+    notes: &[RecordNoteInput],
+    format: OutputFormat,
+) {
+    let record_type = config.record_type(&plan.record_type);
+    let emoji = record_type.and_then(|kind| kind.emoji.as_deref());
+    let label = record_type
+        .map_or(plan.record_type.as_str(), |kind| kind.label.as_str());
+    if format == OutputFormat::Json {
+        println!(
+            "{}",
+            json!({
+                "schema_version": SCHEMA_VERSION,
+                "status": "written",
+                "type": plan.record_type,
+                "title": plan.title,
+                "stem": plan.stem,
+                "path": plan.path.display().to_string(),
+                "changed": plan.changed,
+                "notes": notes.len(),
+                "properties": plan.properties.iter().map(update_property_json).collect::<Vec<_>>(),
+                "warnings": plan.warnings.iter().map(|warning| json!({
+                    "field": warning.field,
+                    "code": warning.diagnostic_code(),
+                    "message": warning.message,
+                })).collect::<Vec<_>>(),
+            })
+        );
+    } else {
+        let prefix = Styler::detect().green("✓");
+        let emoji_text =
+            emoji.map(|emoji| format!("{emoji} ")).unwrap_or_default();
+        println!(
+            "{}  {}updated {}  {}",
+            prefix,
+            emoji_text,
+            label.to_lowercase(),
+            plan.path.display(),
+        );
+        for property in &plan.properties {
+            let Some(display) = property.display.as_deref() else {
+                continue;
+            };
+            if property.current_display.as_deref() == Some(display)
+                && property.source.is_none()
+            {
+                continue;
+            }
+            if let Some(before) = property.current_display.as_deref()
+                && before != display
+            {
+                println!(
+                    "  {}  {before} → {display}",
+                    Styler::detect().dim(&property.label)
+                );
+                continue;
+            }
+            println!(
+                "  {}  {}",
+                Styler::detect().dim(&property.label),
+                display
+            );
+        }
+        if !notes.is_empty() {
+            let word = if notes.len() == 1 { "note" } else { "notes" };
+            println!(
+                "  {}",
+                Styler::detect().dim(&format!("{} {word}", notes.len()))
+            );
+        }
+    }
+    for warning in &plan.warnings {
+        let styler = Styler::detect();
+        eprintln!(
+            "bob records update: {}: {}",
+            styler.warning_prefix(),
+            update_warning_text(warning)
+        );
+    }
+    let _ = config;
 }
 
 fn add_external_records(

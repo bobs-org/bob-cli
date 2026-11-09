@@ -193,6 +193,7 @@ pub(crate) enum NativeCommand {
     RecordsList,
     RecordsNew,
     RecordsShow,
+    RecordsUpdate,
     TmuxPomodoro,
     VaultSync,
 }
@@ -278,6 +279,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::RecordsList => records::cli::run_list(args),
         NativeCommand::RecordsNew => records::cli::run_new(args),
         NativeCommand::RecordsShow => records::cli::run_show(args),
+        NativeCommand::RecordsUpdate => records::cli::run_update(args),
         NativeCommand::ThemesColor => pomodoro_themes::run_color(args),
         NativeCommand::ThemesHide => pomodoro_themes::run_hide(args),
         NativeCommand::ThemesList => pomodoro_themes::run_list(args),

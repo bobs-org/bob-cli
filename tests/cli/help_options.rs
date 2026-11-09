@@ -683,18 +683,25 @@ fn records_help_lists_subcommands_and_options_alphabetically() {
     let help = stdout(&output);
     assert!(
         help.contains(
-            "List, inspect, check, and create configured Record Notes"
+            "List, inspect, check, and create or update configured Record Notes"
         ) && help.contains("Bare `bob records` runs the read-only list")
             && help.contains("(default)")
             && help.contains("\n  check ")
             && help.contains("\n  list ")
             && help.contains("\n  new ")
-            && help.contains("\n  show "),
+            && help.contains("\n  show ")
+            && help.contains("\n  update "),
         "expected records help and default command:\n{help}"
     );
     assert_text_order(
         &help,
-        &["\n  check ", "\n  list ", "\n  new ", "\n  show "],
+        &[
+            "\n  check ",
+            "\n  list ",
+            "\n  new ",
+            "\n  show ",
+            "\n  update ",
+        ],
     );
     assert_stdout_has_no_ansi(&output);
 }
@@ -725,6 +732,36 @@ fn records_new_help_lists_options_alphabetically() {
             "-o, --open",
             "-s, --set",
             "-S, --stem",
+        ],
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn records_update_help_lists_options_alphabetically() {
+    let output = bob_command()
+        .args(["records", "update", "--help"])
+        .output()
+        .expect("run bob records update --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("Resolve an existing record by TYPE and STEM")
+            && help.contains("only the supplied YAML value spans")
+            && help.contains("bob records update restaurant ninja_sushi"),
+        "expected records update help:\n{help}"
+    );
+    assert_text_order(
+        &help,
+        &[
+            "-b, --bob-dir",
+            "-d, --dry-run",
+            "-f, --format",
+            "-h, --help",
+            "-n, --note",
+            "-o, --open",
+            "-s, --set",
         ],
     );
     assert_stdout_has_no_ansi(&output);

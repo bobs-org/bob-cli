@@ -23,6 +23,8 @@ use crate::native::{
 pub(crate) const MISSING_ROUTE_MESSAGE: &str = "pass --route first";
 /// Shown when `--drawer` has a route but no `--task` yet.
 pub(crate) const MISSING_TASK_MESSAGE: &str = "pass --task first";
+/// Shown when a record-dependent slot has no `TYPE` yet.
+pub(crate) const MISSING_RECORD_TYPE_MESSAGE: &str = "pass TYPE first";
 
 /// Answer one vault slot. Returns `None` when `kind` is not
 /// vault-aware, so the presenter keeps its static decision.
@@ -42,6 +44,8 @@ pub(crate) fn vault_lines(
         Kind::RelationLabel => Some(relation_labels(context)),
         Kind::ThemeName => Some(theme_names(context)),
         Kind::RecordType => Some(record_types()),
+        Kind::RecordStem => Some(record_stems(context)),
+        Kind::RecordSet => Some(record_sets(context)),
         Kind::VaultNote => Some(vault_notes(context)),
         Kind::ArticleNote => Some(article_notes(context)),
         Kind::Choices | Kind::Dirs | Kind::Files(_) | Kind::FreeText => None,
@@ -65,6 +69,111 @@ fn record_types() -> Vec<String> {
             )
         })
         .collect()
+}
+
+/// Existing stems in the retained `TYPE` folder, in index order. An
+/// absent `TYPE` offers a hint instead of scanning; an invalid `TYPE`
+/// offers nothing so no unrelated folder is scanned.
+fn record_stems(context: &Context) -> Vec<String> {
+    let Some(record_type_id) = context.record_type.as_deref() else {
+        return vec![protocol::message_line(MISSING_RECORD_TYPE_MESSAGE)];
+    };
+    let Ok(config) = crate::native::config::records::load_records_config()
+    else {
+        return Vec::new();
+    };
+    let Some(record_type) = config.record_type(record_type_id) else {
+        return Vec::new();
+    };
+    let mut catalog =
+        crate::native::records::RecordCatalog::new(&context.bob_dir);
+    let folder = catalog.folder(&record_type.dir).clone();
+    let group = format!("stems in {}", record_type.id);
+    folder
+        .notes()
+        .iter()
+        .filter_map(|note| {
+            let description = note.title.clone().unwrap_or_default();
+            protocol::candidate_line(
+                OsStr::new(&note.stem),
+                &description,
+                &group,
+                false,
+            )
+        })
+        .collect()
+}
+
+/// `KEY=VALUE` edits for the retained `TYPE`: schema keys as `KEY=`,
+/// then allowed choices, dynamic dates, and catalog suggestions as
+/// `KEY=value`. Reuses the same record catalogs as capture. An absent
+/// `TYPE` offers a hint; an invalid `TYPE` offers nothing.
+fn record_sets(context: &Context) -> Vec<String> {
+    let Some(record_type_id) = context.record_type.as_deref() else {
+        return vec![protocol::message_line(MISSING_RECORD_TYPE_MESSAGE)];
+    };
+    let Ok(config) = crate::native::config::records::load_records_config()
+    else {
+        return Vec::new();
+    };
+    let Some(record_type) = config.record_type(record_type_id) else {
+        return Vec::new();
+    };
+    let mut catalog =
+        crate::native::records::RecordCatalog::new(&context.bob_dir);
+    let folder = catalog.folder(&record_type.dir).clone();
+    let mut lines = Vec::new();
+    for field in &record_type.fields {
+        let key_line = protocol::candidate_line(
+            OsStr::new(&format!("{}=", field.key)),
+            &format!("{} · {}", field.label, field.kind.kind_name()),
+            "record fields",
+            true,
+        );
+        if let Some(line) = key_line {
+            lines.push(line);
+        }
+        match &field.kind {
+            crate::native::records::FieldKind::Choices(choices) => {
+                for choice in choices {
+                    if let Some(line) = protocol::candidate_line(
+                        OsStr::new(&format!("{}={}", field.key, choice.value)),
+                        &choice.label,
+                        "record values",
+                        true,
+                    ) {
+                        lines.push(line);
+                    }
+                }
+            }
+            crate::native::records::FieldKind::Date => {
+                for value in ["today", "yesterday"] {
+                    if let Some(line) = protocol::candidate_line(
+                        OsStr::new(&format!("{}={value}", field.key)),
+                        value,
+                        "record values",
+                        true,
+                    ) {
+                        lines.push(line);
+                    }
+                }
+            }
+            _ => {}
+        }
+        if field.suggest {
+            for suggestion in folder.value_suggestions(&field.key) {
+                if let Some(line) = protocol::candidate_line(
+                    OsStr::new(&format!("{}={}", field.key, suggestion.insert)),
+                    &suggestion.display(),
+                    "record values",
+                    true,
+                ) {
+                    lines.push(line);
+                }
+            }
+        }
+    }
+    lines
 }
 
 /// Remembered task types, including hidden names so hide, unhide,

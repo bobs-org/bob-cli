@@ -33,6 +33,8 @@ pub(crate) struct Context {
     pub task: Option<String>,
     /// `--repo` / `-r` on `plugins sync`, else [`bob_env::plugins_dir`].
     pub repo: Option<PathBuf>,
+    /// First positional `TYPE` on `records` commands, as typed.
+    pub record_type: Option<String>,
 }
 
 impl Context {
@@ -62,6 +64,7 @@ struct Walker<'a> {
     route: Option<String>,
     task: Option<String>,
     repo: Option<OsString>,
+    record_type: Option<String>,
 }
 
 impl<'a> Walker<'a> {
@@ -75,12 +78,19 @@ impl<'a> Walker<'a> {
             route: None,
             task: None,
             repo: None,
+            record_type: None,
         }
     }
 
     fn step(&mut self, word: &OsString) {
         let text = word.to_string_lossy();
         if self.escaped {
+            if self.path.first().map(String::as_str) == Some("records")
+                && self.record_type.is_none()
+                && !text.is_empty()
+            {
+                self.record_type = Some(text.to_string());
+            }
             return;
         }
         // A pending option consumes any non-flag word as its value.
@@ -135,6 +145,18 @@ impl<'a> Walker<'a> {
         if let Some(next) = self.node.find_subcommand(word) {
             self.node = next;
             self.path.push(next.get_name().to_string());
+            return;
+        }
+        // A plain word after the records subcommand path is a positional.
+        // Option values never reach here: a pending option consumes them
+        // above, and `--opt=value` records inline. Only the first
+        // positional (TYPE) is retained; an absent TYPE stays None so
+        // dependent providers offer nothing instead of scanning.
+        if self.path.first().map(String::as_str) == Some("records")
+            && self.record_type.is_none()
+            && !text.is_empty()
+        {
+            self.record_type = Some(text.to_string());
         }
     }
 
@@ -168,6 +190,9 @@ impl<'a> Walker<'a> {
                     .map(|path| bob_env::expand_tilde(&path))
                     .unwrap_or_else(bob_env::plugins_dir),
             ),
+            record_type: self
+                .record_type
+                .filter(|record_type| !record_type.is_empty()),
         }
     }
 }

@@ -153,6 +153,9 @@ impl NativeCommand {
             NativeCommand::RecordsShow => {
                 crate::native::records::cli::build_cli_show()
             }
+            NativeCommand::RecordsUpdate => {
+                crate::native::records::cli::build_cli_update()
+            }
             NativeCommand::Randomize => crate::native::randomize::build_cli(),
             NativeCommand::Stats => {
                 crate::native::stats::cli::overview_command()

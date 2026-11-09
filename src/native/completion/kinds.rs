@@ -55,6 +55,10 @@ pub(crate) enum Kind {
     ArticleNote,
     /// A configured Record Note schema id.
     RecordType,
+    /// An existing Record Note stem in the retained TYPE folder.
+    RecordStem,
+    /// A `KEY=VALUE` record field edit for the retained TYPE.
+    RecordSet,
 }
 
 struct Entry {
@@ -95,7 +99,7 @@ const TABLE: &[Entry] = &[
     Entry {
         path: &["records", "new"],
         arg: "set",
-        kind: Kind::FreeText,
+        kind: Kind::RecordSet,
     },
     Entry {
         path: &["records", "new"],
@@ -111,6 +115,26 @@ const TABLE: &[Entry] = &[
         path: &["records", "show"],
         arg: "type",
         kind: Kind::RecordType,
+    },
+    Entry {
+        path: &["records", "update"],
+        arg: "type",
+        kind: Kind::RecordType,
+    },
+    Entry {
+        path: &["records", "update"],
+        arg: "stem",
+        kind: Kind::RecordStem,
+    },
+    Entry {
+        path: &["records", "update"],
+        arg: "set",
+        kind: Kind::RecordSet,
+    },
+    Entry {
+        path: &["records", "update"],
+        arg: "note",
+        kind: Kind::FreeText,
     },
     // One id, two meanings: a _new_ ID here ...
     Entry {

@@ -11,6 +11,8 @@ pub(crate) const KNOWN_SLOTS: &[&str] = &[
     "article-note",
     "metric",
     "pdf",
+    "record-set",
+    "record-stem",
     "ref",
     "ref-query",
     "ref-target",
@@ -670,7 +672,7 @@ pub(crate) const ENTRIES: &[Row] = &[
             },
             StaticArg {
                 name: "SET",
-                slot: "text",
+                slot: "record-set",
                 required: false,
                 repeat: true,
             },
@@ -686,6 +688,39 @@ pub(crate) const ENTRIES: &[Row] = &[
             &["records", "new"],
             "Create a Record Note",
             &["records", "new", "create", "record", "note"],
+            Policy::PreviewFirst,
+            Some(DRY_RUN),
+            60,
+        )
+    },
+    Row {
+        fixed: JSON,
+        preview: Some(DRY_RUN),
+        slots: &[
+            ("TYPE", "record-type"),
+            ("type", "record-type"),
+            ("STEM", "record-stem"),
+            ("stem", "record-stem"),
+        ],
+        extra_args: &[
+            StaticArg {
+                name: "NOTE",
+                slot: "text",
+                required: false,
+                repeat: true,
+            },
+            StaticArg {
+                name: "SET",
+                slot: "record-set",
+                required: false,
+                repeat: true,
+            },
+        ],
+        ..writes(
+            "records-update",
+            &["records", "update"],
+            "Update a Record Note",
+            &["records", "update", "edit", "record", "note"],
             Policy::PreviewFirst,
             Some(DRY_RUN),
             60,

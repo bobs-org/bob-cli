@@ -375,6 +375,14 @@ const RECORDS_MEMBERS: &[Member] = &[
             script_command: None,
         },
     },
+    Member {
+        name: "update",
+        about: "Update one existing Record Note in place",
+        leaf: Leaf {
+            native_command: NativeCommand::RecordsUpdate,
+            script_command: None,
+        },
+    },
 ];
 
 const RECORDS_AFTER_HELP: &str = "\
@@ -861,13 +869,13 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "records",
-        about: "List, inspect, check, and create configured Record Notes",
+        about: "List, inspect, check, and create or update configured Record Notes",
         section: Section::Vault,
         target: Target::Group(Group {
             members: RECORDS_MEMBERS,
             default: Some("list"),
             extra_about: Some(
-                "Bare `bob records` runs the read-only list. `new` creates a note through the shared records planner and refuses missing fields or duplicates.",
+                "Bare `bob records` runs the read-only list. `new` creates a note through the shared records planner and refuses missing fields or duplicates. `update` edits an existing note in place.",
             ),
             after_help: RECORDS_AFTER_HELP,
             usage: "bob records [COMMAND]",
@@ -2357,6 +2365,7 @@ mod tests {
             NativeCommand::RecordsList,
             NativeCommand::RecordsNew,
             NativeCommand::RecordsShow,
+            NativeCommand::RecordsUpdate,
             NativeCommand::Stats,
             NativeCommand::StatsMetrics,
             NativeCommand::StatsShow,

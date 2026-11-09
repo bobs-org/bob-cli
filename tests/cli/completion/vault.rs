@@ -871,3 +871,183 @@ fn relation_label_completion_notes_close_consequences() {
         .expect("plain label row");
     assert_eq!(plain[1], "1 link");
 }
+
+#[test]
+fn records_update_completion_uses_retained_type() {
+    let fixture = fixture();
+    write_file(
+        &fixture.config,
+        concat!(
+            "records:\n",
+            "  restaurant:\n",
+            "    dir: eat\n",
+            "    label: Restaurant\n",
+            "    emoji: \"🍽️\"\n",
+            "    dated_notes: true\n",
+            "    fields:\n",
+            "      status:\n",
+            "        required: true\n",
+            "        values:\n",
+            "          to_try: \"To try\"\n",
+            "          liked: \"Liked\"\n",
+            "      category:\n",
+            "        required: true\n",
+            "        suggest: true\n",
+            "      location:\n",
+            "        suggest: true\n",
+            "      visited:\n",
+            "        values: date\n",
+        ),
+    );
+    fs::create_dir_all(fixture.vault.join("eat")).expect("eat folder");
+    write_file(
+        &fixture.vault.join("eat/ninja_sushi.md"),
+        "---\ntitle: Ninja Sushi\ntype: \"[[restaurant]]\"\nstatus: to_try\ncategory: Sushi\nlocation: Clark\n---\n## Notes\n",
+    );
+    write_file(
+        &fixture.vault.join("eat/ramen_nagi.md"),
+        "---\ntitle: Ramen Nagi\ntype: \"[[restaurant]]\"\nstatus: liked\ncategory: \"Ramen Shop\"\nlocation: \"[[Westfield]]\"\n---\n## Notes\n",
+    );
+    write_file(
+        &fixture.vault.join("eat/cafe.md"),
+        "---\ntitle: Café\ntype: \"[[restaurant]]\"\nstatus: liked\ncategory: \"Café\"\nlocation: Clark\n---\n## Notes\n",
+    );
+
+    let types = complete(&fixture, &["bob", "records", "update", ""]);
+    assert_success(&types);
+    assert!(
+        values(&types).contains(&"restaurant".to_string()),
+        "{}",
+        stdout(&types)
+    );
+
+    let stems =
+        complete(&fixture, &["bob", "records", "update", "restaurant", ""]);
+    assert_success(&stems);
+    for stem in ["ninja_sushi", "ramen_nagi", "cafe"] {
+        assert!(
+            values(&stems).contains(&stem.to_string()),
+            "stems: {}",
+            stdout(&stems)
+        );
+    }
+
+    let prior = complete(
+        &fixture,
+        &["bob", "records", "update", "-f", "json", "restaurant", ""],
+    );
+    assert_success(&prior);
+    assert!(
+        values(&prior).contains(&"ninja_sushi".to_string()),
+        "prior options retain TYPE: {}",
+        stdout(&prior)
+    );
+
+    for set_words in [
+        vec![
+            "bob",
+            "records",
+            "update",
+            "restaurant",
+            "ninja_sushi",
+            "-s",
+            "",
+        ],
+        vec![
+            "bob",
+            "records",
+            "update",
+            "restaurant",
+            "ninja_sushi",
+            "--set",
+            "",
+        ],
+    ] {
+        let output = complete(&fixture, &set_words);
+        assert_success(&output);
+        for key in ["status=", "category=", "location=", "visited="] {
+            assert!(
+                values(&output).contains(&key.to_string()),
+                "words {set_words:?}: {}",
+                stdout(&output)
+            );
+        }
+        for value in [
+            "status=liked",
+            "status=to_try",
+            "visited=today",
+            "visited=yesterday",
+        ] {
+            assert!(
+                values(&output).contains(&value.to_string()),
+                "words {set_words:?}: {}",
+                stdout(&output)
+            );
+        }
+        for suggestion in [
+            "category=Ramen Shop",
+            "category=Café",
+            "location=[[Westfield]]",
+        ] {
+            assert!(
+                values(&output).contains(&suggestion.to_string()),
+                "quoting {suggestion} in {set_words:?}: {}",
+                stdout(&output)
+            );
+        }
+    }
+
+    let new_sets = complete(
+        &fixture,
+        &["bob", "records", "new", "restaurant", "Title", "-s", ""],
+    );
+    assert_success(&new_sets);
+    assert!(
+        values(&new_sets).contains(&"status=".to_string()),
+        "new reuses KEY=VALUE: {}",
+        stdout(&new_sets)
+    );
+
+    let attached = complete(
+        &fixture,
+        &[
+            "bob",
+            "records",
+            "update",
+            "restaurant",
+            "ninja_sushi",
+            "--set=status=",
+        ],
+    );
+    assert_success(&attached);
+    assert!(
+        values(&attached).contains(&"status=liked".to_string()),
+        "attached: {}",
+        stdout(&attached)
+    );
+
+    let missing = complete(&fixture, &["bob", "records", "update", "-s", ""]);
+    assert_success(&missing);
+    assert_eq!(stdout(&missing), "!message pass TYPE first\n");
+
+    let invalid = complete(&fixture, &["bob", "records", "update", "nope", ""]);
+    assert_success(&invalid);
+    assert!(
+        stdout(&invalid).is_empty(),
+        "invalid TYPE scans nothing: {}",
+        stdout(&invalid)
+    );
+
+    let snapshot = tree_hashes(&fixture.vault);
+    let lock = lock_tree(&fixture.vault);
+    let locked =
+        complete(&fixture, &["bob", "records", "update", "restaurant", ""]);
+    assert_success(&locked);
+    assert!(values(&locked).contains(&"ninja_sushi".to_string()));
+    drop(lock);
+    assert_eq!(
+        tree_hashes(&fixture.vault),
+        snapshot,
+        "completion wrote to the vault"
+    );
+}

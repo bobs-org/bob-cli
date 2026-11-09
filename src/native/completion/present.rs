@@ -518,6 +518,8 @@ impl<'a> Walk<'a> {
             | Kind::RelationLabel
             | Kind::ThemeName
             | Kind::RecordType
+            | Kind::RecordStem
+            | Kind::RecordSet
             | Kind::VaultNote
             | Kind::ArticleNote => {
                 // Vault slots read the words before the cursor for

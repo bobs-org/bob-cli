@@ -206,6 +206,7 @@ Types. Bare `bob records` runs the read-only `list` command.
 | `bob records list` | Show each configured type, its folder, note count, and required fields. |
 | `bob records new TYPE TITLE` | Create one record through the same planner used by capture. |
 | `bob records show TYPE` | Show the schema, choice labels, defaults, and common suggested values. |
+| `bob records update TYPE STEM` | Edit one existing record in place through the shared update planner. |
 
 Every command accepts `-f json`. The human output is intended for a terminal;
 JSON output is stable for scripts. `-b/--bob-dir` selects a vault root, defaulting
@@ -229,6 +230,32 @@ opens a successfully created note in Obsidian.
 The planner applies defaults only to fields that were not supplied, validates all
 provided values, and never writes incomplete notes. A completed write goes through
 the same staged writer as capture, including its no-replace install guard.
+
+Update one record with repeated `-s/--set KEY=VALUE` fields and optional repeated
+`-n/--note TEXT` bullets. Only supplied fields change; defaults never apply to an
+update. An explicitly empty optional field removes its key, while an empty required
+field is refused with exit 2. Notes append under the existing `## Notes` section,
+dated when the record type opts in:
+
+```sh
+bob records update restaurant ninja_sushi \
+  -s status=liked -n 'Went back, still great'
+```
+
+Clear one optional field without touching anything else, or revisit with only a
+note:
+
+```sh
+bob records update restaurant ninja_sushi -s location=
+bob records update podcast talk_python -n 'Listened to the async episode'
+```
+
+`-d/--dry-run` prints the exact planned Markdown without opening or writing, and
+`-o/--open` opens the note in Obsidian only after a successful committed update.
+Usage, missing targets, and supplied-value refusals exit 2. A no-op update succeeds
+without rewriting the note. Human and JSON results report changed fields with
+before and effective values, notes, and warnings; warnings name `bob records check`
+and never block the update.
 
 ## Related
 
