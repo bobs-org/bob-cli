@@ -41,10 +41,30 @@ pub(crate) fn vault_lines(
         Kind::Metric => Some(metrics()),
         Kind::RelationLabel => Some(relation_labels(context)),
         Kind::ThemeName => Some(theme_names(context)),
+        Kind::RecordType => Some(record_types()),
         Kind::VaultNote => Some(vault_notes(context)),
         Kind::ArticleNote => Some(article_notes(context)),
         Kind::Choices | Kind::Dirs | Kind::Files(_) | Kind::FreeText => None,
     }
+}
+
+fn record_types() -> Vec<String> {
+    let Ok(config) = crate::native::config::records::load_records_config()
+    else {
+        return Vec::new();
+    };
+    config
+        .types
+        .iter()
+        .filter_map(|record_type| {
+            protocol::candidate_line(
+                OsStr::new(&record_type.id),
+                &format!("{} · {}/", record_type.label, record_type.dir),
+                "record types",
+                false,
+            )
+        })
+        .collect()
 }
 
 /// Remembered task types, including hidden names so hide, unhide,

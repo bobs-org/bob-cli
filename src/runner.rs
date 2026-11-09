@@ -342,6 +342,53 @@ Examples:
 See docs/attachments.md for the origin journal contract.
 Run 'bob attachments <command> --help' for more information on a command.";
 
+const RECORDS_MEMBERS: &[Member] = &[
+    Member {
+        name: "check",
+        about: "Check configured Record Notes against their schemas",
+        leaf: Leaf {
+            native_command: NativeCommand::RecordsCheck,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "list",
+        about: "List configured Record Note collections (default)",
+        leaf: Leaf {
+            native_command: NativeCommand::RecordsList,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "new",
+        about: "Create one Record Note from its configured schema",
+        leaf: Leaf {
+            native_command: NativeCommand::RecordsNew,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "show",
+        about: "Show one record schema and its common values",
+        leaf: Leaf {
+            native_command: NativeCommand::RecordsShow,
+            script_command: None,
+        },
+    },
+];
+
+const RECORDS_AFTER_HELP: &str = "\
+Bare `bob records` runs the read-only list.
+
+Examples:
+  bob records                                      List record types and counts
+  bob records show restaurant                     Inspect a schema and common values
+  bob records check -f json                       Lint every configured record folder
+  bob records new restaurant 'Ramen Nagi' -s status=to_try
+
+See docs/records.md for the schema, CLI, and lint contract.
+Run 'bob records <command> --help' for more information on a command.";
+
 const RELATIONS_MEMBERS: &[Member] = &[
     Member {
         name: "hide",
@@ -810,6 +857,20 @@ const SUBCOMMANDS: &[Subcommand] = &[
         target: Target::Leaf(Leaf {
             native_command: NativeCommand::Query,
             script_command: None,
+        }),
+    },
+    Subcommand {
+        name: "records",
+        about: "List, inspect, check, and create configured Record Notes",
+        section: Section::Vault,
+        target: Target::Group(Group {
+            members: RECORDS_MEMBERS,
+            default: Some("list"),
+            extra_about: Some(
+                "Bare `bob records` runs the read-only list. `new` creates a note through the shared records planner and refuses missing fields or duplicates.",
+            ),
+            after_help: RECORDS_AFTER_HELP,
+            usage: "bob records [COMMAND]",
         }),
     },
     Subcommand {
@@ -2292,6 +2353,10 @@ mod tests {
             NativeCommand::RelationsList,
             NativeCommand::RelationsRename,
             NativeCommand::RelationsUnhide,
+            NativeCommand::RecordsCheck,
+            NativeCommand::RecordsList,
+            NativeCommand::RecordsNew,
+            NativeCommand::RecordsShow,
             NativeCommand::Stats,
             NativeCommand::StatsMetrics,
             NativeCommand::StatsShow,

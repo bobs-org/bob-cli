@@ -53,6 +53,8 @@ pub(crate) enum Kind {
     VaultNote,
     /// An article note, completed with its current section count.
     ArticleNote,
+    /// A configured Record Note schema id.
+    RecordType,
 }
 
 struct Entry {
@@ -79,6 +81,21 @@ const TABLE: &[Entry] = &[
         path: &["articles", "outline"],
         arg: "note",
         kind: Kind::ArticleNote,
+    },
+    Entry {
+        path: &["records", "check"],
+        arg: "type",
+        kind: Kind::RecordType,
+    },
+    Entry {
+        path: &["records", "new"],
+        arg: "type",
+        kind: Kind::RecordType,
+    },
+    Entry {
+        path: &["records", "show"],
+        arg: "type",
+        kind: Kind::RecordType,
     },
     // One id, two meanings: a _new_ ID here ...
     Entry {

@@ -141,6 +141,18 @@ impl NativeCommand {
             NativeCommand::RelationsUnhide => {
                 crate::native::relation_labels::write::build_cli_unhide()
             }
+            NativeCommand::RecordsCheck => {
+                crate::native::records::cli::build_cli_check()
+            }
+            NativeCommand::RecordsList => {
+                crate::native::records::cli::build_cli_list()
+            }
+            NativeCommand::RecordsNew => {
+                crate::native::records::cli::build_cli_new()
+            }
+            NativeCommand::RecordsShow => {
+                crate::native::records::cli::build_cli_show()
+            }
             NativeCommand::Randomize => crate::native::randomize::build_cli(),
             NativeCommand::Stats => {
                 crate::native::stats::cli::overview_command()

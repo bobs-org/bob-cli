@@ -161,3 +161,39 @@ available, the record type and field. It disables record features only; task
 capture, planning, hooks, and unrelated config sections keep their existing
 behavior. Loading the schema does not scan the vault or require type and
 collection notes to exist.
+
+## `bob records`
+
+The `records` command group manages notes whose frontmatter `type` matches a
+configured record type. It is separate from `bob types`, which manages Task
+Types. Bare `bob records` runs the read-only `list` command.
+
+| Command | Purpose |
+| --- | --- |
+| `bob records check [TYPE]` | Lint configured folders and find typed records filed outside them. Exits 1 when it finds errors. |
+| `bob records list` | Show each configured type, its folder, note count, and required fields. |
+| `bob records new TYPE TITLE` | Create one record through the same planner used by capture. |
+| `bob records show TYPE` | Show the schema, choice labels, defaults, and common suggested values. |
+
+Every command accepts `-f json`. The human output is intended for a terminal;
+JSON output is stable for scripts. `-b/--bob-dir` selects a vault root, defaulting
+to `BOB_DIR` or `~/bob`.
+
+Create a note with repeated `-s/--set KEY=VALUE` fields and optional repeated
+`-n/--note TEXT` bullets:
+
+```sh
+bob records new restaurant 'Ramen Nagi' \
+  -s status=to_try -s category=Ramen -s location=Clark \
+  -n 'Recommended by Kelly'
+```
+
+`-S/--stem STEM` supplies a filename stem for titles that normalize to an empty
+stem or need a curated name. Duplicate paths are refused. Missing required fields
+and invalid values exit 2; bob prints a ready-to-copy draft for missing fields.
+`-d/--dry-run` prints the exact planned Markdown without writing, and `-o/--open`
+opens a successfully created note in Obsidian.
+
+The planner applies defaults only to fields that were not supplied, validates all
+provided values, and never writes incomplete notes. A completed write goes through
+the same staged writer as capture, including its no-replace install guard.

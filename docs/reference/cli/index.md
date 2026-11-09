@@ -69,6 +69,11 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob periods migrate`](periods.md#bob-periods-migrate) | Adopt the period-note tree (dry run by default) |
 | [`bob periods show`](periods.md#bob-periods-show) | Show a period's live stats and child summaries |
 | [`bob query`](query.md) | Run Dataview or Tasks queries against the vault |
+| [`bob records`](records.md) | List, inspect, check, and create configured Record Notes |
+| [`bob records check`](records.md#bob-records-check) | Check configured Record Notes against their schemas |
+| [`bob records list`](records.md#bob-records-list) | List configured Record Note collections (default) |
+| [`bob records new`](records.md#bob-records-new) | Create one Record Note from its configured schema |
+| [`bob records show`](records.md#bob-records-show) | Show one record schema and its common values |
 | [`bob ref`](ref.md) | Find, list, read, rename, and plan references for today; sync Highlights PDFs into them |
 | [`bob vault-sync`](vault-sync.md) | Reconcile the vault through Git (default: run) or show status |
 
@@ -144,6 +149,7 @@ Vault:
                period notes, vault-sync
   periods      Manage period notes: weeks, quarters, years, and all time
   query        Run Dataview or Tasks queries against the vault
+  records      List, inspect, check, and create configured Record Notes
   ref          Find, list, read, rename, and plan references for today; sync
                Highlights PDFs into them
   vault-sync   Reconcile the vault through Git (default: run) or show status

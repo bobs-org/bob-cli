@@ -14,6 +14,7 @@ pub(crate) const KNOWN_SLOTS: &[&str] = &[
     "ref",
     "ref-query",
     "ref-target",
+    "record-type",
     "relation-label",
     "text",
     "theme",
@@ -624,6 +625,80 @@ pub(crate) const ENTRIES: &[Row] = &[
             &["attachments", "origin"],
             "Attachment origins",
             &["attachments", "origin", "source"],
+            Presentation::Report,
+            60,
+        )
+    },
+    Row {
+        fixed: JSON,
+        slots: &[("TYPE", "record-type"), ("type", "record-type")],
+        ..reads(
+            "records-check",
+            &["records", "check"],
+            "Check Record Notes",
+            &["records", "check", "lint", "schema", "notes"],
+            Presentation::Report,
+            60,
+        )
+    },
+    Row {
+        fixed: JSON,
+        ..reads(
+            "records-list",
+            &["records", "list"],
+            "Record Note collections",
+            &["records", "list", "types", "folders", "notes"],
+            Presentation::Report,
+            60,
+        )
+    },
+    Row {
+        fixed: JSON,
+        preview: Some(DRY_RUN),
+        slots: &[
+            ("TYPE", "record-type"),
+            ("type", "record-type"),
+            ("TITLE", "text"),
+            ("title", "text"),
+        ],
+        extra_args: &[
+            StaticArg {
+                name: "NOTE",
+                slot: "text",
+                required: false,
+                repeat: true,
+            },
+            StaticArg {
+                name: "SET",
+                slot: "text",
+                required: false,
+                repeat: true,
+            },
+            StaticArg {
+                name: "STEM",
+                slot: "text",
+                required: false,
+                repeat: false,
+            },
+        ],
+        ..writes(
+            "records-new",
+            &["records", "new"],
+            "Create a Record Note",
+            &["records", "new", "create", "record", "note"],
+            Policy::PreviewFirst,
+            Some(DRY_RUN),
+            60,
+        )
+    },
+    Row {
+        fixed: JSON,
+        slots: &[("TYPE", "record-type"), ("type", "record-type")],
+        ..reads(
+            "records-show",
+            &["records", "show"],
+            "Record Note schema",
+            &["records", "show", "schema", "fields", "values"],
             Presentation::Report,
             60,
         )

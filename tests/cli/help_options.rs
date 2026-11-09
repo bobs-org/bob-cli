@@ -669,6 +669,65 @@ fn projects_help_lists_subcommands_and_options() {
 }
 
 #[test]
+fn records_help_lists_subcommands_and_options_alphabetically() {
+    let output = bob_command()
+        .arg("records")
+        .arg("--help")
+        .output()
+        .expect("run bob records --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains(
+            "List, inspect, check, and create configured Record Notes"
+        ) && help.contains("Bare `bob records` runs the read-only list")
+            && help.contains("(default)")
+            && help.contains("\n  check ")
+            && help.contains("\n  list ")
+            && help.contains("\n  new ")
+            && help.contains("\n  show "),
+        "expected records help and default command:\n{help}"
+    );
+    assert_text_order(
+        &help,
+        &["\n  check ", "\n  list ", "\n  new ", "\n  show "],
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn records_new_help_lists_options_alphabetically() {
+    let output = bob_command()
+        .args(["records", "new", "--help"])
+        .output()
+        .expect("run bob records new --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("Plan and create a single Record Note")
+            && help.contains("Missing required fields are refused")
+            && help.contains("bob records new restaurant 'Ramen Nagi'"),
+        "expected records new help:\n{help}"
+    );
+    assert_text_order(
+        &help,
+        &[
+            "-b, --bob-dir",
+            "-d, --dry-run",
+            "-f, --format",
+            "-h, --help",
+            "-n, --note",
+            "-o, --open",
+            "-s, --set",
+            "-S, --stem",
+        ],
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
 fn plugins_help_lists_subcommand_and_options() {
     let output = bob_command()
         .arg("plugins")

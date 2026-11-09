@@ -1,12 +1,11 @@
 //! Record Note engine: schema, per-folder catalog, renderer, and planner.
 //!
-//! The engine has no production caller yet. `bob records` (bob-cli-ir.3) and
-//! the record capture grammar (bob-cli-ir.5) are its first consumers; remove
-//! these unused-code allowances once they call into it.
+//! Shared Record Note schema, catalog, planner, renderer, and public CLI.
 #![allow(dead_code)]
 
 pub(crate) mod catalog;
 pub(crate) mod check;
+pub(crate) mod cli;
 pub(crate) mod plan;
 pub(crate) mod render;
 pub(crate) mod schema;

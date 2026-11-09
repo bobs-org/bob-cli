@@ -236,6 +236,7 @@ nav:
               - "bob nightly": reference/cli/nightly.md
               - "bob periods": reference/cli/periods.md
               - "bob query": reference/cli/query.md
+              - "bob records": reference/cli/records.md
               - "bob ref": reference/cli/ref.md
               - "bob vault-sync": reference/cli/vault-sync.md
           - "Integrations":

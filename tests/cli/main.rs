@@ -25,6 +25,7 @@ mod plugins;
 mod pomodoro;
 mod projects;
 mod ready;
+mod records;
 mod ref_library;
 mod relations;
 mod relations_rename;

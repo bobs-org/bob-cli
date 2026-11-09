@@ -76,7 +76,7 @@ once bob reports success (see [Bob Mac Capture Is A Thin Client Of bob](../devel
 the draft into capture items, each a parent line plus optional authored child bullets,
 and each item's markers decide what it does. That is far more than GTD inbox capture: an
 item may create a task (default `mac_inbox.md`, an [Inbox File](#inbox-file)), bullet, sub-bullet,
-or project note; queue a bare public URL as a background reference job, never touching
+project note, or record note (a note of a config-declared record type, see `docs/records.md`); queue a bare public URL as a background reference job, never touching
 the network; link, start, complete, or relate existing tasks (`@route:id`, `!note:id`,
 `&`, `*`); or start, adjust, shift, or close today's Pomodoro (`=`, `+N`, `++N`, `x`).
 bob plans every edit against in-memory snapshots of the target notes and today's daily
