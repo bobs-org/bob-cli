@@ -13,7 +13,8 @@ use super::clock::StatsClock;
 use super::error::StatsError;
 use crate::native::{
     capture_pomodoros, capture_pomodoros_agenda, collect_done, dataview,
-    pomodoro_homes, projects, vault_links::NoteIndex,
+    pomodoro_homes, projects, task_dependencies::is_archive_path,
+    vault_links::NoteIndex,
 };
 
 /// Shared vault and journal facts for evaluators. The inputs phase
@@ -169,8 +170,17 @@ impl StatsIndex {
             .map(|(path, _)| PathBuf::from(path))
             .collect::<Vec<_>>();
         let note_index = NoteIndex::from_paths(relative_paths);
-        let parsed =
-            parse_markdown_files_parallel(&buffers, &parser, now, &note_index);
+        // The pair index shares the single vault pass: no extra reads, and
+        // archives keep their source even when task parsing filters them.
+        let pair_index =
+            collect_done::ArchivePairIndex::from_buffers(&buffers, &note_index);
+        let parsed = parse_markdown_files_parallel(
+            &buffers,
+            &parser,
+            now,
+            &note_index,
+            &pair_index,
+        );
         let mut index = Self::default();
         let mut parent_candidates = Vec::new();
         for file in parsed {
@@ -445,6 +455,7 @@ fn parse_markdown_files_parallel(
     parser: &dataview::StatsTaskParser,
     now: NaiveDateTime,
     note_index: &NoteIndex,
+    pair_index: &collect_done::ArchivePairIndex,
 ) -> Vec<ParsedMarkdownFile> {
     if buffers.is_empty() {
         return Vec::new();
@@ -470,6 +481,7 @@ fn parse_markdown_files_parallel(
                             index,
                             parse_markdown_file(
                                 relative, contents, parser, now, note_index,
+                                pair_index,
                             ),
                         ));
                     }
@@ -487,12 +499,30 @@ fn parse_markdown_files_parallel(
     results.into_iter().map(|(_, file)| file).collect()
 }
 
+/// The source residence of a parsed path: a bound archive resolves to its
+/// source, while unresolved or conflicting archives (and every other note)
+/// keep their own location. Unresolved archives are never attributed to a
+/// guessed source, and no task row is dropped.
+fn resolved_residence(
+    pair_index: &collect_done::ArchivePairIndex,
+    path: &Path,
+) -> PathBuf {
+    if is_archive_path(path)
+        && let collect_done::ArchiveLookup::Bound(bound) =
+            pair_index.for_archive(path)
+    {
+        return bound.source;
+    }
+    path.to_path_buf()
+}
+
 fn parse_markdown_file(
     relative: &str,
     contents: &str,
     parser: &dataview::StatsTaskParser,
     now: NaiveDateTime,
     note_index: &NoteIndex,
+    pair_index: &collect_done::ArchivePairIndex,
 ) -> ParsedMarkdownFile {
     let task_rows = parser.parse_file(contents, relative.to_string());
     let mut tasks = Vec::with_capacity(task_rows.len());
@@ -501,13 +531,12 @@ fn parse_markdown_file(
     let mut missing_created = 0;
     for task in task_rows {
         let actual_path = task.path;
-        let archive_source = collect_done::source_relative_path_from_archive(
-            Path::new(&actual_path),
-        )
-        .map(|path| path_string(&path));
-        let source_path = archive_source
-            .clone()
-            .unwrap_or_else(|| actual_path.clone());
+        let actual = Path::new(&actual_path);
+        let source_path = if is_archive_path(actual) {
+            path_string(&resolved_residence(pair_index, actual))
+        } else {
+            actual_path.clone()
+        };
         let created = dated_value(task.created, now.date());
         let done = dated_value(task.done, now.date());
         let cancelled = dated_value(task.cancelled, now.date());
@@ -546,7 +575,7 @@ fn parse_markdown_file(
 
         tasks.push(IndexedTask {
             source_path,
-            archive_path: archive_source.map(|_| actual_path),
+            archive_path: is_archive_path(actual).then(|| actual_path.clone()),
             status_type: task.status_type,
             created,
             done,
@@ -567,12 +596,8 @@ fn parse_markdown_file(
     let parent = parent_target(contents).and_then(|target| {
         let parent = note_index.resolve(Some(Path::new(relative)), &target)?;
         let actual_child = Path::new(relative);
-        let source_child =
-            collect_done::source_relative_path_from_archive(actual_child)
-                .unwrap_or_else(|| actual_child.to_path_buf());
-        let source_parent =
-            collect_done::source_relative_path_from_archive(&parent)
-                .unwrap_or(parent);
+        let source_child = resolved_residence(pair_index, actual_child);
+        let source_parent = resolved_residence(pair_index, &parent);
         let is_archive = source_child.as_path() != actual_child;
         Some((
             is_archive,
@@ -1451,12 +1476,12 @@ mod tests {
         write_note(
             vault.path(),
             "child/Source.md",
-            "---\nparent: \"[[Project]]\"\n---\n",
+            "---\nparent: \"[[Project]]\"\ndone_tasks: \"[[done/child/Source_done]]\"\n---\n",
         );
         write_note(
             vault.path(),
             "done/child/Source_done.md",
-            "---\nparent: \"[[Project]]\"\n---\n- [x] #task Read ^ref\n",
+            "---\nparent: \"[[child/Source]]\"\n---\n- [x] #task Read ^ref\n",
         );
         write_note(vault.path(), "a/shared.md", "# A\n");
         write_note(vault.path(), "b/shared.md", "# B\n");
@@ -1485,6 +1510,57 @@ mod tests {
         assert_eq!(index.parent_ancestors("Project.md"), ["Area.md"]);
         assert_eq!(index.parent_ancestors("Area.md"), ["Project.md"]);
         assert!(!index.parent_of.contains_key("ambiguous.md"));
+    }
+
+    #[test]
+    fn archived_task_attribution_survives_source_rename() {
+        let vault = TempDir::new().unwrap();
+        settings(vault.path(), "dataview");
+        write_note(
+            vault.path(),
+            "work.md",
+            "---\ntype: \"[[project]]\"\ndone_tasks: \"[[done/work_done]]\"\n---\n\n# Work\n",
+        );
+        write_note(
+            vault.path(),
+            "done/work_done.md",
+            "---\nparent: \"[[work]]\"\ntype: \"[[done]]\"\n---\n\n- [x] #task Ship it [created:: 2026-10-09] [completion:: 2026-10-10] ^ship\n",
+        );
+
+        let before = StatsIndex::read(vault.path(), fixed_now()).unwrap();
+        let task = before
+            .tasks
+            .iter()
+            .find(|task| task.description.contains("Ship it"))
+            .unwrap();
+        assert_eq!(task.source_path, "work.md");
+        assert_eq!(task.archive_path.as_deref(), Some("done/work_done.md"));
+
+        // Rename the source; the archive keeps its old filename while both
+        // sides name each other.
+        fs::rename(vault.path().join("work.md"), vault.path().join("job.md"))
+            .unwrap();
+        write_note(
+            vault.path(),
+            "job.md",
+            "---\ntype: \"[[project]]\"\ndone_tasks: \"[[done/work_done]]\"\n---\n\n# Work\n",
+        );
+        write_note(
+            vault.path(),
+            "done/work_done.md",
+            "---\nparent: \"[[job]]\"\ntype: \"[[done]]\"\n---\n\n- [x] #task Ship it [created:: 2026-10-09] [completion:: 2026-10-10] ^ship\n",
+        );
+
+        let after = StatsIndex::read(vault.path(), fixed_now()).unwrap();
+        assert_eq!(after.tasks.len(), before.tasks.len());
+        let task = after
+            .tasks
+            .iter()
+            .find(|task| task.description.contains("Ship it"))
+            .unwrap();
+        assert_eq!(task.source_path, "job.md");
+        assert_eq!(task.archive_path.as_deref(), Some("done/work_done.md"));
+        assert_eq!(task.block_id.as_deref(), Some("ship"));
     }
 
     #[test]

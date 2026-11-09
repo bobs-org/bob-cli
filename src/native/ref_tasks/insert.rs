@@ -27,7 +27,8 @@ use std::path::Path;
 
 use crate::native::capture::{insert_task_line, Placement, StagedTextFile};
 use crate::native::collect_done::{
-    block_ids_in_markdown, trailing_block_id_in_line,
+    block_ids_in_markdown, trailing_block_id_in_line, ArchivePairIndex,
+    SourceLookup,
 };
 
 use super::line::ReadingIdentity;
@@ -86,6 +87,13 @@ pub(crate) fn insert_ref_task_with_preferred_id(
     // present and fall back to the destination stem.
     let preview_stem_owned = ref_stem_hint_from_line(line);
     let preview_stem = preview_stem_owned.as_deref().unwrap_or(stem);
+    // The pair index is built once per insertion from one vault scan; the
+    // destination entry is rebound to freshly read bytes on every attempt
+    // so the binding never goes stale inside the retry loop. Unreadable
+    // notes are retained as census failures and refuse only the lookups
+    // they could plausibly affect.
+    let base_pairs = ArchivePairIndex::read_vault(bob_dir)
+        .map_err(|error| format!("refusing to reserve archive IDs: {error}"))?;
     let mut attempt = 0usize;
     loop {
         attempt += 1;
@@ -107,8 +115,14 @@ pub(crate) fn insert_ref_task_with_preferred_id(
         // Archive read failures other than not-found propagate: a
         // collision hidden by an unreadable archive must not mint a
         // duplicate ID.
+        let pairs = rebind_destination(
+            &base_pairs,
+            bob_dir,
+            destination,
+            &dest_contents,
+        );
         let archive_contents =
-            archive_contents_for(bob_dir, destination, &dest_contents)?;
+            archive_contents_for(bob_dir, destination, &pairs)?;
         let mut taken: BTreeSet<String> =
             block_ids_in_markdown(&dest_contents).into_iter().collect();
         if let Some(archive) = archive_contents.as_deref() {
@@ -210,17 +224,56 @@ fn ref_stem_hint_from_line(line: &str) -> Option<String> {
     Some(stem.to_string())
 }
 
-fn archive_contents_for(
+/// Rebind the destination entry to freshly read bytes without disk I/O.
+///
+/// The census may hold an older copy of the destination; the retry loop reads
+/// it fresh every attempt, and the binding must follow the fresh bytes.
+/// Destinations outside the vault keep the base index (the lookup below then
+/// finds no archive).
+fn rebind_destination(
+    base: &ArchivePairIndex,
     bob_dir: &Path,
     destination: &Path,
     dest_contents: &str,
+) -> ArchivePairIndex {
+    let Ok(relative) = destination.strip_prefix(bob_dir) else {
+        return base.clone();
+    };
+    base.with_contents(relative, dest_contents)
+}
+
+/// The archive bytes whose IDs stay reserved, via the shared pair index.
+///
+/// A refused binding surfaces as an insertion error rather than silently
+/// omitting the reservation and risking a duplicate ID.
+fn archive_contents_for(
+    bob_dir: &Path,
+    destination: &Path,
+    pairs: &ArchivePairIndex,
 ) -> Result<Option<String>, String> {
-    let Some(archive_rel) =
-        archive_rel_for_destination(bob_dir, destination, dest_contents)
-    else {
+    let Ok(relative) = destination.strip_prefix(bob_dir) else {
         return Ok(None);
     };
-    let archive_path = bob_dir.join(&archive_rel);
+    let bound = match pairs.for_source(relative) {
+        SourceLookup::Bound(bound) => bound,
+        SourceLookup::Missing { canonical_archive } => {
+            return missing_archive_contents(bob_dir, canonical_archive)
+        }
+        SourceLookup::Refused {
+            reason, related, ..
+        } => {
+            return Err(format!(
+                "refusing to reserve archive IDs for {}: {reason} ({})",
+                destination.display(),
+                related
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ));
+        }
+    };
+    let archive_path = bob_dir.join(&bound.archive);
     match fs::read_to_string(&archive_path) {
         Ok(contents) => Ok(Some(contents)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -228,37 +281,26 @@ fn archive_contents_for(
     }
 }
 
-fn archive_rel_for_destination(
+/// Reservation bytes when the census knows no archive for the destination.
+///
+/// The canonical path usually does not exist (a missing archive reserves
+/// nothing). When something is there anyway — a directory in the archive
+/// slot, or a file that appeared after the census scan — it is read for the
+/// reservation set instead of letting a hidden collision mint a duplicate
+/// ID; anything but not-found propagates.
+fn missing_archive_contents(
     bob_dir: &Path,
-    destination: &Path,
-    dest_contents: &str,
-) -> Option<String> {
-    // Prefer the note's own `done_tasks: "[[done/...]]"` link.
-    for line in dest_contents.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("done_tasks:")
-            && let Some(start) = trimmed.find("[[")
-            && let Some(end) = trimmed[start..].find("]]")
-        {
-            let target = &trimmed[start + 2..start + end];
-            let mut rel = target.trim().to_string();
-            if !rel.ends_with(".md") {
-                rel.push_str(".md");
-            }
-            return Some(rel);
-        }
+    canonical_archive: Option<std::path::PathBuf>,
+) -> Result<Option<String>, String> {
+    let Some(relative) = canonical_archive else {
+        return Ok(None);
+    };
+    let archive_path = bob_dir.join(&relative);
+    match fs::read_to_string(&archive_path) {
+        Ok(contents) => Ok(Some(contents)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("read {}: {error}", archive_path.display())),
     }
-    // Default `done/<stem>_done.md` for vault-root notes. The destination is
-    // absolute, so compare vault-relative components: an absolute vault-root
-    // note (`/vault/sase.md`) has three absolute components but exactly one
-    // relative one, and the old absolute count missed its archive.
-    let relative = destination.strip_prefix(bob_dir).unwrap_or(destination);
-    if relative.components().count() == 1
-        && let Some(stem) = destination.file_stem().and_then(|s| s.to_str())
-    {
-        return Some(format!("done/{stem}_done.md"));
-    }
-    None
 }
 
 #[cfg(test)]
@@ -377,6 +419,153 @@ mod tests {
         let error = insert_ref_task(bob, &dest, line, &[])
             .expect_err("archive read error must propagate");
         assert!(error.contains("sase_done.md"), "{error}");
+    }
+
+    #[test]
+    fn nested_archive_without_metadata_stays_reserved() {
+        // Nested sources never had a default archive under the old
+        // filename rule; the shared lookup binds them by filename.
+        let temp = tempfile::tempdir().expect("temp vault");
+        let bob = temp.path();
+        let dest = bob.join("sub/note.md");
+        fs::create_dir_all(dest.parent().unwrap()).expect("mkdir");
+        fs::write(&dest, "# Note\n").expect("write");
+        fs::create_dir_all(bob.join("done/sub")).expect("done dir");
+        fs::write(
+            bob.join("done/sub/note_done.md"),
+            "# Done\n\n- [x] #task #ref [[ref/papers/x|X]] [created::2026-10-01] ^ref-x\n",
+        )
+        .expect("write archive");
+        let line =
+            "- [ ] #task #ref [[ref/papers/x|X]] [created::2026-10-09] ^ref-x";
+        let out = insert_ref_task(bob, &dest, line, &[]).expect("insert");
+        assert_eq!(out.block_id, "ref-x-2");
+        let archive = fs::read_to_string(bob.join("done/sub/note_done.md"))
+            .expect("read archive");
+        assert!(
+            !archive.contains(&out.block_id),
+            "archive must stay untouched: {archive}"
+        );
+    }
+
+    #[test]
+    fn renamed_source_archive_stays_reserved() {
+        // The source was renamed; the archive keeps its old filename while
+        // both sides name each other.
+        let temp = tempfile::tempdir().expect("temp vault");
+        let bob = temp.path();
+        let dest = bob.join("new.md");
+        fs::write(
+            &dest,
+            "---\ndone_tasks: \"[[done/old_done]]\"\n---\n\n# New\n",
+        )
+        .expect("write");
+        fs::create_dir_all(bob.join("done")).expect("done dir");
+        fs::write(
+            bob.join("done/old_done.md"),
+            "---\nparent: \"[[new]]\"\n---\n\n- [x] #task #ref [[ref/papers/x|X]] [created::2026-10-01] ^ref-x\n",
+        )
+        .expect("write archive");
+        let line =
+            "- [ ] #task #ref [[ref/papers/x|X]] [created::2026-10-09] ^ref-x";
+        let out = insert_ref_task(bob, &dest, line, &[]).expect("insert");
+        assert_eq!(out.block_id, "ref-x-2");
+    }
+
+    #[test]
+    fn unreadable_sibling_does_not_block_missing_destination() {
+        // An unreadable note elsewhere in the vault is retained as a census
+        // failure, but a missing destination with no canonical archive is
+        // provably unaffected, so the insert proceeds.
+        let temp = tempfile::tempdir().expect("temp vault");
+        let bob = temp.path();
+        fs::write(bob.join("unreadable.md"), [0xff, 0xfe, 0x00, 0x9f])
+            .expect("write unreadable");
+        let dest = bob.join("mac_inbox.md");
+        let line =
+            "- [ ] #task #ref [[ref/papers/x|X]] [created::2026-10-09] ^ref-x";
+        let out = insert_ref_task(bob, &dest, line, &[]).expect("insert");
+        assert_eq!(out.block_id, "ref-x");
+        assert_eq!(out.placement, Placement::Created);
+    }
+
+    #[test]
+    fn unreadable_sibling_poisons_involved_source() {
+        // The destination names an existing archive, so a retained failure
+        // could hide a dispute over that archive: the insert refuses.
+        let temp = tempfile::tempdir().expect("temp vault");
+        let bob = temp.path();
+        fs::write(bob.join("unreadable.md"), [0xff, 0xfe, 0x00, 0x9f])
+            .expect("write unreadable");
+        let dest = bob.join("sase.md");
+        fs::write(
+            &dest,
+            "---\ndone_tasks: \"[[done/sase_done]]\"\n---\n\n# Sase\n",
+        )
+        .expect("write");
+        fs::create_dir_all(bob.join("done")).expect("done dir");
+        fs::write(bob.join("done/sase_done.md"), "# Done\n")
+            .expect("write archive");
+        let line =
+            "- [ ] #task #ref [[ref/papers/x|X]] [created::2026-10-09] ^ref-x";
+        let error =
+            insert_ref_task(bob, &dest, line, &[]).expect_err("must refuse");
+        assert!(error.contains("refusing"), "{error}");
+        assert!(error.contains("incomplete_census"), "{error}");
+    }
+
+    #[test]
+    fn reciprocal_pair_survives_unreadable_sibling() {
+        // A reciprocal binding keeps its owner against unknown third
+        // parties, so the reservation still applies.
+        let temp = tempfile::tempdir().expect("temp vault");
+        let bob = temp.path();
+        fs::write(bob.join("unreadable.md"), [0xff, 0xfe, 0x00, 0x9f])
+            .expect("write unreadable");
+        let dest = bob.join("new.md");
+        fs::write(
+            &dest,
+            "---\ndone_tasks: \"[[done/old_done]]\"\n---\n\n# New\n",
+        )
+        .expect("write");
+        fs::create_dir_all(bob.join("done")).expect("done dir");
+        fs::write(
+            bob.join("done/old_done.md"),
+            "---\nparent: \"[[new]]\"\n---\n\n- [x] #task #ref [[ref/papers/x|X]] [created::2026-10-01] ^ref-x\n",
+        )
+        .expect("write archive");
+        let line =
+            "- [ ] #task #ref [[ref/papers/x|X]] [created::2026-10-09] ^ref-x";
+        let out = insert_ref_task(bob, &dest, line, &[]).expect("insert");
+        assert_eq!(out.block_id, "ref-x-2");
+    }
+
+    #[test]
+    fn contradictory_binding_surfaces_as_error() {
+        // `sase.md` claims an archive that reciprocally belongs to
+        // `other.md`: the insertion refuses instead of silently omitting
+        // the reservation.
+        let temp = tempfile::tempdir().expect("temp vault");
+        let bob = temp.path();
+        let dest = bob.join("sase.md");
+        fs::write(
+            &dest,
+            "---\ndone_tasks: \"[[done/other_done]]\"\n---\n\n# Sase\n",
+        )
+        .expect("write");
+        fs::write(bob.join("other.md"), "# Other\n").expect("write other");
+        fs::create_dir_all(bob.join("done")).expect("done dir");
+        fs::write(
+            bob.join("done/other_done.md"),
+            "---\nparent: \"[[other]]\"\n---\n\n- [x] #task #ref [[ref/papers/x|X]] [created::2026-10-01] ^ref-x\n",
+        )
+        .expect("write archive");
+        let line =
+            "- [ ] #task #ref [[ref/papers/x|X]] [created::2026-10-09] ^ref-x";
+        let error =
+            insert_ref_task(bob, &dest, line, &[]).expect_err("must refuse");
+        assert!(error.contains("refusing"), "{error}");
+        assert!(error.contains("contradictory_metadata"), "{error}");
     }
 
     #[test]

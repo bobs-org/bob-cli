@@ -3229,6 +3229,79 @@ fn enforce_budget(ctx: &Ctx, json: &mut Value, markdown: &mut String) {
 mod tests {
     use super::*;
 
+    fn test_settings(vault: &Path) {
+        let path =
+            vault.join(".obsidian/plugins/obsidian-tasks-plugin/data.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            path,
+            r##"{"taskFormat":"dataview","globalFilter":"#task"}"##,
+        )
+        .unwrap();
+    }
+
+    fn write_note(vault: &Path, relative: &str, contents: &str) {
+        let path = vault.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, contents).unwrap();
+    }
+
+    /// Brief attribution follows the resolver across a source rename: the
+    /// archived row matches its new source spelling while its effective
+    /// (on-disk archive) path stays put.
+    #[test]
+    fn brief_attribution_survives_source_rename() {
+        let vault = tempfile::TempDir::new().unwrap();
+        test_settings(vault.path());
+        let now = NaiveDate::from_ymd_opt(2026, 10, 11)
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap();
+        write_note(
+            vault.path(),
+            "work.md",
+            "---\ntype: \"[[project]]\"\ndone_tasks: \"[[done/work_done]]\"\n---\n\n# Work\n",
+        );
+        write_note(
+            vault.path(),
+            "done/work_done.md",
+            "---\nparent: \"[[work]]\"\ntype: \"[[done]]\"\n---\n\n- [x] #task Ship it [created:: 2026-10-09] [completion:: 2026-10-10] ^ship\n",
+        );
+        let before = StatsIndex::read(vault.path(), now).unwrap();
+        let task = before
+            .tasks
+            .iter()
+            .find(|task| task.description.contains("Ship it"))
+            .unwrap();
+        assert!(task_matches_target(task, "work"));
+        assert_eq!(task_effective_path(task), "done/work_done.md");
+
+        std::fs::rename(
+            vault.path().join("work.md"),
+            vault.path().join("job.md"),
+        )
+        .unwrap();
+        write_note(
+            vault.path(),
+            "job.md",
+            "---\ntype: \"[[project]]\"\ndone_tasks: \"[[done/work_done]]\"\n---\n\n# Work\n",
+        );
+        write_note(
+            vault.path(),
+            "done/work_done.md",
+            "---\nparent: \"[[job]]\"\ntype: \"[[done]]\"\n---\n\n- [x] #task Ship it [created:: 2026-10-09] [completion:: 2026-10-10] ^ship\n",
+        );
+        let after = StatsIndex::read(vault.path(), now).unwrap();
+        let task = after
+            .tasks
+            .iter()
+            .find(|task| task.description.contains("Ship it"))
+            .unwrap();
+        assert!(task_matches_target(task, "job"));
+        assert!(!task_matches_target(task, "work"));
+        assert_eq!(task_effective_path(task), "done/work_done.md");
+    }
+
     #[test]
     fn task_alias_drops_fields_tags_blocks_and_keep_links() {
         let description = "#task #ref [[ref/blogs/x|The AI-native SDLC playbook]] [fresh:: 2026-10-28] ^ref-x";

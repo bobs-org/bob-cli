@@ -17,6 +17,7 @@ mod archive;
 mod command;
 mod git;
 mod link_repair;
+pub(crate) mod pair;
 mod plan;
 mod report;
 mod snapshot;
@@ -35,6 +36,7 @@ pub(crate) use command::run_collection;
 pub(crate) use link_repair::{
     archive_parent_target, source_relative_path_from_archive,
 };
+pub(crate) use pair::{ArchiveLookup, ArchivePairIndex, SourceLookup};
 pub(crate) use transform::{
     block_ids_in_markdown, is_block_id_byte, split_line_ending,
     trailing_block_id_in_line,
