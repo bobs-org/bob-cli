@@ -655,6 +655,120 @@ fn missing_note_waits_with_exit_zero() {
     );
 }
 
+/// A raw template Core Daily Notes copied before Templater renders it:
+/// tags and `## Pomodoros` are both present.
+fn write_raw_template_note(env: &GcalEnv) -> String {
+    let raw = "---\ndate: <% tp.date.now(\"YYYY-MM-DD\") %>\n---\n# Day\n\n## Pomodoros\n\n- [ ] (**0800-0830**) — Work\n";
+    fs::write(env.vault().join("2026/20261030.md"), raw)
+        .expect("write raw template note");
+    raw.to_string()
+}
+
+#[test]
+fn unrendered_note_waits_and_writes_nothing() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-unrendered");
+    prepare(&env);
+    let raw = write_raw_template_note(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("waiting for 2026/20261030.md · Templater hasn't finished rendering it"),
+        "{text}"
+    );
+    assert!(text.contains("line 2 still has <% tp.date.now("), "{text}");
+    assert!(text.contains("hint: nothing was written"), "{text}");
+    assert_eq!(today_note(&env), raw, "note stays byte-identical");
+    assert!(
+        !env.vault().join(".bob/gcal/test-host.jsonl").exists(),
+        "journal unchanged"
+    );
+    let recorded = status(&env);
+    assert_eq!(recorded["outcome"], "waiting");
+    assert_eq!(recorded["reason"], "note_unrendered");
+}
+
+#[test]
+fn unrendered_note_reports_json_reason_and_line() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-unrendered-json");
+    prepare(&env);
+    write_raw_template_note(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+
+    let output = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let report: Value =
+        serde_json::from_str(&stdout(&output)).expect("JSON report");
+    assert_eq!(report["status"], "waiting");
+    assert_eq!(report["waiting"]["reason"], "note_unrendered");
+    assert_eq!(report["waiting"]["line"], 2);
+    assert!(
+        report["waiting"]["hint"]
+            .as_str()
+            .is_some_and(|hint| hint.contains("rerun bob gcal sync")),
+        "{report}"
+    );
+    assert!(report["waiting"]["detail"].is_string(), "{report}");
+}
+
+#[test]
+fn dry_run_on_an_unrendered_note_prints_the_waiting_reason() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-unrendered-dry");
+    prepare(&env);
+    let raw = write_raw_template_note(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+
+    let output = sync_output(&env, &fake, &["-d"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("Templater hasn't finished rendering it"),
+        "{}",
+        stdout(&output)
+    );
+    assert_eq!(today_note(&env), raw);
+    assert!(
+        !env.root().join("state/bob/gcal/status.json").exists(),
+        "dry run records no status"
+    );
+}
+
+#[test]
+fn rendering_the_note_lets_the_same_snapshot_write() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-unrendered-then-rendered");
+    prepare(&env);
+    let raw = write_raw_template_note(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+
+    let waiting = sync_output(&env, &fake, &[]);
+    assert!(
+        stdout(&waiting).contains("waiting for"),
+        "{}",
+        stdout(&waiting)
+    );
+    assert_eq!(today_note(&env), raw);
+
+    // Templater finishes: the same tags, rendered.
+    fs::write(
+        env.vault().join("2026/20261030.md"),
+        raw.replace("<% tp.date.now(\"YYYY-MM-DD\") %>", "2026-10-30"),
+    )
+    .expect("render note");
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        today_note(&env).contains("## Events"),
+        "{}",
+        today_note(&env)
+    );
+    assert_eq!(status(&env)["outcome"], "written");
+}
+
 #[test]
 fn incomplete_snapshot_writes_nothing() {
     let env = GcalEnv::new("bob-cli-gcal-sync-incomplete");

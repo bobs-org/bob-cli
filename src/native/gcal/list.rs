@@ -20,6 +20,7 @@ use crate::native::{
     env as bob_env, event_task,
     pomodoro_homes::{DiskHomeSource, HomeResolver},
     style::{self, Styler},
+    templater::first_pending_tag,
 };
 
 type ListedEvent = SnapshotEvent;
@@ -107,7 +108,16 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
         .as_deref()
         .map(|contents| contents.lines().collect())
         .unwrap_or_default();
-    let has_note = note.is_some();
+    // A note Templater has not rendered is about to be overwritten, so
+    // sync refuses it; list shows the same state instead of Bob state.
+    let unrendered = note
+        .as_deref()
+        .is_some_and(|contents| first_pending_tag(contents).is_some());
+    let note_view: NoteView<'_> = match (&note, unrendered) {
+        (_, true) => Err(WAITING_FOR_TEMPLATER),
+        (Some(_), false) => Ok(note_lines.as_slice()),
+        (None, false) => Err(WAITING_FOR_NOTE),
+    };
     let day_string = day.to_string();
     // Missed meetings stay open and surface here; nothing auto-cancels.
     let past_open = past_open_meetings(&vault, day);
@@ -121,7 +131,7 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
             args.include_omitted,
             &journal_state,
             &day_string,
-            has_note.then_some(note_lines.as_slice()),
+            note_view,
             last_sync_json(&newest),
             &past_open,
             &journal_warnings,
@@ -138,8 +148,8 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
             args.include_omitted,
             &journal_state,
             &day_string,
-            has_note.then_some(note_lines.as_slice()),
-            &last_sync_human(&newest),
+            note_view,
+            &last_sync_human(&newest, unrendered),
             &journal_warnings,
             &diag_warnings,
             &past_open,
@@ -186,6 +196,13 @@ fn past_open_meetings(
     open
 }
 
+const WAITING_FOR_NOTE: &str = "waiting for note";
+const WAITING_FOR_TEMPLATER: &str = "waiting for Templater";
+
+/// The day's note lines, or the label every VAULT cell shows while the
+/// note is missing or still unrendered.
+type NoteView<'a> = Result<&'a [&'a str], &'static str>;
+
 /// What sync did, or would do, with one event: `task · MEET`, `task`,
 /// `context`, `waiting for note`, or `removed by you`, each with
 /// ` · off-clock` (or ` · off-clock via love`) appended for off-clock
@@ -197,13 +214,14 @@ fn vault_status(
         journal::OccurrenceState,
     >,
     day: &str,
-    note: Option<&[&str]>,
+    note: NoteView<'_>,
 ) -> String {
     if let Inclusion::Omitted(reason) = &event.inclusion {
         return reason.clone();
     }
-    let Some(lines) = note else {
-        return "waiting for note".to_string();
+    let lines = match note {
+        Ok(lines) => lines,
+        Err(label) => return label.to_string(),
     };
     let key = journal::occurrence_key(
         &event.event.key.calendar_id,
@@ -367,10 +385,18 @@ fn buffer_label(event: &ListedEvent) -> Option<String> {
 /// journal record's host and time, else never synced.
 fn last_sync_human(
     newest: &Option<(chrono::DateTime<chrono::FixedOffset>, String)>,
+    unrendered: bool,
 ) -> String {
+    if unrendered {
+        return WAITING_FOR_TEMPLATER.to_string();
+    }
     if let Some(status) = journal::read_status() {
         if status.outcome == "waiting" {
-            return "waiting for note".to_string();
+            return match status.reason.as_deref() {
+                Some("note_unrendered") => WAITING_FOR_TEMPLATER,
+                _ => WAITING_FOR_NOTE,
+            }
+            .to_string();
         }
         return format!(
             "synced {} on {}",
@@ -392,6 +418,7 @@ fn last_sync_json(
     if let Some(status) = journal::read_status() {
         return json!({
             "outcome": status.outcome,
+            "reason": status.reason,
             "host": status.host,
             "ts": status.ts.to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
         });
@@ -442,7 +469,7 @@ fn print_json(
         journal::OccurrenceState,
     >,
     day_string: &str,
-    note: Option<&[&str]>,
+    note: NoteView<'_>,
     last_sync: Value,
     past_open: &[(NaiveDate, String)],
     journal_warnings: &[String],
@@ -513,7 +540,7 @@ fn print_table(
         journal::OccurrenceState,
     >,
     day_string: &str,
-    note: Option<&[&str]>,
+    note: NoteView<'_>,
     sync_state: &str,
     journal_warnings: &[String],
     diag_warnings: &[String],

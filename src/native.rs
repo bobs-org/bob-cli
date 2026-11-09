@@ -115,6 +115,7 @@ mod task_status_hooks;
 mod task_status_hooks_write;
 mod task_text_escape;
 mod task_theme;
+mod templater;
 #[cfg(test)]
 pub(crate) mod test_stub;
 pub(crate) mod url_routing;

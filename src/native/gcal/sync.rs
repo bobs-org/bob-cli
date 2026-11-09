@@ -33,6 +33,7 @@ use crate::native::{
     pomodoro_homes::{DiskHomeSource, HomeResolver, HomeSource},
     pref_journal,
     style::Styler,
+    templater::{first_pending_tag, PendingTag},
 };
 
 pub(crate) fn run(args: &SyncArgs) -> i32 {
@@ -76,6 +77,7 @@ fn record_last_error(args: &SyncArgs, error: &GcalError) {
             diff: None,
             stamp: None,
             stamp_refreshed: false,
+            waiting: None,
         },
         Some(format!("{}: {}", error.kind(), error.message())),
     );
@@ -111,6 +113,8 @@ struct SyncReport {
     diff: Option<String>,
     stamp: Option<Stamp>,
     stamp_refreshed: bool,
+    /// Why the run wrote nothing, for `waiting` results only.
+    waiting: Option<WaitingReason>,
 }
 
 /// Deprecation diagnostics for the complete fetched snapshot, before any
@@ -181,21 +185,26 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
                 &host,
                 day,
                 &display_path,
-                &journal_warnings(&vault)?,
-                diag_warnings,
+                WaitingReason::NoteMissing,
+                journal_warnings(&vault)?
+                    .into_iter()
+                    .chain(diag_warnings)
+                    .collect(),
                 deprecations,
             );
         }
     };
-    let refs: Vec<&str> = contents.lines().collect();
-    if pomodoros_section_range(&refs).is_none() {
+    if let Some(reason) = WaitingReason::of_contents(&contents) {
         return waiting(
             args,
             &host,
             day,
             &display_path,
-            &journal_warnings(&vault)?,
-            diag_warnings,
+            reason,
+            journal_warnings(&vault)?
+                .into_iter()
+                .chain(diag_warnings)
+                .collect(),
             deprecations,
         );
     }
@@ -268,6 +277,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
             diff: Some(diff),
             stamp: plan.stamp.clone(),
             stamp_refreshed: plan.stamp_refreshed,
+            waiting: None,
         });
     }
 
@@ -288,6 +298,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
             diff: None,
             stamp: plan.stamp.clone(),
             stamp_refreshed: plan.stamp_refreshed,
+            waiting: None,
         };
         record_status(&host, day, "unchanged", &report, None);
         return Ok(report);
@@ -338,6 +349,19 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
                             format!("re-read {}: {error}", note_path.display()),
                         )
                     })?;
+                // Templater may have replaced the note while the plan
+                // waited for the lock; never write into an unrendered one.
+                if let Some(reason) = WaitingReason::of_contents(&current) {
+                    return waiting(
+                        args,
+                        &host,
+                        day,
+                        &display_path,
+                        reason,
+                        warnings,
+                        deprecations,
+                    );
+                }
                 stamp::account_guard(
                     &current,
                     &snapshot.account,
@@ -378,6 +402,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
                         diff: None,
                         stamp: plan.stamp.clone(),
                         stamp_refreshed: plan.stamp_refreshed,
+                        waiting: None,
                     };
                     record_status(&host, day, "unchanged", &report, None);
                     return Ok(report);
@@ -416,6 +441,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
         diff: None,
         stamp: plan.stamp.clone(),
         stamp_refreshed: plan.stamp_refreshed,
+        waiting: None,
     };
     record_status(&host, day, "written", &report, None);
     Ok(report)
@@ -426,12 +452,10 @@ fn waiting(
     host: &str,
     day: NaiveDate,
     display_path: &str,
-    warnings: &[String],
-    diag_warnings: Vec<String>,
+    reason: WaitingReason,
+    warnings: Vec<String>,
     deprecations: Vec<diagnostics::Deprecation>,
 ) -> Result<SyncReport, GcalError> {
-    let mut merged = warnings.to_vec();
-    merged.extend(diag_warnings);
     let report = SyncReport {
         day,
         path: display_path.to_string(),
@@ -441,18 +465,88 @@ fn waiting(
         links_added: 0,
         links_refiled: 0,
         links_sorted: 0,
-        warnings: merged,
+        warnings,
         deprecations,
         quiet: args.quiet,
         json: args.format.is_json(),
         diff: None,
         stamp: None,
         stamp_refreshed: false,
+        waiting: Some(reason),
     };
     if !args.dry_run {
         record_status(host, day, "waiting", &report, None);
     }
     Ok(report)
+}
+
+/// Why sync left a day's note untouched. Day-level, never per-event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WaitingReason {
+    /// The daily note does not exist yet.
+    NoteMissing,
+    /// The note exists but has no `## Pomodoros` section.
+    PomodorosMissing,
+    /// Templater has not rendered the note: a `<%` tag is still in it.
+    NoteUnrendered(PendingTag),
+}
+
+impl WaitingReason {
+    /// The guard for note contents, in order: an unrendered note first,
+    /// because a raw template already has a `## Pomodoros` section.
+    pub(crate) fn of_contents(contents: &str) -> Option<Self> {
+        if let Some(tag) = first_pending_tag(contents) {
+            return Some(Self::NoteUnrendered(tag));
+        }
+        let lines: Vec<&str> = contents.lines().collect();
+        pomodoros_section_range(&lines)
+            .is_none()
+            .then_some(Self::PomodorosMissing)
+    }
+
+    /// Stable JSON `reason` code.
+    pub(crate) fn code(&self) -> &'static str {
+        match self {
+            Self::NoteMissing => "note_missing",
+            Self::PomodorosMissing => "pomodoros_missing",
+            Self::NoteUnrendered(_) => "note_unrendered",
+        }
+    }
+
+    pub(crate) fn detail(&self) -> String {
+        match self {
+            Self::NoteMissing => "the daily note doesn't exist yet".to_string(),
+            Self::PomodorosMissing => {
+                "it has no ## Pomodoros section yet".to_string()
+            }
+            Self::NoteUnrendered(tag) => format!(
+                "Templater hasn't finished rendering it (line {} still has {})",
+                tag.line, tag.excerpt
+            ),
+        }
+    }
+
+    pub(crate) fn hint(&self) -> &'static str {
+        match self {
+            Self::NoteMissing => {
+                "nothing was written; rerun bob gcal sync once the note exists"
+            }
+            Self::PomodorosMissing => {
+                "nothing was written; rerun bob gcal sync once the section exists"
+            }
+            Self::NoteUnrendered(_) => {
+                "nothing was written; rerun bob gcal sync once the note is rendered"
+            }
+        }
+    }
+
+    /// Line of the pending tag, for an unrendered note.
+    pub(crate) fn line(&self) -> Option<usize> {
+        match self {
+            Self::NoteUnrendered(tag) => Some(tag.line),
+            _ => None,
+        }
+    }
 }
 
 fn journal_warnings(vault: &std::path::Path) -> Result<Vec<String>, GcalError> {
@@ -1254,6 +1348,10 @@ fn record_status(
         links_added: report.links_added,
         links_refiled: report.links_refiled,
         error,
+        reason: report
+            .waiting
+            .as_ref()
+            .map(|reason| reason.code().to_string()),
     });
 }
 
@@ -1338,6 +1436,12 @@ fn print_json(report: &SyncReport) {
                 "links_sorted": report.links_sorted,
                 "entries": json_entries(report),
             },
+            "waiting": report.waiting.as_ref().map(|reason| json!({
+                "reason": reason.code(),
+                "detail": reason.detail(),
+                "hint": reason.hint(),
+                "line": reason.line(),
+            })),
             "warnings": report.warnings,
             "deprecations": report.deprecations,
             "stamp": stamp,
@@ -1370,7 +1474,16 @@ fn print_human(report: &SyncReport) {
     }
     if report.status == "waiting" {
         println!("bob gcal sync · {}", report.path);
-        println!("waiting for {}", report.path);
+        match report.waiting.as_ref() {
+            Some(reason) => {
+                println!("waiting for {} · {}", report.path, reason.detail());
+                println!(
+                    "  {}",
+                    styler.dim(&format!("hint: {}", reason.hint()))
+                );
+            }
+            None => println!("waiting for {}", report.path),
+        }
         print_warnings_stderr(report);
         return;
     }
@@ -1554,5 +1667,52 @@ fn human_time(time: &str) -> String {
         )
     } else {
         time.to_string()
+    }
+}
+
+#[cfg(test)]
+mod waiting_tests {
+    use super::*;
+
+    const RENDERED: &str = "---\ndate: 2026-11-09\n---\n## Pomodoros\n\n";
+
+    #[test]
+    fn rendered_note_with_pomodoros_is_ready() {
+        assert_eq!(WaitingReason::of_contents(RENDERED), None);
+    }
+
+    #[test]
+    fn unrendered_check_precedes_the_pomodoros_check() {
+        // The raw template already has Pomodoros; the tag must still win.
+        let raw = "---\ndate: <% tp.date.now() %>\n---\n## Pomodoros\n";
+        let reason = WaitingReason::of_contents(raw).expect("waiting");
+        assert_eq!(reason.code(), "note_unrendered");
+        assert_eq!(reason.line(), Some(2));
+        // Without Pomodoros the tag is still the reported reason.
+        let reason = WaitingReason::of_contents("<% x %>\n").expect("waiting");
+        assert_eq!(reason.code(), "note_unrendered");
+    }
+
+    #[test]
+    fn rendered_note_without_pomodoros_waits_for_the_section() {
+        let reason = WaitingReason::of_contents("# Day\n").expect("waiting");
+        assert_eq!(reason.code(), "pomodoros_missing");
+        assert_eq!(reason.line(), None);
+    }
+
+    #[test]
+    fn locked_reread_guard_refuses_a_replaced_note() {
+        // The locked re-read after a NoteChanged retry uses the same
+        // guard: a note Templater replaced mid-run is refused.
+        let replaced = format!("{RENDERED}<%* tR += 'x' %>\n");
+        assert!(matches!(
+            WaitingReason::of_contents(&replaced),
+            Some(WaitingReason::NoteUnrendered(_))
+        ));
+    }
+
+    #[test]
+    fn missing_note_has_its_own_code() {
+        assert_eq!(WaitingReason::NoteMissing.code(), "note_missing");
     }
 }

@@ -422,8 +422,26 @@ fn last_sync_check() -> Check {
         return Check {
             id: "last_sync",
             status: CheckStatus::Warn,
-            summary: format!("last run waited for {}", status.day),
-            fix: Some("open the daily note in Obsidian, then sync".to_string()),
+            summary: match status.reason.as_deref() {
+                Some("note_unrendered") => format!(
+                    "last run waited for Templater to render {}",
+                    status.day
+                ),
+                Some("pomodoros_missing") => format!(
+                    "last run waited for a ## Pomodoros section in {}",
+                    status.day
+                ),
+                _ => format!("last run waited for {}", status.day),
+            },
+            fix: Some(
+                match status.reason.as_deref() {
+                    Some("note_unrendered") => {
+                        "let Templater finish rendering the note, then sync"
+                    }
+                    _ => "open the daily note in Obsidian, then sync",
+                }
+                .to_string(),
+            ),
         };
     }
     if status.outcome == "error" {

@@ -546,3 +546,40 @@ fn list_and_sync_agree_on_love_meets_with_type_filtered_clock_defaults() {
         assert_eq!(after["off_clock"], before["off_clock"]);
     }
 }
+
+#[test]
+fn list_shows_waiting_for_templater_on_an_unrendered_note() {
+    let env = GcalEnv::new("bob-cli-gcal-list-unrendered");
+    prepare(&env);
+    fs::write(
+        env.vault().join("2026/20261030.md"),
+        "---\ndate: <% tp.date.now() %>\n---\n## Pomodoros\n",
+    )
+    .expect("write raw template note");
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+
+    let mut command = env.command();
+    fake.install(&mut command).args(["gcal"]);
+    let output = command.output().expect("run bob gcal");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let table = stdout(&output);
+    assert!(
+        table
+            .lines()
+            .next()
+            .unwrap_or("")
+            .contains("waiting for Templater"),
+        "{table}"
+    );
+    assert!(!table.contains("waiting for note"), "{table}");
+    assert!(table.contains("waiting for Templater"), "{table}");
+
+    let mut command = env.command();
+    fake.install(&mut command).args(["gcal", "-f", "json"]);
+    let output = command.output().expect("run bob gcal json");
+    let report: Value =
+        serde_json::from_str(&stdout(&output)).expect("JSON report");
+    let dentist = list_event(&report, "Dentist");
+    assert_eq!(dentist["vault"], "waiting for Templater");
+}

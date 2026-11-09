@@ -80,7 +80,10 @@ fn sync_command() -> ClapCommand {
             "Write one day's Events rows and MEET links: reconcile one \
              bounded, idempotent day (default today, `-D` for another day \
              whose note exists). `-d` prints the exact unified diff of the \
-             plan and writes nothing. Never overwrites your edits.",
+             plan and writes nothing. Never overwrites your edits. Writes \
+             nothing, and exits 0 with a reason and hint, while the note is \
+             missing, has no `## Pomodoros`, or still has Templater tags \
+             (`<% … %>`) Templater has not rendered.",
         )
         .after_help(sync_after_help())
         .disable_help_flag(true)

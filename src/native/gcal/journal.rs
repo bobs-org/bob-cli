@@ -559,6 +559,8 @@ pub(crate) struct SyncStatus {
     pub links_added: usize,
     pub links_refiled: usize,
     pub error: Option<String>,
+    /// Waiting reason code for a `waiting` outcome (additive).
+    pub reason: Option<String>,
 }
 
 fn status_path() -> PathBuf {
@@ -584,6 +586,7 @@ pub(crate) fn write_status(status: &SyncStatus) -> std::io::Result<()> {
         "links_added": status.links_added,
         "links_refiled": status.links_refiled,
         "error": status.error,
+        "reason": status.reason,
     });
     fs::write(path, serde_json::to_string(&value).unwrap_or_default())
 }
@@ -631,6 +634,10 @@ pub(crate) fn read_status() -> Option<SyncStatus> {
             .unwrap_or(0) as usize,
         error: object
             .get("error")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        reason: object
+            .get("reason")
             .and_then(Value::as_str)
             .map(str::to_string),
     })

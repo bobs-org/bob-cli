@@ -339,9 +339,11 @@ snapshot.
 
 The table shows local time, title, RSVP, selected root, and the VAULT column:
 what sync did, or would do, with the event — `task · MEET`, `task`,
-`context`, `waiting for note`, or `removed by you`, each with
-` · off-clock` appended for Google off-clock tasks
-(`task · MEET · off-clock`). The TIME column appends the buffer label for
+`context`, `waiting for note`, `waiting for Templater`, or `removed by you`,
+each with ` · off-clock` appended for Google off-clock tasks
+(`task · MEET · off-clock`). While the day's note still has Templater tags,
+every VAULT cell and the header read `waiting for Templater`, the state sync
+refuses to write into. The TIME column appends the buffer label for
 buffered tasks (`12:00-13:00 −30m +15m`, dimmed on a TTY); see
 [Buffers](#buffers). The EVENT column appends a dim `≡ N` after the title
 of each Event Task with N bullet lines sync would write, reasons
@@ -374,8 +376,27 @@ as a footer.
 
 `bob gcal sync` reconciles one bounded, idempotent day — today by default,
 `-D` for another day whose note already exists. Bob never creates daily notes;
-when the note or its `## Pomodoros` section is missing, sync exits 0 with
-`waiting for 2026/20261030.md`.
+when the note, its `## Pomodoros` section, or Templater's rendering of it is
+missing, sync writes nothing and exits 0 with
+`waiting for 2026/20261030.md · <detail>` and a dim `hint:` line.
+
+Core Daily Notes copies the raw template, `<% … %>` tags and `## Pomodoros`
+included, before Templater renders it and replaces the whole file. A sync
+that wrote in between would lose its rows, so a note that still holds a
+`<%` tag (`<%*`, `<%+`, `<%-`, and `<%_` included) is never written. The
+tag is looked for everywhere, YAML frontmatter included, except in fenced
+code blocks and inline code. The checks run in this order, and `-d` gets the
+same report; the same guard runs again on the locked re-read, so a note
+Templater replaces while sync waits for the lock is refused, not written:
+
+| `reason`            | Meaning                                                              |
+| ------------------- | -------------------------------------------------------------------- |
+| `note_missing`      | the day's daily note does not exist yet                              |
+| `note_unrendered`   | Templater has not finished: line N still has a `<% … %>` tag         |
+| `pomodoros_missing` | the note is rendered but has no `## Pomodoros` section               |
+
+The unrendered check comes before the Pomodoros check because the raw
+template already has a Pomodoros section.
 
 ```bash
 bob gcal sync
@@ -914,7 +935,8 @@ sync.
 ## Exit status
 
 - `0` — success, including "already connected", a doctor run with only
-  warnings, an unchanged sync, and a sync waiting for the daily note.
+  warnings, an unchanged sync, and a sync waiting for the daily note (missing,
+  not yet rendered by Templater, or without `## Pomodoros`).
 - `1` — runtime failure: gog, network, timeout, token, a doctor check
   that failed, or a daily-note write that lost a concurrent-edit race.
 - `2` — usage or setup error: clap usage errors, bad `gcal:` config, missing
@@ -952,8 +974,11 @@ attendee list, and carries `clock`, `clock_source`, `clock_note`,
 `off_clock`, deprecated `untracked`, and the `vault` state.
 
 `sync -f json`: `ok`, `day`, `path`, `status`, `rows`, `pomodoro`,
-`warnings`, `deprecations`, and `stamp`. `stamp` is
-`{account, synced_at, refreshed}` or `null`. `pomodoro` carries
+`waiting`, `warnings`, `deprecations`, and `stamp`. `waiting` is `null`
+unless `status` is `waiting`, then `{reason, detail, hint, line}` with
+`reason` one of `note_missing`, `note_unrendered`, or `pomodoros_missing`
+and `line` the 1-based line of the pending Templater tag (else `null`).
+`stamp` is `{account, synced_at, refreshed}` or `null`. `pomodoro` carries
 `entry_line`, `created`, `links_added`, `links_refiled`, `links_sorted`, and
 `entries` as in [Sync](#sync). Row actions add `updated`, `cancelled`,
 `removed` (context), `upgraded`, and `learned` to the sync-phase `added`,
