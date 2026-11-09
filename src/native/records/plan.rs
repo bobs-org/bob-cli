@@ -874,6 +874,7 @@ pub(crate) fn resolve_update_target(
             suggestions: Vec::new(),
         });
     }
+    let vault_root = catalog.vault_root().to_path_buf();
     let folder = catalog.folder(&record_type.dir);
     if let Some(reason) = folder.create_refusal() {
         return Err(RecordUpdateTargetError {
@@ -886,13 +887,51 @@ pub(crate) fn resolve_update_target(
             suggestions: Vec::new(),
         });
     }
-    match folder.lookup_stem(stem) {
-        StemLookup::Exact(note) => Ok(ResolvedUpdateTarget {
+    let exact = match folder.lookup_stem(stem) {
+        StemLookup::Exact(note) => Some((
+            note.relative_path.clone(),
+            note.stem.clone(),
+            note.title.clone().unwrap_or_else(|| note.stem.clone()),
+        )),
+        StemLookup::Ambiguous(_) | StemLookup::None => None,
+    };
+    if let Some((path, resolved_stem, title)) = exact {
+        // The commit's rename would replace the alias with a regular file
+        // while the real note stays unchanged, so symlinked update targets
+        // refuse without writing.
+        if let Ok(meta) = std::fs::symlink_metadata(vault_root.join(&path))
+            && meta.file_type().is_symlink()
+        {
+            let target_stem =
+                symlink_target_stem(&vault_root, &record_type.dir, &path);
+            let message = match target_stem {
+                Some(target) => format!(
+                    "unsafe record stem {stem:?}: {} is a symlink to `{target}`; update `@{}/{}` instead",
+                    path.display(),
+                    record_type.dir,
+                    target,
+                ),
+                None => format!(
+                    "unsafe record stem {stem:?}: {} is a symlink; update targets must name one existing note",
+                    path.display(),
+                ),
+            };
+            return Err(RecordUpdateTargetError {
+                code: RecordUpdateTargetErrorCode::UnsafeTarget,
+                message,
+                paths: Vec::new(),
+                suggestions: Vec::new(),
+            });
+        }
+        return Ok(ResolvedUpdateTarget {
             record_type: record_type.clone(),
-            path: note.relative_path.clone(),
-            stem: note.stem.clone(),
-            title: note.title.clone().unwrap_or_else(|| note.stem.clone()),
-        }),
+            path,
+            stem: resolved_stem,
+            title,
+        });
+    }
+    match folder.lookup_stem(stem) {
+        StemLookup::Exact(_) => unreachable!("exact was handled above"),
         StemLookup::Ambiguous(notes) => {
             let paths = notes
                 .iter()
@@ -961,6 +1000,23 @@ fn is_safe_update_stem(stem: &str) -> bool {
     let mut components = std::path::Path::new(stem).components();
     matches!(components.next(), Some(std::path::Component::Normal(_)))
         && components.next().is_none()
+}
+
+/// In-folder stem a symlinked update target points to, when one exists.
+/// Returns `None` for dangling links and targets outside the record folder.
+fn symlink_target_stem(
+    vault_root: &Path,
+    dir: &str,
+    link: &PathBuf,
+) -> Option<String> {
+    let target = std::fs::canonicalize(vault_root.join(link)).ok()?;
+    let folder = std::fs::canonicalize(vault_root.join(dir)).ok()?;
+    let relative = target.strip_prefix(&folder).ok()?;
+    if relative.components().count() != 1 {
+        return None;
+    }
+    let name = relative.file_name()?.to_str()?;
+    name.strip_suffix(".md").map(str::to_owned)
 }
 
 /// Inputs needed to plan one existing-record update. `target` is the
@@ -1139,9 +1195,47 @@ pub(crate) fn plan_update(
     let currents: BTreeMap<String, Option<RecordValue>> =
         snapshot_currents(record_type, &snapshot.mapping, request.today);
 
+    // An untouched pre-filled edit must change no bytes: drop supplied
+    // valued edits whose resolved value equals the snapshot's resolved
+    // current value, and drop removals of already-absent keys. This keeps
+    // quoted scalars and flow-style lists as no-ops instead of rewrites.
+    let mut no_op_keys: Vec<String> = Vec::new();
+    for (key, supplied) in &effective {
+        let Some(Some(current)) = currents.get(key) else {
+            continue;
+        };
+        let Ok(supplied_resolved) =
+            resolve_value_dates(supplied, request.today)
+        else {
+            continue;
+        };
+        let Ok(current_resolved) = resolve_value_dates(current, request.today)
+        else {
+            continue;
+        };
+        if supplied_resolved == current_resolved {
+            no_op_keys.push(key.clone());
+        }
+    }
+    for key in &removed {
+        if currents.get(key).is_none_or(|current| current.is_none()) {
+            no_op_keys.push(key.clone());
+        }
+    }
+    for key in &no_op_keys {
+        effective.remove(key);
+        removed.retain(|name| name != key);
+    }
+    let filtered_fields: Vec<super::schema::RecordFieldInput> = request
+        .fields
+        .iter()
+        .filter(|input| !no_op_keys.iter().any(|key| key == &input.key))
+        .cloned()
+        .collect();
+
     let properties = update_properties(
         record_type,
-        request.fields,
+        &filtered_fields,
         &currents,
         &effective,
         &removed,
@@ -1173,7 +1267,7 @@ pub(crate) fn plan_update(
     let applied = apply_record_update(&RecordUpdateRequest {
         record_type,
         original: request.original,
-        fields: request.fields,
+        fields: &filtered_fields,
         notes: request.notes,
         note_date: note_date.as_deref(),
         today: request.today,
@@ -2252,6 +2346,74 @@ records:
             resolve_update_target(&config, &mut catalog, "restaurant", "x")
                 .unwrap_err();
         assert_eq!(error.code, RecordUpdateTargetErrorCode::FolderUnavailable);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn update_symlinked_alias_refuses_as_unsafe_target() {
+        use std::os::unix::fs::symlink;
+        let root = temp_dir("update-symlink");
+        let original = "---\ntitle: Real\nstatus: liked\ncategory: Coffee\nlocation: Clark\ncreated: 2026-11-08T12:00:00+0000\n---\n\n# Real\n";
+        write_update_note(&root, "eat/real.md", original);
+        if symlink(root.join("eat/real.md"), root.join("eat/alias.md")).is_err()
+        {
+            fs::remove_dir_all(root).unwrap();
+            return;
+        }
+        let config = config();
+        let mut catalog = RecordCatalog::new(&root);
+        let error =
+            resolve_update_target(&config, &mut catalog, "restaurant", "alias")
+                .unwrap_err();
+        assert_eq!(error.code, RecordUpdateTargetErrorCode::UnsafeTarget);
+        assert_eq!(error.code.diagnostic_code(), "record_invalid_value");
+        assert!(
+            error.message.contains("alias") && error.message.contains("real"),
+            "names link and target: {}",
+            error.message
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn update_equal_valued_edits_are_dropped_as_noop() {
+        let root = temp_dir("update-noop");
+        let original = "---\ntitle: Noop\nstatus: liked\ncategory: Coffee\nlocation: \"Clark\"\ncompanions: [\"[[kelly]]\", \"[[morgan]]\"]\ncreated: 2026-11-08T12:00:00+0000\n---\n\n# Noop\n";
+        write_update_note(&root, "eat/noop.md", original);
+        let config = config();
+        let mut catalog = RecordCatalog::new(&root);
+        let target =
+            resolve_update_target(&config, &mut catalog, "restaurant", "noop")
+                .unwrap();
+        let fields = vec![
+            RecordFieldInput {
+                key: "location".to_owned(),
+                state: FieldInputState::SuppliedValues(
+                    vec!["Clark".to_owned()],
+                ),
+                source_range: None,
+            },
+            RecordFieldInput {
+                key: "companions".to_owned(),
+                state: FieldInputState::SuppliedValues(vec![
+                    "[[kelly]], [[morgan]]".to_owned(),
+                ]),
+                source_range: None,
+            },
+        ];
+        let plan = plan_update(PlanUpdateRequest {
+            target: &target,
+            original,
+            fields: &fields,
+            notes: &[],
+            today: UPDATE_TODAY,
+        })
+        .unwrap();
+        assert!(plan.missing.is_empty());
+        assert!(plan.invalid.is_empty());
+        assert!(plan.changed.is_empty(), "changed: {:?}", plan.changed);
+        assert_eq!(plan.markdown.as_deref(), Some(original));
         fs::remove_dir_all(root).unwrap();
     }
 

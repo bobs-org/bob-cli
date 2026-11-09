@@ -266,6 +266,27 @@ fn record_target_menu_ranks_matches_and_shows_stored_values() {
 }
 
 #[test]
+fn record_target_menu_skips_spaced_stems() {
+    let vault = RecordVault::new("bob-cli-complete-record-spaced");
+    vault.write_note("nagi", "Ramen", "Clark");
+    write_file(
+        &vault.path().join("eat/Ramen Nagi.md"),
+        "---\ntitle: Ramen Nagi\nstatus: liked\ncategory: Ramen\nlocation: Clark\n---\n# Ramen Nagi\n",
+    );
+    let raw = "@eat/";
+    let result = vault.complete(raw, raw.len());
+    assert_eq!(result.context, Some(CompletionContext::RecordTarget));
+    let Candidates::RecordTarget(rows) = &result.candidates else {
+        panic!("expected record targets: {result:?}");
+    };
+    assert!(
+        !rows.iter().any(|row| row.stem == "Ramen Nagi"),
+        "spaced stem is not addressable: {rows:?}"
+    );
+    assert!(rows.iter().any(|row| row.stem == "nagi"), "{rows:?}");
+}
+
+#[test]
 fn update_field_assistance_uses_current_values_without_legacy_prompts() {
     let vault = RecordVault::new("bob-cli-complete-record-update-assist");
     vault.write_note("nagi", "Ramen", "\"Clark\"");

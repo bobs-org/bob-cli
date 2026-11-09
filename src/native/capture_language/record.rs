@@ -392,7 +392,11 @@ fn parse_record_route_token(
     })
 }
 
-fn is_update_stem_token(stem: &str) -> bool {
+/// Whether an on-disk stem can be addressed as `@dir/stem` in the capture
+/// grammar. The update resolver still owns safety; this only mirrors the
+/// lexical stem alphabet so completion and rewrites never offer a row that
+/// no longer parses as that target (for example a stem with spaces).
+pub(crate) fn is_addressable_update_stem(stem: &str) -> bool {
     !stem.is_empty()
         && stem.chars().all(|character| {
             !character.is_whitespace()
@@ -412,6 +416,10 @@ fn is_update_stem_token(stem: &str) -> bool {
                         | ','
                 )
         })
+}
+
+fn is_update_stem_token(stem: &str) -> bool {
+    is_addressable_update_stem(stem)
 }
 
 /// Explicit stems use the block-ID alphabet: ASCII letters, digits,
@@ -1417,7 +1425,13 @@ pub(crate) fn editor_view_for_claim(claim: &RecordClaim) -> RecordEditorView {
                     title: None,
                     key: Some(field.key.clone()),
                 });
-                if field.value.is_empty() && !needs.contains(&Need::RecordValue)
+                // On an update, an empty optional field is a legal key
+                // removal, so the editor never needs `record_value` for it.
+                // Required-empty updates still report the need through the
+                // resolved-plan merge when `entry.missing` is non-empty.
+                if intent.action == RecordAction::Create
+                    && field.value.is_empty()
+                    && !needs.contains(&Need::RecordValue)
                 {
                     needs.push(Need::RecordValue);
                 }

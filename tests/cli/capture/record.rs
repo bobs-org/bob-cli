@@ -351,6 +351,13 @@ fn capture_same_draft_collision_writes_nothing() {
             .contains("@eat/ramen_nagi"),
         "names reserved update: {json}"
     );
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("add to it with"),
+        "offers working update spelling: {json}"
+    );
     assert!(!vault.join("eat").exists(), "no writes");
 }
 
@@ -1352,5 +1359,297 @@ fn capture_update_empty_required_and_historical_warning() {
             .unwrap()
             .contains("- 2026-10-07: Still good"),
         "warning does not block the update"
+    );
+}
+
+#[test]
+fn update_optional_empty_reports_no_record_value_and_removes_key() {
+    let (_temp, vault, config) = complete_fixture();
+    write_ninja(&vault);
+    // `location` is optional; an empty edit is a legal key removal.
+    let draft = "@eat/ninja_sushi\n- location::";
+    let parsed = json_output(&capture_parse(&vault, &config, draft));
+    assert_eq!(parsed["record"]["action"], "update");
+    assert_eq!(parsed["record"]["missing"], serde_json::json!([]));
+    assert!(
+        !parsed["needs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|need| need == "record_value"),
+        "optional removal needs nothing: {parsed}"
+    );
+    let dry = capture(&vault, &config, &["--dry-run", "-f", "json", draft])
+        .output()
+        .expect("dry-run optional removal");
+    assert_success(&dry);
+    let dry_json = json_output(&dry);
+    let markdown = dry_json["note_files"][0]["markdown"]
+        .as_str()
+        .expect("markdown");
+    assert!(!markdown.contains("location:"), "key removed: {markdown}");
+}
+
+#[test]
+fn update_required_empty_still_needs_record_value() {
+    let (_temp, vault, config) = complete_fixture();
+    write_ninja(&vault);
+    let draft = "@eat/ninja_sushi\n- status::";
+    let parsed = json_output(&capture_parse(&vault, &config, draft));
+    assert_eq!(parsed["record"]["action"], "update");
+    assert!(
+        parsed["needs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|need| need == "record_value"),
+        "required empty still needs a value: {parsed}"
+    );
+    assert_eq!(
+        parsed["record"]["missing"],
+        serde_json::json!(["status"]),
+        "{parsed}"
+    );
+}
+
+#[test]
+fn update_optional_empty_batch_items_report_no_record_value() {
+    let (_temp, vault, config) = complete_fixture();
+    write_ninja(&vault);
+    fs::write(
+        vault.join("eat/ramen_nagi.md"),
+        "---\ntitle: Ramen Nagi\nstatus: liked\ncategory: Ramen\nlocation: Clark\n---\n# Ramen\n",
+    )
+    .expect("second record");
+    // Two-item draft exercises the batch `items[]` merge path.
+    let draft =
+        "@eat/ninja_sushi\n- location::\n\n@eat/ramen_nagi\n- location::";
+    let parsed = json_output(&capture_parse(&vault, &config, draft));
+    for item in parsed["items"].as_array().expect("items") {
+        assert_eq!(item["record"]["missing"], serde_json::json!([]));
+        assert!(
+            !item["needs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|need| need == "record_value"),
+            "batch optional removal needs nothing: {item}"
+        );
+    }
+    assert!(
+        !parsed["needs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|need| need == "record_value"),
+        "top-level needs nothing: {parsed}"
+    );
+}
+
+#[test]
+fn update_recovery_draft_keeps_parent_note_without_suggestions() {
+    let (_temp, vault, config) = complete_fixture();
+    write_ninja(&vault);
+    // Missing required `status` forces the incomplete-draft path.
+    let draft = "Went back @eat/ninja_sushi\n- status::";
+    let output = capture(&vault, &config, &["-f", "json", draft])
+        .output()
+        .expect("incomplete update");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    let json = json_output(&output);
+    let draft_text = json["draft"].as_str().unwrap_or_default();
+    assert!(
+        draft_text.contains("Went back @eat/ninja_sushi"),
+        "keeps parent note: {draft_text}"
+    );
+    assert!(
+        draft_text.contains("- status::"),
+        "offers the missing key: {draft_text}"
+    );
+    assert!(
+        !draft_text.contains("category::"),
+        "no optional suggestion lines on updates: {draft_text}"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("eat/ninja_sushi.md")).unwrap(),
+        NINJA,
+        "no write on incomplete"
+    );
+}
+
+#[test]
+fn update_record_title_falls_back_to_stem_not_parent_note() {
+    let (_temp, vault, config) = complete_fixture();
+    write_ninja(&vault);
+    let draft = "Went back @eat/ninja_sushy\n- status:: liked";
+    let parsed = json_output(&capture_parse(&vault, &config, draft));
+    assert_eq!(parsed["record"]["action"], "update");
+    assert_eq!(parsed["record"]["stem"], "ninja_sushy");
+    assert_eq!(
+        parsed["record"]["title"], "ninja_sushy",
+        "unresolved update title is the stem: {parsed}"
+    );
+}
+
+#[test]
+fn update_unknown_target_reports_not_found_with_suggestion() {
+    let (_temp, vault, config) = complete_fixture();
+    write_ninja(&vault);
+    let draft = "Went back @eat/ninja_sushy\n- status:: liked";
+    let parsed = json_output(&capture_parse(&vault, &config, draft));
+    let codes: Vec<&str> = parsed["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["code"].as_str().unwrap_or_default())
+        .collect();
+    assert!(
+        codes.contains(&"record_not_found"),
+        "unknown stem is not-found: {parsed}"
+    );
+    let diagnostic = parsed["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["code"] == "record_not_found")
+        .unwrap();
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("ninja_sushi"),
+        "did-you-mean names the stem: {diagnostic}"
+    );
+    let output = capture(&vault, &config, &["-f", "json", draft])
+        .output()
+        .expect("unknown update");
+    assert_ne!(output.status.code(), Some(0), "{}", format_output(&output));
+    assert_eq!(json_output(&output)["code"], "record_not_found");
+    assert_eq!(
+        fs::read_to_string(vault.join("eat/ninja_sushi.md")).unwrap(),
+        NINJA,
+        "no write on unknown target"
+    );
+}
+
+#[test]
+fn update_ambiguous_target_refuses_without_writing() {
+    let temp = TempDir::new("bob-cli-record-ambiguous");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(vault.join("eat")).expect("create eat");
+    let config = write_records_config(&temp);
+    for name in ["Foo.md", "foo.md"] {
+        // Skip on case-insensitive filesystems where the second write would
+        // clobber the first.
+        let path = vault.join(format!("eat/{name}"));
+        if path.exists() {
+            return;
+        }
+        write_file(
+            &path,
+            &format!("---\ntitle: {name}\nstatus: liked\ncategory: Ramen\n---\n# {name}\n"),
+        );
+    }
+    if !vault.join("eat/Foo.md").exists() || !vault.join("eat/foo.md").exists()
+    {
+        return;
+    }
+    let draft = "Note @eat/foo\n- status:: liked";
+    let parsed = json_output(&capture_parse(&vault, &config, draft));
+    assert!(
+        parsed["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["code"] == "record_not_found"),
+        "ambiguous stem is not-found: {parsed}"
+    );
+    let before_foo = fs::read_to_string(vault.join("eat/Foo.md")).unwrap();
+    let before_lower = fs::read_to_string(vault.join("eat/foo.md")).unwrap();
+    let output = capture(&vault, &config, &["-f", "json", draft])
+        .output()
+        .expect("ambiguous update");
+    assert_ne!(output.status.code(), Some(0), "{}", format_output(&output));
+    assert_eq!(
+        fs::read_to_string(vault.join("eat/Foo.md")).unwrap(),
+        before_foo,
+        "no write"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("eat/foo.md")).unwrap(),
+        before_lower,
+        "no write"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn update_symlinked_target_refuses_without_writing() {
+    use std::os::unix::fs::symlink;
+    let (_temp, vault, config) = complete_fixture();
+    write_ninja(&vault);
+    let link = vault.join("eat/alias.md");
+    if symlink(vault.join("eat/ninja_sushi.md"), &link).is_err() {
+        return;
+    }
+    let draft = "Revisit @eat/alias\n- status:: liked";
+    let parsed = json_output(&capture_parse(&vault, &config, draft));
+    assert!(
+        parsed["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["code"] == "record_invalid_value"),
+        "symlink is an unsafe target: {parsed}"
+    );
+    let output = capture(&vault, &config, &["-f", "json", draft])
+        .output()
+        .expect("symlink update");
+    assert_ne!(output.status.code(), Some(0), "{}", format_output(&output));
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "alias still a symlink"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("eat/ninja_sushi.md")).unwrap(),
+        NINJA,
+        "real note unchanged"
+    );
+}
+
+#[test]
+fn update_noop_prefilled_edit_changes_no_bytes() {
+    let (_temp, vault, config) = complete_fixture();
+    fs::create_dir_all(vault.join("eat")).expect("create eat");
+    // Quoted scalar and flow-style list must round-trip as a no-op.
+    let original = "---\ntitle: Ninja Sushi\nstatus: liked\ncategory: Sushi\nlocation: \"Clark\"\ntags: [hot, soup]\n---\n# Ninja\n";
+    write_file(&vault.join("eat/ninja_sushi.md"), original);
+    let draft = "@eat/ninja_sushi\n- location:: Clark\n- tags:: hot, soup";
+    let dry = capture(&vault, &config, &["--dry-run", "-f", "json", draft])
+        .output()
+        .expect("dry-run no-op update");
+    assert_success(&dry);
+    let json = json_output(&dry);
+    let file = json["note_files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|file| file["path"] == "eat/ninja_sushi.md")
+        .expect("note file");
+    assert_eq!(
+        file["markdown"].as_str().unwrap_or_default(),
+        original,
+        "equal values change no bytes: {file}"
+    );
+    assert!(
+        file["lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|line| line["change"] == "unchanged"),
+        "all lines unchanged: {file}"
     );
 }

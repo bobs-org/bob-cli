@@ -139,6 +139,10 @@ impl RecordCatalog {
     pub(crate) fn files_opened(&self) -> usize {
         self.files_opened
     }
+
+    pub(crate) fn vault_root(&self) -> &std::path::Path {
+        &self.vault_root
+    }
 }
 
 impl FolderIndex {

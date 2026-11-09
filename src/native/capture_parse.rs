@@ -3152,10 +3152,18 @@ fn parse_record(
             super::records::RecordStemSource::Explicit => "explicit",
             super::records::RecordStemSource::Existing => "existing",
         }),
-        title: entry
-            .title
-            .clone()
-            .unwrap_or_else(|| entry.intent.title.clone()),
+        // For updates the parent-line note is a note to append, never the
+        // record title. Unresolved targets fall back to the requested stem.
+        title: entry.title.clone().unwrap_or_else(|| match entry.action {
+            super::capture_record::RecordParseAction::Create => {
+                entry.intent.title.clone()
+            }
+            super::capture_record::RecordParseAction::Update => entry
+                .stem
+                .clone()
+                .or_else(|| entry.intent.update_stem.clone())
+                .unwrap_or_default(),
+        }),
         missing: entry.missing.clone(),
         notes: entry
             .intent

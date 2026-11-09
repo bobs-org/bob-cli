@@ -482,3 +482,156 @@ fn capture_parse_record_advertises_assist_version() {
     assert_eq!(json["record"]["assist_version"], 1);
     assert!(json.get("assist_version").is_none());
 }
+
+#[test]
+fn record_target_skips_grammar_unaddressable_stems() {
+    let (_temp, vault, config) = fixture();
+    write_file(
+        &vault.join("eat/Ramen Nagi.md"),
+        "---\ntitle: Ramen Nagi\nstatus: liked\ncategory: Ramen\nlocation: Clark\n---\n# Ramen Nagi\n",
+    );
+    let draft = "@eat/";
+    let output = complete(&vault, &config, draft.len(), draft, &[]);
+    assert_success(&output);
+    let json = json_output(&output);
+    assert_eq!(json["context"], "record_target", "{json}");
+    let stems: Vec<&str> = json["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["stem"].as_str().unwrap_or_default())
+        .collect();
+    assert!(
+        !stems.contains(&"Ramen Nagi"),
+        "spaced stem is not offered: {stems:?}"
+    );
+    assert!(
+        stems.contains(&"nagi"),
+        "addressable stems remain: {stems:?}"
+    );
+    // Row keys required by the landing plan.
+    let row = json["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["stem"] == "nagi")
+        .expect("nagi row");
+    for key in [
+        "route",
+        "stem",
+        "title",
+        "replacement",
+        "cursor_after",
+        "continuation",
+    ] {
+        assert!(row.get(key).is_some(), "row has {key}: {row}");
+    }
+    assert!(row.get("status").is_some(), "row has status: {row}");
+    assert!(row.get("fields").is_some(), "row has fields: {row}");
+}
+
+#[test]
+fn named_field_on_update_prefills_current_value() {
+    let (_temp, vault, config) = fixture();
+    let draft = "@eat/nagi";
+    let output =
+        complete(&vault, &config, draft.len(), draft, &["-F", "location"]);
+    assert_success(&output);
+    let json = json_output(&output);
+    assert_eq!(json["record"]["field"], "location");
+    assert_eq!(json["record"]["current"], "Clark");
+    let edit = json["record"]["edit"].as_object().expect("record.edit");
+    let replacement = edit["replacement"].as_str().unwrap_or_default();
+    assert!(
+        replacement.contains("- location:: Clark"),
+        "pre-filled current: {replacement}"
+    );
+    let applied = apply_edit(draft, &json);
+    assert_eq!(applied, "@eat/nagi\n- location:: Clark");
+}
+
+#[test]
+fn named_field_on_update_without_current_keeps_empty_insert() {
+    let (_temp, vault, config) = fixture();
+    write_file(
+        &vault.join("eat/bare.md"),
+        "---\ntitle: Bare\nstatus: liked\ncategory: Ramen\n---\n# Bare\n",
+    );
+    let draft = "@eat/bare";
+    let output =
+        complete(&vault, &config, draft.len(), draft, &["-F", "location"]);
+    assert_success(&output);
+    let json = json_output(&output);
+    let replacement = json["record"]["edit"]["replacement"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        replacement.contains("- location:: "),
+        "empty insert when no current: {replacement}"
+    );
+}
+
+#[test]
+fn named_field_on_update_prefills_list_and_authored_bullet() {
+    let (_temp, vault, config) = fixture();
+    write_file(
+        &vault.join("eat/nagi.md"),
+        "---\ntitle: Nagi\nstatus: liked\ncategory: Ramen\nlocation: Clark\ncompanions: [\"[[kelly]]\", \"[[morgan]]\"]\n---\n# Nagi\n",
+    );
+    let draft = "@eat/nagi";
+    let output =
+        complete(&vault, &config, draft.len(), draft, &["-F", "companions"]);
+    assert_success(&output);
+    let json = json_output(&output);
+    let replacement = json["record"]["edit"]["replacement"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        replacement.contains("[[kelly]]") && replacement.contains("[[morgan]]"),
+        "list pre-filled: {replacement}"
+    );
+    // Already-authored bullet keeps the caret path (no insert).
+    let authored = "@eat/nagi\n- location:: Cla";
+    let output = complete(
+        &vault,
+        &config,
+        authored.len(),
+        authored,
+        &["-F", "location"],
+    );
+    assert_success(&output);
+    let json = json_output(&output);
+    assert!(
+        json["record"]["edit"].is_object(),
+        "authored keeps edit: {json}"
+    );
+}
+
+#[test]
+fn named_field_on_update_with_comma_member_omits_edit() {
+    let (_temp, vault, config) = fixture();
+    write_file(
+        &vault.join("eat/nagi.md"),
+        "---\ntitle: Nagi\nstatus: liked\ncategory: Ramen\nlocation: Clark\ncompanions: [\"[[a,b]]\"]\n---\n# Nagi\n",
+    );
+    let draft = "@eat/nagi";
+    let output =
+        complete(&vault, &config, draft.len(), draft, &["-F", "companions"]);
+    assert_success(&output);
+    let json = json_output(&output);
+    assert!(
+        json["record"]["edit"].is_null(),
+        "comma member cannot be spelled losslessly: {json}"
+    );
+}
+
+#[test]
+fn update_completion_title_is_stored_not_parent_note() {
+    let (_temp, vault, config) = fixture();
+    let draft = "Went back @eat/nagi";
+    let output =
+        complete(&vault, &config, draft.len(), draft, &["-F", "location"]);
+    assert_success(&output);
+    let json = json_output(&output);
+    assert_eq!(json["record"]["title"], "Nagi", "stored title: {json}");
+}

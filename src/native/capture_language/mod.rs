@@ -185,6 +185,7 @@ pub(crate) use self::pomodoro_literal::canonicalize_exact_name;
 pub(crate) use self::project_tasks::split_leading_checkbox;
 pub(crate) use self::record::candidate_collection_routes;
 pub(crate) use self::record::candidate_dirs;
+pub(crate) use self::record::is_addressable_update_stem;
 pub(crate) use self::record::RecordNoteIntent;
 pub(crate) use self::record::RecordRoutePolicy;
 pub(crate) use self::record::RECORDS_CONFIG_INVALID_CODE;

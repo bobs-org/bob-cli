@@ -6556,7 +6556,12 @@ caret is in that value and otherwise the final authored member. Named-field
 responses include `record.edit`, Bob's explicit edit-in-draft action:
 an absent field gets an empty `- key:: ` bullet, a defaulted field
 materializes the server's default spelling, and an authored field keeps its
-bytes with the caret in the selected value. `record.edit` carries ordinary
+bytes with the caret in the selected value. On an update item with no
+authored bullet, `record.edit` pre-fills the snapshot's current value in
+capture spelling; a field without a current value keeps the empty insert,
+and a value that cannot be spelled losslessly (invalid under the schema or
+a list member containing `,`) omits `record.edit`. An untouched pre-filled
+edit changes no bytes. `record.edit` carries ordinary
 value-completion continuation (`next_missing_field: false`) even when
 value suggestions are empty; clients must not apply it merely because a
 response refreshed. Unknown fields, non-record cursors, and malformed
@@ -6566,11 +6571,14 @@ codes) and never fall through to a task completion context.
 With the caret in a configured `@dir/` route or partial existing stem,
 `record_target` offers existing notes from that folder's lazy index. Exact
 and prefix matches on stem or title rank before fuzzy title matches, with
-stable title/stem ties. Rows show the stored title, status label, and up to
-the first two nonempty fields marked `suggest` in schema order. Accept
-replaces only the route with the canonical `@dir/stem` and continues through
-the ordinary missing-field request; authored parent text and bullets remain
-in place. Explicit-new `@dir/^stem` routes do not open this menu.
+stable title/stem ties. Only grammar-addressable stems are offered, so a
+note such as `eat/Ramen Nagi.md` has no row. Each row carries `route`,
+`stem`, `title`, `status`, `fields[{key,label,value}]` (up to the first two
+nonempty fields marked `suggest` in schema order), `replacement`,
+`cursor_after`, and `continuation`. Accept replaces only the route with the
+canonical `@dir/stem` and continues through the ordinary missing-field
+request; authored parent text and bullets remain in place. Explicit-new
+`@dir/^stem` routes do not open this menu.
 
 Update field rows and named-value responses use the target note's snapshot.
 Field candidates may include a `current` display, and value responses include

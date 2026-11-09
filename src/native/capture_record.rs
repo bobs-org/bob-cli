@@ -104,6 +104,7 @@ pub(crate) fn create_to_update_rewrite(
 ) -> Option<DiagnosticRewrite> {
     if intent.action != super::capture_language::record::RecordAction::Create
         || !intent.dir.eq_ignore_ascii_case(target_dir)
+        || !super::capture_language::is_addressable_update_stem(target_stem)
     {
         return None;
     }
@@ -295,7 +296,9 @@ pub(crate) fn resolve_record_intents_with_catalog(
                         let (stem, stem_source, path) =
                             resolved_destination(intent, record_type);
                         let duplicate_target_stem = safe_duplicate_target_stem(
+                            config,
                             catalog,
+                            vault_root,
                             record_type,
                             stem.as_deref(),
                             &error,
@@ -478,7 +481,9 @@ fn overlay_key(dir: &str, stem: &str) -> String {
 }
 
 fn safe_duplicate_target_stem(
+    config: &records::RecordsConfig,
     catalog: &mut RecordCatalog,
+    vault_root: &Path,
     record_type: &RecordType,
     stem: Option<&str>,
     error: &RecordPlanError,
@@ -494,17 +499,43 @@ fn safe_duplicate_target_stem(
     if let Some(snapshot) = overlay.get(&overlay_key(&record_type.dir, stem))
         && snapshot.path == *collision_path
     {
-        return Some(snapshot.stem.clone());
+        let candidate = snapshot.stem.clone();
+        if !super::capture_language::is_addressable_update_stem(&candidate) {
+            return None;
+        }
+        // A staged target that shadows a symlinked note is not a safe
+        // update: the real update would refuse the alias.
+        if let Ok(meta) =
+            std::fs::symlink_metadata(vault_root.join(collision_path))
+            && meta.file_type().is_symlink()
+        {
+            return None;
+        }
+        return Some(candidate);
     }
-    match catalog.folder(&record_type.dir).lookup_stem(stem) {
+    let candidate = match catalog.folder(&record_type.dir).lookup_stem(stem) {
         records::StemLookup::Exact(note)
             if note.relative_path == *collision_path =>
         {
-            Some(note.stem.clone())
+            note.stem.clone()
         }
         records::StemLookup::Exact(_)
         | records::StemLookup::Ambiguous(_)
-        | records::StemLookup::None => None,
+        | records::StemLookup::None => return None,
+    };
+    if !super::capture_language::is_addressable_update_stem(&candidate) {
+        return None;
+    }
+    // Offer the rewrite only when a real update resolves to the same path,
+    // so symlinked aliases and other unsafe targets have no rewrite.
+    match records::resolve_update_target(
+        config,
+        catalog,
+        &record_type.id,
+        &candidate,
+    ) {
+        Ok(target) if target.path == *collision_path => Some(candidate),
+        Ok(_) | Err(_) => None,
     }
 }
 
@@ -742,8 +773,8 @@ fn note_child_texts(
     lines.iter().map(|line| line.text.clone()).collect()
 }
 
-/// Teaching copy for a path collision: name the existing file and the
-/// recognized update spelling without enabling an update write.
+/// Teaching copy for a path collision: name the existing file and offer
+/// the working update spelling.
 pub(crate) fn collision_message(
     error: &RecordPlanError,
     intent: &RecordNoteIntent,
@@ -762,7 +793,7 @@ pub(crate) fn collision_message(
         .or(intent.explicit_stem.as_deref())
         .unwrap_or("<stem>");
     format!(
-        "record already exists: {path} (open it; capture recognizes `@{}/{stem}` for updates, but update writes are not active yet)",
+        "record already exists: {path}; add to it with `@{}/{stem}`",
         record_type.dir,
     )
 }

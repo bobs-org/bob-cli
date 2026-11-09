@@ -202,6 +202,13 @@ impl<'a> Session<'a> {
                 // actionable completion target.
                 continue;
             };
+            if !super::super::capture_language::is_addressable_update_stem(
+                &target.stem,
+            ) {
+                // A grammar-unaddressable stem (for example with spaces)
+                // no longer parses as that target, so it is not actionable.
+                continue;
+            }
             let title = note.title.clone().unwrap_or_else(|| note.stem.clone());
             let Some((rank, distance)) =
                 target_match_rank(&probe.query, &target.stem, &title)
@@ -367,8 +374,13 @@ impl<'a> Session<'a> {
         let probe = named_value_probe(self.request, &item, &intent, &field);
         let mut result = self.value_menu(&item, &intent, probe.clone())?;
         if let Some(record) = result.record.as_mut() {
-            record.edit =
-                Some(record_edit_action(self.request, &item, &probe, &entry));
+            record.edit = record_edit_action(
+                self.request,
+                &item,
+                &probe,
+                &entry,
+                self.today,
+            );
         }
         set_files_opened(self.catalog.files_opened());
         Ok(result)
@@ -652,13 +664,23 @@ impl<'a> Session<'a> {
                 .find(|property| &property.key == key)
                 .and_then(|property| property.current_display.clone())
         });
+        // For updates the parent-line note is a note to append, never the
+        // record title: use the planned entry's stored title, or None when
+        // the target is unresolved.
+        let title = if entry.action
+            == super::super::capture_record::RecordParseAction::Update
+        {
+            entry.title.clone()
+        } else {
+            (!intent.title.is_empty()).then(|| intent.title.clone())
+        };
         result.record = Some(RecordCompletionMeta {
             record_type: entry.record_type.id.clone(),
             dir: intent.dir.clone(),
             label: entry.record_type.label.clone(),
             emoji: entry.record_type.emoji.clone(),
             field,
-            title: (!intent.title.is_empty()).then(|| intent.title.clone()),
+            title,
             current,
             assist_version: Some(RECORD_ASSIST_VERSION),
             edit: None,
@@ -969,9 +991,69 @@ fn record_edit_action(
     item: &EditorItemParse,
     probe: &ValueProbe,
     entry: &RecordParseEntry,
-) -> RecordEditAction {
+    today: chrono::NaiveDate,
+) -> Option<RecordEditAction> {
     let newline = item_newline(request.raw_text, item.start..item.end);
     if let Some(key) = probe.insert_bullet.as_deref() {
+        // For updates, an empty optional value removes the key, so an
+        // untouched field must pre-fill the snapshot's current value in
+        // capture spelling. This is the update counterpart of materializing
+        // a create default.
+        if entry.action
+            == super::super::capture_record::RecordParseAction::Update
+        {
+            let current = entry
+                .update_properties
+                .iter()
+                .find(|property| property.key == key)
+                .and_then(|property| property.current.clone());
+            let Some(current) = current else {
+                let replacement = value_insert_text(
+                    request.raw_text,
+                    &probe.replace,
+                    "",
+                    Some(key),
+                    newline,
+                );
+                let cursor_after =
+                    edit_value_cursor(probe.replace.start, &replacement, "");
+                return Some(RecordEditAction {
+                    replacement_range: Replacement {
+                        start: probe.replace.start,
+                        end: probe.replace.end,
+                    },
+                    replacement,
+                    cursor_after,
+                    continuation: CandidateContinuation {
+                        cursor: cursor_after,
+                        next_missing_field: false,
+                    },
+                });
+            };
+            let spelling =
+                lossless_capture_spelling(&probe.field, &current, today)?;
+            let replacement = value_insert_text(
+                request.raw_text,
+                &probe.replace,
+                &spelling,
+                Some(key),
+                newline,
+            );
+            let cursor_after =
+                edit_value_cursor(probe.replace.start, &replacement, &spelling);
+            return Some(RecordEditAction {
+                replacement_range: Replacement {
+                    start: probe.replace.start,
+                    end: probe.replace.end,
+                },
+                replacement,
+                cursor_after,
+                continuation: CandidateContinuation {
+                    cursor: cursor_after,
+                    next_missing_field: false,
+                },
+            });
+        }
         let defaulted = entry.properties.iter().any(|property| {
             property.key == key
                 && property.state == RecordPropertyState::Default
@@ -995,7 +1077,7 @@ fn record_edit_action(
         );
         let cursor_after =
             edit_value_cursor(probe.replace.start, &replacement, &spelling);
-        return RecordEditAction {
+        return Some(RecordEditAction {
             replacement_range: Replacement {
                 start: probe.replace.start,
                 end: probe.replace.end,
@@ -1006,14 +1088,14 @@ fn record_edit_action(
                 cursor: cursor_after,
                 next_missing_field: false,
             },
-        };
+        });
     }
     let current = request
         .raw_text
         .get(probe.replace.clone())
         .unwrap_or("")
         .to_string();
-    RecordEditAction {
+    Some(RecordEditAction {
         replacement_range: Replacement {
             start: probe.replace.start,
             end: probe.replace.end,
@@ -1024,7 +1106,96 @@ fn record_edit_action(
             cursor: probe.replace.start,
             next_missing_field: false,
         },
+    })
+}
+
+/// Capture spelling of a snapshot current value when it round-trips
+/// losslessly. Returns `None` for values that are invalid under the schema
+/// and for list members containing `,`, which would split on resubmit.
+fn lossless_capture_spelling(
+    field: &RecordField,
+    value: &RecordValue,
+    today: chrono::NaiveDate,
+) -> Option<String> {
+    if let RecordValue::List(members) = value {
+        for member in members {
+            let spelling = match member {
+                RecordScalar::Text(text)
+                | RecordScalar::Choice(text)
+                | RecordScalar::Link(text) => text.clone(),
+                RecordScalar::Date(RecordDate::Resolved(date)) => {
+                    date.format("%Y-%m-%d").to_string()
+                }
+                RecordScalar::Date(RecordDate::Today) => "today".to_owned(),
+                RecordScalar::Date(RecordDate::Yesterday) => {
+                    "yesterday".to_owned()
+                }
+                RecordScalar::Url(url) => url.to_string(),
+                RecordScalar::Number(number) => number.to_string(),
+            };
+            if spelling.contains(',') {
+                return None;
+            }
+        }
     }
+    let spelling = capture_value_spelling(value);
+    let validated = super::super::records::schema::validate_field_values(
+        field,
+        &[spelling.clone()],
+        today,
+    )
+    .ok()?;
+    let resolved = match &validated {
+        RecordValue::Scalar(scalar) => match scalar {
+            RecordScalar::Date(date) => {
+                let resolved = date.resolve(today)?;
+                RecordValue::Scalar(RecordScalar::Date(RecordDate::Resolved(
+                    resolved,
+                )))
+            }
+            _ => validated.clone(),
+        },
+        RecordValue::List(members) => {
+            let mut resolved_members = Vec::new();
+            for member in members {
+                match member {
+                    RecordScalar::Date(date) => {
+                        let resolved = date.resolve(today)?;
+                        resolved_members.push(RecordScalar::Date(
+                            RecordDate::Resolved(resolved),
+                        ));
+                    }
+                    other => resolved_members.push(other.clone()),
+                }
+            }
+            RecordValue::List(resolved_members)
+        }
+    };
+    let current_resolved = match value {
+        RecordValue::Scalar(RecordScalar::Date(date)) => {
+            let resolved = date.resolve(today)?;
+            RecordValue::Scalar(RecordScalar::Date(RecordDate::Resolved(
+                resolved,
+            )))
+        }
+        RecordValue::List(members) => {
+            let mut out = Vec::new();
+            for member in members {
+                match member {
+                    RecordScalar::Date(date) => {
+                        let resolved = date.resolve(today)?;
+                        out.push(RecordScalar::Date(RecordDate::Resolved(
+                            resolved,
+                        )));
+                    }
+                    other => out.push(other.clone()),
+                }
+            }
+            RecordValue::List(out)
+        }
+        other => other.clone(),
+    };
+    (resolved == current_resolved).then_some(spelling)
 }
 
 fn edit_value_cursor(replace_start: usize, insert: &str, value: &str) -> usize {

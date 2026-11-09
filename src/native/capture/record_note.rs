@@ -488,10 +488,19 @@ fn incomplete_draft(
     missing: &[String],
     catalog: &mut RecordCatalog,
 ) -> String {
+    let is_update = matches!(
+        intent.action,
+        crate::native::capture_language::record::RecordAction::Update
+    );
     let mut draft = match intent.action {
         crate::native::capture_language::record::RecordAction::Update => {
             let stem = intent.update_stem.as_deref().unwrap_or_default();
-            format!("@{}/{}", record_type.dir, stem)
+            let route = format!("@{}/{}", record_type.dir, stem);
+            if intent.title.is_empty() {
+                route
+            } else {
+                format!("{} {route}", intent.title)
+            }
         }
         crate::native::capture_language::record::RecordAction::Create => {
             if let Some(stem) = intent.explicit_stem.as_deref() {
@@ -527,23 +536,29 @@ fn incomplete_draft(
             draft.push_str(&format!("    {hint}"));
         }
     }
-    let folder = catalog.folder(&record_type.dir);
-    for field in &record_type.fields {
-        if field.required || written.contains(&field.key) || !field.suggest {
-            continue;
+    // On an update, an unsupplied optional `suggest` line would overwrite
+    // stored data once filled in, so only supplied fields and missing keys
+    // are offered.
+    if !is_update {
+        let folder = catalog.folder(&record_type.dir);
+        for field in &record_type.fields {
+            if field.required || written.contains(&field.key) || !field.suggest
+            {
+                continue;
+            }
+            let suggestions = folder.value_suggestions(&field.key);
+            if suggestions.is_empty() {
+                continue;
+            }
+            let hint = suggestions
+                .iter()
+                .map(|suggestion| suggestion.insert.as_str())
+                .take(5)
+                .collect::<Vec<_>>()
+                .join(" · ");
+            draft.push_str(&format!("\n- {}:: …    {hint}", field.key));
+            written.insert(field.key.clone());
         }
-        let suggestions = folder.value_suggestions(&field.key);
-        if suggestions.is_empty() {
-            continue;
-        }
-        let hint = suggestions
-            .iter()
-            .map(|suggestion| suggestion.insert.as_str())
-            .take(5)
-            .collect::<Vec<_>>()
-            .join(" · ");
-        draft.push_str(&format!("\n- {}:: …    {hint}", field.key));
-        written.insert(field.key.clone());
     }
     for group in &intent.notes {
         if let Some(section) = &group.section {
