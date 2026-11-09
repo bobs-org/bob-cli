@@ -90,12 +90,11 @@ bob capture-parse -f json -- 'Ramen Nagi @eat/'
 {"ok":true,"schema_version":1,"grammar":21,"input":"Ramen Nagi @eat/","body":"Ramen Nagi","mode":"record_note","route":"eat","needs":["record_value"],"record":{"action":"create","type":"restaurant","label":"Restaurant","dir":"eat","path":"eat/ramen_nagi.md","stem":"ramen_nagi","stem_source":"title","title":"Ramen Nagi","missing":["status","category"],"notes":0,"assist_version":1,"fields":[{"key":"status","kind":"choices","required":true,"state":"missing"}]}}
 ```
 
-Existing `@eat/ninja_sushi` parses as `record_update` / `action: "update"`,
-with `stem_source: "existing"` and stored title. Fields carry effective
-`value`/`display` and prior `before`/`before_display`; `missing` lists supplied
-required fields that remain empty. Legacy defects warn in `bob records check`.
-Update writes use `kind: "record_update"`, `placement: "updated"`, and
-`note_files[].action: "update"` with `before` and `lines`.
+Existing `@eat/ninja_sushi` parses as `record_update` / `action: "update"`, with
+`stem_source: "existing"` and stored title. Fields expose `value`/`display` and
+prior `before`/`before_display`; `missing` lists required fields still empty.
+`bob records check` reports legacy defects. Updates use `kind: "record_update"`,
+`placement: "updated"`, and `note_files[].action: "update"` with `before` and `lines`.
 
 ```bash
 bob capture -f json --dry-run -- "$(printf '%s\n' 'Ramen Nagi @eat/' '- status:: liked' '- category:: Ramen')"
@@ -105,9 +104,8 @@ bob capture -f json --dry-run -- "$(printf '%s\n' 'Ramen Nagi @eat/' '- status::
 {"ok":true,"dry_run":true,"kind":"record_note","placement":"created","relative_target":"eat/ramen_nagi.md","record_note":{"action":"create","label":"Restaurant","emoji":"🍽️","path":"eat/ramen_nagi.md","notes":0,"properties":[{"key":"status","label":"Status","value":"liked","display":"Liked","source":"typed"}]},"note_files":[{"path":"eat/ramen_nagi.md","action":"create","record_type":"restaurant","properties":[{"key":"status","label":"Status","value":"liked","display":"Liked","source":"typed"}],"body":"","markdown":"---\n…\n"}]}
 ```
 
-Each record item also carries an additive `record_note` summary
-without the Markdown; ordinary items omit it. Incomplete drafts refuse
-with top-level `draft`, `missing[]`, and `invalid[]`.
+Record items add `record_note` summaries; incomplete drafts include `draft`,
+`missing[]`, and `invalid[]`.
 
 ```bash
 bob capture -f json --dry-run -- "$(printf '%s\n' 'Went back, still great @eat/ninja_sushi' '- status:: liked')"
@@ -117,9 +115,9 @@ bob capture -f json --dry-run -- "$(printf '%s\n' 'Went back, still great @eat/n
 {"ok":true,"dry_run":true,"kind":"record_update","placement":"updated","relative_target":"eat/ninja_sushi.md","note_files":[{"path":"eat/ninja_sushi.md","action":"update","record_type":"restaurant","properties":[{"key":"status","label":"Status","value":"liked","display":"Liked","source":"typed","before":"to_try","before_display":"To try"}],"body":"","markdown":"---\n…\n","lines":[{"text":"- 2026-10-07: Went back, still great","depth":0,"change":"added"}]}]}
 ```
 
-Properties separate canonical `value` from human `display` (for example,
-`"liked"` / `"Liked"`). Lists are arrays, numbers stay numeric, and dates,
-links, and URLs are strings. Empty optional fields omit both values.
+Properties pair canonical `value` and human `display`. Lists are arrays, numbers
+stay numeric, and dates, links, and URLs are strings. Empty optional fields omit
+values.
 See [Capture](../capture.md#record-notes) for the full representation.
 
 ```bash
