@@ -1567,8 +1567,15 @@ fn editor_reports_pomodoro_start_modes_spans_specs_and_diagnostics() {
     assert_eq!(shape.diagnostics[0].range, Some((3, 7)), "=3 more");
     assert!(shape.pomodoro_start.is_none(), "=3 more");
     let glued = editor("=3x");
-    assert_eq!(codes(&glued), vec!["invalid_pomodoro_start"], "=3x");
-    assert_eq!(glued.diagnostics[0].range, Some((2, 3)), "=3x");
+    assert_eq!(codes(&glued), vec!["invalid_pomodoro_close"], "=3x");
+    assert_eq!(glued.mode, EditorMode::PomodoroClose, "=3x");
+    assert_eq!(glued.diagnostics[0].range, Some((0, 3)), "=3x");
+    assert!(
+        glued.diagnostics[0].message.contains("`3x`")
+            && glued.diagnostics[0].message.contains("=3#x"),
+        "=3x: {}",
+        glued.diagnostics[0].message
+    );
     // Exact tokens with child lines report on the child line.
     let child = editor("=\n- child");
     assert_eq!(child.mode, EditorMode::PomodoroStart, "= child");

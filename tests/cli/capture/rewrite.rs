@@ -1154,6 +1154,10 @@ fn capture_rewrite_json_expands_close_outcome_aliases() {
         ("x=1=s", "x=1=*", "*", "Typed * for s"),
         ("@r:id=xx", "@r:id=x!", "!", "Typed ! for x"),
         ("+2 xs", "+2 x*", "*", "Typed * for s"),
+        ("2xx", "2x!", "!", "Typed ! for x"),
+        ("2x1s", "2x1*", "*", "Typed * for s"),
+        ("^r:id=2xs", "^r:id=2x*", "*", "Typed * for s"),
+        ("--1 2xs", "--1 2x*", "*", "Typed * for s"),
     ] {
         let json = capture_rewrite_json(draft, Some(draft.len()));
         assert_eq!(json["ok"], true, "{draft}");
@@ -1179,7 +1183,7 @@ fn capture_rewrite_json_expands_close_outcome_aliases() {
 
 #[test]
 fn capture_rewrite_json_leaves_close_outcome_letters_literal_without_cursor() {
-    for draft in ["xx", "xs", "x=1=s", "@r:id=xx", "+2 xs"] {
+    for draft in ["xx", "xs", "x=1=s", "@r:id=xx", "+2 xs", "2xx", "2x1s"] {
         let json = capture_rewrite_json(draft, None);
         assert_eq!(json["changed"], false, "{draft}: {json}");
         assert_eq!(json["text"], draft, "{draft}");

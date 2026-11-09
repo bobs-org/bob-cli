@@ -641,9 +641,7 @@ pub(super) fn parse_task_block_id_route_token(
                     .split_once('=')
                     .map(|(_, raw)| raw)
                     .unwrap_or_default();
-                if raw.eq_ignore_ascii_case("x")
-                    || link_close_after_x(raw).is_some()
-                {
+                if is_link_close_suffix(raw) {
                     return Err(POMODORO_CLOSE_PROJECT_NOTE_ERROR.to_string());
                 }
                 return Err(POMODORO_START_PROJECT_NOTE_ERROR.to_string());
@@ -750,9 +748,7 @@ pub(super) fn parse_task_block_id_route_token(
         // `@dev^foo@=3`); otherwise this is an ordinary invalid block ID,
         // as before the epic.
         if before_eq.ends_with('@') {
-            if raw.eq_ignore_ascii_case("x")
-                || link_close_after_x(raw).is_some()
-            {
+            if is_link_close_suffix(raw) {
                 return Err(POMODORO_CLOSE_PROJECT_NOTE_ERROR.to_string());
             }
             return Err(POMODORO_START_PROJECT_NOTE_ERROR.to_string());
@@ -763,9 +759,7 @@ pub(super) fn parse_task_block_id_route_token(
             // Only the block portion before `=` matters for the hint; the
             // name probe is None because `=` splits before `#`.
             let _ = retired_core;
-            if raw.eq_ignore_ascii_case("x")
-                || link_close_after_x(raw).is_some()
-            {
+            if is_link_close_suffix(raw) {
                 return Err(POMODORO_CLOSE_PROJECT_NOTE_ERROR.to_string());
             }
             return Err(POMODORO_START_PROJECT_NOTE_ERROR.to_string());
@@ -1284,9 +1278,7 @@ pub(super) fn parse_colon_link_tail(
         };
         if let Some(eq_index) = offer_split_at {
             let raw_suffix = &rest[eq_index + 1..];
-            if raw_suffix.eq_ignore_ascii_case("x")
-                || link_close_after_x(raw_suffix).is_some()
-            {
+            if is_link_close_suffix(raw_suffix) {
                 return Err(POMODORO_CLOSE_PROJECT_NOTE_ERROR.to_string());
             }
             return Err(POMODORO_START_PROJECT_NOTE_ERROR.to_string());
@@ -1498,35 +1490,23 @@ pub(super) fn parse_colon_link_tail(
     let mut parsed_suffix = None;
     let session: Option<SessionSuffix> = match suffix {
         None => None,
-        Some(raw)
-            if raw.eq_ignore_ascii_case("x")
-                || link_close_after_x(raw).is_some() =>
-        {
+        Some(raw) if is_link_close_suffix(raw) => {
             let display = format!("={raw}");
             if let Some(rewrite) = retired_link_alias_rewrite(raw) {
                 return Err(retired_link_close_alias_error(&display, &rewrite));
             }
-            let spec = match classify_link_close(raw) {
-                None => PomodoroCloseSpec::plain(display.clone()),
-                Some((after_x, x_len)) if after_x.is_empty() => {
-                    debug_assert_eq!(x_len, 1);
-                    PomodoroCloseSpec::plain(display.clone())
+            let spec = match lex_link_close_selection(raw, &display, 1) {
+                Ok(CloseSelectionOutcome::Valid(lex)) => {
+                    close_spec_from_lex(display.clone(), &lex)
+                        .with_size(link_close_size(raw))
                 }
-                Some((after_x, x_len)) => {
-                    let base = 1 + x_len;
-                    match lex_close_selection(after_x, base, &display) {
-                        Ok(CloseSelectionOutcome::Valid(lex)) => {
-                            close_spec_from_lex(display.clone(), &lex)
-                        }
-                        Ok(CloseSelectionOutcome::Incomplete(incomplete)) => {
-                            return Err(close_selection_incomplete_error(
-                                &display,
-                                incomplete.separator,
-                            ));
-                        }
-                        Err(error) => return Err(error.message),
-                    }
+                Ok(CloseSelectionOutcome::Incomplete(incomplete)) => {
+                    return Err(close_selection_incomplete_error(
+                        &display,
+                        incomplete.separator,
+                    ));
                 }
+                Err(error) => return Err(error.message),
             };
             Some(SessionSuffix::Close(spec))
         }
@@ -1865,8 +1845,7 @@ fn caret_tail_has_close_suffix(tail: &str) -> bool {
     let Some((_, raw_suffix)) = tail.split_once('=') else {
         return false;
     };
-    raw_suffix.eq_ignore_ascii_case("x")
-        || link_close_after_x(raw_suffix).is_some()
+    is_link_close_suffix(raw_suffix)
 }
 
 /// Parse a `^route:…` token's components with the shared post-sigil parser.
@@ -2023,8 +2002,7 @@ pub(super) fn classify_caret_token(text: &str) -> CaretTokenShape {
     // diagnostics, and surface the dangling separator as an incomplete
     // state. Every other suffix keeps today's `=<X>` start handling below.
     if let Some((before_eq, raw_suffix)) = tail.split_once('=')
-        && (raw_suffix.eq_ignore_ascii_case("x")
-            || link_close_after_x(raw_suffix).is_some())
+        && is_link_close_suffix(raw_suffix)
     {
         return classify_caret_close_suffix(route_part, before_eq, raw_suffix);
     }
@@ -2259,16 +2237,17 @@ fn classify_caret_close_suffix(
             range: (suffix_offset, suffix_offset + display.len()),
         };
     }
-    let (after_x, x_len) = classify_link_close(raw_suffix).unwrap_or(("", 1));
-    let after_x_offset = suffix_offset + 1 + x_len;
     let link_end = link_base + block_id.len();
-    match lex_close_selection(after_x, after_x_offset, &display) {
+    match lex_link_close_selection(raw_suffix, &display, suffix_offset + 1) {
         Ok(CloseSelectionOutcome::Valid(lex)) => CaretTokenShape::Complete {
             route,
             block_id: block_id.to_string(),
             pomodoro_name: None,
             start: None,
-            close: Some(close_spec_from_lex(display, &lex)),
+            close: Some(
+                close_spec_from_lex(display, &lex)
+                    .with_size(link_close_size(raw_suffix)),
+            ),
             link_end,
             name_range: None,
             start_offset: Some(suffix_offset),
@@ -2283,7 +2262,8 @@ fn classify_caret_close_suffix(
             CaretTokenShape::CloseIncomplete {
                 route,
                 block_id: block_id.to_string(),
-                close: close_spec_from_incomplete(display, &incomplete),
+                close: close_spec_from_incomplete(display, &incomplete)
+                    .with_size(link_close_size(raw_suffix)),
                 link_end,
                 suffix_offset,
                 close_in_progress: incomplete.in_progress_range,

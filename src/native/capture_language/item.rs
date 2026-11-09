@@ -12,8 +12,7 @@ use super::model::*;
 use super::move_bullet::MoveBulletHit;
 use super::move_bullet::MoveBulletInvalid;
 use super::pomodoro_literal::{
-    canonicalize_exact_name, decode_close_hash_name, lex_exact_name_after_hash,
-    opens_exact_name,
+    canonicalize_exact_name, lex_exact_name_after_hash, opens_exact_name,
 };
 use super::project_tasks::*;
 use super::start_selection::*;
@@ -3721,7 +3720,11 @@ pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
     // strict classifier ahead of the `=`-family lexer so starts and all
     // existing `=` spellings retain their current tokenization.
     let first = text.split_whitespace().next().unwrap_or(text);
-    if classify_whole_item_close(first).is_some() || first.starts_with("x#") {
+    if !matches!(
+        lex_close_prefix(first, ClosePrefixCase::WholeItem, 0),
+        ClosePrefixOutcome::Prose
+    ) || lex_equals_sized_close(first, 0).is_some()
+    {
         return Some(EqualsToken::Close);
     }
     // Past `x=` claims every lowercase prefix at an item start or chain
@@ -4019,6 +4022,8 @@ pub(super) fn is_session_chain_token(token: &str) -> bool {
                 || is_plain_whole_item_close(token)
                 || whole_item_close_after_x(token).is_some()
                 || is_close_hash_token(token)
+                || is_sized_whole_item_close_shape(token)
+                || lex_equals_sized_close(token, 0).is_some()
                 || retired_whole_item_close_rewrite(token).is_some()
         }
         None => false,
@@ -4268,10 +4273,40 @@ fn early_link_operator_body_error(
 }
 
 /// Whether a whitespace-free token is a close-hash near miss: bare lowercase
-/// `x` immediately followed by `#`. The retired `=x#…` spelling is a
-/// retired-form teaching error instead.
+/// `x` or a sized `Nx` immediately followed by `#`. The retired `=x#…`
+/// spelling is a retired-form teaching error instead.
 pub(super) fn is_close_hash_token(token: &str) -> bool {
-    token.starts_with("x#")
+    matches!(
+        lex_close_prefix(token, ClosePrefixCase::WholeItem, 0),
+        ClosePrefixOutcome::Error(error)
+            if error.kind == ClosePrefixErrorKind::Hash
+    )
+}
+
+/// Whether `token` is an adjust or shift operator (including claimed near
+/// misses), so a following sized close may chain in front position.
+pub(crate) fn is_adjust_or_shift_chain_token(token: &str) -> bool {
+    match session_operator_token(token) {
+        Some((_, digits, len)) => len == token.len() || !digits.is_empty(),
+        None => false,
+    }
+}
+
+/// Position-aware chain predicate: a sized whole-item close is an operator
+/// only at index zero or after adjust/shift tokens.
+pub(crate) fn is_session_chain_token_at(
+    token: &str,
+    index: usize,
+    tokens: &[Token<'_>],
+) -> bool {
+    if is_sized_whole_item_close_shape(token) {
+        let front = index == 0
+            || tokens[..index]
+                .iter()
+                .all(|prev| is_adjust_or_shift_chain_token(prev.text));
+        return front && is_session_chain_token(token);
+    }
+    is_session_chain_token(token)
 }
 
 /// Whether a close token is the plain whole-item `x`, with no selection
@@ -5485,15 +5520,37 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     format!("{rewritten}{}", &parent_trimmed[first.len()..]);
                 return Err(retired_whole_item_close_error(first, &rewrite));
             }
-            if is_close_hash_token(first) {
-                let name = decode_close_hash_name(first, parent_trimmed);
-                return Err(pomodoro_close_hash_error(&name));
-            }
-            let selection_after_x = whole_item_close_after_x(first);
-            if selection_after_x.is_none() && !is_plain_whole_item_close(first)
-            {
-                return Ok(None);
-            }
+            let leading = parent_line.raw.text.len()
+                - parent_line.raw.text.trim_start().len();
+            let token_start = parent_line.raw.start + leading;
+            let prefix = match lex_close_prefix(
+                first,
+                ClosePrefixCase::WholeItem,
+                token_start,
+            ) {
+                ClosePrefixOutcome::Error(error) => {
+                    return Err(close_prefix_error_message(
+                        first,
+                        parent_trimmed,
+                        &error,
+                    ));
+                }
+                ClosePrefixOutcome::Prose => {
+                    if let Some(error) =
+                        lex_equals_sized_close(first, token_start)
+                    {
+                        return Err(error.message);
+                    }
+                    return Ok(None);
+                }
+                ClosePrefixOutcome::Valid(prefix) => prefix,
+            };
+            let size = prefix.size.clone();
+            let selection_after_x = if prefix.after_x.is_empty() {
+                None
+            } else {
+                Some(prefix.after_x)
+            };
             let single_token_parent = parent_trimmed == first;
             if single_token_parent && item.lines.len() == 1 {
                 if forced_route.is_some() || forced_section.is_some() {
@@ -5501,13 +5558,15 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                 }
                 let raw = parent_trimmed.to_string();
                 let spec = match selection_after_x {
-                    None => PomodoroCloseSpec::plain(raw.clone()),
+                    None => PomodoroCloseSpec::plain(raw.clone())
+                        .with_size(size.clone()),
                     Some(after_x) => {
                         let offset =
                             close_after_x_offset(parent_line, first, after_x);
                         match lex_close_selection(after_x, offset, first) {
                             Ok(CloseSelectionOutcome::Valid(lex)) => {
                                 close_spec_from_lex(raw.clone(), &lex)
+                                    .with_size(size.clone())
                             }
                             Ok(CloseSelectionOutcome::Incomplete(
                                 incomplete,
@@ -5605,7 +5664,8 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                         let mut spec = close_spec_from_lex(
                             first.to_string(),
                             &lexed_selection,
-                        );
+                        )
+                        .with_size(size.clone());
                         spec.log = log_entries_from_lex(&lexed.entries);
                         let body = parent_trimmed.to_string();
                         return Ok(Some(parsed_capture_item_outcome(
@@ -5749,7 +5809,8 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     let mut spec = close_spec_from_lex(
                         first.to_string(),
                         &lexed_selection,
-                    );
+                    )
+                    .with_size(size.clone());
                     spec.log = vec![log_entry_from_inline(
                         &entry,
                         first,

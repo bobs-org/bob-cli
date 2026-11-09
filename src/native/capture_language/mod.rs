@@ -144,6 +144,7 @@ pub(crate) use self::model::CaptureParseOptions;
 pub(crate) use self::model::ClipRequest;
 pub(crate) use self::model::CloseLogEntry;
 pub(crate) use self::model::CloseLogOrigin;
+pub(crate) use self::model::CloseSize;
 pub(crate) use self::model::DrawerSelector;
 pub(crate) use self::model::EditorParseOptions;
 pub(crate) use self::model::FanoutContext;

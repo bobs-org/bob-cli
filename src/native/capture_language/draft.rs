@@ -507,9 +507,9 @@ pub(super) fn session_chain_tokens<'a>(
 ) -> Option<Vec<Token<'a>>> {
     let tokens = line_session_view_tokens(line);
     if tokens.len() >= 2
-        && tokens
-            .iter()
-            .all(|token| is_session_chain_token(token.text))
+        && tokens.iter().enumerate().all(|(index, token)| {
+            is_session_chain_token_at(token.text, index, &tokens)
+        })
     {
         Some(tokens)
     } else {
@@ -522,6 +522,12 @@ pub(super) fn session_chain_tokens<'a>(
 /// teaches the rewrite. Past counts as a close so it owns inline entries
 /// and child bullets.
 fn is_chain_close_token(token: &str) -> bool {
+    if super::close_selection::is_sized_whole_item_close_shape(token) {
+        // Sized closes still own a chain when they sit in front position;
+        // the position-aware scan decides membership. Past records stay
+        // close-like so they own inline entries and child bullets.
+        return true;
+    }
     matches!(
         super::item::session_equals_token(token),
         Some(super::item::EqualsToken::Close)
@@ -535,6 +541,9 @@ fn is_chain_close_token(token: &str) -> bool {
 /// Adjust/shift tokens (`+1`, `-`, `--`) never start a session, so they
 /// stay entry text unless a start or close precedes them in the trail.
 fn is_trail_head_token(token: &str) -> bool {
+    if super::close_selection::is_sized_whole_item_close_shape(token) {
+        return false;
+    }
     super::item::session_equals_token(token).is_some()
 }
 
@@ -562,26 +571,37 @@ pub(crate) fn split_inline_close_tokens(
     if tokens.len() < 2 {
         return None;
     }
-    if tokens
-        .iter()
-        .all(|token| is_session_chain_token(token.text))
-    {
+    if tokens.iter().enumerate().all(|(index, token)| {
+        is_session_chain_token_at(token.text, index, tokens)
+    }) {
         return None;
     }
     let lead_len = tokens
         .iter()
-        .take_while(|token| is_session_chain_token(token.text))
+        .enumerate()
+        .take_while(|(index, token)| {
+            is_session_chain_token_at(token.text, *index, tokens)
+        })
         .count();
     if lead_len == 0 {
         return None;
     }
     let owner_index = tokens[..lead_len]
         .iter()
-        .rposition(|token| is_chain_close_token(token.text))?;
+        .enumerate()
+        .rev()
+        .find(|(index, token)| {
+            is_chain_close_token(token.text)
+                && is_session_chain_token_at(token.text, *index, tokens)
+        })
+        .map(|(index, _)| index)?;
     let suffix_len = tokens
         .iter()
+        .enumerate()
         .rev()
-        .take_while(|token| is_session_chain_token(token.text))
+        .take_while(|(index, token)| {
+            is_session_chain_token_at(token.text, *index, tokens)
+        })
         .count();
     let mut trail_start = tokens.len() - suffix_len;
     while trail_start < tokens.len()

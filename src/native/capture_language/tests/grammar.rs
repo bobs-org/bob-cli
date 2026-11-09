@@ -1057,8 +1057,13 @@ fn execution_parses_equals_family_starts_alongside_close() {
             && dashed_twice.contains("=5#deep-work"),
         "{dashed_twice}"
     );
-    let close_shaped = execute("=3x").expect_err("close-shaped name");
-    assert!(close_shaped.contains("=3#x"), "{close_shaped}");
+    let close_shaped = execute("=3x").expect_err("equals-sized close");
+    assert!(
+        close_shaped.contains("`=3x` is not a start")
+            && close_shaped.contains("`3x`")
+            && close_shaped.contains("=3#x"),
+        "{close_shaped}"
+    );
     // Oversized values fail the shared start overflow before any write.
     let overflow = execute("=99999999999999999999999").expect_err("overflow");
     assert_eq!(overflow, POMODORO_START_OVERFLOW_ERROR, "{overflow}");

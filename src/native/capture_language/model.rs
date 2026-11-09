@@ -313,6 +313,10 @@ pub(crate) struct PomodoroCloseSpec {
     /// whole-item close, or the `=`-prefixed suffix (`=x1*2!3~4`) for a link
     /// or task close.
     pub(crate) raw: String,
+    /// Optional size prefix: `N` in `Nx`, one or two ASCII digits naming
+    /// five-minute blocks. Omitted from JSON when the close is unsized.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) size: Option<CloseSize>,
     /// Numbered links that stay in progress, or `None` when no `<N>` list
     /// was typed. `Some(vec![])` is an explicit `x0` ('none').
     pub(crate) in_progress: Option<Vec<u32>>,
@@ -343,6 +347,37 @@ pub(crate) struct PomodoroCloseSpec {
 
 fn is_false(value: &bool) -> bool {
     !value
+}
+
+/// A claimed `Nx` close size: the typed digit run, its block count, and
+/// the equivalent minutes (`blocks * 5`). `raw` keeps leading zeros
+/// (`02` stays `"02"` while `blocks` is 2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct CloseSize {
+    pub(crate) raw: String,
+    pub(crate) blocks: u32,
+    pub(crate) minutes: u32,
+}
+
+impl CloseSize {
+    /// A 1–2 digit run whose numeric value is 1–99.
+    pub(crate) fn from_raw(raw: &str) -> Option<Self> {
+        if raw.is_empty()
+            || raw.len() > 2
+            || !raw.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return None;
+        }
+        let blocks = raw.parse::<u32>().ok()?;
+        if !(1..=99).contains(&blocks) {
+            return None;
+        }
+        Some(Self {
+            raw: raw.to_string(),
+            blocks,
+            minutes: blocks.saturating_mul(5),
+        })
+    }
 }
 
 /// A close is explicit when any numbered task list contains a number, or
@@ -418,6 +453,7 @@ impl PomodoroCloseSpec {
     pub(crate) fn plain(raw: String) -> Self {
         Self {
             raw,
+            size: None,
             in_progress: None,
             park: Vec::new(),
             park_all: false,
@@ -425,6 +461,21 @@ impl PomodoroCloseSpec {
             complete_all: false,
             drop: Vec::new(),
             log: Vec::new(),
+        }
+    }
+
+    /// Attach a lexed size without re-parsing `raw`.
+    pub(crate) fn with_size(mut self, size: Option<CloseSize>) -> Self {
+        self.size = size;
+        self
+    }
+
+    /// Byte length of the `[N]x` operator: digits plus `x`, or `1` when
+    /// unsized. Link suffixes add the leading `=` on top of this.
+    pub(crate) fn operator_len(&self) -> usize {
+        match &self.size {
+            Some(size) => size.raw.len() + 1,
+            None => 1,
         }
     }
 

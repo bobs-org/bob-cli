@@ -93,6 +93,9 @@ fn bare_close_selection_shapes_report_the_same_close_everywhere() {
 fn bare_close_classifier_claims_only_the_documented_shapes() {
     for (token, expected) in [
         ("x", Some("")),
+        ("2x", Some("")),
+        ("02x", Some("")),
+        ("2x!2", Some("!2")),
         ("x1,3!2", Some("1,3!2")),
         ("x,", Some(",")),
         ("x#bugs", None),

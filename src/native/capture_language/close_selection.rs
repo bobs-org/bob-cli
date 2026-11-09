@@ -109,6 +109,314 @@ pub(crate) enum CloseSelectionOutcome {
     Incomplete(CloseSelectionIncomplete),
 }
 
+/// Case context for [`lex_close_prefix`]: whole-item closes need a
+/// lowercase `x`; link suffixes accept `x` or `X`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClosePrefixCase {
+    WholeItem,
+    Link,
+}
+
+/// A valid `[N]x` (or unsized `x` / short `*`/`!`) prefix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ClosePrefix<'a> {
+    pub(crate) size: Option<CloseSize>,
+    /// Bytes of `[digits]x` from the start of the scanned token, or `0`
+    /// for a short `*`/`!` link alias.
+    pub(crate) prefix_len: usize,
+    /// `1` for `x`/`X`, `0` for a short alias.
+    pub(crate) x_len: usize,
+    /// Selection body after `x` (or the whole suffix for a short alias).
+    pub(crate) after_x: &'a str,
+}
+
+/// Why [`lex_close_prefix`] refused a claimed size/near-miss.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClosePrefixErrorKind {
+    Zero,
+    TooLarge,
+    Hash,
+    SizedPast,
+    EqualsSized,
+}
+
+/// A claimed teaching error with its byte range relative to `base_offset`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ClosePrefixError {
+    pub(crate) message: String,
+    pub(crate) range: (usize, usize),
+    pub(crate) kind: ClosePrefixErrorKind,
+}
+
+/// Shared prefix lexer result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ClosePrefixOutcome<'a> {
+    /// Not a close prefix (ordinary prose).
+    Prose,
+    /// Claimed teaching error (`0x`, `100x`, `2x#`, `2x=`, `=2x`).
+    Error(ClosePrefixError),
+    /// Valid close prefix, sized or unsized.
+    Valid(ClosePrefix<'a>),
+}
+
+fn is_close_selection_start(byte: u8) -> bool {
+    byte.is_ascii_digit()
+        || byte == b','
+        || byte == b'!'
+        || byte == b'~'
+        || byte == b'*'
+        || byte == b'@'
+}
+
+fn is_claimed_close_body(after_x: &str, sized: bool) -> bool {
+    match after_x.as_bytes().first() {
+        None => true,
+        Some(byte) if is_close_selection_start(*byte) => true,
+        Some(b'#') => true,
+        Some(b'=') if sized => true,
+        _ => false,
+    }
+}
+
+fn close_x_len(
+    bytes: &[u8],
+    at: usize,
+    case: ClosePrefixCase,
+) -> Option<usize> {
+    match (case, bytes.get(at).copied()) {
+        (ClosePrefixCase::WholeItem, Some(b'x')) => Some(1),
+        (ClosePrefixCase::Link, Some(b'x' | b'X')) => Some(1),
+        _ => None,
+    }
+}
+
+fn leading_digit_len(text: &str) -> usize {
+    text.bytes()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count()
+}
+
+fn past_minutes_from_e(e: &str) -> Option<u32> {
+    if e.is_empty()
+        || e.len() > 2
+        || !e.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let blocks = e.parse::<u32>().ok()?;
+    (1..=99)
+        .contains(&blocks)
+        .then_some(blocks.saturating_mul(5))
+}
+
+/// Shared `[N]x` prefix lexer. `token` is a whole-item token or a link
+/// suffix after `=`. `base_offset` is the absolute (or token-relative)
+/// start of `token`; error ranges add it.
+pub(crate) fn lex_close_prefix(
+    token: &str,
+    case: ClosePrefixCase,
+    base_offset: usize,
+) -> ClosePrefixOutcome<'_> {
+    if case == ClosePrefixCase::Link
+        && (token.starts_with('*') || token.starts_with('!'))
+    {
+        return ClosePrefixOutcome::Valid(ClosePrefix {
+            size: None,
+            prefix_len: 0,
+            x_len: 0,
+            after_x: token,
+        });
+    }
+    let bytes = token.as_bytes();
+    let digit_len = leading_digit_len(token);
+    let Some(x_len) = close_x_len(bytes, digit_len, case) else {
+        return ClosePrefixOutcome::Prose;
+    };
+    let prefix_len = digit_len + x_len;
+    let after_x = &token[prefix_len..];
+    let sized = digit_len > 0;
+    if !is_claimed_close_body(after_x, sized) {
+        return ClosePrefixOutcome::Prose;
+    }
+    let token_range = (base_offset, base_offset + token.len());
+    let prefix_range = (base_offset, base_offset + prefix_len);
+    let close_spelling = &token[..prefix_len];
+    if sized && digit_len >= 3 {
+        return ClosePrefixOutcome::Error(ClosePrefixError {
+            message: pomodoro_close_size_too_large_error(close_spelling),
+            range: prefix_range,
+            kind: ClosePrefixErrorKind::TooLarge,
+        });
+    }
+    let size = if sized {
+        match CloseSize::from_raw(&token[..digit_len]) {
+            Some(size) => Some(size),
+            None => {
+                return ClosePrefixOutcome::Error(ClosePrefixError {
+                    message: pomodoro_close_size_zero_error(close_spelling),
+                    range: prefix_range,
+                    kind: ClosePrefixErrorKind::Zero,
+                });
+            }
+        }
+    } else {
+        None
+    };
+    if after_x.starts_with('#') {
+        let name =
+            super::pomodoro_literal::decode_close_hash_name(token, token);
+        return ClosePrefixOutcome::Error(ClosePrefixError {
+            message: pomodoro_close_hash_error(close_spelling, &name),
+            range: (base_offset + prefix_len, base_offset + token.len()),
+            kind: ClosePrefixErrorKind::Hash,
+        });
+    }
+    if sized && after_x.starts_with('=') {
+        let rest = &after_x[1..];
+        let past = format!("x={rest}");
+        let start = if rest.is_empty() {
+            "=3".to_string()
+        } else if rest.starts_with('=') {
+            rest.to_string()
+        } else {
+            format!("={rest}")
+        };
+        let close_minutes = size.as_ref().map(|s| s.minutes).unwrap_or(0);
+        return ClosePrefixOutcome::Error(ClosePrefixError {
+            message: pomodoro_sized_past_error(
+                token,
+                &past,
+                past_minutes_from_e(rest),
+                close_spelling,
+                close_minutes,
+                &start,
+            ),
+            range: token_range,
+            kind: ClosePrefixErrorKind::SizedPast,
+        });
+    }
+    ClosePrefixOutcome::Valid(ClosePrefix {
+        size,
+        prefix_len,
+        x_len,
+        after_x,
+    })
+}
+
+/// Rebuild a prefix-error message using the parent line, so a hash name
+/// that is a quoted literal with spaces matches parse/editor copy.
+pub(crate) fn close_prefix_error_message(
+    token: &str,
+    parent: &str,
+    error: &ClosePrefixError,
+) -> String {
+    if error.kind == ClosePrefixErrorKind::Hash {
+        let close = token
+            .find('#')
+            .map(|index| &token[..index])
+            .unwrap_or(token);
+        pomodoro_close_hash_error(
+            close,
+            &super::pomodoro_literal::decode_close_hash_name(token, parent),
+        )
+    } else {
+        error.message.clone()
+    }
+}
+
+/// Size carried by a valid link-close suffix (`2x`, `02X!1`), or `None`
+/// when the suffix is unsized or not a valid prefix.
+pub(crate) fn link_close_size(suffix: &str) -> Option<CloseSize> {
+    match lex_close_prefix(suffix, ClosePrefixCase::Link, 0) {
+        ClosePrefixOutcome::Valid(prefix) => prefix.size,
+        _ => None,
+    }
+}
+
+/// Lex a link-close suffix through the shared prefix owner, then the
+/// selection lexer. Prefix teaching errors (`0x`, `100x`, `2x=`, `2x#`)
+/// surface as selection errors so they cannot fall through as starts.
+/// `suffix_abs` is the absolute offset of `raw`'s first byte (the byte
+/// after `=`).
+pub(crate) fn lex_link_close_selection(
+    raw: &str,
+    display: &str,
+    suffix_abs: usize,
+) -> Result<CloseSelectionOutcome, CloseSelectionError> {
+    match lex_close_prefix(raw, ClosePrefixCase::Link, suffix_abs) {
+        ClosePrefixOutcome::Error(error) => Err(CloseSelectionError {
+            message: error.message,
+            range: error.range,
+            kind: CloseSelectionErrorKind::Other,
+        }),
+        ClosePrefixOutcome::Prose => Err(CloseSelectionError::new(
+            format!("`{display}` is not a close"),
+            (suffix_abs, suffix_abs + raw.len()),
+        )),
+        ClosePrefixOutcome::Valid(prefix) => lex_close_selection(
+            prefix.after_x,
+            suffix_abs + prefix.prefix_len,
+            display,
+        ),
+    }
+}
+
+/// Whole-item `=2x`: a start near-miss that must not go through the
+/// retired `=x` rewrite. Only a valid size (1–99, one or two digits)
+/// claims this teaching error; `=0x` / `=100x` keep start parsing.
+pub(crate) fn lex_equals_sized_close(
+    token: &str,
+    base_offset: usize,
+) -> Option<ClosePrefixError> {
+    let rest = token.strip_prefix('=')?;
+    if rest.starts_with('=') {
+        return None;
+    }
+    match lex_close_prefix(rest, ClosePrefixCase::WholeItem, base_offset + 1) {
+        ClosePrefixOutcome::Valid(prefix) => {
+            let size = prefix.size?;
+            Some(ClosePrefixError {
+                message: pomodoro_equals_sized_close_error(
+                    token,
+                    &token[1..1 + prefix.prefix_len],
+                    size.minutes,
+                    &size.raw,
+                ),
+                range: (base_offset, base_offset + token.len()),
+                kind: ClosePrefixErrorKind::EqualsSized,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Whether `token` is a sized whole-item close shape (valid or a claimed
+/// size/near-miss error). Unsized `x` / `x#` are false.
+pub(crate) fn is_sized_whole_item_close_shape(token: &str) -> bool {
+    match lex_close_prefix(token, ClosePrefixCase::WholeItem, 0) {
+        ClosePrefixOutcome::Valid(prefix) => prefix.size.is_some(),
+        ClosePrefixOutcome::Error(error) => {
+            matches!(
+                error.kind,
+                ClosePrefixErrorKind::Zero
+                    | ClosePrefixErrorKind::TooLarge
+                    | ClosePrefixErrorKind::Hash
+                    | ClosePrefixErrorKind::SizedPast
+            ) && leading_digit_len(token) > 0
+        }
+        ClosePrefixOutcome::Prose => false,
+    }
+}
+
+/// A link suffix (text after `=`) that is a close: unsized `x`/`X`, a
+/// sized prefix, a selection, a short alias, or a claimed size error.
+pub(crate) fn is_link_close_suffix(suffix: &str) -> bool {
+    !matches!(
+        lex_close_prefix(suffix, ClosePrefixCase::Link, 0),
+        ClosePrefixOutcome::Prose
+    )
+}
+
 /// Classify the text after `=` for a link close suffix or a retired
 /// whole-item `=` spelling: the selection body to lex plus the `x` length (1
 /// for a long `x`/`X` close, 0 for a short `*`/`!` alias). `None` for
@@ -116,55 +424,31 @@ pub(crate) enum CloseSelectionOutcome {
 /// length 1; a selection-shaped long close reports the text after `x`; any
 /// suffix starting with `*` or `!` is a short alias (claimed even when its
 /// list is malformed, so `=*abc` reports a close diagnostic, never a task).
+/// Sized prefixes (`2x`, `02X!1`) are valid closes; size errors stay
+/// claimed so they cannot fall through to the start parser.
 pub(crate) fn close_after_eq_parts(after_eq: &str) -> Option<(&str, usize)> {
-    if after_eq.eq_ignore_ascii_case("x") {
-        return Some(("", 1));
-    }
-    if let Some(after_x) = after_eq
-        .strip_prefix('x')
-        .or_else(|| after_eq.strip_prefix('X'))
-    {
-        if after_x.as_bytes().first().is_some_and(|byte| {
-            byte.is_ascii_digit()
-                || *byte == b','
-                || *byte == b'!'
-                || *byte == b'~'
-                || *byte == b'*'
-                || *byte == b'@'
-        }) {
-            return Some((after_x, 1));
+    match lex_close_prefix(after_eq, ClosePrefixCase::Link, 0) {
+        ClosePrefixOutcome::Valid(prefix) => {
+            Some((prefix.after_x, prefix.x_len))
         }
-        return None;
+        ClosePrefixOutcome::Error(_) => Some(("", 1)),
+        ClosePrefixOutcome::Prose => None,
     }
-    if after_eq.starts_with('*') || after_eq.starts_with('!') {
-        return Some((after_eq, 0));
-    }
-    None
 }
 
 /// Classify a whole-item close token: the selection body to lex after the
-/// one-byte lowercase `x`. Plain `x` is a close with an empty selection; a
-/// following selection sigil or digit claims the token, while every other
-/// shape stays prose (`xx`, `xa`, `x.`, `x-ray`, and every capitalized `X…`).
-/// `x#…` is intentionally handled by the hash-near-miss recognizer, and the
-/// retired `=x…`/`=*…`/`=!…` spellings by
+/// `[N]x` prefix. Plain `x` and sized `2x` are closes with an empty
+/// selection; a following selection sigil or digit claims the token, while
+/// every other shape stays prose (`xx`, `xa`, `x.`, `x-ray`, `2X`, and
+/// every capitalized `X…`). Size errors, `x#…`/`2x#…`, and `2x=` are
+/// claimed by [`lex_close_prefix`] instead of this function. The retired
+/// `=x…`/`=*…`/`=!…` spellings stay on
 /// [`retired_whole_item_close_rewrite`].
 pub(crate) fn classify_whole_item_close(token: &str) -> Option<&str> {
-    let after_x = token.strip_prefix('x')?;
-    if after_x.is_empty() {
-        return Some("");
+    match lex_close_prefix(token, ClosePrefixCase::WholeItem, 0) {
+        ClosePrefixOutcome::Valid(prefix) => Some(prefix.after_x),
+        _ => None,
     }
-    if after_x.as_bytes().first().is_some_and(|byte| {
-        byte.is_ascii_digit()
-            || *byte == b','
-            || *byte == b'!'
-            || *byte == b'~'
-            || *byte == b'*'
-            || *byte == b'@'
-    }) {
-        return Some(after_x);
-    }
-    None
 }
 
 /// The bare rewrite of a retired whole-item `=`-prefixed close token, or
@@ -178,6 +462,11 @@ pub(crate) fn classify_whole_item_close(token: &str) -> Option<&str> {
 /// closes. `=xx` / `=xa` are named starts, not retired closes.
 pub(crate) fn retired_whole_item_close_rewrite(token: &str) -> Option<String> {
     let after_eq = token.strip_prefix('=')?;
+    // `=2x` is a sized-start near miss, not a retired `=x` that would drop
+    // the size.
+    if leading_digit_len(after_eq) > 0 {
+        return None;
+    }
     if let Some(name) = after_eq
         .strip_prefix("x#")
         .or_else(|| after_eq.strip_prefix("X#"))
@@ -198,15 +487,6 @@ pub(crate) fn retired_link_alias_rewrite(suffix: &str) -> Option<String> {
     }
 }
 
-/// Classify a link suffix (the text after `=`): the selection body to lex
-/// plus the `x` length (`1` for `x`/`X`, `0` for `*`/`!` aliases). `Some`
-/// for a selection-shaped long suffix and for every alias suffix (claimed
-/// even when malformed, then reported as retired); `None` for a plain `x`
-/// suffix and every `=<X>` start shape.
-pub(crate) fn classify_link_close(suffix: &str) -> Option<(&str, usize)> {
-    close_after_eq_parts(suffix)
-}
-
 /// Leading keep text before the first `*`, `!`, `~`, or `@` marker.
 fn leading_keep_text(body: &str) -> &str {
     let mut end = body.len();
@@ -225,18 +505,6 @@ fn leading_keep_text(body: &str) -> &str {
 /// non-close tokens.
 pub(crate) fn whole_item_close_after_x(token: &str) -> Option<&str> {
     classify_whole_item_close(token).filter(|selection| !selection.is_empty())
-}
-
-/// Return the selection text when a link suffix (the text after `=`) is
-/// close-shaped: a long `x`/`X` close followed by a digit, `,`, `!`, `~`,
-/// `*`, or `@`, or any `*`/`!` alias (claimed even when malformed). `None`
-/// for a plain `x` suffix and every `=<X>` start shape.
-pub(crate) fn link_close_after_x(suffix: &str) -> Option<&str> {
-    let (selection, x_len) = close_after_eq_parts(suffix)?;
-    if x_len == 1 && selection.is_empty() {
-        return None;
-    }
-    Some(selection)
 }
 
 /// Lex the selection body after a close's `x` (`after_x`), where
@@ -1006,6 +1274,7 @@ pub(crate) fn close_spec_from_lex(
 ) -> PomodoroCloseSpec {
     PomodoroCloseSpec {
         raw,
+        size: None,
         in_progress: lex.in_progress.clone(),
         park: lex.park.clone(),
         complete: lex.complete.clone(),
@@ -1025,6 +1294,7 @@ pub(crate) fn close_spec_from_incomplete(
 ) -> PomodoroCloseSpec {
     PomodoroCloseSpec {
         raw,
+        size: None,
         in_progress: incomplete.in_progress.clone(),
         park: incomplete.park.clone(),
         complete: incomplete.complete.clone(),
@@ -1557,17 +1827,22 @@ mod tests {
         assert_eq!(classify_whole_item_close("x1,3!2"), Some("1,3!2"));
         assert_eq!(classify_whole_item_close("X"), None);
         assert_eq!(classify_whole_item_close("=x"), None);
-        assert_eq!(link_close_after_x("x1,3!2"), Some("1,3!2"));
-        assert_eq!(link_close_after_x("x1~2"), Some("1~2"));
-        assert_eq!(link_close_after_x("x*2"), Some("*2"));
-        assert_eq!(link_close_after_x("x1*2!3"), Some("1*2!3"));
-        assert_eq!(link_close_after_x("X1"), Some("1"));
-        assert_eq!(link_close_after_x("*"), Some("*"));
-        assert_eq!(link_close_after_x("!2"), Some("!2"));
-        assert_eq!(link_close_after_x("*abc"), Some("*abc"));
-        assert_eq!(link_close_after_x("x"), None);
-        assert_eq!(link_close_after_x("xa"), None);
-        assert_eq!(link_close_after_x("3"), None);
+        assert_eq!(close_after_eq_parts("x1,3!2"), Some(("1,3!2", 1)));
+        assert_eq!(close_after_eq_parts("x1~2"), Some(("1~2", 1)));
+        assert_eq!(close_after_eq_parts("x*2"), Some(("*2", 1)));
+        assert_eq!(close_after_eq_parts("x1*2!3"), Some(("1*2!3", 1)));
+        assert_eq!(close_after_eq_parts("X1"), Some(("1", 1)));
+        assert_eq!(close_after_eq_parts("*"), Some(("*", 0)));
+        assert_eq!(close_after_eq_parts("!2"), Some(("!2", 0)));
+        assert_eq!(close_after_eq_parts("*abc"), Some(("*abc", 0)));
+        assert_eq!(close_after_eq_parts("x"), Some(("", 1)));
+        assert_eq!(close_after_eq_parts("xa"), None);
+        assert_eq!(close_after_eq_parts("3"), None);
+        assert!(is_link_close_suffix("x"));
+        assert!(is_link_close_suffix("2x"));
+        assert!(is_link_close_suffix("X1"));
+        assert!(!is_link_close_suffix("xa"));
+        assert!(!is_link_close_suffix("3"));
     }
 
     #[test]

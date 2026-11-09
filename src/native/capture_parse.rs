@@ -15,13 +15,13 @@ use super::{
     capture_flag_guard,
     capture_language::{
         self, resolve_exact_type_name, scan_line, unmatched_type_display,
-        AuthoredSubBullet, DependencyEntry, DependencyTarget, Diagnostic,
-        DiagnosticRewrite, EditorGlobalDestination, EditorItemParse,
-        EditorMode, EditorParseOptions, EditorTarget, ListContext, MoveBullet,
-        MoveChoiceBullet, Need, PomodoroAdjustSpec, PomodoroCloseSpec,
-        PomodoroMergeSpec, PomodoroPastSpec, PomodoroShiftSpec,
-        PomodoroSplitSpec, PomodoroStartSpec, ProjectTaskId, RelationDirection,
-        RelationEntry, ResolvedTypeName, Severity, Span,
+        AuthoredSubBullet, CloseSize, DependencyEntry, DependencyTarget,
+        Diagnostic, DiagnosticRewrite, EditorGlobalDestination,
+        EditorItemParse, EditorMode, EditorParseOptions, EditorTarget,
+        ListContext, MoveBullet, MoveChoiceBullet, Need, PomodoroAdjustSpec,
+        PomodoroCloseSpec, PomodoroMergeSpec, PomodoroPastSpec,
+        PomodoroShiftSpec, PomodoroSplitSpec, PomodoroStartSpec, ProjectTaskId,
+        RelationDirection, RelationEntry, ResolvedTypeName, Severity, Span,
     },
     capture_links, capture_task_wikilinks,
     pomodoro_themes::{ThemeLookup as ThemeCatalog, ThemeRef},
@@ -3948,6 +3948,10 @@ fn unit_noun(units: u64) -> &'static str {
 /// index resolves at execution render as `log "text"`, with no number.
 fn format_pomodoro_close(close: &PomodoroCloseSpec) -> String {
     let base = close.raw.clone();
+    let size_label = close
+        .size
+        .as_ref()
+        .map(|CloseSize { minutes, .. }| format!("{minutes}m"));
     let log_part = if close.log.is_empty() {
         None
     } else {
@@ -3985,6 +3989,9 @@ fn format_pomodoro_close(close: &PomodoroCloseSpec) -> String {
         close.is_explicit() || close.park_all || close.complete_all;
     if !has_work_selection {
         let mut parts = Vec::new();
+        if let Some(label) = size_label.clone() {
+            parts.push(label);
+        }
         if !close.complete.is_empty() {
             parts.push(format!("complete {}", join_numbers(&close.complete)));
         }
@@ -4000,6 +4007,9 @@ fn format_pomodoro_close(close: &PomodoroCloseSpec) -> String {
         return format!("{base} ({})", parts.join(" · "));
     };
     let mut parts = Vec::new();
+    if let Some(label) = size_label {
+        parts.push(label);
+    }
     if let Some(in_progress) = close.in_progress.as_ref() {
         if in_progress.is_empty() {
             // A modifier list after `x0` makes the empty `<N>` redundant.
@@ -5444,6 +5454,7 @@ mod tests {
         use crate::native::capture_language::CloseLogEntry;
         let close = PomodoroCloseSpec {
             raw: "x1,2".to_string(),
+            size: None,
             in_progress: Some(vec![1, 2]),
             park: Vec::new(),
             park_all: false,
@@ -5480,8 +5491,28 @@ mod tests {
         );
         let plain = PomodoroCloseSpec::plain("x".to_string());
         assert_eq!(format_pomodoro_close(&plain), "x");
+        let sized = PomodoroCloseSpec::plain("2x".to_string()).with_size(
+            crate::native::capture_language::CloseSize::from_raw("2"),
+        );
+        assert_eq!(format_pomodoro_close(&sized), "2x (10m)");
+        let sized_complete = PomodoroCloseSpec {
+            raw: "2x!2".to_string(),
+            size: crate::native::capture_language::CloseSize::from_raw("2"),
+            in_progress: None,
+            park: Vec::new(),
+            park_all: false,
+            complete: vec![2],
+            complete_all: false,
+            drop: Vec::new(),
+            log: Vec::new(),
+        };
+        assert_eq!(
+            format_pomodoro_close(&sized_complete),
+            "2x!2 (10m · complete 2 · defer the rest)"
+        );
         let star = PomodoroCloseSpec {
             raw: "x".to_string(),
+            size: None,
             in_progress: None,
             park: Vec::new(),
             park_all: false,
@@ -5517,6 +5548,7 @@ mod tests {
     fn format_pomodoro_close_describes_wildcard_scope() {
         let bare_park = PomodoroCloseSpec {
             raw: "x*".to_string(),
+            size: None,
             in_progress: None,
             park: Vec::new(),
             park_all: true,
@@ -5529,6 +5561,7 @@ mod tests {
 
         let park_except_complete = PomodoroCloseSpec {
             raw: "x*!2".to_string(),
+            size: None,
             in_progress: None,
             park: Vec::new(),
             park_all: true,
@@ -5544,6 +5577,7 @@ mod tests {
 
         let progress_exception = PomodoroCloseSpec {
             raw: "x1*".to_string(),
+            size: None,
             in_progress: Some(vec![1]),
             park: Vec::new(),
             park_all: true,
@@ -5559,6 +5593,7 @@ mod tests {
 
         let bare_complete = PomodoroCloseSpec {
             raw: "x!".to_string(),
+            size: None,
             in_progress: None,
             park: Vec::new(),
             park_all: false,
@@ -5571,6 +5606,7 @@ mod tests {
 
         let complete_one = PomodoroCloseSpec {
             raw: "x!2".to_string(),
+            size: None,
             in_progress: None,
             park: Vec::new(),
             park_all: false,
@@ -5596,6 +5632,7 @@ mod tests {
 
         let drop_one = PomodoroCloseSpec {
             raw: "x~2".to_string(),
+            size: None,
             in_progress: None,
             park: Vec::new(),
             park_all: false,

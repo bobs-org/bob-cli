@@ -556,9 +556,7 @@ pub(super) fn classify_task_block_id_token(token: &Token<'_>) -> TokenParse {
                     .split_once('=')
                     .map(|(_, raw)| raw)
                     .unwrap_or_default();
-                let message = if raw.eq_ignore_ascii_case("x")
-                    || link_close_after_x(raw).is_some()
-                {
+                let message = if is_link_close_suffix(raw) {
                     POMODORO_CLOSE_PROJECT_NOTE_ERROR
                 } else {
                     POMODORO_START_PROJECT_NOTE_ERROR
@@ -766,9 +764,7 @@ pub(super) fn classify_task_block_id_token(token: &Token<'_>) -> TokenParse {
     if block_part.contains('=') {
         let (before_eq, raw) = block_part.split_once('=').unwrap_or_default();
         if before_eq.ends_with('@') {
-            let message = if raw.eq_ignore_ascii_case("x")
-                || link_close_after_x(raw).is_some()
-            {
+            let message = if is_link_close_suffix(raw) {
                 POMODORO_CLOSE_PROJECT_NOTE_ERROR
             } else {
                 POMODORO_START_PROJECT_NOTE_ERROR
@@ -780,9 +776,7 @@ pub(super) fn classify_task_block_id_token(token: &Token<'_>) -> TokenParse {
             ));
         }
         if before_eq.ends_with('+') {
-            let message = if raw.eq_ignore_ascii_case("x")
-                || link_close_after_x(raw).is_some()
-            {
+            let message = if is_link_close_suffix(raw) {
                 POMODORO_CLOSE_PROJECT_NOTE_ERROR
             } else {
                 POMODORO_START_PROJECT_NOTE_ERROR
@@ -1068,9 +1062,7 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
         || name_part.is_some_and(|name| name.ends_with('@'))
     {
         if let Some(raw) = start_part {
-            let message = if raw.eq_ignore_ascii_case("x")
-                || link_close_after_x(raw).is_some()
-            {
+            let message = if is_link_close_suffix(raw) {
                 POMODORO_CLOSE_PROJECT_NOTE_ERROR
             } else {
                 POMODORO_START_PROJECT_NOTE_ERROR
@@ -1109,8 +1101,7 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
         ));
     }
     if let Some(raw) = start_part
-        && !raw.eq_ignore_ascii_case("x")
-        && link_close_after_x(raw).is_none()
+        && !is_link_close_suffix(raw)
         // Preserve the editor's incomplete block-ID state for the legacy
         // unnamed timing form (`@route:=3`). The shared link-start parser
         // requires a block ID for execution and would otherwise turn this
@@ -1125,10 +1116,7 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
     let mut close_suffix: Option<EditorCloseSuffix> = None;
     let start_spec = match start_part {
         None => None,
-        Some(raw)
-            if raw.eq_ignore_ascii_case("x")
-                || link_close_after_x(raw).is_some() =>
-        {
+        Some(raw) if is_link_close_suffix(raw) => {
             // A close-shaped suffix lexes through the shared selection
             // lexer: a valid selection reports the spec plus list spans, a
             // dangling separator reports the partial spec as an incomplete
@@ -1150,9 +1138,11 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
                     rewrite: None,
                 });
             }
-            let (after_x, x_len) = classify_link_close(raw).unwrap_or(("", 1));
-            let after_x_base = token.start + eq_rel + 1 + x_len;
-            match lex_close_selection(after_x, after_x_base, &display) {
+            match lex_link_close_selection(
+                raw,
+                &display,
+                token.start + eq_rel + 1,
+            ) {
                 Ok(CloseSelectionOutcome::Valid(lex)) => {
                     close_suffix = Some(EditorCloseSuffix::Valid {
                         in_progress: lex.in_progress_range,
@@ -1160,11 +1150,15 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
                         complete: lex.complete_range,
                         drop: lex.drop_range,
                     });
-                    close_spec = Some(close_spec_from_lex(display, &lex));
+                    close_spec = Some(
+                        close_spec_from_lex(display, &lex)
+                            .with_size(link_close_size(raw)),
+                    );
                 }
                 Ok(CloseSelectionOutcome::Incomplete(incomplete)) => {
                     close_suffix = Some(EditorCloseSuffix::Incomplete {
-                        spec: close_spec_from_incomplete(display, &incomplete),
+                        spec: close_spec_from_incomplete(display, &incomplete)
+                            .with_size(link_close_size(raw)),
                         in_progress: incomplete.in_progress_range,
                         park: incomplete.park_range,
                         complete: incomplete.complete_range,
@@ -1296,7 +1290,7 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
             complete,
             drop,
         }) => {
-            // Split the whole-suffix `pomodoro_close` span into `=x` plus
+            // Split the whole-suffix `pomodoro_close` span into `=[N]x` plus
             // the list spans. (A plain `=x` re-emits the identical single
             // span.)
             let spec = close_spec.expect("valid close spec");
@@ -1310,7 +1304,7 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
             }
             marker_parse.spans.push(Span {
                 start: suffix_start,
-                end: suffix_start + 2,
+                end: suffix_start + 1 + spec.operator_len(),
                 kind: SpanKind::PomodoroClose,
                 project_note: None,
                 title: None,
@@ -1379,7 +1373,7 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
             }
             marker_parse.spans.push(Span {
                 start: suffix_start,
-                end: suffix_start + 2,
+                end: suffix_start + 1 + spec.operator_len(),
                 kind: SpanKind::PomodoroClose,
                 project_note: None,
                 title: None,

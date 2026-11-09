@@ -724,7 +724,11 @@ pub(crate) fn lex_close_inline_entry_with_all(
         unreachable!("inline entry tokens are never empty");
     };
     // 3. A leading start or close token belongs at the end of the line.
-    if session_equals_token(first.text).is_some() {
+    // A sized `Nx` in log text (`x 2x faster`) is not a session operator
+    // in trail position, so skip the reorder.
+    if session_equals_token(first.text).is_some()
+        && !is_sized_whole_item_close_shape(first.text)
+    {
         let leading_count = entry_tokens
             .iter()
             .take_while(|token| is_session_chain_token(token.text))

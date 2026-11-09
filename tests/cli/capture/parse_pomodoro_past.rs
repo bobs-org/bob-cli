@@ -50,6 +50,7 @@ fn past_parse_reports_full_contract_and_grammar_14() {
             "close": { "raw": "", "in_progress": null, "complete": [] },
         })
     );
+    assert!(one["pomodoro_past"]["close"].get("size").is_none());
     // Spans: `x=` plus leading count, no second past, no name/repair/close.
     assert_eq!(
         one["spans"],

@@ -1,13 +1,16 @@
 //! Draft absorption and text edits.
 
 use super::close_selection::{
-    classify_whole_item_close, close_after_eq_parts, close_marker_may_follow,
-    lex_close_selection, retired_whole_item_close_rewrite,
+    classify_whole_item_close, close_marker_may_follow,
+    is_sized_whole_item_close_shape, lex_close_prefix, lex_close_selection,
+    retired_whole_item_close_rewrite, ClosePrefixCase, ClosePrefixOutcome,
 };
 use super::draft::*;
 use super::editor_model::*;
 use super::editor_parse::*;
-use super::item::{is_session_chain_token, past_token_len};
+use super::item::{
+    is_adjust_or_shift_chain_token, is_session_chain_token, past_token_len,
+};
 use super::markers::is_route_token;
 use super::model::*;
 use super::project_tasks::{lex_project_task_id, TaskIdLex};
@@ -375,10 +378,17 @@ fn odd_backtick_parity_before(raw_text: &str, start: usize) -> bool {
 }
 
 fn close_lead_ok(token_index: usize, tokens: &[Token<'_>]) -> bool {
-    token_index == 0
-        || tokens[..token_index]
+    if token_index == 0 {
+        return true;
+    }
+    if is_sized_whole_item_close_shape(tokens[token_index].text) {
+        return tokens[..token_index]
             .iter()
-            .all(|token| is_session_chain_token(token.text))
+            .all(|token| is_adjust_or_shift_chain_token(token.text));
+    }
+    tokens[..token_index]
+        .iter()
+        .all(|token| is_session_chain_token(token.text))
 }
 
 fn close_outcome_selection(
@@ -406,14 +416,13 @@ fn close_outcome_selection(
         return Some(split.close_text);
     }
     let suffix = link_eq_suffix(token.text)?;
-    if !suffix.starts_with('x') {
-        return None;
+    // Aliases stay lowercase-only even on links that execute `X`.
+    match lex_close_prefix(suffix, ClosePrefixCase::WholeItem, 0) {
+        ClosePrefixOutcome::Valid(prefix) if prefix.x_len == 1 => {
+            Some(prefix.after_x.to_string())
+        }
+        _ => None,
     }
-    let (selection, x_len) = close_after_eq_parts(suffix)?;
-    if x_len != 1 {
-        return None;
-    }
-    Some(selection.to_string())
 }
 
 /// Typing `-` inside an `x=` past token aliases `~` only where the swapped

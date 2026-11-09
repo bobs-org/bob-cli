@@ -480,7 +480,9 @@ fn capture_pomodoro_whole_item_start_rejects_shape_and_forced_flags() {
     assert_ne!(output.status.code(), Some(0), "=3x should fail");
     let error = stdout(&output);
     assert!(
-        error.contains("has a close-shaped name") && error.contains("`=3#x`"),
+        error.contains("`=3x` is not a start")
+            && error.contains("`3x`")
+            && error.contains("`=3#x`"),
         "=3x: {error}"
     );
     assert_eq!(before, after, "=3x must not write");

@@ -835,3 +835,134 @@ fn capture_parse_pomodoro_close_drop_protocol() {
     assert_success(&bare_human);
     assert!(stdout(&bare_human).contains("x2 (in progress 2 · defer the rest)"));
 }
+
+#[test]
+fn capture_parse_sized_close_protocol() {
+    let parse = |text: &str| {
+        let output = bob_command()
+            .arg("capture-parse")
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(text)
+            .output()
+            .expect("run capture-parse");
+        assert_success(&output);
+        serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+            .expect("capture-parse JSON")
+    };
+    let parse_stdin = |draft: &str| {
+        let output = run_with_stdin(
+            bob_command().arg("capture-parse").arg("-f").arg("json"),
+            draft,
+        );
+        assert_success(&output);
+        serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+            .expect("capture-parse JSON")
+    };
+
+    let bare = parse("x");
+    assert!(bare["pomodoro_close"].get("size").is_none(), "{bare}");
+
+    let close = parse("2x");
+    assert_eq!(close["mode"], "pomodoro_close");
+    assert_eq!(
+        close["pomodoro_close"],
+        serde_json::json!({
+            "raw": "2x",
+            "size": { "raw": "2", "blocks": 2, "minutes": 10 },
+            "in_progress": null,
+            "complete": []
+        })
+    );
+    assert_eq!(
+        close["spans"],
+        serde_json::json!([{ "start": 0, "end": 2, "kind": "pomodoro_close" }])
+    );
+
+    let selected = parse("2x!2");
+    assert_eq!(selected["pomodoro_close"]["raw"], "2x!2");
+    assert_eq!(
+        selected["pomodoro_close"]["size"],
+        serde_json::json!({ "raw": "2", "blocks": 2, "minutes": 10 })
+    );
+    assert_eq!(
+        selected["spans"],
+        serde_json::json!([
+            { "start": 0, "end": 2, "kind": "pomodoro_close" },
+            { "start": 2, "end": 4, "kind": "pomodoro_close_complete" },
+        ])
+    );
+
+    let twelve = parse("12x");
+    assert_eq!(
+        twelve["spans"],
+        serde_json::json!([{ "start": 0, "end": 3, "kind": "pomodoro_close" }])
+    );
+
+    let pending = parse("2x1,");
+    assert_eq!(pending["mode"], "incomplete");
+    assert_eq!(pending["needs"], serde_json::json!(["pomodoro_close_task"]));
+    assert_eq!(pending["pomodoro_close"]["size"]["blocks"], 2);
+
+    let utf8 = parse_stdin("café\n\n2x");
+    assert_eq!(utf8["items"][1]["mode"], "pomodoro_close");
+    assert_eq!(utf8["items"][1]["pomodoro_close"]["raw"], "2x");
+    assert_eq!(
+        utf8["items"][1]["pomodoro_close"]["size"],
+        serde_json::json!({ "raw": "2", "blocks": 2, "minutes": 10 })
+    );
+
+    let zero = parse("0x");
+    assert_eq!(zero["diagnostics"][0]["code"], "invalid_pomodoro_close");
+    assert_eq!(zero["diagnostics"][0]["range"], serde_json::json!([0, 2]));
+
+    let link = parse("^r:id=2x!1");
+    assert_eq!(link["mode"], "pomodoro_link");
+    assert_eq!(link["pomodoro_close"]["raw"], "=2x!1");
+    assert_eq!(
+        link["pomodoro_close"]["size"],
+        serde_json::json!({ "raw": "2", "blocks": 2, "minutes": 10 })
+    );
+    assert_eq!(
+        link["spans"][2],
+        serde_json::json!({ "start": 5, "end": 8, "kind": "pomodoro_close" })
+    );
+
+    let body = parse("Text café @r:id=2x");
+    let eq = body["input"].as_str().unwrap().find('=').unwrap();
+    assert_eq!(
+        body["spans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|span| span["kind"] == "pomodoro_close")
+            .expect("close span"),
+        &serde_json::json!({
+            "start": eq,
+            "end": eq + 3,
+            "kind": "pomodoro_close"
+        })
+    );
+
+    let human = bob_command()
+        .arg("capture-parse")
+        .arg("--")
+        .arg("2x")
+        .output()
+        .expect("human 2x");
+    assert_success(&human);
+    assert!(stdout(&human).contains("2x (10m)"), "{}", stdout(&human));
+    let human_sel = bob_command()
+        .arg("capture-parse")
+        .arg("--")
+        .arg("2x!2")
+        .output()
+        .expect("human 2x!2");
+    assert_success(&human_sel);
+    assert!(
+        stdout(&human_sel).contains("2x!2 (10m · complete 2 · defer the rest)"),
+        "{}",
+        stdout(&human_sel)
+    );
+}

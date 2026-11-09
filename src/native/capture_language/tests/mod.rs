@@ -108,6 +108,7 @@ mod record;
 mod ref_grammar;
 mod retired_close;
 mod rewrite;
+mod sized_close;
 mod target_runs;
 mod template;
 mod transfer;

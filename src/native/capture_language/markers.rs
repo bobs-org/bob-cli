@@ -814,16 +814,63 @@ pub(super) fn retired_link_close_alias_error(
     )
 }
 
-/// Named-start E5: `x#…` close near miss.
-pub(super) fn pomodoro_close_hash_error(name: &str) -> String {
+/// Named-start E5: `x#…` close near miss. `close` is the typed close
+/// operator (`x`, `2x`) so a sized prefix teaches `2x =bugs`.
+pub(super) fn pomodoro_close_hash_error(close: &str, name: &str) -> String {
     if name.is_empty() {
-        "`x` always closes the running Pomodoro; remove `#`".to_string()
+        format!("`{close}` always closes the running Pomodoro; remove `#`")
     } else {
         let start = super::bare_name::named_start_token(name);
         format!(
-            "`x` always closes the running Pomodoro; remove `#{name}`, or write `x {start}` to close it and then start that Pomodoro; `{start}` swaps it in without closing the running session"
+            "`{close}` always closes the running Pomodoro; remove `#{name}`, or write `{close} {start}` to close it and then start that Pomodoro; `{start}` swaps it in without closing the running session"
         )
     }
+}
+
+/// `0x` / `00x`: a close size must be at least one block.
+pub(super) fn pomodoro_close_size_zero_error(token: &str) -> String {
+    format!(
+        "`{token}` needs at least 1 block: write `1x` to close at 5 minutes, or `x0` to reset the session"
+    )
+}
+
+/// Three or more digits before `x`, reserved even when leading zeros would
+/// make the numeric value small.
+pub(super) fn pomodoro_close_size_too_large_error(token: &str) -> String {
+    format!(
+        "`{token}` is too large: a close size is 1–99 five-minute blocks (`12x` is an hour)"
+    )
+}
+
+/// Whole-item `=2x`: not a start, and not the retired `=x` rewrite.
+pub(super) fn pomodoro_equals_sized_close_error(
+    token: &str,
+    close: &str,
+    minutes: u32,
+    digits: &str,
+) -> String {
+    format!(
+        "`{token}` is not a start: write `{close}` to close at {minutes} minutes, or `={digits}#x` to start a Pomodoro named X"
+    )
+}
+
+/// `2x=3`: a close size glued to a past record. `past` is the `x=…`
+/// spelling, `past_minutes` describes that record when `E` is a count.
+pub(super) fn pomodoro_sized_past_error(
+    token: &str,
+    past: &str,
+    past_minutes: Option<u32>,
+    close: &str,
+    close_minutes: u32,
+    start: &str,
+) -> String {
+    let past_clause = match past_minutes {
+        Some(minutes) => format!("write `{past}` to record {minutes} minutes"),
+        None => format!("write `{past}`"),
+    };
+    format!(
+        "`{token}` mixes a close size with a past record: `x=` takes its size after `=`; {past_clause}, or `{close} {start}` to close at {close_minutes} minutes and then start"
+    )
 }
 
 pub(super) const POMODORO_CLOSE_PROJECT_NOTE_ERROR: &str = "Pomodoro close suffix `=x` applies only to `@<route>:<block-id>` task captures, not project-note `@<route>^<block-id>@` forms";

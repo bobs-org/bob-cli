@@ -931,9 +931,7 @@ fn capture_parse_pomodoro_start_protocol() {
 
     // Counted tokens with extra text are invalid starts on the extra text,
     // never tasks.
-    for (text, start, end) in
-        [("=3 more", 3, 7), ("=-2 @work", 4, 9), ("=3x", 2, 3)]
-    {
+    for (text, start, end) in [("=3 more", 3, 7), ("=-2 @work", 4, 9)] {
         let value = parse(text);
         assert_eq!(value["mode"], "pomodoro_start", "{text}");
         assert!(value.get("pomodoro_start").is_none(), "{text}: {value}");
@@ -947,6 +945,21 @@ fn capture_parse_pomodoro_start_protocol() {
             "{text}: {value}"
         );
     }
+    let equals_sized = parse("=3x");
+    assert_eq!(equals_sized["mode"], "pomodoro_close", "=3x");
+    assert!(
+        equals_sized.get("pomodoro_close").is_none(),
+        "{equals_sized}"
+    );
+    assert_eq!(
+        equals_sized["diagnostics"][0]["code"], "invalid_pomodoro_close",
+        "{equals_sized}"
+    );
+    assert_eq!(
+        equals_sized["diagnostics"][0]["range"],
+        serde_json::json!([0, 3]),
+        "{equals_sized}"
+    );
     let child = parse_stdin("=3\n- detail\n");
     assert_eq!(child["mode"], "pomodoro_start");
     assert!(child.get("pomodoro_start").is_none(), "{child}");

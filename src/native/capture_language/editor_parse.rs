@@ -5428,9 +5428,13 @@ pub(super) fn parse_editor_item_inner<'a>(
                 }
                 if let Some(offset) = start_offset {
                     if pomodoro_close.is_some() {
+                        let close_op_len = pomodoro_close
+                            .as_ref()
+                            .map(|spec| 1 + spec.operator_len())
+                            .unwrap_or(2);
                         spans.push(Span {
                             start: token_start + offset,
-                            end: token_start + offset + 2,
+                            end: token_start + offset + close_op_len,
                             kind: SpanKind::PomodoroClose,
                             project_note: None,
                             title: None,
@@ -5585,9 +5589,13 @@ pub(super) fn parse_editor_item_inner<'a>(
                     title: None,
                     key: None,
                 });
+                let close_op_len = pomodoro_close
+                    .as_ref()
+                    .map(|spec| 1 + spec.operator_len())
+                    .unwrap_or(2);
                 spans.push(Span {
                     start: token_start + suffix_offset,
-                    end: token_start + suffix_offset + 2,
+                    end: token_start + suffix_offset + close_op_len,
                     kind: SpanKind::PomodoroClose,
                     project_note: None,
                     title: None,

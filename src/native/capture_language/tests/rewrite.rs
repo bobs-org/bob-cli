@@ -2065,6 +2065,10 @@ fn rewrite_draft_expands_close_outcome_aliases() {
         ("^r:id=x1s", "^r:id=x1*", "s", '*'),
         ("Fix it @r:id=xs", "Fix it @r:id=x*", "s", '*'),
         ("Plan\n\nxx", "Plan\n\nx!", "x", '!'),
+        ("2xx", "2x!", "x", '!'),
+        ("2x1s", "2x1*", "s", '*'),
+        ("^r:id=2xs", "^r:id=2x*", "s", '*'),
+        ("--1 2xs", "--1 2x*", "s", '*'),
     ] {
         assert_close_outcome_alias(raw, expected, alias, sigil);
     }
@@ -2091,6 +2095,10 @@ fn rewrite_draft_close_outcome_aliases_stay_literal() {
         ("=xs", 3),
         ("=x", 2),
         ("Plan xs", 7),
+        ("x 2xx", 5),
+        ("= 2xx", 5),
+        ("Plan 2xx", 8),
+        ("2Xx", 3),
         ("tax", 3),
         ("session", 1),
         ("s:2", 1),

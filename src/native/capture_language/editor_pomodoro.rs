@@ -2342,44 +2342,88 @@ pub(super) fn parse_editor_close_item<'a>(
             }],
         ));
     }
-    // The close token is the one-byte `x`; spans cover exactly what was
-    // typed.
+    let prefix = match lex_close_prefix(
+        first,
+        ClosePrefixCase::WholeItem,
+        token_start,
+    ) {
+        ClosePrefixOutcome::Error(error) => {
+            let close_end = if error.kind == ClosePrefixErrorKind::Hash {
+                error.range.0
+            } else {
+                error.range.1
+            };
+            return Some(editor_close_outcome(
+                item,
+                parent_trimmed,
+                EditorMode::PomodoroClose,
+                None,
+                vec![Span {
+                    start: token_start,
+                    end: close_end.max(token_start),
+                    kind: SpanKind::PomodoroClose,
+                    project_note: None,
+                    title: None,
+                    key: None,
+                }],
+                Vec::new(),
+                vec![Diagnostic {
+                    severity: Severity::Error,
+                    code: "invalid_pomodoro_close",
+                    message: close_prefix_error_message(
+                        first,
+                        parent_trimmed,
+                        &error,
+                    ),
+                    range: Some(error.range),
+                    rewrite: None,
+                }],
+            ));
+        }
+        ClosePrefixOutcome::Prose => {
+            if let Some(error) = lex_equals_sized_close(first, token_start) {
+                return Some(editor_close_outcome(
+                    item,
+                    parent_trimmed,
+                    EditorMode::PomodoroClose,
+                    None,
+                    vec![Span {
+                        start: token_start,
+                        end: token_start + first.len(),
+                        kind: SpanKind::PomodoroClose,
+                        project_note: None,
+                        title: None,
+                        key: None,
+                    }],
+                    Vec::new(),
+                    vec![Diagnostic {
+                        severity: Severity::Error,
+                        code: "invalid_pomodoro_close",
+                        message: error.message,
+                        range: Some(error.range),
+                        rewrite: None,
+                    }],
+                ));
+            }
+            return None;
+        }
+        ClosePrefixOutcome::Valid(prefix) => prefix,
+    };
+    let size = prefix.size.clone();
+    // The operator span covers `[N]x` (digits plus `x`).
     let close_span = Span {
         start: token_start,
-        end: token_start + 1,
+        end: token_start + prefix.prefix_len,
         kind: SpanKind::PomodoroClose,
         project_note: None,
         title: None,
         key: None,
     };
-    // `x#…` is a claimed close near miss with a teaching error, whether or
-    // not the item carries extra text or child lines. It used to be prose.
-    if is_close_hash_token(first) {
-        return Some(editor_close_outcome(
-            item,
-            parent_trimmed,
-            EditorMode::PomodoroClose,
-            None,
-            vec![close_span.clone()],
-            Vec::new(),
-            vec![Diagnostic {
-                severity: Severity::Error,
-                code: "invalid_pomodoro_close",
-                message: pomodoro_close_hash_error(
-                    &super::pomodoro_literal::decode_close_hash_name(
-                        first,
-                        parent_trimmed,
-                    ),
-                ),
-                range: Some((token_start + 1, token_start + first.len())),
-                rewrite: None,
-            }],
-        ));
-    }
-    let selection_after_x = whole_item_close_after_x(first);
-    if selection_after_x.is_none() && !is_plain_whole_item_close(first) {
-        return None;
-    }
+    let selection_after_x = if prefix.after_x.is_empty() {
+        None
+    } else {
+        Some(prefix.after_x)
+    };
     let single_token_parent = parent_trimmed == first;
     if single_token_parent && item.lines.len() == 1 {
         // An exact close: plain `x`, a valid selection, or a dangling
@@ -2394,7 +2438,10 @@ pub(super) fn parse_editor_close_item<'a>(
                     item,
                     parent_trimmed,
                     EditorMode::PomodoroClose,
-                    Some(PomodoroCloseSpec::plain(first.to_string())),
+                    Some(
+                        PomodoroCloseSpec::plain(first.to_string())
+                            .with_size(size.clone()),
+                    ),
                     vec![close_span.clone()],
                     Vec::new(),
                     Vec::new(),
@@ -2446,7 +2493,10 @@ pub(super) fn parse_editor_close_item<'a>(
                     item,
                     parent_trimmed,
                     EditorMode::PomodoroClose,
-                    Some(close_spec_from_lex(first.to_string(), &lex)),
+                    Some(
+                        close_spec_from_lex(first.to_string(), &lex)
+                            .with_size(size.clone()),
+                    ),
                     spans,
                     Vec::new(),
                     Vec::new(),
@@ -2506,10 +2556,13 @@ pub(super) fn parse_editor_close_item<'a>(
                     item,
                     parent_trimmed,
                     EditorMode::Incomplete,
-                    Some(close_spec_from_incomplete(
-                        first.to_string(),
-                        &incomplete,
-                    )),
+                    Some(
+                        close_spec_from_incomplete(
+                            first.to_string(),
+                            &incomplete,
+                        )
+                        .with_size(size.clone()),
+                    ),
                     spans,
                     vec![Need::PomodoroCloseTask],
                     Vec::new(),
@@ -2673,10 +2726,13 @@ pub(super) fn parse_editor_close_item<'a>(
                     item,
                     parent_trimmed,
                     EditorMode::Incomplete,
-                    Some(close_spec_from_incomplete(
-                        first.to_string(),
-                        incomplete,
-                    )),
+                    Some(
+                        close_spec_from_incomplete(
+                            first.to_string(),
+                            incomplete,
+                        )
+                        .with_size(size.clone()),
+                    ),
                     spans.clone(),
                     vec![Need::PomodoroCloseTask],
                     Vec::new(),
@@ -2729,7 +2785,8 @@ pub(super) fn parse_editor_close_item<'a>(
                 if lexed.dangling.is_empty() {
                     base_spans.sort_by_key(|span| (span.start, span.end));
                     let mut spec =
-                        close_spec_from_lex(first.to_string(), lexed_selection);
+                        close_spec_from_lex(first.to_string(), lexed_selection)
+                            .with_size(size.clone());
                     spec.log = log_entries_from_lex(&lexed.entries);
                     return Some(editor_close_outcome(
                         item,
@@ -2753,7 +2810,8 @@ pub(super) fn parse_editor_close_item<'a>(
                 }
                 base_spans.sort_by_key(|span| (span.start, span.end));
                 let mut spec =
-                    close_spec_from_lex(first.to_string(), lexed_selection);
+                    close_spec_from_lex(first.to_string(), lexed_selection)
+                        .with_size(size.clone());
                 spec.log = log_entries_from_lex(&lexed.entries);
                 return Some(editor_close_outcome(
                     item,
@@ -2795,10 +2853,10 @@ pub(super) fn parse_editor_close_item<'a>(
                 item,
                 parent_trimmed,
                 EditorMode::Incomplete,
-                Some(close_spec_from_incomplete(
-                    first.to_string(),
-                    &incomplete,
-                )),
+                Some(
+                    close_spec_from_incomplete(first.to_string(), &incomplete)
+                        .with_size(size.clone()),
+                ),
                 spans,
                 vec![Need::PomodoroCloseTask],
                 Vec::new(),
@@ -2924,7 +2982,8 @@ pub(super) fn parse_editor_close_item<'a>(
             });
             base_spans.sort_by_key(|span| (span.start, span.end));
             let mut spec =
-                close_spec_from_lex(first.to_string(), &lexed_selection);
+                close_spec_from_lex(first.to_string(), &lexed_selection)
+                    .with_size(size.clone());
             spec.log = Vec::new();
             Some(editor_close_outcome(
                 item,
@@ -2997,7 +3056,8 @@ pub(super) fn parse_editor_close_item<'a>(
             }
             base_spans.sort_by_key(|span| (span.start, span.end));
             let mut spec =
-                close_spec_from_lex(first.to_string(), &lexed_selection);
+                close_spec_from_lex(first.to_string(), &lexed_selection)
+                    .with_size(size.clone());
             spec.log =
                 vec![log_entry_from_inline(&entry, first, default_index)];
             Some(editor_close_outcome(

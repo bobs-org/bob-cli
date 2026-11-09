@@ -1848,6 +1848,21 @@ fn selection_from_spec(
     )
 }
 
+fn reject_sized_pomodoro_close(
+    spec: &PomodoroCloseSpec,
+) -> Result<(), CaptureError> {
+    if spec.size.is_some() {
+        return Err(CaptureError::usage_code(
+            format!(
+                "`{}` closes at a size, which this bob cannot execute yet; nothing was written",
+                spec.raw
+            ),
+            "pomodoro_close_size_unavailable",
+        ));
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn plan_pomodoro_close_item(
     request: &CaptureRequest,
@@ -1860,6 +1875,7 @@ pub(super) fn plan_pomodoro_close_item(
     dependency_ctx: &mut DependencyContext,
     task_theme_context: &mut CaptureTaskThemeContext,
 ) -> Result<PlannedCaptureItem, CaptureError> {
+    reject_sized_pomodoro_close(&spec)?;
     reject_pomodoro_close_conflicts(&parsed, request)?;
     let selection = selection_from_spec(&spec);
     let day_file = pomodoro::day_file_for(&request.bob_dir);
@@ -2346,6 +2362,7 @@ pub(super) fn plan_pomodoro_close_link_item(
     dependency_ctx: &mut DependencyContext,
     task_theme_context: &mut CaptureTaskThemeContext,
 ) -> Result<PlannedCaptureItem, CaptureError> {
+    reject_sized_pomodoro_close(&close_spec)?;
     reject_pomodoro_link_conflicts(&parsed, request)?;
     let selection = selection_from_spec(&close_spec);
     let route = parsed.route.clone().ok_or_else(|| {
@@ -2886,6 +2903,7 @@ pub(super) fn plan_pomodoro_close_task_item(
     dependency_ctx: &mut DependencyContext,
     task_theme_context: &mut CaptureTaskThemeContext,
 ) -> Result<PlannedCaptureItem, CaptureError> {
+    reject_sized_pomodoro_close(close_spec)?;
     let selection = selection_from_spec(close_spec);
     // Body-bearing `<text> @route:block-id=x`: today's `:` new-task capture
     // forced into _R_, then close. This helper stages the new task and the
