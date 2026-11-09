@@ -29,9 +29,9 @@ pub(crate) use plan::{
 };
 #[allow(unused_imports)]
 pub(crate) use render::{
-    AppliedRecordUpdate, RecordNoteInput, RecordRenderRequest,
-    RecordUpdateError, RecordUpdateErrorCode, RecordUpdateRequest,
-    RenderedRecord,
+    yaml_quote, yaml_string_scalar, AppliedRecordUpdate, RecordNoteInput,
+    RecordRenderRequest, RecordUpdateError, RecordUpdateErrorCode,
+    RecordUpdateRequest, RenderedRecord,
 };
 #[allow(unused_imports)]
 pub(crate) use schema::{

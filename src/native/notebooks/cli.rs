@@ -1,4 +1,4 @@
-//! `bob notebooks list` and `check` commands.
+//! `bob notebooks` list, check, sync, and create commands.
 
 use std::{ffi::OsString, path::PathBuf};
 
@@ -7,8 +7,8 @@ use clap::{
     Command as ClapCommand,
 };
 
-use super::{output, scan};
-use crate::native::env as bob_env;
+use super::{create::CreateRequest, create_run, output, scan, sync};
+use crate::native::{env as bob_env, records::cli::open_in_obsidian};
 
 const COMMAND_NAME: &str = "bob notebooks";
 const SCHEMA_VERSION: u32 = 1;
@@ -49,6 +49,30 @@ pub(crate) fn run_check(args: Vec<OsString>) -> i32 {
     execute_check(&matches)
 }
 
+pub(crate) fn run_sync(args: Vec<OsString>) -> i32 {
+    let mut command = build_cli_sync();
+    let name = command.get_name().to_owned();
+    let matches = match command.try_get_matches_from_mut(
+        std::iter::once(OsString::from(name)).chain(args),
+    ) {
+        Ok(matches) => matches,
+        Err(error) => return print_clap_error(error),
+    };
+    execute_sync(&matches)
+}
+
+pub(crate) fn run_create(args: Vec<OsString>) -> i32 {
+    let mut command = build_cli_create();
+    let name = command.get_name().to_owned();
+    let matches = match command.try_get_matches_from_mut(
+        std::iter::once(OsString::from(name)).chain(args),
+    ) {
+        Ok(matches) => matches,
+        Err(error) => return print_clap_error(error),
+    };
+    execute_create(&matches)
+}
+
 pub(crate) fn build_cli_list() -> ClapCommand {
     ClapCommand::new("bob notebooks list")
         .about("List notebooks grouped by root (default)")
@@ -76,6 +100,80 @@ pub(crate) fn build_cli_check() -> ClapCommand {
         .arg(bob_dir_arg())
         .arg(format_arg())
         .arg(help_arg())
+}
+
+pub(crate) fn build_cli_sync() -> ClapCommand {
+    ClapCommand::new("bob notebooks sync")
+        .about("Write every generated notebook catalog")
+        .long_about(
+            "Repair the generated `## Notebooks` catalog in every area or project with notebooks beneath it. A real run takes the shared vault lock, pre-syncs, rewrites only the bytes between each catalog's markers, and makes one scoped commit `notebooks: sync catalogs (N notes)`; a vault whose catalogs are current writes and commits nothing. `--dry-run` prints a unified diff per host and changes nothing. A damaged catalog (a lone, duplicated, or reversed marker) is skipped and reported, and the command exits 1.",
+        )
+        .after_help(
+            "Examples:\n  bob notebooks sync\n  bob notebooks sync -d\n  bob notebooks sync -f json\n\nSee docs/notebooks.md for the catalog contract.",
+        )
+        .disable_help_flag(true)
+        .arg(bob_dir_arg())
+        .arg(dry_run_arg())
+        .arg(format_arg())
+        .arg(help_arg())
+}
+
+pub(crate) fn build_cli_create() -> ClapCommand {
+    ClapCommand::new("bob notebooks create")
+        .about("Create a notebook and its catalog rows")
+        .long_about(
+            "Create PARENT_ID.md under an area, a project of any status, or another notebook, and update every affected catalog in one guarded write and one commit. PARENT names the parent note; ID uses the block-ID alphabet (letters, digits, `-`), and the file is named `<parent>_<id>.md` with hyphens turned into underscores. `-s` is required; a summary over 140 characters only warns. The title defaults to the humanized ID. Validation or refusal exits 2.",
+        )
+        .after_help(
+            "Examples:\n  bob notebooks create dev nvim -s 'Neovim config notes and plugin picks.'\n  bob notebooks create dev_nvim lua -s 'Lua for my config.' -t 'Lua'\n  bob notebooks create dev nvim -s 'Neovim notes.' -d\n  bob notebooks create dev nvim -s 'Neovim notes.' -o\n\nSee docs/notebooks.md for the creation contract.",
+        )
+        .disable_help_flag(true)
+        .arg(
+            Arg::new("parent")
+                .value_name("PARENT")
+                .required(true)
+                .help("Parent area, project, or notebook (stem or path)"),
+        )
+        .arg(
+            Arg::new("id")
+                .value_name("ID")
+                .required(true)
+                .help("Block-style ID; names the file <parent>_<id>.md"),
+        )
+        .arg(bob_dir_arg())
+        .arg(dry_run_arg())
+        .arg(format_arg())
+        .arg(help_arg())
+        .arg(
+            Arg::new("open")
+                .long("open")
+                .short('o')
+                .action(ArgAction::SetTrue)
+                .help("Open the new notebook in Obsidian after creating it"),
+        )
+        .arg(
+            Arg::new("summary")
+                .long("summary")
+                .short('s')
+                .value_name("SUMMARY")
+                .required(true)
+                .help("One-line summary of what belongs in the notebook"),
+        )
+        .arg(
+            Arg::new("title")
+                .long("title")
+                .short('t')
+                .value_name("TITLE")
+                .help("One-line title; defaults to the humanized ID"),
+        )
+}
+
+fn dry_run_arg() -> Arg {
+    Arg::new("dry-run")
+        .long("dry-run")
+        .short('d')
+        .action(ArgAction::SetTrue)
+        .help("Print what would change as unified diffs; write nothing")
 }
 
 fn bob_dir_arg() -> Arg {
@@ -156,45 +254,12 @@ fn execute_list(matches: &ArgMatches) -> i32 {
         report
             .notebooks
             .retain(|entry| entry.root.as_deref() == Some(root.as_str()));
-        // Recompute counts for the filtered set.
-        let roots = report
-            .notebooks
-            .iter()
-            .filter_map(|entry| entry.root.clone())
-            .collect::<std::collections::BTreeSet<_>>()
-            .len();
-        let errors = report
-            .notebooks
-            .iter()
-            .map(|entry| {
-                entry
-                    .issues
-                    .iter()
-                    .filter(|issue| {
-                        issue.severity == super::model::Severity::Error
-                    })
-                    .count()
-            })
-            .sum();
-        let warnings = report
-            .notebooks
-            .iter()
-            .map(|entry| {
-                entry
-                    .issues
-                    .iter()
-                    .filter(|issue| {
-                        issue.severity == super::model::Severity::Warning
-                    })
-                    .count()
-            })
-            .sum();
-        report.counts = super::model::NotebookCounts {
-            notebooks: report.notebooks.len(),
-            roots,
-            errors,
-            warnings,
-        };
+        // Host catalogs filter by the host's own computed root, and the
+        // counts follow the filtered notebooks and catalogs.
+        report
+            .catalogs
+            .retain(|record| record.root.as_deref() == Some(root.as_str()));
+        report.recount();
     }
     if !output.io_errors.is_empty() {
         // Never present I/O failures as a clean scan.
@@ -242,4 +307,63 @@ fn execute_check(matches: &ArgMatches) -> i32 {
 #[allow(dead_code)]
 fn schema_version() -> u32 {
     SCHEMA_VERSION
+}
+
+fn print_json(payload: &serde_json::Value) {
+    println!("{payload}");
+}
+
+fn execute_sync(matches: &ArgMatches) -> i32 {
+    let bob_dir = vault_from(matches);
+    let json = format_is_json(matches);
+    let dry_run = matches.get_flag("dry-run");
+    let report = if dry_run {
+        sync::dry_run(&bob_dir)
+    } else {
+        sync::run_standalone(&bob_dir, json)
+    };
+    if json {
+        print_json(&report.to_json());
+    } else {
+        sync::print_human(&report);
+    }
+    report.exit_code()
+}
+
+fn execute_create(matches: &ArgMatches) -> i32 {
+    let bob_dir = vault_from(matches);
+    let json = format_is_json(matches);
+    let dry_run = matches.get_flag("dry-run");
+    let text = |name: &str| {
+        matches.get_one::<String>(name).cloned().unwrap_or_default()
+    };
+    let request = CreateRequest {
+        parent: text("parent"),
+        id: text("id"),
+        summary: text("summary"),
+        title: matches.get_one::<String>("title").cloned(),
+        body: None,
+        now: bob_env::current_datetime(),
+    };
+    let mut report = if dry_run {
+        create_run::dry_run(&bob_dir, &request)
+    } else {
+        create_run::run_standalone(&bob_dir, &request, json)
+    };
+    // Open only after a committed creation; failure to open is a warning
+    // and never rolls the file back.
+    if matches.get_flag("open")
+        && !dry_run
+        && report.failure.is_none()
+        && let Some(plan) = &report.plan
+        && let Err(message) = open_in_obsidian(&bob_dir, &plan.path)
+    {
+        report.warnings.push(message);
+    }
+    if json {
+        print_json(&report.to_json());
+    } else {
+        create_run::print_human(&report);
+    }
+    report.exit_code()
 }

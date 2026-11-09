@@ -555,7 +555,52 @@ fn is_bullet_section(
     heading: &MarkdownHeading<'_>,
     reserved: &BTreeSet<usize>,
 ) -> bool {
-    heading.title != "Tasks" && !reserved.contains(&heading.line_index)
+    heading.title != "Tasks"
+        && !is_generated_notebooks_heading(heading)
+        && !reserved.contains(&heading.line_index)
+}
+
+/// The bob-written `## Notebooks` catalog heading. Its section belongs to
+/// `bob notebooks sync`, so it is never a bullet target or completion row.
+fn is_generated_notebooks_heading(heading: &MarkdownHeading<'_>) -> bool {
+    heading.level == 2 && heading.title == "Notebooks"
+}
+
+/// Refuse a section selector that can only mean the generated
+/// `## Notebooks` catalog. Excluding that heading from targeting alone
+/// would let the selector fall through to the pre-heading section and
+/// write there silently; an explicit selection must refuse instead.
+pub(super) fn reject_generated_notebooks_selector(
+    contents: &str,
+    selector: Option<&str>,
+    exact: bool,
+) -> Result<(), CaptureError> {
+    let Some(selector) = selector else {
+        return Ok(());
+    };
+    let lines = line_spans(contents);
+    let headings = markdown_headings(&lines);
+    let Some(generated) = headings
+        .iter()
+        .find(|heading| is_generated_notebooks_heading(heading))
+    else {
+        return Ok(());
+    };
+    if resolved_bullet_heading_line(contents, selector, exact).is_some() {
+        return Ok(());
+    }
+    let matches_generated =
+        raw_heading_matches(generated.title, Some(selector), exact)
+            || slug_heading_matches(generated.title, selector, exact);
+    if !matches_generated {
+        return Ok(());
+    }
+    Err(CaptureError::usage_code(
+        "`## Notebooks` is the generated notebook catalog (written by \
+         `bob notebooks sync`) and is not a section target; pick another \
+         section, or capture into one of its notebooks",
+        "notebooks_section_generated",
+    ))
 }
 
 pub(super) fn last_bullet_block_insert_index_in_range(

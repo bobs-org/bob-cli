@@ -390,8 +390,10 @@ Title is the first H1 before the first bullet or `##` (wikilinks to display
 text, emphasis stripped), otherwise the first `aliases:` entry, otherwise
 the humanized stem. Owner is the nearest area or project on the parent
 chain; root is the owner's Root Parent. Counts are column-zero note bullets;
-`last_note` is the latest `[created::]` date. See `docs/notebooks.md` for
-the contract, `bob notebooks list` and `check`, and the teaching refusals.
+`last_note` is the latest `[created::]` date. Areas and projects carry a
+generated `## Notebooks` catalog of the notebooks beneath them. See
+`docs/notebooks.md` for the contract, the catalog, `bob notebooks list`,
+`check`, `sync`, and `create`, and the teaching refusals.
 
 Contract: [Notebooks](../../notebooks.md).
 

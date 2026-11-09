@@ -85,7 +85,13 @@ fn notebooks_list_and_check_json_shape() {
         serde_json::from_str(stdout(&output).trim()).expect("parse json");
     assert_eq!(payload["schema_version"], 1);
     assert_eq!(payload["ok"], true);
-    assert!(payload["catalogs"].as_array().unwrap().is_empty());
+    // `dev` hosts both notebooks but holds no generated catalog yet.
+    let catalogs = payload["catalogs"].as_array().unwrap();
+    assert_eq!(catalogs.len(), 1);
+    assert_eq!(catalogs[0]["host"], "dev");
+    assert_eq!(catalogs[0]["path"], "dev.md");
+    assert_eq!(catalogs[0]["state"], "missing");
+    assert_eq!(catalogs[0]["notebooks"], 2);
     assert_eq!(payload["notebooks"].as_array().unwrap().len(), 2);
     let git = payload["notebooks"]
         .as_array()

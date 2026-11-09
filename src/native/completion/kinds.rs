@@ -89,6 +89,21 @@ const TABLE: &[Entry] = &[
         kind: Kind::ArticleNote,
     },
     Entry {
+        path: &["notebooks"],
+        arg: "root",
+        kind: Kind::NotebookRoot,
+    },
+    Entry {
+        path: &["notebooks", "create"],
+        arg: "parent",
+        kind: Kind::VaultNote,
+    },
+    Entry {
+        path: &["notebooks", "create"],
+        arg: "summary",
+        kind: Kind::FreeText,
+    },
+    Entry {
         path: &["notebooks", "list"],
         arg: "root",
         kind: Kind::NotebookRoot,

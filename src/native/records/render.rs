@@ -158,8 +158,56 @@ fn refusal(
 }
 
 /// Quote with JSON string syntax, which YAML double-quoted style accepts.
-fn yaml_quote(text: &str) -> String {
+pub(crate) fn yaml_quote(text: &str) -> String {
     serde_json::to_string(text).expect("JSON string quoting never fails")
+}
+
+/// Text a reader may take as a non-string: a YAML 1.1 boolean or null word,
+/// or one unspaced token that starts like a number, date, or time.
+fn looks_typed(text: &str) -> bool {
+    if matches!(
+        text.to_ascii_lowercase().as_str(),
+        "true"
+            | "false"
+            | "null"
+            | "yes"
+            | "no"
+            | "on"
+            | "off"
+            | "y"
+            | "n"
+            | "~"
+    ) {
+        return true;
+    }
+    let first = text.chars().next();
+    first.is_some_and(|ch| ch.is_ascii_digit() || matches!(ch, '+' | '-' | '.'))
+        && !text.contains(char::is_whitespace)
+}
+
+/// One YAML string scalar: plain when it parses back as exactly the same
+/// string (so `yes`, `1`, `null`, `a: b`, and `# x` are quoted), otherwise
+/// quoted with [`yaml_quote`]. Single-line text only; multi-line text is
+/// always quoted.
+pub(crate) fn yaml_string_scalar(text: &str) -> String {
+    let plain_safe = !text.is_empty()
+        && text == text.trim()
+        && !text.contains(['\n', '\r'])
+        && !looks_typed(text);
+    if plain_safe
+        && matches!(
+            serde_yaml::from_str::<serde_yaml::Value>(text),
+            Ok(serde_yaml::Value::String(ref parsed)) if parsed == text
+        )
+        && matches!(
+            serde_yaml::from_str::<serde_yaml::Value>(&format!("k: {text}")),
+            Ok(serde_yaml::Value::Mapping(ref map))
+                if map.get("k").and_then(serde_yaml::Value::as_str) == Some(text)
+        )
+    {
+        return text.to_string();
+    }
+    yaml_quote(text)
 }
 
 fn is_bare_choice_token(token: &str) -> bool {

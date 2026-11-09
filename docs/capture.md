@@ -7393,8 +7393,12 @@ non-`Tasks` section whose heading title starts with the prefix (compared case
 insensitively), or any non-`Tasks` section when the marker is a bare `#`. The
 `Next & In Progress`, `Blocked`, and `Done & Canceled` status-group headings
 `bob task reconcile` generates under a `Tasks` heading belong to that Tasks
-section. They are never bullet targets, so `@note#` and `@note#Bl` skip them. A
-matching non-H1 section is preferred; a matching H1 heading is used only when no
+section. They are never bullet targets, so `@note#` and `@note#Bl` skip them. The
+bob-written `## Notebooks` catalog heading is skipped the same way (see
+[the catalog](notebooks.md#the-catalog)): section completion omits it, and a
+selector that can only mean it (`@note#notebooks`) refuses with
+`notebooks_section_generated` instead of falling through to the pre-heading
+section. A matching non-H1 section is preferred; a matching H1 heading is used only when no
 non-H1 heading matches. If no heading matches, the bullet goes into the
 pre-heading (zeroth) section. When the destination note is an article
 (`type: "[[article]]"`), selectors also match on heading identity: the title

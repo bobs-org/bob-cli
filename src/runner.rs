@@ -415,10 +415,26 @@ const NOTEBOOKS_MEMBERS: &[Member] = &[
         },
     },
     Member {
+        name: "create",
+        about: "Create a notebook and its catalog rows",
+        leaf: Leaf {
+            native_command: NativeCommand::NotebooksCreate,
+            script_command: None,
+        },
+    },
+    Member {
         name: "list",
         about: "List notebooks grouped by root (default)",
         leaf: Leaf {
             native_command: NativeCommand::NotebooksList,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "sync",
+        about: "Write every generated notebook catalog",
+        leaf: Leaf {
+            native_command: NativeCommand::NotebooksSync,
             script_command: None,
         },
     },
@@ -432,6 +448,10 @@ Examples:
   bob notebooks list -r dev           List one root's notebooks
   bob notebooks check                 Lint notebooks against the contract
   bob notebooks check -f json         Findings as JSON
+  bob notebooks sync -d               Preview catalog changes as diffs
+  bob notebooks sync                  Write every generated catalog
+  bob notebooks create dev nvim -s 'Neovim config notes.'
+                                      Create dev_nvim.md and its catalog rows
 
 See docs/notebooks.md for the notebook contract.
 Run 'bob notebooks <command> --help' for more information on a command.";
@@ -876,11 +896,25 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "nightly",
-        about: "Run nightly maintenance: vault-sync, task archive, articles, period notes, vault-sync",
+        about: "Run nightly maintenance: vault-sync, task archive, articles, period notes, notebooks, vault-sync",
         section: Section::Vault,
         target: Target::Leaf(Leaf {
             native_command: NativeCommand::Nightly,
             script_command: None,
+        }),
+    },
+    Subcommand {
+        name: "notebooks",
+        about: "Inspect or maintain notebook notes",
+        section: Section::Vault,
+        target: Target::Group(Group {
+            members: NOTEBOOKS_MEMBERS,
+            default: Some("list"),
+            extra_about: Some(
+                "Bare `bob notebooks` runs the read-only list. `list` shows the tree grouped by root. `check` lints notebooks against the contract and reports catalog state. `sync` repairs every generated `## Notebooks` catalog (`-d` previews diffs) and `create` makes a notebook with its catalog rows in one guarded commit.",
+            ),
+            after_help: NOTEBOOKS_AFTER_HELP,
+            usage: "bob notebooks [COMMAND]",
         }),
     },
     Subcommand {
@@ -918,20 +952,6 @@ const SUBCOMMANDS: &[Subcommand] = &[
             ),
             after_help: RECORDS_AFTER_HELP,
             usage: "bob records [COMMAND]",
-        }),
-    },
-    Subcommand {
-        name: "notebooks",
-        about: "Inspect or maintain notebook notes",
-        section: Section::Vault,
-        target: Target::Group(Group {
-            members: NOTEBOOKS_MEMBERS,
-            default: Some("list"),
-            extra_about: Some(
-                "Bare `bob notebooks` runs the read-only list. `list` shows the tree grouped by root. `check` lints notebooks against the contract.",
-            ),
-            after_help: NOTEBOOKS_AFTER_HELP,
-            usage: "bob notebooks [COMMAND]",
         }),
     },
     Subcommand {
@@ -2397,6 +2417,10 @@ mod tests {
             NativeCommand::TaskMove,
             NativeCommand::TaskSplit,
             NativeCommand::Nightly,
+            NativeCommand::NotebooksCheck,
+            NativeCommand::NotebooksCreate,
+            NativeCommand::NotebooksList,
+            NativeCommand::NotebooksSync,
             NativeCommand::NoteReady,
             NativeCommand::Notify,
             NativeCommand::PeriodsBrief,

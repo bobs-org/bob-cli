@@ -162,8 +162,14 @@ impl NativeCommand {
             NativeCommand::NotebooksCheck => {
                 crate::native::notebooks::build_cli_check()
             }
+            NativeCommand::NotebooksCreate => {
+                crate::native::notebooks::build_cli_create()
+            }
             NativeCommand::NotebooksList => {
                 crate::native::notebooks::build_cli_list()
+            }
+            NativeCommand::NotebooksSync => {
+                crate::native::notebooks::build_cli_sync()
             }
             NativeCommand::Randomize => crate::native::randomize::build_cli(),
             NativeCommand::Stats => {

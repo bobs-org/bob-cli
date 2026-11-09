@@ -1686,7 +1686,10 @@ fn value_display(value: &RecordValue) -> String {
     }
 }
 
-fn open_in_obsidian(vault: &Path, relative: &Path) -> Result<(), String> {
+pub(crate) fn open_in_obsidian(
+    vault: &Path,
+    relative: &Path,
+) -> Result<(), String> {
     let vault_name = vault
         .file_name()
         .and_then(|name| name.to_str())

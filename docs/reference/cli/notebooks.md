@@ -11,13 +11,15 @@ Inspect or maintain notebook notes
 ```text title="bob notebooks --help"
 Inspect or maintain notebook notes
 
-Bare `bob notebooks` runs the read-only list. `list` shows the tree grouped by root. `check` lints notebooks against the contract.
+Bare `bob notebooks` runs the read-only list. `list` shows the tree grouped by root. `check` lints notebooks against the contract and reports catalog state. `sync` repairs every generated `## Notebooks` catalog (`-d` previews diffs) and `create` makes a notebook with its catalog rows in one guarded commit.
 
 Usage: bob notebooks [COMMAND]
 
 Commands:
-  check  Check notebooks against the contract
-  list   List notebooks grouped by root (default)
+  check   Check notebooks against the contract
+  create  Create a notebook and its catalog rows
+  list    List notebooks grouped by root (default)
+  sync    Write every generated notebook catalog
 
 Options:
   -h, --help  Print help
@@ -29,6 +31,10 @@ Examples:
   bob notebooks list -r dev           List one root's notebooks
   bob notebooks check                 Lint notebooks against the contract
   bob notebooks check -f json         Findings as JSON
+  bob notebooks sync -d               Preview catalog changes as diffs
+  bob notebooks sync                  Write every generated catalog
+  bob notebooks create dev nvim -s 'Neovim config notes.'
+                                      Create dev_nvim.md and its catalog rows
 
 See docs/notebooks.md for the notebook contract.
 Run 'bob notebooks <command> --help' for more information on a command.
@@ -61,6 +67,56 @@ Examples:
   bob notebooks check -f json
 ```
 
+## bob notebooks create
+
+Create a notebook and its catalog rows
+
+```text title="bob notebooks create --help"
+Create PARENT_ID.md under an area, a project of any status, or another notebook, and update every affected catalog in one guarded write and one commit. PARENT names the parent note; ID uses the block-ID alphabet (letters, digits, `-`), and the file is named `<parent>_<id>.md` with hyphens turned into underscores. `-s` is required; a summary over 140 characters only warns. The title defaults to the humanized ID. Validation or refusal exits 2.
+
+Usage: bob notebooks create [OPTIONS] --summary <SUMMARY> <PARENT> <ID>
+
+Arguments:
+  <PARENT>
+          Parent area, project, or notebook (stem or path)
+
+  <ID>
+          Block-style ID; names the file <parent>_<id>.md
+
+Options:
+  -b, --bob-dir <DIR>
+          Bob vault root; defaults to BOB_DIR or ~/bob
+
+  -d, --dry-run
+          Print what would change as unified diffs; write nothing
+
+  -f, --format <FORMAT>
+          Output format: human or json
+
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Show help
+
+  -o, --open
+          Open the new notebook in Obsidian after creating it
+
+  -s, --summary <SUMMARY>
+          One-line summary of what belongs in the notebook
+
+  -t, --title <TITLE>
+          One-line title; defaults to the humanized ID
+
+Examples:
+  bob notebooks create dev nvim -s 'Neovim config notes and plugin picks.'
+  bob notebooks create dev_nvim lua -s 'Lua for my config.' -t 'Lua'
+  bob notebooks create dev nvim -s 'Neovim notes.' -d
+  bob notebooks create dev nvim -s 'Neovim notes.' -o
+
+See docs/notebooks.md for the creation contract.
+```
+
 ## bob notebooks list
 
 List notebooks grouped by root (default)
@@ -90,6 +146,39 @@ Examples:
   bob notebooks
   bob notebooks list
   bob notebooks list -r dev -f json
+```
+
+## bob notebooks sync
+
+Write every generated notebook catalog
+
+```text title="bob notebooks sync --help"
+Repair the generated `## Notebooks` catalog in every area or project with notebooks beneath it. A real run takes the shared vault lock, pre-syncs, rewrites only the bytes between each catalog's markers, and makes one scoped commit `notebooks: sync catalogs (N notes)`; a vault whose catalogs are current writes and commits nothing. `--dry-run` prints a unified diff per host and changes nothing. A damaged catalog (a lone, duplicated, or reversed marker) is skipped and reported, and the command exits 1.
+
+Usage: bob notebooks sync [OPTIONS]
+
+Options:
+  -b, --bob-dir <DIR>
+          Bob vault root; defaults to BOB_DIR or ~/bob
+
+  -d, --dry-run
+          Print what would change as unified diffs; write nothing
+
+  -f, --format <FORMAT>
+          Output format: human or json
+
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Show help
+
+Examples:
+  bob notebooks sync
+  bob notebooks sync -d
+  bob notebooks sync -f json
+
+See docs/notebooks.md for the catalog contract.
 ```
 
 ## Related

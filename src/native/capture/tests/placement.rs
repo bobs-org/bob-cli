@@ -1094,6 +1094,114 @@ fn section_completion_prefers_raw_then_slug_then_quoted() {
     assert_eq!(by_title["a-\"q\""], "a-\"q\"");
 }
 
+const GENERATED_NOTEBOOKS: &str = concat!(
+    "# Dev\n",
+    "\n",
+    "## Notebooks\n",
+    "\n",
+    "<!-- bob:notebooks:begin v1 -->\n",
+    "\n",
+    "> [!notebooks]\n",
+    ">\n",
+    "> - **[[git|Git]]**\n",
+    "\n",
+    "<!-- bob:notebooks:end -->\n",
+    "\n",
+    "## Ideas\n",
+    "\n",
+    "- one\n",
+    "\n",
+    "## Tasks\n",
+);
+
+#[test]
+fn generated_notebooks_section_is_never_completed() {
+    let titles: Vec<String> =
+        super::super::section_completion_rows(GENERATED_NOTEBOOKS, "")
+            .into_iter()
+            .map(|row| row.title)
+            .collect();
+    assert_eq!(titles, vec!["Dev".to_string(), "Ideas".to_string()]);
+    assert!(super::super::section_completion_rows(
+        GENERATED_NOTEBOOKS,
+        "notebooks"
+    )
+    .is_empty());
+    let headings: Vec<String> =
+        super::super::non_tasks_section_headings(GENERATED_NOTEBOOKS)
+            .into_iter()
+            .map(|heading| heading.title)
+            .collect();
+    assert_eq!(headings, vec!["Dev".to_string(), "Ideas".to_string()]);
+}
+
+#[test]
+fn generated_notebooks_section_is_never_a_bullet_target() {
+    // A neighbor selector still lands in its own section and leaves the
+    // generated block untouched.
+    let (updated, _) = super::super::insert_bullet_line(
+        GENERATED_NOTEBOOKS,
+        BULLET,
+        Some("Ideas"),
+        false,
+    );
+    assert!(updated.contains(&format!("- one\n{BULLET}")), "{updated}");
+    let before_block = updated
+        .split("<!-- bob:notebooks:begin v1 -->")
+        .next()
+        .unwrap();
+    assert!(!before_block.contains(BULLET));
+    let in_block = updated
+        .split("<!-- bob:notebooks:begin v1 -->")
+        .nth(1)
+        .and_then(|rest| rest.split("<!-- bob:notebooks:end -->").next())
+        .unwrap();
+    assert!(!in_block.contains(BULLET));
+}
+
+#[test]
+fn explicit_notebooks_selector_refuses_instead_of_falling_through() {
+    for (selector, exact) in [
+        ("notebooks", false),
+        ("Notebooks", true),
+        ("note", false),
+        ("n", false),
+    ] {
+        let error = super::super::reject_generated_notebooks_selector(
+            GENERATED_NOTEBOOKS,
+            Some(selector),
+            exact,
+        )
+        .expect_err(selector);
+        assert!(
+            error.message.contains("generated notebook catalog"),
+            "{selector}: {}",
+            error.message
+        );
+    }
+    // Other selectors, an eligible match, bare `#`, and notes without the
+    // generated heading are unaffected.
+    for (contents, selector) in [
+        (GENERATED_NOTEBOOKS, Some("Ideas")),
+        (GENERATED_NOTEBOOKS, Some("zzz")),
+        (GENERATED_NOTEBOOKS, None),
+        ("## Ideas\n", Some("notebooks")),
+    ] {
+        super::super::reject_generated_notebooks_selector(
+            contents, selector, false,
+        )
+        .expect("not refused");
+    }
+    // A user's own non-generated `Notebooks` heading elsewhere still wins
+    // when it is an eligible match.
+    super::super::reject_generated_notebooks_selector(
+        "## Notebooks\n\n## Notebooks Extra\n",
+        Some("notebooks"),
+        false,
+    )
+    .expect("eligible heading exists");
+}
+
 #[test]
 fn heading_matches_bullet_selector_is_raw_or_identity() {
     assert!(super::super::heading_matches_bullet_selector(

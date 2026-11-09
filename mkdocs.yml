@@ -235,10 +235,10 @@ nav:
               - "bob articles": reference/cli/articles.md
               - "bob attachments": reference/cli/attachments.md
               - "bob nightly": reference/cli/nightly.md
+              - "bob notebooks": reference/cli/notebooks.md
               - "bob periods": reference/cli/periods.md
               - "bob query": reference/cli/query.md
               - "bob records": reference/cli/records.md
-              - "bob notebooks": reference/cli/notebooks.md
               - "bob ref": reference/cli/ref.md
               - "bob vault-sync": reference/cli/vault-sync.md
           - "Integrations":

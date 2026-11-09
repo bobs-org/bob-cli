@@ -110,6 +110,55 @@ impl NotebookEntry {
     }
 }
 
+/// How a host's generated `## Notebooks` catalog compares with the plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CatalogState {
+    /// Required content, no managed region yet.
+    Missing,
+    /// The managed bytes differ from the plan, or are removable.
+    Stale,
+    Current,
+    /// The region cannot safely be edited.
+    Damaged,
+}
+
+impl CatalogState {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Missing => "missing",
+            Self::Stale => "stale",
+            Self::Current => "current",
+            Self::Damaged => "damaged",
+        }
+    }
+}
+
+/// One area or project host's catalog state with its own findings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CatalogRecord {
+    pub(crate) host: String,
+    pub(crate) path: String,
+    /// The host's computed root stem, for root-filtered reports.
+    pub(crate) root: Option<String>,
+    pub(crate) state: CatalogState,
+    /// Expected recursive notebook rows in the catalog.
+    pub(crate) notebooks: usize,
+    pub(crate) issues: Vec<NotebookIssue>,
+}
+
+impl CatalogRecord {
+    pub(crate) fn to_json(&self) -> Value {
+        json!({
+            "host": self.host,
+            "path": self.path,
+            "root": self.root,
+            "state": self.state.as_str(),
+            "notebooks": self.notebooks,
+            "issues": self.issues.iter().map(|issue| issue.to_json()).collect::<Vec<_>>(),
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NotebookCounts {
     pub(crate) notebooks: usize,
@@ -121,6 +170,7 @@ pub(crate) struct NotebookCounts {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NotebookReport {
     pub(crate) notebooks: Vec<NotebookEntry>,
+    pub(crate) catalogs: Vec<CatalogRecord>,
     pub(crate) counts: NotebookCounts,
 }
 
@@ -129,12 +179,45 @@ impl NotebookReport {
         self.counts.errors == 0
     }
 
+    /// Recompute `counts` from the retained notebooks and catalogs. Host
+    /// catalog findings count once, in the totals, never on a notebook.
+    pub(crate) fn recount(&mut self) {
+        let roots = self
+            .notebooks
+            .iter()
+            .filter_map(|entry| entry.root.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+        let issues = self
+            .notebooks
+            .iter()
+            .flat_map(|entry| entry.issues.iter())
+            .chain(
+                self.catalogs
+                    .iter()
+                    .flat_map(|catalog| catalog.issues.iter()),
+            );
+        let (mut errors, mut warnings) = (0, 0);
+        for issue in issues {
+            match issue.severity {
+                Severity::Error => errors += 1,
+                Severity::Warning => warnings += 1,
+            }
+        }
+        self.counts = NotebookCounts {
+            notebooks: self.notebooks.len(),
+            roots,
+            errors,
+            warnings,
+        };
+    }
+
     pub(crate) fn to_json(&self) -> Value {
         json!({
             "ok": self.ok(),
             "schema_version": 1,
             "notebooks": self.notebooks.iter().map(|entry| entry.to_json()).collect::<Vec<_>>(),
-            "catalogs": [],
+            "catalogs": self.catalogs.iter().map(CatalogRecord::to_json).collect::<Vec<_>>(),
             "counts": {
                 "notebooks": self.counts.notebooks,
                 "roots": self.counts.roots,

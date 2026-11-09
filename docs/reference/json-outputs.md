@@ -177,14 +177,14 @@ in each row's `replacement` and adds `one_off: true` to the response.
 
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
-| `bob notebooks list` | `-f json` | Tree of notebooks grouped by root with titles, summaries, counts, and issue markers; `catalogs: []` in this phase | `schema_version: 1` | [Notebooks](../../notebooks.md#json) |
-| `bob notebooks check` | `-f json` | Same report shape as list; `ok` reflects error findings | `schema_version: 1` | [Notebooks](../../notebooks.md#json) |
+| `bob notebooks list` | `-f json` | Notebooks, counts, issues, and host `catalogs` | `schema_version: 1` | [Notebooks](../../notebooks.md#json) |
+| `bob notebooks check` | `-f json` | Same report as list; `ok` reflects error findings | `schema_version: 1` | [Notebooks](../../notebooks.md#json) |
+| `bob notebooks sync`, `create` | `-f json` | Envelope: `ok`, `changes[]`, `commit`, `error`; `create` adds `notebook` | `schema_version: 1` | [Notebooks](../../notebooks.md#sync) |
 
 Each notebook carries `stem`, `path`, `title`, `summary`, `parent`,
 `parent_kind`, `owner`, `root`, `breadcrumb`, `children`, `notes`,
-`sections`, `last_note`, and `issues` (`code`, `severity`, `line`,
-`message`). Missing ownership or dates are null. `counts` matches the
-reported set after list filtering.
+`sections`, `last_note`, and `issues`. `catalogs[]` records: `host`, `path`, `root`,
+`state`, `notebooks`, `issues`.
 
 ### Session edits and successor offers
 

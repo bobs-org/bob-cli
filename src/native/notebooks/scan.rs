@@ -1,32 +1,34 @@
-//! One sorted vault walk serving notebook list and check.
+//! Notebook analysis over one vault snapshot: the report, its findings,
+//! and the catalog graph.
 //!
-//! A single recursive discovery pass indexes relative paths once, reads
-//! frontmatter for every included note (refs and record types included,
-//! because child-kind validation needs them), and retains full bodies
-//! only for notebooks. Ownership reuses the existing `HomeResolver`
-//! through `IndexedHomeSource` so root, owner, and hue agree with Stats.
+//! Ownership reuses the existing `HomeResolver` through `IndexedHomeSource`
+//! so root, owner, and hue agree with Stats. Disk loading lives in
+//! `snapshot.rs`; analysis here is pure over a [`VaultSnapshot`], so staged
+//! overlays plan exactly like the vault on disk.
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
-    fs,
     path::{Path, PathBuf},
 };
 
 use chrono::NaiveDate;
 
+use super::catalog::{
+    self, CatalogGraph, CatalogHost, CatalogNotebook, CatalogPlan,
+};
 use super::model::{
     NotebookEntry, NotebookIssue, NotebookReport, NotebookSection,
 };
 use super::rules;
+use super::snapshot::{
+    display_slash, stem_of, stem_of_path_str, LiteKind, NoteFactsLite,
+    VaultSnapshot,
+};
 use crate::native::{
     env as bob_env,
     highlights_ref::humanize_stem,
     pomodoro_homes::{HomeResolver, IndexedHomeSource},
-    projects::{
-        frontmatter_is_area, frontmatter_is_notebook, frontmatter_is_project,
-        frontmatter_value, is_excluded_directory, is_markdown_file,
-        parse_frontmatter, wikilink_path_target,
-    },
+    projects::wikilink_path_target,
     vault_links::NoteIndex,
 };
 
@@ -36,117 +38,56 @@ pub(crate) struct ScanOutput {
     pub(crate) io_errors: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
-struct NoteFactsLite {
-    relative: PathBuf,
-    relative_slash: String,
-    stem: String,
-    kind: LiteKind,
-    parent_raw: Option<String>,
-    parent_line: Option<usize>,
-    parent_count: usize,
-    summary_raw: Option<String>,
-    aliases_first: Option<String>,
+/// One analyzed snapshot: the public report, the catalog graph it was
+/// planned from, and the per-host catalog plan.
+#[derive(Debug)]
+pub(crate) struct Analysis {
+    pub(crate) report: NotebookReport,
+    pub(crate) graph: CatalogGraph,
+    pub(crate) plan: CatalogPlan,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LiteKind {
-    Area,
-    Project { terminal: bool },
-    Notebook,
-    Ref,
-    RecordInstance,
-    Other,
-    Untyped,
-}
-
+/// Read-only report for `list`, `check`, and completion.
 pub(crate) fn scan_notebooks(bob_dir: &Path) -> ScanOutput {
-    let mut relative_paths: Vec<PathBuf> = Vec::new();
-    let mut io_errors = Vec::new();
-    collect_markdown(bob_dir, bob_dir, &mut relative_paths, &mut io_errors);
-    relative_paths.sort();
-    relative_paths.dedup();
-
-    let index = NoteIndex::from_paths(relative_paths.clone());
-
-    // Load record config once for classification.
-    let record_ids: BTreeSet<String> =
-        match crate::native::config::records::load_records_config() {
-            Ok(config) => config.types.into_iter().map(|t| t.id).collect(),
-            Err(_) => BTreeSet::new(),
-        };
-
-    // Read every included note once.
-    let mut lites: BTreeMap<PathBuf, NoteFactsLite> = BTreeMap::new();
-    let mut bodies: BTreeMap<PathBuf, String> = BTreeMap::new();
-    let mut buffers: Vec<(String, String)> = Vec::new();
-    for relative in &relative_paths {
-        let full = bob_dir.join(relative);
-        let contents = match fs::read_to_string(&full) {
-            Ok(contents) => contents,
-            Err(error) => {
-                io_errors.push(format!(
-                    "{}: failed to read file: {error}",
-                    display_slash(relative)
-                ));
-                continue;
-            }
-        };
-        let Some(frontmatter) = parse_frontmatter(&contents) else {
-            // No frontmatter: untyped note without facts. Still indexed.
-            let slash = display_slash(relative);
-            let stem = stem_of(relative);
-            lites.insert(
-                relative.clone(),
-                NoteFactsLite {
-                    relative: relative.clone(),
-                    relative_slash: slash.clone(),
-                    stem,
-                    kind: LiteKind::Untyped,
-                    parent_raw: None,
-                    parent_line: None,
-                    parent_count: 0,
-                    summary_raw: None,
-                    aliases_first: None,
-                },
-            );
-            // Header buffer for resolver: empty frontmatter still parses as Other.
-            buffers.push((slash, "---\n---\n".to_string()));
-            continue;
-        };
-        let kind = classify_kind(&frontmatter, &record_ids);
-        let (parent_raw, parent_line, parent_count) = parent_info(&frontmatter);
-        let summary_raw =
-            frontmatter_value(&frontmatter, "summary").map(str::to_string);
-        let aliases_first = first_alias(&contents);
-        let slash = display_slash(relative);
-        let stem = stem_of(relative);
-        let is_notebook = frontmatter_is_notebook(&frontmatter);
-        if is_notebook {
-            bodies.insert(relative.clone(), contents.clone());
-        }
-        // Header buffer: reconstruct minimal frontmatter so NoteFacts parses.
-        let header = reconstruct_header(&frontmatter);
-        buffers.push((slash.clone(), header));
-        lites.insert(
-            relative.clone(),
-            NoteFactsLite {
-                relative: relative.clone(),
-                relative_slash: slash,
-                stem,
-                kind: if is_notebook {
-                    LiteKind::Notebook
-                } else {
-                    kind
-                },
-                parent_raw,
-                parent_line,
-                parent_count,
-                summary_raw,
-                aliases_first,
-            },
-        );
+    let snapshot = VaultSnapshot::load(bob_dir);
+    let analysis = analyze(&snapshot);
+    ScanOutput {
+        report: analysis.report,
+        io_errors: snapshot.io_errors,
     }
+}
+
+/// Codes that make a notebook structurally unplaceable: it has no single
+/// resolvable owner chain at the vault root, so no catalog lists it.
+const STRUCTURAL_CODES: &[&str] = &[
+    "notebook_parent_missing",
+    "notebook_parent_ambiguous",
+    "notebook_parent_kind",
+    "notebook_cycle",
+    "notebook_not_at_root",
+];
+
+pub(crate) fn analyze(snapshot: &VaultSnapshot) -> Analysis {
+    let index = snapshot.index();
+    let lites: BTreeMap<PathBuf, NoteFactsLite> = snapshot
+        .files
+        .iter()
+        .map(|(path, file)| (path.clone(), file.lite.clone()))
+        .collect();
+    let bodies: BTreeMap<PathBuf, String> = snapshot
+        .files
+        .iter()
+        .filter(|(_, file)| file.lite.kind == LiteKind::Notebook)
+        .filter_map(|(path, file)| {
+            file.contents.clone().map(|text| (path.clone(), text))
+        })
+        .collect();
+    let buffers: Vec<(String, String)> = snapshot
+        .files
+        .iter()
+        .map(|(path, file)| (display_slash(path), file.header.clone()))
+        .collect();
+    let mut graph = CatalogGraph::default();
 
     // Ownership through the shared resolver.
     let source = IndexedHomeSource::from_buffers(&index, &buffers);
@@ -270,8 +211,9 @@ pub(crate) fn scan_notebooks(bob_dir: &Path) -> ScanOutput {
         });
         let mut issues: Vec<NotebookIssue> = Vec::new();
 
-        // Summary findings.
-        issues.extend(rules::summary_findings(lite.summary_raw.as_deref()));
+        // Summary findings, on the decoded YAML string.
+        let summary_text = lite.summary_raw.as_deref().map(decode_summary);
+        issues.extend(rules::summary_findings(summary_text.as_deref()));
 
         // Not at root.
         if relative.components().count() > 1 {
@@ -398,6 +340,59 @@ pub(crate) fn scan_notebooks(bob_dir: &Path) -> ScanOutput {
 
         issues = rules::dedupe(issues);
 
+        // Catalog membership follows structural validity: a resolvable
+        // owner chain at the vault root. Body-rule errors (a checkbox, a
+        // duplicate ID) never drop a row from a catalog.
+        let structural = !issues
+            .iter()
+            .any(|issue| STRUCTURAL_CODES.contains(&issue.code));
+        if structural && let Some(parent_path) = edge.target_path.clone() {
+            let home = resolver.resolve_note(relative);
+            if home.key != "@unfiled" {
+                let chain: Vec<PathBuf> =
+                    home.residence_chain.iter().map(PathBuf::from).collect();
+                let owner = PathBuf::from(&home.key);
+                let owner_at = chain.iter().position(|path| *path == owner);
+                let root_at = chain
+                    .iter()
+                    .position(|path| display_slash(path) == home.root_parent);
+                if let Some(owner_at) = owner_at {
+                    let root_at = root_at.unwrap_or(owner_at).max(owner_at);
+                    let hosts = chain[owner_at..=root_at]
+                        .iter()
+                        .filter(|path| {
+                            matches!(
+                                kind_of(path),
+                                Some(LiteKind::Area | LiteKind::Project { .. })
+                            )
+                        })
+                        .cloned()
+                        .collect();
+                    graph.notebooks.insert(
+                        relative.clone(),
+                        CatalogNotebook {
+                            path: relative.clone(),
+                            link: link_destination(&index, relative),
+                            title: titles
+                                .get(relative)
+                                .cloned()
+                                .unwrap_or_else(|| lite.stem.clone()),
+                            summary: summary_text
+                                .as_deref()
+                                .map(|value| value.trim().to_string())
+                                .filter(|value| !value.is_empty()),
+                            owner,
+                            parent_is_notebook: kind_of(&parent_path)
+                                == Some(LiteKind::Notebook),
+                            parent: parent_path,
+                            hosts,
+                            chain,
+                        },
+                    );
+                }
+            }
+        }
+
         // Ownership: invalid notebooks keep null owner/root.
         let has_error = issues
             .iter()
@@ -448,8 +443,7 @@ pub(crate) fn scan_notebooks(bob_dir: &Path) -> ScanOutput {
 
         let last_note = latest_created_date(&body_lines);
         let children = children_map.get(relative).cloned().unwrap_or_default();
-        let summary = lite
-            .summary_raw
+        let summary = summary_text
             .as_deref()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
@@ -495,224 +489,75 @@ pub(crate) fn scan_notebooks(bob_dir: &Path) -> ScanOutput {
             .then_with(|| left.path.cmp(&right.path)),
     });
 
-    let roots = notebook_entries
-        .iter()
-        .filter_map(|entry| entry.root.clone())
-        .collect::<BTreeSet<_>>()
-        .len();
-    let errors = notebook_entries
-        .iter()
-        .map(|entry| {
-            entry
-                .issues
-                .iter()
-                .filter(|issue| issue.severity == super::model::Severity::Error)
-                .count()
-        })
-        .sum();
-    let warnings = notebook_entries
-        .iter()
-        .map(|entry| {
-            entry
-                .issues
-                .iter()
-                .filter(|issue| {
-                    issue.severity == super::model::Severity::Warning
-                })
-                .count()
-        })
-        .sum();
-    let counts = super::model::NotebookCounts {
-        notebooks: notebook_entries.len(),
-        roots,
-        errors,
-        warnings,
-    };
-    ScanOutput {
-        report: NotebookReport {
-            notebooks: notebook_entries,
-            counts,
-        },
-        io_errors,
-    }
-}
-
-fn collect_markdown(
-    root: &Path,
-    directory: &Path,
-    out: &mut Vec<PathBuf>,
-    io_errors: &mut Vec<String>,
-) {
-    let entries = match fs::read_dir(directory) {
-        Ok(entries) => entries.collect::<Result<Vec<_>, _>>(),
-        Err(error) => {
-            io_errors.push(format!(
-                "{}: failed to read directory: {error}",
-                display_slash(&relative_or(root, directory))
-            ));
-            return;
-        }
-    };
-    let Ok(mut entries) = entries else {
-        io_errors.push(format!(
-            "{}: failed to read directory entries",
-            display_slash(&relative_or(root, directory))
-        ));
-        return;
-    };
-    entries.sort_by_key(|entry| entry.path());
-    for entry in entries {
-        let path = entry.path();
-        let file_type = match entry.file_type() {
-            Ok(file_type) => file_type,
-            Err(error) => {
-                io_errors.push(format!(
-                    "{}: failed to inspect path: {error}",
-                    display_slash(&relative_or(root, &path))
-                ));
-                continue;
-            }
-        };
-        if file_type.is_dir() {
-            if is_excluded_directory(&path) {
-                continue;
-            }
-            // `_templates/` is already excluded via ALWAYS_EXCLUDED, but
-            // keep the explicit guard for the notebook contract.
-            if path.file_name().and_then(|name| name.to_str())
-                == Some("_templates")
-            {
-                continue;
-            }
-            collect_markdown(root, &path, out, io_errors);
+    // Hosts: every area or project with retained bytes. A host's own root
+    // comes from the same resolver walk the notebooks used.
+    for (relative, lite) in &lites {
+        if !matches!(lite.kind, LiteKind::Area | LiteKind::Project { .. }) {
             continue;
         }
-        if file_type.is_file() && is_markdown_file(&path) {
-            out.push(relative_or(root, &path));
-        }
+        let Some(contents) = snapshot.contents(relative) else {
+            continue;
+        };
+        let home = resolver.resolve_note(relative);
+        graph.hosts.insert(
+            relative.clone(),
+            CatalogHost {
+                path: relative.clone(),
+                stem: lite.stem.clone(),
+                link: link_destination(&index, relative),
+                root: (home.root_parent != "@unfiled")
+                    .then(|| stem_of_path_str(&home.root_parent)),
+                contents: contents.to_string(),
+            },
+        );
+    }
+
+    let plan = catalog::plan_catalogs(&graph);
+    let mut report = NotebookReport {
+        notebooks: notebook_entries,
+        catalogs: plan.records(),
+        counts: super::model::NotebookCounts {
+            notebooks: 0,
+            roots: 0,
+            errors: 0,
+            warnings: 0,
+        },
+    };
+    report.recount();
+    Analysis {
+        report,
+        graph,
+        plan,
     }
 }
 
-fn relative_or(root: &Path, path: &Path) -> PathBuf {
-    path.strip_prefix(root).unwrap_or(path).to_path_buf()
-}
-
-fn display_slash(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
-}
-
-fn stem_of(path: &Path) -> String {
-    path.file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or("")
+/// The wikilink destination that resolves to `path`: the bare stem when it
+/// is unambiguous, otherwise the extensionless vault-relative path.
+pub(super) fn link_destination(index: &NoteIndex, path: &Path) -> String {
+    let stem = stem_of(path);
+    if index.resolve_detailed(None, &stem).path() == Some(path) {
+        return stem;
+    }
+    let slashed = display_slash(path);
+    slashed
+        .strip_suffix(".md")
+        .or_else(|| slashed.strip_suffix(".MD"))
+        .unwrap_or(&slashed)
         .to_string()
 }
 
-fn stem_of_path_str(value: &str) -> String {
-    let trimmed = value.trim();
-    let without_suffix = trimmed
-        .strip_suffix(".md")
-        .or_else(|| trimmed.strip_suffix(".MD"))
-        .unwrap_or(trimmed);
-    Path::new(without_suffix)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .map(str::to_string)
-        .unwrap_or_else(|| without_suffix.to_string())
-}
-
-fn classify_kind(
-    frontmatter: &crate::native::projects::Frontmatter<'_>,
-    record_ids: &BTreeSet<String>,
-) -> LiteKind {
-    if frontmatter_is_area(frontmatter) {
-        return LiteKind::Area;
+/// A frontmatter `summary:` value as the YAML string it denotes.
+fn decode_summary(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.starts_with(['"', '\''])
+        && let Ok(serde_yaml::Value::String(text)) =
+            serde_yaml::from_str::<serde_yaml::Value>(trimmed)
+    {
+        return text;
     }
-    if frontmatter_is_project(frontmatter) {
-        let status = crate::native::projects::ProjectStatus::parse(
-            frontmatter_value(frontmatter, "status"),
-        );
-        return LiteKind::Project {
-            terminal: status.is_terminal(),
-        };
-    }
-    if frontmatter_is_notebook(frontmatter) {
-        return LiteKind::Notebook;
-    }
-    let names = crate::native::projects::frontmatter_type_names(frontmatter);
-    if names.iter().any(|name| name == "ref") {
-        return LiteKind::Ref;
-    }
-    if names.iter().any(|name| record_ids.contains(name)) {
-        return LiteKind::RecordInstance;
-    }
-    if names.is_empty() {
-        return LiteKind::Untyped;
-    }
-    LiteKind::Other
-}
-
-fn parent_info(
-    frontmatter: &crate::native::projects::Frontmatter<'_>,
-) -> (Option<String>, Option<usize>, usize) {
-    let mut count = 0;
-    let mut first_raw = None;
-    let mut first_line = None;
-    for (index, line) in frontmatter.lines.iter().enumerate() {
-        // Frontmatter lines are 2-based (line 1 is `---`).
-        let number = index + 2;
-        let Some(rest) = line.strip_prefix("parent") else {
-            continue;
-        };
-        let Some(value) = rest.strip_prefix(':') else {
-            continue;
-        };
-        count += 1;
-        if first_raw.is_none() {
-            first_raw = Some(value.trim().to_string());
-            first_line = Some(number);
-        }
-    }
-    (
-        first_raw.filter(|value| !value.is_empty()),
-        first_line,
-        count,
-    )
-}
-
-fn reconstruct_header(
-    frontmatter: &crate::native::projects::Frontmatter<'_>,
-) -> String {
-    let mut header = String::from("---\n");
-    for line in &frontmatter.lines {
-        header.push_str(line);
-        header.push('\n');
-    }
-    header.push_str("---\n");
-    header
-}
-
-fn first_alias(contents: &str) -> Option<String> {
-    let start = contents.find("---")?;
-    let rest = &contents[start + 3..];
-    let end = rest.find("---")?;
-    let block = &rest[..end];
-    let parsed: serde_yaml::Value = serde_yaml::from_str(block).ok()?;
-    let mapping = parsed.as_mapping()?;
-    let key = serde_yaml::Value::String("aliases".to_string());
-    let value = mapping.get(&key)?;
-    match value {
-        serde_yaml::Value::String(text) => {
-            let trimmed = text.trim();
-            (!trimmed.is_empty()).then(|| trimmed.to_string())
-        }
-        serde_yaml::Value::Sequence(items) => items.iter().find_map(|item| {
-            item.as_str()
-                .map(str::trim)
-                .filter(|text| !text.is_empty())
-                .map(str::to_string)
-        }),
-        _ => None,
+    match trimmed.find(" #") {
+        Some(at) => trimmed[..at].trim_end().to_string(),
+        None => trimmed.to_string(),
     }
 }
 

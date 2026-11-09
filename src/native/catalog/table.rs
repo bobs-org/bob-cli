@@ -783,9 +783,22 @@ pub(crate) const ENTRIES: &[Row] = &[
         )
     },
     Row {
+        fixed: JSON,
+        preview: Some(DRY_RUN),
+        ..syncs(
+            "notebooks-sync",
+            &["notebooks", "sync"],
+            "Sync notebook catalogs",
+            &["notebooks", "sync", "catalog", "notes", "repair"],
+            Policy::PreviewFirst,
+            Some(DRY_RUN),
+            120,
+        )
+    },
+    Row {
         confirm: Some(
             "Run nightly maintenance (vault-sync, task archive, articles, \
-             period notes, vault-sync). Athena's timer already runs this.",
+             period notes, notebooks, vault-sync). Athena's timer already runs this.",
         ),
         invalidates: &["tasks"],
         ..syncs(
@@ -1370,6 +1383,11 @@ pub(crate) const EXCLUDED: &[Excluded] = &[
         path: &["capture"],
         reason: "Capture text from Bob Mac Capture or a terminal; command \
                  mode runs its named capture rows",
+    },
+    Excluded {
+        path: &["notebooks", "create"],
+        reason: "Needs a summary and an ID; create notebooks from a terminal \
+                 or the Bob plugin's Create notebook command",
     },
     Excluded {
         path: &["pomodoro", "notify"],

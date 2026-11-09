@@ -615,7 +615,10 @@ fn normalized_path(path: &str) -> String {
         .to_ascii_lowercase()
 }
 
-fn git_head(vault: &Path, child_env: &ob::ChildEnv) -> Result<String, String> {
+pub(crate) fn git_head(
+    vault: &Path,
+    child_env: &ob::ChildEnv,
+) -> Result<String, String> {
     let output = ob::git_command(vault, child_env)
         .args(["rev-parse", "HEAD"])
         .output()
@@ -629,7 +632,7 @@ fn git_head(vault: &Path, child_env: &ob::ChildEnv) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-fn unstage_paths(
+pub(crate) fn unstage_paths(
     vault: &Path,
     child_env: &ob::ChildEnv,
     paths: &[PathBuf],
@@ -651,7 +654,7 @@ fn unstage_paths(
     }
 }
 
-fn committed_despite_error(
+pub(crate) fn committed_despite_error(
     vault: &Path,
     child_env: &ob::ChildEnv,
     old_head: Option<&str>,

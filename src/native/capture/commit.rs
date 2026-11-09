@@ -233,13 +233,29 @@ pub(super) fn validate_disk_preimages(
     Ok(())
 }
 
+/// A non-race I/O failure while validating a read dependency.
+pub(crate) fn read_failed(message: impl Into<String>) -> CaptureError {
+    CaptureError::io(message)
+}
+
+/// A read dependency or preimage changed on disk after planning.
+pub(crate) fn changed_after_planning(
+    message: impl Into<String>,
+) -> CaptureError {
+    CaptureError::io(message).with_typed(CaptureFailureKind::NoteChanged)
+}
+
 pub(crate) fn write_staged_files(
     files: &[StagedTextFile],
 ) -> Result<(), CaptureError> {
     write_staged_files_guarded(files, || Ok(()))
 }
 
-fn write_staged_files_guarded(
+/// Install staged files like [`write_staged_files`], also running
+/// `validate_reads` before staging and again before any target is replaced,
+/// so read-only inputs (ancestors, notes that are not rewritten) are guarded
+/// at both validation points.
+pub(crate) fn write_staged_files_guarded(
     files: &[StagedTextFile],
     validate_reads: impl Fn() -> Result<(), CaptureError>,
 ) -> Result<(), CaptureError> {

@@ -7,7 +7,7 @@ use std::{
 
 use chrono::NaiveDate;
 
-use super::model::{NotebookEntry, NotebookReport};
+use super::model::{CatalogState, NotebookEntry, NotebookReport};
 use crate::native::{
     env as bob_env,
     pomodoro_homes::{DiskHomeSource, HomeResolver},
@@ -18,6 +18,7 @@ pub(crate) fn print_list(report: &NotebookReport, bob_dir: &Path) {
     let styler = Styler::detect();
     if report.notebooks.is_empty() {
         println!("No notebooks.");
+        print_catalog_states(report, &styler);
         return;
     }
     // Group by root; invalid/unowned last.
@@ -60,12 +61,38 @@ pub(crate) fn print_list(report: &NotebookReport, bob_dir: &Path) {
         print_forest(&entries, &styler, 0);
         println!();
     }
+    print_catalog_states(report, &styler);
     let counts = &report.counts;
     let summary = format!(
         "{} notebooks in {} roots — {} errors, {} warnings",
         counts.notebooks, counts.roots, counts.errors, counts.warnings
     );
     println!("{summary}");
+}
+
+/// One line per catalog that is not current, so `list` says what
+/// `bob notebooks sync` would do.
+fn print_catalog_states(report: &NotebookReport, styler: &Styler) {
+    let pending: Vec<_> = report
+        .catalogs
+        .iter()
+        .filter(|record| record.state != CatalogState::Current)
+        .collect();
+    if pending.is_empty() {
+        return;
+    }
+    for record in pending {
+        let state = match record.state {
+            CatalogState::Damaged => styler.red(record.state.as_str()),
+            _ => styler.yellow(record.state.as_str()),
+        };
+        println!("catalog {} — {state}", record.path);
+    }
+    println!(
+        "{}",
+        styler.dim("run `bob notebooks sync` to repair catalogs")
+    );
+    println!();
 }
 
 fn hue_for_root<S>(
@@ -223,6 +250,27 @@ fn issue_marker(entry: &NotebookEntry) -> String {
     }
 }
 
+fn print_issues(issues: &[super::model::NotebookIssue], styler: &Styler) {
+    for issue in issues {
+        let severity = match issue.severity {
+            super::model::Severity::Error => styler.red("error"),
+            super::model::Severity::Warning => styler.yellow("warning"),
+        };
+        match issue.line {
+            Some(line) => println!(
+                "  {line}: [{code}/{severity}] {message}",
+                code = issue.code,
+                message = issue.message
+            ),
+            None => println!(
+                "  [{code}/{severity}] {message}",
+                code = issue.code,
+                message = issue.message
+            ),
+        }
+    }
+}
+
 pub(crate) fn print_check(report: &NotebookReport) {
     let styler = Styler::detect();
     let mut any = false;
@@ -236,24 +284,19 @@ pub(crate) fn print_check(report: &NotebookReport) {
         any = true;
         let header = format!("{} — {}", entry.path, entry.title);
         println!("{}", styler.bold(&header));
-        for issue in &entry.issues {
-            let severity = match issue.severity {
-                super::model::Severity::Error => styler.red("error"),
-                super::model::Severity::Warning => styler.yellow("warning"),
-            };
-            match issue.line {
-                Some(line) => println!(
-                    "  {line}: [{code}/{severity}] {message}",
-                    code = issue.code,
-                    message = issue.message
-                ),
-                None => println!(
-                    "  [{code}/{severity}] {message}",
-                    code = issue.code,
-                    message = issue.message
-                ),
-            }
+        print_issues(&entry.issues, &styler);
+        println!();
+    }
+    // Catalog findings are the host's, never an arbitrary notebook's:
+    // print them once under the host path.
+    for record in &report.catalogs {
+        if record.issues.is_empty() {
+            continue;
         }
+        any = true;
+        let header = format!("{} — catalog", record.path);
+        println!("{}", styler.bold(&header));
+        print_issues(&record.issues, &styler);
         println!();
     }
     let counts = &report.counts;

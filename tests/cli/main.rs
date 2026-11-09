@@ -19,6 +19,7 @@ mod highlights;
 mod move_done;
 mod note_walkers;
 mod notebooks;
+mod notebooks_catalog;
 mod periods;
 mod plan;
 mod plan_off_clock;

@@ -542,12 +542,19 @@ pub(super) fn plan_capture_to_target(
         CaptureKind::Bullet {
             section_prefix,
             exact,
-        } => insert_bullet_line(
-            &contents,
-            capture_block,
-            section_prefix.as_deref(),
-            *exact,
-        ),
+        } => {
+            reject_generated_notebooks_selector(
+                &contents,
+                section_prefix.as_deref(),
+                *exact,
+            )?;
+            insert_bullet_line(
+                &contents,
+                capture_block,
+                section_prefix.as_deref(),
+                *exact,
+            )
+        }
         CaptureKind::ProjectNote { .. } => {
             return Err(CaptureError::io(
                 "project-note capture invariant failed: wrong write planner",

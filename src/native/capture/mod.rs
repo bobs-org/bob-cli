@@ -160,7 +160,10 @@ use task_toggle::*;
 
 pub(crate) use batch::{CaptureBatchPlanner, StagedTextFile};
 pub(crate) use block_diff::block_depths;
-pub(crate) use commit::{validate_target_parent, write_staged_files};
+pub(crate) use commit::{
+    changed_after_planning, read_failed, validate_target_parent,
+    write_staged_files, write_staged_files_guarded,
+};
 pub(crate) use existing_task_link::{
     link_existing_task, list_today_link_pomodoros, today_error_code,
     ExistingTaskLinkOutcome, TodayPomodoroRow,
