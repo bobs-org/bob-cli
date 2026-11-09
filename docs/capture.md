@@ -6504,7 +6504,11 @@ writes. Success names the type emoji, `new restaurant` (or the configured
 label), path, field displays, and note count. JSON adds top-level
 `note_files` (omitted when empty) with `path`, `action: "create"`,
 `record_type`, `properties`, `body`, and `markdown`; dry-run and commit
-share those bytes. `kind` is `"record_note"`. Incomplete records exit 2
+share those bytes. Each property has a canonical JSON `value` and a separate
+human `display`: choices use schema value plus label (`"liked"` / `"Liked"`),
+lists keep JSON arrays (for example `["hot", "soup"]`), and numbers stay
+numeric (`4.5`, displayed as `"4.5"`). Empty optional fields omit both.
+`kind` is `"record_note"`. Incomplete records exit 2
 without prompting and print a ready-to-copy draft; a later-item failure
 rolls the whole batch back, including earlier tasks. Collisions use
 `record_exists` and never suffix a filename. Record-only drafts do not

@@ -17,8 +17,9 @@ pub(crate) struct CaptureParseOptions<'a> {
     /// creation. `None` keeps every record candidate literal. Callers
     /// outside the grammar build exactly one policy per invocation.
     pub(crate) record_policy: Option<&'a super::record::RecordRoutePolicy>,
-    /// A forced destination or clip flag (`-r -s -t -S -c`, `--task-ref`)
-    /// keeps the item a task.
+    /// A forced destination (`-r -s -t -S`, `--task-ref`) keeps record-like
+    /// text literal. Task-only execution modifiers such as `--clip` are
+    /// checked after claiming so a configured record can refuse them.
     pub(crate) explicit_destination: bool,
     /// Whether lone `@route` / `@route#section` headers split into capture
     /// lists. `false` for forced-destination parses, where `@tokens` stay

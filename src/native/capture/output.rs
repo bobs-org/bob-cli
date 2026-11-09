@@ -958,7 +958,7 @@ pub(super) struct NoteFilePropertyJson {
     pub(super) key: String,
     pub(super) label: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) value: Option<String>,
+    pub(super) value: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) display: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

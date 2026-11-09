@@ -328,7 +328,19 @@ fn expand_capture(matches: &ArgMatches, output_format: OutputFormat) -> i32 {
         Ok(raw) => raw,
         Err(error) => return print_capture_error(error, output_format),
     };
-    let expansion = match capture_language::template::expand(&raw) {
+    let record_policy = super::capture_record::record_policy_for_draft(
+        &super::env::bob_dir(),
+        None,
+        &raw,
+    );
+    let template_analysis = capture_language::template::analyze_for_capture(
+        &raw,
+        Some(&record_policy),
+    );
+    let expansion = match capture_language::template::expand_with_analysis(
+        &raw,
+        &template_analysis,
+    ) {
         Ok(expansion) => expansion,
         Err(issue) => {
             return print_capture_error(

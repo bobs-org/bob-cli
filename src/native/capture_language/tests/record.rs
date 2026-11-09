@@ -215,12 +215,9 @@ fn malformed_stems_stay_in_the_record_path() {
 }
 
 #[test]
-fn task_sigils_in_the_tail_keep_task_meaning() {
-    // `@areas/a+f` is a nested task source, not a record route: tails
-    // carrying task sigils never claim.
-    for raw in ["Ramen @eat/a+b", "Ramen @eat/^bad!stem", "Ramen @eat/#sec"] {
-        // Either a plain task or an ordinary task-path teaching error:
-        // never a record claim or a record code.
+fn unrelated_nested_task_routes_keep_task_meaning() {
+    // These are nested task route forms, not record stem spellings.
+    for raw in ["Ramen @eat/a+b", "Ramen @eat/#sec"] {
         match strict(raw) {
             Ok(parsed) => assert!(
                 matches!(parsed.kind, CaptureKind::Task),
@@ -233,6 +230,120 @@ fn task_sigils_in_the_tail_keep_task_meaning() {
             ),
         }
     }
+    for raw in ["@eat/^bad_stem Ramen", "Ramen @eat/^bad_stem"] {
+        assert_eq!(strict_code(raw), RECORD_STEM_CODE, "{raw}");
+    }
+}
+
+#[test]
+fn task_markers_at_both_route_edges_refuse_as_record_modifiers() {
+    let markers = [
+        "#dinner",
+        "s:3",
+        "$2",
+        "%c",
+        "%n",
+        "%l",
+        "&work:abc",
+        "*work:abc",
+        "~work:abc",
+        "!work:abc",
+        "+query",
+        ":abc",
+        "^abc",
+        "=3",
+        "x2",
+    ];
+    for marker in markers {
+        for raw in [
+            format!("@eat/ Ramen {marker}"),
+            format!("Ramen {marker} @eat/"),
+            format!("{marker} @eat/ Ramen"),
+            format!("Ramen @eat/ {marker}"),
+        ] {
+            let error = parse_capture_draft_with_options_coded(
+                &raw,
+                None,
+                None,
+                &strict_options(Some(&configured_policy())),
+            )
+            .expect_err("task modifier must not hide the record route");
+            assert_eq!(
+                error.code,
+                Some(RECORD_MARKER_UNSUPPORTED_CODE),
+                "{raw}: {error:?}"
+            );
+            let editor = parse_for_editor_with(
+                &raw,
+                &editor_options(Some(&configured_policy())),
+            );
+            assert_eq!(editor.items[0].mode, EditorMode::RecordNote, "{raw}");
+            assert_eq!(
+                editor.items[0].diagnostics[0].code,
+                RECORD_MARKER_UNSUPPORTED_CODE,
+                "{raw}"
+            );
+        }
+    }
+}
+
+#[test]
+fn task_modifier_utf8_ranges_point_to_original_bytes() {
+    for raw in ["🍜 @eat/ s:3", "s:3 @eat/ 🍜"] {
+        let error = parse_capture_draft_with_options_coded(
+            raw,
+            None,
+            None,
+            &strict_options(Some(&configured_policy())),
+        )
+        .expect_err("schedule marker refuses");
+        let (start, end) = error.span.expect("marker span");
+        assert_eq!(&raw[start..end], "s:3", "{raw}");
+        assert_eq!(error.code, Some(RECORD_MARKER_UNSUPPORTED_CODE));
+    }
+}
+
+#[test]
+fn escaped_type_text_decodes_in_title_but_keeps_original_range() {
+    let raw = "Ramen \\#READ @eat/";
+    let parsed = strict(raw).expect("escaped type text is literal");
+    let CaptureKind::RecordNote { intent } = parsed.kind else {
+        panic!("not a record");
+    };
+    assert_eq!(intent.title, "Ramen #READ");
+    let range = intent.title_range.expect("original title range");
+    assert_eq!(&raw[range.0..range.1], "Ramen \\#READ");
+}
+
+#[test]
+fn field_values_do_not_claim_template_directives_or_hide_placeholders() {
+    let policy = configured_policy();
+    for raw in [
+        "Ramen @eat/\\n- location:: %t",
+        "@eat/ Ramen\\n- location:: %t",
+    ] {
+        let raw = raw.replace("\\n", "\n");
+        let masked = super::super::record::mask_field_values_for_template(
+            &raw,
+            Some(&policy),
+        );
+        assert!(super::super::template::analyze(&masked).directive.is_none());
+        strict(&raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
+    }
+
+    let raw = "{0} @eat/ %t\n- location:: {1}\n\nRamen %t";
+    let masked = super::super::record::mask_field_values_for_template(
+        raw,
+        Some(&policy),
+    );
+    let analysis = super::super::template::analyze(&masked);
+    assert!(analysis.directive.is_some(), "parent %t remains active");
+    assert_eq!(analysis.placeholders.len(), 2);
+    assert_eq!(
+        &raw[analysis.placeholders[1].range.clone()],
+        "{1}",
+        "field placeholders remain available to the existing expander"
+    );
 }
 
 #[test]

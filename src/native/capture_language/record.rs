@@ -344,14 +344,10 @@ fn parse_record_route_token(
     let stem = if tail.is_empty() {
         RecordRouteStem::None
     } else if let Some(stem) = tail.strip_prefix('^') {
-        // Explicit stems use the block-ID alphabet; an empty stem is a
-        // partial `@dir/^` that refuses downstream.
-        if !stem
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-        {
-            return None;
-        }
+        // Keep malformed caret stems in the record path so the record
+        // diagnostic explains the allowed alphabet. Other nested route
+        // tails (for example `@areas/a+f` or `@note#heading`) stay task
+        // syntax and are not claimed here.
         let stem_start = token.start + 1 + dir.len() + 1 + 1;
         RecordRouteStem::Explicit(
             stem.to_string(),
@@ -404,17 +400,60 @@ fn find_record_route_token(
     if tokens.is_empty() {
         return None;
     }
-    if let Some(route) = parse_record_route_token(&tokens[0]) {
+    let mut first = 0;
+    while first < tokens.len() && is_edge_task_marker(tokens[first].text) {
+        first += 1;
+    }
+    if first < tokens.len()
+        && let Some(route) = parse_record_route_token(&tokens[first])
+    {
         return Some((route, RecordRoutePosition::RouteFirst));
     }
-    if tokens.len() > 1
-        && let Some(route) = parse_record_route_token(&tokens[tokens.len() - 1])
+    let mut last = tokens.len();
+    while last > 0 && is_edge_task_marker(tokens[last - 1].text) {
+        last -= 1;
+    }
+    if last > 0
+        && let Some(route) = parse_record_route_token(&tokens[last - 1])
     {
         return Some((route, RecordRoutePosition::TitleFirst));
     }
     // A single-token parent is both first and last; the check above
     // already handled it as route-first.
     None
+}
+
+/// Recognized task markers may sit beside a record route at either edge.
+/// They still cause a record refusal after the route is claimed; this
+/// predicate only lets them expose the route to the shared classifier.
+fn is_edge_task_marker(token: &str) -> bool {
+    if token.is_empty() {
+        return false;
+    }
+    if parse_schedule_token(token).is_some()
+        || is_priority_marker_token(token)
+        || classify_region_token(token).is_some()
+    {
+        return true;
+    }
+    if token.starts_with('#') {
+        return super::type_marker::scan_line(token, 0)
+            .iter()
+            .any(|occurrence| occurrence.is_marker());
+    }
+    if token.starts_with('%') {
+        let template_marker = super::directive::template_tokens(&[RawLine {
+            text: token,
+            start: 0,
+            end: token.len(),
+        }]);
+        return !template_marker.is_empty()
+            || matches!(token, "%c" | "%n" | "%l");
+    }
+    if matches!(token.as_bytes().first(), Some(b'&' | b'*' | b'~')) {
+        return true;
+    }
+    false
 }
 
 /// What a record-shaped route token resolves to under the policy.
@@ -537,7 +576,10 @@ pub(crate) fn classify_record_item(
         }
         RecordRouteStem::Update(_) => unreachable!("handled above"),
     };
-    let (title, title_range) = parent_title(parent, &route, &position);
+    let (mut title, title_range) = parent_title(parent, &route, &position);
+    if let Some((start, end)) = title_range {
+        title = decode_title_escapes(item, title, start, end);
+    }
     let mut fields = Vec::new();
     let mut field_value_ranges = Vec::new();
     let mut notes = Vec::new();
@@ -691,6 +733,37 @@ fn parent_title(
     let offset = raw.find(trimmed).unwrap_or(0);
     let start = parent.start + relative_start + offset;
     (trimmed.to_string(), Some((start, start + trimmed.len())))
+}
+
+/// Apply the same `\#` literal decoding the ordinary task parser applies,
+/// but only inside the title. Field values keep their authored bytes.
+fn decode_title_escapes(
+    item: &CaptureItem<'_>,
+    title: String,
+    start: usize,
+    end: usize,
+) -> String {
+    let mut removals = super::type_marker::collect_item(item)
+        .into_iter()
+        .filter_map(|occurrence| match occurrence {
+            super::type_marker::TypeMarkerOccurrence::Escaped { span }
+                if start <= span.start && span.end <= end =>
+            {
+                Some(span.start)
+            }
+            _ => None,
+        })
+        .filter_map(|absolute| {
+            let relative = absolute.checked_sub(start)?;
+            (title.as_bytes().get(relative) == Some(&b'\\')).then_some(relative)
+        })
+        .collect::<Vec<_>>();
+    removals.sort_unstable_by(|left, right| right.cmp(left));
+    let mut bytes = title.into_bytes();
+    for relative in removals {
+        bytes.remove(relative);
+    }
+    String::from_utf8(bytes).expect("removing ASCII escapes preserves UTF-8")
 }
 
 /// Parse `- key:: value` into a field input. Returns `None` when the
@@ -923,6 +996,24 @@ fn refuse_record_markers(
     // Schedule, priority, and selector/session shapes in the non-opaque
     // regions, with quote and escape rules for literal title text.
     let source = item.source;
+    // The route can be exposed by a task marker before or after it. Scan
+    // the whole parent line with only the route token blanked, so that
+    // those markers cannot disappear when the title is extracted.
+    if let Some(parent) = item.lines.first().map(|line| line.raw) {
+        let mut parent_without_route = parent.text.as_bytes().to_vec();
+        let route_start = claim.route_range.0.saturating_sub(parent.start);
+        let route_end = claim.route_range.1.saturating_sub(parent.start);
+        if route_start <= route_end && route_end <= parent_without_route.len() {
+            parent_without_route[route_start..route_end].fill(b' ');
+            let parent_without_route = String::from_utf8(parent_without_route)
+                .expect("route masking preserves UTF-8");
+            if let Some((marker, range)) =
+                scan_region_markers(&parent_without_route, parent.start, source)
+            {
+                return Some(unsupported(marker, Some(range)));
+            }
+        }
+    }
     for (text, base) in record_scan_regions(claim) {
         if let Some((marker, range)) = scan_region_markers(&text, base, source)
         {
@@ -930,6 +1021,60 @@ fn refuse_record_markers(
         }
     }
     None
+}
+
+/// Mask template directives inside fields of configured record items before
+/// `%t` analysis. Placeholders stay visible to the existing expander. The
+/// masking is byte-preserving, so every template range and source map still
+/// indexes the caller's original UTF-8 draft.
+pub(crate) fn mask_field_values_for_template(
+    raw: &str,
+    policy: Option<&RecordRoutePolicy>,
+) -> String {
+    let Some(policy) = policy else {
+        return raw.to_string();
+    };
+    let draft = super::draft::split_capture_draft_no_lists(raw);
+    let mut bytes = raw.as_bytes().to_vec();
+    for item in &draft.items {
+        let Some(parent) = item.lines.first().map(|line| line.raw) else {
+            continue;
+        };
+        let Some((route, _)) =
+            find_record_route_token(parent.text, parent.start)
+        else {
+            continue;
+        };
+        if !matches!(
+            resolve_record_route(&route, policy),
+            RouteResolution::Configured
+        ) {
+            continue;
+        }
+        for line in item.lines.iter().skip(1) {
+            let AuthoredLineClass::Item(authored) =
+                classify_authored_line(line.raw)
+            else {
+                continue;
+            };
+            if authored.depth != AuthoredDepth::First {
+                continue;
+            }
+            let Some(field) =
+                parse_record_field(authored.body, authored.body_start)
+            else {
+                continue;
+            };
+            let (start, end) = field.value_range;
+            if start <= end && end <= bytes.len() {
+                let value = &raw[start..end];
+                for (offset, _) in value.match_indices("%t") {
+                    bytes[start + offset..start + offset + 2].fill(b' ');
+                }
+            }
+        }
+    }
+    String::from_utf8(bytes).expect("field masking preserves UTF-8")
 }
 
 /// Quote state while scanning one region for marker shapes.
@@ -1161,9 +1306,11 @@ pub(super) fn claim_strict_record<'a>(
         Some(RecordClaim::Note(intent)) => {
             Ok(Some(strict_record_outcome(item, intent, &route_text)))
         }
-        Some(RecordClaim::Refused { code, message, .. }) => {
-            Err(CaptureItemParseError::coded(code, message))
-        }
+        Some(RecordClaim::Refused {
+            code,
+            message,
+            span,
+        }) => Err(CaptureItemParseError::coded_at(code, message, span)),
     }
 }
 

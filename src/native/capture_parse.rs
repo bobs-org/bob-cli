@@ -1309,7 +1309,11 @@ struct TemplateRowParse {
     mode: Option<EditorMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     body: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    needs: Vec<Need>,
     fields: Vec<TemplateFieldParse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    record: Option<ParseRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1327,7 +1331,10 @@ struct SourceRange {
 
 impl CaptureParseResult {
     fn new(input: String, options: &EditorParseOptions<'_>) -> Self {
-        let analysis = capture_language::template::analyze(&input);
+        let analysis = capture_language::template::analyze_for_capture(
+            &input,
+            options.record_policy,
+        );
         if analysis.directive.is_some() {
             return Self::new_template(input, options, analysis);
         }
@@ -1516,20 +1523,109 @@ impl CaptureParseResult {
         let expanded_rows = capture_language::template::expand_rows_for_editor(
             &input, &analysis,
         );
+        let row_parses = expanded_rows
+            .iter()
+            .map(|instance| {
+                instance.as_ref().map(|instance| {
+                    capture_language::parse_for_editor_with(
+                        &instance.text,
+                        options,
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut record_intents = Vec::new();
+        let mut record_rows = std::collections::HashMap::new();
+        let mut record_index = 0usize;
+        for (row_index, row_parse) in row_parses.iter().enumerate() {
+            let Some(row_parse) = row_parse.as_ref() else {
+                continue;
+            };
+            for (_, intent) in &row_parse.record_intents {
+                record_index += 1;
+                record_intents.push((record_index, intent.clone()));
+                record_rows.insert(record_index, row_index);
+            }
+        }
+        let record_entries = super::capture_record::resolve_record_intents(
+            &record_intents,
+            options.record_policy,
+        );
+        let mut records_by_row =
+            vec![
+                Vec::<super::capture_record::RecordParseEntry>::new();
+                analysis.rows.len()
+            ];
+        for entry in record_entries {
+            let Some(row_index) = record_rows.get(&entry.index).copied() else {
+                continue;
+            };
+            let (Some(instance), Some(row)) = (
+                expanded_rows.get(row_index).and_then(Option::as_ref),
+                analysis.rows.get(row_index),
+            ) else {
+                continue;
+            };
+            records_by_row[row_index].push(map_template_record_entry(
+                entry,
+                instance,
+                &row.fields,
+                &row.range,
+            ));
+        }
+        let mapped_record_entries =
+            records_by_row.iter().flatten().cloned().collect::<Vec<_>>();
         let mut row_summaries = Vec::with_capacity(analysis.rows.len());
         let mut row_items = Vec::with_capacity(analysis.rows.len());
+        let mut row_record_spans = Vec::new();
         let mut instance_diagnostics = Vec::new();
         let mut refusal_diagnostics = Vec::new();
         let mut incomplete_diagnostics = Vec::new();
 
         for (index, row) in analysis.rows.iter().enumerate() {
             let instance = expanded_rows.get(index).and_then(Option::as_ref);
-            let row_parse = instance.map(|instance| {
-                capture_language::parse_for_editor_with(&instance.text, options)
-            });
+            let row_parse = row_parses.get(index).and_then(Option::as_ref);
+            let record_entry = records_by_row
+                .get(index)
+                .and_then(|entries| entries.first());
+            let mut row_needs = row_parse
+                .map(|parsed| parsed.needs.clone())
+                .unwrap_or_default();
+            if record_entry.is_some_and(|record| !record.missing.is_empty())
+                && !row_needs.contains(&Need::RecordValue)
+            {
+                row_needs.push(Need::RecordValue);
+            }
             if let (Some(instance), Some(row_parse)) =
                 (instance, row_parse.as_ref())
             {
+                row_record_spans.extend(
+                    row_parse
+                        .spans
+                        .iter()
+                        .filter(|span| {
+                            matches!(
+                                span.kind,
+                                capture_language::SpanKind::RecordRoute
+                                    | capture_language::SpanKind::RecordStem
+                                    | capture_language::SpanKind::RecordFieldKey
+                                    | capture_language::SpanKind::RecordFieldValue
+                            )
+                        })
+                        .map(|span| {
+                            let (start, end) = map_instance_range(
+                                Some((span.start, span.end)),
+                                instance,
+                                &row.fields,
+                                &row.range,
+                            );
+                            capture_language::Span {
+                                start,
+                                end,
+                                ..span.clone()
+                            }
+                        }),
+                );
                 for diagnostic in &row_parse.diagnostics {
                     if diagnostic.code == "invalid_global_destination" {
                         continue;
@@ -1579,7 +1675,7 @@ impl CaptureParseResult {
                     });
                 }
 
-                if !row_parse.needs.is_empty()
+                if !row_needs.is_empty()
                     || row_parse.mode == EditorMode::Incomplete
                 {
                     incomplete_diagnostics.push(Diagnostic {
@@ -1604,6 +1700,7 @@ impl CaptureParseResult {
                 },
                 mode: row_parse.as_ref().map(|parsed| parsed.mode),
                 body: row_parse.as_ref().map(|parsed| parsed.body.clone()),
+                needs: row_needs.clone(),
                 fields: row
                     .fields
                     .iter()
@@ -1616,6 +1713,7 @@ impl CaptureParseResult {
                         },
                     })
                     .collect(),
+                record: record_entry.map(parse_record),
             };
 
             if let Some(row_parse) = row_parse.as_ref() {
@@ -1633,7 +1731,7 @@ impl CaptureParseResult {
                     route: row_parse.route.clone(),
                     section: row_parse.section.clone(),
                     block_id: row_parse.block_id.clone(),
-                    needs: Vec::new(),
+                    needs: row_needs,
                     ref_parent: None,
                     ref_listen: row_parse.ref_listen,
                     sub_bullets: Vec::new(),
@@ -1659,7 +1757,7 @@ impl CaptureParseResult {
                     header_range: None,
                     template_row: Some(template_row),
                     targets: Vec::new(),
-                    record: None,
+                    record: record_entry.map(parse_record),
                 });
             } else {
                 row_items.push(CaptureParseItem {
@@ -1716,6 +1814,13 @@ impl CaptureParseResult {
             &analysis,
             &row_summaries,
         );
+        spans.extend(wire_spans(row_record_spans));
+        spans.sort_by_key(|span| (span.start, span.end, span.kind.label()));
+        spans.dedup_by(|left, right| {
+            left.start == right.start
+                && left.end == right.end
+                && left.kind == right.kind
+        });
         stamp_directive_spans(&mut spans, &input);
         fill_span_gaps(
             &mut spans,
@@ -1792,6 +1897,8 @@ impl CaptureParseResult {
             },
         ));
         diagnostics.extend(instance_diagnostics);
+        diagnostics
+            .extend(record_parse_diagnostics(&input, &mapped_record_entries));
 
         // Instance parses are the source of truth for clipboard: the masked
         // copy (`xxx %c`) reads as `%c` while a `URL %l` row
@@ -2557,6 +2664,63 @@ fn map_instance_range(
     (row_range.start, row_range.end)
 }
 
+fn map_template_record_entry(
+    mut entry: super::capture_record::RecordParseEntry,
+    instance: &capture_language::template::TemplateInstance,
+    fields: &[capture_language::template::TemplateField],
+    row_range: &std::ops::Range<usize>,
+) -> super::capture_record::RecordParseEntry {
+    let map = |range: (usize, usize)| {
+        map_instance_range(Some(range), instance, fields, row_range)
+    };
+    entry.intent.route_range = map(entry.intent.route_range);
+    entry.intent.title_range = entry.intent.title_range.map(map);
+    entry.intent.stem_range = entry.intent.stem_range.map(map);
+    for field in &mut entry.intent.fields {
+        field.key_range = map(field.key_range);
+        field.value_range = map(field.value_range);
+    }
+    for group in &mut entry.intent.notes {
+        group.section_range = group.section_range.map(map);
+        for line in &mut group.lines {
+            map_template_record_note_line(line, &map);
+        }
+    }
+    if let Some(issue) = &mut entry.plan_issue {
+        issue.range = issue.range.take().map(|range| {
+            let (start, end) = map((range.start, range.end));
+            start..end
+        });
+    }
+    for diagnostic in &mut entry.invalid {
+        if let Some(ranges) = diagnostic.source_ranges.as_mut() {
+            for range in ranges {
+                let (start, end) = map((range.start, range.end));
+                *range = start..end;
+            }
+        }
+    }
+    for property in &mut entry.properties {
+        if let Some(ranges) = property.source_ranges.as_mut() {
+            for range in ranges {
+                let (start, end) = map((range.start, range.end));
+                *range = start..end;
+            }
+        }
+    }
+    entry
+}
+
+fn map_template_record_note_line(
+    line: &mut capture_language::record::RecordNoteLine,
+    map: &impl Fn((usize, usize)) -> (usize, usize),
+) {
+    line.range = map(line.range);
+    for child in &mut line.children {
+        map_template_record_note_line(child, map);
+    }
+}
+
 fn map_instance_rewrite(
     rewrite: &DiagnosticRewrite,
     instance: &capture_language::template::TemplateInstance,
@@ -3015,7 +3179,10 @@ fn parse_record_field(
         required: field.required,
         list: field.list,
         state: field.state.as_str(),
-        value: field.value.as_ref().map(record_value_json),
+        value: field
+            .value
+            .as_ref()
+            .map(super::capture_record::record_value_json),
         display: field.display.clone(),
         source: field.source.map(|source| match source {
             RecordPropertySource::Typed => "typed",
@@ -3024,33 +3191,6 @@ fn parse_record_field(
         range: (ranges.len() == 1).then(|| ranges[0]),
         value_ranges: if ranges.len() > 1 { ranges } else { Vec::new() },
         choices,
-    }
-}
-
-fn record_value_json(value: &super::records::RecordValue) -> serde_json::Value {
-    use super::records::{RecordDate, RecordScalar, RecordValue};
-
-    fn scalar(value: &RecordScalar) -> serde_json::Value {
-        match value {
-            RecordScalar::Text(value) | RecordScalar::Choice(value) => {
-                json!(value)
-            }
-            RecordScalar::Date(RecordDate::Resolved(date)) => {
-                json!(date.format("%Y-%m-%d").to_string())
-            }
-            RecordScalar::Date(RecordDate::Today) => json!("today"),
-            RecordScalar::Date(RecordDate::Yesterday) => json!("yesterday"),
-            RecordScalar::Link(value) => json!(value),
-            RecordScalar::Url(value) => json!(value.to_string()),
-            RecordScalar::Number(value) => json!(value),
-        }
-    }
-
-    match value {
-        RecordValue::Scalar(value) => scalar(value),
-        RecordValue::List(values) => {
-            serde_json::Value::Array(values.iter().map(scalar).collect())
-        }
     }
 }
 

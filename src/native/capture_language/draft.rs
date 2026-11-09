@@ -1161,7 +1161,8 @@ pub(crate) fn parse_capture_draft_with_options_coded(
     forced_section: Option<&str>,
     options: &CaptureParseOptions<'_>,
 ) -> Result<ParsedCaptureDraft, TemplateCodedError> {
-    let analysis = super::template::analyze(raw_text);
+    let analysis =
+        super::template::analyze_for_capture(raw_text, options.record_policy);
     if analysis.directive.is_some() {
         if let Some(block) = analysis.block.as_ref()
             && block.definition_lines(raw_text).iter().any(|line| {
@@ -1198,9 +1199,10 @@ pub(crate) fn parse_capture_draft_with_options_coded(
             ));
         }
         let Some(expansion) =
-            super::template::expand(raw_text).map_err(|issue| {
-                TemplateCodedError::coded(issue.code(), issue.message())
-            })?
+            super::template::expand_with_analysis(raw_text, &analysis)
+                .map_err(|issue| {
+                    TemplateCodedError::coded(issue.code(), issue.message())
+                })?
         else {
             // A missing definition is already reported as a language
             // issue above; reaching here means an ordinary draft.
@@ -1219,10 +1221,10 @@ pub(crate) fn parse_capture_draft_with_options_coded(
             options,
         );
     }
-    if let Some(expansion) =
-        super::template::expand(raw_text).map_err(|issue| {
-            TemplateCodedError::coded(issue.code(), issue.message())
-        })?
+    if let Some(expansion) = super::template::expand_with_analysis(
+        raw_text, &analysis,
+    )
+    .map_err(|issue| TemplateCodedError::coded(issue.code(), issue.message()))?
     {
         return parse_template_expansion(
             expansion,

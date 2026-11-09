@@ -296,7 +296,32 @@ pub(crate) fn expand_rows_for_editor(
 /// directive is represented by an analysis with no `directive`; a `%t` in
 /// any later item still produces a misplaced-directive issue.
 pub(crate) fn analyze(raw: &str) -> TemplateAnalysis {
-    let lines = split_physical_lines(raw);
+    analyze_with_record_policy(raw, None)
+}
+
+/// Analyze capture templates while treating configured record field values
+/// as data. The analysis source has the same byte length as `raw`, so all
+/// template ranges still address the caller's original draft.
+pub(crate) fn analyze_for_capture(
+    raw: &str,
+    record_policy: Option<&super::record::RecordRoutePolicy>,
+) -> TemplateAnalysis {
+    analyze_with_record_policy(raw, record_policy)
+}
+
+fn analyze_with_record_policy(
+    raw: &str,
+    record_policy: Option<&super::record::RecordRoutePolicy>,
+) -> TemplateAnalysis {
+    let masked_source;
+    let source = if let Some(policy) = record_policy {
+        masked_source =
+            super::record::mask_field_values_for_template(raw, Some(policy));
+        masked_source.as_str()
+    } else {
+        raw
+    };
+    let lines = split_physical_lines(source);
     let mut issues = Vec::new();
     let empty = |issues: Vec<TemplateIssue>| {
         let mut issues = issues;
@@ -630,7 +655,18 @@ pub(crate) fn analyze(raw: &str) -> TemplateAnalysis {
         ) {
             Ok(expansion) => {
                 for instance in &expansion.instances {
-                    let instance_lines = split_physical_lines(&instance.text);
+                    let masked_instance;
+                    let instance_source = if let Some(policy) = record_policy {
+                        masked_instance =
+                            super::record::mask_field_values_for_template(
+                                &instance.text,
+                                Some(policy),
+                            );
+                        masked_instance.as_str()
+                    } else {
+                        instance.text.as_str()
+                    };
+                    let instance_lines = split_physical_lines(instance_source);
                     if !super::directive::template_tokens(&instance_lines)
                         .is_empty()
                     {
@@ -725,27 +761,37 @@ pub(crate) fn leading_instances(
 
 /// Expand a template draft, or return `None` unchanged for an ordinary
 /// capture draft. The first issue in draft order is the stable CLI error.
+#[cfg(test)]
 pub(crate) fn expand(
     raw: &str,
 ) -> Result<Option<TemplateExpansion>, TemplateIssue> {
     let analysis = analyze(raw);
+    expand_with_analysis(raw, &analysis)
+}
+
+/// Expand with the already computed analysis. Capture parsing uses this so
+/// record-aware masking and expansion share exactly the same framing.
+pub(crate) fn expand_with_analysis(
+    raw: &str,
+    analysis: &TemplateAnalysis,
+) -> Result<Option<TemplateExpansion>, TemplateIssue> {
     if let Some(issue) = analysis.issues.first() {
         return Err(issue.clone());
     }
-    let Some((_, directive_line)) = analysis.directive else {
+    let Some((_, directive_line)) = analysis.directive.as_ref() else {
         return Ok(None);
     };
-    let Some(block) = analysis.block else {
+    let Some(block) = analysis.block.as_ref() else {
         return Ok(None);
     };
     Ok(Some(
         build_expansion(
             raw,
-            &block,
+            block,
             &analysis.placeholders,
             &analysis.escapes,
             &analysis.rows,
-            directive_line,
+            *directive_line,
             analysis.field_count,
         )
         .expect("analyzed template expansion must fit the size limit"),

@@ -96,6 +96,19 @@ impl CaptureItemParseError {
             span: None,
         }
     }
+
+    pub(crate) fn coded_at(
+        code: &'static str,
+        message: String,
+        span: Option<(usize, usize)>,
+    ) -> Self {
+        Self {
+            code: Some(code),
+            message,
+            item: None,
+            span,
+        }
+    }
 }
 
 impl From<String> for CaptureItemParseError {

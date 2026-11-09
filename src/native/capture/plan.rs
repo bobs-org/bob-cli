@@ -143,12 +143,18 @@ pub(super) fn plan_capture_batch_with_config_path(
         &request.raw_text,
     );
     let options = CaptureParseOptions {
-        url_routing: routing,
+        // A forced clipboard request keeps bare URLs on the task path. Keep
+        // record claiming enabled so a claimed record can refuse `--clip`
+        // before the clipboard is read.
+        url_routing: if request.forced_clip.is_some() {
+            None
+        } else {
+            routing
+        },
         record_policy: (!forced_literal).then_some(&record_policy),
         explicit_destination: request.forced_section.is_some()
             || request.forced_sub_bullet_target.is_some()
-            || request.forced_drawer.is_some()
-            || request.forced_clip.is_some(),
+            || request.forced_drawer.is_some(),
         has_global_destination: false,
         recognize_lists: !forced_literal,
     };
@@ -158,6 +164,20 @@ pub(super) fn plan_capture_batch_with_config_path(
         request.forced_section.as_deref(),
         &options,
     )?;
+    if (request.forced_clip.is_some()
+        || parsed_draft.items.iter().any(|item| {
+            matches!(item.parsed.kind, CaptureKind::RecordNote { .. })
+                && item.parsed.clip.is_some()
+        }))
+        && parsed_draft.items.iter().any(|item| {
+            matches!(item.parsed.kind, CaptureKind::RecordNote { .. })
+        })
+    {
+        return Err(CaptureError::usage_code(
+            "record notes do not support task clipboard modifiers; remove `--clip` or `%c`",
+            "record_marker_unsupported",
+        ));
+    }
     if parsed_draft.template.is_some() && request.forced_clip.is_some() {
         return Err(CaptureError::usage_code(
             "a template can't capture the clipboard: `%c` would repeat once per row",
@@ -171,6 +191,14 @@ pub(super) fn plan_capture_batch_with_config_path(
             &request.forced_destination_flags,
         )));
     }
+    // The parser has finished consulting the policy. Transfer ownership to
+    // one context that carries that schema and the invocation's lazy folder
+    // catalog through every record item.
+    let mut record_context =
+        super::super::capture_record::CaptureRecordContext::new(
+            record_policy,
+            &request.bob_dir,
+        );
     let template = parsed_draft.template;
     let template_rows = parsed_draft
         .items
@@ -750,6 +778,7 @@ pub(super) fn plan_capture_batch_with_config_path(
                 &mut warnings,
                 &mut dependency_ctx,
                 config_path,
+                &mut record_context,
                 &mut task_theme_context,
                 &items,
                 &all_project_moves,
@@ -1707,6 +1736,7 @@ pub(super) fn plan_capture_item(
     warnings: &mut Vec<CaptureWarning>,
     dependency_ctx: &mut DependencyContext,
     config_path: Option<&Path>,
+    record_context: &mut super::super::capture_record::CaptureRecordContext,
     task_theme_context: &mut CaptureTaskThemeContext,
     earlier_items: &[PlannedCaptureItem],
     project_moves: &[ProjectMoveLanding],
@@ -1718,7 +1748,7 @@ pub(super) fn plan_capture_item(
             now,
             today,
             planner,
-            config_path,
+            record_context,
         );
     }
     // Staged `>` transfers run before every other planner: a bare-note

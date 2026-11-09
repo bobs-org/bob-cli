@@ -33,6 +33,8 @@ const RECORDS_CONFIG: &str = r#"records:
         list: true
       website:
         values: url
+      rating:
+        values: number
 "#;
 
 const COMPLETE_RAMEN: &str = "Ramen Nagi @eat/\n- status:: liked\n- category:: Ramen\n- location:: Clark\n- visited:: today\n- Spicy tuna was great.";
@@ -75,6 +77,20 @@ fn complete_fixture() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
 
 fn daily_note(vault: &Path) -> std::path::PathBuf {
     vault.join("2026-10-07.md")
+}
+
+fn capture_parse(vault: &Path, config: &Path, draft: &str) -> Output {
+    bob_command()
+        .env("BOB_NOW", NOW)
+        .env("BOB_CONFIG_FILE", config)
+        .env("BOB_DIR", vault)
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .output()
+        .expect("run capture-parse")
 }
 
 #[test]
@@ -129,6 +145,72 @@ fn capture_record_dry_run_and_commit_share_markdown() {
     );
     assert!(!vault.join("mac_inbox.md").exists(), "no inbox task");
     assert!(!daily_note(&vault).exists(), "no daily note");
+}
+
+#[test]
+fn note_files_preserve_typed_values_and_match_parse_and_commit() {
+    let (_temp, vault, config) = complete_fixture();
+    let draft = "Nagi @eat/\n- status:: liked\n- category:: Ramen\n- location::\n- visited:: today\n- tags:: spicy\n- tags:: lunch\n- rating:: 4.5";
+    let dry = capture(&vault, &config, &["--dry-run", "-f", "json", draft])
+        .output()
+        .expect("typed dry-run");
+    assert_success(&dry);
+    let dry_json = json_output(&dry);
+    let properties = dry_json["note_files"][0]["properties"]
+        .as_array()
+        .expect("properties");
+    let property = |key: &str| {
+        properties
+            .iter()
+            .find(|property| property["key"] == key)
+            .unwrap_or_else(|| panic!("missing property {key}: {properties:?}"))
+    };
+    assert_eq!(property("status")["value"], "liked");
+    assert_eq!(property("status")["display"], "Liked");
+    assert_eq!(
+        property("tags")["value"],
+        serde_json::json!(["spicy", "lunch"])
+    );
+    assert_eq!(property("tags")["display"], "spicy, lunch");
+    assert_eq!(property("rating")["value"], 4.5);
+    assert_eq!(property("rating")["display"], "4.5");
+    assert_eq!(property("visited")["value"], "2026-10-07");
+    assert!(property("location").get("value").is_none());
+    assert!(property("location").get("display").is_none());
+
+    let parsed = capture_parse(&vault, &config, draft);
+    assert_success(&parsed);
+    let parsed_json = json_output(&parsed);
+    let parsed_fields = parsed_json["record"]["fields"].as_array().unwrap();
+    let parsed_status = parsed_fields
+        .iter()
+        .find(|field| field["key"] == "status")
+        .unwrap();
+    let parsed_tags = parsed_fields
+        .iter()
+        .find(|field| field["key"] == "tags")
+        .unwrap();
+    let parsed_rating = parsed_fields
+        .iter()
+        .find(|field| field["key"] == "rating")
+        .unwrap();
+    assert_eq!(parsed_status["value"], "liked");
+    assert_eq!(parsed_tags["value"], serde_json::json!(["spicy", "lunch"]));
+    assert_eq!(parsed_rating["value"], 4.5);
+
+    let committed = capture(&vault, &config, &["-f", "json", draft])
+        .output()
+        .expect("typed commit");
+    assert_success(&committed);
+    let committed_json = json_output(&committed);
+    assert_eq!(
+        committed_json["note_files"][0]["properties"],
+        dry_json["note_files"][0]["properties"]
+    );
+    assert_eq!(
+        committed_json["note_files"][0]["markdown"],
+        dry_json["note_files"][0]["markdown"]
+    );
 }
 
 #[test]
@@ -389,6 +471,238 @@ fn capture_record_field_urls_stay_opaque() {
         "field and note keep original URL:\n{written}"
     );
     assert!(!written.contains("gmail"), "no gmail rewrite in {written}");
+}
+
+#[test]
+fn record_field_template_text_stays_opaque_and_template_expands_sigils() {
+    let (_temp, vault, config) = complete_fixture();
+    let ordinary =
+        "Ramen @eat/\n- status:: liked\n- category:: Ramen\n- location:: %t";
+    let output =
+        capture(&vault, &config, &["--dry-run", "-f", "json", ordinary])
+            .output()
+            .expect("opaque field value");
+    assert_success(&output);
+    assert_eq!(json_output(&output)["kind"], "record_note");
+    assert_eq!(
+        json_output(&capture_parse(&vault, &config, ordinary))["mode"],
+        "record_note"
+    );
+    let expanded_ordinary =
+        capture(&vault, &config, &["-E", "-f", "json", ordinary])
+            .output()
+            .expect("expand ordinary record with literal %t field");
+    assert_success(&expanded_ordinary);
+    assert_eq!(json_output(&expanded_ordinary)["expanded"], ordinary);
+
+    let template = "{0} @eat/ %t\n- status:: {1}\n- category:: Ramen\n- location:: {2}\n\nRamen liked %c\n";
+    let parsed = capture_parse(&vault, &config, template);
+    assert_success(&parsed);
+    let parsed_json = json_output(&parsed);
+    assert_eq!(
+        parsed_json["template"]["rows"][0]["record"]["title"],
+        "Ramen"
+    );
+    assert_eq!(
+        parsed_json["template"]["rows"][0]["record"]["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|field| field["key"] == "location")
+            .unwrap()["value"],
+        "%c"
+    );
+    let executed =
+        capture(&vault, &config, &["--dry-run", "-f", "json", template])
+            .output()
+            .expect("template-injected task sigil stays a field value");
+    assert_success(&executed);
+    assert_eq!(json_output(&executed)["kind"], "record_note");
+    assert_eq!(
+        json_output(&executed)["note_files"][0]["properties"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|field| field["key"] == "location")
+            .unwrap()["value"],
+        "%c"
+    );
+
+    let template_t = template.replace("Ramen liked %c", "Ramen liked %t");
+    let parsed_t = capture_parse(&vault, &config, &template_t);
+    assert_success(&parsed_t);
+    assert_eq!(
+        json_output(&parsed_t)["template"]["rows"][0]["record"]["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|field| field["key"] == "location")
+            .unwrap()["value"],
+        "%t"
+    );
+    let executed_t =
+        capture(&vault, &config, &["--dry-run", "-f", "json", &template_t])
+            .output()
+            .expect("template-injected record field %t stays literal");
+    assert_success(&executed_t);
+    assert_eq!(json_output(&executed_t)["kind"], "record_note");
+    assert_eq!(
+        json_output(&executed_t)["note_files"][0]["properties"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|field| field["key"] == "location")
+            .unwrap()["value"],
+        "%t"
+    );
+    let expanded_t =
+        capture(&vault, &config, &["-E", "-f", "json", &template_t])
+            .output()
+            .expect("expand record template with literal %t field");
+    assert_success(&expanded_t);
+    assert!(json_output(&expanded_t)["expanded"]
+        .as_str()
+        .unwrap()
+        .contains("- location:: %t"));
+}
+
+#[cfg(unix)]
+#[test]
+fn forced_clip_refuses_record_before_running_clipboard_command() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (temp, vault, config) = complete_fixture();
+    let invoked = temp.path().join("clipboard-was-run");
+    let command = temp.path().join("fake-clipboard");
+    write_file(
+        &command,
+        &format!(
+            "#!/bin/sh\nprintf called > '{}'\nprintf clipboard\n",
+            invoked.display()
+        ),
+    );
+    fs::set_permissions(&command, fs::Permissions::from_mode(0o755))
+        .expect("make fake clipboard executable");
+    let output =
+        capture(&vault, &config, &["--clip", "-f", "json", COMPLETE_RAMEN])
+            .env("BOB_CLIPBOARD_CMD", &command)
+            .output()
+            .expect("record with forced clip");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    let json = json_output(&output);
+    assert_eq!(json["code"], "record_marker_unsupported");
+    assert!(!invoked.exists(), "refusal must precede clipboard access");
+    assert!(!vault.join("mac_inbox.md").exists());
+    assert!(!vault.join("eat").exists());
+}
+
+#[test]
+fn capture_decodes_escaped_hash_in_record_title() {
+    let (_temp, vault, config) = complete_fixture();
+    let draft = "Ramen \\#READ @eat/\n- status:: liked\n- category:: Ramen";
+    let output = capture(&vault, &config, &["-f", "json", draft])
+        .output()
+        .expect("escaped title capture");
+    assert_success(&output);
+    let written = fs::read_to_string(vault.join("eat/ramen_read.md"))
+        .expect("read record");
+    assert!(written.contains("title: \"Ramen #READ\""), "{written}");
+    assert!(!written.contains("Ramen \\#READ"), "{written}");
+}
+
+#[test]
+fn capture_parse_resolves_record_templates_with_mapped_values() {
+    let (_temp, vault, config) = complete_fixture();
+    let draft = "{0} @eat/ %t\n- status:: {1}\n- category:: Ramen\n\n\"Ramen Nagi\" liked\n\"Udon\" WRONG\n\"Café 🍜\" \"\"\n";
+    let output = capture_parse(&vault, &config, draft);
+    assert_success(&output);
+    let json = json_output(&output);
+    let rows = json["template"]["rows"].as_array().expect("template rows");
+    assert_eq!(rows[0]["record"]["title"], "Ramen Nagi");
+    assert_eq!(rows[0]["record"]["missing"], serde_json::json!([]));
+    assert_eq!(rows[1]["record"]["title"], "Udon");
+    let status = rows[1]["record"]["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|field| field["key"] == "status")
+        .unwrap();
+    assert_eq!(status["state"], "invalid");
+    let wrong = draft.find("WRONG").unwrap();
+    assert_eq!(
+        status["range"],
+        serde_json::json!({"start": wrong, "end": wrong + 5})
+    );
+    assert_eq!(rows[2]["record"]["missing"], serde_json::json!(["status"]));
+    assert!(rows[2]["needs"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!("record_value")));
+    assert!(json["diagnostics"].as_array().unwrap().iter().any(|entry| {
+        entry["code"] == "record_invalid_value"
+            && entry["range"] == serde_json::json!([wrong, wrong + 5])
+    }));
+    assert_eq!(json["items"][2]["record"], rows[1]["record"]);
+
+    let execution =
+        capture(&vault, &config, &["--dry-run", "-f", "json", draft])
+            .output()
+            .expect("execute invalid template record");
+    assert_eq!(
+        execution.status.code(),
+        Some(2),
+        "{}",
+        format_output(&execution)
+    );
+    assert_eq!(json_output(&execution)["code"], "record_invalid_value");
+
+    let collision =
+        "{0} @eat/ %t\n- status:: liked\n- category:: Ramen\n\nRamen\nRamen\n";
+    let parsed_collision =
+        json_output(&capture_parse(&vault, &config, collision));
+    assert!(parsed_collision["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["code"] == "record_exists"));
+    let collision_run =
+        capture(&vault, &config, &["--dry-run", "-f", "json", collision])
+            .output()
+            .expect("execute colliding template records");
+    assert_eq!(collision_run.status.code(), Some(2));
+    assert_eq!(json_output(&collision_run)["code"], "record_exists");
+
+    let repeated = "{0} @eat/ %t\n- status:: liked\n- category:: Ramen\n- tags:: {1}\n- tasty broth\n- tags:: soup\n\nRamen spicy\n";
+    let repeated_json = json_output(&capture_parse(&vault, &config, repeated));
+    let tags = repeated_json["template"]["rows"][0]["record"]["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|field| field["key"] == "tags")
+        .unwrap();
+    assert_eq!(tags["value"], serde_json::json!(["spicy", "soup"]));
+    assert_eq!(tags["value_ranges"].as_array().unwrap().len(), 2);
+    for (needle, range) in [
+        ("spicy", tags["value_ranges"][0].clone()),
+        ("soup", tags["value_ranges"][1].clone()),
+    ] {
+        let start = range["start"].as_u64().unwrap() as usize;
+        let end = range["end"].as_u64().unwrap() as usize;
+        assert_eq!(&repeated[start..end], needle);
+    }
+
+    let crlf = "{0} @eat/ %t\r\n- status:: {1}\r\n- category:: Ramen\r\n\r\n\"Café 🍜\" liked\r\n";
+    let crlf_json = json_output(&capture_parse(&vault, &config, crlf));
+    assert_eq!(
+        crlf_json["template"]["rows"][0]["record"]["title"],
+        "Café 🍜"
+    );
+    for span in crlf_json["spans"].as_array().unwrap() {
+        let start = span["start"].as_u64().unwrap() as usize;
+        let end = span["end"].as_u64().unwrap() as usize;
+        assert!(crlf.is_char_boundary(start));
+        assert!(crlf.is_char_boundary(end));
+    }
 }
 
 #[test]

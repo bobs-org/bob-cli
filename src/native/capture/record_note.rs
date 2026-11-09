@@ -6,7 +6,7 @@ use super::*;
 use crate::native::capture_language::record::RecordNoteIntent;
 use crate::native::capture_record::{
     collision_message, field_inputs_from_intent, record_note_inputs,
-    record_policy_for_draft,
+    CaptureRecordContext,
 };
 use crate::native::records::{
     self, FieldKind, RecordCatalog, RecordCreatePlan, RecordCreateRequest,
@@ -20,7 +20,7 @@ pub(super) fn plan_record_note_item(
     now: chrono::NaiveDateTime,
     today: NaiveDate,
     planner: &mut CaptureBatchPlanner,
-    config_path: Option<&Path>,
+    record_context: &mut CaptureRecordContext,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     let CaptureKind::RecordNote { intent } = parsed_item.parsed.kind.clone()
     else {
@@ -28,12 +28,7 @@ pub(super) fn plan_record_note_item(
             "record-note capture invariant failed: wrong capture kind",
         ));
     };
-    let policy = record_policy_for_draft(
-        &request.bob_dir,
-        config_path,
-        &request.raw_text,
-    );
-    let Some(config) = policy.records_config() else {
+    let Some((config, catalog)) = record_context.config_and_catalog() else {
         return Err(CaptureError::usage(
             "record notes need a valid records config",
         ));
@@ -48,7 +43,6 @@ pub(super) fn plan_record_note_item(
     let notes = record_note_inputs(&intent);
     let reserved_paths = reserved_paths(planner, &request.bob_dir);
     let timezone = crate::native::day_timezone().ok().flatten();
-    let mut catalog = RecordCatalog::new(&request.bob_dir);
     let plan = match records::plan_create(
         RecordCreateRequest {
             config,
@@ -62,7 +56,7 @@ pub(super) fn plan_record_note_item(
             vault_root: &request.bob_dir,
             reserved_paths: &reserved_paths,
         },
-        &mut catalog,
+        catalog,
     ) {
         Ok(plan) => plan,
         Err(error) => {
@@ -80,12 +74,7 @@ pub(super) fn plan_record_note_item(
     };
 
     let Some(markdown) = plan.markdown.clone() else {
-        return Err(incomplete_error(
-            &intent,
-            &record_type,
-            &plan,
-            &mut catalog,
-        ));
+        return Err(incomplete_error(&intent, &record_type, &plan, catalog));
     };
     let target = request.bob_dir.join(&plan.path);
     planner.stage(&target, markdown.clone())?;
@@ -153,7 +142,10 @@ fn note_file_property(
     NoteFilePropertyJson {
         key: property.key.clone(),
         label: property.label.clone(),
-        value: property.display.clone(),
+        value: property
+            .value
+            .as_ref()
+            .map(crate::native::capture_record::record_value_json),
         display: property.display.clone(),
         source: property.source.map(|source| match source {
             RecordPropertySource::Typed => "typed",

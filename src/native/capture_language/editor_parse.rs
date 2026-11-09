@@ -318,7 +318,10 @@ pub(crate) fn parse_for_editor_with(
 ) -> EditorParse {
     // Template rows are never split by headers, and a header in the
     // template body is refused outright.
-    let template_draft = super::template::analyze(raw_text).directive.is_some();
+    let template_draft =
+        super::template::analyze_for_capture(raw_text, options.record_policy)
+            .directive
+            .is_some();
     let draft = if template_draft {
         split_capture_draft_no_lists(raw_text)
     } else {
