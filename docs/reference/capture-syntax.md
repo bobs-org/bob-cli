@@ -69,6 +69,7 @@ incomplete **picker** input is refused.
 | `=*[source][#destination…]` | Merge the next planned Pomodoro or named destinations into one open session | [`=*`](#equals-merge) |
 | `~<K>` | Drop those queued Task Links from the start | [`~<K>`](#tilde-drop) |
 | `x` | Close today's running timed Pomodoro | [`x`](#x-close) |
+| `[N]x` | Close at N blocks | [`[N]x`](#nx-close) |
 | `x=E[s][!][=X]` | Record a past Pomodoro ending at the next five-minute boundary or segment | [Recording past Pomodoros](#recording-past-pomodoros) |
 | `x!<M>` | Close, completing those Task Links | [`x!<M>`](#x-complete-links) |
 | `x*<P>` | Close, parking those Task Links | [`x*<P>`](#x-park-links) |
@@ -713,15 +714,13 @@ does not offer it. See [relation effects](configuration.md#relations).
 `||` also hides the label from suggestions after capture succeeds.
 Three pipes fail: `use || to hide a label, | to name one`.
 
-The label pipe attaches directly to the target. Editors using
-[`capture-rewrite`](../capture.md#bob-capture-rewrite) with `--cursor` just
-after a newly typed pipe can attach it across spaces or tabs
-(`~note:id |` → `~note:id|`, `~note:id ||` → `~note:id||`); direct
-`bob capture` input does not apply these editor rewrites. With the cursor
-immediately after `=`, `Task =` becomes `Task ~`; `Task ~=` becomes
-`Task ~~`, and `Task ~~=` becomes `Task ~`. After a complete target, a
-glued `~` or `=` flips direction; after a label, only `~` flips.
-The label stays unchanged.
+The label pipe attaches directly to the target. Editor
+[`capture-rewrite`](../capture.md#bob-capture-rewrite) with `--cursor`
+attaches a spaced pipe across spaces or tabs (`~note:id |` → `~note:id|`,
+`~note:id ||` → `~note:id||`); plain `bob capture` input applies no
+rewrites. `Task =`/`~=`/`~~=` become `Task ~`/`~~`/`~`; after a complete
+target a glued `~` or `=` flips direction, after a label only `~` flips,
+and the label stays unchanged.
 
 ```bash
 bob capture 'Fix flaky capture retries ~sase:retry-design|see'
@@ -898,13 +897,13 @@ Contract: [Starting the next Pomodoro](../capture.md#starting-the-next-pomodoro)
 ### `=name` / `=<X>name` {#equals-named}
 
 Start with `=focus`, `=3focus`, or `=focus3`; timing can precede or follow a
-bare name. Bare names start with a letter, contain no `-`, do not end in a
-digit or `+`, and are not close-shaped. Use `#` for names that cannot be spelled
-bare (`=3#deep-work`, `=#2fa`, `=#c++`) or exact literals; timing goes before
-`#`. An open match starts in place (whole slug before prefix); a completed
-match starts a new session ("again"); otherwise Bob creates
-and starts it. With a session running, a different name swaps in; no `<X>`
-keeps its clock, and `<X>` supplies fresh timing.
+bare name, starting with a letter, containing no `-`, ending in no digit
+or `+`, and not close-shaped. Use `#` (`=3#deep-work`, `=#2fa`, `=#c++`) or
+exact literals for other names; timing goes before `#`. An open match starts
+in place (whole slug before prefix); a completed match starts a new session
+("again"); otherwise Bob creates and starts it. With a session running, a
+different name swaps in: no `<X>` keeps its clock, `<X>` supplies fresh
+timing.
 
 ```bash
 bob capture '=focus'
@@ -940,15 +939,13 @@ and [Lossless acceptance](../task-types.md#pt8-lossless-acceptance).
 ### `=/[base][#type…]` {#equals-split}
 
 `=/` splits the current Pomodoro: the open timed entry, else the next
-planned entry. Its base (first task-type component) stays; every other type
-gets an untimed planned entry immediately below it, in source-name order,
-with that type's Task Links and their nested notes. The source keeps its
-timing and other notes. `=/build` selects an open merged entry whose base
-is BUILD; it does not fall back to the current entry if none matches.
-
-For three or more types, `=/build#fix` splits only FIX and
-`=/build#fix#read` selects both. With exactly two types, omit `#type`.
-MEET and single-type entries cannot split. Selectors accept quoted literals.
+planned entry. Its base (first type component) stays; every other type gets
+an untimed planned entry below it, in source-name order, with that type's
+Task Links and notes. The source keeps its timing and other notes.
+`=/build` selects an open merged entry based at BUILD, with no fallback to
+the current entry. With three or more types, `=/build#fix[#read]` selects
+only those; with two, omit `#type`. MEET and single-type entries cannot
+split; selectors accept quoted literals.
 
 ```bash
 bob capture --dry-run '=/build'
@@ -959,16 +956,16 @@ Contract: [Splitting a merged Pomodoro](../capture.md#splitting-a-merged-pomodor
 ### `=*[source][#destination…]` {#equals-merge}
 
 `=*build#fix` keeps BUILD and absorbs FIX. The name before `#` selects the
-surviving source; names after `#` select entries to remove. `=*#fix` uses
-the open timed entry as source, else the next planned entry.
-`=*build#fix#read` absorbs FIX, then READ. Without a `#`, `=*` or `=*build`
-absorbs the first open, untimed, named Pomodoro below its source. It passes
-completed, timed, running, unnamed, and MEET entries and never wraps above the
-source. Only one entry is implied per token. The source may be timed or planned;
-it keeps its timing and ledger order and gains the absorbed names and children.
-An absorbed Task Link with an identical trimmed line already under the source
-is removed with its subtree. Named absorbed entries must be untimed and open;
-MEET cannot merge. A trailing `#` still needs a destination name.
+surviving source; names after `#` select entries to remove (`=*build#fix#read`
+absorbs FIX, then READ). `=*#fix` uses the open timed entry as source, else
+the next planned entry. Without a `#`, `=*` or `=*build` absorbs the first
+open, untimed, named Pomodoro below its source, passing completed, timed,
+running, unnamed, and MEET entries without wrapping above it; one entry per
+token. The source may be timed or planned; it keeps its timing and ledger
+order and gains the absorbed names and children; an absorbed Task Link
+duplicating a source line is
+removed with its subtree. Named absorbed entries must be untimed and open;
+MEET cannot merge, and a trailing `#` still needs a destination name.
 
 ```bash
 bob capture --dry-run '=*'
@@ -1026,6 +1023,27 @@ Mid-body `x` is prose. Grammar/paste/`capture-parse`/`bob capture` never close
 
 Contract: [Closing the running Pomodoro](../capture.md#closing-the-running-pomodoro).
 
+### `[N]x` {#nx-close}
+
+`[N]x` sizes the `x` close: `2x` closes at exactly 2 five-minute blocks (10
+minutes) from the session start, with the same selection as `x`. One or two
+digits, never a task selection. An unelapsed size, an unstarted session, or
+an unparseable range refuses with a fix and writes nothing.
+
+```bash
+bob capture-parse -- '2x!2'
+```
+
+```text { .no-copy title="Output (excerpt)" }
+  body      2x!2
+  close     2x!2 (10m · complete 2 · defer the rest)
+```
+
+A capital `X` never sizes (`2X4 lumber` stays a task), and `2x-ray`, `2.5x`,
+and `2 x!2` stay prose. Three or more digits (`100x`) stay reserved.
+
+Contract: [Closing at a size](../capture.md#closing-at-a-size).
+
 ### `x!<M>` {#x-complete-links}
 
 `x!1` completes task 1, deferring other ordinary plain links. Empty `!`
@@ -1056,9 +1074,9 @@ remaining numbered links, except Event Tasks whose meeting has not started.
 bob capture --dry-run 'x*'
 ```
 
-When no link to the parked task remains under today's open Pomodoros,
-tasks whose `starts after` relation points to it can be offered as
-successors. Offers link only when selected with `--pull-in`.
+Tasks whose `starts after` relation points to a parked task with no
+remaining link can be offered as successors, linking only when selected with
+`--pull-in`.
 
 Contract: [Choosing each Task Link's outcome](../capture.md#choosing-each-task-links-outcome).
 
@@ -1090,10 +1108,10 @@ Contract: [Choosing each Task Link's outcome](../capture.md#choosing-each-task-l
 
 Write one inline entry or child bullets. Without wildcards, explicit lists assign
 unnumbered bullets to listed worked tasks in order; one task takes all. `x!2 note`
-logs to 2; `x~2 note` fails. A leading number selects a task (`x 1 3 bugs fixed`
-logs `3 bugs fixed` to 1); `x 1` needs `pomodoro_close_log_text`. Entries receive
-`*YYYY-MM-DD HH:MM* —` timestamps. Number bullets all or none; `- * summary` logs
-to remaining worked tasks. Two-space bullets nest undated details.
+logs to 2; `x~2 note` fails. A leading number selects a task; `x 1` needs
+`pomodoro_close_log_text`. Entries gain `*YYYY-MM-DD HH:MM* —` stamps; number
+bullets all or none, `- * summary` logs to remaining worked tasks, and
+two-space bullets nest undated details.
 
 ```bash
 bob capture --dry-run 'x wired the lexer'
@@ -1489,9 +1507,8 @@ Contract: [Directives (`%`)](../capture.md#directives) · [Clipboard](../capture
 A bare `#` at an item edge is an incomplete type marker. In an editor it opens
 task-type completion, with rows in configured type order (or recent catalog
 order) and no row selected. Write `\#` to keep a literal hash. In Mac Capture,
-`\` or `/` typed where `#` would open a menu becomes `#` (not at a line
-start), and pressing the same key twice leaves one literal `\` or `/`, so
-type `\` `\` `#` to write the `\#` escape there.
+`\` or `/` where `#` would open a menu becomes `#` (not at a line start);
+doubling either leaves one literal, so type `\` `\` `#` for `\#` there.
 
 Contract: [Typing tasks with `#<type>`](../capture.md#typing-tasks-with-type).
 
@@ -1523,14 +1540,13 @@ token) types the new task with that explicit block ID. Named Pomodoro owners suc
 `^route:block-id#NAME`, `=NAME`, and project-note `@route^block-id@#NAME` /
 `@route:block-id@#NAME` keep their existing meanings.
 
-When the item also names a Pomodoro, the task keeps its effective type
-(including a separate `#type` choice), and a destination with type components
-gains that type if missing: a BUILD task landing in FIX makes `FIX + BUILD`.
-A container (a name with no type components) keeps its name and the task's
-type, with a warning. A MEET type destination changes a different effective
-type to MEET. Explicit retyping stages the `[type::]` edit with the gesture
-and relocates the live Task Link.
-Closed targets are refused.
+With a Pomodoro destination, the task keeps its effective type (including a
+separate `#type` choice), and a typed destination gains a missing type: a
+BUILD task landing in FIX makes `FIX + BUILD`. A container (a name with no
+type components) keeps its name and the task's type, with a warning; a MEET
+destination retypes a different effective type to MEET. Explicit retyping
+stages the `[type::]` edit with the gesture and relocates the live Task
+Link. Closed targets are refused.
 
 ```bash
 bob capture --no-clip 'Fix the parser #fix @sase'

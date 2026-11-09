@@ -283,8 +283,8 @@ stays the end-of-options marker and carries no text.\n\n\
 Pomodoro sessions form a lifecycle: `=`/`=<X>` starts the next session, \
 `=name` starts that named session, `+[N]`/`-[N]` resizes the \
 running session, `++[N]`/`--[N]` shifts it, and `x` stops the running one. \
-Mnemonic: `=` starts now, `x` stops now, and `x=` records what already \
-happened. A whole-item `x=` token records past work (`x=3`, `x=build`, \
+Mnemonic: `=` starts now, `x` stops now, `Nx` stops at N blocks, and `x=` records what already \
+happened. Before `x`: 5-minute blocks · after `x`: task numbers. A whole-item `x=` token records past work (`x=3`, `x=build`, \
 `x=build2 x=fix3`) ending at the next five-minute boundary; stack members \
 fill earlier windows backward. It never changes a running session, and `!` \
 only permits trimming one edge of a closed row. Session operators may share one line when whitespace \
@@ -353,11 +353,11 @@ followed by prose stays ordinary text, preserving Obsidian highlights. \
 JSON stays `pomodoro_start`; `pomodoro_start.override` is present only for \
 a restart or swap and its action is `restart` or `swap`. See \
 `docs/capture.md` (`Overriding the running Pomodoro`).\n\n\
-Capture a whole item `x[<N>][*<P>][!<M>][~<K>][@<N>]` (lowercase `x` only, with \
+Capture a whole item `[N]x[<N>][*<P>][!<M>][~<K>][@<N>]` (lowercase `x` only, with \
 `*`, `!`, `~`, and `@` in any order; `<N>` may instead be typed last as `@<N>` (for example `x!1@2` means `x2!1`)) to close today's running timed Pomodoro the \
 way Obsidian's Ctrl+Enter completion does, plus an auto-decrement that \
 shortens an early-stopped session to the earliest five-minute step at or \
-after now (never extended; an overrun is reported). A bare `x` keeps \
+after now (plain `x` never extends a session; an overrun is reported — write `Nx` to close at a stated size). A bare `x` keeps \
 today's behavior; `x<N>` keeps only the numbered Task Links in `<N>` in \
 progress and defers the rest, `x*<P>` parks the links in `<P>` (normal In \
 Progress work without carrying them forward), `x!<M>` completes the links in `<M>`, \
@@ -374,7 +374,24 @@ closed session's continuation (docs/task-dependencies.md §12; \
 `plan.link_unblocked: false` turns linking off). `<N>`, `<P>`, `<M>`, and `<K>` are comma-separated task numbers in ledger \
 order starting at 1 (the numbers `bob capture` shows, in human output, in \
 `--dry-run`, and as JSON `task_links`); a lone `0` means no \
-task stays in progress, as in `x0`. Plain `x0` on a note-free session resets it to the first future placeholder (clearing the parenthesized ledger to `()` and keeping all children); the same `x0` on a session with a stand-alone note closes, deferring every numbered link. Explicit modifiers (`x0*2`, `x0!2`, `x0~2`, wildcards) always close. A present `*` or `!` group with no digits selects every numbered link left after explicit assignments (`x*` parks all, `x!` completes all, `x1*` keeps 1 in progress and parks the rest, `x*!2` parks the rest and completes 2). Explicit forms such as `x*1`/`x!1` select only task 1; an absent group stays absent and `~` never defaults. Two empty wildcard groups compete, so `x*!` and `x!*` need numbers on at least one group. Log one entry on the close line: \
+task stays in progress, as in `x0`. Plain `x0` on a note-free session resets it to the first future placeholder (clearing the parenthesized ledger to `()` and keeping all children); the same `x0` on a session with a stand-alone note closes, deferring every numbered link. Explicit modifiers (`x0*2`, `x0!2`, `x0~2`, wildcards) always close. A present `*` or `!` group with no digits selects every numbered link left after explicit assignments (`x*` parks all, `x!` completes all, `x1*` keeps 1 in progress and parks the rest, `x*!2` parks the rest and completes 2). Explicit forms such as `x*1`/`x!1` select only task 1; an absent group stays absent and `~` never defaults. Two empty wildcard groups compete, so `x*!` and `x!*` need numbers on at least one group. Glue one or two digits \
+before the `x` (`2x`, `2x!2`, `2x0`) to close at exactly that many \
+five-minute blocks from the session start: `2x!2` records 10 minutes then \
+completes task 2, and may lengthen the session to do it. The number before \
+`x` is the number of blocks Bob records, or Bob tells you why not: a size \
+that has not elapsed yet, a session that has not started, or a time range \
+that does not parse refuses with a named fix \
+(`pomodoro_close_size_not_elapsed`, `pomodoro_close_size_not_started`, \
+`pomodoro_close_size_unparseable`) and writes nothing. `2x0` closes and \
+defers every plain link, never a reset. A sized close comes first on its \
+line, after any `+`/`-`/`++`/`--` moves: `x 2x faster` logs `2x faster`, \
+while `--1 2x!2` and `2x =` still chain. `0x` needs at least 1 block, three \
+or more digits (`100x`) stay reserved, `=2x` is not a start, `2x=3` mixes a \
+size with a past record, and a capital `X` (`2X4 lumber`) stays prose. Human \
+output reads `0900-0925 → 0900-0910 (10m · 2x, −15m)` with no overrun line, \
+and JSON carries an additive `size` object; after a `+`/`-` adjust plus an \
+unsized close at a whole-block size, human output adds a dim \
+`tip: 2x!2 closes at 10m in one step` line. Log one entry on the close line: \
 `x wired the lexer` logs to the first task the close works (task 1 for a \
 plain `x`, the first eligible worked link with wildcard intent), and \
 `x1,3 3 fixed the flaky test` logs to task 3. A leading \

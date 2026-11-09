@@ -50,6 +50,7 @@ workflow guide.
   - [Shifting the current Pomodoro](#shifting-the-current-pomodoro)
   - [Running into an event](#running-into-an-event)
   - [Closing the running Pomodoro](#closing-the-running-pomodoro)
+    - [Closing at a size](#closing-at-a-size)
     - [Close names follow the work](#close-names-follow-the-work)
     - [Retired close spellings](#retired-close-spellings)
     - [Choosing each Task Link's outcome](#choosing-each-task-links-outcome)
@@ -155,12 +156,13 @@ anything is written, and any failure rolls the whole batch back.
 | `=name~<K>`, `=<X>name~<K>`, `=name<X>~<K>`, or `=<X>#non-bare-name~<K>` | Start without the queued Task Links in `<K>` (`=~2`, `=3~2,4`, `=bugs~2`, `=3bugs~1,3`); `~` drops, the drop part always comes last, and the item must contain only the start token |
 | `==` / `==<X>` / `==[<X>]#name` | Retired. For example, `` `==` is retired: `=` restarts or swaps the running Pomodoro by itself; write `=` ``; `==3` gives the same message and teaches `=3`; other claimed forms teach their one-`=` rewrite |
 | `x[<N>][*<P>][!<M>][~<K>][@<N>]` | Close today's running timed Pomodoro (lowercase `x` only, with `*`, `!`, `~`, and `@` in any order; `<N>` may instead be typed last as `@<N>`, so `x!1@2` means `x2!1`); any numbered list makes the close explicit, so only listed links are included and other plain links defer; `<N>` keeps listed links in progress, `*<P>` parks those links (normal work without carrying forward), `!<M>` completes those links, `~<K>` drops those links (removed, not carried, not started), and a lone `0` means none; a present-but-empty `*` or `!` selects every remaining numbered Task Link after explicit assignments and is represented by `park_all`/`complete_all` with an empty lexical list; `x*1`/`x!1` act only on task 1; one Work Log entry may sit on the close line, several use child bullets |
+| `[N]x[<N>][*<P>][!<M>][~<K>][@<N>]` | Close at exactly N five-minute blocks from the session start (`2x` records 10 minutes; `2x!2` records 10 minutes then completes task 2; `2x0` closes and defers every plain link); the prefix is never a task selection and may lengthen the session, but never records time that has not happened — a size that has not elapsed, a session that has not started, or an unparseable range refuses with a named fix and writes nothing (see [Closing at a size](#closing-at-a-size)) |
 | `x [<n>] <entry text…>` | One entry on the close line: with no number it logs to the first task the close works (task 1 for plain `x`, the first eligible worked link for wildcard closes); a leading number names the task, so only the first token is an index (`x 1 3 bugs fixed` logs `3 bugs fixed` to task 1) |
 | `x` + `- [<n>] <text>` / `- * <text>` (+ `  - <detail>`) | Several entries while closing: bullets are numbered all or none except star bullets — a numbered bullet logs its text to worked task `<n>`, unnumbered bullets log in order to the close's worked tasks (one worked task takes them all, otherwise bullet `i` logs to worked task `i`), and `- * <text>` logs the same entry to every worked task no other entry in this close logs to; a two-space bullet nests an undated detail under its entry; an inline entry plus bullets fails |
 | `+2 x`, `x =`, `x =bugs`, `x =~2`, `x wired the lexer =` | Same-line session-operator chain: whitespace-separated session tokens on one line run left to right exactly like blank-line items; an inline entry sits right after its close with operators trailing (`x wired the lexer =` closes with the entry then starts); `x =~2` closes then starts without link 2 of the next lineup, while `x~2 =` drops link 2 of the running session and then starts |
 | `x =` + `- 1 wired the lexer` | Close with a Work Log bullet in a chain: the child lines attach to the line's `x`, so this logs the entry then starts the next session |
 | `x=E[s][!][=X]` | Record finished work ending at the next five-minute boundary (or at a timeline segment with `s`); `E` is an optional positive block count or name, `!` permits trimming a closed row's edge, and the optional second `=X` applies the existing close outcomes |
-| `@route:block-id=x…` with no other text | Put that existing task into the running session, then close it (own-prerequisite Blocked targets drop those links first; a refused drop keeps today's history link); the `=` is the suffix separator, the same selection may follow the `x`, and numbers refer to the post-link lineup |
+| `@route:block-id=x…` with no other text | Put that existing task into the running session, then close it (own-prerequisite Blocked targets drop those links first; a refused drop keeps today's history link); the `=` is the suffix separator, a `Nx` size may precede the `x` (`@route:block-id=2x!1` closes at 10 minutes), the same selection may follow the `x`, and numbers refer to the post-link lineup |
 | `^route:block-id=x…` with no other text | Identical execution; `^` is the active-task spelling |
 | `<text> @route:block-id=x…` | Create the new Pomodoro-linked task in the running session, then close it; numbers refer to the post-link lineup |
 | `@route^block-id@` | Create the project note `<route>_<block_id>.md`; the `^prj` task is never linked and the daily note is untouched |
@@ -340,12 +342,21 @@ Bob refuses two cases before planning writes:
 | `=xx`, `=xa`, `=xmas`, `=Bugs` | Grammar and CLI: named start; `x` followed by more name characters is not close-shaped. In Mac Capture's editor, typing `xx` on a link-close suffix gives `=x!` |
 | `=x`, `=X`, `=x2!1`, `=*1`, `=!`, `=x wired the lexer` | Unchanged retired-close teaching errors |
 | `=x#bugs` | Unchanged retired error, now teaching `x =bugs` |
-| `xx`, `xa`, `x.`, `x-ray`, `xylophone` | Grammar and CLI: ordinary prose; only a plain `x` or a selection-shaped `x…` token closes. In Mac Capture's editor, typing `xx` gives `x!` |
+| `xx`, `xa`, `x.`, `x-ray`, `xylophone` | Grammar and CLI: ordinary prose; only a plain `x`, a sized `Nx`, or a selection-shaped `x…` token closes. In Mac Capture's editor, typing `xx` gives `x!` |
 | `Plan x` | Ordinary task text; a mid-body `x` stays prose |
 | `Plan =x` | Ordinary task text; a mid-body `=x` stays prose |
 | `X`, `X2`, `X post about the launch` | Ordinary task text; only lowercase `x` closes |
 | `X *job:cleanup` | Ordinary blocked-task capture; capitalizing the first letter is the escape for a task that must start with the word `x` |
 | `x86 build` | Close claiming task 86 (`x86`); fails unless that Task Link exists |
+| `2X4 lumber`, `2x-ray`, `2.5x`, `2 x!2` | Ordinary task text; a capital `X`, a glued non-selection suffix, or a space before the `x` keeps the size from claiming the line — capitalizing is the escape for text that must start with digits and `x` |
+| `x made it 2x` | Close with the entry `made it 2x` on task 1: a sized token is never a trail head |
+| `x 2x faster` | Close with the entry `2x faster` on task 1: a sized close comes first on its line, after any `+`/`-`/`++`/`--` moves |
+| `= 2x` | Ordinary task text; a sized token after a start keeps today's parse, as `= foo` does |
+| `0x` | Error: `` `0x` needs at least 1 block: write `1x` to close at 5 minutes, or `x0` to reset the session `` |
+| `100x` | Error: `` `100x` is too large: a close size is 1–99 five-minute blocks (`12x` is an hour) ``; three or more digits stay reserved for a possible clock-time close |
+| `2x=3` | Error: `` `2x=3` mixes a close size with a past record: `x=` takes its size after `=`; write `x=3` to record 15 minutes, or `2x =3` to close at 10 minutes and then start `` |
+| `=2x` | Error: `` `=2x` is not a start: write `2x` to close at 10 minutes, or `=2#x` to start a Pomodoro named X `` |
+| `2x#bugs` | Error: `` `2x` always closes the running Pomodoro; remove `#bugs`, or write `2x =bugs` to close it and then start that Pomodoro; `=bugs` swaps it in without closing the running session `` |
 | `x *job:cleanup` | Error: `` task relationships need a task owner: '*note:block-id' cannot attach to a Pomodoro operator capture (add task text or '@note+task-id' for the dependent) `` |
 | `Plan =3` | Ordinary task text; a mid-body `=3` stays prose |
 | `x more` | Close with the entry `more` on task 1, exactly like `x` plus `- 1 more` |
@@ -4540,6 +4551,88 @@ printf 'x\n\n=\n' | bob capture
 Single-quote tokens that contain `!`, `*`, or `~`: shells glob `*` and
 history-expand `!`. A bare `x` needs no `=`-word quoting.
 
+#### Closing at a size
+
+Glue one or two digits before the `x` (`2x`, `2x!2`, `2x0`) to close the
+running session at exactly that many five-minute blocks from its start:
+
+```bash
+bob capture '2x'
+bob capture '2x!2'
+bob capture '2x wired the lexer'
+bob capture '@bob:capture-stop=2x!1'
+```
+
+The number before `x` is the number of blocks Bob records, or Bob tells you
+why not. Time goes before `x`; task numbers go after it. The prefix is never
+a task selection: `2x` defers exactly what `x` defers, `2x!2` selects exactly
+what `x!2` selects, and `2x0` closes while deferring every plain link (never
+a reset). `02x` is valid (2 blocks, matching `=03` and `x=03`); after `x`,
+the text must already be close-shaped. On a 25-minute session, `2x!2` writes
+the same span and the same task outcomes as `-3 x!2`, but in one gesture and
+with honest clocks: Work Log entries stamp at the sized end `C`, not at wall
+time.
+
+Unlike `x`, a sized close may lengthen the session, and it never records time
+that has not happened. Let the running session be `[S, E)`, `T` be now's
+minute of day, and `N ∈ 1..=99`. Let `e = T − S` normalized into (−720, 720]
+exactly the way `close_timing` normalizes `remaining`, and `m = 5N`:
+
+| Condition | Result |
+| --- | --- |
+| The running row's time range does not parse | Refused with `pomodoro_close_size_unparseable`; plain `x` keeps its "left as written" warning, but a sized close cannot honor its number, so it refuses |
+| The session has not started (`e < 0`) | Refused with `pomodoro_close_size_not_started` |
+| The size has not elapsed (`m − e ≥ 5`) | Refused with `pomodoro_close_size_not_elapsed`; this allows exactly the five-minute round-up plain `x` already makes, and the message names the largest size that fits (`fits = ⌈e / 5⌉` blocks, 0 when `e = 0`) |
+| Otherwise | Stage `E′ = (S + m) mod 1440` in the session's own clock key (`[t::]` or `[off::]`), and close at `C = now − max(e − m, 0)` minutes (seconds zeroed), so the date stays right across midnight |
+
+At `C`, `close_timing` sees `remaining = E′ − C ∈ [0, 5)`, so it never trims
+again and never reports an overrun. Every refusal writes nothing: the whole
+capture batch rolls back, and `--dry-run` previews the refusal before Return.
+
+| Draft on `0900-0925` @ now | Result |
+| --- | --- |
+| `2x` @ 09:50 (closing late) | `0900-0910`, closed at 09:10 |
+| `2x` @ 09:08 (inside the round-up) | `0900-0910`, closed at 09:08 |
+| `7x` @ 09:50 (claiming an overrun) | `0900-0935`, closed at 09:35 |
+| `5x` @ 09:40 | `0900-0925`, closed at 09:25, no `ran 15m over` |
+| `2x` @ 09:03 | Refused: `1x` fits |
+| `20x` @ 09:50 (typo for `2x`) | Refused: `10x` fits |
+| `2x` on a non-grid `0902-0925` @ 09:30 | `0902-0912` (`-3 x` would give 8m) |
+| `2x` on a MEET starting 13:00 @ 12:50 | Refused: not started; `x0` resets it |
+
+Each refusal names the token, the fact, and one fix: a self-contained first
+line, then the fix indented two spaces.
+
+```text
+error: `7x` asks for 35m, but BUILD has run 12m since 0900; nothing was written
+  `3x` closes at 0915 · `x` closes now
+error: `1x` asks for 5m, but BUILD started at 0900 and has run 0m; nothing was written
+  `x0` resets it
+error: `2x` cannot size MEET: it starts at 1300 and has not begun; nothing was written
+  `x0` resets it
+error: `2x` needs BUILD's time range, but it could not be parsed; nothing was written
+  fix the range, or close with `x`
+```
+
+JSON errors carry the `code` above plus `extra.close_size`
+(`{"raw":"7","blocks":7,"minutes":35,"elapsed_minutes":12,"fits_blocks":3}`;
+`elapsed_minutes`/`fits_blocks` are omitted when not computed). The closed
+caption reads from the sized span: shrink prints
+`0900-0925 → 0900-0910 (10m · 2x, −15m)`, lengthen prints
+`0900-0925 → 0900-0935 (35m · 7x, +10m)`, an equal size prints
+`0900-0925 (25m · 5x)`, and an off-clock close prints
+`0900-0925 → 0900-0910 (10m · off-clock · 2x, −15m)` — never a
+`(ran Nm over)` line. When a human-output batch holds a `±k` adjust item
+immediately followed by an unsized whole-item close of the same Pomodoro line
+that kept the adjusted span at a size of 1–99 whole blocks, one dim line
+follows the close block: `tip: 2x!2 closes at 10m in one step` (the close's
+selection after its `x`, without Work Log text). Never in JSON, never for
+shifts, link closes, or sized closes.
+
+Hint: "Before `x`: 5-minute blocks · after `x`: task numbers". Mnemonic:
+"`=` starts now, `x` stops now, `Nx` stops at N blocks, `x=` records what
+already happened."
+
 #### Closing a session that has not started
 
 A MEET written with its event run's future start has not begun when `x` runs
@@ -4557,7 +4650,8 @@ from the same note.
 
 On a timed close, a plain Task Link to an Event Task in this daily note's
 `## Events` section uses the event span and the session's start **S** and
-close time **C**. A hand-written Event Task follows the same rule. Task Links
+close time **C**. A hand-written Event Task follows the same rule. A sized
+close classifies at its sized end `C`, not at wall time. Task Links
 to ordinary tasks or to Event Tasks in another note keep their existing
 close behavior.
 
@@ -4683,7 +4777,9 @@ when `remaining ≥ 5`, `units = floor(remaining / 5)`,
 `new_end = (start + new_duration) mod 1440`, rewritten in the same
 clock key `+N`/`-N` writes: worked rows keep `[t:: Nm]`, off-clock rows
 keep `[off:: Nm]`. Otherwise the range bytes
-are untouched; Bob never extends a session, and an overrun is reported
+are untouched; plain `x` never extends a session (write `Nx` to close at a
+stated size, longer or shorter — see [Closing at a size](#closing-at-a-size)),
+and an overrun is reported
 (`ran 7m over`). Closed at `09:49` or later, `0920-0950` stays unchanged.
 
 The close's child lines are Work Log bullets, and one entry may sit on the
@@ -4954,8 +5050,10 @@ task 1; `x3` is out of range on this fixture.
 
 #### Choosing each Task Link's outcome
 
-Close the running session with `x[<N>][*<P>][!<M>][~<K>][@<N>]` (lowercase
-`x` only, with `*`, `!`, `~`, and `@` in any order) to decide, by number, which of its
+Close the running session with `[N]x[<N>][*<P>][!<M>][~<K>][@<N>]` (lowercase
+`x` only, with `*`, `!`, `~`, and `@` in any order; an optional one- or
+two-digit size prefix closes at exactly that many five-minute blocks — see
+[Closing at a size](#closing-at-a-size)) to decide, by number, which of its
 Task Links stay in progress, which are deferred, which are completed and
 struck, and which are dropped — in one capture instead of editing the
 `[[…]]#` / `![[…]]` markers by hand before Ctrl+Enter (single-quote the
@@ -5621,8 +5719,10 @@ tokens containing `!`, `*`, or `~` in Zsh (for example,
 ### Chaining session operators on one line
 
 The eight whole-item Pomodoro session operators — `+[N]`, `-[N]`, `++[N]`,
-`--[N]`, `=`/`=<X>`, `=name`, `x[<N>][!<M>][~<K>]`, and `x=E[s][!][=X]` — may share one physical line when
-whitespace separates them:
+`--[N]`, `=`/`=<X>`, `=name`, `[N]x[<N>][!<M>][~<K>]`, and `x=E[s][!][=X]` — may share one physical line when
+whitespace separates them (a sized close comes first on its line, after any
+`+`/`-`/`++`/`--` moves: `x 2x faster` logs `2x faster` and `= 2x` stays task
+text, while `--1 2x!2` and `2x =` still chain):
 
 ```bash
 bob capture '+2 x'
