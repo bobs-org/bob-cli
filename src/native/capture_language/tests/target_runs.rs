@@ -22,6 +22,7 @@ fn editor_active() -> EditorParseOptions<'static> {
         has_global_destination: false,
         record_policy: None,
         notebook_policy: None,
+        global_route: None,
     }
 }
 

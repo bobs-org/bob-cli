@@ -49,6 +49,7 @@ pub(super) fn draft_related(
         has_global_destination: false,
         record_policy: Some(&record_policy),
         notebook_policy: Some(&notebook_policy),
+        global_route: None,
     };
     let parsed =
         capture_language::parse_for_editor_with(&request.draft, &options);

@@ -1049,6 +1049,7 @@ fn pomodoro_route_requires_a_body_and_stays_literal_in_middle_or_forced() {
         CaptureKind::Bullet {
             section_prefix: Some("time:box".to_string()),
             exact: false,
+            block_id: None,
         }
     );
 }

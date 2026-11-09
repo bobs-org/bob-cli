@@ -104,8 +104,23 @@ fn build_result_inner(
     if let Some(result) = super::records::try_complete(request)? {
         return Ok(result);
     }
-    let current_route = capture_language::editor_item_at(raw_text, cursor)
-        .and_then(|item| item.route);
+    let notebook_policy =
+        crate::native::capture_notebooks::notebook_policy_for_draft(
+            bob_dir, raw_text,
+        );
+    let editor_options = capture_language::EditorParseOptions {
+        url_routing: None,
+        has_global_destination: false,
+        record_policy: None,
+        notebook_policy: Some(&notebook_policy),
+        global_route: None,
+    };
+    let current_route = capture_language::editor_item_at_with(
+        raw_text,
+        cursor,
+        &editor_options,
+    )
+    .and_then(|item| item.route);
     let current_note_path = current_route
         .as_deref()
         .map(capture::route_label)
@@ -447,7 +462,11 @@ fn build_result_inner(
         });
     }
 
-    let editor_item = capture_language::editor_item_at(raw_text, cursor);
+    let editor_item = capture_language::editor_item_at_with(
+        raw_text,
+        cursor,
+        &editor_options,
+    );
     // A drawer field at a first-level bullet start carries its own target
     // and accept continuation; the glued `@route+id#` field has neither.
     let bullet = (field.context == CompletionContext::Drawer)

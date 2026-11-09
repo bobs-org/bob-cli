@@ -50,6 +50,8 @@
   location: /reference/capture-syntax/#at-route
 - query: "@route#Section"
   location: /reference/capture-syntax/#at-route-section
+- query: "@route#section^id"
+  location: /reference/capture-syntax/#at-route-section
 - query: "@route#"
   location: /reference/capture-syntax/#at-route-any-section
 - query: "@route^block-id"

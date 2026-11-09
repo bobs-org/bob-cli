@@ -356,8 +356,8 @@ fn capture_section_list_matches_equivalent_batch_byte_for_byte() {
 
 #[test]
 fn capture_section_list_keeps_ids_literal() {
-    // Outside task bullets, ` :id` / ` ^id` stay literal text and open no
-    // prompt: section bullets never take IDs.
+    // A notes-list trailing `:id` stays literal. Trailing `^id` names the
+    // bullet and is written in the canonical block-ID slot.
     let temp = TempDir::new("bob-cli-capture-section-list-literal-id");
     let vault = vault_with_dev(&temp);
     let day = day_file(&vault);
@@ -372,7 +372,7 @@ fn capture_section_list_keeps_ids_literal() {
     assert!(
         dev.contains("- Note with trailing :keep-me [created::2026-11-02]\n")
     );
-    assert!(dev.contains("- Other ^keep-too [created::2026-11-02]\n"));
+    assert!(dev.contains("- Other [created::2026-11-02] ^keep-too\n"));
 }
 
 #[test]

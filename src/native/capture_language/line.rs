@@ -262,8 +262,63 @@ pub(super) fn missing_capture_item_error() -> String {
     MISSING_CAPTURE_ITEM_ERROR.to_string()
 }
 
-pub(super) fn unsupported_global_destination_error() -> String {
-    GLOBAL_DESTINATION_SHAPE_ERROR.to_string()
+/// `@@nb#…` / `@@nb^…` / `@@nb+…`: `@@` names only the draft-wide route.
+pub(super) fn invalid_global_destination_place_error(token: &str) -> String {
+    let rest = token.strip_prefix("@@").unwrap_or(token);
+    let route: String = rest
+        .chars()
+        .take_while(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
+        .collect();
+    let route = if route.is_empty() {
+        "nb".to_string()
+    } else {
+        route.to_ascii_lowercase()
+    };
+    format!(
+        "`@@` declares a draft-wide route and takes no place; put it on the item: `@{route}#sec`"
+    )
+}
+
+pub(super) fn notebook_holds_no_tasks_error(
+    route: &str,
+    owner: Option<&str>,
+) -> String {
+    match owner {
+        Some(owner) => format!(
+            "{route}.md is a notebook and holds no tasks — use its owner @{owner}"
+        ),
+        None => format!(
+            "{route}.md is a notebook and holds no tasks — choose an area or project and run `bob notebooks check`"
+        ),
+    }
+}
+
+pub(super) fn notebook_marker_unsupported_error(
+    marker: &str,
+    route: &str,
+    owner: Option<&str>,
+) -> String {
+    match owner {
+        Some(owner) => format!(
+            "notebook notes do not take `{marker}`; capture the note on @{route} and use its owner @{owner} for tasks"
+        ),
+        None => format!(
+            "notebook notes do not take `{marker}`; capture the note on @{route} and choose an area or project for tasks"
+        ),
+    }
+}
+
+pub(super) fn notebook_project_seal_error(
+    route: &str,
+    block_id: &str,
+) -> String {
+    format!(
+        "`@{route}^{block_id}@` creates a child notebook; add `%n` to create it, or drop the trailing `@` to name a note"
+    )
+}
+
+pub(super) fn notebook_no_drawers_error(route: &str) -> String {
+    format!("notebook notes have no drawers; drop `#drawer` on @{route}")
 }
 
 pub(super) fn pomodoro_note_route_conflict_error() -> String {

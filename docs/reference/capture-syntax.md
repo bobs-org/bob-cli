@@ -33,7 +33,7 @@ incomplete **picker** input is refused.
 | `#` | **Picker:** choose a task type | [Bare `#`](#hash-picker) |
 | `@route` | Write a task to `<route>.md` | [`@route`](#at-route) |
 | `@dir/` / `@dir/^stem` / `@dir/stem` | Record create, explicit stem, or existing-record update | [Record notes](#record-notes) |
-| `@route#Section` | Ordinary bullet under a matching heading | [`@route#Section`](#at-route-section) |
+| `@route#Section` / `@route#section^id` | Ordinary bullet under a matching heading | [`@route#Section`](#at-route-section) |
 | Notebook `@route`, `@route#section`, `@route^id`, `@route+id` | Parse a notebook note or sub-note | [Notebook capture](../notebooks.md#capture) |
 | `@route#` | Ordinary bullet under any non-`Tasks` heading | [`@route#`](#at-route-any-section) |
 | `@route^block-id` | New open task with a user-authored block ID | [`@route^block-id`](#at-route-caret) |
@@ -222,17 +222,14 @@ bob capture 'Buy milk @@work'
 
 Contract: [Global destination declaration](../capture.md#global-destination-declaration).
 
-### `@route#Section` {#at-route-section}
+### `@route#Section` / `@route#section^id` {#at-route-section}
 
-Write an ordinary bullet (no checkbox) into a matching non-`Tasks` heading.
+Ordinary bullet under a matching non-`Tasks` heading; append `^id`
+(`#"Title^lit"` keeps the caret).
 
 ```bash
 bob capture 'Remember the timeout @notes#Ideas'
-```
-
-```text { .no-copy title="Output" }
-✓ captured  notes.md
-  - Remember the timeout [created::2026-10-20]
+bob capture 'Try mergiraf @dev#ideas^mergiraf'
 ```
 
 Contract: [Section bullets](../capture.md#section-bullets).

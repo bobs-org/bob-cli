@@ -1590,12 +1590,18 @@ fn parse_list_bullet_item<'a>(
     let has_creation_modifiers = aggregate.clip.is_some()
         || aggregate.scheduled_offset.is_some()
         || aggregate.priority_level.is_some();
+    let (parent_body, note_block_id) = if notes {
+        super::notebook::strip_trailing_caret_id(&parent_outcome.body)
+    } else {
+        (parent_outcome.body.clone(), None)
+    };
     let (route, kind) = match (notes, stripped_id) {
         (true, _) => (
             Some(list.route.clone()),
             CaptureKind::Bullet {
                 section_prefix: list.section.clone(),
                 exact: list.exact,
+                block_id: note_block_id,
             },
         ),
         (false, Some(id)) if stripped_sigil == Some(':') => (
@@ -1616,7 +1622,7 @@ fn parse_list_bullet_item<'a>(
     };
     super::drawer_bullet::finish_execution_drawer_bullets(
         &kind,
-        &parent_outcome.body,
+        &parent_body,
         &mut sub_bullets,
     )
     .map_err(CaptureItemParseError::generic)?;
@@ -1624,7 +1630,7 @@ fn parse_list_bullet_item<'a>(
         &item_dependencies,
         &kind,
         route.as_deref(),
-        parent_outcome.body.is_empty(),
+        parent_body.is_empty(),
         has_creation_modifiers,
         Some(&header_text),
     )
@@ -1632,7 +1638,7 @@ fn parse_list_bullet_item<'a>(
     Ok(parsed_capture_item_outcome(
         item,
         ParsedCaptureText {
-            body: parent_outcome.body,
+            body: parent_body,
             clip: aggregate.clip,
             route,
             kind,
@@ -2789,6 +2795,7 @@ fn parse_capture_item_masked<'a>(
         let kind = CaptureKind::Bullet {
             section_prefix: Some(section.to_string()),
             exact: true,
+            block_id: None,
         };
         super::drawer_bullet::finish_execution_drawer_bullets(
             &kind,

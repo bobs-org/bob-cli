@@ -155,6 +155,10 @@ pub(super) fn plan_capture_batch_with_config_path(
             &request.raw_text,
         )
     };
+    let notebook_policy_for_parse = match request.forced_route.as_deref() {
+        Some(route) => notebook_policy.get(route).is_some(),
+        None => !forced_literal,
+    };
     let options = CaptureParseOptions {
         // A forced clipboard request keeps bare URLs on the task path. Keep
         // record claiming enabled so a claimed record can refuse `--clip`
@@ -165,12 +169,18 @@ pub(super) fn plan_capture_batch_with_config_path(
             routing
         },
         record_policy: (!forced_literal).then_some(&record_policy),
-        notebook_policy: (!forced_literal).then_some(&notebook_policy),
+        notebook_policy: notebook_policy_for_parse.then_some(&notebook_policy),
         explicit_destination: request.forced_section.is_some()
             || request.forced_sub_bullet_target.is_some()
             || request.forced_drawer.is_some(),
         has_global_destination: false,
         recognize_lists: !forced_literal,
+        global_route: None,
+        forced_task: match request.forced_sub_bullet_target.as_ref() {
+            Some(SubBulletTarget::BlockId(id)) => Some(id.as_str()),
+            _ => None,
+        },
+        forced_drawer: request.forced_drawer.as_deref(),
     };
     let parsed_draft = parse_capture_draft_with_options(
         &request.raw_text,
@@ -2580,12 +2590,18 @@ pub(super) fn plan_capture_item(
                 block_id,
             )
         }
-        CaptureKind::Bullet { .. } => format_bullet_line(
-            &parsed.body,
-            &created,
-            priority_field,
-            scheduled.as_deref(),
-        ),
+        CaptureKind::Bullet { block_id, .. } => {
+            let mut line = format_bullet_line(
+                &parsed.body,
+                &created,
+                priority_field,
+                scheduled.as_deref(),
+            );
+            if let Some(block_id) = block_id {
+                append_block_id(&mut line, block_id);
+            }
+            line
+        }
         CaptureKind::SubBullet { .. } => format_sub_bullet_line(
             &parsed.body,
             priority_field,

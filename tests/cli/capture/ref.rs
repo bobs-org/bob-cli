@@ -406,8 +406,8 @@ fn capture_inline_global_routes_refs_and_rejects_parent_id_forms() {
     assert_eq!(items[1]["ref_parent"]["token"], "groceries", "{json}");
     assert_eq!(items[1]["ref_parent"]["source"], "global", "{json}");
 
-    // A global parent-task selector is rejected with the generic declaration
-    // error instead of changing how the URL is classified.
+    // A global parent-task selector is rejected as an invalid place
+    // instead of changing how the URL is classified.
     let mut command = capture(&temp, &vault, &["-d", "-f", "json"]);
     let output = run_with_stdin(
         &mut command,
@@ -415,8 +415,9 @@ fn capture_inline_global_routes_refs_and_rejects_parent_id_forms() {
     );
     assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
     assert!(
-        stdout(&output)
-            .contains("invalid `@@` declaration: `@@` takes a route (`@@foo`)"),
+        stdout(&output).contains(
+            "`@@` declares a draft-wide route and takes no place; put it on the item: `@groceries#sec`"
+        ),
         "{}",
         format_output(&output)
     );

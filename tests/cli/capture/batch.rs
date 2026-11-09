@@ -291,8 +291,9 @@ fn capture_rejects_a_global_route_block_id_with_the_generic_declaration_error()
         .expect("run capture with an unsupported global destination");
     assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
     assert!(
-        stderr(&output)
-            .contains("invalid `@@` declaration: `@@` takes a route (`@@foo`)"),
+        stderr(&output).contains(
+            "`@@` declares a draft-wide route and takes no place; put it on the item: `@foo#sec`"
+        ),
         "{}",
         format_output(&output)
     );

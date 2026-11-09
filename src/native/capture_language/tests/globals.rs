@@ -154,7 +154,12 @@ fn execution_rejects_unsupported_global_forms() {
             &CaptureParseOptions::routing_off(),
         )
         .unwrap_err();
-        assert_eq!(error, GLOBAL_DESTINATION_SHAPE_ERROR, "{raw}");
+        let token = raw.lines().next().expect("declaration line");
+        assert_eq!(
+            error,
+            super::super::line::invalid_global_destination_place_error(token),
+            "{raw}"
+        );
     }
 }
 

@@ -533,6 +533,13 @@ pub(super) fn plan_capture_to_target(
     if let CaptureKind::TaskWithBlockId { block_id } = kind {
         reject_duplicate_block_id(&contents, block_id, target)?;
     }
+    if let CaptureKind::Bullet {
+        block_id: Some(block_id),
+        ..
+    } = kind
+    {
+        reject_duplicate_block_id(&contents, block_id, target)?;
+    }
     let (updated, placement) = match kind {
         CaptureKind::Task
         | CaptureKind::TaskWithBlockId { .. }
@@ -542,6 +549,7 @@ pub(super) fn plan_capture_to_target(
         CaptureKind::Bullet {
             section_prefix,
             exact,
+            ..
         } => {
             reject_generated_notebooks_selector(
                 &contents,

@@ -80,7 +80,7 @@ pub(super) fn classify_global_token(token: &Token<'_>) -> TokenParse {
         return TokenParse::Invalid(token_diagnostic(
             token,
             "invalid_global_destination",
-            &unsupported_global_destination_error(),
+            &invalid_global_destination_place_error(token.text),
         ));
     }
     if rest.ends_with('!') {
@@ -2031,46 +2031,64 @@ pub(super) fn classify_route_token(token: &Token<'_>) -> Option<MarkerParse> {
         return None;
     }
 
+    let parsed_hash = super::tokens::parse_hash_section_and_id(prefix);
+    let (right_part, third) = if parsed_hash.has_caret {
+        (
+            prefix.get(..parsed_hash.section_len).unwrap_or(""),
+            Some(MarkerThird {
+                separator_len: 1,
+                part: prefix.get(parsed_hash.section_len + 1..).unwrap_or(""),
+                kind: SpanKind::TaskBlockId,
+                need: Need::BlockId,
+            }),
+        )
+    } else {
+        (prefix, None)
+    };
     let mut parsed = marker_parse(
         token,
         MarkerShape {
             sigil_len: 1,
             route_part,
             separator_len: 1,
-            right_part: prefix,
+            right_part,
             route_kind: SpanKind::Route,
             right_kind: SpanKind::Section,
             complete_mode: EditorMode::Bullet,
             right_need: Need::Section,
-            third: None,
+            third,
             suffix: None,
         },
     );
+    // `#section^id` puts the ID on `block_id`; marker_parse would otherwise
+    // treat a third component as a drawer section.
+    if parsed_hash.has_caret {
+        parsed.section = parsed_hash.section.clone();
+        parsed.block_id = parsed_hash.block_id.clone();
+        if parsed_hash.incomplete_block_id
+            && !parsed.needs.contains(&Need::BlockId)
+        {
+            parsed.needs.push(Need::BlockId);
+            parsed.mode = EditorMode::Incomplete;
+        }
+        if parsed_hash.incomplete_section
+            && !parsed.needs.contains(&Need::Section)
+        {
+            parsed.needs.push(Need::Section);
+            parsed.mode = EditorMode::Incomplete;
+        }
+    }
     // A `#"…"` section literal: a complete one reports the decoded name
     // (the span already covers the quotes); an unterminated one is an
     // editing state with a section need, never a mistake.
-    if !route_part.is_empty()
-        && super::pomodoro_literal::opens_exact_name(prefix)
-    {
-        match super::pomodoro_literal::lex_exact_name_after_hash(
-            prefix,
-            prefix.len(),
-        ) {
-            Some(lex)
-                if lex.complete
-                    && lex.literal_len == prefix.len()
-                    && !lex.decoded.is_empty() =>
-            {
-                parsed.section = Some(lex.decoded);
+    if !route_part.is_empty() && parsed_hash.exact {
+        parsed.section = parsed_hash.section.clone();
+        if parsed_hash.quoted_incomplete {
+            parsed.section = None;
+            parsed.mode = EditorMode::Incomplete;
+            if !parsed.needs.contains(&Need::Section) {
+                parsed.needs.push(Need::Section);
             }
-            Some(lex) if !lex.complete => {
-                parsed.section = None;
-                parsed.mode = EditorMode::Incomplete;
-                if !parsed.needs.contains(&Need::Section) {
-                    parsed.needs.push(Need::Section);
-                }
-            }
-            _ => {}
         }
     }
     Some(parsed)

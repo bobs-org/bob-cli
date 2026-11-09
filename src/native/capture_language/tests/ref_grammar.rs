@@ -27,6 +27,9 @@ fn routing_options(
         explicit_destination: false,
         has_global_destination: false,
         recognize_lists: true,
+        global_route: None,
+        forced_task: None,
+        forced_drawer: None,
     }
 }
 
@@ -52,6 +55,7 @@ fn editor_routing(raw: &str, policy: Option<&UrlRoutingPolicy>) -> EditorParse {
             has_global_destination: false,
             record_policy: None,
             notebook_policy: None,
+            global_route: None,
         },
     )
 }

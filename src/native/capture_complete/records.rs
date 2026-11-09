@@ -118,13 +118,19 @@ impl<'a> Session<'a> {
         let policy =
             record_policy_for_draft(request.bob_dir, None, request.raw_text);
         policy.records_config()?;
+        let notebook_policy =
+            crate::native::capture_notebooks::notebook_policy_for_draft(
+                request.bob_dir,
+                request.raw_text,
+            );
         let parsed = capture_language::parse_for_editor_with(
             request.raw_text,
             &EditorParseOptions {
                 url_routing: None,
                 has_global_destination: false,
                 record_policy: Some(&policy),
-                notebook_policy: None,
+                notebook_policy: Some(&notebook_policy),
+                global_route: None,
             },
         );
         Some(Self {

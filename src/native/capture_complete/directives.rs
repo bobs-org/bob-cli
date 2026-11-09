@@ -88,6 +88,7 @@ pub(super) fn candidates(
             "%c" => None,
             "%n" => item.and_then(|item| {
                 directive_refusal(
+                    bob_dir,
                     raw_text,
                     field,
                     item.index,
@@ -101,6 +102,7 @@ pub(super) fn candidates(
             ),
             "%t" => item.and_then(|item| {
                 directive_refusal(
+                    bob_dir,
                     raw_text,
                     field,
                     item.index,
@@ -114,6 +116,7 @@ pub(super) fn candidates(
             ),
             "%l" => item.and_then(|item| {
                 directive_refusal(
+                    bob_dir,
                     raw_text,
                     field,
                     item.index,
@@ -236,6 +239,7 @@ fn bare_url_reference(
 }
 
 fn directive_refusal(
+    bob_dir: &Path,
     raw_text: &str,
     field: &CompletionField,
     item_index: usize,
@@ -244,6 +248,10 @@ fn directive_refusal(
 ) -> Option<String> {
     let mut probe = raw_text.to_string();
     probe.replace_range(field.replacement.0..field.replacement.1, token);
+    let notebook_policy =
+        crate::native::capture_notebooks::notebook_policy_for_draft(
+            bob_dir, &probe,
+        );
     let parsed = capture_language::parse_for_editor_with(
         &probe,
         &capture_language::EditorParseOptions {
@@ -252,7 +260,8 @@ fn directive_refusal(
             // Record-aware completion rows belong to a later phase;
             // completion probes keep the literal fallback here.
             record_policy: None,
-            notebook_policy: None,
+            notebook_policy: Some(&notebook_policy),
+            global_route: None,
         },
     );
     parsed
@@ -267,6 +276,7 @@ fn directive_refusal(
                 "pomodoro_note_conflict"
                     | "template_directive_misplaced"
                     | "directive_not_applicable"
+                    | "notebook_marker_unsupported"
             )
         })
         .map(|diagnostic| diagnostic.message)

@@ -145,6 +145,10 @@ close-list comma (`x1` then `2` → `x1,2`). See bob-cli `docs/capture.md`
 (`bob capture-rewrite`, "Sigil alias") and Bob Mac Capture's `docs/keyboard.md` and
 `docs/capture-panel.md`.
 
+`bob capture-rewrite --cursor` also returns `sigil_alias_tip`, proved by running the
+forward rewrite; Bob Mac Capture shows it as a fading "Next time" row in the list or
+picker the sigil opened.
+
 ### Command Mode {#command-mode}
 
 *Aliases: Bob Command Mode, command sheet.*

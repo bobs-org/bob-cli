@@ -53,6 +53,7 @@ pub(crate) fn parse_template_protocol(text: &str) -> TemplateProtocolParse {
         has_global_destination: false,
         record_policy: None,
         notebook_policy: None,
+        global_route: None,
     };
     let parsed = CaptureParseResult::new(draft, &options);
     let route = parsed.items.first().and_then(|item| item.route.clone());
@@ -135,6 +136,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         has_global_destination: false,
         record_policy: Some(&record_policy),
         notebook_policy: Some(&notebook_policy),
+        global_route: None,
     };
     let mut result = CaptureParseResult::new(raw_text, &options);
     attach_gmail_spans(&mut result);
@@ -191,7 +193,7 @@ command also best-effort reads the configured vault's theme catalog and adds \
 theme refs; if the catalog is unavailable, parsing still succeeds without \
 those refs. It never writes to the vault or reads the clipboard, and takes no \
 --bob-dir. A '%c' directive still succeeds without reading the clipboard.\n\n\
-Success JSON reports `grammar: 21` for the capture-language revision while \
+Success JSON reports `grammar: 23` for the capture-language revision while \
 `schema_version` stays 1. Gmail URLs add `gmail_url` spans with offline \
 `gmail: {verdict, date_hint?}`, decoded thread `key`, and saved-label `title`. \
 No Gmail calls are made.\n\n\
@@ -4321,6 +4323,7 @@ mod tests {
             has_global_destination: false,
             record_policy: Some(&policy),
             notebook_policy: None,
+            global_route: None,
         };
         CaptureParseResult::new(input.to_string(), &options)
     }
@@ -4470,6 +4473,7 @@ mod tests {
             has_global_destination: false,
             record_policy: Some(&policy),
             notebook_policy: None,
+            global_route: None,
         };
         let parsed = CaptureParseResult::new(input.to_string(), &options);
         let value = serde_json::to_value(parsed).unwrap();
@@ -4804,7 +4808,7 @@ mod tests {
         let value = json("Call bank @Cash+");
         assert_eq!(value["ok"], true);
         assert_eq!(value["schema_version"], 1);
-        assert_eq!(value["grammar"], 22);
+        assert_eq!(value["grammar"], 23);
         assert_eq!(value["input"], "Call bank @Cash+");
         assert_eq!(value["body"], "Call bank");
         assert_eq!(value["mode"], "incomplete");
@@ -4837,6 +4841,7 @@ mod tests {
             has_global_destination: false,
             record_policy: None,
             notebook_policy: None,
+            global_route: None,
         };
         let result = CaptureParseResult::new(raw.to_string(), &options);
         let value = serde_json::to_value(&result).unwrap();
@@ -4869,7 +4874,7 @@ mod tests {
         // "start a list" from it.
         let value = json("@sase");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 22);
+        assert_eq!(value["grammar"], 23);
         assert_eq!(value["mode"], "note_pull");
         assert_eq!(value["route"], "sase");
         assert!(value["section"].is_null());
@@ -5681,10 +5686,10 @@ mod tests {
     }
 
     #[test]
-    fn json_reports_merge_in_wire_shape_and_grammar_22() {
+    fn json_reports_merge_in_wire_shape_and_grammar_23() {
         let value = json("New task < @a+x @b+y");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 22);
+        assert_eq!(value["grammar"], 23);
         assert_eq!(value["schema_version"], 1);
         assert_eq!(value["mode"], "task");
         let merge_in = value.get("merge_in").expect("merge_in");

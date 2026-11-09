@@ -68,10 +68,13 @@ Old top-level spellings remain as hidden aliases. See
 ## Capture-language revision
 
 `capture-parse` and `capture-complete` keep `schema_version: 1` and report the
-additive top-level `grammar: 22` revision. Clients can use it to distinguish
+additive top-level `grammar: 23` revision. Clients can use it to distinguish
 capture-language updates while continuing to read the same versioned JSON
-envelope. Grammar 22 makes sized `Nx` closes execute (older clients parse the
-size as literal task text) with an additive `pomodoro_close.size` object.
+envelope. Grammar 23 splits `#section^id` into a section selector plus an
+optional named bullet ID (a caret inside a quoted title stays title text) and
+claims notebook list, global, and forced destinations as notes. Grammar 22
+makes sized `Nx` closes execute (older clients parse the size as literal
+task text) with an additive `pomodoro_close.size` object.
 Grammar 20 claims `@dir/` record routes (older clients parse them as
 literal task text) and reports record parse metadata; `capture-complete` adds
 `record_field`/`record_value` menus, `-n/--next-missing-field`,

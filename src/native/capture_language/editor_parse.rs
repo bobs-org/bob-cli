@@ -329,9 +329,12 @@ pub(crate) fn parse_for_editor_with(
     };
     let mut global_spans = Vec::new();
     let mut global_diagnostics = Vec::new();
+    let peeked_global = super::draft::peek_editor_global_route(&draft);
     let options = EditorParseOptions {
         has_global_destination: options.has_global_destination
+            || peeked_global.is_some()
             || !draft.declarations.is_empty(),
+        global_route: peeked_global.as_deref().or(options.global_route),
         ..*options
     };
     let mut item_outcomes = draft
@@ -818,6 +821,11 @@ pub(super) fn inherit_editor_global_destination(
     global: &EditorGlobalDestination,
 ) {
     if item.has_local_destination {
+        return;
+    }
+    if item.mode == EditorMode::NotebookNote
+        || item.mode == EditorMode::NotebookSubNote
+    {
         return;
     }
     // Dependency needs survive inheritance: the modifiers are item-local
@@ -1697,7 +1705,7 @@ fn notebook_editor_outcome<'a>(
             list: item.list.clone(),
             spans: view.spans,
             diagnostics: view.diagnostics,
-            sub_bullets: Vec::new(),
+            sub_bullets: view.sub_bullets,
             has_local_destination: true,
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
@@ -1769,7 +1777,36 @@ pub(super) fn parse_editor_item_with<'a>(
                     ),
                 };
             }
-            claimed => return parse_editor_transfer_item(item, claimed),
+            claimed => {
+                if let super::transfer::TransferScan::Valid {
+                    sources,
+                    destination,
+                    ..
+                } = &claimed
+                    && let Some(error) =
+                        super::notebook::first_notebook_task_route(
+                            options.notebook_policy,
+                            sources
+                                .iter()
+                                .map(|source| {
+                                    (
+                                        source.route.as_str(),
+                                        Some((source.start, source.end)),
+                                    )
+                                })
+                                .chain(std::iter::once((
+                                    destination.route.as_str(),
+                                    Some((destination.start, destination.end)),
+                                ))),
+                        )
+                {
+                    return notebook_editor_outcome(
+                        item,
+                        error.into_editor_view(),
+                    );
+                }
+                return parse_editor_transfer_item(item, claimed);
+            }
         }
     }
     if let Some(outcome) = parse_editor_merge_claim(item, options) {
@@ -2009,6 +2046,14 @@ fn parse_editor_merge_valid<'a>(
     sources: Vec<super::merge_in::MergeInSource>,
     arrow: super::merge_in::MergeInArrow,
 ) -> EditorItemOutcome<'a> {
+    if let Some(error) = super::notebook::first_notebook_task_route(
+        options.notebook_policy,
+        sources.iter().map(|source| {
+            (source.route.as_str(), Some((source.start, source.end)))
+        }),
+    ) {
+        return notebook_editor_outcome(item, error.into_editor_view());
+    }
     // An empty left side names no new task.
     let left_prefix_len = arrow.start.saturating_sub(parent.start);
     if parent
@@ -2056,6 +2101,15 @@ fn parse_editor_merge_valid<'a>(
             remap_type_marker_declarations(outcome.declarations, item.source);
         (outcome.item, remapped)
     };
+    if let Some(route) = left_parse.route.as_deref()
+        && let Some(error) = super::notebook::notebook_task_route_error(
+            options.notebook_policy,
+            route,
+            None,
+        )
+    {
+        return notebook_editor_outcome(item, error.into_editor_view());
+    }
     // Lexical `&`/`*`/`~`/`~~` source matches refuse first.
     if let Some(message) =
         editor_merge_source_also_marked_message(&left_parse, &sources)
@@ -6292,6 +6346,14 @@ pub(crate) fn editor_item_at(
     raw_text: &str,
     cursor: usize,
 ) -> Option<EditorItemParse> {
+    editor_item_at_with(raw_text, cursor, &EditorParseOptions::routing_off())
+}
+
+pub(crate) fn editor_item_at_with(
+    raw_text: &str,
+    cursor: usize,
+    options: &EditorParseOptions<'_>,
+) -> Option<EditorItemParse> {
     let draft = split_capture_draft(raw_text);
     let found = draft.items.iter().find(|item| {
         item.lines
@@ -6323,7 +6385,7 @@ pub(crate) fn editor_item_at(
                 .index
         }
     };
-    parse_for_editor(raw_text)
+    parse_for_editor_with(raw_text, options)
         .items
         .into_iter()
         .find(|item| item.index == index)

@@ -42,6 +42,9 @@ fn strict_options(
         explicit_destination: false,
         has_global_destination: false,
         recognize_lists: true,
+        global_route: None,
+        forced_task: None,
+        forced_drawer: None,
     }
 }
 
@@ -53,6 +56,7 @@ fn editor_options(
         has_global_destination: false,
         record_policy: policy,
         notebook_policy: None,
+        global_route: None,
     }
 }
 

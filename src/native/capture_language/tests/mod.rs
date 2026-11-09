@@ -137,6 +137,7 @@ mod grammar;
 mod lists;
 mod merge_in;
 mod move_bullet;
+mod notebook;
 mod past;
 mod pomodoro_merge;
 mod record;

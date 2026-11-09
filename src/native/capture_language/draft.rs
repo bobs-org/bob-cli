@@ -177,9 +177,7 @@ pub(crate) struct ListHeader {
 fn parse_list_header_token(
     trimmed: &str,
 ) -> Option<(String, Option<String>, bool, ListKind)> {
-    use super::pomodoro_literal::{
-        expand_literal_token, lex_exact_name_after_hash, opens_exact_name,
-    };
+    use super::pomodoro_literal::expand_literal_token;
     if trimmed.starts_with("@@") || !trimmed.starts_with('@') {
         return None;
     }
@@ -213,17 +211,23 @@ fn parse_list_header_token(
             ListKind::Notes,
         ));
     }
-    if opens_exact_name(after_hash) {
-        let lex = lex_exact_name_after_hash(after_hash, after_hash.len())?;
-        if !lex.complete
-            || lex.literal_len != after_hash.len()
-            || lex.decoded.is_empty()
-        {
+    let parsed = super::tokens::parse_hash_section_and_id(after_hash);
+    // `#section^id` is a complete named-bullet marker, never a list header.
+    if parsed.has_caret
+        || parsed.quoted_incomplete
+        || parsed.incomplete_section
+        || parsed.incomplete_block_id
+    {
+        return None;
+    }
+    if parsed.exact {
+        let section = parsed.section?;
+        if section.is_empty() {
             return None;
         }
         return Some((
             route_part.to_ascii_lowercase(),
-            Some(lex.decoded),
+            Some(section),
             true,
             ListKind::Notes,
         ));
@@ -233,7 +237,7 @@ fn parse_list_header_token(
     }
     Some((
         route_part.to_ascii_lowercase(),
-        Some(after_hash.to_string()),
+        parsed.section,
         false,
         ListKind::Notes,
     ))
@@ -1037,13 +1041,19 @@ pub(crate) fn parse_capture_text_with_options(
             missing_text_error()
         });
     }
-    let options = options.with_global(!draft.declarations.is_empty());
+    let draft_global =
+        peek_draft_global(&draft).map_err(|error| error.message)?;
+    let options = options
+        .with_global(draft_global.is_some())
+        .with_global_route(
+            draft_global.as_ref().map(|global| global.route.as_str()),
+        );
 
     // Singleton parsing claims transfers and merge-ins exactly like the
     // draft parser but keeps ordinary items on the unfanned singleton parser.
     let mut item_outcomes = Vec::new();
     for item in &draft.items {
-        if let Some(outcome) = super::notebook::claim_strict_notebook(
+        if let Some(outcomes) = super::notebook::claim_notebook_members(
             item,
             forced_route,
             forced_section,
@@ -1051,7 +1061,7 @@ pub(crate) fn parse_capture_text_with_options(
         )
         .map_err(|error| error.message)?
         {
-            item_outcomes.push(outcome);
+            item_outcomes.extend(outcomes);
             continue;
         }
         if let Some(outcome) = super::record::claim_strict_record(
@@ -1292,7 +1302,12 @@ fn parse_ordinary_draft(
         }
         .into());
     }
-    let options = options.with_global(!draft.declarations.is_empty());
+    let draft_global = peek_draft_global(&draft)?;
+    let options = options
+        .with_global(draft_global.is_some())
+        .with_global_route(
+            draft_global.as_ref().map(|global| global.route.as_str()),
+        );
 
     let mut item_outcomes = Vec::new();
     for item in &draft.items {
@@ -1513,6 +1528,14 @@ fn parse_capture_item_members<'a>(
     forced_section: Option<&str>,
     options: &CaptureParseOptions<'_>,
 ) -> Result<Vec<ParsedCaptureItemOutcome<'a>>, CaptureItemParseError> {
+    if let Some(outcomes) = super::notebook::claim_notebook_members(
+        item,
+        forced_route,
+        forced_section,
+        options,
+    )? {
+        return Ok(outcomes);
+    }
     // Record creation claims before transfers: a record field value may
     // hold `>`/`<` prose that must stay opaque.
     if let Some(outcome) = super::record::claim_strict_record(
@@ -1648,6 +1671,25 @@ fn parse_transfer_claim<'a>(
                     arrow,
                     destination,
                 } => {
+                    if let Some(error) =
+                        super::notebook::first_notebook_task_route(
+                            options.notebook_policy,
+                            sources
+                                .iter()
+                                .map(|source| {
+                                    (
+                                        source.route.as_str(),
+                                        Some((source.start, source.end)),
+                                    )
+                                })
+                                .chain(std::iter::once((
+                                    destination.route.as_str(),
+                                    Some((destination.start, destination.end)),
+                                ))),
+                        )
+                    {
+                        return Err(error.into_parse_error());
+                    }
                     let route = destination.route.clone();
                     let parsed = ParsedCaptureText {
                         body: String::new(),
@@ -1856,6 +1898,23 @@ fn parse_merge_valid<'a>(
         // the exact draft.
         rebind_capture_item_declarations(outcome, item.source)
     };
+    if let Some(error) = super::notebook::first_notebook_task_route(
+        options.notebook_policy,
+        sources.iter().map(|source| {
+            (source.route.as_str(), Some((source.start, source.end)))
+        }),
+    ) {
+        return Err(error.into_parse_error());
+    }
+    if let Some(route) = outcome.parsed.route.as_deref()
+        && let Some(error) = super::notebook::notebook_task_route_error(
+            options.notebook_policy,
+            route,
+            None,
+        )
+    {
+        return Err(error.into_parse_error());
+    }
     // Lexical `&`/`*`/`~`/`~~` source matches refuse before kind checks.
     if let Some((message, span)) =
         merge_source_also_marked_message(&outcome.parsed, &sources)
@@ -2467,6 +2526,40 @@ fn is_template_session_kind(kind: &CaptureKind) -> bool {
     }
 }
 
+pub(super) fn peek_editor_global_route(
+    draft: &CaptureDraft<'_>,
+) -> Option<String> {
+    peek_draft_global(draft)
+        .ok()
+        .flatten()
+        .map(|global| global.route)
+}
+
+fn peek_draft_global<'a>(
+    draft: &CaptureDraft<'a>,
+) -> Result<Option<ParsedGlobalDestination>, CaptureItemParseError> {
+    let mut declarations = draft.declarations.clone();
+    let mut seen = std::collections::HashSet::new();
+    for declaration in &declarations {
+        seen.insert((declaration.token.start, declaration.token.end));
+    }
+    for item in &draft.items {
+        for line in &item.lines {
+            for token in tokenize_line_with_spans(&line.raw) {
+                if token.text.starts_with("@@")
+                    && seen.insert((token.start, token.end))
+                {
+                    declarations.push(GlobalDeclarationToken {
+                        token,
+                        line_number: line.line_number,
+                    });
+                }
+            }
+        }
+    }
+    resolve_global_declaration_strict(&declarations).map_err(Into::into)
+}
+
 pub(super) fn resolve_global_declaration_strict(
     declarations: &[GlobalDeclarationToken<'_>],
 ) -> Result<Option<ParsedGlobalDestination>, String> {
@@ -2539,7 +2632,7 @@ pub(super) fn parse_global_destination_token(
         || rest.contains('^')
         || rest.contains(':')
     {
-        return Err(unsupported_global_destination_error());
+        return Err(invalid_global_destination_place_error(token));
     }
     if rest.ends_with('!') {
         return Err(EXPLICIT_TOGGLE_GLOBAL_ERROR.to_string());

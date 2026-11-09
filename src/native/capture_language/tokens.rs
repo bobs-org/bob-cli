@@ -14,42 +14,173 @@ use super::pomodoro_literal::{
 };
 use crate::native::collect_done;
 
+/// A `#` suffix on an `@route`: the section selector plus an optional
+/// trailing `^block-id`. A caret inside a quoted title is literal title
+/// text; a caret after the closing quote introduces the named ID.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct HashSectionAndId {
+    pub(super) section: Option<String>,
+    pub(super) exact: bool,
+    pub(super) block_id: Option<String>,
+    /// Byte length of the section text after `#`, quotes included.
+    pub(super) section_len: usize,
+    /// True when the suffix includes `^` after the section.
+    pub(super) has_caret: bool,
+    /// Byte length of the ID after `^` (0 when the caret is dangling).
+    pub(super) id_len: usize,
+    pub(super) incomplete_section: bool,
+    pub(super) incomplete_block_id: bool,
+    pub(super) quoted_incomplete: bool,
+}
+
+/// Split the text after `#` on a route token into section plus optional ID.
+pub(super) fn parse_hash_section_and_id(after_hash: &str) -> HashSectionAndId {
+    if after_hash.is_empty() {
+        return HashSectionAndId {
+            section: None,
+            exact: false,
+            block_id: None,
+            section_len: 0,
+            has_caret: false,
+            id_len: 0,
+            incomplete_section: false,
+            incomplete_block_id: false,
+            quoted_incomplete: false,
+        };
+    }
+    if opens_exact_name(after_hash) {
+        match lex_exact_name_after_hash(after_hash, after_hash.len()) {
+            Some(lex) if !lex.complete => {
+                return HashSectionAndId {
+                    section: None,
+                    exact: true,
+                    block_id: None,
+                    section_len: after_hash.len(),
+                    has_caret: false,
+                    id_len: 0,
+                    incomplete_section: true,
+                    incomplete_block_id: false,
+                    quoted_incomplete: true,
+                };
+            }
+            Some(lex) => {
+                let rest = after_hash.get(lex.literal_len..).unwrap_or("");
+                let empty_title = lex.decoded.is_empty();
+                if rest.is_empty() {
+                    return HashSectionAndId {
+                        section: (!empty_title).then_some(lex.decoded),
+                        exact: true,
+                        block_id: None,
+                        section_len: lex.literal_len,
+                        has_caret: false,
+                        id_len: 0,
+                        incomplete_section: empty_title,
+                        incomplete_block_id: false,
+                        quoted_incomplete: false,
+                    };
+                }
+                if let Some(id) = rest.strip_prefix('^') {
+                    let valid = !id.is_empty() && is_block_id(id);
+                    return HashSectionAndId {
+                        section: (!empty_title).then_some(lex.decoded),
+                        exact: true,
+                        block_id: valid.then(|| id.to_string()),
+                        section_len: lex.literal_len,
+                        has_caret: true,
+                        id_len: id.len(),
+                        incomplete_section: empty_title,
+                        incomplete_block_id: !valid,
+                        quoted_incomplete: false,
+                    };
+                }
+                // Trailing bytes after a closing quote that are not `^id`
+                // are not a complete `#` selector.
+                return HashSectionAndId {
+                    section: None,
+                    exact: true,
+                    block_id: None,
+                    section_len: after_hash.len(),
+                    has_caret: false,
+                    id_len: 0,
+                    incomplete_section: true,
+                    incomplete_block_id: false,
+                    quoted_incomplete: false,
+                };
+            }
+            None => {
+                return HashSectionAndId {
+                    section: Some(after_hash.to_string()),
+                    exact: false,
+                    block_id: None,
+                    section_len: after_hash.len(),
+                    has_caret: false,
+                    id_len: 0,
+                    incomplete_section: false,
+                    incomplete_block_id: false,
+                    quoted_incomplete: false,
+                };
+            }
+        }
+    }
+    match after_hash.split_once('^') {
+        Some((section, id)) => {
+            let valid = !id.is_empty() && is_block_id(id);
+            HashSectionAndId {
+                section: (!section.is_empty()).then(|| section.to_string()),
+                exact: false,
+                block_id: valid.then(|| id.to_string()),
+                section_len: section.len(),
+                has_caret: true,
+                id_len: id.len(),
+                incomplete_section: section.is_empty(),
+                incomplete_block_id: !valid,
+                quoted_incomplete: false,
+            }
+        }
+        None => HashSectionAndId {
+            section: Some(after_hash.to_string()),
+            exact: false,
+            block_id: None,
+            section_len: after_hash.len(),
+            has_caret: false,
+            id_len: 0,
+            incomplete_section: false,
+            incomplete_block_id: false,
+            quoted_incomplete: false,
+        },
+    }
+}
+
 /// Parse one whitespace-free token as an `@route` token, returning `None` when
 /// it does not begin with `@` or its route part is not a valid route name. A
 /// `#` suffix selects bullet mode and is split off before route validation.
-/// A quoted `#` selector (`#"Literal"` / `#“Literal”`) decodes through the
-/// shared exact-name lexer and reports `exact: true`; an incomplete literal
-/// or trailing bytes after the closing quote are not a complete token.
+/// `#section^id` names the bullet; a quoted `#` selector (`#"Literal"` /
+/// `#“Literal”`) decodes through the shared exact-name lexer and reports
+/// `exact: true`. A caret inside the quotes is title text; a caret after the
+/// closing quote is the named ID. An incomplete literal or trailing bytes
+/// after the closing quote that are not `^id` are not a complete token.
 pub(super) fn parse_route_token(token: &str) -> Option<RouteToken> {
     let rest = token.strip_prefix('@')?;
     let (route_part, bullet) = match rest.split_once('#') {
         Some((route, prefix)) => {
-            if prefix.is_empty() {
-                (route, Some((None, false)))
-            } else if opens_exact_name(prefix) {
-                let lex = lex_exact_name_after_hash(prefix, prefix.len())?;
-                if !lex.complete
-                    || lex.literal_len != prefix.len()
-                    || lex.decoded.is_empty()
-                {
-                    return None;
-                }
-                (route, Some((Some(lex.decoded), true)))
-            } else {
-                let marker = (!prefix.is_empty()).then(|| prefix.to_string());
-                // A quoted opener that failed to lex above already returned;
-                // an unquoted selector with embedded quotes stays literal.
-                (route, Some((marker, false)))
+            let parsed = parse_hash_section_and_id(prefix);
+            if parsed.quoted_incomplete
+                || parsed.incomplete_section
+                || parsed.incomplete_block_id
+            {
+                return None;
             }
+            (route, Some((parsed.section, parsed.exact, parsed.block_id)))
         }
         None => (rest, None),
     };
     is_route_token(route_part).then(|| RouteToken {
         route: Some(route_part.to_ascii_lowercase()),
         kind: match bullet {
-            Some((section_prefix, exact)) => CaptureKind::Bullet {
+            Some((section_prefix, exact, block_id)) => CaptureKind::Bullet {
                 section_prefix,
                 exact,
+                block_id,
             },
             None => CaptureKind::Task,
         },
@@ -58,6 +189,9 @@ pub(super) fn parse_route_token(token: &str) -> Option<RouteToken> {
 
 pub(super) const INCOMPLETE_SECTION_ERROR: &str =
     "`#\"…` is incomplete: finish the quoted section name (for example `@sase#\"Future Work\"`)";
+
+pub(super) const INCOMPLETE_SECTION_BLOCK_ID_ERROR: &str =
+    "`^` is incomplete: type a block ID after `#section^` (for example `@notes#git^mergiraf`)";
 
 pub(super) fn parse_terminal_route_token(
     token: &str,
@@ -82,6 +216,9 @@ pub(super) fn parse_terminal_route_token(
     if incomplete_quoted_section(token) {
         return Err(INCOMPLETE_SECTION_ERROR.to_string());
     }
+    if incomplete_section_block_id(token) {
+        return Err(INCOMPLETE_SECTION_BLOCK_ID_ERROR.to_string());
+    }
     Ok(parse_route_token(token))
 }
 
@@ -97,11 +234,21 @@ fn incomplete_quoted_section(token: &str) -> bool {
     if route_part.is_empty() || !is_route_token(route_part) {
         return false;
     }
-    if !opens_exact_name(prefix) {
+    parse_hash_section_and_id(prefix).quoted_incomplete
+}
+
+fn incomplete_section_block_id(token: &str) -> bool {
+    let Some(rest) = token.strip_prefix('@') else {
+        return false;
+    };
+    let Some((route_part, prefix)) = rest.split_once('#') else {
+        return false;
+    };
+    if route_part.is_empty() || !is_route_token(route_part) {
         return false;
     }
-    lex_exact_name_after_hash(prefix, prefix.len())
-        .is_some_and(|lex| !lex.complete)
+    let parsed = parse_hash_section_and_id(prefix);
+    parsed.has_caret && parsed.incomplete_block_id && !parsed.quoted_incomplete
 }
 
 pub(super) fn parse_sub_bullet_route_token(

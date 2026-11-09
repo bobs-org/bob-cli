@@ -32,6 +32,14 @@ pub(crate) struct CaptureParseOptions<'a> {
     /// A `@@` declaration in the draft keeps every item a task. Draft
     /// resolution fills this in from the split declarations.
     pub(crate) has_global_destination: bool,
+    /// Resolved draft-wide `@@route`, when the declaration is a complete
+    /// route. Notebook claiming reads this before task/ref parse.
+    pub(crate) global_route: Option<&'a str>,
+    /// Forced `-t/--task` parent block ID. Notebook claiming reads this
+    /// with a notebook `--route` as a sub-note.
+    pub(crate) forced_task: Option<&'a str>,
+    /// Forced `--drawer`. Notebook notes refuse it.
+    pub(crate) forced_drawer: Option<&'a str>,
 }
 
 impl<'a> CaptureParseOptions<'a> {
@@ -46,6 +54,9 @@ impl<'a> CaptureParseOptions<'a> {
             explicit_destination: false,
             has_global_destination: false,
             recognize_lists: true,
+            global_route: None,
+            forced_task: None,
+            forced_drawer: None,
         }
     }
 
@@ -55,6 +66,19 @@ impl<'a> CaptureParseOptions<'a> {
             has_global_destination: self.has_global_destination
                 || has_global_destination,
             ..*self
+        }
+    }
+
+    /// Copy these options with the resolved draft-wide `@@route`.
+    pub(crate) fn with_global_route(
+        self,
+        global_route: Option<&'a str>,
+    ) -> Self {
+        Self {
+            global_route,
+            has_global_destination: self.has_global_destination
+                || global_route.is_some(),
+            ..self
         }
     }
 }
@@ -71,6 +95,9 @@ pub(crate) struct EditorParseOptions<'a> {
     /// Immutable notebook route policy, shared with the strict parser.
     pub(crate) notebook_policy:
         Option<&'a super::notebook::NotebookRoutePolicy>,
+    /// Resolved draft-wide `@@route`, when the declaration is a complete
+    /// route. Notebook claiming reads this before task/ref parse.
+    pub(crate) global_route: Option<&'a str>,
 }
 
 impl<'a> EditorParseOptions<'a> {
@@ -81,6 +108,7 @@ impl<'a> EditorParseOptions<'a> {
             has_global_destination: false,
             record_policy: None,
             notebook_policy: None,
+            global_route: None,
         }
     }
 }
@@ -106,6 +134,9 @@ pub(crate) enum CaptureKind {
     Bullet {
         section_prefix: Option<String>,
         exact: bool,
+        /// Optional named ID after `#section^id`. Distinct from a task
+        /// block ID: this names the bullet itself.
+        block_id: Option<String>,
     },
     Pomodoro {
         block_id: String,

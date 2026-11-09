@@ -525,6 +525,7 @@ fn parses_suffixed_route_token_as_bullet() {
             CaptureKind::Bullet {
                 section_prefix: prefix.map(str::to_string),
                 exact: false,
+                block_id: None,
             },
             "{label}"
         );
@@ -547,6 +548,7 @@ fn forced_section_forces_exact_bullet_with_forced_route() {
         CaptureKind::Bullet {
             section_prefix: Some("Ideas".to_string()),
             exact: true,
+            block_id: None,
         }
     );
 }

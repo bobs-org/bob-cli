@@ -312,6 +312,7 @@ mod tests {
             CaptureKind::Bullet {
                 section_prefix: Some(ref section),
                 exact: false,
+                block_id: None,
             } if section == "Ideas"
         ));
         assert_eq!(parsed.route.as_deref(), Some("dev"));

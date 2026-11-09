@@ -1237,8 +1237,14 @@ fn editor_agrees_with_execution_for_resolved_captures() {
                 "{raw}"
             );
         }
-        if let CaptureKind::Bullet { section_prefix, .. } = &executed.kind {
+        if let CaptureKind::Bullet {
+            section_prefix,
+            block_id,
+            ..
+        } = &executed.kind
+        {
             assert_eq!(parse.section, *section_prefix, "{raw}");
+            assert_eq!(parse.block_id, *block_id, "{raw}");
         }
         if let CaptureKind::ProjectNote {
             block_id,

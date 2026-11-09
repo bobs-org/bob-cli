@@ -314,7 +314,7 @@ fn project_cannot_depend_on_its_resident_and_unmodified_shape_is_frozen() {
     let unmodified = complete_output(&vault, &day_file, "@empty+", 7);
     assert_eq!(
         unmodified,
-        r#"{"ok":true,"schema_version":1,"grammar":22,"cursor":7,"replacement":{"start":7,"end":7},"context":"task","candidates":[],"query":"","picker":{"kind":"parent_task","scope":"note","scope_token":"@empty+","note_target":"empty.md","marker_range":{"start":0,"end":7},"trigger_removal_range":{"start":6,"end":7},"continuation":" +"}}"#
+        r#"{"ok":true,"schema_version":1,"grammar":23,"cursor":7,"replacement":{"start":7,"end":7},"context":"task","candidates":[],"query":"","picker":{"kind":"parent_task","scope":"note","scope_token":"@empty+","note_target":"empty.md","marker_range":{"start":0,"end":7},"trigger_removal_range":{"start":6,"end":7},"continuation":" +"}}"#
     );
 }
 

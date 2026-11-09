@@ -48,9 +48,11 @@ pub(crate) mod transfer;
 mod type_marker;
 
 /// Revision of the capture grammar contract exposed to clients.
-/// Revision 22 makes sized `Nx` closes execute (see `sized_pomodoro_close.md`);
-/// older clients parse the size as literal task text.
-pub(crate) const GRAMMAR_REVISION: u32 = 22;
+/// Revision 23 adds `#section^id` on every route and notebook list, global,
+/// and forced destination forms. Revision 22 makes sized `Nx` closes execute
+/// (see `sized_pomodoro_close.md`); older clients parse the size as literal
+/// task text.
+pub(crate) const GRAMMAR_REVISION: u32 = 23;
 
 #[cfg(test)]
 mod tests;
@@ -120,6 +122,7 @@ pub(crate) use self::editor_model::Severity;
 pub(crate) use self::editor_model::Span;
 pub(crate) use self::editor_model::SpanKind;
 pub(crate) use self::editor_parse::editor_item_at;
+pub(crate) use self::editor_parse::editor_item_at_with;
 pub(crate) use self::editor_parse::parse_for_editor;
 pub(crate) use self::editor_parse::parse_for_editor_with;
 pub(crate) use self::editor_parse::tokenize_line_with_spans;

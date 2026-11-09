@@ -461,7 +461,8 @@ fn mixed_separators_keep_the_first_family_and_do_not_steal_section_suffixes() {
 
     let bullet_caret = editor("Jot @notes#time^box");
     assert_eq!(bullet_caret.mode, EditorMode::Bullet);
-    assert_eq!(bullet_caret.section.as_deref(), Some("time^box"));
+    assert_eq!(bullet_caret.section.as_deref(), Some("time"));
+    assert_eq!(bullet_caret.block_id.as_deref(), Some("box"));
     assert!(bullet_caret.diagnostics.is_empty());
 
     let bullet_colons = editor("Jot @notes#time::box");

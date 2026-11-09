@@ -1701,6 +1701,7 @@ fn execution_keeps_pomodoro_note_and_other_families_unchanged() {
         CaptureKind::Bullet {
             section_prefix: Some(ref prefix),
             exact: false,
+            block_id: None,
         } if prefix == "Ideas"
     ));
 
