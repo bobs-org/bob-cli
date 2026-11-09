@@ -238,6 +238,7 @@ nav:
               - "bob periods": reference/cli/periods.md
               - "bob query": reference/cli/query.md
               - "bob records": reference/cli/records.md
+              - "bob notebooks": reference/cli/notebooks.md
               - "bob ref": reference/cli/ref.md
               - "bob vault-sync": reference/cli/vault-sync.md
           - "Integrations":
@@ -347,4 +348,5 @@ nav:
               - "Bob vault Git sync runbook": vault-git-sync.md
               - "Attachment origins": attachments.md
               - "Record notes": records.md
+              - "Notebooks": notebooks.md
           # END GENERATED: contracts nav

@@ -59,6 +59,8 @@ pub(crate) enum Kind {
     RecordStem,
     /// A `KEY=VALUE` record field edit for the retained TYPE.
     RecordSet,
+    /// A computed notebook root for `bob notebooks list -r`.
+    NotebookRoot,
 }
 
 struct Entry {
@@ -85,6 +87,11 @@ const TABLE: &[Entry] = &[
         path: &["articles", "outline"],
         arg: "note",
         kind: Kind::ArticleNote,
+    },
+    Entry {
+        path: &["notebooks", "list"],
+        arg: "root",
+        kind: Kind::NotebookRoot,
     },
     Entry {
         path: &["records", "check"],

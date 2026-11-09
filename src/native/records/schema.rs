@@ -10,6 +10,7 @@ use url::Url;
 
 const RESERVED_RECORD_IDS: &[&str] = &[
     "project", "area", "ref", "day", "done", "mail", "article", "type",
+    "notebook",
 ];
 const RESERVED_FIELD_NAMES: &[&str] = &["parent", "type", "title", "created"];
 const RECORD_KEYS: &[&str] = &[

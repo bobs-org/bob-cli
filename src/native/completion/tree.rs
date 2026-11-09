@@ -159,6 +159,12 @@ impl NativeCommand {
             NativeCommand::RecordsUpdate => {
                 crate::native::records::cli::build_cli_update()
             }
+            NativeCommand::NotebooksCheck => {
+                crate::native::notebooks::build_cli_check()
+            }
+            NativeCommand::NotebooksList => {
+                crate::native::notebooks::build_cli_list()
+            }
             NativeCommand::Randomize => crate::native::randomize::build_cli(),
             NativeCommand::Stats => {
                 crate::native::stats::cli::overview_command()

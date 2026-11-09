@@ -10,6 +10,7 @@ pub(crate) const KNOWN_SLOTS: &[&str] = &[
     "area-note",
     "article-note",
     "metric",
+    "notebook-root",
     "pdf",
     "record-set",
     "record-stem",
@@ -754,6 +755,29 @@ pub(crate) const ENTRIES: &[Row] = &[
             &["records", "show"],
             "Record Note schema",
             &["records", "show", "schema", "fields", "values"],
+            Presentation::Report,
+            60,
+        )
+    },
+    Row {
+        fixed: JSON,
+        slots: &[("ROOT", "notebook-root"), ("root", "notebook-root")],
+        ..reads(
+            "notebooks-list",
+            &["notebooks", "list"],
+            "Notebook tree",
+            &["notebooks", "list", "notes", "tree", "roots"],
+            Presentation::Report,
+            60,
+        )
+    },
+    Row {
+        fixed: JSON,
+        ..reads(
+            "notebooks-check",
+            &["notebooks", "check"],
+            "Check notebooks",
+            &["notebooks", "check", "lint", "contract", "notes"],
             Presentation::Report,
             60,
         )

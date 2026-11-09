@@ -47,7 +47,7 @@ records:
 Each type has a lowercase id matching `[a-z][a-z0-9_]*`, a required `dir`, a
 required display `label`, and an ordered `fields` mapping. `emoji`, `parent`,
 `dated_notes`, and `legacy` are optional. The reserved ids are `project`,
-`area`, `ref`, `day`, `done`, `mail`, `article`, and `type`.
+`area`, `ref`, `day`, `done`, `mail`, `article`, `type`, and `notebook`.
 
 Directories are unique, safe, relative single path segments. Dot-folders,
 `.bob`, `done`, and `ref` are reserved. The directory and collection note do

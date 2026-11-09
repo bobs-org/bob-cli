@@ -77,6 +77,7 @@ queued intake; full scans also synchronize annotations. The
 | [attachments.md](attachments.md) | Attachment origin journal, resolution states, `bob attachments import` / `origin`, and `%c` recording |
 | [mail-link-marks.md](mail-link-marks.md) | Mail link marks: the display-only reply badge, no-reply pill, and Also-replied tooltip pip on Gmail-watched tasks |
 | [records.md](records.md) | Config-declared Record Notes: schema, capture `@dir/` creation, validation, filename planning, and rendered Markdown |
+| [notebooks.md](notebooks.md) | `bob notebooks` list and check, the notebook contract, JSON, and teaching refusals |
 <!-- END GENERATED: contract table -->
 
 `bob <command> --help` is the concise usage source for that command, and

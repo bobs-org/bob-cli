@@ -173,6 +173,19 @@ The response includes `hidden_count` for this context. Rows also carry
 `hide_replacement` for the `||` spelling; a `||` probe preserves both pipes
 in each row's `replacement` and adds `one_off: true` to the response.
 
+### Notebook reports {#notebook-reports}
+
+| Command | Flag | Shape | Version | Contract |
+| --- | --- | --- | --- | --- |
+| `bob notebooks list` | `-f json` | Tree of notebooks grouped by root with titles, summaries, counts, and issue markers; `catalogs: []` in this phase | `schema_version: 1` | [Notebooks](../../notebooks.md#json) |
+| `bob notebooks check` | `-f json` | Same report shape as list; `ok` reflects error findings | `schema_version: 1` | [Notebooks](../../notebooks.md#json) |
+
+Each notebook carries `stem`, `path`, `title`, `summary`, `parent`,
+`parent_kind`, `owner`, `root`, `breadcrumb`, `children`, `notes`,
+`sections`, `last_note`, and `issues` (`code`, `severity`, `line`,
+`message`). Missing ownership or dates are null. `counts` matches the
+reported set after list filtering.
+
 ### Session edits and successor offers
 
 Capture results are unversioned, including these per-item session payloads:

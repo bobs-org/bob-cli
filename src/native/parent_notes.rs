@@ -12,9 +12,10 @@ use std::path::Path;
 use super::{
     capture_targets::{self, CaptureTargetKind},
     note_tasks::bounded_levenshtein,
+    pomodoro_homes::{DiskHomeSource, HomeResolver},
     projects::{
-        frontmatter_is_area, frontmatter_is_project, frontmatter_value,
-        parse_frontmatter, ProjectStatus,
+        frontmatter_is_area, frontmatter_is_notebook, frontmatter_is_project,
+        frontmatter_value, parse_frontmatter, ProjectStatus,
     },
 };
 
@@ -121,6 +122,10 @@ pub(crate) enum ParentError {
     NotParent {
         label: String,
     },
+    Notebook {
+        label: String,
+        owner: Option<String>,
+    },
 }
 
 /// One near-miss or ambiguity claimant for hints.
@@ -181,6 +186,14 @@ impl ParentError {
                     "{label} is not an area or project note\nhint: run 'bob capture-targets' to list routable notes"
                 )
             }
+            Self::Notebook { label, owner } => match owner {
+                Some(route) => format!(
+                    "{label} is a notebook and holds no tasks — use its owner @{route}"
+                ),
+                None => format!(
+                    "{label} is a notebook and holds no tasks — choose an area or project and repair it with `bob notebooks check`"
+                ),
+            },
         }
     }
 }
@@ -338,7 +351,7 @@ fn is_route_token_text(value: &str) -> bool {
 }
 
 /// When a valid stem names no candidate, read that root note directly so a
-/// terminal project and a non-parent hub report their own error.
+/// terminal project, a notebook, and a non-parent hub report their own error.
 fn check_non_candidate_note(
     bob_dir: &Path,
     lowered: &str,
@@ -357,6 +370,10 @@ fn check_non_candidate_note(
             matched: ParentMatchKind::Stem,
         }));
     }
+    if frontmatter_is_notebook(&frontmatter) {
+        let owner = notebook_owner_route(bob_dir, lowered);
+        return Some(Err(ParentError::Notebook { label, owner }));
+    }
     if !frontmatter_is_project(&frontmatter) {
         return Some(Err(ParentError::NotParent { label }));
     }
@@ -374,6 +391,29 @@ fn check_non_candidate_note(
         label,
         matched: ParentMatchKind::Stem,
     }))
+}
+
+/// Resolve a notebook's owner for teaching refusals, including nested
+/// notebooks. Returns the owner stem without `@`, or `None` when no
+/// owner resolves.
+fn notebook_owner_route(bob_dir: &Path, lowered: &str) -> Option<String> {
+    use std::path::PathBuf;
+    let relative = PathBuf::from(format!("{lowered}.md"));
+    let source = DiskHomeSource::new(bob_dir);
+    let mut resolver = HomeResolver::new(source);
+    let home = resolver.resolve_note(&relative);
+    if home.key == "@unfiled" || home.key == "@unlinked" {
+        return None;
+    }
+    let stem = std::path::Path::new(&home.key)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(str::to_string)
+        .unwrap_or(home.key.clone());
+    if stem.is_empty() || stem.starts_with('@') {
+        return None;
+    }
+    Some(stem)
 }
 
 /// Up to three near misses (distance 2 over stems then aliases) for hints.

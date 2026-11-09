@@ -357,6 +357,10 @@ pub(crate) fn frontmatter_is_article(frontmatter: &Frontmatter<'_>) -> bool {
     frontmatter_has_type(frontmatter, "[[article]]")
 }
 
+pub(crate) fn frontmatter_is_notebook(frontmatter: &Frontmatter<'_>) -> bool {
+    frontmatter_has_type(frontmatter, "[[notebook]]")
+}
+
 pub(crate) fn frontmatter_has_type(
     frontmatter: &Frontmatter<'_>,
     expected: &str,

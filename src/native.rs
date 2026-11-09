@@ -72,6 +72,7 @@ mod markdown;
 mod nightly;
 mod note_ready;
 mod note_tasks;
+pub(crate) mod notebooks;
 mod notify;
 mod ob;
 pub(crate) mod parent_notes;
@@ -162,6 +163,8 @@ pub(crate) enum NativeCommand {
     TaskMove,
     TaskSplit,
     Nightly,
+    NotebooksCheck,
+    NotebooksList,
     NoteReady,
     Notify,
     PeriodsBrief,
@@ -257,6 +260,8 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::TaskMove => task_move::run(args),
         NativeCommand::TaskSplit => task_split::run(args),
         NativeCommand::Nightly => nightly::run(args),
+        NativeCommand::NotebooksCheck => notebooks::cli::run_check(args),
+        NativeCommand::NotebooksList => notebooks::cli::run_list(args),
         NativeCommand::NoteReady => note_ready::cli::run(args),
         NativeCommand::Notify => notify::run(args),
         NativeCommand::PeriodsBrief => periods::brief::run(args),

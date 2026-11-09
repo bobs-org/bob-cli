@@ -370,6 +370,31 @@ Contract: [Project Task Sync](../projects.md),
 [Project Note](glossary.md#project-note),
 [Project Task](glossary.md#project-task).
 
+### Notebook notes
+
+Frontmatter `type: "[[notebook]]"`. A task-free collection of note bullets,
+optionally under `##` sections, that always hangs under an area, a project,
+or another notebook. Lives at the vault root; capture routes are root stems.
+
+```yaml
+---
+parent: "[[dev]]"
+template: "[[new_notebook]]"
+type: "[[notebook]]"
+summary: Linux machine setup, shell shortcuts, and troubleshooting notes.
+created: 2026-11-09T09:14:00-05:00
+---
+```
+
+Title is the first H1 before the first bullet or `##` (wikilinks to display
+text, emphasis stripped), otherwise the first `aliases:` entry, otherwise
+the humanized stem. Owner is the nearest area or project on the parent
+chain; root is the owner's Root Parent. Counts are column-zero note bullets;
+`last_note` is the latest `[created::]` date. See `docs/notebooks.md` for
+the contract, `bob notebooks list` and `check`, and the teaching refusals.
+
+Contract: [Notebooks](../../notebooks.md).
+
 ### Inbox notes
 
 `inbox.md` at the vault root, plus area notes whose frontmatter `parent`

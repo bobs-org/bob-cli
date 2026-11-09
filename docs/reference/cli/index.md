@@ -76,6 +76,9 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob records new`](records.md#bob-records-new) | Create one Record Note from its configured schema |
 | [`bob records show`](records.md#bob-records-show) | Show one record schema and its common values |
 | [`bob records update`](records.md#bob-records-update) | Update one existing Record Note in place |
+| [`bob notebooks`](notebooks.md) | Inspect or maintain notebook notes |
+| [`bob notebooks check`](notebooks.md#bob-notebooks-check) | Check notebooks against the contract |
+| [`bob notebooks list`](notebooks.md#bob-notebooks-list) | List notebooks grouped by root (default) |
 | [`bob ref`](ref.md) | Find, list, read, rename, and plan references for today; sync Highlights PDFs into them |
 | [`bob vault-sync`](vault-sync.md) | Reconcile the vault through Git (default: run) or show status |
 
@@ -154,6 +157,7 @@ Vault:
   query        Run Dataview or Tasks queries against the vault
   records      List, inspect, check, scaffold, and create or update configured
                Record Notes
+  notebooks    Inspect or maintain notebook notes
   ref          Find, list, read, rename, and plan references for today; sync
                Highlights PDFs into them
   vault-sync   Reconcile the vault through Git (default: run) or show status

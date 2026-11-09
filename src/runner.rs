@@ -405,6 +405,37 @@ Examples:
 See docs/records.md for the schema, CLI, and lint contract.
 Run 'bob records <command> --help' for more information on a command.";
 
+const NOTEBOOKS_MEMBERS: &[Member] = &[
+    Member {
+        name: "check",
+        about: "Check notebooks against the contract",
+        leaf: Leaf {
+            native_command: NativeCommand::NotebooksCheck,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "list",
+        about: "List notebooks grouped by root (default)",
+        leaf: Leaf {
+            native_command: NativeCommand::NotebooksList,
+            script_command: None,
+        },
+    },
+];
+
+const NOTEBOOKS_AFTER_HELP: &str = "\
+Bare `bob notebooks` runs the read-only list.
+
+Examples:
+  bob notebooks                       List notebooks grouped by root
+  bob notebooks list -r dev           List one root's notebooks
+  bob notebooks check                 Lint notebooks against the contract
+  bob notebooks check -f json         Findings as JSON
+
+See docs/notebooks.md for the notebook contract.
+Run 'bob notebooks <command> --help' for more information on a command.";
+
 const RELATIONS_MEMBERS: &[Member] = &[
     Member {
         name: "hide",
@@ -887,6 +918,20 @@ const SUBCOMMANDS: &[Subcommand] = &[
             ),
             after_help: RECORDS_AFTER_HELP,
             usage: "bob records [COMMAND]",
+        }),
+    },
+    Subcommand {
+        name: "notebooks",
+        about: "Inspect or maintain notebook notes",
+        section: Section::Vault,
+        target: Target::Group(Group {
+            members: NOTEBOOKS_MEMBERS,
+            default: Some("list"),
+            extra_about: Some(
+                "Bare `bob notebooks` runs the read-only list. `list` shows the tree grouped by root. `check` lints notebooks against the contract.",
+            ),
+            after_help: NOTEBOOKS_AFTER_HELP,
+            usage: "bob notebooks [COMMAND]",
         }),
     },
     Subcommand {

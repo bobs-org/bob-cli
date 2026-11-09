@@ -171,6 +171,7 @@ impl RouteProblem {
         let kind = match error {
             ParentError::Unknown { .. } => RouteProblemKind::UnknownNote,
             ParentError::NotParent { .. } => RouteProblemKind::NotAreaOrProject,
+            ParentError::Notebook { .. } => RouteProblemKind::NotAreaOrProject,
             ParentError::Terminal { .. } => RouteProblemKind::ClosedProject,
             ParentError::Ambiguous { .. } => RouteProblemKind::AmbiguousAlias,
         };

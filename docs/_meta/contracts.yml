@@ -161,3 +161,6 @@ groups:
       - stem: records
         summary: "Config-declared Record Notes: schema, capture `@dir/` creation, validation, filename planning, and rendered Markdown"
         order: 45
+      - stem: notebooks
+        summary: "`bob notebooks` list and check, the notebook contract, JSON, and teaching refusals"
+        order: 46

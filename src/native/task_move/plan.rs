@@ -21,9 +21,10 @@ use super::super::{
     },
     markdown,
     note_tasks::clean_description,
+    pomodoro_homes::{HomeResolver, IndexedHomeSource},
     projects::{
-        frontmatter_is_area, frontmatter_is_project, frontmatter_value,
-        parse_frontmatter, trim_yaml_scalar, ProjectStatus,
+        frontmatter_is_area, frontmatter_is_notebook, frontmatter_is_project,
+        frontmatter_value, parse_frontmatter, trim_yaml_scalar, ProjectStatus,
     },
     task_complete::is_inbox_note,
     task_dependencies::{
@@ -748,7 +749,19 @@ pub(crate) fn plan_task_move(
 
     let source_contents = snapshot_note(snapshot, &source_path)?;
     let dest_contents = snapshot_note(snapshot, &dest_path)?;
-    let dest_kind = classify_dest(&dest_path, dest_contents)?;
+    let dest_kind = match classify_dest(&dest_path, dest_contents) {
+        Ok(kind) => kind,
+        Err(PlanError::DestKind { path, detail })
+            if detail.contains("is a notebook and holds no tasks") =>
+        {
+            let owner = notebook_owner_from_snapshot(snapshot, &dest_path);
+            return Err(PlanError::DestKind {
+                path: path.clone(),
+                detail: notebook_teaching_detail(&path, owner.as_deref()),
+            });
+        }
+        Err(error) => return Err(error),
+    };
     let dest_has_tasks = tasks_heading_index(dest_contents).is_some();
     if dest_kind == DestKind::Project && !dest_has_tasks {
         return Err(PlanError::ProjectWithoutTasks { path: dest_path });
@@ -1144,6 +1157,12 @@ fn classify_dest(path: &Path, contents: &str) -> Result<DestKind, PlanError> {
             detail: "destination is not an area or project note".to_string(),
         });
     };
+    if frontmatter_is_notebook(&frontmatter) {
+        return Err(PlanError::DestKind {
+            path: path.to_path_buf(),
+            detail: notebook_teaching_detail(path, None),
+        });
+    }
     if frontmatter_is_project(&frontmatter) {
         match ProjectStatus::parse(frontmatter_value(&frontmatter, "status")) {
             ProjectStatus::Wip | ProjectStatus::Waiting => {
@@ -1165,6 +1184,47 @@ fn classify_dest(path: &Path, contents: &str) -> Result<DestKind, PlanError> {
             detail: "destination is not an area or project note".to_string(),
         })
     }
+}
+
+fn notebook_teaching_detail(path: &Path, owner: Option<&str>) -> String {
+    let display = path.to_string_lossy().replace('\\', "/");
+    match owner {
+        Some(route) => format!(
+            "{display} is a notebook and holds no tasks — use its owner @{route}"
+        ),
+        None => format!(
+            "{display} is a notebook and holds no tasks — choose an area or project and repair it with `bob notebooks check`"
+        ),
+    }
+}
+
+fn notebook_owner_from_snapshot(
+    snapshot: &VaultSnapshot,
+    dest_path: &Path,
+) -> Option<String> {
+    let index = NoteIndex::from_paths(snapshot.notes.keys().cloned());
+    let buffers: Vec<(String, String)> = snapshot
+        .notes
+        .iter()
+        .map(|(path, contents)| {
+            (path.to_string_lossy().replace('\\', "/"), contents.clone())
+        })
+        .collect();
+    let source = IndexedHomeSource::from_buffers(&index, &buffers);
+    let mut resolver = HomeResolver::new(source);
+    let home = resolver.resolve_note(dest_path);
+    if home.key == "@unfiled" || home.key == "@unlinked" {
+        return None;
+    }
+    let stem = Path::new(&home.key)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(str::to_string)
+        .unwrap_or(home.key.clone());
+    if stem.is_empty() || stem.starts_with('@') {
+        return None;
+    }
+    Some(stem)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

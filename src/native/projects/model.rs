@@ -443,6 +443,6 @@ pub(super) struct PrjCandidate<'a> {
 
 #[derive(Debug, Clone)]
 pub(crate) struct Frontmatter<'a> {
-    pub(super) lines: Vec<&'a str>,
-    pub(super) body_start_line: usize,
+    pub(crate) lines: Vec<&'a str>,
+    pub(crate) body_start_line: usize,
 }
