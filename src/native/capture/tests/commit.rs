@@ -303,6 +303,91 @@ fn new_note_fallback_refuses_when_file_lands_between_check_and_install() {
 }
 
 #[test]
+fn existing_record_update_race_preserves_foreign_bytes_and_rolls_back() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let earlier = dir.path().join("inbox.md");
+    let record = dir.path().join("eat").join("ninja_sushi.md");
+    fs::create_dir_all(record.parent().unwrap()).expect("record folder");
+    let earlier_original = "- [ ] #task buy milk\n";
+    let record_original =
+        "---\ntitle: Ninja Sushi\nstatus: to_try\n---\n## Notes\n";
+    let record_updated =
+        "---\ntitle: Ninja Sushi\nstatus: liked\n---\n## Notes\n- went back\n";
+    fs::write(&earlier, earlier_original).expect("write earlier");
+    fs::write(&record, record_original).expect("write record");
+    let planned = vec![
+        staged_existing(&earlier, earlier_original, "- [x] #task buy milk\n"),
+        staged_existing(&record, record_original, record_updated),
+    ];
+    let concurrent = format!("{record_original}<!-- concurrent edit -->\n");
+    fs::write(&record, &concurrent).expect("concurrent record edit");
+    let error = write_staged_files(&planned)
+        .expect_err("concurrent record edit refuses commit");
+    assert_eq!(error.typed, Some(CaptureFailureKind::NoteChanged));
+    assert!(
+        error.message.contains("ninja_sushi.md")
+            && error
+                .message
+                .contains("note changed on disk after planning"),
+        "names the changed record: {}",
+        error.message
+    );
+    assert_eq!(
+        fs::read_to_string(&record).expect("read record"),
+        concurrent,
+        "foreign bytes survive"
+    );
+    assert_eq!(
+        fs::read_to_string(&earlier).expect("read earlier"),
+        earlier_original,
+        "earlier file rolls back"
+    );
+    no_capture_litter(dir.path());
+    no_capture_litter(record.parent().unwrap());
+}
+
+#[test]
+fn record_update_then_create_plant_rolls_back_earlier_write() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let existing = dir.path().join("eat").join("ninja_sushi.md");
+    let created = dir.path().join("eat").join("ramen_nagi.md");
+    fs::create_dir_all(existing.parent().unwrap()).expect("record folder");
+    let original = "---\ntitle: Ninja Sushi\nstatus: to_try\n---\n## Notes\n";
+    let updated =
+        "---\ntitle: Ninja Sushi\nstatus: liked\n---\n## Notes\n- went back\n";
+    let new_record = "---\ntitle: Ramen Nagi\nstatus: liked\n---\n## Notes\n";
+    fs::write(&existing, original).expect("write existing record");
+    let planned = vec![
+        staged_existing(&existing, original, updated),
+        staged_new(&created, new_record),
+    ];
+    let intervening = "---\ntitle: someone else\n---\n";
+    PLANT_BEFORE_INSTALL.with(|plant| {
+        *plant.borrow_mut() = Some((created.clone(), intervening.to_string()));
+    });
+    let error = write_staged_files(&planned)
+        .expect_err("intervening create at install refuses");
+    PLANT_BEFORE_INSTALL.with(|plant| *plant.borrow_mut() = None);
+    assert_eq!(error.typed, Some(CaptureFailureKind::NoteChanged));
+    assert!(
+        error.message.contains("rolled back earlier note writes"),
+        "earlier writes roll back: {}",
+        error.message
+    );
+    assert_eq!(
+        fs::read_to_string(&created).expect("read planted create"),
+        intervening,
+        "foreign bytes survive"
+    );
+    assert_eq!(
+        fs::read_to_string(&existing).expect("read existing record"),
+        original,
+        "earlier record update rolls back"
+    );
+    no_capture_litter(existing.parent().unwrap());
+}
+
+#[test]
 fn existing_note_edits_still_rename_when_hard_link_fallback_is_forced() {
     let dir = tempfile::tempdir().expect("tempdir");
     let first = dir.path().join("first.md");

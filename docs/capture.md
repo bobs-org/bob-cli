@@ -6492,12 +6492,13 @@ reports mode `record_update`, resolves the exact stem, and shows the stored
 title, current field values, proposed values, and historical warnings. Parent
 text is the first note; authored bullets remain notes or `key:: value` field
 inputs. Only explicitly supplied fields are validated, so old missing or
-invalid fields do not become required inputs. The transactional writer is not
-active yet: `bob capture` fails closed with `record_update_reserved` and makes
-no changes. Forced-destination flags (`--route` and friends) and escaped
-`\@eat/` keep the text literal. Task markers outside field
-values (`#TYPE`, `s:N`, `$N`, `%c`, `%n`, `%l`, `&`, `*`, `~`, `!`, `+`,
-`:`, session operators, task-ID bullets) refuse with
+invalid fields do not become required inputs. `bob capture` stages the update
+through the same preimage-checked writer as other edits: dry-run and commit
+share the planned Markdown, later updates in the same draft see earlier staged
+bytes, and a no-op does not rewrite the note. Forced-destination flags
+(`--route` and friends) and escaped `\@eat/` keep the text literal. Task
+markers outside field values (`#TYPE`, `s:N`, `$N`, `%c`, `%n`, `%l`, `&`,
+`*`, `~`, `!`, `+`, `:`, session operators, task-ID bullets) refuse with
 `record_marker_unsupported`.
 
 `Blaze @eat` stays a task. Parse adds `record_collection_route` plus a
@@ -6505,20 +6506,22 @@ rewrite that replaces only the route token with `@eat/`. Applying that
 rewrite parses as record creation. Heading, task-ID, escaped, and
 forced-literal routes do not get the warning.
 
-`--dry-run` prints `would create` plus the exact Markdown that commit
-writes. Success names the type emoji, `new restaurant` (or the configured
-label), path, field displays, and note count. JSON adds top-level
-`note_files` (omitted when empty) with `path`, `action: "create"`,
-`record_type`, `properties`, `body`, and `markdown`; dry-run and commit
-share those bytes. Each property has a canonical JSON `value` and a separate
-human `display`: choices use schema value plus label (`"liked"` / `"Liked"`),
-lists keep JSON arrays (for example `["hot", "soup"]`), and numbers stay
-numeric (`4.5`, displayed as `"4.5"`). Empty optional fields omit both.
-`kind` is `"record_note"`. Incomplete records exit 2
-without prompting and print a ready-to-copy draft; a later-item failure
-rolls the whole batch back, including earlier tasks. Collisions use
-`record_exists` and never suffix a filename. Record-only drafts do not
-touch the daily note or `mac_inbox.md`.
+`--dry-run` prints `would create` or `would update` plus the exact Markdown
+that commit writes. Success names the type emoji, `new restaurant` or
+`updated restaurant` (or the configured label), path, field displays, and
+appended note count. JSON adds top-level `note_files` (omitted when empty)
+with `path`, `action` (`"create"` or `"update"`), `record_type`,
+`properties`, `body`, and `markdown`; updates also include `before` /
+`before_display` on properties and the existing block-diff `lines`. Dry-run
+and commit share those bytes. Each property has a canonical JSON `value` and
+a separate human `display`: choices use schema value plus label (`"liked"` /
+`"Liked"`), lists keep JSON arrays (for example `["hot", "soup"]`), and
+numbers stay numeric (`4.5`, displayed as `"4.5"`). Empty optional fields
+omit both. `kind` is `"record_note"` on create and `"record_update"` on
+update. Incomplete records exit 2 without prompting and print a
+ready-to-copy draft; a later-item failure rolls the whole batch back,
+including earlier tasks. Collisions use `record_exists` and never suffix a
+filename. Record-only drafts do not touch the daily note or `mac_inbox.md`.
 
 Exact token forms live in
 [Capture syntax](reference/capture-syntax.md#record-notes). Wire examples
@@ -7397,11 +7400,11 @@ drafts without `%t` it returns the original text. The
 `kind` field is `"task"`, `"bullet"`, `"pomodoro_task"`,
 `"pomodoro_note"`, `"sub_bullet"`, `"task_toggle"`, `"project_note"`,
 `"pomodoro_adjust"`, `"pomodoro_shift"`, `"pomodoro_start"`,
-`"pomodoro_close"`, `"pomodoro_link"`, `"note_pull"`, `"task_dependency"`, `"task_complete"`, `"task_move"`, `"task_merge"`, `"record_note"`, or `"ref"`, and
+`"pomodoro_close"`, `"pomodoro_link"`, `"note_pull"`, `"task_dependency"`, `"task_complete"`, `"task_move"`, `"task_merge"`, `"record_note"`, `"record_update"`, or `"ref"`, and
 `task_line` holds the rendered line for any kind — for `"project_note"` it is
-the rendered `^prj` line, for `"record_note"` it is empty (the new file lives in
-`relative_target` and `note_files`), and for `"pomodoro_link"` it is the linked task's
-post-image line. A record creation also adds batch-level `note_files` (omitted
+the rendered `^prj` line, for `"record_note"` and `"record_update"` it is empty
+(the file lives in `relative_target` and `note_files`), and for `"pomodoro_link"` it is the linked task's
+post-image line. A record create or update also adds batch-level `note_files` (omitted
 when empty); see [Record notes](#record-notes). On JSON-mode failures, stdout is still a
 single object with `ok: false` and an `error` string. Template framing and
 refusal errors include their stable `template_*` code. `code` also appears on

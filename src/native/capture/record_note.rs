@@ -1,4 +1,5 @@
-//! Record-note planning: engine create plans staged as new files.
+//! Record-note planning: engine create and update plans staged through
+//! the capture batch overlay.
 
 use std::collections::HashSet;
 
@@ -6,11 +7,12 @@ use super::*;
 use crate::native::capture_language::record::RecordNoteIntent;
 use crate::native::capture_record::{
     collision_message, field_inputs_from_intent, record_note_inputs,
-    CaptureRecordContext,
+    record_value_json, CaptureRecordContext,
 };
 use crate::native::records::{
-    self, FieldKind, RecordCatalog, RecordCreatePlan, RecordCreateRequest,
-    RecordDiagnostic, RecordPlanErrorCode, RecordPropertySource, RecordType,
+    self, FieldKind, PlanUpdateRequest, RecordCatalog, RecordCreatePlan,
+    RecordCreateRequest, RecordDiagnostic, RecordPlanErrorCode,
+    RecordPropertySource, RecordType, RecordUpdatePlan, ResolvedUpdateTarget,
 };
 use serde_json::{json, Map};
 
@@ -21,13 +23,39 @@ pub(super) fn plan_record_note_item(
     today: NaiveDate,
     planner: &mut CaptureBatchPlanner,
     record_context: &mut CaptureRecordContext,
+    warnings: &mut Vec<CaptureWarning>,
 ) -> Result<PlannedCaptureItem, CaptureError> {
-    let CaptureKind::RecordNote { intent } = parsed_item.parsed.kind.clone()
-    else {
-        return Err(CaptureError::io(
+    match parsed_item.parsed.kind.clone() {
+        CaptureKind::RecordNote { intent } => plan_record_create_item(
+            request,
+            intent,
+            now,
+            today,
+            planner,
+            record_context,
+        ),
+        CaptureKind::RecordUpdate { intent } => plan_record_update_item(
+            request,
+            intent,
+            today,
+            planner,
+            record_context,
+            warnings,
+        ),
+        _ => Err(CaptureError::io(
             "record-note capture invariant failed: wrong capture kind",
-        ));
-    };
+        )),
+    }
+}
+
+fn plan_record_create_item(
+    request: &CaptureRequest,
+    intent: RecordNoteIntent,
+    now: chrono::NaiveDateTime,
+    today: NaiveDate,
+    planner: &mut CaptureBatchPlanner,
+    record_context: &mut CaptureRecordContext,
+) -> Result<PlannedCaptureItem, CaptureError> {
     let Some((config, catalog)) = record_context.config_and_catalog() else {
         return Err(CaptureError::usage(
             "record notes need a valid records config",
@@ -93,8 +121,10 @@ pub(super) fn plan_record_note_item(
         properties: properties.clone(),
         body,
         markdown: markdown.clone(),
+        lines: Vec::new(),
     };
     let summary = RecordNoteSummary {
+        action: "create",
         emoji: record_type.emoji.clone(),
         label: record_type.label.clone(),
         path: relative.clone(),
@@ -105,13 +135,221 @@ pub(super) fn plan_record_note_item(
     };
     Ok(PlannedCaptureItem {
         result: record_item_result(
-            request, &intent, &plan, &target, &relative, summary, today,
+            request,
+            &intent,
+            &plan.title,
+            &target,
+            &relative,
+            summary,
+            today,
+            "record_note",
+            Placement::Created,
         ),
         clip_plan: None,
         pomodoro_refs: Vec::new(),
         task_block_refs: Vec::new(),
         project_move_landings: Vec::new(),
     })
+}
+
+fn plan_record_update_item(
+    request: &CaptureRequest,
+    intent: RecordNoteIntent,
+    today: NaiveDate,
+    planner: &mut CaptureBatchPlanner,
+    record_context: &mut CaptureRecordContext,
+    warnings: &mut Vec<CaptureWarning>,
+) -> Result<PlannedCaptureItem, CaptureError> {
+    let Some((config, catalog)) = record_context.config_and_catalog() else {
+        return Err(CaptureError::usage(
+            "record notes need a valid records config",
+        ));
+    };
+    let Some(record_type) = config.by_directory(&intent.dir).cloned() else {
+        return Err(CaptureError::usage(format!(
+            "`{}/` is not a configured record folder",
+            intent.dir
+        )));
+    };
+    let stem = intent.update_stem.as_deref().unwrap_or_default();
+    let (target, original) = match staged_update_snapshot(
+        planner,
+        &request.bob_dir,
+        &record_type,
+        stem,
+    ) {
+        Some(snapshot) => snapshot,
+        None => {
+            let target = match records::resolve_update_target(
+                config,
+                catalog,
+                &record_type.id,
+                stem,
+            ) {
+                Ok(target) => target,
+                Err(error) => {
+                    return Err(CaptureError::usage_code(
+                        error.message,
+                        error.code.diagnostic_code(),
+                    ));
+                }
+            };
+            let absolute = request.bob_dir.join(&target.path);
+            let original = planner.read_existing(&absolute)?;
+            (target, original)
+        }
+    };
+    let field_inputs = field_inputs_from_intent(&intent);
+    let notes = record_note_inputs(&intent);
+    let plan = match records::plan_update(PlanUpdateRequest {
+        target: &target,
+        original: &original,
+        fields: &field_inputs,
+        notes: &notes,
+        today,
+    }) {
+        Ok(plan) => plan,
+        Err(error) => {
+            return Err(CaptureError::usage_code(
+                error.to_string(),
+                "record_invalid_value",
+            ));
+        }
+    };
+    let Some(markdown) = plan.markdown.clone() else {
+        return Err(incomplete_update_error(
+            &intent,
+            &record_type,
+            &plan,
+            catalog,
+        ));
+    };
+    for warning in &plan.warnings {
+        warnings.push(CaptureWarning::Text(existing_record_warning(warning)));
+    }
+    let absolute = request.bob_dir.join(&plan.path);
+    if markdown != original {
+        planner.stage(&absolute, markdown.clone())?;
+    } else {
+        let _ = planner.ensure_loaded(&absolute)?;
+    }
+    let relative = plan.path.display().to_string().replace('\\', "/");
+    let properties = plan
+        .properties
+        .iter()
+        .map(update_note_file_property)
+        .collect::<Vec<_>>();
+    let note_count =
+        ordinary_note_count(&intent) + usize::from(!intent.title.is_empty());
+    let body = plan.body.clone().unwrap_or_default();
+    let lines = record_update_lines(&original, &markdown);
+    let note_file = NoteFileJson {
+        path: relative.clone(),
+        action: "update",
+        record_type: plan.record_type.clone(),
+        properties: properties.clone(),
+        body,
+        markdown: markdown.clone(),
+        lines,
+    };
+    let summary = RecordNoteSummary {
+        action: "update",
+        emoji: record_type.emoji.clone(),
+        label: record_type.label.clone(),
+        path: relative.clone(),
+        notes: note_count,
+        properties,
+        markdown,
+        note_file,
+    };
+    Ok(PlannedCaptureItem {
+        result: record_item_result(
+            request,
+            &intent,
+            &plan.title,
+            &absolute,
+            &relative,
+            summary,
+            today,
+            "record_update",
+            Placement::Updated,
+        ),
+        clip_plan: None,
+        pomodoro_refs: Vec::new(),
+        task_block_refs: Vec::new(),
+        project_move_landings: Vec::new(),
+    })
+}
+
+fn staged_update_snapshot(
+    planner: &CaptureBatchPlanner,
+    vault: &Path,
+    record_type: &RecordType,
+    stem: &str,
+) -> Option<(ResolvedUpdateTarget, String)> {
+    let folded = stem.to_lowercase();
+    let mut matches = Vec::new();
+    for (path, contents) in planner.staged_snapshot() {
+        let Some(contents) = contents else {
+            continue;
+        };
+        let Ok(relative) = path.strip_prefix(vault) else {
+            continue;
+        };
+        let Some(parent) = relative.parent() else {
+            continue;
+        };
+        if parent != Path::new(&record_type.dir) {
+            continue;
+        }
+        if relative.extension().and_then(|ext| ext.to_str()) != Some("md") {
+            continue;
+        }
+        let Some(file_stem) =
+            relative.file_stem().and_then(|name| name.to_str())
+        else {
+            continue;
+        };
+        if file_stem.to_lowercase() != folded {
+            continue;
+        }
+        matches.push((relative.to_path_buf(), file_stem.to_owned(), contents));
+    }
+    let (path, stem, markdown) = match matches.len() {
+        1 => matches.pop()?,
+        _ => return None,
+    };
+    Some((
+        ResolvedUpdateTarget {
+            record_type: record_type.clone(),
+            path,
+            stem,
+            title: String::new(),
+        },
+        markdown,
+    ))
+}
+
+fn record_update_lines(original: &str, updated: &str) -> Vec<BlockLineJson> {
+    let before: Vec<String> = original.lines().map(str::to_owned).collect();
+    let after: Vec<String> = updated.lines().map(str::to_owned).collect();
+    let before_refs: Vec<&str> = before.iter().map(String::as_str).collect();
+    let after_refs: Vec<&str> = after.iter().map(String::as_str).collect();
+    let before_depths = block_depths(&before_refs, 0, 0..before.len());
+    let after_depths = block_depths(&after_refs, 0, 0..after.len());
+    pair_lines(&before, &before_depths, &after, &after_depths, false)
+}
+
+fn existing_record_warning(warning: &RecordDiagnostic) -> String {
+    let field = warning
+        .field
+        .as_deref()
+        .map(|field| format!(" `{field}`"))
+        .unwrap_or_default();
+    format!(
+        "existing record{field}: {}; review it with `bob records check`",
+        warning.message
+    )
 }
 
 fn reserved_paths(planner: &CaptureBatchPlanner, vault: &Path) -> Vec<PathBuf> {
@@ -142,15 +380,28 @@ fn note_file_property(
     NoteFilePropertyJson {
         key: property.key.clone(),
         label: property.label.clone(),
-        value: property
-            .value
-            .as_ref()
-            .map(crate::native::capture_record::record_value_json),
+        value: property.value.as_ref().map(record_value_json),
         display: property.display.clone(),
         source: property.source.map(|source| match source {
             RecordPropertySource::Typed => "typed",
             RecordPropertySource::Default => "default",
         }),
+        before: None,
+        before_display: None,
+    }
+}
+
+fn update_note_file_property(
+    property: &records::PlannedUpdateProperty,
+) -> NoteFilePropertyJson {
+    NoteFilePropertyJson {
+        key: property.key.clone(),
+        label: property.label.clone(),
+        value: property.value.as_ref().map(record_value_json),
+        display: property.display.clone(),
+        source: property.source.map(|_| "typed"),
+        before: property.current.as_ref().map(record_value_json),
+        before_display: property.current_display.clone(),
     }
 }
 
@@ -160,25 +411,59 @@ fn incomplete_error(
     plan: &RecordCreatePlan,
     catalog: &mut RecordCatalog,
 ) -> CaptureError {
-    let draft = incomplete_draft(intent, record_type, plan, catalog);
+    incomplete_plan_error(
+        intent,
+        record_type,
+        &plan.title,
+        &plan.missing,
+        &plan.invalid,
+        catalog,
+    )
+}
+
+fn incomplete_update_error(
+    intent: &RecordNoteIntent,
+    record_type: &RecordType,
+    plan: &RecordUpdatePlan,
+    catalog: &mut RecordCatalog,
+) -> CaptureError {
+    incomplete_plan_error(
+        intent,
+        record_type,
+        &plan.title,
+        &plan.missing,
+        &plan.invalid,
+        catalog,
+    )
+}
+
+fn incomplete_plan_error(
+    intent: &RecordNoteIntent,
+    record_type: &RecordType,
+    title: &str,
+    missing: &[String],
+    invalid: &[RecordDiagnostic],
+    catalog: &mut RecordCatalog,
+) -> CaptureError {
+    let draft = incomplete_draft(intent, record_type, title, missing, catalog);
     let label = record_type.label.as_str();
-    let message = if !plan.missing.is_empty() {
+    let message = if !missing.is_empty() {
         format!(
             "a {label} note needs {} more required field{}",
-            plan.missing.len(),
-            if plan.missing.len() == 1 { "" } else { "s" },
+            missing.len(),
+            if missing.len() == 1 { "" } else { "s" },
         )
     } else {
         format!("the {label} note has invalid field values")
     };
     let mut extra = Map::new();
     extra.insert("draft".to_string(), json!(draft));
-    extra.insert("missing".to_string(), json!(plan.missing));
+    extra.insert("missing".to_string(), json!(missing));
     extra.insert(
         "invalid".to_string(),
-        json!(plan.invalid.iter().map(invalid_json).collect::<Vec<_>>()),
+        json!(invalid.iter().map(invalid_json).collect::<Vec<_>>()),
     );
-    let mut error = match plan.invalid.first() {
+    let mut error = match invalid.first() {
         Some(diagnostic) => {
             CaptureError::usage_code(message, diagnostic.diagnostic_code())
         }
@@ -199,13 +484,22 @@ fn invalid_json(diagnostic: &RecordDiagnostic) -> serde_json::Value {
 fn incomplete_draft(
     intent: &RecordNoteIntent,
     record_type: &RecordType,
-    plan: &RecordCreatePlan,
+    title: &str,
+    missing: &[String],
     catalog: &mut RecordCatalog,
 ) -> String {
-    let mut draft = if let Some(stem) = intent.explicit_stem.as_deref() {
-        format!("{} @{}/^{stem}", plan.title, record_type.dir)
-    } else {
-        format!("{} @{}/", plan.title, record_type.dir)
+    let mut draft = match intent.action {
+        crate::native::capture_language::record::RecordAction::Update => {
+            let stem = intent.update_stem.as_deref().unwrap_or_default();
+            format!("@{}/{}", record_type.dir, stem)
+        }
+        crate::native::capture_language::record::RecordAction::Create => {
+            if let Some(stem) = intent.explicit_stem.as_deref() {
+                format!("{} @{}/^{stem}", title, record_type.dir)
+            } else {
+                format!("{} @{}/", title, record_type.dir)
+            }
+        }
     };
     let mut written = HashSet::new();
     for field in &intent.fields {
@@ -223,7 +517,7 @@ fn incomplete_draft(
             draft.push_str(&format!("\n- {}:: {}", field.key, field.value));
         }
     }
-    for key in &plan.missing {
+    for key in missing {
         if !written.insert(key.clone()) {
             continue;
         }
@@ -290,11 +584,13 @@ fn field_hint(field: &records::RecordField) -> String {
 fn record_item_result(
     request: &CaptureRequest,
     intent: &RecordNoteIntent,
-    plan: &RecordCreatePlan,
+    title: &str,
     target: &Path,
     relative: &str,
     summary: RecordNoteSummary,
     today: NaiveDate,
+    kind: &'static str,
+    placement: Placement,
 ) -> CaptureItemResult {
     CaptureItemResult {
         note_pull: None,
@@ -308,15 +604,15 @@ fn record_item_result(
         route_label: relative.to_string(),
         relative_target: relative.to_string(),
         target: target.display().to_string(),
-        text: plan.title.clone(),
+        text: title.to_owned(),
         task_line: String::new(),
-        kind: "record_note",
+        kind,
         fanout: None,
         created: super::plan::date_string(today),
         scheduled: None,
         priority: None,
         priority_label: None,
-        placement: Placement::Created,
+        placement,
         sub_bullets: Vec::new(),
         notes: Vec::new(),
         drawers: Vec::new(),

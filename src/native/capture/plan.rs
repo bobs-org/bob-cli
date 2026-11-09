@@ -185,22 +185,6 @@ pub(super) fn plan_capture_batch_with_config_path(
             "record_marker_unsupported",
         ));
     }
-    if let Some(intent) = parsed_draft.items.iter().find_map(|item| {
-        if let CaptureKind::RecordUpdate { intent } = &item.parsed.kind {
-            Some(intent)
-        } else {
-            None
-        }
-    }) {
-        return Err(CaptureError::usage_code(
-            format!(
-                "`@{}/{}` is recognized as a record update, but capture execution is not enabled yet; no files were changed",
-                intent.dir,
-                intent.update_stem.as_deref().unwrap_or_default(),
-            ),
-            capture_language::record::RECORD_UPDATE_RESERVED_CODE,
-        ));
-    }
     if parsed_draft.template.is_some() && request.forced_clip.is_some() {
         return Err(CaptureError::usage_code(
             "a template can't capture the clipboard: `%c` would repeat once per row",
@@ -1772,7 +1756,10 @@ pub(super) fn plan_capture_item(
     earlier_items: &[PlannedCaptureItem],
     project_moves: &[ProjectMoveLanding],
 ) -> Result<PlannedCaptureItem, CaptureError> {
-    if matches!(parsed_item.parsed.kind, CaptureKind::RecordNote { .. }) {
+    if matches!(
+        parsed_item.parsed.kind,
+        CaptureKind::RecordNote { .. } | CaptureKind::RecordUpdate { .. }
+    ) {
         return plan_record_note_item(
             request,
             parsed_item,
@@ -1780,6 +1767,7 @@ pub(super) fn plan_capture_item(
             today,
             planner,
             record_context,
+            warnings,
         );
     }
     // Staged `>` transfers run before every other planner: a bare-note
@@ -2627,7 +2615,7 @@ pub(super) fn plan_capture_item(
             unreachable!("record capture is planned by plan_record_note_item")
         }
         CaptureKind::RecordUpdate { .. } => {
-            unreachable!("record update is refused before capture planning")
+            unreachable!("record update is planned by plan_record_note_item")
         }
         CaptureKind::NotePull { .. } => {
             unreachable!("note-pull capture is planned by plan_note_pull_item")

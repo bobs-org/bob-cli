@@ -35,9 +35,32 @@ const RECORDS_CONFIG: &str = r#"records:
         values: url
       rating:
         values: number
+  podcast:
+    dir: podcasts
+    label: Podcast
+    emoji: "🎙️"
+    fields:
+      status:
+        required: true
+        values:
+          to_try: "To try"
+          subscribed: "Subscribed"
+      category:
+        required: true
+      url:
+        values: url
 "#;
 
 const COMPLETE_RAMEN: &str = "Ramen Nagi @eat/\n- status:: liked\n- category:: Ramen\n- location:: Clark\n- visited:: today\n- Spicy tuna was great.";
+
+const NINJA: &str = "---\ntitle: Ninja Sushi\ntype: \"[[restaurant]]\"\ncreated: 2025-01-01 12:00\nstatus: to_try\ncategory: Sushi\nlocation: Clark\n---\n## Notes\n- 2025-01-02: First visit.\n";
+
+fn write_ninja(vault: &Path) -> std::path::PathBuf {
+    fs::create_dir_all(vault.join("eat")).expect("create eat folder");
+    let path = vault.join("eat/ninja_sushi.md");
+    write_file(&path, NINJA);
+    path
+}
 
 fn capture(
     vault: &Path,
@@ -794,22 +817,424 @@ fn capture_parse_reports_existing_record_values_and_update_ranges() {
 }
 
 #[test]
-fn capture_update_execution_stays_fail_closed() {
+fn capture_update_one_line_append_shares_dry_run_and_commit_bytes() {
     let (_temp, vault, config) = complete_fixture();
-    fs::create_dir_all(vault.join("eat")).expect("create eat folder");
-    let path = vault.join("eat/ninja_sushi.md");
-    let original = "---\ntitle: Ninja Sushi\ntype: \"[[restaurant]]\"\nstatus: liked\ncategory: Sushi\nlocation: Clark\n---\n## Notes\n";
-    write_file(&path, original);
+    let path = write_ninja(&vault);
+    let draft = "Went back, still great @eat/ninja_sushi";
+    let dry = capture(&vault, &config, &["--dry-run", "-f", "json", draft])
+        .output()
+        .expect("dry-run one-line update");
+    assert_success(&dry);
+    let dry_json = json_output(&dry);
+    assert_eq!(dry_json["ok"], true);
+    assert_eq!(dry_json["dry_run"], true);
+    assert_eq!(dry_json["kind"], "record_update");
+    assert_eq!(dry_json["placement"], "updated");
+    assert_eq!(dry_json["relative_target"], "eat/ninja_sushi.md");
+    let files = dry_json["note_files"].as_array().expect("note_files");
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0]["action"], "update");
+    assert_eq!(files[0]["path"], "eat/ninja_sushi.md");
+    let markdown = files[0]["markdown"].as_str().expect("markdown");
+    assert!(
+        markdown.contains("- 2026-10-07: Went back, still great"),
+        "dated parent note: {markdown}"
+    );
+    assert!(
+        markdown.contains("- 2025-01-02: First visit."),
+        "keeps existing note: {markdown}"
+    );
+    assert!(
+        markdown.contains("status: to_try"),
+        "untouched field stays: {markdown}"
+    );
+    let status = files[0]["properties"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|property| property["key"] == "status")
+        .unwrap();
+    assert_eq!(status["value"], "to_try");
+    assert_eq!(status["before"], "to_try");
+    assert_eq!(status["before_display"], "To try");
+    assert!(
+        files[0]["lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|line| line["change"] == "added"
+                && line["text"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("Went back, still great")),
+        "block-diff added the note: {}",
+        files[0]["lines"]
+    );
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        NINJA,
+        "dry-run does not write"
+    );
 
-    let output = capture(
-        &vault,
-        &config,
-        &["--dry-run", "-f", "json", "Went back @eat/ninja_sushi"],
-    )
-    .output()
-    .expect("capture update remains reserved at the writer boundary");
+    let committed = capture(&vault, &config, &["-f", "json", draft])
+        .output()
+        .expect("commit one-line update");
+    assert_success(&committed);
+    let committed_json = json_output(&committed);
+    assert_eq!(committed_json["dry_run"], false);
+    assert_eq!(
+        committed_json["note_files"][0]["markdown"],
+        dry_json["note_files"][0]["markdown"]
+    );
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        dry_json["note_files"][0]["markdown"].as_str().unwrap()
+    );
+}
+
+#[test]
+fn capture_update_field_only_and_human_preview() {
+    let (_temp, vault, config) = complete_fixture();
+    write_ninja(&vault);
+    let draft = "@eat/ninja_sushi\n- status:: liked";
+    let dry = capture(&vault, &config, &["--dry-run", "-f", "json", draft])
+        .output()
+        .expect("field-only dry-run");
+    assert_success(&dry);
+    let dry_json = json_output(&dry);
+    let markdown = dry_json["note_files"][0]["markdown"]
+        .as_str()
+        .expect("markdown");
+    assert!(markdown.contains("status: liked"), "{markdown}");
+    assert!(
+        !markdown.contains("2026-10-07"),
+        "field-only adds no note: {markdown}"
+    );
+    let status = dry_json["note_files"][0]["properties"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|property| property["key"] == "status")
+        .unwrap();
+    assert_eq!(status["value"], "liked");
+    assert_eq!(status["before"], "to_try");
+    assert_eq!(status["before_display"], "To try");
+    assert_eq!(status["display"], "Liked");
+
+    let human = capture(&vault, &config, &["--dry-run", draft])
+        .output()
+        .expect("human dry-run update");
+    assert_success(&human);
+    let text = stdout(&human);
+    assert!(
+        text.contains("would update") && text.contains("restaurant"),
+        "human dry-run names update: {text}"
+    );
+    assert!(text.contains("status: liked"), "prints markdown: {text}");
+
+    let committed = capture(&vault, &config, &[draft])
+        .output()
+        .expect("human commit update");
+    assert_success(&committed);
+    let text = stdout(&committed);
+    assert!(
+        text.contains("updated restaurant")
+            && text.contains("eat/ninja_sushi.md"),
+        "human success names update: {text}"
+    );
+}
+
+#[test]
+fn capture_update_undated_podcast_and_missing_notes() {
+    let (_temp, vault, config) = complete_fixture();
+    fs::create_dir_all(vault.join("podcasts")).expect("podcasts folder");
+    write_file(
+        &vault.join("podcasts/talk_python.md"),
+        "---\ntitle: Talk Python\ntype: \"[[podcast]]\"\nstatus: subscribed\ncategory: python\n---\n# Talk Python\n",
+    );
+    let draft = "Listened to the async episode @podcasts/talk_python";
+    let output = capture(&vault, &config, &["-f", "json", draft])
+        .output()
+        .expect("undated podcast update");
+    assert_success(&output);
+    let json = json_output(&output);
+    let markdown = json["note_files"][0]["markdown"]
+        .as_str()
+        .expect("markdown");
+    assert!(
+        markdown.contains("- Listened to the async episode"),
+        "undated note: {markdown}"
+    );
+    assert!(
+        !markdown.contains("2026-10-07"),
+        "podcast notes are undated: {markdown}"
+    );
+    assert!(
+        markdown.contains("## Notes"),
+        "creates missing Notes: {markdown}"
+    );
+}
+
+#[test]
+fn capture_update_preserves_messy_note_bytes() {
+    let (_temp, vault, config) = complete_fixture();
+    let original = include_str!("../../fixtures/records/source/eat/ahrres.md");
+    fs::create_dir_all(vault.join("eat")).expect("eat folder");
+    write_file(&vault.join("eat/ahrres.md"), original);
+    let draft = "Revisit was great @eat/ahrres\n- location:: Clark";
+    let output = capture(&vault, &config, &["-f", "json", draft])
+        .output()
+        .expect("messy note update");
+    assert_success(&output);
+    let json = json_output(&output);
+    let markdown = json["note_files"][0]["markdown"]
+        .as_str()
+        .expect("markdown");
+    let expected = original
+        .replacen("location: \"Westfield\"\n", "location: \"Clark\"\n", 1)
+        .replacen(
+            "## Notes\n\n## Source",
+            "## Notes\n\n- 2026-10-07: Revisit was great\n\n## Source",
+            1,
+        );
+    assert_eq!(markdown, expected);
+    assert_eq!(
+        fs::read_to_string(vault.join("eat/ahrres.md")).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn capture_update_replaces_lists_in_request_order() {
+    let (_temp, vault, config) = complete_fixture();
+    fs::create_dir_all(vault.join("eat")).expect("eat folder");
+    write_file(
+        &vault.join("eat/lists.md"),
+        "---\ntitle: Lists\ntype: \"[[restaurant]]\"\nstatus: liked\ncategory: Ramen\nlocation: Clark\ntags:\n  - old\n  - stale\n---\n## Notes\n",
+    );
+    let draft = "@eat/lists\n- tags:: spicy\n- tags:: lunch";
+    let output = capture(&vault, &config, &["-f", "json", draft])
+        .output()
+        .expect("list replace");
+    assert_success(&output);
+    let json = json_output(&output);
+    let markdown = json["note_files"][0]["markdown"]
+        .as_str()
+        .expect("markdown");
+    assert!(
+        markdown.contains("spicy") && markdown.contains("lunch"),
+        "{markdown}"
+    );
+    assert!(!markdown.contains("old"), "{markdown}");
+    let tags = json["note_files"][0]["properties"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|property| property["key"] == "tags")
+        .unwrap();
+    assert_eq!(tags["value"], serde_json::json!(["spicy", "lunch"]));
+    assert_eq!(tags["before"], serde_json::json!(["old", "stale"]));
+}
+
+#[test]
+fn capture_ordered_same_target_updates_accumulate() {
+    let (_temp, vault, config) = complete_fixture();
+    write_ninja(&vault);
+    let draft = "First revisit @eat/ninja_sushi\n- status:: liked\n\nSecond revisit @eat/ninja_sushi\n- location:: Westfield";
+    let output = capture(&vault, &config, &["-f", "json", draft])
+        .output()
+        .expect("ordered same-target updates");
+    assert_success(&output);
+    let json = json_output(&output);
+    let captures = json["captures"].as_array().expect("captures");
+    assert_eq!(captures.len(), 2);
+    assert_eq!(captures[0]["kind"], "record_update");
+    assert_eq!(captures[1]["kind"], "record_update");
+    let files = json["note_files"].as_array().expect("note_files");
+    assert_eq!(files.len(), 2);
+    let first = files[0]["markdown"].as_str().unwrap();
+    let second = files[1]["markdown"].as_str().unwrap();
+    assert!(first.contains("status: liked"), "{first}");
+    assert!(first.contains("- 2026-10-07: First revisit"), "{first}");
+    assert!(
+        !first.contains("Westfield"),
+        "first item does not see later fields: {first}"
+    );
+    assert!(second.contains("status: liked"), "{second}");
+    assert!(second.contains("Westfield"), "{second}");
+    assert!(
+        second.contains("- 2026-10-07: First revisit")
+            && second.contains("- 2026-10-07: Second revisit"),
+        "second item keeps the first note: {second}"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("eat/ninja_sushi.md")).unwrap(),
+        second
+    );
+}
+
+#[test]
+fn capture_create_then_update_aligns_parse_dry_run_and_commit() {
+    let (_temp, vault, config) = complete_fixture();
+    let draft = format!(
+        "{COMPLETE_RAMEN}\n\nWent back for extra spice @eat/ramen_nagi\n- location:: Westfield"
+    );
+    let parsed = capture_parse(&vault, &config, &draft);
+    assert_success(&parsed);
+    let parsed_json = json_output(&parsed);
+    let items = parsed_json["items"].as_array().expect("parse items");
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["mode"], "record_note");
+    assert_eq!(items[1]["mode"], "record_update");
+    assert_eq!(items[1]["record"]["action"], "update");
+    assert_eq!(items[1]["record"]["stem"], "ramen_nagi");
+    assert_eq!(items[1]["record"]["stem_source"], "existing");
+    let location = items[1]["record"]["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|field| field["key"] == "location")
+        .unwrap();
+    assert_eq!(location["value"], "Westfield");
+    assert_eq!(location["before"], "Clark");
+
+    let dry = capture(&vault, &config, &["--dry-run", "-f", "json", &draft])
+        .output()
+        .expect("create-then-update dry-run");
+    assert_success(&dry);
+    let dry_json = json_output(&dry);
+    let files = dry_json["note_files"].as_array().expect("note_files");
+    assert_eq!(files.len(), 2);
+    assert_eq!(files[0]["action"], "create");
+    assert_eq!(files[1]["action"], "update");
+    let created = files[0]["markdown"].as_str().unwrap();
+    let updated = files[1]["markdown"].as_str().unwrap();
+    assert!(created.contains("location: \"Clark\""), "{created}");
+    assert!(updated.contains("location: \"Westfield\""), "{updated}");
+    assert!(
+        updated.contains("- 2026-10-07: Went back for extra spice"),
+        "{updated}"
+    );
+    assert!(
+        !vault.join("eat").exists(),
+        "dry-run does not create the folder"
+    );
+
+    let committed = capture(&vault, &config, &["-f", "json", &draft])
+        .output()
+        .expect("create-then-update commit");
+    assert_success(&committed);
+    let committed_json = json_output(&committed);
+    assert_eq!(
+        committed_json["note_files"][1]["markdown"],
+        dry_json["note_files"][1]["markdown"]
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("eat/ramen_nagi.md")).unwrap(),
+        updated
+    );
+}
+
+#[test]
+fn capture_mixed_task_create_update_and_later_invalid_writes_nothing() {
+    let (_temp, vault, config) = complete_fixture();
+    write_ninja(&vault);
+    let mixed = format!(
+        "Buy milk\n\n{COMPLETE_RAMEN}\n\nWent back @eat/ninja_sushi\n- status:: liked"
+    );
+    let output = capture(&vault, &config, &["-f", "json", &mixed])
+        .output()
+        .expect("mixed task/create/update");
+    assert_success(&output);
+    let json = json_output(&output);
+    let captures = json["captures"].as_array().expect("captures");
+    assert_eq!(captures.len(), 3);
+    assert_eq!(captures[0]["kind"], "task");
+    assert_eq!(captures[1]["kind"], "record_note");
+    assert_eq!(captures[2]["kind"], "record_update");
+    assert!(vault.join("mac_inbox.md").exists(), "task inbox");
+    assert!(vault.join("eat/ramen_nagi.md").exists(), "created record");
+    assert!(fs::read_to_string(vault.join("eat/ninja_sushi.md"))
+        .unwrap()
+        .contains("status: liked"));
+
+    let (_temp, vault, config) = complete_fixture();
+    write_ninja(&vault);
+    let invalid = "Went back @eat/ninja_sushi\n- status:: liked\n\nBroken @eat/\n- status:: liked";
+    let output = capture(&vault, &config, &["-f", "json", invalid])
+        .output()
+        .expect("later invalid item");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert_eq!(
+        fs::read_to_string(vault.join("eat/ninja_sushi.md")).unwrap(),
+        NINJA,
+        "later invalid item writes nothing"
+    );
+}
+
+#[test]
+fn capture_noop_update_does_not_rewrite() {
+    let (_temp, vault, config) = complete_fixture();
+    let path = write_ninja(&vault);
+    let before = fs::metadata(&path).unwrap();
+    let output = capture(&vault, &config, &["-f", "json", "@eat/ninja_sushi"])
+        .output()
+        .expect("no-op update");
+    assert_success(&output);
+    let json = json_output(&output);
+    assert_eq!(json["kind"], "record_update");
+    assert_eq!(json["note_files"][0]["action"], "update");
+    assert_eq!(json["note_files"][0]["markdown"].as_str().unwrap(), NINJA);
+    assert_eq!(fs::read_to_string(&path).unwrap(), NINJA);
+    let after = fs::metadata(&path).unwrap();
+    assert_eq!(
+        before.modified().unwrap(),
+        after.modified().unwrap(),
+        "no-op does not rewrite the note"
+    );
+}
+
+#[test]
+fn capture_update_empty_required_and_historical_warning() {
+    let (_temp, vault, config) = complete_fixture();
+    fs::create_dir_all(vault.join("eat")).expect("eat folder");
+    write_file(
+        &vault.join("eat/legacy.md"),
+        "---\ntitle: Legacy\ntype: \"[[restaurant]]\"\nstatus: liked\n---\n## Notes\n",
+    );
+    let empty_required = "@eat/legacy\n- status::";
+    let output = capture(&vault, &config, &["-f", "json", empty_required])
+        .output()
+        .expect("empty required update");
     assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
     let json = json_output(&output);
-    assert_eq!(json["code"], "record_update_reserved");
-    assert_eq!(fs::read_to_string(path).unwrap(), original);
+    assert!(
+        json["missing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|key| key == "status"),
+        "{json}"
+    );
+
+    let warning_draft = "Still good @eat/legacy";
+    let output = capture(&vault, &config, &["-f", "json", warning_draft])
+        .output()
+        .expect("historical warning update");
+    assert_success(&output);
+    let json = json_output(&output);
+    let warnings = json["warnings"].as_array().expect("warnings");
+    assert!(
+        warnings.iter().any(|warning| warning
+            .as_str()
+            .unwrap_or_default()
+            .contains("bob records check")),
+        "forwards historical warning: {warnings:?}"
+    );
+    assert!(
+        fs::read_to_string(vault.join("eat/legacy.md"))
+            .unwrap()
+            .contains("- 2026-10-07: Still good"),
+        "warning does not block the update"
+    );
 }

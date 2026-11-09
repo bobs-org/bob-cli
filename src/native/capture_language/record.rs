@@ -30,8 +30,6 @@ use super::model::*;
 use crate::native::capture_links::is_protected_markup_range;
 use crate::native::records::schema::RecordsConfig;
 
-/// Strict execution refusal while record updates have not reached the writer.
-pub(crate) const RECORD_UPDATE_RESERVED_CODE: &str = "record_update_reserved";
 /// Strict refusal for task markers outside opaque field values.
 pub(crate) const RECORD_MARKER_UNSUPPORTED_CODE: &str =
     "record_marker_unsupported";

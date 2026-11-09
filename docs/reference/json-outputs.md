@@ -93,8 +93,9 @@ bob capture-parse -f json -- 'Ramen Nagi @eat/'
 `@eat/ninja_sushi` parses as `record_update` / `action: "update"`, with
 `stem_source: "existing"` and stored title. Fields include effective
 `value`/`display` and prior `before`/`before_display`; `missing` lists supplied
-required fields with empty values. Older defects warn for `bob records check`;
-update writes still fail with `record_update_reserved`.
+required fields with empty values. Older defects warn for `bob records check`.
+Use `kind` `"record_update"`, `placement` `"updated"`, and
+`note_files[]` `action: "update"` with `before` and `lines`.
 
 ```bash
 bob capture -f json --dry-run -- "$(printf '%s\n' 'Ramen Nagi @eat/' '- status:: liked' '- category:: Ramen')"
@@ -102,6 +103,14 @@ bob capture -f json --dry-run -- "$(printf '%s\n' 'Ramen Nagi @eat/' '- status::
 
 ```text { .no-copy title="Output (selected fields)" }
 {"ok":true,"dry_run":true,"kind":"record_note","placement":"created","relative_target":"eat/ramen_nagi.md","note_files":[{"path":"eat/ramen_nagi.md","action":"create","record_type":"restaurant","properties":[{"key":"status","label":"Status","value":"liked","display":"Liked","source":"typed"}],"body":"","markdown":"---\n…\n"}]}
+```
+
+```bash
+bob capture -f json --dry-run -- "$(printf '%s\n' 'Went back, still great @eat/ninja_sushi' '- status:: liked')"
+```
+
+```text { .no-copy title="Output (selected fields)" }
+{"ok":true,"dry_run":true,"kind":"record_update","placement":"updated","relative_target":"eat/ninja_sushi.md","note_files":[{"path":"eat/ninja_sushi.md","action":"update","record_type":"restaurant","properties":[{"key":"status","label":"Status","value":"liked","display":"Liked","source":"typed","before":"to_try","before_display":"To try"}],"body":"","markdown":"---\n…\n","lines":[{"text":"- 2026-10-07: Went back, still great","depth":0,"change":"added"}]}]}
 ```
 
 Each `note_files[].properties[]` entry separates canonical JSON `value` from

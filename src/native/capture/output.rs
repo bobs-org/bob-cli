@@ -950,6 +950,8 @@ pub(super) struct NoteFileJson {
     pub(super) properties: Vec<NoteFilePropertyJson>,
     pub(super) body: String,
     pub(super) markdown: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) lines: Vec<BlockLineJson>,
 }
 
 /// One schema property on a planned record file.
@@ -963,11 +965,16 @@ pub(super) struct NoteFilePropertyJson {
     pub(super) display: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) source: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) before: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) before_display: Option<String>,
 }
 
-/// Human-facing record create summary plus the `note_files` row.
+/// Human-facing record create/update summary plus the `note_files` row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RecordNoteSummary {
+    pub(super) action: &'static str,
     pub(super) emoji: Option<String>,
     pub(super) label: String,
     pub(super) path: String,
@@ -3902,7 +3909,7 @@ pub(super) fn print_human_item_success(
         print_consumed_links(result, &styler);
         return;
     }
-    if result.kind == "record_note"
+    if matches!(result.kind, "record_note" | "record_update")
         && let Some(record) = result.record_note.as_ref()
     {
         print_human_record_note_success(
@@ -7152,21 +7159,44 @@ fn print_human_record_note_success(
         .map(|emoji| format!("{emoji} "))
         .unwrap_or_default();
     let kind = record.label.to_lowercase();
+    let updating = record.action == "update";
     if result.dry_run {
-        println!(
-            "{prefix} would create  {ordinal}{emoji}new {kind}  {target_label}"
-        );
+        if updating {
+            println!(
+                "{prefix} would update  {ordinal}{emoji}{kind}  {target_label}"
+            );
+        } else {
+            println!(
+                "{prefix} would create  {ordinal}{emoji}new {kind}  {target_label}"
+            );
+        }
         print!("{}", record.markdown);
         if !record.markdown.ends_with('\n') {
             println!();
         }
         return;
     }
-    println!("{prefix} {emoji}new {kind}  {ordinal}{target_label}");
+    if updating {
+        println!("{prefix} {emoji}updated {kind}  {ordinal}{target_label}");
+    } else {
+        println!("{prefix} {emoji}new {kind}  {ordinal}{target_label}");
+    }
     for property in &record.properties {
         let Some(display) = property.display.as_deref() else {
             continue;
         };
+        if updating
+            && property.before_display.as_deref() == Some(display)
+            && property.source.is_none()
+        {
+            continue;
+        }
+        if let Some(before) = property.before_display.as_deref()
+            && before != display
+        {
+            println!("  {}  {before} → {display}", styler.dim(&property.label));
+            continue;
+        }
         println!("  {}  {}", styler.dim(&property.label), display);
     }
     if record.notes > 0 {

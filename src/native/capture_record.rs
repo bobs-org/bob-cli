@@ -7,7 +7,7 @@
 
 use serde_json::json;
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     ops::Range,
     path::{Path, PathBuf},
 };
@@ -22,6 +22,7 @@ use super::{
         self, FieldInputState, PlannedRecordProperty, PlannedUpdateProperty,
         RecordCatalog, RecordDiagnostic, RecordFieldInput, RecordNoteInput,
         RecordPlanError, RecordPlanErrorCode, RecordStemSource, RecordType,
+        ResolvedUpdateTarget,
     },
 };
 
@@ -186,6 +187,7 @@ pub(crate) fn resolve_record_intents_with_catalog(
     let timezone = super::day_timezone().ok().flatten();
     let today = now.date();
     let mut reserved_paths = Vec::new();
+    let mut overlay = HashMap::new();
     let mut entries = Vec::with_capacity(intents.len());
 
     for (index, intent) in intents {
@@ -213,6 +215,17 @@ pub(crate) fn resolve_record_intents_with_catalog(
                 match records::plan_create(request, catalog) {
                     Ok(plan) => {
                         reserved_paths.push(plan.path.clone());
+                        if let Some(markdown) = plan.markdown.as_ref() {
+                            overlay.insert(
+                                overlay_key(&intent.dir, &plan.stem),
+                                OverlaySnapshot {
+                                    path: plan.path.clone(),
+                                    stem: plan.stem.clone(),
+                                    title: plan.title.clone(),
+                                    markdown: markdown.clone(),
+                                },
+                            );
+                        }
                         entries.push(RecordParseEntry {
                             index: *index,
                             intent: intent.clone(),
@@ -270,22 +283,26 @@ pub(crate) fn resolve_record_intents_with_catalog(
             }
             super::capture_language::record::RecordAction::Update => {
                 let stem = intent.update_stem.as_deref().unwrap_or_default();
-                let target = match records::resolve_update_target(
+                let resolved = match resolve_update_snapshot(
                     config,
                     catalog,
-                    &record_type.id,
+                    record_type,
+                    vault_root,
+                    &overlay,
                     stem,
                 ) {
-                    Ok(target) => target,
+                    Ok(resolved) => resolved,
                     Err(error) => {
                         entries.push(RecordParseEntry {
                             index: *index,
                             intent: intent.clone(),
                             action: RecordParseAction::Update,
                             record_type: record_type.clone(),
-                            title: None,
-                            path: None,
-                            stem: Some(stem.to_owned()),
+                            title: error.title,
+                            path: error.path,
+                            stem: Some(
+                                error.stem.unwrap_or_else(|| stem.to_owned()),
+                            ),
                             stem_source: Some(RecordStemSource::Existing),
                             properties: Vec::new(),
                             update_properties: Vec::new(),
@@ -293,7 +310,7 @@ pub(crate) fn resolve_record_intents_with_catalog(
                             invalid: Vec::new(),
                             warnings: Vec::new(),
                             plan_issue: Some(RecordParseIssue {
-                                code: error.code.diagnostic_code(),
+                                code: error.code,
                                 message: error.message,
                                 range: intent
                                     .stem_range
@@ -304,64 +321,43 @@ pub(crate) fn resolve_record_intents_with_catalog(
                         continue;
                     }
                 };
-                let original = match std::fs::read_to_string(
-                    vault_root.join(&target.path),
-                ) {
-                    Ok(original) => original,
-                    Err(error) => {
+                match records::plan_update(records::PlanUpdateRequest {
+                    target: &resolved.target,
+                    original: &resolved.original,
+                    fields: &field_inputs,
+                    notes: &notes,
+                    today,
+                }) {
+                    Ok(plan) => {
+                        if let Some(markdown) = plan.markdown.as_ref() {
+                            overlay.insert(
+                                overlay_key(&intent.dir, &plan.stem),
+                                OverlaySnapshot {
+                                    path: plan.path.clone(),
+                                    stem: plan.stem.clone(),
+                                    title: plan.title.clone(),
+                                    markdown: markdown.clone(),
+                                },
+                            );
+                        }
                         entries.push(RecordParseEntry {
                             index: *index,
                             intent: intent.clone(),
                             action: RecordParseAction::Update,
                             record_type: record_type.clone(),
-                            title: Some(target.title.clone()),
-                            path: Some(target.path.clone()),
-                            stem: Some(target.stem.clone()),
+                            title: Some(plan.title.clone()),
+                            path: Some(plan.path),
+                            stem: Some(plan.stem),
                             stem_source: Some(RecordStemSource::Existing),
                             properties: Vec::new(),
-                            update_properties: Vec::new(),
-                            missing: Vec::new(),
-                            invalid: Vec::new(),
-                            warnings: Vec::new(),
-                            plan_issue: Some(RecordParseIssue {
-                                code: "record_invalid_value",
-                                message: format!(
-                                    "cannot read existing record {}: {error}",
-                                    target.path.display()
-                                ),
-                                range: intent
-                                    .stem_range
-                                    .map(|(start, end)| start..end),
-                            }),
+                            update_properties: plan.properties,
+                            missing: plan.missing,
+                            invalid: plan.invalid,
+                            warnings: plan.warnings,
+                            plan_issue: None,
                             near_values,
                         });
-                        continue;
                     }
-                };
-                match records::plan_update(records::PlanUpdateRequest {
-                    target: &target,
-                    original: &original,
-                    fields: &field_inputs,
-                    notes: &notes,
-                    today,
-                }) {
-                    Ok(plan) => entries.push(RecordParseEntry {
-                        index: *index,
-                        intent: intent.clone(),
-                        action: RecordParseAction::Update,
-                        record_type: record_type.clone(),
-                        title: Some(plan.title.clone()),
-                        path: Some(plan.path),
-                        stem: Some(plan.stem),
-                        stem_source: Some(RecordStemSource::Existing),
-                        properties: Vec::new(),
-                        update_properties: plan.properties,
-                        missing: plan.missing,
-                        invalid: plan.invalid,
-                        warnings: plan.warnings,
-                        plan_issue: None,
-                        near_values,
-                    }),
                     Err(error) => {
                         let range = error
                             .field
@@ -379,9 +375,9 @@ pub(crate) fn resolve_record_intents_with_catalog(
                             intent: intent.clone(),
                             action: RecordParseAction::Update,
                             record_type: record_type.clone(),
-                            title: Some(target.title),
-                            path: Some(target.path),
-                            stem: Some(target.stem),
+                            title: Some(resolved.target.title),
+                            path: Some(resolved.target.path),
+                            stem: Some(resolved.target.stem),
                             stem_source: Some(RecordStemSource::Existing),
                             properties: Vec::new(),
                             update_properties: Vec::new(),
@@ -401,6 +397,82 @@ pub(crate) fn resolve_record_intents_with_catalog(
         }
     }
     entries
+}
+
+#[derive(Clone)]
+struct OverlaySnapshot {
+    path: PathBuf,
+    stem: String,
+    title: String,
+    markdown: String,
+}
+
+struct OverlayResolveError {
+    code: &'static str,
+    message: String,
+    title: Option<String>,
+    path: Option<PathBuf>,
+    stem: Option<String>,
+}
+
+struct OverlayResolved {
+    target: ResolvedUpdateTarget,
+    original: String,
+}
+
+fn overlay_key(dir: &str, stem: &str) -> String {
+    format!("{}/{}", dir.to_lowercase(), stem.to_lowercase())
+}
+
+fn resolve_update_snapshot(
+    config: &records::RecordsConfig,
+    catalog: &mut RecordCatalog,
+    record_type: &RecordType,
+    vault_root: &Path,
+    overlay: &HashMap<String, OverlaySnapshot>,
+    stem: &str,
+) -> Result<OverlayResolved, OverlayResolveError> {
+    if let Some(snapshot) = overlay.get(&overlay_key(&record_type.dir, stem)) {
+        return Ok(OverlayResolved {
+            target: ResolvedUpdateTarget {
+                record_type: record_type.clone(),
+                path: snapshot.path.clone(),
+                stem: snapshot.stem.clone(),
+                title: snapshot.title.clone(),
+            },
+            original: snapshot.markdown.clone(),
+        });
+    }
+    let target = match records::resolve_update_target(
+        config,
+        catalog,
+        &record_type.id,
+        stem,
+    ) {
+        Ok(target) => target,
+        Err(error) => {
+            return Err(OverlayResolveError {
+                code: error.code.diagnostic_code(),
+                message: error.message,
+                title: None,
+                path: None,
+                stem: Some(stem.to_owned()),
+            });
+        }
+    };
+    match std::fs::read_to_string(vault_root.join(&target.path)) {
+        Ok(original) => Ok(OverlayResolved { target, original }),
+        Err(error) => Err(OverlayResolveError {
+            code: "record_invalid_value",
+            message: format!(
+                "cannot read existing record {}: {error}",
+                target.path.display()
+            ),
+            title: Some(target.title),
+            path: Some(target.path),
+            stem: Some(target.stem),
+        }),
+    }
 }
 
 fn collect_near_value_hints(

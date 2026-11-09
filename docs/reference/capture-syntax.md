@@ -208,8 +208,8 @@ Ramen Nagi @eat/
 bob capture --dry-run -- "$(printf '%s\n' 'Ramen Nagi @eat/' '- status:: liked' '- category:: Ramen')"
 ```
 
-`@dir/stem` parses as `record_update`; the writer still refuses updates
-(`record_update_reserved`).
+`@dir/stem` parses as `record_update` and `bob capture` writes the planned
+bytes through the existing preimage-checked edit path.
 
 ### `@@route` {#global-route}
 
