@@ -46,9 +46,11 @@ impl CapturedInputs {
 /// Source paths come from the existing source walker (which excludes
 /// `done/`); repair paths come from the wider link-repair walker (which
 /// includes `done/`). Snapshots are deduplicated by absolute path. Absent
-/// archive destinations and Tasks settings are captured as optional inputs so
-/// a file appearing underfoot invalidates the plan instead of being
-/// overwritten.
+/// canonical archive destinations (`done/<parent>/<stem>_done.md`) and Tasks
+/// settings are captured as optional inputs so a file appearing underfoot
+/// invalidates the plan instead of being overwritten. The pair index is built
+/// from this census; a later rename phase reuses the already-captured
+/// canonical slot.
 pub(super) fn capture_inputs(vault: &Path) -> io::Result<CapturedInputs> {
     let vault_canonical = vault
         .canonicalize()

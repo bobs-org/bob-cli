@@ -13,6 +13,7 @@ use std::{
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 mod execution;
+mod health;
 mod plan;
 mod snapshot;
 mod unit;

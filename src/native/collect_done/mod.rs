@@ -16,6 +16,7 @@ use super::{
 mod archive;
 mod command;
 mod git;
+mod health;
 mod link_repair;
 pub(crate) mod pair;
 mod plan;

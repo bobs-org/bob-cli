@@ -129,6 +129,8 @@ impl ResolveMovedNote for crate::native::vault_links::NoteIndex {
 pub(super) fn apply_link_repairs_to_plan(
     captured: &BTreeMap<PathBuf, String>,
     files: &mut [FilePlan],
+    pairs: &ArchivePairIndex,
+    blocked_sources: &BTreeSet<PathBuf>,
 ) -> io::Result<Vec<LinkRepairPlan>> {
     let mut planned_contents = captured.clone();
     for file in files.iter() {
@@ -149,8 +151,13 @@ pub(super) fn apply_link_repairs_to_plan(
     let note_paths: BTreeSet<PathBuf> =
         planned_contents.keys().cloned().collect();
 
-    let moved_targets =
-        moved_block_targets(&note_paths, &planned_contents, files)?;
+    let moved_targets = moved_block_targets(
+        &note_paths,
+        &planned_contents,
+        files,
+        pairs,
+        blocked_sources,
+    )?;
     if moved_targets.is_empty() {
         return Ok(Vec::new());
     }
@@ -173,10 +180,11 @@ pub(super) fn apply_link_repairs_to_plan(
         if let Some((source_target, stayed, stayed_headings)) =
             archive_stayed_block_ids(
                 &relative_path,
-                &contents,
-                &note_index,
+                pairs,
                 &planned_contents,
                 &moved_targets,
+                blocked_sources,
+                files,
             )?
         {
             let pathless = repair_pathless_archive_links(
@@ -280,37 +288,41 @@ pub(super) fn moved_block_targets(
     note_paths: &BTreeSet<PathBuf>,
     planned_contents: &BTreeMap<PathBuf, String>,
     files: &[FilePlan],
+    pairs: &ArchivePairIndex,
+    blocked_sources: &BTreeSet<PathBuf>,
 ) -> io::Result<MovedBlockTargets> {
-    let mut targets = archived_block_targets(note_paths, planned_contents)?;
+    let mut targets = archived_block_targets(
+        note_paths,
+        planned_contents,
+        pairs,
+        blocked_sources,
+    )?;
     overlay_current_run_block_targets(files, &mut targets)?;
     Ok(targets)
 }
 pub(super) fn archived_block_targets(
     note_paths: &BTreeSet<PathBuf>,
     planned_contents: &BTreeMap<PathBuf, String>,
+    pairs: &ArchivePairIndex,
+    blocked_sources: &BTreeSet<PathBuf>,
 ) -> io::Result<MovedBlockTargets> {
     let mut targets = BTreeMap::new();
-    let note_index = NoteIndex::from_paths(note_paths.iter().cloned());
     for archive_relative_path in note_paths {
-        let Some(source_relative_path) =
-            source_relative_path_from_archive(archive_relative_path)
+        let ArchiveLookup::Bound(bound) =
+            pairs.for_archive(archive_relative_path)
         else {
             continue;
         };
+        if blocked_sources.contains(&bound.source) {
+            continue;
+        }
+        let source_relative_path = bound.source;
         if !note_paths.contains(&source_relative_path) {
             continue;
         }
 
         let archive_contents =
             note_contents(archive_relative_path, planned_contents)?;
-        if !archive_parent_matches_source(
-            &archive_contents,
-            archive_relative_path,
-            &source_relative_path,
-            &note_index,
-        ) {
-            continue;
-        }
 
         let source_contents =
             note_contents(&source_relative_path, planned_contents)?;
@@ -423,20 +435,6 @@ pub(crate) fn source_relative_path_from_archive(
     is_normal_relative_path(&source_relative_path)
         .then_some(source_relative_path)
 }
-pub(super) fn archive_parent_matches_source(
-    archive_contents: &str,
-    archive_relative_path: &Path,
-    source_relative_path: &Path,
-    note_index: &NoteIndex,
-) -> bool {
-    let Some(parent_target) = archive_parent_target(archive_contents) else {
-        return false;
-    };
-    note_index
-        .resolve(archive_relative_path, &parent_target)
-        .as_deref()
-        == Some(source_relative_path)
-}
 pub(crate) fn archive_parent_target(contents: &str) -> Option<String> {
     let lines: Vec<&str> = contents.split_inclusive('\n').collect();
     if lines
@@ -538,24 +536,37 @@ pub(crate) fn repair_links_in_note_with<R: ResolveMovedNote>(
 /// `current_path` is an archive note whose parent source exists.
 pub(super) fn archive_stayed_block_ids(
     current_path: &Path,
-    current_contents: &str,
-    note_index: &NoteIndex,
+    pairs: &ArchivePairIndex,
     planned_contents: &BTreeMap<PathBuf, String>,
     moved_targets: &MovedBlockTargets,
+    blocked_sources: &BTreeSet<PathBuf>,
+    files: &[FilePlan],
 ) -> io::Result<Option<(String, BTreeSet<String>, BTreeSet<String>)>> {
-    let Some(source_relative_path) =
-        source_relative_path_from_archive(current_path)
-    else {
-        return Ok(None);
+    let source_relative_path = match pairs.for_archive(current_path) {
+        ArchiveLookup::Bound(bound) => {
+            if blocked_sources.contains(&bound.source) {
+                return Ok(None);
+            }
+            bound.source
+        }
+        ArchiveLookup::Refused { .. } => return Ok(None),
+        ArchiveLookup::Orphan { .. } => {
+            // Newly created archives are absent from the captured pair
+            // census; the current FilePlan is the association.
+            match files
+                .iter()
+                .find(|file| file.relative_archive_path == current_path)
+            {
+                Some(file)
+                    if !blocked_sources
+                        .contains(&file.relative_source_path) =>
+                {
+                    file.relative_source_path.clone()
+                }
+                _ => return Ok(None),
+            }
+        }
     };
-    if !archive_parent_matches_source(
-        current_contents,
-        current_path,
-        &source_relative_path,
-        note_index,
-    ) {
-        return Ok(None);
-    }
     let source_contents =
         note_contents(&source_relative_path, planned_contents)?;
     let moved: BTreeSet<String> = moved_targets

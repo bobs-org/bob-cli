@@ -410,10 +410,13 @@ fn invalid_destination_anchor_refuses_before_any_write() {
         format!("{archive}- [x] duplicate #task ^a1-1\n"),
     );
 
+    let pairs = ArchivePairIndex::from_contents(&captured.contents);
     let error = super::super::plan::verify_moved_identities(
         &captured,
         &overlay,
         &planned.collection.files,
+        &pairs,
+        &BTreeSet::new(),
     )
     .expect_err("duplicate destination anchor must be rejected");
     assert!(

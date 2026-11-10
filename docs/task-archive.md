@@ -48,9 +48,9 @@ Finished projects are skipped entirely. A project is finished when its `^prj`
 line is closed (`[x]` / `[X]` / `[-]`) or its frontmatter `status` is
 terminal (`done` or `canceled`). Remaining closed tasks on that note stay put.
 
-A note with no `type:` frontmatter that already owns its paired archive
-(today `obsidian.md` → `done/obsidian_done.md`) stays eligible and is reported
-as grandfathered. Every other note is skipped and counted by reason:
+A note with no `type:` frontmatter that already owns a bound archive stays
+eligible and is reported as grandfathered. The bound archive may be
+noncanonical. Every other note is skipped and counted by reason:
 
 | Reason | When |
 | --- | --- |
@@ -92,13 +92,27 @@ run exits 1 with reason `duplicate_block_id` so nightly flags it. A closed
 counted under skips as `open_parent`. A closed `^prj` line is skipped as `prj`
 and is never moved; siblings still evaluate on their own.
 
-The human scan report always prints `holds`, `skips`, and `grandfathered`
-after the file counts.
+The human scan report always prints `holds`, `skips`, `grandfathered`, and
+`diagnostics` after the file counts.
 
 ## Destination and pairing
 
-The archive path is `done/<source-parent>/<stem>_done.md`. A new archive
-opens with:
+Pairing is metadata-first. One shared pair index is built from the captured
+census before eligibility filtering. Reciprocal `done_tasks` / `parent`
+frontmatter wins even when the archive filename is old; unique filename
+fallback applies only when no metadata contradicts it. A bound existing
+archive is the destination, including a noncanonical name; this phase never
+creates a second archive for that source. The canonical path
+`done/<source-parent>/<stem>_done.md` is still captured when absent so a later
+rename phase can install it.
+
+A binding conflict (contradictory or ambiguous metadata, two archives claiming
+one source, two sources claiming one archive, or an occupied canonical
+destination) skips writes and inferred historical link repairs for the
+affected pair. Unrelated unambiguous work still proceeds, and the run exits 1
+with reason `archive_binding_conflict`.
+
+A new archive opens with:
 
 ```yaml
 ---
@@ -225,8 +239,37 @@ to stderr. Usage errors are plain stderr with exit 2. The schema is
 | `skips` | Reason-to-count object |
 | `grandfathered` | Path list |
 | `link_repairs` | `files` (affected paths), `link_count`, `dependency_metadata_count` |
+| `diagnostics` | See below |
 | `git` | See below |
 | `exit` | See below |
+
+`diagnostics` is present on every captured run, including preview, no-op, and
+plan refusal (`scan` may then be `null` and `moves` empty). Capture failures
+set `complete` to `false` so an empty finding list is not a clean census.
+
+| Field | Meaning |
+| --- | --- |
+| `complete` | Whether the census finished |
+| `counts` | Every diagnostic code mapped to its finding count, including zeros |
+| `findings` | Deterministic list of `{code, path, line, block_id, related}` |
+
+`line` is a one-based content line or `null`. `block_id` is the trailing
+anchor when one exists. `related` lists competing claimant paths. Codes:
+
+| Code | Meaning |
+| --- | --- |
+| `archive_orphan` | An archive has no resolvable source |
+| `archive_duplicate` | Two or more archives claim one source; `related` lists the claimants. Writes and inferred historical repairs for that source skip |
+| `open_task_in_archive` | A content `#task` in `done/` is open under captured Tasks settings |
+| `duplicate_block_id_in_done` | An anchor occurs more than once in one archive note |
+| `undated_closed_row` | An eligible source's closed root has no valid `ref_tasks::close_date` (`YYYY-MM-DD` from `[completion::]`, `[cancelled::]`, `✅`/`✔`, or `❌`/`✖`). Counted independently of the batch threshold |
+| `archive_binding_conflict` | Other unsafe bindings (contradictory or ambiguous metadata, competing sources, one-sided rename, occupied destination) |
+
+Health warnings (`archive_orphan`, `open_task_in_archive`,
+`duplicate_block_id_in_done`, `undated_closed_row`) do not change exit status.
+`archive_duplicate` and `archive_binding_conflict` skip writes for the
+affected source and set `exit.reason` to `archive_binding_conflict` with exit
+1; unrelated unambiguous work still proceeds.
 
 In a move, `roots` lists every selected root as `{line, block_id}` (original
 one-based source line, nullable root id); `replays` is the subset of those that
@@ -254,7 +297,7 @@ vault-relative with `/` separators.
 | --- | --- |
 | `code` | The process exit code |
 | `outcome` | `preview`, `noop`, `applied`, or `failed` |
-| `reason` | `null` on success; otherwise `lock_timeout`, `lock_error`, `plan_failed`, `plan_refused`, `retry_exhausted`, `write_failed`, `partial_apply`, `git_failed`, or `duplicate_block_id` (moves applied, exit 1) |
+| `reason` | `null` on success; otherwise `lock_timeout`, `lock_error`, `plan_failed`, `plan_refused`, `retry_exhausted`, `write_failed`, `partial_apply`, `git_failed`, `duplicate_block_id` (moves applied, exit 1), or `archive_binding_conflict` (unrelated unambiguous work may still apply, exit 1) |
 | `message` | Human-readable failure detail, else `null` |
 | `applied_paths` | Vault-relative paths actually installed, in apply order |
 | `deferred_paths` | Planned paths not installed (partial apply, retry exhaustion) |

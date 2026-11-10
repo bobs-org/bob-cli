@@ -5,6 +5,7 @@ use super::super::task_status_hooks::{parse_tasks, task_group_classification};
 use super::super::task_status_hooks_write::{
     planned_write, InputSnapshot, PlannedWrite, WritePlan,
 };
+use super::health::{collect_diagnostics, Diagnostics};
 use super::snapshot::{capture_error, capture_inputs, CapturedInputs};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -241,12 +242,12 @@ fn is_daily_source(
         || is_captured_daily(snapshot, captured)
 }
 
-enum SourceEligibility {
+pub(super) enum SourceEligibility {
     Eligible { grandfathered: bool },
     Skip(&'static str),
 }
 
-fn classify_source(
+pub(super) fn classify_source(
     relative_path: &Path,
     snapshot: &InputSnapshot,
     contents: &str,
@@ -380,13 +381,37 @@ pub(super) fn build_write_plan(
 pub(super) struct PlannedArchive {
     pub(super) collection: CollectionPlan,
     pub(super) write_plan: WritePlan,
+    pub(super) diagnostics: Diagnostics,
 }
 
 pub(super) fn plan_from_captured(
     captured: &CapturedInputs,
     threshold: usize,
 ) -> io::Result<PlannedArchive> {
+    let pairs = ArchivePairIndex::from_contents(&captured.contents);
+    let diagnostics = collect_diagnostics(captured, &pairs);
+    plan_from_captured_with(captured, &pairs, diagnostics, threshold)
+}
+
+fn plan_from_captured_with(
+    captured: &CapturedInputs,
+    pairs: &ArchivePairIndex,
+    diagnostics: Diagnostics,
+    threshold: usize,
+) -> io::Result<PlannedArchive> {
+    let result =
+        plan_from_pairs(captured, pairs, diagnostics.clone(), threshold);
+    result.map_err(|error| attach_diagnostics(error, diagnostics))
+}
+
+fn plan_from_pairs(
+    captured: &CapturedInputs,
+    pairs: &ArchivePairIndex,
+    diagnostics: Diagnostics,
+    threshold: usize,
+) -> io::Result<PlannedArchive> {
     validate_dependency_identity_index(&captured.contents)?;
+    let blocked_sources = diagnostics.write_blocked_sources();
     let mut files = Vec::new();
     let mut holds = Vec::new();
     let mut skip_counts = BTreeMap::new();
@@ -396,11 +421,22 @@ pub(super) fn plan_from_captured(
         let snapshot = snapshot_for_path(&captured.snapshots, path)?;
         let relative_source_path =
             vault_relative_path(&captured.vault, path, "note")?;
+        if blocked_sources.contains(&relative_source_path) {
+            continue;
+        }
         let contents = captured.contents(&relative_source_path)?.to_string();
-        let relative_archive_path =
-            archive_relative_path(&relative_source_path)?;
-        let archive_exists =
-            captured.contents.contains_key(&relative_archive_path);
+        let (relative_archive_path, archive_exists) =
+            match pairs.for_source(&relative_source_path) {
+                SourceLookup::Bound(bound) => (bound.archive, true),
+                SourceLookup::Missing { canonical_archive } => {
+                    let path = match canonical_archive {
+                        Some(path) => path,
+                        None => archive_relative_path(&relative_source_path)?,
+                    };
+                    (path, false)
+                }
+                SourceLookup::Refused { .. } => continue,
+            };
         match classify_source(
             &relative_source_path,
             snapshot,
@@ -557,10 +593,20 @@ pub(super) fn plan_from_captured(
         });
     }
 
-    let mut link_repairs =
-        apply_link_repairs_to_plan(&captured.contents, &mut files)?;
+    let mut link_repairs = apply_link_repairs_to_plan(
+        &captured.contents,
+        &mut files,
+        pairs,
+        &blocked_sources,
+    )?;
     apply_same_write_grouping(captured, &mut files, &mut link_repairs)?;
-    verify_planned_postimages(captured, &files, &link_repairs)?;
+    verify_planned_postimages(
+        captured,
+        &files,
+        &link_repairs,
+        pairs,
+        &blocked_sources,
+    )?;
     let write_plan = write_plan_for(captured, &files, &link_repairs)?;
     grandfathered.sort();
     holds.sort_by(|left, right| {
@@ -579,10 +625,11 @@ pub(super) fn plan_from_captured(
             grandfathered,
         },
         write_plan,
+        diagnostics,
     })
 }
 
-fn snapshot_for_path<'a>(
+pub(super) fn snapshot_for_path<'a>(
     snapshots: &'a [InputSnapshot],
     path: &Path,
 ) -> io::Result<&'a InputSnapshot> {
@@ -859,6 +906,8 @@ fn verify_planned_postimages(
     captured: &CapturedInputs,
     files: &[FilePlan],
     link_repairs: &[LinkRepairPlan],
+    pairs: &ArchivePairIndex,
+    blocked_sources: &BTreeSet<PathBuf>,
 ) -> io::Result<()> {
     let mut overlay = captured.contents.clone();
     for file in files {
@@ -878,7 +927,7 @@ fn verify_planned_postimages(
     for repair in link_repairs {
         overlay.insert(repair.relative_path.clone(), repair.contents.clone());
     }
-    verify_moved_identities(captured, &overlay, files)?;
+    verify_moved_identities(captured, &overlay, files, pairs, blocked_sources)?;
     verify_archive_postimages(captured, &overlay, files, link_repairs)?;
     Ok(())
 }
@@ -887,6 +936,8 @@ pub(super) fn verify_moved_identities(
     captured: &CapturedInputs,
     overlay: &BTreeMap<PathBuf, String>,
     files: &[FilePlan],
+    pairs: &ArchivePairIndex,
+    blocked_sources: &BTreeSet<PathBuf>,
 ) -> io::Result<()> {
     let mut census: BTreeMap<PathBuf, BTreeMap<String, Vec<usize>>> =
         BTreeMap::new();
@@ -894,7 +945,13 @@ pub(super) fn verify_moved_identities(
         census.insert(path.clone(), anchor_id_lines(contents));
     }
     let note_paths: BTreeSet<PathBuf> = overlay.keys().cloned().collect();
-    let targets = moved_block_targets(&note_paths, overlay, files)?;
+    let targets = moved_block_targets(
+        &note_paths,
+        overlay,
+        files,
+        pairs,
+        blocked_sources,
+    )?;
     for file in files {
         if file.task_count == 0 {
             continue;
@@ -1075,9 +1132,48 @@ impl std::fmt::Display for PlanRefusal {
 impl std::error::Error for PlanRefusal {}
 
 pub(super) fn is_plan_refusal(error: &io::Error) -> bool {
-    error
-        .get_ref()
-        .is_some_and(|inner| inner.downcast_ref::<PlanRefusal>().is_some())
+    error.get_ref().is_some_and(|inner| {
+        inner.downcast_ref::<PlanRefusal>().is_some()
+            || inner
+                .downcast_ref::<CarriedPlanError>()
+                .is_some_and(|carried| carried.refused)
+    })
+}
+
+/// Diagnostics collected before a planning error, when the census finished.
+pub(super) fn carried_diagnostics(error: &io::Error) -> Option<&Diagnostics> {
+    error.get_ref().and_then(|inner| {
+        inner
+            .downcast_ref::<CarriedPlanError>()
+            .map(|carried| &carried.diagnostics)
+    })
+}
+
+#[derive(Debug)]
+struct CarriedPlanError {
+    message: String,
+    refused: bool,
+    diagnostics: Diagnostics,
+}
+
+impl std::fmt::Display for CarriedPlanError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for CarriedPlanError {}
+
+fn attach_diagnostics(error: io::Error, diagnostics: Diagnostics) -> io::Error {
+    let refused = is_plan_refusal(&error);
+    io::Error::new(
+        error.kind(),
+        CarriedPlanError {
+            message: error.to_string(),
+            refused,
+            diagnostics,
+        },
+    )
 }
 
 fn refusal(

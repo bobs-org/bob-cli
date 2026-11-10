@@ -9,6 +9,7 @@ use super::*;
 use serde_json::{json, Map, Value};
 
 use git::{GitOutcome, GitReport};
+use health::{Diagnostics, Finding};
 
 /// JSON contract version for `bob task archive -f json`.
 pub(super) const SCHEMA_VERSION: u64 = 1;
@@ -61,6 +62,7 @@ pub(super) struct Report {
     pub(super) threshold: usize,
     pub(super) dry_run: bool,
     pub(super) plan: Option<CollectionPlan>,
+    pub(super) diagnostics: Diagnostics,
     pub(super) git: GitReport,
     pub(super) exit: ExitReport,
 }
@@ -72,6 +74,7 @@ impl Report {
             threshold,
             dry_run,
             plan: None,
+            diagnostics: Diagnostics::incomplete(),
             git: GitReport::not_run(if dry_run {
                 "dry_run"
             } else {
@@ -152,26 +155,44 @@ impl Report {
     }
 
     fn flag_duplicate_holds(&mut self) {
-        let Some(plan) = &self.plan else {
-            return;
-        };
-        let mut notes: Vec<String> = plan
-            .holds
-            .iter()
-            .filter(|hold| hold.reason == "duplicate_block_id")
-            .map(|hold| path_text(&hold.relative_path))
-            .collect();
-        if notes.is_empty() {
+        if let Some(plan) = &self.plan {
+            let mut notes: Vec<String> = plan
+                .holds
+                .iter()
+                .filter(|hold| hold.reason == "duplicate_block_id")
+                .map(|hold| path_text(&hold.relative_path))
+                .collect();
+            if !notes.is_empty() {
+                notes.sort();
+                notes.dedup();
+                self.exit.code = 1;
+                self.exit.reason = Some("duplicate_block_id");
+                self.exit.message = Some(format!(
+                    "held blocks with duplicate ids in {}; fix duplicates and rerun",
+                    notes.join(", ")
+                ));
+            }
+        }
+        self.flag_binding_conflicts();
+    }
+
+    fn flag_binding_conflicts(&mut self) {
+        if !self.diagnostics.blocks_writes() {
             return;
         }
-        notes.sort();
-        notes.dedup();
+        if self.exit.reason == Some("git_failed") {
+            return;
+        }
+        let paths = self
+            .diagnostics
+            .conflict_paths()
+            .into_iter()
+            .map(|path| path_text(&path))
+            .collect::<Vec<_>>();
         self.exit.code = 1;
-        self.exit.reason = Some("duplicate_block_id");
-        self.exit.message = Some(format!(
-            "held blocks with duplicate ids in {}; fix duplicates and rerun",
-            notes.join(", ")
-        ));
+        self.exit.reason = Some("archive_binding_conflict");
+        self.exit.message =
+            Some(format!("refused archive bindings: {}", paths.join(", ")));
     }
 
     pub(super) fn fail(&mut self, reason: &'static str, message: String) {
@@ -258,6 +279,7 @@ pub(super) fn render_json(report: &Report) -> String {
         "link_repairs": plan
             .map(link_repairs_json)
             .unwrap_or_else(empty_link_repairs_json),
+        "diagnostics": diagnostics_json(&report.diagnostics),
         "git": git_json(&report.git),
         "exit": exit_json(&report.exit),
     });
@@ -371,6 +393,32 @@ fn empty_link_repairs_json() -> Value {
     json!({"files": [], "link_count": 0, "dependency_metadata_count": 0})
 }
 
+fn diagnostics_json(diagnostics: &Diagnostics) -> Value {
+    let mut counts = Map::new();
+    for (code, count) in diagnostics.counts() {
+        counts.insert(code.to_string(), json!(count));
+    }
+    json!({
+        "complete": diagnostics.complete,
+        "counts": counts,
+        "findings": diagnostics
+            .findings
+            .iter()
+            .map(finding_json)
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn finding_json(finding: &Finding) -> Value {
+    json!({
+        "code": finding.code,
+        "path": path_text(&finding.path),
+        "line": finding.line,
+        "block_id": finding.block_id,
+        "related": path_list(&finding.related),
+    })
+}
+
 fn git_json(git: &GitReport) -> Value {
     json!({
         "outcome": git.outcome.as_str(),
@@ -420,6 +468,7 @@ pub(super) fn human_header(report: &Report) -> String {
 pub(super) fn render_human(report: &Report) -> String {
     let mut out = String::new();
     let Some(plan) = &report.plan else {
+        push_diagnostics(&mut out, report);
         out.push_str("summary:\n");
         push_failure(&mut out, report);
         return out;
@@ -427,6 +476,7 @@ pub(super) fn render_human(report: &Report) -> String {
 
     push_scan(&mut out, plan);
     push_selection(&mut out, plan);
+    push_diagnostics(&mut out, report);
     push_scan_counts(&mut out, plan);
 
     out.push_str("moves:\n");
@@ -504,6 +554,54 @@ fn push_selection(out: &mut String, plan: &CollectionPlan) {
             out.push_str(&format!("  {}\n", path.display()));
         }
     }
+}
+
+fn push_diagnostics(out: &mut String, report: &Report) {
+    out.push_str("diagnostics:\n");
+    if !report.diagnostics.complete {
+        out.push_str("  incomplete census\n");
+        if report.diagnostics.findings.is_empty() {
+            return;
+        }
+    }
+    if report.diagnostics.findings.is_empty() {
+        out.push_str("  none\n");
+        return;
+    }
+    for (code, count) in report.diagnostics.counts() {
+        if count == 0 {
+            continue;
+        }
+        out.push_str(&format!("  {code}: {count}\n"));
+        for finding in report
+            .diagnostics
+            .findings
+            .iter()
+            .filter(|finding| finding.code == code)
+        {
+            out.push_str(&format!("    {}\n", finding_line(finding)));
+        }
+    }
+}
+
+fn finding_line(finding: &Finding) -> String {
+    let mut line = path_text(&finding.path);
+    if let Some(number) = finding.line {
+        line.push_str(&format!(":{number}"));
+    }
+    if let Some(block_id) = &finding.block_id {
+        line.push_str(&format!(" ^{block_id}"));
+    }
+    if !finding.related.is_empty() {
+        let related = finding
+            .related
+            .iter()
+            .map(|path| path_text(path))
+            .collect::<Vec<_>>()
+            .join(", ");
+        line.push_str(&format!(" ({related})"));
+    }
+    line
 }
 
 fn push_scan_counts(out: &mut String, plan: &CollectionPlan) {

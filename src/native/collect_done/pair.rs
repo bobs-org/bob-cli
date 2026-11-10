@@ -240,6 +240,34 @@ impl ArchivePairIndex {
         Self::from_census(census)
     }
 
+    /// Build from a captured contents map. No disk I/O.
+    pub(crate) fn from_contents(contents: &BTreeMap<PathBuf, String>) -> Self {
+        let note_index = NoteIndex::from_paths(contents.keys().cloned());
+        Self::from_census(PairCensus {
+            contents: contents.clone(),
+            note_index,
+            failures: BTreeSet::new(),
+        })
+    }
+
+    /// Source lookup table built from the census.
+    pub(crate) fn source_entries(
+        &self,
+    ) -> impl Iterator<Item = (&Path, &SourceLookup)> {
+        self.sources
+            .iter()
+            .map(|(path, lookup)| (path.as_path(), lookup))
+    }
+
+    /// Archive lookup table built from the census.
+    pub(crate) fn archive_entries(
+        &self,
+    ) -> impl Iterator<Item = (&Path, &ArchiveLookup)> {
+        self.archives
+            .iter()
+            .map(|(path, lookup)| (path.as_path(), lookup))
+    }
+
     /// Walk the vault once and build from disk. Reads that fail are
     /// retained as failure paths; lookups refuse when a failure could
     /// plausibly affect them. No lookup performs I/O after this returns.

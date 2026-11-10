@@ -16,7 +16,10 @@ use super::super::task_status_hooks_write::{
 use super::*;
 
 use git::{finish_git, touched_git_paths};
-use plan::{is_plan_refusal, plan_archive, PlannedArchive};
+use health::Diagnostics;
+use plan::{
+    carried_diagnostics, is_plan_refusal, plan_archive, PlannedArchive,
+};
 use report::{human_header, render_human, render_json, OutputFormat, Report};
 use snapshot::scan_membership;
 
@@ -148,6 +151,11 @@ fn plan_and_apply(report: &mut Report, hooks: &mut Hooks) -> Settled {
                 } else {
                     "plan_failed"
                 };
+                if let Some(diagnostics) = carried_diagnostics(&error) {
+                    report.diagnostics = diagnostics.clone();
+                } else {
+                    report.diagnostics = Diagnostics::incomplete();
+                }
                 report.fail(
                     reason,
                     format!(
@@ -161,7 +169,9 @@ fn plan_and_apply(report: &mut Report, hooks: &mut Hooks) -> Settled {
         let PlannedArchive {
             collection,
             write_plan,
+            diagnostics,
         } = planned;
+        report.diagnostics = diagnostics;
         let has_outputs = !write_plan.outputs.is_empty();
         report.plan = Some(collection);
 

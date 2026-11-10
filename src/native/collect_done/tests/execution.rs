@@ -195,7 +195,14 @@ fn apply_reports_actual_paths_and_holds_the_lock_throughout() {
     assert_eq!(value["git"]["outcome"], "skipped");
     assert_eq!(value["git"]["skip_reason"], "not_worktree");
     let text = render_human(&report);
-    for label in ["scan:", "holds:", "skips:", "grandfathered:", "moves:"] {
+    for label in [
+        "scan:",
+        "holds:",
+        "skips:",
+        "grandfathered:",
+        "diagnostics:",
+        "moves:",
+    ] {
         assert!(text.contains(label), "missing {label}:\n{text}");
     }
     assert!(text.contains("git:\n  warning: vault is not a git worktree"));
