@@ -1232,6 +1232,65 @@ fn rewrite_draft_expands_dot_dependency_alias() {
 }
 
 #[test]
+fn rewrite_draft_dot_prefers_dependency_once_item_is_routed() {
+    for (raw, expected) in [
+        ("Buy milk @foo:bar .", "Buy milk @foo:bar &"),
+        ("Buy milk @foo^bar .", "Buy milk @foo^bar &"),
+        ("Buy milk @foo+bar .", "Buy milk @foo+bar &"),
+        ("Buy milk @foo:bar\t.", "Buy milk @foo:bar\t&"),
+        ("Buy milk @foo:bar@ .", "Buy milk @foo:bar@ &"),
+        ("Buy milk @foo:bar#DEEP .", "Buy milk @foo:bar#DEEP &"),
+        ("Buy milk @work+a @dev:b .", "Buy milk @work+a @dev:b &"),
+        ("Buy milk @foo:bar &x:y .", "Buy milk @foo:bar &x:y &"),
+        ("Buy milk @foo:bar #type .", "Buy milk @foo:bar #type &"),
+        ("- [ ] Task @work:a .", "- [ ] Task @work:a &"),
+        (
+            "Buy milk @foo:bar\n- detail .",
+            "Buy milk @foo:bar\n- detail &",
+        ),
+        (
+            "Buy milk @foo:bar\n- detail\n  - nested .",
+            "Buy milk @foo:bar\n- detail\n  - nested &",
+        ),
+        (
+            "First\n\nBuy milk @foo:bar .",
+            "First\n\nBuy milk @foo:bar &",
+        ),
+        (
+            "caf\u{e9} \u{1f680} @Cash:Goog-Exit .",
+            "caf\u{e9} \u{1f680} @Cash:Goog-Exit &",
+        ),
+        ("Buy milk @foo .", "Buy milk @foo &"),
+        ("Buy milk @foo#sec .", "Buy milk @foo#sec &"),
+    ] {
+        assert_modifier_alias(raw, expected, ".", "&");
+    }
+}
+
+#[test]
+fn rewrite_draft_dot_keeps_route_alias_when_item_is_not_routed_or_and_cannot_open(
+) {
+    for (raw, expected) in [
+        ("Buy milk .", "Buy milk @"),
+        ("@@sase Buy .", "@@sase Buy @"),
+        (
+            "Buy milk @foo:bar some text .",
+            "Buy milk @foo:bar some text @",
+        ),
+        (
+            "Buy milk @foo:bar\n\nFix it .",
+            "Buy milk @foo:bar\n\nFix it @",
+        ),
+        ("@a+x > .", "@a+x > @"),
+        ("@a+x > @c+tid .", "@a+x > @c+tid @"),
+        ("Create task < @cash:line .", "Create task < @cash:line @"),
+        ("Create task < .", "Create task < @"),
+    ] {
+        assert_modifier_alias(raw, expected, ".", "@");
+    }
+}
+
+#[test]
 fn rewrite_draft_expands_semicolon_blocked_task_alias() {
     for (raw, expected) in [
         ("Buy milk ;", "Buy milk *"),

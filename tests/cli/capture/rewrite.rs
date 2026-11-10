@@ -433,6 +433,41 @@ fn capture_rewrite_json_expands_a_dot_dependency_alias() {
 }
 
 #[test]
+fn capture_rewrite_json_dot_prefers_dependency_once_routed() {
+    let draft = "Buy milk @foo:bar .";
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg(draft.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .output()
+        .expect("run bob capture-rewrite routed dot alias");
+
+    assert_success(&output);
+    assert!(stderr(&output).is_empty(), "{}", format_output(&output));
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["input"], draft);
+    assert_eq!(json["text"], "Buy milk @foo:bar &");
+    assert_eq!(json["changed"], true);
+    assert_eq!(json["cursor"], draft.len());
+    assert_eq!(json["rule"], "expand_sigil_alias");
+    assert_eq!(
+        json["edits"],
+        serde_json::json!([
+            { "range": { "start": draft.len() - 1, "end": draft.len() }, "replacement": "&" },
+        ])
+    );
+    assert_eq!(json["summary"], "Typed & for .");
+    assert_eq!(json["alias"]["id"], "dependency");
+}
+
+#[test]
 fn capture_rewrite_json_expands_a_semicolon_blocked_task_alias() {
     let output = bob_command()
         .arg("capture-rewrite")
@@ -1444,6 +1479,12 @@ fn capture_rewrite_json_tips_name_every_key_that_would_have_typed_the_sigil() {
         ),
         ("Fix it ~", "relation", vec!["="], Some("after a word")),
         ("@home &", "dependency", vec!["."], Some("once routed")),
+        (
+            "Buy milk @foo:bar &",
+            "dependency",
+            vec!["."],
+            Some("once routed"),
+        ),
         (
             "Buy milk *",
             "blocked_task",

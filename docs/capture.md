@@ -9284,15 +9284,19 @@ the candidate opens the Task Link picker. A `- .` or `- ;` first-level bullet
 in a sealed project-note item becomes `- ^` or `- :` where the Move picker
 would open, and `- ^.` becomes `- ^^`. Typing `.` after a space or tab that
 follows body text becomes `@` wherever a bare `@` would open route
-completion. It stays literal at a line or bullet-body start, after a
-checkbox, glued to a word, inside an unclosed backtick span or a wikilink,
-and in positions with no route field. For example, `Buy milk .` becomes
-`Buy milk @`, while `@errands.` still becomes `@errands^` as the first `.`
-rule. A spaced `.` that does not become `@` becomes `&` wherever a bare `&`
-would open the Depends On picker, and a spaced `;` that does not become `:`
-becomes `*` wherever a bare `*` would open the Blocks picker; both follow the
-same literal positions. For example, `@home .` becomes `@home &` and
-`Buy milk ;` becomes `Buy milk *`. Typing `\` or `/` becomes `#`
+completion and the item is not already routed. It stays literal at a line or
+bullet-body start, after a checkbox, glued to a word, inside an unclosed
+backtick span or a wikilink, and in positions with no route field. For
+example, `Buy milk .` becomes `Buy milk @`, while `@errands.` still becomes
+`@errands^` as the first `.` rule. Once the item already owns a route marker,
+a spaced `.` tries `&` first and falls back to `@` only where `&` cannot
+open; otherwise a spaced `.` that does not become `@` becomes `&` wherever a
+bare `&` would open the Depends On picker. A spaced `;` that does not become
+`:` becomes `*` wherever a bare `*` would open the Blocks picker; both follow
+the same literal positions. For example, `@home .` becomes `@home &`,
+`Buy milk @foo:bar .` becomes `Buy milk @foo:bar &`, and `Buy milk ;`
+becomes `Buy milk *`. A later blank-line item, `@@route` declarations, and
+transfer/merge-in slots keep `@`. Typing `\` or `/` becomes `#`
 wherever bob's completion grammar would open a `#` menu: task type, section,
 drawer and drawer bullet, Pomodoro name, named-start and past-session name,
 split type, merge destination, and wikilink heading. A `\` or `/` at a line

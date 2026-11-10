@@ -190,6 +190,13 @@ fn sigil_alias_tip_proves_each_positive_row() {
             Some("once routed"),
         ),
         (
+            "Buy milk @foo:bar &",
+            AliasId::Dependency,
+            &["."],
+            '&',
+            Some("once routed"),
+        ),
+        (
             "Buy milk *",
             AliasId::BlockedTask,
             &[";"],
@@ -284,6 +291,7 @@ fn sigil_alias_tip_stays_silent_for_the_negative_corpus() {
         ("x!", 2),
         ("x=2~", 4),
         ("Buy milk &", 10),
+        ("Buy milk @foo:bar @", 19),
         ("Buy milk .", 10),
         ("Buy milk", 8),
         // A template draft never rewrites, so it never teaches.

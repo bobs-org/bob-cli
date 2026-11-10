@@ -149,7 +149,9 @@ pub(crate) fn rewrite_draft(
 /// From), while `~~=` turns back into `~`. A spaced `=` aliases `~` only where
 /// a bare relation sigil would open Links To, and a spaced `.` aliases `@`
 /// only where a bare `@` would open route completion (never after a bare
-/// task checkbox). A lowercase `x` or `s` that
+/// task checkbox) and the item is not already routed. Once the item already
+/// owns a route marker, a spaced `.` tries `&` first and falls back to `@`
+/// only where `&` cannot open. A lowercase `x` or `s` that
 /// ends a close selection aliases `!` or `*`. Everywhere else `=` stays
 /// literal, including inside a wikilink.
 ///
@@ -340,11 +342,14 @@ fn collapse_global_destination(
 }
 
 /// Two completion-gated fallbacks run after every rule above, so they never
-/// change an existing alias. A spaced `.` that did not become `^` or `@`
-/// aliases `&` wherever a bare `&` would open the Depends On picker, and a
-/// spaced `;` that did not become `:` aliases `*` wherever a bare `*` would
-/// open the Blocks picker. Both share the spaced `.` -> `@` position guard,
-/// so a line-initial `.` or `;` stays literal.
+/// change an existing alias. A spaced `.` that did not become `^` tries `&`
+/// first once its item already owns a route marker, falling back to `@` only
+/// where `&` cannot open; otherwise it tries `@` first and falls back to `&`.
+/// Each fires only where the winning bare sigil would open route completion
+/// or the Depends On picker. A spaced `;` that did not become `:` aliases
+/// `*` wherever a bare `*` would open the Blocks picker. Both share the
+/// spaced `.` -> `@` position guard, so a line-initial `.` or `;` stays
+/// literal.
 /// A comma glued to a complete `@route:id` / `@route^id` is claimed earlier
 /// by `switch_block_id_separator`, before this alias lane runs.
 fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
@@ -370,8 +375,16 @@ fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
         return expand_parent_task_comma_alias(raw_text, start, cursor, token);
     }
     if alias == "." {
-        return expand_dot_block_id_alias(raw_text, start, cursor)
-            .or_else(|| expand_dot_route_alias(raw_text, start, cursor))
+        if let Some(rewrite) =
+            expand_dot_block_id_alias(raw_text, start, cursor)
+        {
+            return Some(rewrite);
+        }
+        if alias_item_is_routed(raw_text, start, cursor) {
+            return expand_dot_dependency_alias(raw_text, start, cursor)
+                .or_else(|| expand_dot_route_alias(raw_text, start, cursor));
+        }
+        return expand_dot_route_alias(raw_text, start, cursor)
             .or_else(|| expand_dot_dependency_alias(raw_text, start, cursor));
     }
     if alias == ";" {
@@ -532,9 +545,10 @@ fn expand_dot_block_id_alias(
 }
 
 /// Typing `.` after a space or tab that follows body text aliases `@` only
-/// where a bare `@` would open route completion. Line and bullet-body
-/// starts, a bare checkbox, glued words, code spans, and wikilink fields
-/// stay literal.
+/// where a bare `@` would open route completion and the item is not already
+/// routed (routed items try `&` first; see [`alias_item_is_routed`]). Line
+/// and bullet-body starts, a bare checkbox, glued words, code spans, and
+/// wikilink fields stay literal.
 fn expand_dot_route_alias(
     raw_text: &str,
     start: usize,
@@ -569,9 +583,45 @@ fn expand_dot_route_alias(
     ))
 }
 
-/// Typing `.` after a space or tab that follows body text, where neither `^`
-/// nor `@` applies, aliases `&` only where a bare `&` would open the Depends
-/// On picker. Item and bullet starts stay literal, like the `.` -> `@` alias.
+/// Whether the `.` item already owns a complete local route marker, so a
+/// spaced `.` should try `&` before `@`.
+///
+/// Make the pre-key draft by removing the typed `.` (`start..cursor`) and
+/// parse that draft, not the post-key one: with the `.` still present, a
+/// trailing `@route:bar` is no longer the line's last token and parses as
+/// prose. Find the item holding `start` and read its
+/// `local_destination_markers`, which already lists exactly the complete,
+/// item-owned markers on any of its lines (no `@@route` declarations,
+/// list-header routes, incomplete markers, or record/notebook views).
+fn alias_item_is_routed(raw_text: &str, start: usize, cursor: usize) -> bool {
+    if start >= cursor
+        || cursor > raw_text.len()
+        || !raw_text.is_char_boundary(start)
+        || !raw_text.is_char_boundary(cursor)
+        || raw_text.get(start..cursor) != Some(".")
+    {
+        return false;
+    }
+    let mut pre_key = raw_text.to_string();
+    pre_key.replace_range(start..cursor, "");
+    let draft = split_capture_draft(&pre_key);
+    let Some(item) = draft.items.iter().find(|item| {
+        item.lines
+            .iter()
+            .any(|line| start >= line.raw.start && start <= line.raw.end)
+    }) else {
+        return false;
+    };
+    !parse_editor_item(item)
+        .item
+        .local_destination_markers
+        .is_empty()
+}
+
+/// Typing `.` after a space or tab that follows body text aliases `&` only
+/// where a bare `&` would open the Depends On picker: first when the item
+/// already owns a route marker, otherwise only where neither `^` nor `@`
+/// applies. Item and bullet starts stay literal, like the `.` -> `@` alias.
 fn expand_dot_dependency_alias(
     raw_text: &str,
     start: usize,
