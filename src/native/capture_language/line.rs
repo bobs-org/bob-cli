@@ -279,7 +279,7 @@ pub(super) fn invalid_global_destination_place_error(token: &str) -> String {
     )
 }
 
-pub(super) fn notebook_holds_no_tasks_error(
+pub(crate) fn notebook_holds_no_tasks_error(
     route: &str,
     owner: Option<&str>,
 ) -> String {

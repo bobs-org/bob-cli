@@ -81,12 +81,16 @@ pub(crate) enum SpanKind {
     /// A record field bullet's value (without the `key::`).
     RecordFieldValue,
     /// An existing notebook route, with the resolved notebook title.
+    #[serde(rename = "route")]
     NotebookRoute,
     /// A notebook's `#section` selector.
+    #[serde(rename = "section")]
     NotebookSection,
     /// A note bullet's authored block ID in `@notebook^id`.
+    #[serde(rename = "task_block_id")]
     NotebookBlockId,
     /// The parent note ID in `@notebook+id`.
+    #[serde(rename = "sub_bullet_block_id")]
     NotebookParentBlockId,
     /// A whole-item bare URL admitted by the routing policy.
     RefUrl,
@@ -178,10 +182,10 @@ impl SpanKind {
             Self::RecordStem => "record_stem",
             Self::RecordFieldKey => "record_field_key",
             Self::RecordFieldValue => "record_field_value",
-            Self::NotebookRoute => "notebook_route",
-            Self::NotebookSection => "notebook_section",
-            Self::NotebookBlockId => "notebook_block_id",
-            Self::NotebookParentBlockId => "notebook_parent_block_id",
+            Self::NotebookRoute => "route",
+            Self::NotebookSection => "section",
+            Self::NotebookBlockId => "task_block_id",
+            Self::NotebookParentBlockId => "sub_bullet_block_id",
             Self::RefUrl => "ref_url",
             Self::GmailUrl => "Gmail link",
             Self::TaskCompleteSigil => "task_complete_sigil",
@@ -201,6 +205,16 @@ impl SpanKind {
             Self::MergeInArrow => "merge_in_arrow",
             Self::MergeInSource => "merge_in_source",
         }
+    }
+
+    pub(crate) fn is_notebook(self) -> bool {
+        matches!(
+            self,
+            Self::NotebookRoute
+                | Self::NotebookSection
+                | Self::NotebookBlockId
+                | Self::NotebookParentBlockId
+        )
     }
 }
 

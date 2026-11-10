@@ -4,7 +4,6 @@ use super::*;
 use crate::native::capture_language::notebook::{
     NotebookRouteInfo, NotebookRoutePolicy,
 };
-use crate::native::capture_project_note::format_project_section_title;
 use crate::native::projects::{frontmatter_is_notebook, parse_frontmatter};
 
 /// Machine-readable notebook summary carried on each dry-run/success item.
@@ -17,152 +16,6 @@ pub(crate) struct NotebookSummary {
     pub(crate) section_action: Option<&'static str>,
     pub(crate) block_id: Option<String>,
     pub(crate) parent_block_id: Option<String>,
-}
-
-struct SectionResolution {
-    /// Resolved heading title (`None` for the pre-H2 region).
-    title: Option<String>,
-    /// `existing`, `create`, or `None` for the pre-H2 region.
-    action: Option<&'static str>,
-    /// Line index of the resolved `##` heading, when existing.
-    heading_line: Option<usize>,
-    /// Title to create when `action == Some("create")`.
-    create_title: Option<String>,
-}
-
-struct NotebookHeadings {
-    /// `(line_index, title)` for every `##` heading in document order.
-    headings: Vec<(usize, String)>,
-}
-
-fn notebook_h2_headings(contents: &str) -> NotebookHeadings {
-    let lines = sections::line_spans(contents);
-    let headings = sections::markdown_headings(&lines);
-    let headings = headings
-        .into_iter()
-        .filter(|heading| heading.level == 2)
-        .map(|heading| (heading.line_index, heading.title.to_string()))
-        .collect();
-    NotebookHeadings { headings }
-}
-
-fn slug_of(text: &str) -> String {
-    capture_language::selector_slug(text)
-}
-
-/// Resolve a notebook section selector against the file's `##` headings.
-///
-/// Exact selectors (quoted or forced `--section`) match whole-title only.
-/// Unquoted selectors match exact title or whole slug, refuse near misses,
-/// and otherwise create a Title Case `##`.
-fn resolve_notebook_section(
-    contents: &str,
-    selector: Option<&str>,
-    exact: bool,
-    route: &str,
-) -> Result<SectionResolution, CaptureError> {
-    let Some(selector) = selector else {
-        return Ok(SectionResolution {
-            title: None,
-            action: None,
-            heading_line: None,
-            create_title: None,
-        });
-    };
-    let headings = notebook_h2_headings(contents);
-    if exact {
-        for (line_index, title) in &headings.headings {
-            if title.to_lowercase() == selector.to_lowercase() {
-                return Ok(SectionResolution {
-                    title: Some(title.clone()),
-                    action: Some("existing"),
-                    heading_line: Some(*line_index),
-                    create_title: None,
-                });
-            }
-        }
-        return Ok(SectionResolution {
-            title: Some(selector.to_string()),
-            action: Some("create"),
-            heading_line: None,
-            create_title: Some(selector.to_string()),
-        });
-    }
-    // Unquoted: exact title or whole slug wins.
-    for (line_index, title) in &headings.headings {
-        if title.to_lowercase() == selector.to_lowercase()
-            || (!slug_of(title).is_empty()
-                && slug_of(title) == slug_of(selector))
-        {
-            return Ok(SectionResolution {
-                title: Some(title.clone()),
-                action: Some("existing"),
-                heading_line: Some(*line_index),
-                create_title: None,
-            });
-        }
-    }
-    // Near miss: selector prefixes an existing slug, or is within edit
-    // distance two of one.
-    let query_slug = slug_of(selector);
-    let mut suggestion: Option<(String, String)> = None;
-    for (_, title) in &headings.headings {
-        let existing_slug = slug_of(title);
-        if existing_slug.is_empty() || query_slug.is_empty() {
-            continue;
-        }
-        if existing_slug.starts_with(query_slug.as_str()) {
-            suggestion = Some((existing_slug, title.clone()));
-            break;
-        }
-    }
-    if suggestion.is_none() && !query_slug.is_empty() {
-        let mut best: Option<(usize, String, String)> = None;
-        for (_, title) in &headings.headings {
-            let existing_slug = slug_of(title);
-            if existing_slug.is_empty() {
-                continue;
-            }
-            if let Some(distance) =
-                note_tasks::bounded_levenshtein(&query_slug, &existing_slug, 2)
-            {
-                let better = best
-                    .as_ref()
-                    .is_none_or(|(best_dist, _, _)| distance < *best_dist);
-                if better {
-                    best =
-                        Some((distance, existing_slug.clone(), title.clone()));
-                }
-            }
-        }
-        if let Some((_, slug, _)) = best {
-            let title = headings
-                .headings
-                .iter()
-                .find(|(_, t)| slug_of(t) == slug)
-                .map(|(_, t)| t.clone())
-                .unwrap_or(slug.clone());
-            suggestion = Some((slug, title));
-        }
-    }
-    if let Some((slug, _)) = suggestion {
-        let file = format!("{route}.md");
-        let quoted = format_project_section_title(&selector.replace('-', " "));
-        return Err(CaptureError::usage_code(
-            format!(
-                "no section `{selector}` in {file} — did you mean `#{slug}`? Write `#\"{quoted}\"` to create it"
-            ),
-            "notebook_section_near_miss",
-        ));
-    }
-    let create_title =
-        format_project_section_title(&selector.replace('-', " "));
-    Ok(SectionResolution {
-        title: Some(create_title.clone()),
-        action: Some("create"),
-        heading_line: None,
-        create_title: Some(create_title),
-    })
 }
 
 fn line_ending_of(contents: &str) -> &'static str {
@@ -178,19 +31,26 @@ fn split_lines_keep(contents: &str) -> Vec<String> {
     contents.split('\n').map(str::to_string).collect()
 }
 
-fn join_lines(lines: &[String], ending: &str) -> String {
+fn join_lines(
+    lines: &[String],
+    ending: &str,
+    trailing_newline: bool,
+) -> String {
     if lines.is_empty() {
         return String::new();
     }
-    let mut out = lines.join(ending);
-    // `split('\n')` on a trailing-newline file yields a final empty
-    // element; joining restores the trailing ending exactly.
-    let _ = ending;
-    out.push('\n');
-    // Normalize a lone `\n` join to CRLF when the document is CRLF.
-    if ending == "\r\n" && out.ends_with('\n') && !out.ends_with("\r\n") {
-        out.pop();
-        out.push_str("\r\n");
+    let mut out = String::new();
+    for (index, line) in lines.iter().enumerate() {
+        out.push_str(line);
+        if index + 1 < lines.len() || trailing_newline {
+            // Existing rows keep their own terminator. Newly inserted rows
+            // use the document's detected line ending.
+            if line.ends_with('\r') {
+                out.push('\n');
+            } else {
+                out.push_str(ending);
+            }
+        }
     }
     out
 }
@@ -211,31 +71,126 @@ fn is_blank(line: &str) -> bool {
     line.trim().is_empty()
 }
 
-/// Collect every `^id` in staged bytes outside fenced code blocks.
-fn block_ids_outside_fences(contents: &str) -> Vec<(String, usize)> {
-    let raw_lines: Vec<&str> = contents.split('\n').collect();
-    let fenced = markdown::fenced_lines(&raw_lines, 0..raw_lines.len());
-    let mut ids = Vec::new();
-    for (index, line) in raw_lines.iter().enumerate() {
-        if fenced.contains(&index) {
+fn logical_lines(lines: &[String]) -> Vec<String> {
+    lines
+        .iter()
+        .map(|line| line.strip_suffix('\r').unwrap_or(line).to_string())
+        .collect()
+}
+
+fn fenced_line_indices(lines: &[String]) -> std::collections::BTreeSet<usize> {
+    let logical = logical_lines(lines);
+    let borrowed = logical.iter().map(String::as_str).collect::<Vec<_>>();
+    markdown::fenced_lines(&borrowed, 0..borrowed.len())
+}
+
+fn real_heading_levels(lines: &[String]) -> Vec<(usize, usize)> {
+    let logical = logical_lines(lines).join("\n");
+    let spans = sections::line_spans(&logical);
+    sections::markdown_headings(&spans)
+        .into_iter()
+        .map(|heading| (heading.line_index, heading.level))
+        .collect()
+}
+
+fn mask_inline_code_and_wikilinks(line: &str) -> String {
+    let mut chars = line.chars().collect::<Vec<_>>();
+    let mut index = 0;
+    while index < chars.len() {
+        if chars[index] == '`' {
+            let run_end = (index..chars.len())
+                .take_while(|position| chars[*position] == '`')
+                .last()
+                .map_or(index + 1, |position| position + 1);
+            let run = run_end - index;
+            let close = (run_end..chars.len()).find(|position| {
+                if chars[*position] != '`' {
+                    return false;
+                }
+                let end = (*position..chars.len())
+                    .take_while(|candidate| chars[*candidate] == '`')
+                    .last()
+                    .map_or(*position + 1, |candidate| candidate + 1);
+                end - *position == run
+            });
+            if let Some(close) = close {
+                let close_end = (close..chars.len())
+                    .take_while(|position| chars[*position] == '`')
+                    .last()
+                    .map_or(close + 1, |position| position + 1);
+                for character in &mut chars[index..close_end] {
+                    *character = ' ';
+                }
+                index = close_end;
+                continue;
+            }
+            index = run_end;
             continue;
         }
-        let logical = sections::logical_line(line);
-        for token in logical.split_whitespace() {
-            if let Some(id) = token.strip_prefix('^')
-                && !id.is_empty()
-                && capture_language::is_block_id(id)
-            {
-                // Strip trailing punctuation that cannot be part of an ID.
-                let clean = id
-                    .trim_end_matches([',', '.', ';', ':', '!', '?', ')', ']']);
-                if !clean.is_empty() && capture_language::is_block_id(clean) {
-                    ids.push((clean.to_string(), index));
-                }
+        if chars[index] == '['
+            && chars.get(index + 1) == Some(&'[')
+            && (index == 0 || chars[index - 1] != '\\')
+            && let Some(close) = (index + 2..chars.len().saturating_sub(1))
+                .find(|position| {
+                    chars[*position] == ']' && chars[*position + 1] == ']'
+                })
+        {
+            for character in &mut chars[index..close + 2] {
+                *character = ' ';
             }
+            index = close + 2;
+            continue;
         }
+        index += 1;
     }
-    ids
+    chars.into_iter().collect()
+}
+
+/// Actual trailing block anchors across Markdown blocks. Inline code,
+/// wikilink destinations, frontmatter, and fenced examples are prose.
+fn block_ids_outside_fences(contents: &str) -> Vec<(String, usize)> {
+    let lines: Vec<&str> = contents
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .collect();
+    let frontmatter_end = markdown::strictly_closed_frontmatter_end(&lines);
+    let scan_start = frontmatter_end.map_or(0, |end| end + 1);
+    let fenced = markdown::fenced_lines(&lines, scan_start..lines.len());
+    lines
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| {
+            frontmatter_end.is_none_or(|end| *index > end)
+                && !fenced.contains(index)
+        })
+        .filter_map(|(index, line)| {
+            let visible = mask_inline_code_and_wikilinks(line);
+            crate::native::collect_done::trailing_block_id_in_line(&visible)
+                .map(|id| (id, index))
+        })
+        .collect()
+}
+
+fn is_markdown_bullet(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with("- ")
+        || trimmed.starts_with("-\t")
+        || trimmed.starts_with("* ")
+        || trimmed.starts_with("*\t")
+        || trimmed.starts_with("+ ")
+        || trimmed.starts_with("+\t")
+    {
+        return true;
+    }
+    let digits = trimmed.bytes().take_while(u8::is_ascii_digit).count();
+    digits > 0
+        && trimmed.as_bytes().get(digits).is_some_and(|byte| {
+            matches!(byte, b'.' | b')')
+                && trimmed
+                    .as_bytes()
+                    .get(digits + 1)
+                    .is_some_and(u8::is_ascii_whitespace)
+        })
 }
 
 fn parent_indent_of(line: &str) -> String {
@@ -253,55 +208,58 @@ fn find_notebook_parent(
 ) -> Result<(usize, String), CaptureError> {
     let raw_lines: Vec<&str> = contents.split('\n').collect();
     let fenced = markdown::fenced_lines(&raw_lines, 0..raw_lines.len());
-    let mut matches: Vec<usize> = Vec::new();
-    let mut fenced_match = false;
-    let mut heading_match = false;
-    let mut task_match = false;
-    for (index, line) in raw_lines.iter().enumerate() {
-        let logical = sections::logical_line(line);
-        let has_id = logical.split_whitespace().any(|token| {
-            token.strip_prefix('^').is_some_and(|id| {
-                let clean = id
-                    .trim_end_matches([',', '.', ';', ':', '!', '?', ')', ']']);
-                clean == parent_block_id
-            })
-        });
-        if !has_id {
-            continue;
-        }
-        if fenced.contains(&index) {
-            fenced_match = true;
-            continue;
-        }
-        let trimmed = logical.trim_start();
-        if trimmed.starts_with('#') {
-            heading_match = true;
-            continue;
-        }
-        // Task lines hold `#task` or a checkbox; they can never parent a
-        // notebook sub-note.
-        if trimmed.starts_with("- [") || logical.contains("#task") {
-            task_match = true;
-            continue;
-        }
-        if is_top_level_bullet(logical)
-            || logical.starts_with([' ', '\t'])
-                && logical.trim_start().starts_with("- ")
-            || logical.trim_start().starts_with("-\t")
-            || logical.trim_start() == "-"
-        {
-            matches.push(index);
-        } else {
-            // A bare `^id` outside a bullet is not a note parent.
-            continue;
-        }
-    }
-    if matches.len() > 1 {
+    let occurrences = block_ids_outside_fences(contents)
+        .into_iter()
+        .filter(|(id, _)| id == parent_block_id)
+        .map(|(_, index)| index)
+        .collect::<Vec<_>>();
+    if occurrences.len() > 1 {
         return Err(CaptureError::io(format!(
             "block ID ^{parent_block_id} already exists in {route}.md"
         )));
     }
-    if let Some(index) = matches.first().copied() {
+    let mut fenced_match = false;
+    for (index, line) in raw_lines.iter().enumerate() {
+        if !fenced.contains(&index) {
+            continue;
+        }
+        let logical = line.strip_suffix('\r').unwrap_or(line);
+        let visible = mask_inline_code_and_wikilinks(logical);
+        if crate::native::collect_done::trailing_block_id_in_line(&visible)
+            .as_deref()
+            == Some(parent_block_id)
+        {
+            fenced_match = true;
+            break;
+        }
+    }
+    let lines = raw_lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    let headings = real_heading_levels(&lines)
+        .into_iter()
+        .map(|(index, _)| index)
+        .collect::<std::collections::HashSet<_>>();
+    let heading_match = occurrences
+        .first()
+        .is_some_and(|index| headings.contains(index));
+    let task_match = occurrences.first().is_some_and(|index| {
+        crate::native::notebooks::rules::is_checkbox_line(
+            raw_lines[*index]
+                .strip_suffix('\r')
+                .unwrap_or(raw_lines[*index]),
+        )
+    });
+    if let Some(index) = occurrences.first().copied()
+        && !heading_match
+        && !task_match
+        && is_markdown_bullet(
+            raw_lines[index]
+                .strip_suffix('\r')
+                .unwrap_or(raw_lines[index]),
+        )
+    {
         let indent = parent_indent_of(raw_lines[index]);
         return Ok((index, indent));
     }
@@ -369,12 +327,18 @@ fn bullet_block_end(
     lines: &[String],
     parent_index: usize,
     parent_indent: usize,
+    fenced: &std::collections::BTreeSet<usize>,
 ) -> usize {
     let mut end = parent_index + 1;
     let mut last_content = parent_index + 1;
     while end < lines.len() {
         let line = &lines[end];
         let logical = line.strip_suffix('\r').unwrap_or(line);
+        if fenced.contains(&end) {
+            last_content = end + 1;
+            end += 1;
+            continue;
+        }
         if is_blank(logical) {
             end += 1;
             continue;
@@ -400,50 +364,21 @@ fn region_bounds(
     lines: &[String],
     heading_line: Option<usize>,
 ) -> (usize, usize) {
+    let headings = real_heading_levels(lines);
     if let Some(heading) = heading_line {
-        let mut end = heading + 1;
-        while end < lines.len() {
-            let logical = lines[end].strip_suffix('\r').unwrap_or(&lines[end]);
-            let trimmed = logical.trim_start();
-            // A section ends at the next heading of level two or less:
-            // any `#`/`##` heading at column zero ends it. Deeper
-            // headings (`###`+) stay inside the section.
-            if !logical.starts_with([' ', '\t']) && trimmed.starts_with('#') {
-                let hashes = trimmed.bytes().take_while(|b| *b == b'#').count();
-                if hashes <= 2 {
-                    // Require a space after the hashes to count as a
-                    // heading (mirrors the ATX parser).
-                    if trimmed
-                        .as_bytes()
-                        .get(hashes)
-                        .is_some_and(|b| b.is_ascii_whitespace())
-                    {
-                        break;
-                    }
-                }
-            }
-            end += 1;
-        }
+        let end = headings
+            .iter()
+            .find(|(line, level)| *line > heading && *level <= 2)
+            .map(|(line, _)| *line)
+            .unwrap_or(lines.len());
         (heading + 1, end)
     } else {
-        // Pre-H2 region: everything before the first H2 (or EOF).
-        // Frontmatter, the early H1, and preamble stay; notes append
-        // after the last note block inside it.
-        let mut end = lines.len();
-        for (index, line) in lines.iter().enumerate() {
-            let logical = line.strip_suffix('\r').unwrap_or(line);
-            let trimmed = logical.trim_start();
-            if !logical.starts_with([' ', '\t'])
-                && trimmed.starts_with("##")
-                && trimmed
-                    .as_bytes()
-                    .get(2)
-                    .is_some_and(|b| b.is_ascii_whitespace())
-            {
-                end = index;
-                break;
-            }
-        }
+        // The pre-H2 region retains YAML, the early H1, and preamble.
+        let end = headings
+            .iter()
+            .find(|(_, level)| *level == 2)
+            .map(|(line, _)| *line)
+            .unwrap_or(lines.len());
         (0, end)
     }
 }
@@ -455,14 +390,19 @@ fn last_note_block_end_in_region(
 ) -> Option<usize> {
     let mut last: Option<usize> = None;
     let mut index = start;
+    let fenced = fenced_line_indices(lines);
     while index < end {
         let logical = lines[index].strip_suffix('\r').unwrap_or(&lines[index]);
+        if fenced.contains(&index) {
+            index += 1;
+            continue;
+        }
         if is_blank(logical) {
             index += 1;
             continue;
         }
         if is_top_level_bullet(logical) {
-            let block_end = bullet_block_end(lines, index, 0);
+            let block_end = bullet_block_end(lines, index, 0, &fenced);
             last = Some(block_end.min(end));
             index = block_end;
         } else {
@@ -667,17 +607,43 @@ fn plan_notebook_note(
     target: &Path,
     relative: &Path,
 ) -> Result<PlannedCaptureItem, CaptureError> {
-    if let Some(block_id) = block_id.as_deref() {
-        super::pomodoro_adjust::reject_duplicate_block_id(
-            &contents, block_id, target,
-        )?;
-    }
-    let resolution = resolve_notebook_section(
-        &contents,
-        section.as_deref(),
-        exact_section,
-        &route,
-    )?;
+    let (section_title, section_action, mut heading_line, create_title) =
+        match section.as_deref() {
+            None => (None, None, None, None),
+            Some(selector) => {
+                match capture_language::resolve_notebook_section(
+                    selector,
+                    exact_section,
+                    &capture_language::notebook_sections(&contents),
+                ) {
+                    capture_language::NotebookSectionResolution::Existing {
+                        title,
+                        line_index,
+                    } => {
+                        (Some(title), Some("existing"), Some(line_index), None)
+                    }
+                    capture_language::NotebookSectionResolution::Create {
+                        title,
+                    } => {
+                        (Some(title.clone()), Some("create"), None, Some(title))
+                    }
+                    capture_language::NotebookSectionResolution::NearMiss {
+                        slug,
+                        quoted_title,
+                    } => {
+                        return Err(CaptureError::usage_code(
+                            capture_language::notebook_section_near_miss_message(
+                                &route,
+                                selector,
+                                &slug,
+                                &quoted_title,
+                            ),
+                            "notebook_section_near_miss",
+                        ));
+                    }
+                }
+            }
+        };
     // New-section creation appends the heading at EOF first.
     let mut lines = split_lines_keep(&contents);
     // `split('\n')` on an empty file yields `[""]`; normalize to empty so
@@ -685,7 +651,7 @@ fn plan_notebook_note(
     if lines.len() == 1 && lines[0].is_empty() {
         lines.clear();
     }
-    let had_trailing_newline = contents.is_empty() || contents.ends_with('\n');
+    let had_trailing_newline = contents.ends_with('\n');
     // Drop the synthetic trailing element from the split so indexes line
     // up with real lines; it is restored on join.
     if had_trailing_newline
@@ -694,11 +660,8 @@ fn plan_notebook_note(
     {
         lines.pop();
     }
-    let section_title = resolution.title.clone();
-    let section_action = resolution.action;
-    let mut heading_line = resolution.heading_line;
     if section_action == Some("create") {
-        let title = resolution.create_title.clone().unwrap_or_default();
+        let title = create_title.unwrap_or_default();
         if !lines.is_empty() {
             let last = lines.last().map(String::as_str).unwrap_or("");
             if !is_blank(last.strip_suffix('\r').unwrap_or(last)) {
@@ -744,6 +707,16 @@ fn plan_notebook_note(
             block.push(line.clone());
         }
     }
+    let block_text = block.join("\n");
+    if crate::native::notebooks::rules::contains_checkbox_rows(&block_text) {
+        return Err(CaptureError::usage_code(
+            capture_language::notebook_holds_no_tasks_error(
+                &route,
+                info.owner.as_deref(),
+            ),
+            "notebook_holds_no_tasks",
+        ));
+    }
     // Duplicate IDs across earlier writes in the same draft: the staged
     // `contents` already include them, and the new block must not repeat
     // any live ID either.
@@ -754,23 +727,12 @@ fn plan_notebook_note(
             .collect();
     let mut seen_new: std::collections::HashSet<String> =
         std::collections::HashSet::new();
-    for line in &block {
-        for token in line.split_whitespace() {
-            if let Some(id) = token.strip_prefix('^') {
-                let clean = id
-                    .trim_end_matches([',', '.', ';', ':', '!', '?', ')', ']']);
-                if clean.is_empty() || !capture_language::is_block_id(clean) {
-                    continue;
-                }
-                if live_ids.contains(clean)
-                    || !seen_new.insert(clean.to_string())
-                {
-                    return Err(CaptureError::io(format!(
-                        "block ID ^{clean} already exists in {}",
-                        target.display()
-                    )));
-                }
-            }
+    for (id, _) in block_ids_outside_fences(&block_text) {
+        if live_ids.contains(&id) || !seen_new.insert(id.clone()) {
+            return Err(CaptureError::io(format!(
+                "block ID ^{id} already exists in {}",
+                target.display()
+            )));
         }
     }
     // Warn when clipboard history fell back, matching task-clip behavior.
@@ -807,7 +769,7 @@ fn plan_notebook_note(
             staged.insert(at + block.len(), String::new());
         }
     }
-    let updated = join_lines(&staged, ending);
+    let updated = join_lines(&staged, ending, had_trailing_newline);
     planner.stage(target, updated)?;
     let relative_str = relative.to_string_lossy().replace('\\', "/");
     let summary = NotebookSummary {
@@ -863,23 +825,22 @@ fn plan_notebook_sub_note(
     if lines.len() == 1 && lines[0].is_empty() {
         lines.clear();
     }
-    let had_trailing_newline = contents.is_empty() || contents.ends_with('\n');
+    let had_trailing_newline = contents.ends_with('\n');
     if had_trailing_newline
         && !lines.is_empty()
         && lines.last().is_some_and(|l| l.is_empty())
     {
         lines.pop();
     }
-    let parent_width = parent_indent.chars().count();
     // Child indent: parent indent plus the file's dominant unit.
     let unit = super::sub_bullet::child_indent_unit(planner, target)
         .unwrap_or_else(|_| "\t".to_string());
     let child_indent = format!("{parent_indent}{unit}");
-    let _ = parent_width;
+    let detail_indent = format!("{child_indent}{unit}");
     let authored_children: Vec<String> =
         render_notebook_children(&parsed.sub_bullets, &unit)
             .into_iter()
-            .map(|line| format!("{parent_indent}{line}"))
+            .map(|line| format!("{child_indent}{line}"))
             .collect();
     let clip_plan = clip_lines_for_note(
         request,
@@ -887,7 +848,7 @@ fn plan_notebook_sub_note(
         clip_snapshot,
         clip_reservations,
         now,
-        &child_indent,
+        &detail_indent,
     )?;
     let mut clip_output = None;
     if let Some(plan) = clip_plan.as_ref() {
@@ -905,9 +866,19 @@ fn plan_notebook_sub_note(
             if line.starts_with(&child_indent) {
                 block.push(line.clone());
             } else {
-                block.push(format!("{child_indent}{}", line.trim_start()));
+                block.push(format!("{detail_indent}{}", line.trim_start()));
             }
         }
+    }
+    let block_text = block.join("\n");
+    if crate::native::notebooks::rules::contains_checkbox_rows(&block_text) {
+        return Err(CaptureError::usage_code(
+            capture_language::notebook_holds_no_tasks_error(
+                &route,
+                info.owner.as_deref(),
+            ),
+            "notebook_holds_no_tasks",
+        ));
     }
     // Duplicate check for any new IDs (terminal IDs on sub-note bodies
     // count, even though the kind carries no block_id).
@@ -916,33 +887,28 @@ fn plan_notebook_sub_note(
             .into_iter()
             .map(|(id, _)| id)
             .collect();
-    for line in &block {
-        for token in line.split_whitespace() {
-            if let Some(id) = token.strip_prefix('^') {
-                let clean = id
-                    .trim_end_matches([',', '.', ';', ':', '!', '?', ')', ']']);
-                if clean.is_empty() || !capture_language::is_block_id(clean) {
-                    continue;
-                }
-                if live_ids.contains(clean) {
-                    return Err(CaptureError::io(format!(
-                        "block ID ^{clean} already exists in {}",
-                        target.display()
-                    )));
-                }
-            }
+    let mut seen_new: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    for (id, _) in block_ids_outside_fences(&block_text) {
+        if live_ids.contains(&id) || !seen_new.insert(id.clone()) {
+            return Err(CaptureError::io(format!(
+                "block ID ^{id} already exists in {}",
+                target.display()
+            )));
         }
     }
+    let fenced = fenced_line_indices(&lines);
     let insert_at = bullet_block_end(
         &lines,
         parent_line,
         indent_width(&lines[parent_line]),
+        &fenced,
     );
     let mut staged = lines.clone();
     for (offset, line) in block.iter().enumerate() {
         staged.insert(insert_at + offset, line.clone());
     }
-    let updated = join_lines(&staged, ending);
+    let updated = join_lines(&staged, ending, had_trailing_newline);
     planner.stage(target, updated)?;
     let relative_str = relative.to_string_lossy().replace('\\', "/");
     let summary = NotebookSummary {

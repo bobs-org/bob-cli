@@ -14,7 +14,7 @@ pub(crate) struct CaptureBatchPlanner {
     pub(super) read_guards: BatchReadGuards,
 }
 
-/// Inputs consulted by a merge even when they are not written by the batch.
+/// Inputs consulted during planning even when the batch does not write them.
 #[derive(Default)]
 pub(super) struct BatchReadGuards {
     files: BTreeMap<PathBuf, Option<String>>,
@@ -44,7 +44,7 @@ impl BatchReadGuards {
                 != expected.as_ref().map(|text| text.as_bytes())
             {
                 return Err(CaptureError::io(format!(
-                    "merge input {} changed on disk after planning",
+                    "read input {} changed on disk after planning",
                     path.display()
                 ))
                 .with_typed(CaptureFailureKind::NoteChanged));
@@ -1192,5 +1192,28 @@ mod move_order_tests {
             .into_staged_files()
             .expect_err("cyclic move ordering refuses");
         assert!(error.message.contains("ordering contains a cycle"));
+    }
+
+    #[test]
+    fn read_guard_rejects_metadata_drift_after_classification() {
+        let dir = tempfile::tempdir().expect("temp vault");
+        let notebook = dir.path().join("notes.md");
+        let owner = dir.path().join("area.md");
+        fs::write(&notebook, "type: notebook\n").expect("write notebook");
+        fs::write(&owner, "type: area\n").expect("write owner");
+        for (path, before, after) in [
+            (&notebook, "type: notebook\n", "type: project\n"),
+            (&owner, "type: area\n", "type: project\n"),
+        ] {
+            let mut planner = CaptureBatchPlanner::default();
+            planner.guard_merge_read(path, Some(before.to_string()));
+            fs::write(path, after).expect("mutate metadata");
+            let error = planner
+                .read_guards
+                .validate(dir.path())
+                .expect_err("metadata drift refuses commit");
+            assert_eq!(error.typed, Some(CaptureFailureKind::NoteChanged));
+            fs::write(path, before).expect("restore metadata");
+        }
     }
 }

@@ -636,14 +636,14 @@ pub(super) fn is_checkbox_marker(after_dash: &str) -> bool {
 /// `line_index` is the heading's line, `level` is its ATX level (number of
 /// leading `#`), and `title` is the stripped heading text.
 #[derive(Debug, Clone, Copy)]
-pub(super) struct MarkdownHeading<'a> {
-    pub(super) line_index: usize,
-    pub(super) level: usize,
-    pub(super) title: &'a str,
+pub(crate) struct MarkdownHeading<'a> {
+    pub(crate) line_index: usize,
+    pub(crate) level: usize,
+    pub(crate) title: &'a str,
 }
 
 /// Collect every ATX heading, skipping YAML frontmatter and fenced code blocks.
-pub(super) fn markdown_headings<'a>(
+pub(crate) fn markdown_headings<'a>(
     lines: &[LineSpan<'a>],
 ) -> Vec<MarkdownHeading<'a>> {
     let mut headings = Vec::new();

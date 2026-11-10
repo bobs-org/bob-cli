@@ -65,6 +65,7 @@ pub(crate) fn parse_template_protocol(text: &str) -> TemplateProtocolParse {
             start: span.start - text_start,
             end: span.end - text_start,
             kind: span.kind,
+            notebook: span.kind.is_notebook(),
             field: span.field,
             themes: span.themes,
             cancels_source: span.cancels_source,
@@ -193,7 +194,7 @@ command also best-effort reads the configured vault's theme catalog and adds \
 theme refs; if the catalog is unavailable, parsing still succeeds without \
 those refs. It never writes to the vault or reads the clipboard, and takes no \
 --bob-dir. A '%c' directive still succeeds without reading the clipboard.\n\n\
-Success JSON reports `grammar: 23` for the capture-language revision while \
+Success JSON reports `grammar: 24` for the capture-language revision while \
 `schema_version` stays 1. Gmail URLs add `gmail_url` spans with offline \
 `gmail: {verdict, date_hint?}`, decoded thread `key`, and saved-label `title`. \
 No Gmail calls are made.\n\n\
@@ -209,9 +210,9 @@ Field `range` is present for one typed value, while `value_ranges[]` preserves \
 separate source spans for repeated values.\n\n\
 When a route resolves to an existing notebook note, individual `@route`, \
 `@route#section`, `@route^id`, and `@route+id` items report \
-`notebook_note` or `notebook_sub_note`. Their `notebook_route`, \
-`notebook_section`, `notebook_block_id`, and \
-`notebook_parent_block_id` spans keep the authored body opaque. `bob capture` \
+`notebook_note` or `notebook_sub_note`. Their `route`, `section`, \
+`task_block_id`, and `sub_bullet_block_id` spans keep the authored body \
+opaque and add `notebook: true`. `bob capture` \
 writes them as notebook notes through the guarded capture transaction.\n\n\
 Adjacent `@route+id` target markers at the start or end of one line fill one \
 route slot. Capture-parse keeps one item and adds `targets[]` for runs; \
@@ -1067,6 +1068,9 @@ pub(crate) struct CaptureParseSpan {
     pub(crate) start: usize,
     pub(crate) end: usize,
     pub(crate) kind: super::capture_language::SpanKind,
+    /// Notebook capture uses the shared span labels plus this discriminator.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) notebook: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) field: Option<usize>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -2281,6 +2285,7 @@ fn wire_spans(spans: Vec<Span>) -> Vec<CaptureParseSpan> {
             start: span.start,
             end: span.end,
             kind: span.kind,
+            notebook: span.kind.is_notebook(),
             field: None,
             themes: Vec::new(),
             cancels_source: false,
@@ -2322,6 +2327,7 @@ fn fill_span_gaps(spans: &mut Vec<CaptureParseSpan>, candidates: Vec<Span>) {
                     start: cursor,
                     end: start.min(candidate.end),
                     kind: candidate.kind,
+                    notebook: candidate.kind.is_notebook(),
                     field: None,
                     themes: Vec::new(),
                     cancels_source: false,
@@ -2346,6 +2352,7 @@ fn fill_span_gaps(spans: &mut Vec<CaptureParseSpan>, candidates: Vec<Span>) {
                 start: cursor,
                 end: candidate.end,
                 kind: candidate.kind,
+                notebook: candidate.kind.is_notebook(),
                 field: None,
                 themes: Vec::new(),
                 cancels_source: false,
@@ -2449,6 +2456,7 @@ fn template_spans(
                     start: cursor,
                     end: placeholder.range.start,
                     kind: span.kind,
+                    notebook: span.kind.is_notebook(),
                     field: None,
                     themes: Vec::new(),
                     cancels_source: false,
@@ -2470,6 +2478,7 @@ fn template_spans(
                 start: cursor,
                 end: span.end,
                 kind: span.kind,
+                notebook: span.kind.is_notebook(),
                 field: None,
                 themes: Vec::new(),
                 cancels_source: false,
@@ -2491,6 +2500,7 @@ fn template_spans(
             start: range.start,
             end: range.end,
             kind: SpanKind::Directive,
+            notebook: false,
             field: None,
             themes: Vec::new(),
             cancels_source: false,
@@ -2510,6 +2520,7 @@ fn template_spans(
             start: placeholder.range.start,
             end: placeholder.range.end,
             kind: SpanKind::TemplatePlaceholder,
+            notebook: false,
             field: Some(placeholder.field),
             themes: Vec::new(),
             cancels_source: false,
@@ -2529,6 +2540,7 @@ fn template_spans(
             start: field.range.start,
             end: field.range.end,
             kind: SpanKind::TemplateField,
+            notebook: false,
             field: Some(field.field),
             themes: Vec::new(),
             cancels_source: false,
@@ -4808,7 +4820,7 @@ mod tests {
         let value = json("Call bank @Cash+");
         assert_eq!(value["ok"], true);
         assert_eq!(value["schema_version"], 1);
-        assert_eq!(value["grammar"], 23);
+        assert_eq!(value["grammar"], 24);
         assert_eq!(value["input"], "Call bank @Cash+");
         assert_eq!(value["body"], "Call bank");
         assert_eq!(value["mode"], "incomplete");
@@ -4874,7 +4886,7 @@ mod tests {
         // "start a list" from it.
         let value = json("@sase");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 23);
+        assert_eq!(value["grammar"], 24);
         assert_eq!(value["mode"], "note_pull");
         assert_eq!(value["route"], "sase");
         assert!(value["section"].is_null());
@@ -5686,10 +5698,10 @@ mod tests {
     }
 
     #[test]
-    fn json_reports_merge_in_wire_shape_and_grammar_23() {
+    fn json_reports_merge_in_wire_shape_and_grammar_24() {
         let value = json("New task < @a+x @b+y");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 23);
+        assert_eq!(value["grammar"], 24);
         assert_eq!(value["schema_version"], 1);
         assert_eq!(value["mode"], "task");
         let merge_in = value.get("merge_in").expect("merge_in");

@@ -102,7 +102,7 @@ mod relations_complete;
 mod relations_mentions;
 mod relations_merge;
 mod relations_mirror;
-mod sections;
+pub(crate) mod sections;
 pub(crate) mod shell_guard;
 mod start_output;
 mod sub_bullet;

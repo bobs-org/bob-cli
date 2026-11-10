@@ -115,7 +115,7 @@ fn empty_drawer_menu_json_pins_groups_fields_and_the_unselected_open() {
     let draft = "Postgres 17 minimum @foo+bar#";
     let json = complete(&temp, &vault, draft);
 
-    assert_eq!(json["grammar"], 23);
+    assert_eq!(json["grammar"], 24);
     assert_eq!(json["schema_version"], 1);
     assert_eq!(json["context"], "drawer");
     assert_eq!(json["initial_selection"], "none");
@@ -428,7 +428,7 @@ fn bullet_menu_json_pins_the_target_the_bare_titles_and_the_continuation() {
     let draft = "@foo+bar\n- #";
     let json = complete(&temp, &vault, draft);
 
-    assert_eq!(json["grammar"], 23);
+    assert_eq!(json["grammar"], 24);
     assert_eq!(json["context"], "drawer");
     assert_eq!(json["initial_selection"], "none");
     assert_eq!(json["query"], "");

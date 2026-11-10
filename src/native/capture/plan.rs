@@ -297,6 +297,10 @@ pub(super) fn plan_capture_batch_with_config_path(
     let today = now.date();
     let roll_seed = config::roll_seed();
     let mut planner = CaptureBatchPlanner::default();
+    for (relative, source) in notebook_policy.metadata_sources() {
+        planner
+            .guard_merge_read(&request.bob_dir.join(relative), source.clone());
+    }
     let mut clip_reservations = capture_clip::ClipReservations::default();
     let mut clip_snapshot = ClipSnapshot::for_batch(request, &parsed_items);
     let mut fanout_warning_messages: HashMap<usize, HashSet<String>> =

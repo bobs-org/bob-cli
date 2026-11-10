@@ -19,6 +19,10 @@ fn policy() -> NotebookRoutePolicy {
             summary: Some("Tools".into()),
             owner: Some("dev".into()),
             breadcrumb: vec!["dev".into(), "Developer tools".into()],
+            sections: vec![super::super::notebook::NotebookSection {
+                title: "Git".into(),
+                line_index: 6,
+            }],
         },
     );
     policy
@@ -150,8 +154,8 @@ fn assert_code(raw: &str, code: &str) {
 }
 
 #[test]
-fn grammar_revision_is_twenty_three() {
-    assert_eq!(GRAMMAR_REVISION, 23);
+fn grammar_revision_is_twenty_four() {
+    assert_eq!(GRAMMAR_REVISION, 24);
 }
 
 #[test]
@@ -173,6 +177,72 @@ fn individual_forms_claim_notes_and_sub_notes() {
         Some("idea-id"),
     );
     assert_sub_note("Child note @dev+parent-id", "Child note", "parent-id");
+}
+
+#[test]
+fn clipboard_marker_keeps_text_on_both_sides_of_route() {
+    assert_note("%c @dev Keep this", "Keep this", None, false, None);
+    assert_note("Keep this @dev %c", "Keep this", None, false, None);
+    assert_note(
+        "Keep this %c @dev#Git",
+        "Keep this",
+        Some("Git"),
+        false,
+        None,
+    );
+}
+
+#[test]
+fn notebook_section_near_miss_has_editor_diagnostics() {
+    let note = editor_parse("Keep this @dev#Gi");
+    assert_eq!(
+        note.diagnostics.first().map(|diagnostic| diagnostic.code),
+        Some("notebook_section_near_miss")
+    );
+    let parsed = editor_parse("@dev#Gi\n- first\n- second");
+    assert_eq!(parsed.mode, EditorMode::NotebookNote);
+    assert_eq!(
+        parsed.diagnostics.first().map(|diagnostic| diagnostic.code),
+        Some("notebook_section_near_miss")
+    );
+}
+
+#[test]
+fn global_notebook_route_skips_capture_operations() {
+    for raw in [
+        "@@dev\nRemember this %n",
+        "@@dev\nx",
+        "@@dev\n=3",
+        "@@dev\n+2",
+    ] {
+        let parsed =
+            draft(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
+        assert!(
+            parsed.items.iter().all(|item| !matches!(
+                item.parsed.kind,
+                CaptureKind::NotebookNote { .. }
+                    | CaptureKind::NotebookSubNote { .. }
+            )),
+            "global notebook route claimed an operation: {raw}"
+        );
+    }
+    let explicit = draft("@@dev\nChild @dev+parent-id")
+        .unwrap_or_else(|error| panic!("explicit task link: {error}"));
+    assert!(matches!(
+        explicit.items[0].parsed.kind,
+        CaptureKind::NotebookSubNote { .. }
+    ));
+}
+
+#[test]
+fn notebook_capture_refuses_authored_checkbox_rows() {
+    for raw in [
+        "A note @dev\n- [ ] task row",
+        "Child @dev+parent-id\n- [x] task row",
+        "@dev#Git\n- [ ] task row",
+    ] {
+        assert_code(raw, "notebook_holds_no_tasks");
+    }
 }
 
 #[test]

@@ -48,11 +48,12 @@ pub(crate) mod transfer;
 mod type_marker;
 
 /// Revision of the capture grammar contract exposed to clients.
-/// Revision 23 adds `#section^id` on every route and notebook list, global,
-/// and forced destination forms. Revision 22 makes sized `Nx` closes execute
-/// (see `sized_pomodoro_close.md`); older clients parse the size as literal
-/// task text.
-pub(crate) const GRAMMAR_REVISION: u32 = 23;
+/// Revision 24 restores the established notebook span labels with an
+/// additive `notebook` modifier. Revision 23 adds `#section^id` on every route
+/// and notebook list, global, and forced destination forms. Revision 22
+/// makes sized `Nx` closes execute (see `sized_pomodoro_close.md`); older
+/// clients parse the size as literal task text.
+pub(crate) const GRAMMAR_REVISION: u32 = 24;
 
 #[cfg(test)]
 mod tests;
@@ -129,6 +130,7 @@ pub(crate) use self::editor_parse::tokenize_line_with_spans;
 pub(crate) use self::editor_pomodoro::cursor_in_close_log_text;
 pub(crate) use self::line::missing_text_error;
 pub(crate) use self::line::normalize_task_text;
+pub(crate) use self::line::notebook_holds_no_tasks_error;
 pub(crate) use self::line::selector_slug;
 #[cfg(test)]
 pub(crate) use self::markers::extract_terminal_markers;
@@ -190,8 +192,10 @@ pub(crate) use self::model::SubBulletTarget;
 pub(crate) use self::model::TaskToggleIntent;
 pub(crate) use self::model::TemplateRowSummary;
 pub(crate) use self::notebook::{
-    candidate_notebook_route, candidate_notebook_routes, NotebookRouteInfo,
-    NotebookRoutePolicy,
+    candidate_notebook_route, candidate_notebook_routes,
+    notebook_section_near_miss_message, notebook_sections,
+    resolve_notebook_section, NotebookRouteInfo, NotebookRoutePolicy,
+    NotebookSectionResolution,
 };
 pub(crate) use self::pomodoro_literal::canonicalize_exact_name;
 pub(crate) use self::project_tasks::split_leading_checkbox;

@@ -82,6 +82,23 @@ pub(crate) fn is_checkbox_line(line: &str) -> bool {
     bracket_status(after)
 }
 
+/// Whether this Markdown block contains a live checkbox row. Frontmatter,
+/// fenced examples, and inline code are not task rows; the same predicate is
+/// used by notebook capture before a staged write can commit.
+pub(crate) fn contains_checkbox_rows(contents: &str) -> bool {
+    let lines = physical_lines(contents);
+    let frontmatter_end =
+        crate::native::markdown::strictly_closed_frontmatter_end(&lines);
+    let scan_start = frontmatter_end.map_or(0, |end| end + 1);
+    let fenced =
+        crate::native::markdown::fenced_lines(&lines, scan_start..lines.len());
+    lines.iter().enumerate().any(|(index, line)| {
+        !frontmatter_end.is_some_and(|end| index <= end)
+            && !fenced.contains(&index)
+            && is_checkbox_line(line)
+    })
+}
+
 fn ordered_marker_len(line: &str) -> Option<usize> {
     let digits = line
         .char_indices()

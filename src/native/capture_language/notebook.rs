@@ -1,6 +1,6 @@
 //! Lexical notebook-route classification shared by capture and its editor.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 
 use super::{
     editor_model::{Diagnostic, EditorMode, Need, Severity, Span, SpanKind},
@@ -17,6 +17,20 @@ pub(crate) struct NotebookRouteInfo {
     pub(crate) summary: Option<String>,
     pub(crate) owner: Option<String>,
     pub(crate) breadcrumb: Vec<String>,
+    pub(crate) sections: Vec<NotebookSection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NotebookSection {
+    pub(crate) title: String,
+    pub(crate) line_index: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NotebookSectionResolution {
+    Existing { title: String, line_index: usize },
+    Create { title: String },
+    NearMiss { slug: String, quoted_title: String },
 }
 
 /// Immutable notebook route lookup for a single parse/capture invocation.
@@ -29,6 +43,9 @@ pub(crate) struct NotebookRoutePolicy {
     /// planner's staged bytes so a retype between classification and
     /// planning aborts instead of writing the new version silently.
     sources: HashMap<String, String>,
+    /// Every metadata preimage consulted while classifying notebook routes,
+    /// including owner-chain notes and missing candidate paths.
+    metadata_sources: HashMap<PathBuf, Option<String>>,
 }
 
 impl NotebookRoutePolicy {
@@ -61,6 +78,129 @@ impl NotebookRoutePolicy {
             .get(&route.to_ascii_lowercase())
             .map(String::as_str)
     }
+
+    pub(crate) fn insert_metadata_source(
+        &mut self,
+        path: PathBuf,
+        source: Option<String>,
+    ) {
+        self.metadata_sources.entry(path).or_insert(source);
+    }
+
+    pub(crate) fn metadata_sources(&self) -> &HashMap<PathBuf, Option<String>> {
+        &self.metadata_sources
+    }
+}
+
+/// H2 section headings from the same note snapshot used to classify its route.
+pub(crate) fn notebook_sections(contents: &str) -> Vec<NotebookSection> {
+    let lines = crate::native::capture::sections::line_spans(contents);
+    crate::native::capture::sections::markdown_headings(&lines)
+        .into_iter()
+        .filter(|heading| heading.level == 2)
+        .map(|heading| NotebookSection {
+            title: heading.title.to_string(),
+            line_index: heading.line_index,
+        })
+        .collect()
+}
+
+/// Resolve a selector against real H2s. The same pure operation serves the
+/// editor snapshot and the writer's later staged snapshot.
+pub(crate) fn resolve_notebook_section(
+    selector: &str,
+    exact: bool,
+    headings: &[NotebookSection],
+) -> NotebookSectionResolution {
+    if exact {
+        if let Some(heading) = headings
+            .iter()
+            .find(|heading| heading.title.eq_ignore_ascii_case(selector))
+        {
+            return NotebookSectionResolution::Existing {
+                title: heading.title.clone(),
+                line_index: heading.line_index,
+            };
+        }
+        return NotebookSectionResolution::Create {
+            title: selector.to_string(),
+        };
+    }
+
+    let query_slug = super::selector_slug(selector);
+    if let Some(heading) = headings.iter().find(|heading| {
+        heading.title.eq_ignore_ascii_case(selector)
+            || (!super::selector_slug(&heading.title).is_empty()
+                && super::selector_slug(&heading.title) == query_slug)
+    }) {
+        return NotebookSectionResolution::Existing {
+            title: heading.title.clone(),
+            line_index: heading.line_index,
+        };
+    }
+
+    let mut suggestion = headings.iter().find_map(|heading| {
+        let slug = super::selector_slug(&heading.title);
+        (!slug.is_empty()
+            && !query_slug.is_empty()
+            && slug.starts_with(&query_slug))
+        .then_some((slug, heading.title.clone()))
+    });
+    if suggestion.is_none() && !query_slug.is_empty() {
+        let mut best: Option<(usize, String)> = None;
+        for heading in headings {
+            let slug = super::selector_slug(&heading.title);
+            if slug.is_empty() {
+                continue;
+            }
+            if let Some(distance) =
+                crate::native::note_tasks::bounded_levenshtein(
+                    &query_slug,
+                    &slug,
+                    2,
+                )
+                && best
+                    .as_ref()
+                    .is_none_or(|(best_distance, _)| distance < *best_distance)
+            {
+                best = Some((distance, slug));
+            }
+        }
+        suggestion = best.map(|(_, slug)| {
+            let title = headings
+                .iter()
+                .find(|heading| super::selector_slug(&heading.title) == slug)
+                .map(|heading| heading.title.clone())
+                .unwrap_or_else(|| slug.clone());
+            (slug, title)
+        });
+    }
+    if let Some((slug, _)) = suggestion {
+        return NotebookSectionResolution::NearMiss {
+            slug,
+            quoted_title: crate::native::capture_project_note::format_project_section_title(
+                &selector.replace('-', " "),
+            ),
+        };
+    }
+
+    NotebookSectionResolution::Create {
+        title:
+            crate::native::capture_project_note::format_project_section_title(
+                &selector.replace('-', " "),
+            ),
+    }
+}
+
+pub(crate) fn notebook_section_near_miss_message(
+    route: &str,
+    selector: &str,
+    slug: &str,
+    quoted_title: &str,
+) -> String {
+    format!(
+        "no section `{selector}` in {route}.md — did you mean `#{slug}`? Write `#\"{quoted_title}\"` to create it"
+    )
 }
 
 /// Routes mentioned by capture syntax, in first-seen order. This is a
@@ -521,12 +661,14 @@ fn body_without_marker(item: &CaptureItem<'_>, marker: &RouteMarker) -> String {
     };
     let local_start = marker.token_range.0.saturating_sub(parent.raw.start);
     let local_end = marker.token_range.1.saturating_sub(parent.raw.start);
-    let parent_body = if local_start == 0 {
-        parent.raw.text.get(local_end..).unwrap_or("").trim()
-    } else {
-        parent.raw.text.get(..local_start).unwrap_or("").trim()
-    };
-    parent_body.to_string()
+    let before = parent.raw.text.get(..local_start).unwrap_or("").trim();
+    let after = parent.raw.text.get(local_end..).unwrap_or("").trim();
+    match (before.is_empty(), after.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => before.to_string(),
+        (true, false) => after.to_string(),
+        (false, false) => format!("{before} {after}"),
+    }
 }
 
 fn notebook_sub_bullets(
@@ -598,6 +740,9 @@ fn classify_item(
             RouteScan::NotNotebookRoute => Ok(None),
         };
     }
+    if item_has_explicit_operation(item) {
+        return Ok(None);
+    }
     let Some(route) = global_route else {
         return Ok(None);
     };
@@ -610,6 +755,86 @@ fn classify_item(
         info,
         inherited: true,
     }))
+}
+
+/// Global notebook routes apply only to ordinary text and URL notes. Keep
+/// lexical operation claims on their established parser path before the
+/// notebook can reinterpret an unrouted item.
+fn item_has_explicit_operation(item: &CaptureItem<'_>) -> bool {
+    if super::tokens::task_link_query_token(item).is_some()
+        || super::tokens::task_goto_query_token(item).is_some()
+        || super::editor_parse::parse_editor_task_complete_item(item).is_some()
+    {
+        return true;
+    }
+    let Some(parent) = item.lines.first() else {
+        return false;
+    };
+    let first = parent.raw.text.split_whitespace().next().unwrap_or("");
+    if super::item::is_session_chain_token(first) {
+        return true;
+    }
+    let directives =
+        super::directive::resolve(&super::directive::collect_item(item));
+    if directives.is_ok_and(|directives| {
+        directives.note || directives.listen || directives.template
+    }) {
+        return true;
+    }
+    if super::type_marker::collect_item(item)
+        .iter()
+        .any(super::type_marker::TypeMarkerOccurrence::is_marker)
+    {
+        return true;
+    }
+    if super::dependencies::scan_item_dependencies(item).has_entries()
+        || super::dependencies::scan_item_dependencies(item)
+            .has_partial_tokens()
+    {
+        return true;
+    }
+    if super::relations::scan_line_relations(parent.raw.text, parent.raw.start)
+        .iter()
+        .any(|relation| {
+            !matches!(
+                relation,
+                super::relations::ScannedRelation::Escaped { .. }
+            )
+        })
+    {
+        return true;
+    }
+    super::editor_parse::tokenize_line_with_spans(&parent.raw)
+        .iter()
+        .any(|token| {
+            super::markers::parse_schedule_token(token.text).is_some()
+                || super::markers::parse_priority_token(token.text).is_some()
+        })
+}
+
+fn notebook_authored_block(
+    body: &str,
+    children: &[AuthoredSubBullet],
+) -> String {
+    let mut lines = vec![format!("- {body}")];
+    lines.extend(children.iter().map(|child| {
+        let indentation = "  ".repeat(child.depth.indent_units());
+        format!("{indentation}- {}", child.body)
+    }));
+    lines.join("\n")
+}
+
+fn notebook_authored_block_has_checkbox(
+    body: &str,
+    children: &[AuthoredSubBullet],
+) -> bool {
+    crate::native::notebooks::rules::contains_checkbox_rows(
+        &notebook_authored_block(body, children),
+    )
+}
+
+fn notebook_task_refusal(route: &str, owner: Option<&str>) -> String {
+    super::line::notebook_holds_no_tasks_error(route, owner)
 }
 
 fn inherited_marker(route: String, item: &CaptureItem<'_>) -> RouteMarker {
@@ -955,6 +1180,16 @@ fn finish_notebook_claim<'a>(
         }
     }
     let sub_bullets = notebook_sub_bullets(item)?;
+    if notebook_authored_block_has_checkbox(&claim.body, &sub_bullets) {
+        return Err(CaptureItemParseError::coded_at(
+            "notebook_holds_no_tasks",
+            notebook_task_refusal(
+                &claim.marker.route,
+                claim.info.owner.as_deref(),
+            ),
+            Some(claim.marker.token_range),
+        ));
+    }
     let empty_ok = !sub_bullets.is_empty()
         || clip.is_some()
         || matches!(claim.marker.form, NotebookForm::SubNote { .. });
@@ -1440,6 +1675,32 @@ pub(crate) fn editor_view_for_item(
             needs.push(Need::NotebookNote);
         }
         let sub_bullets = notebook_sub_bullets(item).unwrap_or_default();
+        if notebook_authored_block_has_checkbox(&body, &sub_bullets) {
+            return Some(notebook_editor_error(
+                list.route.clone(),
+                "notebook_holds_no_tasks",
+                notebook_task_refusal(&list.route, owner),
+                Some(header_range),
+            ));
+        }
+        let mut diagnostics = Vec::new();
+        if let Some(selector) = list.section.as_deref()
+            && let NotebookSectionResolution::NearMiss { slug, quoted_title } =
+                resolve_notebook_section(selector, list.exact, &info.sections)
+        {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code: "notebook_section_near_miss",
+                message: notebook_section_near_miss_message(
+                    &list.route,
+                    selector,
+                    &slug,
+                    &quoted_title,
+                ),
+                range: Some(header_range),
+                rewrite: None,
+            });
+        }
         return Some(NotebookEditorView {
             mode: EditorMode::NotebookNote,
             body,
@@ -1455,7 +1716,7 @@ pub(crate) fn editor_view_for_item(
                 title: Some(info.title.clone()),
                 key: info.owner.clone(),
             }],
-            diagnostics: Vec::new(),
+            diagnostics,
             sub_bullets,
         });
     }
@@ -1493,6 +1754,7 @@ pub(crate) fn editor_view_for_item(
         }
     };
     let mut needs = Vec::new();
+    let mut diagnostics = Vec::new();
     let mut spans = vec![Span {
         start: claim.marker.route_range.0,
         end: claim.marker.route_range.1,
@@ -1520,6 +1782,29 @@ pub(crate) fn editor_view_for_item(
                         if *exact_section { "exact" } else { "slug" }
                             .to_string(),
                     ),
+                });
+            }
+            if let Some(section) = section.as_deref()
+                && let NotebookSectionResolution::NearMiss {
+                    slug,
+                    quoted_title,
+                } = resolve_notebook_section(
+                    section,
+                    *exact_section,
+                    &claim.info.sections,
+                )
+            {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    code: "notebook_section_near_miss",
+                    message: notebook_section_near_miss_message(
+                        &claim.marker.route,
+                        section,
+                        &slug,
+                        &quoted_title,
+                    ),
+                    range: *section_range,
+                    rewrite: None,
                 });
             }
             if let Some(range) = block_id_range {
@@ -1587,6 +1872,14 @@ pub(crate) fn editor_view_for_item(
     if clip.is_some() {
         body = strip_clip_tokens(&body);
     }
+    if notebook_authored_block_has_checkbox(&body, &sub_bullets) {
+        return Some(notebook_editor_error(
+            claim.marker.route.clone(),
+            "notebook_holds_no_tasks",
+            notebook_task_refusal(&claim.marker.route, owner_of(&claim.info)),
+            Some(claim.marker.token_range),
+        ));
+    }
     if body.trim().is_empty()
         && needs.is_empty()
         && sub_bullets.is_empty()
@@ -1604,7 +1897,7 @@ pub(crate) fn editor_view_for_item(
         block_id,
         needs,
         spans,
-        diagnostics: Vec::new(),
+        diagnostics,
         sub_bullets,
     })
 }
@@ -1651,6 +1944,10 @@ mod tests {
                 summary: Some("Tools".into()),
                 owner: Some("dev".into()),
                 breadcrumb: vec!["dev".into(), "Developer tools".into()],
+                sections: vec![NotebookSection {
+                    title: "Git".into(),
+                    line_index: 0,
+                }],
             },
         );
         policy
@@ -1719,6 +2016,7 @@ mod tests {
                 summary: None,
                 owner: Some("dev".into()),
                 breadcrumb: vec!["dev".into()],
+                sections: Vec::new(),
             },
         );
         let options = EditorParseOptions {

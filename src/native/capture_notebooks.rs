@@ -54,9 +54,6 @@ fn build_notebook_policy(
     let mut policy = NotebookRoutePolicy::absent();
     for route in candidates {
         let path = PathBuf::from(format!("{route}.md"));
-        if !vault_root.join(&path).is_file() {
-            continue;
-        }
         let Some(contents) =
             read_cached(vault_root, &path, &mut cache, &mut reads)
         else {
@@ -72,6 +69,9 @@ fn build_notebook_policy(
             vault_root, &path, &contents, &links, &mut cache, &mut reads,
         );
         policy.insert_with_source(route, info, contents);
+    }
+    for (path, source) in cache {
+        policy.insert_metadata_source(path, source);
     }
     (policy, reads)
 }
@@ -172,6 +172,7 @@ fn route_info(
         summary,
         owner,
         breadcrumb,
+        sections: super::capture_language::notebook_sections(contents),
     }
 }
 
@@ -221,6 +222,18 @@ mod tests {
         assert_eq!(info.title, "Git");
         assert_eq!(info.owner.as_deref(), Some("dev"));
         assert_eq!(info.breadcrumb, ["dev", "Developer tools", "Git"]);
+        for (path, expected) in [
+            ("git.md", "type: \"[[notebook]]\""),
+            ("dev_tools.md", "type: \"[[notebook]]\""),
+            ("dev.md", "type: \"[[area]]\""),
+        ] {
+            let source = policy
+                .metadata_sources()
+                .get(Path::new(path))
+                .and_then(Option::as_deref)
+                .unwrap_or_else(|| panic!("missing metadata preimage: {path}"));
+            assert!(source.contains(expected), "{path}: {source}");
+        }
         assert_eq!(
             reads
                 .iter()
