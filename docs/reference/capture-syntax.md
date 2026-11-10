@@ -31,7 +31,7 @@ Incomplete **picker** input cannot execute.
 | `@route` | Write a task to `<route>.md` | [`@route`](#at-route) |
 | `@dir/` / `@dir/^stem` / `@dir/stem` | Record create, explicit stem, or existing-record update | [Record notes](#record-notes) |
 | `@route#Section` / `@route#section^id` | Ordinary bullet under a matching heading | [`@route#Section`](#at-route-section) |
-| Notebook `@route`, `@route#section`, `@route^id`, `@route+id` | Append a note, section note, named note, or sub-note | [Notebook capture](../notebooks.md#capture) |
+| Notebook `@route`, `@route#section`, `@route^id`, `@route+id` | Append a note, section note, note with an ID, or child note | [Notebook capture](../notebooks.md#capture) |
 | `@route#` | Ordinary bullet under any non-`Tasks` heading | [`@route#`](#at-route-any-section) |
 | `@route^block-id` | New open task with a user-authored block ID | [`@route^block-id`](#at-route-caret) |
 | `@route:block-id` | New Next task plus a Pomodoro Task Link | [`@route:block-id`](#at-route-colon) |
@@ -379,7 +379,7 @@ Contract: [Bulk templates](../capture.md#bulk-templates).
 
 Editor `capture-rewrite` aliases include `@route.` / `@route;` → `^` / `:`,
 whole-item `;` → `:`, and spaced `.` / `;` → route or dependency pickers.
-A glued `.` toggles complete `@route:id` ↔ `@route^id`, including sealed
+A trailing `.` toggles complete `@route:id` ↔ `@route^id`, including sealed
 project markers and task-list IDs. Direct CLI capture never applies these
 [typing assists](../capture.md#bob-capture-rewrite).
 

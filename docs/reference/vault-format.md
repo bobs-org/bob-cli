@@ -402,14 +402,14 @@ Contract: [Notebooks](../notebooks.md).
 Each configured `records:` type owns one folder. A record uses
 `type: "[[<type-id>]]"` and lives at `<dir>/<stem>.md`; its properties come
 from that type's schema. Bob writes `parent` when available, then `type`,
-`title`, schema fields, and `created`. Authored note bullets live under
+`title`, schema fields, and `created`. Ordinary note bullets live under
 `## Notes`, with dates when `dated_notes: true`.
 
-For example, a configured `restaurant` type owning `eat/` creates
-`eat/ramen_nagi.md` through `Ramen Nagi @eat/`. `@eat/ramen_nagi` updates
-that record's supplied fields and appends notes. `bob records init restaurant`
-scaffolds missing `restaurant.md`, `eat.md`, and `eat.base`; creating a
-missing collection note also requires `-p/--parent`.
+For a configured `restaurant` type owning `eat/`, `Ramen Nagi @eat/` plus
+its required field bullets creates `eat/ramen_nagi.md`. `@eat/ramen_nagi`
+updates supplied fields and appends notes. `bob records init restaurant -p food`
+scaffolds missing `restaurant.md`, `eat.md`, and `eat.base`; `-p/--parent`
+sets the collection note's parent and is required when that note is missing.
 
 Contract: [Record notes](../records.md).
 
@@ -421,11 +421,14 @@ the archive; the archive has `type: "[[done]]"` and a `parent` link back.
 Reciprocal metadata takes precedence over filenames, and unambiguous archive
 pairs follow source renames.
 
-Eligible area and unfinished project notes keep up to ten newest dated
-closures from today and the preceding six days. Older eligible task blocks
-move with their children; undated and future-dated closures stay. New archive
-content uses `## YYYY-MM` close-month headings. Links to moved blocks are
-repaired across the vault.
+Each eligible area or unfinished project note keeps up to ten eligible task
+blocks with the newest close dates from today and the preceding six days.
+Older blocks, including excess closures within that window, move with their children;
+undated and future-dated blocks stay. `--threshold N` requires at least N
+selected blocks in a note before moving any. Exact copies already archived
+are removed from the source even within the keep window. New archive content
+uses `## YYYY-MM` close-month headings. Links to moved blocks are repaired
+across the vault.
 
 `bob task restore` moves selected closed blocks back to their bound source
 or an explicit destination. They remain closed unless `--reopen` is supplied.

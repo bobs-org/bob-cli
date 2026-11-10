@@ -251,7 +251,7 @@ bob records update restaurant ninja_sushi -s url=
 bob records update restaurant ninja_sushi -n 'Went back for lunch'
 ```
 
-`-d/--dry-run` prints the exact planned Markdown without opening or writing, and
+`-d/--dry-run` prints the planned Markdown without writing or opening Obsidian, and
 `-o/--open` opens the note in Obsidian only after a successful committed update.
 Usage, missing targets, and supplied-value refusals exit 2. A no-op update succeeds
 without rewriting the note. Human and JSON results report changed fields with
@@ -260,9 +260,8 @@ and never block the update.
 
 ## Adding a record type
 
-Types exist only when declared in `records:` in `config.yml`;
-`bob records init TYPE` scaffolds an already-configured type. With the
-restaurant schema above:
+Declare a type under `records:` in `config.yml` before running
+`bob records init TYPE` to scaffold it. For the restaurant schema above:
 
 ```sh
 bob records init restaurant -p food

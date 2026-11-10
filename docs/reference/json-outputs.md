@@ -28,15 +28,15 @@ Envelopes vary by command family:
 - A failing command may print JSON, a human message on stderr, or both; see
   that command's contract.
 
-The examples below show selected fields. The `bob plan` illustration uses a
-synthetic vault with no daily note yet; `…` marks omitted nested numbers.
+Examples show selected fields; `…` marks omissions. The `bob plan` vault
+has no daily note.
 
 ```bash
 bob capture-parse -f json -- 'Buy milk @dev'
 ```
 
 ```text { .no-copy title="Output (selected fields)" }
-{"ok":true,"schema_version":1,"grammar":24,"input":"Buy milk @dev","body":"Buy milk","mode":"task","route":"dev","section":null,"block_id":null,"needs":[],"spans":[{"start":9,"end":13,"kind":"route"}],"diagnostics":[]}
+{"ok":true,"schema_version":1,"grammar":25,"input":"Buy milk @dev","body":"Buy milk","mode":"task","route":"dev","section":null,"block_id":null,"needs":[],"spans":[{"start":9,"end":13,"kind":"route"}],"diagnostics":[]}
 ```
 
 ```bash
@@ -65,7 +65,7 @@ except `capture-task-id`/`capture-pomodoro-name` (write; `-d` previews) and
 | `bob capture-complete` | `-f json` | Completion contexts, candidates, replacement ranges, picker state, selection, effects, and creation choices. Contexts cover routes, tasks, types, records, relations, moves, transfers, merge-ins, and past sessions. `-n` walks required fields; `-F` adds record-value assistance. | `schema_version: 1` | [Capture completion](../capture.md#bob-capture-complete) |
 | `bob capture-pomodoro-name` | `-f json` | Name write (or `-d` plan) for one open Pomodoro, plus optional `warnings` | `schema_version: 1` | [Capture](../capture.md) |
 | `bob capture-pomodoros` | `-f json` | Ledger entries, `warnings`, and `max_task_link_count`; Pomodoro rows include `start_token` when selectable and their slug is non-empty; `--tasks` adds task agendas, optional `events` calendar rows/hints, event chips, `off_clock` and deprecated `untracked` fields plus `clock_source` (`on_tag`\|`off_tag`\|`note`\|`invalid_note`\|`default`) and `clock_note` (deciding note path or null), completed off-clock totals, and buffer objects with occupied spans on buffered Event Tasks | `schema_version: 1` | [Capture](../capture.md), [Pomodoro homes](../pomodoro-homes.md) |
-| `bob capture-related` | `-f json` | Similar tasks or records, UTF-8 draft anchors, actions, and already-linked tasks; `--query` adds scores | `schema_version: 1` | [Capture](../capture.md#bob-capture-related) |
+| `bob capture-related` | `-f json` | Similar tasks or same-folder records, UTF-8 draft anchors, actions, and already-linked tasks; `--query` ranks task titles with scores | `schema_version: 1` | [Capture](../capture.md#bob-capture-related) |
 | `bob capture-rewrite` | `-f json` | `input`, rewritten `text`, `changed`, `cursor`, `rule`, `edits`, and optional forward `alias`; unchanged cursor requests add an object or `null` `sigil_alias_tip` | `schema_version: 1` | [Capture-rewrite contract](../capture.md#bob-capture-rewrite) |
 | `bob capture-sections` | `-f json` | `route`, `count`, and non-`Tasks` `sections` | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md) |
 | `bob capture-targets` | `-f json` | `bob_dir`, `count`, and route `targets`; notebook rows use `kind: "notebook"` with `title`, `summary`, `owner`, and `breadcrumb`, record rows use `kind: "record"` | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md#record-notes) |
@@ -82,15 +82,17 @@ Capture item results optionally carry `gmail: [{url, verdict, thread_id?, note?,
 
 ### Record notes {#record-notes}
 
-These excerpts assume required `status` and `category` fields, optional
-`visited`, and `dated_notes: true` in the [record schema](../records.md#schema).
+These excerpts use the [restaurant schema](../records.md#schema), including
+required `status`, `category`, and `location`. Update examples assume
+`eat/ninja_sushi.md` exists with `status: to_try`; section completion assumes
+`eat.md` has a `# Ideas` heading.
 
 ```bash
 bob capture-parse -f json -- 'Ramen Nagi @eat/'
 ```
 
 ```text { .no-copy title="Output (selected fields)" }
-{"ok":true,"schema_version":1,"grammar":24,"input":"Ramen Nagi @eat/","body":"Ramen Nagi","mode":"record_note","route":"eat","needs":["record_value"],"record":{"action":"create","type":"restaurant","label":"Restaurant","dir":"eat","path":"eat/ramen_nagi.md","stem":"ramen_nagi","stem_source":"title","title":"Ramen Nagi","missing":["status","category"],"notes":0,"assist_version":1,"fields":[{"key":"status","kind":"choices","required":true,"state":"missing"}]}}
+{"ok":true,"schema_version":1,"grammar":25,"input":"Ramen Nagi @eat/","body":"Ramen Nagi","mode":"record_note","route":"eat","needs":["record_value"],"record":{"action":"create","type":"restaurant","label":"Restaurant","dir":"eat","path":"eat/ramen_nagi.md","stem":"ramen_nagi","stem_source":"title","title":"Ramen Nagi","missing":["status","category","location"],"notes":0,"assist_version":1,"fields":[{"key":"status","kind":"choices","required":true,"state":"missing"}]}}
 ```
 
 Existing `@eat/ninja_sushi` parses as `record_update` / `action: "update"`, with
@@ -100,11 +102,11 @@ prior `before`/`before_display`; `missing` lists required fields still empty.
 `placement: "updated"`, and `note_files[].action: "update"` with `before` and `lines`.
 
 ```bash
-bob capture -f json --dry-run -- "$(printf '%s\n' 'Ramen Nagi @eat/' '- status:: liked' '- category:: Ramen')"
+bob capture -f json --dry-run -- "$(printf '%s\n' 'Ramen Nagi @eat/' '- status:: liked' '- category:: Ramen' '- location:: Clark')"
 ```
 
 ```text { .no-copy title="Output (selected fields)" }
-{"ok":true,"dry_run":true,"kind":"record_note","placement":"created","relative_target":"eat/ramen_nagi.md","record_note":{"action":"create","label":"Restaurant","emoji":"🍽️","path":"eat/ramen_nagi.md","notes":0,"properties":[{"key":"status","label":"Status","value":"liked","display":"Liked","source":"typed"}]},"note_files":[{"path":"eat/ramen_nagi.md","action":"create","record_type":"restaurant","properties":[{"key":"status","label":"Status","value":"liked","display":"Liked","source":"typed"}],"body":"","markdown":"---\n…\n"}]}
+{"ok":true,"dry_run":true,"kind":"record_note","placement":"created","relative_target":"eat/ramen_nagi.md","record_note":{"action":"create","label":"Restaurant","emoji":"🍽️","path":"eat/ramen_nagi.md","notes":0,"properties":[{"key":"status","label":"Status","value":"liked","display":"💚 Liked","source":"typed"}]},"note_files":[{"path":"eat/ramen_nagi.md","action":"create","record_type":"restaurant","properties":[{"key":"status","label":"Status","value":"liked","display":"💚 Liked","source":"typed"}],"markdown":"---\n…\n"}]}
 ```
 
 Record items add `record_note` summaries; incomplete drafts include `draft`,
@@ -115,7 +117,7 @@ bob capture -f json --dry-run -- "$(printf '%s\n' 'Went back, still great @eat/n
 ```
 
 ```text { .no-copy title="Output (selected fields)" }
-{"ok":true,"dry_run":true,"kind":"record_update","placement":"updated","relative_target":"eat/ninja_sushi.md","note_files":[{"path":"eat/ninja_sushi.md","action":"update","record_type":"restaurant","properties":[{"key":"status","label":"Status","value":"liked","display":"Liked","source":"typed","before":"to_try","before_display":"To try"}],"body":"","markdown":"---\n…\n","lines":[{"text":"- 2026-10-20: Went back, still great","depth":0,"change":"added"}]}]}
+{"ok":true,"dry_run":true,"kind":"record_update","placement":"updated","relative_target":"eat/ninja_sushi.md","note_files":[{"path":"eat/ninja_sushi.md","action":"update","record_type":"restaurant","properties":[{"key":"status","label":"Status","value":"liked","display":"💚 Liked","source":"typed","before":"to_try","before_display":"🔖 To try"}],"markdown":"---\n…\n","lines":[{"text":"- 2026-10-20: Went back, still great","depth":0,"change":"added"}]}]}
 ```
 
 Properties pair canonical `value` and human `display`. Lists are arrays, numbers
@@ -128,7 +130,7 @@ bob capture-complete -n -c 16 -f json -- 'Ramen Nagi @eat/'
 ```
 
 ```text { .no-copy title="Output (selected fields)" }
-{"ok":true,"schema_version":1,"grammar":24,"cursor":16,"context":"record_value","record":{"type":"restaurant","dir":"eat","label":"Restaurant","field":"status","assist_version":1},"candidates":[{"replacement":"\n- status:: liked","value":"liked","display":"Liked","kind":"choices","cursor_after":33,"continuation":{"cursor":33,"next_missing_field":true}}]}
+{"ok":true,"schema_version":1,"grammar":25,"cursor":16,"context":"record_value","record":{"type":"restaurant","dir":"eat","label":"Restaurant","field":"status","assist_version":1},"candidates":[{"replacement":"\n- status:: liked","value":"liked","display":"💚 Liked","kind":"choices","cursor_after":33,"continuation":{"cursor":33,"next_missing_field":true}}]}
 ```
 
 Accepting inserts `- status:: liked`; `-n` at `continuation.cursor` walks
@@ -141,7 +143,7 @@ bob capture-complete -F visited -c 16 -f json -- 'Ramen Nagi @eat/'
 ```
 
 ```text { .no-copy title="Output (selected fields)" }
-{"ok":true,"schema_version":1,"grammar":24,"cursor":16,"context":"record_value","record":{"type":"restaurant","dir":"eat","label":"Restaurant","field":"visited","assist_version":1,"edit":{"replacement_range":{"start":16,"end":16},"replacement":"\n- visited:: ","cursor_after":29,"continuation":{"cursor":29,"next_missing_field":false}}},"candidates":[{"replacement":"\n- visited:: today","value":"today","display":"today","kind":"date","cursor_after":34}]}
+{"ok":true,"schema_version":1,"grammar":25,"cursor":16,"context":"record_value","record":{"type":"restaurant","dir":"eat","label":"Restaurant","field":"visited","assist_version":1,"edit":{"replacement_range":{"start":16,"end":16},"replacement":"\n- visited:: ","cursor_after":29,"continuation":{"cursor":29,"next_missing_field":false}}},"candidates":[{"replacement":"\n- visited:: today","value":"today","display":"today","kind":"date","cursor_after":34}]}
 ```
 
 `@` inserts `eat/ ` (`kind: "record"`). Empty `@eat#` expands `replacement`
@@ -152,7 +154,7 @@ bob capture-complete -c 5 -f json -- '@eat#'
 ```
 
 ```text { .no-copy title="Output (selected fields)" }
-{"ok":true,"schema_version":1,"grammar":24,"cursor":5,"replacement":{"start":0,"end":5},"context":"section","candidates":[{"kind":"record_create","replacement":"@eat/ ","label":"🍽️ New restaurant · eat/","route":"eat/","type":"restaurant","cursor_after":6,"continuation":{"cursor":6,"next_missing_field":true}},{"replacement":"@eat#Ideas","title":"Ideas","level":1}]}
+{"ok":true,"schema_version":1,"grammar":25,"cursor":5,"replacement":{"start":0,"end":5},"context":"section","candidates":[{"kind":"record_create","replacement":"@eat/ ","label":"🍽️ New restaurant · eat/","route":"eat/","type":"restaurant","cursor_after":6,"continuation":{"cursor":6,"next_missing_field":true}},{"replacement":"@eat#Ideas","title":"Ideas","level":1}]}
 ```
 
 Near-spellings warn `record_value_near` with no rewrite. Parse reports
@@ -248,14 +250,14 @@ and [relation events](../task-dependencies.md#1218-relation-successors-starts-af
 
 ### Move-choice results
 
-Every `bob capture -f json` success and refusal returns `move_choice` with
-`supported: true`. A `- ^^` slot adds `slots[]`. Dry runs without `-m`
-return `answered: false` and `ok: true`, with no choices applied.
+`bob capture -f json` successes return `move_choice` with `supported: true`;
+refusals may include it. A `- ^^` slot adds `slots[]`. A valid dry run without
+`-m` returns `answered: false` and `ok: true`, with no choices applied.
 
-A draft has at most one choice slot, built from the staged parent including
-earlier items. `item_line` is one-based; `draft_range` is a half-open UTF-8
-byte pair for `^^`. `pomodoro_name` is optional. Bob supplies the display
-strings in `copy`; `then` is optional. Example:
+A draft has at most one choice slot. `item_line` is one-based;
+`draft_range` is a half-open UTF-8 byte pair for `^^`.
+`pomodoro_name` is optional. Bob supplies the display
+strings in `copy`; `then` is a string or `null`. Example:
 
 ```json
 {
