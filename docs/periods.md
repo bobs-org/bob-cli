@@ -386,11 +386,12 @@ The schema-1 JSON object has these top-level members:
 | `links` | Parent, previous, and next note ids, paths, and labels |
 | `facts` | Visible Day-strip facts in `worked`, `reviewed`, `done`, `created`, `review_closed` order |
 | `lanes` | Worked root-parent and type parts, with labels, minutes, displays, shares, and a type-fold flag |
+| `charts` | Schema-1 Roots and Types series for the period strip: top-N root parents, configured types (or top 7 components), folded rest, and unattributed time |
 | `columns` | Render-ready strip columns: seven days for a week, weeks for a quarter/year, and quarters for all time |
 | `groups` | Quarter Worked totals for a year, or year totals for all time |
 | `children` | Parts-table rows: days, weeks, quarters, or years |
 | `homes`, `theme_hues` | The Stats home and type catalogs used by the Day strip |
-| `warnings` | Report warnings; empty when none apply |
+| `warnings` | Report warnings; empty when none apply. Invalid `stats.period_strip.top_roots` adds `period_strip_top_roots_invalid` |
 
 Every fact has `metric`, `label`, `unit`, `value`, `display`, `so_far`,
 `quality`, and `typical`. `review_closed` also has `of` and displays `N of M`.
@@ -414,12 +415,45 @@ typical line.
 `lanes.root_parent` and `lanes.theme` each contain `{key, label, minutes,
 display, share}` rows. The weekly type lane is unmodified. Quarter, year, and
 all-time type lanes fold `(unnamed)` and types below 2% of Worked into `other`.
+`lanes`, `types_folded`, and `columns[].stack` / `children[].stack` stay the
+previous contract so older plugins keep working.
+
+`charts` is additive schema 1. `charts.roots` has `limit` (from
+`stats.period_strip.top_roots`, default 5), `dimension: root_parent`, and
+`series`. `charts.types` has `policy` (`configured` when a `types:` vocabulary
+is present, otherwise `components`) and `series`. Each series is
+`{key, kind, label, minutes, display, display_short, share}` with `kind` one of
+`root`, `type`, `rest`, or `unattributed`. Synthetic keys start with `@`.
+Named roots are ranked by the whole period's Worked minutes (ties by key); the
+first N stay, the rest fold into `@rest` labeled `N more` with `members`.
+`@unlinked` and `@unfiled` merge into `@unattributed` (labeled `unlinked`,
+`unfiled`, or `no root` when both are present) and never take a top-N slot.
+Configured types with minutes each get a series; sessions with no configured
+type fold into `@unattributed` labeled `untyped` (`members` `@unnamed` and
+`@other_names`). Without a vocabulary the types chart keeps the top 7
+components, then `@rest` labeled `N more types`, then unattributed. Series
+order is named (minutes descending, ties by key), then rest, then
+unattributed. `share` is a percent of the period's total Worked, rounded like
+`lanes`. `display_short` is the whole-hours form (`35h`, rounded half up) when
+minutes are ≥ 600, and otherwise equals `display`. A future period, or a
+period with no Worked, has empty `series`. Charts are computed even when
+`stats.hide` hides the Worked fact; the fact stays hidden.
+
+Observed non-future `columns[]` and `children[]` add `stacks` (series keys
+only, members folded in, series order, zeros omitted) and
+`worked.display_short`. Week columns are days; quarter and year columns are
+weeks; all-time columns are quarters. Year `children[]` are the four quarters
+and all-time `children[]` are years, each with stacks for the narrow-width
+fallback. Future columns carry `stacks: {"roots": [], "types": []}`. In every
+observed column and child, and for the whole period, Σ `stacks.roots` = Σ
+`stacks.types` = Worked.
+
 `columns` include the date/period id, kind, labels, path and existence, start
-and end, state, Worked value/display/quality, a root-parent `stack`, mark,
-month `tick`, and parent `group` where relevant. Day marks are `met`, `missed`,
-`open`, or null; period marks use the child note's review state. Current columns
-include today's provisional value. Future columns remain identifiable and
-carry no values.
+and end, state, Worked value/display/`display_short`/quality, a root-parent
+`stack`, chart `stacks`, mark, month `tick`, and parent `group` where relevant.
+Day marks are `met`, `missed`, `open`, or null; period marks use the child
+note's review state. Current columns include today's provisional value. Future
+columns remain identifiable and carry no values.
 
 `children` rows carry their id, kind, label, range label, note path and
 existence, and state. Non-future rows add Worked and Done, review state,
@@ -431,9 +465,11 @@ same week data. Year columns are weeks grouped by quarter and all-time columns
 are quarters grouped by year. `groups` carry `key`, `label`, and
 `worked_display`.
 
-Future periods show a `Starts …` coverage line and do not run Stats. A closed
-period with gaps reports `<N> of <M> days logged`; complete coverage has an
-empty display. Period reads never write a note.
+Future periods show a `Starts …` coverage line and do not run Stats. A current
+week reads `so far · Mon–Tue`; a current quarter or year reads
+`so far · W40–W46` (ISO week ids, zero-padded). All time reads `since
+<date>`. A closed period with gaps reports `<N> of <M> days logged`; complete
+coverage has an empty display. Period reads never write a note.
 
 ## Agent briefs (brief v2)
 

@@ -7,6 +7,7 @@
 
 pub(crate) mod brief;
 pub(crate) mod calendar;
+pub(crate) mod charts;
 pub(crate) mod cli;
 pub(crate) mod draft;
 pub(crate) mod ensure;

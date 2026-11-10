@@ -2330,3 +2330,360 @@ fn ensure_refresh_skips_reflected_and_commits_once() {
     let log = stdout(&git_in(&vault, ["log", "--format=%s"]));
     assert_eq!(log.lines().count(), 4, "re-run is a no-op:\n{log}");
 }
+
+fn write_area(vault: &std::path::Path, stem: &str, title: &str) {
+    write_file(
+        &vault.join(format!("{stem}.md")),
+        &format!(
+            "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\n---\n# {title}\n\n## Tasks\n- [ ] #task {title} work ^{stem}\n"
+        ),
+    );
+}
+
+fn write_daily(vault: &std::path::Path, date: &str, pomodoros: &str) {
+    let compact = date.replace('-', "");
+    let year = &date[..4];
+    write_file(
+        &vault.join(format!("{year}/{compact}.md")),
+        &format!("# {date}\n\n## Pomodoros\n\n{pomodoros}"),
+    );
+}
+
+fn write_charts_config(path: &std::path::Path, extra_stats: &str) {
+    write_file(
+        path,
+        &format!(
+            "types:\n  BUILD: yellow\n  FIX: red\n  PLAN: auto\nstats:\n  period_strip:\n    top_roots: 5\n{extra_stats}"
+        ),
+    );
+}
+
+fn write_charts_vault(vault: &std::path::Path) {
+    write_dataview_tasks_settings(vault);
+    for (stem, title) in [
+        ("bob", "Bob"),
+        ("sase", "SASE"),
+        ("job", "Job"),
+        ("rest", "Rest"),
+        ("other", "Other"),
+        ("cash", "Cash"),
+    ] {
+        write_area(vault, stem, title);
+    }
+    // 2026-W45 (closed): mixed roots, types, labels, unnamed, unlinked.
+    write_daily(
+        vault,
+        "2026-11-02",
+        "- [x] (**08:00 - 08:30** [t:: 30m]) — BUILD\n\t- [[bob#^bob]]\n\
+         - [x] (**09:00 - 09:30** [t:: 30m]) — BUILD + SASE\n\t- [[sase#^sase]]\n\
+         - [x] (**10:00 - 10:20** [t:: 20m]) \n\t- [[bob#^bob]]\n",
+    );
+    write_daily(
+        vault,
+        "2026-11-03",
+        "- [x] (**08:00 - 08:25** [t:: 25m]) — BUILD + FIX\n\t- [[job#^job]]\n",
+    );
+    write_daily(
+        vault,
+        "2026-11-04",
+        "- [x] (**08:00 - 08:40** [t:: 40m]) — BUILD\n",
+    );
+    write_daily(
+        vault,
+        "2026-11-05",
+        "- [x] (**08:00 - 08:15** [t:: 15m]) — BUILD\n\t- [[rest#^rest]]\n\
+         - [x] (**09:00 - 09:10** [t:: 10m]) — BUILD\n\t- [[other#^other]]\n\
+         - [x] (**10:00 - 10:08** [t:: 8m]) — BUILD\n\t- [[cash#^cash]]\n",
+    );
+    // Current week W46 so coverage copy has Mon–Tue.
+    write_daily(
+        vault,
+        "2026-11-09",
+        "- [x] (**08:00 - 08:30** [t:: 30m]) — BUILD\n\t- [[bob#^bob]]\n",
+    );
+    write_daily(
+        vault,
+        "2026-11-10",
+        "- [x] (**08:00 - 09:00** [t:: 60m]) — PLAN\n\t- [[bob#^bob]]\n",
+    );
+}
+
+fn show_json(
+    vault: &std::path::Path,
+    config: &std::path::Path,
+    period: &str,
+) -> serde_json::Value {
+    let mut command = bob_command();
+    command
+        .args(["periods", "show", period, "-f", "json"])
+        .env("BOB_DIR", vault)
+        .env("BOB_NOW", REVIEWS_NOW)
+        .env("BOB_CONFIG_FILE", config)
+        .env("NO_COLOR", "1");
+    let output = command.output().expect("run bob periods show");
+    assert_success(&output);
+    serde_json::from_str(&stdout(&output)).expect("show JSON")
+}
+
+fn series_keys(report: &serde_json::Value, chart: &str) -> Vec<String> {
+    report["charts"][chart]["series"]
+        .as_array()
+        .expect("series")
+        .iter()
+        .map(|row| row["key"].as_str().unwrap().to_string())
+        .collect()
+}
+
+fn sum_minutes(rows: &serde_json::Value) -> i64 {
+    rows.as_array()
+        .unwrap_or(&Vec::new())
+        .iter()
+        .map(|row| row["minutes"].as_i64().unwrap_or(0))
+        .sum()
+}
+
+fn assert_chart_invariant(report: &serde_json::Value) {
+    let period_roots = sum_minutes(&report["charts"]["roots"]["series"]);
+    let period_types = sum_minutes(&report["charts"]["types"]["series"]);
+    assert_eq!(period_roots, period_types, "period series sums");
+    for collection in ["columns", "children"] {
+        for row in report[collection].as_array().unwrap() {
+            if row["state"] == "future" {
+                assert_eq!(row["stacks"]["roots"], serde_json::json!([]));
+                assert_eq!(row["stacks"]["types"], serde_json::json!([]));
+                continue;
+            }
+            let Some(worked) = row["worked"]["value"].as_i64() else {
+                continue;
+            };
+            let roots = sum_minutes(&row["stacks"]["roots"]);
+            let types = sum_minutes(&row["stacks"]["types"]);
+            assert_eq!(roots, types, "{collection} {} types", row["id"]);
+            assert_eq!(roots, worked, "{collection} {} worked", row["id"]);
+        }
+    }
+    if period_roots > 0 {
+        let facts_worked = report["facts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|fact| fact["metric"] == "worked")
+            .and_then(|fact| fact["value"].as_i64());
+        if let Some(worked) = facts_worked {
+            assert_eq!(period_roots, worked, "charts match the Worked fact");
+        }
+    }
+}
+
+#[test]
+fn periods_show_emits_charts_stacks_and_coverage_for_each_kind() {
+    let vault = vault_dir("charts-kinds");
+    write_charts_vault(vault.path());
+    let config = vault.path().join("bob-config.yml");
+    write_charts_config(&config, "");
+
+    let week = show_json(vault.path(), &config, "2026-W45");
+    assert_eq!(week["ok"], true);
+    assert_eq!(week["schema_version"], 1);
+    assert_eq!(week["charts"]["version"], 1);
+    assert_eq!(week["charts"]["roots"]["limit"], 5);
+    assert_eq!(week["charts"]["roots"]["dimension"], "root_parent");
+    assert_eq!(week["charts"]["types"]["policy"], "configured");
+    assert_eq!(week["columns"].as_array().unwrap().len(), 7);
+    assert!(
+        week["period"]["coverage"]["display"]
+            .as_str()
+            .unwrap()
+            .contains("of 7 days logged"),
+        "closed week with gaps: {}",
+        week["period"]["coverage"]["display"]
+    );
+    let keys = series_keys(&week, "roots");
+    assert_eq!(keys.last().map(String::as_str), Some("@unattributed"));
+    assert!(keys.contains(&"bob.md".to_string()));
+    assert!(keys.contains(&"rest.md".to_string()));
+    assert!(keys.contains(&"other.md".to_string()));
+    assert!(
+        keys.contains(&"@rest".to_string()),
+        "N=5 folds cash: {keys:?}"
+    );
+    let rest = week["charts"]["roots"]["series"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["key"] == "@rest")
+        .expect("rest series");
+    assert_eq!(rest["label"], "1 more");
+    assert_eq!(week["charts"]["types"]["series"][0]["key"], "build");
+    assert_eq!(week["charts"]["types"]["series"][0]["label"], "BUILD");
+    let type_keys = series_keys(&week, "types");
+    assert!(type_keys.contains(&"fix".to_string()));
+    assert!(type_keys.contains(&"@unattributed".to_string()));
+    assert!(!type_keys.contains(&"sase".to_string()), "SASE is a label");
+    assert_eq!(
+        week["columns"][0]["worked"]["display_short"],
+        week["columns"][0]["worked"]["display"]
+    );
+    assert!(week["columns"][0]["stack"].is_array());
+    assert!(week["lanes"]["root_parent"].is_array());
+    assert_chart_invariant(&week);
+
+    let current_week = show_json(vault.path(), &config, "2026-W46");
+    assert_eq!(
+        current_week["period"]["coverage"]["display"],
+        "so far · Mon–Tue"
+    );
+    assert_eq!(current_week["columns"].as_array().unwrap().len(), 7);
+    assert_eq!(current_week["columns"][2]["state"], "future");
+    assert_eq!(
+        current_week["columns"][2]["stacks"],
+        serde_json::json!({ "roots": [], "types": [] })
+    );
+    assert_chart_invariant(&current_week);
+
+    let quarter = show_json(vault.path(), &config, "2026-Q4");
+    assert_eq!(quarter["columns"].as_array().unwrap().len(), 14);
+    assert_eq!(quarter["period"]["coverage"]["display"], "so far · W40–W46");
+    assert_chart_invariant(&quarter);
+
+    let year = show_json(vault.path(), &config, "2026");
+    assert_eq!(year["columns"].as_array().unwrap().len(), 53);
+    assert_eq!(year["children"].as_array().unwrap().len(), 4);
+    assert_eq!(year["period"]["coverage"]["display"], "so far · W01–W46");
+    assert!(year["children"][3]["stacks"]["roots"].is_array());
+    assert_chart_invariant(&year);
+
+    let all_time = show_json(vault.path(), &config, "all");
+    assert!(!all_time["columns"].as_array().unwrap().is_empty());
+    assert!(all_time["period"]["coverage"]["display"]
+        .as_str()
+        .unwrap()
+        .starts_with("since "));
+    assert_chart_invariant(&all_time);
+}
+
+#[test]
+fn periods_show_honors_top_roots_and_warns_on_invalid_values() {
+    let vault = vault_dir("charts-top-roots");
+    write_charts_vault(vault.path());
+
+    let n1 = vault.path().join("n1.yml");
+    write_file(
+        &n1,
+        "types:\n  BUILD: yellow\n  FIX: red\n  PLAN: auto\nstats:\n  period_strip:\n    top_roots: 1\n",
+    );
+    let report = show_json(vault.path(), &n1, "2026-W45");
+    let keys = series_keys(&report, "roots");
+    assert_eq!(keys[0], "bob.md");
+    assert_eq!(keys[1], "@rest");
+    assert!(report["charts"]["roots"]["series"][1]["label"]
+        .as_str()
+        .unwrap()
+        .ends_with(" more"));
+    assert_eq!(report["charts"]["roots"]["limit"], 1);
+    assert_chart_invariant(&report);
+
+    let n8 = vault.path().join("n8.yml");
+    write_file(
+        &n8,
+        "types:\n  BUILD: yellow\n  FIX: red\n  PLAN: auto\nstats:\n  period_strip:\n    top_roots: 8\n",
+    );
+    let report = show_json(vault.path(), &n8, "2026-W45");
+    assert_eq!(report["charts"]["roots"]["limit"], 8);
+    assert!(!series_keys(&report, "roots").contains(&"@rest".to_string()));
+    assert_chart_invariant(&report);
+
+    for (name, body, expected_limit) in [
+        ("five", "top_roots: five\n", 5),
+        ("zero", "top_roots: 0\n", 1),
+        ("twelve", "top_roots: 12\n", 8),
+    ] {
+        let path = vault.path().join(format!("{name}.yml"));
+        write_file(
+            &path,
+            &format!(
+                "types:\n  BUILD: yellow\n  FIX: red\n  PLAN: auto\nstats:\n  period_strip:\n    {body}"
+            ),
+        );
+        let report = show_json(vault.path(), &path, "2026-W45");
+        assert_eq!(
+            report["charts"]["roots"]["limit"], expected_limit,
+            "{name}"
+        );
+        let warnings = report["warnings"].as_array().expect("warnings");
+        assert!(
+            warnings.iter().any(|warning| {
+                warning["code"] == "period_strip_top_roots_invalid"
+                    && warning["message"]
+                        .as_str()
+                        .unwrap_or("")
+                        .contains("stats.period_strip.top_roots")
+                    && warning["message"]
+                        .as_str()
+                        .unwrap_or("")
+                        .contains(&path.display().to_string())
+            }),
+            "{name} warnings: {warnings:?}"
+        );
+        assert_chart_invariant(&report);
+    }
+}
+
+#[test]
+fn periods_show_charts_hidden_worked_and_unattributed_only() {
+    let vault = vault_dir("charts-hidden");
+    write_charts_vault(vault.path());
+    let config = vault.path().join("hide.yml");
+    write_charts_config(&config, "  hide: [worked]\n");
+    let report = show_json(vault.path(), &config, "2026-W45");
+    let facts = report["facts"].as_array().expect("facts");
+    assert!(
+        facts.iter().all(|fact| fact["metric"] != "worked"),
+        "Worked fact stays hidden: {facts:?}"
+    );
+    assert!(
+        !report["charts"]["roots"]["series"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "charts still compute"
+    );
+    assert_chart_invariant(&report);
+
+    let only = vault_dir("charts-unattributed");
+    write_dataview_tasks_settings(only.path());
+    write_daily(
+        only.path(),
+        "2026-11-02",
+        "- [x] (**08:00 - 08:30** [t:: 30m])\n",
+    );
+    let config = only.path().join("bob-config.yml");
+    write_charts_config(&config, "");
+    let report = show_json(only.path(), &config, "2026-W45");
+    assert_eq!(series_keys(&report, "roots"), ["@unattributed"]);
+    assert_eq!(report["charts"]["roots"]["series"][0]["label"], "unlinked");
+    assert_eq!(series_keys(&report, "types"), ["@unattributed"]);
+    assert_eq!(report["charts"]["types"]["series"][0]["label"], "untyped");
+    assert_chart_invariant(&report);
+}
+
+#[test]
+fn periods_show_human_output_is_unchanged_by_charts() {
+    let vault = vault_dir("charts-human");
+    write_charts_vault(vault.path());
+    let config = vault.path().join("bob-config.yml");
+    write_charts_config(&config, "");
+    let mut command = bob_command();
+    command
+        .args(["periods", "show", "2026-W45"])
+        .env("BOB_DIR", vault.path())
+        .env("BOB_NOW", REVIEWS_NOW)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("NO_COLOR", "1");
+    let output = command.output().expect("human show");
+    assert_success(&output);
+    let text = stdout(&output);
+    assert!(text.contains("2026-W45"), "{text}");
+    assert!(!text.contains("\"charts\""), "{text}");
+    assert_stdout_has_no_ansi(&output);
+}

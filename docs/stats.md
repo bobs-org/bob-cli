@@ -296,6 +296,9 @@ stats:
   overview: [worked, reviewed, done, created, net, review_closed]
   hide: []            # suppresses lists and default selection, never evaluation
   since: 2026-06-01   # optional global floor for inferred tracking starts
+  period_strip:
+    top_roots: 5      # period stats strips chart the 5 biggest root parents;
+                      # the rest fold into "N more". Integer 1–8; default 5.
   metrics:
     sase_time:        # pomodoro
       label: SASE time
@@ -341,7 +344,14 @@ stats:
 
 **Defaults.** Missing config file, absent `stats:` block, and unknown keys
 (including plugin-only `bob_path` and `day_strip`) all fall back to
-defaults: range `4w`, the six-metric overview, no hides, no global since.
+defaults: range `4w`, the six-metric overview, no hides, no global since,
+`period_strip.top_roots` 5. `stats.period_strip.top_roots` limits only the
+period strip's Roots chart (an integer 1–8; 8 is the palette size). Absent
+or `null` means 5. An out-of-range integer is clamped; any other value uses
+5. Either invalid case adds a `period_strip_top_roots_invalid` warning to
+`bob periods show` naming the key and the config path; it never fails the
+load or the command. The Day strip, the Stats dash, and briefs keep their
+root lists.
 A custom entry whose ID matches a built-in replaces the whole definition
 and is marked `redefined`; an invalid replacement removes that metric with
 a warning instead of silently falling back.
@@ -350,13 +360,16 @@ a warning instead of silently falling back.
 top-level `range`, `overview`, `hide`, `since`, or `metrics` container is a
 configuration error naming `stats.<key>` and the config path (exit 2 in the
 future CLI); it never breaks the `plan:`, `freshness:`, or `highlights:`
-loaders. A malformed metric entry is a local warning naming
+loaders. `period_strip.top_roots` is the exception: a bad value never fails
+the load (see Defaults). A malformed metric entry is a local warning naming
 `stats.metrics.<id>.<key>`; unrelated metrics keep working. Formula
 references to unknown metrics and dependency cycles invalidate the affected
 definitions (plus downstream dependents) with local warnings.
 
 **Invalid values:**
 
+- `stats.period_strip.top_roots` outside 1–8, or a non-integer, warns
+  (`period_strip_top_roots_invalid`) and uses the clamped or default value.
 - Unknown overview/hide names produce warnings, not errors.
 - Unknown explicit metric IDs in a request are usage errors.
 - Incompatible `unit` values for a kind drop that entry with a warning

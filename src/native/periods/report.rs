@@ -14,10 +14,10 @@ use serde_json::{json, Map, Value};
 
 use super::{
     calendar::{weeks_in_year, PeriodId, PeriodState},
-    labels, note,
+    charts, labels, note,
 };
 use crate::native::{
-    config::{self, load_stats_config},
+    config::{self, load_stats_config, load_theme_sources_from},
     env as bob_env,
     stats::{
         clock::StatsClock,
@@ -25,7 +25,7 @@ use crate::native::{
         error::StatsError,
         range::RangeSpec,
         registry::MetricUnit,
-        report::{SeriesPoint, StatsReport, TypicalRelation},
+        report::{SeriesPoint, StatsReport, StatsWarning, TypicalRelation},
         request::{Grouping, MetricSelection, StatsRequest},
         series::{format_minutes, format_value, median},
     },
@@ -238,9 +238,19 @@ pub(crate) fn build_report(
     let today = now.date();
     let span = period_span(id, vault, today)?;
     let state = id.state(today);
-    let visible_fact_ids = visible_fact_ids(&config_path)?;
+    let stats_config = load_stats_config(&config_path)
+        .map_err(|error| ShowError::config(error.to_string()))?;
+    let visible_fact_ids: Vec<String> = FACT_IDS
+        .iter()
+        .filter(|id| !stats_config.hide.iter().any(|hidden| hidden == **id))
+        .map(|id| (*id).to_string())
+        .collect();
+    let mut compute_ids = visible_fact_ids.clone();
+    if !compute_ids.iter().any(|id| id == "worked") {
+        compute_ids.push("worked".to_string());
+    }
     let history_start = typical_history_start(id).unwrap_or(span.start);
-    let daily = if state == PeriodState::Future || visible_fact_ids.is_empty() {
+    let daily = if state == PeriodState::Future {
         DailyMetrics {
             metrics: BTreeMap::new(),
             homes: json!({}),
@@ -250,14 +260,17 @@ pub(crate) fn build_report(
     } else {
         load_daily_metrics(
             vault,
-            config_path,
+            config_path.clone(),
             history_start.min(span.start),
             span.end.min(today),
-            &visible_fact_ids,
+            &compute_ids,
             now,
             clock,
         )?
     };
+    let types_policy =
+        charts::types_policy(&load_theme_sources_from(&config_path));
+    let top_roots = stats_config.period_strip.top_roots;
     let mut report = report_base(vault, id, span, today, now, state)?;
     let observed_end = match state {
         PeriodState::Future => None,
@@ -270,8 +283,16 @@ pub(crate) fn build_report(
             end: observed_end.min(span.end),
         };
         report["period"]["coverage"] =
-            coverage_value(span, observed_end, state, &daily);
-        let facts = build_facts(id, observed, today, state, &daily, clock);
+            coverage_value(id, span, observed_end, state, &daily);
+        let facts = build_facts(
+            id,
+            observed,
+            today,
+            state,
+            &daily,
+            clock,
+            &visible_fact_ids,
+        );
         let lanes = build_lanes(
             id,
             observed,
@@ -280,6 +301,26 @@ pub(crate) fn build_report(
             &daily.homes,
             &daily.theme_hues,
         );
+        let worked_aggregate = daily
+            .metrics
+            .get("worked")
+            .map(|metric| aggregate("worked", metric, observed, today));
+        let worked_minutes = worked_aggregate
+            .as_ref()
+            .and_then(|value| value.value)
+            .unwrap_or(0)
+            .max(0);
+        let period_charts = match &worked_aggregate {
+            Some(aggregate) => charts::build(
+                &aggregate.parts,
+                worked_minutes,
+                &daily.homes,
+                &daily.theme_hues,
+                top_roots,
+                types_policy,
+            ),
+            None => charts::empty(top_roots, types_policy),
+        };
         let (columns, children, groups) = build_parts(
             vault,
             id,
@@ -288,9 +329,11 @@ pub(crate) fn build_report(
             today,
             &daily,
             &daily.homes,
+            &period_charts,
         )?;
         report["facts"] = Value::Array(facts);
         report["lanes"] = lanes;
+        report["charts"] = charts::charts_json(&period_charts, worked_minutes);
         report["columns"] = Value::Array(columns);
         report["children"] = Value::Array(children);
         report["groups"] = Value::Array(groups);
@@ -300,24 +343,19 @@ pub(crate) fn build_report(
         report["facts"] = json!([]);
         report["lanes"] =
             json!({ "root_parent": [], "theme": [], "types_folded": false });
+        report["charts"] =
+            charts::charts_json(&charts::empty(top_roots, types_policy), 0);
         report["columns"] = Value::Array(empty_future_columns(id, span));
         report["children"] = Value::Array(empty_future_children(id, span));
         report["groups"] = json!([]);
         report["homes"] = daily.homes;
         report["theme_hues"] = daily.theme_hues;
     }
-    report["warnings"] = daily.warnings;
+    report["warnings"] = merge_warnings(
+        daily.warnings,
+        stats_config.period_strip.top_roots_warning.as_deref(),
+    );
     Ok(report)
-}
-
-fn visible_fact_ids(config_path: &Path) -> Result<Vec<String>, ShowError> {
-    let config = load_stats_config(config_path)
-        .map_err(|error| ShowError::config(error.to_string()))?;
-    Ok(FACT_IDS
-        .iter()
-        .filter(|id| !config.hide.iter().any(|hidden| hidden == **id))
-        .map(|id| (*id).to_string())
-        .collect())
 }
 
 fn load_daily_metrics(
@@ -371,6 +409,26 @@ fn daily_metrics_from_report(report: StatsReport) -> DailyMetrics {
         warnings: serde_json::to_value(report.warnings)
             .unwrap_or_else(|_| json!([])),
     }
+}
+
+fn merge_warnings(existing: Value, top_roots_warning: Option<&str>) -> Value {
+    let mut warnings = existing.as_array().cloned().unwrap_or_default();
+    if let Some(message) = top_roots_warning {
+        let warning = serde_json::to_value(StatsWarning {
+            code: "period_strip_top_roots_invalid".to_string(),
+            metric: None,
+            date: None,
+            message: message.to_string(),
+        })
+        .unwrap_or_else(|_| {
+            json!({
+                "code": "period_strip_top_roots_invalid",
+                "message": message,
+            })
+        });
+        warnings.insert(0, warning);
+    }
+    Value::Array(warnings)
 }
 
 pub(crate) fn period_span(
@@ -549,6 +607,7 @@ fn report_base(
         "links": Value::Object(links),
         "facts": [],
         "lanes": {},
+        "charts": {},
         "columns": [],
         "groups": [],
         "children": [],
@@ -565,10 +624,14 @@ fn build_facts(
     state: PeriodState,
     daily: &DailyMetrics,
     clock: StatsClock,
+    visible: &[String],
 ) -> Vec<Value> {
     FACT_IDS
         .iter()
         .filter_map(|metric_id| {
+            if !visible.iter().any(|id| id == *metric_id) {
+                return None;
+            }
             let metric = daily.metrics.get(*metric_id)?;
             let aggregate = aggregate(metric_id, metric, span, today);
             let unit = if *metric_id == "review_closed" { "days" } else { metric.unit.as_deref().unwrap_or("count") };
@@ -1089,6 +1152,7 @@ fn build_parts(
     today: NaiveDate,
     daily: &DailyMetrics,
     homes: &Value,
+    period_charts: &charts::Charts,
 ) -> Result<(Vec<Value>, Vec<Value>, Vec<Value>), ShowError> {
     let column_specs = column_specs(id, span);
     let child_specs = child_specs(id, span);
@@ -1101,6 +1165,7 @@ fn build_parts(
             today,
             daily,
             homes,
+            period_charts,
         )?);
     }
     let mut children = Vec::with_capacity(child_specs.len());
@@ -1112,6 +1177,7 @@ fn build_parts(
             today,
             daily,
             homes,
+            period_charts,
         )?);
     }
     let groups = build_groups(id, span, observed_end, today, daily);
@@ -1231,6 +1297,7 @@ fn build_column(
     today: NaiveDate,
     daily: &DailyMetrics,
     homes: &Value,
+    period_charts: &charts::Charts,
 ) -> Result<Value, ShowError> {
     if let Some(day) = spec.day {
         let state = day_state(day, today);
@@ -1241,7 +1308,7 @@ fn build_column(
                 "id": date_text(day), "kind": "day", "label": labels::day_label(day, day.weekday() == Weekday::Mon),
                 "caption": format!("{} {}", weekday(day), day.day()), "path": path, "exists": path_exists,
                 "start": date_text(day), "end": date_text(day), "state": "future", "partial": null,
-                "worked": null, "stack": [], "mark": null, "tick": null, "group": null,
+                "worked": null, "stack": [], "stacks": charts::empty_stacks(), "mark": null, "tick": null, "group": null,
             }));
         }
         let worked = daily
@@ -1254,6 +1321,7 @@ fn build_column(
             "caption": format!("{} {}", weekday(day), day.day()), "path": path, "exists": path_exists,
             "start": date_text(day), "end": date_text(day), "state": state_name(state), "partial": null,
             "worked": worked.as_ref().map(worked_column), "stack": worked.as_ref().map(|value| stack_value(value, homes)).unwrap_or_default(),
+            "stacks": worked.as_ref().map(|value| charts::stacks_json(period_charts, &value.parts)).unwrap_or_else(charts::empty_stacks),
             "mark": closeout, "tick": null, "group": spec.group,
         }));
     }
@@ -1294,6 +1362,11 @@ fn build_column(
         "start": date_text(spec.span.start), "end": date_text(spec.span.end), "state": state_name(state),
         "partial": partial, "worked": worked.as_ref().map(worked_column),
         "stack": worked.as_ref().map(|value| stack_value(value, homes)).unwrap_or_default(),
+        "stacks": if state == PeriodState::Future {
+            charts::empty_stacks()
+        } else {
+            worked.as_ref().map(|value| charts::stacks_json(period_charts, &value.parts)).unwrap_or_else(charts::empty_stacks)
+        },
         "mark": mark, "tick": tick, "group": spec.group,
         "range_label": range_label,
     }))
@@ -1306,6 +1379,7 @@ fn build_child(
     today: NaiveDate,
     daily: &DailyMetrics,
     homes: &Value,
+    period_charts: &charts::Charts,
 ) -> Result<Value, ShowError> {
     if let Some(day) = spec.day {
         let state = day_state(day, today);
@@ -1320,10 +1394,18 @@ fn build_child(
                 "path": path,
                 "exists": exists,
                 "state": "future",
+                "stacks": charts::empty_stacks(),
             }));
         }
-        let mut child =
-            build_column(vault, spec, observed_end, today, daily, homes)?;
+        let mut child = build_column(
+            vault,
+            spec,
+            observed_end,
+            today,
+            daily,
+            homes,
+            period_charts,
+        )?;
         child["review"] = Value::Null;
         child["closeout"] = child["mark"].clone();
         child["done"] = daily
@@ -1358,9 +1440,11 @@ fn build_child(
             child["mostly"] = json!(mostly_rows(&worked, homes));
             child["mostly_display"] = json!(mostly_display(&worked, homes));
             child["stack"] = json!(stack_value(&worked, homes));
+            child["stacks"] = charts::stacks_json(period_charts, &worked.parts);
         } else {
             child["mostly"] = json!([]);
             child["mostly_display"] = json!("");
+            child["stacks"] = charts::empty_stacks();
         }
         return Ok(child);
     }
@@ -1375,6 +1459,7 @@ fn build_child(
         "path": path.to_string_lossy(), "exists": exists, "state": state_name(state),
     });
     if state == PeriodState::Future || observed_end.is_none() {
+        child["stacks"] = charts::empty_stacks();
         return Ok(child);
     }
     let span = observed_span(spec.span, observed_end);
@@ -1398,22 +1483,30 @@ fn build_child(
         child["mostly"] = json!(mostly_rows(&aggregate, homes));
         child["mostly_display"] = json!(mostly_display(&aggregate, homes));
         child["stack"] = json!(stack_value(&aggregate, homes));
+        child["stacks"] = charts::stacks_json(period_charts, &aggregate.parts);
     } else {
         child["mostly"] = json!([]);
         child["mostly_display"] = json!("");
         child["stack"] = json!([]);
+        child["stacks"] = charts::empty_stacks();
     }
     Ok(child)
 }
 
 fn worked_column(aggregate: &Aggregate) -> Value {
-    json!({ "value": aggregate.value, "display": aggregate.display, "quality": aggregate.quality })
+    json!({
+        "value": aggregate.value,
+        "display": aggregate.display,
+        "display_short": charts::display_short_for(aggregate.value, &aggregate.display),
+        "quality": aggregate.quality,
+    })
 }
 
 fn worked_child(aggregate: &Aggregate) -> Value {
     json!({
         "value": aggregate.value,
         "display": aggregate.display,
+        "display_short": charts::display_short_for(aggregate.value, &aggregate.display),
         "so_far": aggregate.so_far,
         "quality": aggregate.quality,
     })
@@ -1616,10 +1709,10 @@ fn group_row(
 fn empty_future_columns(id: PeriodId, span: Span) -> Vec<Value> {
     column_specs(id, span).into_iter().map(|spec| {
         if let Some(day) = spec.day {
-            json!({ "id": date_text(day), "kind": "day", "label": labels::day_label(day, day.weekday() == Weekday::Mon), "caption": format!("{} {}", weekday(day), day.day()), "start": date_text(day), "end": date_text(day), "state": "future", "partial": null, "worked": null, "stack": [], "mark": null, "tick": null, "group": spec.group })
+            json!({ "id": date_text(day), "kind": "day", "label": labels::day_label(day, day.weekday() == Weekday::Mon), "caption": format!("{} {}", weekday(day), day.day()), "start": date_text(day), "end": date_text(day), "state": "future", "partial": null, "worked": null, "stack": [], "stacks": charts::empty_stacks(), "mark": null, "tick": null, "group": spec.group })
         } else {
             let child = spec.id.expect("period spec id");
-            json!({ "id": child.to_string(), "kind": kind_name(child), "label": labels::short_label(child), "caption": labels::short_label(child), "path": child.path().to_string_lossy(), "exists": false, "start": date_text(spec.span.start), "end": date_text(spec.span.end), "state": "future", "partial": false, "worked": null, "stack": [], "mark": null, "tick": null, "group": spec.group })
+            json!({ "id": child.to_string(), "kind": kind_name(child), "label": labels::short_label(child), "caption": labels::short_label(child), "path": child.path().to_string_lossy(), "exists": false, "start": date_text(spec.span.start), "end": date_text(spec.span.end), "state": "future", "partial": false, "worked": null, "stack": [], "stacks": charts::empty_stacks(), "mark": null, "tick": null, "group": spec.group })
         }
     }).collect()
 }
@@ -1627,15 +1720,16 @@ fn empty_future_columns(id: PeriodId, span: Span) -> Vec<Value> {
 fn empty_future_children(id: PeriodId, span: Span) -> Vec<Value> {
     child_specs(id, span).into_iter().map(|spec| {
         if let Some(day) = spec.day {
-            json!({ "id": date_text(day), "kind": "day", "label": labels::day_label(day, day.weekday() == Weekday::Mon), "range_label": date_text(day), "path": daily_path(day), "exists": false, "state": "future" })
+            json!({ "id": date_text(day), "kind": "day", "label": labels::day_label(day, day.weekday() == Weekday::Mon), "range_label": date_text(day), "path": daily_path(day), "exists": false, "state": "future", "stacks": charts::empty_stacks() })
         } else {
             let child = spec.id.expect("period child id");
-            json!({ "id": child.to_string(), "kind": kind_name(child), "label": labels::short_label(child), "range_label": labels::range_label(spec.span.start, spec.span.end), "path": child.path().to_string_lossy(), "exists": false, "state": "future" })
+            json!({ "id": child.to_string(), "kind": kind_name(child), "label": labels::short_label(child), "range_label": labels::range_label(spec.span.start, spec.span.end), "path": child.path().to_string_lossy(), "exists": false, "state": "future", "stacks": charts::empty_stacks() })
         }
     }).collect()
 }
 
 fn coverage_value(
+    id: PeriodId,
     span: Span,
     observed_end: NaiveDate,
     state: PeriodState,
@@ -1669,9 +1763,7 @@ fn coverage_value(
         .unwrap_or(0);
     let display = match state {
         PeriodState::Future => format!("Starts {}", date_weekday(span.start)),
-        PeriodState::Current => {
-            format!("so far · {}–{}", weekday(span.start), weekday(elapsed_end))
-        }
+        PeriodState::Current => current_coverage_display(id, span, elapsed_end),
         PeriodState::Closed if tracked < span_days(span) => {
             format!("{tracked} of {} days logged", span_days(span))
         }
@@ -1853,6 +1945,35 @@ fn daily_path(day: NaiveDate) -> String {
 
 fn date_text(date: NaiveDate) -> String {
     date.format("%Y-%m-%d").to_string()
+}
+
+fn current_coverage_display(
+    id: PeriodId,
+    span: Span,
+    elapsed_end: NaiveDate,
+) -> String {
+    match id {
+        PeriodId::Week { .. } => {
+            format!("so far · {}–{}", weekday(span.start), weekday(elapsed_end))
+        }
+        PeriodId::Quarter { .. } | PeriodId::Year(_) => {
+            let start_week = PeriodId::week_for_date(span.start);
+            let end_week = PeriodId::week_for_date(elapsed_end);
+            format!(
+                "so far · {}–{}",
+                week_coverage_label(start_week),
+                week_coverage_label(end_week)
+            )
+        }
+        PeriodId::AllTime => format!("since {}", date_text(span.start)),
+    }
+}
+
+fn week_coverage_label(id: PeriodId) -> String {
+    match id {
+        PeriodId::Week { week, .. } => format!("W{week:02}"),
+        _ => labels::short_label(id),
+    }
 }
 
 fn weekday(date: NaiveDate) -> &'static str {
@@ -2151,7 +2272,71 @@ mod tests {
             .unwrap()
             .iter()
             .all(|column| column["state"] == "future"));
+        assert_eq!(report["charts"]["version"], 1);
+        assert_eq!(report["charts"]["roots"]["limit"], 5);
+        assert_eq!(
+            report["charts"]["roots"]["series"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(
+            report["charts"]["types"]["series"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert!(report["columns"].as_array().unwrap().iter().all(|column| {
+            column["stacks"]["roots"] == json!([])
+                && column["stacks"]["types"] == json!([])
+        }));
         assert!(!vault.path().join(id.path()).exists());
+    }
+
+    #[test]
+    fn current_coverage_uses_weekdays_for_weeks_and_week_ids_for_long_periods()
+    {
+        let week = PeriodId::Week {
+            year: 2026,
+            week: 46,
+        };
+        let week_span = period_bounds(week).unwrap();
+        assert_eq!(
+            current_coverage_display(week, week_span, date(2026, 11, 10)),
+            "so far · Mon–Tue"
+        );
+
+        let quarter = PeriodId::Quarter {
+            year: 2026,
+            quarter: 4,
+        };
+        let quarter_span = period_bounds(quarter).unwrap();
+        assert_eq!(
+            current_coverage_display(quarter, quarter_span, date(2026, 11, 10)),
+            "so far · W40–W46"
+        );
+
+        let year = PeriodId::Year(2026);
+        let year_span = period_bounds(year).unwrap();
+        assert_eq!(
+            current_coverage_display(year, year_span, date(2026, 11, 10)),
+            "so far · W01–W46"
+        );
+
+        let all_time_span = Span {
+            start: date(2024, 1, 1),
+            end: date(2026, 11, 10),
+        };
+        assert_eq!(
+            current_coverage_display(
+                PeriodId::AllTime,
+                all_time_span,
+                date(2026, 11, 10)
+            ),
+            "since 2024-01-01"
+        );
     }
 
     #[test]

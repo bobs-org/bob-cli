@@ -17,7 +17,30 @@ pub(crate) struct StatsConfig {
     pub(crate) hide: Vec<String>,
     pub(crate) since: Option<NaiveDate>,
     pub(crate) user_metrics: Vec<(String, serde_yaml::Value)>,
+    pub(crate) period_strip: PeriodStripConfig,
     pub(crate) path: PathBuf,
+}
+
+/// `stats.period_strip` for period-note charts. Invalid `top_roots`
+/// never fails the load: the value is clamped or defaulted and a
+/// warning is attached for `bob periods show`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PeriodStripConfig {
+    pub(crate) top_roots: u8,
+    pub(crate) top_roots_warning: Option<String>,
+}
+
+pub(crate) const DEFAULT_PERIOD_STRIP_TOP_ROOTS: u8 = 5;
+pub(crate) const MIN_PERIOD_STRIP_TOP_ROOTS: u8 = 1;
+pub(crate) const MAX_PERIOD_STRIP_TOP_ROOTS: u8 = 8;
+
+impl Default for PeriodStripConfig {
+    fn default() -> Self {
+        Self {
+            top_roots: DEFAULT_PERIOD_STRIP_TOP_ROOTS,
+            top_roots_warning: None,
+        }
+    }
 }
 
 impl Default for StatsConfig {
@@ -28,6 +51,7 @@ impl Default for StatsConfig {
             hide: Vec::new(),
             since: None,
             user_metrics: Vec::new(),
+            period_strip: PeriodStripConfig::default(),
             path: PathBuf::new(),
         }
     }
@@ -113,7 +137,82 @@ fn parse_stats_value(
     parsed.since = parse_since(mapping_get(&mapping, "since"), path)?;
     parsed.user_metrics =
         parse_metrics_container(mapping_get(&mapping, "metrics"), path)?;
+    parsed.period_strip =
+        parse_period_strip(mapping_get(&mapping, "period_strip"), path);
     Ok(parsed)
+}
+
+fn parse_period_strip(
+    value: Option<&serde_yaml::Value>,
+    path: &Path,
+) -> PeriodStripConfig {
+    match value {
+        None | Some(serde_yaml::Value::Null) => PeriodStripConfig::default(),
+        Some(serde_yaml::Value::Mapping(mapping)) => {
+            parse_top_roots(mapping_get(mapping, "top_roots"), path)
+        }
+        Some(other) => PeriodStripConfig {
+            top_roots: DEFAULT_PERIOD_STRIP_TOP_ROOTS,
+            top_roots_warning: Some(top_roots_invalid_message(
+                path,
+                &render_scalar(other),
+            )),
+        },
+    }
+}
+
+fn parse_top_roots(
+    value: Option<&serde_yaml::Value>,
+    path: &Path,
+) -> PeriodStripConfig {
+    match value {
+        None | Some(serde_yaml::Value::Null) => PeriodStripConfig::default(),
+        Some(serde_yaml::Value::Number(number)) => match number.as_i64() {
+            Some(raw) => clamp_top_roots(raw, path),
+            None => PeriodStripConfig {
+                top_roots: DEFAULT_PERIOD_STRIP_TOP_ROOTS,
+                top_roots_warning: Some(top_roots_invalid_message(
+                    path,
+                    &number.to_string(),
+                )),
+            },
+        },
+        Some(other) => PeriodStripConfig {
+            top_roots: DEFAULT_PERIOD_STRIP_TOP_ROOTS,
+            top_roots_warning: Some(top_roots_invalid_message(
+                path,
+                &render_scalar(other),
+            )),
+        },
+    }
+}
+
+fn clamp_top_roots(raw: i64, path: &Path) -> PeriodStripConfig {
+    let min = i64::from(MIN_PERIOD_STRIP_TOP_ROOTS);
+    let max = i64::from(MAX_PERIOD_STRIP_TOP_ROOTS);
+    if (min..=max).contains(&raw) {
+        return PeriodStripConfig {
+            top_roots: raw as u8,
+            top_roots_warning: None,
+        };
+    }
+    let clamped = raw.clamp(min, max) as u8;
+    PeriodStripConfig {
+        top_roots: clamped,
+        top_roots_warning: Some(format!(
+            "stats.period_strip.top_roots in {} is {raw}; using {clamped}",
+            path.display()
+        )),
+    }
+}
+
+fn top_roots_invalid_message(path: &Path, got: &str) -> String {
+    format!(
+        "stats.period_strip.top_roots in {} must be an integer from {} to {}; got {got}",
+        path.display(),
+        MIN_PERIOD_STRIP_TOP_ROOTS,
+        MAX_PERIOD_STRIP_TOP_ROOTS
+    )
 }
 
 fn parse_range(
@@ -295,6 +394,11 @@ mod tests {
         assert!(missing.hide.is_empty());
         assert!(missing.since.is_none());
         assert!(missing.user_metrics.is_empty());
+        assert_eq!(
+            missing.period_strip.top_roots,
+            DEFAULT_PERIOD_STRIP_TOP_ROOTS
+        );
+        assert!(missing.period_strip.top_roots_warning.is_none());
 
         let absent = parse("properties: []\nunknown_top_level: ignored\n");
         assert_eq!(absent.range, RangeSpec::four_weeks());
@@ -330,6 +434,70 @@ stats:
         );
         assert_eq!(config.user_metrics.len(), 1);
         assert_eq!(config.user_metrics[0].0, "sase_time");
+        assert_eq!(
+            config.period_strip.top_roots,
+            DEFAULT_PERIOD_STRIP_TOP_ROOTS
+        );
+        assert!(config.period_strip.top_roots_warning.is_none());
+    }
+
+    #[test]
+    fn period_strip_top_roots_defaults_clamps_and_warns_without_failing() {
+        let absent = parse("stats:\n  range: 7d\n");
+        assert_eq!(
+            absent.period_strip.top_roots,
+            DEFAULT_PERIOD_STRIP_TOP_ROOTS
+        );
+        assert!(absent.period_strip.top_roots_warning.is_none());
+
+        let nulled = parse("stats:\n  period_strip:\n    top_roots:\n");
+        assert_eq!(
+            nulled.period_strip.top_roots,
+            DEFAULT_PERIOD_STRIP_TOP_ROOTS
+        );
+        assert!(nulled.period_strip.top_roots_warning.is_none());
+
+        let five = parse("stats:\n  period_strip:\n    top_roots: 5\n");
+        assert_eq!(five.period_strip.top_roots, 5);
+        assert!(five.period_strip.top_roots_warning.is_none());
+
+        let one = parse("stats:\n  period_strip:\n    top_roots: 1\n");
+        assert_eq!(one.period_strip.top_roots, 1);
+
+        let eight = parse("stats:\n  period_strip:\n    top_roots: 8\n");
+        assert_eq!(eight.period_strip.top_roots, 8);
+
+        let zero = parse("stats:\n  period_strip:\n    top_roots: 0\n");
+        assert_eq!(zero.period_strip.top_roots, MIN_PERIOD_STRIP_TOP_ROOTS);
+        let zero_warning =
+            zero.period_strip.top_roots_warning.as_deref().unwrap();
+        assert!(zero_warning.contains("stats.period_strip.top_roots"));
+        assert!(zero_warning.contains("/config.yml"));
+        assert!(zero_warning.contains("0"));
+
+        let twelve = parse("stats:\n  period_strip:\n    top_roots: 12\n");
+        assert_eq!(twelve.period_strip.top_roots, MAX_PERIOD_STRIP_TOP_ROOTS);
+        let twelve_warning =
+            twelve.period_strip.top_roots_warning.as_deref().unwrap();
+        assert!(twelve_warning.contains("12"));
+        assert!(twelve_warning.contains("/config.yml"));
+
+        let five_word = parse("stats:\n  period_strip:\n    top_roots: five\n");
+        assert_eq!(
+            five_word.period_strip.top_roots,
+            DEFAULT_PERIOD_STRIP_TOP_ROOTS
+        );
+        let word_warning =
+            five_word.period_strip.top_roots_warning.as_deref().unwrap();
+        assert!(word_warning.contains("five"));
+        assert!(word_warning.contains("/config.yml"));
+
+        let not_a_map = parse("stats:\n  period_strip: 5\n");
+        assert_eq!(
+            not_a_map.period_strip.top_roots,
+            DEFAULT_PERIOD_STRIP_TOP_ROOTS
+        );
+        assert!(not_a_map.period_strip.top_roots_warning.is_some());
     }
 
     #[test]
