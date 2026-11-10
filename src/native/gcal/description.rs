@@ -27,7 +27,9 @@ pub(crate) struct DescriptionContext<'a> {
 }
 
 /// Combined route, untracked, and buffer from directive lines. The first
-/// route and the first value per buffer side win.
+/// route and the first value per buffer side win. Per-side `_set` flags
+/// distinguish "set to 0" from unset so a private note can clear a
+/// Google buffer.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct DescriptionDirectives {
     pub route: Option<String>,
@@ -36,6 +38,8 @@ pub(crate) struct DescriptionDirectives {
     /// wins, so a conflicting `#on` plus alias remains on-clock.
     pub untracked: bool,
     pub buffer: EventBuffer,
+    pub before_set: bool,
+    pub after_set: bool,
 }
 
 /// One labelled buffer reason: the minutes for one side plus the
@@ -99,6 +103,9 @@ impl BufferReasons {
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct EventDescription {
     pub lines: Vec<DescriptionLine>,
+    /// Private-note prose, rendered above Google's copied lines and
+    /// exempt from `description_lines`.
+    pub note_lines: Vec<DescriptionLine>,
     pub directives: DescriptionDirectives,
     pub buffer_reasons: BufferReasons,
     pub oversized: bool,
@@ -108,6 +115,7 @@ impl fmt::Debug for EventDescription {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EventDescription")
             .field("lines", &self.lines.len())
+            .field("note_lines", &self.note_lines.len())
             .field("directives", &self.directives)
             .field("buffer_reasons", &self.buffer_reasons.count())
             .field("oversized", &self.oversized)
@@ -175,6 +183,28 @@ pub(crate) fn parse_description(
     let filtered = filter_source_lines(source, &consumed, ctx);
     EventDescription {
         lines: outline(filtered),
+        note_lines: Vec::new(),
+        directives,
+        buffer_reasons,
+        oversized,
+    }
+}
+
+/// Parse private-note text on the plain-text tokenizer, never the HTML
+/// sniffing path. Prose lands in `lines` so [`GcalEvent::apply_notes`]
+/// can copy it onto `note_lines`.
+pub(crate) fn parse_note(
+    raw: &str,
+    ctx: &DescriptionContext<'_>,
+) -> EventDescription {
+    let oversized = raw.len() > 65_536;
+    let source = plain::tokenize(raw);
+    let (directives, buffer_reasons, consumed) =
+        directives_from_source(&source);
+    let filtered = filter_source_lines(source, &consumed, ctx);
+    EventDescription {
+        lines: outline(filtered),
+        note_lines: Vec::new(),
         directives,
         buffer_reasons,
         oversized,
@@ -408,6 +438,8 @@ fn directives_from_source(
         }
     }
     out.untracked = out.clock_tag.explicit_off();
+    out.before_set = before_set;
+    out.after_set = after_set;
     (out, reasons, consumed)
 }
 
@@ -1176,8 +1208,36 @@ mod tests {
         assert!(!debug.contains("SECRET_REASON"), "{debug}");
         assert!(!debug.contains("secret.example"), "{debug}");
         assert!(debug.contains("lines: 1"), "{debug}");
+        assert!(debug.contains("note_lines: 0"), "{debug}");
         assert!(debug.contains("buffer_reasons: 1"), "{debug}");
         assert!(debug.contains("oversized: false"), "{debug}");
+    }
+
+    #[test]
+    fn parse_note_uses_plain_tokenizer_and_set_flags() {
+        let parsed = parse_note(
+            "@family\n-0\n+15 Drive home\nBring the stroller",
+            &DescriptionContext {
+                join_link: None,
+                location: None,
+            },
+        );
+        assert_eq!(parsed.directives.route.as_deref(), Some("family"));
+        assert!(parsed.directives.before_set);
+        assert_eq!(parsed.directives.buffer.before_min, 0);
+        assert!(parsed.directives.after_set);
+        assert_eq!(parsed.directives.buffer.after_min, 15);
+        assert_eq!(parsed.lines.len(), 1);
+        let prose: String = parsed.lines[0]
+            .inlines
+            .iter()
+            .map(|inline| match inline {
+                Inline::Text { text, .. } | Inline::Link { text, .. } => {
+                    text.as_str()
+                }
+            })
+            .collect();
+        assert_eq!(prose, "Bring the stroller");
     }
 
     #[test]

@@ -1,7 +1,8 @@
 //! Sanitized Event Task description bullets.
 //!
 //! Buffer reasons lead the block: at most one `↤ *Nm before*` and one
-//! `↦ *Nm after*` bullet, then the capped copied description lines.
+//! `↦ *Nm after*` bullet, then uncapped private-note prose, then the
+//! capped copied description lines.
 
 use crate::native::{
     capture::parse_managed_task_log_marker, capture_drawers,
@@ -52,22 +53,24 @@ impl DescriptionBullets {
 
 /// Render the parsed description into inert, capped list-item bodies.
 ///
-/// Reason bullets lead in timeline order (before, then after); the
-/// `cap` applies to copied description lines only, so reasons are
-/// never truncated and never count toward the overflow math.
+/// Reason bullets lead in timeline order (before, then after), then
+/// private-note prose, then copied Google lines. The `cap` applies to
+/// copied description lines only, so reasons and note prose are never
+/// truncated and never count toward the overflow math.
 pub(crate) fn render_bullets(
     description: &EventDescription,
     cap: usize,
     html_link: Option<&str>,
 ) -> DescriptionBullets {
+    let mut bullets = Vec::new();
+    if !description.buffer_reasons.is_empty() {
+        for (part, reason) in description.buffer_reasons.iter() {
+            bullets.push(render_reason(part, reason));
+        }
+    }
+    bullets.extend(description.note_lines.iter().map(render_line));
     if description.oversized {
         let calendar = calendar_link("Google Calendar", html_link);
-        let mut bullets = Vec::new();
-        if !description.buffer_reasons.is_empty() {
-            for (part, reason) in description.buffer_reasons.iter() {
-                bullets.push(render_reason(part, reason));
-            }
-        }
         bullets.push(Bullet {
             depth: 1,
             body: format!(
@@ -92,13 +95,6 @@ pub(crate) fn render_bullets(
             depth: 1,
             body: format!("- *…{hidden} more lines in {calendar}*"),
         });
-    }
-    let mut bullets =
-        Vec::with_capacity(description.buffer_reasons.count() + copied.len());
-    if !description.buffer_reasons.is_empty() {
-        for (part, reason) in description.buffer_reasons.iter() {
-            bullets.push(render_reason(part, reason));
-        }
     }
     bullets.extend(copied);
     DescriptionBullets { bullets }
@@ -414,6 +410,26 @@ mod tests {
                 depth: 1,
                 body: "- *Description too long to copy — open it in [Google Calendar](https://calendar.google.com/event?eid=abc)*".to_string(),
             }]
+        );
+    }
+
+    #[test]
+    fn note_prose_is_exempt_from_the_cap() {
+        let mut parsed = parse("one\ntwo\nthree");
+        parsed.note_lines = parse("Note snacks").lines;
+        let rendered = render_bullets(&parsed, 2, None);
+        let bodies: Vec<&str> = rendered
+            .bullets
+            .iter()
+            .map(|bullet| bullet.body.as_str())
+            .collect();
+        assert_eq!(
+            bodies,
+            [
+                "- Note snacks",
+                "- one",
+                "- *…2 more lines in Google Calendar*",
+            ]
         );
     }
 

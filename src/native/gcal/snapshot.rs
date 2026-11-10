@@ -16,9 +16,9 @@ use super::{
     clock,
     config::GcalConfig,
     gog::Gog,
-    journal,
-    model::{EventDateTime, GcalEvent},
-    root::{self, EventRoot},
+    journal::{self, FoldedNote},
+    model::{EventDateTime, GcalEvent, ParsedNote},
+    root::{self, EventRoot, NoteRootCandidate},
     GcalError,
 };
 use crate::native::{
@@ -75,10 +75,13 @@ pub(crate) fn fetch_day<S: HomeSource>(
     let _ = gog.require_version()?;
     let account = resolve_command(&gog, config.account())?;
     let calendars = gog.calendars(&account)?;
-    // Series roots are vault-local memory of your edits. An unreadable
-    // journal degrades to no learned roots here; sync still fails loudly
-    // on its own strict journal read.
+    // Series roots and notes are vault-local memory. An unreadable
+    // journal degrades to none here; sync still fails loudly on its
+    // own strict journal read.
     let series_roots = journal::load_series_roots(&vault).unwrap_or_default();
+    let notes = journal::load_notes(&vault)
+        .map(|(book, _)| book)
+        .unwrap_or_default();
 
     let mut events = Vec::new();
     for configured in config.calendars() {
@@ -95,13 +98,29 @@ pub(crate) fn fetch_day<S: HomeSource>(
             &account,
         )?;
         for raw_event in raw_events {
-            let event = GcalEvent::from_google(&configured.id, raw_event)?;
+            let mut event = GcalEvent::from_google(&configured.id, raw_event)?;
+            let occurrence_note = matching_note(
+                notes.event(&event.key.calendar_id, &event.key.event_id),
+                &account,
+            );
+            let series_note = event.series_id.as_ref().and_then(|series| {
+                matching_note(
+                    notes.series(&event.key.calendar_id, series),
+                    &account,
+                )
+            });
+            event.apply_notes(occurrence_note.as_ref(), series_note.as_ref());
             let inclusion = classify::classify(&event, &window, config);
             let root = if inclusion == Inclusion::Task {
                 let learned = event.series_id.as_ref().and_then(|series| {
                     series_roots
                         .get(&(event.key.calendar_id.clone(), series.clone()))
                 });
+                let note_roots =
+                    event.note.as_ref().map(|note| NoteRootCandidate {
+                        event: note.event_route.clone(),
+                        series: note.series_route.clone(),
+                    });
                 Some(root::choose_event_root(
                     resolver,
                     &vault,
@@ -110,6 +129,7 @@ pub(crate) fn fetch_day<S: HomeSource>(
                     &calendar_name,
                     config,
                     learned,
+                    note_roots.as_ref(),
                 ))
             } else {
                 None
@@ -129,7 +149,6 @@ pub(crate) fn fetch_day<S: HomeSource>(
                 &event.clock_tag,
                 inclusion == Inclusion::Task,
             );
-            let mut event = event;
             event.title = title;
             events.push(SnapshotEvent {
                 event,
@@ -175,6 +194,17 @@ fn event_time(event: &GcalEvent, window: &DayWindow) -> String {
         }
         _ => "all day".to_string(),
     }
+}
+
+fn matching_note(
+    record: Option<&FoldedNote>,
+    account: &str,
+) -> Option<ParsedNote> {
+    let record = record?;
+    if record.account != account || record.cleared {
+        return None;
+    }
+    Some(ParsedNote::parse(record.scope, &record.text))
 }
 
 fn compare_events(

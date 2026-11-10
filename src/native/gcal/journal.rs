@@ -1,11 +1,13 @@
 //! The per-host `bob gcal sync` journal: `.bob/gcal/<host>.jsonl`.
 //!
 //! Records are `gcal.row`, `gcal.link`, `gcal.gone`, `gcal.series_root`,
-//! and `gcal.flag`, union-merged and folded into state keyed by
-//! (occurrence key, day). Series roots fold into a series-keyed map of
-//! learned `[root::]` values; flags remember once-reported lifecycle
-//! notices. One host-local status file under `$XDG_STATE_HOME/bob/gcal/`
-//! feeds `list` and `doctor`; it is never written to the vault.
+//! `gcal.flag`, `gcal.reset`, and `gcal.note`, union-merged and folded
+//! into state keyed by (occurrence key, day). Series roots fold into a
+//! series-keyed map of learned `[root::]` values; notes fold into a
+//! last-writer-wins book keyed by event or series; flags remember
+//! once-reported lifecycle notices. One host-local status file under
+//! `$XDG_STATE_HOME/bob/gcal/` feeds `list` and `doctor`; it is never
+//! written to the vault.
 
 use std::{
     collections::{BTreeMap, HashSet},
@@ -26,6 +28,9 @@ pub(crate) const NAMESPACE: Namespace = Namespace {
     dir: ".bob/gcal",
     noun: "gcal",
 };
+
+/// Canonical text larger than this makes a `gcal.note` record malformed.
+pub(crate) const MAX_NOTE_BYTES: usize = 2048;
 
 /// Journaled state for one (occurrence key, day).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -82,6 +87,95 @@ pub(crate) struct LearnedRoot {
     pub root: String,
     pub day: String,
     pub block_id: String,
+}
+
+/// Whether a private event note covers one occurrence or the series.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NoteScope {
+    Event,
+    Series,
+}
+
+impl NoteScope {
+    #[allow(dead_code)] // The write command serializes this in a later phase.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Event => "event",
+            Self::Series => "series",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "event" => Some(Self::Event),
+            "series" => Some(Self::Series),
+            _ => None,
+        }
+    }
+}
+
+/// Display-only identity captured when a note was written.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct NoteSeen {
+    pub title: Option<String>,
+    pub start: Option<String>,
+    pub ical_uid: Option<String>,
+    pub original_start: Option<String>,
+}
+
+/// One folded private event note. `text: ""` with `cleared` is a
+/// deliberate clear, distinct from a key that was never noted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FoldedNote {
+    pub account: String,
+    pub scope: NoteScope,
+    pub calendar_id: String,
+    pub key: String,
+    pub text: String,
+    pub cleared: bool,
+    pub seen: Option<NoteSeen>,
+    pub host: String,
+    pub ts: DateTime<FixedOffset>,
+}
+
+/// Last-writer-wins fold of `gcal.note` records.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct NoteBook {
+    events: BTreeMap<(String, String), FoldedNote>,
+    series: BTreeMap<(String, String), FoldedNote>,
+}
+
+impl NoteBook {
+    pub(crate) fn event(
+        &self,
+        calendar_id: &str,
+        event_id: &str,
+    ) -> Option<&FoldedNote> {
+        self.events
+            .get(&(calendar_id.to_string(), event_id.to_string()))
+    }
+
+    pub(crate) fn series(
+        &self,
+        calendar_id: &str,
+        series: &str,
+    ) -> Option<&FoldedNote> {
+        self.series
+            .get(&(calendar_id.to_string(), series.to_string()))
+    }
+}
+
+/// A new `gcal.note` to append.
+#[allow(dead_code)] // The write command constructs this in a later phase.
+#[derive(Debug, Clone)]
+pub(crate) struct NewNote {
+    pub account: String,
+    pub calendar_id: String,
+    pub event_id: Option<String>,
+    pub series: Option<String>,
+    pub scope: NoteScope,
+    pub text: String,
+    pub seen: Option<NoteSeen>,
 }
 
 /// A new `gcal.row` to append.
@@ -154,7 +248,10 @@ pub(crate) fn load_state(
     let mut newest: Option<(DateTime<FixedOffset>, String)> = None;
     for event in ordered {
         let is_gcal = event.kind.starts_with("gcal.");
-        if !is_gcal || event.kind == "gcal.series_root" {
+        if !is_gcal
+            || event.kind == "gcal.series_root"
+            || event.kind == "gcal.note"
+        {
             continue;
         }
         newest = Some((event.ts, event.host.clone()));
@@ -378,6 +475,101 @@ pub(crate) fn load_series_roots(
     Ok(roots)
 }
 
+/// Fold every `gcal.note` record into a last-writer-wins book, ordered
+/// by `(ts, host, path, line)` like [`load_series_roots`]. Malformed
+/// lines are skipped with a warning; callers that need the count use
+/// [`malformed_count`].
+pub(crate) fn load_notes(
+    vault: &Path,
+) -> std::io::Result<(NoteBook, Vec<String>)> {
+    let (stored, mut warnings) = pref_journal::read_raw(vault, NAMESPACE)?;
+    let mut ordered = stored.iter().collect::<Vec<_>>();
+    pref_journal::sort_by_writer_order(&mut ordered, |event| {
+        (
+            event.ts,
+            event.host.as_str(),
+            event.path.as_str(),
+            event.line,
+        )
+    });
+    let mut book = NoteBook::default();
+    let mut malformed = 0usize;
+    for event in ordered {
+        if event.kind.as_str() != "gcal.note" {
+            continue;
+        }
+        match parse_note_record(event) {
+            Some(note) => {
+                let key = (note.calendar_id.clone(), note.key.clone());
+                match note.scope {
+                    NoteScope::Event => {
+                        book.events.insert(key, note);
+                    }
+                    NoteScope::Series => {
+                        book.series.insert(key, note);
+                    }
+                }
+            }
+            None => {
+                malformed += 1;
+                if malformed <= pref_journal::MAX_MALFORMED_WARNINGS {
+                    warnings.push(format!(
+                        "skipping malformed gcal journal line {}:{}",
+                        event.path, event.line
+                    ));
+                }
+            }
+        }
+    }
+    if malformed > pref_journal::MAX_MALFORMED_WARNINGS {
+        warnings
+            .push(format!("skipped {malformed} malformed gcal journal lines"));
+    }
+    Ok((book, warnings))
+}
+
+/// Append one `gcal.note` record with a single `O_APPEND` write.
+#[allow(dead_code)] // The write command appends through this in a later phase.
+pub(crate) fn append_note(
+    vault: &Path,
+    host: &str,
+    note: &NewNote,
+) -> std::io::Result<String> {
+    let mut key = json!({"calendar_id": note.calendar_id});
+    match note.scope {
+        NoteScope::Event => {
+            key["event_id"] = json!(note.event_id.as_deref().unwrap_or(""));
+        }
+        NoteScope::Series => {
+            key["series"] = json!(note.series.as_deref().unwrap_or(""));
+        }
+    }
+    let mut value = json!({
+        "v": 1,
+        "ts": pref_journal::event_timestamp()
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
+        "host": host,
+        "kind": "gcal.note",
+        "account": note.account,
+        "key": key,
+        "scope": note.scope.as_str(),
+        "text": note.text,
+    });
+    if let Some(seen) = &note.seen {
+        value["seen"] = json!({
+            "title": seen.title,
+            "start": seen.start,
+            "ical_uid": seen.ical_uid,
+            "original_start": seen.original_start,
+        });
+    }
+    let line = serde_json::to_string(&value)
+        .unwrap_or_else(|_| "{}".to_string())
+        + "\n";
+    pref_journal::append_line(vault, NAMESPACE, host, &line)?;
+    Ok(line)
+}
+
 /// Append one `gcal.series_root` record: a vault edit on one occurrence
 /// of a recurring event teaches the series.
 #[allow(clippy::too_many_arguments)]
@@ -474,12 +666,74 @@ pub(crate) fn malformed_count(vault: &Path) -> usize {
             if parse_record(&event).is_none()
                 && parse_series_root(&event).is_none()
                 && parse_reset(&event).is_none()
+                && parse_note_record(&event).is_none()
             {
                 count += 1;
             }
         }
     }
     count
+}
+
+/// Parse one `gcal.note` record without folding it. Text larger than
+/// [`MAX_NOTE_BYTES`], an unknown scope, or a missing key part is
+/// malformed.
+fn parse_note_record(event: &StoredEvent) -> Option<FoldedNote> {
+    if event.kind.as_str() != "gcal.note" {
+        return None;
+    }
+    let object = event.value.as_object()?;
+    let account = object.get("account")?.as_str()?.to_string();
+    let scope = NoteScope::parse(object.get("scope")?.as_str()?)?;
+    let key = object.get("key")?.as_object()?;
+    let calendar_id = key.get("calendar_id")?.as_str()?.to_string();
+    if calendar_id.is_empty() {
+        return None;
+    }
+    let key_part = match scope {
+        NoteScope::Event => key.get("event_id")?.as_str()?.to_string(),
+        NoteScope::Series => key.get("series")?.as_str()?.to_string(),
+    };
+    if key_part.is_empty() {
+        return None;
+    }
+    let text = object.get("text")?.as_str()?;
+    if text.len() > MAX_NOTE_BYTES {
+        return None;
+    }
+    let seen =
+        object
+            .get("seen")
+            .and_then(Value::as_object)
+            .map(|seen| NoteSeen {
+                title: seen
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                start: seen
+                    .get("start")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                ical_uid: seen
+                    .get("ical_uid")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                original_start: seen
+                    .get("original_start")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            });
+    Some(FoldedNote {
+        account,
+        scope,
+        calendar_id,
+        key: key_part,
+        text: text.to_string(),
+        cleared: text.is_empty(),
+        seen,
+        host: event.host.clone(),
+        ts: event.ts,
+    })
 }
 
 /// Parse one `gcal.series_root` record without folding it.
@@ -1057,5 +1311,104 @@ mod tests {
                 .to_string(),
             "07:15"
         );
+    }
+
+    fn note_record(dir: &Path, host: &str, ts: &str, extra: serde_json::Value) {
+        let mut value = json!({
+            "v": 1,
+            "ts": ts,
+            "host": host,
+            "kind": "gcal.note",
+            "account": "you@example.com",
+            "key": {"calendar_id": "primary", "event_id": "deerwood"},
+            "scope": "event",
+            "text": "@family",
+        });
+        for (name, field) in extra.as_object().expect("object") {
+            value[name] = field.clone();
+        }
+        let line = serde_json::to_string(&value).expect("json") + "\n";
+        pref_journal::append_line(dir, NAMESPACE, host, &line).expect("append");
+    }
+
+    #[test]
+    fn notes_fold_last_writer_wins_and_clears() {
+        let dir = tempfile::tempdir().expect("vault");
+        note_record(
+            dir.path(),
+            "athena",
+            "2026-11-09T10:00:00-05:00",
+            json!({"text": "@job"}),
+        );
+        note_record(
+            dir.path(),
+            "mac",
+            "2026-11-09T11:00:00-05:00",
+            json!({"text": "@family\n-30 Drive"}),
+        );
+        let (book, warnings) = load_notes(dir.path()).expect("notes");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let note = book.event("primary", "deerwood").expect("event note");
+        assert_eq!(note.text, "@family\n-30 Drive");
+        assert!(!note.cleared);
+        assert_eq!(note.host, "mac");
+
+        note_record(
+            dir.path(),
+            "mac",
+            "2026-11-09T12:00:00-05:00",
+            json!({"text": ""}),
+        );
+        let (book, warnings) = load_notes(dir.path()).expect("cleared");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let note = book.event("primary", "deerwood").expect("cleared note");
+        assert!(note.cleared);
+        assert!(note.text.is_empty());
+    }
+
+    #[test]
+    fn notes_do_not_move_newest_or_count_as_malformed() {
+        let dir = tempfile::tempdir().expect("vault");
+        raw_record(
+            dir.path(),
+            "2026-10-30T05:24:20-04:00",
+            "gcal.row",
+            row_extra(),
+        );
+        note_record(dir.path(), "mac", "2026-10-30T06:00:00-04:00", json!({}));
+        let (state, warnings, newest) = load_state(dir.path()).expect("fold");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(
+            newest.expect("newest").0.format("%H:%M").to_string(),
+            "05:24"
+        );
+        assert!(state
+            .get(&(
+                occurrence_key("primary", "deerwood"),
+                "2026-10-30".to_string()
+            ))
+            .is_none());
+        assert_eq!(malformed_count(dir.path()), 0);
+    }
+
+    #[test]
+    fn oversized_or_unknown_scope_note_is_malformed() {
+        let dir = tempfile::tempdir().expect("vault");
+        note_record(
+            dir.path(),
+            "mac",
+            "2026-10-30T06:00:00-04:00",
+            json!({"scope": "this-and-following"}),
+        );
+        note_record(
+            dir.path(),
+            "mac",
+            "2026-10-30T06:01:00-04:00",
+            json!({"text": "x".repeat(MAX_NOTE_BYTES + 1)}),
+        );
+        let (book, warnings) = load_notes(dir.path()).expect("notes");
+        assert!(book.event("primary", "deerwood").is_none());
+        assert!(!warnings.is_empty(), "{warnings:?}");
+        assert_eq!(malformed_count(dir.path()), 2);
     }
 }

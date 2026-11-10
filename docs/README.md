@@ -42,6 +42,7 @@ queued intake; full scans also synchronize annotations. The
 | [freshness.md](freshness.md) | Task review queue, confirmation dates, recurring occurrences, returning tasks (ticklers), and JSON schema 16 |
 | [getting-started.md](getting-started.md) | Vault requirements, first capture/session, command effects, and troubleshooting |
 | [gcal.md](gcal.md) | `bob gcal` Google Calendar events as daily-note Event Tasks |
+| [gcal-notes.md](gcal-notes.md) | Private event notes: Bob-only description grammar layered over Google Calendar events |
 | [gkeep.md](gkeep.md) | `bob gkeep` Keep inbox drain into tasks or inline reference clips |
 | [gmail.md](gmail.md) | `bob gmail` Gmail threads as inert mail notes, linked from tasks |
 | [highlights-clip.md](highlights-clip.md) | Web article and collection capture into Highlights intake PDFs |

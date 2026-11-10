@@ -15,6 +15,7 @@ These pages specify behavior that Bob components and their tests must agree on.
 - [Shell completion](../completion.md) — Shell completion: the runtime model, protocol 1, and what completes
 - [Getting started](../getting-started.md) — Vault requirements, first capture/session, command effects, and troubleshooting
 - [Bob Gcal](../gcal.md) — `bob gcal` Google Calendar events as daily-note Event Tasks
+- [Private event notes](../gcal-notes.md) — Private event notes: Bob-only description grammar layered over Google Calendar events
 - [Bob Gkeep](../gkeep.md) — `bob gkeep` Keep inbox drain into tasks or inline reference clips
 - [Bob Gmail](../gmail.md) — `bob gmail` Gmail threads as inert mail notes, linked from tasks
 - [Web article capture (`bob ref create <URL> [<URL>…]`)](../highlights-clip.md) — Web article and collection capture into Highlights intake PDFs

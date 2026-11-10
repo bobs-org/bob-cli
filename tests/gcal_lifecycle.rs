@@ -2105,7 +2105,7 @@ fn buffer_reasons_lead_the_description_block() {
     assert_eq!(dentist["buffer"]["before_minutes"], 30, "{dentist}");
     assert_eq!(dentist["buffer"]["after_minutes"], 15, "{dentist}");
     assert!(
-        !stdout(&list_out).contains("dentist"),
+        !stdout(&list_out).contains("Drive to the dentist"),
         "no reason text in JSON: {}",
         stdout(&list_out)
     );

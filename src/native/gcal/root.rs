@@ -35,6 +35,10 @@ pub(crate) struct RootRejection {
 pub(crate) enum RootSourceKind {
     #[default]
     None,
+    /// Private note on this occurrence.
+    Note,
+    /// Private note on the series (`scope: series`).
+    SeriesNote,
     /// Source 1: series memory of an earlier `[root::]` edit.
     SeriesMemory,
     /// Title-ending or description-directive `@route` token.
@@ -45,6 +49,28 @@ pub(crate) enum RootSourceKind {
     Calendar,
     /// Config default (`gcal.root`).
     Default,
+}
+
+impl RootSourceKind {
+    pub(crate) fn json_label(self) -> Option<&'static str> {
+        match self {
+            Self::Note => Some("note"),
+            Self::SeriesNote => Some("series_note"),
+            Self::SeriesMemory => Some("learned"),
+            Self::Token => Some("token"),
+            Self::Colour => Some("colour"),
+            Self::Calendar => Some("calendar"),
+            Self::Default => Some("default"),
+            Self::None => None,
+        }
+    }
+}
+
+/// Note-derived `@route` candidates, occurrence then series.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct NoteRootCandidate {
+    pub event: Option<String>,
+    pub series: Option<String>,
 }
 
 /// Chosen root and user-facing provenance for one Event Task.
@@ -67,9 +93,43 @@ pub(crate) fn choose_event_root<S: HomeSource>(
     calendar_name: &str,
     config: &GcalConfig,
     learned: Option<&super::journal::LearnedRoot>,
+    note: Option<&NoteRootCandidate>,
 ) -> EventRoot {
     let mut warnings = Vec::new();
     let mut title = event.title.clone();
+
+    if let Some(note) = note {
+        for (route, kind, label) in [
+            (
+                note.event.as_deref(),
+                RootSourceKind::Note,
+                note.event.as_deref().map(|route| format!("✎ @{route}")),
+            ),
+            (
+                note.series.as_deref(),
+                RootSourceKind::SeriesNote,
+                note.series
+                    .as_deref()
+                    .map(|route| format!("✎ all events @{route}")),
+            ),
+        ] {
+            let Some(route) = route else {
+                continue;
+            };
+            let Some(label) = label else {
+                continue;
+            };
+            match try_note_route(resolver, vault, daily_rel, route) {
+                Ok(target) => {
+                    title = strip_resolvable_title_route(
+                        resolver, vault, daily_rel, event, title,
+                    );
+                    return chosen(target, label, kind, warnings, title);
+                }
+                Err(warning) => warnings.push(warning),
+            }
+        }
+    }
 
     // Source 1: your earlier `[root::]` edit on another occurrence of the
     // same recurring event taught the series.
@@ -227,6 +287,59 @@ fn rejection_message(source: &str, rejection: &RootRejection) -> String {
         "{source} rejected ({}): {}; fix: {}",
         rejection.reason, rejection.message, rejection.fix
     )
+}
+
+fn try_note_route<S: HomeSource>(
+    resolver: &mut HomeResolver<S>,
+    vault: &Path,
+    daily_rel: &Path,
+    route: &str,
+) -> Result<RootTarget, String> {
+    match parent_notes::resolve_parent(vault, route) {
+        Ok(parent) => {
+            match validate_root_with(resolver, daily_rel, &parent.route) {
+                Ok(target) => Ok(target),
+                Err(rejection) => {
+                    Err(rejection_message(&format!("✎ @{route}"), &rejection))
+                }
+            }
+        }
+        Err(error) => {
+            let mut warning = format!(
+                "route_unknown (✎ @{route}): {}",
+                error.message().replace('\n', "; ")
+            );
+            if let Err(rejection) =
+                validate_root_with(resolver, daily_rel, route)
+            {
+                warning.push_str("; ");
+                warning.push_str(&rejection_message(
+                    &format!("✎ @{route}"),
+                    &rejection,
+                ));
+            }
+            Err(warning)
+        }
+    }
+}
+
+fn strip_resolvable_title_route<S: HomeSource>(
+    resolver: &mut HomeResolver<S>,
+    vault: &Path,
+    daily_rel: &Path,
+    event: &GcalEvent,
+    title: String,
+) -> String {
+    let Some(route) = event.title_route_hint.as_deref() else {
+        return title;
+    };
+    if parent_notes::resolve_parent(vault, route).is_err() {
+        return title;
+    }
+    if validate_root_with(resolver, daily_rel, route).is_err() {
+        return title;
+    }
+    strip_title_route(&event.title, route)
 }
 
 fn strip_title_route(title: &str, route: &str) -> String {
@@ -440,6 +553,26 @@ mod tests {
         config: &GcalConfig,
         learned: Option<&super::super::journal::LearnedRoot>,
     ) -> EventRoot {
+        choose_at_note(
+            vault,
+            daily_rel,
+            event,
+            calendar_name,
+            config,
+            learned,
+            None,
+        )
+    }
+
+    fn choose_at_note(
+        vault: &Path,
+        daily_rel: &Path,
+        event: &GcalEvent,
+        calendar_name: &str,
+        config: &GcalConfig,
+        learned: Option<&super::super::journal::LearnedRoot>,
+        note: Option<&NoteRootCandidate>,
+    ) -> EventRoot {
         let mut resolver = HomeResolver::new(DiskHomeSource::new(vault));
         choose_event_root(
             &mut resolver,
@@ -449,7 +582,37 @@ mod tests {
             calendar_name,
             config,
             learned,
+            note,
         )
+    }
+
+    #[test]
+    fn note_route_precedes_token_and_strips_title_route() {
+        let vault = root_vault();
+        write_note(
+            vault.path(),
+            "family.md",
+            "---\ntype: area\n---\n# family\n",
+        );
+        let event = event("Dentist @body", Some("@job"), None);
+        let note = NoteRootCandidate {
+            event: Some("family".to_string()),
+            series: None,
+        };
+        let root = choose_at_note(
+            vault.path(),
+            Path::new("2026/20261030.md"),
+            &event,
+            "Personal",
+            &config(None, None, "meet"),
+            None,
+            Some(&note),
+        );
+        assert_eq!(root.value.as_deref(), Some("family"));
+        assert_eq!(root.source.as_deref(), Some("✎ @family"));
+        assert_eq!(root.kind, RootSourceKind::Note);
+        assert_eq!(root.title, "Dentist");
+        assert!(root.warnings.is_empty());
     }
 
     #[test]

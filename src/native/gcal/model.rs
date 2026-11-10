@@ -8,14 +8,19 @@ use chrono::{
 use serde::Deserialize;
 
 use crate::native::{
-    clock_tags::{google_clock_token, merge_clock_tags, ClockTag},
-    event_task::EventBuffer,
+    clock_tags::{google_clock_token, merge_clock_tags, ClockKind, ClockTag},
+    event_task::{BufferPart, EventBuffer},
 };
 
 use super::{
-    description::{parse_description, DescriptionContext, EventDescription},
+    description::{
+        parse_description, parse_note, BufferReason, DescriptionContext,
+        EventDescription,
+    },
+    journal::{self, NoteScope},
     GcalError,
 };
+use serde_json::{json, Value};
 
 #[allow(dead_code)] // Lifecycle and sync phases consume the preserved fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +50,100 @@ pub(crate) struct GcalEvent {
     pub my_answer: MyAnswer,
     pub organizer_or_no_guests: bool,
     pub description: EventDescription,
+    /// Layered private-note summary, when a matching note was applied.
+    pub note: Option<AppliedNote>,
+}
+
+/// Which private-note scopes were present when notes were applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AppliedNoteScope {
+    Event,
+    Series,
+    Both,
+}
+
+impl AppliedNoteScope {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Event => "event",
+            Self::Series => "series",
+            Self::Both => "both",
+        }
+    }
+}
+
+/// One field a private note contributed to the layered event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NoteField {
+    Root,
+    Clock,
+    Before,
+    After,
+    Bullets,
+}
+
+impl NoteField {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Root => "root",
+            Self::Clock => "clock",
+            Self::Before => "before",
+            Self::After => "after",
+            Self::Bullets => "bullets",
+        }
+    }
+}
+
+/// Parsed private note ready to layer over a Google event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParsedNote {
+    pub scope: NoteScope,
+    pub text: String,
+    pub description: EventDescription,
+}
+
+impl ParsedNote {
+    pub(crate) fn parse(scope: NoteScope, text: &str) -> Self {
+        Self {
+            scope,
+            text: text.to_string(),
+            description: parse_note(
+                text,
+                &DescriptionContext {
+                    join_link: None,
+                    location: None,
+                },
+            ),
+        }
+    }
+}
+
+/// What a private note contributed after per-field layering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AppliedNote {
+    pub scope: AppliedNoteScope,
+    pub event_route: Option<String>,
+    pub series_route: Option<String>,
+    pub fields: Vec<NoteField>,
+    #[allow(dead_code)] // Provenance records this hash on `gcal.row` later.
+    pub hash: String,
+}
+
+impl AppliedNote {
+    pub(crate) fn json(&self, bullet_lines: usize) -> Value {
+        json!({
+            "scope": self.scope.as_str(),
+            "fields": self.fields.iter().map(|field| field.as_str()).collect::<Vec<_>>(),
+            "bullet_lines": bullet_lines,
+        })
+    }
+}
+
+pub(crate) fn note_summary_json(event: &GcalEvent) -> Value {
+    match &event.note {
+        Some(note) => note.json(event.description.note_lines.len()),
+        None => Value::Null,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,7 +277,125 @@ impl GcalEvent {
             my_answer,
             organizer_or_no_guests,
             description,
+            note: None,
         })
+    }
+
+    /// Layer occurrence then series notes over Google's description,
+    /// field by field. Google keeps time, title, and badge links.
+    pub(crate) fn apply_notes(
+        &mut self,
+        occurrence: Option<&ParsedNote>,
+        series: Option<&ParsedNote>,
+    ) {
+        if occurrence.is_none() && series.is_none() {
+            self.note = None;
+            return;
+        }
+
+        let mut fields = Vec::new();
+        let event_route = occurrence
+            .and_then(|note| note.description.directives.route.clone());
+        let series_route =
+            series.and_then(|note| note.description.directives.route.clone());
+        if event_route.is_some() || series_route.is_some() {
+            fields.push(NoteField::Root);
+        }
+
+        let occ_clock =
+            occurrence.map(|note| &note.description.directives.clock_tag);
+        let series_clock =
+            series.map(|note| &note.description.directives.clock_tag);
+        if occ_clock.is_some_and(|tag| tag.kind() != ClockKind::None) {
+            self.clock_tag = occ_clock.expect("set").clone();
+            self.deprecated_description_tags =
+                self.clock_tag.deprecated().to_vec();
+            fields.push(NoteField::Clock);
+        } else if series_clock.is_some_and(|tag| tag.kind() != ClockKind::None)
+        {
+            self.clock_tag = series_clock.expect("set").clone();
+            self.deprecated_description_tags =
+                self.clock_tag.deprecated().to_vec();
+            fields.push(NoteField::Clock);
+        }
+        self.off_clock = self.clock_tag.explicit_off();
+        self.untracked = self.off_clock;
+
+        let mut note_reason = false;
+        if let Some((minutes, reason)) =
+            layered_side(occurrence, series, BufferPart::Before)
+        {
+            self.buffer.before_min = minutes;
+            self.description.buffer_reasons.before = reason.clone();
+            fields.push(NoteField::Before);
+            note_reason |= reason.is_some();
+        }
+        if let Some((minutes, reason)) =
+            layered_side(occurrence, series, BufferPart::After)
+        {
+            self.buffer.after_min = minutes;
+            self.description.buffer_reasons.after = reason.clone();
+            fields.push(NoteField::After);
+            note_reason |= reason.is_some();
+        }
+
+        let mut note_lines = Vec::new();
+        if let Some(note) = occurrence {
+            note_lines.extend(note.description.lines.clone());
+        }
+        if let Some(note) = series {
+            note_lines.extend(note.description.lines.clone());
+        }
+        if !note_lines.is_empty() || note_reason {
+            fields.push(NoteField::Bullets);
+        }
+        self.description.note_lines = note_lines;
+
+        let mut texts = Vec::new();
+        if let Some(note) = occurrence {
+            texts.push(note.text.as_str());
+        }
+        if let Some(note) = series {
+            texts.push(note.text.as_str());
+        }
+        self.note = Some(AppliedNote {
+            scope: match (occurrence.is_some(), series.is_some()) {
+                (true, true) => AppliedNoteScope::Both,
+                (true, false) => AppliedNoteScope::Event,
+                (false, true) => AppliedNoteScope::Series,
+                (false, false) => unreachable!("early return"),
+            },
+            event_route,
+            series_route,
+            fields,
+            hash: journal::span_hash(&texts.join("\n")),
+        });
+    }
+}
+
+fn layered_side(
+    occurrence: Option<&ParsedNote>,
+    series: Option<&ParsedNote>,
+    part: BufferPart,
+) -> Option<(u16, Option<BufferReason>)> {
+    side_from(occurrence, part).or_else(|| side_from(series, part))
+}
+
+fn side_from(
+    note: Option<&ParsedNote>,
+    part: BufferPart,
+) -> Option<(u16, Option<BufferReason>)> {
+    let note = note?;
+    let directives = &note.description.directives;
+    let reasons = &note.description.buffer_reasons;
+    match part {
+        BufferPart::Before if directives.before_set => {
+            Some((directives.buffer.before_min, reasons.before.clone()))
+        }
+        BufferPart::After if directives.after_set => {
+            Some((directives.buffer.after_min, reasons.after.clone()))
+        }
+        _ => None,
     }
 }
 

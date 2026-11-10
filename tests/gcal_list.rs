@@ -209,7 +209,7 @@ fn list_shows_buffer_reasons_in_time_and_event_columns() {
     assert_eq!(dentist["buffer"]["before_minutes"], 30, "{dentist}");
     assert_eq!(dentist["buffer"]["after_minutes"], 15, "{dentist}");
     assert!(
-        !stdout(&output).contains("dentist"),
+        !stdout(&output).contains("Drive to the dentist"),
         "no reason text in JSON: {}",
         stdout(&output)
     );

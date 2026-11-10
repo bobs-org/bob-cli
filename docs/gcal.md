@@ -348,9 +348,10 @@ what sync did, or would do, with the event — `task · MEET`, `task`,
 every VAULT cell and the header read `waiting for Templater`, the state sync
 refuses to write into. The TIME column appends the buffer label for
 buffered tasks (`12:00-13:00 −30m +15m`, dimmed on a TTY); see
-[Buffers](#buffers). The EVENT column appends a dim `≡ N` after the title
-of each Event Task with N bullet lines sync would write, reasons
-included; see
+[Buffers](#buffers). The EVENT column appends a dim `✎` after the title of each Event Task
+with a private event note, then a dim `≡ N` for N bullet lines sync
+would write, reasons included; see
+[Private event notes](gcal-notes.md) and
 [Description bullets](#description-bullets). Omitted events keep their
 omission reason. `-a` also shows omitted events. A footer line,
 `1 removed by you · bob gcal sync -F restores today's Events`, counts the
@@ -374,7 +375,11 @@ reports `time`, `title`, `answer`, `inclusion`, `reason`, `clock` (`"off"`,
 carries no buffer), `description_lines` (bullet lines sync would write,
 reasons included, 0 otherwise), `vault`, `skip` (the [skip reason](#skipped-events) as
 `{reason, detail, hint}` for an omitted or removed event, else `null`), and
-`root.value`, `root.source`, and `root.warnings`. `vault` appends ` · off-clock` for explicit off tags
+`calendar_id`, `event_id`, `root.value`, `root.source`, `root.kind`
+(`note`, `series_note`, `learned`, `token`, `colour`, `calendar`,
+`default`), `root.warnings`, and `note` (`null` or
+`{"scope": "event"|"series"|"both", "fields": [...], "bullet_lines": N}`,
+never note text). `vault` appends ` · off-clock` for explicit off tags
 and ` · off-clock via <stem>` for inherited clocks. Descriptions and
 attendee details are omitted. A root may be null when no candidate is
 valid; per-event `root.warnings` explain each rejected candidate and its
@@ -651,10 +656,10 @@ account, or set `gcal.account` to the stamp's account.
 | --- | --- | --- |
 | Checkbox | You | Never changed, except cancelling an untouched task (see below) |
 | Time span, title, badges | Google | Updated in place only while untouched; your edits win and are reported once |
-| `#off` / `#on` (deprecated Google aliases `#offclock`, `#off-clock`, `#untracked`) | Google until you edit it | Follows Google's explicit tag while untouched; your add/remove wins and is reported once. A flip after the session closed is left for a hand edit and reported once as `kept_off_clock` |
-| `[buffer::]` | Google until you edit it | Follows Google's description directives while untouched; your add/remove wins and is reported once. No field when the event has no buffer |
-| Description bullets (buffer reasons included) | Google until you edit them | Rewritten in place while they still match what Bob last wrote; your edit, nested note, or deletion makes them yours, reported once only if Google later changes |
-| `[root::]` | Google until you edit it | Follows the chosen root (not series memory) until you edit it, and adds `[type:: MEET]` when needed. Your edits win, are reported once when Google later routes elsewhere, and teach the series |
+| `#off` / `#on` (deprecated Google aliases `#offclock`, `#off-clock`, `#untracked`) | your private note, then Google, until you edit it | Follows Google's explicit tag while untouched; your add/remove wins and is reported once. A flip after the session closed is left for a hand edit and reported once as `kept_off_clock` |
+| `[buffer::]` | your private note, then Google, until you edit it | Follows Google's description directives while untouched; your add/remove wins and is reported once. No field when the event has no buffer |
+| Description bullets (buffer reasons included) | your private note, then Google, until you edit it | Rewritten in place while they still match what Bob last wrote; your edit, nested note, or deletion makes them yours, reported once only if Google later changes |
+| `[root::]` | your private note, then Google, until you edit it | Follows the chosen root (not series memory) until you edit it, and adds `[type:: MEET]` when needed. Your edits win, are reported once when Google later routes elsewhere, and teach the series |
 | `[type::]`, block ID | Bob, once | `[type:: MEET]` is added on a root reroute only when the line has none; an existing `[type::]` and the block ID are never rewritten |
 | Other child bullets (your notes) | You | Never touched |
 | MEET Task Link | Google until you edit it | A Google time or buffer change re-files Bob's untouched placeholder or Bob-shaped closed filing; a hand-edited filing is kept and reported once |
@@ -780,7 +785,8 @@ with `@route` and the clock tags (`#off`, `#on`, deprecated `#offclock`,
 `@love #off -30`
 routes, marks off-clock, and buffers at once. Numbers in
 titles are never buffers: `Q4 +1` and `Room -2` stay titles. Bob reads
-buffers from the description only.
+buffers from the description only. A [private event note](gcal-notes.md)
+beats Google's description per side, including `-0`/`+0` to clear a side.
 
 Bob treats the event as occupying the **buffered span** — `start − before`
 to `end + after`, with a pre-buffer stopping at midnight — while the
@@ -863,9 +869,10 @@ directive grammar does not change, so a line with any non-directive token
 is never a directive.
 
 Buffer reasons lead the block: a `↤ *Nm before*` bullet, then a
-`↦ *Nm after*` bullet, then the copied description bullets in order, then
-the overflow line. Reasons never count toward `description_lines` and are
-never truncated; the cap applies to copied lines only.
+`↦ *Nm after*` bullet, then [private-note](gcal-notes.md) prose (uncapped),
+then the copied description bullets in order, then the overflow line.
+Reasons and note prose never count toward `description_lines` and are
+never truncated; the cap applies to copied Google lines only.
 
 The shape is flat: first children of the Event Task, with one nesting level
 for a list under its lead-in (`Agenda:`) and native `1.` items for ordered
@@ -1026,11 +1033,12 @@ Timed multi-day events appear as context on each date they overlap.
 ## Root selection
 
 For Event Tasks, Bob tries these candidates in order and writes the first valid
-one: the series memory of your earlier `[root::]` edit on another occurrence
-of the same recurring event, a title-ending `@route` or a description
-directive line (combinable and HTML-safe, so `@love #off -30` on one
-line routes), `gcal.colors` by event colour, the calendar's
-`root`, then `gcal.root` (default `meet`). A root must resolve relative to
+one: a [private event note](gcal-notes.md) on this occurrence (`✎ @family`),
+then a note on the series (`✎ all events @abby`), the series memory of your
+earlier `[root::]` edit on another occurrence of the same recurring event, a
+title-ending `@route` or a description directive line (combinable and
+HTML-safe, so `@love #off -30` on one line routes), `gcal.colors` by event
+colour, the calendar's `root`, then `gcal.root` (default `meet`). A root must resolve relative to
 the daily note, be an area at any depth or a root project, and must not be
 `@unfiled`.
 
@@ -1039,9 +1047,10 @@ the R11 reason and fix. If a title route resolves, Bob removes the final token
 from the displayed title. Clock tags are stripped before the route is
 read, so `Lunch @love #off` routes to `love`. An unknown route stays in the title and is reported.
 If the default root also fails, list shows no root and `doctor` reports the
-invalid default. Root sources are reported as `learned from your 2026-10-29
-edit`, `@body`, `colour tomato`, `calendar Health`, or `default`. The VAULT
-column reports the same roots beside the note.
+invalid default. Root sources are reported as `✎ @family`, `✎ all events @abby`,
+`learned from your 2026-10-29 edit`, `@body`, `colour tomato`,
+`calendar Health`, or `default`. The VAULT column reports the same roots
+beside the note.
 
 Adding, changing, or removing a token, or a colour, calendar, or default
 change, reroutes unedited existing rows on the next sync. Sync has no
@@ -1087,15 +1096,17 @@ including the `last_sync` check.
 `list -f json`: `day`, configured `calendars`, classified `events`,
 `counts`, `last_sync`, `past_open`, `warnings`, and `deprecations`. `-a`
 adds omitted event rows. Each event contains no provider description or
-attendee list, and carries `clock`, `clock_source`, `clock_note`,
-`off_clock`, deprecated `untracked`, the `vault` state, and `skip`
-(`{reason, detail, hint}` or `null`; see [Skipped events](#skipped-events)).
+attendee list, and carries `calendar_id`, `event_id`, `clock`,
+`clock_source`, `clock_note`, `off_clock`, deprecated `untracked`, the
+`vault` state, `skip` (`{reason, detail, hint}` or `null`; see
+[Skipped events](#skipped-events)), `root.kind`, and a `note` summary
+(never note text; see [Private event notes](gcal-notes.md)).
 The raw `reason` values and existing `vault` strings are unchanged.
 
 `sync -f json`: `ok`, `day`, `path`, `status` (`written`, `unchanged`,
 `waiting`, `held`, `dry_run`), `force`, `rows`, `in_sync`, `skipped`,
 `pomodoro`, `waiting`, `held` (`{rows, written_at, detail, hint}` or `null`),
-`warnings`, `deprecations`, and `stamp`. `skipped`
+`warnings`, `deprecations`, and `stamp`. `rows` entries gain a `note` summary (never note text). `skipped`
 lists `{time, title, calendar_id, event_id, reason, detail, hint}` for every
 event the run leaves out; `rows` entries gain `detail`. A forced run sets
 `force: true`; restored rows use action `restored`, and forced span updates

@@ -2381,6 +2381,27 @@ fn sort_only_plan_refreshes_stamp_and_is_idempotent() {
 }
 
 #[test]
+fn unedited_root_reroutes_to_note_like_token() {
+    let (contents, journal, mut occ, block_id) = seed_task(with_root(
+        occurrence("standup", "Standup", true, "0900-0930", 540),
+        "meet",
+        "default",
+        RootSourceKind::Default,
+        false,
+    ));
+    occ.root = Some("family".to_string());
+    occ.source = Some("✎ @family".to_string());
+    occ.root_kind = RootSourceKind::Note;
+    occ.needs_type = true;
+    let plan = run_with_journal(&contents, vec![occ], &journal);
+    let row = row_line(&plan.contents, &block_id);
+    assert!(row.contains("[root:: family]"), "{row}");
+    assert!(row.contains("[type:: MEET]"), "{row}");
+    assert_eq!(plan.rows_updated.len(), 1);
+    assert_eq!(plan.rows_updated[0].source.as_deref(), Some("✎ @family"));
+}
+
+#[test]
 fn unedited_root_reroutes_to_token_and_adds_meet_type() {
     let (contents, journal, mut occ, block_id) = seed_task(with_root(
         occurrence("standup", "Standup", true, "0900-0930", 540),

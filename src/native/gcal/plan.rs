@@ -1236,6 +1236,8 @@ fn root_update_action(
     if occurrence.root_kind == RootSourceKind::SeriesMemory {
         return RootAction::Skip;
     }
+    // Note and SeriesNote reroute like Token: an untouched `[root::]`
+    // follows the note, and a vault edit wins (`kept_root`).
     let current_owned = line_root(line);
     let current = nonempty_root(current_owned.as_deref()).map(str::to_string);
     if current.as_deref() == Some(fresh) {

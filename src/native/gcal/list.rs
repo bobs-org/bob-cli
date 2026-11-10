@@ -348,6 +348,33 @@ fn vault_cell(
     VaultCell { vault, skip: None }
 }
 
+fn event_title_plain(event: &ListedEvent, lines: usize) -> String {
+    let mut title = event.event.title.clone();
+    if event.event.note.is_some() {
+        title.push_str(" ✎");
+    }
+    match lines {
+        0 => title,
+        n => format!("{title} ≡ {n}"),
+    }
+}
+
+fn event_title_styled(
+    event: &ListedEvent,
+    lines: usize,
+    styler: &Styler,
+) -> String {
+    let mut title = event.event.title.clone();
+    if event.event.note.is_some() {
+        title.push(' ');
+        title.push_str(&styler.dim("✎"));
+    }
+    match lines {
+        0 => title,
+        n => format!("{title} {}", styler.dim(&format!("≡ {n}"))),
+    }
+}
+
 fn event_url(event: &ListedEvent) -> Option<&str> {
     event.event.html_link.as_deref()
 }
@@ -564,6 +591,8 @@ fn print_json(
             json!({
                 "time": event.time,
                 "title": event.event.title,
+                "calendar_id": event.event.key.calendar_id,
+                "event_id": event.event.key.event_id,
                 "answer": event.event.my_answer.as_str(),
                 "inclusion": event.inclusion.name(),
                 "reason": event.inclusion.reason(),
@@ -577,8 +606,10 @@ fn print_json(
                 "root": {
                     "value": root.and_then(|root| root.value.as_deref()),
                     "source": root.and_then(|root| root.source.as_deref()),
+                    "kind": root.and_then(|root| root.kind.json_label()),
                     "warnings": root.map(|root| root.warnings.as_slice()).unwrap_or(&[]),
                 },
+                "note": crate::native::gcal::model::note_summary_json(&event.event),
                 "vault": cell.vault,
                 "skip": cell.skip_json(),
             })
@@ -657,12 +688,9 @@ fn print_table(
             Some(label) => format!("{} {label}", event.time),
             None => event.time.clone(),
         };
-        // The bullet count rides plain here so column widths are
-        // computed before styling, the way `buffer_label` does.
-        let title = match description_lines(config, event) {
-            0 => event.event.title.clone(),
-            lines => format!("{} ≡ {lines}", event.event.title),
-        };
+        // The pencil and bullet count ride plain here so column widths
+        // are computed before styling, the way `buffer_label` does.
+        let title = event_title_plain(event, description_lines(config, event));
         rows.push([
             time,
             title,
@@ -692,16 +720,11 @@ fn print_table(
         if let Some(label) = buffer_label(event) {
             cells[0] = format!("{} {}", event.time, styler.dim(&label));
         }
-        match description_lines(config, event) {
-            0 => {}
-            lines => {
-                cells[1] = format!(
-                    "{} {}",
-                    event.event.title,
-                    styler.dim(&format!("≡ {lines}"))
-                );
-            }
-        }
+        cells[1] = event_title_styled(
+            event,
+            description_lines(config, event),
+            &styler,
+        );
         if let Some(root) = event.root.as_ref()
             && let Some(value) = root.value.as_deref()
         {

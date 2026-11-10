@@ -104,6 +104,8 @@ struct ReportRow {
     skip: Option<SkipReason>,
     /// Additional detail such as a span reset.
     detail: Option<String>,
+    /// Private-note summary; never includes note text.
+    note: Value,
 }
 
 struct SyncReport {
@@ -1141,6 +1143,22 @@ fn replaced_events_hold(
     })
 }
 
+fn listed_note(
+    snapshot: &snapshot::DaySnapshot,
+    calendar_id: &str,
+    event_id: &str,
+) -> Value {
+    snapshot
+        .events
+        .iter()
+        .find(|listed| {
+            listed.event.key.calendar_id == calendar_id
+                && listed.event.key.event_id == event_id
+        })
+        .map(|listed| super::model::note_summary_json(&listed.event))
+        .unwrap_or(Value::Null)
+}
+
 fn report_rows(
     plan: &plan::SyncPlan,
     snapshot: &snapshot::DaySnapshot,
@@ -1165,6 +1183,7 @@ fn report_rows(
             description_lines: written_description_lines(&added.description),
             skip: None,
             detail: added.detail.clone(),
+            note: listed_note(snapshot, &added.calendar_id, &added.event_id),
         });
     }
     for restored in &plan.rows_restored {
@@ -1185,6 +1204,11 @@ fn report_rows(
             description_lines: written_description_lines(&restored.description),
             skip: None,
             detail: restored.detail.clone(),
+            note: listed_note(
+                snapshot,
+                &restored.calendar_id,
+                &restored.event_id,
+            ),
         });
     }
     for adopted in &plan.rows_adopted {
@@ -1205,6 +1229,11 @@ fn report_rows(
             description_lines: 0,
             skip: None,
             detail: None,
+            note: listed_note(
+                snapshot,
+                &adopted.calendar_id,
+                &adopted.event_id,
+            ),
         });
     }
     for gone in &plan.rows_gone {
@@ -1240,6 +1269,7 @@ fn report_rows(
             description_lines: 0,
             skip: Some(skip),
             detail: None,
+            note: listed_note(snapshot, &gone.calendar_id, &gone.event_id),
         });
     }
     for updated in &plan.rows_updated {
@@ -1260,6 +1290,11 @@ fn report_rows(
             description_lines: updated.wrote_description_lines,
             skip: None,
             detail: updated.detail.clone(),
+            note: listed_note(
+                snapshot,
+                &updated.calendar_id,
+                &updated.event_id,
+            ),
         });
     }
     for cancelled in &plan.rows_cancelled {
@@ -1276,6 +1311,7 @@ fn report_rows(
             description_lines: 0,
             skip: None,
             detail: None,
+            note: Value::Null,
         });
     }
     for removed in &plan.rows_removed {
@@ -1292,6 +1328,11 @@ fn report_rows(
             description_lines: 0,
             skip: Some(SkipReason::removed_in_google(&removed.reason)),
             detail: None,
+            note: listed_note(
+                snapshot,
+                &removed.calendar_id,
+                &removed.event_id,
+            ),
         });
     }
     for upgraded in &plan.rows_upgraded {
@@ -1308,6 +1349,11 @@ fn report_rows(
             description_lines: written_description_lines(&upgraded.description),
             skip: None,
             detail: upgraded.detail.clone(),
+            note: listed_note(
+                snapshot,
+                &upgraded.calendar_id,
+                &upgraded.event_id,
+            ),
         });
     }
     for learned in &plan.learned {
@@ -1324,6 +1370,7 @@ fn report_rows(
             description_lines: 0,
             skip: None,
             detail: None,
+            note: Value::Null,
         });
     }
     rows
@@ -1696,6 +1743,7 @@ fn print_json(report: &SyncReport) {
                 "detail": row.detail.as_deref().or_else(|| {
                     row.skip.as_ref().map(|skip| skip.detail.as_str())
                 }),
+                "note": row.note,
             })
         })
         .collect();
