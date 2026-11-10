@@ -16,6 +16,10 @@ pub(crate) struct NotebookSummary {
     pub(crate) section_action: Option<&'static str>,
     pub(crate) block_id: Option<String>,
     pub(crate) parent_block_id: Option<String>,
+    /// Planned create file collected into top-level `note_files`. Omitted
+    /// on ordinary notebook notes so existing JSON stays byte-identical.
+    #[serde(skip)]
+    pub(crate) note_file: Option<super::output::NoteFileJson>,
 }
 
 fn line_ending_of(contents: &str) -> &'static str {
@@ -780,6 +784,7 @@ fn plan_notebook_note(
         section_action,
         block_id: block_id.clone(),
         parent_block_id: None,
+        note_file: None,
     };
     let task_line = block.first().cloned().unwrap_or_default();
     let sub_bullets = authored_children.clone();
@@ -919,6 +924,7 @@ fn plan_notebook_sub_note(
         section_action: None,
         block_id: None,
         parent_block_id: Some(parent_block_id.clone()),
+        note_file: None,
     };
     let task_line = block.first().cloned().unwrap_or_default();
     let sub_bullets = authored_children.clone();
@@ -942,7 +948,7 @@ fn plan_notebook_sub_note(
     })
 }
 
-fn notebook_item_result(
+pub(super) fn notebook_item_result(
     request: &CaptureRequest,
     route: &str,
     relative_str: &str,

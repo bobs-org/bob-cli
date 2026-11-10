@@ -7,7 +7,8 @@
 use super::super::draft::TemplateCodedError;
 use super::*;
 use crate::native::capture_language::notebook::{
-    candidate_notebook_routes, NotebookRouteInfo, NotebookRoutePolicy,
+    candidate_notebook_routes, discover_notebook_creates, NotebookRouteInfo,
+    NotebookRoutePolicy,
 };
 
 fn policy() -> NotebookRoutePolicy {
@@ -154,8 +155,8 @@ fn assert_code(raw: &str, code: &str) {
 }
 
 #[test]
-fn grammar_revision_is_twenty_four() {
-    assert_eq!(GRAMMAR_REVISION, 24);
+fn grammar_revision_is_twenty_five() {
+    assert_eq!(GRAMMAR_REVISION, 25);
 }
 
 #[test]
@@ -684,4 +685,129 @@ fn unknown_notebook_routes_stay_on_the_established_path() {
     )
     .unwrap_or_else(|error| panic!("{error}"));
     assert!(matches!(absent.kind, CaptureKind::Task));
+}
+
+fn assert_create(raw: &str, body: &str, parent: &str, notebook_id: &str) {
+    let parsed = strict(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
+    let CaptureKind::NotebookCreate {
+        parent: got_parent,
+        notebook_id: got_id,
+    } = &parsed.kind
+    else {
+        panic!("{raw}: not a notebook create: {:?}", parsed.kind);
+    };
+    assert_eq!(parsed.body, body, "{raw}");
+    assert_eq!(got_parent, parent, "{raw}");
+    assert_eq!(got_id, notebook_id, "{raw}");
+    let editor = editor_parse(raw);
+    assert_eq!(editor.mode, EditorMode::NotebookCreate, "{raw}");
+    assert_eq!(editor.body, body, "{raw}");
+    assert_eq!(editor.route.as_deref(), Some(parent), "{raw}");
+    assert_eq!(editor.block_id.as_deref(), Some(notebook_id), "{raw}");
+    assert!(editor.has_local_destination, "{raw}");
+    assert!(
+        editor
+            .spans
+            .iter()
+            .any(|span| span.kind == SpanKind::Directive),
+        "{raw}: {:?}",
+        editor.spans
+    );
+}
+
+#[test]
+fn complete_caret_seal_plus_note_creates_a_notebook() {
+    assert_create(
+        "Neovim config notes @dev^nvim@ %n",
+        "Neovim config notes",
+        "dev",
+        "nvim",
+    );
+    assert_create(
+        "@dev^nvim@ Neovim config notes %n",
+        "Neovim config notes",
+        "dev",
+        "nvim",
+    );
+}
+
+#[test]
+fn empty_summary_stays_notebook_create_with_a_diagnostic() {
+    let parsed =
+        strict("@dev^nvim@ %n").unwrap_or_else(|error| panic!("{error}"));
+    assert!(matches!(
+        parsed.kind,
+        CaptureKind::NotebookCreate {
+            notebook_id,
+            ..
+        } if notebook_id == "nvim"
+    ));
+    let editor = editor_parse("@dev^nvim@ %n");
+    assert_eq!(editor.mode, EditorMode::NotebookCreate);
+    assert_eq!(
+        editor.diagnostics.first().map(|diagnostic| diagnostic.code),
+        Some("notebook_summary_required")
+    );
+}
+
+#[test]
+fn incomplete_or_colon_seals_keep_the_pomodoro_note_conflict() {
+    assert_code("Keep @dev:nvim@ %n", "pomodoro_note_conflict");
+    assert_code("Keep @dev^nvim@#name %n", "pomodoro_note_conflict");
+    assert_code("Keep @dev^ %n", "pomodoro_note_conflict");
+    assert_code("Keep @dev^nvim %n", "pomodoro_note_conflict");
+}
+
+#[test]
+fn create_refusals_name_the_unsupported_marker() {
+    assert_code("Keep @dev^nvim@ %n %c", "notebook_create_unsupported");
+    assert_code("Keep @dev^nvim@ %n %l", "notebook_create_unsupported");
+    assert_code("Keep @dev^nvim@ %n s:3", "notebook_create_unsupported");
+    assert_code("Keep @dev^nvim@ %n $2", "notebook_create_unsupported");
+    assert_code("Keep @dev^nvim@ %n #fix", "notebook_create_unsupported");
+    assert_code("Keep @dev^nvim@ %n !", "notebook_create_unsupported");
+    assert_code("Keep @dev^nvim@ %n =x", "notebook_create_unsupported");
+    assert_code(
+        "Keep @dev^nvim@ %n\n- named :id",
+        "notebook_create_unsupported",
+    );
+    assert_code(
+        "Keep @dev^nvim@ %n\n- ^existing",
+        "notebook_create_unsupported",
+    );
+}
+
+#[test]
+fn create_does_not_absorb_into_a_global_declaration() {
+    let parsed = editor_full("Neovim config notes @dev^nvim@ %n\n@@dev");
+    assert_eq!(parsed.items[0].mode, EditorMode::NotebookCreate);
+    assert!(parsed.items[0].has_local_destination);
+}
+
+#[test]
+fn later_create_is_used_before_created() {
+    let raw = "A note @dev_nvim\n\nNeovim config notes @dev^nvim@ %n";
+    let creates = discover_notebook_creates(raw);
+    assert_eq!(creates.len(), 1);
+    let mut policy = policy();
+    policy.insert_create(
+        creates[0].route.clone(),
+        creates[0].item_start,
+        creates[0].marker_text.clone(),
+        NotebookRouteInfo {
+            title: "Nvim".into(),
+            summary: Some(creates[0].summary.clone()),
+            owner: Some("dev".into()),
+            breadcrumb: vec!["dev".into(), "Nvim".into()],
+            sections: Vec::new(),
+        },
+    );
+    let error = parse_capture_draft_with_options_coded(
+        raw,
+        None,
+        None,
+        &strict_options(Some(&policy)),
+    )
+    .expect_err("used before created");
+    assert_eq!(error.code, Some("notebook_used_before_created"));
 }

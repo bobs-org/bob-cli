@@ -1077,7 +1077,8 @@ impl TypeMarkerSubject {
             CaptureKind::RecordNote { .. }
             | CaptureKind::RecordUpdate { .. } => Self::NewTask,
             CaptureKind::NotebookNote { .. }
-            | CaptureKind::NotebookSubNote { .. } => Self::NotebookNote,
+            | CaptureKind::NotebookSubNote { .. }
+            | CaptureKind::NotebookCreate { .. } => Self::NotebookNote,
             CaptureKind::PomodoroClose { .. } => Self::Close,
             CaptureKind::PomodoroPast { .. } => Self::Close,
             CaptureKind::PomodoroStart { .. } => Self::Start,

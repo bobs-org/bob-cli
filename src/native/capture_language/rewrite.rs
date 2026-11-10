@@ -2325,6 +2325,7 @@ pub(super) fn classify_local_marker(
         | EditorMode::RecordUpdate
         | EditorMode::NotebookNote
         | EditorMode::NotebookSubNote
+        | EditorMode::NotebookCreate
         | EditorMode::Task
         | EditorMode::SubBullet
         | EditorMode::Bullet
@@ -2473,7 +2474,9 @@ pub(super) fn non_absorbable_marker_notice(
             "@@ cannot take a note pull: leave {} on this item, or delete it",
             marker.text
         ),
-        EditorMode::NotebookNote | EditorMode::NotebookSubNote => format!(
+        EditorMode::NotebookNote
+        | EditorMode::NotebookSubNote
+        | EditorMode::NotebookCreate => format!(
             "@@ cannot take a notebook destination: leave {} on this item, or delete it",
             marker.text
         ),

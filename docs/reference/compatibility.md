@@ -68,7 +68,7 @@ Old top-level spellings remain as hidden aliases. See
 ## Capture-language revision
 
 `capture-parse` and `capture-complete` keep `schema_version: 1` and report the
-additive top-level `grammar: 24` revision. Clients can use it to distinguish
+additive top-level `grammar: 25` revision. Clients can use it to distinguish
 capture-language updates while continuing to read the same versioned JSON
 envelope. Grammar 24 restores the established notebook span labels and adds
 `notebook: true` to identify those spans without changing other span labels.

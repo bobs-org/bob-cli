@@ -1193,6 +1193,7 @@ fn editor_agrees_with_execution_for_resolved_captures() {
             CaptureKind::RecordUpdate { .. } => EditorMode::RecordUpdate,
             CaptureKind::NotebookNote { .. } => EditorMode::NotebookNote,
             CaptureKind::NotebookSubNote { .. } => EditorMode::NotebookSubNote,
+            CaptureKind::NotebookCreate { .. } => EditorMode::NotebookCreate,
             CaptureKind::NotePull { .. } => EditorMode::NotePull,
         };
         assert_eq!(parse.mode, expected_mode, "{raw}");

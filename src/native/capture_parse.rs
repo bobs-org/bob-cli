@@ -194,7 +194,7 @@ command also best-effort reads the configured vault's theme catalog and adds \
 theme refs; if the catalog is unavailable, parsing still succeeds without \
 those refs. It never writes to the vault or reads the clipboard, and takes no \
 --bob-dir. A '%c' directive still succeeds without reading the clipboard.\n\n\
-Success JSON reports `grammar: 24` for the capture-language revision while \
+Success JSON reports `grammar: 25` for the capture-language revision while \
 `schema_version` stays 1. Gmail URLs add `gmail_url` spans with offline \
 `gmail: {verdict, date_hint?}`, decoded thread `key`, and saved-label `title`. \
 No Gmail calls are made.\n\n\
@@ -212,8 +212,10 @@ When a route resolves to an existing notebook note, individual `@route`, \
 `@route#section`, `@route^id`, and `@route+id` items report \
 `notebook_note` or `notebook_sub_note`. Their `route`, `section`, \
 `task_block_id`, and `sub_bullet_block_id` spans keep the authored body \
-opaque and add `notebook: true`. `bob capture` \
-writes them as notebook notes through the guarded capture transaction.\n\n\
+opaque and add `notebook: true`. A complete `@parent^id@` caret seal plus \
+`%n` reports `notebook_create`. `bob capture` \
+writes them as notebook notes or a new notebook through the guarded capture \
+transaction.\n\n\
 Adjacent `@route+id` target markers at the start or end of one line fill one \
 route slot. Capture-parse keeps one item and adds `targets[]` for runs; \
 duplicate task identities and targets at opposite edges report the coded \
@@ -4820,7 +4822,7 @@ mod tests {
         let value = json("Call bank @Cash+");
         assert_eq!(value["ok"], true);
         assert_eq!(value["schema_version"], 1);
-        assert_eq!(value["grammar"], 24);
+        assert_eq!(value["grammar"], 25);
         assert_eq!(value["input"], "Call bank @Cash+");
         assert_eq!(value["body"], "Call bank");
         assert_eq!(value["mode"], "incomplete");
@@ -4886,7 +4888,7 @@ mod tests {
         // "start a list" from it.
         let value = json("@sase");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 24);
+        assert_eq!(value["grammar"], 25);
         assert_eq!(value["mode"], "note_pull");
         assert_eq!(value["route"], "sase");
         assert!(value["section"].is_null());
@@ -5698,10 +5700,10 @@ mod tests {
     }
 
     #[test]
-    fn json_reports_merge_in_wire_shape_and_grammar_24() {
+    fn json_reports_merge_in_wire_shape_and_grammar_25() {
         let value = json("New task < @a+x @b+y");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 24);
+        assert_eq!(value["grammar"], 25);
         assert_eq!(value["schema_version"], 1);
         assert_eq!(value["mode"], "task");
         let merge_in = value.get("merge_in").expect("merge_in");

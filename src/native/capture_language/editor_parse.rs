@@ -965,9 +965,9 @@ fn dependency_owner_mode_word(mode: EditorMode) -> &'static str {
         EditorMode::TaskComplete => "task-complete",
         EditorMode::RecordNote => "record-note",
         EditorMode::RecordUpdate => "record-update",
-        EditorMode::NotebookNote | EditorMode::NotebookSubNote => {
-            "notebook note"
-        }
+        EditorMode::NotebookNote
+        | EditorMode::NotebookSubNote
+        | EditorMode::NotebookCreate => "notebook note",
         EditorMode::Ref => "reference",
         EditorMode::PomodoroLink | EditorMode::PomodoroTask => {
             "Pomodoro-ledger-link"
@@ -1798,6 +1798,7 @@ pub(super) fn parse_editor_item_with<'a>(
                                     destination.route.as_str(),
                                     Some((destination.start, destination.end)),
                                 ))),
+                            item.start,
                         )
                 {
                     return notebook_editor_outcome(
@@ -2051,6 +2052,7 @@ fn parse_editor_merge_valid<'a>(
         sources.iter().map(|source| {
             (source.route.as_str(), Some((source.start, source.end)))
         }),
+        item.start,
     ) {
         return notebook_editor_outcome(item, error.into_editor_view());
     }
@@ -2106,6 +2108,7 @@ fn parse_editor_merge_valid<'a>(
             options.notebook_policy,
             route,
             None,
+            item.start,
         )
     {
         return notebook_editor_outcome(item, error.into_editor_view());

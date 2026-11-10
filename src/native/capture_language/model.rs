@@ -267,6 +267,13 @@ pub(crate) enum CaptureKind {
     NotebookSubNote {
         parent_block_id: String,
     },
+    /// `@parent^id@ %n` creates notebook `<parent>_<id>.md`. `parent` is
+    /// the sealed route; `notebook_id` is the sealed block ID. Hyphens in
+    /// the ID become underscores in the filename.
+    NotebookCreate {
+        parent: String,
+        notebook_id: String,
+    },
     /// A whole-item `=/` Pomodoro split: split a merged Pomodoro's types
     /// into planned entries. The item must contain only the split token
     /// and have exactly one physical line; any extra text, markers, or

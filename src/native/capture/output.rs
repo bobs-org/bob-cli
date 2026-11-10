@@ -602,6 +602,11 @@ impl CaptureResult {
                 item.record_note
                     .as_ref()
                     .map(|summary| summary.note_file.clone())
+                    .or_else(|| {
+                        item.notebook
+                            .as_ref()
+                            .and_then(|summary| summary.note_file.clone())
+                    })
             })
             .collect();
         let item = items
@@ -969,6 +974,7 @@ pub(crate) struct CaptureItemResult {
 pub(super) struct NoteFileJson {
     pub(super) path: String,
     pub(super) action: &'static str,
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub(super) record_type: String,
     pub(super) properties: Vec<NoteFilePropertyJson>,
     pub(super) body: String,
@@ -4001,8 +4007,10 @@ pub(super) fn print_human_item_success(
         );
         return;
     }
-    if matches!(result.kind, "notebook_note" | "notebook_sub_note")
-        && let Some(notebook) = result.notebook.as_ref()
+    if matches!(
+        result.kind,
+        "notebook_note" | "notebook_sub_note" | "notebook_create"
+    ) && let Some(notebook) = result.notebook.as_ref()
     {
         print_human_notebook_success(
             result, notebook, &styler, &prefix, &ordinal,
@@ -7320,6 +7328,21 @@ fn print_human_notebook_success(
     prefix: &str,
     ordinal: &str,
 ) {
+    if result.kind == "notebook_create" {
+        let parent = notebook
+            .breadcrumb
+            .first()
+            .map(String::as_str)
+            .unwrap_or("");
+        println!(
+            "{prefix} 📓 New notebook {} · in {parent}",
+            result.relative_target
+        );
+        if !result.text.is_empty() {
+            println!("  {}", styler.dim(&result.text));
+        }
+        return;
+    }
     let detail = if result.kind == "notebook_sub_note" {
         notebook
             .parent_block_id

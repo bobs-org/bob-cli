@@ -74,6 +74,14 @@ impl ReadDependencies {
         deps
     }
 
+    pub(crate) fn iter(
+        &self,
+    ) -> impl Iterator<Item = (&Path, Option<&str>)> + '_ {
+        self.files
+            .iter()
+            .map(|(path, contents)| (path.as_path(), contents.as_deref()))
+    }
+
     pub(crate) fn validate(&self, vault: &Path) -> Result<(), CaptureError> {
         for (relative, expected) in &self.files {
             let absolute = vault.join(relative);

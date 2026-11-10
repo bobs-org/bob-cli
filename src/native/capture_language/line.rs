@@ -317,6 +317,28 @@ pub(super) fn notebook_project_seal_error(
     )
 }
 
+pub(super) fn notebook_used_before_created_error(
+    route: &str,
+    marker_text: &str,
+) -> String {
+    format!(
+        "`{route}.md` is created later in this draft; move `{marker_text}` above this item"
+    )
+}
+
+pub(super) fn notebook_create_marker_unsupported_error(marker: &str) -> String {
+    format!("notebook creation does not take `{marker}`")
+}
+
+pub(super) fn notebook_create_task_id_error() -> String {
+    "notebook creation does not take task-ID bullets; drop ` :id`".to_string()
+}
+
+pub(super) fn notebook_create_move_error() -> String {
+    "notebook creation does not take move bullets; drop `- ^id`, `- :id`, or `- ^^`"
+        .to_string()
+}
+
 pub(super) fn notebook_no_drawers_error(route: &str) -> String {
     format!("notebook notes have no drawers; drop `#drawer` on @{route}")
 }

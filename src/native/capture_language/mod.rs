@@ -48,12 +48,13 @@ pub(crate) mod transfer;
 mod type_marker;
 
 /// Revision of the capture grammar contract exposed to clients.
-/// Revision 24 restores the established notebook span labels with an
-/// additive `notebook` modifier. Revision 23 adds `#section^id` on every route
-/// and notebook list, global, and forced destination forms. Revision 22
-/// makes sized `Nx` closes execute (see `sized_pomodoro_close.md`); older
-/// clients parse the size as literal task text.
-pub(crate) const GRAMMAR_REVISION: u32 = 24;
+/// Revision 25 adds `@parent^id@ %n` notebook creation. Revision 24 restores
+/// the established notebook span labels with an additive `notebook`
+/// modifier. Revision 23 adds `#section^id` on every route and notebook
+/// list, global, and forced destination forms. Revision 22 makes sized `Nx`
+/// closes execute (see `sized_pomodoro_close.md`); older clients parse the
+/// size as literal task text.
+pub(crate) const GRAMMAR_REVISION: u32 = 25;
 
 #[cfg(test)]
 mod tests;
@@ -193,9 +194,9 @@ pub(crate) use self::model::TaskToggleIntent;
 pub(crate) use self::model::TemplateRowSummary;
 pub(crate) use self::notebook::{
     candidate_notebook_route, candidate_notebook_routes,
-    notebook_section_near_miss_message, notebook_sections,
-    resolve_notebook_section, NotebookRouteInfo, NotebookRoutePolicy,
-    NotebookSectionResolution,
+    discover_notebook_creates, notebook_section_near_miss_message,
+    notebook_sections, resolve_notebook_section, DiscoveredNotebookCreate,
+    NotebookRouteInfo, NotebookRoutePolicy, NotebookSectionResolution,
 };
 pub(crate) use self::pomodoro_literal::canonicalize_exact_name;
 pub(crate) use self::project_tasks::split_leading_checkbox;

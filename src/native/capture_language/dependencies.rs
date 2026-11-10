@@ -1939,7 +1939,8 @@ pub(crate) fn resolve_execution_ownership(
         // A lone header names no task, so it owns no modifiers.
         CaptureKind::NotePull { .. }
         | CaptureKind::NotebookNote { .. }
-        | CaptureKind::NotebookSubNote { .. } => Ok(None),
+        | CaptureKind::NotebookSubNote { .. }
+        | CaptureKind::NotebookCreate { .. } => Ok(None),
     }
 }
 

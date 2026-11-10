@@ -948,7 +948,7 @@ fn capture_parse_reports_record_note_wire() {
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
     assert_eq!(json["schema_version"], 1);
-    assert_eq!(json["grammar"], 24);
+    assert_eq!(json["grammar"], 25);
     assert_eq!(json["mode"], "record_note");
     assert_eq!(json["record"]["assist_version"], 1);
     assert_eq!(json["route"], "eat");
@@ -977,7 +977,7 @@ fn capture_parse_reports_existing_record_values_and_update_ranges() {
     let output = capture_parse(&vault, &config, draft);
     assert_success(&output);
     let json = json_output(&output);
-    assert_eq!(json["grammar"], 24);
+    assert_eq!(json["grammar"], 25);
     assert_eq!(json["mode"], "record_update");
     assert_eq!(json["body"], "Went back, still great");
     assert_eq!(json["needs"], serde_json::json!([]));

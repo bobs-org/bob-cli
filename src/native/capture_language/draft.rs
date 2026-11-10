@@ -1686,6 +1686,7 @@ fn parse_transfer_claim<'a>(
                                     destination.route.as_str(),
                                     Some((destination.start, destination.end)),
                                 ))),
+                            item.start,
                         )
                     {
                         return Err(error.into_parse_error());
@@ -1903,6 +1904,7 @@ fn parse_merge_valid<'a>(
         sources.iter().map(|source| {
             (source.route.as_str(), Some((source.start, source.end)))
         }),
+        item.start,
     ) {
         return Err(error.into_parse_error());
     }
@@ -1911,6 +1913,7 @@ fn parse_merge_valid<'a>(
             options.notebook_policy,
             route,
             None,
+            item.start,
         )
     {
         return Err(error.into_parse_error());
@@ -2012,7 +2015,8 @@ fn classify_merge_left(parsed: &ParsedCaptureText) -> MergeNeeds {
         | CaptureKind::RecordUpdate { .. }
         | CaptureKind::NotePull { .. }
         | CaptureKind::NotebookNote { .. }
-        | CaptureKind::NotebookSubNote { .. } => MergeNeeds::NoTask,
+        | CaptureKind::NotebookSubNote { .. }
+        | CaptureKind::NotebookCreate { .. } => MergeNeeds::NoTask,
     }
 }
 

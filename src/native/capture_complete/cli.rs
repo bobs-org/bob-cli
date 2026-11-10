@@ -280,7 +280,7 @@ own `%`, `#`, `@`, `~`, URLs, and `((` before task pickers. A local \
 Record parse objects and record completion metadata advertise \
 `assist_version: 1` when this named-field contract is present.\n\n\
 Every success response reports \
-`grammar: 24` while `schema_version` stays 1; an empty bare `#` or `%` \
+`grammar: 25` while `schema_version` stays 1; an empty bare `#` or `%` \
 query, an empty `=*` merge source, or an empty drawer query after `@route+id#`, adds \
 `initial_selection: \"none\"`. \
 A solo leading `:` token \

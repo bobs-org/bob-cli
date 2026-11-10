@@ -6781,6 +6781,18 @@ task/record drafts keep theirs. `bob capture-targets` and route completion
 list notebook rows after projects with `kind: notebook`, `title`,
 `summary`, `owner`, and `breadcrumb` through the opt-in scanner.
 
+A complete `@parent^id@` caret seal plus `%n` creates a notebook named
+`<parent>_<id>.md` in the same capture transaction: `Neovim config notes
+@dev^nvim@ %n` writes `dev_nvim.md`, seeds ALL-CAPS first-level bullets as
+Title Case `##` sections, updates owner catalogs, and lets later items in
+the same draft write notes into the new route. JSON `kind` is
+`notebook_create`; human output is `📓 New notebook dev_nvim.md · in dev`.
+The new file is in top-level `note_files[]` with `action: "create"`. An
+empty summary stays `notebook_create` in the editor and refuses at plan
+with `notebook_summary_required`. A colon seal, incomplete caret, or
+`#name` suffix plus `%n` stays `pomodoro_note_conflict`. `@parent^id@`
+without `%n` stays a project-note create or `notebook_project_seal`.
+
 Forced destinations follow the same resolver: `bob capture -r dev_tools`,
 `--section T`, `--task ID`, and clipboard composition all land as notebook
 notes. See [Notebooks](notebooks.md#capture) for the full destination table
@@ -8391,8 +8403,10 @@ pickers: `<task> @^block-id@` still prompts only for the destination, while
 `@^<id>@` reports the project-note mode with `needs: ["route"]` and a bare
 `<task> @route^block-id@` is complete. The `:` family seals the same way:
 `<task> @route:block-id@` is a complete offer-form project note (mode
-`pomodoro_project_note`), `@:<id>@` needs a route, a `%n` after the
-seal opens Pomodoro-name completion, and a completed seal offers no picker.
+`pomodoro_project_note`), `@:<id>@` needs a route, and a completed seal
+offers no picker. A `%n` after a complete `@parent^id@` caret seal creates
+a notebook; a `%n` after a colon seal, an incomplete caret, or a `#name`
+suffix is `pomodoro_note_conflict`.
 A missing route, ID, or name keeps that mode and reports `route`,
 `pomodoro_id`, or `pomodoro_name` in `needs`, and `bob capture` refuses a
 route-less sealed marker (`@:<id>@`, with or without a `#name`) with the

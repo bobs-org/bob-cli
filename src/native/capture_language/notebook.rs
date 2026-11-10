@@ -46,6 +46,25 @@ pub(crate) struct NotebookRoutePolicy {
     /// Every metadata preimage consulted while classifying notebook routes,
     /// including owner-chain notes and missing candidate paths.
     metadata_sources: HashMap<PathBuf, Option<String>>,
+    /// Lexically discovered `@parent^id@ %n` items, in source order. Disk
+    /// routes always win; these activate only after their creation item.
+    creates: Vec<ProspectiveCreate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProspectiveCreate {
+    route: String,
+    item_start: usize,
+    marker_text: String,
+    info: NotebookRouteInfo,
+}
+
+/// Ordered notebook-route lookup for one capture item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NotebookRouteLookup<'a> {
+    Hit(&'a NotebookRouteInfo),
+    UsedBeforeCreated { marker_text: &'a str },
+    Miss,
 }
 
 impl NotebookRoutePolicy {
@@ -89,6 +108,65 @@ impl NotebookRoutePolicy {
 
     pub(crate) fn metadata_sources(&self) -> &HashMap<PathBuf, Option<String>> {
         &self.metadata_sources
+    }
+
+    /// Record a prospective notebook created at `item_start`. Disk routes
+    /// and earlier creates keep their slots; a colliding name is ignored.
+    pub(crate) fn insert_create(
+        &mut self,
+        route: String,
+        item_start: usize,
+        marker_text: String,
+        info: NotebookRouteInfo,
+    ) {
+        let route = route.to_ascii_lowercase();
+        if self.routes.contains_key(&route)
+            || self.creates.iter().any(|create| create.route == route)
+        {
+            return;
+        }
+        self.creates.push(ProspectiveCreate {
+            route,
+            item_start,
+            marker_text,
+            info,
+        });
+    }
+
+    /// Register a successfully staged notebook so later items in this
+    /// batch can write notes. Omits `sources` so the planner's staged
+    /// bytes are never mistaken for a disk preimage.
+    pub(crate) fn insert_staged(
+        &mut self,
+        route: String,
+        info: NotebookRouteInfo,
+    ) {
+        self.routes.insert(route.to_ascii_lowercase(), info);
+    }
+
+    /// Disk routes always win. A prospective create is visible only to
+    /// items that start after it; an earlier reference is
+    /// `notebook_used_before_created`.
+    pub(crate) fn lookup(
+        &self,
+        route: &str,
+        item_start: usize,
+    ) -> NotebookRouteLookup<'_> {
+        let key = route.to_ascii_lowercase();
+        if let Some(info) = self.routes.get(&key) {
+            return NotebookRouteLookup::Hit(info);
+        }
+        if let Some(create) =
+            self.creates.iter().find(|create| create.route == key)
+        {
+            if item_start > create.item_start {
+                return NotebookRouteLookup::Hit(&create.info);
+            }
+            return NotebookRouteLookup::UsedBeforeCreated {
+                marker_text: create.marker_text.as_str(),
+            };
+        }
+        NotebookRouteLookup::Miss
     }
 }
 
@@ -246,6 +324,86 @@ pub(crate) fn candidate_notebook_routes(raw_text: &str) -> Vec<String> {
         }
     }
     routes
+}
+
+/// One lexically discovered notebook-create item. Filename is the
+/// project-note basename (`parent_id.md` with hyphens mapped to
+/// underscores).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DiscoveredNotebookCreate {
+    pub(crate) parent: String,
+    pub(crate) notebook_id: String,
+    pub(crate) route: String,
+    pub(crate) filename: String,
+    pub(crate) item_start: usize,
+    pub(crate) marker_text: String,
+    pub(crate) summary: String,
+    pub(crate) sections: Vec<NotebookSection>,
+}
+
+/// Discover `@parent^id@ %n` items with the same item split and seal
+/// recognition as the grammar, including expanded template rows.
+pub(crate) fn discover_notebook_creates(
+    raw_text: &str,
+) -> Vec<DiscoveredNotebookCreate> {
+    let mut creates = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    collect_discovered_creates(
+        raw_text,
+        |item| item.start,
+        &mut creates,
+        &mut seen,
+    );
+    let analysis = super::template::analyze(raw_text);
+    if let Ok(Some(expansion)) =
+        super::template::expand_with_analysis(raw_text, &analysis)
+    {
+        for instance in expansion.instances {
+            collect_discovered_creates(
+                &instance.text,
+                |_| instance.row_range.start,
+                &mut creates,
+                &mut seen,
+            );
+        }
+    }
+    creates
+}
+
+fn collect_discovered_creates(
+    raw_text: &str,
+    item_start: impl Fn(&super::model::CaptureItem<'_>) -> usize,
+    creates: &mut Vec<DiscoveredNotebookCreate>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    let draft = super::draft::split_capture_draft(raw_text);
+    for item in &draft.items {
+        let Some(claim) = complete_notebook_create_shape(item) else {
+            continue;
+        };
+        let filename =
+            crate::native::capture_project_note::project_note_basename(
+                &claim.parent,
+                &claim.notebook_id,
+            );
+        let route = filename
+            .strip_suffix(".md")
+            .unwrap_or(&filename)
+            .to_ascii_lowercase();
+        if !seen.insert(route.clone()) {
+            continue;
+        }
+        creates.push(DiscoveredNotebookCreate {
+            parent: claim.parent,
+            notebook_id: claim.notebook_id,
+            route,
+            filename,
+            item_start: item_start(item),
+            marker_text: claim.marker_text,
+            summary: claim.body,
+            sections: provisional_create_sections(item),
+        });
+    }
 }
 
 /// Forced `--route` destinations are lexical candidates too, even though
@@ -712,6 +870,29 @@ struct NotebookClaim {
     inherited: bool,
 }
 
+fn lookup_route(
+    policy: &NotebookRoutePolicy,
+    route: &str,
+    item_start: usize,
+    range: (usize, usize),
+) -> Result<Option<NotebookRouteInfo>, RouteScan> {
+    match policy.lookup(route, item_start) {
+        NotebookRouteLookup::Hit(info) => Ok(Some(info.clone())),
+        NotebookRouteLookup::Miss => Ok(None),
+        NotebookRouteLookup::UsedBeforeCreated { marker_text } => {
+            Err(RouteScan::Unsupported {
+                route: route.to_ascii_lowercase(),
+                range,
+                code: "notebook_used_before_created",
+                message: super::line::notebook_used_before_created_error(
+                    route,
+                    marker_text,
+                ),
+            })
+        }
+    }
+}
+
 fn classify_item(
     item: &CaptureItem<'_>,
     policy: Option<&NotebookRoutePolicy>,
@@ -726,7 +907,12 @@ fn classify_item(
             RouteScan::Supported(marker) => marker.route.as_str(),
             RouteScan::Unsupported { route, .. } => route,
         };
-        let Some(info) = policy.get(route).cloned() else {
+        let range = match &scan {
+            RouteScan::Supported(marker) => marker.token_range,
+            RouteScan::Unsupported { range, .. } => *range,
+            RouteScan::NotNotebookRoute => (item.start, item.end),
+        };
+        let Some(info) = lookup_route(policy, route, item.start, range)? else {
             return Ok(None);
         };
         return match scan {
@@ -746,7 +932,12 @@ fn classify_item(
     let Some(route) = global_route else {
         return Ok(None);
     };
-    let Some(info) = policy.get(route).cloned() else {
+    let range = item
+        .lines
+        .first()
+        .map(|line| (line.raw.start, line.raw.end))
+        .unwrap_or((item.start, item.end));
+    let Some(info) = lookup_route(policy, route, item.start, range)? else {
         return Ok(None);
     };
     Ok(Some(NotebookClaim {
@@ -905,7 +1096,7 @@ fn strip_clip_tokens(body: &str) -> String {
         .join(" ")
 }
 
-pub(super) fn strip_trailing_caret_id(body: &str) -> (String, Option<String>) {
+pub(crate) fn strip_trailing_caret_id(body: &str) -> (String, Option<String>) {
     let mut tokens: Vec<&str> = body.split_whitespace().collect();
     let Some(last) = tokens.last() else {
         return (body.trim().to_string(), None);
@@ -941,29 +1132,51 @@ fn reformat_unsupported(
     }
 }
 
+/// `%n` is a note directive even when a type marker, session `!`/`=`, or
+/// similar refused token occupies the trailing edge so the shared
+/// collector never claims it.
+fn item_has_note_token(item: &CaptureItem<'_>) -> bool {
+    let Some(parent) = item.lines.first() else {
+        return false;
+    };
+    super::editor_parse::tokenize_line_with_spans(&parent.raw)
+        .iter()
+        .any(|token| token.text == "%n")
+}
+
+/// Incomplete or colon seals plus `%n` keep the pomodoro-note teaching;
+/// only a complete caret create seal is lifted to `NotebookCreate`.
+fn unsupported_with_optional_note(
+    item: &CaptureItem<'_>,
+    code: &'static str,
+    message: String,
+    route: &str,
+    owner: Option<&str>,
+) -> (&'static str, String) {
+    if item_has_note_token(item) {
+        return (
+            "pomodoro_note_conflict",
+            super::line::pomodoro_note_route_conflict_error(),
+        );
+    }
+    reformat_unsupported(code, message, route, owner)
+}
+
 /// A notebook route used as a task home (`>`, `<`, `@nb:id`).
 pub(super) struct NotebookTaskRouteError {
     pub(super) route: String,
     message: String,
     span: Option<(usize, usize)>,
+    code: &'static str,
 }
 
 impl NotebookTaskRouteError {
     pub(super) fn into_parse_error(self) -> CaptureItemParseError {
-        CaptureItemParseError::coded_at(
-            "notebook_holds_no_tasks",
-            self.message,
-            self.span,
-        )
+        CaptureItemParseError::coded_at(self.code, self.message, self.span)
     }
 
     pub(super) fn into_editor_view(self) -> NotebookEditorView {
-        notebook_editor_error(
-            self.route,
-            "notebook_holds_no_tasks",
-            self.message,
-            self.span,
-        )
+        notebook_editor_error(self.route, self.code, self.message, self.span)
     }
 }
 
@@ -971,24 +1184,41 @@ pub(super) fn notebook_task_route_error(
     policy: Option<&NotebookRoutePolicy>,
     route: &str,
     span: Option<(usize, usize)>,
+    item_start: usize,
 ) -> Option<NotebookTaskRouteError> {
-    let info = policy?.get(route)?;
-    Some(NotebookTaskRouteError {
-        route: route.to_ascii_lowercase(),
-        message: super::line::notebook_holds_no_tasks_error(
-            route,
-            info.owner.as_deref(),
-        ),
-        span,
-    })
+    let policy = policy?;
+    match policy.lookup(route, item_start) {
+        NotebookRouteLookup::Hit(info) => Some(NotebookTaskRouteError {
+            route: route.to_ascii_lowercase(),
+            message: super::line::notebook_holds_no_tasks_error(
+                route,
+                info.owner.as_deref(),
+            ),
+            span,
+            code: "notebook_holds_no_tasks",
+        }),
+        NotebookRouteLookup::UsedBeforeCreated { marker_text } => {
+            Some(NotebookTaskRouteError {
+                route: route.to_ascii_lowercase(),
+                message: super::line::notebook_used_before_created_error(
+                    route,
+                    marker_text,
+                ),
+                span,
+                code: "notebook_used_before_created",
+            })
+        }
+        NotebookRouteLookup::Miss => None,
+    }
 }
 
 pub(super) fn first_notebook_task_route<'a>(
     policy: Option<&NotebookRoutePolicy>,
     routes: impl IntoIterator<Item = (&'a str, Option<(usize, usize)>)>,
+    item_start: usize,
 ) -> Option<NotebookTaskRouteError> {
     routes.into_iter().find_map(|(route, span)| {
-        notebook_task_route_error(policy, route, span)
+        notebook_task_route_error(policy, route, span, item_start)
     })
 }
 
@@ -1310,11 +1540,22 @@ fn claim_list_notebook<'a>(
     let Some(policy) = options.notebook_policy else {
         return Ok(None);
     };
-    let Some(info) = policy.get(&list.route) else {
-        return Ok(None);
+    let info = match policy.lookup(&list.route, item.start) {
+        NotebookRouteLookup::Hit(info) => info.clone(),
+        NotebookRouteLookup::Miss => return Ok(None),
+        NotebookRouteLookup::UsedBeforeCreated { marker_text } => {
+            return Err(CaptureItemParseError::coded_at(
+                "notebook_used_before_created",
+                super::line::notebook_used_before_created_error(
+                    &list.route,
+                    marker_text,
+                ),
+                Some((list.header_start, list.header_end)),
+            ));
+        }
     };
     let route = list.route.clone();
-    let owner = owner_of(info);
+    let owner = owner_of(&info);
     let header_range = (list.header_start, list.header_end);
     if list.ownerless {
         return Ok(None);
@@ -1357,7 +1598,7 @@ fn claim_list_notebook<'a>(
                 block_id_range: None,
             },
         },
-        info: info.clone(),
+        info,
         inherited: false,
     };
     finish_notebook_claim(item, claim, clip, Some(format!("@{}", list.route)))
@@ -1398,8 +1639,13 @@ pub(super) fn claim_strict_notebook<'a>(
                 .notebook_policy
                 .and_then(|policy| policy.get(&route))
                 .and_then(|info| info.owner.clone());
-            let (code, message) =
-                reformat_unsupported(code, message, &route, owner.as_deref());
+            let (code, message) = unsupported_with_optional_note(
+                item,
+                code,
+                message,
+                &route,
+                owner.as_deref(),
+            );
             return Err(CaptureItemParseError::coded_at(
                 code,
                 message,
@@ -1421,6 +1667,453 @@ pub(super) fn claim_strict_notebook<'a>(
     finish_notebook_claim(item, claim, clip, None).map(Some)
 }
 
+#[derive(Debug, Clone)]
+struct NotebookCreateShape {
+    parent: String,
+    notebook_id: String,
+    token_range: (usize, usize),
+    route_range: (usize, usize),
+    id_range: (usize, usize),
+    marker_text: String,
+    body: String,
+}
+
+/// A complete `@parent^id@` seal plus `%n`. Independent of whether the
+/// parent is already a notebook, so area and project parents claim too.
+fn complete_notebook_create_shape(
+    item: &CaptureItem<'_>,
+) -> Option<NotebookCreateShape> {
+    if item.list.is_some() {
+        return None;
+    }
+    if !item_has_note_token(item) {
+        return None;
+    }
+    let scan = edge_marker(item)?;
+    let RouteScan::Unsupported {
+        code: "notebook_project_seal",
+        route,
+        range,
+        ..
+    } = scan
+    else {
+        return None;
+    };
+    let token = item.source.get(range.0..range.1)?.trim();
+    let rest = token.strip_prefix('@')?;
+    let (parent, rest) = rest.split_once('^')?;
+    let id = rest.strip_suffix('@')?;
+    if parent.to_ascii_lowercase() != route
+        || !super::is_route_token(parent)
+        || id.is_empty()
+        || !super::tokens::is_block_id(id)
+    {
+        return None;
+    }
+    let parent_len = parent.len();
+    let route_range = (range.0, range.0 + 1 + parent_len);
+    let id_range = (route_range.1 + 1, range.1 - 1);
+    let marker = RouteMarker {
+        route: route.clone(),
+        route_range,
+        token_range: range,
+        form: NotebookForm::Note {
+            section: None,
+            exact_section: false,
+            block_id: Some(id.to_string()),
+            section_range: None,
+            block_id_range: Some(id_range),
+        },
+    };
+    let body = strip_note_tokens(&body_without_marker(item, &marker));
+    Some(NotebookCreateShape {
+        parent: parent.to_ascii_lowercase(),
+        notebook_id: id.to_string(),
+        token_range: range,
+        route_range,
+        id_range,
+        marker_text: token.to_string(),
+        body,
+    })
+}
+
+fn strip_note_tokens(body: &str) -> String {
+    super::model::tokenize_with_spans(body)
+        .into_iter()
+        .filter(|token| token.text != "%n")
+        .map(|token| token.text)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn provisional_create_title(id: &str) -> String {
+    let title = crate::native::highlights_ref::humanize_stem(id);
+    let mut chars = title.chars();
+    match chars.next() {
+        None => id.to_string(),
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+    }
+}
+
+fn provisional_create_sections(item: &CaptureItem<'_>) -> Vec<NotebookSection> {
+    let mut sections = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut index = 1;
+    while index < item.lines.len() {
+        let line = item.lines[index];
+        match super::draft::classify_authored_line(line.raw) {
+            super::draft::AuthoredLineClass::Item(authored)
+                if authored.depth == super::model::AuthoredDepth::First =>
+            {
+                let (text, _) = strip_trailing_caret_id(authored.body.trim());
+                let has_children = item.lines.get(index + 1).is_some_and(|next| {
+                    matches!(
+                        super::draft::classify_authored_line(next.raw),
+                        super::draft::AuthoredLineClass::Item(child)
+                            if child.depth != super::model::AuthoredDepth::First
+                    )
+                });
+                if has_children
+                    && crate::native::capture_project_note::is_project_section_title(
+                        &text,
+                    )
+                {
+                    let title =
+                        crate::native::capture_project_note::format_project_section_title(
+                            &text,
+                        );
+                    let key = crate::native::capture_project_note::normalize_project_section_title(
+                        &title,
+                    );
+                    if seen.insert(key) {
+                        sections.push(NotebookSection {
+                            title,
+                            line_index: 0,
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    sections
+}
+
+fn refuse_notebook_create_markers(
+    item: &CaptureItem<'_>,
+    token_range: (usize, usize),
+) -> Result<(), CaptureItemParseError> {
+    if item_is_claimed_operator(item) {
+        return Err(CaptureItemParseError::coded_at(
+            "notebook_create_unsupported",
+            super::line::notebook_create_marker_unsupported_error(">/ <"),
+            Some(token_range),
+        ));
+    }
+    let occurrences = super::directive::collect_item(item);
+    let directives = match super::directive::resolve(&occurrences) {
+        Ok(directives) => directives,
+        Err((message, code, span)) => {
+            return Err(CaptureItemParseError::coded_at(
+                code,
+                message,
+                Some((span.start, span.end)),
+            ));
+        }
+    };
+    if directives.clip.is_some() {
+        return Err(CaptureItemParseError::coded_at(
+            "notebook_create_unsupported",
+            "notebook creation cannot be combined with %c".to_string(),
+            Some(token_range),
+        ));
+    }
+    if directives.listen {
+        return Err(CaptureItemParseError::coded_at(
+            "notebook_create_unsupported",
+            super::line::notebook_create_marker_unsupported_error("%l"),
+            Some(token_range),
+        ));
+    }
+    if directives.template {
+        return Err(CaptureItemParseError::coded_at(
+            "notebook_create_unsupported",
+            super::line::notebook_create_marker_unsupported_error("%t"),
+            Some(token_range),
+        ));
+    }
+    let types = super::type_marker::collect_item(item);
+    if let Some(occurrence) = types.iter().find(|item| item.is_marker()) {
+        let raw = match occurrence {
+            super::type_marker::TypeMarkerOccurrence::Complete(marker) => {
+                format!("#{}", marker.name)
+            }
+            super::type_marker::TypeMarkerOccurrence::Incomplete { .. } => {
+                "#".to_string()
+            }
+            super::type_marker::TypeMarkerOccurrence::Invalid {
+                raw, ..
+            } => raw.clone(),
+            super::type_marker::TypeMarkerOccurrence::Escaped { .. } => {
+                String::new()
+            }
+        };
+        return Err(CaptureItemParseError::coded_at(
+            "notebook_create_unsupported",
+            super::line::notebook_create_marker_unsupported_error(&raw),
+            Some(token_range),
+        ));
+    }
+    let deps = super::dependencies::scan_item_dependencies(item);
+    if deps.has_entries() || deps.has_partial_tokens() {
+        return Err(CaptureItemParseError::coded_at(
+            "notebook_create_unsupported",
+            super::line::notebook_create_marker_unsupported_error("&/*/~"),
+            Some(token_range),
+        ));
+    }
+    if let Some(parent) = item.lines.first() {
+        for token in super::editor_parse::tokenize_line_with_spans(&parent.raw)
+        {
+            if super::markers::parse_schedule_token(token.text).is_some() {
+                return Err(CaptureItemParseError::coded_at(
+                    "notebook_create_unsupported",
+                    super::line::notebook_create_marker_unsupported_error(
+                        "s:N",
+                    ),
+                    Some((token.start, token.end)),
+                ));
+            }
+            if super::markers::parse_priority_token(token.text).is_some() {
+                return Err(CaptureItemParseError::coded_at(
+                    "notebook_create_unsupported",
+                    super::line::notebook_create_marker_unsupported_error("$N"),
+                    Some((token.start, token.end)),
+                ));
+            }
+            if token.text == "!"
+                || (token.text.starts_with('=') && token.text != "==")
+            {
+                let marker = if token.text == "!" { "!" } else { "=" };
+                return Err(CaptureItemParseError::coded_at(
+                    "notebook_create_unsupported",
+                    super::line::notebook_create_marker_unsupported_error(
+                        marker,
+                    ),
+                    Some((token.start, token.end)),
+                ));
+            }
+        }
+    }
+    refuse_notebook_create_children(item, token_range)
+}
+
+fn refuse_notebook_create_children(
+    item: &CaptureItem<'_>,
+    token_range: (usize, usize),
+) -> Result<(), CaptureItemParseError> {
+    for line in item.lines.iter().skip(1) {
+        match super::draft::classify_authored_line(line.raw) {
+            super::draft::AuthoredLineClass::EmptyOrPlaceholder => continue,
+            super::draft::AuthoredLineClass::Invalid => {
+                return Err(CaptureItemParseError::coded(
+                    "invalid_child_line",
+                    super::line::invalid_child_line_error(line.line_number),
+                ));
+            }
+            super::draft::AuthoredLineClass::Item(authored) => {
+                if authored.depth == super::model::AuthoredDepth::First {
+                    if let Some(hit) = super::move_bullet::scan_move_bullet(
+                        authored.body,
+                        authored.body_start,
+                        item.source,
+                    ) {
+                        let _ = hit;
+                        return Err(CaptureItemParseError::coded_at(
+                            "notebook_create_unsupported",
+                            super::line::notebook_create_move_error(),
+                            Some(token_range),
+                        ));
+                    }
+                    let mut tokens =
+                        super::editor_parse::tokenize_line_with_spans(
+                            &super::model::RawLine {
+                                text: authored.body,
+                                start: authored.body_start,
+                                end: line.raw.end,
+                            },
+                        );
+                    if let Some(stripped) =
+                        super::project_tasks::strip_trailing_task_id(
+                            &mut tokens,
+                        )
+                        && matches!(
+                            stripped.lex,
+                            super::project_tasks::TaskIdLex::Valid {
+                                sigil: ':',
+                                ..
+                            } | super::project_tasks::TaskIdLex::Lone {
+                                sigil: ':'
+                            } | super::project_tasks::TaskIdLex::Invalid {
+                                sigil: ':',
+                                ..
+                            }
+                        )
+                    {
+                        return Err(CaptureItemParseError::coded_at(
+                            "notebook_create_unsupported",
+                            super::line::notebook_create_task_id_error(),
+                            Some(token_range),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    let sub_bullets = notebook_sub_bullets(item)?;
+    let body = item.lines.first().map(|line| line.raw.text).unwrap_or("");
+    if notebook_authored_block_has_checkbox(body, &sub_bullets) {
+        return Err(CaptureItemParseError::coded_at(
+            "notebook_holds_no_tasks",
+            "notebooks hold no tasks; drop checkbox lines outside fenced code"
+                .to_string(),
+            Some(token_range),
+        ));
+    }
+    Ok(())
+}
+
+fn claim_notebook_create<'a>(
+    item: &CaptureItem<'a>,
+) -> Result<Option<ParsedCaptureItemOutcome<'a>>, CaptureItemParseError> {
+    let Some(claim) = complete_notebook_create_shape(item) else {
+        return Ok(None);
+    };
+    refuse_notebook_create_markers(item, claim.token_range)?;
+    let sub_bullets = notebook_sub_bullets(item)?;
+    let local_marker = item
+        .source
+        .get(claim.token_range.0..claim.token_range.1)
+        .map(|text| text.trim().to_string());
+    Ok(Some(super::item::parsed_capture_item_outcome(
+        item,
+        ParsedCaptureText {
+            body: claim.body,
+            clip: None,
+            route: Some(claim.parent.clone()),
+            kind: CaptureKind::NotebookCreate {
+                parent: claim.parent,
+                notebook_id: claim.notebook_id,
+            },
+            scheduled_offset: None,
+            priority_level: None,
+            sub_bullets,
+            dependencies: Vec::new(),
+            blocked_tasks: Vec::new(),
+            relations: Vec::new(),
+            dependency_target: None,
+            type_marker: None,
+            merge_in: None,
+        },
+        Vec::new(),
+        local_marker,
+    )))
+}
+
+fn notebook_create_editor_view(
+    item: &CaptureItem<'_>,
+) -> Option<NotebookEditorView> {
+    let claim = complete_notebook_create_shape(item)?;
+    if let Err(error) = refuse_notebook_create_markers(item, claim.token_range)
+    {
+        return Some(NotebookEditorView {
+            mode: EditorMode::NotebookCreate,
+            body: claim.body,
+            route: claim.parent,
+            section: None,
+            block_id: Some(claim.notebook_id),
+            needs: Vec::new(),
+            spans: vec![Span {
+                start: claim.token_range.0,
+                end: claim.token_range.1,
+                kind: SpanKind::ProjectNoteMarker,
+                project_note: None,
+                title: None,
+                key: None,
+            }],
+            diagnostics: vec![Diagnostic {
+                severity: Severity::Error,
+                code: error.code.unwrap_or("notebook_create_unsupported"),
+                message: error.message,
+                range: error.span.or(Some(claim.token_range)),
+                rewrite: None,
+            }],
+            sub_bullets: notebook_sub_bullets(item).unwrap_or_default(),
+        });
+    }
+    let mut spans = vec![
+        Span {
+            start: claim.route_range.0,
+            end: claim.route_range.1,
+            kind: SpanKind::NotebookRoute,
+            project_note: None,
+            title: Some(provisional_create_title(&claim.notebook_id)),
+            key: Some(claim.parent.clone()),
+        },
+        Span {
+            start: claim.id_range.0,
+            end: claim.id_range.1,
+            kind: SpanKind::NotebookBlockId,
+            project_note: None,
+            title: None,
+            key: None,
+        },
+    ];
+    let occurrences = super::directive::collect_item(item);
+    for occurrence in occurrences {
+        if matches!(
+            occurrence,
+            super::directive::DirectiveOccurrence::Complete {
+                kind: super::directive::DirectiveKind::Note,
+                ..
+            }
+        ) {
+            let span = occurrence.span();
+            spans.push(Span {
+                start: span.start,
+                end: span.end,
+                kind: SpanKind::Directive,
+                project_note: None,
+                title: None,
+                key: None,
+            });
+        }
+    }
+    spans.sort_by_key(|span| (span.start, span.end));
+    let mut diagnostics = Vec::new();
+    if claim.body.trim().is_empty() {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            code: "notebook_summary_required",
+            message: "a notebook needs a one-line summary".to_string(),
+            range: Some(claim.token_range),
+            rewrite: None,
+        });
+    }
+    Some(NotebookEditorView {
+        mode: EditorMode::NotebookCreate,
+        body: claim.body,
+        route: claim.parent,
+        section: None,
+        block_id: Some(claim.notebook_id),
+        needs: Vec::new(),
+        spans,
+        diagnostics,
+        sub_bullets: notebook_sub_bullets(item).unwrap_or_default(),
+    })
+}
+
 /// Fan out a marker-only `@nb+id` plus first-level bullets into one
 /// sub-note per bullet. Ordinary `@route+id` list headers stay unchanged.
 pub(super) fn claim_notebook_members<'a>(
@@ -1429,6 +2122,14 @@ pub(super) fn claim_notebook_members<'a>(
     forced_section: Option<&str>,
     options: &CaptureParseOptions<'_>,
 ) -> Result<Option<Vec<ParsedCaptureItemOutcome<'a>>>, CaptureItemParseError> {
+    if forced_route.is_none()
+        && forced_section.is_none()
+        && !options.explicit_destination
+        && item.list.is_none()
+        && let Some(outcome) = claim_notebook_create(item)?
+    {
+        return Ok(Some(vec![outcome]));
+    }
     if forced_route.is_some()
         || forced_section.is_some()
         || options.explicit_destination
@@ -1480,8 +2181,19 @@ fn fanout_notebook_plus<'a>(
     {
         return Ok(None);
     }
-    if policy.get(route_part).is_none() {
-        return Ok(None);
+    match policy.lookup(route_part, item.start) {
+        NotebookRouteLookup::Hit(_) => {}
+        NotebookRouteLookup::Miss => return Ok(None),
+        NotebookRouteLookup::UsedBeforeCreated { marker_text } => {
+            return Err(CaptureItemParseError::coded_at(
+                "notebook_used_before_created",
+                super::line::notebook_used_before_created_error(
+                    route_part,
+                    marker_text,
+                ),
+                Some((parent.raw.start, parent.raw.end)),
+            ));
+        }
     }
     if trimmed.split_whitespace().nth(1).is_some() {
         return Ok(None);
@@ -1537,10 +2249,10 @@ fn fanout_notebook_plus<'a>(
             .collect(),
             list: None,
         };
-        let info = policy
-            .get(route_part)
-            .cloned()
-            .expect("notebook plus fan-out checks the policy");
+        let info = match policy.lookup(route_part, item.start) {
+            NotebookRouteLookup::Hit(info) => info.clone(),
+            _ => panic!("notebook plus fan-out checks the policy"),
+        };
         let claim = NotebookClaim {
             body: authored.body.trim().to_string(),
             marker: RouteMarker {
@@ -1618,10 +2330,33 @@ pub(crate) fn editor_view_for_item(
     item: &CaptureItem<'_>,
     options: &EditorParseOptions<'_>,
 ) -> Option<NotebookEditorView> {
+    if item.list.is_none()
+        && let Some(view) = notebook_create_editor_view(item)
+    {
+        return Some(view);
+    }
     if let Some(list) = item.list.as_ref()
         && let Some(policy) = options.notebook_policy
-        && let Some(info) = policy.get(&list.route)
     {
+        let info = match policy.lookup(&list.route, item.start) {
+            NotebookRouteLookup::Hit(info) => info.clone(),
+            NotebookRouteLookup::Miss => {
+                // Fall through to ordinary list/task claiming.
+                return None;
+            }
+            NotebookRouteLookup::UsedBeforeCreated { marker_text } => {
+                return Some(notebook_editor_error(
+                    list.route.clone(),
+                    "notebook_used_before_created",
+                    super::line::notebook_used_before_created_error(
+                        &list.route,
+                        marker_text,
+                    ),
+                    Some((list.header_start, list.header_end)),
+                ));
+            }
+        };
+        let info = &info;
         let owner = info.owner.as_deref();
         let header_range = (list.header_start, list.header_end);
         if list.count == 0 && list.kind == super::model::ListKind::Tasks {
@@ -1740,8 +2475,13 @@ pub(crate) fn editor_view_for_item(
                 .notebook_policy
                 .and_then(|policy| policy.get(&route))
                 .and_then(|info| info.owner.clone());
-            let (code, message) =
-                reformat_unsupported(code, message, &route, owner.as_deref());
+            let (code, message) = unsupported_with_optional_note(
+                item,
+                code,
+                message,
+                &route,
+                owner.as_deref(),
+            );
             return Some(notebook_editor_error(
                 route,
                 code,

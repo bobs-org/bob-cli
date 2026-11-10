@@ -1,5 +1,6 @@
 //! Staged batch planning and shared plan/detail types.
 use super::*;
+use crate::native::notebooks::VaultSnapshot;
 use std::collections::HashSet;
 
 #[derive(Default)]
@@ -12,6 +13,7 @@ pub(crate) struct CaptureBatchPlanner {
     item_pre_day: Option<Option<String>>,
     item_consumed_links: Vec<ConsumedLinkJson>,
     pub(super) read_guards: BatchReadGuards,
+    notebook_snapshot: Option<VaultSnapshot>,
 }
 
 /// Inputs consulted during planning even when the batch does not write them.
@@ -218,6 +220,40 @@ impl CaptureBatchPlanner {
         let file = &self.files[index];
         file.present
             .then(|| (file.original.clone(), file.current.clone()))
+    }
+
+    pub(super) fn overlay_notebook_snapshot(
+        &mut self,
+        bob_dir: &Path,
+    ) -> Result<VaultSnapshot, CaptureError> {
+        if self.notebook_snapshot.is_none() {
+            let snapshot = VaultSnapshot::load(bob_dir);
+            if let Some(first) = snapshot.io_errors.first() {
+                let more = snapshot.io_errors.len() - 1;
+                let suffix = if more > 0 {
+                    format!(" (+{more} more)")
+                } else {
+                    String::new()
+                };
+                return Err(CaptureError::io(format!(
+                    "the vault scan was incomplete: {first}{suffix}"
+                )));
+            }
+            self.notebook_snapshot = Some(snapshot);
+        }
+        let overlay = self.staged_snapshot().into_iter().filter_map(
+            |(absolute, contents)| {
+                let contents = contents?;
+                let relative =
+                    absolute.strip_prefix(bob_dir).ok()?.to_path_buf();
+                Some((relative, contents))
+            },
+        );
+        Ok(self
+            .notebook_snapshot
+            .as_ref()
+            .expect("notebook snapshot just loaded")
+            .with_overlay(overlay))
     }
 
     pub(super) fn staged_snapshot(&self) -> BTreeMap<PathBuf, Option<String>> {
@@ -657,6 +693,11 @@ pub(super) fn plan_capture_to_target(
         | CaptureKind::NotebookSubNote { .. } => {
             return Err(CaptureError::io(
                 "notebook-note capture invariant failed: wrong write planner",
+            ));
+        }
+        CaptureKind::NotebookCreate { .. } => {
+            return Err(CaptureError::io(
+                "notebook-create capture invariant failed: wrong write planner",
             ));
         }
     };

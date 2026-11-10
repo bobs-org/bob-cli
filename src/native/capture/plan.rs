@@ -142,19 +142,20 @@ pub(super) fn plan_capture_batch_with_config_path(
         config_path,
         &request.raw_text,
     );
-    let notebook_policy = if let Some(route) = request.forced_route.as_deref() {
-        super::super::capture_notebooks::notebook_policy_for_forced_route(
-            &request.bob_dir,
-            route,
-        )
-    } else if forced_literal {
-        super::super::capture_language::NotebookRoutePolicy::absent()
-    } else {
-        super::super::capture_notebooks::notebook_policy_for_draft(
-            &request.bob_dir,
-            &request.raw_text,
-        )
-    };
+    let mut notebook_policy =
+        if let Some(route) = request.forced_route.as_deref() {
+            super::super::capture_notebooks::notebook_policy_for_forced_route(
+                &request.bob_dir,
+                route,
+            )
+        } else if forced_literal {
+            super::super::capture_language::NotebookRoutePolicy::absent()
+        } else {
+            super::super::capture_notebooks::notebook_policy_for_draft(
+                &request.bob_dir,
+                &request.raw_text,
+            )
+        };
     let notebook_policy_for_parse = match request.forced_route.as_deref() {
         Some(route) => notebook_policy.get(route).is_some(),
         None => !forced_literal,
@@ -246,6 +247,7 @@ pub(super) fn plan_capture_batch_with_config_path(
                     | CaptureKind::RecordUpdate { .. }
                     | CaptureKind::NotebookNote { .. }
                     | CaptureKind::NotebookSubNote { .. }
+                    | CaptureKind::NotebookCreate { .. }
             ) {
                 return false;
             }
@@ -270,6 +272,7 @@ pub(super) fn plan_capture_batch_with_config_path(
                     | CaptureKind::RecordUpdate { .. }
                     | CaptureKind::NotebookNote { .. }
                     | CaptureKind::NotebookSubNote { .. }
+                    | CaptureKind::NotebookCreate { .. }
             ) {
                 return Vec::new();
             }
@@ -826,7 +829,7 @@ pub(super) fn plan_capture_batch_with_config_path(
                 &mut dependency_ctx,
                 config_path,
                 &mut record_context,
-                &notebook_policy,
+                &mut notebook_policy,
                 &mut task_theme_context,
                 &items,
                 &all_project_moves,
@@ -1038,6 +1041,11 @@ pub(super) fn plan_capture_batch_with_config_path(
     {
         warnings.push(warning.into());
     }
+    super::notebook_create::refresh_create_markdown(
+        &mut items,
+        &planner,
+        &request.bob_dir,
+    );
     Ok(PlannedCaptureBatch {
         items,
         read_guards: std::mem::take(&mut planner.read_guards),
@@ -1786,7 +1794,7 @@ pub(super) fn plan_capture_item(
     dependency_ctx: &mut DependencyContext,
     config_path: Option<&Path>,
     record_context: &mut super::super::capture_record::CaptureRecordContext,
-    notebook_policy: &super::super::capture_language::NotebookRoutePolicy,
+    notebook_policy: &mut super::super::capture_language::NotebookRoutePolicy,
     task_theme_context: &mut CaptureTaskThemeContext,
     earlier_items: &[PlannedCaptureItem],
     project_moves: &[ProjectMoveLanding],
@@ -1802,6 +1810,17 @@ pub(super) fn plan_capture_item(
             today,
             planner,
             record_context,
+            warnings,
+        );
+    }
+    if matches!(parsed_item.parsed.kind, CaptureKind::NotebookCreate { .. }) {
+        return super::notebook_create::plan_notebook_create_item(
+            request,
+            parsed_item,
+            now,
+            today,
+            planner,
+            notebook_policy,
             warnings,
         );
     }
@@ -2682,6 +2701,11 @@ pub(super) fn plan_capture_item(
         | CaptureKind::NotebookSubNote { .. } => {
             unreachable!(
                 "notebook capture is planned by plan_notebook_note_item"
+            )
+        }
+        CaptureKind::NotebookCreate { .. } => {
+            unreachable!(
+                "notebook create is planned by plan_notebook_create_item"
             )
         }
     };
@@ -4443,6 +4467,7 @@ pub(super) fn capture_kind_label(kind: &CaptureKind) -> &'static str {
         CaptureKind::RecordUpdate { .. } => "record_update",
         CaptureKind::NotebookNote { .. } => "notebook_note",
         CaptureKind::NotebookSubNote { .. } => "notebook_sub_note",
+        CaptureKind::NotebookCreate { .. } => "notebook_create",
     }
 }
 

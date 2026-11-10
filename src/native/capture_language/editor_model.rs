@@ -314,6 +314,8 @@ pub(crate) enum EditorMode {
     NotebookNote,
     /// A note nested under an existing notebook note bullet.
     NotebookSubNote,
+    /// `@parent^id@ %n` creates a notebook.
+    NotebookCreate,
     /// A whole-item bare URL admitted by the routing policy.
     Ref,
     /// A lone `@route` header that pulls that note's tasks (§12.20).
@@ -348,6 +350,7 @@ impl EditorMode {
             Self::RecordUpdate => "record_update",
             Self::NotebookNote => "notebook_note",
             Self::NotebookSubNote => "notebook_sub_note",
+            Self::NotebookCreate => "notebook_create",
             Self::Ref => "ref",
             Self::NotePull => "note_pull",
             Self::Incomplete => "incomplete",

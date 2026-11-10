@@ -8,7 +8,8 @@ use std::{
 
 use super::{
     capture_language::{
-        candidate_notebook_route, candidate_notebook_routes, NotebookRouteInfo,
+        candidate_notebook_route, candidate_notebook_routes,
+        discover_notebook_creates, DiscoveredNotebookCreate, NotebookRouteInfo,
         NotebookRoutePolicy,
     },
     notebooks::scan::{derive_title, first_alias},
@@ -26,7 +27,59 @@ pub(crate) fn notebook_policy_for_draft(
     vault_root: &Path,
     raw_text: &str,
 ) -> NotebookRoutePolicy {
-    build_notebook_policy(vault_root, candidate_notebook_routes(raw_text)).0
+    let mut candidates = candidate_notebook_routes(raw_text);
+    let creates: Vec<DiscoveredNotebookCreate> =
+        discover_notebook_creates(raw_text);
+    for create in &creates {
+        if !candidates.iter().any(|route| route == &create.route) {
+            candidates.push(create.route.clone());
+        }
+    }
+    let (mut policy, _) = build_notebook_policy(vault_root, candidates);
+    for create in creates {
+        if policy.get(&create.route).is_some() {
+            continue;
+        }
+        let path = PathBuf::from(&create.filename);
+        if vault_root.join(&path).exists() {
+            continue;
+        }
+        let parent_info = policy.get(&create.parent);
+        let owner = parent_info
+            .and_then(|info| info.owner.clone())
+            .or_else(|| Some(create.parent.clone()));
+        let title = provisional_title(&create.notebook_id);
+        let breadcrumb = match parent_info {
+            Some(info) => {
+                let mut crumb = info.breadcrumb.clone();
+                crumb.push(title.clone());
+                crumb
+            }
+            None => vec![create.parent.clone(), title.clone()],
+        };
+        policy.insert_create(
+            create.route,
+            create.item_start,
+            create.marker_text,
+            NotebookRouteInfo {
+                title,
+                summary: (!create.summary.is_empty()).then_some(create.summary),
+                owner,
+                breadcrumb,
+                sections: create.sections,
+            },
+        );
+    }
+    policy
+}
+
+fn provisional_title(id: &str) -> String {
+    let title = super::highlights_ref::humanize_stem(id);
+    let mut chars = title.chars();
+    match chars.next() {
+        None => id.to_string(),
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+    }
 }
 
 /// Resolve a forced capture destination without interpreting any `@` text
