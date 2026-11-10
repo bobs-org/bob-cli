@@ -2804,3 +2804,283 @@ fn mg_successful_merge_fixtures_hold_identity_reconcile_and_repeatability() {
         assert_planner_invariants(case, &before, &request);
     }
 }
+
+#[test]
+fn merge_copy_preserves_inline_code_and_ignores_prose_task_token() {
+    let before = snapshot(&[
+        (
+            "src.md",
+            concat!(
+                "- [ ] #task Source ^src\n",
+                "\t- [x] #task Nested `[id:: literal]` [id:: src__nested] ^nested\n",
+                "\t- [x] #task Ticks ``[id:: other]`` [id:: src__other] ^other\n",
+                "\t- Plain prose mentioning #task with [id:: src__prose] stays\n",
+                "\t- Note about #task `[id:: kept]` and ^kept literal\n",
+            ),
+        ),
+        ("dest.md", "- [ ] #task Target ^dst\n"),
+    ]);
+    let request =
+        request(&["src:src"], MergeContainer::Task(locator("dest:dst")));
+    let first = plan(&before, &request).expect("merge plan");
+    let second = plan(&before, &request).expect("repeatable merge plan");
+    assert_eq!(first, second);
+    let destination = first
+        .postimages
+        .get(Path::new("dest.md"))
+        .expect("destination postimage");
+    assert!(
+        destination.contains("`[id:: literal]`"),
+        "literal inline code survives: {destination}"
+    );
+    assert!(
+        destination.contains("``[id:: other]``"),
+        "multi-backtick literal survives: {destination}"
+    );
+    assert!(
+        destination.contains("`[id:: kept]`"),
+        "prose code literal survives: {destination}"
+    );
+    assert!(
+        destination.contains("^kept literal"),
+        "prose caret literal survives: {destination}"
+    );
+    assert!(
+        !destination.contains("[id:: src__nested]"),
+        "live field stripped: {destination}"
+    );
+    assert!(
+        !destination.contains("[id:: src__other]"),
+        "live field stripped: {destination}"
+    );
+    assert!(
+        !destination.contains("^nested"),
+        "live anchor stripped: {destination}"
+    );
+    assert!(
+        destination.contains("[id:: src__prose]"),
+        "non-task prose keeps its field: {destination}"
+    );
+    assert!(
+        !destination.contains("MergeLineOrigin"),
+        "no debug leakage: {destination}"
+    );
+    assert!(
+        first
+            .merge_line_origins
+            .iter()
+            .any(|origin| origin.origin.ends_with("src.md#^src")),
+        "origin tracking preserved"
+    );
+    let mut merged = before.notes.clone();
+    merged.extend(first.postimages);
+    let settings = note_tasks::read_settings(Path::new("/no-bob-vault"));
+    let reconciled =
+        crate::native::task_status_hooks::reconcile_merge_snapshot_for_tests(
+            &merged, &settings,
+        );
+    assert_eq!(reconciled, merged);
+}
+
+#[test]
+fn merge_copy_fence_length_honors_opening_and_sanitizes_after_close() {
+    let source = concat!(
+        "- [ ] #task Source ^src\n",
+        "\t- Detail before fence ^keep\n",
+        "\t  ````text\n",
+        "\t  literal [id:: inside] ^inside\n",
+        "\t  [[#^keep]] and [link](#^keep)\n",
+        "\t  ```\n",
+        "\t  still inside quadruple fence [id:: still] ^still\n",
+        "\t  ````\n",
+        "\t- [x] #task After [id:: src__after] ^after\n",
+        "\t  ~~~text\n",
+        "\t  tilde literal [id:: tilde] ^tilde\n",
+        "\t  ~~~\n",
+        "\t- [x] #task Tailed [id:: src__tailed] ^tailed\n",
+    );
+    for same_note in [false, true] {
+        let before = if same_note {
+            snapshot(&[(
+                "src.md",
+                format!("{source}- [ ] #task Target ^dst\n  - Existing\n")
+                    .as_str(),
+            )])
+        } else {
+            snapshot(&[
+                ("src.md", source),
+                ("dest.md", "- [ ] #task Target ^dst\n"),
+            ])
+        };
+        let target = if same_note { "src:dst" } else { "dest:dst" };
+        let request =
+            request(&["src:src"], MergeContainer::Task(locator(target)));
+        let first = plan(&before, &request)
+            .unwrap_or_else(|error| panic!("same_note={same_note}: {error:?}"));
+        let second = plan(&before, &request).unwrap_or_else(|error| {
+            panic!("repeat same_note={same_note}: {error:?}")
+        });
+        assert_eq!(first, second, "same_note={same_note}");
+        let dest_key = if same_note { "src.md" } else { "dest.md" };
+        let destination = first
+            .postimages
+            .get(Path::new(dest_key))
+            .expect("destination postimage");
+        assert!(
+            destination.contains("literal [id:: inside] ^inside"),
+            "fenced literals survive same_note={same_note}: {destination}"
+        );
+        assert!(
+            destination.contains("[id:: still] ^still"),
+            "short delimiter does not close same_note={same_note}: {destination}"
+        );
+        assert!(
+            destination.contains("tilde literal [id:: tilde] ^tilde"),
+            "tilde fence survives same_note={same_note}: {destination}"
+        );
+        if same_note {
+            assert_eq!(
+                destination.matches("[id:: src__after]").count(),
+                1,
+                "copy strips live field but source retains same_note={same_note}: {destination}"
+            );
+            assert_eq!(
+                destination.matches("[id:: src__tailed]").count(),
+                1,
+                "copy strips live field but source retains same_note={same_note}: {destination}"
+            );
+            let copy_start = destination
+                .find("- [ ] #task Target ^dst")
+                .expect("target in same-note postimage");
+            let copy_part = &destination[copy_start..];
+            assert!(
+                !copy_part.contains("[id:: src__after]"),
+                "post-fence live field stripped in copy same_note={same_note}: {destination}"
+            );
+            assert!(
+                !copy_part.contains("[id:: src__tailed]"),
+                "post-fence live field stripped in copy same_note={same_note}: {destination}"
+            );
+            assert!(
+                !copy_part.contains("^after"),
+                "post-fence live anchor stripped in copy same_note={same_note}: {destination}"
+            );
+        } else {
+            assert!(
+                !destination.contains("[id:: src__after]"),
+                "post-fence live field stripped same_note={same_note}: {destination}"
+            );
+            assert!(
+                !destination.contains("[id:: src__tailed]"),
+                "post-fence live field stripped same_note={same_note}: {destination}"
+            );
+            assert!(
+                !destination.contains("^after"),
+                "post-fence live anchor stripped same_note={same_note}: {destination}"
+            );
+        }
+        let mut merged = before.notes.clone();
+        merged.extend(first.postimages.clone());
+        let settings = note_tasks::read_settings(Path::new("/no-bob-vault"));
+        let reconciled = crate::native::task_status_hooks::reconcile_merge_snapshot_for_tests(
+            &merged, &settings,
+        );
+        assert_eq!(reconciled, merged, "same_note={same_note}");
+    }
+}
+
+#[test]
+fn mg18_merge_source_with_descendant_anchor_archives_through_bound_pair() {
+    let vault = tempfile::tempdir().expect("temporary vault");
+    let source = concat!(
+        "---\n",
+        "done_tasks: \"[[done/custom_archive]]\"\n",
+        "---\n",
+        "\n",
+        "- [-] #task Source [created:: 2026-10-20] [cancelled:: 2026-11-03] ^src\n",
+        "\t- Child detail ^keep\n",
+        "\t- 🪢 **LINKS:** merged into [[dest#^dst]]\n",
+    );
+    let target_note = concat!(
+        "---\n",
+        "type: [[area]]\n",
+        "---\n",
+        "\n",
+        "- [ ] #task Target ^dst\n",
+        "\t- Merged \"Source\"\n",
+        "\t\t- Child detail ^keep\n",
+        "\t\t- See [[src#^keep]] and [jump](src.md#^keep)\n",
+        "\t- 🪢 **LINKED FROM:** [[src#^src]] (merged into)\n",
+    );
+    let archive = concat!(
+        "---\n",
+        "parent: \"[[src]]\"\n",
+        "type: \"[[done]]\"\n",
+        "---\n",
+        "\n",
+        "- [x] old #task ^old\n",
+    );
+    let referrer = "See [[src#^src]] and [[src#^keep]].\n";
+    std::fs::write(vault.path().join("src.md"), source)
+        .expect("write source fixture");
+    std::fs::write(vault.path().join("dest.md"), target_note)
+        .expect("write target fixture");
+    std::fs::write(vault.path().join("referrer.md"), referrer)
+        .expect("write referrer fixture");
+    std::fs::create_dir_all(vault.path().join("done")).expect("done dir");
+    std::fs::write(vault.path().join("done/custom_archive.md"), archive)
+        .expect("write bound archive");
+    let postimages =
+        crate::native::collect_done::collection_postimages_for_tests(
+            vault.path(),
+            1,
+        )
+        .expect("production archive planner");
+    let target = postimages
+        .get(Path::new("dest.md"))
+        .expect("rewritten target postimage");
+    assert!(
+        target.contains("done/custom_archive#^src")
+            || target.contains("done/custom_archive#^keep"),
+        "copied links follow the bound archive, not a _done guess: {target}"
+    );
+    assert!(
+        !target.contains("[[src#^src]]")
+            || target.contains("done/custom_archive"),
+        "original source refs move to the bound archive: {target}"
+    );
+    let referrer_post = postimages
+        .get(Path::new("referrer.md"))
+        .expect("rewritten referrer postimage");
+    assert!(
+        referrer_post.contains("done/custom_archive#^"),
+        "external references follow the bound archive: {referrer_post}"
+    );
+    assert!(
+        !target.matches("^keep").any(|_| true)
+            || !target.contains(
+                "\n\t\t- Child detail ^keep\n\t\t- Child detail ^keep"
+            ),
+        "destination copies never acquire duplicate identities"
+    );
+    let mut archived = BTreeMap::from([
+        (PathBuf::from("src.md"), source.to_string()),
+        (PathBuf::from("dest.md"), target_note.to_string()),
+        (PathBuf::from("referrer.md"), referrer.to_string()),
+        (PathBuf::from("done/custom_archive.md"), archive.to_string()),
+    ]);
+    archived.extend(postimages);
+    let index = NoteIndex::from_paths(archived.keys().cloned());
+    for (path, block_id) in block_link_targets(&archived) {
+        assert!(
+            block_ids(&archived).contains(&(path.clone(), block_id.clone(),)),
+            "archive link identity must resolve: {}#^{}",
+            path.display(),
+            block_id,
+        );
+        assert!(matches!(
+            index.resolve_detailed(None, &path.with_extension("").to_string_lossy()),
+            LinkResolution::Found(resolved) if resolved == path
+        ));
+    }
+}

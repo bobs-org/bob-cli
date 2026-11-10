@@ -23,11 +23,15 @@ doc first in the same change.
 
 > Merging S into T writes T first. S's description becomes one plain title
 > bullet in the container. S's authored children are **copied** beneath it.
-> Copies carry no anchors or `[id::]`; same-note links in the copy name S's
-> note. Bob then re-points S's open dependents to T, prunes S's live links
-> under today's open Pomodoros, and offers T in their place. S is written
-> last: it is cancelled, carrying `🪢 LINKS: merged into [[T]]`, and keeps
-> its original notes.
+> Copies carry no live anchors or live `[id::]` outside inline and fenced
+> code; same-note links in the copy name S's note. Inline-code and
+> fenced-code text is never touched, so literal `[id:: ...]`, `^id`, wiki
+> links, and Markdown links inside code survive byte-for-byte, and a plain
+> authored note containing `#task` is not a task row. Bob then re-points
+> S's open dependents to T, prunes S's live links under today's open
+> Pomodoros, and offers T in their place. S is written last: it is
+> cancelled, carrying `🪢 LINKS: merged into [[T]]`, and keeps its original
+> notes.
 
 Vocabulary used below:
 
@@ -36,7 +40,7 @@ Vocabulary used below:
 - **P** is the parent (owner) of the bullets being split (split docs only).
 - A **container** is T itself, one of T's drawers, or a note's H2 section.
 
-A task holds notes, so `>` to a bare note **moves** them (identity kept,
+A bare note holds tasks, so `>` to a bare note **moves** them (identity kept,
 links repaired, no back-pointer). A task, a task's drawer, or a note's
 section holds notes, so `>` to any of these **merges** the sources into it
 (S's notes are copied, S retires as a cancelled tombstone that keeps them,
@@ -50,7 +54,7 @@ stay in the parent).
 | --- | --- |
 | S's task line | `[-]` with `[cancelled:: today]`. `^id`, fields, and the creation date are kept, so every link to S still resolves. |
 | S's description | Becomes the group title bullet `- <description>` in the container. The text comes from Bob's description extractor (`note_tasks::clean_description`). It carries **no link back to S**: a ring would draw ⊘ beside live work, and S would gain a reverse mention. Provenance is T's _merged from_ chip. |
-| S's authored body (continuation paragraphs, tables, fences, and authored children) | Copied under the title bullet with relative structure kept, including bytes before the first child and body text without a list wrapper. S keeps the originals. Copies carry no `^id` anchors or `[id::]` fields. Same-note block links in the copy (`[[#^x]]`, `(#^x)`) name S's note. Same-named drawers are **not** flattened into T's drawers. |
+| S's authored body (continuation paragraphs, tables, fences, and authored children) | Copied under the title bullet with relative structure kept, including bytes before the first child and body text without a list wrapper. S keeps the originals. Copies strip only live `^id` anchors and live `[id::]` fields outside inline and fenced code; inline-code and fenced-code bytes (including literal `[id:: ...]`, `^id`, wiki links, and Markdown links) are preserved byte-for-byte, and ordinary non-task prose containing `#task` is never treated as a task row. Same-note block links in the copy (`[[#^x]]`, `(#^x)`) name S's note. Same-named drawers are **not** flattened into T's drawers. |
 | S's open nested tasks | The merge is refused (`merge_source_open_subtasks`). |
 | S's managed children: Depends-On, BLOCKS, LINKS, LINKED FROM, and the Schedule, Work, Rotten, and Cancel logs | Stay on S as history. An existing Cancel Log gets `*date* — 🪢 merged into [[T]]` prepended, as relation cancels do today. |
 | Open tasks that depend on S (other than T) | The production dependency graph finds direct and inherited project dependents. Resolved Depends-On links to any source are replaced with T and deduplicated; unresolved or ambiguous links stay byte-for-byte and are reported, with their field IDs retained as breadcrumbs. A dependent without a block ID refuses the merge because it cannot be safely rewritten. BLOCKS mirrors follow the configured relation policy. A resulting cycle refuses the whole operation (`merge_dependency_cycle`). Re-pointing happens before the cancel, so cancel recovery never releases them. |

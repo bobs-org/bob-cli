@@ -7,16 +7,18 @@ use super::{
     super::{
         capture,
         collect_done::{
-            has_task_tag, split_line_ending, vault_relative_link_target,
-            MovedBlockTargets,
+            split_line_ending, vault_relative_link_target, MovedBlockTargets,
         },
-        markdown, note_tasks, projects, task_children, task_complete,
+        markdown, note_tasks,
+        note_tasks::NoteTaskSettings,
+        task_children, task_complete,
         task_dependencies::inline_code_spans,
         task_locator::{self, LocatedTask},
         task_move::{
             transplant::{self, LineRange, RepairedFile},
             VaultSnapshot,
         },
+        task_status_hooks::after_list_marker,
     },
     containers::{self, ResolvedDestination},
     types::{
@@ -355,7 +357,8 @@ pub(crate) fn prepare_task_merge(
                     .collect::<BTreeSet<_>>()
             })
             .unwrap_or_default();
-        let sanitized = sanitize_copied_payload(&raw.contents);
+        let sanitized =
+            sanitize_copied_payload(&raw.contents, context.task_settings);
         let repaired = transplant::repair_moved_fragment(
             &sanitized,
             &source.prepared.path,
@@ -604,8 +607,14 @@ fn first_fragment_indent(fragment: &str) -> Option<String> {
 
 /// Strip identity from a copied payload, then leave fenced and inline-code
 /// text untouched. Live `^id` anchors and `[id:: …]` fields stay on S.
-fn sanitize_copied_payload(fragment: &str) -> String {
-    strip_copied_id_fields(&strip_copied_anchors(fragment))
+/// Only live identity outside inline and fenced code is stripped; literal
+/// `[id:: …]`, `^id`, wiki links, and Markdown links inside code survive.
+/// A plain authored note containing `#task` is not a task row.
+fn sanitize_copied_payload(
+    fragment: &str,
+    settings: &NoteTaskSettings,
+) -> String {
+    strip_copied_id_fields(&strip_copied_anchors(fragment), settings)
 }
 
 fn strip_copied_anchors(fragment: &str) -> String {
@@ -649,21 +658,219 @@ fn strip_copied_anchors(fragment: &str) -> String {
     updated
 }
 
-fn strip_copied_id_fields(fragment: &str) -> String {
+fn strip_copied_id_fields(
+    fragment: &str,
+    settings: &NoteTaskSettings,
+) -> String {
     let lines: Vec<&str> = fragment.split_inclusive('\n').collect();
     let fenced = copied_fenced_lines(fragment);
     let mut result = String::with_capacity(fragment.len());
     for (index, line) in lines.iter().enumerate() {
         let (content, ending) = split_line_ending(line);
-        if fenced.contains(&index) || !has_task_tag(content) {
+        if fenced.contains(&index) || !is_copied_task_row(content, settings) {
             result.push_str(line);
             continue;
         }
-        let cleaned = projects::edits::remove_all_inline_fields(content, "id");
+        let cleaned = remove_live_id_fields(content);
         result.push_str(&cleaned);
         result.push_str(ending);
     }
     result
+}
+
+/// A merge-copy task row is a list item with a checkbox whose body carries
+/// the live global filter (usually `#task`) outside inline code. Plain prose
+/// that merely mentions `#task` is not a task row, and a `#task` that only
+/// appears inside backticks does not make the line a task.
+fn is_copied_task_row(content: &str, settings: &NoteTaskSettings) -> bool {
+    let indent = content
+        .bytes()
+        .take_while(|byte| matches!(byte, b' ' | b'\t'))
+        .count();
+    let Some(marker_end) = after_list_marker(content, indent) else {
+        return false;
+    };
+    let mut index = marker_end;
+    while content
+        .as_bytes()
+        .get(index)
+        .is_some_and(u8::is_ascii_whitespace)
+    {
+        index += 1;
+    }
+    if content.as_bytes().get(index) != Some(&b'[') {
+        return false;
+    }
+    let Some(close_relative) = content[index + 1..].find(']') else {
+        return false;
+    };
+    let close = index + 1 + close_relative;
+    let status_text = &content[index + 1..close];
+    let mut status_chars = status_text.chars();
+    let Some(_status) = status_chars.next() else {
+        return false;
+    };
+    if status_chars.next().is_some() {
+        return false;
+    }
+    let after_checkbox = &content[close + 1..];
+    if !after_checkbox.is_empty()
+        && !after_checkbox.starts_with(char::is_whitespace)
+    {
+        return false;
+    }
+    let body = after_checkbox.trim_start();
+    if settings.global_filter.is_empty() {
+        return true;
+    }
+    let code_spans = inline_code_spans(content);
+    let mut offset = 0;
+    for token in body.split_whitespace() {
+        let Some(relative) = body[offset..].find(token) else {
+            break;
+        };
+        let token_start_in_body = offset + relative;
+        let token_start = content.len() - body.len() + token_start_in_body;
+        let token_end = token_start + token.len();
+        offset = token_start_in_body + token.len();
+        if token != settings.global_filter {
+            continue;
+        }
+        if code_spans
+            .iter()
+            .any(|span| token_start < span.end && token_end > span.start)
+        {
+            continue;
+        }
+        return true;
+    }
+    false
+}
+
+struct CopiedFieldSpan {
+    start: usize,
+    end: usize,
+}
+
+/// Live `[id:: …]` / `(id:: …)` spans outside inline code.
+fn copied_live_field_spans(
+    text: &str,
+    key: &str,
+    code_spans: &[std::ops::Range<usize>],
+) -> Vec<CopiedFieldSpan> {
+    let mut fields = Vec::new();
+    let mut offset = 0;
+    while offset < text.len() {
+        let square = text[offset..].find('[');
+        let parenthesis = text[offset..].find('(');
+        let Some(open_relative) = (match (square, parenthesis) {
+            (Some(left), Some(right)) => Some(left.min(right)),
+            (Some(left), None) => Some(left),
+            (None, Some(right)) => Some(right),
+            (None, None) => None,
+        }) else {
+            break;
+        };
+        let open = offset + open_relative;
+        let opening = text.as_bytes()[open];
+        let closing = if opening == b'[' { ']' } else { ')' };
+        let Some(close_relative) = text[open + 1..].find(closing) else {
+            offset = open + 1;
+            continue;
+        };
+        let close = open + 1 + close_relative;
+        let inner = &text[open + 1..close];
+        if let Some((field_key, value)) = inner.split_once("::")
+            && field_key.trim() == key
+            && !code_spans
+                .iter()
+                .any(|span| open < span.end && close + 1 > span.start)
+        {
+            let value_start = open + 1 + field_key.len() + "::".len();
+            let _ = value;
+            fields.push(CopiedFieldSpan {
+                start: open,
+                end: close + 1,
+                // value offsets retained for parity with the canonical
+                // scanner; removal only needs the outer span.
+                // value_start,
+                // value_end: value_start + value.len(),
+            });
+            let _ = value_start;
+        }
+        offset = close + 1;
+    }
+    fields
+}
+
+fn remove_live_id_fields(line: &str) -> String {
+    let code_spans = inline_code_spans(line);
+    let spans = copied_live_field_spans(line, "id", &code_spans);
+    let raw_spans = spans
+        .iter()
+        .map(|field| (field.start, field.end))
+        .collect::<Vec<_>>();
+    remove_copied_field_spans(line, 0, &raw_spans)
+}
+
+fn remove_copied_field_spans(
+    line: &str,
+    task_text_offset: usize,
+    spans: &[(usize, usize)],
+) -> String {
+    let mut removal_ranges = spans
+        .iter()
+        .map(|(start, end)| {
+            copied_field_removal_range(
+                line,
+                task_text_offset + start,
+                task_text_offset + end,
+            )
+        })
+        .collect::<Vec<_>>();
+    removal_ranges.sort_unstable();
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    for range in removal_ranges {
+        if let Some(last) = merged.last_mut()
+            && range.0 <= last.1
+        {
+            last.1 = last.1.max(range.1);
+        } else {
+            merged.push(range);
+        }
+    }
+    let mut output = String::with_capacity(line.len());
+    let mut cursor = 0;
+    for (start, end) in merged {
+        output.push_str(&line[cursor..start]);
+        cursor = end;
+    }
+    output.push_str(&line[cursor..]);
+    output
+}
+
+fn copied_field_removal_range(
+    line_text: &str,
+    field_start: usize,
+    field_end: usize,
+) -> (usize, usize) {
+    let bytes = line_text.as_bytes();
+    let mut after = field_end;
+    while after < bytes.len() && is_copied_field_space(bytes[after]) {
+        after += 1;
+    }
+    if after > field_end {
+        return (field_start, after);
+    }
+    let mut before = field_start;
+    while before > 0 && is_copied_field_space(bytes[before - 1]) {
+        before -= 1;
+    }
+    (before, field_end)
+}
+
+fn is_copied_field_space(byte: u8) -> bool {
+    matches!(byte, b' ' | b'\t')
 }
 
 fn copied_fenced_lines(fragment: &str) -> BTreeSet<usize> {
@@ -671,7 +878,7 @@ fn copied_fenced_lines(fragment: &str) -> BTreeSet<usize> {
     let logical: Vec<&str> =
         lines.iter().map(|line| split_line_ending(line).0).collect();
     let mut fenced = markdown::fenced_lines(&logical, 0..logical.len());
-    let mut marker = None;
+    let mut marker: Option<(char, usize)> = None;
     for (index, line) in logical.iter().enumerate() {
         let trimmed = line.trim_start_matches([' ', '\t']);
         if let Some(open) = marker {
@@ -687,7 +894,7 @@ fn copied_fenced_lines(fragment: &str) -> BTreeSet<usize> {
     fenced
 }
 
-fn copied_fence_marker(line: &str) -> Option<char> {
+fn copied_fence_marker(line: &str) -> Option<(char, usize)> {
     let marker = line.chars().next()?;
     if marker != '`' && marker != '~' {
         return None;
@@ -696,15 +903,16 @@ fn copied_fence_marker(line: &str) -> Option<char> {
         .chars()
         .take_while(|character| *character == marker)
         .count();
-    (count >= 3).then_some(marker)
+    (count >= 3).then_some((marker, count))
 }
 
-fn copied_fence_closes(line: &str, marker: char) -> bool {
+fn copied_fence_closes(line: &str, open: (char, usize)) -> bool {
+    let (marker, length) = open;
     let count = line
         .chars()
         .take_while(|character| *character == marker)
         .count();
-    count >= 3 && line[count..].trim().is_empty()
+    count >= length.max(3) && line[count..].trim().is_empty()
 }
 
 fn validate_target_and_source_ranges(

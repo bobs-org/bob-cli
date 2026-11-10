@@ -254,7 +254,7 @@ fn fragment_fenced_lines(
     fenced
 }
 
-fn fragment_fence_marker(line: &str) -> Option<char> {
+fn fragment_fence_marker(line: &str) -> Option<(char, usize)> {
     let marker = line.chars().next()?;
     if marker != '`' && marker != '~' {
         return None;
@@ -263,15 +263,16 @@ fn fragment_fence_marker(line: &str) -> Option<char> {
         .chars()
         .take_while(|character| *character == marker)
         .count();
-    (count >= 3).then_some(marker)
+    (count >= 3).then_some((marker, count))
 }
 
-fn closes_fragment_fence(line: &str, marker: char) -> bool {
+fn closes_fragment_fence(line: &str, open: (char, usize)) -> bool {
+    let (marker, length) = open;
     let count = line
         .chars()
         .take_while(|character| *character == marker)
         .count();
-    count >= 3 && line[count..].trim().is_empty()
+    count >= length.max(3) && line[count..].trim().is_empty()
 }
 
 fn convert_indent(
