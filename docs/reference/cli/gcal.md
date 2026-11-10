@@ -19,6 +19,7 @@ Commands:
   list       List a local day of events and show how Bob would classify them
   login      Connect Google Calendar (read-only) in one guided step
   logout     Remove Bob's Calendar grant only; prints the Google revoke URL
+  note       List and show private event notes for Google Calendar events
   sync       Write one day's Events rows and MEET links
   help       Print this message or the help of the given subcommand(s)
 
@@ -55,6 +56,9 @@ Examples:
   bob gcal login -m           Paste the redirect address (automatic over SSH)
   bob gcal calendars          List calendars with ids for config
   bob gcal doctor             Diagnose gog, the client, and the vault
+  bob gcal note               List private event notes for the next 90 days
+  bob gcal note -a            List every upcoming event, noted or not
+  bob gcal note deerwood      Show one event and its private note
   bob gcal sync               Write today's Events and MEET links
   bob gcal sync -F            Rewrite today's Events from Google as on a first sync
   bob gcal sync -d            Preview the exact Markdown a sync writes

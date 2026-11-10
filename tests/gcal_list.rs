@@ -108,7 +108,7 @@ fn bare_gcal_lists_today_and_json_keeps_only_public_normalized_fields() {
     assert!(events_call.contains(&"--fields".to_string()));
     assert!(events_call
         .iter()
-        .any(|arg| arg.contains("organizer(self)")));
+        .any(|arg| { arg.contains("organizer(self,displayName,email)") }));
     assert!(events_call
         .iter()
         .any(|arg| arg == "2026-10-30T00:00:00-04:00"));

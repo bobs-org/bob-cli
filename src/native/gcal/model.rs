@@ -49,6 +49,8 @@ pub(crate) struct GcalEvent {
     pub color_id: Option<String>,
     pub my_answer: MyAnswer,
     pub organizer_or_no_guests: bool,
+    pub organizer_name: Option<String>,
+    pub organizer_is_self: bool,
     pub description: EventDescription,
     /// Layered private-note summary, when a matching note was applied.
     pub note: Option<AppliedNote>,
@@ -254,6 +256,14 @@ impl GcalEvent {
             description.directives.clock_tag.deprecated().to_vec();
         let title_route_hint =
             title.split_whitespace().last().and_then(parse_route_token);
+        let organizer_name = raw
+            .organizer
+            .as_ref()
+            .and_then(|organizer| organizer.display_label());
+        let organizer_is_self = raw
+            .organizer
+            .as_ref()
+            .is_some_and(|organizer| organizer.is_self);
         Ok(Self {
             key: OccurrenceKey {
                 calendar_id: calendar_id.to_string(),
@@ -287,6 +297,8 @@ impl GcalEvent {
             color_id: raw.color_id,
             my_answer,
             organizer_or_no_guests,
+            organizer_name,
+            organizer_is_self,
             description,
             note: None,
         })
@@ -597,6 +609,27 @@ struct RawOrganizer {
     #[serde(rename = "self")]
     #[serde(default)]
     is_self: bool,
+    #[serde(rename = "displayName")]
+    display_name: Option<String>,
+    #[serde(default)]
+    email: Option<String>,
+}
+
+impl RawOrganizer {
+    fn display_label(&self) -> Option<String> {
+        self.display_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                self.email
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+            })
+    }
 }
 
 #[derive(Debug, Deserialize)]

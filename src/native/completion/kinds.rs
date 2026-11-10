@@ -912,6 +912,18 @@ const TABLE: &[Entry] = &[
         arg: "query",
         kind: Kind::FreeText,
     },
+    // `bob gcal note -C` pins the calendar and `-i` selects the Google
+    // event id; both are free-form ids.
+    Entry {
+        path: &["gcal", "note"],
+        arg: "calendar",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["gcal", "note"],
+        arg: "event-id",
+        kind: Kind::FreeText,
+    },
     Entry {
         path: &[],
         arg: "ref-type",

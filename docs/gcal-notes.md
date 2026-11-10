@@ -12,8 +12,8 @@ writes the row. Any event qualifies: events you own, locked guest events, and
 invitations still awaiting a reply or answered Maybe. A note never changes
 inclusion, never RSVPs, and never creates a row.
 
-Command write, preview, and Mac Capture Event note mode land in later
-phases. This page is the model the engine already applies.
+List and show modes are live; writing, clearing, previewing, editing,
+and the Mac Capture Event note mode land in later phases.
 
 ## Contents
 
@@ -23,6 +23,8 @@ phases. This page is the model the engine already applies.
 - [Storage](#storage)
 - [Ownership](#ownership)
 - [Reliability](#reliability)
+- [Command](#command)
+- [JSON](#json)
 
 ## Model
 
@@ -179,3 +181,93 @@ gcal journal lines) · bob gcal doctor`). A deliberate clear is never held.
 When `kept_description` fires and the journaled note hash differs from the
 fresh one, sync reports `kept your edited description bullets; your private
 note changed` instead of the Google wording.
+
+## Command
+
+```text
+bob gcal note [-A|--adopt] [-a|--all] [-b|--bob-dir DIR] [-C|--calendar ID] [-c|--clear]
+              [-D|--day DAY] [-d|--dry-run] [-e|--edit] [-f|--format human|json] [-h|--help] [-i|--event-id ID] [-l|--list] [-s|--scope event|series]
+              [QUERY...] [[--] TEXT...]
+```
+
+The option pre-pass runs before clap, so `-30`, `-30m`, and `+15` are never
+read as flags, and `bob gcal note deerwood -c` still works. Tokens that are
+this command's options are honored anywhere before the first `--`. A token
+matching `^[-−–+]\d` is never an option. After `--`, every token is TEXT
+verbatim. The positional words before TEXT form QUERY; TEXT starts at the
+first directive token (`@word`, `#off`, `#on`, a deprecated off alias, or
+`±N[m]`) or after `--`. An unknown option-like token is a clap usage error
+(exit 2).
+
+Modes (read-only in this phase; `-A`, `-c`, `-d`, `-e`, and TEXT exit 2 with
+"not available yet" until the write phase):
+
+- Bare `bob gcal note`, or `-l`: list notes.
+- `-l -a`: list every upcoming event, noted or not. This is the Mac picker
+  source.
+- `-l QUERY`: filter the listing.
+- QUERY without TEXT: show that event.
+- QUERY with TEXT, or `-i … -- TEXT`: write (later phase).
+- `-c`: clear (later phase).
+
+Exit status is 0 on success, 1 on gog or network failure, and 2 on usage or
+setup errors, no match, an ambiguous match off a TTY, a missing scope off a
+TTY, or (in the write phase) an invalid note.
+
+Selecting the event fetches from today's local midnight to +90 days, per
+configured calendar, with all pages. `-D DAY` narrows the window to one day,
+past days included. Eligible events are timed, busy, under-24-hour events of
+type `default` or `fromGmail`, answered Yes, Maybe, or awaiting a reply.
+Matching requires every QUERY word in the displayed title; an exact title
+ranks first, then a prefix, then a contains, then soonest first. Recurring
+instances of one series group into one candidate. A pasted Google Calendar
+URL with `eid=` is base64url-decoded to the event id and looked up across
+the configured calendars (`-C` pins the calendar); when no calendar holds
+the id, the command falls back to a title search with a warning. `-i ID`
+uses the same lookup. Zero matches exit 2 with a hint; several matches open
+a numbered picker on a TTY and exit 2 off a TTY with candidates. A recurring
+match asks This event / All events on a TTY and needs `-s` off a TTY; `-s
+series` on a one-off event exits 2.
+
+List shows `✎ N private notes · next 90 days`, one row per noted event with
+its scope (`this event` / `all events`), root hue, buffer, and status
+(`waiting for Yes`, `waiting for your reply`, `lands Sun Dec 13`, `on
+today's note`). Notes outside the window are looked up by id (capped at 25
+lookups); past events are hidden, while cancelled, declined, or not-found
+events show `⚠ no longer on your calendar` with the one-line clear command.
+Show prints the current canonical note lines plus the effective root,
+buffer, and clock.
+
+## JSON
+
+Every event object, in the list, show, candidates, and later write outputs:
+
+```json
+{
+  "calendar_id": "primary",
+  "calendar_name": "Bryan",
+  "event_id": "st49…",
+  "series_id": null,
+  "recurring": false,
+  "title": "Deerwood. Christmas breakfast",
+  "day": "2026-12-13",
+  "start": "2026-12-13T10:00:00-05:00",
+  "end": "2026-12-13T12:00:00-05:00",
+  "time": "10:00-12:00",
+  "answer": "yes",
+  "organizer": { "name": "Kelly", "self": false },
+  "url": "https://www.google.com/calendar/event?eid=…",
+  "lands": "task",
+  "note": null
+}
+```
+
+`lands` is `task`, `context`, `waiting_reply`, or `waiting_maybe`. `note`
+holds a summary in listings
+(`scope`, `root` with `value` and `hue`, `buffer`, `clock`,
+`bullet_lines`) and never holds text. Show mode adds `note.text` and
+`note.lines`; show is the only read path that prints the words. The list
+document is
+`{schema_version, ok, window: {from, to, start, end}, notes|events, orphans, warnings}`:
+`notes` when every row is noted, otherwise `events`. Orphans carry
+`calendar_id`, `event_id`, `series_id`, `scope`, `title`, and `reason`.

@@ -1212,6 +1212,24 @@ pub(crate) const ENTRIES: &[Row] = &[
     },
     Row {
         network: true,
+        slots: &[
+            ("QUERY", "text"),
+            ("query", "text"),
+            ("TEXT", "text"),
+            ("text", "text"),
+        ],
+        ..writes(
+            "gcal-note",
+            &["gcal", "note"],
+            "Private event notes for Calendar events",
+            &["calendar", "google", "gcal", "events", "note", "notes", "private"],
+            Policy::PreviewFirst,
+            Some(DRY_RUN),
+            300,
+        )
+    },
+    Row {
+        network: true,
         invalidates: &["gkeep"],
         ..reads(
             "gkeep-list",

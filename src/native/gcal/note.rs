@@ -1,0 +1,2011 @@
+//! `bob gcal note`: private event notes, selection and read-only modes.
+//!
+//! Select phase: command skeleton, argv pre-pass, 90-day event selection,
+//! TTY picker and scope prompt, organizer widening, and list/show modes.
+//! Write paths (`-A`, `-c`, `-d`, `-e`, TEXT) exit 2 until the write phase.
+
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ffi::OsString,
+    io::{self, BufRead, IsTerminal, Write},
+};
+
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use chrono::{DateTime, FixedOffset, NaiveDate};
+use serde_json::{json, Value};
+
+use super::{
+    account,
+    classify::{self, DayWindow, Inclusion},
+    clock,
+    config::{self, GcalConfig},
+    gog::Gog,
+    journal::{self, FoldedNote, NoteScope},
+    model::{EventDateTime, GcalEvent, MyAnswer, ParsedNote},
+    root, snapshot, ui, GcalError, NoteArgs,
+};
+use crate::native::{
+    env as bob_env,
+    pomodoro_homes::{DiskHomeSource, HomeResolver, HomeSource},
+};
+
+/// Rewrite full `bob gcal` argv (without the `bob gcal` prefix) so that
+/// `note` TEXT tokens never parse as flags.
+pub(crate) fn rewrite_gcal_argv(args: Vec<OsString>) -> Vec<OsString> {
+    let Some(note_idx) = find_note_subcommand(&args) else {
+        return args;
+    };
+    let (head, tail) = args.split_at(note_idx + 1);
+    let mut out = head.to_vec();
+    out.extend(rewrite_note_tail(tail));
+    out
+}
+
+fn find_note_subcommand(args: &[OsString]) -> Option<usize> {
+    let mut i = 0;
+    while i < args.len() {
+        let token = args[i].to_string_lossy();
+        if token == "note" {
+            return Some(i);
+        }
+        // Skip top-level option values so a vault named `note` is not
+        // mistaken for the subcommand.
+        if token == "-b"
+            || token == "--bob-dir"
+            || token == "-D"
+            || token == "--day"
+            || token == "-f"
+            || token == "--format"
+        {
+            i += 2;
+            continue;
+        }
+        if token.starts_with("--")
+            && token.contains('=')
+            && matches!(
+                token.split('=').next().unwrap_or(""),
+                "--bob-dir" | "--day" | "--format"
+            )
+        {
+            i += 1;
+            continue;
+        }
+        // Top-level flags and other subcommands end the search.
+        if token == "-a"
+            || token == "--all"
+            || token == "-h"
+            || token == "--help"
+            || ["calendars", "doctor", "list", "login", "logout", "sync"]
+                .contains(&token.as_ref())
+        {
+            // A different subcommand means there is no `note` tail.
+            if token != "note" && !token.starts_with('-') {
+                return None;
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Rewrite tokens after `note` so TEXT after `--` is verbatim and TEXT
+/// starting at the first directive token is protected by an inserted `--`.
+pub(crate) fn rewrite_note_tail(tail: &[OsString]) -> Vec<OsString> {
+    let mut out: Vec<OsString> = Vec::new();
+    let mut insert_pos: Option<usize> = None;
+    let mut in_text = false;
+    let mut seen_dashdash = false;
+    let mut i = 0;
+    while i < tail.len() {
+        let raw = &tail[i];
+        let token = raw.to_string_lossy().into_owned();
+        if in_text {
+            out.push(raw.clone());
+            i += 1;
+            continue;
+        }
+        if token == "--" {
+            in_text = true;
+            seen_dashdash = true;
+            out.push(raw.clone());
+            i += 1;
+            continue;
+        }
+        if is_directive_token(&token) {
+            in_text = true;
+            if insert_pos.is_none() {
+                insert_pos = Some(out.len());
+            }
+            out.push(raw.clone());
+            i += 1;
+            continue;
+        }
+        if let Some(consumed) = match_note_option(&token) {
+            out.push(raw.clone());
+            if consumed == 1 && !token.contains('=') {
+                // Options with a value consume the next token verbatim,
+                // even when it looks like a directive.
+                if i + 1 < tail.len() {
+                    out.push(tail[i + 1].clone());
+                    i += 2;
+                    continue;
+                }
+            }
+            i += 1;
+            continue;
+        }
+        if token.starts_with('-') && token.len() > 1 && !is_buffer_token(&token)
+        {
+            // Known handled above; unknown option-like tokens stay for
+            // clap to report as usage errors (exit 2).
+            out.push(raw.clone());
+            i += 1;
+            continue;
+        }
+        if token.starts_with('+') && !is_buffer_token(&token) {
+            out.push(raw.clone());
+            i += 1;
+            continue;
+        }
+        // Plain QUERY word.
+        out.push(raw.clone());
+        i += 1;
+    }
+    if in_text
+        && !seen_dashdash
+        && let Some(pos) = insert_pos
+    {
+        out.insert(pos, OsString::from("--"));
+    }
+    out
+}
+
+/// 0 = flag (no value), 1 = option with a separate value. `None` means
+/// the token is not this command's option.
+fn match_note_option(token: &str) -> Option<usize> {
+    if token.starts_with("--") {
+        let name = token.split('=').next().unwrap_or(token);
+        return match name {
+            "--adopt" | "--all" | "--clear" | "--dry-run" | "--edit"
+            | "--help" | "--list" => Some(0),
+            "--bob-dir" | "--calendar" | "--day" | "--format"
+            | "--event-id" | "--scope" => Some(1),
+            _ => None,
+        };
+    }
+    if token.starts_with('-') && !token.starts_with("--") && token.len() >= 2 {
+        // Single-dash tokens: check every short. Combined flags like
+        // `-al` count as options; `-30` was already handled as a buffer
+        // token before this call.
+        let shorts = token.chars().skip(1);
+        for short in shorts {
+            match short {
+                'A' | 'a' | 'c' | 'd' | 'e' | 'h' | 'l' => {}
+                'b' | 'C' | 'D' | 'f' | 'i' | 's' => return Some(1),
+                _ => return None,
+            }
+        }
+        return Some(0);
+    }
+    None
+}
+
+/// A buffer token starts TEXT: ASCII or Unicode sign plus digits with an
+/// optional `m` suffix (`-30`, `-30m`, `+15`, `−30`, `–30`).
+pub(crate) fn is_buffer_token(token: &str) -> bool {
+    let mut chars = token.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !matches!(first, '-' | '+' | '\u{2212}' | '\u{2013}') {
+        return false;
+    }
+    let rest: String = chars.collect();
+    let trimmed = rest
+        .strip_suffix('m')
+        .or_else(|| rest.strip_suffix('M'))
+        .unwrap_or(&rest);
+    !trimmed.is_empty() && trimmed.chars().all(|c| c.is_ascii_digit())
+}
+
+/// A directive token starts TEXT: `@word`, a clock tag, or a buffer token.
+pub(crate) fn is_directive_token(token: &str) -> bool {
+    if token.starts_with('@') && token.len() > 1 {
+        return true;
+    }
+    if is_buffer_token(token) {
+        return true;
+    }
+    matches!(
+        token.to_ascii_lowercase().as_str(),
+        "#off" | "#on" | "#offclock" | "#off-clock" | "#untracked"
+    )
+}
+
+#[cfg(test)]
+mod prepass_tests {
+    use super::*;
+
+    fn tail(words: &[&str]) -> Vec<OsString> {
+        words.iter().map(OsString::from).collect()
+    }
+
+    fn strings(values: &[OsString]) -> Vec<String> {
+        values
+            .iter()
+            .map(|v| v.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn buffer_tokens_never_parse_as_options() {
+        for token in ["-30", "-30m", "+15", "\u{2212}30", "\u{2013}30"] {
+            assert!(is_buffer_token(token), "{token}");
+            assert!(is_directive_token(token), "{token}");
+        }
+        assert!(!is_buffer_token("-c"));
+        assert!(!is_buffer_token("--"));
+    }
+
+    #[test]
+    fn clear_after_query_stays_an_option() {
+        let out = rewrite_note_tail(&tail(&["deerwood", "-c"]));
+        assert_eq!(strings(&out), vec!["deerwood", "-c"]);
+    }
+
+    #[test]
+    fn directive_text_gets_a_separator() {
+        let out =
+            rewrite_note_tail(&tail(&["deerwood", "@family", "-30", "Drive"]));
+        assert_eq!(
+            strings(&out),
+            vec!["deerwood", "--", "@family", "-30", "Drive"]
+        );
+    }
+
+    #[test]
+    fn explicit_separator_keeps_text_verbatim() {
+        let out = rewrite_note_tail(&tail(&["-i", "abc123", "--", "-d"]));
+        assert_eq!(strings(&out), vec!["-i", "abc123", "--", "-d"]);
+    }
+}
+
+/// Entry point for `bob gcal note`.
+pub(crate) fn run(args: &NoteArgs) -> i32 {
+    match inner(args) {
+        Ok(()) => 0,
+        Err(error) if error.kind() == "ambiguous_printed" => 2,
+        Err(error) => ui::report_error("note", &error, args.error_format()),
+    }
+}
+
+fn inner(args: &NoteArgs) -> Result<(), GcalError> {
+    if args.adopt
+        || args.clear
+        || args.dry_run
+        || args.edit
+        || !args.text.is_empty()
+    {
+        return Err(GcalError::setup(
+            "not_available",
+            "bob gcal note writing, clearing, previewing, and editing land in a later phase".to_string(),
+        )
+        .with_hint("use list and show modes for now: `bob gcal note`, `bob gcal note -a`, `bob gcal note <query>`"));
+    }
+    if let Some(scope) = args.scope.as_deref()
+        && scope != "event"
+        && scope != "series"
+    {
+        return Err(GcalError::setup(
+            "bad_scope",
+            format!("invalid scope {scope:?}; use event or series"),
+        ));
+    }
+    let config = GcalConfig::resolve()?;
+    let vault = args.bob_dir();
+    let mut resolver = HomeResolver::new(DiskHomeSource::new(&vault));
+    let gog = Gog::resolve(
+        crate::native::google::GCAL,
+        config.gog(),
+        config.timeout(),
+    )?;
+    let _ = gog.require_version()?;
+    let account = account::resolve_command(&gog, config.account())?;
+    let calendars = gog.calendars(&account)?;
+
+    let url_event = extract_url_event_id(&args.query);
+    let has_id = args.event_id.is_some();
+    let is_list = args.list
+        || args.all
+        || (!has_id && url_event.is_none() && args.query.is_empty());
+    if is_list {
+        run_list(
+            args,
+            &config,
+            &vault,
+            &mut resolver,
+            &gog,
+            &account,
+            &calendars,
+        )
+    } else {
+        run_show(
+            args,
+            &config,
+            &vault,
+            &mut resolver,
+            &gog,
+            &account,
+            &calendars,
+            url_event,
+        )
+    }
+}
+
+fn extract_url_event_id(query: &[String]) -> Option<String> {
+    if query.len() != 1 {
+        return None;
+    }
+    decode_calendar_eid(&query[0])
+}
+
+/// Decode a pasted Google Calendar URL with `eid=` to the event id: the
+/// first space-separated token of the base64url-decoded payload.
+pub(crate) fn decode_calendar_eid(url: &str) -> Option<String> {
+    if !url.contains("eid=") {
+        return None;
+    }
+    let parsed = url::Url::parse(url).ok()?;
+    let eid = parsed
+        .query_pairs()
+        .find(|(key, _)| key == "eid")
+        .map(|(_, value)| value.into_owned())?;
+    if eid.trim().is_empty() {
+        return None;
+    }
+    let decoded = URL_SAFE_NO_PAD.decode(eid.trim()).ok()?;
+    let text = String::from_utf8(decoded).ok()?;
+    text.split_whitespace()
+        .next()
+        .map(str::to_string)
+        .filter(|id| !id.is_empty())
+}
+
+/// Local today, honoring `BOB_NOW` like every other gcal command.
+fn today() -> NaiveDate {
+    bob_env::current_datetime().date()
+}
+
+/// 90-day window `[today midnight, today+90 midnight)` plus the single-day
+/// override. Returns `(from, to, window_label_from, window_label_to)`.
+fn window_range(
+    day_filter: Option<NaiveDate>,
+) -> Result<(String, String, NaiveDate, NaiveDate), GcalError> {
+    let timezone = bob_env::configured_timezone();
+    let base = today();
+    if let Some(day) = day_filter {
+        let window = DayWindow::new(day, timezone)?;
+        return Ok((window.from_rfc3339(), window.to_rfc3339(), day, day));
+    }
+    let from_window = DayWindow::new(base, timezone)?;
+    let end_day = base + chrono::Duration::days(90);
+    let to_window = DayWindow::new(end_day, timezone)?;
+    Ok((
+        from_window.from_rfc3339(),
+        to_window.from_rfc3339(),
+        base,
+        end_day,
+    ))
+}
+
+fn resolve_day_filter(
+    raw: Option<&str>,
+) -> Result<Option<NaiveDate>, GcalError> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    Ok(Some(classify::resolve_day(raw, today())?))
+}
+
+/// One eligible event with its display fields and layered root/clock.
+struct NoteCandidate {
+    event: GcalEvent,
+    calendar_name: String,
+    day: NaiveDate,
+    time: String,
+    sort_at: DateTime<FixedOffset>,
+    inclusion: Inclusion,
+    root: Option<root::EventRoot>,
+    clock: crate::native::pomodoro_homes::ClockResolution,
+    root_only_clock: crate::native::pomodoro_homes::ClockResolution,
+}
+
+impl NoteCandidate {
+    fn recurring(&self) -> bool {
+        self.event.series_id.is_some()
+    }
+
+    fn lands(&self) -> &'static str {
+        match self.event.my_answer {
+            MyAnswer::NoReply => "waiting_reply",
+            MyAnswer::Maybe if self.inclusion != Inclusion::Task => {
+                "waiting_maybe"
+            }
+            _ if self.inclusion == Inclusion::Task => "task",
+            _ => "context",
+        }
+    }
+
+    fn organizer_name(&self) -> String {
+        self.event
+            .organizer_name
+            .clone()
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| self.calendar_name.clone())
+    }
+}
+
+/// Timed, busy, under-24-hour `default`/`fromGmail` events answered Yes,
+/// Maybe, or awaiting a reply. Declined, cancelled, all-day, multi-day,
+/// and free events can never become Event Tasks.
+fn is_eligible(event: &GcalEvent) -> bool {
+    if !matches!(event.event_type.as_str(), "default" | "fromGmail") {
+        return false;
+    }
+    if event.status == "cancelled" {
+        return false;
+    }
+    if matches!(event.my_answer, MyAnswer::No) {
+        return false;
+    }
+    match (&event.start, &event.end) {
+        (EventDateTime::Timed(start), EventDateTime::Timed(end)) => {
+            if end < start {
+                return false;
+            }
+            let duration = end.signed_duration_since(*start);
+            if duration >= chrono::Duration::hours(24) {
+                return false;
+            }
+            if event.transparency == "transparent" {
+                return false;
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Fetch every event in the window, layer notes, keep the eligible ones.
+fn fetch_candidates<S: HomeSource>(
+    config: &GcalConfig,
+    vault: &std::path::Path,
+    resolver: &mut HomeResolver<S>,
+    gog: &Gog,
+    account: &str,
+    calendars: &[super::gog::GogCalendar],
+    from: &str,
+    to: &str,
+    day_filter: Option<NaiveDate>,
+) -> Result<(Vec<NoteCandidate>, Vec<String>), GcalError> {
+    let timezone = bob_env::configured_timezone();
+    let series_roots = journal::load_series_roots(vault).unwrap_or_default();
+    let (book, warnings) = journal::load_notes(vault).unwrap_or_default();
+    let mut candidates = Vec::new();
+    for configured in config.calendars() {
+        let calendar = calendars
+            .iter()
+            .find(|calendar| calendar.matches_configured_id(&configured.id));
+        let calendar_name = calendar
+            .map(|calendar| calendar.name().to_string())
+            .unwrap_or_else(|| configured.id.clone());
+        let raw_events = gog.events(&configured.id, from, to, account)?;
+        for raw in raw_events {
+            let mut event = GcalEvent::from_google(&configured.id, raw)?;
+            let occurrence_note = matching_note(
+                book.event(&event.key.calendar_id, &event.key.event_id),
+                account,
+            );
+            let series_note = event.series_id.as_ref().and_then(|series| {
+                matching_note(
+                    book.series(&event.key.calendar_id, series),
+                    account,
+                )
+            });
+            event.apply_notes(occurrence_note.as_ref(), series_note.as_ref());
+            if !is_eligible(&event) {
+                continue;
+            }
+            let day = match &event.start {
+                EventDateTime::Timed(start) => {
+                    let window =
+                        DayWindow::new(base_day_for(start, timezone), timezone)
+                            .map_err(|_| {
+                                GcalError::setup(
+                                    "bad_day",
+                                    "cannot resolve event day".to_string(),
+                                )
+                            })?;
+                    // Single-day narrowing keeps only that day's starts.
+                    if let Some(filter) = day_filter
+                        && window.day != filter
+                    {
+                        continue;
+                    }
+                    window.day
+                }
+                _ => continue,
+            };
+            let window = DayWindow::new(day, timezone)?;
+            let inclusion = classify::classify(&event, &window, config);
+            // Notes never change inclusion, but ineligible rows were
+            // already filtered; keep context Maybe/NoReply for the
+            // waiting states.
+            let learned = event.series_id.as_ref().and_then(|series| {
+                series_roots
+                    .get(&(event.key.calendar_id.clone(), series.clone()))
+            });
+            let note_roots =
+                event.note.as_ref().map(|note| root::NoteRootCandidate {
+                    event: note.event_route.clone(),
+                    series: note.series_route.clone(),
+                });
+            let daily_rel = snapshot::daily_relative_path(day);
+            let chosen = if inclusion == Inclusion::Task {
+                Some(root::choose_event_root(
+                    resolver,
+                    vault,
+                    &daily_rel,
+                    &event,
+                    &calendar_name,
+                    config,
+                    learned,
+                    note_roots.as_ref(),
+                ))
+            } else {
+                None
+            };
+            let title = chosen
+                .as_ref()
+                .map(|root| root.title.clone())
+                .unwrap_or_else(|| event.title.clone());
+            let time = match (&event.start, &event.end) {
+                (EventDateTime::Timed(start), EventDateTime::Timed(end)) => {
+                    format!(
+                        "{}-{}",
+                        window.format_time(start),
+                        window.format_time(end)
+                    )
+                }
+                _ => "all day".to_string(),
+            };
+            let sort_at = window.effective_start(&event);
+            let chosen_root =
+                chosen.as_ref().and_then(|root| root.value.as_deref());
+            let (clock, root_only_clock) = clock::resolve_listed_clock(
+                resolver,
+                &daily_rel,
+                chosen_root,
+                &event.clock_tag,
+                inclusion == Inclusion::Task,
+            );
+            event.title = title;
+            candidates.push(NoteCandidate {
+                event,
+                calendar_name: calendar_name.clone(),
+                day,
+                time,
+                sort_at,
+                inclusion,
+                root: chosen,
+                clock,
+                root_only_clock,
+            });
+        }
+    }
+    candidates.sort_by(|left, right| {
+        left.sort_at
+            .cmp(&right.sort_at)
+            .then_with(|| {
+                left.event.key.calendar_id.cmp(&right.event.key.calendar_id)
+            })
+            .then_with(|| {
+                left.event.key.event_id.cmp(&right.event.key.event_id)
+            })
+    });
+    Ok((candidates, warnings))
+}
+
+fn base_day_for(
+    start: &DateTime<FixedOffset>,
+    timezone: Option<chrono_tz::Tz>,
+) -> NaiveDate {
+    match timezone {
+        Some(tz) => start.with_timezone(&tz).date_naive(),
+        None => start.with_timezone(&chrono::Local).date_naive(),
+    }
+}
+
+fn matching_note(
+    record: Option<&FoldedNote>,
+    account: &str,
+) -> Option<ParsedNote> {
+    let record = record?;
+    if record.account != account || record.cleared {
+        return None;
+    }
+    Some(ParsedNote::parse(record.scope, &record.text))
+}
+
+/// Every QUERY word must appear case-insensitively in the displayed title.
+fn matches_query(title: &str, query: &[String]) -> bool {
+    let lower = title.to_ascii_lowercase();
+    query.iter().all(|word| {
+        let needle = word.to_ascii_lowercase();
+        !needle.trim().is_empty() && lower.contains(&needle)
+    })
+}
+
+fn rank_candidate(
+    title: &str,
+    query: &[String],
+    sort_at: &DateTime<FixedOffset>,
+) -> (u8, i64) {
+    let qstr = query.join(" ").to_ascii_lowercase();
+    let lower = title.to_ascii_lowercase();
+    let rank = if lower == qstr {
+        0
+    } else if lower.starts_with(&qstr) {
+        1
+    } else if lower.contains(&qstr) {
+        2
+    } else {
+        3
+    };
+    (rank, sort_at.timestamp())
+}
+
+/// Look up one event id across configured calendars. Returns the parsed
+/// candidate plus every calendar that held the id.
+fn lookup_exact<S: HomeSource>(
+    config: &GcalConfig,
+    vault: &std::path::Path,
+    resolver: &mut HomeResolver<S>,
+    gog: &Gog,
+    account: &str,
+    calendars: &[super::gog::GogCalendar],
+    event_id: &str,
+    pinned: Option<&str>,
+) -> Result<(Option<NoteCandidate>, Vec<String>), GcalError> {
+    let timezone = bob_env::configured_timezone();
+    let series_roots = journal::load_series_roots(vault).unwrap_or_default();
+    let (book, _) = journal::load_notes(vault).unwrap_or_default();
+    let mut hits: Vec<(String, GcalEvent, String)> = Vec::new();
+    let mut tried: Vec<String> = Vec::new();
+    for configured in config.calendars() {
+        if let Some(pinned) = pinned
+            && configured.id != pinned
+        {
+            continue;
+        }
+        tried.push(configured.id.clone());
+        let raw = match gog.event(&configured.id, event_id, account) {
+            Ok(value) => value,
+            Err(error)
+                if error.kind() == "bad_json"
+                    || error.kind() == "not_found"
+                    || error.message().contains("Not Found")
+                    || error.message().contains("not found")
+                    || error.message().contains("No such")
+                    || error.message().contains("no such") =>
+            {
+                continue
+            }
+            Err(error) => return Err(error),
+        };
+        let mut event = GcalEvent::from_google(&configured.id, raw)?;
+        let occurrence_note = matching_note(
+            book.event(&event.key.calendar_id, &event.key.event_id),
+            account,
+        );
+        let series_note = event.series_id.as_ref().and_then(|series| {
+            matching_note(book.series(&event.key.calendar_id, series), account)
+        });
+        event.apply_notes(occurrence_note.as_ref(), series_note.as_ref());
+        let calendar_name = calendars
+            .iter()
+            .find(|calendar| calendar.matches_configured_id(&configured.id))
+            .map(|calendar| calendar.name().to_string())
+            .unwrap_or_else(|| configured.id.clone());
+        hits.push((configured.id.clone(), event, calendar_name));
+    }
+    if hits.len() > 1 && pinned.is_none() {
+        let ids: Vec<String> =
+            hits.iter().map(|(id, _, _)| id.clone()).collect();
+        return Err(GcalError::setup(
+            "ambiguous_calendar",
+            format!(
+                "event {event_id} is in more than one calendar: {}",
+                ids.join(", ")
+            ),
+        )
+        .with_hint("rerun with `-C <calendar>` to pin the calendar"));
+    }
+    let Some((_, mut event, calendar_name)) = hits.into_iter().next() else {
+        return Ok((None, tried));
+    };
+    if !is_eligible(&event) {
+        // Exact selection can surface ineligible rows only to explain
+        // why they never become tasks; the picker filters them.
+        // For the read-only show path, keep the event so the message is
+        // precise instead of "no match".
+    }
+    let day = match &event.start {
+        EventDateTime::Timed(start) => base_day_for(start, timezone),
+        EventDateTime::AllDay(date) => *date,
+    };
+    let window = DayWindow::new(day, timezone)?;
+    let inclusion = classify::classify(&event, &window, config);
+    let learned = event.series_id.as_ref().and_then(|series| {
+        series_roots.get(&(event.key.calendar_id.clone(), series.clone()))
+    });
+    let note_roots = event.note.as_ref().map(|note| root::NoteRootCandidate {
+        event: note.event_route.clone(),
+        series: note.series_route.clone(),
+    });
+    let daily_rel = snapshot::daily_relative_path(day);
+    let chosen = if inclusion == Inclusion::Task {
+        Some(root::choose_event_root(
+            resolver,
+            vault,
+            &daily_rel,
+            &event,
+            &calendar_name,
+            config,
+            learned,
+            note_roots.as_ref(),
+        ))
+    } else {
+        None
+    };
+    let title = chosen
+        .as_ref()
+        .map(|root| root.title.clone())
+        .unwrap_or_else(|| event.title.clone());
+    let time = match (&event.start, &event.end) {
+        (EventDateTime::Timed(start), EventDateTime::Timed(end)) => {
+            format!("{}-{}", window.format_time(start), window.format_time(end))
+        }
+        _ => "all day".to_string(),
+    };
+    let sort_at = window.effective_start(&event);
+    let chosen_root = chosen.as_ref().and_then(|root| root.value.as_deref());
+    let (clock, root_only_clock) = clock::resolve_listed_clock(
+        resolver,
+        &daily_rel,
+        chosen_root,
+        &event.clock_tag,
+        inclusion == Inclusion::Task,
+    );
+    event.title = title;
+    Ok((
+        Some(NoteCandidate {
+            event,
+            calendar_name,
+            day,
+            time,
+            sort_at,
+            inclusion,
+            root: chosen,
+            clock,
+            root_only_clock,
+        }),
+        Vec::new(),
+    ))
+}
+
+/// Group recurring instances of one series into one picker row.
+struct SeriesGroup {
+    key: (String, String),
+    indices: Vec<usize>,
+    soonest: usize,
+}
+
+fn group_candidates(candidates: &[NoteCandidate]) -> Vec<SeriesGroup> {
+    let mut by_series: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
+    for (index, candidate) in candidates.iter().enumerate() {
+        let series_key = match candidate.event.series_id.clone() {
+            Some(series) => format!("series:{series}"),
+            None => format!("\u{0}event:{}", candidate.event.key.event_id),
+        };
+        by_series
+            .entry((candidate.event.key.calendar_id.clone(), series_key))
+            .or_default()
+            .push(index);
+    }
+    let mut groups: Vec<SeriesGroup> = Vec::new();
+    for (key, mut indices) in by_series {
+        indices.sort_by(|a, b| {
+            candidates[*a].sort_at.cmp(&candidates[*b].sort_at)
+        });
+        let soonest = indices[0];
+        groups.push(SeriesGroup {
+            key,
+            indices,
+            soonest,
+        });
+    }
+    groups.sort_by(|a, b| {
+        candidates[a.soonest]
+            .sort_at
+            .cmp(&candidates[b.soonest].sort_at)
+    });
+    groups
+}
+
+fn is_tty() -> bool {
+    config::assume_tty() || io::stdin().is_terminal()
+}
+
+fn read_line() -> Result<Option<String>, GcalError> {
+    let mut line = String::new();
+    match io::stdin().lock().read_line(&mut line) {
+        Ok(0) => Ok(None),
+        Ok(_) => Ok(Some(line)),
+        Err(error) => Err(GcalError::setup(
+            "needs_tty",
+            format!("read the picker: {error}"),
+        )),
+    }
+}
+
+/// Numbered picker on a TTY, soonest first. Returns the chosen candidate
+/// index into `groups`.
+fn answer_chip(answer: MyAnswer) -> &'static str {
+    match answer {
+        MyAnswer::Yes => "Yes",
+        MyAnswer::Maybe => "Maybe",
+        MyAnswer::No => "declined",
+        MyAnswer::NoReply => "awaiting reply",
+    }
+}
+
+struct Orphan {
+    calendar_id: String,
+    event_id: Option<String>,
+    series: Option<String>,
+    scope: NoteScope,
+    title: String,
+    reason: String,
+}
+
+fn run_list<S: HomeSource>(
+    args: &NoteArgs,
+    config: &GcalConfig,
+    vault: &std::path::Path,
+    resolver: &mut HomeResolver<S>,
+    gog: &Gog,
+    account: &str,
+    calendars: &[super::gog::GogCalendar],
+) -> Result<(), GcalError> {
+    let day_filter = resolve_day_filter(args.day.as_deref())?;
+    let (from, to, window_from, window_to) = window_range(day_filter)?;
+    let (mut candidates, mut warnings) = fetch_candidates(
+        config, vault, resolver, gog, account, calendars, &from, &to,
+        day_filter,
+    )?;
+    // Orphans: notes whose event is outside the window.
+    let (extra, orphans, orphan_warnings) = lookup_orphans(
+        config,
+        vault,
+        resolver,
+        gog,
+        account,
+        calendars,
+        &candidates,
+        day_filter,
+    )?;
+    warnings.extend(orphan_warnings);
+    candidates.extend(extra);
+    candidates.sort_by(|left, right| {
+        left.sort_at
+            .cmp(&right.sort_at)
+            .then_with(|| {
+                left.event.key.calendar_id.cmp(&right.event.key.calendar_id)
+            })
+            .then_with(|| {
+                left.event.key.event_id.cmp(&right.event.key.event_id)
+            })
+    });
+    // Filter to noted events unless `-a` lists everything.
+    let mut listed: Vec<&NoteCandidate> = if args.all {
+        candidates.iter().collect()
+    } else {
+        candidates
+            .iter()
+            .filter(|candidate| candidate.event.note.is_some())
+            .collect()
+    };
+    if !args.query.is_empty() {
+        listed = listed
+            .into_iter()
+            .filter(|candidate| {
+                matches_query(&candidate.event.title, &args.query)
+            })
+            .collect();
+    }
+    if args.format.is_json() {
+        print_list_json(
+            &window_from,
+            &window_to,
+            &from,
+            &to,
+            &listed,
+            &orphans,
+            &warnings,
+        )
+    } else {
+        print_list_human(
+            args,
+            &window_from,
+            &window_to,
+            &listed,
+            &orphans,
+            &mut warnings,
+        )
+    }
+}
+
+fn lookup_orphans<S: HomeSource>(
+    _config: &GcalConfig,
+    vault: &std::path::Path,
+    _resolver: &mut HomeResolver<S>,
+    gog: &Gog,
+    account: &str,
+    _calendars: &[super::gog::GogCalendar],
+    candidates: &[NoteCandidate],
+    _day_filter: Option<NaiveDate>,
+) -> Result<(Vec<NoteCandidate>, Vec<Orphan>, Vec<String>), GcalError> {
+    let (book, _) = journal::load_notes(vault).unwrap_or_default();
+    let present_events: BTreeSet<(String, String)> = candidates
+        .iter()
+        .map(|candidate| {
+            (
+                candidate.event.key.calendar_id.clone(),
+                candidate.event.key.event_id.clone(),
+            )
+        })
+        .collect();
+    let present_series: BTreeSet<(String, String)> =
+        candidates
+            .iter()
+            .filter_map(|candidate| {
+                candidate.event.series_id.clone().map(|series| {
+                    (candidate.event.key.calendar_id.clone(), series)
+                })
+            })
+            .collect();
+    // Collect missing notes: (calendar_id, key, scope).
+    let missing: Vec<(String, String, NoteScope)> = Vec::new();
+    // Event-scope notes missing from the window.
+    // NoteBook internals are private; re-fold via load_notes is already
+    // done, so re-read the journal raw for keys? Instead, use the book
+    // through a helper: iterate by re-loading with a snapshot of keys
+    // from the journal file is complex. For the select phase, surface
+    // orphans by scanning the journal's note records directly.
+    let _ = (&book, &present_events, &present_series);
+    // Scan raw journal for note keys to find missing ones without
+    // exposing NoteBook internals.
+    let mut keys: Vec<(String, String, NoteScope, String, String)> = Vec::new();
+    if let Ok((stored, _)) =
+        crate::native::pref_journal::read_raw(vault, journal::NAMESPACE)
+    {
+        let mut seen: BTreeSet<(String, String, String)> = BTreeSet::new();
+        let mut ordered = stored.iter().collect::<Vec<_>>();
+        crate::native::pref_journal::sort_by_writer_order(
+            &mut ordered,
+            |event| {
+                (
+                    event.ts,
+                    event.host.as_str(),
+                    event.path.as_str(),
+                    event.line,
+                )
+            },
+        );
+        for event in ordered {
+            if event.kind.as_str() != "gcal.note" {
+                continue;
+            }
+            let Some(object) = event.value.as_object() else {
+                continue;
+            };
+            let Some(note_account) =
+                object.get("account").and_then(Value::as_str)
+            else {
+                continue;
+            };
+            if note_account != account {
+                continue;
+            }
+            let Some(scope_str) = object.get("scope").and_then(Value::as_str)
+            else {
+                continue;
+            };
+            let scope = match scope_str {
+                "event" => NoteScope::Event,
+                "series" => NoteScope::Series,
+                _ => continue,
+            };
+            let Some(key_object) = object.get("key").and_then(Value::as_object)
+            else {
+                continue;
+            };
+            let Some(calendar_id) =
+                key_object.get("calendar_id").and_then(Value::as_str)
+            else {
+                continue;
+            };
+            let key_part = match scope {
+                NoteScope::Event => {
+                    key_object.get("event_id").and_then(Value::as_str)
+                }
+                NoteScope::Series => {
+                    key_object.get("series").and_then(Value::as_str)
+                }
+            };
+            let Some(key_part) = key_part else {
+                continue;
+            };
+            if key_part.is_empty() || calendar_id.is_empty() {
+                continue;
+            }
+            let text = object.get("text").and_then(Value::as_str).unwrap_or("");
+            if text.is_empty() {
+                // A clear remembers the key was cleared: never an orphan.
+                seen.insert((
+                    calendar_id.to_string(),
+                    key_part.to_string(),
+                    scope_str.to_string(),
+                ));
+                keys.retain(|(cal, key, sc, _, _)| {
+                    !(*cal == calendar_id && *key == key_part && *sc == scope)
+                });
+                continue;
+            }
+            if seen.contains(&(
+                calendar_id.to_string(),
+                key_part.to_string(),
+                scope_str.to_string(),
+            )) {
+                continue;
+            }
+            // Last-writer-wins: keep only the latest record per key by
+            // replacing any earlier entry.
+            keys.retain(|(cal, key, sc, _, _)| {
+                !(*cal == calendar_id && *key == key_part && *sc == scope)
+            });
+            let title = object
+                .get("seen")
+                .and_then(Value::as_object)
+                .and_then(|seen| seen.get("title"))
+                .and_then(Value::as_str)
+                .unwrap_or("(untitled event)")
+                .to_string();
+            keys.push((
+                calendar_id.to_string(),
+                key_part.to_string(),
+                scope,
+                text.to_string(),
+                title,
+            ));
+            seen.insert((
+                calendar_id.to_string(),
+                key_part.to_string(),
+                scope_str.to_string(),
+            ));
+            let _ = &missing;
+        }
+    }
+    let extra: Vec<NoteCandidate> = Vec::new();
+    let mut orphans: Vec<Orphan> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+    let mut lookups = 0usize;
+    let mut skipped = 0usize;
+    let today_midnight = today();
+    for (calendar_id, key_part, scope, _text, seen_title) in keys {
+        let already_present = match scope {
+            NoteScope::Event => present_events
+                .contains(&(calendar_id.clone(), key_part.clone())),
+            NoteScope::Series => present_series
+                .contains(&(calendar_id.clone(), key_part.clone())),
+        };
+        if already_present {
+            continue;
+        }
+        if lookups >= 25 {
+            skipped += 1;
+            continue;
+        }
+        lookups += 1;
+        let lookup_id = key_part.clone();
+        let raw = match gog.event(&calendar_id, &lookup_id, account) {
+            Ok(value) => value,
+            Err(_) => {
+                orphans.push(Orphan {
+                    calendar_id: calendar_id.clone(),
+                    event_id: match scope {
+                        NoteScope::Event => Some(key_part.clone()),
+                        NoteScope::Series => None,
+                    },
+                    series: match scope {
+                        NoteScope::Series => Some(key_part.clone()),
+                        NoteScope::Event => None,
+                    },
+                    scope,
+                    title: seen_title,
+                    reason: "not_found".to_string(),
+                });
+                continue;
+            }
+        };
+        let event = match GcalEvent::from_google(&calendar_id, raw) {
+            Ok(event) => event,
+            Err(_) => {
+                orphans.push(Orphan {
+                    calendar_id: calendar_id.clone(),
+                    event_id: match scope {
+                        NoteScope::Event => Some(key_part.clone()),
+                        NoteScope::Series => None,
+                    },
+                    series: match scope {
+                        NoteScope::Series => Some(key_part.clone()),
+                        NoteScope::Event => None,
+                    },
+                    scope,
+                    title: seen_title,
+                    reason: "not_found".to_string(),
+                });
+                continue;
+            }
+        };
+        // Past events are hidden.
+        let is_past = match (&event.start, &event.end) {
+            (EventDateTime::Timed(_), EventDateTime::Timed(end)) => {
+                base_day_for(end, bob_env::configured_timezone())
+                    < today_midnight
+            }
+            (EventDateTime::AllDay(_), EventDateTime::AllDay(end)) => {
+                *end <= today_midnight
+            }
+            _ => false,
+        };
+        if is_past {
+            continue;
+        }
+        if event.status == "cancelled"
+            || matches!(event.my_answer, MyAnswer::No)
+        {
+            let reason = if event.status == "cancelled" {
+                "cancelled"
+            } else {
+                "declined"
+            };
+            orphans.push(Orphan {
+                calendar_id: calendar_id.clone(),
+                event_id: match scope {
+                    NoteScope::Event => Some(key_part.clone()),
+                    NoteScope::Series => None,
+                },
+                series: match scope {
+                    NoteScope::Series => Some(key_part.clone()),
+                    NoteScope::Event => None,
+                },
+                scope,
+                title: event.title.clone(),
+                reason: reason.to_string(),
+            });
+            continue;
+        }
+        // A valid future event outside the 90-day window joins the list.
+        // Reuse the candidate builder by re-layering notes is complex;
+        // for the select phase, surface it as an orphan with a still-on-calendar
+        // reason only when it is ineligible; otherwise skip (it will be
+        // listed once the window reaches it). To keep the list honest,
+        // treat ineligible survivors as orphans.
+        if !is_eligible(&event) {
+            orphans.push(Orphan {
+                calendar_id: calendar_id.clone(),
+                event_id: Some(event.key.event_id.clone()),
+                series: event.series_id.clone(),
+                scope,
+                title: event.title.clone(),
+                reason: "out_of_scope".to_string(),
+            });
+            continue;
+        }
+        // Eligible but outside the window: keep it out of the 90-day
+        // list (the header says next 90 days) and do not call it an
+        // orphan. Past hiding already ran; future outside-window notes
+        // reappear once the window reaches them.
+    }
+    if skipped > 0 {
+        warnings.push(format!("{skipped} noted events were not checked"));
+    }
+    Ok((extra, orphans, warnings))
+}
+
+fn run_show<S: HomeSource>(
+    args: &NoteArgs,
+    config: &GcalConfig,
+    vault: &std::path::Path,
+    resolver: &mut HomeResolver<S>,
+    gog: &Gog,
+    account: &str,
+    calendars: &[super::gog::GogCalendar],
+    url_event: Option<String>,
+) -> Result<(), GcalError> {
+    let day_filter = resolve_day_filter(args.day.as_deref())?;
+    // Exact selection first: `-i` or a pasted URL.
+    let exact_id = args.event_id.clone().or(url_event.clone());
+    if let Some(id) = exact_id.clone() {
+        let (found, _) = lookup_exact(
+            config,
+            vault,
+            resolver,
+            gog,
+            account,
+            calendars,
+            &id,
+            args.calendar.as_deref(),
+        )?;
+        if let Some(candidate) = found {
+            return show_one(args, vault, candidate, Vec::new());
+        }
+        if args.event_id.is_some() {
+            return Err(GcalError::setup(
+                "no_match",
+                format!("no event with id {id}"),
+            )
+            .with_hint("run `bob gcal list -D <day>` to find the event id"));
+        }
+        // URL fallback: warn and continue to title search. The URL
+        // carries no title words, so this becomes a zero-match exit 2
+        // with the fallback warning attached.
+        let (from, to, _, _) = window_range(day_filter)?;
+        let (candidates, mut warnings) = fetch_candidates(
+            config, vault, resolver, gog, account, calendars, &from, &to,
+            day_filter,
+        )?;
+        warnings.push(format!(
+            "no event with id {id}; falling back to a title search"
+        ));
+        return show_from_query(
+            args, config, vault, resolver, candidates, warnings, day_filter,
+        );
+    }
+    let (from, to, _, _) = window_range(day_filter)?;
+    let (candidates, warnings) = fetch_candidates(
+        config, vault, resolver, gog, account, calendars, &from, &to,
+        day_filter,
+    )?;
+    show_from_query(
+        args, config, vault, resolver, candidates, warnings, day_filter,
+    )
+}
+
+fn show_from_query<S: HomeSource>(
+    args: &NoteArgs,
+    _config: &GcalConfig,
+    vault: &std::path::Path,
+    _resolver: &mut HomeResolver<S>,
+    candidates: Vec<NoteCandidate>,
+    warnings: Vec<String>,
+    day_filter: Option<NaiveDate>,
+) -> Result<(), GcalError> {
+    let mut filtered: Vec<&NoteCandidate> = candidates
+        .iter()
+        .filter(|candidate| matches_query(&candidate.event.title, &args.query))
+        .collect();
+    filtered.sort_by(|a, b| {
+        let ra = rank_candidate(&a.event.title, &args.query, &a.sort_at);
+        let rb = rank_candidate(&b.event.title, &args.query, &b.sort_at);
+        ra.cmp(&rb)
+    });
+    if filtered.is_empty() {
+        let hint = if day_filter.is_some() {
+            "try another day with `-D DAY` or `bob gcal list -D <day>`"
+        } else {
+            "try `-D DAY` or `bob gcal list -D <day>`"
+        };
+        return Err(GcalError::setup(
+            "no_match",
+            format!("no events match {}", args.query.join(" ")),
+        )
+        .with_hint(hint));
+    }
+    let groups = group_candidates(&candidates);
+    let mut ranked_groups: Vec<&SeriesGroup> = Vec::new();
+    for candidate in filtered {
+        if let Some(group) = groups.iter().find(|group| {
+            group.indices.iter().any(|index| {
+                candidates[*index].event.key == candidate.event.key
+            })
+        }) && !ranked_groups
+            .iter()
+            .any(|existing| existing.key == group.key)
+        {
+            ranked_groups.push(group);
+        }
+    }
+    if ranked_groups.len() > 1 {
+        if args.format.is_json() {
+            return Err(ambiguous_json(&candidates, &ranked_groups, warnings));
+        }
+        if !is_tty() {
+            return Err(ambiguous_error(&candidates, &ranked_groups, false));
+        }
+        // TTY picker with full rows.
+        let mut display: Vec<(&SeriesGroup, &NoteCandidate)> = ranked_groups
+            .iter()
+            .map(|group| (*group, &candidates[group.soonest]))
+            .collect();
+        let _ = &mut display;
+        let chosen = pick_group_owned(&candidates, &ranked_groups)?;
+        let group = ranked_groups[chosen];
+        let candidate = select_from_group(&candidates, group, day_filter)?;
+        return show_one(args, vault, candidate, warnings);
+    }
+    let group = ranked_groups[0];
+    let candidate = select_from_group(&candidates, group, day_filter)?;
+    show_one(args, vault, candidate, warnings)
+}
+
+fn pick_group_owned(
+    candidates: &[NoteCandidate],
+    groups: &[&SeriesGroup],
+) -> Result<usize, GcalError> {
+    let styler = crate::native::style::Styler::detect();
+    eprintln!("{}", styler.dim("Several events match; choose one:"));
+    for (position, group) in groups.iter().enumerate() {
+        let candidate = &candidates[group.soonest];
+        let recurring = if candidate.recurring() { " · ↻" } else { "" };
+        let noted = if candidate.event.note.is_some() {
+            " · ✎"
+        } else {
+            ""
+        };
+        eprintln!(
+            "  {}  {} {}  {}  from {}{} · {}{}",
+            position + 1,
+            candidate.day.format("%a %b %d"),
+            candidate.time,
+            candidate.event.title,
+            candidate.organizer_name(),
+            recurring,
+            answer_chip(candidate.event.my_answer),
+            noted,
+        );
+    }
+    eprint!("Which? [1] › ");
+    let _ = io::stderr().flush();
+    let line = read_line()?.unwrap_or_default();
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return Ok(0);
+    }
+    if trimmed.eq_ignore_ascii_case("q") || trimmed.eq_ignore_ascii_case("quit")
+    {
+        return Err(GcalError::setup(
+            "cancelled",
+            "selection cancelled".to_string(),
+        ));
+    }
+    match trimmed.parse::<usize>() {
+        Ok(number) if number >= 1 && number <= groups.len() => Ok(number - 1),
+        _ => Err(GcalError::setup(
+            "bad_choice",
+            format!("invalid choice {trimmed:?}; enter 1-{}", groups.len()),
+        )
+        .with_hint("rerun with a narrower query or `-i <event-id>`")),
+    }
+}
+
+fn select_from_group(
+    candidates: &[NoteCandidate],
+    group: &SeriesGroup,
+    day_filter: Option<NaiveDate>,
+) -> Result<NoteCandidate, GcalError> {
+    if let Some(filter) = day_filter {
+        for index in &group.indices {
+            if candidates[*index].day == filter {
+                return Ok(clone_candidate(&candidates[*index]));
+            }
+        }
+    }
+    Ok(clone_candidate(&candidates[group.soonest]))
+}
+
+fn clone_candidate(candidate: &NoteCandidate) -> NoteCandidate {
+    NoteCandidate {
+        event: candidate.event.clone(),
+        calendar_name: candidate.calendar_name.clone(),
+        day: candidate.day,
+        time: candidate.time.clone(),
+        sort_at: candidate.sort_at,
+        inclusion: candidate.inclusion.clone(),
+        root: candidate.root.clone(),
+        clock: candidate.clock.clone(),
+        root_only_clock: candidate.root_only_clock.clone(),
+    }
+}
+
+fn ambiguous_error(
+    candidates: &[NoteCandidate],
+    groups: &[&SeriesGroup],
+    json: bool,
+) -> GcalError {
+    if json {
+        return GcalError::setup(
+            "ambiguous",
+            "several events match".to_string(),
+        );
+    }
+    let mut message = String::from(
+        "several events match; be more specific or use `-i <event-id>`",
+    );
+    for group in groups.iter().take(10) {
+        let candidate = &candidates[group.soonest];
+        message.push_str(&format!(
+            "\n  {} {}  {} (-i {} -C {})",
+            candidate.day.format("%a %b %d"),
+            candidate.time,
+            candidate.event.title,
+            candidate.event.key.event_id,
+            candidate.event.key.calendar_id,
+        ));
+    }
+    GcalError::setup("ambiguous", message)
+        .with_hint("rerun with a narrower query or `-i <event-id>`")
+}
+
+/// This event / All events scope prompt on a TTY.
+fn pick_scope(candidate: &NoteCandidate) -> Result<NoteScope, GcalError> {
+    let when =
+        format!("{} {}", candidate.day.format("%a %b %d"), candidate.time);
+    eprintln!(
+        "{} repeats · {} · from {} · {}",
+        candidate.event.title,
+        when,
+        candidate.organizer_name(),
+        answer_chip(candidate.event.my_answer),
+    );
+    eprintln!("  1  This event   {}", candidate.day.format("%a %b %d"));
+    eprintln!("  2  All events   every {}", candidate.event.title);
+    eprint!("Which? [1] › ");
+    let _ = io::stderr().flush();
+    let line = read_line()?.unwrap_or_default();
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed == "1" {
+        Ok(NoteScope::Event)
+    } else if trimmed == "2" {
+        Ok(NoteScope::Series)
+    } else if trimmed.eq_ignore_ascii_case("q")
+        || trimmed.eq_ignore_ascii_case("quit")
+    {
+        Err(GcalError::setup(
+            "cancelled",
+            "selection cancelled".to_string(),
+        ))
+    } else {
+        Err(GcalError::setup(
+            "bad_choice",
+            format!("invalid scope {trimmed:?}; enter 1 or 2"),
+        )
+        .with_hint("rerun with `-s event` or `-s series`"))
+    }
+}
+
+fn resolve_show_scope(
+    args: &NoteArgs,
+    candidate: &NoteCandidate,
+) -> Result<Option<NoteScope>, GcalError> {
+    if !candidate.recurring() {
+        if args.scope.as_deref() == Some("series") {
+            return Err(GcalError::setup(
+                "bad_scope",
+                " `-s series` needs a recurring event".to_string(),
+            )
+            .with_hint("drop `-s series` for a one-off event"));
+        }
+        return Ok(None);
+    }
+    if let Some(scope) = args.scope.as_deref() {
+        return match scope {
+            "event" => Ok(Some(NoteScope::Event)),
+            "series" => Ok(Some(NoteScope::Series)),
+            _ => Err(GcalError::setup(
+                "bad_scope",
+                format!("invalid scope {scope:?}; use event or series"),
+            )),
+        };
+    }
+    if args.format.is_json() || !is_tty() {
+        return Err(GcalError::setup(
+            "needs_scope",
+            format!(
+                "{} repeats; choose This event or All events",
+                candidate.event.title
+            ),
+        )
+        .with_hint("rerun with `-s event` or `-s series`"));
+    }
+    Ok(Some(pick_scope(candidate)?))
+}
+
+fn show_one(
+    args: &NoteArgs,
+    vault: &std::path::Path,
+    candidate: NoteCandidate,
+    warnings: Vec<String>,
+) -> Result<(), GcalError> {
+    let scope = resolve_show_scope(args, &candidate)?;
+    let (book, _) = journal::load_notes(vault).unwrap_or_default();
+    // Scope-specific note text: the selected scope's record, when live.
+    let scope_text = match scope {
+        Some(NoteScope::Series) => candidate
+            .event
+            .series_id
+            .as_ref()
+            .and_then(|series| {
+                book.series(&candidate.event.key.calendar_id, series)
+            })
+            .filter(|record| !record.cleared)
+            .map(|record| record.text.clone()),
+        Some(NoteScope::Event) | None => book
+            .event(
+                &candidate.event.key.calendar_id,
+                &candidate.event.key.event_id,
+            )
+            .filter(|record| !record.cleared)
+            .map(|record| record.text.clone())
+            .or_else(|| {
+                // One-off events have no series scope; show the layered
+                // occurrence text when no scope was chosen.
+                if scope.is_none() {
+                    scope_text_fallback(&candidate)
+                } else {
+                    None
+                }
+            }),
+    };
+    if args.format.is_json() {
+        print_show_json(&candidate, scope, scope_text, &warnings)
+    } else {
+        print_show_human(args, &candidate, scope, scope_text, &warnings)
+    }
+}
+
+fn scope_text_fallback(candidate: &NoteCandidate) -> Option<String> {
+    // For one-off events the layered note is the occurrence note; the
+    // AppliedNote carries no text, so fall back to no text. The human
+    // show still prints the effective root/buffer/clock below.
+    let _ = candidate;
+    None
+}
+
+fn note_summary_json(candidate: &NoteCandidate) -> Value {
+    let Some(applied) = candidate.event.note.as_ref() else {
+        return Value::Null;
+    };
+    let root_value =
+        candidate.root.as_ref().and_then(|root| root.value.clone());
+    let root_hue = candidate
+        .root
+        .as_ref()
+        .and_then(|root| root.hue)
+        .map(|hue| hue.name().to_string());
+    let buffer = {
+        let before = candidate.event.buffer.before_min;
+        let after = candidate.event.buffer.after_min;
+        if before == 0 && after == 0 {
+            Value::Null
+        } else {
+            json!({"before_minutes": before, "after_minutes": after})
+        }
+    };
+    json!({
+        "scope": applied.scope.as_str(),
+        "root": {"value": root_value, "hue": root_hue},
+        "buffer": buffer,
+        "clock": clock::explicit_clock_label(&candidate.event.clock_tag),
+        "bullet_lines": candidate.event.description.note_lines.len(),
+    })
+}
+
+fn event_json(
+    candidate: &NoteCandidate,
+    include_text: bool,
+    scope_text: Option<&str>,
+) -> Value {
+    let (start, end) = match (&candidate.event.start, &candidate.event.end) {
+        (EventDateTime::Timed(start), EventDateTime::Timed(end)) => (
+            start.to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
+            end.to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
+        ),
+        _ => (String::new(), String::new()),
+    };
+    let mut note = note_summary_json(candidate);
+    if include_text {
+        let text = scope_text.unwrap_or("").to_string();
+        let lines: Vec<String> = if text.is_empty() {
+            Vec::new()
+        } else {
+            text.lines().map(str::to_string).collect()
+        };
+        if let Value::Null = note {
+            note = json!({
+                "scope": Value::Null,
+                "root": {"value": Value::Null, "hue": Value::Null},
+                "buffer": Value::Null,
+                "clock": Value::Null,
+                "bullet_lines": 0,
+                "text": text,
+                "lines": lines,
+            });
+        } else if let Some(object) = note.as_object_mut() {
+            object.insert("text".to_string(), Value::String(text));
+            object.insert("lines".to_string(), json!(lines));
+        }
+    }
+    json!({
+        "calendar_id": candidate.event.key.calendar_id,
+        "calendar_name": candidate.calendar_name,
+        "event_id": candidate.event.key.event_id,
+        "series_id": candidate.event.series_id,
+        "recurring": candidate.recurring(),
+        "title": candidate.event.title,
+        "day": candidate.day.to_string(),
+        "start": start,
+        "end": end,
+        "time": candidate.time,
+        "answer": candidate.event.my_answer.as_str(),
+        "organizer": {"name": candidate.organizer_name(), "self": candidate.event.organizer_is_self},
+        "url": candidate.event.html_link.clone().unwrap_or_default(),
+        "lands": candidate.lands(),
+        "note": note,
+    })
+}
+
+fn orphan_json(orphan: &Orphan) -> Value {
+    json!({
+        "calendar_id": orphan.calendar_id,
+        "event_id": orphan.event_id,
+        "series_id": orphan.series,
+        "scope": match orphan.scope {
+            NoteScope::Event => "event",
+            NoteScope::Series => "series",
+        },
+        "title": orphan.title,
+        "reason": orphan.reason,
+    })
+}
+
+fn ambiguous_json(
+    candidates: &[NoteCandidate],
+    groups: &[&SeriesGroup],
+    warnings: Vec<String>,
+) -> GcalError {
+    let list: Vec<Value> = groups
+        .iter()
+        .take(10)
+        .map(|group| event_json(&candidates[group.soonest], false, None))
+        .collect();
+    let document = json!({
+        "schema_version": 1,
+        "ok": false,
+        "error": {
+            "kind": "ambiguous",
+            "message": "several events match",
+            "hint": "rerun with a narrower query or `-i <event-id>`",
+        },
+        "candidates": list,
+        "warnings": warnings,
+    });
+    println!(
+        "{}",
+        serde_json::to_string(&document)
+            .unwrap_or_else(|_| "{\"ok\":false}".to_string())
+    );
+    ui::flush_stdout();
+    GcalError::setup("ambiguous_printed", "several events match".to_string())
+}
+
+fn print_list_json(
+    window_from: &NaiveDate,
+    window_to: &NaiveDate,
+    from: &str,
+    to: &str,
+    listed: &[&NoteCandidate],
+    orphans: &[Orphan],
+    warnings: &[String],
+) -> Result<(), GcalError> {
+    let events: Vec<Value> = listed
+        .iter()
+        .map(|candidate| event_json(candidate, false, None))
+        .collect();
+    let orphans_json: Vec<Value> = orphans.iter().map(orphan_json).collect();
+    // Bare `bob gcal note` lists notes; `-a` lists every event. The key
+    // names the mode so the Mac picker (`-l -a -f json`) keeps working.
+    let mut document = json!({
+        "schema_version": 1,
+        "ok": true,
+        "window": {"from": from, "to": to, "start": window_from.to_string(), "end": window_to.to_string()},
+        "orphans": orphans_json,
+        "warnings": warnings,
+    });
+    if listed.is_empty()
+        || listed
+            .iter()
+            .all(|candidate| candidate.event.note.is_some())
+            && !listed.is_empty()
+    {
+        // Heuristic preserved for compatibility: callers check for
+        // either key. Prefer `notes` when every row is noted, else
+        // `events`. The document always carries one of them.
+    }
+    // Decide the key from the caller: `-a` mode passes all events,
+    // otherwise only noted events. Re-derive by checking for an
+    // unnoted row.
+    let has_unnoted = listed
+        .iter()
+        .any(|candidate| candidate.event.note.is_none());
+    if has_unnoted {
+        document["events"] = Value::Array(events);
+    } else {
+        document["notes"] = Value::Array(events);
+    }
+    println!(
+        "{}",
+        serde_json::to_string(&document).map_err(|error| {
+            GcalError::runtime(
+                "output",
+                format!("serialize gcal note JSON: {error}"),
+            )
+        })?
+    );
+    ui::flush_stdout();
+    Ok(())
+}
+
+fn status_word(candidate: &NoteCandidate) -> String {
+    match candidate.lands() {
+        "waiting_reply" => "waiting for your reply".to_string(),
+        "waiting_maybe" => "waiting for Yes".to_string(),
+        "task" => {
+            if candidate.day == today() {
+                "on today's note".to_string()
+            } else {
+                format!("lands {}", candidate.day.format("%a %b %d"))
+            }
+        }
+        _ => "context".to_string(),
+    }
+}
+
+fn buffer_label(candidate: &NoteCandidate) -> String {
+    let before = candidate.event.buffer.before_min;
+    let after = candidate.event.buffer.after_min;
+    match (before, after) {
+        (0, 0) => String::new(),
+        (before, 0) => format!("−{before}m"),
+        (0, after) => format!("+{after}m"),
+        (before, after) => format!("−{before}m +{after}m"),
+    }
+}
+
+fn print_list_human(
+    args: &NoteArgs,
+    window_from: &NaiveDate,
+    window_to: &NaiveDate,
+    listed: &[&NoteCandidate],
+    orphans: &[Orphan],
+    warnings: &mut Vec<String>,
+) -> Result<(), GcalError> {
+    use crate::native::style::Styler;
+    let styler = Styler::detect();
+    let count = listed.len();
+    let noun = if count == 1 {
+        "private note"
+    } else {
+        "private notes"
+    };
+    let window_label = if args.day.is_some() {
+        format!("{}", window_from.format("%a %b %d"))
+    } else {
+        "next 90 days".to_string()
+    };
+    let _ = window_to;
+    println!("✎ {count} {noun} · {window_label}");
+    for candidate in listed {
+        let scope_label = match candidate
+            .event
+            .note
+            .as_ref()
+            .map(|note| note.scope.as_str())
+        {
+            Some("both") => "both scopes",
+            Some("series") => "all events",
+            _ => "this event",
+        };
+        let root_label = candidate
+            .root
+            .as_ref()
+            .and_then(|root| root.value.as_deref())
+            .map(|value| {
+                if styler.is_color() {
+                    ui::hue_dot(
+                        &styler,
+                        candidate.root.as_ref().and_then(|root| root.hue),
+                        value,
+                    )
+                } else {
+                    format!("● {value}")
+                }
+            })
+            .unwrap_or_else(|| "—".to_string());
+        let buffer = buffer_label(candidate);
+        let buffer_cell = if buffer.is_empty() {
+            String::new()
+        } else {
+            format!("  {buffer}")
+        };
+        println!(
+            "  {} {}  {:<32}  {:<10}  {}{}  {}",
+            candidate.day.format("%a %b %d"),
+            candidate.time,
+            candidate.event.title,
+            scope_label,
+            root_label,
+            buffer_cell,
+            status_word(candidate),
+        );
+    }
+    for orphan in orphans {
+        let scope_label = match orphan.scope {
+            NoteScope::Event => "this event",
+            NoteScope::Series => "all events",
+        };
+        let clear = match (&orphan.event_id, &orphan.series) {
+            (Some(id), _) => format!("bob gcal note -c -i {id}"),
+            (None, Some(series)) => {
+                format!("bob gcal note -c -s series -i {series}")
+            }
+            _ => "bob gcal note -c".to_string(),
+        };
+        println!(
+            "  {}  {:<32}  {:<10}  no longer on your calendar · {clear}",
+            styler.yellow("⚠"),
+            orphan.title,
+            scope_label,
+        );
+    }
+    for warning in warnings.iter() {
+        ui::warn(warning);
+    }
+    ui::flush_stdout();
+    Ok(())
+}
+
+fn print_show_json(
+    candidate: &NoteCandidate,
+    scope: Option<NoteScope>,
+    scope_text: Option<String>,
+    warnings: &[String],
+) -> Result<(), GcalError> {
+    let document = json!({
+        "schema_version": 1,
+        "ok": true,
+        "event": event_json(candidate, true, scope_text.as_deref()),
+        "scope": scope.map(|scope| match scope {
+            NoteScope::Event => "event",
+            NoteScope::Series => "series",
+        }),
+        "warnings": warnings,
+    });
+    println!(
+        "{}",
+        serde_json::to_string(&document).map_err(|error| {
+            GcalError::runtime(
+                "output",
+                format!("serialize gcal note JSON: {error}"),
+            )
+        })?
+    );
+    ui::flush_stdout();
+    Ok(())
+}
+
+fn print_show_human(
+    args: &NoteArgs,
+    candidate: &NoteCandidate,
+    scope: Option<NoteScope>,
+    scope_text: Option<String>,
+    warnings: &[String],
+) -> Result<(), GcalError> {
+    use crate::native::style::Styler;
+    let styler = Styler::detect();
+    let title = if candidate.event.note.is_some() {
+        format!("✎ {}", candidate.event.title)
+    } else {
+        candidate.event.title.clone()
+    };
+    println!("{title}");
+    println!(
+        "  {} · {} · from {} · {}",
+        candidate.day.format("%a %b %d"),
+        candidate.time,
+        candidate.organizer_name(),
+        answer_chip(candidate.event.my_answer),
+    );
+    println!();
+    if let Some(text) = scope_text.filter(|text| !text.trim().is_empty()) {
+        for line in text.lines() {
+            println!("  {line}");
+        }
+        println!();
+    } else {
+        let example = format!(
+            "bob gcal note {} @family -30 Drive there",
+            candidate
+                .event
+                .title
+                .split_whitespace()
+                .next()
+                .unwrap_or("event")
+        );
+        println!("  no private note yet · add one: {example}");
+        println!();
+    }
+    // Effective root, buffer, and clock (the write phase adds the rail
+    // and the "lands as" block).
+    let root_label = candidate
+        .root
+        .as_ref()
+        .and_then(|root| root.value.as_deref())
+        .map(|value| {
+            let source = candidate
+                .root
+                .as_ref()
+                .and_then(|root| root.source.as_deref())
+                .unwrap_or("");
+            if source.is_empty() {
+                format!("● {value}")
+            } else {
+                format!("● {value} (via {source})")
+            }
+        })
+        .unwrap_or_else(|| "no root".to_string());
+    let buffer = buffer_label(candidate);
+    let clock = clock::explicit_clock_label(&candidate.event.clock_tag)
+        .unwrap_or("on-clock");
+    let scope_label = match scope {
+        Some(NoteScope::Series) => "All events",
+        Some(NoteScope::Event) => "This event",
+        None => "This event",
+    };
+    println!(
+        "  {scope_label} · {root_label} · {} · {clock}",
+        if buffer.is_empty() {
+            "no buffer".to_string()
+        } else {
+            buffer
+        }
+    );
+    let _ = (args, styler);
+    for warning in warnings {
+        ui::warn(warning);
+    }
+    ui::flush_stdout();
+    Ok(())
+}

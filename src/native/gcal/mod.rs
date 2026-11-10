@@ -7,6 +7,7 @@ mod bullet_block;
 mod calendars;
 mod classify;
 pub(crate) mod cli;
+mod note;
 pub(crate) use crate::native::google::{
     account, client, client_setup, login_ui, signin,
 };
@@ -41,12 +42,14 @@ use std::{ffi::OsString, iter};
 pub(crate) use crate::native::google::GoogleError as GcalError;
 
 pub(crate) use cli::{
-    CalendarsArgs, DoctorArgs, ListArgs, LoginArgs, LogoutArgs, SyncArgs,
+    CalendarsArgs, DoctorArgs, ListArgs, LoginArgs, LogoutArgs, NoteArgs,
+    SyncArgs,
 };
 
 const COMMAND_NAME: &str = "bob gcal";
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
+    let args = note::rewrite_gcal_argv(args);
     let command = cli::build_cli();
     let matches = match command.try_get_matches_from(
         iter::once(OsString::from(COMMAND_NAME)).chain(args),
@@ -84,6 +87,9 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         }
         Some(("sync", sub_matches)) => {
             sync::run(&SyncArgs::from_matches(sub_matches))
+        }
+        Some(("note", sub_matches)) => {
+            note::run(&NoteArgs::from_matches(sub_matches))
         }
         Some((name, _)) => {
             eprintln!("{COMMAND_NAME}: unknown subcommand: {name}");

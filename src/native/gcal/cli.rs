@@ -32,11 +32,12 @@ pub(crate) fn build_cli() -> ClapCommand {
         .subcommand(list_command())
         .subcommand(login_command())
         .subcommand(logout_command())
+        .subcommand(note_command())
         .subcommand(sync_command())
 }
 
 fn top_after_help() -> &'static str {
-    "Running `bob gcal` with no command runs `bob gcal list`.\n\nExamples:\n  bob gcal                    Show today's events and what sync would do\n  bob gcal -D tomorrow        List tomorrow in Bob's timezone\n  bob gcal -a -f json         Include omitted events as JSON\n  bob gcal login              Connect Google Calendar in one guided step\n  bob gcal login -a EMAIL     Sign in as this account\n  bob gcal login -c PATH      Replace Bob's stored Desktop-app client JSON\n  bob gcal login -m           Paste the redirect address (automatic over SSH)\n  bob gcal calendars          List calendars with ids for config\n  bob gcal doctor             Diagnose gog, the client, and the vault\n  bob gcal sync               Write today's Events and MEET links\n  bob gcal sync -F            Rewrite today's Events from Google as on a first sync\n  bob gcal sync -d            Preview the exact Markdown a sync writes\n  bob gcal logout -y          Remove Bob's Calendar grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH\n  BOB_GCAL_BROWSER   Browser executable; selects browser sign-in (otherwise automatic)"
+    "Running `bob gcal` with no command runs `bob gcal list`.\n\nExamples:\n  bob gcal                    Show today's events and what sync would do\n  bob gcal -D tomorrow        List tomorrow in Bob's timezone\n  bob gcal -a -f json         Include omitted events as JSON\n  bob gcal login              Connect Google Calendar in one guided step\n  bob gcal login -a EMAIL     Sign in as this account\n  bob gcal login -c PATH      Replace Bob's stored Desktop-app client JSON\n  bob gcal login -m           Paste the redirect address (automatic over SSH)\n  bob gcal calendars          List calendars with ids for config\n  bob gcal doctor             Diagnose gog, the client, and the vault\n  bob gcal note               List private event notes for the next 90 days\n  bob gcal note -a            List every upcoming event, noted or not\n  bob gcal note deerwood      Show one event and its private note\n  bob gcal sync               Write today's Events and MEET links\n  bob gcal sync -F            Rewrite today's Events from Google as on a first sync\n  bob gcal sync -d            Preview the exact Markdown a sync writes\n  bob gcal logout -y          Remove Bob's Calendar grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH\n  BOB_GCAL_BROWSER   Browser executable; selects browser sign-in (otherwise automatic)"
 }
 
 fn calendars_command() -> ClapCommand {
@@ -71,6 +72,44 @@ fn list_command() -> ClapCommand {
 
 fn list_after_help() -> &'static str {
     "`-a` also shows declined, unanswered, and out-of-scope events with their reasons. Root candidates are validated against the vault; warnings show why Bob fell back.\n\nExamples:\n  bob gcal\n  bob gcal list -D tomorrow\n  bob gcal list -D 2026-10-30 -f json\n  bob gcal list -a\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH\n  BOB_NOW            Local datetime override for default day selection"
+}
+
+fn note_command() -> ClapCommand {
+    ClapCommand::new("note")
+        .about("List and show private event notes for Google Calendar events")
+        .long_about(
+            "List and show private event notes: Bob-only description text \
+             keyed by the Google event. Bare `bob gcal note` lists noted \
+             events for the next 90 days; `-a` lists every upcoming event, \
+             noted or not. A query without note text shows one event; \
+             writing, clearing, previewing, and editing land in a later \
+             phase and exit 2 for now.",
+        )
+        .disable_help_flag(true)
+        .arg(adopt_arg())
+        .arg(all_arg())
+        .arg(bob_dir_arg())
+        .arg(calendar_arg())
+        .arg(clear_arg())
+        .arg(note_day_arg())
+        .arg(note_dry_run_arg())
+        .arg(edit_arg())
+        .arg(event_id_arg())
+        .arg(human_format_arg())
+        .arg(help_arg())
+        .arg(note_list_arg())
+        .arg(scope_arg())
+        .arg(query_arg())
+        .arg(text_arg())
+        .after_help(note_after_help())
+}
+
+fn note_after_help() -> &'static str {
+    "Select one event by title words across the next 90 days, `-D` for one \
+     day, a pasted Google Calendar URL with `eid=`, or `-i`/`-C`. Several \
+     matches open a numbered picker on a TTY and exit 2 off a TTY with \
+     candidates. A recurring match asks This event or All events on a TTY \
+     and needs `-s` off a TTY.\n\nExamples:\n  bob gcal note\n  bob gcal note -a -f json\n  bob gcal note -l deerwood\n  bob gcal note deerwood\n  bob gcal note -D 2026-12-13 little gym\n  bob gcal note -i st49ogf0k0jiciob1ebgj1aupo\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH\n  BOB_NOW            Local datetime override for default day selection\n  BOB_GCAL_ASSUME_TTY  Set to 1 to force interactive prompts in tests"
 }
 
 fn sync_command() -> ClapCommand {
@@ -274,6 +313,107 @@ fn quiet_arg() -> Arg {
         .short('q')
         .action(ArgAction::SetTrue)
         .help("Print nothing on success, no-op, or waiting")
+}
+
+fn adopt_arg() -> Arg {
+    Arg::new("adopt")
+        .long("adopt")
+        .short('A')
+        .action(ArgAction::SetTrue)
+        .help("Adopt directive lines from the Google description (not available yet)")
+}
+
+fn all_arg() -> Arg {
+    Arg::new("all")
+        .long("all")
+        .short('a')
+        .action(ArgAction::SetTrue)
+        .help("List every upcoming event, noted or not")
+}
+
+fn calendar_arg() -> Arg {
+    Arg::new("calendar")
+        .long("calendar")
+        .short('C')
+        .value_name("ID")
+        .value_parser(OsStringValueParser::new())
+        .help("Pin the calendar for -i or a pasted URL")
+}
+
+fn clear_arg() -> Arg {
+    Arg::new("clear")
+        .long("clear")
+        .short('c')
+        .action(ArgAction::SetTrue)
+        .help("Clear the private note (not available yet)")
+}
+
+fn note_day_arg() -> Arg {
+    Arg::new("day")
+        .long("day")
+        .short('D')
+        .value_name("DAY")
+        .value_parser(OsStringValueParser::new())
+        .help("Narrow the 90-day window to one local day, past days included")
+}
+
+fn note_dry_run_arg() -> Arg {
+    Arg::new("dry-run")
+        .long("dry-run")
+        .short('d')
+        .action(ArgAction::SetTrue)
+        .help("Validate and preview without saving (not available yet)")
+}
+
+fn edit_arg() -> Arg {
+    Arg::new("edit")
+        .long("edit")
+        .short('e')
+        .action(ArgAction::SetTrue)
+        .help("Edit the note in $EDITOR (not available yet)")
+}
+
+fn event_id_arg() -> Arg {
+    Arg::new("event-id")
+        .long("event-id")
+        .short('i')
+        .value_name("ID")
+        .value_parser(OsStringValueParser::new())
+        .help("Select the event by Google event id")
+}
+
+fn note_list_arg() -> Arg {
+    Arg::new("list")
+        .long("list")
+        .short('l')
+        .action(ArgAction::SetTrue)
+        .help("List notes instead of showing one event")
+}
+
+fn scope_arg() -> Arg {
+    Arg::new("scope")
+        .long("scope")
+        .short('s')
+        .value_name("SCOPE")
+        .value_parser(["event", "series"])
+        .help("Note scope for a recurring event: event or series")
+}
+
+fn query_arg() -> Arg {
+    Arg::new("query")
+        .value_name("QUERY")
+        .num_args(0..)
+        .value_parser(OsStringValueParser::new())
+        .help("Title words to select the event")
+}
+
+fn text_arg() -> Arg {
+    Arg::new("text")
+        .value_name("TEXT")
+        .num_args(0..)
+        .last(true)
+        .value_parser(OsStringValueParser::new())
+        .help("Note text after -- (not available yet)")
 }
 
 /// `doctor`/`login`/`logout` output format.
@@ -484,6 +624,82 @@ impl LogoutArgs {
             format: HumanFormat::from_matches(matches),
             force: matches.get_flag("force"),
         }
+    }
+}
+
+/// Typed `note` arguments: selection plus read-only list/show modes.
+/// Write paths (`-A`, `-c`, `-d`, `-e`, TEXT) are registered so help and
+/// completion are final, but exit 2 until the write phase lands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NoteArgs {
+    pub adopt: bool,
+    pub all: bool,
+    pub bob_dir: Option<PathBuf>,
+    pub calendar: Option<String>,
+    pub clear: bool,
+    pub day: Option<String>,
+    pub dry_run: bool,
+    pub edit: bool,
+    pub event_id: Option<String>,
+    pub format: HumanFormat,
+    pub list: bool,
+    pub scope: Option<String>,
+    pub query: Vec<String>,
+    pub text: Vec<String>,
+}
+
+impl NoteArgs {
+    pub(crate) fn from_matches(matches: &ArgMatches) -> Self {
+        Self {
+            adopt: matches.get_flag("adopt"),
+            all: matches.get_flag("all"),
+            bob_dir: raw_bob_dir(matches),
+            calendar: matches
+                .get_one::<OsString>("calendar")
+                .map(|value| value.to_string_lossy().trim().to_string())
+                .filter(|value| !value.is_empty()),
+            clear: matches.get_flag("clear"),
+            day: matches
+                .get_one::<OsString>("day")
+                .map(|value| value.to_string_lossy().trim().to_string())
+                .filter(|value| !value.is_empty()),
+            dry_run: matches.get_flag("dry-run"),
+            edit: matches.get_flag("edit"),
+            event_id: matches
+                .get_one::<OsString>("event-id")
+                .map(|value| value.to_string_lossy().trim().to_string())
+                .filter(|value| !value.is_empty()),
+            format: HumanFormat::from_matches(matches),
+            list: matches.get_flag("list"),
+            scope: matches
+                .get_one::<String>("scope")
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
+            query: matches
+                .get_many::<OsString>("query")
+                .map(|values| {
+                    values
+                        .map(|value| value.to_string_lossy().into_owned())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            text: matches
+                .get_many::<OsString>("text")
+                .map(|values| {
+                    values
+                        .map(|value| value.to_string_lossy().into_owned())
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    }
+
+    pub(crate) fn bob_dir(&self) -> PathBuf {
+        self.bob_dir.clone().unwrap_or_else(bob_env::bob_dir)
+    }
+
+    pub(crate) fn error_format(&self) -> &'static str {
+        self.format.as_str()
     }
 }
 

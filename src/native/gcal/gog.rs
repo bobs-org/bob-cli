@@ -89,7 +89,7 @@ impl Gog {
         to: &str,
         account: &str,
     ) -> Result<Vec<serde_json::Value>, GcalError> {
-        const FIELDS: &str = "items(id,iCalUID,recurringEventId,originalStartTime,status,summary,description,location,htmlLink,hangoutLink,conferenceData(entryPoints(entryPointType,uri)),start,end,transparency,eventType,colorId,attendees(self,responseStatus),organizer(self)),nextPageToken";
+        const FIELDS: &str = "items(id,iCalUID,recurringEventId,originalStartTime,status,summary,description,location,htmlLink,hangoutLink,conferenceData(entryPoints(entryPointType,uri)),start,end,transparency,eventType,colorId,attendees(self,responseStatus),organizer(self,displayName,email)),nextPageToken";
         let output = self.run(
             self.common_flags(Some(account))
                 .into_iter()
