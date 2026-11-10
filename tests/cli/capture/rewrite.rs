@@ -22,6 +22,10 @@ fn capture_rewrite_help_describes_only_the_remaining_rules() {
         "capture-rewrite help should describe the x/s close-outcome alias:\n{out}"
     );
     assert!(
+        out.contains("glued '.'") && out.contains("switches between"),
+        "capture-rewrite help should describe the glued-dot toggle:\n{out}"
+    );
+    assert!(
         !out.contains("Template start"),
         "capture-rewrite help still documents the template start:\n{out}"
     );
@@ -508,12 +512,22 @@ fn capture_rewrite_toggles_task_bullet_ids_in_lists_and_project_notes() {
     for (before, expected) in [
         ("@dev\n- Task :task-id^", "@dev\n- Task ^task-id"),
         ("@dev\n- Task ^task-id:", "@dev\n- Task :task-id"),
+        ("@dev\n- Task :task-id.", "@dev\n- Task ^task-id"),
+        ("@dev\n- Task ^task-id.", "@dev\n- Task :task-id"),
         (
             "Project @cash^project-id@\n- Task :task-id^",
             "Project @cash^project-id@\n- Task ^task-id",
         ),
         (
             "Project @cash^project-id@\n- Task ^task-id:",
+            "Project @cash^project-id@\n- Task :task-id",
+        ),
+        (
+            "Project @cash^project-id@\n- Task :task-id.",
+            "Project @cash^project-id@\n- Task ^task-id",
+        ),
+        (
+            "Project @cash^project-id@\n- Task ^task-id.",
             "Project @cash^project-id@\n- Task :task-id",
         ),
     ] {
@@ -750,6 +764,43 @@ fn capture_rewrite_json_switches_a_block_id_separator() {
 }
 
 #[test]
+fn capture_rewrite_json_dot_switches_a_block_id_separator() {
+    let input = "Create sase-gallery! @sase:sase-gallery.";
+    let expected = "Create sase-gallery! @sase^sase-gallery";
+    let marker_start = input.find("@sase:").expect("marker start");
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg(input.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(input)
+        .output()
+        .expect("run bob capture-rewrite glued-dot toggle");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["changed"], true);
+    assert_eq!(json["rule"], "switch_block_id_separator");
+    assert_eq!(json["text"], expected);
+    assert_eq!(json["cursor"], expected.len());
+    assert_eq!(
+        json["edits"],
+        serde_json::json!([
+            { "range": { "start": marker_start, "end": input.len() }, "replacement": "@sase^sase-gallery" },
+        ])
+    );
+    assert_eq!(
+        json["summary"],
+        "Changed @sase:sase-gallery to @sase^sase-gallery"
+    );
+    assert!(json.get("alias").is_none(), "{json}");
+    assert!(json.get("sigil_alias_tip").is_none(), "{json}");
+}
+
+#[test]
 fn capture_rewrite_json_switches_a_colon_marker_to_plus() {
     let output = bob_command()
         .arg("capture-rewrite")
@@ -816,28 +867,31 @@ fn capture_parse_keeps_project_note_plus_literal() {
 
 #[test]
 fn capture_parse_does_not_apply_the_separator_toggle() {
-    let output = bob_command()
-        .arg("capture-parse")
-        .arg("-f")
-        .arg("json")
-        .arg("--")
-        .arg("Do work @file:id^")
-        .output()
-        .expect("run bob capture-parse unrewritten toggle");
+    for input in ["Do work @file:id^", "Do work @file:id."] {
+        let output = bob_command()
+            .arg("capture-parse")
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(input)
+            .output()
+            .expect("run bob capture-parse unrewritten toggle");
 
-    assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-parse JSON");
-    assert_eq!(json["input"], "Do work @file:id^");
-    assert_eq!(json["body"], "Do work");
-    assert!(json["block_id"].is_null(), "{json}");
-    let codes: Vec<&str> = json["diagnostics"]
-        .as_array()
-        .expect("diagnostics")
-        .iter()
-        .filter_map(|diagnostic| diagnostic["code"].as_str())
-        .collect();
-    assert!(codes.contains(&"invalid_pomodoro_block_id"), "{json}");
+        assert_success(&output);
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim())
+                .expect("capture-parse JSON");
+        assert_eq!(json["input"], input);
+        assert_eq!(json["body"], "Do work");
+        assert!(json["block_id"].is_null(), "{json}");
+        let codes: Vec<&str> = json["diagnostics"]
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .filter_map(|diagnostic| diagnostic["code"].as_str())
+            .collect();
+        assert!(codes.contains(&"invalid_pomodoro_block_id"), "{json}");
+    }
 }
 
 #[test]

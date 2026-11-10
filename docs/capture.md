@@ -9129,7 +9129,11 @@ template marker.
 plain `@route:id` or `@route+id`, `:` after `@route^id` or `@route+id`, or `+`
 after `@route:id` or `@route^id` consumes that character and switches the
 separator. A plain `@route+block-id` can switch back to `@route:id` with `:`
-or to `@route^block-id` with `^`. On a `>` transfer line, `+` after
+or to `@route^block-id` with `^`. A glued `.` toggles between `:` and `^`:
+`@route:id.` becomes `@route^id`, and `@route^id.` becomes `@route:id`. After
+`@route+id` it stays literal. For example,
+`Create sase-gallery! @sase:sase-gallery.` becomes
+`Create sase-gallery! @sase^sase-gallery`. On a `>` transfer line, `+` after
 `@route:id` or `@route^id` in a source or destination slot switches to
 `@route+id` (`@inbox:bench+ > @db` becomes `@inbox+bench > @db`, and
 `@a+x > @c:tid+` becomes `@a+x > @c+tid`); `:` or `^` after a transfer
@@ -9142,7 +9146,9 @@ project-note marker toggles
 between its two forms instead: `:` typed right after `@route^block-id@` gives
 `@route:block-id@` (create becomes offer), and `^` after `@route:block-id@`
 gives `@route^block-id@`. The same separator, or `+`, after a seal stays
-literal, and nothing toggles once a `#name` follows the seal. `--cursor` is
+literal; a glued `.` toggles between the two sealed forms. Nothing toggles
+once a `#name` follows the seal: `@route:id@.` becomes `@route^id@`, and
+`@route^id@.` becomes `@route:id@`. `--cursor` is
 required: only the token ending at
 that caret is examined, so the command never searches the draft for a toggle.
 The new key must sit against the ID with no intervening whitespace and must
@@ -9162,8 +9168,8 @@ bob capture-rewrite -c 17 -f json -- 'Do work @file:id+'
 bob capture-rewrite -c 17 -f json -- 'Do work @file^id+'
 ```
 
-In Bob Mac Capture, Undo immediately after a successful `@route:id+` or
-`@route^id+` rewrite restores the literal post-key draft. Solo markers,
+In Bob Mac Capture, Undo immediately after a successful `@route:id+`,
+`@route^id+`, or glued-dot rewrite restores the literal post-key draft. Solo markers,
 leading markers, a trailing marker before later body text, a trailing marker
 on an authored child line, and one item in a blank-line batch are eligible
 wherever the shared grammar already recognizes that token as the item's
@@ -9178,14 +9184,17 @@ same-separator repeats, `+` after a sealed `@route^id@` / `@route:id@` marker,
 and marker-looking prose the contextual parser does not select are left
 unchanged. On task-list and project-note task bullets, typing the opposite
 sigil immediately after a complete ID switches `:id` to `^id` or `^id` to
-`:id` and consumes the trigger. The shared task-bullet parser validates the
+`:id`; a glued `.` toggles between those two forms and consumes the trigger.
+The shared task-bullet parser validates the
 candidate, including IDs on nested lines.
 This is an editor assist: `bob capture` and `bob capture-parse` keep the
 literal `@file:id+` text.
 
 **Sigil alias.** With `--cursor`, typing `.` immediately after `@route`
 becomes `^`, and typing `;` there becomes `:` when the candidate opens the
-same Block ID picker as the real sigil. A whole-item `;` becomes `:` when
+same Block ID picker as the real sigil. A `.` glued to a complete
+`@route:id` / `@route^id` marker toggles its separator as described above;
+`@errands.` still becomes `@errands^`. A whole-item `;` becomes `:` when
 the candidate opens the Task Link picker. A `- .` or `- ;` first-level bullet
 in a sealed project-note item becomes `- ^` or `- :` where the Move picker
 would open, and `- ^.` becomes `- ^^`. Typing `.` after a space or tab that

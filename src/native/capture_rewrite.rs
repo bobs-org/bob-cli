@@ -102,14 +102,21 @@ Block-ID separator toggle (requires --cursor): typing '^' immediately after \
 a complete plain '@route:id' or '@route+id', ':' after '@route^id' or \
 '@route+id', or '+' after '@route:id' or '@route^id' consumes that character \
 and switches the separator. Typing ':' right after a sealed '@route^id@' \
-gives '@route:id@', and '^' after '@route:id@' gives '@route^id@'. For \
-example, '@file:id+' becomes '@file+id', '@file^id+' becomes '@file+id', \
+gives '@route:id@', and '^' after '@route:id@' gives '@route^id@'. A glued \
+'.' after '@route:id' / '@route^id' switches between ':' and '^' \
+('@route:id.' becomes '@route^id', and '@route^id.' becomes '@route:id'); \
+after '@route+id' it stays literal. Sealed '@route:id@.' and \
+'@route^id@.' also switch between the two sealed forms. A glued '.' also \
+switches complete task-bullet IDs between ':id' and '^id'. For example, \
+'@file:id+' becomes \
+'@file+id', '@file^id+' becomes '@file+id', \
 '@file+id^' becomes '@file^id', '@file+id:' becomes '@file:id', \
 '@file^id@:' becomes '@file:id@', and '@file:id@^' becomes '@file^id@' \
 (`switch_block_id_separator`). The caret stays just past the unchanged ID \
 (and seal, when sealed). Task IDs at the end of task-list bullets and \
-project-note task bullets also switch: ':id^' becomes '^id', and '^id:' \
-becomes ':id', including nested lines. Only the token ending at --cursor is examined; \
+project-note task bullets also switch: ':id^' becomes '^id', '^id:' becomes \
+':id', and a glued '.' switches between the two, including nested lines. \
+Only the token ending at --cursor is examined; \
 the key must sit against the ID (or seal) with no space, and it must end the token. \
 Suffixes already inside the token ('#name', '=...'), '@@', '@!', standalone \
 '^route:id', '&note:id', '!note:id', incomplete \
@@ -133,7 +140,9 @@ text. Without --cursor this rule is skipped rather than searching the \
 draft.\n\n\
 Sigil alias (requires --cursor): typing '.' immediately after '@route' \
 becomes '^', or ';' becomes ':', only where bob's completion grammar would \
-open the corresponding Block ID picker. A whole-item ';' becomes ':' only \
+open the corresponding Block ID picker. A '.' glued to a complete \
+'@route:id' / '@route^id' toggles its separator instead of expanding as an \
+alias. A whole-item ';' becomes ':' only \
 where the Task Link picker opens. A '- .' or '- ;' first-level bullet in a \
 sealed project-note item becomes '- ^' or '- :' where the Move picker would \
 open, and '- ^.' becomes '- ^^'. Typing '.' after a space or tab that \
@@ -220,7 +229,7 @@ missing TEXT or a bad flag is an error; every other input succeeds with \
 stdin is piped, it reads the complete piped stdin stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id^'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id+'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file^id+'\n  bob capture-rewrite -c 20 -f json -- 'Fix trip ~work:foo |'\n  bob capture-rewrite -c 9 -f json -- '@errands.'\n  bob capture-rewrite -c 8 -f json -- 'Fix it ='\n  bob capture-rewrite -c 9 -f json -- 'Fix it ~='\n  bob capture-rewrite -c 21 -f json -- 'Fix it ~tasks:target='\n  bob capture-rewrite -c 6 -f json -- '@cash,'\n  bob capture-rewrite -c 16 -f json -- '@cash+goog-exit,'\n  bob capture-rewrite -c 1 -f json -- ';'\n  bob capture-rewrite -c 10 -f json -- 'Buy milk \\'\n  printf '@cash^goog-exit@\\n- .' | bob capture-rewrite -c 20 -f json\n  bob capture-rewrite -c 10 -f json -- 'Buy milk /'\n  bob capture-rewrite -c 10 -f json -- 'Buy milk @'\n  bob capture-rewrite -c 16 -f json -- 'Buy milk @dev @@'\n  bob capture-rewrite -- 'Called Morgan Stanley @cash+goog-exit @@'\n  bob capture-rewrite -c 13 -f json -- '@inbox:bench+ > @db'\n  bob capture-rewrite -f json -- '@a+x > @c @@'\n  printf 'Buy milk @dev @@' | bob capture-rewrite -f json\n  printf '@@foo\\nBuy milk @@\\n' | bob capture-rewrite -f json\n  printf 'Buy milk @dev\\n- more detail @@\\n' | bob capture-rewrite -f json",
+            "Examples:\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id^'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id.'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id+'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file^id+'\n  bob capture-rewrite -c 20 -f json -- 'Fix trip ~work:foo |'\n  bob capture-rewrite -c 9 -f json -- '@errands.'\n  bob capture-rewrite -c 8 -f json -- 'Fix it ='\n  bob capture-rewrite -c 9 -f json -- 'Fix it ~='\n  bob capture-rewrite -c 21 -f json -- 'Fix it ~tasks:target='\n  bob capture-rewrite -c 6 -f json -- '@cash,'\n  bob capture-rewrite -c 16 -f json -- '@cash+goog-exit,'\n  bob capture-rewrite -c 1 -f json -- ';'\n  bob capture-rewrite -c 10 -f json -- 'Buy milk \\'\n  printf '@cash^goog-exit@\\n- .' | bob capture-rewrite -c 20 -f json\n  bob capture-rewrite -c 10 -f json -- 'Buy milk /'\n  bob capture-rewrite -c 10 -f json -- 'Buy milk @'\n  bob capture-rewrite -c 16 -f json -- 'Buy milk @dev @@'\n  bob capture-rewrite -- 'Called Morgan Stanley @cash+goog-exit @@'\n  bob capture-rewrite -c 13 -f json -- '@inbox:bench+ > @db'\n  bob capture-rewrite -f json -- '@a+x > @c @@'\n  printf 'Buy milk @dev @@' | bob capture-rewrite -f json\n  printf '@@foo\\nBuy milk @@\\n' | bob capture-rewrite -f json\n  printf 'Buy milk @dev\\n- more detail @@\\n' | bob capture-rewrite -f json",
         )
         .disable_help_flag(true)
         .arg(cursor_arg())

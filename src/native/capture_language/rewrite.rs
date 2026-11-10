@@ -75,12 +75,14 @@ impl RewriteRule {
 /// Apply the capture grammar's editor typing assists to `raw_text`.
 ///
 /// With an explicit `cursor`, a complete plain `@route:id` / `@route^id` /
-/// `@route+id` marker that just grew a supported separator (`^`, `:`, or
-/// `+`) is rewritten to the trigger's spelling and the appended trigger is
-/// dropped. A `+` after `@route^id` switches to `@route+id`, like every
-/// other separator. That rule never searches the draft: no cursor means
-/// absorption-only, matching the historical `@@` contract. Sigil aliases
-/// at the cursor also include close-outcome `x` → `!` and `s` → `*`.
+/// `@route+id` marker that just grew a supported separator (`^`, `:`, `+`,
+/// or `.`) is rewritten to the resolved separator and the appended trigger
+/// is dropped. A glued `.` switches between `:` and `^`; `+` after
+/// `@route^id` switches to `@route+id`, like every other separator. Task
+/// bullet IDs also accept a glued `.` to switch between `:id` and `^id`.
+/// That rule never searches the draft: no cursor means absorption-only,
+/// matching the historical `@@` contract. Sigil aliases at the cursor also
+/// include close-outcome `x` → `!` and `s` → `*`.
 ///
 /// Apply Rule A1's absorption to the bare `@@` at (or before, when
 /// no cursor is given, the last one in source order at) `cursor`: claim the
@@ -1324,10 +1326,11 @@ fn absorb_bare_declaration(
     unchanged_rewrite(raw_text, cursor, Vec::new())
 }
 
-/// Typing the other task-ID sigil immediately after a complete ` :id` /
-/// ` ^id` on a list or project-note task bullet switches the marker and
-/// consumes the trigger. The candidate is reparsed so ordinary prose that
-/// happens to end in a task-ID-shaped token is never rewritten.
+/// Typing the other task-ID sigil, or a glued `.`, immediately after a
+/// complete ` :id` / ` ^id` on a list or project-note task bullet switches
+/// the marker and consumes the trigger. A lone sigil is left for its existing
+/// alias. The candidate is reparsed so ordinary prose that happens to end in
+/// a task-ID-shaped token is never rewritten.
 fn switch_task_bullet_id_separator(
     raw_text: &str,
     cursor: usize,
@@ -1336,14 +1339,16 @@ fn switch_task_bullet_id_separator(
         .into_iter()
         .find(|token| token.end == cursor)?;
     let trigger = *token.text.as_bytes().last()?;
-    let new_sigil = match trigger {
-        b':' => ':',
-        b'^' => '^',
-        _ => return None,
-    };
     let current = token.text.get(..token.text.len().checked_sub(1)?)?;
     let TaskIdLex::Valid { sigil, id } = lex_project_task_id(current)? else {
         return None;
+    };
+    let new_sigil = match trigger {
+        b':' => ':',
+        b'^' => '^',
+        b'.' if sigil == ':' => '^',
+        b'.' => ':',
+        _ => return None,
     };
     if sigil == new_sigil {
         return None;
@@ -1435,13 +1440,15 @@ fn candidate_selects_task_bullet_id(
 }
 
 /// Typing `^` immediately after a complete plain `@route:id` or `@route+id`,
-/// `:` after `@route^id` or `@route+id`, or `+` after `@route:id` consumes
-/// that trigger and switches the separator. Typing `:` right after a sealed
+/// `:` after `@route^id` or `@route+id`, `+` after `@route:id`, or `.` after
+/// `@route:id` / `@route^id` consumes that trigger and switches the
+/// separator. A glued `.` resolves to the other of `:` and `^`; after
+/// `@route+id` it stays literal. Typing `:` right after a sealed
 /// `@route^id@` gives `@route:id@`, and `^` after `@route:id@` gives
-/// `@route^id@`. The token must end at `cursor`; the stripped remainder
-/// must be the line's selected destination marker, complete, and free of
-/// `#`/`=`/`!` suffixes. The same separator, or `+`, after a seal stays
-/// literal.
+/// `@route^id@`; glued `.` follows the same sealed transition. The token must
+/// end at `cursor`; the stripped remainder must be the line's selected
+/// destination marker, complete, and free of `#`/`=`/`!` suffixes. The same
+/// separator, or `+`, after a seal stays literal.
 fn switch_block_id_separator(
     raw_text: &str,
     cursor: usize,
@@ -1450,12 +1457,6 @@ fn switch_block_id_separator(
         .into_iter()
         .find(|token| token.end == cursor)?;
     let trigger = *token.text.as_bytes().last()?;
-    let trigger_char = match trigger {
-        b':' => ':',
-        b'^' => '^',
-        b'+' => '+',
-        _ => return None,
-    };
     let stripped_end = token.end - 1;
     if stripped_end <= token.start || !raw_text.is_char_boundary(stripped_end) {
         return None;
@@ -1464,6 +1465,19 @@ fn switch_block_id_separator(
     let token_end = token.end;
     let stripped = &raw_text[token_start..stripped_end];
     let (separator, route, id, sealed) = plain_block_id_parts(stripped)?;
+    let trigger_char = match trigger {
+        b':' => ':',
+        b'^' => '^',
+        b'+' => '+',
+        b'.' => match separator {
+            ':' => '^',
+            '^' => ':',
+            // A `+id` marker names an existing task, so `.` stays literal.
+            '+' => return None,
+            _ => unreachable!("plain block ID separators are validated"),
+        },
+        _ => return None,
+    };
     let eligible = match trigger_char {
         // After a seal only the other sealed separator switches; the
         // same separator (or `+`) stays literal.
@@ -1514,6 +1528,31 @@ fn switch_block_id_separator(
     let mut candidate = String::with_capacity(raw_text.len() - 1);
     candidate.push_str(&raw_text[..stripped_end]);
     candidate.push_str(&raw_text[token_end..]);
+    if trigger == b'.' {
+        let draft = split_capture_draft(&candidate);
+        let transfer_claims_marker = draft.items.iter().any(|item| {
+            item.lines.iter().any(|line| {
+                if !(line.raw.start <= token_start
+                    && stripped_end <= line.raw.end)
+                {
+                    return false;
+                }
+                matches!(
+                    super::transfer::scan_transfer_line(
+                        &line.raw,
+                        &candidate,
+                        item.lines.len() > 1,
+                    ),
+                    super::transfer::TransferScan::Valid { .. }
+                        | super::transfer::TransferScan::Incomplete { .. }
+                        | super::transfer::TransferScan::Invalid { .. }
+                )
+            })
+        });
+        if transfer_claims_marker {
+            return None;
+        }
+    }
     if !candidate_selects_plain_marker(
         &candidate,
         token_start,
