@@ -836,6 +836,59 @@ fn capture_rewrite_json_dot_switches_a_block_id_separator() {
 }
 
 #[test]
+fn capture_rewrite_json_dot_switches_a_plus_marker_to_caret() {
+    let input = "Create sase-gallery! @sase+sase-gallery.";
+    let expected = "Create sase-gallery! @sase^sase-gallery";
+    let marker_start = input.find("@sase+").expect("marker start");
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg(input.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(input)
+        .output()
+        .expect("run bob capture-rewrite glued-dot plus switch");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["changed"], true);
+    assert_eq!(json["rule"], "switch_block_id_separator");
+    assert_eq!(json["text"], expected);
+    assert_eq!(json["cursor"], expected.len());
+    assert_eq!(
+        json["edits"],
+        serde_json::json!([
+            { "range": { "start": marker_start, "end": input.len() }, "replacement": "@sase^sase-gallery" },
+        ])
+    );
+    assert_eq!(
+        json["summary"],
+        "Changed @sase+sase-gallery to @sase^sase-gallery"
+    );
+    assert!(json.get("alias").is_none(), "{json}");
+    assert!(json.get("sigil_alias_tip").is_none(), "{json}");
+
+    let again_input = format!("{expected}.");
+    let again = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg(again_input.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(&again_input)
+        .output()
+        .expect("run bob capture-rewrite glued-dot second toggle");
+    assert_success(&again);
+    let json: serde_json::Value = serde_json::from_str(stdout(&again).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["text"], "Create sase-gallery! @sase:sase-gallery");
+}
+
+#[test]
 fn capture_rewrite_json_comma_switches_a_block_id_separator_to_plus() {
     let input = "Create sase-gallery! @sase:sase-gallery,";
     let expected = "Create sase-gallery! @sase+sase-gallery";
@@ -968,6 +1021,29 @@ fn capture_parse_does_not_apply_the_separator_toggle() {
             .collect();
         assert!(codes.contains(&"invalid_pomodoro_block_id"), "{json}");
     }
+
+    let input = "Do work @file+id.";
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(input)
+        .output()
+        .expect("run bob capture-parse unrewritten plus dot");
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["input"], input);
+    assert_eq!(json["body"], "Do work");
+    assert!(json["block_id"].is_null(), "{json}");
+    let codes: Vec<&str> = json["diagnostics"]
+        .as_array()
+        .expect("diagnostics")
+        .iter()
+        .filter_map(|diagnostic| diagnostic["code"].as_str())
+        .collect();
+    assert!(codes.contains(&"invalid_sub_bullet_block_id"), "{json}");
 }
 
 #[test]

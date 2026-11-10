@@ -79,8 +79,9 @@ impl RewriteRule {
 /// With an explicit `cursor`, a complete plain `@route:id` / `@route^id` /
 /// `@route+id` marker that just grew a supported separator (`^`, `:`, `+`,
 /// `.`, or `,`) is rewritten to the resolved separator and the appended
-/// trigger is dropped. A glued `.` switches between `:` and `^`; a glued `,`
-/// acts as `+`. Typing `+` after `@route^id` switches to `@route+id`, like
+/// trigger is dropped. A glued `.` after `@route+id` acts as `^`, and later
+/// dots toggle `^` ↔ `:`; a glued `,` acts as `+`. Typing `+` after `@route^id`
+/// switches to `@route+id`, like
 /// every other separator. Task
 /// bullet IDs also accept a glued `.` to switch between `:id` and `^id`.
 /// That rule never searches the draft: no cursor means absorption-only,
@@ -1690,8 +1691,8 @@ fn candidate_selects_task_bullet_id(
 /// Typing `^` immediately after a complete plain `@route:id` or `@route+id`,
 /// `:` after `@route^id` or `@route+id`, `+` after `@route:id`, `.` after
 /// `@route:id` / `@route^id`, or `,` after either marker consumes that trigger
-/// and switches the separator. A glued `.` resolves to the other of `:` and
-/// `^`; after `@route+id` it stays literal. A glued `,` acts like `+`; after
+/// and switches the separator. A glued `.` after `@route+id` acts as `^`,
+/// and later dots toggle `^` ↔ `:`. A glued `,` acts like `+`; after
 /// `@route+id` it falls through to the next-parent continuation. Typing `:`
 /// right after a sealed
 /// `@route^id@` gives `@route:id@`, and `^` after `@route:id@` gives
@@ -1723,8 +1724,9 @@ fn switch_block_id_separator(
         b'.' => match separator {
             ':' => '^',
             '^' => ':',
-            // A `+id` marker names an existing task, so `.` stays literal.
-            '+' => return None,
+            // After `@route+id` a glued `.` acts as `^`; later dots toggle
+            // `^` ↔ `:` through the existing rule.
+            '+' => '^',
             _ => unreachable!("plain block ID separators are validated"),
         },
         _ => return None,

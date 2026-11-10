@@ -9213,7 +9213,9 @@ after `@route:id` or `@route^id` consumes that character and switches the
 separator. A plain `@route+block-id` can switch back to `@route:id` with `:`
 or to `@route^block-id` with `^`. A glued `.` toggles between `:` and `^`:
 `@route:id.` becomes `@route^id`, and `@route^id.` becomes `@route:id`. After
-`@route+id` it stays literal. For example,
+`@route+id`, a glued `.` acts like `^` (`Do work @foo+bar.` becomes
+`Do work @foo^bar`, and a second `.` gives `@foo:bar`); in a `>` transfer slot
+it stays literal. For example,
 `Create sase-gallery! @sase:sase-gallery.` becomes
 `Create sase-gallery! @sase^sase-gallery`. On a `>` transfer line, `+` after
 `@route:id` or `@route^id` in a source or destination slot switches to
@@ -9280,7 +9282,7 @@ literal `@file:id+` text.
 **Sigil alias.** With `--cursor`, typing `.` immediately after `@route`
 becomes `^`, and typing `;` there becomes `:` when the candidate opens the
 same Block ID picker as the real sigil. A `.` glued to a complete
-`@route:id` / `@route^id` marker toggles its separator as described above;
+`@route:id`, `@route^id`, or `@route+id` marker switches its separator as described above;
 `@errands.` still becomes `@errands^`. A whole-item `;` becomes `:` when
 the candidate opens the Task Link picker. A `- .` or `- ;` first-level bullet
 in a sealed project-note item becomes `- ^` or `- :` where the Move picker

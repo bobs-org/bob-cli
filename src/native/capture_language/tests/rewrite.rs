@@ -333,6 +333,141 @@ fn rewrite_draft_dot_toggles_block_id_separators() {
 }
 
 #[test]
+fn rewrite_draft_dot_switches_plus_markers_to_caret() {
+    assert_switch(
+        "Do work @file+id.",
+        "Do work @file^id",
+        "@file+id",
+        "@file^id",
+        8,
+    );
+    assert_switch("@file+id.", "@file^id", "@file+id", "@file^id", 0);
+    assert_switch(
+        "Create sase-gallery! @sase+sase-gallery.",
+        "Create sase-gallery! @sase^sase-gallery",
+        "@sase+sase-gallery",
+        "@sase^sase-gallery",
+        "Create sase-gallery! ".len(),
+    );
+    assert_switch(
+        "- [ ] Task @work+a.",
+        "- [ ] Task @work^a",
+        "@work+a",
+        "@work^a",
+        "- [ ] Task ".len(),
+    );
+    assert_switch(
+        "Parent\n- detail @work+a.",
+        "Parent\n- detail @work^a",
+        "@work+a",
+        "@work^a",
+        "Parent\n- detail ".len(),
+    );
+    assert_switch(
+        "First @file+id\n\nSecond @file+id.",
+        "First @file+id\n\nSecond @file^id",
+        "@file+id",
+        "@file^id",
+        "First @file+id\n\nSecond ".len(),
+    );
+    assert_switch(
+        "café 🚀 @Cash+Goog-Exit.",
+        "café 🚀 @Cash^Goog-Exit",
+        "@Cash+Goog-Exit",
+        "@Cash^Goog-Exit",
+        "café 🚀 ".len(),
+    );
+
+    let crlf = "Do work @file+id.\r\nNext";
+    let cursor = "Do work @file+id.".len();
+    let rewrite = rewrite_draft(crlf, Some(cursor));
+    assert_eq!(rewrite.rule, Some(RewriteRule::SwitchBlockIdSeparator));
+    assert_eq!(rewrite.text, "Do work @file^id\r\nNext");
+    assert_eq!(rewrite.cursor, Some("Do work @file^id".len()));
+
+    let leading = "@file+id. Do work";
+    let leading_cursor = "@file+id.".len();
+    let rewrite = rewrite_draft(leading, Some(leading_cursor));
+    assert_eq!(rewrite.rule, Some(RewriteRule::SwitchBlockIdSeparator));
+    assert_eq!(rewrite.text, "@file^id Do work");
+    assert_eq!(rewrite.cursor, Some("@file^id".len()));
+
+    let trailing = "Do work @file+id. s:2";
+    let trailing_cursor = "Do work @file+id.".len();
+    let rewrite = rewrite_draft(trailing, Some(trailing_cursor));
+    assert_eq!(rewrite.rule, Some(RewriteRule::SwitchBlockIdSeparator));
+    assert_eq!(rewrite.text, "Do work @file^id s:2");
+    assert_eq!(rewrite.cursor, Some("Do work @file^id".len()));
+}
+
+#[test]
+fn rewrite_draft_dot_after_plus_matches_caret() {
+    for (draft, expected) in [
+        ("note @work+a @dev+b", "note @work+a @dev^b"),
+        ("Do work #bug @file+id", "Do work #bug @file^id"),
+    ] {
+        let caret_input = format!("{draft}^");
+        let dot_input = format!("{draft}.");
+        let cursor = draft.len() + 1;
+        let caret = rewrite_draft(&caret_input, Some(cursor));
+        let dot = rewrite_draft(&dot_input, Some(cursor));
+        assert_eq!(caret.rule, dot.rule, "{draft}");
+        assert_eq!(caret.text, dot.text, "{draft}");
+        assert_eq!(caret.cursor, dot.cursor, "{draft}");
+        assert_eq!(caret.summary, dot.summary, "{draft}");
+        assert_eq!(caret.edits, dot.edits, "{draft}");
+        assert_eq!(
+            dot.rule,
+            Some(RewriteRule::SwitchBlockIdSeparator),
+            "{draft}"
+        );
+        assert_eq!(dot.text, expected, "{draft}");
+    }
+
+    for draft in [
+        "@work+a @dev+b",
+        "Do work @a+x +@b+y",
+        "Create task < @cash+line",
+        "@cash^goog-exit@\n- Task @dev+b",
+        "Do work @file+id#bug",
+    ] {
+        let caret_input = format!("{draft}^");
+        let dot_input = format!("{draft}.");
+        let cursor = draft.len() + 1;
+        let caret = rewrite_draft(&caret_input, Some(cursor));
+        let dot = rewrite_draft(&dot_input, Some(cursor));
+        assert_eq!(caret.rule, dot.rule, "{draft}");
+        assert_eq!(caret.text, caret_input, "{draft}");
+        assert_eq!(dot.text, dot_input, "{draft}");
+        assert_eq!(caret.cursor, dot.cursor, "{draft}");
+        assert_eq!(caret.summary, dot.summary, "{draft}");
+        assert_eq!(caret.edits, dot.edits, "{draft}");
+        assert_ne!(
+            dot.rule,
+            Some(RewriteRule::SwitchBlockIdSeparator),
+            "{draft}"
+        );
+    }
+
+    let first =
+        rewrite_draft("Do work @file+id.", Some("Do work @file+id.".len()));
+    assert_eq!(first.text, "Do work @file^id");
+    let second_input = format!("{}.", first.text);
+    let second = rewrite_draft(&second_input, Some(second_input.len()));
+    assert_eq!(second.text, "Do work @file:id");
+    let third_input = format!("{}.", second.text);
+    let third = rewrite_draft(&third_input, Some(third_input.len()));
+    assert_eq!(third.text, "Do work @file^id");
+
+    let comma =
+        rewrite_draft("Do work @file:id,", Some("Do work @file:id,".len()));
+    assert_eq!(comma.text, "Do work @file+id");
+    let dot_input = format!("{}.", comma.text);
+    let dot = rewrite_draft(&dot_input, Some(dot_input.len()));
+    assert_eq!(dot.text, "Do work @file^id");
+}
+
+#[test]
 fn rewrite_draft_comma_switches_block_id_separators_to_plus() {
     for (raw, expected, marker, from, start) in [
         (
@@ -479,7 +614,7 @@ fn rewrite_draft_dot_toggles_task_bullet_ids() {
 #[test]
 fn rewrite_draft_dot_does_not_toggle_ineligible_block_id_spots() {
     let cases = [
-        ("@file+id.", "@file+id.".len()),
+        ("@file+id@.", "@file+id@.".len()),
         ("Do work @file:i.d", "Do work @file:i.".len()),
         ("@file:id#name.", "@file:id#name.".len()),
         ("@file:id=3.", "@file:id=3.".len()),
@@ -494,6 +629,14 @@ fn rewrite_draft_dot_does_not_toggle_ineligible_block_id_spots() {
         ("see @file:id. here", "see @file:id.".len()),
         ("Do work @file:id\n.", "Do work @file:id\n.".len()),
         ("@inbox:bench. > @db", "@inbox:bench.".len()),
+        ("@inbox+bench. > @db", "@inbox+bench.".len()),
+        ("@a+x > @c+tid.", "@a+x > @c+tid.".len()),
+        ("@inbox+bench > @db+x.", "@inbox+bench > @db+x.".len()),
+        (
+            "Create task < @cash+line.",
+            "Create task < @cash+line.".len(),
+        ),
+        ("@dev\n- Task +task-id.", "@dev\n- Task +task-id.".len()),
     ];
     for (raw, cursor) in cases {
         let rewrite = rewrite_draft(raw, Some(cursor));
@@ -502,15 +645,16 @@ fn rewrite_draft_dot_does_not_toggle_ineligible_block_id_spots() {
             Some(RewriteRule::SwitchBlockIdSeparator),
             "{raw:?}"
         );
+        assert_eq!(rewrite.text, raw, "{raw:?}");
     }
 
-    let spaced = "Do work @file:id .";
+    let spaced = "Do work @file+id .";
     let rewrite = rewrite_draft(spaced, Some(spaced.len()));
     assert_ne!(rewrite.rule, Some(RewriteRule::SwitchBlockIdSeparator));
 
-    let no_cursor = rewrite_draft("Do work @file:id.", None);
+    let no_cursor = rewrite_draft("Do work @file+id.", None);
     assert_eq!(no_cursor.rule, None);
-    assert_eq!(no_cursor.text, "Do work @file:id.");
+    assert_eq!(no_cursor.text, "Do work @file+id.");
 }
 
 #[test]

@@ -47,7 +47,7 @@ Aliases exist only while typing. `bob capture`, `capture-parse`, paste, and pipe
 keep the text, so a pasted `Buy milk .` captures a dot and `xx` closes nothing. Template
 drafts and `#"…"` exact-name literals are never rewritten. Rewrites in the same lane
 that edit an existing marker are not aliases: the block-ID separator toggle
-(`@route:id^` → `@route^id`, or a glued `.` toggle (`@route:id.` ↔ `@route^id`), or the glued `,` switch (`@route:id,` → `@route+id`)),
+(`@route:id^` → `@route^id`, or a glued `.` toggle (`@route:id.` ↔ `@route^id`, `@route+id.` → `@route^id`), or the glued `,` switch (`@route:id,` → `@route+id`)),
 the glued `~`/`=` relation direction flip, the `|` label
 attach, `@@` absorption, and the `@@route` collapse (`@@cash/` → `@cash#`).
 None of these is a capture alias either: the Mac's "Capture
