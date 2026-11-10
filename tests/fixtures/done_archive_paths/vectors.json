@@ -1,0 +1,52 @@
+[
+  {
+    "id": "top-level-file",
+    "path": "done/x_done.md",
+    "archive": true
+  },
+  {
+    "id": "nested-month",
+    "path": "done/2026/20260528_done.md",
+    "archive": true
+  },
+  {
+    "id": "archive-root",
+    "path": "done",
+    "archive": true
+  },
+  {
+    "id": "nested-folder",
+    "path": "projects/done/x.md",
+    "archive": false
+  },
+  {
+    "id": "nested-done-dir",
+    "path": "projects/done",
+    "archive": false
+  },
+  {
+    "id": "wrong-case",
+    "path": "Done/x.md",
+    "archive": false
+  },
+  {
+    "id": "root-file",
+    "path": "done.md",
+    "archive": false
+  },
+  {
+    "id": "nested-file",
+    "path": "x/done.md",
+    "archive": false
+  },
+  {
+    "id": "dot-dir",
+    "path": ".done/x.md",
+    "archive": false
+  },
+  {
+    "id": "prefix",
+    "path": "donex/y.md",
+    "archive": false
+  }
+]

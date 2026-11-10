@@ -54,10 +54,12 @@ pub(crate) fn is_clobber_scan_path(path: &Path) -> bool {
     if !projects::is_markdown_file(path) || is_canonical_daily_note(path) {
         return false;
     }
+    if crate::native::done_archive::is_archive_path(path) {
+        return false;
+    }
     path.components().all(|component| match component {
         Component::Normal(name) => {
             !is_always_excluded_note_directory_name(name)
-                && name.to_str() != Some("done")
                 && !name.to_str().is_some_and(|text| text.starts_with('.'))
         }
         Component::CurDir | Component::ParentDir => true,
@@ -513,6 +515,7 @@ mod tests {
         assert!(!is_clobber_scan_path(Path::new("note.txt")));
         assert!(is_clobber_scan_path(Path::new("sase_agent_recovery.md")));
         assert!(is_clobber_scan_path(Path::new("area/project.md")));
+        assert!(is_clobber_scan_path(Path::new("projects/done/x.md")));
     }
 
     #[test]

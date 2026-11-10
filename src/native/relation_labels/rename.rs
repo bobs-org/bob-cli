@@ -773,9 +773,7 @@ fn plan_note(
     }
     line_changes.sort_by_key(|line| line.line);
     let after_contents = replace_spans(contents, &document_edits);
-    let done = Path::new(path)
-        .components()
-        .any(|component| component.as_os_str() == "done");
+    let done = crate::native::done_archive::is_archive_path(Path::new(path));
     Ok((
         Some(FilePlan {
             path: path.to_string(),

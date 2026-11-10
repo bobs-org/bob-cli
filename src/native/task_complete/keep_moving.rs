@@ -231,7 +231,7 @@ pub(crate) fn is_leaf_project<S: HomeSource>(
     today: NaiveDate,
     index: &NoteIndex,
 ) -> bool {
-    if in_done_archive(path) {
+    if crate::native::done_archive::is_archive_path(path) {
         return false;
     }
     if is_inbox_note(path, contents, index) {
@@ -549,7 +549,7 @@ fn g1_predecessor(
     {
         return false;
     }
-    if in_done_archive(&task.relative_path) {
+    if crate::native::done_archive::is_archive_path(&task.relative_path) {
         return false;
     }
     let Some(contents) = note_text(note_texts, &task.relative_path) else {
@@ -613,10 +613,4 @@ fn note_text<'a>(
         .iter()
         .find(|(note, _)| note == path)
         .map(|(_, contents)| contents.as_str())
-}
-
-fn in_done_archive(relative: &Path) -> bool {
-    relative
-        .components()
-        .any(|component| component.as_os_str() == "done")
 }

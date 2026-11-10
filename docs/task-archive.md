@@ -8,7 +8,8 @@ that pointed at moved block ids. The Rust planner lives in
 before articles, period-note problems, and the trailing `vault-sync`.
 
 This file is the behavior contract for selection, the keep window, pairing,
-rename following, guarded writes, preview, JSON output, and task restore.
+rename following, guarded writes, preview, JSON output, task restore, and
+the done/ path rule.
 
 ## Command
 
@@ -67,10 +68,12 @@ noncanonical. Every other note is skipped and counted by reason:
 | `finished_project` | Closed `^prj` or terminal project status |
 | `not_area_or_project` | Missing or non-area/project `type:` |
 
-Source discovery uses `task_status_hooks::markdown_files`: it skips `done/`,
-every dot-directory, and the always-excluded directories (`_conflicts`,
-`_generated`, `_templates`, `.bob`, `.git`, `.obsidian`). Link repair still
-walks `done/` and still skips dot-directories.
+Source discovery uses `task_status_hooks::markdown_files`: it skips the
+top-level `done/` archive, every dot-directory, and the always-excluded
+directories (`_conflicts`, `_generated`, `_templates`, `.bob`, `.git`,
+`.obsidian`). Link repair still walks `done/` and still skips
+dot-directories. A nested folder named `done` is not an archive and is
+not skipped.
 
 Closed and open statuses come from
 `.obsidian/plugins/obsidian-tasks-plugin/data.json` via
@@ -80,6 +83,15 @@ Open means `Todo`, `In Progress`, or `On Hold`. Default settings still treat
 
 YAML frontmatter, fenced code, and `%%` / `<!-- -->` comments are never task
 lines.
+
+## Done path
+
+A vault path is a `done/` archive when its first normal path component
+is exactly `done`, compared case-sensitively. `done/x_done.md` and
+`done/2026/20260528_done.md` are archives. A root `done.md`, a nested
+`projects/done/`, `Done/`, `.done/`, and `donex/` are not. Every Rust
+path check and note walker uses this rule; walkers skip only the
+top-level `done/` directory.
 
 ## Archivable unit, holds, and skips
 

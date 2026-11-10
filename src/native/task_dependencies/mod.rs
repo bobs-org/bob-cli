@@ -7,7 +7,6 @@
 //! implementation builds on.
 
 use std::{
-    ffi::OsStr,
     io,
     ops::Range,
     path::{Component, Path},
@@ -286,8 +285,5 @@ pub(crate) fn vault_relative_link_target_with_kind(
 
 /// Whether a resolved path lives under the `done/` archive.
 pub(crate) fn is_archive_path(path: &Path) -> bool {
-    matches!(
-        path.components().next(),
-        Some(Component::Normal(first)) if first == OsStr::new("done")
-    )
+    crate::native::done_archive::is_archive_path(path)
 }

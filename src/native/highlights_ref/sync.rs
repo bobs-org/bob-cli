@@ -1893,7 +1893,12 @@ fn retarget_v2_follow_up(
         return (candidate, false);
     }
     let route = match residence {
-        Some(route) if !route.is_empty() && !route.starts_with("done/") => {
+        Some(route)
+            if !route.is_empty()
+                && !crate::native::done_archive::is_archive_path(
+                    Path::new(route),
+                ) =>
+        {
             route.to_string()
         }
         _ => FALLBACK_PARENT_ROUTE.to_string(),

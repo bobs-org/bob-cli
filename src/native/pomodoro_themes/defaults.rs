@@ -97,7 +97,8 @@ pub(super) fn load(
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Cache>(&bytes).ok())
             .filter(|cache| {
-                cache.version == VERSION && valid_names(&cache.root)
+                cache.version == VERSION
+                    && valid_names(&cache.root, Path::new(""))
             })
     };
     let mut dirty = previous.is_none();
@@ -141,7 +142,7 @@ fn cache_path(root: &Path, cache_dir: &Path) -> PathBuf {
         .join(format!("note-defaults-v1-{hash}.json"))
 }
 
-fn valid_names(dir: &Directory) -> bool {
+fn valid_names(dir: &Directory, relative: &Path) -> bool {
     let valid = |name: &str| {
         !name.is_empty()
             && name != "."
@@ -152,9 +153,11 @@ fn valid_names(dir: &Directory) -> bool {
         .keys()
         .all(|name| valid(name) && projects::is_markdown_file(Path::new(name)))
         && dir.directories.iter().all(|(name, child)| {
+            let child_rel = relative.join(name);
             valid(name)
                 && !projects::is_excluded_directory(Path::new(name))
-                && valid_names(child)
+                && !crate::native::done_archive::is_archive_root(&child_rel)
+                && valid_names(child, &child_rel)
         })
 }
 
@@ -191,7 +194,12 @@ fn discover<'a>(
             else {
                 continue;
             };
-            if kind.is_dir() && !projects::is_excluded_directory(&path) {
+            if kind.is_dir()
+                && !projects::is_excluded_directory(&path)
+                && !crate::native::done_archive::skip_archive_directory(
+                    root, &path,
+                )
+            {
                 cache.directories.insert(
                     name.clone(),
                     old_dirs.remove(&name).unwrap_or_default(),

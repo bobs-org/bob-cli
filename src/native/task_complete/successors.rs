@@ -10,7 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ffi::OsStr;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
 use sha2::{Digest, Sha256};
@@ -605,16 +605,6 @@ fn parent_link_targets(value: &str) -> Vec<String> {
         }
     }
     targets
-}
-
-/// Whether a vault-relative note path is archive history: anything under
-/// the top-level `done/` directory. Successor candidates never come
-/// from there.
-fn in_done_archive(relative: &Path) -> bool {
-    matches!(
-        relative.components().next(),
-        Some(Component::Normal(name)) if name == "done"
-    )
 }
 
 /// One ledger entry in the pre-gesture day text: its 0-based line,
@@ -1837,7 +1827,8 @@ fn plan_successors_inner(
     let mut verdicts = Vec::new();
     if !legacy_suppressed {
         for (file_index, file) in files.iter().enumerate() {
-            if in_done_archive(&file.relative_path) {
+            if crate::native::done_archive::is_archive_path(&file.relative_path)
+            {
                 continue;
             }
             for (task_index, task) in file.tasks.iter().enumerate() {

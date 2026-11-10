@@ -1788,7 +1788,9 @@ pub(super) fn relation_candidates(
                 || key
                     .as_ref()
                     .is_some_and(|identity| typed.contains_key(identity));
-            let archived = is_done_path(Path::new(&task.note_path));
+            let archived = crate::native::done_archive::is_archive_path(
+                Path::new(&task.note_path),
+            );
             let read_only = direction == RelationDirection::From
                 && is_relation_source_read_only(bob_dir, task);
             let malformed = direction == RelationDirection::From
@@ -1999,7 +2001,9 @@ fn relation_order_key(
     if direction == RelationDirection::To {
         let group = if owner_note == Some(task.note_path.as_str()) {
             0
-        } else if is_done_path(Path::new(&task.note_path)) {
+        } else if crate::native::done_archive::is_archive_path(Path::new(
+            &task.note_path,
+        )) {
             5
         } else if task.open && task.status_symbol == '/' {
             1
@@ -2483,17 +2487,12 @@ fn append_successor_overlay(
     }
 }
 
-fn is_done_path(path: &Path) -> bool {
-    path.components()
-        .any(|component| component.as_os_str() == "done")
-}
-
 fn is_relation_source_read_only(
     bob_dir: &Path,
     task: &capture_dependency_tasks::DependencyTask,
 ) -> bool {
     let path = Path::new(&task.note_path);
-    is_done_path(path)
+    crate::native::done_archive::is_archive_path(path)
         || task_status_hooks::canonical_daily_date(path).is_some()
         || fs::metadata(bob_dir.join(path))
             .is_ok_and(|metadata| metadata.permissions().readonly())
@@ -2509,9 +2508,7 @@ fn is_editable_open_task(
     if task_status_hooks::canonical_daily_date(path).is_some() {
         return false;
     }
-    !path
-        .components()
-        .any(|component| component.as_os_str() == "done")
+    !crate::native::done_archive::is_archive_path(path)
 }
 
 fn blocked_task_group(

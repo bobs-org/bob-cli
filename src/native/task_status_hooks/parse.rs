@@ -3,11 +3,12 @@ use super::*;
 
 pub(crate) fn markdown_files(vault: &Path) -> io::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
-    collect_markdown_files(vault, &mut files)?;
+    collect_markdown_files(vault, vault, &mut files)?;
     Ok(files)
 }
 
 pub(super) fn collect_markdown_files(
+    vault: &Path,
     directory: &Path,
     files: &mut Vec<PathBuf>,
 ) -> io::Result<()> {
@@ -18,11 +19,10 @@ pub(super) fn collect_markdown_files(
         let path = entry.path();
         let file_type = entry.file_type()?;
         if file_type.is_dir() {
-            let name = entry.file_name();
-            if should_skip_directory(&name) {
+            if should_skip_directory(vault, &path) {
                 continue;
             }
-            collect_markdown_files(&path, files)?;
+            collect_markdown_files(vault, &path, files)?;
         } else if file_type.is_file()
             && path
                 .extension()
@@ -35,8 +35,11 @@ pub(super) fn collect_markdown_files(
     Ok(())
 }
 
-pub(super) fn should_skip_directory(name: &OsStr) -> bool {
-    name == OsStr::new("done")
+pub(super) fn should_skip_directory(vault: &Path, directory: &Path) -> bool {
+    let Some(name) = directory.file_name() else {
+        return false;
+    };
+    crate::native::done_archive::skip_archive_directory(vault, directory)
         || name.to_str().is_some_and(|name| name.starts_with('.'))
         || is_always_excluded_note_directory_name(name)
 }

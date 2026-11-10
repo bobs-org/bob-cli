@@ -319,11 +319,6 @@ fn display_relative(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-fn is_done_path(path: &Path) -> bool {
-    path.components()
-        .any(|component| component.as_os_str() == "done")
-}
-
 fn should_preserve_mention(
     source_path: Option<PathBuf>,
     source_id: &str,
@@ -1091,7 +1086,7 @@ fn plan_reverse(
             final_newline: file.final_newline,
             is_archive: file.is_archive,
             is_previous_daily: file.is_previous_daily,
-            done: is_done_path(&file.relative),
+            done: crate::native::done_archive::is_archive_path(&file.relative),
             changes: Vec::new(),
         })
         .collect();
@@ -1495,7 +1490,11 @@ fn plan_reverse(
     let total_links = moves_report.len();
     let done_links = moves_report
         .iter()
-        .filter(|mv| mv.source.path.split('/').any(|part| part == "done"))
+        .filter(|mv| {
+            crate::native::done_archive::is_archive_path(Path::new(
+                &mv.source.path,
+            ))
+        })
         .count();
     let done_notes = file_plans.iter().filter(|file| file.done).count();
     let _ = links_changed_entries;
@@ -2223,7 +2222,10 @@ fn verify_reversed(
                                     // mirrors (done/ + previous daily
                                     // are never rewritten). Only fail
                                     // when the mirror is writable.
-                                    let writable = !is_done_path(relative)
+                                    let archived = crate::native::done_archive::is_archive_path(
+                                        relative,
+                                    );
+                                    let writable = !archived
                                         && previous_daily_relative(
                                             vault, &paths,
                                         )

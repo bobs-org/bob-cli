@@ -783,16 +783,18 @@ fn paths_eq_route_ascii(left: &Path, right: &Path) -> bool {
 }
 
 fn excluded_route_dir(path: &Path) -> Option<&'static str> {
+    if crate::native::done_archive::is_archive_path(path) {
+        return Some("done");
+    }
     for component in path.components() {
         if let Component::Normal(name) = component
             && let Some(dir) = name.to_str()
-            && matches!(dir, "done" | "_templates" | "_conflicts")
         {
-            return Some(match dir {
-                "done" => "done",
-                "_templates" => "_templates",
-                _ => "_conflicts",
-            });
+            match dir {
+                "_templates" => return Some("_templates"),
+                "_conflicts" => return Some("_conflicts"),
+                _ => {}
+            }
         }
     }
     None

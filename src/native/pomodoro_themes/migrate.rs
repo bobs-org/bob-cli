@@ -255,7 +255,7 @@ fn prepare(
     let mut needs_repair = Vec::new();
     let mut conflicts = Vec::new();
     for relative in paths {
-        if is_done_archive(&relative) {
+        if crate::native::done_archive::is_archive_path(&relative) {
             continue;
         }
         let path = capture_dependency_tasks::display_path(&relative);
@@ -525,13 +525,6 @@ fn apply_edits(
         }
     }
     owned.concat()
-}
-
-fn is_done_archive(relative: &Path) -> bool {
-    relative
-        .components()
-        .next()
-        .is_some_and(|component| component.as_os_str() == "done")
 }
 
 fn run_live(matches: &ArgMatches, format: OutputFormat) -> i32 {

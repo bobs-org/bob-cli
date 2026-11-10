@@ -62,9 +62,9 @@ pub(super) fn load_relation_archives(
     let mut loaded = BTreeSet::new();
     if done_root.is_dir() {
         let mut paths = Vec::new();
-        collect_markdown_files(&done_root, &mut paths).map_err(|error| {
-            SyncError::io("scan archive notes", &done_root, error)
-        })?;
+        collect_markdown_files(vault, &done_root, &mut paths).map_err(
+            |error| SyncError::io("scan archive notes", &done_root, error),
+        )?;
         for path in paths {
             let Some(scan) = load_archive_file(vault, settings, &path, inputs)?
             else {

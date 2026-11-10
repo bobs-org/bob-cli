@@ -253,7 +253,7 @@ impl RefTaskIndex {
                 );
             let fenced =
                 crate::native::markdown::fenced_lines(&lines, 0..lines.len());
-            let archived = forward.starts_with("done/");
+            let archived = crate::native::done_archive::is_archive_path(rel);
             let is_root = !forward.contains('/');
             let file_stem = Path::new(&forward)
                 .file_stem()

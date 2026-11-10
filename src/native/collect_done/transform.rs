@@ -99,12 +99,16 @@ pub(super) fn should_skip_directory(
     include_done: bool,
 ) -> bool {
     let relative = directory.strip_prefix(vault).unwrap_or(directory);
+    if !include_done
+        && crate::native::done_archive::skip_archive_directory(vault, directory)
+    {
+        return true;
+    }
     relative.components().any(|component| {
         matches!(
             component,
             Component::Normal(name)
-                if (!include_done && name == OsStr::new("done"))
-                    || name.to_str().is_some_and(|name| name.starts_with('.'))
+                if name.to_str().is_some_and(|name| name.starts_with('.'))
                     || is_always_excluded_note_directory_name(name)
         )
     })

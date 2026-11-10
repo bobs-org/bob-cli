@@ -522,20 +522,13 @@ pub(super) enum SnapshotKind {
     Relations,
 }
 
-/// Whether a vault-relative note sits under an archive directory:
-/// `task_status_hooks::markdown_files` never descends into a `done`
-/// directory at any level, while the catalog covers it (needed for `&`
-/// links), so dependents scanning re-applies that exclusion to the
-/// shared path list. A note merely *named* `done.md` still counts.
+/// Whether a vault-relative note sits under the top-level `done/` archive.
+/// `task_status_hooks::markdown_files` skips that tree, while the catalog
+/// covers it (needed for `&` links), so dependents scanning re-applies
+/// that exclusion to the shared path list. A note merely *named*
+/// `done.md` still counts as live.
 pub(super) fn under_archive_dir(relative: &Path) -> bool {
-    let mut current = relative.parent();
-    while let Some(directory) = current {
-        if directory.file_name().is_some_and(|name| name == "done") {
-            return true;
-        }
-        current = directory.parent();
-    }
-    false
+    crate::native::done_archive::is_archive_path(relative)
 }
 
 impl DependentsSnapshot {

@@ -2,22 +2,17 @@
 //! watching-task scan.
 //!
 //! Both skip the same places: the mail folder itself, `_generated/`,
-//! `_conflicts/`, `.obsidian/`, `.bob/`, `done/`, every dot directory, and
-//! zorg-era generated logs. Symlinks are never followed, so a walk cannot
-//! leave the vault.
+//! `_conflicts/`, `.obsidian/`, `.bob/`, the top-level `done/` archive,
+//! every dot directory, and zorg-era generated logs. Symlinks are never
+//! followed, so a walk cannot leave the vault.
 
 use std::{
-    ffi::OsStr,
     fs,
     path::{Path, PathBuf},
 };
 
 use super::GmailError;
 use crate::native::is_always_excluded_note_directory_name;
-
-/// Vault directories never walked, besides the mail folder itself and any
-/// dot directory.
-const ALWAYS_SKIPPED_DIRS: &[&str] = &["_conflicts", "_generated", "done"];
 
 /// Every Markdown note in the vault except the mail folder, generated and
 /// state directories, the done archive, and zorg-era generated logs. Paths
@@ -95,9 +90,9 @@ fn walk(
             let name = entry.file_name();
             if name.to_string_lossy().starts_with('.')
                 || is_always_excluded_note_directory_name(&name)
-                || ALWAYS_SKIPPED_DIRS
-                    .iter()
-                    .any(|skipped| OsStr::new(skipped) == name.as_os_str())
+                || crate::native::done_archive::skip_archive_directory(
+                    root, &path,
+                )
                 || path_in_folder(relative, folder)
             {
                 continue;

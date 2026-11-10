@@ -245,7 +245,11 @@ pub(super) fn collect_markdown(
             }
         };
         if file_type.is_dir() {
-            if is_excluded_directory(&path) {
+            if is_excluded_directory(&path)
+                || crate::native::done_archive::skip_archive_directory(
+                    root, &path,
+                )
+            {
                 continue;
             }
             // `_templates/` is already excluded via ALWAYS_EXCLUDED, but

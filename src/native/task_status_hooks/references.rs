@@ -124,13 +124,13 @@ where
 
 pub(super) fn explicit_archive_reference_path(target: &str) -> Option<PathBuf> {
     let path = target_to_markdown_path(target)?;
-    let mut components = path.components();
-    let Some(Component::Normal(first)) = components.next() else {
-        return None;
-    };
-    if first != OsStr::new("done") {
+    if !crate::native::done_archive::is_archive_path(&path) {
         return None;
     }
+    let mut components = path.components();
+    let Some(Component::Normal(_)) = components.next() else {
+        return None;
+    };
     let Some(Component::Normal(_)) = components.next() else {
         return None;
     };

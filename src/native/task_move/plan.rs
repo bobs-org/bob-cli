@@ -196,13 +196,14 @@ pub(crate) fn list_task_move_destinations(
 }
 
 fn is_route_destination_excluded(path: &Path) -> bool {
-    path.components().any(|component| {
-        matches!(
-            component,
-            Component::Normal(name)
-                if name == "done" || name == "_templates" || name == "_conflicts"
-        )
-    })
+    crate::native::done_archive::is_archive_path(path)
+        || path.components().any(|component| {
+            matches!(
+                component,
+                Component::Normal(name)
+                    if name == "_templates" || name == "_conflicts"
+            )
+        })
 }
 
 fn resolve_parent_label(

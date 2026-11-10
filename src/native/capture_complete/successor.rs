@@ -137,7 +137,9 @@ fn release_state(
     bob_dir: &Path,
     target: &ResolvedSource,
 ) -> Option<ReleaseState> {
-    if target.status_type.is_terminal() || under_done_dir(&target.path) {
+    if target.status_type.is_terminal()
+        || crate::native::done_archive::is_archive_path(Path::new(&target.path))
+    {
         return Some(ReleaseState::Closed);
     }
     if target.status_symbol != '/' {
@@ -174,10 +176,4 @@ fn task_route(path: &str) -> String {
     let mut route = PathBuf::from(path);
     route.set_extension("");
     route.to_string_lossy().replace('\\', "/")
-}
-
-fn under_done_dir(path: &str) -> bool {
-    Path::new(path)
-        .components()
-        .any(|component| component.as_os_str() == "done")
 }

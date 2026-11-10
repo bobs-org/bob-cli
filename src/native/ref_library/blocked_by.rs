@@ -335,7 +335,10 @@ fn collect_open_id_carriers(
 fn keep_id_note(rel: &Path) -> bool {
     let forward = rel.to_string_lossy().replace('\\', "/");
     let first = forward.split('/').next().unwrap_or("");
-    if first == "lib" || first == "xlib" || first == "done" {
+    if first == "lib"
+        || first == "xlib"
+        || crate::native::done_archive::is_archive_path(rel)
+    {
         return false;
     }
     if let Some(name) = rel.file_name().and_then(|name| name.to_str())

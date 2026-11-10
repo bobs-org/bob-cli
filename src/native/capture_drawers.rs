@@ -290,9 +290,7 @@ pub(crate) fn load_drawer_catalog(
         };
         let key = drawer_display_relative(relative);
         let mtime_unix = mtime_ns / 1_000_000_000;
-        let is_done = key == "done.md"
-            || key.starts_with("done/")
-            || key.contains("/done/");
+        let is_done = crate::native::done_archive::is_archive_path(relative);
         let note = match previous.get(&key) {
             Some(cached)
                 if cached.mtime_ns == mtime_ns && cached.size == size =>

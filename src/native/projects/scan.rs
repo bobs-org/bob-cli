@@ -46,7 +46,11 @@ pub(super) fn scan_directory(
         };
 
         if file_type.is_dir() {
-            if is_excluded_directory(&path) {
+            if is_excluded_directory(&path)
+                || crate::native::done_archive::skip_archive_directory(
+                    root, &path,
+                )
+            {
                 continue;
             }
             scan_directory(root, &path, projects, issues);
@@ -1014,7 +1018,11 @@ fn walk_typed_directory(root: &Path, dir: &Path, notes: &mut Vec<TypedNote>) {
             Err(_) => continue,
         };
         if file_type.is_dir() {
-            if is_excluded_directory(&path) {
+            if is_excluded_directory(&path)
+                || crate::native::done_archive::skip_archive_directory(
+                    root, &path,
+                )
+            {
                 continue;
             }
             walk_typed_directory(root, &path, notes);
@@ -1027,8 +1035,7 @@ fn walk_typed_directory(root: &Path, dir: &Path, notes: &mut Vec<TypedNote>) {
         let relative_slash = relative.to_string_lossy().replace('\\', "/");
         // Contract exclusions beyond directories: `done/` and daily
         // paths are never per-note entries; `dash.md` never is either.
-        if relative_slash.starts_with("done/")
-            || relative_slash == "done"
+        if crate::native::done_archive::is_archive_path(&relative)
             || relative_slash == "dash.md"
         {
             continue;
@@ -1325,10 +1332,8 @@ pub(crate) fn is_markdown_file(path: &Path) -> bool {
 }
 
 pub(crate) fn is_excluded_directory(path: &Path) -> bool {
-    path.file_name().is_some_and(|name| {
-        is_always_excluded_note_directory_name(name)
-            || name.to_str() == Some("done")
-    })
+    path.file_name()
+        .is_some_and(is_always_excluded_note_directory_name)
 }
 
 pub(super) fn trim_cr(value: &str) -> &str {

@@ -75,7 +75,9 @@ fn project_surface_inner(
     today: NaiveDate,
     closed_child: Option<&Path>,
 ) -> Option<ProjectSurface> {
-    if is_done_path(relative) || canonical_daily_date(relative).is_some() {
+    if crate::native::done_archive::is_archive_path(relative)
+        || canonical_daily_date(relative).is_some()
+    {
         return None;
     }
     let mut issues = Vec::new();
@@ -131,12 +133,4 @@ fn project_surface_inner(
         subopen: open_subprojects > 0,
         open_subprojects,
     })
-}
-
-/// Whether a vault-relative note path sits under an archived `done/`
-/// directory at any depth, mirroring sync's directory exclusion.
-fn is_done_path(relative: &Path) -> bool {
-    relative
-        .components()
-        .any(|component| component.as_os_str() == "done")
 }
