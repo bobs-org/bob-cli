@@ -247,8 +247,8 @@ Clear one optional field without touching anything else, or revisit with only a
 note:
 
 ```sh
-bob records update restaurant ninja_sushi -s location=
-bob records update podcast talk_python -n 'Listened to the async episode'
+bob records update restaurant ninja_sushi -s url=
+bob records update restaurant ninja_sushi -n 'Went back for lunch'
 ```
 
 `-d/--dry-run` prints the exact planned Markdown without opening or writing, and
@@ -260,14 +260,12 @@ and never block the update.
 
 ## Adding a record type
 
-A new type is config plus scaffold. Add the type to `records:` in
-`config.yml`, then run `bob records init TYPE`. Shipped types are
-`restaurant` (`eat/`), `podcast` (`podcasts/`), `show` (`tv/`), and
-`movie` (`movies/`).
+Types exist only when declared in `records:` in `config.yml`;
+`bob records init TYPE` scaffolds an already-configured type. With the
+restaurant schema above:
 
 ```sh
-bob records init movie -p fun
-bob records init show
+bob records init restaurant -p food
 ```
 
 `--parent` is required when the collection note (`<dir>.md`) is missing, so

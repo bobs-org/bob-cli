@@ -5,20 +5,18 @@ description: Index of bob capture tokens with syntax, examples, and links into t
 
 # Capture syntax
 
-`bob capture` writes tasks, Record Notes, references, and Pomodoro changes.
+`bob capture` writes tasks, notebook notes, Record Notes, references, and Pomodoro changes.
 See [Capture contract](../capture.md).
 
 `@` chooses a destination; `#` names a section, drawer, or task type; `%` selects a
 capture directive. In completion, standalone `#` and `%` open menus.
 
 Examples use a synthetic vault (`BOB_NOW=2026-10-20 12:00:00`, `TZ=UTC`).
-
-Options come before the draft. Unknown long options stay literal after it.
-`--` ends option parsing.
+Put options before the draft; `--` ends option parsing.
 
 ## Token index
 
-Each operation has one row; incomplete **picker** input is refused.
+Incomplete **picker** input cannot execute.
 
 | Token | Meaning | Heading |
 | --- | --- | --- |
@@ -33,7 +31,7 @@ Each operation has one row; incomplete **picker** input is refused.
 | `@route` | Write a task to `<route>.md` | [`@route`](#at-route) |
 | `@dir/` / `@dir/^stem` / `@dir/stem` | Record create, explicit stem, or existing-record update | [Record notes](#record-notes) |
 | `@route#Section` / `@route#section^id` | Ordinary bullet under a matching heading | [`@route#Section`](#at-route-section) |
-| Notebook `@route`, `@route#section`, `@route^id`, `@route+id` | Parse a notebook note or sub-note | [Notebook capture](../notebooks.md#capture) |
+| Notebook `@route`, `@route#section`, `@route^id`, `@route+id` | Append a note, section note, named note, or sub-note | [Notebook capture](../notebooks.md#capture) |
 | `@route#` | Ordinary bullet under any non-`Tasks` heading | [`@route#`](#at-route-any-section) |
 | `@route^block-id` | New open task with a user-authored block ID | [`@route^block-id`](#at-route-caret) |
 | `@route:block-id` | New Next task plus a Pomodoro Task Link | [`@route:block-id`](#at-route-colon) |
@@ -120,9 +118,9 @@ Contract: [Grammar at a glance](../capture.md#grammar-at-a-glance).
 
 ## Incomplete input versus executable syntax
 
-A picker token is draft state. `bob capture` and
-`bob capture-parse` refuse it until the selection
-becomes `@route:id`, `!note:id`, `&note:id`, `*note:id`,
+A picker token is draft state. `capture-parse` reports its needs;
+`bob capture` refuses it until selection produces
+`@route:id`, `!note:id`, `&note:id`, `*note:id`,
 `~note:id`, `~~note:id`, or
 `@route+id`. Session tokens needing a number or name (`x~`, `=~`, `x@`,
 `=#`) are incomplete too. A bare `=name` start is complete (`=bugs`); an empty `=#` needs a non-bare name (`pomodoro_name`).
@@ -173,8 +171,9 @@ next five-minute boundary unless a segment suffix (`~…`) places them;
 
 ### `@route` {#at-route}
 
-Write a `#task` into `<route>.md` at the vault root. Route names are
-`A–Z a–z 0–9 _ -`, lower-cased. The default without a route is `mac_inbox`.
+Write a `#task` into `<route>.md` at the vault root, or a plain note when
+the destination is a [notebook](../notebooks.md#capture). Route names are
+`A–Z a–z 0–9 _ -`, lower-cased; the default is `mac_inbox`.
 
 ```bash
 bob capture 'Review the queue input'
@@ -195,20 +194,22 @@ Contract: [Routing and insertion](../capture.md#routing-and-insertion).
 
 ### `@dir/` / `@dir/^stem` / `@dir/stem` {#record-notes}
 
-See [Capture](../capture.md#record-notes).
+Requires a configured [record type](../records.md#schema).
 
 ```text
 Ramen Nagi @eat/
 - status:: liked
 - category:: Ramen
+- location:: Clark
 ```
 
 ```bash
-bob capture --dry-run -- "$(printf '%s\n' 'Ramen Nagi @eat/' '- status:: liked' '- category:: Ramen')"
+bob capture --dry-run -- "$(printf '%s\n' 'Ramen Nagi @eat/' '- status:: liked' '- category:: Ramen' '- location:: Clark')"
 ```
 
-`@dir/stem` parses as `record_update` and `bob capture` writes the planned
-bytes through the existing preimage-checked edit path.
+`@dir/` creates a record; `@dir/^stem` fixes its filename. `@dir/stem`
+updates an existing record: supplied fields change and prose appends to Notes.
+See [Capture](../capture.md#record-notes).
 
 ### `@@route` {#global-route}
 
@@ -376,9 +377,11 @@ Contract: [Bulk templates](../capture.md#bulk-templates).
 
 ## Block IDs and linked tasks
 
-Mac Capture uses `capture-rewrite` for `@route.` / `@route;` → `^` / `:`,
-whole-item `;` → `:`, spaced `.` → `@`, and spaced `.` / `;` → `&` / `*`;
-direct input stays literal.
+Editor `capture-rewrite` aliases include `@route.` / `@route;` → `^` / `:`,
+whole-item `;` → `:`, and spaced `.` / `;` → route or dependency pickers.
+A glued `.` toggles complete `@route:id` ↔ `@route^id`, including sealed
+project markers and task-list IDs. Direct CLI capture never applies these
+[typing assists](../capture.md#bob-capture-rewrite).
 
 ### `@route^block-id` {#at-route-caret}
 
@@ -547,8 +550,6 @@ bob capture-parse -f json -- '+prep'
 {"ok":true,"schema_version":1,"mode":"incomplete","needs":["task_parent"],"body":""}
 ```
 
-This is a draft state, not a successful capture.
-
 Contract: [Sub-bullets under existing tasks](../capture.md#sub-bullets-under-existing-tasks).
 
 ### lone `+` {#lone-plus}
@@ -615,8 +616,6 @@ bob capture-parse -f json -- '&prep'
 {"ok":true,"schema_version":1,"mode":"incomplete","needs":["task_dependency"]}
 ```
 
-This is a draft state, not a successful capture.
-
 Contract: [Adding prerequisites with '&'](../capture.md#adding-prerequisites-with).
 
 ### `^route:block-id &note:id` {#add-prereq-existing}
@@ -673,8 +672,6 @@ bob capture-parse -f json -- 'Ask for the dump *queue'
 ```text { .no-copy title="Output (excerpt)" }
 {"ok":true,"schema_version":1,"mode":"incomplete","needs":["blocked_task"]}
 ```
-
-This is a draft state, not a successful capture.
 
 Contract: [Blocking existing tasks with '*'](../capture.md#blocking-existing-tasks-with).
 

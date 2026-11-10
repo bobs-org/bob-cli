@@ -397,6 +397,41 @@ generated `## Notebooks` catalog of the notebooks beneath them. See
 
 Contract: [Notebooks](../notebooks.md).
 
+### Record notes
+
+Each configured `records:` type owns one folder. A record uses
+`type: "[[<type-id>]]"` and lives at `<dir>/<stem>.md`; its properties come
+from that type's schema. Bob writes `parent` when available, then `type`,
+`title`, schema fields, and `created`. Authored note bullets live under
+`## Notes`, with dates when `dated_notes: true`.
+
+For example, a configured `restaurant` type owning `eat/` creates
+`eat/ramen_nagi.md` through `Ramen Nagi @eat/`. `@eat/ramen_nagi` updates
+that record's supplied fields and appends notes. `bob records init restaurant`
+scaffolds missing `restaurant.md`, `eat.md`, and `eat.base`; creating a
+missing collection note also requires `-p/--parent`.
+
+Contract: [Record notes](../records.md).
+
+### Task archives
+
+`bob task archive` pairs a live source with
+`done/<source-parent>/<stem>_done.md`. The source's `done_tasks` link names
+the archive; the archive has `type: "[[done]]"` and a `parent` link back.
+Reciprocal metadata takes precedence over filenames, and unambiguous archive
+pairs follow source renames.
+
+Eligible area and unfinished project notes keep up to ten newest dated
+closures from today and the preceding six days. Older eligible task blocks
+move with their children; undated and future-dated closures stay. New archive
+content uses `## YYYY-MM` close-month headings. Links to moved blocks are
+repaired across the vault.
+
+`bob task restore` moves selected closed blocks back to their bound source
+or an explicit destination. They remain closed unless `--reopen` is supplied.
+
+Contract: [Task archive and restore](../task-archive.md).
+
 ### Inbox notes
 
 `inbox.md` at the vault root, plus area notes whose frontmatter `parent`
@@ -641,6 +676,8 @@ vault/
 ├── gmail_inbox.md           # default bob gmail sync inbox
 ├── work.md                  # area note; @work
 ├── work_intake_flow.md      # project note from @work^intake-flow@
+├── work_notes.md            # notebook owned by work.md
+├── eat/ramen_nagi.md        # record, when records.restaurant.dir is eat
 ├── 2026/20261020.md         # daily note / Pomodoro ledger
 ├── 2026/2026-W43.md         # ISO week note
 ├── 2026/2026-Q4.md          # 13-week quarter (plus W53 in Q4)
@@ -677,6 +714,7 @@ vault/
 | `mail/`, `gmail_inbox.md` | Created by Gmail save/compose and label sync | `gmail.folder`, `gmail.sync.inbox` |
 | Period notes | Created by `bob periods ensure` | Fixed paths in the period tree |
 | `done/` | Created by archive | none |
+| Record folders | Created on first record write | `records.<type>.dir` |
 | `.obsidian/plugins/obsidian-tasks-plugin/data.json` | Needed for Dataview Tasks and Blocked writes | none |
 
 `.bob/` is machine data (preference journals, Keep import receipts, and
@@ -695,9 +733,10 @@ carries `inbox` and `note` and is read-only. `gmail.save` receipts carry
 `note`, `created`, and `added`. Values never contain bodies, snippets, or
 subjects. See [Bob Gmail](../gmail.md#sync).
 
-`old_lib/` is the archival predecessor of `lib/`. Capture routes select
-root-level notes: `@work` writes `work.md`. Nested notes are reached with
-path-aware `&` / `*` (`&projects/foo:bar`), not as `@` routes.
+`old_lib/` is the archival predecessor of `lib/`. Ordinary capture routes
+select root-level notes: `@work` writes `work.md`. Configured record routes
+also address `<dir>/<stem>`. Other nested notes are reached with path-aware
+`&` / `*` (`&projects/foo:bar`).
 
 Contract: [Reference library default paths](../highlights-ref-sync.md#default-paths).
 
