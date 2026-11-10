@@ -1693,6 +1693,24 @@ and the `Cycle period stats charts` command, independent of the Day preference.
 Opening or refreshing a strip never changes note bytes and never appends
 journal events.
 
+Period strip geometry: each chart plot is 44 px tall in Both and 62 px in a
+single view; bars are `min(24px, slot − 2px)`, centered. Roots chart bob's
+configured top-N root parents and Types chart the configured task types;
+folded remainder and unattributed time use neutral fills (light rest, hatched
+unlinked/untyped). An untracked child period shows only a short dotted ghost
+(about 35% of plot height) and a future period shows only the 2 px baseline
+stub. Legends name every series and compact full values to `display_short`
+before wrapping to at most two lines; a newly shown chart fades in over
+160 ms while data repaints never animate (reduced motion disables the fade).
+Year weeks group by quarter with `Q3 · short` captions and no per-column
+values; below about 400 px the year falls back to four quarter columns with
+`Q1` captions and short values. All-time quarters group by year with short
+values; leading untracked years collapse into one quiet ghost. Alt+Enter
+opens Stats for the whole child period, pinning the day for day columns.
+Older bob versions keep the Roots chart with an update note. Height budgets
+at 700–1000 px run about 260–282 px for Both and 215–238 px for a single
+view; at 320–410 px legends and facts wrap (Both about 350–370 px).
+
 ### Browser preview and fixtures
 
 The fixture-driven real-browser preview exercises the production `bob-stats` block
