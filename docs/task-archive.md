@@ -32,20 +32,24 @@ bob task archive -n -f json
 (`--format=json`, `-fjson`, `-f=json`). An unknown format or option is a
 usage error: exit 2, nothing on stdout, no planning.
 
-For each source note, Bob keeps the ten newest dated closures from the last
-seven calendar days. Older closures move to `done/`; when more than ten roots
-closed during that window, the older roots in the window move too. An explicit
-`-t` sets the minimum number of selected roots that must be ready to move from
-one source before any of them move. Without `-t`, there is no batch minimum.
-Exact archive replays remain eligible so a prior interrupted write can remove
-its source copy safely.
+For each source note, Bob keeps dated closures from the last
+`archive.keep_days` calendar days (default `7`), including today, and at most
+the newest `archive.keep_max` of them (default `10`). Older roots and roots
+over the cap move to `done/`. Frontmatter `archive_keep: N` (1–999) replaces that note's cap;
+`archive_keep: off` keeps its closed roots, while exact replays still finish an
+interrupted write. An invalid value warns and falls back to `archive.keep_max`.
+An explicit `-t` sets the minimum number of selected roots that must be ready
+to move from one source before any of them move. Without `-t`, there is no
+batch minimum.
 
 New archive content is grouped under `## YYYY-MM` headings based on each
-root's close date. Existing archive bodies stay in place; Bob does not regroup
-old flat content. Undated or future-dated roots stay in their source because
-their age and close month cannot be established safely. An eligible source
-with an existing archive can still receive metadata repairs even when no
-roots are selected.
+root's close date. Undated roots count as oldest and move under `## Undated`;
+the `undated_closed_row` health diagnostic continues to report them. Future-
+dated roots stay in their source. New month headings are inserted in
+chronological order, with `## Undated` before dated months. Existing archive
+bodies, including legacy flat content, stay in place. An eligible source with
+an existing archive can still receive metadata repairs even when no roots are
+selected.
 
 ## Eligibility
 

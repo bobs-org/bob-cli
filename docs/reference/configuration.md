@@ -40,6 +40,10 @@ plan:
   link_unblocked: true
   default_type: CHORE
 
+archive:
+  keep_days: 7
+  keep_max: 10
+
 types:
   PLAN: blue
   BUILD: yellow
@@ -80,9 +84,7 @@ value kinds consumed by Bob integrations.
 | `levels[].value` | Nonempty scalar string, number, or boolean; values must be unique | Value written in the task's priority property. It cannot contain brackets, `::`, or a newline. |
 | `levels[].min_days`, `max_days` | Nonnegative integers; minimum cannot exceed maximum | Inclusive offset window used to roll a scheduled date. |
 
-Each level's inclusive day window determines how far a chosen priority rolls
-its `scheduled` date. `BOB_PRIORITY_ROLL_SEED` can make a roll repeatable. See
-[priority and schedule rolls](../plan.md#config) and
+See [priority and schedule rolls](../plan.md#config) and
 [`bob task reroll`](cli/task.md).
 
 ### `capture`
@@ -139,6 +141,16 @@ exit 2; capture and hook surfaces warn and use their established fallback.
 
 See the [plan configuration contract](../plan.md#config) and
 [dependency successor offers](../task-dependencies.md#12-successor-offers).
+
+### `archive`
+
+| Key | Type and range | Default | Effect |
+| --- | --- | --- | --- |
+| `archive.keep_days` | Integer, 1–3650 | `7` | Calendar-day window in which closures may be kept. |
+| `archive.keep_max` | Integer, 1–999 | `10` | Maximum recent roots kept per note; `archive_keep: N|off` overrides it. |
+
+Invalid archive settings fail `bob task archive` and its nightly step before
+planning. See the [archive contract](../task-archive.md#command).
 
 ### `types` (legacy alias: `themes`)
 

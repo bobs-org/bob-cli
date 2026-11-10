@@ -864,6 +864,122 @@ Keep this section in place.
 }
 
 #[test]
+fn inserts_missing_month_after_legacy_content_and_before_later_month() {
+    let existing = "\
+---\n\
+parent: \"[[work]]\"\n\
+type: \"[[done]]\"\n\
+---\n\
+\n\
+Legacy flat content.\n\
+\n\
+## 2026-11\n\
+\n\
+- [x] November root #task\n";
+    let contents = archive_contents(
+        Some(existing),
+        "## 2026-09\n\n- [x] September root #task\n",
+        "[[work]]",
+    );
+
+    let legacy = contents.find("Legacy flat content").unwrap();
+    let september = contents.find("## 2026-09").unwrap();
+    let november = contents.find("## 2026-11").unwrap();
+    assert!(legacy < september && september < november, "{contents}");
+}
+
+#[test]
+fn inserts_undated_before_the_first_month_section() {
+    let existing = "\
+---\n\
+parent: \"[[work]]\"\n\
+type: \"[[done]]\"\n\
+---\n\
+\n\
+## 2026-11\n\
+\n\
+- [x] November root #task\n";
+    let contents = archive_contents(
+        Some(existing),
+        "## Undated\n\n- [x] Undated root #task\n",
+        "[[work]]",
+    );
+
+    assert!(
+        contents.find("## Undated").unwrap()
+            < contents.find("## 2026-11").unwrap(),
+        "{contents}"
+    );
+}
+
+#[test]
+fn appends_new_undated_roots_inside_an_existing_undated_section() {
+    let existing = "\
+---\n\
+parent: \"[[work]]\"\n\
+type: \"[[done]]\"\n\
+---\n\
+\n\
+## Undated\n\
+\n\
+- [x] Earlier root #task\n\
+\n\
+## 2026-11\n\
+\n\
+- [x] November root #task\n";
+    let contents = archive_contents(
+        Some(existing),
+        "## Undated\n\n- [x] New root #task\n",
+        "[[work]]",
+    );
+
+    let first = contents.find("## Undated").unwrap();
+    let earlier = contents.find("Earlier root").unwrap();
+    let new = contents.find("New root").unwrap();
+    let month = contents.find("## 2026-11").unwrap();
+    assert_eq!(contents.matches("## Undated").count(), 1);
+    assert!(
+        first < earlier && earlier < new && new < month,
+        "{contents}"
+    );
+}
+
+#[test]
+fn ignores_fenced_month_headings_when_placing_a_new_section() {
+    let existing = "\
+---\n\
+parent: \"[[work]]\"\n\
+type: \"[[done]]\"\n\
+---\n\
+\n\
+```md\n\
+## 2026-11\n\
+```\n";
+    let contents = archive_contents(
+        Some(existing),
+        "## 2026-09\n\n- [x] September root #task\n",
+        "[[work]]",
+    );
+
+    let fence_end = contents.find("```\n").unwrap();
+    let september = contents.rfind("## 2026-09").unwrap();
+    assert!(fence_end < september, "{contents}");
+}
+
+#[test]
+fn keeps_crlf_archive_line_endings_when_inserting_a_month() {
+    let existing = "---\r\nparent: \"[[work]]\"\r\ntype: \"[[done]]\"\r\n---\r\n\r\n## 2026-11\r\n\r\n- [x] November root #task\r\n";
+    let contents = archive_contents(
+        Some(existing),
+        "## 2026-09\r\n\r\n- [x] September root #task\r\n",
+        "[[work]]",
+    );
+
+    assert!(contents.contains("## 2026-09\r\n\r\n"));
+    assert!(!contents.replace("\r\n", "").contains('\n'), "{contents:?}");
+}
+
+#[test]
 fn adds_archive_parent_to_existing_frontmatter() {
     let contents = archive_contents(
         Some(

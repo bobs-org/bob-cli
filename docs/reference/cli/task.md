@@ -49,8 +49,10 @@ usage: bob task archive [-n|--dry-run] [-f|--format human|json] [-t|--threshold 
 
 Move done and canceled Bob task blocks from area and project notes into
 done/ archives, link sources, repair archive metadata, and repair Obsidian
-links to moved block ids. Writes go through the guarded writer under the
-vault maintenance lock (waiting up to 30 seconds). See docs/task-archive.md.
+links to moved block ids. Selection uses archive.keep_days,
+archive.keep_max, and per-note archive_keep. Writes go through the guarded
+writer under the vault maintenance lock (waiting up to 30 seconds). See
+docs/task-archive.md.
 
 examples:
   bob task archive --threshold 10

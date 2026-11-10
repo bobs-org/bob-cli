@@ -377,8 +377,22 @@ pub(super) fn plan_archive(
     vault: &Path,
     threshold: usize,
 ) -> io::Result<PlannedArchive> {
+    let archive_config = super::super::config::load_archive_config(
+        &super::super::config::config_path(),
+    )
+    .map_err(|error| {
+        io::Error::new(io::ErrorKind::InvalidInput, error.to_string())
+    })?;
+    plan_archive_with_config(vault, threshold, archive_config)
+}
+
+fn plan_archive_with_config(
+    vault: &Path,
+    threshold: usize,
+    archive_config: super::super::config::ArchiveConfig,
+) -> io::Result<PlannedArchive> {
     let captured = capture_inputs(vault)?;
-    plan_from_captured(&captured, threshold)
+    plan_from_captured_with_config(&captured, threshold, archive_config)
 }
 
 #[cfg(test)]
@@ -386,7 +400,30 @@ pub(super) fn build_collection_plan(
     vault: &Path,
     threshold: usize,
 ) -> io::Result<CollectionPlan> {
-    plan_archive(vault, threshold).map(|planned| planned.collection)
+    build_collection_plan_with_config(
+        vault,
+        threshold,
+        super::super::config::ArchiveConfig::default(),
+    )
+}
+
+#[cfg(test)]
+pub(super) fn build_collection_plan_with_config(
+    vault: &Path,
+    threshold: usize,
+    archive_config: super::super::config::ArchiveConfig,
+) -> io::Result<CollectionPlan> {
+    plan_archive_with_config(vault, threshold, archive_config)
+        .map(|planned| planned.collection)
+}
+
+#[cfg(test)]
+pub(super) fn build_planned_archive_with_config(
+    vault: &Path,
+    threshold: usize,
+    archive_config: super::super::config::ArchiveConfig,
+) -> io::Result<PlannedArchive> {
+    plan_archive_with_config(vault, threshold, archive_config)
 }
 
 #[cfg(test)]
@@ -404,13 +441,32 @@ pub(super) struct PlannedArchive {
     pub(super) diagnostics: Diagnostics,
 }
 
+#[cfg(test)]
 pub(super) fn plan_from_captured(
     captured: &CapturedInputs,
     threshold: usize,
 ) -> io::Result<PlannedArchive> {
+    plan_from_captured_with_config(
+        captured,
+        threshold,
+        super::super::config::ArchiveConfig::default(),
+    )
+}
+
+fn plan_from_captured_with_config(
+    captured: &CapturedInputs,
+    threshold: usize,
+    archive_config: super::super::config::ArchiveConfig,
+) -> io::Result<PlannedArchive> {
     let pairs = ArchivePairIndex::from_contents(&captured.contents);
     let diagnostics = collect_diagnostics(captured, &pairs);
-    plan_from_captured_with(captured, &pairs, diagnostics, threshold)
+    plan_from_captured_with(
+        captured,
+        &pairs,
+        diagnostics,
+        threshold,
+        archive_config,
+    )
 }
 
 fn plan_from_captured_with(
@@ -418,9 +474,15 @@ fn plan_from_captured_with(
     pairs: &ArchivePairIndex,
     diagnostics: Diagnostics,
     threshold: usize,
+    archive_config: super::super::config::ArchiveConfig,
 ) -> io::Result<PlannedArchive> {
-    let result =
-        plan_from_pairs(captured, pairs, diagnostics.clone(), threshold);
+    let result = plan_from_pairs(
+        captured,
+        pairs,
+        diagnostics.clone(),
+        threshold,
+        archive_config,
+    );
     result.map_err(|error| attach_diagnostics(error, diagnostics))
 }
 
@@ -429,6 +491,7 @@ fn plan_from_pairs(
     pairs: &ArchivePairIndex,
     diagnostics: Diagnostics,
     threshold: usize,
+    archive_config: super::super::config::ArchiveConfig,
 ) -> io::Result<PlannedArchive> {
     validate_dependency_identity_index(&captured.contents)?;
     let blocked_sources = diagnostics.write_blocked_sources();
@@ -520,10 +583,17 @@ fn plan_from_pairs(
         };
         let destination_exists =
             captured.contents.contains_key(&relative_archive_path);
+        let note_keep_cap = note_archive_keep(
+            &contents,
+            &relative_source_path,
+            archive_config.keep_max,
+        );
         let selected_lines = select_archive_roots(
             &candidates,
             existing_archive,
             super::super::env::current_datetime().date(),
+            archive_config.keep_days,
+            note_keep_cap,
         );
         let moves_tasks = !selected_lines.is_empty()
             && (threshold == 0 || selected_lines.len() >= threshold);
@@ -903,19 +973,55 @@ struct PartitionedArchive {
     records: Vec<MovedRootRecord>,
 }
 
-const KEEP_WINDOW_DAYS: i64 = 7;
-const KEEP_WINDOW_CAP: usize = 10;
+/// Resolve the source note's optional archive keep cap. `None` means `off`;
+/// invalid explicit values warn once and fall back to the global default.
+fn note_archive_keep(
+    contents: &str,
+    relative_path: &Path,
+    default_cap: u32,
+) -> Option<usize> {
+    use super::super::projects::FrontmatterScalar;
 
-/// Select roots outside the chosen trailing-week window, plus exact archive
-/// replays that only need their source copy removed after an interrupted run.
-/// Undated and future-dated roots stay in the source because their close month
-/// cannot be established safely.
+    let Some(frontmatter) = super::super::projects::parse_frontmatter(contents)
+    else {
+        return Some(default_cap as usize);
+    };
+    let scalar = super::super::projects::frontmatter_scalar(
+        &frontmatter,
+        "archive_keep",
+    );
+    let raw = match scalar {
+        FrontmatterScalar::Absent => return Some(default_cap as usize),
+        FrontmatterScalar::Blank => String::new(),
+        FrontmatterScalar::Value(value) => value,
+        FrontmatterScalar::NonScalar(value) => value,
+    };
+    if raw.eq_ignore_ascii_case("off") {
+        return None;
+    }
+    if let Ok(number) = raw.parse::<u32>()
+        && (1..=999).contains(&number)
+    {
+        return Some(number as usize);
+    }
+    eprintln!(
+        "{COMMAND_NAME}: warning: archive_keep {raw:?} in {} is not 1–999 or off; using archive.keep_max ({default_cap})",
+        relative_path.display()
+    );
+    Some(default_cap as usize)
+}
+
+/// Select roots outside the configured trailing calendar window, plus
+/// exact archive replays that only need their source copy removed after an
+/// interrupted run. Undated roots count as oldest; future-dated roots stay.
 fn select_archive_roots(
     transform: &Transform,
     existing_archive: Option<&str>,
     today: NaiveDate,
+    keep_days: u32,
+    keep_cap: Option<usize>,
 ) -> BTreeSet<usize> {
-    let cutoff = today - Duration::days(KEEP_WINDOW_DAYS - 1);
+    let cutoff = today - Duration::days(i64::from(keep_days - 1));
     let mut inventory = archive_block_inventory(existing_archive);
     let mut selected = BTreeSet::new();
     let mut recent = Vec::new();
@@ -940,14 +1046,16 @@ fn select_archive_roots(
             .and_then(super::super::ref_tasks::close_date)
             .and_then(|date| NaiveDate::parse_from_str(&date, "%Y-%m-%d").ok());
         match close_date {
-            Some(date) if date < cutoff => {
+            None if keep_cap.is_some() => {
                 selected.insert(span.source_line);
             }
-            Some(date) if date <= today => {
-                recent.push((date, span.source_line))
+            Some(date) if date < cutoff && keep_cap.is_some() => {
+                selected.insert(span.source_line);
             }
-            // Keep future-dated and undated rows until a valid close date is
-            // available; neither can be assigned to a close-month heading.
+            Some(date) if date <= today && keep_cap.is_some() => {
+                recent.push((date, span.source_line));
+            }
+            // Future-dated roots and every non-replay root under `off` stay.
             Some(_) | None => {}
         }
     }
@@ -957,13 +1065,20 @@ fn select_archive_roots(
             .cmp(left_date)
             .then_with(|| right_line.cmp(left_line))
     });
-    selected.extend(
-        recent
-            .into_iter()
-            .skip(KEEP_WINDOW_CAP)
-            .map(|(_, line)| line),
-    );
+    if let Some(keep_cap) = keep_cap {
+        selected
+            .extend(recent.into_iter().skip(keep_cap).map(|(_, line)| line));
+    }
     selected
+}
+
+fn compare_month_keys(left: &str, right: &str) -> std::cmp::Ordering {
+    match (left == "Undated", right == "Undated") {
+        (true, true) => std::cmp::Ordering::Equal,
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        (false, false) => left.cmp(right),
+    }
 }
 
 /// Split selected roots into exact replays and new archive appends.
@@ -986,7 +1101,7 @@ fn partition_selected_roots(
         raw: String,
         contained: Vec<String>,
         replayed: bool,
-        close_month: Option<String>,
+        close_month: String,
         append_start: usize,
         append_end: usize,
         occurrence_base: usize,
@@ -1028,7 +1143,8 @@ fn partition_selected_roots(
             .next()
             .and_then(super::super::ref_tasks::close_date)
             .and_then(|date| NaiveDate::parse_from_str(&date, "%Y-%m-%d").ok())
-            .map(|date| date.format("%Y-%m").to_string());
+            .map(|date| date.format("%Y-%m").to_string())
+            .unwrap_or_else(|| "Undated".to_string());
         pending.push(PendingRoot {
             source_line: span.source_line,
             root_id: span.root_id.clone(),
@@ -1081,20 +1197,10 @@ fn partition_selected_roots(
                 final_root,
                 &deduplicated.final_block_ids,
             );
-            if let Some(month) = pending.close_month.as_ref() {
-                month_appends
-                    .entry(month.clone())
-                    .or_default()
-                    .push((pending.source_line, final_root));
-            } else {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "selected archive root on source line {} has no valid close month",
-                        pending.source_line
-                    ),
-                ));
-            }
+            month_appends
+                .entry(pending.close_month.clone())
+                .or_default()
+                .push((pending.source_line, final_root));
             deduplicated.aligned_final_ids[pending.occurrence_base
                 ..pending.occurrence_base + pending.occurrence_count]
                 .to_vec()
@@ -1110,6 +1216,9 @@ fn partition_selected_roots(
     }
     let line_ending = preferred_line_ending(&new_append);
     let mut archive_append = String::new();
+    let mut month_appends = month_appends.into_iter().collect::<Vec<_>>();
+    month_appends
+        .sort_by(|(left, _), (right, _)| compare_month_keys(left, right));
     for (month, mut roots) in month_appends {
         roots.sort_by_key(|(line, _)| *line);
         archive_append.push_str("## ");

@@ -7,6 +7,7 @@ use serde::Deserialize;
 
 use super::env as bob_env;
 
+pub(crate) mod archive;
 pub(crate) mod capture;
 pub(crate) mod day_timezone;
 pub(crate) mod dependencies;
@@ -19,6 +20,10 @@ pub(crate) mod relations;
 pub(crate) mod stats;
 pub(crate) mod themes;
 
+#[allow(unused_imports)]
+pub(crate) use archive::{
+    load_archive_config, parse_archive_config, ArchiveConfig,
+};
 pub(crate) use capture::{
     load_capture_config, load_clipboard_history_config,
     ClipboardHistorySetting, DEFAULT_MAX_SAVED_TEMPLATES,
@@ -486,6 +491,8 @@ pub(crate) struct RawConfig {
     pub(crate) capture: Option<serde_yaml::Value>,
     #[serde(default)]
     pub(crate) plan: Option<serde_yaml::Value>,
+    #[serde(default)]
+    pub(crate) archive: Option<serde_yaml::Value>,
     #[serde(default)]
     pub(crate) dependencies: Option<serde_yaml::Value>,
     #[serde(default)]

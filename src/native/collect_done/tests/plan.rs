@@ -68,6 +68,138 @@ fn keep_window_caps_recent_roots_at_ten() {
 }
 
 #[test]
+fn configured_keep_days_keeps_the_boundary_and_moves_one_day_older() {
+    let vault = TempDir::new("bob-cli-archive-configured-days");
+    let tasks = format!(
+        "- [x] boundary #task [completion:: {}] ^boundary\n\
+         - [x] older #task [completion:: {}] ^older\n",
+        close_date(2),
+        close_date(3),
+    );
+    write_file(&vault.path().join("work.md"), &area_note(&tasks));
+
+    let plan = super::super::plan::build_collection_plan_with_config(
+        vault.path(),
+        NO_MINIMUM_BATCH,
+        crate::native::config::ArchiveConfig {
+            keep_days: 3,
+            keep_max: 10,
+        },
+    )
+    .expect("build configured plan");
+
+    assert_eq!(plan.total_task_count(), 1);
+    let file = &plan.files[0];
+    assert!(file.source_contents.contains("^boundary"));
+    assert!(!file.source_contents.contains("^older"));
+    assert!(file.archive_contents.as_ref().unwrap().contains("^older"));
+}
+
+#[test]
+fn configured_keep_max_retains_only_the_newest_roots_in_the_window() {
+    let vault = TempDir::new("bob-cli-archive-configured-max");
+    let today = close_date(0);
+    let tasks = (0..4)
+        .map(|index| {
+            format!(
+                "- [x] closed {index} #task [completion:: {today}] ^configured-{index}\n"
+            )
+        })
+        .collect::<String>();
+    write_file(&vault.path().join("work.md"), &area_note(&tasks));
+
+    let plan = super::super::plan::build_collection_plan_with_config(
+        vault.path(),
+        NO_MINIMUM_BATCH,
+        crate::native::config::ArchiveConfig {
+            keep_days: 7,
+            keep_max: 2,
+        },
+    )
+    .expect("build configured plan");
+
+    assert_eq!(plan.total_task_count(), 2);
+    let file = &plan.files[0];
+    let archive = file.archive_contents.as_ref().unwrap();
+    assert!(archive.contains("^configured-0"));
+    assert!(archive.contains("^configured-1"));
+    assert!(file.source_contents.contains("^configured-2"));
+    assert!(file.source_contents.contains("^configured-3"));
+}
+
+#[test]
+fn archive_keep_overrides_the_config_cap_for_one_note() {
+    let vault = TempDir::new("bob-cli-archive-note-cap");
+    let today = close_date(0);
+    let tasks = (0..5)
+        .map(|index| {
+            format!(
+                "- [x] closed {index} #task [completion:: {today}] ^note-{index}\n"
+            )
+        })
+        .collect::<String>();
+    write_file(
+        &vault.path().join("a.md"),
+        &format!("---\ntype: [[area]]\narchive_keep: 3\n---\n\n{tasks}"),
+    );
+    write_file(&vault.path().join("b.md"), &area_note(&tasks));
+
+    let plan = super::super::plan::build_collection_plan_with_config(
+        vault.path(),
+        NO_MINIMUM_BATCH,
+        crate::native::config::ArchiveConfig {
+            keep_days: 7,
+            keep_max: 1,
+        },
+    )
+    .expect("build configured plan");
+
+    assert_eq!(plan.total_task_count(), 6);
+    let first = plan
+        .files
+        .iter()
+        .find(|file| file.relative_source_path == Path::new("a.md"))
+        .unwrap();
+    let second = plan
+        .files
+        .iter()
+        .find(|file| file.relative_source_path == Path::new("b.md"))
+        .unwrap();
+    assert_eq!(first.task_count, 2);
+    assert_eq!(second.task_count, 4);
+}
+
+#[test]
+fn archive_keep_off_keeps_new_roots_but_finishes_exact_replays() {
+    let vault = TempDir::new("bob-cli-archive-note-cap-off");
+    let old = "- [x] replay #task [completion:: 2000-01-01] ^replay\n";
+    let today = close_date(0);
+    write_file(
+        &vault.path().join("work.md"),
+        &format!(
+            "---\ntype: [[area]]\narchive_keep: off\ndone_tasks: \"[[done/work_done]]\"\n---\n\n{old}- [x] recent #task [completion:: {today}] ^recent\n"
+        ),
+    );
+    write_file(
+        &vault.path().join("done/work_done.md"),
+        &format!(
+            "---\nparent: \"[[work]]\"\ntype: \"[[done]]\"\n---\n\n## 2000-01\n\n{old}"
+        ),
+    );
+
+    let plan = build_collection_plan(vault.path(), NO_MINIMUM_BATCH)
+        .expect("build plan");
+
+    assert_eq!(plan.total_task_count(), 1);
+    let file = &plan.files[0];
+    assert_eq!(file.moved_roots.len(), 1);
+    assert!(file.moved_roots[0].replayed);
+    assert!(file.source_contents.contains("^recent"));
+    assert!(!file.source_contents.contains("^replay"));
+    assert!(file.archive_contents.is_none());
+}
+
+#[test]
 fn minimum_batch_applies_to_selected_roots_only() {
     let vault = TempDir::new("bob-cli-archive-minimum-batch");
     let tasks = format!(
@@ -86,7 +218,7 @@ fn minimum_batch_applies_to_selected_roots_only() {
 }
 
 #[test]
-fn undated_and_future_dated_roots_stay_in_the_source() {
+fn undated_roots_move_as_oldest_and_future_dated_roots_stay() {
     let vault = TempDir::new("bob-cli-archive-undated-window");
     let future = (crate::native::env::current_datetime().date()
         + chrono::Duration::days(1))
@@ -99,11 +231,27 @@ fn undated_and_future_dated_roots_stay_in_the_source() {
         &format!("---\ntype: [[area]]\n---\n\n{tasks}"),
     );
 
-    let plan = build_collection_plan(vault.path(), NO_MINIMUM_BATCH)
-        .expect("build plan");
+    let planned = super::super::plan::build_planned_archive_with_config(
+        vault.path(),
+        NO_MINIMUM_BATCH,
+        crate::native::config::ArchiveConfig::default(),
+    )
+    .expect("build plan");
 
-    assert!(plan.files.is_empty());
-    assert_eq!(plan.total_task_count(), 0);
+    assert_eq!(planned.collection.total_task_count(), 1);
+    let file = &planned.collection.files[0];
+    assert!(!file.source_contents.contains("^undated"));
+    assert!(file.source_contents.contains("^future"));
+    assert!(file
+        .archive_contents
+        .as_ref()
+        .unwrap()
+        .contains("## Undated\n\n- [x] undated #task ^undated"));
+    assert!(planned
+        .diagnostics
+        .findings
+        .iter()
+        .any(|finding| finding.code == "undated_closed_row"));
 }
 
 #[test]

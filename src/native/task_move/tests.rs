@@ -1914,6 +1914,25 @@ fn restore_trims_only_the_emptied_month_heading() {
 }
 
 #[test]
+fn restore_removes_an_emptied_undated_heading() {
+    let source = paired_source();
+    let archive = paired_archive(concat!(
+        "## Undated\n\n",
+        "- [x] #task Undated thing ^undated\n",
+    ));
+    let notes = [
+        ("work.md", source.as_str()),
+        ("done/work_done.md", archive.as_str()),
+    ];
+    let result =
+        restore_plan(&notes, "done/work_done", "", vec![block("undated")]);
+    let archive_post = post(&result, "done/work_done.md");
+    assert!(!archive_post.contains("## Undated"), "{archive_post}");
+    assert!(archive_post.contains("type: \"[[done]]\""));
+    assert!(post(&result, "work.md").contains("Undated thing ^undated"));
+}
+
+#[test]
 fn restore_keeps_fenced_month_headings() {
     let source = paired_source();
     let archive = paired_archive(concat!(

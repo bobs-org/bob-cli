@@ -1635,3 +1635,67 @@ fn archive_usage_errors_exit_two_without_a_report() {
         );
     }
 }
+
+#[test]
+fn invalid_archive_config_fails_before_planning_in_both_output_modes() {
+    let temp = TempDir::new("bob-cli-archive-invalid-config");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let config = temp.path().join("config.yml");
+    write_file(&config, "archive:\n  keep_days: 0\n");
+
+    for args in [&["-n", "-f", "json"][..], &["-n"][..]] {
+        let output = archive_command(&vault, &temp)
+            .args(args)
+            .env("BOB_CONFIG_FILE", &config)
+            .output()
+            .expect("run archive with invalid configuration");
+        assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+        assert!(
+            stderr(&output).contains("archive.keep_days"),
+            "{}",
+            format_output(&output)
+        );
+        if args.contains(&"json") {
+            let report = archive_json(&output);
+            assert_eq!(report["exit"]["outcome"], "failed");
+            assert_eq!(report["exit"]["reason"], "plan_failed");
+            assert!(report["exit"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("archive.keep_days"));
+        } else {
+            assert!(stdout(&output).contains("failed: plan_failed"));
+        }
+    }
+}
+
+#[test]
+fn invalid_archive_keep_falls_back_and_warns_once_per_note() {
+    let temp = TempDir::new("bob-cli-archive-invalid-note-cap");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let config = temp.path().join("config.yml");
+    write_file(&config, "archive:\n  keep_max: 2\n");
+    write_file(
+        &vault.join("work.md"),
+        "---\ntype: [[area]]\narchive_keep: 0\n---\n\n\
+- [x] first #task [completion:: 2026-06-02] ^first\n\
+- [x] second #task [completion:: 2026-06-02] ^second\n\
+- [x] third #task [completion:: 2026-06-02] ^third\n\
+- [x] fourth #task [completion:: 2026-06-02] ^fourth\n",
+    );
+
+    let output = archive_command(&vault, &temp)
+        .args(["-n", "-f", "json"])
+        .env("BOB_CONFIG_FILE", &config)
+        .output()
+        .expect("run archive with invalid note cap");
+
+    assert_success(&output);
+    let report = archive_json(&output);
+    assert_eq!(report["moves"][0]["task_count"], 2);
+    assert!(report.get("archive_keep").is_none());
+    assert_eq!(stderr(&output).matches("archive_keep").count(), 1);
+    assert!(stderr(&output).contains("work.md"));
+}

@@ -385,7 +385,7 @@ fn month_sections(archive_append: &str) -> Vec<(String, String)> {
                 .flatten()
         })
         .collect::<Vec<_>>();
-    headings
+    let mut sections = headings
         .iter()
         .enumerate()
         .map(|(position, (start, month))| {
@@ -402,11 +402,16 @@ fn month_sections(archive_append: &str) -> Vec<(String, String)> {
             };
             (month.clone(), lines[body_start..end].concat())
         })
-        .collect()
+        .collect::<Vec<_>>();
+    sections.sort_by(|(left, _), (right, _)| compare_month_keys(left, right));
+    sections
 }
 
 fn month_heading(line: &str) -> Option<String> {
     let (level, title) = super::super::markdown::atx_heading(line)?;
+    if level == 2 && title == "Undated" {
+        return Some(title.to_string());
+    }
     let bytes = title.as_bytes();
     if level != 2
         || bytes.len() != 7
@@ -421,6 +426,15 @@ fn month_heading(line: &str) -> Option<String> {
         return None;
     }
     Some(title.to_string())
+}
+
+fn compare_month_keys(left: &str, right: &str) -> std::cmp::Ordering {
+    match (left == "Undated", right == "Undated") {
+        (true, true) => std::cmp::Ordering::Equal,
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        (false, false) => left.cmp(right),
+    }
 }
 
 /// Return the byte offset after an existing month section's contents, before
@@ -465,6 +479,10 @@ fn insert_month_blocks(contents: &mut String, at: usize, blocks: &str) {
 }
 
 fn append_new_month(contents: &mut String, month: &str, blocks: &str) {
+    if let Some(at) = month_section_order_insert_at(contents, month) {
+        insert_new_month(contents, at, month, blocks);
+        return;
+    }
     let line_ending = preferred_line_ending(contents);
     if !contents.is_empty() && !contents.ends_with('\n') {
         contents.push_str(line_ending);
@@ -480,6 +498,55 @@ fn append_new_month(contents: &mut String, month: &str, blocks: &str) {
     if !blocks.ends_with('\n') {
         contents.push_str(line_ending);
     }
+}
+
+/// Find the first later month section, ignoring every Markdown line hidden
+/// by the shared frontmatter, fence, and comment mask.
+fn month_section_order_insert_at(contents: &str, month: &str) -> Option<usize> {
+    let lines: Vec<&str> = contents.split_inclusive('\n').collect();
+    let logical: Vec<&str> = lines
+        .iter()
+        .map(|line| super::split_line_ending(line).0)
+        .collect();
+    let masked = super::super::markdown::non_content_line_indexes(&lines);
+    logical.iter().enumerate().find_map(|(index, line)| {
+        if masked.contains(&index) {
+            return None;
+        }
+        let existing = month_heading(line)?;
+        (compare_month_keys(&existing, month).is_gt())
+            .then(|| lines[..index].iter().map(|line| line.len()).sum())
+    })
+}
+
+fn insert_new_month(
+    contents: &mut String,
+    at: usize,
+    month: &str,
+    blocks: &str,
+) {
+    let line_ending = preferred_line_ending(contents);
+    let prefix = &contents[..at];
+    let suffix = &contents[at..];
+    let mut insertion = String::new();
+    if !prefix.is_empty() && !prefix.ends_with("\n\n") {
+        if !prefix.ends_with('\n') {
+            insertion.push_str(line_ending);
+        }
+        insertion.push_str(line_ending);
+    }
+    insertion.push_str("## ");
+    insertion.push_str(month);
+    insertion.push_str(line_ending);
+    insertion.push_str(line_ending);
+    insertion.push_str(blocks);
+    if !insertion.ends_with('\n') {
+        insertion.push_str(line_ending);
+    }
+    if !suffix.is_empty() && !insertion.ends_with("\n\n") {
+        insertion.push_str(line_ending);
+    }
+    contents.insert_str(at, &insertion);
 }
 pub(super) fn preferred_line_ending(contents: &str) -> &'static str {
     if contents.contains("\r\n") {
