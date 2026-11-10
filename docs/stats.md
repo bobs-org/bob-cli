@@ -1366,8 +1366,10 @@ Day strip type-lane rule. Identity comes from `statsThemeRef` (report
 `theme_hues`, else the plugin's `pomodoroThemeHueFor`). Coloured types are
 ordered by minutes descending, then label. Gray types (exempt,
 unconfigured) follow, by minutes. Then comes `other` (older bob only), and
-`(unnamed)` is last. Among coloured types that share a hue, the largest
-keeps the exact hue, the second gets 65% and later ones 42%. The exact keys
+`(unnamed)` is last. Among coloured types that share a hue, shades are
+assigned by case-insensitive label, then key; their position remains ordered
+by minutes. The first gets the exact hue, the second gets 65%, and later ones
+42%. The exact keys
 `other` and `(unnamed)` are always gray, even when `theme_hues` carries an
 entry for them.
 
@@ -1526,8 +1528,10 @@ Segments group D's `worked` minutes by root parent (see
 [pomodoro-homes.md](pomodoro-homes.md)), in the same order as
 the Stats page's "Where the time went" bar: area hue-slot order, then
 label, then muted roots, with buckets last in gray. Every coloured root parent
-in the bar gets its own colour: the biggest root of each hue keeps the reported
-hue, and the other same-hue roots take the next free palette hue. A root whose
+in the bar gets its own colour: roots claim their reported hue in
+case-insensitive label order, then key order, and roots that lose a collision
+take the next free palette hue in that same order. Minutes do not affect the
+assignment. A root whose
 catalog `hue_source` is `muted` (a grey `color:` slot) stays gray: it is never
 shaded, never takes or claims a palette hue, and sorts after the coloured
 roots and before the buckets. `unlinked` and `unfiled` stay gray. A report without `root_parent` parts, from an older
@@ -1558,8 +1562,10 @@ follow, with `(unnamed)` last. Colour is identity from Bob's type hues
 (`theme_hues`, else the plugin's `pomodoroThemeHueFor` fallback): a palette
 hue, or gray for exempt, unconfigured, a type named after a grey area,
 `(unnamed)`, and `other`. Among coloured
-segments that share a hue, the largest keeps the exact hue, the second
-is `color-mix(in srgb, <hue> 65%, var(--background-primary))`, and every
+segments that share a hue, shades are assigned in case-insensitive label
+order, then key order; segment position stays ordered by minutes. The first
+keeps the exact hue, the second is
+`color-mix(in srgb, <hue> 65%, var(--background-primary))`, and every
 later one is `42%`. Gray is never shaded. `bob types color` pins remove
 a recurring collision. Each type legend item is a rounded-square swatch
 (the legend-dot footprint), the ALL-CAPS name, and the value. The fitter
@@ -1667,9 +1673,10 @@ Controls: `stats.day_strip` in `~/.config/bob/config.yml` (`true` by
 default) is the durable on/off for the automatic host — explicit fences
 still render when it is `false`. The `Toggle Day stats` command toggles
 automatic strips for the current plugin session. The switch and the `Cycle
-Day stats bars` command set one view for every strip on the device; the view
-is remembered on this device, and `stats.day_strip` and `Toggle Day stats`
-still govern the whole strip. Opening or refreshing a
+Day stats bars` command set one view for every Day strip on the device; the
+view is remembered on this device. Period strips keep their fixed Both view
+and are not affected by that preference. `stats.day_strip` and `Toggle Day
+stats` still govern the automatic Day strip. Opening or refreshing a
 strip never changes note bytes and never appends journal events.
 
 ### Browser preview and fixtures
