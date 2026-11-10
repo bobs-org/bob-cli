@@ -729,7 +729,7 @@ pub(super) struct ProjectNoteSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(super) struct CaptureItemResult {
+pub(crate) struct CaptureItemResult {
     pub(super) ok: bool,
     pub(super) dry_run: bool,
     pub(super) routed: bool,
@@ -958,6 +958,10 @@ pub(super) struct CaptureItemResult {
     /// Ordinary items omit it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) record_note: Option<RecordNoteSummary>,
+    /// Notebook summary for `notebook_note` / `notebook_sub_note` items.
+    /// Additive: omitted otherwise so older output stays byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) notebook: Option<super::notebook_note::NotebookSummary>,
 }
 
 /// One planned record file in top-level `note_files`.
@@ -3994,6 +3998,14 @@ pub(super) fn print_human_item_success(
             &prefix,
             &ordinal,
             &target_label,
+        );
+        return;
+    }
+    if matches!(result.kind, "notebook_note" | "notebook_sub_note")
+        && let Some(notebook) = result.notebook.as_ref()
+    {
+        print_human_notebook_success(
+            result, notebook, &styler, &prefix, &ordinal,
         );
         return;
     }
@@ -7301,6 +7313,48 @@ fn print_human_record_note_success(
     }
 }
 
+fn print_human_notebook_success(
+    result: &CaptureItemResult,
+    notebook: &super::notebook_note::NotebookSummary,
+    styler: &Styler,
+    prefix: &str,
+    ordinal: &str,
+) {
+    let detail = if result.kind == "notebook_sub_note" {
+        notebook
+            .parent_block_id
+            .as_deref()
+            .map(|id| format!("{} › ^{id}", notebook.title))
+            .unwrap_or_else(|| notebook.title.clone())
+    } else if notebook.section_action == Some("create") {
+        let section = notebook.section.as_deref().unwrap_or("");
+        format!("{} › new section {section}", notebook.title)
+    } else if let Some(section) = notebook.section.as_deref() {
+        if let Some(block_id) = notebook.block_id.as_deref() {
+            format!("{} › {section} › ^{block_id}", notebook.title)
+        } else {
+            format!("{} › {section}", notebook.title)
+        }
+    } else if let Some(block_id) = notebook.block_id.as_deref() {
+        format!("{} › ^{block_id}", notebook.title)
+    } else {
+        notebook.title.clone()
+    };
+    println!("{prefix} 📓 Note → {ordinal}{detail}");
+    println!("  {}", styler.dim(&result.task_line));
+    for line in &result.sub_bullets {
+        println!("  {}", styler.dim(line));
+    }
+    if let Some(clip) = &result.clip {
+        if let Some(history) = &clip.history {
+            println!("  {}", styler.dim(&format_clip_history_summary(history)));
+        }
+        for line in &clip.lines {
+            println!("  {}", styler.dim(line));
+        }
+    }
+}
+
 pub(super) fn print_capture_error(
     error: CaptureError,
     output_format: OutputFormat,
@@ -8111,6 +8165,7 @@ mod tests {
         CaptureItemResult {
             note_pull: None,
             record_note: None,
+            notebook: None,
             task_theme: None,
             type_relocation: None,
             ok: true,

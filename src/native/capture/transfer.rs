@@ -325,6 +325,7 @@ pub(super) fn plan_transfer_item(
         result: CaptureItemResult {
             note_pull: None,
             record_note: None,
+            notebook: None,
             task_theme: None,
             type_relocation: None,
             ok: true,

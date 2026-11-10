@@ -300,6 +300,7 @@ fn json_success_shape_is_stable() {
         vec![CaptureItemResult {
             note_pull: None,
             record_note: None,
+            notebook: None,
             task_theme: None,
             type_relocation: None,
             ok: true,

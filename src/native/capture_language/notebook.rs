@@ -24,6 +24,11 @@ pub(crate) struct NotebookRouteInfo {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct NotebookRoutePolicy {
     routes: HashMap<String, NotebookRouteInfo>,
+    /// Exact file bytes read while building the policy, keyed by
+    /// lower-cased route. The writer compares these preimages against the
+    /// planner's staged bytes so a retype between classification and
+    /// planning aborts instead of writing the new version silently.
+    sources: HashMap<String, String>,
 }
 
 impl NotebookRoutePolicy {
@@ -31,12 +36,30 @@ impl NotebookRoutePolicy {
         Self::default()
     }
 
+    #[cfg(test)]
     pub(crate) fn insert(&mut self, route: String, info: NotebookRouteInfo) {
         self.routes.insert(route.to_ascii_lowercase(), info);
     }
 
+    pub(crate) fn insert_with_source(
+        &mut self,
+        route: String,
+        info: NotebookRouteInfo,
+        source: String,
+    ) {
+        let key = route.to_ascii_lowercase();
+        self.routes.insert(key.clone(), info);
+        self.sources.insert(key, source);
+    }
+
     pub(crate) fn get(&self, route: &str) -> Option<&NotebookRouteInfo> {
         self.routes.get(&route.to_ascii_lowercase())
+    }
+
+    pub(crate) fn source(&self, route: &str) -> Option<&str> {
+        self.sources
+            .get(&route.to_ascii_lowercase())
+            .map(String::as_str)
     }
 }
 

@@ -610,6 +610,7 @@ fn record_item_result(
     CaptureItemResult {
         note_pull: None,
         record_note: Some(summary),
+        notebook: None,
         task_theme: None,
         type_relocation: None,
         ok: true,

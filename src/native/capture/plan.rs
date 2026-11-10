@@ -188,22 +188,6 @@ pub(super) fn plan_capture_batch_with_config_path(
         request.forced_section.as_deref(),
         &options,
     )?;
-    if parsed_draft.items.iter().any(|item| {
-        matches!(
-            item.parsed.kind,
-            CaptureKind::NotebookNote { .. }
-                | CaptureKind::NotebookSubNote { .. }
-        ) || item
-            .parsed
-            .route
-            .as_deref()
-            .is_some_and(|route| notebook_policy.get(route).is_some())
-    }) {
-        return Err(CaptureError::usage_code(
-            "notebook capture is recognized but its guarded note writer has not landed yet; no files were changed",
-            "notebook_capture_unavailable",
-        ));
-    }
     if (request.forced_clip.is_some()
         || parsed_draft.items.iter().any(|item| {
             matches!(
@@ -260,6 +244,8 @@ pub(super) fn plan_capture_batch_with_config_path(
                 item.parsed.kind,
                 CaptureKind::RecordNote { .. }
                     | CaptureKind::RecordUpdate { .. }
+                    | CaptureKind::NotebookNote { .. }
+                    | CaptureKind::NotebookSubNote { .. }
             ) {
                 return false;
             }
@@ -282,6 +268,8 @@ pub(super) fn plan_capture_batch_with_config_path(
                 item.parsed.kind,
                 CaptureKind::RecordNote { .. }
                     | CaptureKind::RecordUpdate { .. }
+                    | CaptureKind::NotebookNote { .. }
+                    | CaptureKind::NotebookSubNote { .. }
             ) {
                 return Vec::new();
             }
@@ -834,6 +822,7 @@ pub(super) fn plan_capture_batch_with_config_path(
                 &mut dependency_ctx,
                 config_path,
                 &mut record_context,
+                &notebook_policy,
                 &mut task_theme_context,
                 &items,
                 &all_project_moves,
@@ -1379,7 +1368,7 @@ fn dedupe_fanout_group_warnings(
     }
 }
 
-fn read_capture_clipboard(
+pub(super) fn read_capture_clipboard(
     snapshot: &mut ClipSnapshot,
     request: &ClipRequest,
 ) -> Result<FanoutClipboardRead, CaptureError> {
@@ -1554,6 +1543,7 @@ fn plan_ref_item(
         result: CaptureItemResult {
             note_pull: None,
             record_note: None,
+            notebook: None,
             task_theme: None,
             type_relocation: None,
             ok: true,
@@ -1792,6 +1782,7 @@ pub(super) fn plan_capture_item(
     dependency_ctx: &mut DependencyContext,
     config_path: Option<&Path>,
     record_context: &mut super::super::capture_record::CaptureRecordContext,
+    notebook_policy: &super::super::capture_language::NotebookRoutePolicy,
     task_theme_context: &mut CaptureTaskThemeContext,
     earlier_items: &[PlannedCaptureItem],
     project_moves: &[ProjectMoveLanding],
@@ -1807,6 +1798,22 @@ pub(super) fn plan_capture_item(
             today,
             planner,
             record_context,
+            warnings,
+        );
+    }
+    if matches!(
+        parsed_item.parsed.kind,
+        CaptureKind::NotebookNote { .. } | CaptureKind::NotebookSubNote { .. }
+    ) {
+        return super::notebook_note::plan_notebook_note_item(
+            request,
+            parsed_item,
+            now,
+            today,
+            planner,
+            notebook_policy,
+            clip_reservations,
+            clip_snapshot,
             warnings,
         );
     }
@@ -2172,6 +2179,7 @@ pub(super) fn plan_capture_item(
             result: CaptureItemResult {
                 note_pull: None,
                 record_note: None,
+                notebook: None,
                 ok: true,
                 dry_run: request.dry_run,
                 routed: true,
@@ -2668,10 +2676,9 @@ pub(super) fn plan_capture_item(
         }
         CaptureKind::NotebookNote { .. }
         | CaptureKind::NotebookSubNote { .. } => {
-            return Err(CaptureError::usage_code(
-                "notebook capture is recognized but its writer has not landed yet",
-                "notebook_capture_unavailable",
-            ));
+            unreachable!(
+                "notebook capture is planned by plan_notebook_note_item"
+            )
         }
     };
     let kind_label = capture_kind_label(&parsed.kind);
@@ -3186,6 +3193,7 @@ pub(super) fn plan_capture_item(
                 result: CaptureItemResult {
                     note_pull: None,
                     record_note: None,
+                    notebook: None,
                     ok: true,
                     dry_run: request.dry_run,
                     routed: parsed.route.is_some(),
@@ -4094,6 +4102,7 @@ pub(super) fn plan_capture_item(
         result: CaptureItemResult {
             note_pull: None,
             record_note: None,
+            notebook: None,
             ok: true,
             dry_run: request.dry_run,
             routed: parsed.route.is_some(),
@@ -5375,6 +5384,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
         result: CaptureItemResult {
             note_pull: None,
             record_note: None,
+            notebook: None,
             ok: true,
             dry_run: request.dry_run,
             routed: parsed.route.is_some(),

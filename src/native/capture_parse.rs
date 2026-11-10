@@ -212,7 +212,7 @@ When a route resolves to an existing notebook note, individual `@route`, \
 `notebook_note` or `notebook_sub_note`. Their `notebook_route`, \
 `notebook_section`, `notebook_block_id`, and \
 `notebook_parent_block_id` spans keep the authored body opaque. `bob capture` \
-refuses these captures until the notebook writer is available.\n\n\
+writes them as notebook notes through the guarded capture transaction.\n\n\
 Adjacent `@route+id` target markers at the start or end of one line fill one \
 route slot. Capture-parse keeps one item and adds `targets[]` for runs; \
 duplicate task identities and targets at opposite edges report the coded \

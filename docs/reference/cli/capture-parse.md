@@ -19,7 +19,7 @@ A lone task-list header `@route` with no section, bullets, or other text reports
 
 Configured record create and update claims add a `record` object to the first item and its `items[]` row. Updates resolve an exact existing stem and report the stored title, current/effective field values (`before` for changed fields), and historical warnings; only supplied required-empty fields need `record_value`. Creation reports required fields and defaults; incomplete titles need `record_title`. Field `range` is present for one typed value, while `value_ranges[]` preserves separate source spans for repeated values.
 
-When a route resolves to an existing notebook note, individual `@route`, `@route#section`, `@route^id`, and `@route+id` items report `notebook_note` or `notebook_sub_note`. Their `notebook_route`, `notebook_section`, `notebook_block_id`, and `notebook_parent_block_id` spans keep the authored body opaque. `bob capture` refuses these captures until the notebook writer is available.
+When a route resolves to an existing notebook note, individual `@route`, `@route#section`, `@route^id`, and `@route+id` items report `notebook_note` or `notebook_sub_note`. Their `notebook_route`, `notebook_section`, `notebook_block_id`, and `notebook_parent_block_id` spans keep the authored body opaque. `bob capture` writes them as notebook notes through the guarded capture transaction.
 
 Adjacent `@route+id` target markers at the start or end of one line fill one route slot. Capture-parse keeps one item and adds `targets[]` for runs; duplicate task identities and targets at opposite edges report the coded diagnostics `duplicate_capture_target` and `split_capture_targets`.
 

@@ -655,9 +655,8 @@ pub(super) fn plan_capture_to_target(
         }
         CaptureKind::NotebookNote { .. }
         | CaptureKind::NotebookSubNote { .. } => {
-            return Err(CaptureError::usage_code(
-                "notebook capture is recognized but its writer has not landed yet",
-                "notebook_capture_unavailable",
+            return Err(CaptureError::io(
+                "notebook-note capture invariant failed: wrong write planner",
             ));
         }
     };

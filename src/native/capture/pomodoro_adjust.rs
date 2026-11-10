@@ -400,6 +400,7 @@ pub(super) fn plan_pomodoro_adjust_item(
         result: CaptureItemResult {
             note_pull: None,
             record_note: None,
+            notebook: None,
             task_theme: None,
             type_relocation: None,
             ok: true,
@@ -618,6 +619,7 @@ pub(super) fn plan_pomodoro_shift_item(
         result: CaptureItemResult {
             note_pull: None,
             record_note: None,
+            notebook: None,
             task_theme: None,
             type_relocation: None,
             ok: true,

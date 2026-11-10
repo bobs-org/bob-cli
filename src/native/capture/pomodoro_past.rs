@@ -1720,6 +1720,7 @@ pub(super) fn record_one_member(
         result: super::output::CaptureItemResult {
             note_pull: None,
             record_note: None,
+            notebook: None,
             task_theme: None,
             type_relocation: None,
             ok: true,

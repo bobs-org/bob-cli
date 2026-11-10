@@ -1423,6 +1423,7 @@ fn plan_reset_link_item(
         result: CaptureItemResult {
             note_pull: None,
             record_note: None,
+            notebook: None,
             task_theme: None,
             type_relocation: None,
             ok: true,
@@ -1588,6 +1589,7 @@ fn plan_reset_task_item(
         result: CaptureItemResult {
             note_pull: None,
             record_note: None,
+            notebook: None,
             task_theme: None,
             type_relocation: None,
             ok: true,
@@ -1725,6 +1727,7 @@ fn plan_reset_whole_item(
         result: CaptureItemResult {
             note_pull: None,
             record_note: None,
+            notebook: None,
             task_theme: None,
             type_relocation: None,
             ok: true,
@@ -2240,6 +2243,7 @@ pub(super) fn plan_pomodoro_close_item(
             result: CaptureItemResult {
                 note_pull: None,
                 record_note: None,
+                notebook: None,
                 task_theme: None,
                 type_relocation: None,
                 ok: true,
@@ -2427,6 +2431,7 @@ pub(super) fn plan_pomodoro_close_item(
         result: CaptureItemResult {
             note_pull: None,
             record_note: None,
+            notebook: None,
             task_theme: None,
             type_relocation: None,
             ok: true,
@@ -3290,6 +3295,7 @@ pub(super) fn plan_pomodoro_close_link_item(
         result: CaptureItemResult {
             note_pull: None,
             record_note: None,
+            notebook: None,
             task_theme: None,
             type_relocation: None,
             ok: true,
@@ -3698,6 +3704,7 @@ pub(super) fn plan_pomodoro_close_task_item(
         result: CaptureItemResult {
             note_pull: None,
             record_note: None,
+            notebook: None,
             task_theme: None,
             type_relocation: None,
             ok: true,

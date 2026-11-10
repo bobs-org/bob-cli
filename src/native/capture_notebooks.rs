@@ -71,7 +71,7 @@ fn build_notebook_policy(
         let info = route_info(
             vault_root, &path, &contents, &links, &mut cache, &mut reads,
         );
-        policy.insert(route, info);
+        policy.insert_with_source(route, info, contents);
     }
     (policy, reads)
 }

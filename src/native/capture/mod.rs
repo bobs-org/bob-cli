@@ -74,6 +74,7 @@ mod merge_in_pending;
 pub(crate) mod move_choice;
 pub(crate) mod move_consequence;
 mod note_pull;
+mod notebook_note;
 mod offer_verdicts;
 mod open_notes;
 mod output;

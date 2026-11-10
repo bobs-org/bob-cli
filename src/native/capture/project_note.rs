@@ -1710,6 +1710,7 @@ pub(super) fn plan_project_note_item(
         result: CaptureItemResult {
             note_pull: None,
             record_note: None,
+            notebook: None,
             task_theme,
             type_relocation: None,
             ok: true,
