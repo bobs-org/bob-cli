@@ -277,7 +277,8 @@ fn collect_from_archives(
     if archives.is_empty() {
         return;
     }
-    let pairs = match collect_done::ArchivePairIndex::read_vault(bob_dir) {
+    let pairs = match collect_done::ArchivePairIndex::read_vault_cached(bob_dir)
+    {
         Ok(pairs) => pairs,
         Err(error) => {
             warnings.push(capture_active_tasks::bounded_warning(format!(

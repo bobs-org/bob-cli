@@ -1,6 +1,6 @@
 //! The vault walk and prefilter.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -52,6 +52,19 @@ impl RefTaskIndex {
     /// Build the index over `(bob_dir, ref_dir)`. Never errors; problems
     /// yield an empty or partial index.
     pub(crate) fn build(bob_dir: &Path, ref_dir: &Path) -> Self {
+        Self::build_with_cache(bob_dir, ref_dir, false)
+    }
+
+    /// Build a read-only residence index using cached archive-pair facts.
+    pub(crate) fn build_read_only(bob_dir: &Path, ref_dir: &Path) -> Self {
+        Self::build_with_cache(bob_dir, ref_dir, true)
+    }
+
+    fn build_with_cache(
+        bob_dir: &Path,
+        ref_dir: &Path,
+        use_cache: bool,
+    ) -> Self {
         let ref_rel = match ref_dir.strip_prefix(bob_dir) {
             Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
             Err(_) => {
@@ -132,35 +145,50 @@ impl RefTaskIndex {
         let ref_set: std::collections::BTreeSet<String> =
             ref_notes.iter().cloned().collect();
 
-        // Read + prefilter in parallel, merge back into path order.
+        // The pair census walks its own complete path universe. Filter the
+        // reading-task subset from those same reads so archive notes are not
+        // opened a second time.
+        let filter_paths: BTreeSet<PathBuf> = paths.iter().cloned().collect();
         let pairs: Vec<(PathBuf, PathBuf)> = paths
             .iter()
             .map(|rel| (bob_dir.join(rel), rel.clone()))
             .collect();
-        let contents_map = read_prefiltered_parallel(&pairs);
+        let census_result = if use_cache {
+            crate::native::collect_done::ArchivePairIndex::read_vault_filtered_cached(
+                bob_dir,
+                &filter_paths,
+                contains_ref_marker,
+            )
+        } else {
+            crate::native::collect_done::ArchivePairIndex::read_vault_filtered(
+                bob_dir,
+                &filter_paths,
+                contains_ref_marker,
+            )
+        };
+        let (archive_pairs, contents_map) = match census_result {
+            Ok((index, contents)) => (index.map(Ok), contents),
+            Err(error) => {
+                // Keep the ref-task index useful if the pair census could
+                // not walk the vault. The census result remains refused
+                // wherever this path set could have affected it.
+                let contents = read_prefiltered_parallel(&pairs);
+                let archive_pairs = contents
+                    .iter()
+                    .any(|(path, _)| {
+                        crate::native::task_dependencies::is_archive_path(path)
+                    })
+                    .then(|| {
+                        Err(format!("could not resolve archive pairs: {error}"))
+                    });
+                (archive_pairs, contents)
+            }
+        };
 
         // Order pairs in path order for determinism.
         let mut ordered: Vec<(PathBuf, String)> =
             contents_map.into_iter().collect();
         ordered.sort_by(|a, b| a.0.cmp(&b.0));
-        // Build from the full vault census, independently of the `#ref` body
-        // prefilter above, so non-task source notes can establish pairs.
-        // Keep the no-archive fast path lazy and share the result with batch
-        // preview reservation callers.
-        let archive_pairs = ordered
-            .iter()
-            .any(|(path, _)| {
-                crate::native::task_dependencies::is_archive_path(path)
-            })
-            .then(|| {
-                crate::native::collect_done::ArchivePairIndex::read_vault(
-                    bob_dir,
-                )
-                .map_err(|error| {
-                    format!("could not resolve archive pairs: {error}")
-                })
-            });
-
         // Lazy capture routes.
         let mut routes: Option<std::collections::BTreeSet<String>> = None;
         let mut routes_for = |need: bool,

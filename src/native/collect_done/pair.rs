@@ -42,10 +42,67 @@ use std::{
     ffi::OsStr,
     fs, io,
     path::{Component, Path, PathBuf},
+    sync::atomic::{AtomicUsize, Ordering},
+    time::UNIX_EPOCH,
 };
 
 use super::super::task_dependencies::is_archive_path;
 use super::super::vault_links::{LinkResolution, NoteIndex};
+
+const PAIR_CENSUS_CACHE_VERSION: u32 = 2;
+const PAIR_CENSUS_SNAPSHOT_TTL_SECS: u64 = 60;
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+struct PairCensusCache {
+    version: u32,
+    vault: String,
+    last_scan_unix: u64,
+    complete: bool,
+    #[serde(default)]
+    files: BTreeMap<String, CachedPairFact>,
+    #[serde(default)]
+    failures: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct CachedPairFact {
+    mtime_ns: u64,
+    size: u64,
+    target: Option<String>,
+}
+
+fn pair_census_vault_key(vault: &Path) -> String {
+    fs::canonicalize(vault)
+        .unwrap_or_else(|_| vault.to_path_buf())
+        .display()
+        .to_string()
+}
+
+fn pair_census_cache_path(vault: &Path, cache_dir: &Path) -> PathBuf {
+    use sha2::{Digest, Sha256};
+    let key = pair_census_vault_key(vault);
+    let digest = hex::encode(Sha256::digest(key.as_bytes()));
+    cache_dir.join(format!(
+        "archive-pairs-v{PAIR_CENSUS_CACHE_VERSION}-{digest}.json"
+    ))
+}
+
+fn pair_census_cache_dir() -> PathBuf {
+    super::super::env::bob_cli_cache_dir().join("archive-pairs")
+}
+
+fn pair_census_fingerprint(path: &Path) -> Option<(u64, u64)> {
+    let metadata = fs::metadata(path).ok()?;
+    let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+    Some((u64::try_from(modified.as_nanos()).ok()?, metadata.len()))
+}
+
+fn pair_census_now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
 
 /// Canonical archive destination for a source note, if one is computable.
 ///
@@ -117,7 +174,7 @@ pub(crate) enum ArchiveLookup {
     },
 }
 
-/// Captured note census behind a pair index: contents plus link resolution.
+/// Captured frontmatter facts behind a pair index, plus link resolution.
 ///
 /// Reads that fail are retained as failure paths rather than aborting the
 /// build: lookups refuse when a failure could plausibly affect them and
@@ -125,35 +182,293 @@ pub(crate) enum ArchiveLookup {
 /// stem, and no existing archive for a third party to claim).
 #[derive(Debug, Clone, Default)]
 struct PairCensus {
-    contents: BTreeMap<PathBuf, String>,
+    /// The raw link target relevant to each successfully read note.
+    /// Presence in this map also represents a successfully read note.
+    facts: BTreeMap<PathBuf, Option<String>>,
     note_index: NoteIndex,
     failures: BTreeSet<PathBuf>,
 }
 
 impl PairCensus {
     fn read_vault(vault: &Path) -> io::Result<Self> {
-        let mut paths = Vec::new();
-        collect_markdown_files(vault, vault, &mut paths)?;
+        Self::read_vault_filtered(vault, &BTreeSet::new(), |_| false, None)
+            .map(|(census, _)| census)
+    }
+
+    fn read_vault_cached(vault: &Path, cache_dir: &Path) -> io::Result<Self> {
+        Self::read_vault_filtered(
+            vault,
+            &BTreeSet::new(),
+            |_| false,
+            Some(cache_dir),
+        )
+        .map(|(census, _)| census)
+    }
+
+    fn read_vault_filtered<F>(
+        vault: &Path,
+        filter_paths: &BTreeSet<PathBuf>,
+        filter: F,
+        cache_dir: Option<&Path>,
+    ) -> io::Result<(Self, Vec<(PathBuf, String)>)>
+    where
+        F: Fn(&[u8]) -> bool + Sync,
+    {
+        let cache_path =
+            cache_dir.map(|dir| pair_census_cache_path(vault, dir));
+        let vault_key = pair_census_vault_key(vault);
+        let loaded_cache = cache_path.as_ref().and_then(|path| {
+            fs::read_to_string(path)
+                .ok()
+                .and_then(|text| {
+                    serde_json::from_str::<PairCensusCache>(&text).ok()
+                })
+                .filter(|cache| {
+                    cache.version == PAIR_CENSUS_CACHE_VERSION
+                        && cache.vault == vault_key
+                })
+        });
+        let hot_snapshot = loaded_cache.as_ref().is_some_and(|cache| {
+            cache.complete
+                && cache.last_scan_unix > 0
+                && pair_census_now_unix().saturating_sub(cache.last_scan_unix)
+                    < PAIR_CENSUS_SNAPSHOT_TTL_SECS
+        });
+        let previous = loaded_cache
+            .as_ref()
+            .map(|cache| &cache.files)
+            .cloned()
+            .unwrap_or_default();
+        let previous_failures = loaded_cache
+            .as_ref()
+            .map(|cache| &cache.failures)
+            .cloned()
+            .unwrap_or_default();
+
+        let mut paths: Vec<PathBuf> = if hot_snapshot {
+            previous.keys().map(PathBuf::from).collect()
+        } else {
+            let mut paths = Vec::new();
+            collect_markdown_files(vault, vault, &mut paths)?;
+            paths
+        };
+        if hot_snapshot {
+            paths.extend(
+                filter_paths
+                    .iter()
+                    .filter(|path| {
+                        path.to_str()
+                            .is_none_or(|key| !previous.contains_key(key))
+                    })
+                    .cloned(),
+            );
+        }
         paths.sort();
         paths.dedup();
-        let mut contents = BTreeMap::new();
+
+        struct ReadBatch {
+            facts: Vec<(PathBuf, Option<String>)>,
+            failures: Vec<PathBuf>,
+            filtered: Vec<(PathBuf, String)>,
+            cache_files: Vec<(String, CachedPairFact)>,
+            cache_failures: BTreeSet<String>,
+        }
+
+        let worker_count = std::thread::available_parallelism()
+            .map(|parallelism| parallelism.get())
+            .unwrap_or(4)
+            .min(paths.len())
+            .max(1);
+        let next = AtomicUsize::new(0);
+        let batches: Vec<ReadBatch> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..worker_count)
+                .map(|_| {
+                    scope.spawn(|| {
+                        let mut batch = ReadBatch {
+                            facts: Vec::new(),
+                            failures: Vec::new(),
+                            filtered: Vec::new(),
+                            cache_files: Vec::new(),
+                            cache_failures: BTreeSet::new(),
+                        };
+                        loop {
+                            let index = next.fetch_add(1, Ordering::Relaxed);
+                            let Some(relative) = paths.get(index) else {
+                                break;
+                            };
+                            let absolute = vault.join(relative);
+                            let cache_info = cache_dir.and_then(|_| {
+                                if hot_snapshot {
+                                    relative.to_str().and_then(|key| {
+                                        previous.get(key).map(|cached| {
+                                            (
+                                                key.to_string(),
+                                                cached.mtime_ns,
+                                                cached.size,
+                                            )
+                                        })
+                                    })
+                                } else {
+                                    pair_census_fingerprint(&absolute).and_then(
+                                        |(mtime_ns, size)| {
+                                            relative.to_str().map(|key| {
+                                                (
+                                                    key.to_string(),
+                                                    mtime_ns,
+                                                    size,
+                                                )
+                                            })
+                                        },
+                                    )
+                                }
+                            });
+                            let cached_fact = cache_info.as_ref().and_then(
+                                |(key, mtime_ns, size)| {
+                                    previous.get(key).filter(|cached| {
+                                        cached.mtime_ns == *mtime_ns
+                                            && cached.size == *size
+                                    })
+                                },
+                            );
+                            let needs_text = filter_paths.contains(relative)
+                                || cached_fact.is_none();
+
+                            if !needs_text && let Some(cached) = cached_fact {
+                                if let Some((key, _, _)) = &cache_info {
+                                    batch
+                                        .cache_files
+                                        .push((key.clone(), cached.clone()));
+                                    if previous_failures.contains(key) {
+                                        batch
+                                            .cache_failures
+                                            .insert(key.clone());
+                                    }
+                                }
+                                if relative.to_str().is_some_and(|key| {
+                                    previous_failures.contains(key)
+                                }) {
+                                    batch.failures.push(relative.clone());
+                                } else {
+                                    batch.facts.push((
+                                        relative.clone(),
+                                        cached.target.clone(),
+                                    ));
+                                }
+                                continue;
+                            }
+
+                            match fs::read_to_string(&absolute) {
+                                Ok(text) => {
+                                    let target = note_target(relative, &text);
+                                    batch.facts.push((
+                                        relative.clone(),
+                                        target.clone(),
+                                    ));
+                                    if let Some((key, mtime_ns, size)) =
+                                        &cache_info
+                                    {
+                                        batch.cache_files.push((
+                                            key.clone(),
+                                            CachedPairFact {
+                                                mtime_ns: *mtime_ns,
+                                                size: *size,
+                                                target,
+                                            },
+                                        ));
+                                    }
+                                    if filter_paths.contains(relative)
+                                        && filter(text.as_bytes())
+                                    {
+                                        batch
+                                            .filtered
+                                            .push((relative.clone(), text));
+                                    }
+                                }
+                                Err(_) => {
+                                    batch.failures.push(relative.clone());
+                                    if let Some((key, mtime_ns, size)) =
+                                        &cache_info
+                                    {
+                                        batch
+                                            .cache_failures
+                                            .insert(key.clone());
+                                        batch.cache_files.push((
+                                            key.clone(),
+                                            CachedPairFact {
+                                                mtime_ns: *mtime_ns,
+                                                size: *size,
+                                                target: None,
+                                            },
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                        batch
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| {
+                    handle.join().expect("pair census worker panicked")
+                })
+                .collect()
+        });
+
+        let mut facts = BTreeMap::new();
         let mut failures = BTreeSet::new();
-        for relative in &paths {
-            match fs::read_to_string(vault.join(relative)) {
-                Ok(text) => {
-                    contents.insert(relative.clone(), text);
-                }
-                Err(_) => {
-                    failures.insert(relative.clone());
-                }
+        let mut filtered = Vec::new();
+        let mut cache_files = BTreeMap::new();
+        let mut cache_failures = BTreeSet::new();
+        for batch in batches {
+            facts.extend(batch.facts);
+            failures.extend(batch.failures);
+            filtered.extend(batch.filtered);
+            cache_files.extend(batch.cache_files);
+            cache_failures.extend(batch.cache_failures);
+        }
+        filtered.sort_by(|left, right| left.0.cmp(&right.0));
+
+        if let Some(path) = cache_path.filter(|_| !hot_snapshot) {
+            let complete = cache_files.len() == paths.len();
+            let cache = PairCensusCache {
+                version: PAIR_CENSUS_CACHE_VERSION,
+                vault: vault_key,
+                last_scan_unix: pair_census_now_unix(),
+                complete,
+                files: cache_files,
+                failures: cache_failures,
+            };
+            let changed = loaded_cache.as_ref().is_none_or(|previous| {
+                previous.files != cache.files
+                    || previous.failures != cache.failures
+                    || previous.complete != cache.complete
+            });
+            if (changed || cache.complete)
+                && let Ok(text) = serde_json::to_string(&cache)
+            {
+                let _ = super::atomic_write(&path, &text);
             }
         }
+
         let note_index = NoteIndex::from_paths(paths);
-        Ok(Self {
-            contents,
-            note_index,
-            failures,
-        })
+        Ok((
+            Self {
+                facts,
+                note_index,
+                failures,
+            },
+            filtered,
+        ))
+    }
+}
+
+fn note_target(path: &Path, text: &str) -> Option<String> {
+    if is_archive_path(path) {
+        super::link_repair::archive_parent_target(text)
+    } else {
+        frontmatter_value(text, "done_tasks:")
     }
 }
 
@@ -232,9 +547,13 @@ impl ArchivePairIndex {
         note_index: &NoteIndex,
     ) -> Self {
         let census = PairCensus {
-            contents: buffers
+            facts: buffers
                 .iter()
-                .map(|(relative, text)| (PathBuf::from(relative), text.clone()))
+                .map(|(relative, text)| {
+                    let path = PathBuf::from(relative);
+                    let target = note_target(&path, text);
+                    (path, target)
+                })
                 .collect(),
             note_index: note_index.clone(),
             failures: BTreeSet::new(),
@@ -246,7 +565,10 @@ impl ArchivePairIndex {
     pub(crate) fn from_contents(contents: &BTreeMap<PathBuf, String>) -> Self {
         let note_index = NoteIndex::from_paths(contents.keys().cloned());
         Self::from_census(PairCensus {
-            contents: contents.clone(),
+            facts: contents
+                .iter()
+                .map(|(path, text)| (path.clone(), note_target(path, text)))
+                .collect(),
             note_index,
             failures: BTreeSet::new(),
         })
@@ -277,6 +599,64 @@ impl ArchivePairIndex {
         PairCensus::read_vault(vault).map(Self::from_census)
     }
 
+    /// Read a read-only census through the versioned fingerprint cache.
+    pub(crate) fn read_vault_cached(vault: &Path) -> io::Result<Self> {
+        PairCensus::read_vault_cached(vault, &pair_census_cache_dir())
+            .map(Self::from_census)
+    }
+
+    /// Read the full pair-index path universe once and return selected notes
+    /// whose bytes satisfy `filter`. Build the index only when the selected
+    /// set contains an archived note.
+    pub(crate) fn read_vault_filtered<F>(
+        vault: &Path,
+        filter_paths: &BTreeSet<PathBuf>,
+        filter: F,
+    ) -> io::Result<(Option<Self>, Vec<(PathBuf, String)>)>
+    where
+        F: Fn(&[u8]) -> bool + Sync,
+    {
+        Self::read_vault_filtered_in(vault, filter_paths, filter, None)
+    }
+
+    /// Cached variant for read-only RefTaskIndex residence and previews.
+    pub(crate) fn read_vault_filtered_cached<F>(
+        vault: &Path,
+        filter_paths: &BTreeSet<PathBuf>,
+        filter: F,
+    ) -> io::Result<(Option<Self>, Vec<(PathBuf, String)>)>
+    where
+        F: Fn(&[u8]) -> bool + Sync,
+    {
+        Self::read_vault_filtered_in(
+            vault,
+            filter_paths,
+            filter,
+            Some(pair_census_cache_dir()),
+        )
+    }
+
+    fn read_vault_filtered_in<F>(
+        vault: &Path,
+        filter_paths: &BTreeSet<PathBuf>,
+        filter: F,
+        cache_dir: Option<PathBuf>,
+    ) -> io::Result<(Option<Self>, Vec<(PathBuf, String)>)>
+    where
+        F: Fn(&[u8]) -> bool + Sync,
+    {
+        let (census, filtered) = PairCensus::read_vault_filtered(
+            vault,
+            filter_paths,
+            filter,
+            cache_dir.as_deref(),
+        )?;
+        let has_archived_notes =
+            filtered.iter().any(|(path, _)| is_archive_path(path));
+        let index = has_archived_notes.then(|| Self::from_census(census));
+        Ok((index, filtered))
+    }
+
     /// Rebuild with one note's bytes replaced, without disk I/O.
     ///
     /// Insertion callers hold bytes fresher than the census (a destination
@@ -286,8 +666,8 @@ impl ArchivePairIndex {
     pub(crate) fn with_contents(&self, path: &Path, contents: &str) -> Self {
         let mut census = self.census.clone();
         census
-            .contents
-            .insert(path.to_path_buf(), contents.to_string());
+            .facts
+            .insert(path.to_path_buf(), note_target(path, contents));
         census.failures.remove(path);
         census.note_index =
             census.note_index.with_additional([path.to_path_buf()]);
@@ -331,7 +711,7 @@ impl ArchivePairIndex {
         if self.census.failures.contains(&exact) {
             return true;
         }
-        if self.census.contents.contains_key(&exact) {
+        if self.census.facts.contains_key(&exact) {
             return false;
         }
         let stem = exact
@@ -394,7 +774,7 @@ impl ArchivePairIndex {
             _ => {
                 if canonical
                     .as_deref()
-                    .is_some_and(|path| self.census.contents.contains_key(path))
+                    .is_some_and(|path| self.census.facts.contains_key(path))
                 {
                     Some(self.incomplete_source(source))
                 } else {
@@ -442,7 +822,7 @@ impl ArchivePairIndex {
                 let derived = filename_source_for(archive);
                 if derived.is_some_and(|source| {
                     !is_archive_path(&source)
-                        && self.census.contents.contains_key(&source)
+                        && self.census.facts.contains_key(&source)
                 }) {
                     Some(self.incomplete_archive())
                 } else {
@@ -484,7 +864,7 @@ impl ArchivePairIndex {
             && (self.census.failures.contains(source)
                 || canonical.as_deref().is_some_and(|path| {
                     self.census.failures.contains(path)
-                        || self.census.contents.contains_key(path)
+                        || self.census.facts.contains_key(path)
                 }))
         {
             return SourceLookup::Refused {
@@ -574,14 +954,14 @@ fn resolve_pairs(census: &PairCensus) -> ResolvedPairs {
     let mut refused_sources: BTreeMap<PathBuf, Refusal> = BTreeMap::new();
     let mut refused_archives: BTreeMap<PathBuf, Refusal> = BTreeMap::new();
 
-    for (path, contents) in &census.contents {
+    for (path, target) in &census.facts {
         if is_archive_path(path) {
-            raw_archives.insert(
-                path.clone(),
-                super::link_repair::archive_parent_target(contents),
+            raw_archives.insert(path.clone(), target.clone());
+            let claim = resolve_parent_claim(
+                &census.note_index,
+                path,
+                target.as_deref(),
             );
-            let claim =
-                resolve_parent_claim(&census.note_index, path, contents);
             match claim {
                 Claim::Ambiguous => {
                     refused_archives.insert(
@@ -605,12 +985,12 @@ fn resolve_pairs(census: &PairCensus) -> ResolvedPairs {
             }
             archive_claims.insert(path.clone(), claim);
         } else {
-            raw_sources.insert(
-                path.clone(),
-                frontmatter_value(contents, "done_tasks:"),
+            raw_sources.insert(path.clone(), target.clone());
+            let claim = resolve_done_tasks_claim(
+                &census.note_index,
+                path,
+                target.as_deref(),
             );
-            let claim =
-                resolve_done_tasks_claim(&census.note_index, path, contents);
             match claim {
                 Claim::Ambiguous => {
                     refused_sources.insert(
@@ -833,14 +1213,14 @@ fn resolve_pairs(census: &PairCensus) -> ResolvedPairs {
         {
             let corroborated =
                 filename_source_for(archive).is_some_and(|derived| {
-                    derived == *source && census.contents.contains_key(&derived)
+                    derived == *source && census.facts.contains_key(&derived)
                 });
             if !corroborated {
                 refuse_archive(
                     &mut refused_archives,
                     archive,
                     if filename_source_for(archive).is_some_and(|derived| {
-                        census.contents.contains_key(&derived)
+                        census.facts.contains_key(&derived)
                             && derived != *source
                     }) {
                         "contradictory_metadata"
@@ -928,7 +1308,7 @@ fn resolve_pairs(census: &PairCensus) -> ResolvedPairs {
             continue;
         };
         if is_archive_path(&derived)
-            || !census.contents.contains_key(&derived)
+            || !census.facts.contains_key(&derived)
             || refused_sources.contains_key(&derived)
             || bound
                 .values()
@@ -980,7 +1360,7 @@ fn resolve_pairs(census: &PairCensus) -> ResolvedPairs {
         }
         let canonical = canonical_archive_path(source);
         if let Some(canonical) = &canonical
-            && census.contents.contains_key(canonical)
+            && census.facts.contains_key(canonical)
         {
             sources.insert(
                 source.clone(),
@@ -1066,25 +1446,24 @@ fn refuse_archive(
 fn resolve_done_tasks_claim(
     note_index: &NoteIndex,
     current: &Path,
-    contents: &str,
+    target: Option<&str>,
 ) -> Claim {
-    let Some(target) = frontmatter_value(contents, "done_tasks:") else {
+    let Some(target) = target else {
         return Claim::Absent;
     };
-    resolve_target(note_index, current, &target)
+    resolve_target(note_index, current, target)
 }
 
 /// Resolve an archive note's `parent:` frontmatter link, if any.
 fn resolve_parent_claim(
     note_index: &NoteIndex,
     current: &Path,
-    contents: &str,
+    target: Option<&str>,
 ) -> Claim {
-    let Some(target) = super::link_repair::archive_parent_target(contents)
-    else {
+    let Some(target) = target else {
         return Claim::Absent;
     };
-    resolve_target(note_index, current, &target)
+    resolve_target(note_index, current, target)
 }
 
 fn resolve_target(
@@ -1131,6 +1510,32 @@ fn frontmatter_value(contents: &str, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cached_index(vault: &Path, cache_dir: &Path) -> ArchivePairIndex {
+        let census = PairCensus::read_vault_cached(vault, cache_dir)
+            .expect("read cached census");
+        ArchivePairIndex::from_census(census)
+    }
+
+    fn expire_cached_snapshot(vault: &Path, cache_dir: &Path) {
+        let path = pair_census_cache_path(vault, cache_dir);
+        let mut cache: PairCensusCache =
+            serde_json::from_slice(&fs::read(&path).expect("read pair cache"))
+                .expect("parse pair cache");
+        cache.last_scan_unix = 1;
+        fs::write(
+            path,
+            serde_json::to_vec(&cache).expect("serialize expired cache"),
+        )
+        .expect("expire pair cache");
+    }
+
+    fn write_note(root: &Path, relative: &str, contents: &str) {
+        let path = root.join(relative);
+        fs::create_dir_all(path.parent().expect("note parent"))
+            .expect("create note directory");
+        fs::write(path, contents).expect("write note");
+    }
 
     fn index_of(entries: &[(&str, &str)]) -> ArchivePairIndex {
         let buffers: Vec<(String, String)> = entries
@@ -1220,6 +1625,193 @@ mod tests {
         let pair = bound_pair(&index, "new.md", "done/old_done.md");
         assert!(pair.via_metadata);
         assert_eq!(pair.canonical_archive, PathBuf::from("done/new_done.md"));
+    }
+
+    #[test]
+    fn reciprocal_metadata_binds_custom_archive_filename_from_contents() {
+        let contents = BTreeMap::from([
+            (
+                PathBuf::from("src.md"),
+                "---\ndone_tasks: \"[[done/custom_archive]]\"\n---\n"
+                    .to_string(),
+            ),
+            (
+                PathBuf::from("done/custom_archive.md"),
+                "---\nparent: \"[[src]]\"\n---\n".to_string(),
+            ),
+        ]);
+        let index = ArchivePairIndex::from_contents(&contents);
+        bound_pair(&index, "src.md", "done/custom_archive.md");
+    }
+
+    #[test]
+    fn cached_census_reuses_facts_for_an_unchanged_fingerprint() {
+        let vault = tempfile::TempDir::new().expect("temp vault");
+        let cache = tempfile::TempDir::new().expect("temp cache");
+        let source = "---\ndone_tasks: \"[[done/old]]\"\n---\n# Source\n";
+        write_note(vault.path(), "src.md", source);
+        write_note(
+            vault.path(),
+            "done/old.md",
+            "---\nparent: \"[[src]]\"\n---\n# Archive\n",
+        );
+
+        let first = cached_index(vault.path(), cache.path());
+        bound_pair(&first, "src.md", "done/old.md");
+        let source_path = vault.path().join("src.md");
+        let original = fs::metadata(&source_path).expect("metadata");
+        let modified = original.modified().expect("mtime");
+        let size = original.len();
+
+        // Keep both fingerprint fields fixed while changing the fact. The
+        // cache contract intentionally treats this as an unchanged note.
+        fs::write(&source_path, source.replace("old", "new"))
+            .expect("replace source target");
+        fs::File::options()
+            .write(true)
+            .open(&source_path)
+            .expect("open source")
+            .set_times(fs::FileTimes::new().set_modified(modified))
+            .expect("restore mtime");
+        let current = fs::metadata(&source_path).expect("metadata after");
+        assert_eq!(current.len(), size);
+        assert_eq!(current.modified().expect("restored mtime"), modified);
+
+        let second = cached_index(vault.path(), cache.path());
+        bound_pair(&second, "src.md", "done/old.md");
+    }
+
+    #[test]
+    fn cached_census_invalidates_only_the_changed_note() {
+        let vault = tempfile::TempDir::new().expect("temp vault");
+        let cache = tempfile::TempDir::new().expect("temp cache");
+        for source in ["a", "b"] {
+            write_note(
+                vault.path(),
+                &format!("{source}.md"),
+                &format!(
+                    "---\ndone_tasks: \"[[done/archive-{source}]]\"\n---\n"
+                ),
+            );
+            write_note(
+                vault.path(),
+                &format!("done/archive-{source}.md"),
+                &format!("---\nparent: \"[[{source}]]\"\n---\n"),
+            );
+        }
+        let first = cached_index(vault.path(), cache.path());
+        bound_pair(&first, "a.md", "done/archive-a.md");
+        bound_pair(&first, "b.md", "done/archive-b.md");
+
+        let b_path = vault.path().join("b.md");
+        let b_original = fs::metadata(&b_path).expect("metadata b");
+        let b_modified = b_original.modified().expect("mtime b");
+        fs::write(&b_path, "---\ndone_tasks: \"[[done/archive-x]]\"\n---\n")
+            .expect("change b target without changing fingerprint");
+        fs::File::options()
+            .write(true)
+            .open(&b_path)
+            .expect("open b")
+            .set_times(fs::FileTimes::new().set_modified(b_modified))
+            .expect("restore b mtime");
+
+        write_note(vault.path(), "a.md", "# A without its pair target\n");
+        expire_cached_snapshot(vault.path(), cache.path());
+        let second = cached_index(vault.path(), cache.path());
+        assert!(!matches!(
+            second.for_source(Path::new("a.md")),
+            SourceLookup::Bound(_)
+        ));
+        bound_pair(&second, "b.md", "done/archive-b.md");
+    }
+
+    #[test]
+    fn cached_census_rebuilds_after_a_version_mismatch() {
+        let vault = tempfile::TempDir::new().expect("temp vault");
+        let cache = tempfile::TempDir::new().expect("temp cache");
+        let source = "---\ndone_tasks: \"[[done/current]]\"\n---\n";
+        write_note(vault.path(), "src.md", source);
+        write_note(
+            vault.path(),
+            "done/current.md",
+            "---\nparent: \"[[src]]\"\n---\n",
+        );
+        let stale = PairCensusCache {
+            version: PAIR_CENSUS_CACHE_VERSION - 1,
+            vault: pair_census_vault_key(vault.path()),
+            last_scan_unix: pair_census_now_unix(),
+            complete: true,
+            files: BTreeMap::from([(
+                "src.md".to_string(),
+                CachedPairFact {
+                    mtime_ns: pair_census_fingerprint(
+                        &vault.path().join("src.md"),
+                    )
+                    .expect("source fingerprint")
+                    .0,
+                    size: fs::metadata(vault.path().join("src.md"))
+                        .expect("source metadata")
+                        .len(),
+                    target: Some("done/old".to_string()),
+                },
+            )]),
+            failures: BTreeSet::new(),
+        };
+        let path = pair_census_cache_path(vault.path(), cache.path());
+        fs::create_dir_all(path.parent().expect("cache parent"))
+            .expect("create cache directory");
+        fs::write(
+            &path,
+            serde_json::to_vec(&stale).expect("serialize stale cache"),
+        )
+        .expect("write stale cache");
+
+        let index = cached_index(vault.path(), cache.path());
+        bound_pair(&index, "src.md", "done/current.md");
+        let refreshed: PairCensusCache = serde_json::from_slice(
+            &fs::read(path).expect("read refreshed cache"),
+        )
+        .expect("parse refreshed cache");
+        assert_eq!(refreshed.version, PAIR_CENSUS_CACHE_VERSION);
+    }
+
+    #[test]
+    fn cached_census_preserves_unreadable_paths() {
+        let vault = tempfile::TempDir::new().expect("temp vault");
+        let cache = tempfile::TempDir::new().expect("temp cache");
+        let unreadable = vault.path().join("unreadable.md");
+        fs::write(&unreadable, [0xff, 0xfe]).expect("write invalid UTF-8");
+
+        let first = PairCensus::read_vault_cached(vault.path(), cache.path())
+            .expect("first cached census");
+        assert!(first.failures.contains(Path::new("unreadable.md")));
+        let second = PairCensus::read_vault_cached(vault.path(), cache.path())
+            .expect("cached census");
+        assert!(second.failures.contains(Path::new("unreadable.md")));
+    }
+
+    #[test]
+    fn cached_filtered_census_rereads_selected_notes() {
+        let vault = tempfile::TempDir::new().expect("temp vault");
+        let cache = tempfile::TempDir::new().expect("temp cache");
+        write_note(vault.path(), "ref/source.md", "#ref old\n");
+        PairCensus::read_vault_cached(vault.path(), cache.path())
+            .expect("warm census cache");
+
+        let current = "#ref updated\n";
+        write_note(vault.path(), "ref/source.md", current);
+        let selected = BTreeSet::from([PathBuf::from("ref/source.md")]);
+        let (_, filtered) = PairCensus::read_vault_filtered(
+            vault.path(),
+            &selected,
+            |_| true,
+            Some(cache.path()),
+        )
+        .expect("filtered cached census");
+        assert_eq!(
+            filtered,
+            vec![(PathBuf::from("ref/source.md"), current.to_string())]
+        );
     }
 
     #[test]

@@ -136,7 +136,7 @@ pub(crate) fn build_index(
             config.ref_dir.display()
         )));
     }
-    let ref_tasks = crate::native::ref_tasks::RefTaskIndex::build(
+    let ref_tasks = crate::native::ref_tasks::RefTaskIndex::build_read_only(
         &config.bob_dir,
         &config.ref_dir,
     );

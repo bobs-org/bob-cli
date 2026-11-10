@@ -1,5 +1,6 @@
 //! Unit tests for the ref-task locator use `tempfile` vaults.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -20,6 +21,163 @@ fn build(root: &Path) -> walk::RefTaskIndex {
 
 fn minimal_ref(root: &Path, rel: &str) {
     write_vault_file(root, rel, "---\nstatus: ready\n---\n\n# Note\n");
+}
+
+#[test]
+fn pair_indexes_match_across_vault_contents_and_ref_task_reads() {
+    let temp = tempfile::tempdir().expect("temp vault");
+    let root = temp.path();
+    let readable_notes = [
+        (
+            "projects/nested/source.md",
+            "---\ndone_tasks: \"[[done/custom/archive_done]]\"\n---\n#ref\n",
+        ),
+        (
+            "done/custom/archive_done.md",
+            "---\nparent: \"[[projects/nested/source]]\"\n---\n#ref\n",
+        ),
+        (
+            "books/nested/book.md",
+            "---\ndone_tasks: \"[[done/books/nested/book_done]]\"\n---\n# Book\n\n- [*] #task #ref [[ref/paper]] ^book-ref\n",
+        ),
+        (
+            "done/books/nested/book_done.md",
+            "---\nparent: \"[[books/nested/book]]\"\n---\n# Archived book\n",
+        ),
+        (
+            "lib/library.md",
+            "---\ndone_tasks: \"[[done/lib/library_done]]\"\n---\n# Library\n",
+        ),
+        (
+            "done/lib/library_done.md",
+            "---\nparent: \"[[lib/library]]\"\n---\n# Archived library\n",
+        ),
+        (
+            "xlib/external.md",
+            "---\ndone_tasks: \"[[done/xlib/external_done]]\"\n---\n# External\n",
+        ),
+        (
+            "done/xlib/external_done.md",
+            "---\nparent: \"[[xlib/external]]\"\n---\n# Archived external\n",
+        ),
+        (
+            "draft (conflict 1).md",
+            "---\ndone_tasks: \"[[done/draft (conflict 1)_done]]\"\n---\n# Conflict copy\n",
+        ),
+        (
+            "done/draft (conflict 1)_done.md",
+            "---\nparent: \"[[draft (conflict 1)]]\"\n---\n# Archived conflict copy\n",
+        ),
+        (
+            "body_only.md",
+            "# Body only\n\ndone_tasks: \"[[done/target_done]]\"\n",
+        ),
+        (
+            "fenced_only.md",
+            "# Fenced only\n\n```yaml\ndone_tasks: \"[[done/target_done]]\"\n```\n",
+        ),
+        ("done/target_done.md", "# Target archive\n"),
+        ("ref/paper.md", "---\nstatus: ready\n---\n# Paper\n"),
+    ];
+    let mut contents = BTreeMap::new();
+    for (relative, text) in readable_notes {
+        write_vault_file(root, relative, text);
+        contents.insert(PathBuf::from(relative), text.to_string());
+    }
+
+    // Pair reads retain invalid UTF-8 as a census failure. This unrelated
+    // failure must not poison the reciprocal pairs compared below.
+    fs::write(root.join("unreadable.md"), [0xff, 0xfe, 0x00])
+        .expect("write invalid UTF-8 note");
+    contents.insert(PathBuf::from("unreadable.md"), String::new());
+
+    // The pair census deliberately skips dot directories.
+    write_vault_file(root, ".hidden/dot.md", "# Hidden\n");
+    write_vault_file(root, ".hidden/done/dot_done.md", "# Hidden archive\n");
+
+    let read_index =
+        crate::native::collect_done::ArchivePairIndex::read_vault(root)
+            .expect("read pair census");
+    let contents_index =
+        crate::native::collect_done::ArchivePairIndex::from_contents(&contents);
+    let ref_index = build(root);
+    let ref_pair_index = ref_index
+        .archive_pairs()
+        .expect("archive path should make the pair index lazy value present")
+        .as_ref()
+        .expect("ref task pair census should succeed");
+
+    for (source, archive) in [
+        ("projects/nested/source.md", "done/custom/archive_done.md"),
+        ("books/nested/book.md", "done/books/nested/book_done.md"),
+        ("lib/library.md", "done/lib/library_done.md"),
+        ("xlib/external.md", "done/xlib/external_done.md"),
+        ("draft (conflict 1).md", "done/draft (conflict 1)_done.md"),
+    ] {
+        let lookup = read_index.for_source(Path::new(source));
+        assert!(
+            matches!(
+                &lookup,
+                crate::native::collect_done::SourceLookup::Bound(pair)
+                    if pair.archive.as_path() == Path::new(archive)
+            ),
+            "{source}: {lookup:?}"
+        );
+    }
+    for source in ["body_only.md", "fenced_only.md"] {
+        assert!(matches!(
+            read_index.for_source(Path::new(source)),
+            crate::native::collect_done::SourceLookup::Missing { .. }
+        ));
+    }
+
+    let source_paths = [
+        "projects/nested/source.md",
+        "books/nested/book.md",
+        "lib/library.md",
+        "xlib/external.md",
+        "draft (conflict 1).md",
+        "body_only.md",
+        "fenced_only.md",
+        ".hidden/dot.md",
+    ];
+    for source in source_paths {
+        let path = Path::new(source);
+        let expected = read_index.for_source(path);
+        assert_eq!(
+            contents_index.for_source(path),
+            expected,
+            "contents: {source}"
+        );
+        assert_eq!(
+            ref_pair_index.for_source(path),
+            expected,
+            "ref read: {source}"
+        );
+    }
+
+    let archive_paths = [
+        "done/custom/archive_done.md",
+        "done/books/nested/book_done.md",
+        "done/lib/library_done.md",
+        "done/xlib/external_done.md",
+        "done/draft (conflict 1)_done.md",
+        "done/target_done.md",
+    ];
+    for archive in archive_paths {
+        let path = Path::new(archive);
+        let expected = read_index.for_archive(path);
+        assert_eq!(
+            contents_index.for_archive(path),
+            expected,
+            "contents: {archive}"
+        );
+        assert_eq!(
+            ref_pair_index.for_archive(path),
+            expected,
+            "ref read: {archive}"
+        );
+    }
 }
 
 #[test]
