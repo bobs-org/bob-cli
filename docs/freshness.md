@@ -788,7 +788,9 @@ visible while the cursor is on a review task, including the compact Alt+P
 roll preview in its hint slot when the row has a recommendation; the full
 preview detail is in its tooltip. Off the walk, it shows the Alt+P preview
 for an open task with a priority, and the `]s next` hint otherwise. When
-nothing is due, the footer shows only that preview.
+nothing is due, the footer shows only that preview. On a TICKLER row the Alt+P
+preview shows as a highlighted `Alt+P` answer chip (for example `Alt+P decay P2→P3`),
+red when the recommendation is cancel.
 Its trailing group summary omits the current review group;
 the full summary shows when no review row is current. Wrap and boundary preambles stay transient in the notice.
 
