@@ -17,9 +17,12 @@ Every member has the same tiers, all painted from bob's values:
   period and marked `so far` while it is open. Each numeric fact sits over a quiet
   `typical` line: the median of the same-kind periods just before it, marked ▲/▼/=
   only once the period has closed;
-- a [[root-parent]] lane and a [[task-type]] lane;
-- above the day, a parts row with one column per child period, stacked by root
-  parent, that opens that child's note.
+- on periods, aligned Roots and Types charts that share one child-period axis:
+  Roots shows configured root-parent series, and Types shows configured task types.
+  Their legends distinguish named series, remainder, and unattributed time; a column
+  opens its child's note;
+- a period-only switch between Both, Roots, and Types, remembered independently of
+  the [[day-strip]] controls.
 
 Because periods are whole ISO weeks, the parts always add up to the whole. Worked
 counts closed on-clock [[pomodoro]]s; [[off-clock-pomodoro]] time stays a quiet

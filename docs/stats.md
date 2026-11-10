@@ -1687,10 +1687,11 @@ default) is the durable on/off for the automatic host — explicit fences
 still render when it is `false`. The `Toggle Day stats` command toggles
 automatic strips for the current plugin session. The switch and the `Cycle
 Day stats bars` command set one view for every Day strip on the device; the
-view is remembered on this device. Period strips keep their fixed Both view
-and are not affected by that preference. `stats.day_strip` and `Toggle Day
-stats` still govern the automatic Day strip. Opening or refreshing a
-strip never changes note bytes and never appends journal events.
+view is remembered on this device. Period strips keep their own chart view
+and the `Cycle period stats charts` command, independent of the Day preference.
+`stats.day_strip` and `Toggle Day stats` still govern the automatic Day strip.
+Opening or refreshing a strip never changes note bytes and never appends
+journal events.
 
 ### Browser preview and fixtures
 
