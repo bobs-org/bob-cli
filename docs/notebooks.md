@@ -113,7 +113,9 @@ Dry-run and commit share the same plan and bytes; each item carries
 `route`, `title`, `breadcrumb`, `section`, `section_action`, `block_id`, and
 `parent_block_id`. Human output is `📓 Note → Title › Section`,
 `📓 Note → Title › new section Name`, or `📓 Note → Title › ^id`.
-Routes to other note types keep their existing behavior. See
+Routes to other note types keep their existing behavior. `bob capture-targets`
+and route completion list notebook destinations after projects through the
+opt-in scanner; notebook notes have no Similar-tasks band. See
 [JSON outputs](reference/json-outputs.md#capture-and-protocol-helpers) for the
 parse spans.
 
@@ -345,7 +347,11 @@ If no owner resolves, bob teaches that notebooks hold no tasks and directs
 the user to choose an area or project and repair the notebook with
 `bob notebooks check`. Notebook candidates stay absent from task-move
 destinations, inbox-routing destinations, parent candidates, and
-`scan_capture_targets`.
+the task-only `scan_capture_targets`. The opt-in
+`scan_capture_targets_with_notebooks` scanner — used only by
+`bob capture-targets` and route completion — lists notebook rows after
+projects with `kind: notebook`, `title`, `summary`, `owner`, and
+`breadcrumb`; it never changes what the base scan offers as task homes.
 
 See `docs/reference/vault-format.md` for note types and
 `docs/reference/json-outputs.md` for the report schema.

@@ -14,9 +14,9 @@ use serde_json::json;
 use super::{
     capture, env as bob_env,
     projects::{
-        frontmatter_is_area, frontmatter_is_project, frontmatter_value,
-        is_markdown_file, parse_frontmatter, project_name_aliases,
-        ProjectStatus,
+        frontmatter_is_area, frontmatter_is_notebook, frontmatter_is_project,
+        frontmatter_value, is_markdown_file, parse_frontmatter,
+        project_name_aliases, ProjectStatus,
     },
     records::RecordCatalog,
     style::{display_width, pad_right, Styler},
@@ -36,7 +36,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let output_format = OutputFormat::from_matches(&matches);
     let verbose = matches.get_flag("verbose");
     let bob_dir = bob_dir_from_matches(&matches);
-    let report = scan_capture_targets(&bob_dir);
+    let report = scan_capture_targets_with_notebooks(&bob_dir);
 
     if report.issues.is_empty() {
         print_success(&report.result(&bob_dir), output_format);
@@ -69,12 +69,14 @@ fn print_clap_error(error: clap::Error) -> i32 {
 
 pub(crate) fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
-        .about("List capture routes for inbox, area, project, and record notes")
+        .about(
+            "List capture routes for inbox, area, project, notebook, and record notes",
+        )
         .long_about(
             "List the routable Bob notes that capture pickers can offer.\n\n\
-The command reads top-level area and non-terminal project notes, plus \
-configured record folders. It always pins mac_inbox first as the default \
-task-capture target. It is read-only.",
+The command reads top-level area and non-terminal project notes, opt-in \
+notebook notes, plus configured record folders. It always pins mac_inbox \
+first as the default task-capture target. It is read-only.",
         )
         .after_help(
             "Examples:\n  bob capture-targets --format json\n  bob capture-targets\n  bob capture-targets -f json\n  bob capture-targets -b ~/bob",
@@ -226,6 +228,18 @@ pub(crate) struct CaptureTarget {
     /// Indexed note count, present only on configured record-folder rows.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) count: Option<usize>,
+    /// Notebook title, present only on notebook rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) title: Option<String>,
+    /// Notebook summary, present only on notebook rows with a summary.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) summary: Option<String>,
+    /// Notebook owner route, present only on notebook rows with an owner.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) owner: Option<String>,
+    /// Notebook breadcrumb (owner through title), present only on rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) breadcrumb: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -235,10 +249,115 @@ pub(crate) enum CaptureTargetKind {
     Area,
     Project,
     Record,
+    Notebook,
 }
 
 pub(crate) fn scan_capture_targets(bob_dir: &Path) -> CaptureTargetsReport {
     scan_capture_targets_with_config(bob_dir, &super::config::config_path())
+}
+
+/// Opt-in route scan that also offers notebooks as capture destinations.
+/// The base [`scan_capture_targets`] stays task-only; only `bob
+/// capture-targets` and route completion use this scanner. Notebook rows
+/// sort after projects (before record folders) and carry `kind: notebook`
+/// plus `title`, `summary`, `owner`, and `breadcrumb`.
+pub(crate) fn scan_capture_targets_with_notebooks(
+    bob_dir: &Path,
+) -> CaptureTargetsReport {
+    scan_capture_targets_with_notebooks_config(
+        bob_dir,
+        &super::config::config_path(),
+    )
+}
+
+fn scan_capture_targets_with_notebooks_config(
+    bob_dir: &Path,
+    config_path: &Path,
+) -> CaptureTargetsReport {
+    let mut report = scan_capture_targets_with_config(bob_dir, config_path);
+    if !report.issues.is_empty() {
+        return report;
+    }
+    let notebooks = collect_notebook_targets(bob_dir);
+    if notebooks.is_empty() {
+        return report;
+    }
+    let insert_at = report
+        .targets
+        .iter()
+        .position(|target| target.kind == CaptureTargetKind::Record)
+        .unwrap_or(report.targets.len());
+    report.targets.splice(insert_at..insert_at, notebooks);
+    report
+}
+
+/// Root notebook notes as capture targets, sorted by route. Each row keeps
+/// the vault-relative filename as `label` and reports the notebook catalog
+/// title, summary, owner, and breadcrumb. Notes that fail to read or that
+/// the notebook policy does not recognize stay absent.
+fn collect_notebook_targets(bob_dir: &Path) -> Vec<CaptureTarget> {
+    let entries = match read_sorted_root_directory(bob_dir) {
+        Ok(entries) => entries,
+        Err(_) => return Vec::new(),
+    };
+    let mut routes = Vec::new();
+    for entry in entries {
+        let path = entry.path();
+        if !entry.file_type().is_ok_and(|kind| kind.is_file())
+            || !is_markdown_file(&path)
+        {
+            continue;
+        }
+        let Some(route) = routable_route_for_root_file(&path) else {
+            continue;
+        };
+        if route == capture::inbox_route() {
+            continue;
+        }
+        let contents = match fs::read_to_string(&path) {
+            Ok(contents) => contents,
+            Err(_) => continue,
+        };
+        // Reuse the frontmatter gate the base scan uses: only notebook
+        // notes become notebook rows.
+        let Some(frontmatter) = parse_frontmatter(&contents) else {
+            continue;
+        };
+        if !frontmatter_is_notebook(&frontmatter) {
+            continue;
+        }
+        routes.push(route);
+    }
+    routes.sort();
+    routes.dedup();
+    let mut targets = Vec::new();
+    for route in routes {
+        let policy = super::capture_notebooks::notebook_policy_for_forced_route(
+            bob_dir, &route,
+        );
+        let Some(info) = policy.get(&route) else {
+            continue;
+        };
+        let label = capture::route_label(&route);
+        targets.push(CaptureTarget {
+            route: route.clone(),
+            name: route.clone(),
+            label: label.clone(),
+            kind: CaptureTargetKind::Notebook,
+            is_default: false,
+            status: None,
+            relative_path: label,
+            project_name_aliases: Vec::new(),
+            record_type: None,
+            emoji: None,
+            count: None,
+            title: Some(info.title.clone()),
+            summary: info.summary.clone(),
+            owner: info.owner.clone(),
+            breadcrumb: Some(info.breadcrumb.clone()),
+        });
+    }
+    targets
 }
 
 fn scan_capture_targets_with_config(
@@ -448,6 +567,10 @@ fn default_inbox_target() -> CaptureTarget {
         record_type: None,
         emoji: None,
         count: None,
+        title: None,
+        summary: None,
+        owner: None,
+        breadcrumb: None,
     }
 }
 
@@ -470,6 +593,10 @@ fn target_from_route(
         record_type: None,
         emoji: None,
         count: None,
+        title: None,
+        summary: None,
+        owner: None,
+        breadcrumb: None,
     }
 }
 
@@ -509,6 +636,10 @@ fn append_record_targets(
             record_type: Some(record_type.id),
             emoji: record_type.emoji,
             count: Some(count),
+            title: None,
+            summary: None,
+            owner: None,
+            breadcrumb: None,
         });
     }
 }
@@ -550,6 +681,7 @@ fn print_human_success_with_styler(
     let inbox = targets_of_kind(result, CaptureTargetKind::Inbox);
     let areas = targets_of_kind(result, CaptureTargetKind::Area);
     let projects = targets_of_kind(result, CaptureTargetKind::Project);
+    let notebooks = targets_of_kind(result, CaptureTargetKind::Notebook);
     let records = targets_of_kind(result, CaptureTargetKind::Record);
 
     println!("Capture targets {} {}", styler.separator(), result.bob_dir);
@@ -563,18 +695,26 @@ fn print_human_success_with_styler(
         println!();
         print_group("Active projects", &projects, &widths, styler);
     }
+    if !notebooks.is_empty() {
+        println!();
+        print_group("Notebooks", &notebooks, &widths, styler);
+    }
     if !records.is_empty() {
         println!();
         print_group("Record folders", &records, &widths, styler);
     }
-    if areas.is_empty() && projects.is_empty() && records.is_empty() {
+    if areas.is_empty()
+        && projects.is_empty()
+        && notebooks.is_empty()
+        && records.is_empty()
+    {
         println!();
         println!("  No area or active project targets found.");
     }
 
     println!();
     println!(
-        "{} {} {} {} {} {} {} {} {} {} {} {} {}",
+        "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
         result.count,
         plural(result.count, "target", "targets"),
         styler.separator(),
@@ -585,6 +725,9 @@ fn print_human_success_with_styler(
         plural(areas.len(), "area", "areas"),
         styler.separator(),
         active_project_count_label(projects.len()),
+        styler.separator(),
+        notebooks.len(),
+        plural(notebooks.len(), "notebook", "notebooks"),
         styler.separator(),
         records.len(),
         plural(records.len(), "record folder", "record folders")
@@ -641,6 +784,25 @@ fn target_detail(target: &CaptureTarget, styler: &Styler) -> String {
             return default;
         }
         return format!("{default} · {aka}");
+    }
+
+    if target.kind == CaptureTargetKind::Notebook {
+        let title = target.title.as_deref().unwrap_or(&target.route);
+        let trail = target
+            .breadcrumb
+            .as_deref()
+            .map(|crumbs| crumbs.join(" › "))
+            .filter(|trail| !trail.is_empty());
+        let mut detail = match trail {
+            Some(trail) => format!("📓 {title} · {trail}"),
+            None => format!("📓 {title}"),
+        };
+        if let Some(summary) = target.summary.as_deref()
+            && !summary.is_empty()
+        {
+            detail.push_str(&format!(" · {summary}"));
+        }
+        return detail;
     }
 
     if target.kind != CaptureTargetKind::Project {
@@ -1057,6 +1219,86 @@ mod tests {
         assert!(
             warnings.contains("shadowed by the bob stem"),
             "shadowed aliases warn:\n{warnings}"
+        );
+    }
+
+    #[test]
+    fn base_scan_hides_notebooks_while_opt_in_lists_them_after_projects() {
+        let temp = TempDir::new("bob-cli-capture-targets-notebooks");
+        write_file(
+            &temp.path().join("dev.md"),
+            "---\ntype: \"[[area]]\"\n---\n",
+        );
+        write_file(
+            &temp.path().join("bob.md"),
+            "---\ntype: [[project]]\nstatus: wip\n---\n",
+        );
+        write_file(
+            &temp.path().join("dev_tools.md"),
+            "---\nparent: \"[[dev]]\"\ntype: \"[[notebook]]\"\nsummary: Tools.\n---\n\n# **Developer** [[tools]]\n",
+        );
+        write_file(
+            &temp.path().join("notes.md"),
+            "---\nparent: \"[[dev]]\"\ntype: \"[[notebook]]\"\n---\n\n# Notes\n",
+        );
+
+        let base = scan_capture_targets_with_config(
+            temp.path(),
+            &temp.path().join("records-config.yml"),
+        );
+        assert!(
+            base.targets
+                .iter()
+                .all(|target| target.kind != CaptureTargetKind::Notebook),
+            "base scan stays task-only: {:?}",
+            base.targets
+        );
+
+        let report = scan_capture_targets_with_notebooks_config(
+            temp.path(),
+            &temp.path().join("records-config.yml"),
+        );
+        let routes = report
+            .targets
+            .iter()
+            .map(|target| (target.route.as_str(), target.kind))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            routes.iter().map(|(route, _)| *route).collect::<Vec<_>>(),
+            ["mac_inbox", "dev", "bob", "dev_tools", "notes"]
+        );
+        let notebook = report
+            .targets
+            .iter()
+            .find(|target| target.route == "dev_tools")
+            .expect("notebook row");
+        assert_eq!(notebook.kind, CaptureTargetKind::Notebook);
+        assert_eq!(notebook.title.as_deref(), Some("Developer tools"));
+        assert_eq!(notebook.summary.as_deref(), Some("Tools."));
+        assert_eq!(notebook.owner.as_deref(), Some("dev"));
+        assert_eq!(
+            notebook.breadcrumb.as_deref(),
+            Some(&["dev".to_string(), "Developer tools".to_string()][..])
+        );
+        assert_eq!(notebook.relative_path, "dev_tools.md");
+        assert_eq!(notebook.label, "dev_tools.md");
+
+        let value: serde_json::Value =
+            serde_json::from_str(&success_json(&report.result(temp.path())))
+                .expect("json");
+        let row = value["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["route"] == "dev_tools")
+            .expect("notebook json row");
+        assert_eq!(row["kind"], "notebook");
+        assert_eq!(row["title"], "Developer tools");
+        assert_eq!(row["summary"], "Tools.");
+        assert_eq!(row["owner"], "dev");
+        assert_eq!(
+            row["breadcrumb"],
+            serde_json::json!(["dev", "Developer tools"])
         );
     }
 

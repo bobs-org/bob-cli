@@ -68,7 +68,7 @@ except `capture-task-id`/`capture-pomodoro-name` (write; `-d` previews) and
 | `bob capture-related` | `-f json` | Candidate matches, UTF-8 draft anchors, verified actions, and already-linked tasks; `--query` adds scores | `schema_version: 1` | [Capture](../capture.md#bob-capture-related) |
 | `bob capture-rewrite` | `-f json` | `input`, rewritten `text`, `changed`, `cursor`, `rule`, `edits`, and optional forward `alias`; unchanged cursor requests add an object or `null` `sigil_alias_tip` | `schema_version: 1` | [Capture-rewrite contract](../capture.md#bob-capture-rewrite) |
 | `bob capture-sections` | `-f json` | `route`, `count`, and non-`Tasks` `sections` | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md) |
-| `bob capture-targets` | `-f json` | `bob_dir`, `count`, and route `targets`; record rows use `kind: "record"` | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md#record-notes) |
+| `bob capture-targets` | `-f json` | `bob_dir`, `count`, and route `targets`; notebook rows use `kind: "notebook"` with `title`, `summary`, `owner`, and `breadcrumb`, record rows use `kind: "record"` | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md#record-notes) |
 | `bob capture-task-id` | `-f json` | ID write (or `-d` plan) plus `note_path` and picker `*_replacement` strings | `schema_version: 1` | [Capture](../capture.md) |
 | `bob capture-drawers` | `-f json` | ALL-CAPS child drawers of one task plus catalog recents | `schema_version: 1` | [Capture](../capture.md) |
 | `bob capture-tasks` | `-f json` | Open tasks of one note with block IDs and status names | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md) |

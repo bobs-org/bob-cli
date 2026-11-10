@@ -179,8 +179,11 @@ impl RefTaskIndex {
                         .targets
                         .iter()
                         .filter(|target| {
-                            target.kind
-                                != crate::native::capture_targets::CaptureTargetKind::Record
+                            !matches!(
+                                target.kind,
+                                crate::native::capture_targets::CaptureTargetKind::Record
+                                    | crate::native::capture_targets::CaptureTargetKind::Notebook
+                            )
                         })
                         .map(|t| t.route.to_ascii_lowercase())
                         .collect(),

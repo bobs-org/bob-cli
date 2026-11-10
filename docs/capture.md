@@ -61,6 +61,7 @@ workflow guide.
     - [Offer a new project's tasks](#offer-a-new-projects-tasks)
   - [Record notes](#record-notes)
     - [Guided fields](#guided-fields)
+  - [Notebook notes](#notebook-notes)
   - [Sub-bullets under existing tasks](#sub-bullets-under-existing-tasks)
     - [Moving and merging tasks with `>`](#moving-and-merging-tasks-with)
     - [Merging tasks into a new task with `<`](#merging-tasks-into-a-new-task-with)
@@ -113,6 +114,8 @@ anything is written, and any failure rolls the whole batch back.
 | `- ^` / `- :` in a sealed project-note item | Incomplete move picker (`capture-parse` needs `project_task_move`); `bob capture` refuses until an ID is selected |
 | `@route#Section` | Write an ordinary bullet into a matching non-`Tasks` heading |
 | `@route#` | Write an ordinary bullet into any non-`Tasks` heading |
+| Notebook `@route`, `@route#section`, `@route^id`, `@route+id` | Parse a notebook note or sub-note; commit writes it through the guarded transaction (see [Notebook notes](#notebook-notes)) |
+| `@route#section^id` | Ordinary bullet or notebook note with an authored block ID; a caret inside a quoted title stays title text |
 | `@route` on its line, bullets below | Task list: each first-level bullet below becomes its own task in `<route>.md` (see [Lists](#lists-several-tasks-or-notes-at-once)) |
 | `@route#Section` alone on its line, bullets below | Section list: each first-level bullet below becomes its own bullet under that heading |
 | `- <task> :<task-id>` (list bullet) | Same as the project-note bullet: name the task, make it Next, and link it into the Pomodoro the task's type places |
@@ -468,7 +471,10 @@ trailing `text @route` suffix is used. A draft-wide `@@route` declaration,
 described below, supplies the same destination
 to every item that has no local route or mode marker.
 Route names use `A-Z`, `a-z`, `0-9`, `_`, and `-`, are lower-cased, and write
-to `<route>.md` at the vault root. Existing target files, including
+to `<route>.md` at the vault root. A notebook destination makes the item a
+note instead of a task (see [Notebook notes](#notebook-notes)); the item-local
+route wins, otherwise an eligible item inherits the one draft-wide `@@route`.
+Existing target files, including
 `mac_inbox.md`, prefer a Markdown `Tasks` section: new captures insert after
 the last top-level `#task` block in that section, or after one blank line below
 the `Tasks` heading when the section has no tasks yet. When
@@ -518,9 +524,11 @@ First task
 Second task
 ```
 
-`@@<route>` sends every otherwise-unrouted item to `<route>.md` as a task.
-Authored children stay nested under their own capture parent. Route validation
-matches `@route`.
+`@@<route>` sends every otherwise-unrouted item to `<route>.md` as a task,
+or as a notebook note when the destination is a notebook. Two unrouted text
+items plus `@@dev_tools` become two notebook notes, preserving order and
+local-route overrides. Authored children stay nested under their own capture
+parent. Route validation matches `@route`.
 
 The declaration is metadata, never capture text: it is absent from item counts,
 semantic capture text, preview bodies, and note contents. A draft that contains
@@ -535,7 +543,10 @@ Buy milk @@bar
 
 Unsupported forms such as `@@foo#Ideas`, `@@foo^id`, `@@foo:id`,
 `@@foo+id`, `@@foo^id@`, and `@@foo:id+` are errors
-rather than literal task text. Wrap `@@...` in inline code to keep it literal.
+rather than literal task text. Notebook globals with a place or ID suffix
+(`@@nb#sec`, `@@nb^id`, `@@nb+id`) refuse with `invalid_global_destination`:
+put the place on the item (`@nb#sec`). Wrap `@@...` in inline code to keep
+it literal.
 
 An item-local marker still wins for that item. If the same item also owns the
 declaration, `bob capture-parse` reports a `global_destination_shadowed`
@@ -1032,7 +1043,11 @@ clipboard children, then the schedule log.
 
 A first line that is only `@route` or only `@route#section`, followed by one
 or more bullets, files each first-level bullet below it as its own item in
-that file, with the bullet's nested bullets as its children. A bare `@route`
+that file, with the bullet's nested bullets as its children. A notebook header
+files each bullet as its own stamped note (a terminal `^id` names that note),
+and `@dev_tools+id` files each bullet as an unstamped child of that parent;
+text on a notebook route plus authored bullets nests those bullets beneath the
+one note. A bare `@route`
 with no bullets is a note pull instead; see
 [Pulling ready tasks from a note](#pulling-ready-tasks-from-a-note). A header
 line also starts a new list when no blank line precedes it, so `@dev` / `- a`
@@ -6726,6 +6741,51 @@ task pickers. Link-kind values reuse note/heading/block sources while
 keeping record edit ownership. Template argument rows are not record items.
 Ordinary drafts with no `@dir/` or collection route skip the record catalog.
 
+### Notebook notes
+
+A notebook destination makes the item a note. The item-local route wins;
+otherwise an eligible item inherits the one draft-wide `@@route`. A notebook
+route claims before task, reference-job, and URL interpretation, so
+`https://example.com/post @dev_tools` files a plain URL note with no
+reference job, and a `%t` row that routes to a notebook uses this same
+resolver. Standalone `%n`, record routes, and explicit local operation modes
+keep their existing meanings.
+
+Top-level and section notes append after the last note's whole block in the
+target region, preserving nested details. The pre-H2 region preserves
+frontmatter, the early H1, and preamble; a section ends at the next H2 or
+higher heading. A sub-note appends after its parent's existing nested block
+with no `[created::]` stamp. IDs stay unique across real blocks and earlier
+writes in the same draft; fenced examples are never parent candidates.
+
+```text
+Try mergiraf @dev_tools
+Try mergiraf @dev_tools#git
+Try mergiraf @dev_tools^mergiraf
+Faster with -j @dev_tools+mergiraf
+```
+
+Notebook section lookup uses exact title or whole slug. An unquoted selector
+that prefixes an existing slug or is within edit distance two refuses with
+`notebook_section_near_miss` and suggests the existing heading; quoted
+selectors create their exact title. Other missing selectors create a Title
+Case `##` at EOF and preview it as a new section. `#section^id` works on
+every route: a caret inside a quoted title stays literal title text, while a
+caret outside the closing quote names the note. Each item carries
+`kind: notebook_note` or `notebook_sub_note` plus a `notebook` object with
+`route`, `title`, `breadcrumb`, `section`, `section_action` (`existing`,
+`create`, or null), `block_id`, and `parent_block_id`. Human output is
+`📓 Note → Title › Section`, `📓 Note → Title › new section Name`, or
+`📓 Note → Title › ^id`. Notebook notes have no Similar-tasks band; mixed
+task/record drafts keep theirs. `bob capture-targets` and route completion
+list notebook rows after projects with `kind: notebook`, `title`,
+`summary`, `owner`, and `breadcrumb` through the opt-in scanner.
+
+Forced destinations follow the same resolver: `bob capture -r dev_tools`,
+`--section T`, `--task ID`, and clipboard composition all land as notebook
+notes. See [Notebooks](notebooks.md#capture) for the full destination table
+and refusal codes.
+
 ### Sub-bullets under existing tasks
 
 Use a leading or trailing `@<route>+<block-id>` marker to capture an ordinary
@@ -7418,7 +7478,10 @@ equality first, then slug-prefix, with the same non-H1 preference, so
 and `--section` stay exact title (or article identity) matches and never
 slug-match. An unterminated `@route#\"…` is incomplete (`needs: ["section"]`,
 no diagnostic) and `bob capture` refuses it with zero writes. Notes that are
-not articles keep the raw-title then slug behavior. Within the chosen section
+not articles keep the raw-title then slug behavior. `#section^id` adds an
+authored block ID on every route, ordinary and notebook alike: a caret inside
+a quoted title stays literal title text, while a caret outside the closing
+quote names the note. Within the chosen section
 the bullet is inserted after the last existing top-level bullet, otherwise just
 below the heading (or after any YAML frontmatter for the zeroth section). The
 suffixed route token may lead or trail the body, so `@notes#Ideas jot idea` and
@@ -7494,9 +7557,9 @@ Useful options:
   ```json
   {"code":"pomodoro_override_refused","error":"capture item 1 starting on line 1: refusing capture: `=` would restart the running CAPTURE (0920-0945) and --refuse-override is set; capture `x =` to close it first","ok":false}
   ```
-- `-r, --route NAME`: force `NAME.md` and keep any `@tokens` in the text literal
-- `-s, --section TITLE`: with `--route`, force a bullet into the exact section
-- `-t, --task BLOCK-ID`: with `--route`, append beneath the identified task
+- `-r, --route NAME`: force `NAME.md` and keep any `@tokens` in the text literal; a notebook route forces a notebook note
+- `-s, --section TITLE`: with `--route`, force a bullet into the exact section; a notebook route forces a notebook section note, creating it when missing
+- `-t, --task BLOCK-ID`: with `--route`, append beneath the identified task; a notebook route appends an unstamped child under that note
 - `--task-ref LINE:DIGEST`: hidden picker option; with `--route`, append beneath
   the task identified by that stale-safe ref from `capture-tasks` or
   `capture-complete`. Conflicts with `--task`. Not listed in `--help`.
@@ -8452,10 +8515,13 @@ validates typed values through the records planner without writing a note.
 See [Record notes](#record-notes) and
 [JSON outputs](reference/json-outputs.md#record-notes).
 
-`bob capture-targets` appends configured record folders after inbox, area, and
-project routes. JSON record rows have `kind: "record"`, `type`, `emoji`, and
+`bob capture-targets` appends opt-in notebook notes after inbox, area, and
+project routes, then configured record folders. JSON notebook rows have
+`kind: "notebook"`, `title`, `summary`, `owner`, and `breadcrumb`; JSON
+record rows have `kind: "record"`, `type`, `emoji`, and
 an indexed note `count`; their route is the directory followed by `/`.
-Human output groups these rows under “Record folders”. Missing or invalid
+Human output groups notebook rows under “Notebooks” and record rows under
+“Record folders”. Missing or invalid
 record configuration leaves ordinary capture-target discovery available.
 
 ### Template drafts
@@ -10261,15 +10327,20 @@ list and call `bob capture` directly:
 
 On a successful scan, `capture-targets` returns `mac_inbox` first even when
 `mac_inbox.md` does not exist, followed by top-level area notes and
-non-terminal project notes, with each group sorted by route, then configured
-record folders (route `dir/`, `kind: "record"`). Eligible note
+non-terminal project notes, with each group sorted by route, then opt-in
+notebook notes (route `stem`, `kind: "notebook"`), then configured
+record folders (route `dir/`, `kind: "record"`). The task-only
+`scan_capture_targets` stays without notebooks; only `bob capture-targets`
+and route completion use the opt-in notebook scanner. Eligible note
 filenames must already be lowercase and may contain only ASCII letters,
 digits, `_`, and `-`. Area and project classification comes from YAML
 frontmatter `type: "[[area]]"` or `type: "[[project]]"`; the equivalent bare
-values are also accepted. Nested notes, projects whose status is `done`,
+values are also accepted. Notebook rows come from root notes with
+`type: "[[notebook]]"` and add `title`, `summary`, `owner`, and `breadcrumb`.
+Nested notes, projects whose status is `done`,
 `canceled`, or `cancelled` (case-insensitively), and other note types are
 omitted. Record rows add `type`, `emoji`, and indexed note `count`; they are
-omitted when `records:` is absent or invalid. Human output groups routes by kind (record rows under “Record folders”). JSON output has `ok`, `bob_dir`,
+omitted when `records:` is absent or invalid. Human output groups routes by kind (notebook rows under “Notebooks”, record rows under “Record folders”). JSON output has `ok`, `bob_dir`,
 `count`, and an ordered `targets` array; each target has `route`, `name`,
 `label`, `kind`, `is_default`, `status`, `relative_path`, and
 `project_name_aliases` (the note's external names, `[]` when it has none;

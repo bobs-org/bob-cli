@@ -118,7 +118,10 @@ pub(crate) fn discover_at(
     let settings = note_tasks::read_settings(bob_dir);
     let mut notes = Vec::new();
     for target in &report.targets {
-        if target.kind == CaptureTargetKind::Record {
+        if matches!(
+            target.kind,
+            CaptureTargetKind::Record | CaptureTargetKind::Notebook
+        ) {
             continue;
         }
         let relative = &target.relative_path;

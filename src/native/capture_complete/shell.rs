@@ -172,6 +172,25 @@ pub(crate) fn shell_completion(
                     RouteCandidateKind::Record => {
                         ("records", "record folder".to_string())
                     }
+                    RouteCandidateKind::Notebook => {
+                        let title =
+                            item.title.as_deref().unwrap_or(&item.route);
+                        let trail = item
+                            .breadcrumb
+                            .as_deref()
+                            .map(|crumbs| crumbs.join(" › "))
+                            .filter(|trail| !trail.is_empty());
+                        let mut description = match trail {
+                            Some(trail) => format!("📓 {title} · {trail}"),
+                            None => format!("📓 {title}"),
+                        };
+                        if let Some(summary) = item.summary.as_deref()
+                            && !summary.is_empty()
+                        {
+                            description.push_str(&format!(" · {summary}"));
+                        }
+                        ("notebooks", description)
+                    }
                 };
                 let full = if item.kind == RouteCandidateKind::Record {
                     format!("{}{}", marker_prefix, item.replacement.trim_end())

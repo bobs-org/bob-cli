@@ -917,3 +917,46 @@ fn record_update_items_have_no_rows() {
         );
     }
 }
+
+#[test]
+fn notebook_notes_have_no_similar_band_while_mixed_drafts_keep_task_rows() {
+    let temp = TempDir::new("bob-cli-capture-related-notebooks");
+    write_settings(temp.path());
+    write_file(
+        &temp.path().join("dev.md"),
+        &area_note("Dev", "- [ ] #task Install new UPS battery ^ups\n"),
+    );
+    write_file(
+        &temp.path().join("dev_tools.md"),
+        "---\nparent: \"[[dev]]\"\ntype: \"[[notebook]]\"\nsummary: Tools.\n---\n\n# **Developer** [[tools]]\n",
+    );
+    let request_for = |draft: &str| super::DraftRequest {
+        bob_dir: temp.path().to_path_buf(),
+        days: 30,
+        limit: 5,
+        draft: draft.to_string(),
+    };
+    let _now = TestEnvGuard::set(&[(
+        "BOB_NOW",
+        Some(std::ffi::OsStr::new("2026-10-20 12:00:00")),
+    )]);
+    let notebook_only =
+        super::draft::draft_related(&request_for("Try mergiraf @dev_tools"));
+    assert!(
+        notebook_only.items.is_empty(),
+        "notebook-only draft must have no Similar-tasks band: {notebook_only:?}"
+    );
+    let mixed = super::draft::draft_related(&request_for(
+        "Try mergiraf @dev_tools\n\nInstall new UPS battery @dev",
+    ));
+    assert_eq!(
+        mixed.items.len(),
+        1,
+        "mixed draft keeps one task row: {mixed:?}"
+    );
+    assert_eq!(mixed.items[0].mode, "task");
+    assert!(
+        !mixed.items[0].matches.is_empty(),
+        "task row keeps its band: {mixed:?}"
+    );
+}

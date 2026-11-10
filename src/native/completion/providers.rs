@@ -268,7 +268,9 @@ fn relation_labels(context: &Context) -> Vec<String> {
 }
 
 /// Routes in capture-targets scan order: the default inbox, then
-/// areas, then projects. Groups `inbox` / `areas` / `projects`.
+/// areas, then projects. Groups `inbox` / `areas` / `projects`. This stays
+/// on the task-only scan so shell `--route` completion never offers
+/// notebooks as task homes; route completion owns the notebook rows.
 fn routes(bob_dir: &Path) -> Vec<String> {
     let report = capture_targets::scan_capture_targets(bob_dir);
     let mut lines = Vec::with_capacity(report.targets.len());
@@ -301,6 +303,11 @@ fn routes(bob_dir: &Path) -> Vec<String> {
                     },
                 ),
             ),
+            capture_targets::CaptureTargetKind::Notebook => {
+                // Unreachable on the task-only scan; keep the match
+                // exhaustive without offering a notebook task home.
+                continue;
+            }
         };
         if let Some(line) = protocol::candidate_line(
             OsStr::new(&target.route),

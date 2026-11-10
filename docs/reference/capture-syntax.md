@@ -5,21 +5,20 @@ description: Index of bob capture tokens with syntax, examples, and links into t
 
 # Capture syntax
 
-`bob capture` writes tasks, Record Notes, reference jobs, and Pomodoro changes.
-See the full [Capture contract](../capture.md).
+`bob capture` writes tasks, Record Notes, references, and Pomodoro changes.
+See [Capture contract](../capture.md).
 
 `@` chooses a destination; `#` names a section, drawer, or task type; `%` selects a
 capture directive. In completion, standalone `#` and `%` open menus.
 
 Examples use a synthetic vault (`BOB_NOW=2026-10-20 12:00:00`, `TZ=UTC`).
 
-Options come before the draft. Unknown long options fail there but stay literal
-after it. `--` ends option parsing.
+Options come before the draft. Unknown long options stay literal after it.
+`--` ends option parsing.
 
 ## Token index
 
-Each operation has one row; equivalent spellings share a heading. Submitting
-incomplete **picker** input is refused.
+Each operation has one row; incomplete **picker** input is refused.
 
 | Token | Meaning | Heading |
 | --- | --- | --- |
@@ -215,6 +214,7 @@ bytes through the existing preimage-checked edit path.
 
 A draft-wide destination for otherwise-unrouted items. It may sit anywhere.
 A plain `@@route` also routes default (routeless) refs as source `global`.
+Notebook `@@route` routes notes; `@@nb#sec`, `@@nb^id`, `@@nb+id` are invalid.
 
 ```bash
 bob capture 'Buy milk @@work'
@@ -254,6 +254,7 @@ Contract: [Section bullets](../capture.md#section-bullets).
 
 `--route NAME` forces `NAME.md` and keeps typed `@tokens` literal. On a bare
 URL it queues the reference under that route with source `explicit`.
+Notebook `--route` forces a note.
 
 ```bash
 bob capture -r work -- 'https://example.com/article'

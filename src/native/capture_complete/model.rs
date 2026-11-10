@@ -53,6 +53,18 @@ pub(super) struct RouteCandidate {
     /// Record type id, present only on configured record-folder rows.
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub(super) record_type: Option<String>,
+    /// Notebook title, present only on notebook rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) title: Option<String>,
+    /// Notebook summary, present only on notebook rows with a summary.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) summary: Option<String>,
+    /// Notebook owner route, present only on notebook rows with an owner.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) owner: Option<String>,
+    /// Notebook breadcrumb, present only on notebook rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) breadcrumb: Option<Vec<String>>,
     /// Follow-up request after accepting this record route.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) continuation: Option<CandidateContinuation>,
@@ -73,6 +85,7 @@ pub(super) enum RouteCandidateKind {
     Area,
     Project,
     Record,
+    Notebook,
 }
 
 impl From<CaptureTargetKind> for RouteCandidateKind {
@@ -82,6 +95,7 @@ impl From<CaptureTargetKind> for RouteCandidateKind {
             CaptureTargetKind::Area => Self::Area,
             CaptureTargetKind::Project => Self::Project,
             CaptureTargetKind::Record => Self::Record,
+            CaptureTargetKind::Notebook => Self::Notebook,
         }
     }
 }

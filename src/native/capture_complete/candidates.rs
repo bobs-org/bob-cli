@@ -30,7 +30,7 @@ pub(super) fn route_candidates(
     bob_dir: &Path,
     query: &str,
 ) -> Result<Candidates, CompleteError> {
-    let report = capture_targets::scan_capture_targets(bob_dir);
+    let report = capture_targets::scan_capture_targets_with_notebooks(bob_dir);
     if !report.issues.is_empty() {
         return Err(CompleteError::io(report.issue_summary()));
     }
@@ -73,6 +73,10 @@ fn record_aware_route_candidate(
         emoji: target.emoji,
         count: target.count,
         record_type: target.record_type,
+        title: target.title,
+        summary: target.summary,
+        owner: target.owner,
+        breadcrumb: target.breadcrumb,
         continuation: None,
     }
 }

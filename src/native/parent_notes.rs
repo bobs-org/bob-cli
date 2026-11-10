@@ -29,12 +29,18 @@ pub(crate) struct ParentCandidate {
     pub(crate) status: Option<String>,
 }
 
-/// The capture-target set, in capture-targets order.
+/// The capture-target set, in capture-targets order. Notebooks never
+/// become task parents, so both record folders and notebooks stay out.
 pub(crate) fn parent_candidates(bob_dir: &Path) -> Vec<ParentCandidate> {
     capture_targets::scan_capture_targets(bob_dir)
         .targets
         .into_iter()
-        .filter(|target| target.kind != CaptureTargetKind::Record)
+        .filter(|target| {
+            !matches!(
+                target.kind,
+                CaptureTargetKind::Record | CaptureTargetKind::Notebook
+            )
+        })
         .map(|target| ParentCandidate {
             route: target.route,
             kind: target.kind,
@@ -100,6 +106,7 @@ pub(crate) fn parent_kind_name(kind: &CaptureTargetKind) -> &'static str {
         CaptureTargetKind::Area => "area",
         CaptureTargetKind::Project => "project",
         CaptureTargetKind::Record => "record",
+        CaptureTargetKind::Notebook => "notebook",
     }
 }
 

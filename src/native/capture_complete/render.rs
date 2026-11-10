@@ -476,6 +476,31 @@ pub(super) fn candidate_lines(
         Candidates::Route(items) => items
             .iter()
             .map(|item| {
+                if item.kind == super::model::RouteCandidateKind::Notebook {
+                    let title = item.title.as_deref().unwrap_or(&item.route);
+                    let trail = item
+                        .breadcrumb
+                        .as_deref()
+                        .map(|crumbs| crumbs.join(" › "))
+                        .filter(|trail| !trail.is_empty());
+                    let mut detail = match trail {
+                        Some(trail) => {
+                            format!("📓 {title} · {trail}  {:?}", item.kind)
+                        }
+                        None => {
+                            format!("📓 {title}  {:?}", item.kind)
+                        }
+                    };
+                    if let Some(summary) = item.summary.as_deref()
+                        && !summary.is_empty()
+                    {
+                        detail.push_str(&format!(" · {summary}"));
+                    }
+                    return (
+                        item.replacement.clone(),
+                        format!("{}  {detail}", item.label),
+                    );
+                }
                 (
                     item.replacement.clone(),
                     format!("{}  {:?}", item.label, item.kind),

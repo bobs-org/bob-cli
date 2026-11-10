@@ -675,7 +675,11 @@ fn append_ref_tasks_row(
 fn append_parents_row(bob_dir: &Path, warnings: &mut Vec<String>) {
     let report = crate::native::capture_targets::scan_capture_targets(bob_dir);
     let parent_targets = report.targets.iter().filter(|target| {
-        target.kind != crate::native::capture_targets::CaptureTargetKind::Record
+        !matches!(
+            target.kind,
+            crate::native::capture_targets::CaptureTargetKind::Record
+                | crate::native::capture_targets::CaptureTargetKind::Notebook
+        )
     });
     if report.alias_warnings.is_empty() {
         let notes = parent_targets.clone().count();

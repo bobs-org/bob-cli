@@ -81,6 +81,43 @@ fn route_completion_lists_every_target_for_an_empty_query() {
 }
 
 #[test]
+fn route_completion_offers_notebook_rows_after_projects_with_breadcrumb() {
+    let temp = TempDir::new("bob-cli-capture-complete-routes-notebook");
+    write_file(&temp.path().join("dev.md"), "---\ntype: [[area]]\n---\n");
+    write_file(
+        &temp.path().join("bob.md"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n",
+    );
+    write_file(
+        &temp.path().join("dev_tools.md"),
+        "---\nparent: \"[[dev]]\"\ntype: \"[[notebook]]\"\nsummary: Tools.\n---\n\n# **Developer** [[tools]]\n",
+    );
+
+    let value = result(temp.path(), "@", 1);
+    let Candidates::Route(routes) = &value.candidates else {
+        panic!("expected route candidates");
+    };
+    let names: Vec<&str> =
+        routes.iter().map(|route| route.route.as_str()).collect();
+    assert_eq!(names, vec!["mac_inbox", "dev", "bob", "dev_tools"]);
+    let notebook = routes
+        .iter()
+        .find(|route| route.route == "dev_tools")
+        .expect("notebook candidate");
+    assert_eq!(
+        notebook.kind,
+        super::super::model::RouteCandidateKind::Notebook
+    );
+    assert_eq!(notebook.title.as_deref(), Some("Developer tools"));
+    assert_eq!(notebook.summary.as_deref(), Some("Tools."));
+    assert_eq!(notebook.owner.as_deref(), Some("dev"));
+    assert_eq!(
+        notebook.breadcrumb.as_deref(),
+        Some(&["dev".to_string(), "Developer tools".to_string()][..])
+    );
+}
+
+#[test]
 fn double_at_offers_only_destinations_never_a_template_candidate() {
     let temp = TempDir::new("bob-cli-capture-complete-no-template-candidate");
     for (raw, cursor) in [("@@te", 4), ("@@", 2)] {
