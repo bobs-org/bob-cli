@@ -514,7 +514,7 @@ theme key. These additions retain each command's existing envelope version;
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
 | `bob task move` | `-f json` | Move plan and repaired-link report | `schema_version: 1` | [Task move](../task-move.md) |
-| `bob task archive` | `-f json` | `moves`, `holds`, `skips`, `grandfathered`, `link_repairs`, `diagnostics` (`complete`, `counts`, `findings`), `git`, and `exit` (applied/deferred paths, recovery directory); `-n` previews | `schema_version: 1` | [Task archive](../task-archive.md#json) |
+| `bob task archive` | `-f json` | `moves`, `holds`, `skips`, `grandfathered`, `link_repairs`, `renames` (`source`, `from`, `to`), `diagnostics` (`complete`, `counts`, `findings`), `git`, and `exit` (applied/deferred paths, recovery directory); `-n` previews | `schema_version: 1` | [Task archive](../task-archive.md#json) |
 | `bob task merge` | `-f json` | `merges[]` with source, target, outcome, repaired dependencies and links; `pull_in` counts; write paths, Git results, and error | `schema_version: 1` | [Task merge](../task-merge.md#9-command-line) |
 | `bob task split` | `-f json` | `candidates[]`, `splits[]` with owner, new tasks, stubs, placement, cursor, notice, and clamped counts; write paths, Git results, and error | `schema_version: 1` | [Task split](../task-split.md#3-command-line) |
 | `bob task reconcile` (aliases `task-status-hooks`, `mark-next-tasks`) | `-f json` | Sync result: marked, cleared, blocked, dependency, and reference changes | Unversioned (serialized sync result, no `schema_version`) | [Task Status Hooks](../task-status-hooks.md) |

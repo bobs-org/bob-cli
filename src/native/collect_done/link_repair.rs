@@ -131,6 +131,7 @@ pub(super) fn apply_link_repairs_to_plan(
     files: &mut [FilePlan],
     pairs: &ArchivePairIndex,
     blocked_sources: &BTreeSet<PathBuf>,
+    renames: &[RenamePlan],
 ) -> io::Result<Vec<LinkRepairPlan>> {
     let mut planned_contents = captured.clone();
     for file in files.iter() {
@@ -158,7 +159,21 @@ pub(super) fn apply_link_repairs_to_plan(
         pairs,
         blocked_sources,
     )?;
-    if moved_targets.is_empty() {
+    // Rename maintenance resolves against the pre-rename census so
+    // shortened and case-variant targets still identify the old note; an
+    // ambiguous basename never resolves and is left alone.
+    let rename_map: BTreeMap<PathBuf, PathBuf> = renames
+        .iter()
+        .map(|rename| (rename.from.clone(), rename.to.clone()))
+        .collect();
+    let rename_dep_targets = rename_dependency_targets(captured, renames)?;
+    let pre_rename_index = NoteIndex::from_paths(captured.keys().cloned());
+    let removed_paths: BTreeSet<&PathBuf> =
+        renames.iter().map(|rename| &rename.from).collect();
+    if moved_targets.is_empty()
+        && rename_map.is_empty()
+        && rename_dep_targets.is_empty()
+    {
         return Ok(Vec::new());
     }
 
@@ -167,6 +182,9 @@ pub(super) fn apply_link_repairs_to_plan(
 
     let mut link_repair_counts = BTreeMap::new();
     for relative_path in repair_paths {
+        if removed_paths.contains(&relative_path) {
+            continue;
+        }
         let contents = planned_contents
             .get(&relative_path)
             .cloned()
@@ -177,6 +195,22 @@ pub(super) fn apply_link_repairs_to_plan(
             &note_index,
             &moved_targets,
         );
+        if !rename_map.is_empty() || !rename_dep_targets.is_empty() {
+            let renamed = repair_rename_links(
+                &repair.contents,
+                &relative_path,
+                &pre_rename_index,
+                &rename_map,
+            );
+            repair.contents = renamed.contents;
+            repair.link_count += renamed.link_count;
+            let metadata = repair_dependency_metadata(
+                &repair.contents,
+                &rename_dep_targets,
+            );
+            repair.contents = metadata.contents;
+            repair.dependency_metadata_count += metadata.count;
+        }
         if let Some((source_target, stayed, stayed_headings)) =
             archive_stayed_block_ids(
                 &relative_path,
@@ -284,6 +318,301 @@ pub(super) fn apply_link_repairs_to_plan(
         .sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     Ok(link_repairs)
 }
+/// Old-to-new dependency ids for every anchor a renamed archive holds.
+///
+/// Block ids are preserved verbatim at the canonical destination; only the
+/// path-qualified `[id::]` / `[dependsOn::]` identities change. Anchors
+/// whose dependency id cannot be encoded are skipped, matching the existing
+/// collision validation.
+fn rename_dependency_targets(
+    captured: &BTreeMap<PathBuf, String>,
+    renames: &[RenamePlan],
+) -> io::Result<MovedBlockTargets> {
+    let mut targets = BTreeMap::new();
+    for rename in renames {
+        let old_contents =
+            captured.get(&rename.from).cloned().unwrap_or_default();
+        let new_target = vault_relative_link_target(&rename.to, "archive")?;
+        // All content anchors count, not just trailing ids: archived rows
+        // commonly carry `^id` mid-line before their close-date metadata.
+        let old_ids: BTreeSet<String> =
+            content_anchor_occurrences(&old_contents)
+                .into_iter()
+                .map(|occurrence| occurrence.id)
+                .collect();
+        for block_id in old_ids {
+            let (Ok(old_dependency), Ok(new_dependency)) = (
+                dependency_id(&rename.from, &block_id),
+                dependency_id(&rename.to, &block_id),
+            ) else {
+                continue;
+            };
+            if old_dependency == new_dependency {
+                continue;
+            }
+            targets.insert(
+                (rename.from.clone(), block_id.clone()),
+                MovedBlockTarget {
+                    archive_target: new_target.clone(),
+                    block_id: block_id.clone(),
+                    old_dependency_id: old_dependency,
+                    new_dependency_id: new_dependency,
+                },
+            );
+        }
+    }
+    Ok(targets)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RenameLinkRepair {
+    contents: String,
+    link_count: usize,
+}
+
+/// Retarget inbound note, heading, and block links to renamed archives.
+///
+/// Every supported link form is rewritten with alias, embed, and fragment
+/// syntax preserved: `[[old]]`, `[[old#Heading]]`, `[[old#^id]]`,
+/// `[text](old.md#^id)`, and their alias/embed variants. Resolution uses the
+/// pre-rename index so shortened and case-variant targets still identify the
+/// old note; an ambiguous basename never resolves and is left alone. Managed
+/// YAML links are updated deliberately by the planner, so frontmatter stays
+/// out of this generic pass, as do fenced blocks, inline code spans, and
+/// `%%` / `<!-- -->` comments.
+fn repair_rename_links(
+    contents: &str,
+    current_path: &Path,
+    note_index: &NoteIndex,
+    rename_map: &BTreeMap<PathBuf, PathBuf>,
+) -> RenameLinkRepair {
+    if rename_map.is_empty() {
+        return RenameLinkRepair {
+            contents: contents.to_string(),
+            link_count: 0,
+        };
+    }
+    let wiki = repair_rename_wiki_links(
+        contents,
+        current_path,
+        note_index,
+        rename_map,
+    );
+    let markdown = repair_rename_markdown_links(
+        &wiki.contents,
+        current_path,
+        note_index,
+        rename_map,
+    );
+    RenameLinkRepair {
+        contents: markdown.contents,
+        link_count: wiki.link_count + markdown.link_count,
+    }
+}
+
+fn rename_skip_lines(contents: &str) -> BTreeSet<usize> {
+    let lines: Vec<&str> = contents.split_inclusive('\n').collect();
+    super::super::markdown::non_content_line_indexes(&lines)
+}
+
+fn repair_rename_wiki_links(
+    contents: &str,
+    current_path: &Path,
+    note_index: &NoteIndex,
+    rename_map: &BTreeMap<PathBuf, PathBuf>,
+) -> RenameLinkRepair {
+    let lines: Vec<&str> = contents
+        .split_inclusive('\n')
+        .map(|line| split_line_ending(line).0)
+        .collect();
+    let fenced = markdown::fenced_lines(&lines, 0..lines.len());
+    let frontmatter_end = markdown::strictly_closed_frontmatter_end(&lines);
+    let skipped = rename_skip_lines(contents);
+    let mut repaired = String::with_capacity(contents.len());
+    let mut link_count = 0;
+    let mut cursor = 0;
+
+    while let Some(relative_start) = contents[cursor..].find("[[") {
+        let start = cursor + relative_start;
+        let inner_start = start + 2;
+        let Some(relative_end) = contents[inner_start..].find("]]") else {
+            break;
+        };
+        let end = inner_start + relative_end;
+
+        repaired.push_str(&contents[cursor..start]);
+        let inner = &contents[inner_start..end];
+        let line_index = contents[..start].matches('\n').count();
+        let line = lines.get(line_index).copied().unwrap_or("");
+        let line_start =
+            contents[..start].rfind('\n').map_or(0, |index| index + 1);
+        let skip = skipped.contains(&line_index)
+            || skip_repaired_span(
+                true,
+                line_index,
+                line,
+                start.saturating_sub(line_start),
+                end + 2 - line_start,
+                &fenced,
+                frontmatter_end,
+            );
+        let replacement = if skip {
+            None
+        } else {
+            rename_wiki_target(inner, current_path, note_index, rename_map)
+        };
+        if let Some(new_inner) = replacement {
+            repaired.push_str("[[");
+            repaired.push_str(&new_inner);
+            repaired.push_str("]]");
+            link_count += 1;
+        } else {
+            repaired.push_str(&contents[start..end + 2]);
+        }
+        cursor = end + 2;
+    }
+
+    repaired.push_str(&contents[cursor..]);
+    RenameLinkRepair {
+        contents: repaired,
+        link_count,
+    }
+}
+
+/// Resolve a wiki inner target against the pre-rename index and retarget it
+/// when it names a renamed archive, preserving alias and fragment.
+fn rename_wiki_target(
+    inner: &str,
+    current_path: &Path,
+    note_index: &NoteIndex,
+    rename_map: &BTreeMap<PathBuf, PathBuf>,
+) -> Option<String> {
+    let (target_with_fragment, alias) = match inner.find('|') {
+        Some(index) => (&inner[..index], &inner[index..]),
+        None => (inner, ""),
+    };
+    let (note_target, fragment) = match target_with_fragment.find('#') {
+        Some(index) => (
+            &target_with_fragment[..index],
+            &target_with_fragment[index..],
+        ),
+        None => (target_with_fragment, ""),
+    };
+    if note_target.trim().is_empty() {
+        return None;
+    }
+    let resolved = note_index.resolve(current_path, note_target.trim())?;
+    let new_path = rename_map.get(&resolved)?;
+    let new_target = vault_relative_link_target(new_path, "archive").ok()?;
+    Some(format!("{new_target}{fragment}{alias}"))
+}
+
+fn repair_rename_markdown_links(
+    contents: &str,
+    current_path: &Path,
+    note_index: &NoteIndex,
+    rename_map: &BTreeMap<PathBuf, PathBuf>,
+) -> RenameLinkRepair {
+    let lines: Vec<&str> = contents
+        .split_inclusive('\n')
+        .map(|line| split_line_ending(line).0)
+        .collect();
+    let fenced = markdown::fenced_lines(&lines, 0..lines.len());
+    let frontmatter_end = markdown::strictly_closed_frontmatter_end(&lines);
+    let skipped = rename_skip_lines(contents);
+    let mut repaired = String::with_capacity(contents.len());
+    let mut link_count = 0;
+    let mut cursor = 0;
+
+    while let Some(relative_open) = contents[cursor..].find("](") {
+        let open = cursor + relative_open;
+        if let Some(wiki_start) = next_wiki_link_start(contents, cursor)
+            && wiki_start < open
+        {
+            let Some(wiki_end) = contents[wiki_start + 2..].find("]]") else {
+                break;
+            };
+            let wiki_end = wiki_start + 2 + wiki_end + 2;
+            repaired.push_str(&contents[cursor..wiki_end]);
+            cursor = wiki_end;
+            continue;
+        }
+
+        let destination_start = open + 2;
+        let Some(relative_close) = contents[destination_start..].find(')')
+        else {
+            break;
+        };
+        let destination_end = destination_start + relative_close;
+
+        repaired.push_str(&contents[cursor..destination_start]);
+        let destination = &contents[destination_start..destination_end];
+        let line_index = contents[..open].matches('\n').count();
+        let line = lines.get(line_index).copied().unwrap_or("");
+        let line_start =
+            contents[..open].rfind('\n').map_or(0, |index| index + 1);
+        let skip = skipped.contains(&line_index)
+            || skip_repaired_span(
+                true,
+                line_index,
+                line,
+                open.saturating_sub(line_start),
+                destination_end + 1 - line_start,
+                &fenced,
+                frontmatter_end,
+            );
+        if skip {
+            repaired.push_str(destination);
+        } else if let Some(new_destination) = rename_markdown_destination(
+            destination,
+            current_path,
+            note_index,
+            rename_map,
+        ) {
+            repaired.push_str(&new_destination);
+            link_count += 1;
+        } else {
+            repaired.push_str(destination);
+        }
+        repaired.push(')');
+        cursor = destination_end + 1;
+    }
+
+    repaired.push_str(&contents[cursor..]);
+    RenameLinkRepair {
+        contents: repaired,
+        link_count,
+    }
+}
+
+/// Retarget a Markdown destination naming a renamed archive, preserving the
+/// fragment and the bare/`.md` style of the original target.
+fn rename_markdown_destination(
+    destination: &str,
+    current_path: &Path,
+    note_index: &NoteIndex,
+    rename_map: &BTreeMap<PathBuf, PathBuf>,
+) -> Option<String> {
+    if !is_simple_markdown_destination(destination) {
+        return None;
+    }
+    let (target, fragment) = match destination.find('#') {
+        Some(index) => (&destination[..index], &destination[index..]),
+        None => (destination, ""),
+    };
+    if target.contains("://") || target.trim().is_empty() {
+        return None;
+    }
+    let resolved = note_index.resolve(current_path, target.trim())?;
+    let new_path = rename_map.get(&resolved)?;
+    let new_target = vault_relative_link_target(new_path, "archive").ok()?;
+    if has_markdown_extension(target.trim()) {
+        Some(format!("{new_target}.md{fragment}"))
+    } else {
+        Some(format!("{new_target}{fragment}"))
+    }
+}
+
 pub(super) fn moved_block_targets(
     note_paths: &BTreeSet<PathBuf>,
     planned_contents: &BTreeMap<PathBuf, String>,

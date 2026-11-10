@@ -7,8 +7,8 @@ that pointed at moved block ids. The Rust planner lives in
 `src/native/collect_done/`. Nightly runs it after the leading `vault-sync` and
 before articles, period-note problems, and the trailing `vault-sync`.
 
-This file is the behavior contract. The keep window, rename following, and
-plugin restore are later phases; this page describes the selection, pairing,
+This file is the behavior contract. The keep window and plugin restore are
+later phases; this page describes the selection, pairing, rename following,
 guarded-write, preview, and JSON rules that ship today.
 
 ## Command
@@ -100,11 +100,10 @@ The human scan report always prints `holds`, `skips`, `grandfathered`, and
 Pairing is metadata-first. One shared pair index is built from the captured
 census before eligibility filtering. Reciprocal `done_tasks` / `parent`
 frontmatter wins even when the archive filename is old; unique filename
-fallback applies only when no metadata contradicts it. A bound existing
-archive is the destination, including a noncanonical name; this phase never
-creates a second archive for that source. The canonical path
-`done/<source-parent>/<stem>_done.md` is still captured when absent so a later
-rename phase can install it.
+fallback applies only when no metadata contradicts it. Every bound pair is
+resolved before eligibility can skip its source, so daily, reference,
+untyped, and finished-project sources keep archive maintenance without
+becoming eligible for task extraction.
 
 A binding conflict (contradictory or ambiguous metadata, two archives claiming
 one source, two sources claiming one archive, or an occupied canonical
@@ -141,6 +140,36 @@ A replayed root is removed from the source, appends nothing to the archive, and
 renames nothing; inbound links still repair into the archive. Replayed roots
 still count toward the threshold. This is what finishes an interrupted run (see
 [Recovery](#recovery)): a second successful run is a no-op.
+
+## Rename following
+
+A bound noncanonical archive moves to `done/<source-parent>/<stem>_done.md`
+in the same run that moves tasks. The canonical destination is created from
+the captured old archive with its body, custom frontmatter, line endings, and
+block ids preserved verbatim; only the managed `parent`, `type`, and source
+`done_tasks` fields are updated. An occupied destination refuses the rename
+even when its contents look identical: diagnosing duplicates never licenses
+deleting a copy.
+
+One overlay carries rename maintenance, current task moves, and historical
+repairs. Inbound note, heading, and block links to the old archive are
+retargeted with alias, embed, and fragment syntax preserved, covering wikilinks
+and Markdown destinations; targets resolve against the pre-rename index so
+shortened and case-variant forms still identify the old note, and an ambiguous
+basename is never guessed. Archived anchors keep their block ids while their
+path-qualified `[id::]` / `[dependsOn::]` identities move to the canonical
+path, composed with current-move id suffixing; no source-of-truth dependency
+link may point at the removed archive. Generic repairs stay out of fenced
+blocks, frontmatter, inline code spans, and `%%` / `<!-- -->` comments; managed
+YAML links are updated deliberately. Drafted period review digests survive via
+the existing carry helper.
+
+The final overlay is verified with old paths removed: renamed archives join the
+existing postimage checks (including rename-only runs), and every changed path
+is emitted once. Destination archives install first, then source and repair
+outputs, then guarded old-path removals with before-images in the recovery
+manifest. Both created and removed paths flow through the touched-path Git
+commit. A successful second run is a no-op with no renames planned.
 
 ## Link repair
 
@@ -212,14 +241,23 @@ an explicit, safe later step, because exact replay detects the archive copies
 already installed and only removes the moved blocks from the source. Recovery
 state lives under `$XDG_STATE_HOME/bob-cli/task-archive/`.
 
+A partial rename recovers separately from that task-block replay guarantee.
+When the deletion did not complete, both the canonical copy and the old path
+stay on disk with the recovery manifest holding the before-image of every
+operation (a missing before-image for the create, the captured original bytes
+for the removal). A later ordinary run refuses the unresolved duplicate claims
+instead of guessing which copy is authoritative; an explicit rerun after
+inspecting the recovery directory completes the move without duplicating
+blocks.
+
 ## Preview
 
 `--dry-run` captures, transforms, verifies, and reports; that is all. It
 succeeds while another process holds the maintenance lock, never creates the
 lock file, never probes Git, and creates no recovery state, archive directory,
 or file. A validation refusal still reports the failure and exits 1. Human
-output lists `moves` and the same counts a real run would apply, labeled as
-planned.
+output lists `moves`, `renames`, and the same counts a real run would apply,
+labeled as planned.
 
 ## JSON
 
@@ -233,12 +271,13 @@ to stderr. Usage errors are plain stderr with exit 2. The schema is
 | `schema_version` | `1` |
 | `dry_run` | Whether the run was a preview |
 | `vault`, `threshold` | Vault root and effective threshold |
-| `scan` | Counts for the plan (`null` when planning failed): `markdown_files`, `files_meeting_threshold`, `task_blocks`, `source_done_tasks_updates`, `archive_metadata_repairs`, `moved_block_ids`, `ambiguous_moved_block_ids`, `moved_block_id_renames`, `planned_bytes` |
+| `scan` | Counts for the plan (`null` when planning failed): `markdown_files`, `files_meeting_threshold`, `task_blocks`, `source_done_tasks_updates`, `archive_metadata_repairs`, `moved_block_ids`, `ambiguous_moved_block_ids`, `moved_block_id_renames`, `archive_renames`, `planned_bytes` |
 | `moves` | Deterministic list ordered by `source`; each entry has `source`, `archive`, `task_count`, `writes_source`, `writes_archive`, `creates_archive`, `roots`, `block_ids`, `id_renames`, `replays` |
 | `holds` | `path`, one-based `line`, nullable `block_id`, `reason` (`open_subtask` or `duplicate_block_id`) |
 | `skips` | Reason-to-count object |
 | `grandfathered` | Path list |
 | `link_repairs` | `files` (affected paths), `link_count`, `dependency_metadata_count` |
+| `renames` | Deterministic list ordered by `source`; each entry has `source`, `from` (old archive), `to` (canonical archive) |
 | `diagnostics` | See below |
 | `git` | See below |
 | `exit` | See below |

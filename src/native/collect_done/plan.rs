@@ -3,16 +3,26 @@ use super::*;
 
 use super::super::task_status_hooks::{parse_tasks, task_group_classification};
 use super::super::task_status_hooks_write::{
-    planned_write, InputSnapshot, PlannedWrite, WritePlan,
+    planned_remove, planned_write, InputSnapshot, PlannedWrite, WritePlan,
 };
 use super::health::{collect_diagnostics, Diagnostics};
 use super::snapshot::{capture_error, capture_inputs, CapturedInputs};
+
+/// One guarded source-rename maintenance: a bound noncanonical archive moves
+/// to its canonical destination and the old path is removed recoverably.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RenamePlan {
+    pub(super) source: PathBuf,
+    pub(super) from: PathBuf,
+    pub(super) to: PathBuf,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CollectionPlan {
     pub(super) scanned_files: usize,
     pub(super) files: Vec<FilePlan>,
     pub(super) link_repairs: Vec<LinkRepairPlan>,
+    pub(super) renames: Vec<RenamePlan>,
     pub(super) holds: Vec<HeldRoot>,
     pub(super) skip_counts: BTreeMap<String, usize>,
     pub(super) grandfathered: Vec<PathBuf>,
@@ -47,7 +57,13 @@ pub(super) struct MovedRootRecord {
 
 impl CollectionPlan {
     pub(super) fn is_empty(&self) -> bool {
-        self.files.is_empty() && self.link_repairs.is_empty()
+        self.files.is_empty()
+            && self.link_repairs.is_empty()
+            && self.renames.is_empty()
+    }
+
+    pub(super) fn rename_count(&self) -> usize {
+        self.renames.len()
     }
 
     pub(super) fn total_task_count(&self) -> usize {
@@ -305,6 +321,9 @@ fn grouping_eligible_for(
 pub(super) struct FilePlan {
     pub(super) relative_source_path: PathBuf,
     pub(super) relative_archive_path: PathBuf,
+    /// Old archive path removed recoverably when this file moves a bound
+    /// noncanonical archive to its canonical destination.
+    pub(super) renamed_from: Option<PathBuf>,
     pub(super) task_count: usize,
     pub(super) source_contents: String,
     pub(super) archive_contents: Option<String>,
@@ -412,6 +431,14 @@ fn plan_from_pairs(
 ) -> io::Result<PlannedArchive> {
     validate_dependency_identity_index(&captured.contents)?;
     let blocked_sources = diagnostics.write_blocked_sources();
+    // Rename maintenance is resolved before eligibility can skip a source:
+    // daily, reference, untyped, and finished-project sources keep archive
+    // maintenance without becoming eligible for task extraction.
+    let renames = collect_rename_targets(captured, pairs, &blocked_sources);
+    let rename_by_source: BTreeMap<&PathBuf, &RenamePlan> = renames
+        .iter()
+        .map(|rename| (&rename.source, rename))
+        .collect();
     let mut files = Vec::new();
     let mut holds = Vec::new();
     let mut skip_counts = BTreeMap::new();
@@ -436,6 +463,16 @@ fn plan_from_pairs(
                     (path, false)
                 }
                 SourceLookup::Refused { .. } => continue,
+            };
+        // A bound noncanonical archive moves to its canonical destination;
+        // the old path's bytes stay the append base and are removed later.
+        let renamed_from = rename_by_source
+            .get(&relative_source_path)
+            .map(|rename| rename.from.clone());
+        let relative_archive_path =
+            match rename_by_source.get(&relative_source_path) {
+                Some(rename) => rename.to.clone(),
+                None => relative_archive_path,
             };
         match classify_source(
             &relative_source_path,
@@ -472,10 +509,17 @@ fn plan_from_pairs(
             }
         }));
         let moves_tasks = transform.task_count >= threshold;
-        let existing_archive = captured
-            .contents
-            .get(&relative_archive_path)
-            .map(String::as_str);
+        // A rename reads the old archive as its base while installing the
+        // canonical destination; every other plan reads its destination.
+        let existing_archive = match &renamed_from {
+            Some(from) => captured.contents.get(from).map(String::as_str),
+            None => captured
+                .contents
+                .get(&relative_archive_path)
+                .map(String::as_str),
+        };
+        let destination_exists =
+            captured.contents.contains_key(&relative_archive_path);
         let partitioned = if moves_tasks {
             Some(partition_selected_roots(&transform, existing_archive)?)
         } else {
@@ -563,19 +607,44 @@ fn plan_from_pairs(
                 (None, false)
             };
 
+        // A rename always installs its canonical destination, even when the
+        // copied frontmatter already names the right source: the path move
+        // itself is the change. Refusing an occupied destination stays with
+        // the pair index, which never reports such a pair as bound.
+        let is_rename = renamed_from.is_some();
         if task_count == 0
             && !source_metadata_updated
             && !archive_metadata_updated
+            && !is_rename
         {
             continue;
         }
+        let archive_contents = if is_rename && archive_contents.is_none() {
+            let source_link = source_wiki_link(&relative_source_path)?;
+            let base = match existing_archive {
+                Some(old) => {
+                    archive_base_contents(Some(old), old, &source_link)
+                }
+                None => archive_base_contents(None, "", &source_link),
+            };
+            Some(base)
+        } else {
+            archive_contents
+        };
+        let archive_metadata_updated =
+            match (&existing_archive, &archive_contents) {
+                (_, None) => archive_metadata_updated,
+                (Some(old), Some(next)) if is_rename => next.as_str() != *old,
+                _ => archive_metadata_updated,
+            };
 
         files.push(FilePlan {
             relative_source_path,
             relative_archive_path,
+            renamed_from,
             task_count,
             source_contents,
-            archive_created: archive_contents.is_some() && !archive_exists,
+            archive_created: archive_contents.is_some() && !destination_exists,
             archive_contents,
             source_metadata_updated,
             archive_metadata_updated,
@@ -593,11 +662,19 @@ fn plan_from_pairs(
         });
     }
 
+    plan_rename_only_files(
+        captured,
+        pairs,
+        &blocked_sources,
+        &renames,
+        &mut files,
+    )?;
     let mut link_repairs = apply_link_repairs_to_plan(
         &captured.contents,
         &mut files,
         pairs,
         &blocked_sources,
+        &renames,
     )?;
     apply_same_write_grouping(captured, &mut files, &mut link_repairs)?;
     verify_planned_postimages(
@@ -606,8 +683,9 @@ fn plan_from_pairs(
         &link_repairs,
         pairs,
         &blocked_sources,
+        &renames,
     )?;
-    let write_plan = write_plan_for(captured, &files, &link_repairs)?;
+    let write_plan = write_plan_for(captured, &files, &link_repairs, &renames)?;
     grandfathered.sort();
     holds.sort_by(|left, right| {
         left.relative_path
@@ -620,6 +698,7 @@ fn plan_from_pairs(
             scanned_files: captured.source_paths.len(),
             files,
             link_repairs,
+            renames,
             holds,
             skip_counts,
             grandfathered,
@@ -627,6 +706,123 @@ fn plan_from_pairs(
         write_plan,
         diagnostics,
     })
+}
+
+/// Bound noncanonical archives resolved before eligibility filtering.
+///
+/// Daily, reference, untyped, and finished-project sources keep this
+/// maintenance without task extraction. Occupied canonical destinations are
+/// never overwritten: the pair index reports those as refused, and a
+/// canonical path present in the census is skipped here as well so
+/// diagnosing duplicates never deletes a copy.
+fn collect_rename_targets(
+    captured: &CapturedInputs,
+    pairs: &ArchivePairIndex,
+    blocked_sources: &BTreeSet<PathBuf>,
+) -> Vec<RenamePlan> {
+    let mut renames = Vec::new();
+    for (source, lookup) in pairs.source_entries() {
+        let SourceLookup::Bound(bound) = lookup else {
+            continue;
+        };
+        if bound.archive == bound.canonical_archive {
+            continue;
+        }
+        if blocked_sources.contains(source) {
+            continue;
+        }
+        if captured.contents.contains_key(&bound.canonical_archive) {
+            continue;
+        }
+        if !captured.contents.contains_key(&bound.archive) {
+            continue;
+        }
+        renames.push(RenamePlan {
+            source: source.to_path_buf(),
+            from: bound.archive.clone(),
+            to: bound.canonical_archive.clone(),
+        });
+    }
+    renames.sort_by(|left, right| {
+        left.source
+            .cmp(&right.source)
+            .then(left.from.cmp(&right.from))
+    });
+    renames
+}
+
+/// FilePlans for renames whose source needed no task extraction.
+///
+/// The source loop above only visits eligibility-passing notes through
+/// `captured.source_paths`; a rename whose source was skipped there (daily,
+/// finished, untyped, or below threshold) still moves its archive bytes,
+/// repairs its managed `parent` / `type` / `done_tasks` fields, and removes
+/// the old path. Body, custom frontmatter, line endings, and block ids are
+/// preserved verbatim; only the managed fields change.
+fn plan_rename_only_files(
+    captured: &CapturedInputs,
+    pairs: &ArchivePairIndex,
+    blocked_sources: &BTreeSet<PathBuf>,
+    renames: &[RenamePlan],
+    files: &mut Vec<FilePlan>,
+) -> io::Result<()> {
+    for rename in renames {
+        if files
+            .iter()
+            .any(|file| file.relative_source_path == rename.source)
+        {
+            continue;
+        }
+        if blocked_sources.contains(&rename.source) {
+            continue;
+        }
+        // Conflicted bindings stay out: only bound pairs reach `renames`,
+        // but a concurrent refusal must not gain a maintenance write.
+        if !matches!(pairs.for_source(&rename.source), SourceLookup::Bound(_)) {
+            continue;
+        }
+        let source_original = captured.contents(&rename.source)?.to_string();
+        let old_archive = captured.contents(&rename.from)?.to_string();
+        let archive_link = archive_wiki_link(&rename.to)?;
+        let source_link = source_wiki_link(&rename.source)?;
+        let source_contents = ensure_source_done_tasks_frontmatter(
+            &source_original,
+            &archive_link,
+        );
+        let source_metadata_updated = source_contents != source_original;
+        let archive_contents = archive_base_contents(
+            Some(&old_archive),
+            &old_archive,
+            &source_link,
+        );
+        let archive_metadata_updated = archive_contents != old_archive;
+        files.push(FilePlan {
+            relative_source_path: rename.source.clone(),
+            relative_archive_path: rename.to.clone(),
+            renamed_from: Some(rename.from.clone()),
+            task_count: 0,
+            source_contents,
+            archive_created: true,
+            archive_contents: Some(archive_contents),
+            source_metadata_updated,
+            archive_metadata_updated,
+            moved_block_ids: BTreeSet::new(),
+            ambiguous_moved_block_ids: BTreeSet::new(),
+            moved_block_id_final_ids: BTreeMap::new(),
+            moved_block_final_ids: BTreeSet::new(),
+            moved_block_id_rename_count: 0,
+            moved_roots: Vec::new(),
+            source_structural: false,
+            source_link_repair_count: 0,
+            archive_link_repair_count: 0,
+            source_dependency_metadata_repair_count: 0,
+            archive_dependency_metadata_repair_count: 0,
+        });
+    }
+    files.sort_by(|left, right| {
+        left.relative_source_path.cmp(&right.relative_source_path)
+    });
+    Ok(())
 }
 
 pub(super) fn snapshot_for_path<'a>(
@@ -853,6 +1049,14 @@ fn apply_same_write_grouping(
             &captured.vault.join(&file.relative_source_path),
         )?;
         let original = captured.contents(&file.relative_source_path)?;
+        // Finished projects keep rename maintenance without task-group
+        // rearrangement: only their managed `done_tasks` line may change.
+        if super::super::projects::project_is_finished(
+            &file.relative_source_path,
+            original,
+        ) {
+            continue;
+        }
         if !grouping_eligible_for(
             &file.relative_source_path,
             snapshot,
@@ -908,6 +1112,7 @@ fn verify_planned_postimages(
     link_repairs: &[LinkRepairPlan],
     pairs: &ArchivePairIndex,
     blocked_sources: &BTreeSet<PathBuf>,
+    renames: &[RenamePlan],
 ) -> io::Result<()> {
     let mut overlay = captured.contents.clone();
     for file in files {
@@ -927,8 +1132,101 @@ fn verify_planned_postimages(
     for repair in link_repairs {
         overlay.insert(repair.relative_path.clone(), repair.contents.clone());
     }
+    // Old rename paths are removed by the plan: verify the overlay without
+    // them, so no surviving reference may point at a removed archive.
+    for rename in renames {
+        overlay.remove(&rename.from);
+    }
     verify_moved_identities(captured, &overlay, files, pairs, blocked_sources)?;
     verify_archive_postimages(captured, &overlay, files, link_repairs)?;
+    verify_rename_references(captured, &overlay, renames)?;
+    Ok(())
+}
+
+/// No source-of-truth dependency link may point to a removed archive.
+///
+/// Every anchor the old archive held keeps its block id at the canonical
+/// destination with a new path-qualified dependency id. Any surviving
+/// `[id::]` / `[dependsOn::]` token naming an old dependency id is a plan
+/// refusal, as is a renamed destination that lost an archived anchor.
+fn verify_rename_references(
+    captured: &CapturedInputs,
+    overlay: &BTreeMap<PathBuf, String>,
+    renames: &[RenamePlan],
+) -> io::Result<()> {
+    for rename in renames {
+        let old_archive = captured.contents(&rename.from)?.to_string();
+        let old_ids = content_anchor_ids(&old_archive);
+        let Some(destination) = overlay.get(&rename.to) else {
+            return Err(refusal(
+                &rename.to,
+                1,
+                None::<String>,
+                format!(
+                    "renamed archive {} has no planned contents",
+                    rename.to.display()
+                ),
+            ));
+        };
+        let destination_ids: BTreeSet<String> =
+            content_anchor_ids(destination).into_iter().collect();
+        for id in &old_ids {
+            if !destination_ids.contains(id) {
+                return Err(refusal(
+                    &rename.to,
+                    1,
+                    Some(id),
+                    format!(
+                        "renamed archive lost archived block id ^{id} from {}",
+                        rename.from.display()
+                    ),
+                ));
+            }
+        }
+        let mut stale_ids = BTreeSet::new();
+        for id in &old_ids {
+            let Ok(old_dependency) = dependency_id(&rename.from, id) else {
+                continue;
+            };
+            let Ok(new_dependency) = dependency_id(&rename.to, id) else {
+                continue;
+            };
+            if old_dependency != new_dependency {
+                stale_ids.insert(old_dependency);
+            }
+        }
+        if stale_ids.is_empty() {
+            continue;
+        }
+        for (path, contents) in overlay {
+            for captures in DEPENDENCY_FIELD_RE.captures_iter(contents) {
+                let key =
+                    captures.name("key").map_or("", |value| value.as_str());
+                let value =
+                    captures.name("value").map_or("", |value| value.as_str());
+                let hits_stale = if key == "id" {
+                    stale_ids.contains(value.trim())
+                } else if key == "dependsOn" {
+                    value
+                        .split(',')
+                        .any(|segment| stale_ids.contains(segment.trim()))
+                } else {
+                    false
+                };
+                if hits_stale {
+                    return Err(refusal(
+                        path,
+                        1,
+                        None::<String>,
+                        format!(
+                            "dependency metadata still points to removed archive {}",
+                            rename.from.display()
+                        ),
+                    ));
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1196,15 +1494,20 @@ fn refusal(
 
 /// One guarded [`WritePlan`] output per actually changed path.
 ///
-/// Archive writes come first so an interruption always leaves a recoverable
-/// copy of every moved block, then source removals, then repair-only
-/// outputs. Every output carries its captured original snapshot — including
-/// missing snapshots for creates — so a vault that changed underfoot fails
-/// the apply preflight instead of overwriting.
+/// Destination archives install first so an interruption always leaves a
+/// recoverable copy of every moved block, then source and repair outputs,
+/// then guarded old-path removals. Every output carries its captured
+/// original snapshot — including missing snapshots for creates — so a vault
+/// that changed underfoot fails the apply preflight instead of overwriting.
+/// A partial apply stops without automatic retry: both copies and the
+/// recovery manifest stay available when a deletion did not complete, and a
+/// later run refuses the unresolved duplicate claims instead of guessing
+/// which copy is authoritative.
 fn write_plan_for(
     captured: &CapturedInputs,
     files: &[FilePlan],
     link_repairs: &[LinkRepairPlan],
+    renames: &[RenamePlan],
 ) -> io::Result<WritePlan> {
     let mut outputs: Vec<PlannedWrite> = Vec::new();
     for file in files {
@@ -1250,6 +1553,18 @@ fn write_plan_for(
             )
             .map_err(capture_error)?,
         );
+    }
+    // Guarded old-path removals install last with their captured before-images
+    // in the recovery manifest. Each changed path is emitted once: the old
+    // path never appears in any other output.
+    let mut seen_removals = BTreeSet::new();
+    for rename in renames {
+        if !seen_removals.insert(rename.from.clone()) {
+            continue;
+        }
+        let path = captured.vault.join(&rename.from);
+        let original = snapshot_for_path(&captured.snapshots, &path)?;
+        outputs.push(planned_remove(path, original).map_err(capture_error)?);
     }
     let mut scan_paths: Vec<PathBuf> = captured
         .source_paths

@@ -279,6 +279,7 @@ pub(super) fn render_json(report: &Report) -> String {
         "link_repairs": plan
             .map(link_repairs_json)
             .unwrap_or_else(empty_link_repairs_json),
+        "renames": plan.map(renames_json).unwrap_or_else(|| json!([])),
         "diagnostics": diagnostics_json(&report.diagnostics),
         "git": git_json(&report.git),
         "exit": exit_json(&report.exit),
@@ -296,6 +297,7 @@ fn scan_json(plan: &CollectionPlan) -> Value {
         "moved_block_ids": plan.moved_block_id_count(),
         "ambiguous_moved_block_ids": plan.ambiguous_moved_block_id_count(),
         "moved_block_id_renames": plan.moved_block_id_rename_count(),
+        "archive_renames": plan.rename_count(),
         "planned_bytes": plan.planned_bytes(),
     })
 }
@@ -378,6 +380,27 @@ fn skips_json(plan: &CollectionPlan) -> Value {
         map.insert(reason.clone(), json!(count));
     }
     Value::Object(map)
+}
+
+fn renames_json(plan: &CollectionPlan) -> Value {
+    let mut renames: Vec<&RenamePlan> = plan.renames.iter().collect();
+    renames.sort_by(|left, right| {
+        left.source
+            .cmp(&right.source)
+            .then(left.from.cmp(&right.from))
+    });
+    Value::Array(
+        renames
+            .into_iter()
+            .map(|rename| {
+                json!({
+                    "source": path_text(&rename.source),
+                    "from": path_text(&rename.from),
+                    "to": path_text(&rename.to),
+                })
+            })
+            .collect(),
+    )
 }
 
 fn link_repairs_json(plan: &CollectionPlan) -> Value {
@@ -480,7 +503,7 @@ pub(super) fn render_human(report: &Report) -> String {
     push_scan_counts(&mut out, plan);
 
     out.push_str("moves:\n");
-    if plan.is_empty() {
+    if plan.files.is_empty() && plan.link_repairs.is_empty() {
         out.push_str("  none\n");
     } else {
         for file in &plan.files {
@@ -495,6 +518,8 @@ pub(super) fn render_human(report: &Report) -> String {
             ));
         }
     }
+
+    push_renames(&mut out, plan);
 
     push_git(&mut out, report);
 
@@ -637,10 +662,54 @@ fn push_scan_counts(out: &mut String, plan: &CollectionPlan) {
         "  link-repair files: {}\n",
         plan.link_repair_file_count()
     ));
+    out.push_str(&format!("  archive renames: {}\n", plan.rename_count()));
     out.push_str(&format!("  planned bytes: {}\n", plan.planned_bytes()));
 }
 
+fn push_renames(out: &mut String, plan: &CollectionPlan) {
+    out.push_str("renames:\n");
+    if plan.renames.is_empty() {
+        out.push_str("  none\n");
+        return;
+    }
+    let mut renames: Vec<&RenamePlan> = plan.renames.iter().collect();
+    renames.sort_by(|left, right| {
+        left.source
+            .cmp(&right.source)
+            .then(left.from.cmp(&right.from))
+    });
+    for rename in renames {
+        out.push_str(&format!(
+            "  {}: {} -> {}\n",
+            rename.source.display(),
+            rename.from.display(),
+            rename.to.display(),
+        ));
+    }
+}
+
 fn move_line(file: &FilePlan) -> String {
+    if let Some(from) = &file.renamed_from
+        && file.task_count == 0
+    {
+        return format!(
+            "{} -> {} (archive rename from {})",
+            file.relative_source_path.display(),
+            file.relative_archive_path.display(),
+            from.display(),
+        );
+    }
+    if let Some(from) = &file.renamed_from
+        && file.writes_archive()
+    {
+        return format!(
+            "{} -> {} ({} task blocks, archive rename from {})",
+            file.relative_source_path.display(),
+            file.relative_archive_path.display(),
+            file.task_count,
+            from.display(),
+        );
+    }
     if file.writes_archive() {
         if file.task_count > 0 {
             format!(
@@ -814,6 +883,11 @@ fn push_summary_counts(
             "link-repair files updated",
             "link-repair files to update",
             plan.link_repair_file_count(),
+        ),
+        (
+            "archive renames",
+            "archive renames to apply",
+            plan.rename_count(),
         ),
         ("archive files created", "archive files to create", created),
         ("archive files updated", "archive files to update", updated),

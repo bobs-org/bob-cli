@@ -65,7 +65,7 @@ fn settings_with_custom_open() -> &'static str {
 }
 
 #[test]
-fn bound_noncanonical_archive_is_the_only_destination() {
+fn bound_noncanonical_archive_moves_to_canonical_destination() {
     let vault = TempDir::new("bob-cli-archive-health-noncanonical");
     write_file(
         &vault.path().join("projects/alpha.md"),
@@ -89,21 +89,41 @@ done_tasks: \"[[done/projects/alpha_old_done]]\"
 
     let plan = build_collection_plan(vault.path(), 1).expect("plan");
     assert_eq!(plan.files.len(), 1);
+    // Rename-following installs the canonical destination and removes the
+    // old path; the noncanonical archive is never the final destination.
     assert_eq!(
         plan.files[0].relative_archive_path,
-        PathBuf::from("done/projects/alpha_old_done.md")
+        PathBuf::from("done/projects/alpha_done.md")
     );
-    assert!(!plan.files[0].archive_created);
+    assert_eq!(
+        plan.files[0].renamed_from,
+        Some(PathBuf::from("done/projects/alpha_old_done.md"))
+    );
+    assert!(plan.files[0].archive_created);
     assert!(plan.files[0]
         .archive_contents
         .as_deref()
         .unwrap()
         .contains("one #task"));
+    assert!(plan.files[0]
+        .archive_contents
+        .as_deref()
+        .unwrap()
+        .contains("older #task"));
+    assert_eq!(plan.renames.len(), 1);
+    assert_eq!(
+        plan.renames[0].from,
+        PathBuf::from("done/projects/alpha_old_done.md")
+    );
+    assert_eq!(
+        plan.renames[0].to,
+        PathBuf::from("done/projects/alpha_done.md")
+    );
     assert!(!vault.path().join("done/projects/alpha_done.md").exists());
 }
 
 #[test]
-fn grandfathered_untyped_source_uses_bound_noncanonical_archive() {
+fn grandfathered_untyped_source_renames_bound_noncanonical_archive() {
     let vault = TempDir::new("bob-cli-archive-health-grandfather-noncanonical");
     write_file(
         &vault.path().join("legacy.md"),
@@ -126,9 +146,14 @@ done_tasks: \"[[done/legacy_day_done]]\"
     assert_eq!(plan.files.len(), 1);
     assert_eq!(
         plan.files[0].relative_archive_path,
-        PathBuf::from("done/legacy_day_done.md")
+        PathBuf::from("done/legacy_done.md")
+    );
+    assert_eq!(
+        plan.files[0].renamed_from,
+        Some(PathBuf::from("done/legacy_day_done.md"))
     );
     assert_eq!(plan.files[0].task_count, 1);
+    assert_eq!(plan.renames.len(), 1);
 }
 
 #[test]
