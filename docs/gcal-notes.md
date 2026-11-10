@@ -12,9 +12,9 @@ writes the row. Any event qualifies: events you own, locked guest events, and
 invitations still awaiting a reply or answered Maybe. A note never changes
 inclusion, never RSVPs, and never creates a row.
 
-List, show, preview, write, and clear are available in `bob gcal note`.
-The editor, Google-description adoption, and Mac Capture Event note mode are
-follow-up work.
+List, show, preview, write, clear, editor, and Google-description adoption are
+available in `bob gcal note`. Mac Capture Event note mode is the remaining
+client work.
 
 ## Contents
 
@@ -216,8 +216,12 @@ Modes:
   selected scope's current note.
 - `-c`: append a deliberate clear for the selected scope. Recurring events
   offer only scopes that currently have a note.
-- `-A` and `-e`: Google-description adoption and `$EDITOR` support arrive in
-  the follow-up phase.
+- `-A`: adopt the Google description's directive and buffer-reason lines as a
+  Bob-only note. The adopted text goes through normal route validation and the
+  usual preview/save path; prose and Google-owned bullets are not copied.
+- `-e`: open the selected scope's current note in `$VISUAL` or `$EDITOR`.
+  The scissors marker and help block are removed before validation and save.
+  Combining `-A -e` opens an editor prefilled with the adopted Google lines.
 
 Exit status is 0 on success, 1 on gog or network failure, and 2 on usage or
 setup errors, no match, an ambiguous match off a TTY, a missing scope off a

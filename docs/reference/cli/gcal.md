@@ -15,7 +15,7 @@ Usage: bob gcal [OPTIONS] [COMMAND]
 
 Commands:
   calendars  List Google calendars with id, access role, colour, and mapped root
-  doctor     Check the Calendar setup: gog, client, account, token, calendars, default root, today, journal, and writer
+  doctor     Check the Calendar setup: gog, client, account, token, calendars, default root, today, journal, notes, and writer
   list       List a local day of events and show how Bob would classify them
   login      Connect Google Calendar (read-only) in one guided step
   logout     Remove Bob's Calendar grant only; prints the Google revoke URL

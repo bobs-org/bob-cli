@@ -71,7 +71,7 @@ fn list_command() -> ClapCommand {
 }
 
 fn list_after_help() -> &'static str {
-    "`-a` also shows declined, unanswered, and out-of-scope events with their reasons. Root candidates are validated against the vault; warnings show why Bob fell back.\n\nExamples:\n  bob gcal\n  bob gcal list -D tomorrow\n  bob gcal list -D 2026-10-30 -f json\n  bob gcal list -a\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH\n  BOB_NOW            Local datetime override for default day selection"
+    "`-a` also shows declined, unanswered, and out-of-scope events with their reasons. Root candidates are validated against the vault; warnings show why Bob fell back. If directives live only in someone else's Google description, list suggests `bob gcal note -i ID -A` to preserve them in Bob's private journal.\n\nExamples:\n  bob gcal\n  bob gcal list -D tomorrow\n  bob gcal list -D 2026-10-30 -f json\n  bob gcal list -a\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH\n  BOB_NOW            Local datetime override for default day selection"
 }
 
 fn note_command() -> ClapCommand {
@@ -83,7 +83,8 @@ fn note_command() -> ClapCommand {
              events for the next 90 days; `-a` lists every upcoming event, \
              noted or not. A query without note text shows one event. Write \
              the same description grammar with TEXT, use `-d` to preview, \
-             and `-c` to clear. `-A` and `-e` arrive in a later phase.",
+             `-e` to edit in `$EDITOR`, `-A` to adopt Google directive and \
+             reason lines, and `-c` to clear.",
         )
         .disable_help_flag(true)
         .arg(adopt_arg())
@@ -111,7 +112,10 @@ fn note_after_help() -> &'static str {
      candidates. A recurring match asks This event or All events on a TTY \
      and needs `-s` off a TTY. TEXT starts at the first directive token or \
      after `--`; argv words are joined into a line and normalized. A save on \
-     the writer host immediately syncs an existing rendered day.\n\nExamples:\n  bob gcal note\n  bob gcal note -a -f json\n  bob gcal note -l deerwood\n  bob gcal note deerwood\n  bob gcal note deerwood @family -30 Drive there\n  bob gcal note -d -i event-id -- @family -30 Drive there\n  bob gcal note -c -i event-id\n  bob gcal note -D 2026-12-13 little gym\n  bob gcal note -i st49ogf0k0jiciob1ebgj1aupo\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH\n  BOB_NOW            Local datetime override for default day selection\n  BOB_GCAL_ASSUME_TTY  Set to 1 to force interactive prompts in tests"
+     the writer host immediately syncs an existing rendered day. `-e` edits \
+     the selected scope in `$VISUAL` or `$EDITOR`; the scissors help block \
+     is not saved. `-A` adopts only Google description directive and reason \
+     lines, then uses the ordinary validation and preview path.\n\nExamples:\n  bob gcal note\n  bob gcal note -a -f json\n  bob gcal note -l deerwood\n  bob gcal note deerwood\n  bob gcal note deerwood @family -30 Drive there\n  bob gcal note deerwood -e\n  bob gcal note deerwood -A\n  bob gcal note -d -i event-id -- @family -30 Drive there\n  bob gcal note -c -i event-id\n  bob gcal note -D 2026-12-13 little gym\n  bob gcal note -i st49ogf0k0jiciob1ebgj1aupo\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH\n  BOB_NOW            Local datetime override for default day selection\n  BOB_GCAL_ASSUME_TTY  Set to 1 to force interactive prompts in tests\n  VISUAL, EDITOR       Editor executable used by `-e`"
 }
 
 fn sync_command() -> ClapCommand {
@@ -146,7 +150,7 @@ fn doctor_command() -> ClapCommand {
     ClapCommand::new("doctor")
         .about(
             "Check the Calendar setup: gog, client, account, token, \
-             calendars, default root, today, journal, and writer",
+             calendars, default root, today, journal, notes, and writer",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
@@ -322,7 +326,7 @@ fn adopt_arg() -> Arg {
         .long("adopt")
         .short('A')
         .action(ArgAction::SetTrue)
-        .help("Adopt directive lines from the Google description (not available yet)")
+        .help("Adopt Google description directive and reason lines")
 }
 
 fn all_arg() -> Arg {
@@ -372,7 +376,7 @@ fn edit_arg() -> Arg {
         .long("edit")
         .short('e')
         .action(ArgAction::SetTrue)
-        .help("Edit the note in $EDITOR (not available yet)")
+        .help("Edit the note in $VISUAL or $EDITOR")
 }
 
 fn event_id_arg() -> Arg {
@@ -629,8 +633,7 @@ impl LogoutArgs {
     }
 }
 
-/// Typed `note` arguments: selection, read-only modes, and plain-text writes.
-/// Adoption and editor paths remain reserved for the follow-up phase.
+/// Typed `note` arguments: selection, editor/adoption, and plain-text writes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NoteArgs {
     pub adopt: bool,

@@ -741,6 +741,20 @@ fn print_table(
                 output.push('\n');
             }
         }
+        if !event.event.organizer_is_self
+            && (event.event.description.directives.route.is_some()
+                || event.event.description.directives.clock_tag.kind()
+                    != crate::native::clock_tags::ClockKind::None
+                || event.event.description.directives.before_set
+                || event.event.description.directives.after_set)
+        {
+            output.push_str(&styler.yellow(&format!(
+                "  hint · directives live only in someone else's Google description · `bob gcal note -i {} -C {} -A` adopts them",
+                event.event.key.event_id,
+                event.event.key.calendar_id
+            )));
+            output.push('\n');
+        }
     }
     output.push_str(&format!(
         "{} tasks · {} context · {} awaiting your reply\n",

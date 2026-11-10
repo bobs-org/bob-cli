@@ -39,6 +39,7 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
                 "default_root",
                 "today",
                 "journal",
+                "notes",
                 "writer",
             ] {
                 checks.push(skipped(id, "no gcal config"));
@@ -236,9 +237,177 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
     checks.push(today_check(&bob_dir));
     checks.push(journal_check(&bob_dir));
     checks.push(journal_malformed_check(&bob_dir));
+    checks.push(notes_check(
+        &bob_dir,
+        selected_account.as_deref(),
+        gog.as_ref(),
+    ));
     checks.push(writer_check(config.writer(), &host));
     checks.push(last_sync_check());
     finish(args, &host, checks)
+}
+
+fn notes_check(
+    vault: &Path,
+    account: Option<&str>,
+    gog: Option<&Gog>,
+) -> Check {
+    let Some(account) = account else {
+        return skipped("notes", "no resolved account");
+    };
+    let Ok((records, _)) =
+        crate::native::pref_journal::read_raw(vault, journal::NAMESPACE)
+    else {
+        return Check {
+            id: "notes",
+            status: CheckStatus::Warn,
+            summary: "could not read private event notes".to_string(),
+            fix: Some("inspect .bob/gcal/<host>.jsonl".to_string()),
+        };
+    };
+    let mut latest = std::collections::BTreeMap::<
+        (String, String, String),
+        (String, String),
+    >::new();
+    let mut ordered = records.iter().collect::<Vec<_>>();
+    crate::native::pref_journal::sort_by_writer_order(&mut ordered, |event| {
+        (
+            event.ts,
+            event.host.as_str(),
+            event.path.as_str(),
+            event.line,
+        )
+    });
+    for stored in ordered
+        .into_iter()
+        .filter(|record| record.kind.as_str() == "gcal.note")
+    {
+        let Some(object) = stored.value.as_object() else {
+            continue;
+        };
+        let Some(scope) =
+            object.get("scope").and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        let Some(key) =
+            object.get("key").and_then(serde_json::Value::as_object)
+        else {
+            continue;
+        };
+        let Some(calendar) =
+            key.get("calendar_id").and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        let part = match scope {
+            "event" => key.get("event_id"),
+            "series" => key.get("series"),
+            _ => None,
+        }
+        .and_then(serde_json::Value::as_str);
+        let Some(part) = part else { continue };
+        let email = object
+            .get("account")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let text = object
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        latest.insert(
+            (scope.to_string(), calendar.to_string(), part.to_string()),
+            (email, text),
+        );
+    }
+    let foreign = latest
+        .values()
+        .filter(|(email, text)| {
+            !text.is_empty() && !email.eq_ignore_ascii_case(account)
+        })
+        .count();
+    let mut unresolved = 0usize;
+    let mut orphans = 0usize;
+    let mut lookup_failed = false;
+    for ((scope, calendar, key), (email, text)) in &latest {
+        if text.is_empty() || !email.eq_ignore_ascii_case(account) {
+            continue;
+        }
+        if let Some(scope) = match scope.as_str() {
+            "event" => Some(journal::NoteScope::Event),
+            "series" => Some(journal::NoteScope::Series),
+            _ => None,
+        } {
+            let parsed = super::model::ParsedNote::parse(scope, text);
+            if let Some(route) = parsed.description.directives.route.as_deref()
+                && validate_root_candidate(
+                    vault,
+                    pomodoro::day_file_for(vault)
+                        .strip_prefix(vault)
+                        .unwrap_or(Path::new("")),
+                    route,
+                )
+                .is_err()
+            {
+                unresolved += 1;
+            }
+        }
+        if scope == "event" {
+            if let Some(gog) = gog {
+                match gog.event(calendar, key, account) {
+                    Ok(_) => {}
+                    Err(error)
+                        if error.kind() == "not_found"
+                            || error
+                                .message()
+                                .to_ascii_lowercase()
+                                .contains("not found") =>
+                    {
+                        orphans += 1
+                    }
+                    Err(_) => lookup_failed = true,
+                }
+            }
+        }
+    }
+    let total = foreign + unresolved + orphans;
+    if total == 0 && !lookup_failed {
+        return Check {
+            id: "notes",
+            status: CheckStatus::Ok,
+            summary:
+                "no orphaned notes, unresolved routes, or foreign-account notes"
+                    .to_string(),
+            fix: None,
+        };
+    }
+    let mut issues = Vec::new();
+    if orphans > 0 {
+        issues.push(format!("{orphans} orphaned"));
+    }
+    if unresolved > 0 {
+        issues.push(format!(
+            "{unresolved} unresolved route{}",
+            if unresolved == 1 { "" } else { "s" }
+        ));
+    }
+    if foreign > 0 {
+        issues.push(format!("{foreign} foreign-account"));
+    }
+    if lookup_failed {
+        issues.push("some event identities could not be checked".to_string());
+    }
+    Check {
+        id: "notes",
+        status: CheckStatus::Warn,
+        summary: issues.join(" · "),
+        fix: Some(
+            "review `bob gcal note` and `bob gcal list`; rewrite or clear stale notes, correct routes, or sign in with the matching account"
+                .to_string(),
+        ),
+    }
 }
 
 fn fail_from(error: &GcalError, id: &'static str) -> Check {

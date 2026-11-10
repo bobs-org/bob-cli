@@ -1,7 +1,7 @@
 //! `bob gcal note`: private event notes, selection, preview, and writes.
 //!
-//! The editor and description-adoption modes are added by the follow-up
-//! phase; this module owns plain text writing, preview, and clear.
+//! Editor and Google-description adoption share the normal write path so
+//! validation, previews, and persistence stay identical.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -285,13 +285,29 @@ pub(crate) fn run(args: &NoteArgs) -> i32 {
 }
 
 fn inner(args: &NoteArgs) -> Result<(), GcalError> {
-    if args.adopt || args.edit {
+    if args.adopt && args.clear {
         return Err(GcalError::setup(
-            "not_available",
-            "adopting and editing private event notes land in a later phase"
-                .to_string(),
-        )
-        .with_hint("write text directly, or use `-c` to clear a note"));
+            "bad_arguments",
+            "`-A` cannot be combined with `-c`".to_string(),
+        ));
+    }
+    if args.adopt && !args.text.is_empty() {
+        return Err(GcalError::setup(
+            "bad_arguments",
+            "`-A` cannot be combined with note text".to_string(),
+        ));
+    }
+    if args.edit && args.clear {
+        return Err(GcalError::setup(
+            "bad_arguments",
+            "`-e` cannot be combined with `-c`".to_string(),
+        ));
+    }
+    if args.edit && !args.text.is_empty() {
+        return Err(GcalError::setup(
+            "bad_arguments",
+            "`-e` cannot be combined with note text".to_string(),
+        ));
     }
     if args.clear && (!args.text.is_empty() || args.dry_run) {
         return Err(GcalError::setup(
@@ -331,7 +347,11 @@ fn inner(args: &NoteArgs) -> Result<(), GcalError> {
 
     let url_event = extract_url_event_id(&args.query);
     let has_id = args.event_id.is_some();
-    let writing = args.clear || args.dry_run || !args.text.is_empty();
+    let writing = args.clear
+        || args.dry_run
+        || args.adopt
+        || args.edit
+        || !args.text.is_empty();
     if writing && !has_id && url_event.is_none() && args.query.is_empty() {
         return Err(GcalError::setup(
             "missing_event",
@@ -1296,7 +1316,11 @@ fn run_show<S: HomeSource>(
             let mut related_days = vec![candidate.day];
             let mut selection_warnings = Vec::new();
             if candidate.recurring()
-                && (args.clear || args.dry_run || !args.text.is_empty())
+                && (args.clear
+                    || args.dry_run
+                    || args.adopt
+                    || args.edit
+                    || !args.text.is_empty())
             {
                 let (from, to, _, _) = window_range(day_filter)?;
                 match fetch_candidates(
@@ -1678,6 +1702,29 @@ fn present_candidate<S: HomeSource>(
     warnings: Vec<String>,
     related_days: Vec<NaiveDate>,
 ) -> Result<(), GcalError> {
+    let mut prepared;
+    let args = if args.adopt || args.edit {
+        prepared = args.clone();
+        let seed = if args.adopt {
+            adopted_google_text(&candidate.google_event)
+        } else {
+            current_scope_text(args, &candidate, vault, account)?
+        };
+        let text = if args.edit { edit_text(&seed)? } else { seed };
+        if text.trim().is_empty() {
+            return Err(GcalError::setup(
+                "empty_note",
+                "the editor/adoption produced no note text".to_string(),
+            )
+            .with_hint(
+                "add a directive or reason line, or use `-c` to clear",
+            ));
+        }
+        prepared.text = vec![text];
+        &prepared
+    } else {
+        args
+    };
     if args.clear || args.dry_run || !args.text.is_empty() {
         write::write_one(
             args,
@@ -1692,6 +1739,131 @@ fn present_candidate<S: HomeSource>(
     } else {
         show_one(args, vault, candidate, warnings)
     }
+}
+
+const EDITOR_SCISSORS: &str =
+    "# --- Bob event note help (delete this line and below to save) ---";
+
+fn edit_text(seed: &str) -> Result<String, GcalError> {
+    let editor = std::env::var_os("VISUAL")
+        .filter(|value| !value.is_empty())
+        .or_else(|| std::env::var_os("EDITOR"))
+        .ok_or_else(|| {
+            GcalError::setup(
+                "editor_missing",
+                "set $EDITOR (or $VISUAL) to edit a private event note"
+                    .to_string(),
+            )
+        })?;
+    let mut file = tempfile::NamedTempFile::new().map_err(|error| {
+        GcalError::setup("editor_file", format!("create editor file: {error}"))
+    })?;
+    let initial = format!(
+        "{seed}{}\n\n{EDITOR_SCISSORS}\n# Lines above this marker are saved as the private event note.\n# Examples: @family, #off, -30 Walk home, +15 Drive there\n# Blank lines are ignored; use `bob gcal note -d` to preview.\n",
+        if seed.is_empty() { "" } else { "\n" }
+    );
+    file.write_all(initial.as_bytes()).map_err(|error| {
+        GcalError::setup("editor_file", format!("write editor file: {error}"))
+    })?;
+    file.flush().map_err(|error| {
+        GcalError::setup("editor_file", format!("flush editor file: {error}"))
+    })?;
+    let mut words = editor
+        .to_string_lossy()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if words.is_empty() {
+        return Err(GcalError::setup(
+            "editor_missing",
+            "$EDITOR is empty".to_string(),
+        ));
+    }
+    let program = words.remove(0);
+    let status = std::process::Command::new(program)
+        .args(words)
+        .arg(file.path())
+        .status()
+        .map_err(|error| {
+            GcalError::setup("editor_failed", format!("launch editor: {error}"))
+        })?;
+    if !status.success() {
+        return Err(GcalError::setup(
+            "editor_failed",
+            format!("editor exited with {status}"),
+        ));
+    }
+    let contents = std::fs::read_to_string(file.path()).map_err(|error| {
+        GcalError::setup("editor_file", format!("read editor file: {error}"))
+    })?;
+    Ok(contents
+        .split(EDITOR_SCISSORS)
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string())
+}
+
+fn current_scope_text(
+    args: &NoteArgs,
+    candidate: &NoteCandidate,
+    vault: &std::path::Path,
+    account: &str,
+) -> Result<String, GcalError> {
+    let scope =
+        resolve_show_scope(args, candidate)?.unwrap_or(NoteScope::Event);
+    let (book, _) = journal::load_notes(vault).unwrap_or_default();
+    let record = match scope {
+        NoteScope::Event => book.event_record(
+            &candidate.event.key.calendar_id,
+            &candidate.event.key.event_id,
+        ),
+        NoteScope::Series => {
+            candidate.event.series_id.as_deref().and_then(|series| {
+                book.series_record(&candidate.event.key.calendar_id, series)
+            })
+        }
+    };
+    Ok(record
+        .filter(|note| note.account == account && !note.cleared)
+        .map(|note| note.text.clone())
+        .unwrap_or_default())
+}
+
+fn adopted_google_text(event: &GcalEvent) -> String {
+    let description = &event.description;
+    let mut lines = Vec::new();
+    if let Some(route) = description.directives.route.as_deref() {
+        lines.push(format!("@{route}"));
+    }
+    match description.directives.clock_tag.kind() {
+        crate::native::clock_tags::ClockKind::Off => {
+            lines.push("#off".to_string())
+        }
+        crate::native::clock_tags::ClockKind::On => {
+            lines.push("#on".to_string())
+        }
+        crate::native::clock_tags::ClockKind::None => {}
+    }
+    for (part, reason) in description.buffer_reasons.iter() {
+        let sign = match part {
+            crate::native::event_task::BufferPart::Before => '-',
+            crate::native::event_task::BufferPart::After => '+',
+        };
+        let reason_text = reason
+            .inlines
+            .iter()
+            .map(|inline| match inline {
+                super::description::Inline::Text { text, .. } => text.clone(),
+                super::description::Inline::Link { text, .. } => text.clone(),
+            })
+            .collect::<String>();
+        lines.push(format!("{sign}{} {reason_text}", reason.minutes));
+    }
+    if lines.is_empty() {
+        return String::new();
+    }
+    lines.join("\n")
 }
 
 fn show_one(
