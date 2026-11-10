@@ -511,7 +511,9 @@ class GateTests(unittest.TestCase):
         self.assertTrue(lists, result.stderr)
         args = lists[0]
         self.assertEqual(args[args.index("--repo") + 1], REPO)
-        self.assertEqual(args[args.index("--workflow") + 1], "ci.yml")
+        self.assertEqual(
+            args[args.index("--workflow") + 1], GATE.PROFILES[REPO]["workflow"]
+        )
         self.assertEqual(args[args.index("--event") + 1], "push")
         self.assertEqual(args[args.index("--commit") + 1], SNAP)
         branch = args[args.index("--branch") + 1]

@@ -95,6 +95,7 @@ Offline tests (never invoke this live gate)
 
 PROFILES: dict[str, dict[str, Any]] = {
     "bobs-org/bob-cli": {
+        "workflow": "ci.yml",
         "job": "test (macos-latest)",
         "required_steps": (
             "Lint macOS-only targets",
@@ -106,6 +107,7 @@ PROFILES: dict[str, dict[str, Any]] = {
         "failure_kind": "rust",
     },
     "bobs-org/bob-mac-capture": {
+        "workflow": "macos-swift.yml",
         "job": "macOS 26 SwiftPM",
         "required_steps": (
             "Lint Swift formatting",
@@ -911,6 +913,7 @@ def fetch_failed_logs(
 def wait_for_matching_run(
     runner: Runner,
     repo: str,
+    workflow: str,
     sha: str,
     branch: str,
     deadlines: dict[str, float],
@@ -939,7 +942,7 @@ def wait_for_matching_run(
             "--repo",
             repo,
             "--workflow",
-            "ci.yml",
+            workflow,
             "--event",
             "push",
             "--branch",
@@ -1252,7 +1255,14 @@ def main(argv: list[str] | None = None) -> int:
         push_snapshot(runner, root, snapshot, branch, deadlines, overall_deadline)
         started_wait = time.monotonic()
         run = wait_for_matching_run(
-            runner, repo, snapshot, branch, deadlines, overall_deadline, started_wait
+            runner,
+            repo,
+            str(profile["workflow"]),
+            snapshot,
+            branch,
+            deadlines,
+            overall_deadline,
+            started_wait,
         )
         run_id = str(run.get("databaseId") or "")
         run = wait_for_completion(
