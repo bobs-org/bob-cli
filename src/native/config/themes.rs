@@ -79,7 +79,7 @@ pub(crate) fn load_theme_sources() -> ThemeSources {
     load_theme_sources_from(&super::config_path())
 }
 
-fn load_theme_sources_from(path: &Path) -> ThemeSources {
+pub(crate) fn load_theme_sources_from(path: &Path) -> ThemeSources {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {

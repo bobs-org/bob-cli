@@ -1054,6 +1054,13 @@ key, for type-dimension values present in the report. Exempt types have
 `hue: null` and `hue_source: "exempt"`. Unknown names carry `known: false`;
 while typing, clients keep them neutral.
 
+Stats counts minutes by configured type only, in the `task_type` parts
+dimension beside `theme`. Each session's counted minutes split evenly over
+its configured types (first key takes the remainder); labels never take a
+share. Sessions with no configured type land in `@unnamed` or `@other_names`.
+Classification follows the current vocabulary, so editing `types:`
+reclassifies past periods.
+
 **`bob types list -f json`:**
 
 ```json

@@ -33,8 +33,9 @@ use super::{
         ResolvedRange,
     },
 };
-use crate::native::config::load_stats_config;
+use crate::native::config::{load_stats_config, load_theme_sources_from};
 use crate::native::{
+    config::themes::ThemeSources,
     plan_budget::normalize_component,
     pomodoro_themes::{Catalog as ThemeCatalog, ThemeRef},
 };
@@ -63,6 +64,7 @@ pub(crate) fn compute(
     let ordered = evaluation_set(&registry, &selected);
     let index = StatsIndex::read(&request.vault, request.now)?;
     let homes = HomesEngine::new(&index);
+    let theme_sources = load_theme_sources_from(&request.config);
 
     // Probe pass over an empty date span: tracking starts are index-derived,
     // so this yields every metric's inferred since without any daily values.
@@ -79,6 +81,7 @@ pub(crate) fn compute(
             &probe,
             &homes,
             def.canonical_clock(),
+            &theme_sources,
         ) {
             probe.insert(def.id.clone(), evaluation);
         }
@@ -97,6 +100,7 @@ pub(crate) fn compute(
                 &probe,
                 &homes,
                 effective,
+                &theme_sources,
             )
         {
             display_probe.insert(def.id.clone(), evaluation);
@@ -138,6 +142,7 @@ pub(crate) fn compute(
             &evaluations,
             &homes,
             def.canonical_clock(),
+            &theme_sources,
         ) {
             evaluations.insert(def.id.clone(), evaluation);
         }
@@ -156,6 +161,7 @@ pub(crate) fn compute(
                 &evaluations,
                 &homes,
                 effective,
+                &theme_sources,
             )
         {
             display.insert(def.id.clone(), evaluation);
@@ -280,10 +286,14 @@ fn report_theme_hues(
     today: NaiveDate,
     metrics: &[MetricReport],
 ) -> BTreeMap<String, ThemeRef> {
-    let mut names = BTreeSet::new();
+    let mut keys = BTreeSet::new();
     for metric in metrics {
-        if let Some(parts) = metric.parts_summary.get("theme") {
-            names.extend(parts.iter().map(|part| part.key.clone()));
+        for dimension in ["theme", "task_type"] {
+            if let Some(parts) = metric.parts_summary.get(dimension) {
+                keys.extend(
+                    parts.iter().map(|part| normalize_component(&part.key)),
+                );
+            }
         }
         for point in metric
             .points
@@ -291,30 +301,30 @@ fn report_theme_hues(
             .chain(&metric.prior_points)
             .chain(&metric.daily_points)
         {
-            if let Some(parts) = point.parts.get("theme") {
-                names.extend(parts.keys().cloned());
+            for dimension in ["theme", "task_type"] {
+                if let Some(parts) = point.parts.get(dimension) {
+                    keys.extend(
+                        parts.keys().map(|key| normalize_component(key)),
+                    );
+                }
             }
             if let Some(parts) = point.apportioned.get("theme") {
-                names.extend(parts.keys().cloned());
+                keys.extend(parts.keys().map(|key| normalize_component(key)));
             }
         }
     }
-    names.remove("(unnamed)");
-    if names.is_empty() {
+    keys.remove("(unnamed)");
+    keys.retain(|key| !key.starts_with('@'));
+    if keys.is_empty() {
         return BTreeMap::new();
     }
     let Ok(catalog) = ThemeCatalog::load(vault, today, false) else {
         return BTreeMap::new();
     };
-    names
-        .into_iter()
-        .map(|name| {
-            let key = normalize_component(&name);
-            let display = catalog
-                .get(&key)
-                .map(|record| record.name.as_str())
-                .unwrap_or(name.as_str());
-            (key.clone(), catalog.theme_ref(&key, display))
+    keys.into_iter()
+        .map(|key| {
+            let display = catalog.display_name(&key, &key.to_ascii_uppercase());
+            (key.clone(), catalog.theme_ref(&key, &display))
         })
         .collect()
 }
@@ -398,6 +408,7 @@ fn evaluate_one(
     evaluations: &BTreeMap<String, MetricEvaluation>,
     homes: &HomesEngine<'_>,
     clock: StatsClock,
+    theme_sources: &ThemeSources,
 ) -> Option<MetricEvaluation> {
     match &def.spec {
         MetricSpec::Pomodoro { .. }
@@ -411,6 +422,7 @@ fn evaluate_one(
             global_since,
             homes,
             clock,
+            theme_sources,
         ),
         MetricSpec::Journal { .. } => evaluate_journal(
             def,

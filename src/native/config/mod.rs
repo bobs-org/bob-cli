@@ -50,7 +50,8 @@ pub(crate) use relations::{
 #[allow(unused_imports)]
 pub(crate) use stats::{load_stats_config, parse_stats_config, StatsConfig};
 pub(crate) use themes::{
-    display_config_path, load_theme_sources, ConfiguredTheme, ThemesConfig,
+    display_config_path, load_theme_sources, load_theme_sources_from,
+    ConfiguredTheme, ThemesConfig,
 };
 
 const CONFIG_RELATIVE_PATH: &str = "bob/config.yml";

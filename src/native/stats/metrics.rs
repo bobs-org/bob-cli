@@ -25,7 +25,9 @@ use super::{
     value::{ChecklistState, DailyValue, DataQuality},
 };
 use crate::native::{
+    config::themes::{load_theme_sources, ThemeSources},
     pomodoro_homes::{split_minutes, Home, SessionKind},
+    pomodoro_themes::routing::type_components,
     task_root::{parse_task_root, TaskRootState},
 };
 
@@ -49,6 +51,7 @@ pub(crate) fn evaluate_metric(
     global_since: Option<NaiveDate>,
 ) -> Option<MetricEvaluation> {
     let homes = HomesEngine::new(index);
+    let sources = load_theme_sources();
     evaluate_with_homes(
         metric,
         index,
@@ -57,9 +60,11 @@ pub(crate) fn evaluate_metric(
         global_since,
         &homes,
         StatsClock::Worked,
+        &sources,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn evaluate_with_homes(
     metric: &MetricDef,
     index: &StatsIndex,
@@ -68,6 +73,7 @@ pub(crate) fn evaluate_with_homes(
     global_since: Option<NaiveDate>,
     homes: &HomesEngine<'_>,
     clock: StatsClock,
+    theme_sources: &ThemeSources,
 ) -> Option<MetricEvaluation> {
     let (inferred_since, evaluate, warnings) = match &metric.spec {
         MetricSpec::Pomodoro { .. } => {
@@ -75,7 +81,15 @@ pub(crate) fn evaluate_with_homes(
             let values = if dates.is_empty() {
                 Vec::new()
             } else {
-                evaluate_pomodoros(metric, index, dates, today, homes, clock)
+                evaluate_pomodoros(
+                    metric,
+                    index,
+                    dates,
+                    today,
+                    homes,
+                    clock,
+                    theme_sources,
+                )
             };
             (since, values, Vec::new())
         }
@@ -216,6 +230,7 @@ struct PomodoroDay {
     total: i64,
     sessions: i64,
     theme_parts: BTreeMap<String, i64>,
+    task_type_parts: BTreeMap<String, i64>,
     area_parts: BTreeMap<String, i64>,
     project_parts: BTreeMap<String, i64>,
     root_parent_parts: BTreeMap<String, i64>,
@@ -239,6 +254,7 @@ fn evaluate_pomodoros(
     today: NaiveDate,
     homes: &HomesEngine<'_>,
     clock: StatsClock,
+    theme_sources: &ThemeSources,
 ) -> Vec<DailyValue> {
     let MetricSpec::Pomodoro {
         measure,
@@ -341,6 +357,14 @@ fn evaluate_pomodoros(
                 Some(kept)
             };
 
+            let task_type_keys = task_type_keys(
+                session.name.as_deref(),
+                theme_sources,
+                themes,
+                exclude_themes,
+            );
+            let task_type_bucket = task_type_bucket(session.name.as_deref());
+
             let pair = per_day.entry(*date).or_default();
             if include_value {
                 record_pomodoro_session(
@@ -348,6 +372,8 @@ fn evaluate_pomodoros(
                     *measure,
                     counted.as_ref(),
                     &selected,
+                    &task_type_keys,
+                    &task_type_bucket,
                     kept.as_deref(),
                     &attributed,
                     counted_u32,
@@ -359,6 +385,8 @@ fn evaluate_pomodoros(
                     *measure,
                     counted.as_ref(),
                     &selected,
+                    &task_type_keys,
+                    &task_type_bucket,
                     kept.as_deref(),
                     &attributed,
                     counted_u32,
@@ -478,6 +506,9 @@ fn pomodoro_parts(day: &PomodoroDay) -> (DimensionParts, DimensionParts) {
     if !day.theme_parts.is_empty() {
         parts.insert("theme".to_string(), day.theme_parts.clone());
     }
+    if !day.task_type_parts.is_empty() {
+        parts.insert("task_type".to_string(), day.task_type_parts.clone());
+    }
     let mut apportioned = BTreeMap::new();
     if !day.area_apportioned.is_empty() {
         apportioned.insert("area".to_string(), day.area_apportioned.clone());
@@ -495,11 +526,14 @@ fn pomodoro_parts(day: &PomodoroDay) -> (DimensionParts, DimensionParts) {
     (parts, apportioned)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn record_pomodoro_session(
     day: &mut PomodoroDay,
     measure: PomodoroMeasure,
     counted: Option<&CountedShare>,
     selected: &[String],
+    task_type_keys: &[String],
+    task_type_bucket: &str,
     kept: Option<&[usize]>,
     attributed: &crate::native::pomodoro_homes::SessionHomes,
     counted_u32: Option<u32>,
@@ -508,6 +542,15 @@ fn record_pomodoro_session(
         PomodoroMeasure::Count => {
             day.sessions = day.sessions.saturating_add(1);
             add_part(&mut day.theme_parts, selected[0].clone(), 1);
+            if let Some(first) = task_type_keys.first() {
+                add_part(&mut day.task_type_parts, first.clone(), 1);
+            } else {
+                add_part(
+                    &mut day.task_type_parts,
+                    task_type_bucket.to_string(),
+                    1,
+                );
+            }
             let split = match kept {
                 Some(kept) => {
                     let pairs = kept
@@ -569,6 +612,23 @@ fn record_pomodoro_session(
             for (component, share) in theme_parts {
                 add_part(&mut day.theme_parts, component, share);
             }
+            if task_type_keys.is_empty() {
+                if contrib > 0 {
+                    add_part(
+                        &mut day.task_type_parts,
+                        task_type_bucket.to_string(),
+                        contrib,
+                    );
+                }
+            } else {
+                for (key, share) in
+                    split_task_type_minutes(contrib, task_type_keys)
+                {
+                    if share > 0 {
+                        add_part(&mut day.task_type_parts, key, share);
+                    }
+                }
+            }
             for (key, value) in split.project {
                 add_part(&mut day.project_parts, key, value);
             }
@@ -603,6 +663,72 @@ fn pomodoro_components(name: Option<&str>) -> Vec<String> {
     } else {
         components
     }
+}
+
+/// Distinct configured type keys for one Pomodoro name, in name order.
+///
+/// The vocabulary comes from `sources`: with a configured `types:` block
+/// only its names are types, otherwise every non-inventory component is a
+/// type. The result is restricted to the metric's `themes:` /
+/// `exclude_themes:` selection, so filtered metrics split only their own
+/// total. Labels never take a share.
+fn task_type_keys(
+    name: Option<&str>,
+    sources: &ThemeSources,
+    themes: &[String],
+    exclude_themes: &[String],
+) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut keys = Vec::new();
+    for component in type_components(name, sources) {
+        if !component.is_type {
+            continue;
+        }
+        if !theme_matches(&component.name, themes, exclude_themes) {
+            continue;
+        }
+        if seen.insert(component.key.clone()) {
+            keys.push(component.key);
+        }
+    }
+    keys
+}
+
+/// Bucket for a session with no type key: `@unnamed` for no name (or
+/// `(unnamed)`), `@other_names` for a named but label-only session.
+fn task_type_bucket(name: Option<&str>) -> String {
+    match name {
+        None => "@unnamed".to_string(),
+        Some(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() || trimmed == "(unnamed)" {
+                "@unnamed".to_string()
+            } else {
+                "@other_names".to_string()
+            }
+        }
+    }
+}
+
+/// Evenly split counted minutes over distinct type keys; the first key
+/// gets the remainder, exactly like the theme split.
+fn split_task_type_minutes(
+    minutes: i64,
+    keys: &[String],
+) -> Vec<(String, i64)> {
+    if keys.is_empty() {
+        return Vec::new();
+    }
+    let count = i64::try_from(keys.len()).unwrap_or(1).max(1);
+    let each = minutes / count;
+    let remainder = minutes % count;
+    keys.iter()
+        .enumerate()
+        .map(|(position, key)| {
+            let share = each + i64::from(position == 0) * remainder;
+            (key.clone(), share)
+        })
+        .collect()
 }
 
 fn theme_matches(
@@ -2157,8 +2283,11 @@ mod tests {
         clock: StatsClock,
     ) -> MetricEvaluation {
         let homes = HomesEngine::new(index);
-        evaluate_with_homes(metric, index, dates, today, None, &homes, clock)
-            .unwrap()
+        let sources = load_theme_sources();
+        evaluate_with_homes(
+            metric, index, dates, today, None, &homes, clock, &sources,
+        )
+        .unwrap()
     }
 
     #[test]
@@ -2813,5 +2942,374 @@ mod tests {
             evaluate_metric(&metric, &index, &[date(10)], date(11), None)
                 .unwrap();
         assert_eq!(result.values[0].value, Some(90));
+    }
+
+    fn vocab_sources(names: &[&str]) -> ThemeSources {
+        use std::collections::BTreeSet;
+
+        use crate::native::config::{ConfiguredTheme, ThemesConfig};
+        use crate::native::plan_budget::normalize_component;
+        ThemeSources {
+            exempt: BTreeSet::new(),
+            inventory: BTreeSet::new(),
+            themes: Some(ThemesConfig {
+                entries: names
+                    .iter()
+                    .map(|name| ConfiguredTheme {
+                        key: normalize_component(name),
+                        name: (*name).to_string(),
+                        color: None,
+                    })
+                    .collect(),
+            }),
+            warning: None,
+        }
+    }
+
+    fn no_vocab_sources() -> ThemeSources {
+        use std::collections::BTreeSet;
+        ThemeSources {
+            exempt: BTreeSet::new(),
+            inventory: BTreeSet::from(["later".to_string()]),
+            themes: None,
+            warning: None,
+        }
+    }
+
+    fn eval_with_sources(
+        metric: &MetricDef,
+        index: &StatsIndex,
+        dates: &[NaiveDate],
+        today: NaiveDate,
+        clock: StatsClock,
+        sources: &ThemeSources,
+    ) -> MetricEvaluation {
+        let homes = HomesEngine::new(index);
+        evaluate_with_homes(
+            metric, index, dates, today, None, &homes, clock, sources,
+        )
+        .unwrap()
+    }
+
+    fn task_type_total(value: &DailyValue) -> i64 {
+        value
+            .parts
+            .get("task_type")
+            .map(|parts| parts.values().sum())
+            .unwrap_or(0)
+    }
+
+    fn root_parent_total(value: &DailyValue) -> i64 {
+        value
+            .parts
+            .get("root_parent")
+            .map(|parts| parts.values().sum())
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn task_type_gives_labelled_minutes_to_the_configured_type() {
+        let index = pomodoro_index(&[(
+            10,
+            vec![session(
+                "BUILD + SASE",
+                Some(30),
+                crate::native::capture::SessionClock::Worked { minutes: 30 },
+            )],
+        )]);
+        let metric = builtin("worked");
+        let sources = vocab_sources(&["BUILD"]);
+        let result = eval_with_sources(
+            &metric,
+            &index,
+            &[date(10)],
+            date(11),
+            StatsClock::Worked,
+            &sources,
+        );
+        let value = &result.values[0];
+        assert_eq!(value.value, Some(30));
+        assert_eq!(value.parts["task_type"]["build"], 30);
+        assert_eq!(task_type_total(value), 30);
+    }
+
+    #[test]
+    fn task_type_splits_odd_minutes_with_remainder_on_first_key() {
+        let index = pomodoro_index(&[(
+            10,
+            vec![session(
+                "BUILD + FIX",
+                Some(25),
+                crate::native::capture::SessionClock::Worked { minutes: 25 },
+            )],
+        )]);
+        let metric = builtin("worked");
+        let sources = vocab_sources(&["BUILD", "FIX"]);
+        let result = eval_with_sources(
+            &metric,
+            &index,
+            &[date(10)],
+            date(11),
+            StatsClock::Worked,
+            &sources,
+        );
+        let value = &result.values[0];
+        assert_eq!(value.value, Some(25));
+        assert_eq!(value.parts["task_type"]["build"], 13);
+        assert_eq!(value.parts["task_type"]["fix"], 12);
+    }
+
+    #[test]
+    fn task_type_buckets_unnamed_and_label_only_sessions() {
+        let sources = vocab_sources(&["BUILD", "FIX"]);
+        let metric = builtin("worked");
+        let unnamed = pomodoro_index(&[(
+            10,
+            vec![super::super::index::PomodoroSession {
+                name: None,
+                recorded_minutes: Some(20),
+                range_minutes: Some(20),
+                time_range: None,
+                line: 1,
+                links: Vec::new(),
+                clock: crate::native::capture::SessionClock::Worked {
+                    minutes: 20,
+                },
+                stamp: crate::native::capture::ClockStamp::Keyed,
+                untracked: false,
+            }],
+        )]);
+        let result = eval_with_sources(
+            &metric,
+            &unnamed,
+            &[date(10)],
+            date(11),
+            StatsClock::Worked,
+            &sources,
+        );
+        assert_eq!(result.values[0].parts["task_type"]["@unnamed"], 20);
+
+        let label_only = pomodoro_index(&[(
+            10,
+            vec![session(
+                "SHIT + REMOTE",
+                Some(20),
+                crate::native::capture::SessionClock::Worked { minutes: 20 },
+            )],
+        )]);
+        let result = eval_with_sources(
+            &metric,
+            &label_only,
+            &[date(10)],
+            date(11),
+            StatsClock::Worked,
+            &sources,
+        );
+        assert_eq!(result.values[0].parts["task_type"]["@other_names"], 20);
+    }
+
+    #[test]
+    fn task_type_without_vocabulary_counts_every_non_inventory_component() {
+        let sources = no_vocab_sources();
+        let metric = builtin("worked");
+        let index = pomodoro_index(&[(
+            10,
+            vec![
+                session(
+                    "BUILD + LATER",
+                    Some(30),
+                    crate::native::capture::SessionClock::Worked {
+                        minutes: 30,
+                    },
+                ),
+                session(
+                    "FOO + BAR",
+                    Some(20),
+                    crate::native::capture::SessionClock::Worked {
+                        minutes: 20,
+                    },
+                ),
+            ],
+        )]);
+        let result = eval_with_sources(
+            &metric,
+            &index,
+            &[date(10)],
+            date(11),
+            StatsClock::Worked,
+            &sources,
+        );
+        let value = &result.values[0];
+        assert_eq!(value.value, Some(50));
+        // LATER is an inventory label, so BUILD keeps the whole session.
+        assert_eq!(value.parts["task_type"]["build"], 30);
+        assert_eq!(value.parts["task_type"]["foo"], 10);
+        assert_eq!(value.parts["task_type"]["bar"], 10);
+    }
+
+    #[test]
+    fn task_type_sums_to_the_point_total_on_every_clock() {
+        let index = pomodoro_index(&[(
+            10,
+            vec![
+                session(
+                    "BUILD + FIX",
+                    Some(25),
+                    crate::native::capture::SessionClock::Worked {
+                        minutes: 25,
+                    },
+                ),
+                session(
+                    "MEET",
+                    Some(60),
+                    crate::native::capture::SessionClock::OffClock {
+                        minutes: 60,
+                        stamped: false,
+                    },
+                ),
+            ],
+        )]);
+        let metric = builtin("worked");
+        let sources = vocab_sources(&["BUILD", "FIX", "MEET"]);
+        for clock in
+            [StatsClock::Worked, StatsClock::OffClock, StatsClock::Total]
+        {
+            let result = eval_with_sources(
+                &metric,
+                &index,
+                &[date(10)],
+                date(11),
+                clock,
+                &sources,
+            );
+            let value = &result.values[0];
+            let expected = value.value.unwrap_or(0);
+            assert_eq!(task_type_total(value), expected, "{clock:?}");
+            assert_eq!(root_parent_total(value), expected, "{clock:?}");
+        }
+    }
+
+    #[test]
+    fn task_type_count_mode_counts_the_first_type_key() {
+        let index = pomodoro_index(&[(
+            10,
+            vec![
+                session(
+                    "BUILD + FIX",
+                    Some(10),
+                    crate::native::capture::SessionClock::Worked {
+                        minutes: 10,
+                    },
+                ),
+                session(
+                    "SHIT + REMOTE",
+                    Some(10),
+                    crate::native::capture::SessionClock::Worked {
+                        minutes: 10,
+                    },
+                ),
+            ],
+        )]);
+        let metric = builtin("sessions");
+        let sources = vocab_sources(&["BUILD", "FIX"]);
+        let result = eval_with_sources(
+            &metric,
+            &index,
+            &[date(10)],
+            date(11),
+            StatsClock::Worked,
+            &sources,
+        );
+        let value = &result.values[0];
+        assert_eq!(value.value, Some(2));
+        assert_eq!(value.parts["task_type"]["build"], 1);
+        assert_eq!(value.parts["task_type"]["@other_names"], 1);
+    }
+
+    #[test]
+    fn task_type_in_filtered_metric_sums_to_its_own_total() {
+        use std::path::PathBuf;
+        let mut index = StatsIndex::default();
+        index.note_index = crate::native::vault_links::NoteIndex::from_paths([
+            PathBuf::from("gtd.md"),
+            PathBuf::from("gtd_daily.md"),
+            PathBuf::from("2026/20261010.md"),
+        ]);
+        index.buffers = vec![
+            (
+                "gtd.md".to_string(),
+                "---\ntype: [[area]]\ncolor: orange\n---\n".to_string(),
+            ),
+            (
+                "gtd_daily.md".to_string(),
+                "---\ntype: [[area]]\nparent: [[gtd]]\n---\n".to_string(),
+            ),
+            (
+                "2026/20261010.md".to_string(),
+                "# 2026-10-10\n\n- [ ] #task [[gtd_daily]] [root:: gtd_daily] [created:: 2026-10-10] ^gtd\n".to_string(),
+            ),
+        ];
+        index.daily_notes.insert(
+            date(10),
+            DailyNoteInputs {
+                path: "2026/20261010.md".to_string(),
+                has_pomodoros_heading: true,
+                closed_pomodoros: vec![
+                    super::super::index::PomodoroSession {
+                        name: Some("BUILD + FIX".to_string()),
+                        recorded_minutes: Some(30),
+                        range_minutes: Some(30),
+                        time_range: Some("0800-0830".to_string()),
+                        line: 2,
+                        links: Vec::new(),
+                        clock: crate::native::capture::SessionClock::Worked {
+                            minutes: 0,
+                        },
+                        stamp: crate::native::capture::ClockStamp::Keyed,
+                        untracked: false,
+                    },
+                    super::super::index::PomodoroSession {
+                        name: Some("BUILD + FIX".to_string()),
+                        recorded_minutes: Some(30),
+                        range_minutes: Some(30),
+                        time_range: Some("0900-0930".to_string()),
+                        line: 3,
+                        links: vec![
+                            crate::native::pomodoro_homes::SessionLink {
+                                target: "2026/20261010".to_string(),
+                                block_id: "gtd".to_string(),
+                                line: 4,
+                                embedded: false,
+                            },
+                        ],
+                        clock: crate::native::capture::SessionClock::Worked {
+                            minutes: 0,
+                        },
+                        stamp: crate::native::capture::ClockStamp::Keyed,
+                        untracked: false,
+                    },
+                ],
+                ..DailyNoteInputs::default()
+            },
+        );
+        let metric = custom_metric(
+            "label: Gtd only\nkind: pomodoro\nmeasure: minutes\nin: [gtd_daily]\nunit: minutes",
+            "gtd_only",
+        );
+        let sources = vocab_sources(&["BUILD", "FIX"]);
+        let result = eval_with_sources(
+            &metric,
+            &index,
+            &[date(10)],
+            date(11),
+            StatsClock::Worked,
+            &sources,
+        );
+        let value = &result.values[0];
+        // Only the linked session counts; its 30 minutes split evenly.
+        assert_eq!(value.value, Some(30));
+        assert_eq!(value.parts["task_type"]["build"], 15);
+        assert_eq!(value.parts["task_type"]["fix"], 15);
+        assert_eq!(task_type_total(value), 30);
     }
 }

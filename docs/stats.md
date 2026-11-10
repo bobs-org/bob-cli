@@ -373,7 +373,7 @@ definitions (plus downstream dependents) with local warnings.
 Every metric yields one value per date: an integer `value` (or `null`), an
 optional ratio `num`/`den` in basis points, a quality, an optional non-ok
 reason, and dimension parts (`area`, `root_parent`, `project`, `theme`,
-`kind`, `note`, `tier`, `outcome`, `met`/`missed`). Pomodoro and task
+`task_type`, `kind`, `note`, `tier`, `outcome`, `met`/`missed`). Pomodoro and task
 metrics add `area`, `root_parent`, and `project` homes from the shared
 resolver in [pomodoro-homes.md](pomodoro-homes.md), including a set
 `[root:: X]` field (R11): task-metric `area` / `root_parent` / `project`
@@ -386,12 +386,20 @@ The `theme` dimension splits a named session by task type, on the same `+` compo
 the plan budget; catalog identity and hues are in
 [task-types.md](task-types.md). Minutes-mode days also carry
 `apportioned`, the share of each part that came
-from sessions with two or more keys in that dimension. Consumers never
+from sessions with two or more keys in that dimension.
+The `task_type` dimension splits the same counted minutes by configured type
+only: with a `types:` vocabulary every configured type with minutes gets its
+own series, and sessions with no configured type fold into `@unnamed` (no
+name, or `(unnamed)`) or `@other_names` (named, but label-only). Labels never
+take a share. Classification follows the current vocabulary, so editing
+`types:` reclassifies past periods. `task_type` carries no `apportioned`; its
+off-clock mirror appears wherever `theme` has one, and every point satisfies
+Σ `task_type` = value = Σ `root_parent`. Consumers never
 recalculate a display string, summary, percentage, or delta — the report
 carries them all.
 
 The JSON report includes `theme_hues` beside `homes`, keyed by normalized
-type key, for the type dimensions present in the report. Values use the
+type key, for the type dimensions (`theme` and `task_type`) present in the report. Values use the
 shared `ThemeRef` fields (`key`, `name`, `hue`, `hue_source`). Human output
 adds a colored `■` before known type parts and a muted `□` for exempt types;
 `NO_COLOR` keeps the existing text unchanged.
@@ -506,8 +514,8 @@ linearly interpolated `p25`/`p75` (index `(n-1)*p`, half-away rounding),
 `days_with_data`, `days_met`, the prior headline, and a delta round it out.
 `summary.p25`/`p75` stay daily even when the chart is grouped. Parts
 summaries rank dimensions by total; only `note` collapses to top five plus
-`other`. `theme`, `area`, `root_parent`, and `project` keep every key (the
-note tree already bounds the homes dimensions). Rolling medians span 7 day points, 4 week
+`other`. `theme`, `task_type`, `area`, `root_parent`, and `project` keep every
+key (the note tree already bounds the homes dimensions). Rolling medians span 7 day points, 4 week
 buckets, or 3
 month buckets, with a 7-day / 3-week / 2-month lead-in so the first displayed
 point can fill, need half the window in real observations, and stay `null`
