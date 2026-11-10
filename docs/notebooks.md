@@ -168,20 +168,18 @@ terminal width or mtimes.
 ## The catalog
 
 Every area or project that has notebooks beneath it carries one generated
-block. Bob owns the bytes between the markers; the heading, the block's
-position, and everything else belong to the note's author.
+block. Bob owns the callout; the heading, the block's position, and
+everything else belong to the note's author. See the Obsidian
+[notebook gestures](reference/plugins/notebook-gestures.md) for block-ID
+naming, the picker icon and parent rules, and Create notebook here.
 
 ```markdown
 ## Notebooks
-
-<!-- bob:notebooks:begin v1 -->
 
 > [!notebooks]
 >
 > - **[[dev_tools|Developer tools]]** — Command-line tools and dotfile setup.
 >   - **[[git|Git]]** — Git commands, configuration, and workflow tips.
-
-<!-- bob:notebooks:end -->
 ```
 
 - **Scope.** A host lists notebooks whose owner lies in its own subtree,
@@ -200,21 +198,34 @@ position, and everything else belong to the note's author.
   openers are backslash-escaped, and whitespace collapses to one line.
   No colors, counts, recency, widths, dates, or mtimes are written; hue,
   counts, and age are drawn by clients.
+- **Owned region.** A callout block is real when it comes after the
+  frontmatter, sits outside fenced code, and its head line (at most 3 spaces
+  of indentation) is `> [!notebooks]`. Recognition ignores case and accepts
+  an optional `-`/`+` fold sign and title, but writes are always canonical
+  `> [!notebooks]`. The region runs through every immediately following line
+  that starts with `>` (at most 3 spaces of indentation). Only host-graph
+  notes (area and project notes) are planned; a `[!notebooks]` callout in any
+  other note is never touched.
 - **First write.** The whole block goes immediately before the first real
   `## Tasks` heading, or at the end of the note after one blank line.
-  Frontmatter and fenced examples never count as headings or markers. An
-  existing unmarked `## Notebooks` heading is the author's: bob never
-  adopts its body.
-- **Later writes.** Only the bytes between the markers change, wherever the
-  block was moved; moving it never makes it stale. A UTF-8 BOM, LF or CRLF
-  line endings, and every other byte survive. A current block produces no
-  edit.
-- **Empty subtree.** The region is deleted with its markers. The
-  `## Notebooks` heading goes too, only when its section is then blank
-  lines; authored prose keeps the heading.
-- **Damage.** A lone, duplicated, or reversed marker, or an unsupported or
-  malformed `bob:notebooks` marker, is `notebook_catalog_damaged`, with the
-  path and line. Bob never infers a repair range and never edits that host.
+  Frontmatter and fenced examples never count as headings or callouts.
+- **Later writes.** Only the callout lines change, wherever the block was
+  moved; moving it never makes it stale. A UTF-8 BOM, LF or CRLF line endings,
+  and every other byte survive. A current callout produces no edit.
+- **Empty subtree.** The callout is deleted. The `## Notebooks` heading goes
+  too, only when its section is then blank lines; authored prose keeps the
+  heading.
+- **Legacy migration.** A well-formed v1 begin/end pair is one owned region
+  spanning both marker lines inclusive. `bob notebooks sync`, the nightly step,
+  and capture's `%n` catalog rewrite replace the pair with the bare callout.
+- **Duplicates self-heal.** With more than one owned region (bare callouts
+  and/or legacy pairs), bob keeps the first in document order and deletes the
+  rest, including a duplicate `## Notebooks` heading whose section becomes
+  blank. This is `stale`, not damaged.
+- **Damage.** Only malformed legacy markers are `notebook_catalog_damaged`:
+  a lone, reversed, duplicated, or unsupported-version old marker, with the
+  path and line. Repair the old markers by hand. Bob never guesses a repair
+  range and never edits that host.
 - **States.** `missing` (required content, no region), `stale` (differing
   or removable content), `current`, or `damaged`. Reparenting updates both
   the old and new host.

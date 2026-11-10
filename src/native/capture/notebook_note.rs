@@ -97,58 +97,7 @@ fn real_heading_levels(lines: &[String]) -> Vec<(usize, usize)> {
         .collect()
 }
 
-fn mask_inline_code_and_wikilinks(line: &str) -> String {
-    let mut chars = line.chars().collect::<Vec<_>>();
-    let mut index = 0;
-    while index < chars.len() {
-        if chars[index] == '`' {
-            let run_end = (index..chars.len())
-                .take_while(|position| chars[*position] == '`')
-                .last()
-                .map_or(index + 1, |position| position + 1);
-            let run = run_end - index;
-            let close = (run_end..chars.len()).find(|position| {
-                if chars[*position] != '`' {
-                    return false;
-                }
-                let end = (*position..chars.len())
-                    .take_while(|candidate| chars[*candidate] == '`')
-                    .last()
-                    .map_or(*position + 1, |candidate| candidate + 1);
-                end - *position == run
-            });
-            if let Some(close) = close {
-                let close_end = (close..chars.len())
-                    .take_while(|position| chars[*position] == '`')
-                    .last()
-                    .map_or(close + 1, |position| position + 1);
-                for character in &mut chars[index..close_end] {
-                    *character = ' ';
-                }
-                index = close_end;
-                continue;
-            }
-            index = run_end;
-            continue;
-        }
-        if chars[index] == '['
-            && chars.get(index + 1) == Some(&'[')
-            && (index == 0 || chars[index - 1] != '\\')
-            && let Some(close) = (index + 2..chars.len().saturating_sub(1))
-                .find(|position| {
-                    chars[*position] == ']' && chars[*position + 1] == ']'
-                })
-        {
-            for character in &mut chars[index..close + 2] {
-                *character = ' ';
-            }
-            index = close + 2;
-            continue;
-        }
-        index += 1;
-    }
-    chars.into_iter().collect()
-}
+use crate::native::notebooks::rules::mask_inline_code_and_wikilinks;
 
 /// Actual trailing block anchors across Markdown blocks. Inline code,
 /// wikilink destinations, frontmatter, and fenced examples are prose.

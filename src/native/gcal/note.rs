@@ -222,54 +222,6 @@ pub(crate) fn is_directive_token(token: &str) -> bool {
     )
 }
 
-#[cfg(test)]
-mod prepass_tests {
-    use super::*;
-
-    fn tail(words: &[&str]) -> Vec<OsString> {
-        words.iter().map(OsString::from).collect()
-    }
-
-    fn strings(values: &[OsString]) -> Vec<String> {
-        values
-            .iter()
-            .map(|v| v.to_string_lossy().into_owned())
-            .collect()
-    }
-
-    #[test]
-    fn buffer_tokens_never_parse_as_options() {
-        for token in ["-30", "-30m", "+15", "\u{2212}30", "\u{2013}30"] {
-            assert!(is_buffer_token(token), "{token}");
-            assert!(is_directive_token(token), "{token}");
-        }
-        assert!(!is_buffer_token("-c"));
-        assert!(!is_buffer_token("--"));
-    }
-
-    #[test]
-    fn clear_after_query_stays_an_option() {
-        let out = rewrite_note_tail(&tail(&["deerwood", "-c"]));
-        assert_eq!(strings(&out), vec!["deerwood", "-c"]);
-    }
-
-    #[test]
-    fn directive_text_gets_a_separator() {
-        let out =
-            rewrite_note_tail(&tail(&["deerwood", "@family", "-30", "Drive"]));
-        assert_eq!(
-            strings(&out),
-            vec!["deerwood", "--", "@family", "-30", "Drive"]
-        );
-    }
-
-    #[test]
-    fn explicit_separator_keeps_text_verbatim() {
-        let out = rewrite_note_tail(&tail(&["-i", "abc123", "--", "-d"]));
-        assert_eq!(strings(&out), vec!["-i", "abc123", "--", "-d"]);
-    }
-}
-
 /// Entry point for `bob gcal note`.
 pub(crate) fn run(args: &NoteArgs) -> i32 {
     match inner(args) {
@@ -2298,4 +2250,52 @@ fn print_show_human(
     }
     ui::flush_stdout();
     Ok(())
+}
+
+#[cfg(test)]
+mod prepass_tests {
+    use super::*;
+
+    fn tail(words: &[&str]) -> Vec<OsString> {
+        words.iter().map(OsString::from).collect()
+    }
+
+    fn strings(values: &[OsString]) -> Vec<String> {
+        values
+            .iter()
+            .map(|v| v.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn buffer_tokens_never_parse_as_options() {
+        for token in ["-30", "-30m", "+15", "\u{2212}30", "\u{2013}30"] {
+            assert!(is_buffer_token(token), "{token}");
+            assert!(is_directive_token(token), "{token}");
+        }
+        assert!(!is_buffer_token("-c"));
+        assert!(!is_buffer_token("--"));
+    }
+
+    #[test]
+    fn clear_after_query_stays_an_option() {
+        let out = rewrite_note_tail(&tail(&["deerwood", "-c"]));
+        assert_eq!(strings(&out), vec!["deerwood", "-c"]);
+    }
+
+    #[test]
+    fn directive_text_gets_a_separator() {
+        let out =
+            rewrite_note_tail(&tail(&["deerwood", "@family", "-30", "Drive"]));
+        assert_eq!(
+            strings(&out),
+            vec!["deerwood", "--", "@family", "-30", "Drive"]
+        );
+    }
+
+    #[test]
+    fn explicit_separator_keeps_text_verbatim() {
+        let out = rewrite_note_tail(&tail(&["-i", "abc123", "--", "-d"]));
+        assert_eq!(strings(&out), vec!["-i", "abc123", "--", "-d"]);
+    }
 }

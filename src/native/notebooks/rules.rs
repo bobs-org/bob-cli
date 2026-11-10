@@ -157,7 +157,69 @@ pub(crate) fn checkbox_findings(
     issues
 }
 
-/// All `^block-id` occurrences outside fenced code, with their lines.
+/// Mask inline code spans and `[[wikilinks]]` with spaces, preserving
+/// byte length so trailing-anchor detection sees only visible prose.
+/// Shared with capture's notebook parent lookup so the checker and capture
+/// agree on what an anchor is.
+pub(crate) fn mask_inline_code_and_wikilinks(line: &str) -> String {
+    let mut chars = line.chars().collect::<Vec<_>>();
+    let mut index = 0;
+    while index < chars.len() {
+        if chars[index] == '`' {
+            let run_end = (index..chars.len())
+                .take_while(|position| chars[*position] == '`')
+                .last()
+                .map_or(index + 1, |position| position + 1);
+            let run = run_end - index;
+            let close = (run_end..chars.len()).find(|position| {
+                if chars[*position] != '`' {
+                    return false;
+                }
+                let end = (*position..chars.len())
+                    .take_while(|candidate| chars[*candidate] == '`')
+                    .last()
+                    .map_or(*position + 1, |candidate| candidate + 1);
+                end - *position == run
+            });
+            if let Some(close) = close {
+                let close_end = (close..chars.len())
+                    .take_while(|position| chars[*position] == '`')
+                    .last()
+                    .map_or(close + 1, |position| position + 1);
+                for character in &mut chars[index..close_end] {
+                    *character = ' ';
+                }
+                index = close_end;
+                continue;
+            }
+            index = run_end;
+            continue;
+        }
+        if chars[index] == '['
+            && chars.get(index + 1) == Some(&'[')
+            && (index == 0 || chars[index - 1] != '\\')
+            && let Some(close) = (index + 2..chars.len().saturating_sub(1))
+                .find(|position| {
+                    chars[*position] == ']' && chars[*position + 1] == ']'
+                })
+        {
+            for character in &mut chars[index..close + 2] {
+                *character = ' ';
+            }
+            index = close + 2;
+            continue;
+        }
+        index += 1;
+    }
+    chars.into_iter().collect()
+}
+
+/// The trailing `^block-id` anchor outside fenced code, with its line.
+/// Each line is masked first (inline code and wikilinks are prose), then
+/// only the trailing anchor counts, using
+/// `collect_done::is_block_id_byte`'s character rule (alphanumerics and
+/// `-`). Mid-prose carets, `[[nb#^x]]` destinations, and fenced examples
+/// yield nothing.
 pub(crate) fn block_ids_outside_fences(
     body_lines: &[(usize, &str)],
 ) -> Vec<(usize, String)> {
@@ -167,36 +229,14 @@ pub(crate) fn block_ids_outside_fences(
         if track_fence(line, &mut fence) {
             continue;
         }
-        for id in extract_block_ids(line) {
+        let visible = mask_inline_code_and_wikilinks(line);
+        if let Some(id) =
+            crate::native::collect_done::trailing_block_id_in_line(&visible)
+        {
             found.push((*line_number, id));
         }
     }
     found
-}
-
-fn extract_block_ids(line: &str) -> Vec<String> {
-    let mut ids = Vec::new();
-    let bytes = line.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'^' {
-            let start = index + 1;
-            let mut end = start;
-            while end < bytes.len()
-                && (bytes[end].is_ascii_alphanumeric()
-                    || matches!(bytes[end], b'-' | b'_'))
-            {
-                end += 1;
-            }
-            if end > start {
-                ids.push(line[start..end].to_string());
-            }
-            index = end.max(index + 1);
-        } else {
-            index += 1;
-        }
-    }
-    ids
 }
 
 pub(crate) fn duplicate_block_id_findings(
@@ -447,5 +487,54 @@ fn severity_rank(severity: Severity) -> u8 {
     match severity {
         Severity::Error => 0,
         Severity::Warning => 1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ids(lines: &[&str]) -> Vec<(usize, String)> {
+        let body: Vec<(usize, &str)> = lines
+            .iter()
+            .enumerate()
+            .map(|(index, line)| (index + 1, *line))
+            .collect();
+        block_ids_outside_fences(&body)
+    }
+
+    #[test]
+    fn masked_spans_yield_only_trailing_real_anchor() {
+        assert_eq!(
+            ids(&["- Discuss `^x` and [[nb#^x]] ^real"]),
+            vec![(1, "real".to_string())]
+        );
+    }
+
+    #[test]
+    fn wikilink_alias_and_mid_prose_carets_yield_nothing() {
+        assert!(ids(&["[[nb#^x|alias]]"]).is_empty());
+        assert!(ids(&["a^b mid-prose"]).is_empty());
+        assert!(ids(&["- note [[nb#^x]]"]).is_empty());
+    }
+
+    #[test]
+    fn duplicate_trailing_anchors_still_report_once() {
+        let body: Vec<(usize, &str)> =
+            vec![(2, "- first ^dup"), (5, "- second ^dup")];
+        let findings = duplicate_block_id_findings(&body);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].code, "notebook_duplicate_block_id");
+        assert_eq!(findings[0].line, Some(5));
+    }
+
+    #[test]
+    fn fenced_anchors_are_ignored() {
+        assert!(ids(&["```md", "- fenced ^dup", "```", "- real ^dup"])
+            .iter()
+            .all(|(_, id)| id == "dup"));
+        let fenced_only: Vec<(usize, &str)> =
+            vec![(1, "```md"), (2, "- fenced ^dup"), (3, "```")];
+        assert!(block_ids_outside_fences(&fenced_only).is_empty());
     }
 }

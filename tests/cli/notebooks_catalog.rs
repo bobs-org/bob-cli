@@ -160,7 +160,7 @@ fn snapshot(vault: &Path) -> Vec<(String, String)> {
 
 fn dev_with_catalog(rows: &str) -> String {
     format!(
-        "---\nparent: \"[[area]]\"\ntype: \"[[area]]\"\n---\n\n# Host\n\n## Notebooks\n\n{BEGIN}\n\n> [!notebooks]\n>\n{rows}\n\n{END}\n\n## Tasks\n\n- [ ] #task Keep going ^keep\n"
+        "---\nparent: \"[[area]]\"\ntype: \"[[area]]\"\n---\n\n# Host\n\n## Notebooks\n\n> [!notebooks]\n>\n{rows}\n\n## Tasks\n\n- [ ] #task Keep going ^keep\n"
     )
 }
 
@@ -360,7 +360,7 @@ fn later_syncs_rewrite_in_place_after_the_block_moves_and_on_reparent() {
     // Bryan moves the block below Tasks and adds prose; a title changes.
     let synced = read(&vault, "dev.md");
     let start = synced.find("## Notebooks").unwrap();
-    let end = synced.find(END).unwrap() + END.len() + 2;
+    let end = synced.find("## Tasks").unwrap();
     let block = synced[start..end].to_string();
     let moved = format!(
         "{}Closing prose.\n\n{block}",
@@ -377,10 +377,10 @@ fn later_syncs_rewrite_in_place_after_the_block_moves_and_on_reparent() {
     let output = run(&vault, &temp, &["sync", "-f", "json"]);
     assert_success(&output);
     let after = read(&vault, "dev.md");
-    let prefix = moved.split(BEGIN).next().unwrap();
+    let prefix = moved.split("> [!notebooks]").next().unwrap();
     assert!(
         after.starts_with(prefix),
-        "bytes before the markers unchanged"
+        "bytes before the callout unchanged"
     );
     assert!(after.contains("**[[git|Git!]]** — Git tips."), "{after}");
     assert!(
@@ -427,8 +427,45 @@ fn an_emptied_host_loses_its_region_but_authored_prose_survives() {
         deep.contains("## Notebooks\n\nMy own words about notebooks."),
         "{deep}"
     );
-    assert!(!deep.contains(BEGIN) && !deep.contains(END), "{deep}");
+    assert!(!deep.contains("bob:notebooks:"), "{deep}");
+    assert!(!deep.contains("> [!notebooks]"), "{deep}");
     assert_eq!(subject(&vault), "notebooks: sync catalogs (2 notes)");
+}
+
+#[test]
+fn legacy_marked_host_reports_stale_and_migrates_to_bare_callout() {
+    let temp = TempDir::new("nb-sync-legacy");
+    let vault = online_vault(&temp);
+    // Seed one host with the old v1 marker pair around a current callout.
+    let host = host_note("area", "area", "");
+    let legacy = format!(
+        "{host}## Notebooks\n\n{BEGIN}\n\n> [!notebooks]\n>\n> - old\n\n{END}\n"
+    );
+    write_file(&vault.join("dev.md"), &legacy);
+    write_file(
+        &vault.join("old_nb.md"),
+        &notebook_note("dev", "Old.", "Old"),
+    );
+    commit_all(&vault, "legacy dev");
+    let output = run(&vault, &temp, &["check", "-f", "json"]);
+    let payload = json(&output);
+    let dev = payload["catalogs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|record| record["path"] == "dev.md")
+        .expect("dev catalog");
+    assert_eq!(dev["state"], "stale");
+    let output = run(&vault, &temp, &["sync", "-f", "json"]);
+    assert_success(&output);
+    let synced = read(&vault, "dev.md");
+    assert!(synced.contains("> [!notebooks]"), "{synced}");
+    assert!(!synced.contains("bob:notebooks:"), "{synced}");
+    let files = snapshot(&vault);
+    let output = run(&vault, &temp, &["sync", "-f", "json"]);
+    assert_success(&output);
+    assert_eq!(json(&output)["changed"], serde_json::json!([]));
+    assert_eq!(snapshot(&vault), files, "second sync is a no-op");
 }
 
 #[test]
@@ -847,7 +884,7 @@ fn create_refusals_exit_two_and_leave_the_vault_alone() {
 fn damaged_affected_host_refuses_the_create_but_an_unrelated_one_does_not() {
     let temp = TempDir::new("nb-create-damaged");
     let vault = synced_vault(&temp);
-    let home = read(&vault, "home.md").replace(END, "");
+    let home = format!("{}\n{BEGIN}\n", read(&vault, "home.md"));
     write_file(&vault.join("home.md"), &home);
     commit_all(&vault, "damage home");
     let base = head(&vault);

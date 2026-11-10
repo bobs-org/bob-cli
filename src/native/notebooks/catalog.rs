@@ -148,7 +148,7 @@ pub(crate) fn plan_catalogs(graph: &CatalogGraph) -> CatalogPlan {
                 record.issues.push(NotebookIssue::error(
                     "notebook_catalog_damaged",
                     Some(damage.line),
-                    format!("{path}: {}; repair the markers by hand, then run `bob notebooks sync`", damage.message),
+                    format!("{path}: {}; repair the old markers by hand, then run `bob notebooks sync`", damage.message),
                 ));
             }
         }
@@ -455,7 +455,7 @@ mod tests {
     fn empty_stale_host_is_removed_and_reported_stale() {
         let body = format!(
             "{FRONT}\n{}",
-            "## Notebooks\n\n<!-- bob:notebooks:begin v1 -->\n\n> [!notebooks]\n>\n> - old\n\n<!-- bob:notebooks:end -->\n"
+            "## Notebooks\n\n> [!notebooks]\n>\n> - old\n"
         );
         let graph = graph(vec![host("dev.md", "dev", &body)], vec![]);
         let plan = plan_catalogs(&graph);
@@ -464,6 +464,32 @@ mod tests {
         assert_eq!(dev.record.notebooks, 0);
         assert_eq!(dev.edit.as_ref().unwrap().after, FRONT);
         assert_eq!(dev.record.issues[0].code, "notebook_catalog_stale");
+    }
+
+    #[test]
+    fn legacy_marked_host_migrates_to_bare_callout() {
+        let body = format!(
+            "{FRONT}\n{}",
+            "## Notebooks\n\n<!-- bob:notebooks:begin v1 -->\n\n> [!notebooks]\n>\n> - old\n\n<!-- bob:notebooks:end -->\n"
+        );
+        let graph = graph(
+            vec![host("dev.md", "dev", &body)],
+            vec![notebook(
+                "git",
+                "Git",
+                None,
+                "dev.md",
+                "dev.md",
+                false,
+                &["dev.md"],
+            )],
+        );
+        let plan = plan_catalogs(&graph);
+        let dev = &plan.hosts[0];
+        assert_eq!(dev.record.state, CatalogState::Stale);
+        let after = &dev.edit.as_ref().unwrap().after;
+        assert!(after.contains("> [!notebooks]"));
+        assert!(!after.contains("bob:notebooks:"));
     }
 
     #[test]

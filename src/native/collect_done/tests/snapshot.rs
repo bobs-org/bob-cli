@@ -143,7 +143,7 @@ fn link_only_repairs_regroup_eligible_sources_and_preserve_notebook_catalog() {
         &vault.path().join("work.md"),
         &area_note("- [x] finished #task ^gone\n"),
     );
-    let catalog_region = "<!-- bob:notebooks:begin v1 -->\n\n> [!notebooks]\n>\n> - [[notebooks/dev]]\n\n<!-- bob:notebooks:end -->";
+    let catalog_region = "> [!notebooks]\n>\n> - [[notebooks/dev]]";
     let observer = area_note(&format!(
         "## Notebooks\n\n{catalog_region}\n\n## Tasks\n\n- [x] completed #task ^stale\n- [ ] See [[work#^gone]] #task ^live\n"
     ));
@@ -195,13 +195,9 @@ fn link_only_repairs_regroup_eligible_sources_and_preserve_notebook_catalog() {
     assert!(!repair.contents.contains("🟢"));
     let region_start = repair
         .contents
-        .find("<!-- bob:notebooks:begin v1 -->")
+        .find("> [!notebooks]")
         .expect("catalog start");
-    let region_end = repair
-        .contents
-        .find("<!-- bob:notebooks:end -->")
-        .expect("catalog end")
-        + "<!-- bob:notebooks:end -->".len();
+    let region_end = region_start + catalog_region.len();
     assert_eq!(
         &repair.contents[region_start..region_end],
         catalog_region,

@@ -962,6 +962,9 @@ class GitFixtureTests(unittest.TestCase):
         )
         self.assertEqual(remote.stdout.strip(), "")
 
+    def test_mac_profile_selects_ci_yml(self) -> None:
+        self.assertEqual(GATE.PROFILES["bobs-org/bob-mac-capture"]["workflow"], "ci.yml")
+
     def test_failed_gate_still_preserves_checkout(self) -> None:
         self._prepare_dirty_tree()
         before = self._snapshot_state()

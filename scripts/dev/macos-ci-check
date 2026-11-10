@@ -107,7 +107,7 @@ PROFILES: dict[str, dict[str, Any]] = {
         "failure_kind": "rust",
     },
     "bobs-org/bob-mac-capture": {
-        "workflow": "macos-swift.yml",
+        "workflow": "ci.yml",
         "job": "macOS 26 SwiftPM",
         "required_steps": (
             "Lint Swift formatting",

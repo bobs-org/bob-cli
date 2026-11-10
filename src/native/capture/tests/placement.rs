@@ -1102,13 +1102,9 @@ const GENERATED_NOTEBOOKS: &str = concat!(
     "\n",
     "## Notebooks\n",
     "\n",
-    "<!-- bob:notebooks:begin v1 -->\n",
-    "\n",
     "> [!notebooks]\n",
     ">\n",
     "> - **[[git|Git]]**\n",
-    "\n",
-    "<!-- bob:notebooks:end -->\n",
     "\n",
     "## Ideas\n",
     "\n",
@@ -1149,17 +1145,13 @@ fn generated_notebooks_section_is_never_a_bullet_target() {
         false,
     );
     assert!(updated.contains(&format!("- one\n{BULLET}")), "{updated}");
-    let before_block = updated
-        .split("<!-- bob:notebooks:begin v1 -->")
-        .next()
-        .unwrap();
+    let callout = "> [!notebooks]\n>\n> - **[[git|Git]]**\n";
+    assert!(updated.contains(callout), "{updated}");
+    let before_block = updated.split("> [!notebooks]").next().unwrap();
     assert!(!before_block.contains(BULLET));
-    let in_block = updated
-        .split("<!-- bob:notebooks:begin v1 -->")
-        .nth(1)
-        .and_then(|rest| rest.split("<!-- bob:notebooks:end -->").next())
-        .unwrap();
-    assert!(!in_block.contains(BULLET));
+    // The callout bytes themselves never gain the bullet.
+    let after_callout = updated.split(callout).nth(1).unwrap_or("");
+    assert!(!after_callout.starts_with(BULLET));
 }
 
 #[test]

@@ -7,29 +7,24 @@ description: Every bob machine-readable output, its flag, envelope shape, schema
 
 Fixtures use this checkout's `bob`, isolated `HOME`/`XDG_*`, a synthetic
 vault, `BOB_NOW=2026-10-20 12:00:00`, `TZ=UTC`, `BOB_REF_JOBS_KICK=off`, and
-`BOB_GMAIL_KICK=off`; network, clipboard, sync, and hooks are stubbed. Stored
-freshness/review versions differ; only stdout `schema_version` counts.
+`BOB_GMAIL_KICK=off`; network, clipboard, sync, and hooks are stubbed. Only
+stdout `schema_version` counts.
 
 ## Framing
 
 JSON reports print to stdout. Warnings, progress, and hook chatter print to
 stderr so a JSON pipe stays parseable. Usage errors exit 2.
 
-Envelopes vary by command family:
+Envelopes vary by family:
 
-- Versioned helpers such as `capture-parse`, `plan`, `freshness`, and most
-  `ref` commands print `ok: true` plus a payload on success. Many of those
-  success envelopes carry `schema_version`.
-- Capture-helper error envelopes are often `{"ok":false,"error":"…"}` and
-  need not repeat the success `schema_version`.
+- Versioned helpers (`capture-parse`, `plan`, `freshness`, most `ref`) print
+  `ok: true` plus a payload; many carry `schema_version`.
+- Capture-helper errors are often `{"ok":false,"error":"…"}` without
+  `schema_version`.
 - `bob capture -f json` is unversioned (`ok`, no `schema_version`).
-- `bob vault-sync status -j` prints the status record directly, with no `ok`
-  and no `schema_version`.
-- A failing command may print JSON, a human message on stderr, or both; see
-  that command's contract.
+- `bob vault-sync status -j` prints the status record directly.
 
-Examples show selected fields; `…` marks omissions. The `bob plan` vault
-has no daily note.
+Examples show selected fields; `…` marks omissions.
 
 ```bash
 bob capture-parse -f json -- 'Buy milk @dev'
@@ -47,15 +42,12 @@ bob plan -f json -b /path/to/synthetic-vault
 {"ok":true,"schema_version":3,"date":"2026-10-20","daily_file":"2026/20261020.md","status":"ok","caps":{"max_links":…,"max_next":…,"max_pending":…,"max_ready":…},"today":{"count":0},"today_tasks":[],"today_roots":[],"links":{"count":0,"cap":…,"over":false,"off_clock":0},"next":{"count":0,"cap":…,"over":false},"pending":{"count":0,"cap":…,"over":false},"theme_names":[],"entries":[],"warnings":[]}
 ```
 
-`today_roots` tasks sum to `today.count`; `hue` is null for `@unfiled`.
-`type_mismatch` adds `link`, `entry`, `task_type`, and `entry_types`. See
+`today_roots` sum to `today.count`; `hue` is null for `@unfiled`. See
 [Plan](../plan.md#lints).
 
 ## Capture and protocol helpers
 
-`bob capture` writes the vault; most `capture-*` helpers are read-only
-except `capture-task-id`/`capture-pomodoro-name` (write; `-d` previews) and
-`capture-templates save`/`delete`/`clear` (mutate the shelf).
+`bob capture` writes the vault; most `capture-*` helpers are read-only.
 
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |

@@ -94,8 +94,19 @@ fn edit<'a>(analysis: &'a Analysis, host: &str) -> &'a FileEdit {
 
 fn callout(after: &str) -> String {
     let start = after.find("> [!notebooks]").expect("callout");
-    let end = after.find("\n\n<!-- bob:notebooks:end -->").expect("end");
-    after[start..end].to_string()
+    let rest = &after[start..];
+    let mut end = 0;
+    for line in rest.split_inclusive('\n') {
+        let content = line.strip_suffix('\n').unwrap_or(line);
+        let content = content.strip_suffix('\r').unwrap_or(content);
+        let indent = content.chars().take_while(|ch| *ch == ' ').count();
+        if indent <= 3 && content[indent..].starts_with('>') {
+            end += line.len();
+        } else {
+            break;
+        }
+    }
+    rest[..end].trim_end_matches(['\n', '\r']).to_string()
 }
 
 #[test]
@@ -444,7 +455,7 @@ fn damaged_affected_host_refuses_but_unrelated_one_is_tolerated() {
     write(
         temp.path(),
         "home.md",
-        &healthy.replace("<!-- bob:notebooks:end -->", ""),
+        &format!("{healthy}\n<!-- bob:notebooks:begin v1 -->\n"),
     );
     let snapshot = VaultSnapshot::load(temp.path());
     // dev is healthy: creating under dev ignores the damaged home catalog.

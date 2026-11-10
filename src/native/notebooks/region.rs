@@ -1,19 +1,19 @@
 //! Strict byte-span handling for the Bob-owned `## Notebooks` region.
 //!
-//! The managed block is fenced by exactly one begin/end marker pair. Bob
-//! owns the bytes between the markers; the position of the block, its
-//! heading, and every other byte belong to the note's author. Edits are
-//! computed as byte-range replacements over the original text, so a UTF-8
-//! BOM, LF or CRLF line endings, and all surrounding bytes survive exactly.
-//! Heading and marker detection ignore frontmatter and fenced examples.
+//! Bob owns exactly the `> [!notebooks]` callout block; the position of the
+//! block, its heading, and every other byte belong to the note's author.
+//! Edits are computed as byte-range replacements over the original text, so
+//! a UTF-8 BOM, LF or CRLF line endings, and all surrounding bytes survive
+//! exactly. Heading, callout, and legacy-marker detection ignore frontmatter
+//! and fenced examples.
 
 use std::ops::Range;
 
 use super::rules::track_fence;
 
-pub(crate) const BEGIN_MARKER: &str = "<!-- bob:notebooks:begin v1 -->";
-pub(crate) const END_MARKER: &str = "<!-- bob:notebooks:end -->";
-const MARKER_OPENER: &str = "<!-- bob:notebooks:";
+pub(crate) const LEGACY_BEGIN_MARKER: &str = "<!-- bob:notebooks:begin v1 -->";
+pub(crate) const LEGACY_END_MARKER: &str = "<!-- bob:notebooks:end -->";
+const LEGACY_MARKER_OPENER: &str = "<!-- bob:notebooks:";
 const HEADING_TEXT: &str = "Notebooks";
 
 /// Why a host's managed region cannot be edited safely.
@@ -129,8 +129,10 @@ impl<'a> Scanned<'a> {
         (0..self.lines.len()).filter_map(|index| self.heading(index))
     }
 
-    /// Locate the managed region: absent, one valid pair, or damaged.
-    fn region(&self) -> Result<Option<Range<usize>>, RegionDamage> {
+    /// Locate the single legacy v1 marker pair, if any. A well-formed
+    /// pair is one owned region; any lone, reversed, duplicated, or
+    /// unsupported marker is damage and is never guessed.
+    fn legacy_pair(&self) -> Result<Option<(usize, usize)>, RegionDamage> {
         let mut begins = Vec::new();
         let mut ends = Vec::new();
         for (index, line) in self.lines.iter().enumerate() {
@@ -138,31 +140,31 @@ impl<'a> Scanned<'a> {
                 continue;
             }
             let trimmed = line.content.trim();
-            if trimmed == BEGIN_MARKER {
+            if trimmed == LEGACY_BEGIN_MARKER {
                 begins.push(index);
-            } else if trimmed == END_MARKER {
+            } else if trimmed == LEGACY_END_MARKER {
                 ends.push(index);
-            } else if line.content.contains(MARKER_OPENER) {
+            } else if line.content.contains(LEGACY_MARKER_OPENER) {
                 return Err(damage(
                     index,
-                    "unsupported or malformed notebook catalog marker",
+                    "unsupported or malformed notebook catalog marker; repair the old markers by hand",
                 ));
             }
         }
         match (begins.as_slice(), ends.as_slice()) {
             ([], []) => Ok(None),
-            ([begin], [end]) if begin < end => Ok(Some(*begin..*end)),
+            ([begin], [end]) if begin < end => Ok(Some((*begin, *end))),
             ([begin], [end]) => Err(damage(
                 *end.min(begin),
-                "notebook catalog markers are reversed",
+                "notebook catalog markers are reversed; repair the old markers by hand",
             )),
             ([], [end, ..]) => Err(damage(
                 *end,
-                "notebook catalog end marker has no begin marker",
+                "notebook catalog end marker has no begin marker; repair the old markers by hand",
             )),
             ([begin, ..], []) => Err(damage(
                 *begin,
-                "notebook catalog begin marker has no end marker",
+                "notebook catalog begin marker has no end marker; repair the old markers by hand",
             )),
             _ => {
                 let first = begins
@@ -171,9 +173,62 @@ impl<'a> Scanned<'a> {
                     .copied()
                     .min()
                     .unwrap_or(0);
-                Err(damage(first, "notebook catalog markers are duplicated"))
+                Err(damage(
+                    first,
+                    "notebook catalog markers are duplicated; repair the old markers by hand",
+                ))
             }
         }
+    }
+
+    /// Every bare `> [!notebooks]` callout block outside frontmatter and
+    /// fenced code, in document order. Each entry is (start, end) line
+    /// indices inclusive.
+    fn bare_regions(&self) -> Vec<(usize, usize)> {
+        let mut regions = Vec::new();
+        let mut index = self.body_first;
+        while index < self.lines.len() {
+            if !self.real(index) || !is_callout_head(self.lines[index].content)
+            {
+                index += 1;
+                continue;
+            }
+            let mut end = index;
+            let mut next = index + 1;
+            while next < self.lines.len()
+                && self.real(next)
+                && is_quote_line(self.lines[next].content)
+            {
+                end = next;
+                next += 1;
+            }
+            regions.push((index, end));
+            index = end + 1;
+        }
+        regions
+    }
+
+    /// All owned regions (one legacy pair and/or bare callouts) in document
+    /// order. Each entry is (start_line, end_line, is_legacy) with end
+    /// inclusive.
+    fn owned_regions(&self) -> Result<Vec<(usize, usize, bool)>, RegionDamage> {
+        let legacy = self.legacy_pair()?;
+        let mut owned: Vec<(usize, usize, bool)> = Vec::new();
+        if let Some((begin, end)) = legacy {
+            owned.push((begin, end, true));
+        }
+        for (start, end) in self.bare_regions() {
+            // A callout inside a legacy pair belongs to that pair.
+            if let Some((begin, end_legacy)) = legacy
+                && start >= begin
+                && end <= end_legacy
+            {
+                continue;
+            }
+            owned.push((start, end, false));
+        }
+        owned.sort_by_key(|(start, _, _)| *start);
+        Ok(owned)
     }
 
     fn first_tasks_heading(&self) -> Option<usize> {
@@ -182,10 +237,52 @@ impl<'a> Scanned<'a> {
             .map(|(heading, _)| heading.index)
     }
 
-    /// Byte range of the owned bytes between the markers.
-    fn inner_range(&self, region: &Range<usize>) -> Range<usize> {
-        self.lines[region.start].end..self.lines[region.end].start
+    /// Byte range covering whole lines start..=end inclusive.
+    fn line_byte_range(&self, start: usize, end: usize) -> Range<usize> {
+        self.lines[start].start..self.lines[end].end
     }
+}
+
+/// True when `content` is a `> [!notebooks]` callout head: at most 3 spaces
+/// of indentation, then `>`, then `[!notebooks]` case-insensitively, with an
+/// optional `-`/`+` fold sign and title. Writes are always canonical
+/// `> [!notebooks]`.
+fn is_callout_head(content: &str) -> bool {
+    let indent = content.chars().take_while(|ch| *ch == ' ').count();
+    if indent > 3 {
+        return false;
+    }
+    let rest = &content[indent..];
+    let Some(after_gt) = rest.strip_prefix('>') else {
+        return false;
+    };
+    let after_gt = after_gt.trim_start_matches([' ', '\t']);
+    if !after_gt.starts_with('[') {
+        return false;
+    }
+    let Some(close) = after_gt.find(']') else {
+        return false;
+    };
+    let inner = after_gt[1..close].trim();
+    if !inner.eq_ignore_ascii_case("!notebooks") {
+        return false;
+    }
+    // After `]` allow optional spaces, one optional fold sign, then anything.
+    // A `|alias` form is not a catalog head.
+    let tail = after_gt[close + 1..].trim_start_matches([' ', '\t']);
+    let tail = tail.strip_prefix(['-', '+']).unwrap_or(tail);
+    // Empty tail or a title starting with space/text is fine; a `|` alias is not.
+    !tail.trim_start().starts_with('|')
+}
+
+/// True when `content` is a blockquote line: at most 3 spaces of
+/// indentation, then `>`.
+fn is_quote_line(content: &str) -> bool {
+    let indent = content.chars().take_while(|ch| *ch == ' ').count();
+    if indent > 3 {
+        return false;
+    }
+    content[indent..].starts_with('>')
 }
 
 fn damage(index: usize, message: &str) -> RegionDamage {
@@ -231,54 +328,93 @@ fn atx_heading(content: &str) -> Option<(usize, &str)> {
     Some((level, title))
 }
 
-/// The inner bytes the owned region must hold for `callout` lines.
-pub(crate) fn inner_text(callout: &[String], eol: &str) -> String {
-    let mut inner = String::from(eol);
-    for line in callout {
-        inner.push_str(line);
-        inner.push_str(eol);
+/// The bare callout bytes the owned region must hold for `callout`
+/// lines: each line plus the document EOL, byte-stable.
+pub(crate) fn bare_text(callout: &[String], eol: &str) -> String {
+    if callout.is_empty() {
+        return String::new();
     }
-    inner.push_str(eol);
-    inner
+    let mut out = callout.join(eol);
+    out.push_str(eol);
+    out
 }
 
 fn full_block(callout: &[String], eol: &str) -> String {
-    format!(
-        "## {HEADING_TEXT}{eol}{eol}{BEGIN_MARKER}{eol}{}{END_MARKER}{eol}",
-        inner_text(callout, eol)
-    )
+    format!("## {HEADING_TEXT}{eol}{eol}{}", bare_text(callout, eol))
 }
 
-/// Plan the single edit that makes the host's managed region match
-/// `callout`; an empty `callout` means the host should hold no region.
+/// Plan the edit that makes the host's owned callout match `callout`; an
+/// empty `callout` means the host should hold no region. A well-formed
+/// legacy v1 pair counts as one owned region and migrates to the bare
+/// callout. More than one owned region self-heals by keeping the first and
+/// deleting the rest (stale, never damaged).
 pub(crate) fn plan_host(text: &str, callout: &[String]) -> HostOutcome {
     let scanned = Scanned::new(text);
-    let region = match scanned.region() {
-        Ok(region) => region,
+    let owned = match scanned.owned_regions() {
+        Ok(owned) => owned,
         Err(damage) => return HostOutcome::Damaged(damage),
     };
-    match (region, callout.is_empty()) {
-        (None, true) => HostOutcome::Nothing,
-        (None, false) => HostOutcome::Update {
+    match (owned.as_slice(), callout.is_empty()) {
+        ([], true) => HostOutcome::Nothing,
+        ([], false) => HostOutcome::Update {
             state: EditState::Missing,
             after: apply(text, insertion(&scanned, callout)),
         },
-        (Some(region), false) => {
-            let inner = scanned.inner_range(&region);
-            let expected = inner_text(callout, scanned.eol);
-            if text[inner.clone()] == expected {
+        ([(start, end, _)], false) => {
+            let range = scanned.line_byte_range(*start, *end);
+            let expected = bare_text(callout, scanned.eol);
+            if text[range.clone()] == expected {
                 HostOutcome::Current
             } else {
                 HostOutcome::Update {
                     state: EditState::Stale,
-                    after: apply(text, (inner, expected)),
+                    after: apply(text, (range, expected)),
                 }
             }
         }
-        (Some(region), true) => HostOutcome::Update {
+        ([(start, end, _)], true) => HostOutcome::Update {
             state: EditState::Stale,
-            after: apply(text, removal(&scanned, &region)),
+            after: apply(text, removal(&scanned, &(*start..*end))),
         },
+        (regions, _) => {
+            // Duplicates self-heal: keep the first, delete the rest.
+            let mut edits: Vec<(Range<usize>, String)> = Vec::new();
+            let (first_start, first_end, _) = regions[0];
+            if callout.is_empty() {
+                let (range, replacement) =
+                    removal(&scanned, &(first_start..first_end));
+                edits.push((range, replacement));
+            } else {
+                let range = scanned.line_byte_range(first_start, first_end);
+                let expected = bare_text(callout, scanned.eol);
+                if text[range.clone()] != expected {
+                    edits.push((range, expected));
+                }
+            }
+            for (start, end, _) in &regions[1..] {
+                let (range, replacement) = removal(&scanned, &(*start..*end));
+                edits.push((range, replacement));
+            }
+            // If the first was already current and there were no other
+            // edits, this would be Current; but >1 regions always need at
+            // least the duplicate deletions.
+            if edits.is_empty() {
+                // First is current but duplicates remain: still stale.
+                // Force the duplicate deletions (they must be non-empty).
+                // This branch is unreachable because rest deletions always
+                // produce an edit, but keep it for safety.
+                return HostOutcome::Current;
+            }
+            edits.sort_by_key(|(range, _)| range.start);
+            let mut after = text.to_string();
+            for (range, replacement) in edits.into_iter().rev() {
+                after.replace_range(range, &replacement);
+            }
+            HostOutcome::Update {
+                state: EditState::Stale,
+                after,
+            }
+        }
     }
 }
 
@@ -521,12 +657,12 @@ mod tests {
     fn damaged_markers_refuse_with_line() {
         let rows = callout(&["- **[[a|A]]**"]);
         for (text, line) in [
-            (format!("---\n---\n{BEGIN_MARKER}\nbody\n"), 3),
-            (format!("---\n---\nbody\n{END_MARKER}\n"), 4),
-            (format!("---\n---\n{END_MARKER}\n{BEGIN_MARKER}\n"), 3),
+            (format!("---\n---\n{LEGACY_BEGIN_MARKER}\nbody\n"), 3),
+            (format!("---\n---\nbody\n{LEGACY_END_MARKER}\n"), 4),
+            (format!("---\n---\n{LEGACY_END_MARKER}\n{LEGACY_BEGIN_MARKER}\n"), 3),
             (
                 format!(
-                    "---\n---\n{BEGIN_MARKER}\n{END_MARKER}\n{BEGIN_MARKER}\n{END_MARKER}\n"
+                    "---\n---\n{LEGACY_BEGIN_MARKER}\n{LEGACY_END_MARKER}\n{LEGACY_BEGIN_MARKER}\n{LEGACY_END_MARKER}\n"
                 ),
                 3,
             ),
@@ -541,7 +677,7 @@ mod tests {
 
     #[test]
     fn fenced_marker_examples_are_inert() {
-        let text = format!("---\n---\n\n```md\n{BEGIN_MARKER}\n```\n");
+        let text = format!("---\n---\n\n```md\n{LEGACY_BEGIN_MARKER}\n```\n");
         let rows = callout(&["- **[[a|A]]**"]);
         let (state, _) = update(plan_host(&text, &rows));
         assert_eq!(state, EditState::Missing);
@@ -559,5 +695,97 @@ mod tests {
         assert_eq!(plan_host(&after, &rows), HostOutcome::Current);
         let (_, back) = update(plan_host(&after, &[]));
         assert_eq!(back, text);
+    }
+
+    #[test]
+    fn legacy_pair_migrates_to_exact_bare_callout() {
+        let rows = callout(&["- **[[a|A]]**"]);
+        let legacy = format!(
+            "---\n---\n\n# Dev\n\n## Notebooks\n\n{LEGACY_BEGIN_MARKER}\n\n{}\n\n{LEGACY_END_MARKER}\n",
+            rows.join("\n")
+        );
+        let (state, after) = update(plan_host(&legacy, &rows));
+        assert_eq!(state, EditState::Stale);
+        let expected = format!(
+            "---\n---\n\n# Dev\n\n## Notebooks\n\n{}\n",
+            rows.join("\n")
+        );
+        assert_eq!(after, expected);
+        assert_eq!(plan_host(&after, &rows), HostOutcome::Current);
+        assert!(!after.contains("bob:notebooks:"));
+    }
+
+    #[test]
+    fn legacy_plus_bare_duplicate_heals_to_first() {
+        let rows = callout(&["- **[[a|A]]**"]);
+        let bare = rows.join("\n");
+        let text = format!(
+            "---\n---\n\n# Dev\n\n## Notebooks\n\n{bare}\n\n## Notebooks\n\n{LEGACY_BEGIN_MARKER}\n\n{bare}\n\n{LEGACY_END_MARKER}\n\n## Tasks\n"
+        );
+        let (state, after) = update(plan_host(&text, &rows));
+        assert_eq!(state, EditState::Stale);
+        assert_eq!(after.matches("> [!notebooks]").count(), 1);
+        assert!(!after.contains("bob:notebooks:"));
+        assert_eq!(plan_host(&after, &rows), HostOutcome::Current);
+    }
+
+    #[test]
+    fn two_bare_duplicates_heal_to_first() {
+        let rows = callout(&["- **[[a|A]]**"]);
+        let bare = rows.join("\n");
+        let text = format!(
+            "---\n---\n\n# Dev\n\n## Notebooks\n\n{bare}\n\n## Notebooks\n\n{bare}\n\n## Tasks\n"
+        );
+        let (state, after) = update(plan_host(&text, &rows));
+        assert_eq!(state, EditState::Stale);
+        assert_eq!(after.matches("> [!notebooks]").count(), 1);
+        // Duplicate heading whose section went blank is dropped.
+        assert_eq!(after.matches("## Notebooks").count(), 1);
+        assert_eq!(plan_host(&after, &rows), HostOutcome::Current);
+    }
+
+    #[test]
+    fn folded_head_canonicalizes() {
+        let rows = callout(&["- **[[a|A]]**"]);
+        let folded = "---\n---\n\n# Dev\n\n## Notebooks\n\n> [!notebooks]-\n>\n> - **[[a|A]]**\n".to_string();
+        let (state, after) = update(plan_host(&folded, &rows));
+        assert_eq!(state, EditState::Stale);
+        assert!(after.contains("> [!notebooks]\n"));
+        assert!(!after.contains("> [!notebooks]-"));
+        assert_eq!(plan_host(&after, &rows), HostOutcome::Current);
+    }
+
+    #[test]
+    fn callout_in_fence_or_frontmatter_stays_inert() {
+        let rows = callout(&["- **[[a|A]]**"]);
+        let fenced = "---\n---\n\n```md\n> [!notebooks]\n> - x\n```\n";
+        let (state, after) = update(plan_host(fenced, &rows));
+        assert_eq!(state, EditState::Missing);
+        assert!(after.starts_with(fenced));
+        let front = "---\n> [!notebooks]\n> - x\n---\n\n# Dev\n";
+        let (state, _) = update(plan_host(front, &rows));
+        assert_eq!(state, EditState::Missing);
+    }
+
+    #[test]
+    fn quote_after_blank_does_not_join_region() {
+        let rows = callout(&["- **[[a|A]]**"]);
+        // A `>` line after a blank line is a second owned region, so the
+        // first (partial) plus the orphan heal to one current block.
+        let text =
+            "---\n---\n\n## Notebooks\n\n> [!notebooks]\n>\n\n> - orphan\n";
+        let (state, after) = update(plan_host(text, &rows));
+        assert_eq!(state, EditState::Stale);
+        assert_eq!(plan_host(&after, &rows), HostOutcome::Current);
+    }
+
+    #[test]
+    fn bare_crlf_bom_round_trip() {
+        let rows = callout(&["- **[[a|A]]**"]);
+        let text = "\u{feff}---\r\n---\r\n\r\n# Dev\r\n\r\n## Notebooks\r\n\r\n> [!notebooks]\r\n>\r\n> - **[[a|A]]**\r\n";
+        assert_eq!(plan_host(text, &rows), HostOutcome::Current);
+        let (_, back) = update(plan_host(text, &[]));
+        assert!(!back.contains("> [!notebooks]"));
+        assert!(back.starts_with("\u{feff}---\r\n"));
     }
 }
