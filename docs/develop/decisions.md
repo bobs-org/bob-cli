@@ -428,7 +428,7 @@ Supersedes in part [Capture Sigils Say Where, What, and How](#capture-sigils-say
 
 ## Capture Sigils Say Where, What, and How {#capture-sigils-say-where-what-how}
 
-**Status:** Superseded in part by [Capture Reserves Clock Tags](#capture-reserves-clock-tags), [Capture Bullets Mirror The Task Block](#capture-bullets-mirror-the-task-block)
+**Status:** Superseded in part by [Capture Reserves Clock Tags](#capture-reserves-clock-tags), [Capture Bullets Mirror The Task Block](#capture-bullets-mirror-the-task-block), [A Notebook Route Writes Notes; `@@` Stays Draft-Wide](#notebook-routes-write-notes)
 
 '@' says where, glued '#' names a place and free '#' a type, '%' says how.
 
@@ -470,6 +470,7 @@ restores prefix matching or attached typing.
 Superseded in part: a `#` at a first-level bullet start now names a drawer, not a type
 ([Capture Bullets Mirror The Task Block](#capture-bullets-mirror-the-task-block)).
 Superseded in part: free clock tags at capture item edges are literal task tags, not task types; see [Capture Reserves Clock Tags](#capture-reserves-clock-tags).
+`%n` on a `^`-sealed project capture now creates a notebook; see [A Notebook Route Writes Notes; `@@` Stays Draft-Wide](#notebook-routes-write-notes).
 
 ## Capture `*` Blocks Existing Tasks {#capture-star-blocks-existing-tasks}
 
@@ -1351,6 +1352,54 @@ default cap applies where `config.yml` is unreadable.
 notice scope.
 
 Amended in place 2026-10-04 at Bryan's request: the freshness trial was removed; nothing waits on it.
+
+## A Notebook Route Writes Notes; `@@` Stays Draft-Wide {#notebook-routes-write-notes}
+
+**Status:** Accepted
+
+Notebooks hold only note bullets; on a notebook route the existing `@nb` forms write notes, `@@` stays draft-wide, `@parent^id@ %n` creates a notebook, and bob owns each `## Notebooks` catalog's content.
+
+**Applies to.** bob-cli, bob-plugins, Bob Mac Capture, and the vault.
+
+**Claim.** A [Notebook](../reference/glossary.md#notebook) holds only note bullets and never a checkbox.
+On a notebook route, the existing `@nb` forms write notes: `@nb` a top-level
+note, `@nb#section` a section note, `@nb^id` or `@nb#section^id` a named note,
+and `@nb+id` a child of that note bullet. `@@` stays the draft-wide declaration
+and never takes a place suffix; on a notebook, unrouted items become notes.
+`@parent^id@ %n` creates a notebook whose `summary` is the item text. Bob owns
+each area or project's `## Notebooks` catalog content; Bryan owns its position.
+
+**Why.** Research verifications V1–V6 decide it. `@@route` is already a
+whitespace-free, draft-wide declaration (V1). Suffixed `@@` forms were removed
+on 2026-10-31 (`bob-cli-ey.1.1.1`; V2), and `capture-rewrite` already refuses
+place suffixes on absorption (V3). Rewrite is purely lexical and cannot depend
+on whether a route is a notebook (V4). Every requested alias already works on
+the `@nb` forms (V5). The `@nb` tokens already parsed; only what they write on a
+retyped file had to change (V6). Rejected alternatives:
+
+- **Item-local `@@nb`.** It would give `@@` a second scope and collide with V1.
+- **Suffixed `@@` forms** (`@@nb#…`, `@@nb^…`, `@@nb+…`). They would reverse the
+  2026-10-31 removal.
+- **A `#notebook` tag.** It cannot change capture, validation, or discovery.
+- **Sub-areas.** They drag in Ready caps, `## Tasks`, Stats roots, and tasks.
+- **Folders.** Capture routes are vault-root stems.
+- **Record types.** Records are one-entity notes with a schema; a notebook is
+  one free-form outline.
+- **A Dataview-only index.** Invisible to git, agents, and mobile, and it
+  cannot roll up through sub-projects.
+- **A `^^` seal.** `%n` already means "how", and it is Bryan's stated intent.
+
+**Cost.** Retyping a file changes what `@x` writes, so the capture grammar
+bumped. Every host must run a bob with notebook capture before any vault retype.
+
+**Reopens when.** Bryan wants tasks in notebooks, or a second `@@` scope.
+
+**Evidence.** `research:202611/bob_notebooks/bob_notebooks.md` (V1–V6);
+`plan:202611/bob_notebooks.md`; bob-cli `0a74731b` (recognition), `55468bff`
+(catalogs), `8d098e55` (note writes), `ab021e2d` (creation), `93cf930c`
+(completion and `@@` collapse). See also [Notebook](../reference/glossary.md#notebook),
+[Capture](../reference/glossary.md#capture), [Project Note Capture](../reference/glossary.md#project-note-capture), and
+[Capture Sigils Say Where, What, and How](#capture-sigils-say-where-what-how).
 
 ## #now Is A User-Owned Weekly Bet, Never A Status {#now-tag-is-user-owned}
 

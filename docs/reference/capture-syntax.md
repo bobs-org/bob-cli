@@ -24,7 +24,7 @@ Incomplete **picker** input cannot execute.
 | `URL @route` / `@route URL` | Queue the reference under that route | [`URL @route`](#url-at-route) |
 | `URL %l` / `URL %l @route` | Queue with companion audio | [`URL %l`](#url-listen) |
 | `-r route` | Force the URL (or task) route from the CLI | [`-r`](#cli-route) |
-| `@@route` | Shared task destination for unrouted items | [`@@route`](#global-route) |
+| `@@route` | Draft-wide destination for unrouted items | [`@@route`](#global-route) |
 | `%t` | Expand one capture per template row | [`%t`](#template) |
 | `%` | **Picker:** choose a capture directive | [Bare `%`](#percent-picker) |
 | `#` | **Picker:** choose a task type | [Bare `#`](#hash-picker) |
@@ -73,7 +73,7 @@ Incomplete **picker** input cannot execute.
 | Work Log | Log work onto the close's worked tasks | [Work Log](#x-work-log) |
 | `+2 x` / `x =` | Chain session operators on one line | [Operator chain](#operator-chain) |
 | `@route:block-id=x` | Link that task, then close | [`@route:block-id=x`](#link-then-close) |
-| `@route^block-id@` | Create a project note | [`@route^block-id@`](#project-note-seal) |
+| `@route^block-id@` | Project note, or notebook with `%n` | [`@route^block-id@`](#project-note-seal) |
 | `@route:block-id@` | Create a project note and offer its open tasks | [`@route:block-id@`](#project-note-offer) |
 | `:id` | Project-note child: name, Next, and link | [`:id` child](#project-colon-child) |
 | `^id` | Project-note child: name only | [`^id` child](#project-caret-child) |
@@ -85,7 +85,7 @@ Incomplete **picker** input cannot execute.
 | `- #drawer` with nested notes | First-level drawer bullet | [Drawer bullets](#drawer-bullets) |
 | `@route+block-id` with no other text | Ensure Next and move its Task Link | [Ensure Next](#plus-ensure-next) |
 | `@route+block-id!` | Toggle that task's Pomodoro Task Link | [`@route+block-id!`](#plus-toggle) |
-| `%n` | Plain-text note on the current Pomodoro | [`%n`](#trailing-hash) |
+| `%n` | Pomodoro note, or notebook with `@parent^id@` | [`%n`](#trailing-hash) |
 | `s:<N>` | Schedule N days from today; checkbox tasks start Blocked | [`s:<N>`](#s-schedule) |
 | `$` / `$<N>` | Write priority N and roll a scheduled date | [`$`](#dollar-priority) |
 | `%c` / `%c<N>` | Capture clipboard content as child bullets | [`%c`](#percent-clipboard) |
@@ -1161,10 +1161,9 @@ Contract: [Closing the running Pomodoro](../capture.md#closing-the-running-pomod
 
 ### `@route^block-id@` {#project-note-seal}
 
-Create the project note `<route>_<block_id>.md` (hyphens in the block ID
-become underscores). The `^prj` task is never linked and the daily note is
-untouched. `#pomodoro` on this form sends ` :id` Task Links under that named
-open Pomodoro.
+Create `<route>_<block_id>.md` (hyphens in the ID become underscores). `^prj`
+is never linked. `#pomodoro` sends ` :id` links under that named Pomodoro.
+With `%n`, this caret seal creates a notebook.
 
 ```bash
 bob capture '@work^intake-flow@' 'Ship the intake flow'
@@ -1406,7 +1405,8 @@ Contract: [Task Link toggle](../capture.md#task-link-toggle).
 
 ### `%n` {#trailing-hash}
 
-`%n` at an item edge is a plain-text note on a Pomodoro, not a routed task.
+`%n` at an item edge is a Pomodoro note, not a routed task. On `@parent^id@`
+it creates a notebook.
 
 ```bash
 bob capture 'remembered the timeout %n'

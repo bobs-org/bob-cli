@@ -18,9 +18,9 @@ pub(super) fn print_clap_error(error: clap::Error) -> i32 {
 
 pub(crate) fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
-        .about("Capture a task, bullet, or record note into the Bob vault")
+        .about("Capture a task, bullet, record note, or notebook note into the Bob vault")
         .long_about(
-            "Capture one or more tasks, bullets, or record notes into the Bob Obsidian vault.\n\n\
+            "Capture one or more tasks, bullets, record notes, or notebook notes into the Bob Obsidian vault.\n\n\
 A configured `@dir/` or `@dir/^stem` item creates a Record Note in that folder \
 instead of a task. First-level `key:: value` bullets set schema fields; other \
 first-level bullets become notes. `@dir/stem` updates an existing record: parent \
@@ -30,6 +30,9 @@ route wins over a draft-wide `@@route`. Incomplete or invalid records refuse \
 the whole draft before any writes. Record types come from the `records:` config \
 block; they are not Task Types (`#fix`). See docs/records.md and \
 docs/capture.md (Record notes).\n\n\
+A notebook destination writes a note instead of a task (`@nb`, `@nb#section`, \
+`@nb^id`, `@nb+id`); `@@nb` is draft-wide. A complete `@parent^id@` caret seal \
+plus `%n` creates a notebook. See docs/notebooks.md.\n\n\
 TEXT is split into ordered capture items by one or more blank or whitespace-only \
 physical lines; leading, trailing, and repeated separators are ignored. A \
 whitespace-separated line of only Pomodoro session operators is also split \
@@ -38,7 +41,8 @@ into one item per operator, so `+2 x` means `+2`, blank line, `x`. A \
 is metadata, not a capture item: every otherwise-unrouted item inherits that \
 destination, while an item-local @route, @route+id, @route#..., @route^..., \
 or @route:... marker still wins for that item. A `%n` item ignores the \
-declaration and always files a Pomodoro note. A declaration-only draft \
+declaration and files a Pomodoro note, except a complete `@parent^id@` caret \
+seal plus `%n`, which creates a notebook. A declaration-only draft \
 fails. Do not combine a textual @@ declaration with --route, --section, --task, \
 or --drawer. Each item's first nonblank line is normalized and \
 becomes that item's parent, formatted as a #task with a [created::] stamp unless a \
@@ -552,16 +556,19 @@ that drawer. Item-wide 's:<N>', '$<N>', '%c', and --clip are refused on this \
 form, while a separate '#<type>' retypes the target and '&', '*', '~' keep it \
 as owner.\n\n\
 Append `%n` at either edge of any physical line to capture the item as a \
-plain-text sub-bullet on a Pomodoro instead of a task. It renders as \
+plain-text sub-bullet on a Pomodoro instead of a task, or to create a \
+notebook on a complete `@parent^id@` caret seal. A Pomodoro note renders as \
 '- <body>' with no [created::] stamp, no '#task' marker, and no block ID. \
 The daily note comes from BOB_DAY_FILE or <bob-dir>/YYYY/YYYYMMDD.md. \
 Capture prefers the single open timed entry in its Pomodoros section, \
 otherwise the last completed entry, and otherwise the first open entry, \
 appending the new bullet at the end of that entry's child block. The marker \
 composes with '%c' and --clip but is rejected alongside 's:<N>', '$<N>', \
-'@route', '#<type>', and --route; a draft-wide '@@route' does not apply to \
-a `%n` item. Append `%l` at either edge of a bare-URL item to queue the \
-reference with companion audio; anywhere else `%l` refuses.\n\n\
+'#<type>', and --route; a complete '@parent^id@' caret seal plus '%n' \
+creates a notebook, and every other '@route' form is rejected. A draft-wide \
+'@@route' does not apply to a `%n` item. Append `%l` at either edge of a \
+bare-URL item to queue the reference with companion audio; anywhere else \
+`%l` refuses.\n\n\
 Append '#<section-prefix>' or a bare '#' to an @route token (such as \
 '@notes#Ideas' or '@notes#') to capture an ordinary bullet instead. It renders \
 as '- <body> [created::YYYY-MM-DD]' and is placed in a non-Tasks section whose \

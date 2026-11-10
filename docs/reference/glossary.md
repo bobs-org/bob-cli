@@ -76,7 +76,8 @@ once bob reports success (see [Bob Mac Capture Is A Thin Client Of bob](../devel
 the draft into capture items, each a parent line plus optional authored child bullets,
 and each item's markers decide what it does. That is far more than GTD inbox capture: an
 item may create a task (default `mac_inbox.md`, an [Inbox File](#inbox-file)), bullet, sub-bullet,
-project note (a [Project Note Capture](#project-note-capture)), or record note (a note of a config-declared record type, see `docs/records.md`); queue a bare public URL as a background reference job, never touching
+project note (a [Project Note Capture](#project-note-capture)), a note in a [Notebook](#notebook), a notebook, or
+record note (a note of a config-declared record type, see `docs/records.md`); queue a bare public URL as a background reference job, never touching
 the network; link, start, complete, or relate existing tasks (`@route:id`, `!note:id`,
 `&`, `*`); or start, adjust, shift, or close today's Pomodoro (`=`, `+N`, `++N`, `x`).
 bob plans every edit against in-memory snapshots of the target notes and today's daily
@@ -382,21 +383,34 @@ into ROTTEN where the footer splits them; see [Review Walk Is Tiered With Daily 
 
 A Bob vault Markdown file with frontmatter `type: "[[notebook]]"` that keeps a
 named collection of related notes (observations, explanations, ideas, logs)
-without the obligations of a new [Area Note](#area-note) or [Project Note](#project-note). Its body
-is note bullets, optionally grouped under `##` sections below an H1 title;
-each bullet may carry nested detail, a `[created::]` stamp, and a stable
-`^id`. It never holds a `#task` or any checkbox, so it is never a task's
-residence, a Pomodoro home, a Ready lane, a review item, or a [Root Parent](#root-parent);
-root, clock, and type walks pass through it to the nearest area or project
-above it (its owner).
+without the obligations of a new [Area Note](#area-note) or [Project Note](#project-note). Its body is
+note bullets, optionally grouped under `##` sections below an H1 title; each
+bullet may carry nested detail, a `[created::]` stamp, and a stable `^id`. It
+never holds a `#task` or any checkbox, so it is never a task's residence, a
+Pomodoro home, a Ready lane, a review item, or a [Root Parent](#root-parent); root, clock,
+and type walks pass through it to the nearest area or project above it (its
+owner).
 
-Its single `parent` names an area note, a project note, or another notebook,
-and the chain always reaches an area or project. A one-line `summary:`
-states what belongs there. `bob notebooks list` and `bob notebooks check`
-report the tree, counts, and contract findings. See `docs/notebooks.md`.
+Its single `parent` names an area note, a project note, or another notebook, and
+the chain always reaches an area or project. A one-line `summary:` states what
+belongs there. Every area or project lists the notebooks beneath it, down to the
+next root parent, in a machine-owned `## Notebooks` catalog that
+`bob notebooks sync` maintains: its content is bob's, its position is Bryan's.
+`bob notebooks list` and `bob notebooks check` report the tree, counts, and
+contract findings.
 
-Not a [Reference Note](#reference-note), a record note, a task drawer, or an Obsidian
-folder.
+In [Capture](#capture), the destination decides. On a notebook route, `@nb` adds a
+top-level note, `@nb#section` adds one to that `##` section (exact match,
+created on demand), `@nb^id` or `@nb#section^id` adds a named note, `@nb+id`
+adds a child of the note bullet `^id`, and a draft-wide `@@nb` sends every
+unrouted item there as a note. Task-only markers are refused with a rewrite to
+the owner's route. A [Project Note Capture](#project-note-capture) seal plus the `%n` directive
+creates one: `@parent^id@ %n <summary>` writes `<parent>_<id>.md`; a bare `%n`
+stays a Pomodoro note.
+
+Not a [Reference Note](#reference-note), a record note, a [Task Drawer](#task-drawer), a [Period Note](#period-note),
+the Pomodoro note `%n` writes, or an Obsidian folder. See `docs/notebooks.md`
+and [A Notebook Route Writes Notes; `@@` Stays Draft-Wide](../develop/decisions.md#notebook-routes-write-notes).
 
 ### Off-Clock Pomodoro {#off-clock-pomodoro}
 
@@ -454,7 +468,8 @@ beneath it (see [Off-Clock Follows Tag Then Note Default](../develop/decisions.m
 
 A [Capture](#capture) item whose route marker is sealed with a trailing `@`, `@<route>^<id>@` or
 `@<route>:<id>@` (optionally followed by `#<pomodoro>`), so it creates a brand-new
-[Project Note](#project-note) instead of a task. The marker may lead the item or trail any of its
+[Project Note](#project-note) instead of a task. With `%n`, the `^` seal creates a [Notebook](#notebook)
+instead (parent area, project, or notebook; the item text becomes its `summary`). The marker may lead the item or trail any of its
 lines. bob writes `<route>_<id>.md` at the vault root (each `-` in the ID becomes `_`)
 with `parent: "[[<route>]]"`, `type: "[[project]]"`, `status: wip`, and the
 `template: "[[new_project]]"` line, in the same shape as the Obsidian **Create project

@@ -1,6 +1,6 @@
 # Capture
 
-`bob capture` writes tasks, bullets, and Record Notes, queues bare public links as background
+`bob capture` writes tasks, bullets, Record Notes, and notebook notes, queues bare public links as background
 reference jobs, and manages Pomodoro sessions without opening desktop
 Obsidian. The job confirmation says reading queue. The background job files
 the note when it runs; a queued clip appears in `bob ref list` after the
@@ -99,7 +99,7 @@ anything is written, and any failure rolls the whole batch back.
 | `URL %l` | Queue the reference with companion audio requested (`ref.listen` true; same parent selection as a bare URL: default, `@@route` global, or `-r` forced) |
 | `URL %l @route` or `@route URL %l` | Queue the reference with companion audio under that explicit parent |
 | Bare URL with `-r route` | Queue the reference under that route (source `explicit`) |
-| `@@route` | Shared task destination, anywhere in the draft, for otherwise-unrouted items; also routes default (routeless) refs (source `global`) |
+| `@@route` | Draft-wide destination, anywhere in the draft, for otherwise-unrouted items (notes when the route is a notebook); also routes default (routeless) refs (source `global`) |
 | `%t` | Mark the draft's first item as a [template](#bulk-templates): expand one capture item per row below it; captures exactly like the expansion |
 | `@route` with task text | Write a task to `<route>.md` (default route is `mac_inbox`) |
 | `Title @dir/` or `@dir/ Title` | Create a Record Note in that configured folder (see [Record notes](#record-notes)) |
@@ -168,7 +168,7 @@ anything is written, and any failure rolls the whole batch back.
 | `@route:block-id=x…` with no other text | Put that existing task into the running session, then close it (own-prerequisite Blocked targets drop those links first; a refused drop keeps today's history link); the `=` is the suffix separator, a `Nx` size may precede the `x` (`@route:block-id=2x!1` closes at 10 minutes), the same selection may follow the `x`, and numbers refer to the post-link lineup |
 | `^route:block-id=x…` with no other text | Identical execution; `^` is the active-task spelling |
 | `<text> @route:block-id=x…` | Create the new Pomodoro-linked task in the running session, then close it; numbers refer to the post-link lineup |
-| `@route^block-id@` | Create the project note `<route>_<block_id>.md`; the `^prj` task is never linked and the daily note is untouched |
+| `@route^block-id@` | Create the project note `<route>_<block_id>.md`; the `^prj` task is never linked and the daily note is untouched. With `%n`, create a notebook instead (see [Notebook notes](#notebook-notes)) |
 | `@route^block-id@#pomodoro` | Same; ` :<id>` Task Links go under the named open Pomodoro, creating that named future Pomodoro when missing |
 | `@route:block-id@` | Create the same project note, then **offer** its open task rows as successors of the new `^prj`; explicit ` :<id>` bullets still link, and nothing else links until you pick it with `-p/--pull-in` |
 | `@route:block-id@#pomodoro` | Same; explicit links and picked offers go under the named Pomodoro, which is created only when something lands there |
@@ -183,7 +183,7 @@ anything is written, and any failure rolls the whole batch back.
 | `@route+block-id!` with no other text | Toggle that task's Pomodoro Task Link: link it when unlinked (Ready and own-prerequisite Blocked rise to Next; other Blocked stay unlinked) or unlink it when linked (lane unchanged) |
 | `T < @a+x [@b+y …]` | Create task T, then merge each listed task into it through the explicit merge engine (see [Merging tasks into a new task with `<`](#merging-tasks-into-a-new-task-with)) |
 | `T <` / `T < @r` / `T < @r+` / `T < +q` | Incomplete merge-in: pick tasks to merge in (`capture-parse` needs `merge_in_source`); `bob capture` refuses until the picker resolves |
-| `%n` | Plain-text note on a Pomodoro; `%n` does not open task-type completion |
+| `%n` | Plain-text note on a Pomodoro, or a notebook on a complete `@parent^id@` caret seal; `%n` does not open task-type completion |
 | `s:<N>` | `[scheduled::]` N days from today; checkbox-bearing captures start Blocked (`[?]`) |
 | `$` / `$<N>` | Write priority level N (bare `$` = 1) and roll a scheduled date in that level's window |
 | `%c` / `%c<N>` | Capture clipboard content as child bullets (`%c` is one live value; `%c3` is three) |
@@ -1231,7 +1231,7 @@ This grammar recognizes:
 | --- | --- |
 | `%c` | Read the live clipboard into child bullets of this item |
 | `%c<N>` (N ≥ 2) | Live clipboard plus history, N values in all. `%c1` is `%c` |
-| `%n` | Capture the item as a plain-text note on a Pomodoro |
+| `%n` | Capture the item as a plain-text note on a Pomodoro, or create a notebook on a complete `@parent^id@` caret seal |
 | `%t` | Mark this item as the draft's template; see [Bulk templates](#bulk-templates) |
 | `%l` | Queue a bare-URL reference with companion audio (`URL %l`) |
 | `%` | Incomplete (add `%c`, `%n`, `%t`, `%l`, or write `\%`) |
@@ -7442,13 +7442,15 @@ The marker composes with `%c` and `--clip` in either terminal order, since
 "capture what I just copied onto this Pomodoro" is a plausible use, but it is
 rejected alongside `s:<N>`, `$<N>`, any `@route` token, and `--route`, since
 a plain Pomodoro bullet has no field for a schedule, priority, or routed
-destination:
+destination. The one route exception is a complete `@parent^id@` caret seal,
+which creates a notebook (see [Notebook notes](#notebook-notes)):
 
 | Marker                                                         | With `%n` |
 | ---------------------------------------------------------------| -------- |
 | `%c`, `%c<N>`, `--clip`                                         | allowed  |
 | `s:<N>`                                                         | rejected |
 | `$<N>`                                                         | rejected |
+| `@parent^id@` (complete caret seal)                            | creates a notebook |
 | `@route`, `@route#Sec`, `@route:id`, `@route:id#name`, `@route^id`, `@route+id`, `@route+id#sec` | rejected |
 | `--route` / `--section` / `--task` / `--task-ref` / `--drawer` | rejected |
 

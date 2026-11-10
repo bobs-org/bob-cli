@@ -12,7 +12,7 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 
 | Command | What it does |
 | --- | --- |
-| [`bob capture`](capture.md) | Capture tasks, bullets, record notes, and Pomodoro commands into the vault |
+| [`bob capture`](capture.md) | Capture tasks, bullets, record notes, notebook notes, and Pomodoro commands into the vault |
 | [`bob freshness`](freshness.md) | Walk the tiered freshness review queue |
 | [`bob plan`](plan.md) | Show today's plan budget, Today's tasks, and NEXT/PENDING lanes |
 | [`bob pomodoro`](pomodoro.md) | Show Pomodoro status, print the tmux line, or notify on completion |
@@ -135,8 +135,8 @@ its own options.
 Usage: bob <COMMAND>
 
 Daily workflow:
-  capture      Capture tasks, bullets, record notes, and Pomodoro commands into
-               the vault
+  capture      Capture tasks, bullets, record notes, notebook notes, and
+               Pomodoro commands into the vault
   freshness    Walk the tiered freshness review queue
   plan         Show today's plan budget, Today's tasks, and NEXT/PENDING lanes
   pomodoro     Show Pomodoro status, print the tmux line, or notify on

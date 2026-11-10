@@ -7,7 +7,8 @@ aliases:
 
 A [[capture]] item whose route marker is sealed with a trailing `@`, `@<route>^<id>@` or
 `@<route>:<id>@` (optionally followed by `#<pomodoro>`), so it creates a brand-new
-[[project-note]] instead of a task. The marker may lead the item or trail any of its
+[[project-note]] instead of a task. With `%n`, the `^` seal creates a [[notebook]]
+instead (parent area, project, or notebook; the item text becomes its `summary`). The marker may lead the item or trail any of its
 lines. bob writes `<route>_<id>.md` at the vault root (each `-` in the ID becomes `_`)
 with `parent: "[[<route>]]"`, `type: "[[project]]"`, `status: wip`, and the
 `template: "[[new_project]]"` line, in the same shape as the Obsidian **Create project

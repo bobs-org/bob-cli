@@ -46,7 +46,7 @@ fn capture_help_lists_options_alphabetically() {
     let help = stdout(&output);
     assert!(
         help.contains(
-            "Capture one or more tasks, bullets, or record notes into the Bob Obsidian vault"
+            "Capture one or more tasks, bullets, record notes, or notebook notes into the Bob Obsidian vault"
         ),
         "expected capture long help:\n{help}"
     );

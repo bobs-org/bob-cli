@@ -7,6 +7,7 @@ metadata:
   superseded_by:
     - decisions:capture-reserves-clock-tags
     - decisions:capture-bullets-mirror-the-task-block
+    - decisions:notebook-routes-write-notes
 aka:
   - capture sigils say where what how
   - where what how grammar
@@ -50,3 +51,4 @@ restores prefix matching or attached typing.
 Superseded in part: a `#` at a first-level bullet start now names a drawer, not a type
 ([[decisions:capture-bullets-mirror-the-task-block]]).
 Superseded in part: free clock tags at capture item edges are literal task tags, not task types; see [[decisions:capture-reserves-clock-tags]].
+`%n` on a `^`-sealed project capture now creates a notebook; see [[decisions:notebook-routes-write-notes]].

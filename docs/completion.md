@@ -168,7 +168,7 @@ vault content lands in docs. Each candidate line is
 
 ```text
 $ bob __complete zsh --protocol 1 -- bob ""
-capture<TAB>Capture tasks, bullets, record notes, and Pomodoro commands into the vault<TAB>daily workflow<TAB>space
+capture<TAB>Capture tasks, bullets, record notes, notebook notes, and Pomodoro commands into the vault<TAB>daily workflow<TAB>space
 freshness<TAB>Walk the tiered freshness review queue<TAB>daily workflow<TAB>space
 plan<TAB>Show today's plan budget, Today's tasks, and NEXT/PENDING lanes<TAB>daily workflow<TAB>space
 … (remaining daily workflow commands)
