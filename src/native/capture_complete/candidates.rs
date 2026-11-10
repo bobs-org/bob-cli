@@ -7,11 +7,12 @@ use std::{
 use super::model::{
     ActiveTaskCandidate, ActiveTaskPomodoroCandidate, BlockedTaskCandidate,
     CandidateContinuation, Candidates, CompleteError, DependencyCandidate,
-    PickerRelationEntry, PickerRelationship, PickerRelationshipEntry,
-    ProjectTaskMoveCandidate, ProjectTaskMoveContext, RecordCreateCandidate,
-    RelationCandidate, RelationLabelSuggestion, Replacement, RouteCandidate,
-    SectionCandidate, SectionMenuRow, TaskCandidate, TaskCompleteCandidate,
-    TaskGotoCandidate, TaskLinkCandidate, TaskParentCandidate,
+    NotebookSectionCreate, PickerRelationEntry, PickerRelationship,
+    PickerRelationshipEntry, ProjectTaskMoveCandidate, ProjectTaskMoveContext,
+    RecordCreateCandidate, RelationCandidate, RelationLabelSuggestion,
+    Replacement, RouteCandidate, SectionCandidate, SectionMenuRow,
+    TaskCandidate, TaskCompleteCandidate, TaskGotoCandidate, TaskLinkCandidate,
+    TaskParentCandidate,
 };
 use crate::native::{
     capture, capture_active_tasks, capture_block_ids,
@@ -160,7 +161,25 @@ pub(super) fn section_candidates(
     route: &str,
     query: &str,
 ) -> Result<Candidates, CompleteError> {
+    section_candidates_with_raw(bob_dir, route, query, None, None)
+}
+
+pub(super) fn section_candidates_with_raw(
+    bob_dir: &Path,
+    route: &str,
+    query: &str,
+    raw_text: Option<&str>,
+    replacement: Option<(usize, usize)>,
+) -> Result<Candidates, CompleteError> {
     let contents = read_target(bob_dir, route)?;
+    if is_notebook_route_contents(&contents) {
+        return notebook_section_candidates(
+            &contents,
+            query,
+            raw_text,
+            replacement,
+        );
+    }
     let ranked = capture::section_completion_rows(&contents, query);
 
     Ok(Candidates::Section(
@@ -175,6 +194,194 @@ pub(super) fn section_candidates(
             })
             .collect(),
     ))
+}
+
+pub(super) fn is_notebook_route_contents(contents: &str) -> bool {
+    if let Some(frontmatter) =
+        crate::native::projects::parse_frontmatter(contents)
+    {
+        return crate::native::projects::frontmatter_is_notebook(&frontmatter);
+    }
+    // Fall back to a byte scan for any accepted `type: [[notebook]]`
+    // spelling when the typed parser declines.
+    contents.contains("[[notebook]]")
+}
+
+/// Notebook `@nb#` sections: real H2s in document order, never H1/H3 or
+/// fenced headings, plus one additive create row for a nonempty query
+/// with no exact title/whole-slug match.
+fn notebook_section_candidates(
+    contents: &str,
+    query: &str,
+    raw_text: Option<&str>,
+    replacement: Option<(usize, usize)>,
+) -> Result<Candidates, CompleteError> {
+    use crate::native::capture_language::notebook::{
+        notebook_sections, resolve_notebook_section, NotebookSectionResolution,
+    };
+    let headings = notebook_sections(contents);
+    let query_lower = query.to_lowercase();
+    let query_slug = crate::native::capture_language::selector_slug(query);
+    // Exact title/whole-slug match suppresses the create row.
+    let has_exact = headings.iter().any(|heading| {
+        heading.title.eq_ignore_ascii_case(query)
+            || (!crate::native::capture_language::selector_slug(&heading.title)
+                .is_empty()
+                && crate::native::capture_language::selector_slug(
+                    &heading.title,
+                ) == query_slug)
+    });
+    // Filtered H2s retain document order.
+    let mut rows: Vec<SectionMenuRow> = Vec::new();
+    for heading in &headings {
+        if !query.is_empty() {
+            let title_lower = heading.title.to_lowercase();
+            let slug =
+                crate::native::capture_language::selector_slug(&heading.title);
+            let matches = title_lower.contains(&query_lower)
+                || (!query_slug.is_empty()
+                    && !slug.is_empty()
+                    && (slug.contains(&query_slug)
+                        || slug.starts_with(&query_slug)));
+            if !matches {
+                continue;
+            }
+        }
+        if let Some(replacement) = notebook_section_replacement(
+            &heading.title,
+            heading.line_index,
+            &headings,
+        ) {
+            rows.push(SectionMenuRow::Section(SectionCandidate {
+                replacement,
+                title: heading.title.clone(),
+                level: 2,
+            }));
+        }
+    }
+    // Additive create row for a nonempty query with no exact match.
+    if !query.is_empty() && !has_exact {
+        let exact = raw_text
+            .zip(replacement)
+            .and_then(|(text, (start, end))| text.get(start..end))
+            .is_some_and(|typed| {
+                let trimmed = typed.trim();
+                trimmed.starts_with('"')
+                    || trimmed.starts_with('\u{201c}')
+                    || query.contains(char::is_whitespace)
+            });
+        // Preserve authored quoted titles: an exact (quoted) query creates
+        // verbatim; otherwise resolve the bare query.
+        let resolution = resolve_notebook_section(query, exact, &headings);
+        let (title, replacement) = match resolution {
+            NotebookSectionResolution::Existing { title, .. } => {
+                // Should not happen when `has_exact` is false, but keep
+                // the row additive rather than dropping the query.
+                (title.clone(), query.to_string())
+            }
+            NotebookSectionResolution::Create { title } => {
+                if exact {
+                    // Preserve the authored quoted spelling.
+                    let quoted = raw_text
+                        .zip(replacement)
+                        .and_then(|(text, (start, end))| text.get(start..end))
+                        .map(str::trim)
+                        .filter(|typed| {
+                            (typed.starts_with('"')
+                                && typed.ends_with('"')
+                                && typed.len() >= 2)
+                                || (typed.starts_with('\u{201c}')
+                                    && typed.ends_with('\u{201d}'))
+                        })
+                        .map(str::to_string)
+                        .unwrap_or_else(|| {
+                            format!(
+                                "\"{}\"",
+                                title
+                                    .replace('\\', "\\\\")
+                                    .replace('"', "\\\"")
+                            )
+                        });
+                    (title, quoted)
+                } else {
+                    // Bare slug when the resolver would create it.
+                    let slug =
+                        crate::native::capture_language::selector_slug(&title);
+                    let selector =
+                        if slug.is_empty() { title.clone() } else { slug };
+                    (title, selector)
+                }
+            }
+            NotebookSectionResolution::NearMiss {
+                slug: _,
+                quoted_title,
+            } => {
+                // An unquoted slug would be a near miss: offer the quoted
+                // selector so the create is explicit.
+                let selector = format!(
+                    "\"{}\"",
+                    quoted_title.replace('\\', "\\\\").replace('"', "\\\"")
+                );
+                (quoted_title, selector)
+            }
+        };
+        let label = format!("New section \u{201c}{title}\u{201d}");
+        rows.push(SectionMenuRow::NotebookCreate(NotebookSectionCreate {
+            kind: "notebook_section_create",
+            replacement,
+            label,
+            title,
+        }));
+    }
+    Ok(Candidates::Section(rows))
+}
+
+fn notebook_section_replacement(
+    title: &str,
+    line_index: usize,
+    headings: &[crate::native::capture_language::notebook::NotebookSection],
+) -> Option<String> {
+    use crate::native::capture_language::notebook::resolve_notebook_section;
+    fn unquoted_spelling(value: &str) -> bool {
+        !value.is_empty()
+            && !value.chars().any(char::is_whitespace)
+            && !value.starts_with('"')
+            && !value.starts_with('\u{201c}')
+    }
+    fn quote_escape(value: &str) -> String {
+        value.replace('\\', "\\\\").replace('"', "\\\"")
+    }
+    // Bare title when it round-trips to this heading.
+    if unquoted_spelling(title)
+        && let crate::native::capture_language::notebook::NotebookSectionResolution::Existing {
+            line_index: found,
+            ..
+        } = resolve_notebook_section(title, false, headings)
+        && found == line_index
+    {
+        return Some(title.to_string());
+    }
+    let slug = crate::native::capture_language::selector_slug(title);
+    if !slug.is_empty()
+        && unquoted_spelling(&slug)
+        && let crate::native::capture_language::notebook::NotebookSectionResolution::Existing {
+            line_index: found,
+            ..
+        } = resolve_notebook_section(&slug, false, headings)
+        && found == line_index
+    {
+        return Some(slug);
+    }
+    // Quoted exact title as the explicit spelling.
+    if let crate::native::capture_language::notebook::NotebookSectionResolution::Existing {
+        line_index: found,
+        ..
+    } = resolve_notebook_section(title, true, headings)
+        && found == line_index
+    {
+        return Some(format!("\"{}\"", quote_escape(title)));
+    }
+    None
 }
 
 /// For a configured record collection's local `@dir#` token, expand the
@@ -326,10 +533,110 @@ pub(super) fn task_candidates(
                     line: task.line_index + 1,
                     pomodoro: None,
                     task_kind: task.task_kind,
+                    item_kind: None,
                 }
             })
             .collect(),
     ))
+}
+
+/// Notebook note-bullet rows for note-scoped `@nb+`: eligible note
+/// bullets at any depth, ID'd first then ID-less in stable document
+/// order. Duplicate target IDs become disabled refusals, never selectable
+/// destinations.
+pub(super) fn notebook_note_candidates(
+    bob_dir: &Path,
+    route: &str,
+    query: &str,
+) -> Result<Candidates, CompleteError> {
+    use crate::native::capture::notebook_bullets;
+    let contents = read_target(bob_dir, route)?;
+    let bullets = notebook_bullets::scan_notebook_bullets(&contents);
+    let duplicates = notebook_bullets::duplicate_ids(&contents);
+    let settings = note_tasks::read_settings(bob_dir);
+    let used_ids: Vec<String> =
+        capture_block_ids::collect_used(&contents, &settings)
+            .into_iter()
+            .map(|entry| entry.id)
+            .collect();
+    let query_lower = query.to_lowercase();
+    // Filter by the existing text/ID query behavior: substring on text
+    // or ID, case-insensitive.
+    let mut identified = Vec::new();
+    let mut unidentified = Vec::new();
+    for bullet in &bullets {
+        if !query.is_empty() {
+            let text_hit = bullet.text.to_lowercase().contains(&query_lower);
+            let id_hit = bullet
+                .block_id
+                .as_deref()
+                .is_some_and(|id| id.to_lowercase().contains(&query_lower));
+            if !text_hit && !id_hit {
+                continue;
+            }
+        }
+        if bullet.block_id.is_some() {
+            identified.push(bullet);
+        } else {
+            unidentified.push(bullet);
+        }
+    }
+    let mut rows = Vec::new();
+    for group in [identified, unidentified] {
+        for bullet in group {
+            let duplicate = bullet
+                .block_id
+                .as_deref()
+                .is_some_and(|id| duplicates.contains(id));
+            let requires_block_id = bullet.block_id.is_none();
+            let (replacement, disabled_reason) = if duplicate {
+                (
+                    String::new(),
+                    Some(format!(
+                        "block ID ^{} appears more than once in {route}.md",
+                        bullet.block_id.as_deref().unwrap_or_default()
+                    )),
+                )
+            } else if requires_block_id {
+                (String::new(), None)
+            } else {
+                (bullet.block_id.clone().unwrap_or_default(), None)
+            };
+            let block_id_suggestions = if requires_block_id && !duplicate {
+                let suggestions = capture_block_ids::suggest_ids(
+                    &bullet.text,
+                    '^',
+                    &used_ids,
+                );
+                (!suggestions.is_empty()).then_some(suggestions)
+            } else {
+                None
+            };
+            rows.push(TaskCandidate {
+                replacement,
+                task_ref: bullet.task_ref.clone(),
+                block_id: bullet.block_id.clone(),
+                route: route.to_string(),
+                requires_block_id,
+                block_id_suggestions,
+                status_symbol: '-',
+                status_name: "Note".to_string(),
+                status_type: "NOTE",
+                text: bullet.text.clone(),
+                disabled_reason,
+                consequence: None,
+                detail: None,
+                section: bullet.section.clone(),
+                depth: bullet.depth,
+                child_count: bullet.child_count,
+                line: bullet.line,
+                pomodoro: None,
+                task_kind: None,
+                item_kind: Some("note"),
+            });
+        }
+    }
+    Ok(Candidates::Task(rows))
 }
 
 pub(super) struct ProjectTaskMoveRows {
@@ -702,6 +1009,7 @@ pub(super) fn link_candidates(
                 line: task.line_index + 1,
                 pomodoro,
                 task_kind: task.task_kind,
+                item_kind: None,
             }
         })
         .collect();

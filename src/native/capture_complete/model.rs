@@ -108,11 +108,13 @@ pub(super) struct SectionCandidate {
 }
 
 /// Mixed section menu: ordinary heading rows plus an optional record-create
-/// row. Untagged so heading JSON stays `{replacement, title, level}`.
+/// row or a notebook section-create row. Untagged so heading JSON stays
+/// `{replacement, title, level}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub(super) enum SectionMenuRow {
     Create(RecordCreateCandidate),
+    NotebookCreate(NotebookSectionCreate),
     Section(SectionCandidate),
 }
 
@@ -120,7 +122,7 @@ impl SectionMenuRow {
     pub(super) fn as_section(&self) -> Option<&SectionCandidate> {
         match self {
             Self::Section(row) => Some(row),
-            Self::Create(_) => None,
+            Self::Create(_) | Self::NotebookCreate(_) => None,
         }
     }
 
@@ -128,6 +130,7 @@ impl SectionMenuRow {
         match self {
             Self::Section(row) => &row.replacement,
             Self::Create(row) => &row.replacement,
+            Self::NotebookCreate(row) => &row.replacement,
         }
     }
 }
@@ -147,6 +150,17 @@ pub(super) struct RecordCreateCandidate {
     pub(super) cursor_after: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) continuation: Option<CandidateContinuation>,
+}
+
+/// Additive notebook section-create row: `New section “Title”` for a
+/// nonempty `@nb#` query with no exact title/whole-slug match. Distinct
+/// from `record_create` so older clients ignore it safely.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct NotebookSectionCreate {
+    pub(super) kind: &'static str,
+    pub(super) replacement: String,
+    pub(super) label: String,
+    pub(super) title: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -276,6 +290,10 @@ pub(super) struct TaskCandidate {
     pub(super) pomodoro: Option<ActiveTaskPomodoroCandidate>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) task_kind: Option<&'static str>,
+    /// Additive note discriminator: `"note"` for notebook note bullets.
+    /// Absent for ordinary task rows so existing JSON stays byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) item_kind: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -9188,8 +9188,8 @@ bob capture-rewrite [-c|--cursor N] [-f|--format human|json] [--] [TEXT]...
 ```
 
 Applies the capture grammar's automatic draft rewrites -- the
-block-ID separator toggle, relation-label pipe attach, sigil aliases, relation
-direction toggle, and bare `@@` absorption -- and reports the
+block-ID separator toggle, relation-label pipe attach, sigil aliases, global
+destination collapse, relation direction toggle, and bare `@@` absorption -- and reports the
 resulting edits, cursor, and a human summary. It is purely lexical and
 completely read-only: it never opens the vault, never reads the clipboard
 or the URL routing config, never touches the filesystem, and takes no
@@ -9293,8 +9293,9 @@ drawer and drawer bullet, Pomodoro name, named-start and past-session name,
 split type, merge destination, and wikilink heading. A `\` or `/` at a line
 start, glued to a word, or right after another `\` or `/` stays literal. A
 `/` also stays literal where bob already reads it as part of a field (Go To,
-the `=/` split, wikilink note paths, `@@` routes, section and Pomodoro names);
-block-ID fields do not count. For example, `Buy milk /` becomes `Buy milk #`
+the `=/` split, wikilink note paths, section and Pomodoro names);
+block-ID fields do not count. A `/` glued to a complete `@@route`
+collapses instead (see the global collapse below). For example, `Buy milk /` becomes `Buy milk #`
 and `Buy milk @cash+goog-exit/` becomes `Buy milk @cash+goog-exit#`, while
 `=/` stays the split. A `\` after `\` (or `/` after `/`) never aliases, so
 `\#` escapes stay typeable directly (Mac Capture's double-tap below gives the
@@ -9337,6 +9338,8 @@ Typing `=` after a bare `~` flips it to `~~` (Linked From), and `~~=` flips it
 back to `~` only where the result opens an empty Links To target. The past-session
 dash alias remains inside `x=` tokens: `x=2-` still becomes `x=2~`, while
 `x=~~=` stays literal.
+
+**Global destination collapse.** With `--cursor`, typing `#`, `/`, `\`, `^`, `.`, `+`, or `,` glued to a complete `@@route` collapses it to `@route#`, `@route^`, or `@route+` (`/` and `\` become `#`, `.` becomes `^`, `,` becomes `+`). The route must satisfy the route grammar, the trigger must sit at the cursor with a complete token boundary after it, and the collapsed form keeps the draft's other bytes. Bare `@@`, spaced triggers, invalid routes, already-suffixed globals, escaped or quoted prose and code, and triggers earlier than the caret stay literal. Its rule value is `collapse_global_destination`, it carries no alias object or tip, and it runs ahead of the sigil aliases above. `bob capture` and `bob capture-parse` keep the literal text.
 
 **Relation direction toggle.** With `--cursor`, typing `~` or `=` immediately
 after a complete `~note:id` or `~~note:id` flips the direction and consumes the
@@ -9602,6 +9605,8 @@ response replacement to the whole `@eat#` token so every row inserts a
 complete token (`@eat/ ` or `@eat#Ideas`). Typed heading queries, `@@`
 global destinations, transfer/merge lines, and non-record notes omit that
 row. See [Guided fields](#guided-fields).
+
+Notebook routes are first-class completion citizens (see [Notebooks](notebooks.md) for the contract). Route rows for notebooks carry a 📓 badge, the breadcrumb as the displayed label, and the summary as detail, with the route and file identity kept separate from presentation. A notebook `@nb#` field lists only real H2 sections in document order (never the H1 title, H3s, or fenced headings). A nonempty query with no exact title or whole-slug match appends one additive `kind: "notebook_section_create"` row (`New section “Title”`); its `replacement` is the bare slug, or the quoted selector when the bare slug would be a near miss, and the response replacement keeps exactly one `#` while preserving any `^id` suffix. Block-ID fields on `@nb^` and `@nb#section^` keep `intent: "new"` and add `destination_kind: "notebook"`. Note-scoped `@nb+` lists eligible note bullets (any depth, no checkboxes, headings, fences, or prose) with ID'd rows first, then ID-less rows in document order; each row carries additive `item_kind: "note"` plus the usual route, text, line, section, depth, child count, `ref`, `block_id`, `requires_block_id`, and `block_id_suggestions`. A complete caret-sealed `@parent^id@` item enables the `%n` directive as `New notebook` even with no Pomodoro available.
 Drawer completion
 covers `@route+id#prefix` and a bare `@route+id#` once the item has body text,
 backed by the same scanner as `bob capture-drawers`; the candidate
@@ -10606,25 +10611,25 @@ unknown `--flag` where the draft would begin (`saved_templates_unknown_flag`) ex
 bob capture-task-id (--route NAME | --note-path PATH) --task-ref REF --block-id ID [-b|--bob-dir DIR] [-f|--format human|json] [-d|--dry-run] [-a|--allow-closed]
 ```
 
-Assigns a user-authored Obsidian block ID to one open task in a Bob note.
+Assigns a user-authored Obsidian block ID to one open task or notebook note in a Bob note.
 This is the only write needed to turn a missing-ID `capture-complete --all-tasks`,
-`task_link`, `task_parent`, `task_dependency`, `blocked_task`, `task_complete`, or `wikilink_task` candidate into an identified task. The command validates
+`task_link`, `task_parent`, `task_dependency`, `blocked_task`, `task_complete`, or `wikilink_task` candidate into an identified task, or a missing-ID note-scoped `@nb+` candidate into an identified note. The command validates
 `--route` (or `--note-path`) and `--block-id` with Bob's shared grammar (`A-Z`, `a-z`, `0-9`, and `-` for the
 ID; routes also allow `_`), resolves `--task-ref` with the same stale-safe
 `<line>:<digest>` recovery as `bob capture --task-ref`, and then confirms the
-task is still open and still lacks an ID. An ID already used anywhere in the
-target note — including a non-task `^anchor` — is rejected. Success appends
-` ^<id>` to the resolved physical task line, preserves that line's ending and
+task is still open and still lacks an ID, or the note is an eligible note bullet and still lacks an ID. An ID already used anywhere in the
+target note — including a non-task `^anchor`, headings, and plain bullets — is rejected. Success appends
+` ^<id>` to the resolved physical task or note line, preserves that line's ending and
 every unrelated byte, and replaces the note with one same-directory temporary
 file rename. The write is observable only after that rename completes.
 `--dry-run` returns the same success shape without writing.
 
 `--route` names a routable root note. `--note-path` names the exact
-vault-relative path of any task-bearing note, so nested, case-sensitive, and
+vault-relative path of any task- or note-bearing note, so nested, case-sensitive, and
 quoted paths round-trip exactly without the lowercasing route parser; the two
 flags are mutually exclusive. `--allow-closed` additionally permits
 Done/Cancelled tasks — the dependency picker's completed history — without
-reopening them, and never applies to non-task lines. The previous daily
+reopening them, and never applies to non-task lines or notebook notes. The previous daily
 snapshot stays read-only and fails with a guarded refusal, as do traversal,
 absolute, ambiguous, and symlink-escaping paths.
 
@@ -10645,8 +10650,8 @@ into the Task Wikilink Picker, the canonical
 `block_id`,
 the updated one-based `line`, the updated `ref`, and a `task` object with
 the same picker metadata as `capture-tasks` after the assignment. In `--route`
-mode it also returns `parent_replacement` (`@route+block-id`) for resuming a
-parent-task picker; this field is omitted in `--note-path` mode. JSON
+mode it also returns `parent_replacement` (`@route+block-id`, or `@nb+ID` for notebook notes) for resuming a
+parent-task or note picker; this field is omitted in `--note-path` mode. Notebook assignments additionally carry `item_kind: "note"`. JSON
 failure is `{"ok": false, "error": "..."}` and is write-free, as are stale,
 ambiguous, terminal, already-identified, duplicate, missing, unreadable-note,
 and read-only-snapshot errors.

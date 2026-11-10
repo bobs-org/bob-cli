@@ -161,8 +161,9 @@ and drawer bullet, Pomodoro name, named-start and past-session name, split \
 type, merge destination, and wikilink heading. A '\\' or '/' at a line \
 start, glued to a word, or right after another '\\' or '/' stays literal. A \
 '/' also stays literal where bob already reads it as part of a field (Go \
-To, the '=/' split, wikilink note paths, '@@' routes, section and Pomodoro \
-names); block-ID fields do not count. For example, '@cash,' \
+To, the '=/' split, wikilink note paths, section and Pomodoro \
+names); block-ID fields do not count. A '/' glued to a complete '@@route' \
+collapses instead (see the global collapse below). For example, '@cash,' \
 becomes '@cash+', '@cash+goog-exit,' becomes '@cash+goog-exit +', and \
 'Buy milk ,' becomes 'Buy milk +'; '@errands.' and '@errands;' still become \
 '@errands^' and '@errands:'. Bob's completion grammar decides when a \
@@ -180,6 +181,18 @@ still works inside x= tokens, such as 'x=2-' to 'x=2~'. Typing a lowercase \
 '@r:id=xx' becomes '@r:id=x!'. Competing wildcards ('x!s' to 'x!*') stay a \
 viable prefix. The letters stay literal in past names ('x=1s'), after a \
 dangling ',' or '@', on child bullets, and in prose. 'bob capture' and \
+'bob capture-parse' keep the literal text. Without --cursor this rule is \
+skipped rather than searching the draft.\n\n\
+Global destination collapse (requires --cursor): typing '#', '/', '\\', \
+'^', '.', '+', or ',' glued to a complete '@@route' collapses it to \
+'@route#', '@route^', or '@route+' respectively ('/' and '\\' \
+become '#', '.' becomes '^', ',' becomes '+'). The route must satisfy the \
+route grammar, the trigger must sit at --cursor with a complete token \
+boundary after it, and the collapsed form keeps the draft's other bytes. \
+Bare '@@', spaced triggers, invalid routes, already-suffixed globals, \
+escaped or quoted prose and code, and triggers earlier than the caret stay \
+literal. The rule is 'collapse_global_destination', carries no alias object \
+or tip, and runs ahead of the sigil aliases above. 'bob capture' and \
 'bob capture-parse' keep the literal text. Without --cursor this rule is \
 skipped rather than searching the draft.\n\n\
 Relation direction toggle (requires --cursor): typing '~' or '=' immediately \

@@ -124,6 +124,8 @@ opt-in scanner; notebook notes have no Similar-tasks band. See
 [JSON outputs](reference/json-outputs.md#capture-and-protocol-helpers) for the
 parse spans.
 
+Completion assists live in [Capture](capture.md#bob-capture-complete): notebook route rows, H2-only sections with a `New section` create row, `@nb^`/`#section^` IDs with `destination_kind`, `@nb+` note bullets with `item_kind: "note"` and ID assignment through `capture-task-id`, the `New notebook` `%n` row, and the lexical `@@route` collapse in [Capture-rewrite](capture.md#bob-capture-rewrite).
+
 ## Commands
 
 `bob notebooks` lives in the Vault section of `bob --help`. Bare

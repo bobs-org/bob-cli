@@ -69,29 +69,31 @@ fn print_clap_error(error: clap::Error) -> i32 {
 
 pub(crate) fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
-        .about("Assign a block ID to an open capture task")
+        .about("Assign a block ID to an open capture task or notebook note")
         .long_about(
-            "Assign a user-authored Obsidian block ID to one open task in a \
-Bob note.\n\n\
-The command is the write half of task completion: callers first discover \
+            "Assign a user-authored Obsidian block ID to one open task or \
+notebook note in a Bob note.\n\n\
+The command is the write half of task and note completion: callers first discover \
 a missing-ID task with `bob capture-complete --all-tasks` (or the `&` \
-dependency and `*` blocked-task picker), then pass that candidate's stale-safe --task-ref \
+dependency and `*` blocked-task picker), or a missing-ID notebook note \
+with note-scoped `@nb+` completion, then pass that candidate's stale-safe --task-ref \
 together with the authored --block-id. Validation uses the same route \
-grammar, block-ID grammar, task scan, and duplicate-ID rules as \
+grammar, block-ID grammar, task and note scans, and duplicate-ID rules as \
 `bob capture`. The selected task must still be open and must not already \
-have an ID. An ID already used anywhere in the target note \
-is rejected, including non-task anchors.\n\n\
+have an ID; the selected note must be an eligible note bullet and must not \
+already have an ID. An ID already used anywhere in the target note \
+is rejected, including non-task anchors, headings, and plain bullets.\n\n\
 Use --route for a routable root note, or --note-path for the exact \
-vault-relative path of any task-bearing note (nested, case-sensitive, \
+vault-relative path of any task- or note-bearing note (nested, case-sensitive, \
 or quoted paths round-trip exactly; the lowercasing route parser is \
 never consulted). --allow-closed additionally permits Done/Cancelled \
 tasks without reopening them, for dependency candidates that name \
 completed history; it never reopens the task and never \
-applies to non-task lines. The previous daily snapshot stays \
+applies to non-task lines or notebook notes. The previous daily snapshot stays \
 read-only and fails with a guarded refusal.\n\n\
-On success the command appends ' ^<id>' to the resolved physical task line, \
-preserves that line's ending and every unrelated byte, and replaces the note \
-with one same-directory temporary file rename. The JSON success shape \
+On success the command appends ' ^<id>' to the resolved physical task or \
+note line, preserves that line's ending and every unrelated byte, and \
+replaces the note with one same-directory temporary file rename. The JSON success shape \
 additionally carries the exact `note_path` (in --note-path mode) and the \
 backend-formatted `dependency_replacement` (`&note:id`, quoted when the \
 locator needs it) so the app can resume the picker without losing \
@@ -105,10 +107,12 @@ needs it, so either relation picker can splice the new ID, \
 plus `wikilink_replacement` (`[[note#^id]]`, the shortest unambiguous \
 Obsidian block link, in both modes) so the Task Wikilink Picker can splice \
 the new ID, plus `parent_replacement` (`@route+block-id`) in routable \
-`--route` mode. Dry-run plans the same \
+`--route` mode (for notebook notes, `@nb+ID` so the client can resume \
+the note selection). Notebook assignments additionally carry \
+`item_kind: \"note\"` so clients can tell notes from tasks. Dry-run plans the same \
 mutation and returns the same success shape without writing. Stale, \
 ambiguous, terminal, already-identified, duplicate, missing, unreadable, \
-or read-only-snapshot tasks fail \
+non-note, or read-only-snapshot targets fail \
 without touching the note.",
         )
         .after_help(
@@ -197,7 +201,7 @@ fn route_arg() -> Arg {
         .long("route")
         .short('r')
         .value_name("NAME")
-        .help("Route/name of the note that contains the task")
+        .help("Route/name of the note that contains the task or note")
 }
 
 fn task_ref_arg() -> Arg {
@@ -206,7 +210,7 @@ fn task_ref_arg() -> Arg {
         .short('t')
         .value_name("REF")
         .required(true)
-        .help("Stale-safe task ref from capture-complete or capture-tasks")
+        .help("Stale-safe task or note ref from capture-complete or capture-tasks")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -333,6 +337,10 @@ struct CaptureTaskIdResult {
     /// absent in `--route` mode, where `relative_target` already is it.
     #[serde(skip_serializing_if = "Option::is_none")]
     note_path: Option<String>,
+    /// Additive note discriminator: `"note"` for notebook assignments.
+    /// Absent for ordinary task assignments.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    item_kind: Option<&'static str>,
     block_id: String,
     /// Backend-formatted `&note:block-id` (quoted when the locator
     /// needs it) so the app resumes the picker without losing
@@ -468,7 +476,6 @@ fn plan_assignment(
     };
 
     let settings = note_tasks::read_settings(&request.bob_dir);
-    let scan = note_tasks::scan(&original, &settings);
     if collect_done::block_ids_in_markdown(&original)
         .iter()
         .any(|existing| existing == &request.block_id)
@@ -479,6 +486,20 @@ fn plan_assignment(
         )));
     }
 
+    // Notebook notes: resolve the `line:digest` against the eligible
+    // bullet snapshot and append the chosen ID to that bullet only.
+    if is_notebook_contents(&original) {
+        return plan_notebook_assignment(
+            request,
+            &discovered,
+            route,
+            &relative_target,
+            &target,
+            &original,
+        );
+    }
+
+    let scan = note_tasks::scan(&original, &settings);
     let task = match scan
         .by_ref(request.task_ref.line, &request.task_ref.digest)
     {
@@ -590,6 +611,201 @@ fn plan_assignment(
                 NoteTarget::Route(_) => None,
                 NoteTarget::Path(_) => Some(relative_target),
             },
+            item_kind: None,
+            block_id: request.block_id.clone(),
+            dependency_replacement,
+            blocked_task_replacement,
+            complete_replacement,
+            relation_to_replacement,
+            relation_from_replacement,
+            wikilink_replacement,
+            parent_replacement,
+            line: assigned.line,
+            task_ref: assigned.task_ref.clone(),
+            task: assigned,
+        },
+    })
+}
+
+fn is_notebook_contents(contents: &str) -> bool {
+    if let Some(frontmatter) =
+        crate::native::projects::parse_frontmatter(contents)
+    {
+        return crate::native::projects::frontmatter_is_notebook(&frontmatter);
+    }
+    contents.contains("[[notebook]]")
+}
+
+/// Notebook assignment: append the chosen ID to the eligible bullet
+/// resolved from the `line:digest` ref. Reuses the shared bullet
+/// snapshot and the existing ref semantics so a retyped notebook,
+/// a shifted line, or an ambiguous digest refuses like tasks do.
+#[allow(clippy::too_many_arguments)]
+fn plan_notebook_assignment(
+    request: &CaptureTaskIdRequest,
+    discovered: &capture_dependency_tasks::DependencyTaskResult,
+    route: Option<String>,
+    relative_target: &str,
+    target: &Path,
+    original: &str,
+) -> Result<AssignmentPlan, CaptureTaskIdError> {
+    use crate::native::capture::notebook_bullets;
+    let bullets = notebook_bullets::scan_notebook_bullets(original);
+    let pos = match notebook_bullets::resolve_bullet_ref(
+        &bullets,
+        request.task_ref.line,
+        &request.task_ref.digest,
+    ) {
+        Ok(pos) => pos,
+        Err(()) => {
+            // Distinguish a non-note target from a stale/ambiguous ref:
+            // when the ref line points at a live line that is not an
+            // eligible bullet, name it as such.
+            let line_count = original.split('\n').count();
+            if request.task_ref.line >= 1
+                && request.task_ref.line <= line_count
+                && !bullets
+                    .iter()
+                    .any(|bullet| bullet.line == request.task_ref.line)
+            {
+                return Err(CaptureTaskIdError::io(format!(
+                    "the selected line {} is not a notebook note in {}; pick a note bullet",
+                    request.task_ref.line, relative_target
+                )));
+            }
+            // Ambiguous equal lines vs stale: exactly one digest match
+            // would have resolved, so two or more is ambiguous.
+            let mut digest_matches = 0;
+            for bullet in &bullets {
+                if let Some((_, digest)) = bullet.task_ref.split_once(':')
+                    && digest == request.task_ref.digest
+                {
+                    digest_matches += 1;
+                }
+            }
+            if digest_matches > 1 {
+                return Err(CaptureTaskIdError::io(format!(
+                    "the selected note matches more than one line in {}; rerun the note picker",
+                    relative_target
+                )));
+            }
+            return Err(CaptureTaskIdError::io(format!(
+                "the selected note is no longer in {}; rerun the note picker",
+                relative_target
+            )));
+        }
+    };
+    let bullet = &bullets[pos];
+    if let Some(existing) = bullet.block_id.as_deref() {
+        return Err(CaptureTaskIdError::io(format!(
+            "the selected note already has block ID ^{existing} in {relative_target}"
+        )));
+    }
+    // Duplicate chosen ID anywhere (headings and plain bullets included)
+    // is already checked by the caller via `block_ids_in_markdown`, but
+    // re-check against the live snapshot for a precise message.
+    let duplicates = notebook_bullets::duplicate_ids(original);
+    if duplicates.contains(&request.block_id) {
+        return Err(CaptureTaskIdError::io(format!(
+            "block ID ^{} already exists in {relative_target}",
+            request.block_id
+        )));
+    }
+    let updated =
+        append_block_id(original, bullet.line_index, &request.block_id)?;
+    // Verify the write took: the resolved line now carries the ID.
+    {
+        let after = notebook_bullets::scan_notebook_bullets(&updated);
+        let ok = after.iter().any(|candidate| {
+            candidate.line_index == bullet.line_index
+                && candidate.block_id.as_deref()
+                    == Some(request.block_id.as_str())
+        });
+        if !ok {
+            return Err(CaptureTaskIdError::io(format!(
+                "failed to assign block ID ^{} on line {} of {relative_target}",
+                request.block_id, bullet.line
+            )));
+        }
+    }
+    let assigned_ref = format!(
+        "{}:{}",
+        bullet.line,
+        note_tasks::line_digest(
+            updated
+                .split('\n')
+                .nth(bullet.line_index)
+                .unwrap_or_default()
+        )
+    );
+    let assigned = AssignedTask {
+        task_ref: assigned_ref.clone(),
+        line: bullet.line,
+        block_id: request.block_id.clone(),
+        status_symbol: '-',
+        status_name: "Note".to_string(),
+        status_type: "NOTE",
+        text: bullet.text.clone(),
+        section: bullet.section.clone(),
+        depth: bullet.depth,
+        child_count: bullet.child_count,
+    };
+    let target_path = PathBuf::from(relative_target);
+    let dependency_replacement = capture_dependency_tasks::replacement_for(
+        &discovered.index,
+        &target_path,
+        &request.block_id,
+    );
+    let blocked_task_replacement =
+        capture_dependency_tasks::replacement_for_sigil(
+            &discovered.index,
+            &target_path,
+            &request.block_id,
+            b'*',
+        );
+    let complete_replacement = capture_dependency_tasks::replacement_for_sigil(
+        &discovered.index,
+        &target_path,
+        &request.block_id,
+        b'!',
+    );
+    let relation_to_replacement =
+        capture_dependency_tasks::replacement_for_prefix(
+            &discovered.index,
+            &target_path,
+            &request.block_id,
+            "~",
+        );
+    let relation_from_replacement =
+        capture_dependency_tasks::replacement_for_prefix(
+            &discovered.index,
+            &target_path,
+            &request.block_id,
+            "~~",
+        );
+    let wikilink_replacement = capture_task_wikilinks::wikilink_replacement(
+        &discovered.index,
+        &target_path,
+        &request.block_id,
+    );
+    let parent_replacement = route
+        .as_deref()
+        .map(|route| format!("@{route}+{}", request.block_id));
+    Ok(AssignmentPlan {
+        target: target.to_path_buf(),
+        original: original.to_string(),
+        updated,
+        result: CaptureTaskIdResult {
+            ok: true,
+            schema_version: SCHEMA_VERSION,
+            dry_run: request.dry_run,
+            route,
+            relative_target: relative_target.to_string(),
+            note_path: match &request.target {
+                NoteTarget::Route(_) => None,
+                NoteTarget::Path(_) => Some(relative_target.to_string()),
+            },
+            item_kind: Some("note"),
             block_id: request.block_id.clone(),
             dependency_replacement,
             blocked_task_replacement,
@@ -912,6 +1128,262 @@ mod tests {
         );
     }
 
+    fn notebook_contents(body: &str) -> String {
+        format!(
+            "---\nparent: \"[[dev]]\"\ntype: \"[[notebook]]\"\nsummary: Notes.\n---\n\n# Title\n\n{body}"
+        )
+    }
+
+    fn notebook_ref_for(contents: &str, text: &str) -> TaskRef {
+        let bullets =
+            crate::native::capture::notebook_bullets::scan_notebook_bullets(
+                contents,
+            );
+        let bullet = bullets
+            .iter()
+            .find(|bullet| bullet.text == text)
+            .unwrap_or_else(|| panic!("missing note {text}"));
+        let (line, digest) =
+            bullet.task_ref.split_once(':').expect("line:digest");
+        TaskRef {
+            line: line.parse().expect("line"),
+            digest: digest.to_string(),
+        }
+    }
+
+    #[test]
+    fn notebook_assignment_writes_and_returns_parent_replacement() {
+        let temp = TempDir::new("bob-cli-capture-task-id-notebook");
+        write_settings(temp.path());
+        let original =
+            notebook_contents("- Plain idea\n\n- Use merge ^merge-cmd\n");
+        write_file(&temp.path().join("dev_tools.md"), &original);
+        let note_ref = notebook_ref_for(&original, "Plain idea");
+
+        let dry = assign_capture_task_id(request(
+            temp.path(),
+            "dev_tools",
+            note_ref.clone(),
+            "plain-id",
+            true,
+        ))
+        .expect("dry-run");
+        assert!(dry.dry_run);
+        assert_eq!(dry.item_kind, Some("note"));
+        assert_eq!(
+            dry.parent_replacement.as_deref(),
+            Some("@dev_tools+plain-id")
+        );
+        assert_eq!(
+            fs::read_to_string(temp.path().join("dev_tools.md")).expect("read"),
+            original
+        );
+
+        let result = assign_capture_task_id(request(
+            temp.path(),
+            "dev_tools",
+            note_ref,
+            "plain-id",
+            false,
+        ))
+        .expect("assign");
+        assert_eq!(result.item_kind, Some("note"));
+        assert_eq!(
+            result.parent_replacement.as_deref(),
+            Some("@dev_tools+plain-id")
+        );
+        assert_eq!(result.task.text, "Plain idea");
+        assert_eq!(result.task.block_id, "plain-id");
+        let updated =
+            fs::read_to_string(temp.path().join("dev_tools.md")).expect("read");
+        assert!(updated.contains("- Plain idea ^plain-id"), "{updated:?}");
+        assert!(updated.contains("- Use merge ^merge-cmd"), "{updated:?}");
+    }
+
+    #[test]
+    fn notebook_assignment_rejects_non_note_and_duplicate_ids() {
+        let temp = TempDir::new("bob-cli-capture-task-id-notebook-errors");
+        write_settings(temp.path());
+        let original = notebook_contents(
+            "## Git\n\n- Note one\n\n- [ ] Task ^task-id\n\n# Heading ^head-id\n",
+        );
+        write_file(&temp.path().join("dev_tools.md"), &original);
+        // Non-note target line (heading).
+        let heading_line = original
+            .split('\n')
+            .position(|line| line.starts_with("# Heading"))
+            .expect("heading")
+            + 1;
+        let digest = crate::native::note_tasks::line_digest(
+            original
+                .split('\n')
+                .nth(heading_line - 1)
+                .unwrap_or_default(),
+        );
+        let err = assign_capture_task_id(request(
+            temp.path(),
+            "dev_tools",
+            TaskRef {
+                line: heading_line,
+                digest,
+            },
+            "new-id",
+            false,
+        ))
+        .expect_err("non-note refuses");
+        assert!(err.message.contains("not a notebook note"), "{err:?}");
+        // Already assigned.
+        let with_id = notebook_contents("- Note ^has-id\n");
+        write_file(&temp.path().join("notes.md"), &with_id);
+        let note_ref = notebook_ref_for(&with_id, "Note");
+        let err = assign_capture_task_id(request(
+            temp.path(),
+            "notes",
+            note_ref,
+            "other-id",
+            false,
+        ))
+        .expect_err("already assigned");
+        assert!(err.message.contains("already has block ID"), "{err:?}");
+        // Colliding chosen ID.
+        let colliding = notebook_contents("- Other ^taken\n\n- Plain\n");
+        write_file(&temp.path().join("plain.md"), &colliding);
+        let plain_ref = notebook_ref_for(&colliding, "Plain");
+        let err = assign_capture_task_id(request(
+            temp.path(),
+            "plain",
+            plain_ref,
+            "taken",
+            false,
+        ))
+        .expect_err("colliding");
+        assert!(err.message.contains("already exists"), "{err:?}");
+    }
+
+    #[test]
+    fn notebook_assignment_handles_stale_shifted_and_format_edges() {
+        let temp = TempDir::new("bob-cli-capture-task-id-notebook-edges");
+        write_settings(temp.path());
+        // Stale: digest no longer matches after a retype.
+        let original = notebook_contents("- Plain idea\n");
+        write_file(&temp.path().join("dev_tools.md"), &original);
+        let note_ref = notebook_ref_for(&original, "Plain idea");
+        let retyped = notebook_contents("- Plain idea edited\n");
+        write_file(&temp.path().join("dev_tools.md"), &retyped);
+        let err = assign_capture_task_id(request(
+            temp.path(),
+            "dev_tools",
+            note_ref,
+            "new-id",
+            false,
+        ))
+        .expect_err("stale");
+        assert!(err.message.contains("no longer in"), "{err:?}");
+        // Shifted: same digest one line lower resolves.
+        let original = notebook_contents("- Plain idea\n");
+        let original_ref = notebook_ref_for(&original, "Plain idea");
+        let shifted = notebook_contents("Intro\n\n- Plain idea\n");
+        write_file(&temp.path().join("shift.md"), &shifted);
+        // `shift.md` is not a routable notebook route; use --note-path.
+        let shift_request = CaptureTaskIdRequest {
+            bob_dir: temp.path().to_path_buf(),
+            dry_run: false,
+            target: NoteTarget::Path("shift.md".to_string()),
+            task_ref: original_ref,
+            block_id: "shift-id".to_string(),
+            allow_closed: false,
+        };
+        // The digest matches exactly one bullet after the shift, so it
+        // recovers. Line numbers differ because of the inserted intro.
+        // (If the intro changes the digest, this becomes stale instead;
+        // both outcomes prove the ref is honored.)
+        let outcome = assign_capture_task_id(shift_request);
+        match outcome {
+            Ok(result) => {
+                assert_eq!(result.item_kind, Some("note"));
+                assert!(result.line >= 2);
+            }
+            Err(err) => {
+                assert!(err.message.contains("no longer in"), "{err:?}");
+            }
+        }
+        // Ambiguous equal lines refuse: a shifted line with the same
+        // digest on two rows cannot pick one.
+        let dup_text = notebook_contents("- Same\n\n- Same\n");
+        write_file(&temp.path().join("dup.md"), &dup_text);
+        let same_digest = notebook_ref_for(&dup_text, "Same").digest;
+        let err = assign_capture_task_id(request(
+            temp.path(),
+            "dup",
+            TaskRef {
+                line: 99,
+                digest: same_digest,
+            },
+            "new-id",
+            false,
+        ))
+        .expect_err("ambiguous");
+        assert!(
+            err.message.contains("more than one line")
+                || err.message.contains("no longer in"),
+            "{err:?}"
+        );
+        // CRLF preserves unrelated bytes.
+        let crlf = notebook_contents("- Plain idea\r\n\n- Other\r\n");
+        // `notebook_contents` joins with `\n`; build CRLF explicitly.
+        let crlf = crlf.replace('\n', "\r\n").replace("\r\r\n", "\r\n");
+        write_file(&temp.path().join("crlf.md"), &crlf);
+        let crlf_ref = notebook_ref_for(&crlf, "Plain idea");
+        assign_capture_task_id(CaptureTaskIdRequest {
+            bob_dir: temp.path().to_path_buf(),
+            dry_run: false,
+            target: NoteTarget::Path("crlf.md".to_string()),
+            task_ref: crlf_ref,
+            block_id: "crlf-id".to_string(),
+            allow_closed: false,
+        })
+        .expect("crlf");
+        let updated =
+            fs::read_to_string(temp.path().join("crlf.md")).expect("read");
+        assert!(updated.contains("\r\n"), "{updated:?}");
+        assert!(updated.contains("- Plain idea ^crlf-id"), "{updated:?}");
+        // BOM is preserved.
+        let bom = format!("\u{feff}{}", notebook_contents("- Plain\n"));
+        write_file(&temp.path().join("bom.md"), &bom);
+        let bom_ref = notebook_ref_for(&bom, "Plain");
+        assign_capture_task_id(CaptureTaskIdRequest {
+            bob_dir: temp.path().to_path_buf(),
+            dry_run: false,
+            target: NoteTarget::Path("bom.md".to_string()),
+            task_ref: bom_ref,
+            block_id: "bom-id".to_string(),
+            allow_closed: false,
+        })
+        .expect("bom");
+        let updated =
+            fs::read_to_string(temp.path().join("bom.md")).expect("read");
+        assert!(updated.starts_with("\u{feff}"), "{updated:?}");
+        // Read-only refuses without writing.
+        let ro_original = notebook_contents("- Plain\n");
+        write_file(&temp.path().join("ro.md"), &ro_original);
+        let ro_ref = notebook_ref_for(&ro_original, "Plain");
+        let ro_path = temp.path().join("ro.md");
+        let mut perms =
+            std::fs::metadata(&ro_path).expect("meta").permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&ro_path, perms).expect("readonly");
+        let err = assign_capture_task_id(CaptureTaskIdRequest {
+            bob_dir: temp.path().to_path_buf(),
+            dry_run: false,
+            target: NoteTarget::Path("ro.md".to_string()),
+            task_ref: ro_ref,
+            block_id: "ro-id".to_string(),
+            allow_closed: false,
+        })
+        .expect_err("readonly");
+        assert!(err.message.contains("read-only"), "{err:?}");
+    }
+
     #[test]
     fn recovers_a_shifted_line_and_returns_the_new_line() {
         let temp = TempDir::new("bob-cli-capture-task-id-shift");
@@ -1076,6 +1548,7 @@ mod tests {
             route: Some("file".to_string()),
             relative_target: "file.md".to_string(),
             note_path: None,
+            item_kind: None,
             block_id: "report-id".to_string(),
             dependency_replacement: "&file:report-id".to_string(),
             blocked_task_replacement: "*file:report-id".to_string(),

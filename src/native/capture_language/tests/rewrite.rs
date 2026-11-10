@@ -1267,7 +1267,6 @@ fn rewrite_draft_keeps_comma_literal_outside_parent_task_picker_positions() {
         "@a+x > @c+tid,",
         "@a+x, > @c",
         "@,",
-        "@@cash,",
         "&note:id,",
         ":query,",
         "^route,",
@@ -1295,8 +1294,6 @@ fn rewrite_draft_sigil_aliases_exclude_other_contexts() {
     for raw in [
         "Buy milk.",
         "foo@bar.",
-        "@@r.",
-        "@r#Sec.",
         "&note;",
         "^r;",
         "@r^id;",
@@ -1306,6 +1303,19 @@ fn rewrite_draft_sigil_aliases_exclude_other_contexts() {
         let rewrite = rewrite_draft(raw, Some(raw.len()));
         assert_eq!(rewrite.rule, None, "{raw:?}");
         assert_eq!(rewrite.text, raw, "{raw:?}");
+    }
+
+    // `#sec^id` is valid block-ID grammar on every route, so a glued `.`
+    // after a section now aliases to `^` there.
+    {
+        let raw = "@r#Sec.";
+        let rewrite = rewrite_draft(raw, Some(raw.len()));
+        assert_eq!(
+            rewrite.rule,
+            Some(RewriteRule::ExpandSigilAlias),
+            "{raw:?}"
+        );
+        assert_eq!(rewrite.text, "@r#Sec^", "{raw:?}");
     }
 
     let raw = "@r.";
@@ -1692,7 +1702,6 @@ fn rewrite_draft_leaves_backslash_hash_alias_literal() {
         "Buy milk\n- \\\\",
         "x foo \\",
         "x\n- 1 \\",
-        "@@cash\\",
         "foo |\\",
         "foo ~cash:goog-exit\\",
         ":\\",
@@ -1802,7 +1811,6 @@ fn rewrite_draft_leaves_slash_hash_alias_literal() {
         "[[cash/",
         "[[/",
         "[[folder/",
-        "@@cash/",
         "@cash#Q&A/",
         "Buy milk @cash#/",
         ":/",
@@ -1849,6 +1857,107 @@ fn rewrite_draft_leaves_slash_hash_alias_literal() {
     let template_rewrite = rewrite_draft(template, Some(template.len()));
     assert_eq!(template_rewrite.rule, None);
     assert_eq!(template_rewrite.text, template);
+}
+
+#[test]
+fn rewrite_draft_collapses_glued_trigger_after_complete_global_route() {
+    for (raw, cursor, expected) in [
+        ("@@cash#", 7, "@cash#"),
+        ("@@cash/", 7, "@cash#"),
+        ("@@cash\\", 7, "@cash#"),
+        ("@@cash^", 7, "@cash^"),
+        ("@@cash.", 7, "@cash^"),
+        ("@@cash+", 7, "@cash+"),
+        ("@@cash,", 7, "@cash+"),
+        ("@@r.", 4, "@r^"),
+        ("@@my_note#", 10, "@my_note#"),
+        ("@@my-note,", 10, "@my-note+"),
+        ("Buy milk @@cash/", 16, "Buy milk @cash#"),
+        ("@@cash/ pick up milk", 7, "@cash# pick up milk"),
+        ("caf\u{e9} @@cash/", 13, "caf\u{e9} @cash#"),
+        ("@@cash/ caf\u{e9}", 7, "@cash# caf\u{e9}"),
+    ] {
+        assert!(raw.is_char_boundary(cursor), "{raw:?}");
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(
+            rewrite.rule,
+            Some(RewriteRule::CollapseGlobalDestination),
+            "{raw:?}"
+        );
+        assert_eq!(rewrite.text, expected, "{raw:?}");
+        assert_eq!(rewrite.alias, None, "{raw:?}");
+        // Single native edit; applying it yields the returned text and the
+        // cursor maps through it.
+        assert_eq!(rewrite.edits.len(), 1, "{raw:?}");
+        let edit = &rewrite.edits[0];
+        assert_eq!(
+            &raw[edit.start..edit.end],
+            &raw[edit.start..cursor],
+            "{raw:?}"
+        );
+        assert_eq!(edit.end, cursor, "{raw:?}");
+        assert_eq!(
+            rewrite.cursor,
+            Some(edit.start + edit.replacement.len()),
+            "{raw:?}"
+        );
+        let applied = {
+            let mut out = String::new();
+            out.push_str(&raw[..edit.start]);
+            out.push_str(&edit.replacement);
+            out.push_str(&raw[edit.end..]);
+            out
+        };
+        assert_eq!(applied, expected, "{raw:?}");
+        assert_eq!(applied, rewrite.text, "{raw:?}");
+        // Undo restores the exact typed input.
+        let mut undone = String::new();
+        undone.push_str(&rewrite.text[..edit.start]);
+        undone.push_str(&raw[edit.start..edit.end]);
+        undone.push_str(&rewrite.text[edit.start + edit.replacement.len()..]);
+        assert_eq!(undone, raw, "{raw:?}");
+        // Idempotent: the collapsed form does not collapse again.
+        let again = rewrite_draft(&rewrite.text, rewrite.cursor);
+        assert_eq!(again.text, rewrite.text, "idempotent {raw:?}");
+    }
+    // No-cursor calls retain strict grammar and never collapse.
+    for raw in ["@@cash/", "@@cash#", "@@cash,"] {
+        let rewrite = rewrite_draft(raw, None);
+        assert_eq!(rewrite.rule, None, "{raw:?} no-cursor");
+        assert_eq!(rewrite.text, raw, "{raw:?} no-cursor");
+    }
+    // Non-firing cases stay literal.
+    for (raw, cursor) in [
+        ("@@", 2),
+        ("@@ ", 2),
+        ("@@cash", 6),
+        ("@@cash #", 7),
+        ("@@cash/extra", 7),
+        ("@@cash#sec", 7),
+        ("foo@@cash/", 10),
+        ("\\@@cash/", 8),
+        ("[[@@cash/", 8),
+        ("`@@cash/`", 8),
+        ("\"@@cash/\"", 8),
+    ] {
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(rewrite.rule, None, "{raw:?}@{cursor}");
+        assert_eq!(rewrite.text, raw, "{raw:?}@{cursor}");
+    }
+    // Trigger earlier than the caret never collapses.
+    let raw = "@@cash/ ";
+    let rewrite = rewrite_draft(raw, Some(raw.len()));
+    assert_eq!(rewrite.rule, None, "{raw:?} trailing space");
+    assert_eq!(rewrite.text, raw);
+    // Template drafts never collapse.
+    let template = "Task {0} %t\n\n@@cash/";
+    let template_rewrite = rewrite_draft(template, Some(template.len()));
+    assert_eq!(template_rewrite.rule, None);
+    assert_eq!(template_rewrite.text, template);
+    // Bare `@@` absorption still works when no collapse trigger is present.
+    let bare = "Buy milk @dev @@";
+    let absorbed = rewrite_draft(bare, Some(bare.len()));
+    assert_eq!(absorbed.rule, Some(RewriteRule::AbsorbLocalMarker));
 }
 
 #[test]

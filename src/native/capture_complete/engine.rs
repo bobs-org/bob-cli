@@ -6,9 +6,8 @@ use super::{
         active_task_candidates, apply_relationship_picker,
         blocked_task_candidates, dependency_candidates, link_candidates,
         relation_candidates, relation_label_suggestions, route_candidates,
-        section_candidates, task_candidates, task_complete_candidates,
-        task_goto_candidates, task_link_candidates, task_parent_candidates,
-        TaskSearch,
+        task_candidates, task_complete_candidates, task_goto_candidates,
+        task_link_candidates, task_parent_candidates, TaskSearch,
     },
     model::{
         Candidates, CaptureCompleteResult, CompleteError, CompletionOwner,
@@ -389,16 +388,18 @@ fn build_result_inner(
             | CompletionContext::ProjectTaskBlockId
     ) {
         let route = field.route.as_deref().expect("route resolved");
-        let block_field = capture_block_ids::build_block_id_field(
-            bob_dir,
-            raw_text,
-            cursor,
-            &capture_block_ids::BlockIdRequest {
-                route,
-                replacement: field.replacement,
-                context: field.context,
-            },
-        );
+        let block_field =
+            capture_block_ids::build_block_id_field_with_notebooks(
+                bob_dir,
+                raw_text,
+                cursor,
+                &capture_block_ids::BlockIdRequest {
+                    route,
+                    replacement: field.replacement,
+                    context: field.context,
+                },
+                Some(&notebook_policy),
+            );
         let (candidates, mut warnings) = match block_field.intent {
             capture_block_ids::BlockIdIntent::Link => {
                 if matches!(field.context, CompletionContext::PomodoroBlockId) {
@@ -497,7 +498,13 @@ fn build_result_inner(
         CompletionContext::Section => {
             let route = field.route.as_deref().expect("route resolved");
             (
-                section_candidates(bob_dir, route, &field.query)?,
+                super::candidates::section_candidates_with_raw(
+                    bob_dir,
+                    route,
+                    &field.query,
+                    Some(raw_text),
+                    Some(field.replacement),
+                )?,
                 Vec::new(),
             )
         }
@@ -508,16 +515,33 @@ fn build_result_inner(
         }
         CompletionContext::Task => {
             let route = field.route.as_deref().expect("route resolved");
-            (
-                task_candidates(
-                    bob_dir,
-                    route,
-                    &field.query,
-                    include_missing_task_rows,
-                    TaskSearch::MultiField,
-                )?,
-                Vec::new(),
-            )
+            // Notebook note bullets only for note-scoped `@nb+` with an
+            // explicit `@` route that resolves to a notebook. Bare `+`,
+            // task links, dependencies, relations, and task search stay
+            // on the task-only scanners.
+            if is_explicit_note_scoped_plus(raw_text, &field)
+                && is_notebook_route(bob_dir, route)
+            {
+                (
+                    super::candidates::notebook_note_candidates(
+                        bob_dir,
+                        route,
+                        &field.query,
+                    )?,
+                    Vec::new(),
+                )
+            } else {
+                (
+                    task_candidates(
+                        bob_dir,
+                        route,
+                        &field.query,
+                        include_missing_task_rows,
+                        TaskSearch::MultiField,
+                    )?,
+                    Vec::new(),
+                )
+            }
         }
         CompletionContext::Drawer => {
             let quoted = raw_text[field.replacement.0..]
@@ -892,6 +916,17 @@ fn build_result_inner(
     {
         replacement = expanded;
     }
+    // Notebook `#section^id`: the section replacement owns only the
+    // section selector; a glued `^id` suffix stays outside the range so
+    // accepting a row retains it.
+    if field.context == CompletionContext::Section
+        && replacement.start == field.replacement.0
+        && replacement.end == field.replacement.1
+        && let Some(trimmed) =
+            trim_notebook_section_suffix(bob_dir, raw_text, &field, &candidates)
+    {
+        replacement = trimmed;
+    }
 
     // Bob owns the search query for task pickers and relation completion.
     // Relation target queries are decoded here so clients never parse a
@@ -1031,6 +1066,67 @@ fn build_result_inner(
 
 /// Template completion uses a same-length masked draft so template syntax and
 /// row values never become picker queries.
+/// True for an explicit `@route+` token (note-scoped plus) as opposed
+/// to a bare `+` picker. The whitespace-delimited token holding the
+/// replacement must start with `@`.
+fn is_explicit_note_scoped_plus(
+    raw_text: &str,
+    field: &capture_language::CompletionField,
+) -> bool {
+    let tokens = capture_language::tokenize_with_spans(raw_text);
+    tokens.into_iter().any(|token| {
+        token.start <= field.replacement.0
+            && field.replacement.1 <= token.end
+            && token.text.starts_with('@')
+            && token.text.contains('+')
+    })
+}
+
+fn is_notebook_route(bob_dir: &Path, route: &str) -> bool {
+    let target = bob_dir.join(capture::route_label(route));
+    std::fs::read_to_string(&target).is_ok_and(|contents| {
+        if let Some(frontmatter) =
+            crate::native::projects::parse_frontmatter(&contents)
+        {
+            return crate::native::projects::frontmatter_is_notebook(
+                &frontmatter,
+            );
+        }
+        contents.contains("[[notebook]]")
+    })
+}
+
+fn trim_notebook_section_suffix(
+    bob_dir: &Path,
+    raw_text: &str,
+    field: &capture_language::CompletionField,
+    candidates: &Candidates,
+) -> Option<Replacement> {
+    let Candidates::Section(rows) = candidates else {
+        return None;
+    };
+    // Detect a notebook target: the section menu contains a notebook
+    // create row, or the route file is a notebook.
+    let is_notebook_menu = rows.iter().any(|row| {
+        matches!(row, super::model::SectionMenuRow::NotebookCreate(_))
+    }) || {
+        let route = field.route.as_deref()?;
+        let contents =
+            std::fs::read_to_string(bob_dir.join(capture::route_label(route)))
+                .ok()?;
+        super::candidates::is_notebook_route_contents(&contents)
+    };
+    if !is_notebook_menu {
+        return None;
+    }
+    let token = raw_text.get(field.replacement.0..field.replacement.1)?;
+    let caret = token.find('^')?;
+    Some(Replacement {
+        start: field.replacement.0,
+        end: field.replacement.0 + caret,
+    })
+}
+
 fn template_completion_gate(
     request: &CompleteRequest<'_>,
 ) -> Result<Option<CaptureCompleteResult>, CompleteError> {

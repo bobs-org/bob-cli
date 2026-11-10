@@ -24,8 +24,7 @@ key. The aliases:
   complete `@route+id` target, it inserts ` +` for the next pick.
 - `\` or `/` → `#` wherever a `#` menu would open (task type, section, Pomodoro name,
   wikilink heading, and the rest). Never at a line start, glued to a word, or after
-  another `\`/`/`; `/` stays literal where it is already field text (`=/`, `[[folder/`,
-  `@@` routes).
+  another `\`/`/`; `/` stays literal where it is already field text (`=/`, `[[folder/`).
 - `-` → `~` inside an `x=` past token (`x=2-` → `x=2~`); a spaced `-` stays literal.
 - `=` → `~` after a space or tab where the Links To relation picker would open, while
   `~=` / `~~=` flip to `~~` / `~` ([[decisions:relation-equals-alias-and-flips]]).
@@ -49,7 +48,8 @@ drafts and `#"…"` exact-name literals are never rewritten. Rewrites in the sam
 that edit an existing marker are not aliases: the block-ID separator toggle
 (`@route:id^` → `@route^id`, or a glued `.` toggle (`@route:id.` ↔ `@route^id`)),
 the glued `~`/`=` relation direction flip, the `|` label
-attach, and `@@` absorption. None of these is a capture alias either: the Mac's "Capture
+attach, `@@` absorption, and the `@@route` collapse (`@@cash/` → `@cash#`).
+None of these is a capture alias either: the Mac's "Capture
 alias" hotkey (Settings › Hotkey's global `Command-\`), a frontmatter or
 `project_name_aliases` route alias, a wikilink `|alias`, a deprecated tag spelling
 (`#offclock`), the bare owner alias `^route:id`, Tab's `--` → `—` snippet, or the

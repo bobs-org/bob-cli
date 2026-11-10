@@ -220,6 +220,51 @@ fn bare_hash_type_menu_also_has_no_initial_selection() {
 }
 
 #[test]
+fn notebook_creation_directive_enables_without_pomodoro() {
+    let temp = TempDir::new("bob-cli-capture-complete-directive-notebook");
+    write_file(&temp.path().join("dev.md"), "---\ntype: [[area]]\n---\n");
+    // Complete caret seals enable `%n` as a notebook row even with no
+    // Pomodoro in today's note.
+    for raw in [
+        "New notes @dev^nvim@ %",
+        "@dev^nvim@ New notes %",
+        "New notes @dev^nvim@ %n",
+    ] {
+        let rows = directive_rows(temp.path(), raw);
+        let note = rows.iter().find(|row| row.token == "%n").expect("%n row");
+        assert_eq!(note.name, "New notebook", "{raw}");
+        assert_eq!(note.summary, "Create a notebook", "{raw}");
+        assert!(
+            note.disabled_reason.is_none(),
+            "{raw}: {:?}",
+            note.disabled_reason
+        );
+        assert_eq!(note.replacement, "%n");
+    }
+    // Empty summary still offers the row; the creation validator teaches
+    // the required summary later.
+    let rows = directive_rows(temp.path(), "@dev^nvim@ %");
+    let note = rows.iter().find(|row| row.token == "%n").expect("%n row");
+    assert!(note.disabled_reason.is_none());
+    // Ordinary `%n` keeps Pomodoro availability: no Pomodoro means disabled.
+    let rows = directive_rows(temp.path(), "Remember this %");
+    let note = rows.iter().find(|row| row.token == "%n").expect("%n row");
+    assert_eq!(note.name, "Pomodoro note");
+    assert!(note.disabled_reason.is_some());
+    // Invalid seals stay refused.
+    for raw in [
+        "New notes @dev:nvim@ %",
+        "New notes @dev^nvim %",
+        "New notes @dev^nvim@#extra %",
+    ] {
+        let rows = directive_rows(temp.path(), raw);
+        let note = rows.iter().find(|row| row.token == "%n").expect("%n row");
+        assert_eq!(note.name, "Pomodoro note", "{raw}");
+        assert!(note.disabled_reason.is_some(), "{raw} should refuse");
+    }
+}
+
+#[test]
 fn directive_containing_menu_does_not_preselect_a_row() {
     let temp = TempDir::new("bob-cli-capture-complete-directive-template");
     let raw = "Apply {0} %t\n\n- first\n- second %";

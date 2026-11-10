@@ -40,6 +40,19 @@ pub(super) fn candidates(
     });
     let note_target = pomodoro_note_target(bob_dir);
     let query = field.query.to_ascii_lowercase();
+    // Notebook creation `%n`: a complete caret-sealed `@parent^id@` item
+    // offers a notebook row independent of Pomodoro availability. The
+    // item text becomes the required summary; an empty summary still
+    // offers the row so the creation validator can teach it.
+    let notebook_create = item.and_then(|item| {
+        notebook_create_offer(
+            bob_dir,
+            raw_text,
+            field,
+            item.index,
+            reference_policy.as_ref(),
+        )
+    });
 
     let mut rows = Vec::with_capacity(if is_reference { 4 } else { 3 });
     for (token, name, summary, detail) in [
@@ -51,9 +64,12 @@ pub(super) fn candidates(
         ),
         (
             "%n",
-            "Pomodoro note",
-            "Add a note to a Pomodoro",
-            note_target.detail.as_str(),
+            notebook_create.as_ref().map(|offer| offer.name).unwrap_or("Pomodoro note"),
+            notebook_create.as_ref().map(|offer| offer.summary).unwrap_or("Add a note to a Pomodoro"),
+            notebook_create
+                .as_ref()
+                .map(|offer| offer.detail.as_str())
+                .unwrap_or(note_target.detail.as_str()),
         ),
         (
             "%t",
@@ -86,6 +102,16 @@ pub(super) fn candidates(
                     .to_string(),
             ),
             "%c" => None,
+            "%n" if notebook_create.is_some() => item.and_then(|item| {
+                directive_refusal(
+                    bob_dir,
+                    raw_text,
+                    field,
+                    item.index,
+                    token,
+                    reference_policy.as_ref(),
+                )
+            }),
             "%n" => item.and_then(|item| {
                 directive_refusal(
                     bob_dir,
@@ -280,6 +306,77 @@ fn directive_refusal(
             )
         })
         .map(|diagnostic| diagnostic.message)
+}
+
+struct NotebookCreateOffer {
+    name: &'static str,
+    summary: &'static str,
+    detail: String,
+}
+
+/// Classify the candidate draft with the same parser and notebook
+/// policy as strict capture. On a complete caret-sealed notebook
+/// creation shape, offer the notebook `%n` row independent of Pomodoro
+/// availability. All other shapes (colon seals, incomplete seals,
+/// `#name` after the seal, duplicates) fall back to the ordinary
+/// Pomodoro row via `None`.
+fn notebook_create_offer(
+    bob_dir: &Path,
+    raw_text: &str,
+    field: &CompletionField,
+    item_index: usize,
+    url_routing: Option<&UrlRoutingPolicy>,
+) -> Option<NotebookCreateOffer> {
+    let mut probe = raw_text.to_string();
+    probe.replace_range(field.replacement.0..field.replacement.1, "%n");
+    let notebook_policy =
+        crate::native::capture_notebooks::notebook_policy_for_draft(
+            bob_dir, &probe,
+        );
+    let parsed = capture_language::parse_for_editor_with(
+        &probe,
+        &capture_language::EditorParseOptions {
+            url_routing,
+            has_global_destination: false,
+            record_policy: None,
+            notebook_policy: Some(&notebook_policy),
+            global_route: None,
+        },
+    );
+    let item = parsed
+        .items
+        .into_iter()
+        .find(|item| item.index == item_index)?;
+    if item.mode != EditorMode::NotebookCreate {
+        return None;
+    }
+    // Complete caret seals only: incomplete seals, colon seals, and
+    // `#name` suffixes never reach `NotebookCreate` mode, so they keep
+    // the ordinary refusal path.
+    let marker = probe_item_creation_marker(&probe, &item)?;
+    Some(NotebookCreateOffer {
+        name: "New notebook",
+        summary: "Create a notebook",
+        detail: format!("→ {marker} · the item text becomes its summary"),
+    })
+}
+
+/// Best-effort `@parent^id@` marker text for the `%n` detail line.
+/// Falls back to the generic creation copy when the marker cannot be
+/// sliced cleanly.
+fn probe_item_creation_marker(
+    probe: &str,
+    item: &capture_language::EditorItemParse,
+) -> Option<String> {
+    let item_text = probe.get(item.start..item.end)?;
+    // Find the first `@...^...@` token: the complete caret seal.
+    let at = item_text.find('@')?;
+    let after_at = item_text.get(at..)?;
+    let caret = after_at.find('^')?;
+    let after_caret = after_at.get(caret + 1..)?;
+    let seal = after_caret.find('@')?;
+    let marker = after_at.get(..caret + 1 + seal + 1)?.trim().to_string();
+    (!marker.is_empty()).then_some(marker)
 }
 
 fn leading_marker(raw_text: &str, field: &CompletionField) -> bool {

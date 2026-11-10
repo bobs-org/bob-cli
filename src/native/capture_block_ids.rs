@@ -69,6 +69,10 @@ pub(crate) struct BlockIdField {
     pub(crate) marker: String,
     pub(crate) marker_range: BlockIdMarkerRange,
     pub(crate) intent: BlockIdIntent,
+    /// Additive notebook marker: `"notebook"` for `@nb^` and
+    /// `@nb#section^` fields. Absent for ordinary task fields.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) destination_kind: Option<&'static str>,
     pub(crate) body: String,
     pub(crate) allowed_character: String,
     pub(crate) allowed_description: String,
@@ -110,11 +114,29 @@ pub(crate) fn is_valid_block_id(_marker: char, id: &str) -> bool {
 /// `task_block_id`, or `project_task_block_id` field (see the
 /// `project_task_block_id` builder below). Reads the routed note (missing is
 /// not an error).
+#[allow(dead_code)]
 pub(crate) fn build_block_id_field(
     bob_dir: &Path,
     raw_text: &str,
     cursor: usize,
     request: &BlockIdRequest<'_>,
+) -> BlockIdField {
+    build_block_id_field_with_notebooks(
+        bob_dir, raw_text, cursor, request, None,
+    )
+}
+
+/// Notebook-aware builder: `notebook_policy` is the already-built draft
+/// policy, so draft-created notebooks are recognized without writing
+/// files during completion.
+pub(crate) fn build_block_id_field_with_notebooks(
+    bob_dir: &Path,
+    raw_text: &str,
+    cursor: usize,
+    request: &BlockIdRequest<'_>,
+    notebook_policy: Option<
+        &crate::native::capture_language::notebook::NotebookRoutePolicy,
+    >,
 ) -> BlockIdField {
     if request.context == CompletionContext::ProjectTaskBlockId {
         return build_project_task_block_id_field(
@@ -143,13 +165,44 @@ pub(crate) fn build_block_id_field(
     } else {
         detect_colon_intent(raw_text, cursor, request)
     };
-    let body = editor_item_at(raw_text, cursor)
-        .map(|item| item.body)
-        .unwrap_or_default();
+    // Notebook-aware body: the already-built policy parses the draft with
+    // notebook routes claimed, so a notebook note's text arrives without
+    // route, section, or directive syntax.
+    let body = notebook_policy
+        .map(|policy| {
+            crate::native::capture_language::editor_item_at_with(
+                raw_text,
+                cursor,
+                &crate::native::capture_language::EditorParseOptions {
+                    url_routing: None,
+                    has_global_destination: false,
+                    record_policy: None,
+                    notebook_policy: Some(policy),
+                    global_route: None,
+                },
+            )
+            .map(|item| item.body)
+            .unwrap_or_default()
+        })
+        .unwrap_or_else(|| {
+            editor_item_at(raw_text, cursor)
+                .map(|item| item.body)
+                .unwrap_or_default()
+        });
 
     let target = bob_dir.join(&relative_target);
     let contents = std::fs::read_to_string(&target).ok();
-    let note_exists = contents.is_some();
+    // Draft-created notebooks count as existing for completion without
+    // writing files: the policy already knows their staged routes.
+    let policy_hit = notebook_policy.is_some_and(|policy| {
+        // `lookup` needs an item start; the cursor sits inside the item,
+        // so any start at or before the cursor sees staged creates.
+        !matches!(
+            policy.lookup(&route, cursor.saturating_sub(1)),
+            crate::native::capture_language::notebook::NotebookRouteLookup::Miss
+        )
+    });
+    let note_exists = contents.is_some() || policy_hit;
     let mut used = Vec::new();
     if note_exists
         && intent != BlockIdIntent::ProjectNote
@@ -174,6 +227,11 @@ pub(crate) fn build_block_id_field(
     } else {
         used
     };
+    // Additive notebook marker for `@nb^` and `@nb#section^`; absent for
+    // ordinary task fields and the sealed project-note intent.
+    let destination_kind = (!matches!(intent, BlockIdIntent::ProjectNote)
+        && is_notebook_route(bob_dir, &route, notebook_policy))
+    .then_some("notebook");
 
     BlockIdField {
         route,
@@ -182,6 +240,7 @@ pub(crate) fn build_block_id_field(
         marker: marker.to_string(),
         marker_range,
         intent,
+        destination_kind,
         body,
         allowed_character: allowed_character.to_string(),
         allowed_description: allowed_description.to_string(),
@@ -190,6 +249,34 @@ pub(crate) fn build_block_id_field(
         owner_line: None,
         splice: None,
     }
+}
+
+fn is_notebook_route(
+    bob_dir: &Path,
+    route: &str,
+    notebook_policy: Option<
+        &crate::native::capture_language::notebook::NotebookRoutePolicy,
+    >,
+) -> bool {
+    if let Some(policy) = notebook_policy
+        && !matches!(
+            policy.lookup(route, usize::MAX),
+            crate::native::capture_language::notebook::NotebookRouteLookup::Miss
+        )
+    {
+        return true;
+    }
+    let target = bob_dir.join(capture::route_label(route));
+    std::fs::read_to_string(&target).is_ok_and(|contents| {
+        if let Some(frontmatter) =
+            crate::native::projects::parse_frontmatter(&contents)
+        {
+            return crate::native::projects::frontmatter_is_notebook(
+                &frontmatter,
+            );
+        }
+        contents.contains("[[notebook]]")
+    })
 }
 
 /// Build the additive `block_id` object for a `project_task_block_id`
@@ -216,6 +303,7 @@ fn build_project_task_block_id_field(
                 end: request.replacement.1,
             },
             intent: BlockIdIntent::New,
+            destination_kind: None,
             body: String::new(),
             allowed_character: BLOCK_ID_ALLOWED_CHARACTER.to_string(),
             allowed_description: BLOCK_ID_ALLOWED_DESCRIPTION.to_string(),
@@ -287,6 +375,7 @@ fn build_project_task_block_id_field(
             end: detail.marker_range.1,
         },
         intent: BlockIdIntent::New,
+        destination_kind: None,
         body: detail.body,
         allowed_character: allowed_character.to_string(),
         allowed_description: allowed_description.to_string(),

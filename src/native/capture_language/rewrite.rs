@@ -57,6 +57,7 @@ pub(crate) enum RewriteRule {
     AttachRelationLabel,
     ToggleRelationDirection,
     ExpandSigilAlias,
+    CollapseGlobalDestination,
 }
 
 impl RewriteRule {
@@ -68,6 +69,7 @@ impl RewriteRule {
             Self::AttachRelationLabel => "attach_relation_label",
             Self::ToggleRelationDirection => "toggle_relation_direction",
             Self::ExpandSigilAlias => "expand_sigil_alias",
+            Self::CollapseGlobalDestination => "collapse_global_destination",
         }
     }
 }
@@ -98,6 +100,11 @@ pub(crate) fn rewrite_draft(
 ) -> DraftRewrite {
     if super::template::analyze(raw_text).directive.is_some() {
         return unchanged_rewrite(raw_text, cursor, Vec::new());
+    }
+    if let Some(position) = cursor
+        && let Some(rewrite) = collapse_global_destination(raw_text, position)
+    {
+        return rewrite;
     }
     if let Some(position) = cursor
         && let Some(rewrite) =
@@ -145,6 +152,192 @@ pub(crate) fn rewrite_draft(
 /// ends a close selection aliases `!` or `*`. Everywhere else `=` stays
 /// literal, including inside a wikilink.
 ///
+/// Lexical `@@route` collapse assist: typing `#`, `/`, `\`, `^`, `.`, `+`,
+/// or `,` glued to a complete `@@route` collapses it to `@route#`/`^`/`+`
+/// without reading the vault. It is its own rewrite rule (no alias stamp or
+/// tip) and runs ahead of the dot fallback and ordinary aliases.
+fn collapse_global_destination(
+    raw_text: &str,
+    cursor: usize,
+) -> Option<DraftRewrite> {
+    if cursor == 0 || cursor > raw_text.len() {
+        return None;
+    }
+    if !raw_text.is_char_boundary(cursor)
+        || !raw_text.is_char_boundary(cursor - 1)
+    {
+        return None;
+    }
+    let trigger = *raw_text.as_bytes().get(cursor - 1)?;
+    let mapped = match trigger {
+        b'#' | b'/' | b'\\' => '#',
+        b'^' | b'.' => '^',
+        b'+' | b',' => '+',
+        _ => return None,
+    };
+    // Scan the glued route backwards: `[A-Za-z0-9_-]+` ending at `cursor-1`.
+    let bytes = raw_text.as_bytes();
+    let route_end = cursor - 1;
+    let mut route_start = route_end;
+    while route_start > 0 {
+        let byte = bytes[route_start - 1];
+        if byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-' {
+            // ASCII bytes are always char boundaries.
+            route_start -= 1;
+        } else {
+            break;
+        }
+    }
+    if route_start == route_end {
+        return None;
+    }
+    let route = raw_text.get(route_start..route_end)?;
+    if !is_route_token(route) {
+        return None;
+    }
+    if route_start < 2 {
+        return None;
+    }
+    if raw_text.get(route_start - 2..route_start)? != "@@" {
+        return None;
+    }
+    let token_start = route_start - 2;
+    if !raw_text.is_char_boundary(token_start) {
+        return None;
+    }
+    // Complete token boundary: the trigger sits at the caret and the next
+    // byte (when present) ends the token. Already-suffixed globals such as
+    // `@@cash#sec` (cursor after `#`) keep their trailing text, so the next
+    // byte is non-whitespace there and the collapse refuses.
+    if let Some(next) = bytes.get(cursor)
+        && !matches!(next, b' ' | b'\t' | b'\n' | b'\r')
+    {
+        return None;
+    }
+    // Token start boundary: `@@` must not continue a larger word and must
+    // not be escaped. A preceding route byte or `@` means no boundary;
+    // an odd run of backslashes escapes the token.
+    if token_start > 0 {
+        let prev = bytes[token_start - 1];
+        if prev.is_ascii_alphanumeric()
+            || prev == b'_'
+            || prev == b'-'
+            || prev == b'@'
+        {
+            return None;
+        }
+        if prev == b'\\' {
+            let mut run = 0usize;
+            let mut i = token_start;
+            while i > 0 && bytes[i - 1] == b'\\' {
+                run += 1;
+                i -= 1;
+            }
+            if run % 2 == 1 {
+                return None;
+            }
+        }
+    }
+    // Quoted prose / code: refuse when the token sits inside an unclosed
+    // wikilink, inline code span, or double-quoted span on its line.
+    let line_start = raw_text[..token_start].rfind('\n').map_or(0, |i| i + 1);
+    let prefix = raw_text.get(line_start..token_start).unwrap_or("");
+    // Wikilink: an unclosed `[[` before the token on this line.
+    if let Some(open) = prefix.rfind("[[") {
+        let after_open = &prefix[open + 2..];
+        if !after_open.contains("]]") {
+            return None;
+        }
+    }
+    // Inline code: odd unescaped backticks before the token on this line.
+    {
+        let mut ticks = 0usize;
+        let mut escaped = false;
+        for ch in prefix.chars() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == '`' {
+                ticks += 1;
+            }
+        }
+        if ticks % 2 == 1 {
+            return None;
+        }
+    }
+    // Double-quoted prose: odd unescaped `"` before the token on this line
+    // (exact-name and quoted text stay literal).
+    {
+        let mut quotes = 0usize;
+        let mut escaped = false;
+        for ch in prefix.chars() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == '"' || ch == '\u{201c}' || ch == '\u{201d}' {
+                quotes += 1;
+            }
+        }
+        if quotes % 2 == 1 {
+            return None;
+        }
+    }
+    // Fenced code: refuse when the token line sits inside a fenced block.
+    {
+        let lines: Vec<&str> = raw_text.split('\n').collect();
+        let mut offset = 0usize;
+        let mut in_fence = false;
+        for line in &lines {
+            let line_end = offset + line.len();
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+                // A fence marker toggles only when it opens/closes cleanly;
+                // inline spans never toggle here.
+                in_fence = !in_fence;
+                offset = line_end + 1;
+                continue;
+            }
+            if token_start >= offset && token_start <= line_end && in_fence {
+                return None;
+            }
+            offset = line_end + 1;
+        }
+    }
+    let replacement = format!("@{route}{mapped}");
+    let edits = vec![TextEdit {
+        start: token_start,
+        end: cursor,
+        replacement: replacement.clone(),
+    }];
+    let text = apply_text_edits(raw_text, &edits);
+    debug_assert_eq!(
+        &text[token_start..token_start + replacement.len()],
+        &replacement
+    );
+    Some(DraftRewrite {
+        rule: Some(RewriteRule::CollapseGlobalDestination),
+        edits,
+        text,
+        cursor: Some(token_start + replacement.len()),
+        summary: Some(format!(
+            "Collapsed @@{route}{} to {replacement}",
+            trigger as char
+        )),
+        notices: Vec::new(),
+        alias: None,
+    })
+}
+
 /// Two completion-gated fallbacks run after every rule above, so they never
 /// change an existing alias. A spaced `.` that did not become `^` or `@`
 /// aliases `&` wherever a bare `&` would open the Depends On picker, and a

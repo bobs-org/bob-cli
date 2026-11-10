@@ -3371,6 +3371,50 @@ pub(super) fn marker_field_at_cursor(
 
     let rest = text.strip_prefix('@')?;
     if let Some((route_part, prefix)) = rest.split_once('#') {
+        // `#section^id`: a `^` after the section opens the block-ID
+        // picker for a named note in that section. The section stays
+        // outside the replacement so accepting an ID keeps it.
+        if let Some((sec, block)) = prefix.split_once('^') {
+            let sec_end = token.start + 1 + route_part.len() + 1 + sec.len();
+            let caret = sec_end + 1;
+            if cursor >= caret {
+                if !is_route_token(route_part) {
+                    return None;
+                }
+                let block_start = caret;
+                let block_end = block_start + block.len();
+                if cursor < block_start || cursor > block_end {
+                    return None;
+                }
+                let split = cursor - block_start;
+                return Some(CompletionField {
+                    context: CompletionContext::TaskBlockId,
+                    route: Some(route_part.to_ascii_lowercase()),
+                    block_id: None,
+                    query: block[..split].to_string(),
+                    replacement: (block_start, block_end),
+                    bare_name: false,
+                });
+            }
+            // Cursor inside the section: fall through to Section below,
+            // but with the `^id` suffix excluded from the range. The
+            // caller (`completion_field_from_parts`) would otherwise
+            // own the suffix; trim it here by narrowing `prefix` to the
+            // section part. Since `right_end` derives from `prefix.len()`,
+            // pass only the section text.
+            return completion_field_from_parts(
+                token,
+                CompletionParts {
+                    sigil_len: 1,
+                    route_part,
+                    separator_len: 1,
+                    right_part: sec,
+                    right_context: Some(CompletionContext::Section),
+                    third: None,
+                },
+                cursor,
+            );
+        }
         return completion_field_from_parts(
             token,
             CompletionParts {

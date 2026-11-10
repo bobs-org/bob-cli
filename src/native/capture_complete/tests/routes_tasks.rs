@@ -437,3 +437,301 @@ fn three_component_marker_keeps_route_and_task_contexts() {
     assert_eq!(drawers[0].replacement, "#requirements");
     assert_eq!(drawers[0].title, "REQUIREMENTS");
 }
+
+fn write_notebook(temp: &TempDir, stem: &str, body: &str) {
+    write_file(
+        &temp.path().join(format!("{stem}.md")),
+        &format!(
+            "---\nparent: \"[[dev]]\"\ntype: \"[[notebook]]\"\nsummary: Notes.\n---\n\n# Title\n\n{body}"
+        ),
+    );
+}
+
+#[test]
+fn notebook_sections_list_h2_only_in_document_order() {
+    let temp = TempDir::new("bob-cli-capture-complete-notebook-sections");
+    write_file(&temp.path().join("dev.md"), "---\ntype: [[area]]\n---\n");
+    write_notebook(
+        &temp,
+        "dev_tools",
+        "# Preamble H1\n\n- top note\n\n## Git\n\n- a\n\n### Deep\n\n- b\n\n## Merge Tools\n\n- c\n\n```\n## Fenced\n```\n",
+    );
+    let raw = "@dev_tools#";
+    let value = result(temp.path(), raw, raw.len());
+    assert_eq!(value.context, Some(CompletionContext::Section));
+    let Candidates::Section(rows) = &value.candidates else {
+        panic!("expected section candidates");
+    };
+    let titles: Vec<&str> = rows
+        .iter()
+        .filter_map(|row| {
+            row.as_section().map(|section| section.title.as_str())
+        })
+        .collect();
+    assert_eq!(titles, vec!["Git", "Merge Tools"], "{titles:?}");
+    // Replacement round-trips: single-word title stays bare, multi-word
+    // becomes its hyphen slug.
+    let by_title: std::collections::HashMap<&str, &str> = rows
+        .iter()
+        .filter_map(|row| {
+            row.as_section().map(|section| {
+                (section.title.as_str(), section.replacement.as_str())
+            })
+        })
+        .collect();
+    assert_eq!(by_title["Git"], "Git");
+    assert_eq!(by_title["Merge Tools"], "merge-tools");
+    // Empty query offers no create row.
+    assert!(
+        rows.iter().all(|row| row.as_section().is_some()),
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn notebook_section_create_row_for_unrelated_slug_and_near_miss() {
+    let temp = TempDir::new("bob-cli-capture-complete-notebook-create");
+    write_file(&temp.path().join("dev.md"), "---\ntype: [[area]]\n---\n");
+    write_notebook(&temp, "dev_tools", "## Git\n\n- a\n");
+    // Exact title and slug suppress the create row.
+    for raw in ["@dev_tools#Git", "@dev_tools#git"] {
+        let value = result(temp.path(), raw, raw.len());
+        let Candidates::Section(rows) = &value.candidates else {
+            panic!("expected section candidates");
+        };
+        assert!(
+            rows.iter().all(|row| row.as_section().is_some()),
+            "{raw}: {rows:?}"
+        );
+    }
+    // Unrelated slug appends a bare-slug create row.
+    let raw = "@dev_tools#merge-tools";
+    let value = result(temp.path(), raw, raw.len());
+    let Candidates::Section(rows) = &value.candidates else {
+        panic!("expected section candidates");
+    };
+    let create = rows
+        .iter()
+        .find_map(|row| match row {
+            super::super::model::SectionMenuRow::NotebookCreate(create) => {
+                Some(create)
+            }
+            _ => None,
+        })
+        .expect("create row");
+    assert_eq!(create.replacement, "merge-tools");
+    assert_eq!(create.title, "Merge Tools");
+    assert_eq!(create.kind, "notebook_section_create");
+    // Near-miss unquoted slug offers the quoted selector.
+    let raw = "@dev_tools#gi";
+    let value = result(temp.path(), raw, raw.len());
+    let Candidates::Section(rows) = &value.candidates else {
+        panic!("expected section candidates");
+    };
+    let create = rows
+        .iter()
+        .find_map(|row| match row {
+            super::super::model::SectionMenuRow::NotebookCreate(create) => {
+                Some(create)
+            }
+            _ => None,
+        })
+        .expect("near-miss create row");
+    assert_eq!(create.replacement, "\"Gi\"");
+    // Quoted title preserves the authored spelling.
+    let raw = "@dev_tools#\"Merge tools\"";
+    let value = result(temp.path(), raw, raw.len());
+    let Candidates::Section(rows) = &value.candidates else {
+        panic!("expected section candidates");
+    };
+    let create = rows
+        .iter()
+        .find_map(|row| match row {
+            super::super::model::SectionMenuRow::NotebookCreate(create) => {
+                Some(create)
+            }
+            _ => None,
+        })
+        .expect("quoted create row");
+    assert_eq!(create.title, "Merge tools");
+    // Applying the response replacement keeps exactly one `#` and the
+    // advertised title is accepted by the shared resolver.
+    let mut draft = raw.to_string();
+    draft.replace_range(
+        value.replacement.start..value.replacement.end,
+        &create.replacement,
+    );
+    assert_eq!(draft.matches('#').count(), 1, "{draft:?}");
+    let headings = crate::native::capture_language::notebook::notebook_sections(
+        &std::fs::read_to_string(temp.path().join("dev_tools.md"))
+            .expect("read"),
+    );
+    match crate::native::capture_language::notebook::resolve_notebook_section(
+        &create.title,
+        true,
+        &headings,
+    ) {
+        crate::native::capture_language::notebook::NotebookSectionResolution::Create { title } => {
+            assert_eq!(title, "Merge tools");
+        }
+        other => panic!("expected create, got {other:?}"),
+    }
+}
+
+#[test]
+fn notebook_block_ids_mark_notebook_kind_and_avoid_all_ids() {
+    let temp = TempDir::new("bob-cli-capture-complete-notebook-blockids");
+    write_file(&temp.path().join("dev.md"), "---\ntype: [[area]]\n---\n");
+    write_notebook(
+        &temp,
+        "dev_tools",
+        "## Git\n\n- Use merge ^merge-cmd\n\n- Plain bullet ^plain-id\n\n",
+    );
+    // `@nb^` stays new intent with the notebook marker.
+    let raw = "Try mergiraf @dev_tools^";
+    let value = result(temp.path(), raw, raw.len());
+    assert_eq!(value.context, Some(CompletionContext::TaskBlockId));
+    let block_id = value.block_id.as_ref().expect("block_id object");
+    assert_eq!(block_id.intent, capture_block_ids::BlockIdIntent::New);
+    assert_eq!(block_id.destination_kind, Some("notebook"));
+    // Body derives from the note text without route syntax.
+    assert_eq!(block_id.body, "Try mergiraf");
+    // Used IDs include both task and non-task anchors; suggestions avoid
+    // every actual ID in the file.
+    let used: Vec<&str> = block_id
+        .used
+        .iter()
+        .map(|entry| entry.id.as_str())
+        .collect();
+    assert!(used.contains(&"merge-cmd"), "{used:?}");
+    assert!(used.contains(&"plain-id"), "{used:?}");
+    for suggestion in &block_id.suggestions {
+        assert!(!used.contains(&suggestion.as_str()), "{suggestion:?}");
+    }
+    // Ordinary task fields leave the new field absent.
+    write_file(
+        &temp.path().join("cash.md"),
+        "---\ntype: [[area]]\n---\n- [ ] #task Work ^work\n",
+    );
+    let raw = "Do work @cash^";
+    let value = result(temp.path(), raw, raw.len());
+    let block_id = value.block_id.as_ref().expect("block_id object");
+    assert_eq!(block_id.destination_kind, None);
+    // `#section^` also carries the notebook kind.
+    let raw = "Try mergiraf @dev_tools#Git^";
+    let value = result(temp.path(), raw, raw.len());
+    let block_id = value.block_id.as_ref().expect("block_id object");
+    assert_eq!(block_id.intent, capture_block_ids::BlockIdIntent::New);
+    assert_eq!(block_id.destination_kind, Some("notebook"));
+    // Unicode body and cursors keep working.
+    let raw = "caf\u{e9} notes @dev_tools^";
+    let value = result(temp.path(), raw, raw.len());
+    let block_id = value.block_id.as_ref().expect("block_id object");
+    assert_eq!(block_id.destination_kind, Some("notebook"));
+    assert!(block_id.body.contains("caf\u{e9}"), "{}", block_id.body);
+}
+
+#[test]
+fn notebook_note_bullets_offer_idd_first_then_idless() {
+    let temp = TempDir::new("bob-cli-capture-complete-notebook-notes");
+    write_file(&temp.path().join("dev.md"), "---\ntype: [[area]]\n---\n");
+    write_notebook(
+        &temp,
+        "dev_tools",
+        "## Git\n\n- Use merge ^merge-cmd\n\n- Plain idea\n\n  - Nested detail\n\n- [ ] Task checkbox ^task-id\n\n# Not a section\n\n```\n- Fenced ^fenced-id\n```\n",
+    );
+    let raw = "note @dev_tools+";
+    let value = result(temp.path(), raw, raw.len());
+    assert_eq!(value.context, Some(CompletionContext::Task));
+    let Candidates::Task(rows) = &value.candidates else {
+        panic!("expected task candidates");
+    };
+    // Eligible: two top-level notes + one nested; checkbox, heading,
+    // and fenced examples excluded.
+    assert_eq!(rows.len(), 3, "{rows:?}");
+    assert!(
+        rows.iter().all(|row| row.item_kind == Some("note")),
+        "{rows:?}"
+    );
+    // ID'd first, then ID-less in document order.
+    assert_eq!(rows[0].block_id.as_deref(), Some("merge-cmd"));
+    assert_eq!(rows[0].replacement, "merge-cmd");
+    assert!(!rows[0].requires_block_id);
+    assert!(rows[1].requires_block_id);
+    assert!(rows[2].requires_block_id);
+    assert!(rows[1].line > rows[0].line);
+    assert!(rows[2].line > rows[1].line);
+    assert_eq!(rows[1].text, "Plain idea");
+    assert_eq!(rows[2].text, "Nested detail");
+    assert!(rows[1].block_id_suggestions.is_some());
+    // Filtering by text and ID.
+    let filtered = result(
+        temp.path(),
+        "note @dev_tools+merge",
+        "note @dev_tools+merge".len(),
+    );
+    let Candidates::Task(rows) = &filtered.candidates else {
+        panic!("expected task candidates");
+    };
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].block_id.as_deref(), Some("merge-cmd"));
+    // Bare `+` stays task-only: a task note still offers tasks.
+    write_file(
+        &temp.path().join("cash.md"),
+        "---\ntype: [[area]]\n---\n- [ ] #task Work ^work\n",
+    );
+    let value = result(temp.path(), "note @cash+", "note @cash+".len());
+    let Candidates::Task(rows) = &value.candidates else {
+        panic!("expected task candidates");
+    };
+    assert!(rows.iter().all(|row| row.item_kind.is_none()), "{rows:?}");
+}
+
+#[test]
+fn notebook_note_duplicate_ids_are_disabled() {
+    let temp = TempDir::new("bob-cli-capture-complete-notebook-dup");
+    write_file(&temp.path().join("dev.md"), "---\ntype: [[area]]\n---\n");
+    write_notebook(
+        &temp,
+        "dev_tools",
+        "- First ^dup\n\n- Second ^dup\n\n- Plain\n",
+    );
+    let raw = "note @dev_tools+";
+    let value = result(temp.path(), raw, raw.len());
+    let Candidates::Task(rows) = &value.candidates else {
+        panic!("expected task candidates");
+    };
+    let dup_rows: Vec<_> = rows
+        .iter()
+        .filter(|row| row.block_id.as_deref() == Some("dup"))
+        .collect();
+    assert_eq!(dup_rows.len(), 2);
+    assert!(dup_rows.iter().all(|row| row.disabled_reason.is_some()));
+    assert!(dup_rows.iter().all(|row| row.replacement.is_empty()));
+}
+
+#[test]
+fn notebook_section_completion_keeps_block_id_suffix_range() {
+    let temp = TempDir::new("bob-cli-capture-complete-notebook-suffix");
+    write_file(&temp.path().join("dev.md"), "---\ntype: [[area]]\n---\n");
+    write_notebook(&temp, "dev_tools", "## Git\n\n- a\n");
+    let raw = "@dev_tools#Git^myid";
+    let cursor = "@dev_tools#Git".len();
+    let value = result(temp.path(), raw, cursor);
+    assert_eq!(value.context, Some(CompletionContext::Section));
+    assert_eq!(
+        value.replacement,
+        Replacement {
+            start: "@dev_tools#".len(),
+            end: "@dev_tools#Git".len()
+        }
+    );
+    let mut draft = raw.to_string();
+    let replacement = section_rows(&value.candidates)[0].replacement.clone();
+    draft.replace_range(
+        value.replacement.start..value.replacement.end,
+        &replacement,
+    );
+    assert_eq!(draft.matches('#').count(), 1, "{draft:?}");
+    assert!(draft.ends_with("^myid"), "{draft:?}");
+}

@@ -929,16 +929,22 @@ pub(crate) fn shell_completion(
             // `build_result` does: link intent (a solo `@route:` item)
             // offers existing linkable tasks, while new or project-note
             // intent offers the field's suggestions as new block IDs.
-            let block_field = capture_block_ids::build_block_id_field(
-                bob_dir,
-                raw_text,
-                cursor,
-                &capture_block_ids::BlockIdRequest {
-                    route,
-                    replacement: field.replacement,
-                    context: field.context,
-                },
-            );
+            let notebook_policy =
+                crate::native::capture_notebooks::notebook_policy_for_draft(
+                    bob_dir, raw_text,
+                );
+            let block_field =
+                capture_block_ids::build_block_id_field_with_notebooks(
+                    bob_dir,
+                    raw_text,
+                    cursor,
+                    &capture_block_ids::BlockIdRequest {
+                        route,
+                        replacement: field.replacement,
+                        context: field.context,
+                    },
+                    Some(&notebook_policy),
+                );
             if !matches!(
                 block_field.intent,
                 capture_block_ids::BlockIdIntent::Link

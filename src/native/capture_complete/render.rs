@@ -513,6 +513,9 @@ pub(super) fn candidate_lines(
                 super::model::SectionMenuRow::Create(row) => {
                     (row.label.clone(), "new record".to_string())
                 }
+                super::model::SectionMenuRow::NotebookCreate(row) => {
+                    (row.label.clone(), "new section".to_string())
+                }
                 super::model::SectionMenuRow::Section(row) => {
                     (item.replacement().to_string(), format!("H{}", row.level))
                 }
