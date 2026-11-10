@@ -139,6 +139,8 @@ pub(super) fn plan_transfer_item(
                 allow_closed: false,
                 placement: MovePlacement::Append,
                 id_collision: IdCollisionPolicy::Refuse,
+                restore: false,
+                reopen: false,
             };
             let plan = match apply_batch_move(
                 planner,

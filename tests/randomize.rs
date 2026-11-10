@@ -425,9 +425,8 @@ fn randomize_help_lists_options_alphabetically() {
     assert_success(&top);
     let top_help = stdout(&top);
     assert!(
-        top_help.contains(
-            "task         Vault-wide task maintenance: archive, merge, move,"
-        ),
+        top_help
+            .contains("task         Task maintenance: archive, merge, move,"),
         "expected top-level help to list task reroll:\n{}",
         format_output(&top)
     );

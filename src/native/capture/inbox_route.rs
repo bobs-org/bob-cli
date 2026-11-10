@@ -470,6 +470,8 @@ pub(super) fn apply_inbox_routes(
             allow_closed: true,
             placement: MovePlacement::Append,
             id_collision: IdCollisionPolicy::Rename,
+            restore: false,
+            reopen: false,
         };
         let plan = match apply_batch_move_from_snapshot(
             planner, bob_dir, settings, today, &request, &snapshot,

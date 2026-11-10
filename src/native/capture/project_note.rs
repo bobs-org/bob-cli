@@ -2376,6 +2376,8 @@ fn execute_project_note_moves(
         allow_closed: false,
         placement: MovePlacement::CaptureSlots(slots),
         id_collision: IdCollisionPolicy::Refuse,
+        restore: false,
+        reopen: false,
     };
     let move_plan = match apply_batch_move(
         planner,

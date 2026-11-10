@@ -210,6 +210,14 @@ const TASK_MEMBERS: &[Member] = &[
         },
     },
     Member {
+        name: "restore",
+        about: "Restore archived tasks to their source notes",
+        leaf: Leaf {
+            native_command: NativeCommand::TaskRestore,
+            script_command: None,
+        },
+    },
+    Member {
         name: "split",
         about: "Split task notes into linked tasks",
         leaf: Leaf {
@@ -254,6 +262,7 @@ Examples:
   bob task split --dry-run       Preview splitting task notes into tasks
   bob task reconcile --dry-run   Preview task status reconciliation
   bob task reroll --dry-run      Preview re-rolling due prioritized tasks
+  bob task restore --dry-run     Preview restoring archived tasks home
 
 See also: bob plan, bob ready, bob freshness, bob projects, bob query
 Run 'bob task <command> --help' for more information on a command.";
@@ -859,7 +868,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "task",
-        about: "Vault-wide task maintenance: archive, merge, move, reconcile, reroll, split",
+        about: "Task maintenance: archive, merge, move, reconcile, reroll, restore, split",
         section: Section::TasksAndProjects,
         target: Target::Group(Group {
             members: TASK_MEMBERS,
@@ -2415,6 +2424,7 @@ mod tests {
             NativeCommand::MoveDoneTasks,
             NativeCommand::TaskMerge,
             NativeCommand::TaskMove,
+            NativeCommand::TaskRestore,
             NativeCommand::TaskSplit,
             NativeCommand::Nightly,
             NativeCommand::NotebooksCheck,

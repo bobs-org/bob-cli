@@ -1473,6 +1473,10 @@ pub(crate) const EXCLUDED: &[Excluded] = &[
         reason: "Use Ctrl+Shift+M, which moves tasks through the editor",
     },
     Excluded {
+        path: &["task", "restore"],
+        reason: "Restore an archived task; run it from a terminal",
+    },
+    Excluded {
         path: &["articles", "format"],
         reason: "Use Format this article (bob-articles formats through the \
                  editor)",

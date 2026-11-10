@@ -14,6 +14,8 @@ use std::{fs, io};
 
 use super::super::{
     capture_dependency_tasks::has_prj_is_blocked_tag,
+    capture_task_toggle::set_task_line_status,
+    collect_done::pair::{ArchiveLookup, ArchivePairIndex},
     collect_done::{
         has_task_tag, leading_indent_len, repair_links_in_note_with,
         split_line_ending, task_block_end, trailing_block_id_in_line,
@@ -26,13 +28,15 @@ use super::super::{
         frontmatter_is_area, frontmatter_is_notebook, frontmatter_is_project,
         frontmatter_value, parse_frontmatter, trim_yaml_scalar, ProjectStatus,
     },
-    task_complete::is_inbox_note,
+    relation_labels::relation_label_key,
+    task_complete::tree::remove_completion_fields,
+    task_complete::{is_inbox_note, is_recurring_task_line},
     task_dependencies::{
         dependency_id, inline_code_spans, is_archive_path, parse,
         DependencyLine,
     },
     task_fields::inline_fields,
-    task_status_groups,
+    task_relations, task_status_groups,
     vault_links::{self, NoteIndex},
 };
 
@@ -77,6 +81,16 @@ pub(crate) struct MoveRequest {
     /// collision-renaming behavior. Capture can refuse instead because a
     /// collision would make a typed move bullet resolve to a different task.
     pub(crate) id_collision: IdCollisionPolicy,
+    /// Restore an archived task: the source may live under done/ (the
+    /// destination still may not), an empty destination resolves to the
+    /// archive's bound source through the pairing resolver, and recurring
+    /// occurrences plus merge tombstones are refused. Only
+    /// `bob task restore` sets this; `bob task move`, inbox routing, and
+    /// capture keep refusing every done/ path.
+    pub(crate) restore: bool,
+    /// Reopen each restored root (`[ ]` plus close-field removal). Only
+    /// `bob task restore --reopen` sets this.
+    pub(crate) reopen: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -398,6 +412,16 @@ pub(crate) enum PlanError {
         path: PathBuf,
         role: &'static str,
     },
+    RestoreNoSource {
+        path: PathBuf,
+        detail: String,
+    },
+    RestoreRecurring {
+        candidate: TaskCandidate,
+    },
+    RestoreTombstone {
+        candidate: TaskCandidate,
+    },
     DestKind {
         path: PathBuf,
         detail: String,
@@ -503,6 +527,27 @@ impl fmt::Display for PlanError {
                     formatter,
                     "{role} {} is under done/ and cannot be used",
                     path.display()
+                )
+            }
+            Self::RestoreNoSource { path, detail } => {
+                write!(
+                    formatter,
+                    "cannot restore from {}: {detail}",
+                    path.display()
+                )
+            }
+            Self::RestoreRecurring { candidate } => {
+                write!(
+                    formatter,
+                    "refusing recurring task {}",
+                    format_candidate(candidate)
+                )
+            }
+            Self::RestoreTombstone { candidate } => {
+                write!(
+                    formatter,
+                    "refusing merged-task tombstone {}",
+                    format_candidate(candidate)
                 )
             }
             Self::DestKind { path, detail } => {
@@ -655,6 +700,9 @@ impl PlanError {
             Self::AmbiguousNote { .. } => "move_ambiguous_note",
             Self::SameSourceAndDest { .. } => "move_same_note",
             Self::ArchivePath { .. } => "move_archive_path",
+            Self::RestoreNoSource { .. } => "restore_no_source",
+            Self::RestoreRecurring { .. } => "restore_recurring_task",
+            Self::RestoreTombstone { .. } => "restore_merge_tombstone",
             Self::DestKind { .. } => "move_dest_kind",
             Self::ProjectWithoutTasks { .. } => "move_project_without_tasks",
             Self::SelectorZero { .. } => "move_selector_zero",
@@ -740,11 +788,24 @@ pub(crate) fn plan_task_move(
 
     let note_index = NoteIndex::from_paths(snapshot.notes.keys().cloned());
     let source_path = resolve_note(&note_index, &request.source)?;
-    let dest_path = resolve_note(&note_index, &request.dest)?;
+    if request.restore && !is_archive_path(&source_path) {
+        return Err(PlanError::RestoreNoSource {
+            path: source_path,
+            detail: "source is not under done/; restore takes an archive note"
+                .to_string(),
+        });
+    }
+    let dest_path = if request.restore && request.dest.trim().is_empty() {
+        restore_bound_source(snapshot, &source_path)?
+    } else {
+        resolve_note(&note_index, &request.dest)?
+    };
     if source_path == dest_path {
         return Err(PlanError::SameSourceAndDest { path: source_path });
     }
-    refuse_archive_path(&source_path, "source")?;
+    if !request.restore {
+        refuse_archive_path(&source_path, "source")?;
+    }
     refuse_archive_path(&dest_path, "destination")?;
 
     let source_contents = snapshot_note(snapshot, &source_path)?;
@@ -825,6 +886,9 @@ pub(crate) fn plan_task_move(
     let source_id_counts = count_live_block_ids(source_contents);
 
     for task in &selected {
+        if request.restore {
+            refuse_restore_selection(&source_logical, &source_fenced, task)?;
+        }
         validate_movable_root(
             task,
             &source_path,
@@ -892,12 +956,18 @@ pub(crate) fn plan_task_move(
             block_id,
         },
     })?;
-    let fragments: Vec<String> = fragments
+    let mut fragments: Vec<String> = fragments
         .iter()
         .map(|fragment| {
             transplant::rebase_fragment(fragment, "", "", "", "", false)
         })
         .collect();
+    if request.reopen {
+        fragments = fragments
+            .iter()
+            .map(|fragment| reopen_fragment_root(fragment))
+            .collect();
+    }
     validate_mapped_identities(snapshot, &source_path, &dest_path, &id_map)?;
 
     let dest_target = vault_relative_link_target(&dest_path, "destination")
@@ -998,7 +1068,15 @@ pub(crate) fn plan_task_move(
         renames,
         landing_lines,
     );
-    let postimages = transplanted.postimages;
+    let mut postimages = transplanted.postimages;
+    if request.restore
+        && let Some(source_postimage) = postimages.get(&source_path)
+    {
+        postimages.insert(
+            source_path.clone(),
+            trim_emptied_month_headings(source_postimage),
+        );
+    }
 
     let mut moves = Vec::new();
     let mut carried_block_tag = false;
@@ -1035,7 +1113,7 @@ pub(crate) fn plan_task_move(
             old_dependency_id,
             new_dependency_id,
             destination_section,
-            status_symbol: task.symbol,
+            status_symbol: if request.reopen { ' ' } else { task.symbol },
         });
     }
 
@@ -1142,6 +1220,214 @@ fn refuse_archive_path(
         });
     }
     Ok(())
+}
+
+/// Resolve a restore destination to the archive's bound source through the
+/// shared pairing resolver. Orphan and conflicted archives are refused
+/// instead of guessed, so a restore never lands in the wrong note; pass an
+/// explicit destination to override.
+fn restore_bound_source(
+    snapshot: &VaultSnapshot,
+    archive: &Path,
+) -> Result<PathBuf, PlanError> {
+    let index = ArchivePairIndex::from_contents(&snapshot.notes);
+    match index.for_archive(archive) {
+        ArchiveLookup::Bound(bound) => Ok(bound.source),
+        ArchiveLookup::Orphan { .. } => Err(PlanError::RestoreNoSource {
+            path: archive.to_path_buf(),
+            detail: "archive has no resolvable source; pass -d/--dest NOTE"
+                .to_string(),
+        }),
+        ArchiveLookup::Refused { reason, related } => {
+            let mut detail = format!(
+                "archive binding is refused ({reason}); pass -d/--dest NOTE"
+            );
+            if !related.is_empty() {
+                detail.push_str(&format!(
+                    " (see {})",
+                    related
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            Err(PlanError::RestoreNoSource {
+                path: archive.to_path_buf(),
+                detail,
+            })
+        }
+    }
+}
+
+/// Restore-only selection refusals: recurring occurrences and merged-task
+/// tombstones never come back (each needs explicit handling first). `^prj`
+/// lines stay refused by the shared movable-task check.
+fn refuse_restore_selection(
+    lines: &[&str],
+    fenced: &BTreeSet<usize>,
+    task: &ScannedTask,
+) -> Result<(), PlanError> {
+    if is_recurring_task_line(&task.line) {
+        return Err(PlanError::RestoreRecurring {
+            candidate: task.candidate(),
+        });
+    }
+    if task_block_has_merge_tombstone(lines, fenced, task.line_index) {
+        return Err(PlanError::RestoreTombstone {
+            candidate: task.candidate(),
+        });
+    }
+    Ok(())
+}
+
+/// Whether the task block carries a merge tombstone: a direct-child LINKS
+/// line with the canonical `merged into` relation entry that
+/// `bob task merge` stamps on retired sources.
+fn task_block_has_merge_tombstone(
+    lines: &[&str],
+    fenced: &BTreeSet<usize>,
+    task_line: usize,
+) -> bool {
+    let merge_key = relation_label_key("merged into");
+    task_relations::parse::links_children_of(lines, fenced, task_line)
+        .iter()
+        .any(|child| {
+            let task_relations::LinksLine::Accepted { entries, .. } =
+                &child.parsed
+            else {
+                return false;
+            };
+            entries.iter().any(|entry| {
+                entry
+                    .label
+                    .as_ref()
+                    .is_some_and(|label| relation_label_key(label) == merge_key)
+            })
+        })
+}
+
+/// Reopen one moved fragment's root line: checkbox back to `[ ]` with the
+/// managed `[completion::]`/`[cancelled::]` close fields removed. Children
+/// keep their bytes; only the root row is retouched.
+fn reopen_fragment_root(fragment: &str) -> String {
+    let mut pieces = fragment.split_inclusive('\n');
+    let Some(first) = pieces.next() else {
+        return fragment.to_string();
+    };
+    let (content, ending) = split_line_ending(first);
+    let opened = set_task_line_status(content, ' ')
+        .unwrap_or_else(|| content.to_string());
+    let stripped = remove_cancelled_fields(&remove_completion_fields(&opened));
+    let mut reopened = String::with_capacity(fragment.len());
+    reopened.push_str(&stripped);
+    reopened.push_str(ending);
+    for rest in pieces {
+        reopened.push_str(rest);
+    }
+    reopened
+}
+
+/// Remove managed `[cancelled:: DATE]` fields, mirroring
+/// [`remove_completion_fields`]. Reopen is the only caller: a cancelled row
+/// coming back open must not keep its cancel stamp.
+fn remove_cancelled_fields(line: &str) -> String {
+    let bytes = line.as_bytes();
+    let mut ranges = Vec::new();
+    let mut cursor = 0;
+    while let Some(relative) = line[cursor..].find("[cancelled::") {
+        let start = cursor + relative;
+        let Some(close_relative) = line[start..].find(']') else {
+            break;
+        };
+        let end = start + close_relative + 1;
+        let mut remove_start = start;
+        while remove_start > 0
+            && matches!(bytes[remove_start - 1], b' ' | b'\t')
+        {
+            remove_start -= 1;
+        }
+        ranges.push((remove_start, end));
+        cursor = end;
+    }
+    if ranges.is_empty() {
+        return line.to_string();
+    }
+    let mut updated = line.to_string();
+    for (start, end) in ranges.into_iter().rev() {
+        updated.replace_range(start..end, "");
+    }
+    updated
+}
+
+/// Drop a keep-window month heading (`## YYYY-MM` or `## Undated`) that the
+/// restore emptied: nothing but blank lines may remain between the heading
+/// and the next heading or end of file. Fenced and frontmatter lines are
+/// never headings, so archived code samples survive the trim.
+fn trim_emptied_month_headings(contents: &str) -> String {
+    let lines: Vec<&str> = contents.split_inclusive('\n').collect();
+    if lines.is_empty() {
+        return contents.to_string();
+    }
+    let logical: Vec<&str> =
+        lines.iter().map(|line| split_line_ending(line).0).collect();
+    let frontmatter_end = markdown::strictly_closed_frontmatter_end(&logical);
+    let scan_start = frontmatter_end.map_or(0, |end| end + 1);
+    let fenced = markdown::fenced_lines(&logical, scan_start..logical.len());
+    let hidden: BTreeSet<usize> = frontmatter_end
+        .map(|end| (0..=end).collect::<BTreeSet<usize>>())
+        .unwrap_or_default()
+        .union(&fenced)
+        .copied()
+        .collect();
+    let mut drop_lines: BTreeSet<usize> = BTreeSet::new();
+    for (index, line) in logical.iter().enumerate() {
+        if hidden.contains(&index) || !is_month_heading(line) {
+            continue;
+        }
+        let mut cursor = index + 1;
+        while cursor < logical.len() && logical[cursor].trim().is_empty() {
+            cursor += 1;
+        }
+        let emptied = cursor >= logical.len()
+            || markdown::atx_heading(logical[cursor]).is_some();
+        if !emptied {
+            continue;
+        }
+        drop_lines.insert(index);
+        for (offset, line) in logical[(index + 1)..cursor].iter().enumerate() {
+            if line.trim().is_empty() {
+                drop_lines.insert(index + 1 + offset);
+            }
+        }
+    }
+    if drop_lines.is_empty() {
+        return contents.to_string();
+    }
+    lines
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| !drop_lines.contains(index))
+        .map(|(_, line)| line)
+        .collect()
+}
+
+/// Whether a logical line is a keep-window month heading: `## YYYY-MM` or
+/// `## Undated`, the only section titles the archiver files closed roots
+/// under.
+fn is_month_heading(line: &str) -> bool {
+    let Some(title) = line
+        .strip_prefix("## ")
+        .or_else(|| line.strip_prefix("##\t"))
+        .map(str::trim)
+    else {
+        return false;
+    };
+    if title == "Undated" {
+        return true;
+    }
+    let mut parts = title.split('-');
+    matches!((parts.next(), parts.next(), parts.next()), (Some(year), Some(month), None) if year.len() == 4 && month.len() == 2 && year.bytes().all(|byte| byte.is_ascii_digit()) && month.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

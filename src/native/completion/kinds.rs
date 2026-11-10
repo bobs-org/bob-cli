@@ -274,6 +274,28 @@ const TABLE: &[Entry] = &[
         arg: "match",
         kind: Kind::FreeText,
     },
+    // `bob task restore` mirrors the move selector grammar against an
+    // archive SOURCE, with an optional destination override.
+    Entry {
+        path: &["task", "restore"],
+        arg: "source",
+        kind: Kind::VaultNote,
+    },
+    Entry {
+        path: &["task", "restore"],
+        arg: "dest",
+        kind: Kind::VaultNote,
+    },
+    Entry {
+        path: &["task", "restore"],
+        arg: "block",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["task", "restore"],
+        arg: "match",
+        kind: Kind::FreeText,
+    },
     // Period ids are typed as text, but note paths are useful completions too.
     Entry {
         path: &["periods", "show"],

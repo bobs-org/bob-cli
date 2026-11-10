@@ -9,7 +9,7 @@ before articles, period-note problems, and the trailing `vault-sync`.
 
 This file is the behavior contract. The keep window and plugin restore are
 later phases; this page describes the selection, pairing, rename following,
-guarded-write, preview, and JSON rules that ship today.
+guarded-write, preview, JSON, and task-restore rules that ship today.
 
 ## Command
 
@@ -357,6 +357,55 @@ and skips Git entirely. A partial write skips Git.
 
 A Git failure exits nonzero and says so truthfully: the vault changes are
 already applied, the archive is not rerun, and `exit.reason` is `git_failed`.
+
+## Restore
+
+`bob task restore` moves selected closed `#task` blocks out of a `done/`
+archive back into a live note. It reuses the move selector grammar, plan,
+guarded apply, lock, sync, commit, and report: moving from an archive repairs
+links vault-wide exactly as any move does, which reverses the archive's link
+repair, and it keeps the block's logs, children, and recorded time.
+
+```text
+bob task restore [OPTIONS] <SOURCE> (-b ID | -m TEXT)...
+  -b, --block ID               Select by trailing block id without ^; repeatable
+  -d, --dest NOTE               Restore into this area or project note instead
+  -n, --dry-run                 Plan and print only
+  -f, --format human|json       Default: human
+  -h, --help                    Show help
+  -m, --match TEXT              Select by literal task-line substring; repeatable
+  -o, --offline                 Skip both sync cycles; commit locally
+  -r, --reopen                  Restore the task open: set [ ] and remove its close field
+```
+
+```bash
+bob task restore --dry-run done/work_done -b old-task
+bob task restore done/work_done -m 'Quarterly review'
+bob task restore done/work_done -b old-task -r
+bob task restore -d projects/launch done/work_done -b old-task
+```
+
+The destination defaults to the archive's bound source through the pairing
+resolver ([Destination and pairing](#destination-and-pairing)). With no
+resolvable source and no `-d`, restore refuses (`restore_no_source`) instead
+of guessing. Destinations in `done/` stay refused, as do non-area/project
+notes, finished projects, and notebook notes.
+
+With `-r/--reopen` the restored root returns open (`[ ]`) with its
+`[completion::]`/`[cancelled::]` field removed. Without it the task returns
+closed. Reopen never auto-links today's Pomodoros; reconcile derives Blocked
+from the task's own dependencies and schedule afterwards.
+
+Restore refuses recurring occurrences (`restore_recurring_task`), merged-task
+tombstones (`restore_merge_tombstone`), and `^prj` lines (`move_project_task`).
+A restore that empties a keep-window month heading (`## YYYY-MM` or
+`## Undated`) removes that heading; other headings and fenced examples stay
+untouched.
+
+`-n` previews without locking, syncing, probing Git, or writing. `-f json`
+prints the same `schema_version: 1` move report as
+[bob task move](task-move.md#output), with the restored task's final status
+in `moves[].status_symbol` and the `bob task restore …` commit subject.
 
 ## What reconcile still owns
 

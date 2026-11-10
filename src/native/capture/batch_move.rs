@@ -300,6 +300,8 @@ mod tests {
             allow_closed: false,
             placement: MovePlacement::Append,
             id_collision: IdCollisionPolicy::Refuse,
+            restore: false,
+            reopen: false,
         };
 
         let error = apply_batch_move_from_snapshot(

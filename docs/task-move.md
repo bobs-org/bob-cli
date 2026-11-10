@@ -77,7 +77,9 @@ report with a `↪ Moved N tasks into db.md › Tasks` header.
 
 The command validates every selector and destination before writing. It refuses
 missing or ambiguous notes, absolute or escaping paths, unsupported filesystem
-objects, identical source and destination, and either note under `done/`. It
+objects, identical source and destination, and a destination under `done/`
+(a source under `done/` moves only through
+[bob task restore](task-archive.md#restore)). It
 also refuses closed, nested, non-task, and `^prj` selections; an ambiguous block
 identity; a non-canonical existing `[id::]`, including a stale extra field on
 the same task; an encoded identity that collides with another live note

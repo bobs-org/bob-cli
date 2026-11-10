@@ -40,8 +40,41 @@ use super::{
 use crate::native::task_locator::TaskLocator;
 
 const COMMAND_NAME: &str = "bob task move";
-const DEFAULT_RETRY_TIMEOUT_SECS: u64 = 60;
+pub(crate) const DEFAULT_RETRY_TIMEOUT_SECS: u64 = 60;
 const TOOL_NAME: &str = "task-move";
+
+/// Which task-move flavor a report belongs to. Restore reuses the move
+/// pipeline (plan, guarded apply, lock, sync, commit, report) with its own
+/// command name, recovery tool name, and commit subject.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum CommandKind {
+    #[default]
+    Move,
+    Restore,
+}
+
+impl CommandKind {
+    pub(crate) fn command_name(self) -> &'static str {
+        match self {
+            Self::Move => COMMAND_NAME,
+            Self::Restore => super::restore::COMMAND_NAME,
+        }
+    }
+
+    fn tool_name(self) -> &'static str {
+        match self {
+            Self::Move => TOOL_NAME,
+            Self::Restore => super::restore::TOOL_NAME,
+        }
+    }
+
+    fn action(self) -> &'static str {
+        match self {
+            Self::Move => "Move",
+            Self::Restore => "Restore",
+        }
+    }
+}
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let mut command = build_cli();
@@ -107,6 +140,8 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         allow_closed: false,
         placement: MovePlacement::Append,
         id_collision: IdCollisionPolicy::Rename,
+        restore: false,
+        reopen: false,
     };
     let exit = execute(&mut report, &request);
     print_report(&report);
@@ -127,7 +162,9 @@ fn many_tasks_from_matches(matches: &ArgMatches) -> Vec<String> {
     tasks
 }
 
-fn selectors_from_matches(matches: &ArgMatches) -> Vec<MoveSelector> {
+pub(crate) fn selectors_from_matches(
+    matches: &ArgMatches,
+) -> Vec<MoveSelector> {
     let mut selectors = Vec::new();
     if let Some(blocks) = matches.get_many::<String>("block") {
         selectors.extend(blocks.cloned().map(MoveSelector::Block));
@@ -138,7 +175,7 @@ fn selectors_from_matches(matches: &ArgMatches) -> Vec<MoveSelector> {
     selectors
 }
 
-fn print_clap_error(error: clap::Error) -> i32 {
+pub(crate) fn print_clap_error(error: clap::Error) -> i32 {
     let code = error.exit_code();
     if let Err(print_error) = error.print() {
         // A closed pipe renders nothing: stay quiet instead of
@@ -180,13 +217,13 @@ pub(crate) fn build_cli() -> ClapCommand {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OutputFormat {
+pub(crate) enum OutputFormat {
     Human,
     Json,
 }
 
 impl OutputFormat {
-    fn from_matches(matches: &ArgMatches) -> Self {
+    pub(crate) fn from_matches(matches: &ArgMatches) -> Self {
         if matches.get_one::<String>("format").map(String::as_str)
             == Some("json")
         {
@@ -252,7 +289,8 @@ impl GitMode {
     }
 }
 
-struct Report {
+pub(crate) struct Report {
+    pub(crate) kind: CommandKind,
     format: OutputFormat,
     dry_run: bool,
     offline: bool,
@@ -284,13 +322,14 @@ struct RelocatedInfo {
 }
 
 impl Report {
-    fn new(
+    pub(crate) fn new(
         format: OutputFormat,
         dry_run: bool,
         offline: bool,
         retry_secs: u64,
     ) -> Self {
         Self {
+            kind: CommandKind::Move,
             format,
             dry_run,
             offline,
@@ -381,7 +420,7 @@ impl ScanError {
     }
 }
 
-fn execute(report: &mut Report, request: &MoveRequest) -> i32 {
+pub(crate) fn execute(report: &mut Report, request: &MoveRequest) -> i32 {
     if report.dry_run {
         match plan_once(&report.vault, request) {
             Ok((scan, plan)) => {
@@ -663,6 +702,8 @@ fn plan_many_from_scan(
             allow_closed: false,
             placement: MovePlacement::Append,
             id_collision: IdCollisionPolicy::Rename,
+            restore: false,
+            reopen: false,
         };
         let staged_snapshot = VaultSnapshot::from_notes(
             staged
@@ -774,7 +815,7 @@ fn plan_and_apply_many(
         let mut session = ApplySession::production(Box::new(move || {
             link_repair_markdown_files(&rescan_vault)
         }));
-        session.tool = TOOL_NAME;
+        session.tool = report.kind.tool_name();
         match apply_plan(&write_plan, &session) {
             Ok(ApplyOutcome::NoOp) => return Some((Vec::new(), false)),
             Ok(ApplyOutcome::Applied {
@@ -1006,7 +1047,7 @@ fn plan_and_apply_with_hooks(
         };
         let vault = report.vault.clone();
         let mut session = session_factory(&vault);
-        session.tool = TOOL_NAME;
+        session.tool = report.kind.tool_name();
         match apply_plan(&write_plan, &session) {
             Ok(ApplyOutcome::NoOp) => return Some((Vec::new(), false)),
             Ok(ApplyOutcome::Applied {
@@ -1311,7 +1352,8 @@ fn commit_applied(
         )
     } else {
         format!(
-            "bob task move {} -> {} ({count} {})",
+            "{} {} -> {} ({count} {})",
+            report.kind.command_name(),
             first.source_path.display(),
             first.dest_path.display(),
             if count == 1 { "task" } else { "tasks" }
@@ -1420,7 +1462,7 @@ fn display_relative(path: &Path) -> String {
         .join("/")
 }
 
-fn print_report(report: &Report) {
+pub(crate) fn print_report(report: &Report) {
     match report.format {
         OutputFormat::Json => println!("{}", json_document(report)),
         OutputFormat::Human => print_human(report),
@@ -1548,8 +1590,13 @@ fn print_human(report: &Report) {
             ))
         );
     } else {
-        let action = if report.dry_run { "Plan" } else { "Move" };
-        let mut title = format!("{} {COMMAND_NAME}", styler.bold(action));
+        let action = if report.dry_run {
+            "Plan"
+        } else {
+            report.kind.action()
+        };
+        let mut title =
+            format!("{} {}", styler.bold(action), report.kind.command_name());
         if report.dry_run {
             title.push_str(" · dry run");
         }
@@ -1720,6 +1767,8 @@ mod tests {
             allow_closed: false,
             placement: MovePlacement::Append,
             id_collision: IdCollisionPolicy::Rename,
+            restore: false,
+            reopen: false,
         }
     }
 
@@ -2328,5 +2377,103 @@ mod tests {
             .expect("git log");
         assert!(output.status.success());
         String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+}
+
+#[cfg(test)]
+mod restore_tests {
+    use std::{fs, path::Path};
+
+    use super::super::{
+        IdCollisionPolicy, MovePlacement, MoveRequest, MoveSelector,
+    };
+    use super::{execute, json_document, CommandKind, OutputFormat, Report};
+
+    fn write_restore_fixture(root: &Path) {
+        fs::create_dir_all(root.join("done")).expect("create done dir");
+        fs::write(
+            root.join("work.md"),
+            "---\ntype: [[area]]\ndone_tasks: \"[[done/work_done]]\"\n---\n## Tasks\n",
+        )
+        .expect("write source");
+        fs::write(
+            root.join("done/work_done.md"),
+            "---\nparent: \"[[work]]\"\ntype: \"[[done]]\"\n---\n\n- [x] #task Done thing [completion:: 2026-11-01] ^dry\n",
+        )
+        .expect("write archive");
+    }
+
+    fn restore_request(reopen: bool) -> MoveRequest {
+        MoveRequest {
+            source: "done/work_done".to_string(),
+            dest: String::new(),
+            selectors: vec![MoveSelector::Block("dry".to_string())],
+            allow_closed: true,
+            placement: MovePlacement::Append,
+            id_collision: IdCollisionPolicy::Rename,
+            restore: true,
+            reopen,
+        }
+    }
+
+    fn dry_run_report() -> (tempfile::TempDir, Report) {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let root = temp.path().join("vault");
+        write_restore_fixture(&root);
+        let mut report = Report::new(OutputFormat::Json, true, true, 5);
+        report.vault = root;
+        report.kind = CommandKind::Restore;
+        (temp, report)
+    }
+
+    #[test]
+    fn restore_dry_run_plans_bound_source_without_writing() {
+        let (temp, mut report) = dry_run_report();
+        let root = temp.path().join("vault");
+        let before =
+            fs::read_to_string(root.join("done/work_done.md")).unwrap();
+        let exit = execute(&mut report, &restore_request(false));
+        assert_eq!(exit, 0);
+        let plan = report.plan.as_ref().expect("dry run plans");
+        assert_eq!(plan.moves.len(), 1);
+        assert_eq!(
+            plan.moves[0].dest_path,
+            std::path::PathBuf::from("work.md")
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("done/work_done.md")).unwrap(),
+            before,
+            "dry run writes nothing"
+        );
+        assert!(
+            !root.join("work.md").exists()
+                || !fs::read_to_string(root.join("work.md"))
+                    .unwrap()
+                    .contains("Done thing"),
+            "dry run writes nothing"
+        );
+        let document = json_document(&report);
+        assert_eq!(document["dry_run"], true);
+        assert_eq!(document["moves"][0]["destination_path"], "work.md");
+        assert_eq!(document["moves"][0]["status_symbol"], "x");
+    }
+
+    #[test]
+    fn restore_dry_run_reopen_reports_open_status() {
+        let (temp, mut report) = dry_run_report();
+        let root = temp.path().join("vault");
+        let before =
+            fs::read_to_string(root.join("done/work_done.md")).unwrap();
+        let exit = execute(&mut report, &restore_request(true));
+        assert_eq!(exit, 0);
+        let plan = report.plan.as_ref().expect("dry run plans");
+        assert_eq!(plan.moves[0].status_symbol, ' ');
+        assert_eq!(
+            fs::read_to_string(root.join("done/work_done.md")).unwrap(),
+            before,
+            "dry run writes nothing"
+        );
+        let document = json_document(&report);
+        assert_eq!(document["moves"][0]["status_symbol"], " ");
     }
 }

@@ -43,6 +43,8 @@ fn request(
         allow_closed: false,
         placement: MovePlacement::Append,
         id_collision: IdCollisionPolicy::Rename,
+        restore: false,
+        reopen: false,
     }
 }
 
@@ -75,6 +77,52 @@ fn post<'a>(plan: &'a super::MovePlan, path: &str) -> &'a str {
 
 fn block(id: &str) -> MoveSelector {
     MoveSelector::Block(id.to_string())
+}
+
+fn restore_request(
+    source: &str,
+    dest: &str,
+    selectors: Vec<MoveSelector>,
+) -> MoveRequest {
+    MoveRequest {
+        source: source.to_string(),
+        dest: dest.to_string(),
+        selectors,
+        allow_closed: true,
+        placement: MovePlacement::Append,
+        id_collision: IdCollisionPolicy::Rename,
+        restore: true,
+        reopen: false,
+    }
+}
+
+fn restore_plan(
+    notes: &[(&str, &str)],
+    source: &str,
+    dest: &str,
+    selectors: Vec<MoveSelector>,
+) -> super::MovePlan {
+    plan_task_move(&snap(notes), &restore_request(source, dest, selectors))
+        .unwrap_or_else(|error| panic!("restore plan failed: {error}"))
+}
+
+fn restore_plan_err(
+    notes: &[(&str, &str)],
+    source: &str,
+    dest: &str,
+    selectors: Vec<MoveSelector>,
+) -> PlanError {
+    plan_task_move(&snap(notes), &restore_request(source, dest, selectors))
+        .expect_err("restore plan should fail")
+}
+
+fn paired_source() -> String {
+    "---\ntype: [[area]]\ndone_tasks: \"[[done/work_done]]\"\n---\n## Tasks\n"
+        .to_string()
+}
+
+fn paired_archive(body: &str) -> String {
+    format!("---\nparent: \"[[work]]\"\ntype: \"[[done]]\"\n---\n\n{body}")
 }
 
 fn contains(text: &str) -> MoveSelector {
@@ -1620,4 +1668,279 @@ fn movable_roots_share_source_eligibility_and_include_idless_rows() {
         .disabled_reason
         .as_deref()
         .is_some_and(|reason| reason.contains("checkbox [~]")));
+}
+
+#[test]
+fn restore_defaults_to_the_bound_source() {
+    let source = paired_source();
+    let archive =
+        paired_archive("- [x] #task Done thing [completion:: 2026-11-01] ^a\n");
+    let notes = [
+        ("work.md", source.as_str()),
+        ("done/work_done.md", archive.as_str()),
+    ];
+    let result = restore_plan(&notes, "done/work_done", "", vec![block("a")]);
+    assert_eq!(result.moves.len(), 1);
+    assert_eq!(
+        result.moves[0].source_path,
+        PathBuf::from("done/work_done.md")
+    );
+    assert_eq!(result.moves[0].dest_path, PathBuf::from("work.md"));
+    assert_eq!(result.moves[0].status_symbol, 'x');
+    assert!(post(&result, "work.md")
+        .contains("Done thing [completion:: 2026-11-01] ^a"));
+    assert!(!post(&result, "done/work_done.md").contains("Done thing"));
+}
+
+#[test]
+fn restore_binds_by_filename_without_metadata() {
+    let source = area("## Tasks\n");
+    let archive = "- [x] #task Done thing [completion:: 2026-11-01] ^a\n";
+    let notes = [("work.md", source.as_str()), ("done/work_done.md", archive)];
+    let result = restore_plan(&notes, "done/work_done", "", vec![block("a")]);
+    assert_eq!(result.moves.len(), 1);
+    assert_eq!(result.moves[0].dest_path, PathBuf::from("work.md"));
+}
+
+#[test]
+fn restore_orphan_without_dest_refuses() {
+    let archive = "- [x] #task Done thing [completion:: 2026-11-01] ^a\n";
+    let error = restore_plan_err(
+        &[("done/lonely_done.md", archive)],
+        "done/lonely_done",
+        "",
+        vec![block("a")],
+    );
+    assert!(
+        matches!(
+            error,
+            PlanError::RestoreNoSource { ref path, .. }
+                if path == &PathBuf::from("done/lonely_done.md")
+        ),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn restore_conflicting_binding_refuses_without_dest() {
+    let source = "---\ntype: [[area]]\ndone_tasks: \"[[done/first_done]]\"\n---\n## Tasks\n";
+    let first =
+        "---\nparent: \"[[work]]\"\ntype: \"[[done]]\"\n---\n\n- [x] #task Done thing [completion:: 2026-11-01] ^a\n";
+    let second =
+        "---\nparent: \"[[work]]\"\ntype: \"[[done]]\"\n---\n\n# Other\n";
+    let notes = [
+        ("work.md", source),
+        ("done/first_done.md", first),
+        ("done/second_done.md", second),
+    ];
+    // The reciprocal owner keeps its pair; the extra claimant refuses.
+    let error =
+        restore_plan_err(&notes, "done/second_done", "", vec![block("a")]);
+    assert!(
+        matches!(error, PlanError::RestoreNoSource { .. }),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn restore_explicit_dest_overrides_binding() {
+    let archive = "- [x] #task Done thing [completion:: 2026-11-01] ^a\n";
+    let dest = area("## Tasks\n");
+    let notes = [
+        ("done/lonely_done.md", archive),
+        ("other.md", dest.as_str()),
+    ];
+    let result =
+        restore_plan(&notes, "done/lonely_done", "other", vec![block("a")]);
+    assert_eq!(result.moves.len(), 1);
+    assert_eq!(result.moves[0].dest_path, PathBuf::from("other.md"));
+    assert!(post(&result, "other.md")
+        .contains("Done thing [completion:: 2026-11-01] ^a"));
+}
+
+#[test]
+fn restore_refuses_done_destinations() {
+    let source = paired_source();
+    let archive =
+        paired_archive("- [x] #task Done thing [completion:: 2026-11-01] ^a\n");
+    let notes = [
+        ("work.md", source.as_str()),
+        ("done/work_done.md", archive.as_str()),
+        ("done/other_done.md", "archive\n"),
+    ];
+    let error = restore_plan_err(
+        &notes,
+        "done/work_done",
+        "done/other_done",
+        vec![block("a")],
+    );
+    assert!(
+        matches!(
+            error,
+            PlanError::ArchivePath { role, .. } if role == "destination"
+        ),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn restore_refuses_live_sources() {
+    let source = area("## Tasks\n\n- [ ] #task Live ^live\n");
+    let dest = area("## Tasks\n");
+    let notes = [("work.md", source.as_str()), ("other.md", dest.as_str())];
+    let error = restore_plan_err(&notes, "work", "other", vec![block("live")]);
+    assert!(
+        matches!(error, PlanError::RestoreNoSource { .. }),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn restore_refuses_recurring_occurrences() {
+    let source = paired_source();
+    let archive = paired_archive(
+        "- [x] #task Weekly [repeat:: weekly] [completion:: 2026-11-01] ^w\n",
+    );
+    let notes = [
+        ("work.md", source.as_str()),
+        ("done/work_done.md", archive.as_str()),
+    ];
+    let error =
+        restore_plan_err(&notes, "done/work_done", "", vec![block("w")]);
+    assert!(
+        matches!(error, PlanError::RestoreRecurring { .. }),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn restore_refuses_merge_tombstones() {
+    let source = paired_source();
+    let archive = paired_archive(concat!(
+        "- [-] #task Retired [cancelled:: 2026-11-01] ^src\n",
+        "\t- 🪢 **LINKS:** merged into [[dest#^target]]\n",
+    ));
+    let notes = [
+        ("work.md", source.as_str()),
+        ("done/work_done.md", archive.as_str()),
+    ];
+    let error =
+        restore_plan_err(&notes, "done/work_done", "", vec![block("src")]);
+    assert!(
+        matches!(error, PlanError::RestoreTombstone { .. }),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn restore_refuses_prj_lines() {
+    let source = paired_source();
+    let archive =
+        paired_archive("- [x] #task Criteria [completion:: 2026-11-01] ^prj\n");
+    let notes = [
+        ("work.md", source.as_str()),
+        ("done/work_done.md", archive.as_str()),
+    ];
+    let error =
+        restore_plan_err(&notes, "done/work_done", "", vec![block("prj")]);
+    assert!(
+        matches!(error, PlanError::ProjectTask { .. }),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn restore_reopen_returns_open_without_close_fields() {
+    let source = paired_source();
+    let archive = paired_archive(concat!(
+        "- [x] #task Done thing [completion:: 2026-11-01] ^a\n",
+        "- [-] #task Dropped [cancelled:: 2026-11-02] ^d\n",
+    ));
+    let notes = [
+        ("work.md", source.as_str()),
+        ("done/work_done.md", archive.as_str()),
+    ];
+    let mut request =
+        restore_request("done/work_done", "", vec![block("a"), block("d")]);
+    request.reopen = true;
+    let result = plan_task_move(&snap(&notes), &request)
+        .unwrap_or_else(|error| panic!("restore plan failed: {error}"));
+    assert_eq!(result.moves.len(), 2);
+    assert!(result.moves.iter().all(|item| item.status_symbol == ' '));
+    let dest = post(&result, "work.md");
+    assert!(dest.contains("- [ ] #task Done thing ^a"), "{dest}");
+    assert!(dest.contains("- [ ] #task Dropped ^d"), "{dest}");
+    assert!(!dest.contains("[completion::"), "{dest}");
+    assert!(!dest.contains("[cancelled::"), "{dest}");
+}
+
+#[test]
+fn restore_without_reopen_keeps_close_fields() {
+    let source = paired_source();
+    let archive =
+        paired_archive("- [x] #task Done thing [completion:: 2026-11-01] ^a\n");
+    let notes = [
+        ("work.md", source.as_str()),
+        ("done/work_done.md", archive.as_str()),
+    ];
+    let result = restore_plan(&notes, "done/work_done", "", vec![block("a")]);
+    let dest = post(&result, "work.md");
+    assert!(
+        dest.contains("- [x] #task Done thing [completion:: 2026-11-01] ^a"),
+        "{dest}"
+    );
+}
+
+#[test]
+fn restore_trims_only_the_emptied_month_heading() {
+    let source = paired_source();
+    let archive = paired_archive(concat!(
+        "## 2026-11\n\n",
+        "- [x] #task Old thing [completion:: 2026-10-20] ^old\n\n",
+        "## 2026-10\n\n",
+        "- [x] #task Older thing [completion:: 2026-09-01] ^older\n",
+    ));
+    let notes = [
+        ("work.md", source.as_str()),
+        ("done/work_done.md", archive.as_str()),
+    ];
+    let result = restore_plan(&notes, "done/work_done", "", vec![block("old")]);
+    let archive_post = post(&result, "done/work_done.md");
+    assert!(!archive_post.contains("## 2026-11"), "{archive_post}");
+    assert!(archive_post.contains("## 2026-10"), "{archive_post}");
+    assert!(archive_post.contains("Older thing"), "{archive_post}");
+    assert!(post(&result, "work.md")
+        .contains("Old thing [completion:: 2026-10-20] ^old"));
+}
+
+#[test]
+fn restore_keeps_fenced_month_headings() {
+    let source = paired_source();
+    let archive = paired_archive(concat!(
+        "```text\n",
+        "## 2026-11\n",
+        "```\n\n",
+        "- [x] #task Done thing [completion:: 2026-11-01] ^a\n",
+    ));
+    let notes = [
+        ("work.md", source.as_str()),
+        ("done/work_done.md", archive.as_str()),
+    ];
+    let result = restore_plan(&notes, "done/work_done", "", vec![block("a")]);
+    let archive_post = post(&result, "done/work_done.md");
+    assert!(archive_post.contains("## 2026-11"), "{archive_post}");
+}
+
+#[test]
+fn restore_repairs_inbound_links_to_the_source() {
+    let source = paired_source();
+    let archive =
+        paired_archive("- [x] #task Done thing [completion:: 2026-11-01] ^a\n");
+    let notes = [
+        ("work.md", source.as_str()),
+        ("done/work_done.md", archive.as_str()),
+        ("notes.md", "See [[done/work_done#^a]].\n"),
+    ];
+    let result = restore_plan(&notes, "done/work_done", "", vec![block("a")]);
+    assert!(post(&result, "notes.md").contains("[[work#^a]]"));
 }

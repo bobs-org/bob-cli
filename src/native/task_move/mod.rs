@@ -6,6 +6,7 @@
 
 mod command;
 pub(crate) mod plan;
+pub(crate) mod restore;
 #[cfg(test)]
 mod tests;
 pub(crate) mod transplant;
@@ -19,3 +20,4 @@ pub(crate) use plan::{
     MovePlan, MoveRecord, MoveRequest, MoveSelector, PlanError, TaskCandidate,
     TaskMoveDestination, VaultSnapshot,
 };
+pub(crate) use restore::{build_cli as build_restore_cli, run as run_restore};

@@ -1872,6 +1872,8 @@ fn refile_inbox_task_atomic(
         allow_closed: false,
         placement: MovePlacement::Append,
         id_collision: IdCollisionPolicy::Rename,
+        restore: false,
+        reopen: false,
     };
     let plan = plan_task_move(&snapshot, &request)
         .map_err(|error| failed(error.to_string()))?;
