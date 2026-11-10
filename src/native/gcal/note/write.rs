@@ -174,7 +174,7 @@ pub(super) fn write_one<S: HomeSource>(
     }
     warnings
         .extend(note.warnings.iter().map(|warning| warning.message.clone()));
-    if note.errors.len() > 0 {
+    if !note.errors.is_empty() {
         return invalid_output(
             args, &candidate, scope, &input, &note, warnings,
         );
@@ -1178,14 +1178,14 @@ fn validate(
         }
     }
     // Rebuild the route in the canonical text after aliases have resolved.
-    if let (Some(before), Some(route)) = (original_route, note.routes.first()) {
-        if before != route.value {
-            note.canonical = note.canonical.replacen(
-                &format!("@{before}"),
-                &format!("@{}", route.value),
-                1,
-            );
-        }
+    if let (Some(before), Some(route)) = (original_route, note.routes.first())
+        && before != route.value
+    {
+        note.canonical = note.canonical.replacen(
+            &format!("@{before}"),
+            &format!("@{}", route.value),
+            1,
+        );
     }
     if note.canonical.len() > journal::MAX_NOTE_BYTES {
         note.errors.push(issue(
@@ -1418,32 +1418,31 @@ fn preview(
     let mut row = None;
     let mut bullets = Vec::new();
     let path = daily_rel.display().to_string();
-    if let Some(occurrence) = planned {
-        if occurrence.task {
-            let contents = std::fs::read_to_string(vault.join(&daily_rel))
-                .unwrap_or_default();
-            let lines =
-                contents.lines().map(str::to_string).collect::<Vec<_>>();
-            let ids = plan::collect_block_ids(&lines);
-            let existing_id =
-                plan::preview_existing_block_id(&contents, &occurrence);
-            let block_id = existing_id.clone().unwrap_or_else(|| {
-                crate::native::capture_block_ids::mint_block_id(
-                    &occurrence.id_hint,
-                    &ids.iter().map(String::as_str).collect(),
-                )
-            });
-            row = Some(plan::render_occurrence(
-                &occurrence,
-                &block_id,
-                candidate.day,
-            ));
-            bullets = plan::preview_bullets(
-                &contents,
-                &occurrence,
-                existing_id.as_deref(),
-            );
-        }
+    if let Some(occurrence) = planned
+        && occurrence.task
+    {
+        let contents =
+            std::fs::read_to_string(vault.join(&daily_rel)).unwrap_or_default();
+        let lines = contents.lines().map(str::to_string).collect::<Vec<_>>();
+        let ids = plan::collect_block_ids(&lines);
+        let existing_id =
+            plan::preview_existing_block_id(&contents, &occurrence);
+        let block_id = existing_id.clone().unwrap_or_else(|| {
+            crate::native::capture_block_ids::mint_block_id(
+                &occurrence.id_hint,
+                &ids.iter().map(String::as_str).collect(),
+            )
+        });
+        row = Some(plan::render_occurrence(
+            &occurrence,
+            &block_id,
+            candidate.day,
+        ));
+        bullets = plan::preview_bullets(
+            &contents,
+            &occurrence,
+            existing_id.as_deref(),
+        );
     }
     let rail = time_rail(candidate, &window, true);
     let json_rail = time_rail(candidate, &window, false);

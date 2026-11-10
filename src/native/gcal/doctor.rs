@@ -354,21 +354,21 @@ fn notes_check(
                 unresolved += 1;
             }
         }
-        if scope == "event" {
-            if let Some(gog) = gog {
-                match gog.event(calendar, key, account) {
-                    Ok(_) => {}
-                    Err(error)
-                        if error.kind() == "not_found"
-                            || error
-                                .message()
-                                .to_ascii_lowercase()
-                                .contains("not found") =>
-                    {
-                        orphans += 1
-                    }
-                    Err(_) => lookup_failed = true,
+        if scope == "event"
+            && let Some(gog) = gog
+        {
+            match gog.event(calendar, key, account) {
+                Ok(_) => {}
+                Err(error)
+                    if error.kind() == "not_found"
+                        || error
+                            .message()
+                            .to_ascii_lowercase()
+                            .contains("not found") =>
+                {
+                    orphans += 1
                 }
+                Err(_) => lookup_failed = true,
             }
         }
     }

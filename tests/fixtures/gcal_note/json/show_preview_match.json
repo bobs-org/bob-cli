@@ -1,0 +1,90 @@
+{
+  "action": "show",
+  "effective": {
+    "buffer": {
+      "after_minutes": 0,
+      "after_reason": null,
+      "before_minutes": 10,
+      "before_reason": "Drive there"
+    },
+    "clock": null,
+    "fields": [
+      "root",
+      "before",
+      "bullets"
+    ],
+    "meeting": {
+      "end": "10:00",
+      "start": "09:00"
+    },
+    "occupied": {
+      "clipped": false,
+      "end": "10:00",
+      "start": "08:50"
+    },
+    "root": {
+      "hue": "orange",
+      "kind": "note",
+      "source": "✎ @family",
+      "value": "family"
+    }
+  },
+  "event": {
+    "answer": "yes",
+    "calendar_id": "primary",
+    "calendar_name": "Personal",
+    "day": "2026-11-13",
+    "end": "2026-11-13T10:00:00-05:00",
+    "event_id": "highlight-note",
+    "lands": "task",
+    "note": {
+      "buffer": {
+        "after_minutes": 0,
+        "before_minutes": 10
+      },
+      "bullet_lines": 0,
+      "clock": null,
+      "lines": [
+        "@family",
+        "-10 Drive there"
+      ],
+      "root": {
+        "hue": "orange",
+        "value": "family"
+      },
+      "scope": "event",
+      "text": "@family\n-10 Drive there"
+    },
+    "organizer": {
+      "name": "Kelly",
+      "self": false
+    },
+    "recurring": false,
+    "series_id": null,
+    "start": "2026-11-13T09:00:00-05:00",
+    "time": "09:00-10:00",
+    "title": "Little Gym",
+    "url": "https://calendar.google.com/event?eid=highlight-note"
+  },
+  "ok": true,
+  "preview": {
+    "bullets": [
+      "\t- ↤ *10m before* · Drive there"
+    ],
+    "meeting": {
+      "end": "10:00",
+      "start": "09:00"
+    },
+    "occupied": {
+      "clipped": false,
+      "end": "10:00",
+      "start": "08:50"
+    },
+    "path": "2026/20261113.md",
+    "rail": "● orange 08:50 ╱╱09:00 ━━━━━━━━━━━━━━10:00 10:00",
+    "row": "- [*] #task **0900-1000** Little Gym [📅](https://calendar.google.com/event?eid=highlight-note) [buffer:: -10m] [root:: family] [type:: MEET] ^little-gym"
+  },
+  "schema_version": 1,
+  "scope": "event",
+  "warnings": []
+}

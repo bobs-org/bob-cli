@@ -382,6 +382,73 @@ fn preview_save_unchanged_clear_and_invalid_json() {
 }
 
 #[test]
+fn saved_note_show_and_preview_share_highlight_input() {
+    let env = GcalEnv::new("bob-cli-gcal-note-show-preview-match");
+    prepare(&env);
+    let event = guest_event(
+        "highlight-note",
+        "Little Gym",
+        "2026-11-13T09:00:00-05:00",
+        "2026-11-13T10:00:00-05:00",
+    );
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.event_lookup(
+        "highlight-note",
+        &serde_json::to_string(&json!({"event": event})).expect("lookup body"),
+    );
+    append_journal(
+        &env,
+        "test-host",
+        event_note(
+            "test-host",
+            "2026-10-30T11:00:00-04:00",
+            "highlight-note",
+            "@family\n-10 Drive there",
+        ),
+    );
+
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-i", "highlight-note", "-f", "json"])
+        .output()
+        .expect("show saved note");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let show = json_stdout(&output);
+    let note_text = show["event"]["note"]["text"]
+        .as_str()
+        .expect("saved note text");
+    assert_eq!(note_text, "@family\n-10 Drive there");
+    assert_golden("show_preview_match", &show);
+
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args([
+            "gcal",
+            "note",
+            "-i",
+            "highlight-note",
+            "-d",
+            "-f",
+            "json",
+            "--",
+        ])
+        .arg(note_text)
+        .output()
+        .expect("preview saved note");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let preview = json_stdout(&output);
+    assert_eq!(preview["action"], "preview");
+    assert_eq!(preview["input"]["text"], note_text);
+    assert!(!preview["spans"]
+        .as_array()
+        .expect("preview spans")
+        .is_empty());
+    assert_golden("preview_match", &preview);
+}
+
+#[test]
 fn writer_host_applies_note_and_preview_matches_sync() {
     let env = GcalEnv::new("bob-cli-gcal-note-immediate-sync");
     prepare(&env);
