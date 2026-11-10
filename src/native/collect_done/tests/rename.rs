@@ -162,6 +162,70 @@ fn rename_plus_task_move_keeps_old_body_and_appends_new_roots() {
     assert!(rerun.is_empty());
 }
 
+/// Stats (and the periods brief built on it) attribute archived rows to the
+/// same source before and after an applied rename; only the on-disk archive
+/// location moves to the canonical path, and no row is lost or duplicated.
+#[test]
+fn applied_rename_preserves_stats_attribution() {
+    use crate::native::stats::index::StatsIndex;
+
+    let vault = bound_pair_fixture("bob-cli-archive-rename-stats");
+    write_file(
+        &vault
+            .path()
+            .join(".obsidian/plugins/obsidian-tasks-plugin/data.json"),
+        r##"{"taskFormat":"dataview","globalFilter":"#task"}"##,
+    );
+    let now = chrono::NaiveDate::from_ymd_opt(2026, 1, 3)
+        .and_then(|date| date.and_hms_opt(12, 0, 0))
+        .expect("fixed now");
+    let attribution = |index: &StatsIndex| {
+        let mut rows: Vec<(String, String, Option<String>)> = index
+            .tasks
+            .iter()
+            .map(|task| {
+                (
+                    task.description.clone(),
+                    task.source_path.clone(),
+                    task.archive_path.clone(),
+                )
+            })
+            .collect();
+        rows.sort();
+        rows
+    };
+
+    let before = StatsIndex::read(vault.path(), now).expect("stats before");
+    let before_rows = attribution(&before);
+    let older = before_rows
+        .iter()
+        .find(|(description, ..)| description.contains("older"))
+        .expect("archived row before");
+    assert_eq!(older.1, "work.md");
+    assert_eq!(older.2.as_deref(), Some("done/work_old_done.md"));
+
+    apply_archive(vault.path(), 1);
+    assert!(!vault.path().join("done/work_old_done.md").exists());
+
+    let after = StatsIndex::read(vault.path(), now).expect("stats after");
+    let after_rows = attribution(&after);
+    assert_eq!(after_rows.len(), before_rows.len(), "{after_rows:?}");
+    for (description, source, _) in &before_rows {
+        let row = after_rows
+            .iter()
+            .find(|(after_description, ..)| after_description == description)
+            .unwrap_or_else(|| panic!("row {description} lost"));
+        assert_eq!(&row.1, source, "{description} changed attribution");
+        if !description.contains("active") {
+            assert_eq!(
+                row.2.as_deref(),
+                Some("done/work_done.md"),
+                "{description} should live in the canonical archive"
+            );
+        }
+    }
+}
+
 #[test]
 fn legacy_daily_filename_follows_reciprocal_metadata() {
     let vault = TempDir::new("bob-cli-archive-rename-daily");

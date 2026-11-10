@@ -32,8 +32,10 @@
 //!
 //! Filename helpers stay canonical path construction and fallback inside this
 //! module. No lookup performs disk I/O: [`ArchivePairIndex::read_vault`]
-//! walks the vault once up front, and read failures abort the build rather
-//! than presenting an incomplete census as proof of no conflict.
+//! walks the vault once up front. A note that cannot be read is retained as
+//! a census failure rather than dropped, and any lookup that failure could
+//! plausibly affect is refused (`incomplete_census`), so an incomplete
+//! census is never presented as proof of no conflict.
 
 use std::{
     collections::{BTreeMap, BTreeSet},

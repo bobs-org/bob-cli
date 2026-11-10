@@ -1322,6 +1322,80 @@ fn archive_json_reports_the_applied_commit_and_push() {
 }
 
 #[test]
+fn archive_rename_commits_the_removed_old_path_and_second_run_is_noop() {
+    let temp = TempDir::new("bob-cli-archive-json-rename");
+    let (vault, remote) = init_git_vault_with_remote(&temp);
+    write_file(
+        &vault.join("work.md"),
+        "---\ntype: [[project]]\ndone_tasks: \"[[done/work_old_done]]\"\n---\n\n- [x] shipped #task ^ship\n- [ ] active #task\n",
+    );
+    write_file(
+        &vault.join("done/work_old_done.md"),
+        "---\nparent: \"[[work]]\"\ntype: \"[[done]]\"\n---\n\n- [x] older #task ^old\n",
+    );
+    write_file(
+        &vault.join("notes.md"),
+        "See [[done/work_old_done#^old]].\n",
+    );
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
+    git_in(&vault, ["push", "-q", "-u", "origin", "HEAD"]);
+
+    let output = archive_command(&vault, &temp)
+        .args(["-f", "json", "-t", "1"])
+        .output()
+        .expect("run bob task archive with a rename");
+
+    assert_success(&output);
+    let report = archive_json(&output);
+    assert_eq!(report["exit"]["outcome"], "applied");
+    assert_eq!(
+        report["renames"],
+        serde_json::json!([{
+            "source": "work.md",
+            "from": "done/work_old_done.md",
+            "to": "done/work_done.md",
+        }])
+    );
+    assert_eq!(report["git"]["outcome"], "pushed");
+    assert_eq!(
+        report["git"]["paths"],
+        serde_json::json!([
+            "done/work_done.md",
+            "done/work_old_done.md",
+            "notes.md",
+            "work.md"
+        ])
+    );
+    assert!(!vault.join("done/work_old_done.md").exists());
+    let archive = fs::read_to_string(vault.join("done/work_done.md")).unwrap();
+    assert!(archive.contains("older #task ^old"), "{archive}");
+    assert!(archive.contains("shipped #task ^ship"), "{archive}");
+    let notes = fs::read_to_string(vault.join("notes.md")).unwrap();
+    assert_eq!(notes, "See [[done/work_done#^old]].\n");
+    let status = stdout(&git_in(&vault, ["status", "--porcelain"]));
+    assert_eq!(status, "", "the removal is committed, not left unstaged");
+    let removed = stdout(&git_in(
+        &vault,
+        ["ls-tree", "-r", "--name-only", "HEAD", "--", "done"],
+    ));
+    assert_eq!(removed.trim(), "done/work_done.md");
+    let remote_head =
+        stdout(&git(["--git-dir", path_str(&remote), "rev-parse", "HEAD"]));
+    let local_head = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
+    assert_eq!(remote_head, local_head, "push should update bare remote");
+
+    let rerun = archive_command(&vault, &temp)
+        .args(["-f", "json", "-t", "1"])
+        .output()
+        .expect("rerun bob task archive");
+    assert_success(&rerun);
+    let rerun = archive_json(&rerun);
+    assert_eq!(rerun["exit"]["outcome"], "noop");
+    assert_eq!(rerun["renames"], serde_json::json!([]));
+}
+
+#[test]
 fn archive_json_reports_skipped_git_for_a_non_worktree_vault() {
     let temp = TempDir::new("bob-cli-archive-json-non-worktree");
     let vault = temp.path().join("vault");
