@@ -286,7 +286,8 @@ Without `--force`:
 A non-Git source directory can bootstrap, but later differing assets require
 `--force` because ancestry is unavailable. A clean unpushed commit is protected
 when it is absent from incoming history. Protection never depends on a remote
-fetch.
+fetch. The refusal's landed-build hint reads only remote-tracking refs already
+present, never fetches, and never changes the decision.
 
 In a Git vault the stamp path must be ignored (for example
 `.obsidian/plugins/*/.bob-deploy.json`) and must not be tracked. `--force`
@@ -302,11 +303,16 @@ checkout whose HEAD reaches a commit holding the stamped bundle byte for
 byte: the sync overwrites without `--force` and names that proving commit in
 table output and as `proving_commit` in JSON. Syncing the identical bytes
 still reconciles to the clean revision, and a later descendant can update
-normally. If no single commit holds the stamped bundle, review the diff and
-pass `--force` explicitly.
+normally. If the checkout that needs to recover also has its own uncommitted
+work, stash it, bring the checkout up to the landed ref, sync from the clean
+tree, then restore and redeploy the stashed changes. If no single commit holds
+the stamped bundle, review the diff and pass `--force` explicitly.
 
-A protection refusal names the plugin and earlier deployment, explains the
-cause, and prints the preview and force commands.
+A protection refusal names the plugin and the earlier deployment (including
+the deploying agent when recorded), explains the cause, and gives the
+landed-build remedy before the preview and force commands. That remedy names a
+commit on an already-fetched remote-tracking ref that holds the deployed
+build, or otherwise tells you to fetch.
 
 ### Dirty-file guard
 

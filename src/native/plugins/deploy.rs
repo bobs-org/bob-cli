@@ -895,6 +895,7 @@ pub(super) fn evaluate_guard(
                             "same-checkout uncommitted deploy has a reset, \
 divergent, or unknown history",
                             incoming_repo,
+                            None,
                         ),
                     },
                 }
@@ -907,6 +908,16 @@ divergent, or unknown history",
                     proving_commit: Some(proving),
                 }
             } else {
+                let remedy =
+                    dirty_landed_remedy(incoming_repo, plugin_id, stamp);
+                let fallback;
+                let remedy_ref = match remedy {
+                    Some(ref text) => text.as_str(),
+                    None => {
+                        fallback = generic_landed_remedy();
+                        fallback.as_str()
+                    }
+                };
                 GuardDecision::Refuse {
                     message: refuse_message(
                         plugin_id,
@@ -914,6 +925,7 @@ divergent, or unknown history",
                         "no single commit reachable from HEAD holds the \
 stamped bundle byte for byte",
                         incoming_repo,
+                        Some(remedy_ref),
                     ),
                 }
             }
@@ -927,15 +939,27 @@ stamped bundle byte for byte",
                     stamp_action: StampAction::Write,
                     proving_commit: None,
                 },
-                _ => GuardDecision::Refuse {
-                    message: refuse_message(
-                        plugin_id,
-                        stamp,
-                        "incoming HEAD does not contain the stamped clean \
+                _ => {
+                    let remedy = clean_landed_remedy(incoming_repo, stamp);
+                    let fallback;
+                    let remedy_ref = match remedy {
+                        Some(ref text) => text.as_str(),
+                        None => {
+                            fallback = generic_landed_remedy();
+                            fallback.as_str()
+                        }
+                    };
+                    GuardDecision::Refuse {
+                        message: refuse_message(
+                            plugin_id,
+                            stamp,
+                            "incoming HEAD does not contain the stamped clean \
 revision",
-                        incoming_repo,
-                    ),
-                },
+                            incoming_repo,
+                            Some(remedy_ref),
+                        ),
+                    }
+                }
             }
         }
         PriorStamp::Complete { stamp, .. }
@@ -967,6 +991,7 @@ revision",
                         stamp,
                         cause,
                         incoming_repo,
+                        None,
                     ),
                 }
             }
@@ -1039,15 +1064,32 @@ fn find_inclusion_proof(
     plugin_id: &str,
     stamp: &DeployStamp,
 ) -> Option<String> {
+    find_holding_commit(incoming_repo, plugin_id, stamp, &["HEAD"])
+}
+
+/// Shared walker behind the HEAD permit proof and the refusal-path landed
+/// hint: run `git rev-list` with the given revision arguments, then return
+/// the first commit whose tree holds every stamped asset byte for byte.
+/// Per-file matches drawn from different commits never qualify.
+fn find_holding_commit(
+    incoming_repo: &Path,
+    plugin_id: &str,
+    stamp: &DeployStamp,
+    revisions: &[&str],
+) -> Option<String> {
     const MAX_COMMITS: usize = 500;
     let plugin_rel =
         format!("{}/{}", super::model::REPO_PLUGINS_SUBDIR, plugin_id);
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    command
         .arg("-C")
         .arg(incoming_repo)
         .arg("rev-list")
-        .arg(format!("--max-count={MAX_COMMITS}"))
-        .arg("HEAD")
+        .arg(format!("--max-count={MAX_COMMITS}"));
+    for revision in revisions {
+        command.arg(revision);
+    }
+    let output = command
         .arg("--")
         .arg(&plugin_rel)
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -1098,6 +1140,166 @@ fn find_inclusion_proof(
     let _ = child.kill();
     let _ = child.wait();
     found
+}
+
+/// Advisory landed-build lookup for the dirty-stamp refusal path only.
+///
+/// Walks already-fetched remote-tracking refs excluding HEAD, newest first,
+/// and names the containing remote ref. Never fetches; any git failure
+/// returns `None` so the caller falls back to the generic remedy.
+fn find_landed_dirty_commit(
+    incoming_repo: &Path,
+    plugin_id: &str,
+    stamp: &DeployStamp,
+) -> Option<(String, String)> {
+    let commit = find_holding_commit(
+        incoming_repo,
+        plugin_id,
+        stamp,
+        &["--remotes", "--not", "HEAD"],
+    )?;
+    let short_ref = containing_remote_ref(incoming_repo, &commit)?;
+    Some((commit, short_ref))
+}
+
+/// Advisory landed-build lookup for the clean-stamp non-ancestor refusal.
+///
+/// When the stamped clean revision exists locally and some already-fetched
+/// remote-tracking ref contains it, the deployed revision has landed.
+fn find_clean_landed(
+    incoming_repo: &Path,
+    stamp: &DeployStamp,
+) -> Option<(String, String)> {
+    let head = stamp
+        .source_head
+        .as_deref()
+        .filter(|head| !head.is_empty())?;
+    if !object_exists(incoming_repo, head) {
+        return None;
+    }
+    let short_ref = containing_remote_ref(incoming_repo, head)?;
+    Some((head.to_string(), short_ref))
+}
+
+fn dirty_landed_remedy(
+    incoming_repo: &Path,
+    plugin_id: &str,
+    stamp: &DeployStamp,
+) -> Option<String> {
+    let (commit, short_ref) =
+        find_landed_dirty_commit(incoming_repo, plugin_id, stamp)?;
+    Some(format!(
+        "commit {} on {} holds the deployed bundle byte for byte, so that build has landed. Stash your changes, bring this checkout up to {}, sync from a clean tree (no -F needed), then restore and redeploy your changes.",
+        short_sha(&commit),
+        short_ref,
+        short_ref,
+    ))
+}
+
+fn clean_landed_remedy(
+    incoming_repo: &Path,
+    stamp: &DeployStamp,
+) -> Option<String> {
+    let (commit, short_ref) = find_clean_landed(incoming_repo, stamp)?;
+    Some(format!(
+        "deployed revision {} is on {}, so bring this checkout up to {} and sync again; no -F is needed.",
+        short_sha(&commit),
+        short_ref,
+        short_ref,
+    ))
+}
+
+fn generic_landed_remedy() -> String {
+    "if that build has since landed, run `git fetch`, bring this checkout up to date, and sync from a clean tree; no -F is needed.".to_string()
+}
+
+fn object_exists(repo: &Path, sha: &str) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .arg("cat-file")
+        .arg("-e")
+        .arg(sha)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+/// Name one already-fetched remote-tracking ref containing `sha`.
+///
+/// Drops symbolic `refs/remotes/*/HEAD` entries, prefers the current
+/// branch's upstream when it contains the commit, and otherwise uses the
+/// first remaining ref in sorted order. Returns the short name (for example
+/// `origin/master`). Any git failure returns `None`.
+fn containing_remote_ref(repo: &Path, sha: &str) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .arg("for-each-ref")
+        .arg("--contains")
+        .arg(sha)
+        .arg("--format=%(refname)")
+        .arg("refs/remotes")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let refs: Vec<String> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter(|line| !line.ends_with("/HEAD"))
+        .map(str::to_string)
+        .collect();
+    if refs.is_empty() {
+        return None;
+    }
+    prefer_remote_ref(&refs, upstream_short(repo).as_deref())
+}
+
+fn prefer_remote_ref(
+    refs: &[String],
+    upstream: Option<&str>,
+) -> Option<String> {
+    let mut sorted: Vec<&String> = refs.iter().collect();
+    sorted.sort();
+    if let Some(upstream) =
+        upstream.filter(|upstream| !upstream.is_empty() && *upstream != "HEAD")
+        && sorted.iter().any(|full| {
+            full.strip_prefix("refs/remotes/")
+                .is_some_and(|short| short == upstream)
+        })
+    {
+        return Some(upstream.to_string());
+    }
+    sorted.into_iter().next().map(|full| {
+        full.strip_prefix("refs/remotes/")
+            .map(str::to_string)
+            .unwrap_or_else(|| full.clone())
+    })
+}
+
+fn upstream_short(repo: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .arg("rev-parse")
+        .arg("--abbrev-ref")
+        .arg("--symbolic-full-name")
+        .arg("@{upstream}")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let upstream = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if upstream.is_empty() || upstream == "HEAD" {
+        return None;
+    }
+    Some(upstream)
 }
 
 fn commit_holds_stamp(
@@ -1281,6 +1483,7 @@ pub(super) fn refuse_message(
     stamp: &DeployStamp,
     cause: &str,
     incoming_repo: &Path,
+    remedy: Option<&str>,
 ) -> String {
     let phrase = if stamp.dirty == DirtyState::Dirty {
         "deployed from uncommitted build"
@@ -1292,10 +1495,22 @@ pub(super) fn refuse_message(
         .as_deref()
         .map(short_sha)
         .unwrap_or_else(|| "unknown".to_string());
+    let agent_suffix = stamp
+        .agent
+        .as_deref()
+        .map(str::trim)
+        .filter(|agent| !agent.is_empty())
+        .map(|agent| format!(" by agent {agent}"))
+        .unwrap_or_default();
+    let remedy_prefix = remedy
+        .map(str::trim)
+        .filter(|remedy| !remedy.is_empty())
+        .map(|remedy| format!("{remedy} "))
+        .unwrap_or_default();
     format!(
-        "refusing to overwrite plugin {plugin_id} {phrase} at {} on {} \
-({sha}, {}). {cause}. Preview with `bob plugins sync --repo {} --no-pull \
---dry-run -p {plugin_id}`; overwrite with `bob plugins sync --repo {} \
+        "refusing to overwrite plugin {plugin_id} {phrase} at {} on {}{agent_suffix} \
+({sha}, {}). {cause}. {remedy_prefix}Preview with `bob plugins sync --repo {} --no-pull \
+--dry-run -p {plugin_id}`; to overwrite, discarding the deployed build, with `bob plugins sync --repo {} \
 -p {plugin_id} -F`.",
         stamp.source_root,
         stamp.host,
@@ -1567,6 +1782,27 @@ fn one_line(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prefer_remote_ref_prefers_upstream_and_sorts() {
+        let refs = vec![
+            "refs/remotes/origin/zebra".to_string(),
+            "refs/remotes/origin/master".to_string(),
+        ];
+        assert_eq!(
+            prefer_remote_ref(&refs, Some("origin/master")),
+            Some("origin/master".to_string())
+        );
+        assert_eq!(
+            prefer_remote_ref(&refs, Some("origin/missing")),
+            Some("origin/master".to_string())
+        );
+        assert_eq!(
+            prefer_remote_ref(&refs, None),
+            Some("origin/master".to_string())
+        );
+        assert_eq!(prefer_remote_ref(&[], Some("origin/master")), None);
+    }
 
     fn asset(name: &str, present: bool, sha: Option<&str>) -> AssetFingerprint {
         AssetFingerprint {

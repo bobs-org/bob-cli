@@ -1602,3 +1602,338 @@ fn advance_plugins_remote(upstream: &Path, body: &str) {
     git_in(upstream, ["commit", "-q", "-m", "update alpha"]);
     git_in(upstream, ["push", "-q"]);
 }
+
+fn init_bare_guard_fixture(
+    temp: &TempDir,
+) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+    let remote = temp.path().join("guard-remote.git");
+    git(["init", "-q", "--bare", path_str(&remote)]);
+    let seed = temp.path().join("guard-seed");
+    git(["clone", "-q", path_str(&remote), path_str(&seed)]);
+    configure_test_git_identity(&seed);
+    write_plugin(&seed.join("plugins/alpha"), "alpha", "1.0.0", "old");
+    git_in(&seed, ["add", "."]);
+    git_in(&seed, ["commit", "-q", "-m", "seed"]);
+    git_in(&seed, ["push", "-q", "-u", "origin", "HEAD"]);
+    let checkout_a = temp.path().join("guard-a");
+    let checkout_b = temp.path().join("guard-b");
+    git(["clone", "-q", path_str(&remote), path_str(&checkout_a)]);
+    git(["clone", "-q", path_str(&remote), path_str(&checkout_b)]);
+    configure_test_git_identity(&checkout_a);
+    configure_test_git_identity(&checkout_b);
+    let vault = temp.path().join("vault");
+    write_stamp_ignore(&vault);
+    let backups = temp.path().join("backups");
+    (checkout_a, checkout_b, vault, backups)
+}
+
+fn rev_parse_head(repo: &Path) -> String {
+    String::from_utf8_lossy(&git_in(repo, ["rev-parse", "HEAD"]).stdout)
+        .trim()
+        .to_string()
+}
+
+fn remote_refs_snapshot(repo: &Path) -> String {
+    String::from_utf8_lossy(
+        &git_in(
+            repo,
+            ["for-each-ref", "--format=%(objectname)", "refs/remotes"],
+        )
+        .stdout,
+    )
+    .into_owned()
+}
+
+#[test]
+fn plugins_sync_dirty_refusal_names_landed_build() {
+    let temp = TempDir::new("bob-cli-plugins-guard-landed");
+    let (checkout_a, checkout_b, vault, backups) =
+        init_bare_guard_fixture(&temp);
+    write_file(&checkout_a.join("plugins/alpha/main.js"), "// dirty-a\n");
+
+    let deployed = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("alpha")
+        .arg("-n")
+        .arg("-r")
+        .arg(&checkout_a)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .env("SASE_AGENT_ID", "agent-a")
+        .output()
+        .expect("dirty deploy from checkout A");
+    assert_success(&deployed);
+    let stamp = vault.join(".obsidian/plugins/alpha/.bob-deploy.json");
+    let stamp_bytes = fs::read(&stamp).expect("read stamp");
+
+    git_in(&checkout_a, ["add", "plugins/alpha/main.js"]);
+    git_in(&checkout_a, ["commit", "-q", "-m", "land dirty-a"]);
+    git_in(&checkout_a, ["push", "-q", "origin", "HEAD"]);
+    let landed_sha = rev_parse_head(&checkout_a);
+    let landed_short: String = landed_sha.chars().take(7).collect();
+    git_in(&checkout_b, ["fetch", "-q", "origin"]);
+
+    let refused = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("alpha")
+        .arg("-n")
+        .arg("-r")
+        .arg(&checkout_b)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .env_remove("SASE_AGENT_ID")
+        .output()
+        .expect("refuse from stale checkout B");
+    assert_eq!(
+        refused.status.code(),
+        Some(1),
+        "landed dirty build must still refuse:\n{}",
+        format_output(&refused)
+    );
+    let err = stderr(&refused);
+    assert!(
+        err.contains("refusing to overwrite plugin alpha")
+            && err.contains("deployed from uncommitted build")
+            && err.contains(&landed_short)
+            && err.contains("origin/")
+            && err.contains("agent-a")
+            && err.contains("no -F"),
+        "refusal must name the landed commit, its origin ref, and the agent:\n{}",
+        format_output(&refused)
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/alpha/main.js"))
+            .expect("vault after refusal"),
+        "// dirty-a\n"
+    );
+    assert_eq!(fs::read(&stamp).expect("stamp after refusal"), stamp_bytes);
+}
+
+#[test]
+fn plugins_sync_landed_recovery_without_force() {
+    let temp = TempDir::new("bob-cli-plugins-guard-recover");
+    let (checkout_a, checkout_b, vault, backups) =
+        init_bare_guard_fixture(&temp);
+    write_file(&checkout_a.join("plugins/alpha/main.js"), "// dirty-a\n");
+    let deployed = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("alpha")
+        .arg("-n")
+        .arg("-r")
+        .arg(&checkout_a)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .env_remove("SASE_AGENT_ID")
+        .output()
+        .expect("dirty deploy from checkout A");
+    assert_success(&deployed);
+
+    git_in(&checkout_a, ["add", "plugins/alpha/main.js"]);
+    git_in(&checkout_a, ["commit", "-q", "-m", "land dirty-a"]);
+    git_in(&checkout_a, ["push", "-q", "origin", "HEAD"]);
+    let landed_sha = rev_parse_head(&checkout_a);
+    git_in(&checkout_b, ["fetch", "-q", "origin"]);
+
+    write_file(
+        &checkout_b.join("plugins/alpha/manifest.json"),
+        "{\n  \"id\": \"alpha\",\n  \"version\": \"9.9.9\",\n  \"description\": \"alpha keeps things tidy\"\n}\n",
+    );
+    git_in(&checkout_b, ["stash", "push", "-q", "-u", "-m", "b work"]);
+    git_in(&checkout_b, ["merge", "-q", "--ff-only", "@{upstream}"]);
+    let clean = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("alpha")
+        .arg("-n")
+        .arg("-r")
+        .arg(&checkout_b)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .env_remove("SASE_AGENT_ID")
+        .output()
+        .expect("clean reconcile after update");
+    assert_success(&clean);
+    let stamp_body = fs::read_to_string(
+        vault.join(".obsidian/plugins/alpha/.bob-deploy.json"),
+    )
+    .expect("read reconciled stamp");
+    assert!(
+        stamp_body.contains("\"dirty\": \"clean\"")
+            && stamp_body.contains(&landed_sha),
+        "clean sync must reconcile to the landed commit: {stamp_body}"
+    );
+
+    git_in(&checkout_b, ["stash", "pop", "-q"]);
+    let redeploy = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("alpha")
+        .arg("-n")
+        .arg("-r")
+        .arg(&checkout_b)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .env_remove("SASE_AGENT_ID")
+        .output()
+        .expect("redeploy B change without force");
+    assert_success(&redeploy);
+    assert!(
+        fs::read_to_string(vault.join(".obsidian/plugins/alpha/manifest.json"))
+            .expect("vault manifest after redeploy")
+            .contains("\"version\": \"9.9.9\""),
+        "vault must keep B's manifest change after redeploy"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/alpha/main.js"))
+            .expect("vault after redeploy"),
+        "// dirty-a\n"
+    );
+}
+
+#[test]
+fn plugins_sync_dirty_refusal_generic_remedy_without_fetch() {
+    let temp = TempDir::new("bob-cli-plugins-guard-generic");
+    let (checkout_a, checkout_b, vault, backups) =
+        init_bare_guard_fixture(&temp);
+    write_file(&checkout_a.join("plugins/alpha/main.js"), "// dirty-a\n");
+    let deployed = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("alpha")
+        .arg("-n")
+        .arg("-r")
+        .arg(&checkout_a)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .env_remove("SASE_AGENT_ID")
+        .output()
+        .expect("dirty deploy from checkout A");
+    assert_success(&deployed);
+
+    git_in(&checkout_a, ["add", "plugins/alpha/main.js"]);
+    git_in(&checkout_a, ["commit", "-q", "-m", "land dirty-a"]);
+    git_in(&checkout_a, ["push", "-q", "origin", "HEAD"]);
+    let landed_sha = rev_parse_head(&checkout_a);
+    let landed_short: String = landed_sha.chars().take(7).collect();
+    let before = remote_refs_snapshot(&checkout_b);
+
+    let refused = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("alpha")
+        .arg("-n")
+        .arg("-r")
+        .arg(&checkout_b)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .env_remove("SASE_AGENT_ID")
+        .output()
+        .expect("refuse without fetching");
+    assert_eq!(
+        refused.status.code(),
+        Some(1),
+        "unfetched landed build must still refuse:\n{}",
+        format_output(&refused)
+    );
+    let err = stderr(&refused);
+    assert!(
+        err.contains("git fetch") && err.contains("no -F"),
+        "generic remedy must point at fetch without force:\n{}",
+        format_output(&refused)
+    );
+    assert!(
+        !err.contains(&landed_short) && !err.contains(&landed_sha),
+        "generic remedy must not name the unfetched commit:\n{}",
+        format_output(&refused)
+    );
+    assert_eq!(
+        remote_refs_snapshot(&checkout_b),
+        before,
+        "refusal must not fetch or mutate remote-tracking refs"
+    );
+}
+
+#[test]
+fn plugins_sync_clean_refusal_names_landed_revision() {
+    let temp = TempDir::new("bob-cli-plugins-guard-clean");
+    let (checkout_a, checkout_b, vault, backups) =
+        init_bare_guard_fixture(&temp);
+    write_file(&checkout_a.join("plugins/alpha/main.js"), "// new\n");
+    git_in(&checkout_a, ["add", "plugins/alpha/main.js"]);
+    git_in(&checkout_a, ["commit", "-q", "-m", "new revision"]);
+    let clean = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("alpha")
+        .arg("-n")
+        .arg("-r")
+        .arg(&checkout_a)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .env_remove("SASE_AGENT_ID")
+        .output()
+        .expect("clean deploy from checkout A");
+    assert_success(&clean);
+    git_in(&checkout_a, ["push", "-q", "origin", "HEAD"]);
+    let landed_sha = rev_parse_head(&checkout_a);
+    let landed_short: String = landed_sha.chars().take(7).collect();
+    git_in(&checkout_b, ["fetch", "-q", "origin"]);
+
+    let refused = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("alpha")
+        .arg("-n")
+        .arg("-r")
+        .arg(&checkout_b)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .env_remove("SASE_AGENT_ID")
+        .output()
+        .expect("clean non-ancestor refusal");
+    assert_eq!(
+        refused.status.code(),
+        Some(1),
+        "stale clean checkout must refuse:\n{}",
+        format_output(&refused)
+    );
+    let err = stderr(&refused);
+    assert!(
+        err.contains("refusing to overwrite plugin alpha")
+            && err.contains(&landed_short)
+            && err.contains("origin/")
+            && err.contains("no -F"),
+        "clean refusal must name the landed revision on its origin ref:\n{}",
+        format_output(&refused)
+    );
+}
