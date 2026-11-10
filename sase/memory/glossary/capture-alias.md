@@ -23,9 +23,11 @@ key. The aliases:
   `Buy milk .` stays `@`).
 - `,` → `+` wherever the Parent Task picker would open (`@cash,` → `@cash+`); glued to a
   complete `@route+id` target, it inserts ` +` for the next pick.
-- `\` or `/` → `#` wherever a `#` menu would open (task type, section, Pomodoro name,
+- `/` → `#` wherever a `#` menu would open (task type, section, Pomodoro name,
   wikilink heading, and the rest). Never at a line start, glued to a word, or after
-  another `\`/`/`; `/` stays literal where it is already field text (`=/`, `[[folder/`).
+  another `/`; `/` stays literal where it is already field text (`=/`, `[[folder/`).
+- `\` → `%` wherever a bare `%` would open the directive menu (`Buy milk \` →
+  `Buy milk %`). Never at a line start, glued to a word, or after another `\`.
 - `-` → `~` inside an `x=` past token (`x=2-` → `x=2~`); a spaced `-` stays literal.
 - `=` → `~` after a space or tab where the Links To relation picker would open, while
   `~=` / `~~=` flip to `~~` / `~` ([[decisions:relation-equals-alias-and-flips]]).

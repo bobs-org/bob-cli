@@ -140,12 +140,14 @@ pub(crate) fn rewrite_draft(
 
 /// Typing `.`, `;`, `,`, `-`, `\`, `/`, `=`, `x`, or `s` in a position where
 /// its real sigil would open a picker or close-outcome slot swaps that byte
-/// to `^`, `:`, `+`, `~`, `#`, `!`, or `*`. The candidate is checked by the
-/// ordinary completion grammar or the close lexer, keeping the assist lexical
-/// and aligned with picker eligibility. Route-scope contexts plus lone
+/// to `^`, `:`, `+`, `~`, `%`, `#`, `!`, or `*`. The candidate is checked by
+/// the ordinary completion grammar or the close lexer, keeping the assist
+/// lexical and aligned with picker eligibility. Route-scope contexts plus lone
 /// move-bullet sigils are accepted; a `.` that completes a `- ^^` choice
 /// marker is also accepted. A comma glued to a complete target-run member
-/// instead inserts ` +` to open the next parent-task picker. Typing `=` right
+/// instead inserts ` +` to open the next parent-task picker. Typing `\` where
+/// a bare `%` would open the directive menu aliases `%`, while `/` alone
+/// aliases `#`. Typing `=` right
 /// after a bare `~` that opens the Links To picker turns it into `~~` (Linked
 /// From), while `~~=` turns back into `~`. A spaced `=` aliases `~` only where
 /// a bare relation sigil would open Links To, and a spaced `.` aliases `@`
@@ -156,7 +158,7 @@ pub(crate) fn rewrite_draft(
 /// ends a close selection aliases `!` or `*`. Everywhere else `=` stays
 /// literal, including inside a wikilink.
 ///
-/// Lexical `@@route` collapse assist: typing `#`, `/`, `\`, `^`, `.`, `+`,
+/// Lexical `@@route` collapse assist: typing `#`, `/`, `^`, `.`, `+`,
 /// or `,` glued to a complete `@@route` collapses it to `@route#`/`^`/`+`
 /// without reading the vault. It is its own rewrite rule (no alias stamp or
 /// tip) and runs ahead of the dot fallback and ordinary aliases.
@@ -174,7 +176,7 @@ fn collapse_global_destination(
     }
     let trigger = *raw_text.as_bytes().get(cursor - 1)?;
     let mapped = match trigger {
-        b'#' | b'/' | b'\\' => '#',
+        b'#' | b'/' => '#',
         b'^' | b'.' => '^',
         b'+' | b',' => '+',
         _ => return None,
@@ -366,8 +368,11 @@ fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
         return expand_relation_flip_alias(raw_text, start, cursor)
             .or_else(|| expand_relation_equals_alias(raw_text, start, cursor));
     }
-    if alias == "\\" || alias == "/" {
-        return expand_hash_alias(raw_text, start, cursor, alias);
+    if alias == "\\" {
+        return expand_directive_alias(raw_text, start, cursor);
+    }
+    if alias == "/" {
+        return expand_hash_alias(raw_text, start, cursor);
     }
     if alias == "," {
         let token = tokenize_with_spans(raw_text)
@@ -1276,19 +1281,21 @@ fn expand_merge_in_source_comma_alias(
     })
 }
 
-/// Typing `\` or `/` where a real `#` would open a completion menu swaps
-/// that byte to `#`. A `\` or `/` with only whitespace before it on its
+/// Typing `/` where a real `#` would open a completion menu swaps
+/// that byte to `#`. A `/` with only whitespace before it on its
 /// physical line never aliases, so a blank draft keeps opening Go To and a
 /// later line's leading sigil stays literal. A `/` also stays literal where
 /// bob already reads it as part of a field (Go To, the `=/` split, wikilink
 /// note paths, `@@` routes, section and Pomodoro names). The candidate is
 /// checked by the ordinary completion grammar: wikilink headings first
 /// (matching the engine's precedence), then the marker grammar's `#` menus.
+///
+/// Typing `\` where a bare `%` would open the directive menu swaps that byte
+/// to `%` instead (see [`expand_directive_alias`]); `\` never types `#`.
 fn expand_hash_alias(
     raw_text: &str,
     start: usize,
     cursor: usize,
-    alias: &str,
 ) -> Option<DraftRewrite> {
     let line_start = raw_text[..start].rfind('\n').map_or(0, |index| index + 1);
     if raw_text
@@ -1303,30 +1310,28 @@ fn expand_hash_alias(
     {
         return None;
     }
-    if alias == "/" {
-        if crate::native::capture_links::completion_field_at(
-            raw_text,
-            cursor,
-            String::new(),
-        )
-        .is_some()
-        {
+    if crate::native::capture_links::completion_field_at(
+        raw_text,
+        cursor,
+        String::new(),
+    )
+    .is_some()
+    {
+        return None;
+    }
+    if let Some(raw_field) =
+        super::completion::completion_field_at(raw_text, cursor)
+    {
+        // Block-ID queries are exempt: an ID can never contain `/`, so
+        // there the `/` is only a stray query byte.
+        use super::completion::CompletionContext;
+        if !matches!(
+            raw_field.context,
+            CompletionContext::Task
+                | CompletionContext::TaskBlockId
+                | CompletionContext::PomodoroBlockId
+        ) {
             return None;
-        }
-        if let Some(raw_field) =
-            super::completion::completion_field_at(raw_text, cursor)
-        {
-            // Block-ID queries are exempt: an ID can never contain `/`, so
-            // there the `/` is only a stray query byte.
-            use super::completion::CompletionContext;
-            if !matches!(
-                raw_field.context,
-                CompletionContext::Task
-                    | CompletionContext::TaskBlockId
-                    | CompletionContext::PomodoroBlockId
-            ) {
-                return None;
-            }
         }
     }
     let mut candidate = raw_text.to_string();
@@ -1345,7 +1350,7 @@ fn expand_hash_alias(
                 &candidate,
                 start,
                 cursor,
-                hash_alias_stamp(raw_text, start, cursor, alias),
+                hash_alias_stamp(raw_text, start, cursor),
             ));
         }
         return None;
@@ -1378,21 +1383,95 @@ fn expand_hash_alias(
         &candidate,
         start,
         cursor,
-        hash_alias_stamp(raw_text, start, cursor, alias),
+        hash_alias_stamp(raw_text, start, cursor),
     ))
 }
 
-/// Stamp a `\` or `/` -> `#` alias. The position phrase describes only what
-/// the key itself is attached to: a space or tab before it reads `after a
-/// word`, a route glued to it reads `right after a route`, and anything else
-/// gets no phrase.
-fn hash_alias_stamp(
+/// Typing `\` where a bare `%` would open the directive menu swaps that byte
+/// to `%`. A `\` at a line start (or after only spaces or tabs on its line)
+/// stays literal, since a line-initial `\` usually starts an escape such as
+/// `\#fix` or `\%`, and the blank draft's `\` belongs to the app's Go To
+/// gesture. Keys glued to a word, doubled after another `\`, mid-line with
+/// body text after the caret, on close items, after `|`, in template drafts,
+/// and no-cursor calls stay literal too: the swapped `%` must open a bare-`%`
+/// directive field at the caret for the alias to fire.
+fn expand_directive_alias(
     raw_text: &str,
     start: usize,
     cursor: usize,
-    alias: &str,
-) -> AliasStamp {
-    let stamp = AliasStamp::new(AliasId::HashMenu, alias, '#');
+) -> Option<DraftRewrite> {
+    let line_start = raw_text[..start].rfind('\n').map_or(0, |index| index + 1);
+    if raw_text
+        .get(line_start..start)
+        .is_some_and(|prefix| prefix.chars().all(|c| c == ' ' || c == '\t'))
+    {
+        return None;
+    }
+    if tokenize_with_spans(raw_text)
+        .into_iter()
+        .all(|token| token.end != cursor)
+    {
+        return None;
+    }
+    if raw_text.as_bytes().get(start.checked_sub(1)?) == Some(&b'\\') {
+        return None;
+    }
+    let mut candidate = raw_text.to_string();
+    candidate.replace_range(start..cursor, "%");
+    let field = super::completion::completion_field_at(&candidate, cursor)?;
+    use super::completion::CompletionContext;
+    if field.context != CompletionContext::Directive
+        || field.replacement != (start, cursor)
+    {
+        return None;
+    }
+    Some(finish_sigil_alias(
+        raw_text,
+        &candidate,
+        start,
+        cursor,
+        directive_alias_stamp(raw_text, start),
+    ))
+}
+
+/// Stamp a `\` -> `%` alias. The position phrase is `after a word` only when
+/// the key follows a space or tab with body text before that space; a bare
+/// bullet marker (`-`, `*`, `+`) does not count as body text.
+fn directive_alias_stamp(raw_text: &str, start: usize) -> AliasStamp {
+    let stamp = AliasStamp::new(AliasId::DirectiveMenu, "\\", '%');
+    if !matches!(
+        start
+            .checked_sub(1)
+            .and_then(|index| raw_text.as_bytes().get(index)),
+        Some(b' ' | b'\t')
+    ) {
+        return stamp;
+    }
+    let line_start = raw_text[..start].rfind('\n').map_or(0, |index| index + 1);
+    let before_key = raw_text.get(line_start..start - 1).unwrap_or("");
+    let mut body = before_key.trim_start_matches([' ', '\t']);
+    // A bullet marker is structure, not body text: a bare marker, or a
+    // marker plus whitespace, never counts.
+    for marker in ['-', '*', '+'] {
+        if let Some(rest) = body.strip_prefix(marker)
+            && (rest.is_empty() || rest.starts_with([' ', '\t']))
+        {
+            body = rest.trim_start_matches([' ', '\t']);
+            break;
+        }
+    }
+    if body.trim().is_empty() {
+        return stamp;
+    }
+    stamp.at("after a word")
+}
+
+/// Stamp a `/` -> `#` alias. The position phrase describes only what
+/// the key itself is attached to: a space or tab before it reads `after a
+/// word`, a route glued to it reads `right after a route`, and anything else
+/// gets no phrase.
+fn hash_alias_stamp(raw_text: &str, start: usize, cursor: usize) -> AliasStamp {
+    let stamp = AliasStamp::new(AliasId::HashMenu, "/", '#');
     let glued_route = tokenize_with_spans(raw_text)
         .into_iter()
         .find(|token| token.end == cursor)

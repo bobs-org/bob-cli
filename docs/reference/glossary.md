@@ -113,9 +113,11 @@ key. The aliases:
   `Buy milk .` stays `@`).
 - `,` → `+` wherever the Parent Task picker would open (`@cash,` → `@cash+`); glued to a
   complete `@route+id` target, it inserts ` +` for the next pick.
-- `\` or `/` → `#` wherever a `#` menu would open (task type, section, Pomodoro name,
+- `/` → `#` wherever a `#` menu would open (task type, section, Pomodoro name,
   wikilink heading, and the rest). Never at a line start, glued to a word, or after
-  another `\`/`/`; `/` stays literal where it is already field text (`=/`, `[[folder/`).
+  another `/`; `/` stays literal where it is already field text (`=/`, `[[folder/`).
+- `\` → `%` wherever a bare `%` would open the directive menu (`Buy milk \` →
+  `Buy milk %`). Never at a line start, glued to a word, or after another `\`.
 - `-` → `~` inside an `x=` past token (`x=2-` → `x=2~`); a spaced `-` stays literal.
 - `=` → `~` after a space or tab where the Links To relation picker would open, while
   `~=` / `~~=` flip to `~~` / `~` ([Relation Equals Alias And Flips](../develop/decisions.md#relation-equals-alias-and-flips)).
@@ -361,14 +363,14 @@ closeout). Off a queue row it reads `⟳ Review N due · K commitments` (or
 when the cursor is on an open task with a priority, and stays `]s next` otherwise.
 On a queue row it reads `⟳ Review r/N · TIER i/M` plus that row's detail and, when the row has a
 recommended roll, the `Alt+P` preview in the hint slot (for example
-`Alt+P roll P2 1/1`). The other nonempty tier
+`Alt+P roll P2 1/1`); on TICK rows that preview renders as a tinted answer chip. The other nonempty tier
 groups follow in walk order, then the `✓ upkeep/budget today` meter. To fit the
 status bar it uses short tier labels — `WIP` for PENDING (WIP is an official alias of
 the Pending status), `RECUR` for RECURRING, `TICKS` for TICKLER — explained in its
 tooltip. Each group, and the current tier's context, wears that tier's own color; a
 hairline divider separates the commitment groups from ROTTEN and POST; and as space
 runs out it drops groups from the end of the walk (marking the cut with `…`), then
-detail, hint, and meter.
+detail, hint, and meter, except on TICK rows, where the meter goes before the `Alt+P` chip.
 Clicking jumps to the next due task like `]s`. It is a read-only projection: it never
 stamps or changes tasks, its numbers are queue positions rather than progress, and it
 hides when Tasks is unavailable. When nothing is due, it hides unless the cursor is
@@ -623,17 +625,19 @@ Every member has the same tiers, all painted from bob's values:
   period and marked `so far` while it is open. Each numeric fact sits over a quiet
   `typical` line: the median of the same-kind periods just before it, marked ▲/▼/=
   only once the period has closed;
-- a [Root Parent](#root-parent) lane and a [Task Type](#task-type) lane;
-- above the day, a parts row with one column per child period, stacked by root
-  parent, that opens that child's note.
+- on periods, a [Root Parent](#root-parent) chart (the top N, `N more`, and hatched unattributed
+  time) and a [Task Type](#task-type) chart (configured types, hatched untyped time) on one
+  child-period axis; a column opens its child's note;
+- a period-only Both/Roots/Types switch with its own memory, independent of the
+  [Day Strip](#day-strip) controls.
 
 Because periods are whole ISO weeks, the parts always add up to the whole. Worked
 counts closed on-clock [Pomodoro](#pomodoro)s; [Off-Clock Pomodoro](#off-clock-pomodoro) time stays a quiet
 separate hint.
 
-The [Day Strip](#day-strip) is the day member: it has no parts row and mounts itself in
-`bob-plan`. Facts and lanes open the [Stats Dash](#stats-dash) with the period pinned. bob owns
-every value, and the strip never writes the note.
+The [Day Strip](#day-strip) is the day member: it keeps its two lanes, has no parts row, and
+mounts itself in `bob-plan`. Facts and lanes open the [Stats Dash](#stats-dash) with the period
+pinned. bob owns every value, and the strip never writes the note.
 
 Not the parts table (`bob-period-parts`), the [Stats Dash](#stats-dash), `bob stats` terminal
 output, or the [Morning GTD Review Footer](#morning-gtd-review-footer).

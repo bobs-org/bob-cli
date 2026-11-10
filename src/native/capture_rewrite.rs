@@ -162,15 +162,21 @@ wherever a bare '&' would open the Depends On picker. A spaced ';' that does \
 not become ':' becomes '*' wherever a bare '*' would open the Blocks picker; \
 both follow the same literal positions. For example, '@home .' becomes \
 '@home &', 'Buy milk @foo:bar .' becomes 'Buy milk @foo:bar &', and \
-'Buy milk ;' becomes 'Buy milk *'. Typing '\\' or '/' becomes '#' wherever \
+'Buy milk ;' becomes 'Buy milk *'. Typing '/' becomes '#' wherever \
 bob's completion grammar would open a '#' menu: task type, section, drawer \
 and drawer bullet, Pomodoro name, named-start and past-session name, split \
-type, merge destination, and wikilink heading. A '\\' or '/' at a line \
-start, glued to a word, or right after another '\\' or '/' stays literal. A \
+type, merge destination, and wikilink heading. A '/' at a line \
+start, glued to a word, or right after another '/' stays literal. A \
 '/' also stays literal where bob already reads it as part of a field (Go \
 To, the '=/' split, wikilink note paths, section and Pomodoro \
 names); block-ID fields do not count. A '/' glued to a complete '@@route' \
-collapses instead (see the global collapse below). For example, '@cash,' \
+collapses instead (see the global collapse below). Typing '\\' becomes '%' \
+wherever a bare '%' would open the directive menu: at either edge of an \
+item line with only other markers between it and that edge. A '\\' at a line \
+start or after only spaces or tabs on its line, glued to a word, doubled \
+after another '\\', or anywhere the swapped '%' would not open that menu \
+stays literal. For example, 'Buy milk \\' becomes 'Buy milk %', while \
+'\\#fix' keeps its escape. For example, '@cash,' \
 becomes '@cash+', '@cash+goog-exit,' becomes '@cash+goog-exit +', and \
 'Buy milk ,' becomes 'Buy milk +'; '@errands.' and '@errands;' still become \
 '@errands^' and '@errands:'. Bob's completion grammar decides when a \
@@ -190,10 +196,10 @@ viable prefix. The letters stay literal in past names ('x=1s'), after a \
 dangling ',' or '@', on child bullets, and in prose. 'bob capture' and \
 'bob capture-parse' keep the literal text. Without --cursor this rule is \
 skipped rather than searching the draft.\n\n\
-Global destination collapse (requires --cursor): typing '#', '/', '\\', \
+Global destination collapse (requires --cursor): typing '#', '/', \
 '^', '.', '+', or ',' glued to a complete '@@route' collapses it to \
-'@route#', '@route^', or '@route+' respectively ('/' and '\\' \
-become '#', '.' becomes '^', ',' becomes '+'). The route must satisfy the \
+'@route#', '@route^', or '@route+' respectively ('/' \
+becomes '#', '.' becomes '^', ',' becomes '+'). The route must satisfy the \
 route grammar, the trigger must sit at --cursor with a complete token \
 boundary after it, and the collapsed form keeps the draft's other bytes. \
 Bare '@@', spaced triggers, invalid routes, already-suffixed globals, \
@@ -233,8 +239,8 @@ never absorbs either: a bare `@@` on the line is left untouched with an \
 Typing tips (requires --cursor): when nothing changed, the JSON \
 'sigil_alias_tip' field says whether an unshifted alias key would have typed \
 the sigil that ends at --cursor. bob proves it by swapping each candidate \
-key ('.' for '@' '^' '&', ';' for ':' '*', ',' for '+', '=' for '~', '/' or \
-'\\' for '#') in for the sigil and running the whole rewrite; a key counts \
+key ('.' for '@' '^' '&', ';' for ':' '*', ',' for '+', '=' for '~', '/' \
+for '#', '\\' for '%') in for the sigil and running the whole rewrite; a key counts \
 only when that forward rewrite yields exactly TEXT with the caret unchanged. \
 The object carries the lesson 'id', the 'sigil', the preferred 'keys', the \
 sigil's UTF-8 byte 'range', and an optional 'where' phrase. An explicit null \

@@ -1963,28 +1963,25 @@ fn rewrite_draft_switches_and_continues_merge_in_sources() {
 }
 
 #[test]
-fn rewrite_draft_expands_backslash_hash_alias() {
+fn rewrite_draft_expands_backslash_directive_alias() {
     for (raw, expected) in [
-        ("Buy milk \\", "Buy milk #"),
-        ("foo #a \\", "foo #a #"),
-        ("@cash\\", "@cash#"),
-        ("Buy milk @cash\\", "Buy milk @cash#"),
-        ("a > @cash\\", "a > @cash#"),
-        ("Buy milk @cash:goog-exit\\", "Buy milk @cash:goog-exit#"),
-        ("Buy milk @cash^newid@\\", "Buy milk @cash^newid@#"),
-        ("^cash:goog-exit\\", "^cash:goog-exit#"),
-        ("Buy milk @cash+goog-exit\\", "Buy milk @cash+goog-exit#"),
-        ("@cash^goog-exit@\n- \\", "@cash^goog-exit@\n- #"),
-        ("@cash:goog-exit@\n- \\", "@cash:goog-exit@\n- #"),
-        ("Buy milk\n- \\", "Buy milk\n- #"),
-        ("@cash^goog-exit@\n  - \\", "@cash^goog-exit@\n  - #"),
-        ("=\\", "=#"),
-        ("=25\\", "=25#"),
-        ("x=25\\", "x=25#"),
-        ("=/\\", "=/#"),
-        ("=*fix\\", "=*fix#"),
-        ("[[cash\\", "[[cash#"),
-        ("[[\\", "[[#"),
+        ("Buy milk \\", "Buy milk %"),
+        ("foo #a \\", "foo #a %"),
+        ("Buy milk @cash \\", "Buy milk @cash %"),
+        ("a > @cash \\", "a > @cash %"),
+        ("Buy milk #fix \\", "Buy milk #fix %"),
+        ("https://example.com \\", "https://example.com %"),
+        ("=25 \\", "=25 %"),
+        ("=fix \\", "=fix %"),
+        (":fix \\", ":fix %"),
+        ("!fix \\", "!fix %"),
+        ("Buy milk &dev:build \\", "Buy milk &dev:build %"),
+        ("foo ~cash:goog-exit \\", "foo ~cash:goog-exit %"),
+        ("Buy milk\n- \\", "Buy milk\n- %"),
+        ("Buy milk\n  - \\", "Buy milk\n  - %"),
+        ("Buy milk\n- note \\", "Buy milk\n- note %"),
+        ("- \\", "- %"),
+        ("@@cash \\", "@@cash %"),
     ] {
         let cursor = raw.len();
         assert!(raw.is_char_boundary(cursor), "{raw:?}");
@@ -1994,7 +1991,7 @@ fn rewrite_draft_expands_backslash_hash_alias() {
         assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
         assert_eq!(
             rewrite.summary.as_deref(),
-            Some("Typed # for \\"),
+            Some("Typed % for \\"),
             "{raw:?}"
         );
         assert_eq!(rewrite.notices, Vec::<String>::new(), "{raw:?}");
@@ -2003,7 +2000,7 @@ fn rewrite_draft_expands_backslash_hash_alias() {
             vec![TextEdit {
                 start: cursor - 1,
                 end: cursor,
-                replacement: "#".to_string(),
+                replacement: "%".to_string(),
             }],
             "{raw:?}"
         );
@@ -2013,37 +2010,30 @@ fn rewrite_draft_expands_backslash_hash_alias() {
         assert_eq!(again.text, expected, "idempotent {raw:?}");
     }
 
-    let raw = "@cash+goog-exit\\ Buy milk";
-    let cursor = "@cash+goog-exit\\".len();
-    let rewrite = rewrite_draft(raw, Some(cursor));
-    assert_alias_applied(raw, &rewrite);
-    assert_eq!(rewrite.text, "@cash+goog-exit# Buy milk");
-    assert_eq!(rewrite.cursor, Some(cursor));
-    assert_eq!(rewrite.summary.as_deref(), Some("Typed # for \\"));
-    assert_eq!(
-        rewrite.edits,
-        vec![TextEdit {
-            start: cursor - 1,
-            end: cursor,
-            replacement: "#".to_string(),
-        }]
-    );
-    let again = rewrite_draft(&rewrite.text, Some(cursor));
-    assert_eq!(again.rule, None);
-    assert_eq!(again.text, "@cash+goog-exit# Buy milk");
-
     let raw = "caf\u{e9} \\";
     let rewrite = rewrite_draft(raw, Some(raw.len()));
     assert_alias_applied(raw, &rewrite);
-    assert_eq!(rewrite.text, "caf\u{e9} #");
+    assert_eq!(rewrite.text, "caf\u{e9} %");
     assert!(raw.is_char_boundary(rewrite.edits[0].start));
     assert_eq!(rewrite.edits[0].start, raw.len() - 1);
     let again = rewrite_draft(&rewrite.text, rewrite.cursor);
     assert_eq!(again.rule, None);
+
+    // A `\` landing mid-draft with a later line still aliases.
+    let raw = "Buy milk \\\n- later";
+    let cursor = "Buy milk \\".len();
+    let rewrite = rewrite_draft(raw, Some(cursor));
+    assert_alias_applied(raw, &rewrite);
+    assert_eq!(rewrite.text, "Buy milk %\n- later");
+    assert_eq!(rewrite.cursor, Some(cursor));
+    assert_eq!(rewrite.summary.as_deref(), Some("Typed % for \\"));
+    let again = rewrite_draft(&rewrite.text, Some(cursor));
+    assert_eq!(again.rule, None);
+    assert_eq!(again.text, "Buy milk %\n- later");
 }
 
 #[test]
-fn rewrite_draft_leaves_backslash_hash_alias_literal() {
+fn rewrite_draft_leaves_backslash_directive_alias_literal() {
     for raw in [
         "\\",
         "  \\",
@@ -2058,10 +2048,22 @@ fn rewrite_draft_leaves_backslash_hash_alias_literal() {
         "Buy milk\n- \\\\",
         "x foo \\",
         "x\n- 1 \\",
+        "x=25 \\",
         "foo |\\",
         "foo ~cash:goog-exit\\",
         ":\\",
         "Buy milk @cash:goog-exit#a\\",
+        "@cash\\",
+        "Buy milk @cash\\",
+        "@cash+goog-exit\\",
+        "x \\",
+        "@@cash\\",
+        // `/` stays literal here, so `\` does too: no `#` fallback remains.
+        "=\\",
+        "[[cash\\",
+        "[[\\",
+        "=/fix\\",
+        "=*fix\\",
     ] {
         let rewrite = rewrite_draft(raw, Some(raw.len()));
         assert_eq!(rewrite.rule, None, "{raw:?}");
@@ -2081,6 +2083,13 @@ fn rewrite_draft_leaves_backslash_hash_alias_literal() {
 
     let raw = "foo \\ bar";
     let cursor = "foo \\".len();
+    let rewrite = rewrite_draft(raw, Some(cursor));
+    assert_eq!(rewrite.rule, None, "{raw:?}@{cursor}");
+    assert_eq!(rewrite.text, raw);
+
+    // Inside an unclosed code span the swapped `%` opens no directive menu.
+    let raw = "foo `code \\`";
+    let cursor = "foo `code \\".len();
     let rewrite = rewrite_draft(raw, Some(cursor));
     assert_eq!(rewrite.rule, None, "{raw:?}@{cursor}");
     assert_eq!(rewrite.text, raw);
@@ -2220,7 +2229,6 @@ fn rewrite_draft_collapses_glued_trigger_after_complete_global_route() {
     for (raw, cursor, expected) in [
         ("@@cash#", 7, "@cash#"),
         ("@@cash/", 7, "@cash#"),
-        ("@@cash\\", 7, "@cash#"),
         ("@@cash^", 7, "@cash^"),
         ("@@cash.", 7, "@cash^"),
         ("@@cash+", 7, "@cash+"),
@@ -2287,6 +2295,7 @@ fn rewrite_draft_collapses_glued_trigger_after_complete_global_route() {
         ("@@", 2),
         ("@@ ", 2),
         ("@@cash", 6),
+        ("@@cash\\", 7),
         ("@@cash #", 7),
         ("@@cash/extra", 7),
         ("@@cash#sec", 7),
@@ -2317,21 +2326,12 @@ fn rewrite_draft_collapses_glued_trigger_after_complete_global_route() {
 }
 
 #[test]
-fn rewrite_draft_keeps_backslash_hash_alias_where_slash_stays_literal() {
-    for (raw, expected) in [
-        ("=\\", "=#"),
-        ("[[cash\\", "[[cash#"),
-        ("=/fix\\", "=/fix#"),
-        ("=*fix\\", "=*fix#"),
-    ] {
+fn rewrite_draft_leaves_backslash_literal_where_slash_stays_literal() {
+    // No `#` fallback remains: where `/` stays literal, `\` does too.
+    for raw in ["=\\", "[[cash\\", "[[\\", "=/fix\\", "=*fix\\"] {
         let rewrite = rewrite_draft(raw, Some(raw.len()));
-        assert_alias_applied(raw, &rewrite);
-        assert_eq!(rewrite.text, expected, "{raw:?}");
-        assert_eq!(
-            rewrite.summary.as_deref(),
-            Some("Typed # for \\"),
-            "{raw:?}"
-        );
+        assert_eq!(rewrite.rule, None, "{raw:?}");
+        assert_eq!(rewrite.text, raw, "{raw:?}");
     }
 }
 

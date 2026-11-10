@@ -1223,7 +1223,9 @@ for the JSON, copy, gate, and protocol contracts, and
 A `%` token at either edge of any physical line, with only other markers
 between it and that edge, is a capture directive. Mid-line tokens such as
 `50%` or a URL `%25` stay prose. `\%c` at an edge captures the text without
-the backslash; mid-line `\%` stays verbatim.
+the backslash; mid-line `\%` stays verbatim. In an editor, typing `\` where
+a bare `%` would open the directive menu types `%` instead (the `\%` and
+`\#` double-tap escapes still type one literal).
 
 This grammar recognizes:
 
@@ -9300,19 +9302,24 @@ bare `&` would open the Depends On picker. A spaced `;` that does not become
 the same literal positions. For example, `@home .` becomes `@home &`,
 `Buy milk @foo:bar .` becomes `Buy milk @foo:bar &`, and `Buy milk ;`
 becomes `Buy milk *`. A later blank-line item, `@@route` declarations, and
-transfer/merge-in slots keep `@`. Typing `\` or `/` becomes `#`
+transfer/merge-in slots keep `@`. Typing `/` becomes `#`
 wherever bob's completion grammar would open a `#` menu: task type, section,
 drawer and drawer bullet, Pomodoro name, named-start and past-session name,
-split type, merge destination, and wikilink heading. A `\` or `/` at a line
-start, glued to a word, or right after another `\` or `/` stays literal. A
+split type, merge destination, and wikilink heading. A `/` at a line
+start, glued to a word, or right after another `/` stays literal. A
 `/` also stays literal where bob already reads it as part of a field (Go To,
 the `=/` split, wikilink note paths, section and Pomodoro names);
 block-ID fields do not count. A `/` glued to a complete `@@route`
 collapses instead (see the global collapse below). For example, `Buy milk /` becomes `Buy milk #`
 and `Buy milk @cash+goog-exit/` becomes `Buy milk @cash+goog-exit#`, while
-`=/` stays the split. A `\` after `\` (or `/` after `/`) never aliases, so
-`\#` escapes stay typeable directly (Mac Capture's double-tap below gives the
-same text).
+`=/` stays the split. Typing `\` becomes `%`
+wherever a bare `%` would open the directive menu: at either edge of an
+item line, with only other markers between it and that edge. A `\` at a line
+start or after only spaces or tabs on its line, glued to a word, doubled
+after another `\`, or anywhere the swapped `%` would not open that menu
+stays literal. For example, `Buy milk \` becomes `Buy milk %`. A `\` after `\`
+(or `/` after `/`) never aliases, so `\#` and `\%` escapes stay typeable
+directly (Mac Capture's double-tap below gives the same text).
 Typing `,` wherever the Parent Task picker would open aliases `+`, including
 as a whole item, after a space, or after `@route`; after a complete
 `@route+id` target it inserts ` +` and opens the next parent picker. A `,`
@@ -9353,7 +9360,7 @@ back to `~` only where the result opens an empty Links To target. The past-sessi
 dash alias remains inside `x=` tokens: `x=2-` still becomes `x=2~`, while
 `x=~~=` stays literal.
 
-**Global destination collapse.** With `--cursor`, typing `#`, `/`, `\`, `^`, `.`, `+`, or `,` glued to a complete `@@route` collapses it to `@route#`, `@route^`, or `@route+` (`/` and `\` become `#`, `.` becomes `^`, `,` becomes `+`). The route must satisfy the route grammar, the trigger must sit at the cursor with a complete token boundary after it, and the collapsed form keeps the draft's other bytes. Bare `@@`, spaced triggers, invalid routes, already-suffixed globals, escaped or quoted prose and code, and triggers earlier than the caret stay literal. Its rule value is `collapse_global_destination`, it carries no alias object or tip, and it runs ahead of the sigil aliases above. `bob capture` and `bob capture-parse` keep the literal text.
+**Global destination collapse.** With `--cursor`, typing `#`, `/`, `^`, `.`, `+`, or `,` glued to a complete `@@route` collapses it to `@route#`, `@route^`, or `@route+` (`/` becomes `#`, `.` becomes `^`, `,` becomes `+`). The route must satisfy the route grammar, the trigger must sit at the cursor with a complete token boundary after it, and the collapsed form keeps the draft's other bytes. Bare `@@`, spaced triggers, invalid routes, already-suffixed globals, escaped or quoted prose and code, and triggers earlier than the caret stay literal. Its rule value is `collapse_global_destination`, it carries no alias object or tip, and it runs ahead of the sigil aliases above. `bob capture` and `bob capture-parse` keep the literal text.
 
 **Relation direction toggle.** With `--cursor`, typing `~` or `=` immediately
 after a complete `~note:id` or `~~note:id` flips the direction and consumes the
@@ -9526,7 +9533,7 @@ bob capture-rewrite --cursor 10 --format json -- 'Buy milk @'
 ```
 
 bob proves a tip by running the forward rewrite, never by a table. For the
-sigil `@ # ^ : + ~ & *` at the caret, it swaps each candidate key (`.`, `/` then
+sigil `@ # % ^ : + ~ & *` at the caret, it swaps each candidate key (`.`, `/`,
 `\`, `.`, `;`, `,`, `=`, `.`, `;` respectively) in for that byte and runs the
 whole rewrite pipeline; a key is kept only when the result is an
 `expand_sigil_alias` that yields exactly the original draft with the caret
@@ -9535,11 +9542,12 @@ sigil, `keys` lists the kept keys in bob's preference order for the first
 proved id, and `where` is a short true phrase (`after a word`,
 `right after a route`, `at an item start`, `on a move bullet`, `once routed`)
 that bob omits when none applies. Template drafts never tip. The tipped ids are
-`route_after_text`, `hash_menu`, `block_id_after_route`, `link_after_route`,
+`route_after_text`, `hash_menu`, `directive_menu`, `block_id_after_route`, `link_after_route`,
 `task_link_item`, `move_bullet_caret`, `move_bullet_colon`, `parent_task`,
 `relation`, `dependency`, and `blocked_task`. The other forward aliases still
 carry an `alias` id (`relation_flip`, `move_choice`, `next_parent`,
-`past_segment`, `close_complete`, `close_park`) but are never taught.
+`past_segment`, `close_complete`, `close_park`) but are never taught. `/`
+types `#` and `\` types `%`.
 
 ## `bob capture-complete`
 

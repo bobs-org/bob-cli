@@ -11,7 +11,7 @@ use super::*;
 const FORWARD_FIXTURES: &[(&str, AliasId)] = &[
     ("Buy milk .", AliasId::RouteAfterText),
     ("Buy milk /", AliasId::HashMenu),
-    ("@errands\\", AliasId::HashMenu),
+    ("Buy milk \\", AliasId::DirectiveMenu),
     ("@errands.", AliasId::BlockIdAfterRoute),
     ("@errands;", AliasId::LinkAfterRoute),
     (";", AliasId::TaskLinkItem),
@@ -71,6 +71,7 @@ fn the_tipped_classification_matches_the_v1_lessons() {
         BTreeSet::from([
             "route_after_text",
             "hash_menu",
+            "directive_menu",
             "block_id_after_route",
             "link_after_route",
             "task_link_item",
@@ -157,17 +158,25 @@ fn sigil_alias_tip_proves_each_positive_row() {
         (
             "Buy milk #",
             AliasId::HashMenu,
-            &["/", "\\"],
+            &["/"],
             '#',
             Some("after a word"),
         ),
         (
             "@errands#",
             AliasId::HashMenu,
-            &["/", "\\"],
+            &["/"],
             '#',
             Some("right after a route"),
         ),
+        (
+            "Buy milk %",
+            AliasId::DirectiveMenu,
+            &["\\"],
+            '%',
+            Some("after a word"),
+        ),
+        ("Buy milk\n- %", AliasId::DirectiveMenu, &["\\"], '%', None),
         (
             "Fix it ~",
             AliasId::Relation,
@@ -215,13 +224,10 @@ fn sigil_alias_tip_proves_each_positive_row() {
 
 #[test]
 fn sigil_alias_tip_keeps_only_the_keys_the_forward_rewrite_accepts() {
-    // `/` stays literal inside a `=` split and a wikilink note path, so only
-    // `\` would have typed `#`: the tip never names `/` there.
+    // `/` stays literal inside a `=` split and a wikilink note path, and the
+    // `\` fallback is gone: no key would have typed `#` there, so no tip.
     for raw in ["=*fix#", "=#", "[[folder#"] {
-        let tip = tip_at_end(raw).unwrap_or_else(|| panic!("{raw:?}: no tip"));
-        assert_eq!(tip.id, AliasId::HashMenu, "{raw:?}");
-        assert_eq!(tip.keys, ["\\"], "{raw:?}");
-        assert_eq!(tip.position, None, "{raw:?}");
+        assert!(tip_at_end(raw).is_none(), "{raw:?}");
     }
 }
 
@@ -280,6 +286,9 @@ fn sigil_alias_tip_stays_silent_for_the_negative_corpus() {
         ("See [[note @", 12),
         ("#", 1),
         ("Buy milk\n#", 10),
+        ("%", 1),
+        ("x foo %", 7),
+        ("foo \\%", 6),
         ("=/", 2),
         ("[[folder/", 9),
         ("Buy #\"foo bar #", 15),
@@ -313,6 +322,8 @@ fn sigil_alias_tip_agrees_with_the_forward_rewrite_for_every_prefix() {
         ":",
         "@cash+",
         "Buy milk #",
+        "Buy milk %",
+        "Buy milk\n- %",
         "Fix it ~",
         "@home &",
         "Buy milk *",

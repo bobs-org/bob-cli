@@ -1296,7 +1296,7 @@ fn capture_rewrite_reports_a_run_for_bare_at_at() {
 }
 
 #[test]
-fn capture_rewrite_json_expands_a_backslash_hash_alias() {
+fn capture_rewrite_json_expands_a_backslash_directive_alias() {
     let output = bob_command()
         .arg("capture-rewrite")
         .arg("-c")
@@ -1314,17 +1314,21 @@ fn capture_rewrite_json_expands_a_backslash_hash_alias() {
         .expect("capture-rewrite JSON");
     assert_eq!(json["ok"], true);
     assert_eq!(json["input"], "Buy milk \\");
-    assert_eq!(json["text"], "Buy milk #");
+    assert_eq!(json["text"], "Buy milk %");
     assert_eq!(json["changed"], true);
     assert_eq!(json["cursor"], 10);
     assert_eq!(json["rule"], "expand_sigil_alias");
     assert_eq!(
         json["edits"],
         serde_json::json!([
-            { "range": { "start": 9, "end": 10 }, "replacement": "#" },
+            { "range": { "start": 9, "end": 10 }, "replacement": "%" },
         ])
     );
-    assert_eq!(json["summary"], "Typed # for \\");
+    assert_eq!(json["summary"], "Typed % for \\");
+    assert_eq!(
+        json["alias"],
+        serde_json::json!({ "id": "directive_menu", "key": "\\", "sigil": "%" })
+    );
 }
 
 #[test]
@@ -1547,12 +1551,14 @@ fn capture_rewrite_json_tips_name_every_key_that_would_have_typed_the_sigil() {
             vec![","],
             Some("right after a route"),
         ),
+        ("Buy milk #", "hash_menu", vec!["/"], Some("after a word")),
         (
-            "Buy milk #",
-            "hash_menu",
-            vec!["/", "\\"],
+            "Buy milk %",
+            "directive_menu",
+            vec!["\\"],
             Some("after a word"),
         ),
+        ("Buy milk\n- %", "directive_menu", vec!["\\"], None),
         ("Fix it ~", "relation", vec!["="], Some("after a word")),
         ("@home &", "dependency", vec!["."], Some("once routed")),
         (
@@ -1573,7 +1579,6 @@ fn capture_rewrite_json_tips_name_every_key_that_would_have_typed_the_sigil() {
             vec!["."],
             Some("on a move bullet"),
         ),
-        ("=*fix#", "hash_menu", vec!["\\"], None),
     ] {
         let json = capture_rewrite_json(draft, Some(draft.len()));
         let tip = &json["sigil_alias_tip"];
@@ -1615,6 +1620,10 @@ fn capture_rewrite_json_sends_an_explicit_null_when_no_tip_is_proved() {
         ("@", 1),
         ("Do work @file:{0}^ %t\n\nrow", 18),
         ("xx", 1),
+        // Under hash_fallback = drop no key would have typed `#` here.
+        ("=*fix#", 6),
+        ("=#", 2),
+        ("[[folder#", 9),
     ] {
         let json = capture_rewrite_json(draft, Some(cursor));
         assert_eq!(json["changed"], false, "{draft:?}: {json}");
@@ -1649,7 +1658,7 @@ fn capture_rewrite_json_stamps_the_alias_on_forward_sigil_aliases() {
     for (draft, id, key, sigil) in [
         ("Buy milk .", "route_after_text", ".", "@"),
         ("Buy milk /", "hash_menu", "/", "#"),
-        ("@errands\\", "hash_menu", "\\", "#"),
+        ("Buy milk \\", "directive_menu", "\\", "%"),
         ("@errands.", "block_id_after_route", ".", "^"),
         ("@errands;", "link_after_route", ";", ":"),
         (";", "task_link_item", ";", ":"),
@@ -1728,15 +1737,15 @@ fn capture_rewrite_human_tip_line_omits_a_missing_position_phrase() {
     let output = bob_command()
         .arg("capture-rewrite")
         .arg("-c")
-        .arg("6")
+        .arg("12")
         .arg("--")
-        .arg("=*fix#")
+        .arg("Buy milk\n- %")
         .output()
         .expect("run bob capture-rewrite human tip without a phrase");
     assert_success(&output);
     assert_eq!(
         stdout(&output),
-        "no rewrite\ntip  next time \\ \u{2192} #\n"
+        "no rewrite\ntip  next time \\ \u{2192} %\n"
     );
 }
 

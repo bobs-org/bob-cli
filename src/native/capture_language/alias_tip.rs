@@ -39,8 +39,10 @@ macro_rules! alias_ids {
 alias_ids! {
     /// `.` -> `@` after body text and a space or tab.
     RouteAfterText => "route_after_text",
-    /// `\` or `/` -> `#` wherever a `#` menu would open.
+    /// `/` -> `#` wherever a `#` menu would open.
     HashMenu => "hash_menu",
+    /// `\` -> `%` wherever the directive menu would open.
+    DirectiveMenu => "directive_menu",
     /// `.` -> `^` where the Block ID picker opens.
     BlockIdAfterRoute => "block_id_after_route",
     /// `;` -> `:` where the Pomodoro Block ID picker opens.
@@ -80,6 +82,7 @@ impl AliasId {
         match self {
             Self::RouteAfterText
             | Self::HashMenu
+            | Self::DirectiveMenu
             | Self::BlockIdAfterRoute
             | Self::LinkAfterRoute
             | Self::TaskLinkItem
@@ -160,7 +163,8 @@ pub(crate) struct SigilAliasTip {
 /// forward rewrite decides.
 const CANDIDATES: &[(char, &[&str])] = &[
     ('@', &["."]),
-    ('#', &["/", "\\"]),
+    ('#', &["/"]),
+    ('%', &["\\"]),
     ('^', &["."]),
     (':', &[";"]),
     ('+', &[","]),

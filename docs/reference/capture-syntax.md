@@ -1472,8 +1472,10 @@ Contract: [Scheduling and priority](../capture.md#scheduling-and-priority).
 A bare `%` is an incomplete directive picker. In an editor, it opens a menu with
 Clip (`%c`), Pomodoro note (`%n`), Template (`%t`), and Listen (`%l`) for a
 bare-URL reference. The rows show the Pomodoro target and configuration status;
-unavailable choices explain why and are omitted by shell completion. Opening
-the menu never reads clipboard content.
+unavailable choices explain why and are omitted by shell completion without
+reading clipboard content. In Mac Capture, `\` where `%` would
+open the directive menu becomes `%` (not at a line start); type `\` `\` `%`
+for `\%`.
 
 Contract: [Directives (`%`)](../capture.md#directives).
 
@@ -1502,18 +1504,17 @@ Contract: [Directives (`%`)](../capture.md#directives) · [Clipboard](../capture
 A bare `#` at an item edge is an incomplete type marker. In an editor it opens
 task-type completion, with rows in configured type order (or recent catalog
 order) and no row selected. Write `\#` to keep a literal hash. In Mac Capture,
-`\` or `/` where `#` would open a menu becomes `#` (not at a line start);
-doubling either leaves one literal, so type `\` `\` `#` for `\#` there.
+`/` where `#` would open a menu becomes `#` (not at a line start);
+doubling it leaves one literal.
 
 Contract: [Typing tasks with `#<type>`](../capture.md#typing-tasks-with-type).
 
 ### `#<type>` {#hash-type}
 
 The clock spellings `#off`, `#on`, `#offclock`, `#off-clock`, and
-`#untracked` are reserved task tags at either item edge. They stay verbatim
-when capturing a new task and are never type markers or completion choices.
-Capture refuses them on an item that selects an existing task and asks you to
-edit that task line directly.
+`#untracked` are reserved task tags at either item edge: never type markers or
+completion choices, kept verbatim on new tasks. On an item that selects an
+existing task, capture refuses them; edit that task line directly.
 
 Type a new task at either item edge (`#fix Fix it`, `Fix it #fix`), or retype
 an existing task the item targets. Slugs start with an ASCII letter and use
