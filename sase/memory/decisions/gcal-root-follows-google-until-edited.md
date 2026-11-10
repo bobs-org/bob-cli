@@ -7,8 +7,9 @@ summary:
   "An Event Task's [root::] follows Google's chosen root until Bryan edits it;
   his edits always win and are reported once on conflict."
 metadata:
-  status: accepted
+  status: superseded-in-part
   decided: 2026-10-31
+  superseded_by: decisions:private-event-notes-beat-google-per-field
 ---
 
 # Gcal Root Follows Google Until Edited
@@ -58,3 +59,5 @@ the chosen root, or HTML-formatted description tokens should participate.
 [[decisions:bob-gcal-is-read-only-and-proposes-once]]
 
 [[glossary:event-task]]
+
+Superseded in part: the chosen root now begins with the private event note candidates. See [[decisions:private-event-notes-beat-google-per-field]].

@@ -25,6 +25,7 @@ and rules. Filter the same pages by CLI, Obsidian, or macOS on
 - [Link emails to tasks](link-emails-to-tasks.md)
 - [File email from your phone](file-email-from-your-phone.md)
 - [Send email from Obsidian](send-email-from-obsidian.md)
+- [Plan an event you don't own](plan-events-you-dont-own.md)
 
 ## Plan the day
 

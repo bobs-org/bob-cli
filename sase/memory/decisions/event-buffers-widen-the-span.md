@@ -10,7 +10,9 @@ summary:
 metadata:
   status: superseded-in-part
   decided: 2026-11-02
-  superseded_by: decisions:buffer-reasons-ride-description-bullets
+  superseded_by:
+    - decisions:buffer-reasons-ride-description-bullets
+    - decisions:private-event-notes-beat-google-per-field
 title: Event Buffers Widen The Occupied Span
 ---
 
@@ -78,3 +80,5 @@ events, § Root selection; `docs/capture.md`;
 [[glossary:event-task]]
 
 Superseded in part: buffers are also read from reason lines (`-30 Drive to Kelly's`), which write a labelled reason bullet. See [[decisions:buffer-reasons-ride-description-bullets]].
+
+Superseded in part: the "description you cannot edit cannot take a Google-owned buffer" cost is retired; a private event note can set that buffer. See [[decisions:private-event-notes-beat-google-per-field]].

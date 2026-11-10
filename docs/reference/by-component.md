@@ -26,6 +26,7 @@ uses more than one surface appears in each matching group.
 - [Keep Ready lanes under their cap](../guides/keep-ready-under-cap.md)
 - [Link emails to tasks](../guides/link-emails-to-tasks.md)
 - [Link related tasks](../guides/link-related-tasks.md)
+- [Plan an event you don't own](../guides/plan-events-you-dont-own.md)
 - [Point bob at your vault](../guides/point-bob-at-your-vault.md)
 - [Projects and dependencies](../concepts/projects-and-dependencies.md)
 - [Recover a stuck reference job](../guides/recover-reference-job.md)

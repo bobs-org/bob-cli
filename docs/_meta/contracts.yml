@@ -24,7 +24,7 @@ groups:
       - stem: gcal-notes
         summary: "Private event notes: Bob-only description grammar layered over Google Calendar events"
         order: 11
-        reader: guides/connect-google-calendar.md
+        reader: guides/plan-events-you-dont-own.md
       - stem: gkeep
         summary: "`bob gkeep` Keep inbox drain into tasks or inline reference clips"
         order: 12
