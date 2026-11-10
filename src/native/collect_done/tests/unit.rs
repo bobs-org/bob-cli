@@ -2,10 +2,10 @@
 use super::*;
 
 #[test]
-fn parses_default_threshold() {
+fn parses_without_a_minimum_batch_by_default() {
     match parse_args(vec![]) {
         ParseResult::Run(args) => {
-            assert_eq!(args.threshold, DEFAULT_THRESHOLD);
+            assert_eq!(args.threshold, NO_MINIMUM_BATCH);
         }
         _ => panic!("expected runnable args"),
     }
@@ -333,7 +333,10 @@ fn duplicate_moved_block_ids_are_held_not_archived() {
 #[test]
 fn existing_archive_block_ids_reserve_original_ids() {
     let vault = TempDir::new("bob-cli-collect-done-existing-id");
-    write_file(&vault.path().join("obsidian.md"), "- [x] new #task ^dup\n");
+    write_file(
+        &vault.path().join("obsidian.md"),
+        &with_test_close_dates("- [x] new #task ^dup\n"),
+    );
     write_file(
         &vault.path().join("done/obsidian_done.md"),
         "\
@@ -359,7 +362,10 @@ type: \"[[done]]\"
 ---
 
 - [x] old #task ^dup
-- [x] new #task ^dup-1
+
+## 2000-01
+
+- [x] new #task [completion:: 2000-01-01] ^dup-1
 "
         )
     );
@@ -368,7 +374,10 @@ type: \"[[done]]\"
 #[test]
 fn block_id_suffix_selection_skips_existing_candidates() {
     let vault = TempDir::new("bob-cli-collect-done-existing-id-suffix");
-    write_file(&vault.path().join("obsidian.md"), "- [x] new #task ^dup\n");
+    write_file(
+        &vault.path().join("obsidian.md"),
+        &with_test_close_dates("- [x] new #task ^dup\n"),
+    );
     write_file(
         &vault.path().join("done/obsidian_done.md"),
         "\
@@ -389,7 +398,7 @@ type: \"[[done]]\"
         .archive_contents
         .as_deref()
         .expect("archive contents")
-        .contains("- [x] new #task ^dup-2\n"));
+        .contains("- [x] new #task [completion:: 2000-01-01] ^dup-2\n"));
 }
 
 #[test]
@@ -419,7 +428,7 @@ fn block_id_suffix_selection_preserves_distinct_moved_ids() {
         .archive_contents
         .as_deref()
         .expect("archive contents")
-        .contains("- [x] distinct #task ^dup-1\n"));
+        .contains("- [x] distinct #task [completion:: 2000-01-01] ^dup-1\n"));
 }
 
 #[test]
@@ -484,7 +493,7 @@ fn link_repair_uses_renamed_unique_moved_block_id() {
     let vault = TempDir::new("bob-cli-collect-done-renamed-link-plan");
     write_file(
         &vault.path().join("obsidian.md"),
-        "- [x] done #task ^abc123\n",
+        &with_test_close_dates("- [x] done #task ^abc123\n"),
     );
     write_file(
         &vault.path().join("daily.md"),
@@ -514,7 +523,7 @@ type: \"[[done]]\"
         .archive_contents
         .as_deref()
         .expect("archive contents")
-        .contains("- [x] done #task ^abc123-1\n"));
+        .contains("- [x] done #task [completion:: 2000-01-01] ^abc123-1\n"));
 }
 
 #[test]
@@ -822,6 +831,36 @@ type: \"[[done]]\"
 - [x] done #task
 "
     );
+}
+
+#[test]
+fn appends_new_roots_inside_an_existing_close_month_section() {
+    let existing = "\
+---
+parent: \"[[work]]\"
+type: \"[[done]]\"
+---
+
+## 2026-11
+
+- [x] older #task
+
+## Notes
+
+Keep this section in place.
+";
+    let contents = archive_contents(
+        Some(existing),
+        "## 2026-11\n\n- [x] newer #task\n",
+        "[[work]]",
+    );
+
+    assert_eq!(contents.matches("## 2026-11").count(), 1);
+    let old = contents.find("older #task").unwrap();
+    let new = contents.find("newer #task").unwrap();
+    let notes = contents.find("## Notes").unwrap();
+    assert!(old < new && new < notes, "{contents}");
+    assert!(contents.contains("Keep this section in place."));
 }
 
 #[test]

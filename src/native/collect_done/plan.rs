@@ -7,6 +7,7 @@ use super::super::task_status_hooks_write::{
 };
 use super::health::{collect_diagnostics, Diagnostics};
 use super::snapshot::{capture_error, capture_inputs, CapturedInputs};
+use chrono::{Duration, NaiveDate};
 
 /// One guarded source-rename maintenance: a bound noncanonical archive moves
 /// to its canonical destination and the old path is removed recoverably.
@@ -493,10 +494,10 @@ fn plan_from_pairs(
                 }
             }
         }
-        let transform =
+        let candidates =
             transform_markdown_with_settings(&contents, &captured.settings);
-        merge_skips(&mut skip_counts, &transform.skip_counts);
-        holds.extend(transform.holds.iter().map(|hold| {
+        merge_skips(&mut skip_counts, &candidates.skip_counts);
+        holds.extend(candidates.holds.iter().map(|hold| {
             HeldRoot {
                 relative_path: relative_source_path.clone(),
                 line: hold.line,
@@ -508,7 +509,6 @@ fn plan_from_pairs(
                 block_ids: hold.block_ids.clone(),
             }
         }));
-        let moves_tasks = transform.task_count >= threshold;
         // A rename reads the old archive as its base while installing the
         // canonical destination; every other plan reads its destination.
         let existing_archive = match &renamed_from {
@@ -520,17 +520,33 @@ fn plan_from_pairs(
         };
         let destination_exists =
             captured.contents.contains_key(&relative_archive_path);
-        let partitioned = if moves_tasks {
-            Some(partition_selected_roots(&transform, existing_archive)?)
+        let selected_lines = select_archive_roots(
+            &candidates,
+            existing_archive,
+            super::super::env::current_datetime().date(),
+        );
+        let moves_tasks = !selected_lines.is_empty()
+            && (threshold == 0 || selected_lines.len() >= threshold);
+        let transform = if moves_tasks {
+            Some(transform_markdown_with_selected_roots(
+                &contents,
+                &captured.settings,
+                Some(&selected_lines),
+            ))
         } else {
             None
         };
-
-        let source_base = if moves_tasks {
-            transform.source_contents
-        } else {
-            contents
+        let partitioned = match &transform {
+            Some(transform) => {
+                Some(partition_selected_roots(transform, existing_archive)?)
+            }
+            None => None,
         };
+
+        let source_base = transform
+            .as_ref()
+            .map(|transform| transform.source_contents.clone())
+            .unwrap_or(contents);
         let (source_contents, source_metadata_updated) =
             if moves_tasks || archive_exists {
                 let link = archive_wiki_link(&relative_archive_path)?;
@@ -541,17 +557,18 @@ fn plan_from_pairs(
             } else {
                 (source_base, false)
             };
-        let task_count = if moves_tasks { transform.task_count } else { 0 };
-        let moved_block_ids = if moves_tasks {
-            transform.moved_block_ids.clone()
-        } else {
-            BTreeSet::new()
-        };
-        let ambiguous_moved_block_ids = if moves_tasks {
-            transform.ambiguous_moved_block_ids.clone()
-        } else {
-            BTreeSet::new()
-        };
+        let task_count = transform
+            .as_ref()
+            .map(|transform| transform.task_count)
+            .unwrap_or(0);
+        let moved_block_ids = transform
+            .as_ref()
+            .map(|transform| transform.moved_block_ids.clone())
+            .unwrap_or_default();
+        let ambiguous_moved_block_ids = transform
+            .as_ref()
+            .map(|transform| transform.ambiguous_moved_block_ids.clone())
+            .unwrap_or_default();
         let (
             archive_append,
             moved_block_id_final_ids,
@@ -886,6 +903,69 @@ struct PartitionedArchive {
     records: Vec<MovedRootRecord>,
 }
 
+const KEEP_WINDOW_DAYS: i64 = 7;
+const KEEP_WINDOW_CAP: usize = 10;
+
+/// Select roots outside the chosen trailing-week window, plus exact archive
+/// replays that only need their source copy removed after an interrupted run.
+/// Undated and future-dated roots stay in the source because their close month
+/// cannot be established safely.
+fn select_archive_roots(
+    transform: &Transform,
+    existing_archive: Option<&str>,
+    today: NaiveDate,
+) -> BTreeSet<usize> {
+    let cutoff = today - Duration::days(KEEP_WINDOW_DAYS - 1);
+    let mut inventory = archive_block_inventory(existing_archive);
+    let mut selected = BTreeSet::new();
+    let mut recent = Vec::new();
+
+    for span in &transform.moved_roots {
+        let raw = &transform.archive_append[span.start..span.end];
+        let is_replay = match inventory.get_mut(raw) {
+            Some(count) if *count > 0 => {
+                *count -= 1;
+                true
+            }
+            _ => false,
+        };
+        if is_replay {
+            selected.insert(span.source_line);
+            continue;
+        }
+
+        let close_date = raw
+            .lines()
+            .next()
+            .and_then(super::super::ref_tasks::close_date)
+            .and_then(|date| NaiveDate::parse_from_str(&date, "%Y-%m-%d").ok());
+        match close_date {
+            Some(date) if date < cutoff => {
+                selected.insert(span.source_line);
+            }
+            Some(date) if date <= today => {
+                recent.push((date, span.source_line))
+            }
+            // Keep future-dated and undated rows until a valid close date is
+            // available; neither can be assigned to a close-month heading.
+            Some(_) | None => {}
+        }
+    }
+
+    recent.sort_by(|(left_date, left_line), (right_date, right_line)| {
+        right_date
+            .cmp(left_date)
+            .then_with(|| right_line.cmp(left_line))
+    });
+    selected.extend(
+        recent
+            .into_iter()
+            .skip(KEEP_WINDOW_CAP)
+            .map(|(_, line)| line),
+    );
+    selected
+}
+
 /// Split selected roots into exact replays and new archive appends.
 ///
 /// A selected root replays when the existing archive already holds its exact
@@ -906,6 +986,9 @@ fn partition_selected_roots(
         raw: String,
         contained: Vec<String>,
         replayed: bool,
+        close_month: Option<String>,
+        append_start: usize,
+        append_end: usize,
         occurrence_base: usize,
         occurrence_count: usize,
     }
@@ -926,6 +1009,7 @@ fn partition_selected_roots(
         };
         let occurrence_base = new_occurrences.len();
         let mut occurrence_count = 0;
+        let append_start = new_append.len();
         if !replayed {
             let base = new_append.len();
             for occurrence in &occurrences {
@@ -938,12 +1022,22 @@ fn partition_selected_roots(
             }
             new_append.push_str(&raw);
         }
+        let append_end = new_append.len();
+        let close_month = raw
+            .lines()
+            .next()
+            .and_then(super::super::ref_tasks::close_date)
+            .and_then(|date| NaiveDate::parse_from_str(&date, "%Y-%m-%d").ok())
+            .map(|date| date.format("%Y-%m").to_string());
         pending.push(PendingRoot {
             source_line: span.source_line,
             root_id: span.root_id.clone(),
             raw,
             contained,
             replayed,
+            close_month,
+            append_start,
+            append_end,
             occurrence_base,
             occurrence_count,
         });
@@ -953,14 +1047,12 @@ fn partition_selected_roots(
         &new_append,
         &new_occurrences,
     );
-    let rewritten_append = rewrite_renamed_pathless_links(
-        &deduplicated.archive_append,
-        &deduplicated.final_block_ids,
-    );
     let mut final_block_ids = deduplicated.final_block_ids.clone();
     let mut final_ids = BTreeSet::new();
     final_ids.extend(deduplicated.aligned_final_ids.iter().cloned());
     let mut records = Vec::new();
+    let mut month_appends: BTreeMap<String, Vec<(usize, String)>> =
+        BTreeMap::new();
     for pending in pending {
         let finals = if pending.replayed {
             for id in &pending.contained {
@@ -973,6 +1065,36 @@ fn partition_selected_roots(
             }
             pending.contained.clone()
         } else {
+            let final_start = remap_append_offset(
+                pending.append_start,
+                &new_occurrences,
+                &deduplicated.aligned_final_ids,
+            );
+            let final_end = remap_append_offset(
+                pending.append_end,
+                &new_occurrences,
+                &deduplicated.aligned_final_ids,
+            );
+            let final_root =
+                &deduplicated.archive_append[final_start..final_end];
+            let final_root = rewrite_renamed_pathless_links(
+                final_root,
+                &deduplicated.final_block_ids,
+            );
+            if let Some(month) = pending.close_month.as_ref() {
+                month_appends
+                    .entry(month.clone())
+                    .or_default()
+                    .push((pending.source_line, final_root));
+            } else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "selected archive root on source line {} has no valid close month",
+                        pending.source_line
+                    ),
+                ));
+            }
             deduplicated.aligned_final_ids[pending.occurrence_base
                 ..pending.occurrence_base + pending.occurrence_count]
                 .to_vec()
@@ -986,13 +1108,49 @@ fn partition_selected_roots(
             replayed: pending.replayed,
         });
     }
+    let line_ending = preferred_line_ending(&new_append);
+    let mut archive_append = String::new();
+    for (month, mut roots) in month_appends {
+        roots.sort_by_key(|(line, _)| *line);
+        archive_append.push_str("## ");
+        archive_append.push_str(&month);
+        archive_append.push_str(line_ending);
+        archive_append.push_str(line_ending);
+        for (_, root) in roots {
+            archive_append.push_str(&root);
+            if !root.ends_with('\n') {
+                archive_append.push_str(line_ending);
+            }
+        }
+    }
     Ok(PartitionedArchive {
-        archive_append: rewritten_append,
+        archive_append,
         final_block_ids,
         final_ids,
         rename_count: deduplicated.rename_count,
         records,
     })
+}
+
+/// Convert a byte offset in the pre-deduplicated append to the matching
+/// offset after block-id suffixes were applied.
+fn remap_append_offset(
+    offset: usize,
+    occurrences: &[BlockIdOccurrence],
+    final_ids: &[String],
+) -> usize {
+    let delta = occurrences
+        .iter()
+        .zip(final_ids)
+        .filter(|(occurrence, _)| occurrence.end <= offset)
+        .map(|(occurrence, final_id)| {
+            final_id.len() as isize
+                - (occurrence.end - occurrence.start) as isize
+        })
+        .sum::<isize>();
+    offset
+        .checked_add_signed(delta)
+        .expect("valid remapped offset")
 }
 
 /// Multiset of complete archive blocks, frontmatter excluded.

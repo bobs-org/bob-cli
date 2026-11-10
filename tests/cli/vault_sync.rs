@@ -2356,7 +2356,9 @@ fn make_pending_task_losses_old(temp: &TempDir) {
 fn done_tasks_source(count: usize) -> String {
     let mut text = String::from("---\ntype: [[area]]\n---\n\n");
     for index in 1..=count {
-        text.push_str(&format!("- [x] done {index} #task\n"));
+        text.push_str(&format!(
+            "- [x] done {index} #task [completion:: 2000-01-01]\n"
+        ));
     }
     text.push_str("- [ ] active #task\n");
     text

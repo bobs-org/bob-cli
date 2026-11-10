@@ -1,6 +1,111 @@
 //! Collection planning and link-repair tests.
 use super::*;
 
+fn close_date(days_ago: i64) -> String {
+    (crate::native::env::current_datetime().date()
+        - chrono::Duration::days(days_ago))
+    .format("%Y-%m-%d")
+    .to_string()
+}
+
+#[test]
+fn keep_window_keeps_recent_roots_and_archives_older_roots_by_month() {
+    let vault = TempDir::new("bob-cli-archive-keep-window");
+    let mut tasks = String::new();
+    for age in 0..12 {
+        tasks.push_str(&format!(
+            "- [x] closed {age} #task [completion:: {}] ^task-{age}\n",
+            close_date(age)
+        ));
+    }
+    write_file(
+        &vault.path().join("work.md"),
+        &format!("---\ntype: [[area]]\n---\n\n{tasks}"),
+    );
+
+    let plan = build_collection_plan(vault.path(), NO_MINIMUM_BATCH)
+        .expect("build plan");
+
+    assert_eq!(plan.total_task_count(), 5);
+    let file = &plan.files[0];
+    for age in 0..7 {
+        assert!(file.source_contents.contains(&format!("^task-{age}")));
+    }
+    for age in 7..12 {
+        assert!(!file.source_contents.contains(&format!("^task-{age}")));
+        assert!(file.archive_contents.as_ref().unwrap().contains(&format!(
+            "- [x] closed {age} #task [completion:: {}] ^task-{age}",
+            close_date(age)
+        )));
+    }
+    assert!(file.archive_contents.as_ref().unwrap().contains("## "));
+}
+
+#[test]
+fn keep_window_caps_recent_roots_at_ten() {
+    let vault = TempDir::new("bob-cli-archive-keep-window-cap");
+    let today = close_date(0);
+    let tasks = (0..12)
+        .map(|index| {
+            format!(
+                "- [x] closed {index} #task [completion:: {today}] ^same-day-{index}\n"
+            )
+        })
+        .collect::<String>();
+    write_file(&vault.path().join("work.md"), &area_note(&tasks));
+
+    let plan = build_collection_plan(vault.path(), NO_MINIMUM_BATCH)
+        .expect("build plan");
+
+    assert_eq!(plan.total_task_count(), 2);
+    let file = &plan.files[0];
+    let archive = file.archive_contents.as_ref().unwrap();
+    assert!(archive.contains("^same-day-0"));
+    assert!(archive.contains("^same-day-1"));
+    for index in 2..12 {
+        assert!(file.source_contents.contains(&format!("^same-day-{index}")));
+    }
+}
+
+#[test]
+fn minimum_batch_applies_to_selected_roots_only() {
+    let vault = TempDir::new("bob-cli-archive-minimum-batch");
+    let tasks = format!(
+        "- [x] first #task [completion:: {}] ^first\n- [x] second #task [completion:: {}] ^second\n",
+        close_date(8),
+        close_date(9),
+    );
+    write_file(&vault.path().join("work.md"), &area_note(&tasks));
+
+    let gated = build_collection_plan(vault.path(), 3).expect("gated plan");
+    assert!(gated.files.is_empty());
+
+    let eligible =
+        build_collection_plan(vault.path(), 2).expect("eligible plan");
+    assert_eq!(eligible.total_task_count(), 2);
+}
+
+#[test]
+fn undated_and_future_dated_roots_stay_in_the_source() {
+    let vault = TempDir::new("bob-cli-archive-undated-window");
+    let future = (crate::native::env::current_datetime().date()
+        + chrono::Duration::days(1))
+    .format("%Y-%m-%d");
+    let tasks = format!(
+        "- [x] undated #task ^undated\n- [x] future #task [completion:: {future}] ^future\n"
+    );
+    write_file(
+        &vault.path().join("work.md"),
+        &format!("---\ntype: [[area]]\n---\n\n{tasks}"),
+    );
+
+    let plan = build_collection_plan(vault.path(), NO_MINIMUM_BATCH)
+        .expect("build plan");
+
+    assert!(plan.files.is_empty());
+    assert_eq!(plan.total_task_count(), 0);
+}
+
 #[test]
 fn scans_markdown_files_with_exclusions_and_threshold() {
     let vault = TempDir::new("bob-cli-collect-done-vault");
@@ -75,8 +180,10 @@ parent: \"[[obsidian]]\"
 type: \"[[done]]\"
 ---
 
-- [x] one #task
-- [-] two #task
+## 2000-01
+
+- [x] one #task [completion:: 2000-01-01]
+- [-] two #task [completion:: 2000-01-01]
 "
         )
     );
@@ -122,9 +229,11 @@ parent: \"[[obsidian]]\"
 type: \"[[done]]\"
 ---
 
-- [-] canceled one #task
+## 2000-01
+
+- [-] canceled one #task [completion:: 2000-01-01]
   detail
-- [-] canceled two #task
+- [-] canceled two #task [completion:: 2000-01-01]
 "
         )
     );
@@ -173,7 +282,9 @@ parent: \"[[foo/bar]]\"
 type: \"[[done]]\"
 ---
 
-- [x] nested #task
+## 2000-01
+
+- [x] nested #task [completion:: 2000-01-01]
 "
         )
     );
@@ -232,7 +343,7 @@ fn task_moves_repair_dependency_ids_in_archive_and_all_dependents() {
         .archive_contents
         .as_deref()
         .unwrap()
-        .contains("[id:: done__projects__Shared_done__review] ^review"));
+        .contains("[id:: done__projects__Shared_done__review] [completion:: 2000-01-01] ^review"));
     assert_eq!(plan.link_repairs.len(), 2);
     for repair in &plan.link_repairs {
         assert!(repair
@@ -454,11 +565,13 @@ fn planned_source_and_archive_contents_are_link_repaired() {
     let vault = TempDir::new("bob-cli-collect-done-planned-link-repair");
     write_file(
         &vault.path().join("obsidian.md"),
-        "\
+        &with_test_close_dates(
+            "\
 - [x] done #task ^abc123
 - [ ] active #task
   follow-up [[obsidian#^abc123]]
 ",
+        ),
     );
     write_file(
         &vault.path().join("done/obsidian_done.md"),

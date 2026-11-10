@@ -12,7 +12,7 @@ use git::{GitOutcome, GitReport};
 use health::{Diagnostics, Finding};
 
 /// JSON contract version for `bob task archive -f json`.
-pub(super) const SCHEMA_VERSION: u64 = 1;
+pub(super) const SCHEMA_VERSION: u64 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum OutputFormat {
@@ -268,7 +268,7 @@ pub(super) fn render_json(report: &Report) -> String {
         "schema_version": SCHEMA_VERSION,
         "dry_run": report.dry_run,
         "vault": report.vault.display().to_string(),
-        "threshold": report.threshold,
+        "threshold": (report.threshold > 0).then_some(report.threshold),
         "scan": plan.map(scan_json).unwrap_or(Value::Null),
         "moves": plan.map(moves_json).unwrap_or_else(|| json!([])),
         "holds": plan.map(holds_json).unwrap_or_else(|| json!([])),
@@ -290,7 +290,7 @@ pub(super) fn render_json(report: &Report) -> String {
 fn scan_json(plan: &CollectionPlan) -> Value {
     json!({
         "markdown_files": plan.scanned_files,
-        "files_meeting_threshold": plan.task_move_file_count(),
+        "files_selected": plan.task_move_file_count(),
         "task_blocks": plan.total_task_count(),
         "source_done_tasks_updates": plan.source_metadata_update_count(),
         "archive_metadata_repairs": plan.archive_metadata_update_count(),
@@ -483,7 +483,11 @@ pub(super) fn human_header(report: &Report) -> String {
         text.push_str("mode: dry run (no vault changes will be made)\n");
     }
     text.push_str(&format!("vault: {}\n", report.vault.display()));
-    text.push_str(&format!("threshold: {}\n", report.threshold));
+    if report.threshold == NO_MINIMUM_BATCH {
+        text.push_str("minimum batch: none\n");
+    } else {
+        text.push_str(&format!("minimum batch: {}\n", report.threshold));
+    }
     text
 }
 
@@ -527,10 +531,10 @@ pub(super) fn render_human(report: &Report) -> String {
     match report.exit.outcome {
         Outcome::Failed => push_failure(&mut out, report),
         Outcome::Noop => out.push_str(
-            "  no task blocks met the threshold; no vault changes made.\n",
+            "  no archive changes needed; no vault changes made.\n",
         ),
         Outcome::Preview if plan.is_empty() => out.push_str(
-            "  dry run: no task blocks met the threshold; no vault changes would be made.\n",
+            "  dry run: no archive changes needed; no vault changes would be made.\n",
         ),
         Outcome::Preview | Outcome::Applied => {
             push_summary_counts(&mut out, report, plan)
@@ -543,7 +547,7 @@ fn push_scan(out: &mut String, plan: &CollectionPlan) {
     out.push_str("scan:\n");
     out.push_str(&format!("  markdown files: {}\n", plan.scanned_files));
     out.push_str(&format!(
-        "  files meeting threshold: {}\n",
+        "  files selected for archive: {}\n",
         plan.task_move_file_count()
     ));
     out.push_str(&format!("  task blocks: {}\n", plan.total_task_count()));

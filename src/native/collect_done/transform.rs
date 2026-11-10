@@ -183,6 +183,19 @@ pub(super) fn transform_markdown_with_settings(
     contents: &str,
     settings: &super::super::task_status_hooks::TasksSettings,
 ) -> Transform {
+    transform_markdown_with_selected_roots(contents, settings, None)
+}
+
+/// Transform a document while moving only the selected closed roots.
+///
+/// Roots omitted from `selected_lines` stay byte-identical in the source.
+/// This lets the archive planner apply age/window policy without changing the
+/// task-block parser or losing the original position of retained roots.
+pub(super) fn transform_markdown_with_selected_roots(
+    contents: &str,
+    settings: &super::super::task_status_hooks::TasksSettings,
+    selected_lines: Option<&BTreeSet<usize>>,
+) -> Transform {
     let lines: Vec<&str> = contents.split_inclusive('\n').collect();
     let masked = super::super::markdown::non_content_line_indexes(&lines);
     let parsed =
@@ -313,6 +326,11 @@ pub(super) fn transform_markdown_with_settings(
     let mut id_counts: BTreeMap<String, usize> = BTreeMap::new();
     for action in &actions {
         if let ScanAction::Candidate(pending) = action {
+            if selected_lines.is_some_and(|selected| {
+                !selected.contains(&pending.source_line)
+            }) {
+                continue;
+            }
             for id in &pending.contained_ids {
                 *id_counts.entry(id.clone()).or_insert(0) += 1;
             }
@@ -339,6 +357,14 @@ pub(super) fn transform_markdown_with_settings(
                 }
             }
             ScanAction::Candidate(pending) => {
+                if selected_lines.is_some_and(|selected| {
+                    !selected.contains(&pending.source_line)
+                }) {
+                    for line in pending.block_lines {
+                        source_contents.push_str(&line);
+                    }
+                    continue;
+                }
                 let is_duplicate = pending
                     .contained_ids
                     .iter()

@@ -222,7 +222,7 @@ done_tasks: \"[[done/clean_done]]\"
     let report = run_preview(&vault);
     let value = json(&report);
     assert_eq!(value["diagnostics"]["complete"], true);
-    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["schema_version"], 2);
 
     let orphans = findings(&value, CODE_ORPHAN);
     assert_eq!(orphans.len(), 1);
@@ -240,12 +240,11 @@ done_tasks: \"[[done/clean_done]]\"
     assert_eq!(dups[0]["block_id"], "dup");
 
     let undated = findings(&value, CODE_UNDATED);
-    assert_eq!(undated.len(), 2, "{value}");
+    assert_eq!(undated.len(), 1, "{value}");
     let undated_lines: Vec<u64> = undated
         .iter()
         .map(|finding| finding["line"].as_u64().unwrap())
         .collect();
-    assert!(undated_lines.contains(&5), "{undated:?}");
     assert!(undated_lines.contains(&6), "{undated:?}");
 
     let text = render_human(&report);
@@ -486,7 +485,7 @@ fn undated_rows_count_below_threshold() {
     let vault = TempDir::new("bob-cli-archive-health-undated-threshold");
     write_file(
         &vault.path().join("work.md"),
-        &area_note("- [x] lonely #task\n- [ ] live #task\n"),
+        "---\ntype: [[area]]\n---\n\n- [x] lonely #task\n- [ ] live #task\n",
     );
     let plan = build_collection_plan(vault.path(), 10).expect("plan");
     assert!(plan.files.is_empty());

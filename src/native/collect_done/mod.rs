@@ -81,7 +81,7 @@ pub(crate) fn collection_postimages_for_tests(
 }
 
 pub(super) const COMMAND_NAME: &str = "bob task archive";
-pub(crate) const DEFAULT_THRESHOLD: usize = 10;
+pub(crate) const NO_MINIMUM_BATCH: usize = 0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Args {
@@ -93,7 +93,7 @@ struct Args {
 impl Default for Args {
     fn default() -> Self {
         Self {
-            threshold: DEFAULT_THRESHOLD,
+            threshold: NO_MINIMUM_BATCH,
             dry_run: false,
             format: OutputFormat::Human,
         }
@@ -287,7 +287,7 @@ pub(crate) fn completion_descriptor() -> ClapCommand {
                 .short('t')
                 .value_name("N")
                 .value_parser(clap::value_parser!(usize))
-                .help("Minimum completed/canceled task count per source note"),
+                .help("Minimum roots to archive from a source note"),
         )
 }
 
@@ -310,11 +310,10 @@ options:
   -n, --dry-run    plan and report only: no lock, writes, or Git
   -f, --format human|json
                    output format (default: human); json prints one
-                   schema_version 1 document
+                   schema_version 2 document
   -h, --help       show this help message and exit
   -t, --threshold N
-                   minimum completed/canceled task count per source note \
-(default: {DEFAULT_THRESHOLD})"
+                   optional minimum selected-root batch per source note"
     )
 }
 

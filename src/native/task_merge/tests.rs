@@ -2512,7 +2512,7 @@ fn mg17_closed_nested_task_copy_strips_identity_and_reconcile_is_noop() {
 #[test]
 fn mg18_archive_planner_repairs_merged_from_to_tombstone_archive() {
     let vault = tempfile::tempdir().expect("temporary vault");
-    let source = "---\ntype: [[area]]\n---\n\n- [-] #task Source [created:: 2026-10-20] [cancelled:: 2026-11-03] ^src\n\t- 🪢 **LINKS:** merged into [[dest#^dst]]\n";
+    let source = "---\ntype: [[area]]\n---\n\n- [-] #task Source [created:: 2026-10-20] [cancelled:: 2000-01-01] ^src\n\t- 🪢 **LINKS:** merged into [[dest#^dst]]\n";
     let target_note = "---\ntype: [[area]]\n---\n\n- [ ] #task Target ^dst\n\t- 🪢 **LINKED FROM:** [[src#^src]] (merged into)\n";
     std::fs::write(vault.path().join("src.md"), source)
         .expect("write source fixture");
@@ -2997,7 +2997,7 @@ fn mg18_merge_source_with_descendant_anchor_archives_through_bound_pair() {
         "done_tasks: \"[[done/custom_archive]]\"\n",
         "---\n",
         "\n",
-        "- [-] #task Source [created:: 2026-10-20] [cancelled:: 2026-11-03] ^src\n",
+        "- [-] #task Source [created:: 2026-10-20] [cancelled:: 2000-01-01] ^src\n",
         "\t- Child detail ^keep\n",
         "\t- 🪢 **LINKS:** merged into [[dest#^dst]]\n",
     );
@@ -3040,21 +3040,27 @@ fn mg18_merge_source_with_descendant_anchor_archives_through_bound_pair() {
         .get(Path::new("dest.md"))
         .expect("rewritten target postimage");
     assert!(
-        target.contains("done/custom_archive#^src")
-            || target.contains("done/custom_archive#^keep"),
-        "copied links follow the bound archive, not a _done guess: {target}"
+        target.contains("done/src_done#^src")
+            || target.contains("done/src_done#^keep"),
+        "copied links follow the bound archive's canonical rename: {target}"
     );
     assert!(
-        !target.contains("[[src#^src]]")
-            || target.contains("done/custom_archive"),
+        !target.contains("[[src#^src]]") || target.contains("done/src_done"),
         "original source refs move to the bound archive: {target}"
     );
+    assert!(
+        postimages
+            .get(Path::new("done/src_done.md"))
+            .is_some_and(|archive| archive.contains("- [x] old #task ^old")),
+        "the bound archive's bytes move to its canonical destination"
+    );
+    assert!(!postimages.contains_key(Path::new("done/custom_archive.md")));
     let referrer_post = postimages
         .get(Path::new("referrer.md"))
         .expect("rewritten referrer postimage");
     assert!(
-        referrer_post.contains("done/custom_archive#^"),
-        "external references follow the bound archive: {referrer_post}"
+        referrer_post.contains("done/src_done#^"),
+        "external references follow the bound archive's canonical rename: {referrer_post}"
     );
     assert!(
         !target.matches("^keep").any(|_| true)

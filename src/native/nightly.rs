@@ -179,7 +179,7 @@ fn print_help() {
 }
 
 fn run_collect_done_step(child_env: &ChildEnv) -> i32 {
-    collect_done::run_collection(collect_done::DEFAULT_THRESHOLD, child_env)
+    collect_done::run_collection(collect_done::NO_MINIMUM_BATCH, child_env)
 }
 
 fn run_articles_step(_child_env: &ChildEnv) -> i32 {

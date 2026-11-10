@@ -93,7 +93,42 @@ fn os_args<const N: usize>(args: [&str; N]) -> Vec<OsString> {
 }
 
 fn area_note(body: &str) -> String {
-    format!("---\ntype: [[area]]\n---\n\n{body}")
+    format!(
+        "---\ntype: [[area]]\n---\n\n{}",
+        with_test_close_dates(body)
+    )
+}
+
+/// New archive selection needs a close date. Give legacy test fixtures a
+/// stable old date unless a test explicitly supplies one.
+fn with_test_close_dates(contents: &str) -> String {
+    let mut dated = String::with_capacity(contents.len() + 32);
+    for segment in contents.split_inclusive('\n') {
+        let (line, ending) = split_line_ending(segment);
+        let task_line = line.trim_start();
+        let closed = task_line.starts_with("- [x]")
+            || task_line.starts_with("- [X]")
+            || task_line.starts_with("- [-]");
+        if closed
+            && has_task_tag(line)
+            && super::super::ref_tasks::close_date(line).is_none()
+        {
+            let trimmed = line.trim_end();
+            let trailing = &line[trimmed.len()..];
+            let mut with_date = trimmed.to_string();
+            if let Some(anchor) = with_date.rfind(" ^") {
+                with_date.insert_str(anchor, " [completion:: 2000-01-01]");
+            } else {
+                with_date.push_str(" [completion:: 2000-01-01]");
+            }
+            dated.push_str(&with_date);
+            dated.push_str(trailing);
+        } else {
+            dated.push_str(line);
+        }
+        dated.push_str(ending);
+    }
+    dated
 }
 
 fn write_file(path: &Path, contents: &str) {

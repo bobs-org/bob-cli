@@ -7,9 +7,8 @@ that pointed at moved block ids. The Rust planner lives in
 `src/native/collect_done/`. Nightly runs it after the leading `vault-sync` and
 before articles, period-note problems, and the trailing `vault-sync`.
 
-This file is the behavior contract. The keep window and plugin restore are
-later phases; this page describes the selection, pairing, rename following,
-guarded-write, preview, JSON, and task-restore rules that ship today.
+This file is the behavior contract for selection, the keep window, pairing,
+rename following, guarded writes, preview, JSON output, and task restore.
 
 ## Command
 
@@ -18,12 +17,12 @@ bob task archive [-n|--dry-run] [-f|--format human|json] [-t|--threshold N]
   -n, --dry-run         Plan and report only; no lock, writes, or Git
   -f, --format FORMAT   human (default) or json
   -h, --help            Show help
-  -t, --threshold N     Minimum closed-root count per source note (default: 10)
+  -t, --threshold N     Optional minimum selected-root batch per source note
 ```
 
 ```bash
 bob task archive
-bob task archive --threshold 1
+bob task archive --threshold 2
 bob task archive --dry-run
 bob task archive -n -f json
 ```
@@ -32,10 +31,20 @@ bob task archive -n -f json
 (`--format=json`, `-fjson`, `-f=json`). An unknown format or option is a
 usage error: exit 2, nothing on stdout, no planning.
 
-`-t` still counts only archivable roots in one source note. A note below the
-threshold is left unchanged unless it already owns a paired archive (then
-source `done_tasks` and archive `parent` / `type` metadata can still be
-repaired).
+For each source note, Bob keeps the ten newest dated closures from the last
+seven calendar days. Older closures move to `done/`; when more than ten roots
+closed during that window, the older roots in the window move too. An explicit
+`-t` sets the minimum number of selected roots that must be ready to move from
+one source before any of them move. Without `-t`, there is no batch minimum.
+Exact archive replays remain eligible so a prior interrupted write can remove
+its source copy safely.
+
+New archive content is grouped under `## YYYY-MM` headings based on each
+root's close date. Existing archive bodies stay in place; Bob does not regroup
+old flat content. Undated or future-dated roots stay in their source because
+their age and close month cannot be established safely. An eligible source
+with an existing archive can still receive metadata repairs even when no
+roots are selected.
 
 ## Eligibility
 
@@ -121,7 +130,8 @@ type: "[[done]]"
 ```
 
 The source gains `done_tasks: "[[done/..._done]]"` in frontmatter. An existing
-archive appends newly moved blocks after its current body. Duplicate block
+archive appends newly moved blocks after its current body, under close-month
+headings. Duplicate block
 ids against the existing archive receive a numeric suffix (`^x` → `^x-1`); a
 moved block's own pathless links (`[[#^x]]`, with alias and `!`) are rewritten
 to the final id before the append so they do not resolve to the older archived
@@ -138,7 +148,7 @@ numeric-suffix rename above.
 
 A replayed root is removed from the source, appends nothing to the archive, and
 renames nothing; inbound links still repair into the archive. Replayed roots
-still count toward the threshold. This is what finishes an interrupted run (see
+count toward an explicit minimum batch. This is what finishes an interrupted run (see
 [Recovery](#recovery)): a second successful run is a no-op.
 
 ## Rename following
@@ -264,14 +274,15 @@ labeled as planned.
 `-f json` prints exactly one JSON document on stdout (compact, one line) for
 every run, including runtime failures; progress and subprocess diagnostics go
 to stderr. Usage errors are plain stderr with exit 2. The schema is
-`schema_version: 1`; additions stay additive.
+`schema_version: 2`; the keep-window change makes `threshold` nullable and
+renames the scan count to `files_selected`.
 
 | Section | Contents |
 | --- | --- |
-| `schema_version` | `1` |
+| `schema_version` | `2` |
 | `dry_run` | Whether the run was a preview |
-| `vault`, `threshold` | Vault root and effective threshold |
-| `scan` | Counts for the plan (`null` when planning failed): `markdown_files`, `files_meeting_threshold`, `task_blocks`, `source_done_tasks_updates`, `archive_metadata_repairs`, `moved_block_ids`, `ambiguous_moved_block_ids`, `moved_block_id_renames`, `archive_renames`, `planned_bytes` |
+| `vault`, `threshold` | Vault root and nullable explicit minimum batch (`null` when `-t` was omitted) |
+| `scan` | Counts for the plan (`null` when planning failed): `markdown_files`, `files_selected`, `task_blocks`, `source_done_tasks_updates`, `archive_metadata_repairs`, `moved_block_ids`, `ambiguous_moved_block_ids`, `moved_block_id_renames`, `archive_renames`, `planned_bytes` |
 | `moves` | Deterministic list ordered by `source`; each entry has `source`, `archive`, `task_count`, `writes_source`, `writes_archive`, `creates_archive`, `roots`, `block_ids`, `id_renames`, `replays` |
 | `holds` | `path`, one-based `line`, nullable `block_id`, `reason` (`open_subtask` or `duplicate_block_id`) |
 | `skips` | Reason-to-count object |

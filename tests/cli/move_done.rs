@@ -50,7 +50,8 @@ fn task_archive_accepts_a_symlinked_vault_root() {
     );
     let archive = fs::read_to_string(vault.join("done/work_done.md"))
         .expect("archive created under real vault");
-    assert!(archive.contains("- [x] finished #task ^gone"));
+    assert!(archive
+        .contains("- [x] finished #task [completion:: 2000-01-01] ^gone"));
     assert!(fs::read_to_string(vault.join("work.md"))
         .unwrap()
         .contains("- [ ] active #task"));
@@ -211,7 +212,7 @@ fn move_done_tasks_commits_link_repairs_with_collection_changes() {
     assert!(
         fs::read_to_string(&archive)
             .expect("read archive")
-            .contains("- [x] done #task ^abc123"),
+            .contains("- [x] done #task [completion:: 2000-01-01] ^abc123"),
         "expected archived task"
     );
 
@@ -244,7 +245,7 @@ fn move_done_tasks_deduplicates_archive_block_ids_and_repairs_links() {
     write_file(
         &source,
         "\
-- [x] done #task ^abc123
+- [x] done #task [completion:: 2000-01-01] ^abc123
 - [ ] active #task
 ",
     );
@@ -301,7 +302,9 @@ done_tasks: \"[[done/obsidian_done]]\"
     let archive_contents = fs::read_to_string(&archive).expect("read archive");
     assert!(
         archive_contents.contains("- [x] archived #task ^abc123\n")
-            && archive_contents.contains("- [x] done #task ^abc123-1\n"),
+            && archive_contents.contains(
+                "- [x] done #task [completion:: 2000-01-01] ^abc123-1\n"
+            ),
         "expected existing and renamed moved block ids:\n{archive_contents}"
     );
 
@@ -570,8 +573,8 @@ fn move_done_tasks_moves_canceled_tasks_in_non_repo_vault() {
         &source,
         &area_note(
             "\
-- [-] canceled one #task
-- [-] canceled two #task
+- [-] canceled one #task [cancelled:: 2000-01-01]
+- [-] canceled two #task [cancelled:: 2000-01-01]
 - [ ] active #task
 ",
         ),
@@ -588,7 +591,7 @@ fn move_done_tasks_moves_canceled_tasks_in_non_repo_vault() {
     assert_success(&output);
     let output_text = stdout(&output);
     assert!(
-        output_text.contains("files meeting threshold: 1")
+        output_text.contains("files selected for archive: 1")
             && output_text.contains("task blocks: 2")
             && output_text.contains("moved task blocks: 2")
             && output_text
@@ -615,8 +618,10 @@ parent: \"[[obsidian]]\"
 type: \"[[done]]\"
 ---
 
-- [-] canceled one #task
-- [-] canceled two #task
+## 2000-01
+
+- [-] canceled one #task [cancelled:: 2000-01-01]
+- [-] canceled two #task [cancelled:: 2000-01-01]
 "
     );
 }
@@ -682,7 +687,7 @@ done_tasks: \"[[done/obsidian_done]]\"
     assert!(
         fs::read_to_string(&archive)
             .expect("read archive")
-            .contains("- [x] done #task ^abc123"),
+            .contains("- [x] done #task [completion:: 2000-01-01] ^abc123"),
         "expected archived task"
     );
     let show = stdout(&git_in(
@@ -1057,6 +1062,7 @@ fn move_done_tasks_keeps_a_drafted_period_review_drafted() {
         .args(["task", "archive"])
         .arg("-t1")
         .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-11-20")
         .env("PATH", path_with_prefix(&stub_bin))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
@@ -1082,7 +1088,56 @@ fn move_done_tasks_keeps_a_drafted_period_review_drafted() {
 }
 
 fn area_note(body: &str) -> String {
-    format!("---\ntype: [[area]]\n---\n\n{body}")
+    format!(
+        "---\ntype: [[area]]\n---\n\n{}",
+        with_archive_test_close_dates(body)
+    )
+}
+
+fn with_archive_test_close_dates(contents: &str) -> String {
+    let mut dated = String::with_capacity(contents.len() + 32);
+    for segment in contents.split_inclusive('\n') {
+        let (line, ending) = if let Some(line) = segment.strip_suffix("\r\n") {
+            (line, "\r\n")
+        } else if let Some(line) = segment.strip_suffix('\n') {
+            (line, "\n")
+        } else {
+            (segment, "")
+        };
+        let task_line = line.trim_start();
+        let status = if task_line.starts_with("- [-]") {
+            Some("cancelled")
+        } else if task_line.starts_with("- [x]")
+            || task_line.starts_with("- [X]")
+        {
+            Some("completion")
+        } else {
+            None
+        };
+        let has_date =
+            ["[completion::", "[cancelled::", "✅ ", "✔ ", "❌ ", "✖ "]
+                .iter()
+                .any(|field| line.contains(field));
+        if let Some(status) =
+            status.filter(|_| task_line.contains("#task") && !has_date)
+        {
+            let trimmed = line.trim_end();
+            let trailing = &line[trimmed.len()..];
+            let mut updated = trimmed.to_string();
+            let field = format!(" [{status}:: 2000-01-01]");
+            if let Some(anchor) = updated.rfind(" ^") {
+                updated.insert_str(anchor, &field);
+            } else {
+                updated.push_str(&field);
+            }
+            dated.push_str(&updated);
+            dated.push_str(trailing);
+        } else {
+            dated.push_str(line);
+        }
+        dated.push_str(ending);
+    }
+    dated
 }
 
 fn init_git_vault_with_remote(temp: &TempDir) -> (PathBuf, PathBuf) {
@@ -1189,7 +1244,7 @@ fn archive_dry_run_has_no_side_effects_with_a_held_lock_and_sentinel_git() {
 
     assert_success(&output);
     let report = archive_json(&output);
-    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["schema_version"], 2);
     assert_eq!(report["dry_run"], true);
     assert_eq!(report["exit"]["outcome"], "preview");
     assert_eq!(report["exit"]["code"], 0);
@@ -1327,7 +1382,7 @@ fn archive_rename_commits_the_removed_old_path_and_second_run_is_noop() {
     let (vault, remote) = init_git_vault_with_remote(&temp);
     write_file(
         &vault.join("work.md"),
-        "---\ntype: [[project]]\ndone_tasks: \"[[done/work_old_done]]\"\n---\n\n- [x] shipped #task ^ship\n- [ ] active #task\n",
+        "---\ntype: [[project]]\ndone_tasks: \"[[done/work_old_done]]\"\n---\n\n- [x] shipped #task [completion:: 2000-01-01] ^ship\n- [ ] active #task\n",
     );
     write_file(
         &vault.join("done/work_old_done.md"),
@@ -1370,7 +1425,10 @@ fn archive_rename_commits_the_removed_old_path_and_second_run_is_noop() {
     assert!(!vault.join("done/work_old_done.md").exists());
     let archive = fs::read_to_string(vault.join("done/work_done.md")).unwrap();
     assert!(archive.contains("older #task ^old"), "{archive}");
-    assert!(archive.contains("shipped #task ^ship"), "{archive}");
+    assert!(
+        archive.contains("shipped #task [completion:: 2000-01-01] ^ship"),
+        "{archive}"
+    );
     let notes = fs::read_to_string(vault.join("notes.md")).unwrap();
     assert_eq!(notes, "See [[done/work_done#^old]].\n");
     let status = stdout(&git_in(&vault, ["status", "--porcelain"]));
@@ -1467,7 +1525,10 @@ fn archive_git_failure_is_nonzero_and_reports_the_applied_changes() {
     );
     let archive =
         fs::read_to_string(vault.join("done/obsidian_done.md")).unwrap();
-    assert!(archive.contains("done #task ^d1"), "{archive}");
+    assert!(
+        archive.contains("done #task [completion:: 2000-01-01] ^d1"),
+        "{archive}"
+    );
     let commits = stdout(&git_in(&vault, ["log", "--format=%s"]));
     assert_eq!(
         commits.lines().next(),

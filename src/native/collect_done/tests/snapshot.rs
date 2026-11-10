@@ -33,7 +33,10 @@ fn write_plan_outputs(vault: &Path) {
 }
 
 fn paired_archive(source: &str, body: &str) -> String {
-    format!("---\nparent: \"[[{source}]]\"\ntype: \"[[done]]\"\n---\n\n{body}")
+    format!(
+        "---\nparent: \"[[{source}]]\"\ntype: \"[[done]]\"\n---\n\n{}",
+        with_test_close_dates(body)
+    )
 }
 
 #[test]
@@ -59,7 +62,10 @@ fn records_selected_roots_with_final_ids() {
     let first = &file.moved_roots[0];
     assert_eq!(first.source_line, 5);
     assert_eq!(first.root_id.as_deref(), Some("a1"));
-    assert_eq!(first.raw_bytes, "- [x] one #task ^a1\n  child detail\n");
+    assert_eq!(
+        first.raw_bytes,
+        "- [x] one #task [completion:: 2000-01-01] ^a1\n  child detail\n"
+    );
     assert_eq!(first.contained_ids, vec!["a1".to_string()]);
     assert_eq!(first.final_ids, vec!["a1".to_string()]);
     assert!(!first.replayed);
@@ -153,7 +159,10 @@ fn link_only_repairs_regroup_eligible_sources_and_preserve_notebook_catalog() {
         &classification,
     )
     .contents;
-    let stale_observer = grouped.replace("- [x] completed #task ^stale\n", "");
+    let stale_observer = grouped.replace(
+        "- [x] completed #task [completion:: 2000-01-01] ^stale\n",
+        "",
+    );
     assert!(stale_observer.contains("### Done & Canceled"));
     assert!(stale_observer.contains("🟢"));
     write_file(&vault.path().join("observer.md"), &stale_observer);
@@ -322,7 +331,7 @@ fn moved_identity_uses_original_id_when_destination_id_is_valid_at_source() {
         .archive_contents
         .as_deref()
         .expect("archive")
-        .contains("- [x] new body #task ^a1-1"));
+        .contains("- [x] new body #task [completion:: 2000-01-01] ^a1-1"));
 }
 
 #[test]
@@ -458,10 +467,15 @@ fn different_body_with_same_id_takes_rename_path() {
     assert_eq!(file.moved_roots[0].final_ids, vec!["a1-1".to_string()]);
     let archive = file.archive_contents.as_deref().expect("archive planned");
     assert!(
-        archive.contains("- [x] new body #task ^a1-1\n"),
+        archive
+            .contains("- [x] new body #task [completion:: 2000-01-01] ^a1-1\n"),
         "{archive}"
     );
-    assert!(archive.contains("- [x] old body #task ^a1\n"), "{archive}");
+    assert!(
+        archive
+            .contains("- [x] old body #task [completion:: 2000-01-01] ^a1\n"),
+        "{archive}"
+    );
 }
 
 #[test]
@@ -491,11 +505,16 @@ fn mixed_replay_and_new_blocks_append_only_new() {
     assert!(!file.moved_roots[1].replayed);
     let archive = file.archive_contents.as_deref().expect("archive planned");
     assert_eq!(
-        archive.matches("- [x] replayed #task ^a1\n").count(),
+        archive
+            .matches("- [x] replayed #task [completion:: 2000-01-01] ^a1\n")
+            .count(),
         1,
         "replayed block must not duplicate:\n{archive}"
     );
-    assert!(archive.contains("- [x] fresh #task ^b2\n"), "{archive}");
+    assert!(
+        archive.contains("- [x] fresh #task [completion:: 2000-01-01] ^b2\n"),
+        "{archive}"
+    );
 
     write_plan_outputs(vault.path());
     let rerun = build_collection_plan(vault.path(), 1).expect("rerun plan");
@@ -507,7 +526,8 @@ fn threshold_gates_replay_candidates() {
     let vault = TempDir::new("bob-cli-archive-snapshot-threshold");
     write_file(
         &vault.path().join("work.md"),
-        "\
+        &with_test_close_dates(
+            "\
 ---
 type: [[area]]
 done_tasks: \"[[done/work_done]]\"
@@ -516,6 +536,7 @@ done_tasks: \"[[done/work_done]]\"
 - [x] one #task ^a1
 - [ ] active #task
 ",
+        ),
     );
     write_file(
         &vault.path().join("done/work_done.md"),
@@ -536,9 +557,11 @@ done_tasks: \"[[done/work_done]]\"
 #[test]
 fn crlf_replay_is_a_noop_on_second_run() {
     let vault = TempDir::new("bob-cli-archive-snapshot-crlf");
-    let source = "---\r\ntype: [[area]]\r\n---\r\n\r\n\
-- [x] one #task ^a1\r\n- [ ] active #task\r\n";
-    write_file(&vault.path().join("work.md"), source);
+    let source = with_test_close_dates(
+        "---\r\ntype: [[area]]\r\n---\r\n\r\n\
+- [x] one #task ^a1\r\n- [ ] active #task\r\n",
+    );
+    write_file(&vault.path().join("work.md"), &source);
     write_file(
         &vault.path().join("done/work_done.md"),
         &paired_archive("work", "- [x] one #task ^a1\r\n")
@@ -645,13 +668,15 @@ fn grandfathered_untyped_source_skips_grouping() {
     let vault = TempDir::new("bob-cli-archive-snapshot-grandfathered");
     write_file(
         &vault.path().join("loose.md"),
-        "\
+        &with_test_close_dates(
+            "\
 ## Tasks
 
 - [x] done one #task ^g1
 - [x] done two #task ^g2
 - [ ] live #task
 ",
+        ),
     );
     write_file(
         &vault.path().join("done/loose_done.md"),
@@ -690,7 +715,11 @@ fn repeated_bare_ids_in_unrelated_notes_stay_legal() {
     let file = &plan.files[0];
     assert_eq!(file.relative_source_path, PathBuf::from("a.md"));
     let archive = file.archive_contents.as_deref().expect("archive planned");
-    assert!(archive.contains("- [x] move me #task ^dup\n"), "{archive}");
+    assert!(
+        archive
+            .contains("- [x] move me #task [completion:: 2000-01-01] ^dup\n"),
+        "{archive}"
+    );
 }
 
 #[test]

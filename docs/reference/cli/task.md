@@ -61,10 +61,10 @@ options:
   -n, --dry-run    plan and report only: no lock, writes, or Git
   -f, --format human|json
                    output format (default: human); json prints one
-                   schema_version 1 document
+                   schema_version 2 document
   -h, --help       show this help message and exit
   -t, --threshold N
-                   minimum completed/canceled task count per source note (default: 10)
+                   optional minimum selected-root batch per source note
 ```
 
 ## bob task merge

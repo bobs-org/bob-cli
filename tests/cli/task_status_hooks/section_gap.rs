@@ -60,7 +60,9 @@ fn close_a_new_task(note: &Path, cycle: usize) {
     } else {
         "- [*] #task Keep going ^next\n"
     };
-    let closed = format!("- [x] #task Finished round {cycle} ^done{cycle}\n\n");
+    let closed = format!(
+        "- [x] #task Finished round {cycle} [completion:: 2000-01-01] ^done{cycle}\n\n"
+    );
     write_file(
         note,
         &contents.replacen(anchor, &format!("{closed}{anchor}"), 1),
@@ -93,7 +95,7 @@ fn reconcile_keeps_one_blank_line_after_tasks_across_archive_cycles() {
             "# Alpha\n\n",
             "## Tasks\n\n",
             "- [*] #task Keep going ^next\n",
-            "- [x] #task Finished round zero ^done\n",
+            "- [x] #task Finished round zero [completion:: 2000-01-01] ^done\n",
             "\n",
             "## Future Work\n\n",
             "Later ideas.\n",

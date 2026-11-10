@@ -351,10 +351,135 @@ pub(super) fn append_archive_blocks(
         return;
     }
 
+    let month_sections = month_sections(archive_append);
+    if !month_sections.is_empty() {
+        for (month, blocks) in month_sections {
+            if let Some(insert_at) = month_section_insert_at(contents, &month) {
+                insert_month_blocks(contents, insert_at, &blocks);
+            } else {
+                append_new_month(contents, &month, &blocks);
+            }
+        }
+        return;
+    }
+
     if !contents.is_empty() && !contents.ends_with('\n') {
         contents.push('\n');
     }
     contents.push_str(archive_append);
+}
+
+fn month_sections(archive_append: &str) -> Vec<(String, String)> {
+    let lines: Vec<&str> = archive_append.split_inclusive('\n').collect();
+    let logical: Vec<&str> = lines
+        .iter()
+        .map(|line| super::split_line_ending(line).0)
+        .collect();
+    let masked = super::super::markdown::non_content_line_indexes(&lines);
+    let headings = logical
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            (!masked.contains(&index))
+                .then(|| month_heading(line).map(|month| (index, month)))
+                .flatten()
+        })
+        .collect::<Vec<_>>();
+    headings
+        .iter()
+        .enumerate()
+        .map(|(position, (start, month))| {
+            let end = headings
+                .get(position + 1)
+                .map(|(index, _)| *index)
+                .unwrap_or(lines.len());
+            let body_start = if lines.get(*start + 1).is_some_and(|line| {
+                super::split_line_ending(line).0.trim().is_empty()
+            }) {
+                *start + 2
+            } else {
+                *start + 1
+            };
+            (month.clone(), lines[body_start..end].concat())
+        })
+        .collect()
+}
+
+fn month_heading(line: &str) -> Option<String> {
+    let (level, title) = super::super::markdown::atx_heading(line)?;
+    let bytes = title.as_bytes();
+    if level != 2
+        || bytes.len() != 7
+        || bytes[4] != b'-'
+        || !bytes[..4].iter().all(u8::is_ascii_digit)
+        || !bytes[5..].iter().all(u8::is_ascii_digit)
+    {
+        return None;
+    }
+    let month = (bytes[5] - b'0') * 10 + (bytes[6] - b'0');
+    if !(1..=12).contains(&month) {
+        return None;
+    }
+    Some(title.to_string())
+}
+
+/// Return the byte offset after an existing month section's contents, before
+/// the next H1/H2 heading. Headings inside frontmatter, fences, and comments
+/// are ignored.
+fn month_section_insert_at(contents: &str, month: &str) -> Option<usize> {
+    let lines: Vec<&str> = contents.split_inclusive('\n').collect();
+    let logical: Vec<&str> = lines
+        .iter()
+        .map(|line| super::split_line_ending(line).0)
+        .collect();
+    let masked = super::super::markdown::non_content_line_indexes(&lines);
+    let start = logical.iter().enumerate().find_map(|(index, line)| {
+        if masked.contains(&index) {
+            return None;
+        }
+        (month_heading(line).as_deref() == Some(month)).then_some(index)
+    })?;
+    let end = (start + 1..lines.len())
+        .find(|index| {
+            !masked.contains(index)
+                && super::super::markdown::atx_heading(logical[*index])
+                    .is_some_and(|(level, _)| level <= 2)
+        })
+        .unwrap_or(lines.len());
+    Some(lines[..end].iter().map(|line| line.len()).sum())
+}
+
+fn insert_month_blocks(contents: &mut String, at: usize, blocks: &str) {
+    let line_ending = preferred_line_ending(contents);
+    let prefix = &contents[..at];
+    let mut insertion = String::new();
+    if !prefix.is_empty() && !prefix.ends_with("\n\n") {
+        insertion.push_str(line_ending);
+    }
+    insertion.push_str(blocks);
+    if !insertion.ends_with('\n') {
+        insertion.push_str(line_ending);
+    }
+    insertion.push_str(line_ending);
+    contents.insert_str(at, &insertion);
+}
+
+fn append_new_month(contents: &mut String, month: &str, blocks: &str) {
+    let line_ending = preferred_line_ending(contents);
+    if !contents.is_empty() && !contents.ends_with('\n') {
+        contents.push_str(line_ending);
+    }
+    if !contents.is_empty() && !contents.ends_with("\n\n") {
+        contents.push_str(line_ending);
+    }
+    contents.push_str("## ");
+    contents.push_str(month);
+    contents.push_str(line_ending);
+    contents.push_str(line_ending);
+    contents.push_str(blocks);
+    if !blocks.ends_with('\n') {
+        contents.push_str(line_ending);
+    }
 }
 pub(super) fn preferred_line_ending(contents: &str) -> &'static str {
     if contents.contains("\r\n") {

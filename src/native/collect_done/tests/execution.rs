@@ -118,7 +118,7 @@ fn dry_run_plans_without_lock_session_state_or_writes() {
     assert!(!vault.path().join("done").exists(), "no archive directory");
     assert!(!state.exists(), "no recovery state");
     let value = json(&report);
-    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["schema_version"], 2);
     assert_eq!(value["dry_run"], true);
     assert_eq!(value["exit"]["outcome"], "preview");
     assert_eq!(value["exit"]["applied_paths"], serde_json::json!([]));
@@ -180,7 +180,7 @@ fn apply_reports_actual_paths_and_holds_the_lock_throughout() {
     assert!(report.git.warning.is_some());
     let archive =
         fs::read_to_string(vault.path().join("done/work_done.md")).unwrap();
-    assert!(archive.contains("- [x] done one #task ^one"), "{archive}");
+    assert!(archive.contains("- [x] done one #task"), "{archive}");
     assert!(archive.contains("- [x] done two #task"), "{archive}");
     let source = fs::read_to_string(vault.path().join("work.md")).unwrap();
     assert!(!source.contains("done one"), "{source}");
@@ -234,7 +234,7 @@ fn empty_plan_is_a_noop_that_skips_git() {
     assert_eq!(value["git"]["skip_reason"], "no_changes");
     assert_eq!(value["moves"], serde_json::json!([]));
     assert!(render_human(&report).contains(
-        "git:\n  skipped: no vault changes\nsummary:\n  no task blocks met the threshold; no vault changes made.\n"
+        "git:\n  skipped: no vault changes\nsummary:\n  no archive changes needed; no vault changes made.\n"
     ));
 }
 
