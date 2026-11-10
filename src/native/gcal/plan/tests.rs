@@ -109,6 +109,7 @@ fn occurrence_off_clock(
         event_id: event_id.to_string(),
         ical_uid: None,
         series_id: None,
+        note: None,
         id_hint: title.to_string(),
         task,
         time_label: time_label.to_string(),
@@ -261,6 +262,8 @@ fn plan_clocked(
             is_today,
             occurrences,
             journal,
+            notes: &crate::native::gcal::journal::NoteBook::default(),
+            malformed: 0,
             day_string: "2026-10-30".to_string(),
             today: note_day(),
             lifecycle: Vec::new(),
@@ -284,6 +287,8 @@ fn run_with_journal(
         is_today: false,
         occurrences,
         journal,
+        notes: &crate::native::gcal::journal::NoteBook::default(),
+        malformed: 0,
         day_string: "2026-10-30".to_string(),
         today: note_day(),
         lifecycle: Vec::new(),
@@ -312,6 +317,7 @@ fn journal_from_added(
             record.series_id.clone_from(&row.series_id);
             record.row_kind.clone_from(&row.row_kind);
             record.description.clone_from(&row.description);
+            record.note.clone_from(&row.note);
         }
         journal.insert(key, state);
     }
@@ -334,6 +340,7 @@ fn overlay_updated(
             record.root.clone_from(&row.root);
             record.source.clone_from(&row.source);
             record.description.clone_from(&row.description);
+            record.note.clone_from(&row.note);
         }
     }
     for notice in &plan.kept {
@@ -395,6 +402,8 @@ fn run_journaled_at(
         is_today,
         occurrences,
         journal,
+        notes: &crate::native::gcal::journal::NoteBook::default(),
+        malformed: 0,
         day_string: "2026-10-30".to_string(),
         today: note_day(),
         lifecycle: Vec::new(),
@@ -421,6 +430,8 @@ fn run_at(
         is_today,
         occurrences,
         journal: &BTreeMap::new(),
+        notes: &crate::native::gcal::journal::NoteBook::default(),
+        malformed: 0,
         day_string: "2026-10-30".to_string(),
         today: note_day(),
         lifecycle: Vec::new(),
@@ -892,6 +903,7 @@ fn journal_task(
                 series_id: None,
                 url: url.map(str::to_string),
                 description: DescriptionState::Absent,
+                note: None,
                 ts,
                 host: "test".to_string(),
                 path: "2026/20261030.md".to_string(),
@@ -1237,6 +1249,8 @@ fn existing_ended_row_gets_no_closed_entry() {
             LinkPhase::Past,
         )],
         journal: &journal,
+        notes: &crate::native::gcal::journal::NoteBook::default(),
+        malformed: 0,
         day_string: "2026-10-30".to_string(),
         today: note_day(),
         lifecycle: Vec::new(),
@@ -1308,6 +1322,7 @@ fn upgraded_ended_maybe_gets_closed_meet() {
                 series_id: None,
                 url: occ.html_link.clone(),
                 description: DescriptionState::Absent,
+                note: None,
                 ts,
                 host: "test".to_string(),
                 path: "2026/20261030.md".to_string(),
@@ -1324,6 +1339,8 @@ fn upgraded_ended_maybe_gets_closed_meet() {
         is_today: true,
         occurrences: vec![occ],
         journal: &journal,
+        notes: &crate::native::gcal::journal::NoteBook::default(),
+        malformed: 0,
         day_string: "2026-10-30".to_string(),
         today: note_day(),
         lifecycle: Vec::new(),
@@ -2223,6 +2240,8 @@ fn replanning_output_with_journal_is_idempotent() {
             ),
         ],
         journal: &journal,
+        notes: &crate::native::gcal::journal::NoteBook::default(),
+        malformed: 0,
         day_string: "2026-10-30".to_string(),
         today: note_day(),
         lifecycle: Vec::new(),
@@ -2272,6 +2291,8 @@ fn new_earlier_event_sorts_before_a_previously_journaled_link() {
         is_today: true,
         occurrences: vec![late, early],
         journal: &journal,
+        notes: &crate::native::gcal::journal::NoteBook::default(),
+        malformed: 0,
         day_string: "2026-10-30".to_string(),
         today: note_day(),
         lifecycle: Vec::new(),
@@ -2348,6 +2369,8 @@ fn sort_only_plan_refreshes_stamp_and_is_idempotent() {
         is_today: true,
         occurrences: occurrences.clone(),
         journal: &journal,
+        notes: &crate::native::gcal::journal::NoteBook::default(),
+        malformed: 0,
         day_string: "2026-10-30".to_string(),
         today: note_day(),
         lifecycle: Vec::new(),
@@ -2367,6 +2390,8 @@ fn sort_only_plan_refreshes_stamp_and_is_idempotent() {
         is_today: true,
         occurrences,
         journal: &journal,
+        notes: &crate::native::gcal::journal::NoteBook::default(),
+        malformed: 0,
         day_string: "2026-10-30".to_string(),
         today: note_day(),
         lifecycle: Vec::new(),
@@ -3044,6 +3069,7 @@ fn context_upgrade_resolves_the_upgraded_line() {
                 series_id: None,
                 url: occ.html_link.clone(),
                 description: DescriptionState::Absent,
+                note: None,
                 ts,
                 host: "test".to_string(),
                 path: "2026/20261030.md".to_string(),

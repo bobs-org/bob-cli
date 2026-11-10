@@ -49,6 +49,14 @@ pub(crate) struct OccurrenceState {
     pub flags: HashSet<String>,
 }
 
+/// Which private-note fields a `gcal.row` record carries. Additive:
+/// older binaries read other fields with `object.get` and ignore it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NoteProvenance {
+    pub hash: String,
+    pub fields: Vec<String>,
+}
+
 /// One `gcal.row` record: what Bob wrote for one occurrence and day.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RowRecord {
@@ -60,6 +68,7 @@ pub(crate) struct RowRecord {
     pub series_id: Option<String>,
     pub url: Option<String>,
     pub description: DescriptionState,
+    pub note: Option<NoteProvenance>,
     pub ts: DateTime<FixedOffset>,
     pub host: String,
     pub path: String,
@@ -163,6 +172,25 @@ impl NoteBook {
         self.series
             .get(&(calendar_id.to_string(), series.to_string()))
     }
+
+    /// Raw event-scope record, including clears and foreign accounts.
+    /// Hold logic decides whether it counts.
+    pub(crate) fn event_record(
+        &self,
+        calendar_id: &str,
+        event_id: &str,
+    ) -> Option<&FoldedNote> {
+        self.event(calendar_id, event_id)
+    }
+
+    /// Raw series-scope record, including clears and foreign accounts.
+    pub(crate) fn series_record(
+        &self,
+        calendar_id: &str,
+        series: &str,
+    ) -> Option<&FoldedNote> {
+        self.series(calendar_id, series)
+    }
 }
 
 /// A new `gcal.note` to append.
@@ -196,6 +224,7 @@ pub(crate) struct NewRow {
     /// block-less context rows.
     pub url: Option<String>,
     pub description: DescriptionState,
+    pub note: Option<NoteProvenance>,
 }
 
 /// A new `gcal.link` or `gcal.gone` to append.
@@ -373,6 +402,7 @@ fn parse_record(event: &StoredEvent) -> Option<(String, String, Update)> {
                 .and_then(Value::as_str)
                 .map(str::to_string),
             description: parse_description_state(object.get("description")),
+            note: parse_note_provenance(object.get("note")),
             ts: event.ts,
             host: event.host.clone(),
             path: object
@@ -758,6 +788,39 @@ fn parse_series_root(
     ))
 }
 
+/// Parse one `gcal.row` note provenance record: absent when missing or
+/// `null`, with a `{hash, fields}` object otherwise. Any malformed value
+/// parses as absent so the row stays valid; older binaries ignore it.
+fn parse_note_provenance(value: Option<&Value>) -> Option<NoteProvenance> {
+    let value = value?;
+    if value.is_null() {
+        return None;
+    }
+    let object = value.as_object()?;
+    let hash = object.get("hash").and_then(Value::as_str)?;
+    if hash.len() != 16 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let fields = object.get("fields").and_then(Value::as_array)?;
+    let mut out = Vec::new();
+    for field in fields {
+        let name = field.as_str()?;
+        if !matches!(name, "root" | "clock" | "before" | "after" | "bullets") {
+            return None;
+        }
+        if !out.contains(&name.to_string()) {
+            out.push(name.to_string());
+        }
+    }
+    if out.is_empty() {
+        return None;
+    }
+    Some(NoteProvenance {
+        hash: hash.to_string(),
+        fields: out,
+    })
+}
+
 /// Parse one `gcal.row` description record: absent, a `{hash, lines}`
 /// object, or `null`. Any malformed value parses as hands-off (never
 /// touched) rather than as absent, so the row stays valid and never
@@ -816,6 +879,9 @@ pub(crate) fn append_row(
         DescriptionState::Tracked { hash, lines } => {
             value["description"] = json!({"hash": hash, "lines": lines});
         }
+    }
+    if let Some(note) = &row.note {
+        value["note"] = json!({"hash": note.hash, "fields": note.fields});
     }
     let line = serde_json::to_string(&value)
         .unwrap_or_else(|_| "{}".to_string())
@@ -1031,6 +1097,7 @@ mod tests {
                 root: Some("job".to_string()),
                 source: Some("colour tomato".to_string()),
                 description: DescriptionState::Absent,
+                note: None,
             },
         )
         .expect("row");
@@ -1099,6 +1166,7 @@ mod tests {
                     root: None,
                     source: None,
                     description: DescriptionState::Absent,
+                    note: None,
                 },
             )
             .expect("row")

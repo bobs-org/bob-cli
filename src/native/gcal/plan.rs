@@ -59,6 +59,9 @@ pub(crate) struct PlannedOccurrence {
     pub event_id: String,
     pub ical_uid: Option<String>,
     pub series_id: Option<String>,
+    /// Fresh private-note provenance for this task row, when a note
+    /// contributed. `None` for context rows and note-free tasks.
+    pub note: Option<super::journal::NoteProvenance>,
     /// Bare title for block-id minting.
     pub id_hint: String,
     pub task: bool,
@@ -152,6 +155,8 @@ pub(crate) struct SyncPlanInput<'a> {
     pub is_today: bool,
     pub occurrences: Vec<PlannedOccurrence>,
     pub journal: &'a BTreeMap<(String, String), OccurrenceState>,
+    pub notes: &'a super::journal::NoteBook,
+    pub malformed: usize,
     pub day_string: String,
     /// Cancel reasons and similar lifecycle notices land under this date.
     pub today: NaiveDate,
@@ -186,6 +191,7 @@ pub(crate) struct PlannedRow {
     pub time_label: String,
     pub title: String,
     pub off_clock: bool,
+    pub note: Option<super::journal::NoteProvenance>,
     pub buffer: crate::native::event_task::EventBuffer,
     /// The `gcal.row` description record for this row. Every construction
     /// site sets it: there is no `Default`, so the compiler flags any
@@ -215,6 +221,7 @@ pub(crate) struct AdoptedRow {
     pub time_label: String,
     pub title: String,
     pub off_clock: bool,
+    pub note: Option<super::journal::NoteProvenance>,
     pub buffer: crate::native::event_task::EventBuffer,
     /// Crash recovery: `Tracked` when a window matches the fresh
     /// render (an empty render always matches), else `HandsOff`.
@@ -414,6 +421,14 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
                 }
                 let journaled_kind_is_task = journaled.row_kind == "task";
                 if journaled_kind_is_task == occurrence.task {
+                    if let Some(held) =
+                        hold_note_row(input, occurrence, journaled)
+                    {
+                        hold_journaled_row(
+                            input, &mut plan, occurrence, journaled, held,
+                        );
+                        continue;
+                    }
                     // Learn before span updates: a time change re-slots
                     // the row, invalidating `line_index`.
                     learn_series_root(
@@ -550,6 +565,7 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
                     time_label: occurrence.time_label.clone(),
                     title: occurrence.title.clone(),
                     off_clock: occurrence.off_clock,
+                    note: occurrence.note.clone(),
                     buffer: buffer_for_row(occurrence),
                     description: tracked_state(occurrence.description.as_ref()),
                     wrote_description_lines: occurrence
@@ -742,6 +758,7 @@ fn reset_refreshes(
             time_label: occurrence.time_label.clone(),
             title: occurrence.title.clone(),
             off_clock: occurrence.off_clock,
+            note: occurrence.note.clone(),
             buffer: buffer_for_row(occurrence),
             description: old_row.description.clone(),
             wrote_description_lines: 0,
@@ -783,6 +800,7 @@ fn adopt_occurrence(
         time_label: occurrence.time_label.clone(),
         title: occurrence.title.clone(),
         off_clock: occurrence.off_clock,
+        note: occurrence.note.clone(),
         buffer: buffer_for_row(occurrence),
         description: adopt_description(&working.lines, line_index, occurrence),
     });
@@ -889,15 +907,24 @@ fn apply_description_update(
         recorded_lines,
     ) else {
         if fresh_hash != recorded_hash {
+            let journaled_note_hash =
+                journaled.note.as_ref().map(|note| note.hash.as_str());
+            let fresh_note_hash =
+                occurrence.note.as_ref().map(|note| note.hash.as_str());
+            let detail = if journaled_note_hash != fresh_note_hash {
+                "kept your edited description bullets; your private note changed"
+                    .to_string()
+            } else {
+                "kept your edited description bullets; Google's description changed"
+                    .to_string()
+            };
             push_kept_once(
                 input,
                 plan,
                 &occurrence.calendar_id,
                 &occurrence.event_id,
                 occurrence.title.clone(),
-                "kept your edited description bullets; \
-                 Google's description changed"
-                    .to_string(),
+                detail,
                 "kept_description",
             );
         }
@@ -1147,6 +1174,7 @@ fn apply_span_updates(
         time_label: occurrence.time_label.clone(),
         title: occurrence.title.clone(),
         off_clock: occurrence.off_clock,
+        note: occurrence.note.clone(),
         buffer: buffer_for_row(occurrence),
         // A title update or root reroute keeps the description record
         // unless this run also rewrote or adopted the bullet block.
@@ -1163,6 +1191,80 @@ fn apply_span_updates(
             keep_off_clock,
         ),
     });
+}
+
+/// Fail-safe hold for a journaled row whose private note contributed
+/// fields, while the current fold has neither a live note nor a deliberate
+/// clear for that key and the journal reports malformed gcal lines.
+/// Returns the hold warning when the row must be held.
+fn hold_note_row(
+    input: &SyncPlanInput<'_>,
+    occurrence: &PlannedOccurrence,
+    journaled: &super::journal::RowRecord,
+) -> Option<String> {
+    let journaled_note = journaled.note.as_ref()?;
+    if journaled_note.fields.is_empty() {
+        return None;
+    }
+    if input.malformed == 0 {
+        return None;
+    }
+    let has_note = input
+        .notes
+        .event_record(&occurrence.calendar_id, &occurrence.event_id)
+        .is_some_and(|record| record.account == input.account)
+        || occurrence.series_id.as_deref().is_some_and(|series| {
+            input
+                .notes
+                .series_record(&occurrence.calendar_id, series)
+                .is_some_and(|record| record.account == input.account)
+        });
+    if has_note {
+        return None;
+    }
+    let noun = if input.malformed == 1 {
+        "1 malformed gcal journal line"
+    } else {
+        &format!("{} malformed gcal journal lines", input.malformed)
+    };
+    Some(format!(
+        "held {}: its private note could not be read ({noun}) · bob gcal doctor",
+        occurrence.title
+    ))
+}
+
+/// Carry a held journal record forward unchanged: skip span, root, and
+/// description updates, report the hold warning, and record the row with
+/// its journaled spans so the report carries the row's detail.
+fn hold_journaled_row(
+    input: &SyncPlanInput<'_>,
+    plan: &mut SyncPlan,
+    occurrence: &PlannedOccurrence,
+    journaled: &super::journal::RowRecord,
+    warning: String,
+) {
+    plan.warnings.push(warning.clone());
+    plan.rows_updated.push(PlannedRow {
+        calendar_id: occurrence.calendar_id.clone(),
+        event_id: occurrence.event_id.clone(),
+        ical_uid: occurrence.ical_uid.clone(),
+        series_id: occurrence.series_id.clone(),
+        block_id: journaled.block_id.clone(),
+        url: occurrence.html_link.clone(),
+        row_kind: journaled.row_kind.clone(),
+        spans: journaled.spans.clone(),
+        root: journaled.root.clone(),
+        source: journaled.source.clone(),
+        time_label: occurrence.time_label.clone(),
+        title: occurrence.title.clone(),
+        off_clock: occurrence.off_clock,
+        note: journaled.note.clone(),
+        buffer: buffer_for_row(occurrence),
+        description: journaled.description.clone(),
+        wrote_description_lines: 0,
+        detail: Some(warning),
+    });
+    let _ = input;
 }
 
 fn forced_reset_detail(
@@ -1421,6 +1523,7 @@ fn upgrade_context_row(
         time_label: occurrence.time_label.clone(),
         title: occurrence.title.clone(),
         off_clock: occurrence.off_clock,
+        note: occurrence.note.clone(),
         buffer: buffer_for_row(occurrence),
         description: tracked_state(occurrence.description.as_ref()),
         wrote_description_lines: occurrence

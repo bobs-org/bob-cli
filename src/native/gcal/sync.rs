@@ -241,6 +241,10 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
                 format!("read the gcal journal: {error}"),
             )
         })?;
+    let (note_book, note_warnings) =
+        journal::load_notes(&vault).unwrap_or_default();
+    warnings.extend(note_warnings);
+    let malformed = journal::malformed_count(&vault);
     // Diagnostics stay ephemeral: they never create journal writes and
     // never make an otherwise unchanged plan changed.
     warnings.extend(diag_warnings);
@@ -339,6 +343,8 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
             is_today,
             occurrences: occurrences.clone(),
             journal: active_journal,
+            notes: &note_book,
+            malformed,
             day_string: day.to_string(),
             today: now.date(),
             lifecycle: lifecycle.clone(),
@@ -496,6 +502,8 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
                         is_today,
                         occurrences: occurrences.clone(),
                         journal: active_journal,
+                        notes: &note_book,
+                        malformed,
                         day_string: day.to_string(),
                         today: now.date(),
                         lifecycle: retry_lifecycle,
@@ -812,12 +820,16 @@ fn build_occurrences<S: HomeSource>(
                 }
             })
             .unwrap_or(None);
+        let note = task
+            .then(|| event.event.note.as_ref().map(|note| note.provenance()))
+            .flatten();
         out.push((
             PlannedOccurrence {
                 calendar_id: event.event.key.calendar_id.clone(),
                 event_id: event.event.key.event_id.clone(),
                 ical_uid: event.event.ical_uid.clone(),
                 series_id: event.event.series_id.clone(),
+                note,
                 id_hint: event.event.title.clone(),
                 task,
                 time_label,
@@ -1393,6 +1405,7 @@ fn append_row_record(
     root: Option<&str>,
     source: Option<&str>,
     description: &journal::DescriptionState,
+    note: Option<&journal::NoteProvenance>,
 ) -> Result<(), GcalError> {
     journal::append_row(
         vault,
@@ -1411,6 +1424,7 @@ fn append_row_record(
             root: root.map(str::to_string),
             source: source.map(str::to_string),
             description: description.clone(),
+            note: note.cloned(),
         },
     )
     .map(|_| ())
@@ -1488,6 +1502,7 @@ fn append_journal(
             added.root.as_deref(),
             added.source.as_deref(),
             &added.description,
+            added.note.as_ref(),
         )?;
     }
     for adopted in &plan.rows_adopted {
@@ -1507,6 +1522,7 @@ fn append_journal(
             adopted.root.as_deref(),
             adopted.source.as_deref(),
             &adopted.description,
+            adopted.note.as_ref(),
         )?;
     }
     for updated in &plan.rows_updated {
@@ -1526,6 +1542,7 @@ fn append_journal(
             updated.root.as_deref(),
             updated.source.as_deref(),
             &updated.description,
+            updated.note.as_ref(),
         )?;
     }
     for upgraded in &plan.rows_upgraded {
@@ -1545,6 +1562,7 @@ fn append_journal(
             upgraded.root.as_deref(),
             upgraded.source.as_deref(),
             &upgraded.description,
+            upgraded.note.as_ref(),
         )?;
     }
     for refreshed in &plan.journal_refreshes {
@@ -1564,6 +1582,7 @@ fn append_journal(
             refreshed.root.as_deref(),
             refreshed.source.as_deref(),
             &refreshed.description,
+            refreshed.note.as_ref(),
         )?;
     }
     for adopted in &plan.rows_adopted {

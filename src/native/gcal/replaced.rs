@@ -127,6 +127,7 @@ https://calendar.google.com/calendar/r/day/2026/10/30\
             series_id: None,
             url: url.map(str::to_string),
             description: DescriptionState::Absent,
+            note: None,
             ts: ts(hour, minute),
             host: "test".to_string(),
             path: "2026/20261030.md".to_string(),

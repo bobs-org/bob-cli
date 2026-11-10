@@ -130,6 +130,17 @@ pub(crate) struct AppliedNote {
 }
 
 impl AppliedNote {
+    pub(crate) fn provenance(&self) -> journal::NoteProvenance {
+        journal::NoteProvenance {
+            hash: self.hash.clone(),
+            fields: self
+                .fields
+                .iter()
+                .map(|field| field.as_str().to_string())
+                .collect(),
+        }
+    }
+
     pub(crate) fn json(&self, bullet_lines: usize) -> Value {
         json!({
             "scope": self.scope.as_str(),

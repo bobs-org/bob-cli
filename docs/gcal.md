@@ -941,9 +941,18 @@ render of its event:
   when Google clears the description). Your edit, a nested note, or a
   deletion makes them yours: they are never re-added, and a
   `kept_description` warning fires once only if Google's description
-  later changes. Rows synced before this feature get their bullets on
+  later changes. When the journaled private-note hash differs from the fresh
+  one, that warning instead reads `kept your edited description bullets;
+  your private note changed`. Rows synced before this feature get their bullets on
   the next sync of their day; matching existing content is adopted,
   never duplicated.
+- A journaled row shaped by a private note (`gcal.row` carries
+  `note: {hash, fields}`) is held while the journal reports malformed gcal
+  lines and the current fold holds neither a live note nor a deliberate clear
+  for that key: sync skips its span, root, and description updates, carries
+  the journal record forward unchanged, and warns on every run
+  (`held …: its private note could not be read (N malformed gcal journal
+  lines) · bob gcal doctor`). A deliberate clear is never held.
 - When Google changes a journaled Event Task's meeting time or parsed
   buffer, sync classifies its same-note MEET links before changing the
   ledger. It moves a row out of an untouched untimed MEET placeholder only

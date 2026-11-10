@@ -22,6 +22,7 @@ phases. This page is the model the engine already applies.
 - [Precedence](#precedence)
 - [Storage](#storage)
 - [Ownership](#ownership)
+- [Reliability](#reliability)
 
 ## Model
 
@@ -163,3 +164,18 @@ See [Who owns each part of a row](gcal.md#who-owns-each-part-of-a-row) in
 [Bob Gcal](gcal.md): the Owner column for `[root::]`, `[buffer::]`,
 `#off`/`#on`, and the description bullets is "your private note, then Google,
 until you edit it".
+
+## Reliability
+
+Every `gcal.row` a private note shaped carries `note: {hash, fields}`: the
+short hash of the applied canonical note texts and the subset of
+`root`, `clock`, `before`, `after`, and `bullets` the note contributed. The
+field is absent otherwise. When the journal reports malformed gcal lines and
+the current fold holds neither a live note nor a deliberate clear for that
+key, sync holds the row: it skips span, root, and description updates, carries
+the journal record forward unchanged, and warns on every run while the
+condition lasts (`held …: its private note could not be read (N malformed
+gcal journal lines) · bob gcal doctor`). A deliberate clear is never held.
+When `kept_description` fires and the journaled note hash differs from the
+fresh one, sync reports `kept your edited description bullets; your private
+note changed` instead of the Google wording.

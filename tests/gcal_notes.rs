@@ -879,6 +879,204 @@ fn foreign_account_note_is_ignored() {
     assert!(event["note"].is_null(), "{event}");
 }
 
+fn journal_rows(env: &GcalEnv) -> Vec<Value> {
+    let dir = env.vault().join(".bob/gcal");
+    let mut rows = Vec::new();
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return rows;
+    };
+    for entry in entries.filter_map(|entry| entry.ok()) {
+        let Ok(text) = fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        for line in text.lines() {
+            let Ok(value) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            if value.get("kind").and_then(Value::as_str) == Some("gcal.row") {
+                rows.push(value);
+            }
+        }
+    }
+    rows
+}
+
+fn truncate_first_note_line(env: &GcalEnv) {
+    let path = env.vault().join(".bob/gcal/athena.jsonl");
+    let text = fs::read_to_string(&path).expect("read note journal");
+    let mut out = String::new();
+    let mut truncated = false;
+    for line in text.lines() {
+        if !truncated && line.contains("\"gcal.note\"") {
+            let cut = line.len().saturating_sub(20);
+            out.push_str(&line[..cut]);
+            out.push('\n');
+            truncated = true;
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    assert!(truncated, "no gcal.note line to truncate");
+    fs::write(&path, out).expect("truncate note line");
+}
+
+#[test]
+fn provenance_record_shape() {
+    let env = GcalEnv::new("bob-cli-gcal-notes-provenance");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![guest_event(
+        "deerwood",
+        "Deerwood. Christmas breakfast",
+        None,
+        "2026-10-30T18:00:00-04:00",
+        "2026-10-30T19:00:00-04:00",
+    )]));
+    append_journal(
+        &env,
+        "athena",
+        event_note(
+            "athena",
+            "2026-10-29T18:02:11-04:00",
+            "deerwood",
+            "@family\n-30 Drive to Deerwood\n+15 Drive home\nBring gifts",
+            ACCOUNT,
+        ),
+    );
+    let output = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let rows = journal_rows(&env);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    let note = rows[0].get("note").expect("gcal.row carries note");
+    let hash = note.get("hash").and_then(Value::as_str).expect("hash");
+    assert_eq!(hash.len(), 16, "{note}");
+    assert!(hash.chars().all(|c| c.is_ascii_hexdigit()), "{note}");
+    let fields = note
+        .get("fields")
+        .and_then(Value::as_array)
+        .expect("fields");
+    let names: Vec<&str> = fields.iter().filter_map(Value::as_str).collect();
+    assert!(names.contains(&"root"), "{names:?}");
+    assert!(names.contains(&"before"), "{names:?}");
+    assert!(names.contains(&"after"), "{names:?}");
+    assert!(names.contains(&"bullets"), "{names:?}");
+    // A second sync with nothing malformed stays clean.
+    let again = sync_output(&env, &fake, &[]);
+    assert_eq!(again.status.code(), Some(0), "{}", stderr(&again));
+    let combined = format!("{}{}", stdout(&again), stderr(&again));
+    assert!(!combined.contains("could not be read"), "{combined}");
+}
+
+#[test]
+fn hold_on_truncated_note_line_and_clear_restores() {
+    let env = GcalEnv::new("bob-cli-gcal-notes-hold");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![guest_event(
+        "deerwood",
+        "Deerwood. Christmas breakfast",
+        None,
+        "2026-10-30T18:00:00-04:00",
+        "2026-10-30T19:00:00-04:00",
+    )]));
+    append_journal(
+        &env,
+        "athena",
+        event_note(
+            "athena",
+            "2026-10-29T18:02:11-04:00",
+            "deerwood",
+            "@family\n-30 Drive to Deerwood",
+            ACCOUNT,
+        ),
+    );
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let before = today_note(&env);
+    assert!(before.contains("[root:: family]"), "{before}");
+
+    truncate_first_note_line(&env);
+    let held = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(held.status.code(), Some(0), "{}", stderr(&held));
+    let report = json_report(&held);
+    let warnings = report["warnings"].as_array().expect("warnings");
+    assert!(
+        warnings.iter().any(|warning| warning.as_str().is_some_and(
+            |text| text.contains("held Deerwood")
+                && text.contains("could not be read")
+                && text.contains("bob gcal doctor")
+        )),
+        "{warnings:?}"
+    );
+    assert_eq!(today_note(&env), before, "held rows skip vault updates");
+
+    // A deliberate clear is never held: it restores Google's values.
+    append_journal(
+        &env,
+        "athena",
+        event_note(
+            "athena",
+            "2026-10-30T12:02:00-04:00",
+            "deerwood",
+            "",
+            ACCOUNT,
+        ),
+    );
+    let cleared = sync_output(&env, &fake, &[]);
+    assert_eq!(cleared.status.code(), Some(0), "{}", stderr(&cleared));
+    let row = event_row(&today_note(&env), "^deerwood");
+    assert!(row.contains("[root:: meet]"), "{row}");
+    assert!(!row.contains("[buffer::"), "{row}");
+}
+
+#[test]
+fn kept_description_words_note_change() {
+    let env = GcalEnv::new("bob-cli-gcal-notes-kept-note");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![guest_event(
+        "deerwood",
+        "Deerwood. Christmas breakfast",
+        None,
+        "2026-10-30T18:00:00-04:00",
+        "2026-10-30T19:00:00-04:00",
+    )]));
+    append_journal(
+        &env,
+        "athena",
+        event_note(
+            "athena",
+            "2026-10-29T18:02:11-04:00",
+            "deerwood",
+            "@family\nBring gifts",
+            ACCOUNT,
+        ),
+    );
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let edited = today_note(&env).replace("Bring gifts", "My edit");
+    write_today(&env, &edited);
+    append_journal(
+        &env,
+        "athena",
+        event_note(
+            "athena",
+            "2026-10-30T12:03:00-04:00",
+            "deerwood",
+            "@family\nBring snacks",
+            ACCOUNT,
+        ),
+    );
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let combined = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(
+        combined.contains(
+            "kept your edited description bullets; your private note changed"
+        ),
+        "{combined}"
+    );
+}
+
 #[test]
 fn incomplete_snapshot_writes_nothing() {
     let env = GcalEnv::new("bob-cli-gcal-notes-incomplete");
