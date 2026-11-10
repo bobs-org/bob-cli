@@ -12,8 +12,9 @@ writes the row. Any event qualifies: events you own, locked guest events, and
 invitations still awaiting a reply or answered Maybe. A note never changes
 inclusion, never RSVPs, and never creates a row.
 
-List and show modes are live; writing, clearing, previewing, editing,
-and the Mac Capture Event note mode land in later phases.
+List, show, preview, write, and clear are available in `bob gcal note`.
+The editor, Google-description adoption, and Mac Capture Event note mode are
+follow-up work.
 
 ## Contents
 
@@ -24,6 +25,7 @@ and the Mac Capture Event note mode land in later phases.
 - [Ownership](#ownership)
 - [Reliability](#reliability)
 - [Command](#command)
+- [When a note lands](#when-a-note-lands)
 - [JSON](#json)
 
 ## Model
@@ -199,20 +201,30 @@ first directive token (`@word`, `#off`, `#on`, a deprecated off alias, or
 `±N[m]`) or after `--`. An unknown option-like token is a clap usage error
 (exit 2).
 
-Modes (read-only in this phase; `-A`, `-c`, `-d`, `-e`, and TEXT exit 2 with
-"not available yet" until the write phase):
+Modes:
 
 - Bare `bob gcal note`, or `-l`: list notes.
 - `-l -a`: list every upcoming event, noted or not. This is the Mac picker
   source.
 - `-l QUERY`: filter the listing.
-- QUERY without TEXT: show that event.
-- QUERY with TEXT, or `-i … -- TEXT`: write (later phase).
-- `-c`: clear (later phase).
+- QUERY without TEXT: show the event, effective note fields, time rail, and
+  the row preview.
+- QUERY with TEXT, or `-i … -- TEXT`: normalize, validate, preview, and save
+  the private note. TEXT words are joined with spaces; use a quoted argument
+  or `--` for multiline input.
+- `-d`: validate and preview without saving. With no TEXT, it previews the
+  selected scope's current note.
+- `-c`: append a deliberate clear for the selected scope. Recurring events
+  offer only scopes that currently have a note.
+- `-A` and `-e`: Google-description adoption and `$EDITOR` support arrive in
+  the follow-up phase.
 
 Exit status is 0 on success, 1 on gog or network failure, and 2 on usage or
 setup errors, no match, an ambiguous match off a TTY, a missing scope off a
-TTY, or (in the write phase) an invalid note.
+TTY, or an invalid note. Saving identical canonical text reports `unchanged`
+and appends no journal record. Saving or clearing on the writer host
+immediately syncs an existing rendered day; a sync failure leaves the note
+saved and prints a warning with `bob gcal sync` as the recovery command.
 
 Selecting the event fetches from today's local midnight to +90 days, per
 configured calendar, with all pages. `-D DAY` narrows the window to one day,
@@ -236,11 +248,26 @@ today's note`). Notes outside the window are looked up by id (capped at 25
 lookups); past events are hidden, while cancelled, declined, or not-found
 events show `⚠ no longer on your calendar` with the one-line clear command.
 Show prints the current canonical note lines plus the effective root,
-buffer, and clock.
+buffer, and clock. It also shows the time rail and the exact Event Task row
+and bullets that sync will write.
+
+## When a note lands
+
+| You save the note… | Result |
+| --- | --- |
+| Before that day's note exists | It is saved now and lands when the day's note syncs |
+| On an event awaiting your reply | It waits until you answer Yes |
+| On an event answered Maybe | It waits until Yes, unless `gcal.tentative: task` makes it a task |
+| On today's task and the writer host | The command immediately runs sync and reports `↻ applied to …` |
+| On another host or without a rendered daily note | It reports that the note is saved and when or where sync can apply it |
+| After the row has been edited | Your edit wins; sync reports the kept edit |
+
+For a series note, the message names the series and reports the selected
+occurrence's current status.
 
 ## JSON
 
-Every event object, in the list, show, candidates, and later write outputs:
+Every event object in list, show, candidates, and write outputs:
 
 ```json
 {
@@ -266,8 +293,13 @@ Every event object, in the list, show, candidates, and later write outputs:
 holds a summary in listings
 (`scope`, `root` with `value` and `hue`, `buffer`, `clock`,
 `bullet_lines`) and never holds text. Show mode adds `note.text` and
-`note.lines`; show is the only read path that prints the words. The list
-document is
+`note.lines` and carries `action: "show"`. Write results also contain the effective fields, a
+preview path, row, bullets, meeting and occupied time bounds, and status. A
+write result carries canonical `note.text` and `note.lines`; `spans` contains
+half-open UTF-8 byte offsets into `input.text` for route, clock, buffer,
+reason, prose, separator, and invalid spans. Invalid JSON returns `ok: false`,
+`error`, and all ranged `errors` without saving. Listings never carry note
+text. The list document is
 `{schema_version, ok, window: {from, to, start, end}, notes|events, orphans, warnings}`:
 `notes` when every row is noted, otherwise `events`. Orphans carry
 `calendar_id`, `event_id`, `series_id`, `scope`, `title`, and `reason`.

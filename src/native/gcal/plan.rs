@@ -2040,6 +2040,49 @@ pub(super) fn trailing_block_id(line: &str) -> String {
     parse_trailing_block_id(line).unwrap_or_default()
 }
 
+/// Resolve the identity and child indentation a sync would reuse for a
+/// previewed occurrence already present in the note.
+pub(super) fn preview_existing_block_id(
+    contents: &str,
+    occurrence: &PlannedOccurrence,
+) -> Option<String> {
+    let working = WorkingNote::new(contents);
+    let row = find_row_line(
+        &working.lines,
+        working.events_range(),
+        "",
+        occurrence.html_link.as_deref(),
+        occurrence.task,
+        Some(&occurrence.title),
+    )?;
+    parse_trailing_block_id(&working.lines[row])
+}
+
+/// Materialize proposed description bullets with the same indentation
+/// policy as the sync writer, including an existing row's child style.
+pub(super) fn preview_bullets(
+    contents: &str,
+    occurrence: &PlannedOccurrence,
+    block_id: Option<&str>,
+) -> Vec<String> {
+    let Some(description) = occurrence.description.as_ref() else {
+        return Vec::new();
+    };
+    let working = WorkingNote::new(contents);
+    let row = find_row_line(
+        &working.lines,
+        working.events_range(),
+        block_id.unwrap_or_default(),
+        occurrence.html_link.as_deref(),
+        occurrence.task,
+        Some(&occurrence.title),
+    );
+    let (depth1, unit) = row
+        .map(|line| child_bullet_indents(&working, line))
+        .unwrap_or_else(|| fresh_bullet_indents(&working));
+    description.materialize(&depth1, &unit)
+}
+
 /// The journal description record for freshly materialized bullets:
 /// `Tracked` with the rendered hash and line count (even when the block
 /// is empty), or `Absent` for context rows and `off` mode.

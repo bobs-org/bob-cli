@@ -76,14 +76,14 @@ fn list_after_help() -> &'static str {
 
 fn note_command() -> ClapCommand {
     ClapCommand::new("note")
-        .about("List and show private event notes for Google Calendar events")
+        .about("List, show, preview, and write private event notes")
         .long_about(
-            "List and show private event notes: Bob-only description text \
+            "List, show, preview, and write private event notes: Bob-only description text \
              keyed by the Google event. Bare `bob gcal note` lists noted \
              events for the next 90 days; `-a` lists every upcoming event, \
-             noted or not. A query without note text shows one event; \
-             writing, clearing, previewing, and editing land in a later \
-             phase and exit 2 for now.",
+             noted or not. A query without note text shows one event. Write \
+             the same description grammar with TEXT, use `-d` to preview, \
+             and `-c` to clear. `-A` and `-e` arrive in a later phase.",
         )
         .disable_help_flag(true)
         .arg(adopt_arg())
@@ -109,7 +109,9 @@ fn note_after_help() -> &'static str {
      day, a pasted Google Calendar URL with `eid=`, or `-i`/`-C`. Several \
      matches open a numbered picker on a TTY and exit 2 off a TTY with \
      candidates. A recurring match asks This event or All events on a TTY \
-     and needs `-s` off a TTY.\n\nExamples:\n  bob gcal note\n  bob gcal note -a -f json\n  bob gcal note -l deerwood\n  bob gcal note deerwood\n  bob gcal note -D 2026-12-13 little gym\n  bob gcal note -i st49ogf0k0jiciob1ebgj1aupo\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH\n  BOB_NOW            Local datetime override for default day selection\n  BOB_GCAL_ASSUME_TTY  Set to 1 to force interactive prompts in tests"
+     and needs `-s` off a TTY. TEXT starts at the first directive token or \
+     after `--`; argv words are joined into a line and normalized. A save on \
+     the writer host immediately syncs an existing rendered day.\n\nExamples:\n  bob gcal note\n  bob gcal note -a -f json\n  bob gcal note -l deerwood\n  bob gcal note deerwood\n  bob gcal note deerwood @family -30 Drive there\n  bob gcal note -d -i event-id -- @family -30 Drive there\n  bob gcal note -c -i event-id\n  bob gcal note -D 2026-12-13 little gym\n  bob gcal note -i st49ogf0k0jiciob1ebgj1aupo\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH\n  BOB_NOW            Local datetime override for default day selection\n  BOB_GCAL_ASSUME_TTY  Set to 1 to force interactive prompts in tests"
 }
 
 fn sync_command() -> ClapCommand {
@@ -345,7 +347,7 @@ fn clear_arg() -> Arg {
         .long("clear")
         .short('c')
         .action(ArgAction::SetTrue)
-        .help("Clear the private note (not available yet)")
+        .help("Clear the private note in the selected scope")
 }
 
 fn note_day_arg() -> Arg {
@@ -362,7 +364,7 @@ fn note_dry_run_arg() -> Arg {
         .long("dry-run")
         .short('d')
         .action(ArgAction::SetTrue)
-        .help("Validate and preview without saving (not available yet)")
+        .help("Validate and preview note text without saving")
 }
 
 fn edit_arg() -> Arg {
@@ -413,7 +415,7 @@ fn text_arg() -> Arg {
         .num_args(0..)
         .last(true)
         .value_parser(OsStringValueParser::new())
-        .help("Note text after -- (not available yet)")
+        .help("Note text after --")
 }
 
 /// `doctor`/`login`/`logout` output format.
@@ -627,9 +629,8 @@ impl LogoutArgs {
     }
 }
 
-/// Typed `note` arguments: selection plus read-only list/show modes.
-/// Write paths (`-A`, `-c`, `-d`, `-e`, TEXT) are registered so help and
-/// completion are final, but exit 2 until the write phase lands.
+/// Typed `note` arguments: selection, read-only modes, and plain-text writes.
+/// Adoption and editor paths remain reserved for the follow-up phase.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NoteArgs {
     pub adopt: bool,

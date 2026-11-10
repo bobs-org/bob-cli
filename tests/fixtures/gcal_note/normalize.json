@@ -1,0 +1,80 @@
+[
+  {
+    "input": "@body -30 I need to walk home from the park",
+    "canonical": "@body\n-30 I need to walk home from the park",
+    "errors": []
+  },
+  {
+    "input": "-30 Drive there +15 Drive home",
+    "canonical": "-30 Drive there\n+15 Drive home",
+    "errors": []
+  },
+  {
+    "input": "@family #off -30 +15",
+    "canonical": "@family #off -30 +15",
+    "errors": []
+  },
+  {
+    "input": "@family; #off; -30; +15",
+    "canonical": "@family #off -30 +15",
+    "errors": []
+  },
+  {
+    "input": "Bring snacks; and water",
+    "canonical": "Bring snacks; and water",
+    "errors": []
+  },
+  {
+    "input": "−30m Drive there +15m Drive home",
+    "canonical": "-30 Drive there\n+15 Drive home",
+    "errors": []
+  },
+  {
+    "input": "@family #offclock",
+    "canonical": "@family #off",
+    "errors": [],
+    "warnings": ["deprecated_clock"]
+  },
+  {
+    "input": "@body @family",
+    "canonical": "@body",
+    "errors": ["route_conflict"]
+  },
+  {
+    "input": "#off #on",
+    "canonical": "#on",
+    "errors": ["clock_conflict"]
+  },
+  {
+    "input": "-30 +15 -45",
+    "canonical": "-30 +15",
+    "errors": ["buffer_conflict"]
+  },
+  {
+    "input": "-0 Walk there",
+    "canonical": "-0 Walk there",
+    "errors": ["reason_zero"]
+  },
+  {
+    "input": "+721",
+    "canonical": "+721",
+    "errors": ["minutes_range"]
+  },
+  {
+    "input": "#foo",
+    "canonical": "#foo",
+    "errors": [],
+    "warnings": ["unknown_hash"]
+  },
+  {
+    "input": "Bring snacks -d",
+    "canonical": "Bring snacks -d",
+    "errors": [],
+    "warnings": ["option_like"]
+  },
+  {
+    "input": "@family\nBring snacks\nand water",
+    "canonical": "@family\nBring snacks\nand water",
+    "errors": []
+  }
+]

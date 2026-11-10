@@ -601,6 +601,30 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
     Ok(report)
 }
 
+/// Apply a just-saved private note through the same sync planner used by
+/// `bob gcal sync`, without printing a second command report.
+pub(super) fn apply_note_day(
+    vault: &std::path::Path,
+    day: NaiveDate,
+) -> Result<(String, String, Vec<String>, Option<String>), GcalError> {
+    let args = SyncArgs {
+        bob_dir: Some(vault.to_path_buf()),
+        day: day.to_string(),
+        dry_run: false,
+        force: false,
+        format: super::cli::HumanFormat::Human,
+        quiet: true,
+    };
+    let report = sync(&args)?;
+    let waiting = report.waiting.as_ref().map(WaitingReason::detail);
+    Ok((
+        report.status.to_string(),
+        report.path,
+        report.warnings,
+        waiting,
+    ))
+}
+
 fn waiting(
     args: &SyncArgs,
     host: &str,
@@ -722,7 +746,7 @@ fn journal_warnings(vault: &std::path::Path) -> Result<Vec<String>, GcalError> {
 /// roots, the `[type:: MEET]` field, badges, span hashes, description
 /// bullets, and MEET eligibility. Returns each occurrence with its root
 /// warnings.
-fn build_occurrences<S: HomeSource>(
+pub(super) fn build_occurrences<S: HomeSource>(
     snapshot: &snapshot::DaySnapshot,
     config: &GcalConfig,
     vault: &std::path::Path,

@@ -98,6 +98,51 @@ fn assert_text_order(text: &str, needles: &[&str]) {
     }
 }
 
+fn assert_golden(name: &str, actual: &Value) {
+    fn assert_subset(actual: &Value, expected: &Value, path: &str) {
+        match expected {
+            Value::Object(expected) => {
+                let actual = actual.as_object().unwrap_or_else(|| {
+                    panic!("{path} is not an object: {actual}")
+                });
+                for (key, expected) in expected {
+                    let child_path = format!("{path}.{key}");
+                    let actual = actual.get(key).unwrap_or_else(|| {
+                        panic!("missing {child_path}: {actual:?}")
+                    });
+                    assert_subset(actual, expected, &child_path);
+                }
+            }
+            Value::Array(expected) => {
+                let actual = actual.as_array().unwrap_or_else(|| {
+                    panic!("{path} is not an array: {actual}")
+                });
+                assert_eq!(actual.len(), expected.len(), "{path} length");
+                for (index, (actual, expected)) in
+                    actual.iter().zip(expected).enumerate()
+                {
+                    assert_subset(
+                        actual,
+                        expected,
+                        &format!("{path}[{index}]"),
+                    );
+                }
+            }
+            expected => assert_eq!(actual, expected, "{path}"),
+        }
+    }
+
+    let path = format!(
+        "{}/tests/fixtures/gcal_note/json/{name}.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let contents = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {path}: {error}"));
+    let expected: Value = serde_json::from_str(&contents)
+        .unwrap_or_else(|error| panic!("parse golden {path}: {error}"));
+    assert_subset(actual, &expected, name);
+}
+
 #[test]
 fn note_help_pins_sorted_options_and_examples() {
     let env = GcalEnv::new("bob-cli-gcal-note-help");
@@ -139,56 +184,409 @@ fn note_help_pins_sorted_options_and_examples() {
 }
 
 #[test]
-fn write_paths_exit_2_not_available_yet() {
-    let env = GcalEnv::new("bob-cli-gcal-note-write-stub");
+fn preview_save_unchanged_clear_and_invalid_json() {
+    let env = GcalEnv::new("bob-cli-gcal-note-write");
     prepare(&env);
     let fake = FakeGog::new(&env, "fake-gog");
-    fake.events_json(&events_envelope(vec![guest_event(
+    fake.event_lookup(
         "e1",
-        "Deerwood",
-        "2026-12-13T10:00:00-05:00",
-        "2026-12-13T12:00:00-05:00",
-    )]));
-    for args in [
-        vec!["note", "deerwood", "@family"],
-        vec!["note", "deerwood", "-c"],
-        vec!["note", "deerwood", "-d"],
-        vec!["note", "deerwood", "-e"],
-        vec!["note", "deerwood", "-A"],
-        vec!["note", "-i", "e1", "--", "@family"],
-    ] {
-        let mut command = env.command();
-        let output = fake
-            .install(&mut command)
-            .args([vec!["gcal"], args.clone()].concat())
-            .output()
-            .expect("run note write stub");
-        assert_eq!(
-            output.status.code(),
-            Some(2),
-            "{args:?}: {}",
-            stderr(&output)
-        );
-        assert!(
-            stderr(&output).contains("later phase"),
-            "{args:?}: {}",
-            stderr(&output)
-        );
-    }
-    // Buffer-like TEXT is never an option: `-30` becomes TEXT, then exits
-    // 2 as not-available (not a clap usage error about `-3`).
+        &serde_json::to_string(&json!({
+            "event": guest_event(
+                "e1",
+                "Deerwood",
+                "2026-12-13T10:00:00-05:00",
+                "2026-12-13T12:00:00-05:00",
+            )
+        }))
+        .expect("lookup body"),
+    );
+
     let mut command = env.command();
     let output = fake
         .install(&mut command)
-        .args(["gcal", "note", "-30"])
+        .args([
+            "gcal", "note", "-i", "e1", "-d", "-f", "json", "--", "@family",
+            "-30", "Drive", "there", "+15", "Drive", "home",
+        ])
         .output()
-        .expect("run note -30");
-    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
-    assert!(
-        stderr(&output).contains("later phase"),
-        "{}",
-        stderr(&output)
+        .expect("preview private note");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let preview = json_stdout(&output);
+    assert_eq!(preview["action"], "preview");
+    assert_eq!(
+        preview["note"]["text"],
+        "@family\n-30 Drive there\n+15 Drive home"
     );
+    assert_eq!(preview["preview"]["occupied"]["start"], "09:30");
+    assert_eq!(preview["preview"]["occupied"]["end"], "12:15");
+    assert_eq!(preview["preview"]["bullets"].as_array().unwrap().len(), 2);
+    assert!(preview["preview"]["row"]
+        .as_str()
+        .unwrap()
+        .contains("[root:: family]"));
+    assert_golden("preview", &preview);
+    assert!(
+        !env.vault().join(".bob/gcal/test-host.jsonl").exists(),
+        "preview must not create the note journal"
+    );
+
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args([
+            "gcal", "note", "-i", "e1", "-f", "json", "--", "@family", "-30",
+            "Drive", "there", "+15", "Drive", "home",
+        ])
+        .output()
+        .expect("save private note");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let saved = json_stdout(&output);
+    assert_eq!(saved["action"], "saved");
+    assert_eq!(saved["status"]["state"], "waiting_note");
+    assert_golden("saved", &saved);
+    assert_eq!(saved["preview"]["row"], preview["preview"]["row"]);
+    assert_eq!(saved["preview"]["bullets"], preview["preview"]["bullets"]);
+    assert!(saved["spans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|span| span["kind"] == "reason"));
+
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args([
+            "gcal", "note", "-i", "e1", "-f", "json", "--", "@family", "-30",
+            "Drive", "there", "+15", "Drive", "home",
+        ])
+        .output()
+        .expect("repeat private note");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let unchanged = json_stdout(&output);
+    assert_eq!(unchanged["action"], "unchanged");
+    assert_golden("unchanged", &unchanged);
+    let journal_path = env.vault().join(".bob/gcal/test-host.jsonl");
+    assert_eq!(
+        fs::read_to_string(&journal_path).unwrap().lines().count(),
+        1,
+        "an unchanged canonical note must not append another journal record"
+    );
+
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-i", "e1", "-c", "-f", "json"])
+        .output()
+        .expect("clear private note");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let cleared = json_stdout(&output);
+    assert_eq!(cleared["action"], "cleared");
+    assert_eq!(cleared["note"]["text"], "");
+    assert_golden("cleared", &cleared);
+    assert_eq!(
+        fs::read_to_string(&journal_path).unwrap().lines().count(),
+        2,
+        "clear appends a tombstone after the original note"
+    );
+
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-i", "e1", "-f", "json", "--", "@famly"])
+        .output()
+        .expect("reject unknown route");
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    let invalid = json_stdout(&output);
+    assert_eq!(invalid["ok"], false);
+    assert_eq!(invalid["action"], "invalid");
+    assert_eq!(invalid["errors"][0]["kind"], "route_unknown");
+    assert_golden("invalid", &invalid);
+    assert_eq!(
+        fs::read_to_string(&journal_path).unwrap().lines().count(),
+        2,
+        "invalid input must not write"
+    );
+
+    fake.event_lookup(
+        "midnight",
+        &serde_json::to_string(&json!({
+            "event": guest_event(
+                "midnight",
+                "Early appointment",
+                "2026-12-14T00:15:00-05:00",
+                "2026-12-14T00:45:00-05:00",
+            )
+        }))
+        .expect("midnight lookup"),
+    );
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args([
+            "gcal", "note", "-i", "midnight", "-d", "-f", "json", "--",
+            "@family", "-30", "Drive",
+        ])
+        .output()
+        .expect("preview clipped time rail");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let rail_doc = json_stdout(&output);
+    let rail = rail_doc["preview"]["rail"].as_str().expect("time rail");
+    assert!(rail.contains("(clipped at 00:00)"), "{rail}");
+    assert!(rail.chars().count() <= 48, "{rail}");
+
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args([
+            "gcal",
+            "note",
+            "-i",
+            "e1",
+            "-d",
+            "-f",
+            "json",
+            "--",
+            "@family",
+            "#offclock",
+            "#foo",
+            "-d",
+        ])
+        .output()
+        .expect("preview warning-bearing note");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let warnings = json_stdout(&output);
+    assert_eq!(warnings["note"]["text"], "@family #off\n#foo -d");
+    let warning_messages = warnings["warnings"].as_array().unwrap();
+    assert!(warning_messages.iter().any(|warning| {
+        warning.as_str().unwrap_or_default().contains("deprecated")
+    }));
+    assert!(warning_messages.iter().any(|warning| {
+        warning
+            .as_str()
+            .unwrap_or_default()
+            .contains("not a Bob directive")
+    }));
+    assert!(warning_messages.iter().any(|warning| {
+        warning
+            .as_str()
+            .unwrap_or_default()
+            .contains("put options before")
+    }));
+}
+
+#[test]
+fn writer_host_applies_note_and_preview_matches_sync() {
+    let env = GcalEnv::new("bob-cli-gcal-note-immediate-sync");
+    prepare(&env);
+    let event = guest_event(
+        "today-event",
+        "Lunch with Kelly",
+        "2026-10-30T13:00:00-04:00",
+        "2026-10-30T14:00:00-04:00",
+    );
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![event.clone()]));
+    fake.event_lookup(
+        "today-event",
+        &serde_json::to_string(&json!({"event": event})).expect("lookup body"),
+    );
+
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args([
+            "gcal",
+            "note",
+            "-i",
+            "today-event",
+            "-f",
+            "json",
+            "--",
+            "@family",
+            "-10",
+            "Drive",
+            "there",
+        ])
+        .output()
+        .expect("save and immediately sync note");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let result = json_stdout(&output);
+    assert_eq!(result["action"], "saved");
+    assert_eq!(result["status"]["state"], "applied");
+
+    let daily = fs::read_to_string(env.vault().join("2026/20261030.md"))
+        .expect("read synced daily note");
+    let row = result["preview"]["row"].as_str().expect("preview row");
+    assert!(
+        daily.contains(row),
+        "sync row differs from preview:\n{daily}\n---\n{row}"
+    );
+    for bullet in result["preview"]["bullets"].as_array().unwrap() {
+        let bullet = bullet.as_str().unwrap();
+        assert!(
+            daily.contains(bullet),
+            "sync bullet differs from preview: {bullet}\n{daily}"
+        );
+    }
+}
+
+#[test]
+fn off_writer_and_sync_failure_keep_the_saved_note() {
+    let env = GcalEnv::new("bob-cli-gcal-note-other-writer");
+    prepare(&env);
+    env.write_config(
+        "timezone: America/New_York\ngcal:\n  account: you@example.com\n  writer: the-mac\n",
+    );
+    let event = guest_event(
+        "off-writer",
+        "Lunch with Kelly",
+        "2026-10-30T13:00:00-04:00",
+        "2026-10-30T14:00:00-04:00",
+    );
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.event_lookup(
+        "off-writer",
+        &serde_json::to_string(&json!({"event": event})).expect("lookup body"),
+    );
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args([
+            "gcal",
+            "note",
+            "-i",
+            "off-writer",
+            "-f",
+            "json",
+            "--",
+            "@family",
+        ])
+        .output()
+        .expect("save on non-writer host");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let result = json_stdout(&output);
+    assert_eq!(result["action"], "saved");
+    assert_eq!(result["status"]["state"], "saved_elsewhere");
+    assert!(result["status"]["detail"]
+        .as_str()
+        .unwrap()
+        .contains("the-mac"));
+    assert!(env.vault().join(".bob/gcal/test-host.jsonl").is_file());
+
+    let env = GcalEnv::new("bob-cli-gcal-note-sync-failure");
+    prepare(&env);
+    let event = guest_event(
+        "sync-fails",
+        "Lunch with Kelly",
+        "2026-10-30T13:00:00-04:00",
+        "2026-10-30T14:00:00-04:00",
+    );
+    let fake = FakeGog::new(&env, "fake-gog").scenario("events_failure");
+    fake.event_lookup(
+        "sync-fails",
+        &serde_json::to_string(&json!({"event": event})).expect("lookup body"),
+    );
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args([
+            "gcal",
+            "note",
+            "-i",
+            "sync-fails",
+            "-f",
+            "json",
+            "--",
+            "@family",
+        ])
+        .output()
+        .expect("save while immediate sync fails");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let result = json_stdout(&output);
+    assert_eq!(result["action"], "saved");
+    assert_eq!(result["status"]["state"], "sync_failed");
+    assert!(result["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|warning| {
+            warning
+                .as_str()
+                .unwrap_or_default()
+                .contains("immediate sync failed")
+        }));
+    assert!(env.vault().join(".bob/gcal/test-host.jsonl").is_file());
+}
+
+#[test]
+fn series_note_immediately_syncs_each_existing_occurrence_day() {
+    let env = GcalEnv::new("bob-cli-gcal-note-series-sync");
+    prepare(&env);
+    for day in ["20261113", "20261120"] {
+        fs::write(
+            env.vault().join("2026").join(format!("{day}.md")),
+            format!("# {day}\n\n## Pomodoros\n"),
+        )
+        .expect("write occurrence daily note");
+    }
+    let occurrence = |id: &str, start: &str, end: &str| {
+        json!({
+            "id": id,
+            "summary": "Little Gym",
+            "status": "confirmed",
+            "recurringEventId": "gym-series",
+            "start": {"dateTime": start},
+            "end": {"dateTime": end},
+            "htmlLink": format!("https://calendar.google.com/event?eid={id}"),
+            "organizer": {"displayName": "Kelly", "email": "kelly@example.com", "self": false},
+            "attendees": [{"self": true, "responseStatus": "accepted"}],
+        })
+    };
+    let first = occurrence(
+        "gym-1",
+        "2026-11-13T09:00:00-05:00",
+        "2026-11-13T10:00:00-05:00",
+    );
+    let events = vec![
+        first.clone(),
+        occurrence(
+            "gym-2",
+            "2026-11-20T09:00:00-05:00",
+            "2026-11-20T10:00:00-05:00",
+        ),
+    ];
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(events));
+    fake.event_lookup(
+        "gym-1",
+        &serde_json::to_string(&json!({"event": first})).expect("lookup body"),
+    );
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args([
+            "gcal", "note", "-i", "gym-1", "-s", "series", "-f", "json", "--",
+            "@family", "Bring", "socks",
+        ])
+        .output()
+        .expect("save series note and sync occurrence days");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let result = json_stdout(&output);
+    assert_eq!(result["action"], "saved");
+    assert_eq!(result["scope"], "series");
+    assert_eq!(result["status"]["state"], "applied");
+    assert!(result["status"]["detail"]
+        .as_str()
+        .unwrap()
+        .contains("applies to every Little Gym"));
+    for day in ["20261113", "20261120"] {
+        let daily = fs::read_to_string(
+            env.vault().join("2026").join(format!("{day}.md")),
+        )
+        .expect("read synced occurrence note");
+        assert!(daily.contains("[root:: family]"), "{day}: {daily}");
+        assert!(daily.contains("Bring socks"), "{day}: {daily}");
+    }
 }
 
 #[test]
@@ -243,6 +641,14 @@ fn list_and_show_round_trip_with_notes() {
     let listing = stdout(&output);
     assert!(listing.contains("Deerwood"), "{listing}");
     assert!(listing.contains("Little Gym"), "{listing}");
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-a", "-f", "json"])
+        .output()
+        .expect("run note -a json");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_golden("list_all", &json_stdout(&output));
     // Show prints the note words plus the effective root/buffer/clock.
     let mut command = env.command();
     let output = fake
@@ -293,6 +699,7 @@ fn list_and_show_round_trip_with_notes() {
     let text = document["event"]["note"]["text"].as_str().unwrap_or("");
     assert!(text.contains("@family"), "{document}");
     assert!(text.contains("-30 Drive to Deerwood"), "{document}");
+    assert_golden("show", &document);
 }
 
 #[test]
@@ -356,6 +763,7 @@ fn matching_requires_every_word_and_ranks_exact_first() {
     let candidates = document["candidates"].as_array().expect("candidates");
     assert_eq!(candidates.len(), 3);
     assert_eq!(candidates[0]["title"], "Deerwood");
+    assert_golden("ambiguous", &document);
 }
 
 #[test]

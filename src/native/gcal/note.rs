@@ -1,8 +1,7 @@
-//! `bob gcal note`: private event notes, selection and read-only modes.
+//! `bob gcal note`: private event notes, selection, preview, and writes.
 //!
-//! Select phase: command skeleton, argv pre-pass, 90-day event selection,
-//! TTY picker and scope prompt, organizer widening, and list/show modes.
-//! Write paths (`-A`, `-c`, `-d`, `-e`, TEXT) exit 2 until the write phase.
+//! The editor and description-adoption modes are added by the follow-up
+//! phase; this module owns plain text writing, preview, and clear.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -24,6 +23,7 @@ use super::{
     model::{EventDateTime, GcalEvent, MyAnswer, ParsedNote},
     root, snapshot, ui, GcalError, NoteArgs,
 };
+mod write;
 use crate::native::{
     env as bob_env,
     pomodoro_homes::{DiskHomeSource, HomeResolver, HomeSource},
@@ -274,23 +274,39 @@ mod prepass_tests {
 pub(crate) fn run(args: &NoteArgs) -> i32 {
     match inner(args) {
         Ok(()) => 0,
-        Err(error) if error.kind() == "ambiguous_printed" => 2,
+        Err(error)
+            if error.kind() == "ambiguous_printed"
+                || error.kind() == "printed_exit_2" =>
+        {
+            2
+        }
         Err(error) => ui::report_error("note", &error, args.error_format()),
     }
 }
 
 fn inner(args: &NoteArgs) -> Result<(), GcalError> {
-    if args.adopt
-        || args.clear
-        || args.dry_run
-        || args.edit
-        || !args.text.is_empty()
-    {
+    if args.adopt || args.edit {
         return Err(GcalError::setup(
             "not_available",
-            "bob gcal note writing, clearing, previewing, and editing land in a later phase".to_string(),
+            "adopting and editing private event notes land in a later phase"
+                .to_string(),
         )
-        .with_hint("use list and show modes for now: `bob gcal note`, `bob gcal note -a`, `bob gcal note <query>`"));
+        .with_hint("write text directly, or use `-c` to clear a note"));
+    }
+    if args.clear && (!args.text.is_empty() || args.dry_run) {
+        return Err(GcalError::setup(
+            "bad_arguments",
+            "`-c` cannot be combined with note text or `-d`".to_string(),
+        ));
+    }
+    if (args.list || args.all)
+        && (args.clear || args.dry_run || !args.text.is_empty())
+    {
+        return Err(GcalError::setup(
+            "bad_arguments",
+            "list options cannot be combined with note text, `-d`, or `-c`"
+                .to_string(),
+        ));
     }
     if let Some(scope) = args.scope.as_deref()
         && scope != "event"
@@ -315,9 +331,20 @@ fn inner(args: &NoteArgs) -> Result<(), GcalError> {
 
     let url_event = extract_url_event_id(&args.query);
     let has_id = args.event_id.is_some();
+    let writing = args.clear || args.dry_run || !args.text.is_empty();
+    if writing && !has_id && url_event.is_none() && args.query.is_empty() {
+        return Err(GcalError::setup(
+            "missing_event",
+            "choose an event before writing a private note".to_string(),
+        )
+        .with_hint("use a title query or `-i <event-id>`"));
+    }
     let is_list = args.list
         || args.all
-        || (!has_id && url_event.is_none() && args.query.is_empty());
+        || (!writing
+            && !has_id
+            && url_event.is_none()
+            && args.query.is_empty());
     if is_list {
         run_list(
             args,
@@ -410,6 +437,8 @@ fn resolve_day_filter(
 /// One eligible event with its display fields and layered root/clock.
 struct NoteCandidate {
     event: GcalEvent,
+    /// Google-only event, before private notes were layered over it.
+    google_event: GcalEvent,
     calendar_name: String,
     day: NaiveDate,
     time: String,
@@ -502,6 +531,7 @@ fn fetch_candidates<S: HomeSource>(
         let raw_events = gog.events(&configured.id, from, to, account)?;
         for raw in raw_events {
             let mut event = GcalEvent::from_google(&configured.id, raw)?;
+            let google_event = event.clone();
             let occurrence_note = matching_note(
                 book.event(&event.key.calendar_id, &event.key.event_id),
                 account,
@@ -592,6 +622,7 @@ fn fetch_candidates<S: HomeSource>(
             event.title = title;
             candidates.push(NoteCandidate {
                 event,
+                google_event,
                 calendar_name: calendar_name.clone(),
                 day,
                 time,
@@ -734,6 +765,7 @@ fn lookup_exact<S: HomeSource>(
     let Some((_, mut event, calendar_name)) = hits.into_iter().next() else {
         return Ok((None, tried));
     };
+    let google_event = event.clone();
     if !is_eligible(&event) {
         // Exact selection can surface ineligible rows only to explain
         // why they never become tasks; the picker filters them.
@@ -791,6 +823,7 @@ fn lookup_exact<S: HomeSource>(
     Ok((
         Some(NoteCandidate {
             event,
+            google_event,
             calendar_name,
             day,
             time,
@@ -1260,7 +1293,40 @@ fn run_show<S: HomeSource>(
             args.calendar.as_deref(),
         )?;
         if let Some(candidate) = found {
-            return show_one(args, vault, candidate, Vec::new());
+            let mut related_days = vec![candidate.day];
+            let mut selection_warnings = Vec::new();
+            if candidate.recurring()
+                && (args.clear || args.dry_run || !args.text.is_empty())
+            {
+                let (from, to, _, _) = window_range(day_filter)?;
+                match fetch_candidates(
+                    config, vault, resolver, gog, account, calendars, &from,
+                    &to, day_filter,
+                ) {
+                    Ok((occurrences, occurrence_warnings)) => {
+                        related_days.extend(series_days(
+                            &occurrences,
+                            &candidate.event.key.calendar_id,
+                            candidate.event.series_id.as_deref(),
+                        ));
+                        selection_warnings.extend(occurrence_warnings);
+                    }
+                    Err(error) => selection_warnings.push(format!(
+                        "could not inspect other occurrences for immediate sync: {}",
+                        error.message()
+                    )),
+                }
+            }
+            return present_candidate(
+                args,
+                config,
+                vault,
+                resolver,
+                account,
+                candidate,
+                selection_warnings,
+                unique_days(related_days),
+            );
         }
         if args.event_id.is_some() {
             return Err(GcalError::setup(
@@ -1281,7 +1347,8 @@ fn run_show<S: HomeSource>(
             "no event with id {id}; falling back to a title search"
         ));
         return show_from_query(
-            args, config, vault, resolver, candidates, warnings, day_filter,
+            args, config, vault, resolver, account, candidates, warnings,
+            day_filter,
         );
     }
     let (from, to, _, _) = window_range(day_filter)?;
@@ -1290,15 +1357,17 @@ fn run_show<S: HomeSource>(
         day_filter,
     )?;
     show_from_query(
-        args, config, vault, resolver, candidates, warnings, day_filter,
+        args, config, vault, resolver, account, candidates, warnings,
+        day_filter,
     )
 }
 
 fn show_from_query<S: HomeSource>(
     args: &NoteArgs,
-    _config: &GcalConfig,
+    config: &GcalConfig,
     vault: &std::path::Path,
-    _resolver: &mut HomeResolver<S>,
+    resolver: &mut HomeResolver<S>,
+    account: &str,
     candidates: Vec<NoteCandidate>,
     warnings: Vec<String>,
     day_filter: Option<NaiveDate>,
@@ -1354,11 +1423,66 @@ fn show_from_query<S: HomeSource>(
         let chosen = pick_group_owned(&candidates, &ranked_groups)?;
         let group = ranked_groups[chosen];
         let candidate = select_from_group(&candidates, group, day_filter)?;
-        return show_one(args, vault, candidate, warnings);
+        let related_days = series_days(
+            &candidates,
+            &candidate.event.key.calendar_id,
+            candidate.event.series_id.as_deref(),
+        );
+        return present_candidate(
+            args,
+            config,
+            vault,
+            resolver,
+            account,
+            candidate,
+            warnings,
+            related_days,
+        );
     }
     let group = ranked_groups[0];
     let candidate = select_from_group(&candidates, group, day_filter)?;
-    show_one(args, vault, candidate, warnings)
+    let related_days = series_days(
+        &candidates,
+        &candidate.event.key.calendar_id,
+        candidate.event.series_id.as_deref(),
+    );
+    present_candidate(
+        args,
+        config,
+        vault,
+        resolver,
+        account,
+        candidate,
+        warnings,
+        related_days,
+    )
+}
+
+fn series_days(
+    candidates: &[NoteCandidate],
+    calendar_id: &str,
+    series_id: Option<&str>,
+) -> Vec<NaiveDate> {
+    let Some(series_id) = series_id else {
+        return Vec::new();
+    };
+    unique_days(
+        candidates
+            .iter()
+            .filter(|candidate| {
+                candidate.event.key.calendar_id == calendar_id
+                    && candidate.event.series_id.as_deref() == Some(series_id)
+            })
+            .map(|candidate| candidate.day)
+            .collect(),
+    )
+}
+
+fn unique_days(days: Vec<NaiveDate>) -> Vec<NaiveDate> {
+    let mut days = days;
+    days.sort_unstable();
+    days.dedup();
+    days
 }
 
 fn pick_group_owned(
@@ -1429,6 +1553,7 @@ fn select_from_group(
 fn clone_candidate(candidate: &NoteCandidate) -> NoteCandidate {
     NoteCandidate {
         event: candidate.event.clone(),
+        google_event: candidate.google_event.clone(),
         calendar_name: candidate.calendar_name.clone(),
         day: candidate.day,
         time: candidate.time.clone(),
@@ -1518,7 +1643,7 @@ fn resolve_show_scope(
             )
             .with_hint("drop `-s series` for a one-off event"));
         }
-        return Ok(None);
+        return Ok(Some(NoteScope::Event));
     }
     if let Some(scope) = args.scope.as_deref() {
         return match scope {
@@ -1541,6 +1666,32 @@ fn resolve_show_scope(
         .with_hint("rerun with `-s event` or `-s series`"));
     }
     Ok(Some(pick_scope(candidate)?))
+}
+
+fn present_candidate<S: HomeSource>(
+    args: &NoteArgs,
+    config: &GcalConfig,
+    vault: &std::path::Path,
+    resolver: &mut HomeResolver<S>,
+    account: &str,
+    candidate: NoteCandidate,
+    warnings: Vec<String>,
+    related_days: Vec<NaiveDate>,
+) -> Result<(), GcalError> {
+    if args.clear || args.dry_run || !args.text.is_empty() {
+        write::write_one(
+            args,
+            config,
+            vault,
+            resolver,
+            account,
+            candidate,
+            warnings,
+            related_days,
+        )
+    } else {
+        show_one(args, vault, candidate, warnings)
+    }
 }
 
 fn show_one(
@@ -1579,11 +1730,7 @@ fn show_one(
                 }
             }),
     };
-    if args.format.is_json() {
-        print_show_json(&candidate, scope, scope_text, &warnings)
-    } else {
-        print_show_human(args, &candidate, scope, scope_text, &warnings)
-    }
+    write::show_result(args, vault, &candidate, scope, scope_text, &warnings)
 }
 
 fn scope_text_fallback(candidate: &NoteCandidate) -> Option<String> {
@@ -1893,35 +2040,6 @@ fn print_list_human(
     for warning in warnings.iter() {
         ui::warn(warning);
     }
-    ui::flush_stdout();
-    Ok(())
-}
-
-fn print_show_json(
-    candidate: &NoteCandidate,
-    scope: Option<NoteScope>,
-    scope_text: Option<String>,
-    warnings: &[String],
-) -> Result<(), GcalError> {
-    let document = json!({
-        "schema_version": 1,
-        "ok": true,
-        "event": event_json(candidate, true, scope_text.as_deref()),
-        "scope": scope.map(|scope| match scope {
-            NoteScope::Event => "event",
-            NoteScope::Series => "series",
-        }),
-        "warnings": warnings,
-    });
-    println!(
-        "{}",
-        serde_json::to_string(&document).map_err(|error| {
-            GcalError::runtime(
-                "output",
-                format!("serialize gcal note JSON: {error}"),
-            )
-        })?
-    );
     ui::flush_stdout();
     Ok(())
 }

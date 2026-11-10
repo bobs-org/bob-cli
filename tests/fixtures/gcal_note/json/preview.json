@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "action": "preview",
+  "scope": "event",
+  "note": {
+    "text": "@family\n-30 Drive there\n+15 Drive home",
+    "lines": [
+      {"kind": "directives", "text": "@family"},
+      {"kind": "reason", "side": "before", "minutes": 30, "text": "-30 Drive there"},
+      {"kind": "reason", "side": "after", "minutes": 15, "text": "+15 Drive home"}
+    ]
+  },
+  "spans": [
+    {"start": 0, "end": 7, "kind": "route"},
+    {"start": 8, "end": 11, "kind": "buffer"},
+    {"start": 8, "end": 9, "kind": "reason_sign"},
+    {"start": 12, "end": 24, "kind": "reason"},
+    {"start": 24, "end": 27, "kind": "buffer"},
+    {"start": 24, "end": 25, "kind": "reason_sign"},
+    {"start": 28, "end": 38, "kind": "reason"}
+  ],
+  "preview": {
+    "path": "2026/20261213.md",
+    "occupied": {"start": "09:30", "end": "12:15", "clipped": false},
+    "bullets": [
+      "\t- ↤ *30m before* · Drive there",
+      "\t- ↦ *15m after* · Drive home"
+    ]
+  },
+  "status": {"state": "preview"}
+}

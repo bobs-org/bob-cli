@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "action": "show",
+  "scope": "event",
+  "event": {
+    "event_id": "deerwood",
+    "note": {"text": "@family\n-30 Drive to Deerwood\n+15 Drive home"}
+  },
+  "preview": {"path": "2026/20261213.md"}
+}

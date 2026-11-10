@@ -46,11 +46,15 @@ bob gcal doctor [-b|--bob-dir DIR] [-f|--format human|json]
 bob gcal [list] [-a] [-b|--bob-dir DIR] [-D|--day DAY] [-f|--format table|json]
 bob gcal login [-a|--account EMAIL] [-c|--credentials FILE] [-f|--format human|json] [-m|--manual]
 bob gcal logout [-a|--account EMAIL] [-f|--format human|json] [-y|--force]
+bob gcal note [-a|--all] [-c|--clear] [-d|--dry-run] [-e|--edit] [-i|--event-id ID] [-l|--list] [-s|--scope event|series] [QUERY...] [[--] TEXT...]
 bob gcal sync [-b|--bob-dir DIR] [-D|--day DAY] [-d|--dry-run] [-f|--format human|json] [-q|--quiet]
 ```
 
 Running `bob gcal` with no subcommand runs `bob gcal list`. The list is
-read-only; `sync` writes the vault.
+read-only; `sync` writes Event Task rows. `bob gcal note` writes Bob-only
+private notes to the gcal journal and never changes Google. See
+[Private event notes](gcal-notes.md) for the grammar, preview, and JSON
+contract.
 
 ## How it works
 
@@ -1077,7 +1081,9 @@ sync.
 - `2` — usage or setup error: clap usage errors, bad `gcal:` config, missing
   gog, gog older than v0.44.0, no client, not logged in, sync on a host
   other than `gcal.writer`, or `account_changed` when the day's Events stamp
-  names a different Google account than this run.
+  names a different Google account than this run, or an invalid private event
+  note. A note saved before an immediate sync failure remains saved; the note
+  command reports the sync failure as a warning and exits 0.
 
 Errors print `bob gcal <cmd>: <message>` to stderr (a red `error` prefix on a
 TTY) with an optional dim `  hint: …` line. In JSON mode, failures print
@@ -1182,8 +1188,11 @@ immediately. The `bob-gcal` client is a separate bucket from Gmail. Tests use
   MEETs are kept and reported once as `kept_meet`.
 - Buffers stop at midnight: a pre-buffer never crosses into the previous
   day, and the total stays below 24h. The first value per side wins. A
-  description you cannot edit cannot take a Google-owned buffer: a
-  hand-added `[buffer::]` is your edit — kept and reported once.
+  description you cannot edit can take a buffer through a
+  [private event note](gcal-notes.md). After a row is born, note-driven
+  buffer and clock changes follow the existing combined badges-span rule:
+  sync applies them only while the row's time, title, and badges remain
+  untouched.
 - Someone else's line such as `+1 to that` reads as a 1-minute
   after-buffer with a reason; the first line per side wins.
 - R9 may clear `[*]` Event Tasks on a future day's note until that day is

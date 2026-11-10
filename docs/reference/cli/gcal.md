@@ -19,7 +19,7 @@ Commands:
   list       List a local day of events and show how Bob would classify them
   login      Connect Google Calendar (read-only) in one guided step
   logout     Remove Bob's Calendar grant only; prints the Google revoke URL
-  note       List and show private event notes for Google Calendar events
+  note       List, show, preview, and write private event notes
   sync       Write one day's Events rows and MEET links
   help       Print this message or the help of the given subcommand(s)
 

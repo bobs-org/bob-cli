@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "action": "cleared",
+  "scope": "event",
+  "note": {"text": ""},
+  "status": {"state": "waiting_note"}
+}

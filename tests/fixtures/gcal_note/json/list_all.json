@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "events": [
+    {"event_id": "gym", "lands": "task"},
+    {"event_id": "deerwood", "lands": "task"}
+  ]
+}
