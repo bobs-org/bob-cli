@@ -297,13 +297,15 @@ Every event object in list, show, candidates, and write outputs:
 holds a summary in listings
 (`scope`, `root` with `value` and `hue`, `buffer`, `clock`,
 `bullet_lines`) and never holds text. Show mode adds `note.text` and
-`note.lines` and carries `action: "show"`. Write results also contain the effective fields, a
-preview path, row, bullets, meeting and occupied time bounds, and status. A
-write result carries canonical `note.text` and `note.lines`; `spans` contains
-half-open UTF-8 byte offsets into `input.text` for route, clock, buffer,
-reason, prose, separator, and invalid spans. Invalid JSON returns `ok: false`,
-`error`, and all ranged `errors` without saving. Listings never carry note
-text. The list document is
+`note.lines` and carries `action: "show"`. Both show and write responses
+include `effective`: root, explicit clock, buffer minutes and winning reason
+display text, contributed fields, and meeting and occupied bounds. A reason is
+`null` when none wins, including an explicit zero buffer. Writes add their
+canonical `note.text`, typed `note.lines`, preview path, row, bullets, and
+status. Their `spans` are half-open UTF-8 byte offsets into `input.text` for
+route, clock, buffer, reason, prose, separator, and invalid spans. Invalid
+JSON returns `ok: false`, `error`, and ranged `errors` without saving.
+Listings never carry note text. The list document is
 `{schema_version, ok, window: {from, to, start, end}, notes|events, orphans, warnings}`:
 `notes` when every row is noted, otherwise `events`. Orphans carry
 `calendar_id`, `event_id`, `series_id`, `scope`, `title`, and `reason`.

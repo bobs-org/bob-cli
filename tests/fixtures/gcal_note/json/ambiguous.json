@@ -1,5 +1,72 @@
 {
-  "schema_version": 1,
+  "candidates": [
+    {
+      "answer": "yes",
+      "calendar_id": "primary",
+      "calendar_name": "Personal",
+      "day": "2026-12-13",
+      "end": "2026-12-13T11:00:00-05:00",
+      "event_id": "exact",
+      "lands": "task",
+      "note": null,
+      "organizer": {
+        "name": "Kelly",
+        "self": false
+      },
+      "recurring": false,
+      "series_id": null,
+      "start": "2026-12-13T10:00:00-05:00",
+      "time": "10:00-11:00",
+      "title": "Deerwood",
+      "url": "https://calendar.google.com/event?eid=exact"
+    },
+    {
+      "answer": "yes",
+      "calendar_id": "primary",
+      "calendar_name": "Personal",
+      "day": "2026-12-14",
+      "end": "2026-12-14T11:00:00-05:00",
+      "event_id": "prefix",
+      "lands": "task",
+      "note": null,
+      "organizer": {
+        "name": "Kelly",
+        "self": false
+      },
+      "recurring": false,
+      "series_id": null,
+      "start": "2026-12-14T10:00:00-05:00",
+      "time": "10:00-11:00",
+      "title": "Deerwood Christmas breakfast",
+      "url": "https://calendar.google.com/event?eid=prefix"
+    },
+    {
+      "answer": "yes",
+      "calendar_id": "primary",
+      "calendar_name": "Personal",
+      "day": "2026-12-15",
+      "end": "2026-12-15T11:00:00-05:00",
+      "event_id": "contains",
+      "lands": "task",
+      "note": null,
+      "organizer": {
+        "name": "Kelly",
+        "self": false
+      },
+      "recurring": false,
+      "series_id": null,
+      "start": "2026-12-15T10:00:00-05:00",
+      "time": "10:00-11:00",
+      "title": "Christmas Deerwood party",
+      "url": "https://calendar.google.com/event?eid=contains"
+    }
+  ],
+  "error": {
+    "hint": "rerun with a narrower query or `-i <event-id>`",
+    "kind": "ambiguous",
+    "message": "several events match"
+  },
   "ok": false,
-  "error": {"kind": "ambiguous"}
+  "schema_version": 1,
+  "warnings": []
 }

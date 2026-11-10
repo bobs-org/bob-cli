@@ -1,0 +1,81 @@
+{
+  "action": "show",
+  "effective": {
+    "buffer": {
+      "after_minutes": 18,
+      "after_reason": "Google drive home",
+      "before_minutes": 12,
+      "before_reason": "Google drive there"
+    },
+    "clock": null,
+    "fields": [],
+    "meeting": {
+      "end": "13:00",
+      "start": "12:00"
+    },
+    "occupied": {
+      "clipped": false,
+      "end": "13:18",
+      "start": "11:48"
+    },
+    "root": {
+      "hue": "violet",
+      "kind": "default",
+      "source": "default",
+      "value": "meet"
+    }
+  },
+  "event": {
+    "answer": "yes",
+    "calendar_id": "primary",
+    "calendar_name": "Personal",
+    "day": "2026-11-21",
+    "end": "2026-11-21T13:00:00-05:00",
+    "event_id": "solo-reasons",
+    "lands": "task",
+    "note": {
+      "buffer": null,
+      "bullet_lines": 0,
+      "clock": null,
+      "lines": [],
+      "root": {
+        "hue": null,
+        "value": null
+      },
+      "scope": null,
+      "text": ""
+    },
+    "organizer": {
+      "name": "Kelly",
+      "self": false
+    },
+    "recurring": false,
+    "series_id": null,
+    "start": "2026-11-21T12:00:00-05:00",
+    "time": "12:00-13:00",
+    "title": "Solo Lunch",
+    "url": "https://calendar.google.com/event?eid=solo-reasons"
+  },
+  "ok": true,
+  "preview": {
+    "bullets": [
+      "\t- ↤ *12m before* · Google drive there",
+      "\t- ↦ *18m after* · Google drive home"
+    ],
+    "meeting": {
+      "end": "13:00",
+      "start": "12:00"
+    },
+    "occupied": {
+      "clipped": false,
+      "end": "13:18",
+      "start": "11:48"
+    },
+    "path": "2026/20261121.md",
+    "rail": "● violet 11:48 ╱╱12:00 ━━━━━━━━━━━13:00 ╱╱╱13:18",
+    "row": "- [*] #task **1200-1300** Solo Lunch [📅](https://calendar.google.com/event?eid=solo-reasons) [buffer:: -12m +18m] [root:: meet] [type:: MEET] ^solo-lunch"
+  },
+  "schema_version": 1,
+  "scope": "event",
+  "warnings": []
+}

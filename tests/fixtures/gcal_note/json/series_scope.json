@@ -1,0 +1,78 @@
+{
+  "action": "show",
+  "effective": {
+    "buffer": {
+      "after_minutes": 0,
+      "after_reason": null,
+      "before_minutes": 0,
+      "before_reason": null
+    },
+    "clock": null,
+    "fields": [],
+    "meeting": {
+      "end": "10:00",
+      "start": "09:15"
+    },
+    "occupied": {
+      "clipped": false,
+      "end": "10:00",
+      "start": "09:15"
+    },
+    "root": {
+      "hue": "violet",
+      "kind": "default",
+      "source": "default",
+      "value": "meet"
+    }
+  },
+  "event": {
+    "answer": "yes",
+    "calendar_id": "primary",
+    "calendar_name": "Personal",
+    "day": "2026-11-13",
+    "end": "2026-11-13T10:00:00-05:00",
+    "event_id": "gym-1",
+    "lands": "task",
+    "note": {
+      "buffer": null,
+      "bullet_lines": 0,
+      "clock": null,
+      "lines": [],
+      "root": {
+        "hue": null,
+        "value": null
+      },
+      "scope": null,
+      "text": ""
+    },
+    "organizer": {
+      "name": "Kelly",
+      "self": false
+    },
+    "recurring": true,
+    "series_id": "gym-series",
+    "start": "2026-11-13T09:15:00-05:00",
+    "time": "09:15-10:00",
+    "title": "Little Gym",
+    "url": "https://calendar.google.com/event?eid=gym-1"
+  },
+  "ok": true,
+  "preview": {
+    "bullets": [],
+    "meeting": {
+      "end": "10:00",
+      "start": "09:15"
+    },
+    "occupied": {
+      "clipped": false,
+      "end": "10:00",
+      "start": "09:15"
+    },
+    "path": "2026/20261113.md",
+    "rail": "● violet 09:15 09:15 ━━━━━━━━━━━━━━━━10:00 10:00",
+    "row": "- [*] #task **0915-1000** Little Gym [📅](https://calendar.google.com/event?eid=gym-1) [root:: meet] [type:: MEET] ^little-gym"
+  },
+  "schema_version": 1,
+  "scope": "series",
+  "warnings": []
+}

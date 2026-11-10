@@ -1,9 +1,51 @@
 {
-  "schema_version": 1,
-  "ok": false,
   "action": "invalid",
+  "error": {
+    "hint": "fix the highlighted note text and retry",
+    "kind": "invalid_note",
+    "message": "@famly: no area or project named 'famly'\nhint: did you mean family (area · family.md)?\nhint: to accept this name, add `project_name_aliases: [\"famly\"]` to family.md"
+  },
   "errors": [
-    {"kind": "route_unknown", "start": 0, "end": 6}
+    {
+      "end": 6,
+      "kind": "route_unknown",
+      "message": "@famly: no area or project named 'famly'\nhint: did you mean family (area · family.md)?\nhint: to accept this name, add `project_name_aliases: [\"famly\"]` to family.md",
+      "start": 0,
+      "suggestions": []
+    }
   ],
-  "error": {"kind": "invalid_note"}
+  "event": {
+    "answer": "yes",
+    "calendar_id": "primary",
+    "calendar_name": "Personal",
+    "day": "2026-12-13",
+    "end": "2026-12-13T12:00:00-05:00",
+    "event_id": "e1",
+    "lands": "task",
+    "note": null,
+    "organizer": {
+      "name": "Kelly",
+      "self": false
+    },
+    "recurring": false,
+    "series_id": null,
+    "start": "2026-12-13T10:00:00-05:00",
+    "time": "10:00-12:00",
+    "title": "Deerwood",
+    "url": "https://calendar.google.com/event?eid=e1"
+  },
+  "input": {
+    "text": "@famly"
+  },
+  "ok": false,
+  "schema_version": 1,
+  "scope": "event",
+  "spans": [
+    {
+      "end": 6,
+      "kind": "route",
+      "start": 0
+    }
+  ],
+  "warnings": []
 }

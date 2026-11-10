@@ -1,0 +1,88 @@
+{
+  "action": "show",
+  "effective": {
+    "buffer": {
+      "after_minutes": 40,
+      "after_reason": "Series after",
+      "before_minutes": 30,
+      "before_reason": "Series before"
+    },
+    "clock": null,
+    "fields": [
+      "before",
+      "after",
+      "bullets"
+    ],
+    "meeting": {
+      "end": "10:00",
+      "start": "09:00"
+    },
+    "occupied": {
+      "clipped": false,
+      "end": "10:40",
+      "start": "08:30"
+    },
+    "root": {
+      "hue": "violet",
+      "kind": "default",
+      "source": "default",
+      "value": "meet"
+    }
+  },
+  "event": {
+    "answer": "yes",
+    "calendar_id": "primary",
+    "calendar_name": "Personal",
+    "day": "2026-11-20",
+    "end": "2026-11-20T10:00:00-05:00",
+    "event_id": "gym-2",
+    "lands": "task",
+    "note": {
+      "buffer": {
+        "after_minutes": 40,
+        "before_minutes": 30
+      },
+      "bullet_lines": 0,
+      "clock": null,
+      "lines": [],
+      "root": {
+        "hue": "violet",
+        "value": "meet"
+      },
+      "scope": "series",
+      "text": ""
+    },
+    "organizer": {
+      "name": "Kelly",
+      "self": false
+    },
+    "recurring": true,
+    "series_id": "gym-series",
+    "start": "2026-11-20T09:00:00-05:00",
+    "time": "09:00-10:00",
+    "title": "Little Gym",
+    "url": "https://calendar.google.com/event?eid=gym-2"
+  },
+  "ok": true,
+  "preview": {
+    "bullets": [
+      "\t- ↤ *30m before* · Series before",
+      "\t- ↦ *40m after* · Series after"
+    ],
+    "meeting": {
+      "end": "10:00",
+      "start": "09:00"
+    },
+    "occupied": {
+      "clipped": false,
+      "end": "10:40",
+      "start": "08:30"
+    },
+    "path": "2026/20261120.md",
+    "rail": "● violet 08:30 ╱╱╱╱09:00 ━━━━━━━10:00 ╱╱╱╱╱10:40",
+    "row": "- [*] #task **0900-1000** Little Gym [📅](https://calendar.google.com/event?eid=gym-2) [buffer:: -30m +40m] [root:: meet] [type:: MEET] ^little-gym"
+  },
+  "schema_version": 1,
+  "scope": "event",
+  "warnings": []
+}

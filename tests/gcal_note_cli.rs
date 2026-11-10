@@ -98,49 +98,50 @@ fn assert_text_order(text: &str, needles: &[&str]) {
     }
 }
 
-fn assert_golden(name: &str, actual: &Value) {
-    fn assert_subset(actual: &Value, expected: &Value, path: &str) {
-        match expected {
-            Value::Object(expected) => {
-                let actual = actual.as_object().unwrap_or_else(|| {
-                    panic!("{path} is not an object: {actual}")
-                });
-                for (key, expected) in expected {
-                    let child_path = format!("{path}.{key}");
-                    let actual = actual.get(key).unwrap_or_else(|| {
-                        panic!("missing {child_path}: {actual:?}")
-                    });
-                    assert_subset(actual, expected, &child_path);
-                }
-            }
-            Value::Array(expected) => {
-                let actual = actual.as_array().unwrap_or_else(|| {
-                    panic!("{path} is not an array: {actual}")
-                });
-                assert_eq!(actual.len(), expected.len(), "{path} length");
-                for (index, (actual, expected)) in
-                    actual.iter().zip(expected).enumerate()
-                {
-                    assert_subset(
-                        actual,
-                        expected,
-                        &format!("{path}[{index}]"),
-                    );
-                }
-            }
-            expected => assert_eq!(actual, expected, "{path}"),
-        }
+fn normalize_note_fixture(actual: &Value) -> Value {
+    let mut normalized = actual.clone();
+    if let Some(window) =
+        normalized.get_mut("window").and_then(Value::as_object_mut)
+    {
+        // The integration harness pins BOB_NOW to 2026-10-30. Keep these
+        // realistic, offset-aware values stable if the harness clock changes.
+        window.insert(
+            "from".to_string(),
+            Value::String("2026-10-30T00:00:00-04:00".to_string()),
+        );
+        window.insert(
+            "to".to_string(),
+            Value::String("2027-01-28T00:00:00-05:00".to_string()),
+        );
+        window.insert(
+            "start".to_string(),
+            Value::String("2026-10-30".to_string()),
+        );
+        window
+            .insert("end".to_string(), Value::String("2027-01-28".to_string()));
     }
+    normalized
+}
 
+fn assert_golden(name: &str, actual: &Value) {
     let path = format!(
         "{}/tests/fixtures/gcal_note/json/{name}.json",
         env!("CARGO_MANIFEST_DIR")
     );
+    let actual = normalize_note_fixture(actual);
+    if std::env::var_os("BOB_UPDATE_GCAL_NOTE_FIXTURES").is_some() {
+        fs::write(
+            &path,
+            format!("{}\n", serde_json::to_string_pretty(&actual).unwrap()),
+        )
+        .unwrap_or_else(|error| panic!("write fixture {path}: {error}"));
+        return;
+    }
     let contents = fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("read {path}: {error}"));
     let expected: Value = serde_json::from_str(&contents)
         .unwrap_or_else(|error| panic!("parse golden {path}: {error}"));
-    assert_subset(actual, &expected, name);
+    assert_eq!(actual, expected, "full JSON fixture {name}");
 }
 
 #[test]
@@ -219,6 +220,12 @@ fn preview_save_unchanged_clear_and_invalid_json() {
     );
     assert_eq!(preview["preview"]["occupied"]["start"], "09:30");
     assert_eq!(preview["preview"]["occupied"]["end"], "12:15");
+    assert_eq!(preview["effective"]["buffer"]["before_minutes"], 30);
+    assert_eq!(
+        preview["effective"]["buffer"]["before_reason"],
+        "Drive there"
+    );
+    assert_eq!(preview["effective"]["buffer"]["after_reason"], "Drive home");
     assert_eq!(preview["preview"]["bullets"].as_array().unwrap().len(), 2);
     assert!(preview["preview"]["row"]
         .as_str()
@@ -413,6 +420,7 @@ fn writer_host_applies_note_and_preview_matches_sync() {
     let result = json_stdout(&output);
     assert_eq!(result["action"], "saved");
     assert_eq!(result["status"]["state"], "applied");
+    assert_golden("applied", &result);
 
     let daily = fs::read_to_string(env.vault().join("2026/20261030.md"))
         .expect("read synced daily note");
@@ -467,6 +475,7 @@ fn off_writer_and_sync_failure_keep_the_saved_note() {
     let result = json_stdout(&output);
     assert_eq!(result["action"], "saved");
     assert_eq!(result["status"]["state"], "saved_elsewhere");
+    assert_golden("saved_elsewhere", &result);
     assert!(result["status"]["detail"]
         .as_str()
         .unwrap()
@@ -505,6 +514,7 @@ fn off_writer_and_sync_failure_keep_the_saved_note() {
     let result = json_stdout(&output);
     assert_eq!(result["action"], "saved");
     assert_eq!(result["status"]["state"], "sync_failed");
+    assert_golden("saved_sync_failed", &result);
     assert!(result["warnings"]
         .as_array()
         .unwrap()
@@ -826,6 +836,7 @@ fn series_instances_group_and_scope_is_required_off_tty() {
     assert_eq!(document["event"]["title"], "Little Gym");
     assert_eq!(document["event"]["series_id"], "gym-series");
     assert_eq!(document["scope"], "series");
+    assert_golden("series_scope", &document);
     // `-s series` on a one-off event exits 2.
     let env2 = GcalEnv::new("bob-cli-gcal-note-series-oneoff");
     prepare(&env2);
@@ -1189,4 +1200,163 @@ fn list_orphans_and_past_hiding() {
     assert!(listing.contains("no longer on your calendar"), "{listing}");
     assert!(listing.contains("bob gcal note -c -i gone-1"), "{listing}");
     assert!(!listing.contains("Past Meeting"), "{listing}");
+}
+
+#[test]
+fn effective_buffer_reasons_follow_occurrence_series_and_google_precedence() {
+    let env = GcalEnv::new("bob-cli-gcal-note-effective-reasons");
+    prepare(&env);
+    let occurrence = |id: &str, start: &str, end: &str| {
+        let event = json!({
+            "id": id,
+            "summary": "Little Gym",
+            "status": "confirmed",
+            "recurringEventId": "gym-series",
+            "start": {"dateTime": start},
+            "end": {"dateTime": end},
+            "htmlLink": format!("https://calendar.google.com/event?eid={id}"),
+            "organizer": {"displayName": "Kelly", "email": "kelly@example.com", "self": false},
+            "attendees": [{"self": true, "responseStatus": "accepted"}],
+            "description": "-10 Google before\n+20 Google after",
+        });
+        event
+    };
+    let first = occurrence(
+        "gym-1",
+        "2026-11-13T09:00:00-05:00",
+        "2026-11-13T10:00:00-05:00",
+    );
+    let second = occurrence(
+        "gym-2",
+        "2026-11-20T09:00:00-05:00",
+        "2026-11-20T10:00:00-05:00",
+    );
+    let mut solo = guest_event(
+        "solo-reasons",
+        "Solo Lunch",
+        "2026-11-21T12:00:00-05:00",
+        "2026-11-21T13:00:00-05:00",
+    );
+    solo["description"] =
+        json!("-12 Google drive there\n+18 Google drive home");
+
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![
+        first.clone(),
+        second.clone(),
+        solo.clone(),
+    ]));
+    for event in [&first, &second, &solo] {
+        fake.event_lookup(
+            event["id"].as_str().unwrap(),
+            &serde_json::to_string(&json!({"event": event}))
+                .expect("lookup body"),
+        );
+    }
+    append_journal(
+        &env,
+        "test-host",
+        json!({
+            "v": 1,
+            "ts": "2026-10-30T11:00:00-04:00",
+            "host": "test-host",
+            "kind": "gcal.note",
+            "account": ACCOUNT,
+            "key": {"calendar_id": "primary", "series": "gym-series"},
+            "scope": "series",
+            "text": "-30 Series before\n+40 Series after",
+        }),
+    );
+    append_journal(
+        &env,
+        "test-host",
+        event_note(
+            "test-host",
+            "2026-10-30T11:30:00-04:00",
+            "gym-1",
+            "-0\n+5 Event after",
+        ),
+    );
+
+    let show = |event_id: &str| {
+        let mut command = env.command();
+        let output = fake
+            .install(&mut command)
+            .args(["gcal", "note", "-i", event_id, "-s", "event", "-f", "json"])
+            .output()
+            .expect("show event note");
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        json_stdout(&output)
+    };
+
+    let both_scopes = show("gym-1");
+    assert_eq!(both_scopes["effective"]["buffer"]["before_minutes"], 0);
+    assert_eq!(
+        both_scopes["effective"]["buffer"]["before_reason"],
+        Value::Null
+    );
+    assert_eq!(both_scopes["effective"]["buffer"]["after_minutes"], 5);
+    assert_eq!(
+        both_scopes["effective"]["buffer"]["after_reason"],
+        "Event after"
+    );
+    assert_golden("both_scopes", &both_scopes);
+
+    let inherited = show("gym-2");
+    assert_eq!(
+        inherited["effective"]["buffer"]["before_reason"],
+        "Series before"
+    );
+    assert_eq!(
+        inherited["effective"]["buffer"]["after_reason"],
+        "Series after"
+    );
+    assert_golden("inherited_reasons", &inherited);
+
+    let google = show("solo-reasons");
+    assert_eq!(
+        google["effective"]["buffer"]["before_reason"],
+        "Google drive there"
+    );
+    assert_eq!(
+        google["effective"]["buffer"]["after_reason"],
+        "Google drive home"
+    );
+    assert_golden("google_reasons", &google);
+}
+
+#[test]
+fn list_json_exposes_waiting_reply_and_maybe_events() {
+    let env = GcalEnv::new("bob-cli-gcal-note-waiting-events");
+    prepare(&env);
+    let mut reply = guest_event(
+        "waiting-reply",
+        "Review proposal",
+        "2026-11-11T09:00:00-05:00",
+        "2026-11-11T10:00:00-05:00",
+    );
+    reply["attendees"][0]["responseStatus"] = json!("needsAction");
+    let mut maybe = guest_event(
+        "waiting-maybe",
+        "Lunch invitation",
+        "2026-11-12T12:00:00-05:00",
+        "2026-11-12T13:00:00-05:00",
+    );
+    maybe["attendees"][0]["responseStatus"] = json!("tentative");
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![reply, maybe]));
+
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-a", "-f", "json"])
+        .output()
+        .expect("list waiting events");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let document = json_stdout(&output);
+    let events = document["events"].as_array().expect("event list");
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0]["lands"], "waiting_reply");
+    assert_eq!(events[1]["lands"], "waiting_maybe");
+    assert_golden("waiting_states", &document);
 }

@@ -1334,12 +1334,14 @@ pub(super) fn show_result(
 ) -> Result<(), GcalError> {
     let rendered = preview(candidate, vault)?;
     if args.format.is_json() {
+        let effective = effective_json(candidate, &rendered);
         let document = json!({
             "schema_version": 1,
             "ok": true,
             "action": "show",
             "event": event_json(candidate, true, scope_text.as_deref()),
             "scope": scope.map(NoteScope::as_str),
+            "effective": effective,
             "preview": rendered.json,
             "warnings": warnings,
         });
@@ -1680,13 +1682,38 @@ fn proportional_rail_widths(lengths: [usize; 3], width: usize) -> [usize; 3] {
 fn effective_json(candidate: &NoteCandidate, preview: &Preview) -> Value {
     let applied = candidate.event.note.as_ref();
     let buffer = candidate.event.buffer;
+    let reasons = &candidate.event.description.buffer_reasons;
     json!({
         "root": {"value": candidate.root.as_ref().and_then(|root| root.value.clone()), "source": candidate.root.as_ref().and_then(|root| root.source.clone()), "kind": candidate.root.as_ref().and_then(|root| root.kind.json_label()), "hue": candidate.root.as_ref().and_then(|root| root.hue).map(|hue| hue.name())},
         "clock": clock::explicit_clock_label(&candidate.event.clock_tag),
-        "buffer": {"before_minutes": buffer.before_min, "after_minutes": buffer.after_min},
+        "buffer": {
+            "before_minutes": buffer.before_min,
+            "after_minutes": buffer.after_min,
+            "before_reason": buffer_reason_text(reasons.before.as_ref()),
+            "after_reason": buffer_reason_text(reasons.after.as_ref()),
+        },
         "meeting": preview.json["meeting"],
         "occupied": preview.json["occupied"],
         "fields": applied.map(|note| note.fields.iter().map(|field| field.as_str()).collect::<Vec<_>>()).unwrap_or_default(),
+    })
+}
+
+fn buffer_reason_text(
+    reason: Option<&crate::native::gcal::description::BufferReason>,
+) -> Option<String> {
+    reason.map(|reason| {
+        reason
+            .inlines
+            .iter()
+            .map(|inline| match inline {
+                crate::native::gcal::description::Inline::Text {
+                    text, ..
+                }
+                | crate::native::gcal::description::Inline::Link {
+                    text, ..
+                } => text.as_str(),
+            })
+            .collect()
     })
 }
 

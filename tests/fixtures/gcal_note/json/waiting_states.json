@@ -1,0 +1,54 @@
+{
+  "events": [
+    {
+      "answer": "no_reply",
+      "calendar_id": "primary",
+      "calendar_name": "Personal",
+      "day": "2026-11-11",
+      "end": "2026-11-11T10:00:00-05:00",
+      "event_id": "waiting-reply",
+      "lands": "waiting_reply",
+      "note": null,
+      "organizer": {
+        "name": "Kelly",
+        "self": false
+      },
+      "recurring": false,
+      "series_id": null,
+      "start": "2026-11-11T09:00:00-05:00",
+      "time": "09:00-10:00",
+      "title": "Review proposal",
+      "url": "https://calendar.google.com/event?eid=waiting-reply"
+    },
+    {
+      "answer": "maybe",
+      "calendar_id": "primary",
+      "calendar_name": "Personal",
+      "day": "2026-11-12",
+      "end": "2026-11-12T13:00:00-05:00",
+      "event_id": "waiting-maybe",
+      "lands": "waiting_maybe",
+      "note": null,
+      "organizer": {
+        "name": "Kelly",
+        "self": false
+      },
+      "recurring": false,
+      "series_id": null,
+      "start": "2026-11-12T12:00:00-05:00",
+      "time": "12:00-13:00",
+      "title": "Lunch invitation",
+      "url": "https://calendar.google.com/event?eid=waiting-maybe"
+    }
+  ],
+  "ok": true,
+  "orphans": [],
+  "schema_version": 1,
+  "warnings": [],
+  "window": {
+    "end": "2027-01-28",
+    "from": "2026-10-30T00:00:00-04:00",
+    "start": "2026-10-30",
+    "to": "2027-01-28T00:00:00-05:00"
+  }
+}

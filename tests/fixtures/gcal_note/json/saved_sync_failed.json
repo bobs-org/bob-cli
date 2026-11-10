@@ -1,0 +1,109 @@
+{
+  "action": "saved",
+  "effective": {
+    "buffer": {
+      "after_minutes": 0,
+      "after_reason": null,
+      "before_minutes": 0,
+      "before_reason": null
+    },
+    "clock": null,
+    "fields": [
+      "root"
+    ],
+    "meeting": {
+      "end": "14:00",
+      "start": "13:00"
+    },
+    "occupied": {
+      "clipped": false,
+      "end": "14:00",
+      "start": "13:00"
+    },
+    "root": {
+      "hue": "orange",
+      "kind": "note",
+      "source": "✎ @family",
+      "value": "family"
+    }
+  },
+  "errors": [],
+  "event": {
+    "answer": "yes",
+    "calendar_id": "primary",
+    "calendar_name": "Personal",
+    "day": "2026-10-30",
+    "end": "2026-10-30T14:00:00-04:00",
+    "event_id": "sync-fails",
+    "lands": "task",
+    "note": {
+      "buffer": null,
+      "bullet_lines": 0,
+      "clock": null,
+      "lines": [
+        "@family"
+      ],
+      "root": {
+        "hue": "orange",
+        "value": "family"
+      },
+      "scope": "event",
+      "text": "@family"
+    },
+    "organizer": {
+      "name": "Kelly",
+      "self": false
+    },
+    "recurring": false,
+    "series_id": null,
+    "start": "2026-10-30T13:00:00-04:00",
+    "time": "13:00-14:00",
+    "title": "Lunch with Kelly",
+    "url": "https://calendar.google.com/event?eid=sync-fails"
+  },
+  "input": {
+    "text": "@family"
+  },
+  "note": {
+    "lines": [
+      {
+        "kind": "directives",
+        "text": "@family"
+      }
+    ],
+    "text": "@family"
+  },
+  "ok": true,
+  "preview": {
+    "bullets": [],
+    "meeting": {
+      "end": "14:00",
+      "start": "13:00"
+    },
+    "occupied": {
+      "clipped": false,
+      "end": "14:00",
+      "start": "13:00"
+    },
+    "path": "2026/20261030.md",
+    "rail": "● orange 13:00 13:00 ━━━━━━━━━━━━━━━━14:00 14:00",
+    "row": "- [*] #task **1300-1400** Lunch with Kelly [📅](https://calendar.google.com/event?eid=sync-fails) [root:: family] [type:: MEET] ^lunch-kelly"
+  },
+  "schema_version": 1,
+  "scope": "event",
+  "spans": [
+    {
+      "end": 7,
+      "kind": "route",
+      "start": 0
+    }
+  ],
+  "status": {
+    "detail": "saved · immediate sync failed: fake gog: second page failed · run `bob gcal sync`",
+    "path": "2026/20261030.md",
+    "state": "sync_failed"
+  },
+  "warnings": [
+    "immediate sync failed: fake gog: second page failed"
+  ]
+}

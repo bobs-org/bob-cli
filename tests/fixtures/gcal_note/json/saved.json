@@ -1,8 +1,160 @@
 {
-  "schema_version": 1,
-  "ok": true,
   "action": "saved",
+  "effective": {
+    "buffer": {
+      "after_minutes": 15,
+      "after_reason": "Drive home",
+      "before_minutes": 30,
+      "before_reason": "Drive there"
+    },
+    "clock": null,
+    "fields": [
+      "root",
+      "before",
+      "after",
+      "bullets"
+    ],
+    "meeting": {
+      "end": "12:00",
+      "start": "10:00"
+    },
+    "occupied": {
+      "clipped": false,
+      "end": "12:15",
+      "start": "09:30"
+    },
+    "root": {
+      "hue": "orange",
+      "kind": "note",
+      "source": "✎ @family",
+      "value": "family"
+    }
+  },
+  "errors": [],
+  "event": {
+    "answer": "yes",
+    "calendar_id": "primary",
+    "calendar_name": "Personal",
+    "day": "2026-12-13",
+    "end": "2026-12-13T12:00:00-05:00",
+    "event_id": "e1",
+    "lands": "task",
+    "note": {
+      "buffer": {
+        "after_minutes": 15,
+        "before_minutes": 30
+      },
+      "bullet_lines": 0,
+      "clock": null,
+      "lines": [
+        "@family",
+        "-30 Drive there",
+        "+15 Drive home"
+      ],
+      "root": {
+        "hue": "orange",
+        "value": "family"
+      },
+      "scope": "event",
+      "text": "@family\n-30 Drive there\n+15 Drive home"
+    },
+    "organizer": {
+      "name": "Kelly",
+      "self": false
+    },
+    "recurring": false,
+    "series_id": null,
+    "start": "2026-12-13T10:00:00-05:00",
+    "time": "10:00-12:00",
+    "title": "Deerwood",
+    "url": "https://calendar.google.com/event?eid=e1"
+  },
+  "input": {
+    "text": "@family -30 Drive there +15 Drive home"
+  },
+  "note": {
+    "lines": [
+      {
+        "kind": "directives",
+        "text": "@family"
+      },
+      {
+        "kind": "reason",
+        "minutes": 30,
+        "side": "before",
+        "text": "-30 Drive there"
+      },
+      {
+        "kind": "reason",
+        "minutes": 15,
+        "side": "after",
+        "text": "+15 Drive home"
+      }
+    ],
+    "text": "@family\n-30 Drive there\n+15 Drive home"
+  },
+  "ok": true,
+  "preview": {
+    "bullets": [
+      "\t- ↤ *30m before* · Drive there",
+      "\t- ↦ *15m after* · Drive home"
+    ],
+    "meeting": {
+      "end": "12:00",
+      "start": "10:00"
+    },
+    "occupied": {
+      "clipped": false,
+      "end": "12:15",
+      "start": "09:30"
+    },
+    "path": "2026/20261213.md",
+    "rail": "● orange 09:30 ╱╱╱10:00 ━━━━━━━━━━━━12:00 ╱12:15",
+    "row": "- [*] #task **1000-1200** Deerwood [📅](https://calendar.google.com/event?eid=e1) [buffer:: -30m +15m] [root:: family] [type:: MEET] ^deerwood"
+  },
+  "schema_version": 1,
   "scope": "event",
-  "note": {"text": "@family\n-30 Drive there\n+15 Drive home"},
-  "status": {"state": "waiting_note"}
+  "spans": [
+    {
+      "end": 7,
+      "kind": "route",
+      "start": 0
+    },
+    {
+      "end": 11,
+      "kind": "buffer",
+      "start": 8
+    },
+    {
+      "end": 9,
+      "kind": "reason_sign",
+      "start": 8
+    },
+    {
+      "end": 24,
+      "kind": "reason",
+      "start": 12
+    },
+    {
+      "end": 27,
+      "kind": "buffer",
+      "start": 24
+    },
+    {
+      "end": 25,
+      "kind": "reason_sign",
+      "start": 24
+    },
+    {
+      "end": 38,
+      "kind": "reason",
+      "start": 28
+    }
+  ],
+  "status": {
+    "detail": "lands in 2026/20261213.md when that day syncs",
+    "path": null,
+    "state": "waiting_note"
+  },
+  "warnings": []
 }
