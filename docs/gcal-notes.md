@@ -13,8 +13,9 @@ invitations still awaiting a reply or answered Maybe. A note never changes
 inclusion, never RSVPs, and never creates a row.
 
 List, show, preview, write, clear, editor, and Google-description adoption are
-available in `bob gcal note`. Mac Capture Event note mode is the remaining
-client work.
+available in `bob gcal note`. Bob Mac Capture ships an
+[Event notes](../reference/mac-capture/event-notes.md) surface for the
+same contract: open any capture draft with Command-E and pick the event.
 
 ## Contents
 

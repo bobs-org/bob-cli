@@ -87,6 +87,15 @@ Colour is the root source after a note or `@route` token and before the
 calendar's root. Replace it with a private note once you can run
 `bob gcal note`.
 
+## On your Mac
+
+Bob Mac Capture ships an [Event notes](../reference/mac-capture/event-notes.md)
+surface for the same contract. Press Command-E from any capture draft — empty or
+not — pick the event, choose This event or All events for a recurring match, and
+edit with Bob's highlights and time rail. Return saves, Command-Delete clears the
+saved scope, and Command-Z undoes the last save. Bob still performs the writer-host
+sync; the Mac never issues a second one.
+
 ## What "lands" means
 
 Saving the note stores it now. Sync writes it onto the Event Task when
