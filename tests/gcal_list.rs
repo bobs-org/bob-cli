@@ -20,6 +20,25 @@ fn prepare(env: &GcalEnv) {
     );
 }
 
+fn sync_output(
+    env: &GcalEnv,
+    fake: &FakeGog,
+    args: &[&str],
+) -> std::process::Output {
+    let mut command = env.command();
+    let mut full = vec!["gcal", "sync"];
+    full.extend(args);
+    fake.install(&mut command)
+        .args(full)
+        .output()
+        .expect("run sync")
+}
+
+fn today_note(env: &GcalEnv) -> String {
+    fs::read_to_string(env.vault().join("2026/20261030.md"))
+        .expect("read daily note")
+}
+
 #[test]
 fn bare_gcal_lists_today_and_json_keeps_only_public_normalized_fields() {
     let env = GcalEnv::new("bob-cli-gcal-list");
@@ -582,4 +601,48 @@ fn list_shows_waiting_for_templater_on_an_unrendered_note() {
         serde_json::from_str(&stdout(&output)).expect("JSON report");
     let dentist = list_event(&report, "Dentist");
     assert_eq!(dentist["vault"], "waiting for Templater");
+}
+
+#[test]
+fn list_reads_a_replaced_section_before_any_held_sync() {
+    let env = GcalEnv::new("bob-cli-gcal-list-replaced-live");
+    prepare(&env);
+    fs::write(
+        env.vault().join("meet.md"),
+        "---\ntype: area\ncolor: violet\ntask_type: MEET\n---\n# Meet\n",
+    )
+    .expect("write meet area");
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+    let first = sync_output(&env, &fake, &[]);
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    let original = today_note(&env);
+    let events_start = original.find("## Events").unwrap();
+    let pomodoros_start = original.find("## Pomodoros").unwrap();
+    let replaced = format!(
+        "{}## Notes\n\n{}",
+        &original[..events_start],
+        &original[pomodoros_start..]
+    );
+    fs::write(env.vault().join("2026/20261030.md"), &replaced)
+        .expect("replace Events section");
+
+    let mut listed = env.command();
+    fake.install(&mut listed);
+    let held = listed.args(["gcal", "list"]).output().expect("run list");
+    assert_eq!(held.status.code(), Some(0), "{}", stderr(&held));
+    let table = stdout(&held);
+    assert!(table.contains("held · Events replaced"), "{table}");
+    assert!(table.contains("lost · run sync -F"), "{table}");
+    assert!(!table.contains("removed by you"), "{table}");
+
+    fs::write(env.vault().join("2026/20261030.md"), &original)
+        .expect("restore Events section");
+    let mut listed = env.command();
+    fake.install(&mut listed);
+    let restored = listed.args(["gcal", "list"]).output().expect("run list");
+    assert_eq!(restored.status.code(), Some(0), "{}", stderr(&restored));
+    let table = stdout(&restored);
+    assert!(!table.contains("held · Events replaced"), "{table}");
+    assert!(!table.contains("lost · run sync -F"), "{table}");
 }

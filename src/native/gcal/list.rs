@@ -13,6 +13,7 @@ use super::{
     lifecycle::split_row_spans,
     model::MyAnswer,
     plan::journaled_title,
+    replaced,
     skip::{restore_command, SkipReason},
     snapshot::{self, SnapshotEvent},
     ui, GcalError, ListArgs,
@@ -121,6 +122,13 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
     };
     let day_string = day.to_string();
     let is_today = day == bob_env::current_datetime().date();
+    let held = note
+        .as_deref()
+        .filter(|_| !unrendered)
+        .and_then(|contents| {
+            replaced::detect(contents, &day_string, &journal_state)
+        })
+        .is_some();
     let cells: Vec<VaultCell> = events
         .iter()
         .map(|event| {
@@ -131,9 +139,7 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
                 &day_string,
                 note_view,
                 is_today,
-                journal::read_status().is_some_and(|status| {
-                    status.outcome == "held" && status.day == day_string
-                }),
+                held,
             )
         })
         .collect();
@@ -164,13 +170,7 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
             args.include_omitted,
             &cells,
             (day, is_today),
-            &last_sync_human(
-                &newest,
-                unrendered,
-                journal::read_status().is_some_and(|status| {
-                    status.outcome == "held" && status.day == day_string
-                }),
-            ),
+            &last_sync_human(&newest, unrendered, held),
             &journal_warnings,
             &diag_warnings,
             &past_open,
@@ -460,8 +460,9 @@ fn buffer_label(event: &ListedEvent) -> Option<String> {
     event.event.buffer.label()
 }
 
-/// Header freshness: the host-local status file, else the newest
-/// journal record's host and time, else never synced.
+/// Header freshness: a replaced Events section, else the host-local
+/// status file, else the newest journal record's host and time, else
+/// never synced.
 fn last_sync_human(
     newest: &Option<(chrono::DateTime<chrono::FixedOffset>, String)>,
     unrendered: bool,
@@ -470,10 +471,10 @@ fn last_sync_human(
     if unrendered {
         return WAITING_FOR_TEMPLATER.to_string();
     }
+    if held {
+        return "held · Events replaced".to_string();
+    }
     if let Some(status) = journal::read_status() {
-        if held && status.outcome == "held" {
-            return "held · Events replaced".to_string();
-        }
         if status.outcome == "waiting" {
             return match status.reason.as_deref() {
                 Some("note_unrendered") => WAITING_FOR_TEMPLATER,

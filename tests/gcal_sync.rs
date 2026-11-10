@@ -255,6 +255,91 @@ fn replaced_events_section_holds_until_force_reset() {
 }
 
 #[test]
+fn emptied_section_that_keeps_its_stamp_tombstones() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-emptied-keeps-stamp");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+    let first = sync_output(&env, &fake, &[]);
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    let original = today_note(&env);
+    let events_start = original.find("## Events").unwrap();
+    let pomodoros_start = original.find("## Pomodoros").unwrap();
+    let stamp = original[events_start..pomodoros_start]
+        .lines()
+        .find(|line| line.contains('↻'))
+        .expect("stamp");
+    let emptied = format!(
+        "{}## Events\n\n{stamp}\n{}",
+        &original[..events_start],
+        &original[pomodoros_start..]
+    );
+    fs::write(env.vault().join("2026/20261030.md"), &emptied)
+        .expect("empty Events rows");
+    let journal_before = journal_lines(&env).len();
+
+    let output = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let value: Value = serde_json::from_slice(&output.stdout).expect("JSON");
+    assert_eq!(value["status"], "written");
+    assert!(value["held"].is_null(), "{value}");
+    assert!(
+        journal_lines(&env)
+            .iter()
+            .any(|line| line["kind"] == "gcal.gone"),
+        "tombstone the emptied rows"
+    );
+    assert!(journal_lines(&env).len() > journal_before);
+    assert_eq!(status(&env)["outcome"], "written");
+}
+
+#[test]
+fn context_only_stamp_deletion_restores_stamp_without_hold() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-context-stamp");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(
+        r#"{
+          "events": [
+            {
+              "id": "holiday",
+              "status": "confirmed",
+              "summary": "School holiday",
+              "eventType": "default",
+              "start": {"date": "2026-10-30"},
+              "end": {"date": "2026-10-31"},
+              "attendees": []
+            },
+            {
+              "id": "class",
+              "status": "confirmed",
+              "summary": "Toddler class",
+              "eventType": "default",
+              "start": {"dateTime": "2026-10-30T09:15:00-04:00"},
+              "end": {"dateTime": "2026-10-30T10:00:00-04:00"},
+              "attendees": [{"self": true, "responseStatus": "tentative"}]
+            }
+          ],
+          "nextPageToken": null
+        }"#,
+    );
+    let first = sync_output(&env, &fake, &[]);
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    let original = today_note(&env);
+    let stripped = original.replace(&format!("{}\n", today_stamp("12:00")), "");
+    assert_ne!(stripped, original);
+    fs::write(env.vault().join("2026/20261030.md"), stripped)
+        .expect("delete stamp");
+
+    let restored = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(restored.status.code(), Some(0), "{}", stderr(&restored));
+    let value: Value = serde_json::from_slice(&restored.stdout).expect("JSON");
+    assert_ne!(value["status"], "held", "{value}");
+    assert!(value["held"].is_null(), "{value}");
+    assert_eq!(today_note(&env), original);
+}
+
+#[test]
 fn sync_restores_missing_blank_under_events_heading() {
     let env = GcalEnv::new("bob-cli-gcal-sync-heading-gap");
     prepare(&env);

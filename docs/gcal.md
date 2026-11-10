@@ -27,6 +27,7 @@ touch Google: set `BOB_GCAL_GOG` to a fake executable.
 - [Buffers](#buffers)
 - [Description bullets](#description-bullets)
 - [Reconciling Google-side changes](#reconciling-google-side-changes)
+- [Replaced Events sections](#replaced-events-sections)
 - [Where it runs](#where-it-runs)
 - [Event inclusion](#event-inclusion)
 - [Root selection](#root-selection)
@@ -278,7 +279,8 @@ asks for confirmation on a TTY and exits 2 on a pipe.
 (the token refresh), configured calendars, default-root validity and its type
 suggestion, today's daily note, journal git rules, malformed journal lines,
 the writer host, and the last sync (including its error, when the last run
-failed).
+failed). The `last_sync` check warns when the last sync held (fix:
+`bob gcal sync -F`) and shows the waiting reason when the last sync waited.
 
 A failing check prints `✗ <check>  <problem>` plus `  fix: <one command or
 step>`. Exit 1 when any check fails; exit 0 when every check is `ok` or
@@ -339,7 +341,8 @@ snapshot.
 
 The table shows local time, title, RSVP, selected root, and the VAULT column:
 what sync did, or would do, with the event — `task · MEET`, `task`,
-`context`, `waiting for note`, `waiting for Templater`, or
+`context`, `waiting for note`, `waiting for Templater`,
+`lost · run sync -F` (the Events section was replaced), or
 `removed by you 05:28` (the time sync noticed your deletion), each with ` · off-clock` appended for Google off-clock tasks
 (`task · MEET · off-clock`). While the day's note still has Templater tags,
 every VAULT cell and the header read `waiting for Templater`, the state sync
@@ -357,7 +360,9 @@ VAULT words come from the same vocabulary sync uses to name every event it
 leaves out; see [Skipped events](#skipped-events). Counts include omitted events
 even when their rows are hidden. The header carries the last sync: `synced
 3 min ago on kellys-macbook-pro`, falling back to the newest journal record,
-else `never synced`.
+else `never synced`. When the note's Events section was replaced, the header
+reads `held · Events replaced`, computed from the note and journal the same
+way sync does.
 
 JSON has `schema_version`, `day`, `calendars`, `events`, `counts`,
 `last_sync`, `past_open`, `warnings`, and `deprecations` fields. Each event
@@ -403,16 +408,6 @@ Templater replaces while sync waits for the lock is refused, not written:
 
 The unrendered check comes before the Pomodoros check because the raw
 template already has a Pomodoros section.
-
-### Replaced Events sections
-
-When at least one journaled Event Task row and Bob's recognized `↻` stamp
-are both gone, sync treats the whole Events section as replaced. It returns
-`held`, writes nothing to the note or journal, and reports each lost event
-with `events_replaced`; a single missing row while the stamp remains is still
-treated as a deletion. `bob gcal sync -F` explicitly resets that day's sync
-journal and restores the current Google snapshot. `bob gcal list` shows
-`held · Events replaced`, and `bob gcal doctor` warns when the last sync held.
 
 ```bash
 bob gcal sync
@@ -529,7 +524,7 @@ appends only after the note write succeeds, and host-local status
 exact unified diff of the plan and writes nothing; the diff shows the exact
 description bullets, and is the only place description text appears in
 command output. `-q` suppresses success chatter on
-success, no-op, or waiting, while clock-deprecation warnings stay visible
+success, no-op, waiting, or held, while clock-deprecation warnings stay visible
 on stderr. Human dry-run diffs also print those warnings on stderr; JSON
 mode carries `warnings` and `deprecations` with no duplicate stderr
 diagnostics.
@@ -591,7 +586,7 @@ bob gcal sync · 2026/20261109.md
 ✓ Events unchanged · Pomodoros unchanged · 3 in sync · 1 skipped
 ```
 
-Actionable skips (`removed_by_you`, `awaiting_reply`) show a yellow `⊘`; by-design
+Actionable skips (`removed_by_you`, `awaiting_reply`, `events_replaced`) show a yellow `⊘`; by-design
 omissions show a dim one. The detail is dim and a command in a hint is cyan.
 `-q` still prints nothing on success. An omission (the Google side) wins over
 a tombstone.
@@ -606,6 +601,7 @@ a tombstone.
 | `invalid_time`      | Google sent an invalid time range                   | —                                              |
 | `removed_by_you`    | removed by you at `05:28`                           | restore with `bob gcal sync -F`                |
 | `removed_in_google` | the lifecycle reason (`Declined in Google Calendar`)| —                                              |
+| `events_replaced`   | lost when the Events section was replaced           | restore with `bob gcal sync -F`                |
 
 `in sync` counts included events already in the note that this run did not
 change. A row tombstoned in this very run reports as a `-` change row
@@ -977,6 +973,20 @@ render of its event:
   `2 past meetings still open: Thu Dentist, Tue Weekly 1:1 · close or
   cancel them in their notes`.
 
+## Replaced Events sections
+
+When every row Bob journaled for the day is gone from the note and the `↻`
+stamp (or the whole Events section) is gone, sync treats the section as
+replaced. It returns `held`, writes nothing to the note or journal, and
+reports each lost event with `events_replaced`. An emptied section that keeps
+its stamp, or a single deleted row, still tombstones as usual. Rows Bob
+cannot locate (URL-less context rows) count as present, so deleting only the
+stamp on a context-only day restores the stamp instead of holding.
+`bob gcal sync -F` explicitly resets that day's sync journal and restores the
+current Google snapshot. `bob gcal list` shows `held · Events replaced`,
+computed from the note and journal the same way sync does, and
+`bob gcal doctor` warns when the last sync held.
+
 ## Where it runs
 
 The Mac is the single writer: Templater creates daily notes there, the
@@ -1082,8 +1092,10 @@ attendee list, and carries `clock`, `clock_source`, `clock_note`,
 (`{reason, detail, hint}` or `null`; see [Skipped events](#skipped-events)).
 The raw `reason` values and existing `vault` strings are unchanged.
 
-`sync -f json`: `ok`, `day`, `path`, `status`, `force`, `rows`, `in_sync`, `skipped`,
-`pomodoro`, `waiting`, `warnings`, `deprecations`, and `stamp`. `skipped`
+`sync -f json`: `ok`, `day`, `path`, `status` (`written`, `unchanged`,
+`waiting`, `held`, `dry_run`), `force`, `rows`, `in_sync`, `skipped`,
+`pomodoro`, `waiting`, `held` (`{rows, written_at, detail, hint}` or `null`),
+`warnings`, `deprecations`, and `stamp`. `skipped`
 lists `{time, title, calendar_id, event_id, reason, detail, hint}` for every
 event the run leaves out; `rows` entries gain `detail`. A forced run sets
 `force: true`; restored rows use action `restored`, and forced span updates
@@ -1091,6 +1103,7 @@ include their reset detail. `waiting` is `null` unless `status` is `waiting`,
 then `{reason, detail, hint, line}` with
 `reason` one of `note_missing`, `note_unrendered`, or `pomodoros_missing`
 and `line` the 1-based line of the pending Templater tag (else `null`).
+`held` is populated when a replaced Events section is held.
 `stamp` is `{account, synced_at, refreshed}` or `null`. `pomodoro` carries
 `entry_line`, `created`, `links_added`, `links_refiled`, `links_sorted`, and
 `entries` as in [Sync](#sync). Row actions add `updated`, `cancelled`,

@@ -21,7 +21,7 @@ use super::{
     lifecycle::{AbsentVerdict, LifecycleItem},
     model::{EventDateTime, GcalEvent},
     plan::{self, LinkPhase, MeetPomodoroEntry, PlannedOccurrence},
-    render,
+    render, replaced,
     skip::{self, SkipReason, SkippedEvent},
     snapshot::{self},
     stamp::{self, Stamp},
@@ -243,8 +243,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
     // never make an otherwise unchanged plan changed.
     warnings.extend(diag_warnings);
     if !args.force
-        && let Some(held) =
-            replaced_events_hold(&contents, &daily_rel, day, &journal_state)
+        && let Some(held) = replaced_events_hold(&contents, day, &journal_state)
     {
         let mut skipped = Vec::new();
         for ((key, row_day), state) in &journal_state {
@@ -1114,43 +1113,12 @@ fn day_skips(
 /// survives in the note, and Bob's recognized Events stamp disappeared.
 fn replaced_events_hold(
     contents: &str,
-    daily_rel: &std::path::Path,
     day: NaiveDate,
     journal: &BTreeMap<(String, String), OccurrenceState>,
 ) -> Option<HeldSummary> {
-    let day_string = day.to_string();
-    let rows: Vec<_> = journal
-        .iter()
-        .filter(|((_, row_day), state)| {
-            row_day == &day_string && state.row.is_some() && !state.gone
-        })
-        .filter_map(|(_, state)| state.row.as_ref())
-        .collect();
-    if rows.is_empty()
-        || rows.iter().any(|row| {
-            crate::native::event_task::event_task_by_id(
-                daily_rel,
-                contents,
-                &row.block_id,
-            )
-            .is_some()
-        })
-    {
-        return None;
-    }
-    let lines: Vec<&str> = contents.lines().collect();
-    let has_stamp = crate::native::event_task::events_section_range(&lines)
-        .is_some_and(|range| !stamp::recognize(&lines, range).is_empty());
-    if has_stamp {
-        return None;
-    }
-    let written_at = rows
-        .iter()
-        .map(|row| row.ts)
-        .max()?
-        .format("%H:%M")
-        .to_string();
-    let count = rows.len();
+    let detected = replaced::detect(contents, &day.to_string(), journal)?;
+    let written_at = detected.written_at.format("%H:%M").to_string();
+    let count = detected.rows;
     let restore = if day == bob_env::current_datetime().date() {
         "bob gcal sync -F".to_string()
     } else {
@@ -1163,13 +1131,13 @@ fn replaced_events_hold(
     };
     Some(HeldSummary {
         rows: count,
-        written_at: written_at.clone(),
         detail: format!(
             "{event_day} Events section was replaced: the {count} rows Bob wrote at {written_at} and its ↻ stamp are gone"
         ),
         hint: format!(
             "another writer (Templater, a sync conflict) likely replaced the note; nothing was tombstoned · {restore} rewrites the day's Events (then delete any rows you don't want)"
         ),
+        written_at,
     })
 }
 
