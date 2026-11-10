@@ -1,5 +1,6 @@
 //! Draft rewrite tests.
 
+use super::super::alias_tip::AliasId;
 use super::super::editor_model::{EditorMode, Severity, SpanKind};
 use super::super::editor_parse::*;
 use super::super::rewrite::*;
@@ -329,6 +330,119 @@ fn rewrite_draft_dot_toggles_block_id_separators() {
     assert_eq!(first.text, "Do work @file^id");
     assert_eq!(second.text, "Do work @file:id");
     assert_eq!(third.text, "Do work @file^id");
+}
+
+#[test]
+fn rewrite_draft_comma_switches_block_id_separators_to_plus() {
+    for (raw, expected, marker, from, start) in [
+        (
+            "Do work @file:id,",
+            "Do work @file+id",
+            "@file+id",
+            "@file:id",
+            "Do work ".len(),
+        ),
+        (
+            "Do work @file^id,",
+            "Do work @file+id",
+            "@file+id",
+            "@file^id",
+            "Do work ".len(),
+        ),
+        (
+            "Create sase-gallery! @sase:sase-gallery,",
+            "Create sase-gallery! @sase+sase-gallery",
+            "@sase+sase-gallery",
+            "@sase:sase-gallery",
+            "Create sase-gallery! ".len(),
+        ),
+        (
+            "@cash:goog-exit,",
+            "@cash+goog-exit",
+            "@cash+goog-exit",
+            "@cash:goog-exit",
+            0,
+        ),
+        (
+            "@cash^goog-exit,",
+            "@cash+goog-exit",
+            "@cash+goog-exit",
+            "@cash^goog-exit",
+            0,
+        ),
+        (
+            "- [ ] Task @work:a,",
+            "- [ ] Task @work+a",
+            "@work+a",
+            "@work:a",
+            "- [ ] Task ".len(),
+        ),
+        (
+            "Parent\n- detail @work:a,",
+            "Parent\n- detail @work+a",
+            "@work+a",
+            "@work:a",
+            "Parent\n- detail ".len(),
+        ),
+        (
+            "First @file:id\n\nSecond @file:id,",
+            "First @file:id\n\nSecond @file+id",
+            "@file+id",
+            "@file:id",
+            "First @file:id\n\nSecond ".len(),
+        ),
+        (
+            "café 🚀 @Cash:Goog-Exit,",
+            "café 🚀 @Cash+Goog-Exit",
+            "@Cash+Goog-Exit",
+            "@Cash:Goog-Exit",
+            "café 🚀 ".len(),
+        ),
+    ] {
+        assert_switch(raw, expected, from, marker, start);
+    }
+
+    let crlf = "Do work @file:id,\r\nNext";
+    let rewrite = rewrite_draft(crlf, Some("Do work @file:id,".len()));
+    assert_eq!(rewrite.rule, Some(RewriteRule::SwitchBlockIdSeparator));
+    assert_eq!(rewrite.text, "Do work @file+id\r\nNext");
+    assert_eq!(rewrite.cursor, Some("Do work @file+id".len()));
+    assert!(rewrite.alias.is_none());
+}
+
+#[test]
+fn rewrite_draft_comma_matches_plus_in_transfer_merge_and_run_slots() {
+    for (prefix, suffix, expected) in [
+        ("@inbox:bench", " > @db", "@inbox+bench > @db"),
+        ("@a+x > @c:tid", "", "@a+x > @c+tid"),
+        ("Create task < @cash:line", "", "Create task < @cash+line"),
+        ("@work+a @dev:b", "", "@work+a @dev+b"),
+        ("note @work:a", " @dev+b", "note @work+a @dev+b"),
+    ] {
+        let before_plus = format!("{prefix}+{suffix}");
+        let before_comma = format!("{prefix},{suffix}");
+        let cursor = prefix.len() + 1;
+        let plus = rewrite_draft(&before_plus, Some(cursor));
+        let comma = rewrite_draft(&before_comma, Some(cursor));
+        assert_eq!(comma.rule, plus.rule, "{before_comma}");
+        assert_eq!(comma.text, plus.text, "{before_comma}");
+        assert_eq!(comma.cursor, plus.cursor, "{before_comma}");
+        assert_eq!(comma.summary, plus.summary, "{before_comma}");
+        assert_eq!(comma.edits, plus.edits, "{before_comma}");
+        assert_eq!(comma.text, expected, "{before_comma}");
+    }
+
+    let first =
+        rewrite_draft("@cash:goog-exit,", Some("@cash:goog-exit,".len()));
+    assert_eq!(first.text, "@cash+goog-exit");
+    let next = "@cash+goog-exit,";
+    let second = rewrite_draft(next, Some(next.len()));
+    assert_eq!(second.rule, Some(RewriteRule::ExpandSigilAlias));
+    assert_eq!(second.text, "@cash+goog-exit +");
+    assert_eq!(
+        second.alias.as_ref().map(|alias| alias.id),
+        Some(AliasId::NextParent)
+    );
 }
 
 #[test]
@@ -1251,6 +1365,47 @@ fn rewrite_draft_expands_comma_to_parent_task_picker() {
 }
 
 #[test]
+fn rewrite_draft_comma_does_not_switch_in_ineligible_block_id_positions() {
+    for raw in [
+        "@file:id@,",
+        "@file^id@,",
+        "@file:id#name,",
+        "@file:id=3,",
+        "@@file:id,",
+        "@!file:id,",
+        "^file:id,",
+        "&note:id,",
+        "@a+x > @c+tid,",
+        "@dev\n- Task :task-id,",
+        "@cash^p@\n- Task ^task-id,",
+    ] {
+        let rewrite = rewrite_draft(raw, Some(raw.len()));
+        assert_ne!(
+            rewrite.rule,
+            Some(RewriteRule::SwitchBlockIdSeparator),
+            "{raw:?}"
+        );
+    }
+
+    let raw = "Do work @file:id,";
+    let no_cursor = rewrite_draft(raw, None);
+    assert_eq!(no_cursor.rule, None);
+    assert_eq!(no_cursor.text, raw);
+
+    let template = "Task {0} %t\n\nDo work @file:id,";
+    let template_rewrite = rewrite_draft(template, Some(template.len()));
+    assert_eq!(template_rewrite.rule, None);
+    assert_eq!(template_rewrite.text, template);
+
+    let spaced = "Do work @file:id ,";
+    let spaced_rewrite = rewrite_draft(spaced, Some(spaced.len()));
+    assert_ne!(
+        spaced_rewrite.rule,
+        Some(RewriteRule::SwitchBlockIdSeparator)
+    );
+}
+
+#[test]
 fn rewrite_draft_keeps_comma_literal_outside_parent_task_picker_positions() {
     for raw in [
         "Buy milk,",
@@ -1261,8 +1416,6 @@ fn rewrite_draft_keeps_comma_literal_outside_parent_task_picker_positions() {
         "x=3=1,",
         "=bugs,",
         "=bugs,fix",
-        "@cash:goog-exit,",
-        "@cash^goog-exit,",
         "@cash+goog-exit#req,",
         "@a+x > @c+tid,",
         "@a+x, > @c",

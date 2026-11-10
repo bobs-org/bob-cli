@@ -78,9 +78,10 @@ impl RewriteRule {
 ///
 /// With an explicit `cursor`, a complete plain `@route:id` / `@route^id` /
 /// `@route+id` marker that just grew a supported separator (`^`, `:`, `+`,
-/// or `.`) is rewritten to the resolved separator and the appended trigger
-/// is dropped. A glued `.` switches between `:` and `^`; `+` after
-/// `@route^id` switches to `@route+id`, like every other separator. Task
+/// `.`, or `,`) is rewritten to the resolved separator and the appended
+/// trigger is dropped. A glued `.` switches between `:` and `^`; a glued `,`
+/// acts as `+`. Typing `+` after `@route^id` switches to `@route+id`, like
+/// every other separator. Task
 /// bullet IDs also accept a glued `.` to switch between `:id` and `^id`.
 /// That rule never searches the draft: no cursor means absorption-only,
 /// matching the historical `@@` contract. Sigil aliases at the cursor also
@@ -344,6 +345,8 @@ fn collapse_global_destination(
 /// spaced `;` that did not become `:` aliases `*` wherever a bare `*` would
 /// open the Blocks picker. Both share the spaced `.` -> `@` position guard,
 /// so a line-initial `.` or `;` stays literal.
+/// A comma glued to a complete `@route:id` / `@route^id` is claimed earlier
+/// by `switch_block_id_separator`, before this alias lane runs.
 fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
     let start = cursor.checked_sub(1)?;
     let alias = raw_text.get(start..cursor)?;
@@ -1033,7 +1036,9 @@ fn finish_relation_double_flip_alias(
 }
 
 /// Typing `,` where `+` would open a Parent Task picker aliases it to `+`.
-/// A comma glued to the end of a complete target-run member instead becomes
+/// A comma glued to a complete `@route:id` / `@route^id` marker is claimed
+/// earlier by `switch_block_id_separator`. A comma glued to the end of a
+/// complete target-run member instead becomes
 /// ` +`, advancing to the next target without changing the capture grammar.
 fn expand_parent_task_comma_alias(
     raw_text: &str,
@@ -1633,10 +1638,12 @@ fn candidate_selects_task_bullet_id(
 }
 
 /// Typing `^` immediately after a complete plain `@route:id` or `@route+id`,
-/// `:` after `@route^id` or `@route+id`, `+` after `@route:id`, or `.` after
-/// `@route:id` / `@route^id` consumes that trigger and switches the
-/// separator. A glued `.` resolves to the other of `:` and `^`; after
-/// `@route+id` it stays literal. Typing `:` right after a sealed
+/// `:` after `@route^id` or `@route+id`, `+` after `@route:id`, `.` after
+/// `@route:id` / `@route^id`, or `,` after either marker consumes that trigger
+/// and switches the separator. A glued `.` resolves to the other of `:` and
+/// `^`; after `@route+id` it stays literal. A glued `,` acts like `+`; after
+/// `@route+id` it falls through to the next-parent continuation. Typing `:`
+/// right after a sealed
 /// `@route^id@` gives `@route:id@`, and `^` after `@route:id@` gives
 /// `@route^id@`; glued `.` follows the same sealed transition. The token must
 /// end at `cursor`; the stripped remainder must be the line's selected
@@ -1662,6 +1669,7 @@ fn switch_block_id_separator(
         b':' => ':',
         b'^' => '^',
         b'+' => '+',
+        b',' => '+',
         b'.' => match separator {
             ':' => '^',
             '^' => ':',

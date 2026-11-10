@@ -105,7 +105,10 @@ and switches the separator. Typing ':' right after a sealed '@route^id@' \
 gives '@route:id@', and '^' after '@route:id@' gives '@route^id@'. A glued \
 '.' after '@route:id' / '@route^id' switches between ':' and '^' \
 ('@route:id.' becomes '@route^id', and '@route^id.' becomes '@route:id'); \
-after '@route+id' it stays literal. Sealed '@route:id@.' and \
+after '@route+id' it stays literal. A glued ',' after '@route:id' or \
+'@route^id' switches to '@route+id' exactly like '+', including transfer \
+and '<' source slots; after '@route+id' it still inserts ' +' for the next \
+parent pick, and after a seal it stays literal. Sealed '@route:id@.' and \
 '@route^id@.' also switch between the two sealed forms. A glued '.' also \
 switches complete task-bullet IDs between ':id' and '^id'. For example, \
 '@file:id+' becomes \

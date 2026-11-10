@@ -9221,6 +9221,11 @@ or to `@route^block-id` with `^`. A glued `.` toggles between `:` and `^`:
 slot, `+` after `@route:id` or `@route^id` switches to
 `@route+id` exactly as on a `>` line; see
 [Merging tasks into a new task with `<`](#merging-tasks-into-a-new-task-with).
+A glued `,` after `@route:id` or `@route^id` switches to `@route+id` just like
+`+`, including `>` transfer and `<` source slots. For example,
+`Create sase-gallery! @sase:sase-gallery,` becomes
+`Create sase-gallery! @sase+sase-gallery`. After `@route+id`, `,` still
+inserts ` +` for the next parent pick, and after a seal it stays literal.
 A sealed
 project-note marker toggles
 between its two forms instead: `:` typed right after `@route^block-id@` gives
@@ -9249,7 +9254,7 @@ bob capture-rewrite -c 17 -f json -- 'Do work @file^id+'
 ```
 
 In Bob Mac Capture, Undo immediately after a successful `@route:id+`,
-`@route^id+`, or glued-dot rewrite restores the literal post-key draft. Solo markers,
+`@route^id+`, or glued-dot / glued-comma rewrite restores the literal post-key draft. Solo markers,
 leading markers, a trailing marker before later body text, a trailing marker
 on an authored child line, and one item in a blank-line batch are eligible
 wherever the shared grammar already recognizes that token as the item's
@@ -9302,8 +9307,9 @@ and `Buy milk @cash+goog-exit/` becomes `Buy milk @cash+goog-exit#`, while
 same text).
 Typing `,` wherever the Parent Task picker would open aliases `+`, including
 as a whole item, after a space, or after `@route`; after a complete
-`@route+id` target it inserts ` +` and opens the next parent picker. For
-example, `@cash,` becomes `@cash+`, `Buy milk ,` becomes `Buy milk +`, and
+`@route+id` target it inserts ` +` and opens the next parent picker. A `,`
+glued to a complete `@route:id` / `@route^id` switches the separator instead.
+For example, `@cash,` becomes `@cash+`, `Buy milk ,` becomes `Buy milk +`, and
 `@cash+goog-exit,` becomes `@cash+goog-exit +`. Bob's completion grammar
 decides eligibility, so commas in prose and other picker contexts stay
 literal. The caret stays just past the inserted sigil or plus.
