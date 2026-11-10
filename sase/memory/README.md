@@ -102,7 +102,7 @@ strand inherits no `type:` of its own and never inlines into `AGENTS.md`.
   Mac Capture, and the Bob vault — the choice, its rejected alternatives, and what would
   reopen it.
 - Lines: 324
-- Approx. tokens: 5643
+- Approx. tokens: 5630
 
 ### `sase/memory/glossary.md`
 
@@ -171,7 +171,7 @@ strand inherits no `type:` of its own and never inlines into `AGENTS.md`.
 - Reference notes: 5
 - Web descriptor notes: 3
 - Total lines: 838
-- Total approx. tokens: 12063
+- Total approx. tokens: 12050
 
 ## Commands
 

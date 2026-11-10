@@ -215,6 +215,17 @@ impl SkipReason {
         Self::new("removed_in_google", reason.to_string(), None)
     }
 
+    pub(crate) fn events_replaced(day: NaiveDate, is_today: bool) -> Self {
+        Self::new(
+            "events_replaced",
+            "lost when the Events section was replaced".to_string(),
+            Some(SkipHint::with_command(
+                "restore with",
+                restore_command(day, is_today),
+            )),
+        )
+    }
+
     /// The `list` VAULT cell: `removed by you 05:28`, else the detail.
     pub(crate) fn vault_label(&self) -> String {
         match (self.code, &self.at) {

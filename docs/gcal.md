@@ -404,6 +404,16 @@ Templater replaces while sync waits for the lock is refused, not written:
 The unrendered check comes before the Pomodoros check because the raw
 template already has a Pomodoros section.
 
+### Replaced Events sections
+
+When at least one journaled Event Task row and Bob's recognized `↻` stamp
+are both gone, sync treats the whole Events section as replaced. It returns
+`held`, writes nothing to the note or journal, and reports each lost event
+with `events_replaced`; a single missing row while the stamp remains is still
+treated as a deletion. `bob gcal sync -F` explicitly resets that day's sync
+journal and restores the current Google snapshot. `bob gcal list` shows
+`held · Events replaced`, and `bob gcal doctor` warns when the last sync held.
+
 ```bash
 bob gcal sync
 bob gcal sync -D tomorrow
@@ -525,7 +535,9 @@ mode carries `warnings` and `deprecations` with no duplicate stderr
 diagnostics.
 
 `sync -f json` reports `schema_version`, `ok`, `day`, `path`,
-`status` (`written`, `unchanged`, `waiting`, or `dry_run`), `rows`
+`status` (`written`, `unchanged`, `waiting`, `held`, or `dry_run`), `held`
+(`rows`, `written_at`, `detail`, `hint`, or `null`; populated when a replaced
+Events section is held), `rows`
 (`action`, `kind`, `time`, `title`, `root`, `source`, `off_clock`, deprecated
 `untracked`, `buffer` as `{"before_minutes", "after_minutes"}` or
 `null`, `description_lines`, the bullet lines this run wrote for the
@@ -1030,7 +1042,8 @@ sync.
 
 - `0` — success, including "already connected", a doctor run with only
   warnings, an unchanged sync, and a sync waiting for the daily note (missing,
-  not yet rendered by Templater, or without `## Pomodoros`).
+  not yet rendered by Templater, without `## Pomodoros`, or a held replaced
+  Events section).
 - `1` — runtime failure: gog, network, timeout, token, a doctor check
   that failed, or a daily-note write that lost a concurrent-edit race.
 - `2` — usage or setup error: clap usage errors, bad `gcal:` config, missing

@@ -131,6 +131,9 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
                 &day_string,
                 note_view,
                 is_today,
+                journal::read_status().is_some_and(|status| {
+                    status.outcome == "held" && status.day == day_string
+                }),
             )
         })
         .collect();
@@ -161,7 +164,13 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
             args.include_omitted,
             &cells,
             (day, is_today),
-            &last_sync_human(&newest, unrendered),
+            &last_sync_human(
+                &newest,
+                unrendered,
+                journal::read_status().is_some_and(|status| {
+                    status.outcome == "held" && status.day == day_string
+                }),
+            ),
             &journal_warnings,
             &diag_warnings,
             &past_open,
@@ -252,6 +261,7 @@ fn vault_cell(
     day: &str,
     note: NoteView<'_>,
     is_today: bool,
+    held: bool,
 ) -> VaultCell {
     if let Inclusion::Omitted(reason) = &event.inclusion {
         return VaultCell {
@@ -273,6 +283,13 @@ fn vault_cell(
         &event.event.key.event_id,
     );
     let state = journal.get(&(key, day.to_string()));
+    if held && state.is_some_and(|state| state.row.is_some() && !state.gone) {
+        let skip = SkipReason::events_replaced(window.day, is_today);
+        return VaultCell {
+            vault: "lost · run sync -F".to_string(),
+            skip: Some(skip),
+        };
+    }
     let task = event.inclusion == Inclusion::Task;
     // Whether the journaled row is in the note. A context row without a
     // URL is matched by its rendered text, which list does not render, so
@@ -448,11 +465,15 @@ fn buffer_label(event: &ListedEvent) -> Option<String> {
 fn last_sync_human(
     newest: &Option<(chrono::DateTime<chrono::FixedOffset>, String)>,
     unrendered: bool,
+    held: bool,
 ) -> String {
     if unrendered {
         return WAITING_FOR_TEMPLATER.to_string();
     }
     if let Some(status) = journal::read_status() {
+        if held && status.outcome == "held" {
+            return "held · Events replaced".to_string();
+        }
         if status.outcome == "waiting" {
             return match status.reason.as_deref() {
                 Some("note_unrendered") => WAITING_FOR_TEMPLATER,

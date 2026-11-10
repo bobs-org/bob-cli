@@ -444,6 +444,19 @@ fn last_sync_check() -> Check {
             ),
         };
     }
+    if status.outcome == "held" {
+        return Check {
+            id: "last_sync",
+            status: CheckStatus::Warn,
+            summary: format!(
+                "last sync held {} because its Events section was replaced",
+                status.day
+            ),
+            fix: Some(
+                "run `bob gcal sync -F` to restore today's Events".to_string(),
+            ),
+        };
+    }
     if status.outcome == "error" {
         return Check {
             id: "last_sync",

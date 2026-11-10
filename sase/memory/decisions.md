@@ -135,8 +135,8 @@ edited in place.
       explicit picks win, except not-started events stay out of wildcard completion and
       parking.
 27. **Gcal Force Resets The Day** (`gcal-force-resets-the-day`)
-    - `bob gcal sync -F` explicitly resets one day's sync journal and restores missing
-      rows from Google while keeping task and Pomodoro history.
+    - A replaced Events section holds; only an explicit forced sync restores that day's
+      rows.
 28. **Gcal Root Follows Google Until Edited** (`gcal-root-follows-google-until-edited`)
     - An Event Task's [root::] follows Google's chosen root until Bryan edits it; his
       edits always win and are reported once on conflict.

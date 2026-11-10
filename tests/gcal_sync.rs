@@ -192,6 +192,69 @@ fn first_sync_creates_events_meet_and_links() {
 }
 
 #[test]
+fn replaced_events_section_holds_until_force_reset() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-replaced-events");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+    let first = sync_output(&env, &fake, &[]);
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    let original = today_note(&env);
+    let events_start = original.find("## Events").unwrap();
+    let pomodoros_start = original.find("## Pomodoros").unwrap();
+    let replaced = format!(
+        "{}## Notes\n\n{}",
+        &original[..events_start],
+        &original[pomodoros_start..]
+    );
+    fs::write(env.vault().join("2026/20261030.md"), &replaced)
+        .expect("replace Events section");
+    let journal_before = journal_lines(&env);
+
+    let held = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(held.status.code(), Some(0), "{}", stderr(&held));
+    let value: Value = serde_json::from_slice(&held.stdout).expect("held JSON");
+    assert_eq!(value["status"], "held");
+    assert_eq!(value["held"]["rows"], 10);
+    assert_eq!(value["skipped"][0]["reason"], "events_replaced");
+    assert_eq!(today_note(&env), replaced);
+    assert_eq!(journal_lines(&env), journal_before);
+    assert_eq!(status(&env)["outcome"], "held");
+
+    let mut list = env.command();
+    fake.install(&mut list);
+    let listed = list.args(["gcal", "list"]).output().expect("run list");
+    assert_eq!(listed.status.code(), Some(0), "{}", stderr(&listed));
+    assert!(
+        stdout(&listed).contains("held · Events replaced"),
+        "{}",
+        stdout(&listed)
+    );
+    assert!(
+        stdout(&listed).contains("lost · run sync -F"),
+        "{}",
+        stdout(&listed)
+    );
+    let mut doctor = env.command();
+    fake.install(&mut doctor);
+    let diagnosed = doctor
+        .args(["gcal", "doctor"])
+        .output()
+        .expect("run doctor");
+    assert_eq!(diagnosed.status.code(), Some(0), "{}", stderr(&diagnosed));
+    assert!(
+        stdout(&diagnosed).contains("last sync held"),
+        "{}",
+        stdout(&diagnosed)
+    );
+
+    let reset = sync_output(&env, &fake, &["-F"]);
+    assert_eq!(reset.status.code(), Some(0), "{}", stderr(&reset));
+    assert!(today_note(&env).contains("## Events\n\n*↻ synced"));
+    assert_eq!(status(&env)["outcome"], "written");
+}
+
+#[test]
 fn sync_restores_missing_blank_under_events_heading() {
     let env = GcalEnv::new("bob-cli-gcal-sync-heading-gap");
     prepare(&env);
@@ -331,13 +394,16 @@ fn force_reset_restores_clobbered_rows_with_old_ids_and_then_noops() {
 
     fs::write(env.vault().join("2026/20261030.md"), template)
         .expect("clobber today's Events section");
-    let removed = sync_output(&env, &fake, &[]);
-    assert_eq!(removed.status.code(), Some(0), "{}", stderr(&removed));
+    let held = sync_output(&env, &fake, &[]);
+    assert_eq!(held.status.code(), Some(0), "{}", stderr(&held));
     assert!(
-        journal_lines(&env).iter().any(|row| {
-            row["kind"] == "gcal.gone" && row["key"]["event_id"] == "interview"
-        }),
-        "normal sync records the deletion"
+        stdout(&held).contains("held · today's Events section was replaced")
+    );
+    assert!(
+        !journal_lines(&env)
+            .iter()
+            .any(|row| row["kind"] == "gcal.gone"),
+        "a replaced section is held without tombstones"
     );
 
     let reset = sync_output(&env, &fake, &["-F", "-f", "json"]);

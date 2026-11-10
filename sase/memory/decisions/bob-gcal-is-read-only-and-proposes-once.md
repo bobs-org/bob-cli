@@ -56,6 +56,6 @@ and § Who owns each part of a row, and `tests/gcal_lifecycle.rs`.
 
 Superseded in part: a qualifying Google time or buffer move can re-file Bob-owned MEET links; the rule that each link is written once is retired. See [[decisions:meet-filing-follows-google-until-edited]].
 
-Superseded in part: tombstoned rows can be restored by `bob gcal sync -F`,
-and a replaced Events section holds instead of tombstoning. See
-[[decisions:gcal-force-resets-the-day]].
+Superseded in part: tombstoned rows are no longer "never re-added";
+`bob gcal sync -F` re-adds them and a replaced Events section holds instead of
+tombstoning. See [[decisions:gcal-force-resets-the-day]].

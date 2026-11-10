@@ -82,6 +82,7 @@ fn record_last_error(args: &SyncArgs, error: &GcalError) {
             waiting: None,
             skipped: Vec::new(),
             in_sync: 0,
+            held: None,
         },
         Some(format!("{}: {}", error.kind(), error.message())),
     );
@@ -128,6 +129,14 @@ struct SyncReport {
     skipped: Vec<SkippedEvent>,
     /// Included events already in the note that needed no change.
     in_sync: usize,
+    held: Option<HeldSummary>,
+}
+
+struct HeldSummary {
+    rows: usize,
+    written_at: String,
+    detail: String,
+    hint: String,
 }
 
 /// Deprecation diagnostics for the complete fetched snapshot, before any
@@ -233,6 +242,62 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
     // Diagnostics stay ephemeral: they never create journal writes and
     // never make an otherwise unchanged plan changed.
     warnings.extend(diag_warnings);
+    if !args.force
+        && let Some(held) =
+            replaced_events_hold(&contents, &daily_rel, day, &journal_state)
+    {
+        let mut skipped = Vec::new();
+        for ((key, row_day), state) in &journal_state {
+            if row_day != &day.to_string() || state.gone {
+                continue;
+            }
+            if state.row.is_none() {
+                continue;
+            }
+            let Some(event) = snapshot.events.iter().find(|event| {
+                journal::occurrence_key(
+                    &event.event.key.calendar_id,
+                    &event.event.key.event_id,
+                ) == *key
+            }) else {
+                continue;
+            };
+            skipped.push(SkippedEvent {
+                time: row_time(&snapshot.window, &event.event).3,
+                title: event.event.title.clone(),
+                calendar_id: event.event.key.calendar_id.clone(),
+                event_id: event.event.key.event_id.clone(),
+                reason: SkipReason::events_replaced(day, is_today),
+            });
+        }
+        skipped.sort_by(|a, b| a.time.cmp(&b.time));
+        let report = SyncReport {
+            day,
+            path: display_path,
+            status: "held",
+            rows: Vec::new(),
+            entries: Vec::new(),
+            links_added: 0,
+            links_refiled: 0,
+            links_sorted: 0,
+            warnings,
+            deprecations,
+            quiet: args.quiet,
+            force: false,
+            json: args.format.is_json(),
+            diff: None,
+            stamp: None,
+            stamp_refreshed: false,
+            waiting: None,
+            skipped,
+            in_sync: 0,
+            held: Some(held),
+        };
+        if !args.dry_run {
+            record_status(&host, day, "held", &report, None);
+        }
+        return Ok(report);
+    }
     let now = bob_env::current_datetime();
     let mut occurrences = Vec::new();
     for (occurrence, warning) in build_occurrences(
@@ -308,6 +373,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
             waiting: None,
             skipped: skips.skipped,
             in_sync: skips.in_sync,
+            held: None,
         });
     }
 
@@ -334,6 +400,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
             waiting: None,
             skipped: skips.skipped,
             in_sync: skips.in_sync,
+            held: None,
         };
         record_status(&host, day, "unchanged", &report, None);
         return Ok(report);
@@ -464,6 +531,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
                         waiting: None,
                         skipped: skips.skipped,
                         in_sync: skips.in_sync,
+                        held: None,
                     };
                     record_status(&host, day, "unchanged", &report, None);
                     return Ok(report);
@@ -518,6 +586,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
         waiting: None,
         skipped: skips.skipped,
         in_sync: skips.in_sync,
+        held: None,
     };
     record_status(&host, day, "written", &report, None);
     Ok(report)
@@ -552,6 +621,7 @@ fn waiting(
         waiting: Some(reason),
         skipped: Vec::new(),
         in_sync: 0,
+        held: None,
     };
     if !args.dry_run {
         record_status(host, day, "waiting", &report, None);
@@ -1038,6 +1108,69 @@ fn day_skips(
         is_today,
         &|event| row_time(&snapshot.window, event).3,
     )
+}
+
+/// Detect a whole-section replacement: active rows were journaled, none
+/// survives in the note, and Bob's recognized Events stamp disappeared.
+fn replaced_events_hold(
+    contents: &str,
+    daily_rel: &std::path::Path,
+    day: NaiveDate,
+    journal: &BTreeMap<(String, String), OccurrenceState>,
+) -> Option<HeldSummary> {
+    let day_string = day.to_string();
+    let rows: Vec<_> = journal
+        .iter()
+        .filter(|((_, row_day), state)| {
+            row_day == &day_string && state.row.is_some() && !state.gone
+        })
+        .filter_map(|(_, state)| state.row.as_ref())
+        .collect();
+    if rows.is_empty()
+        || rows.iter().any(|row| {
+            crate::native::event_task::event_task_by_id(
+                daily_rel,
+                contents,
+                &row.block_id,
+            )
+            .is_some()
+        })
+    {
+        return None;
+    }
+    let lines: Vec<&str> = contents.lines().collect();
+    let has_stamp = crate::native::event_task::events_section_range(&lines)
+        .is_some_and(|range| !stamp::recognize(&lines, range).is_empty());
+    if has_stamp {
+        return None;
+    }
+    let written_at = rows
+        .iter()
+        .map(|row| row.ts)
+        .max()?
+        .format("%H:%M")
+        .to_string();
+    let count = rows.len();
+    let restore = if day == bob_env::current_datetime().date() {
+        "bob gcal sync -F".to_string()
+    } else {
+        format!("bob gcal sync -D {day} -F")
+    };
+    let event_day = if day == bob_env::current_datetime().date() {
+        "today's".to_string()
+    } else {
+        format!("{day}'s")
+    };
+    Some(HeldSummary {
+        rows: count,
+        written_at: written_at.clone(),
+        detail: format!(
+            "{event_day} Events section was replaced: the {count} rows Bob wrote at {written_at} and its ↻ stamp are gone"
+        ),
+        hint: format!(
+            "another writer (Templater, a sync conflict) likely replaced the note; nothing was tombstoned · {restore} rewrites the day's Events (then delete any rows you don't want)"
+        ),
+    })
 }
 
 fn report_rows(
@@ -1634,6 +1767,12 @@ fn print_json(report: &SyncReport) {
                 "hint": reason.hint(),
                 "line": reason.line(),
             })),
+            "held": report.held.as_ref().map(|held| json!({
+                "rows": held.rows,
+                "written_at": held.written_at,
+                "detail": held.detail,
+                "hint": held.hint,
+            })),
             "warnings": report.warnings,
             "deprecations": report.deprecations,
             "stamp": stamp,
@@ -1676,6 +1815,17 @@ fn print_human(report: &SyncReport) {
                 );
             }
             None => println!("waiting for {}", report.path),
+        }
+        print_warnings_stderr(report);
+        return;
+    }
+    if report.status == "held" {
+        let held = report.held.as_ref().expect("held report details");
+        println!("bob gcal sync · {}", report.path);
+        println!("held · {}", held.detail);
+        println!("  {}", styler.dim(&format!("hint: {}", held.hint)));
+        for skipped in &report.skipped {
+            println!("{}", skipped.human_line(&styler, &human_time));
         }
         print_warnings_stderr(report);
         return;

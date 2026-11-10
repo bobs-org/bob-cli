@@ -268,6 +268,14 @@ bob vault-sync status --json
 bob vault-sync
 ```
 
+A lost [Event Task](gcal.md#events) (a synced calendar row in a daily note's
+`## Events` section) is restored from Google instead of by hand. On the `gcal.writer`
+host, `bob gcal sync -F` (add `-D YYYY-MM-DD` for another day) rewrites that day's Events
+and MEET links as on a first sync, reusing the lost row's block ID so its links resolve
+again. The reset also returns your time, title, badge, and `[root::]` edits on that
+day's other synced rows to Google's values, so preview it with `-d` first. See
+[Reset a day](gcal.md#reset-a-day-f).
+
 ## Credentials
 
 athena and apollo each use a repository-scoped read-write deploy key at
