@@ -1762,3 +1762,140 @@ fn capture_rewrite_help_documents_typing_tips() {
     assert!(out.contains("sigil_alias_tip"), "{out}");
     assert!(out.contains("'Buy milk @'"), "{out}");
 }
+
+fn notebook_alias_vault(temp: &TempDir) -> std::path::PathBuf {
+    let vault = temp.path().join("vault");
+    std::fs::create_dir_all(&vault).expect("create vault");
+    write_file(
+        &vault.join("dev.md"),
+        "---\ntype: \"[[area]]\"\n---\n# Dev\n",
+    );
+    write_file(
+        &vault.join("dev_tools.md"),
+        concat!(
+            "---\nparent: \"[[dev]]\"\ntype: \"[[notebook]]\"\nsummary: Tools.\n---\n\n",
+            "# Developer tools\n\n",
+            "## Git\n\n",
+            "- Use worktrees for investigations [created::2026-11-08]\n",
+        ),
+    );
+    vault
+}
+
+fn rewrite_with_vault_json(
+    draft: &str,
+    cursor: Option<usize>,
+    vault: &std::path::Path,
+) -> serde_json::Value {
+    let mut command = bob_command();
+    command
+        .arg("capture-rewrite")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DIR", vault);
+    if let Some(cursor) = cursor {
+        command.arg("-c").arg(cursor.to_string());
+    }
+    let output = command
+        .arg("--")
+        .arg(draft)
+        .output()
+        .expect("run bob capture-rewrite");
+    assert_success(&output);
+    assert!(stderr(&output).is_empty(), "{}", format_output(&output));
+    serde_json::from_str(stdout(&output).trim()).expect("capture-rewrite JSON")
+}
+
+#[test]
+fn capture_rewrite_json_expands_slash_to_hash_in_a_notebook_list() {
+    let temp = TempDir::new("bob-cli-rewrite-notebook-alias");
+    let vault = notebook_alias_vault(&temp);
+    let draft = "@dev_tools\n- /";
+    let json = rewrite_with_vault_json(draft, Some(draft.len()), &vault);
+    assert_eq!(json["changed"], true, "{json}");
+    assert_eq!(json["text"], "@dev_tools\n- #", "{json}");
+    assert_eq!(json["rule"], "expand_sigil_alias", "{json}");
+    assert_eq!(
+        json["alias"],
+        serde_json::json!({ "id": "hash_menu", "key": "/", "sigil": "#" }),
+        "{json}"
+    );
+}
+
+#[test]
+fn capture_rewrite_json_expands_slash_to_hash_in_a_notebook_create_item() {
+    let temp = TempDir::new("bob-cli-rewrite-notebook-create-alias");
+    let vault = notebook_alias_vault(&temp);
+    let draft = "Parent @dev^nvim@ %n\n- /";
+    let json = rewrite_with_vault_json(draft, Some(draft.len()), &vault);
+    assert_eq!(json["changed"], true, "{json}");
+    assert_eq!(json["text"], "Parent @dev^nvim@ %n\n- #", "{json}");
+    assert_eq!(json["rule"], "expand_sigil_alias", "{json}");
+    assert_eq!(
+        json["alias"],
+        serde_json::json!({ "id": "hash_menu", "key": "/", "sigil": "#" }),
+        "{json}"
+    );
+}
+
+#[test]
+fn capture_rewrite_json_keeps_slash_literal_outside_notebook_bodies() {
+    let temp = TempDir::new("bob-cli-rewrite-notebook-alias-negatives");
+    let vault = notebook_alias_vault(&temp);
+    for draft in [
+        // An area task list keeps the drawer grammar: no section menu opens.
+        "@dev\n- /",
+        // A bullet under a notebook note is opaque note detail.
+        "Text @dev_tools\n- /",
+        // A fan-out bullet under a notebook task link is note detail too.
+        "Text @dev_tools+abc\n- /",
+        // A bullet under an `@nb#Section` header is already filed.
+        "Note @dev_tools#git\n- /",
+    ] {
+        // Nested note detail keeps the lexical task-type menu exactly like
+        // a typed `#` (it fires convergently); the unit preflight test pins
+        // that no vault read happens there.
+        let json = rewrite_with_vault_json(draft, Some(draft.len()), &vault);
+        assert_eq!(json["changed"], false, "{draft:?}: {json}");
+        assert_eq!(json["text"], draft, "{draft:?}: {json}");
+    }
+}
+
+#[test]
+fn capture_rewrite_json_reads_no_files_for_an_unrouted_slash_bullet() {
+    let temp = TempDir::new("bob-cli-rewrite-unrouted-alias");
+    let missing = temp.path().join("missing-vault");
+    let draft = "- /";
+    let json = rewrite_with_vault_json(draft, Some(draft.len()), &missing);
+    assert_eq!(json["changed"], false, "{json}");
+    assert_eq!(json["text"], draft, "{json}");
+    assert!(
+        !missing.exists(),
+        "capture-rewrite must not create the vault directory"
+    );
+}
+
+#[test]
+fn capture_rewrite_json_teaches_slash_for_hash_in_a_notebook_body() {
+    let temp = TempDir::new("bob-cli-rewrite-notebook-alias-tip");
+    let vault = notebook_alias_vault(&temp);
+    let draft = "@dev_tools\n- #";
+    let json = rewrite_with_vault_json(draft, Some(draft.len()), &vault);
+    assert_eq!(json["changed"], false, "{json}");
+    assert_eq!(json["sigil_alias_tip"]["id"], "hash_menu", "{json}");
+    assert_eq!(
+        json["sigil_alias_tip"]["keys"],
+        serde_json::json!(["/"]),
+        "{json}"
+    );
+
+    // Under a notebook note the forward alias stays literal, so no tip.
+    let draft = "Text @dev_tools\n- #";
+    let json = rewrite_with_vault_json(draft, Some(draft.len()), &vault);
+    assert_eq!(json["changed"], false, "{json}");
+    assert_eq!(
+        json.get("sigil_alias_tip"),
+        Some(&serde_json::Value::Null),
+        "{draft:?}: {json}"
+    );
+}

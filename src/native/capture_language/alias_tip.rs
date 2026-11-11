@@ -9,7 +9,7 @@
 //! completion eligibility stay owned by the forward rewrite. The check is
 //! lexical and does no vault I/O.
 
-use super::rewrite::{rewrite_draft, RewriteRule};
+use super::rewrite::{rewrite_draft_with, RewriteRule};
 
 /// Declares [`AliasId`] together with its wire spelling and, for tests, the
 /// full list of ids, so the three can never drift apart.
@@ -179,10 +179,14 @@ const CANDIDATES: &[(char, &[&str])] = &[
 /// `cursor` is not a candidate sigil, or when no candidate key reproduces
 /// `raw` through the forward rewrite. A key is kept only when the forward
 /// rewrite of the swapped draft is an `expand_sigil_alias` that yields
-/// exactly `raw` with the caret at `cursor` and a tipped alias id.
-pub(crate) fn sigil_alias_tip(
+/// exactly `raw` with the caret at `cursor` and a tipped alias id. Takes an
+/// optional notebook route policy, so a typed `- #` in a notebook body can
+/// teach `/` exactly where the forward alias fires. The caller performs any
+/// vault I/O; this function itself never touches the filesystem.
+pub(crate) fn sigil_alias_tip_with(
     raw: &str,
     cursor: usize,
+    notebook_policy: Option<&super::notebook::NotebookRoutePolicy>,
 ) -> Option<SigilAliasTip> {
     let start = cursor.checked_sub(1)?;
     let sigil_text = raw.get(start..cursor)?;
@@ -198,7 +202,8 @@ pub(crate) fn sigil_alias_tip(
     for key in keys {
         let mut candidate = raw.to_string();
         candidate.replace_range(start..cursor, key);
-        let rewrite = rewrite_draft(&candidate, Some(cursor));
+        let rewrite =
+            rewrite_draft_with(&candidate, Some(cursor), notebook_policy);
         if rewrite.rule != Some(RewriteRule::ExpandSigilAlias)
             || rewrite.text != raw
             || rewrite.cursor != Some(cursor)

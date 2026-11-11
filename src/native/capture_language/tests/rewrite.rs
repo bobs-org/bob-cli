@@ -2841,3 +2841,41 @@ fn rewrite_draft_close_outcome_alias_leaves_templates() {
     assert_eq!(rewrite.rule, None);
     assert_eq!(rewrite.text, raw);
 }
+
+#[test]
+fn slash_alias_notebook_preflight_only_fires_at_first_level_bullets() {
+    // A `/` or `#` at a first-level bullet start may need the notebook
+    // policy: the one bounded vault read happens only for these drafts.
+    for raw in [
+        "@dev_tools\n- /",
+        "@dev_tools\n- #",
+        "Parent @dev^nvim@ %n\n- /",
+        "Parent @dev^nvim@ %n\n- #",
+        "@dev\n- /",
+        "@dev_tools\n* /",
+    ] {
+        assert!(
+            bullet_sigil_may_need_notebook_policy(raw, raw.len()),
+            "{raw:?} should gate the notebook policy read"
+        );
+    }
+    // Anywhere else the rewrite stays filesystem-free: body text, glued or
+    // doubled sigils, bullets outside a list or below a header line, and
+    // nested note detail (which keeps the lexical task-type menu).
+    for (raw, cursor) in [
+        ("Buy milk /", 10),
+        ("Buy milk //", 11),
+        ("=/", 2),
+        ("-/ ", 2),
+        ("Text @dev_tools", 15),
+        ("@dev_tools", 10),
+        ("Parent @dev^nvim@ %n", 20),
+        ("Text @dev_tools\n  - /", 21),
+        ("@dev_tools\n- #git\n  - /", 23),
+    ] {
+        assert!(
+            !bullet_sigil_may_need_notebook_policy(raw, cursor),
+            "{raw:?} must not gate the notebook policy read"
+        );
+    }
+}

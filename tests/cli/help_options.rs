@@ -562,7 +562,7 @@ fn capture_rewrite_help_lists_options_alphabetically() {
     assert_success(&output);
     let help = stdout(&output);
     assert!(
-        help.contains("purely lexical and completely read-only")
+        help.contains("one bounded vault read")
             && help.contains("absorb")
             && help.contains("switch")
             && help.contains("--cursor")

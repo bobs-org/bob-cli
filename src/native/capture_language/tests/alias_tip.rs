@@ -86,7 +86,7 @@ fn the_tipped_classification_matches_the_v1_lessons() {
 }
 
 fn tip_at_end(raw: &str) -> Option<SigilAliasTip> {
-    sigil_alias_tip(raw, raw.len())
+    sigil_alias_tip_with(raw, raw.len(), None)
 }
 
 #[test]
@@ -262,15 +262,16 @@ fn sigil_alias_tip_only_looks_at_the_sigil_ending_at_the_cursor() {
     // is not something the forward alias fires on, so nothing is taught.
     let raw = "Buy milk @\nlater";
     let cursor = "Buy milk @".len();
-    let tip = sigil_alias_tip(raw, cursor).expect("tip before a later line");
+    let tip = sigil_alias_tip_with(raw, cursor, None)
+        .expect("tip before a later line");
     assert_eq!(tip.id, AliasId::RouteAfterText);
     assert_eq!(tip.range, (cursor - 1, cursor));
-    assert!(sigil_alias_tip("Buy milk @ later", cursor).is_none());
-    assert!(sigil_alias_tip(raw, raw.len()).is_none());
-    assert!(sigil_alias_tip(raw, 0).is_none());
-    assert!(sigil_alias_tip("Buy milk @", 99).is_none());
+    assert!(sigil_alias_tip_with("Buy milk @ later", cursor, None).is_none());
+    assert!(sigil_alias_tip_with(raw, raw.len(), None).is_none());
+    assert!(sigil_alias_tip_with(raw, 0, None).is_none());
+    assert!(sigil_alias_tip_with("Buy milk @", 99, None).is_none());
     // A cursor inside a multi-byte character is not a boundary.
-    assert!(sigil_alias_tip("caf\u{e9}", 4).is_none());
+    assert!(sigil_alias_tip_with("caf\u{e9}", 4, None).is_none());
 }
 
 #[test]
@@ -307,7 +308,7 @@ fn sigil_alias_tip_stays_silent_for_the_negative_corpus() {
         ("Do work @file:{0}^ %t\n\nrow", "Do work @file:{0}^".len()),
     ] {
         assert!(raw.len() >= cursor, "{raw:?}");
-        assert!(sigil_alias_tip(raw, cursor).is_none(), "{raw:?}");
+        assert!(sigil_alias_tip_with(raw, cursor, None).is_none(), "{raw:?}");
     }
 }
 

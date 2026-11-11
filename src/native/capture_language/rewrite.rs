@@ -100,6 +100,23 @@ pub(crate) fn rewrite_draft(
     raw_text: &str,
     cursor: Option<usize>,
 ) -> DraftRewrite {
+    rewrite_draft_with(raw_text, cursor, None)
+}
+
+/// Apply the capture grammar's editor typing assists with an optional
+/// notebook route policy.
+///
+/// The only policy-aware assist is the `/` -> `#` alias at a first-level
+/// bullet start: with a policy it opens the `notebook_section_bullet` menu
+/// in a notebook body and stays literal under a notebook note, exactly like
+/// a typed `#`. Every other assist stays lexical. The caller performs any
+/// vault I/O (see [`bullet_sigil_may_need_notebook_policy`]); this function
+/// itself never touches the filesystem.
+pub(crate) fn rewrite_draft_with(
+    raw_text: &str,
+    cursor: Option<usize>,
+    notebook_policy: Option<&super::notebook::NotebookRoutePolicy>,
+) -> DraftRewrite {
     if super::template::analyze(raw_text).directive.is_some() {
         return unchanged_rewrite(raw_text, cursor, Vec::new());
     }
@@ -130,12 +147,81 @@ pub(crate) fn rewrite_draft(
         return rewrite;
     }
     if let Some(position) = cursor
-        && let Some(rewrite) = expand_sigil_alias(raw_text, position)
+        && let Some(rewrite) =
+            expand_sigil_alias(raw_text, position, notebook_policy)
     {
         return rewrite;
     }
 
     absorb_bare_declaration(raw_text, cursor)
+}
+
+/// Cheap lexical preflight for the notebook-aware `/` (and `#` tip) alias:
+/// true when the byte before `cursor` is `/` or `#` sitting at a
+/// first-level bullet start (`- /`, `* /`, `+ /`, and the `#` forms) inside
+/// a list or below an item header, where the section-bullet menu could open.
+/// The `capture-rewrite` adapter builds its one bounded notebook policy read
+/// only when this returns true; every other rewrite stays filesystem-free.
+/// A doubled `//` (which stays literal), a glued `-/`, and a first-line
+/// `/` after body text (`Buy milk /`) all return false.
+pub(crate) fn bullet_sigil_may_need_notebook_policy(
+    raw_text: &str,
+    cursor: usize,
+) -> bool {
+    if cursor == 0 || cursor > raw_text.len() {
+        return false;
+    }
+    if !raw_text.is_char_boundary(cursor)
+        || !raw_text.is_char_boundary(cursor - 1)
+    {
+        return false;
+    }
+    let sigil = match raw_text.as_bytes().get(cursor - 1) {
+        Some(b'/') => b'/',
+        Some(b'#') => b'#',
+        _ => return false,
+    };
+    if sigil == b'/' && raw_text.as_bytes().get(cursor - 2) == Some(&b'/') {
+        return false;
+    }
+    let line_start = raw_text[..cursor - 1]
+        .rfind('\n')
+        .map_or(0, |index| index + 1);
+    let Some(prefix) = raw_text.get(line_start..cursor - 1) else {
+        return false;
+    };
+    let trimmed = prefix.trim_start_matches([' ', '\t']);
+    let Some(rest) = trimmed.strip_prefix(['-', '*', '+']) else {
+        return false;
+    };
+    if rest.is_empty() || !rest.chars().all(|cell| cell == ' ' || cell == '\t')
+    {
+        return false;
+    }
+    let draft = split_capture_draft(raw_text);
+    let Some((item, line_index)) = draft.items.iter().find_map(|item| {
+        item.lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| {
+                cursor >= line.raw.start && cursor <= line.raw.end
+            })
+            .map(|(line_index, _)| (item, line_index))
+    }) else {
+        return false;
+    };
+    if item.list.is_some() {
+        return line_index == 0;
+    }
+    if line_index == 0 {
+        return false;
+    }
+    let line = item.lines[line_index].raw;
+    matches!(
+        classify_authored_line(line),
+        AuthoredLineClass::Item(authored)
+            if authored.depth == AuthoredDepth::First
+    )
 }
 
 /// Typing `.`, `;`, `,`, `-`, `\`, `/`, `=`, `x`, or `s` in a position where
@@ -355,7 +441,11 @@ fn collapse_global_destination(
 /// literal.
 /// A comma glued to a complete `@route:id` / `@route^id` is claimed earlier
 /// by `switch_block_id_separator`, before this alias lane runs.
-fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
+fn expand_sigil_alias(
+    raw_text: &str,
+    cursor: usize,
+    notebook_policy: Option<&super::notebook::NotebookRoutePolicy>,
+) -> Option<DraftRewrite> {
     let start = cursor.checked_sub(1)?;
     let alias = raw_text.get(start..cursor)?;
     if alias == "-" {
@@ -372,7 +462,7 @@ fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
         return expand_directive_alias(raw_text, start, cursor);
     }
     if alias == "/" {
-        return expand_hash_alias(raw_text, start, cursor);
+        return expand_hash_alias(raw_text, start, cursor, notebook_policy);
     }
     if alias == "," {
         let token = tokenize_with_spans(raw_text)
@@ -1296,6 +1386,7 @@ fn expand_hash_alias(
     raw_text: &str,
     start: usize,
     cursor: usize,
+    notebook_policy: Option<&super::notebook::NotebookRoutePolicy>,
 ) -> Option<DraftRewrite> {
     let line_start = raw_text[..start].rfind('\n').map_or(0, |index| index + 1);
     if raw_text
@@ -1355,11 +1446,23 @@ fn expand_hash_alias(
         }
         return None;
     }
-    let field = super::completion::completion_field_at(&candidate, cursor)?;
+    let field = super::completion::completion_field_at_with(
+        &candidate,
+        cursor,
+        notebook_policy,
+    )?;
     use super::completion::CompletionContext;
     let allowed = match field.context {
         CompletionContext::TaskType | CompletionContext::Drawer => {
             field.replacement == (start, cursor)
+        }
+        // A `/` at a first-level bullet start in a notebook body becomes
+        // `#` exactly where the section menu opens. The replacement covers
+        // only the selector after `#`, so `replacement.0 == cursor` proves
+        // the caret sits right after the new `#`. Under a notebook note no
+        // section field opens, so the alias stays literal there.
+        CompletionContext::NotebookSectionBullet => {
+            field.replacement.0 == cursor
         }
         CompletionContext::Section
         | CompletionContext::PomodoroName

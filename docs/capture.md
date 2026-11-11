@@ -9252,11 +9252,14 @@ bob capture-rewrite [-c|--cursor N] [-f|--format human|json] [--] [TEXT]...
 Applies the capture grammar's automatic draft rewrites -- the
 block-ID separator toggle, relation-label pipe attach, sigil aliases, global
 destination collapse, relation direction toggle, and bare `@@` absorption -- and reports the
-resulting edits, cursor, and a human summary. It is purely lexical and
-completely read-only: it never opens the vault, never reads the clipboard
-or the URL routing config, never touches the filesystem, and takes no
-`--bob-dir`. `bob capture-parse` reads that config unless `--no-ref` is
-set; see [above](#bob-capture-parse).
+resulting edits, cursor, and a human summary. It is read-only and takes no
+`--bob-dir`: every rewrite is purely lexical except one bounded vault read.
+When the byte before `--cursor` is `/` at a first-level bullet start
+(`- /`), it reads notebook route frontmatter from the configured vault
+(`BOB_DIR`) to decide whether `- /` becomes `- #`; every other rewrite never
+opens the vault, never reads the clipboard or the URL routing config, and
+never touches the filesystem. `bob capture-parse` reads that config unless
+`--no-ref` is set; see [above](#bob-capture-parse).
 If `TEXT` is omitted and stdin is piped, it reads the complete piped stdin
 stream. Missing `TEXT`, invalid options, or a cursor outside `TEXT` or
 inside a UTF-8 character return exit 2. Other draft text succeeds, with
@@ -9362,15 +9365,22 @@ the same literal positions. For example, `@home .` becomes `@home &`,
 becomes `Buy milk *`. A later blank-line item, `@@route` declarations, and
 transfer/merge-in slots keep `@`. Typing `/` becomes `#`
 wherever bob's completion grammar would open a `#` menu: task type, section,
-drawer and drawer bullet, Pomodoro name, named-start and past-session name,
-split type, merge destination, and wikilink heading. A `/` at a line
+notebook section bullet, drawer and drawer bullet, Pomodoro name, named-start
+and past-session name, split type, merge destination, and wikilink heading. A
+`/` at a first-level bullet start in a notebook body becomes `#` exactly
+where the section menu opens, so `- /` becomes `- #`; under a notebook note
+it stays literal. Deciding that reads notebook route frontmatter from the
+configured vault (`BOB_DIR`): the command's one bounded vault read, and a
+draft with no such bullet reads no files. A typed `/` and a typed `#`
+converge on the same menu. A `/` at a line
 start, glued to a word, or right after another `/` stays literal. A
 `/` also stays literal where bob already reads it as part of a field (Go To,
 the `=/` split, wikilink note paths, section and Pomodoro names);
 block-ID fields do not count. A `/` glued to a complete `@@route`
 collapses instead (see the global collapse below). For example, `Buy milk /` becomes `Buy milk #`
 and `Buy milk @cash+goog-exit/` becomes `Buy milk @cash+goog-exit#`, while
-`=/` stays the split. Typing `\` becomes `%`
+`=/` stays the split. For a typed `- #` in a notebook body the typing tip
+uses the same bounded vault read, so the tip teaches `/`. Typing `\` becomes `%`
 wherever a bare `%` would open the directive menu: at either edge of an
 item line, with only other markers between it and that edge. A `\` at a line
 start or after only spaces or tabs on its line, glued to a word, doubled

@@ -16,6 +16,7 @@ use super::{
     capture_language::{
         self, AliasStamp, DraftRewrite, RewriteRule, SigilAliasTip, TextEdit,
     },
+    env as bob_env,
     style::Styler,
 };
 
@@ -95,9 +96,12 @@ pub(crate) fn build_cli() -> ClapCommand {
         .long_about(
             "Apply the capture grammar's editor typing assists to TEXT and \
 report the resulting edits, cursor, and a human summary.\n\n\
-The command is purely lexical and completely read-only: it never opens the \
-vault, never reads the clipboard, never touches the filesystem, and takes no \
---bob-dir. It implements five rules.\n\n\
+The command is read-only and takes no --bob-dir: every rewrite is purely \
+lexical except one bounded vault read. When the byte before --cursor is `/` \
+at a first-level bullet start (`- /`), it reads notebook route frontmatter \
+from the configured vault (BOB_DIR) to decide whether `- /` becomes `- #`; \
+every other rewrite never opens the vault, never reads the clipboard, and \
+never touches the filesystem. It implements five rules.\n\n\
 Block-ID separator toggle (requires --cursor): typing '^' immediately after \
 a complete plain '@route:id' or '@route+id', ':' after '@route^id' or \
 '@route+id', or '+' after '@route:id' or '@route^id' consumes that character \
@@ -163,14 +167,20 @@ not become ':' becomes '*' wherever a bare '*' would open the Blocks picker; \
 both follow the same literal positions. For example, '@home .' becomes \
 '@home &', 'Buy milk @foo:bar .' becomes 'Buy milk @foo:bar &', and \
 'Buy milk ;' becomes 'Buy milk *'. Typing '/' becomes '#' wherever \
-bob's completion grammar would open a '#' menu: task type, section, drawer \
-and drawer bullet, Pomodoro name, named-start and past-session name, split \
-type, merge destination, and wikilink heading. A '/' at a line \
+bob's completion grammar would open a '#' menu: task type, section, \
+notebook section bullet, drawer and drawer bullet, Pomodoro name, \
+named-start and past-session name, split type, merge destination, and \
+wikilink heading. A '/' at a first-level bullet start in a notebook body \
+becomes '#' exactly where the section menu opens, so `- /` becomes `- #`; \
+under a notebook note it stays literal. Deciding that reads notebook route \
+frontmatter from the configured vault (BOB_DIR): the command's one bounded \
+vault read, and a draft with no such bullet reads no files. A '/' at a line \
 start, glued to a word, or right after another '/' stays literal. A \
 '/' also stays literal where bob already reads it as part of a field (Go \
 To, the '=/' split, wikilink note paths, section and Pomodoro \
 names); block-ID fields do not count. A '/' glued to a complete '@@route' \
-collapses instead (see the global collapse below). Typing '\\' becomes '%' \
+collapses instead (see the global collapse below). A typed '/' and a typed \
+'#' converge on the same menu. Typing '\\' becomes '%' \
 wherever a bare '%' would open the directive menu: at either edge of an \
 item line with only other markers between it and that edge. A '\\' at a line \
 start or after only spaces or tabs on its line, glued to a word, doubled \
@@ -247,7 +257,9 @@ sigil's UTF-8 byte 'range', and an optional 'where' phrase. An explicit null \
 means no tip is proved and marks a bob that reports tips; the field is \
 absent without --cursor or when the draft changed. Every rewrite that fires \
 the sigil alias rule also carries an 'alias' object with its 'id', 'key', \
-and 'sigil'. Human output keeps 'no rewrite' and adds one dim 'tip' line.\n\n\
+and 'sigil'. For a typed `- #` in a notebook body the proof uses the same \
+bounded vault read, so the tip teaches `/`. Human output keeps 'no rewrite' \
+and adds one dim 'tip' line.\n\n\
 These assists are editor-only: 'bob capture' and 'bob capture-parse' keep \
 the literal TEXT, so '@file:id^' is not silently rewritten there. Only a \
 missing TEXT or a bad flag is an error; every other input succeeds with \
@@ -405,11 +417,39 @@ struct SourceRange {
 
 impl CaptureRewriteResult {
     fn new(input: String, cursor: Option<usize>) -> Self {
-        let rewrite = capture_language::rewrite_draft(&input, cursor);
+        // The one bounded vault read this command performs: only when a
+        // `/` or `#` sits at a first-level bullet start, so `- /` becomes
+        // `- #` exactly where the notebook section menu opens and stays
+        // literal under a notebook note. Every other rewrite stays
+        // filesystem-free.
+        let policy;
+        let notebook_policy = match cursor {
+            Some(position)
+                if capture_language::bullet_sigil_may_need_notebook_policy(
+                    &input, position,
+                ) =>
+            {
+                policy = super::capture_notebooks::notebook_policy_for_draft(
+                    &bob_env::bob_dir(),
+                    &input,
+                );
+                Some(&policy)
+            }
+            _ => None,
+        };
+        let rewrite = capture_language::rewrite_draft_with(
+            &input,
+            cursor,
+            notebook_policy,
+        );
         let sigil_alias_tip = match cursor {
             Some(position) if rewrite.rule.is_none() => Some(
-                capture_language::sigil_alias_tip(&input, position)
-                    .map(tip_json),
+                capture_language::sigil_alias_tip_with(
+                    &input,
+                    position,
+                    notebook_policy,
+                )
+                .map(tip_json),
             ),
             _ => None,
         };

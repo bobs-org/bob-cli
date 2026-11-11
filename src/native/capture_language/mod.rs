@@ -62,7 +62,7 @@ pub(crate) const GRAMMAR_REVISION: u32 = 26;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::alias_tip::sigil_alias_tip;
+pub(crate) use self::alias_tip::sigil_alias_tip_with;
 pub(crate) use self::alias_tip::AliasStamp;
 pub(crate) use self::alias_tip::SigilAliasTip;
 pub(crate) use self::bare_name::can_spell_bare;
@@ -221,7 +221,9 @@ pub(crate) use self::record::ALBUM_SCHEMA_INVALID_CODE;
 pub(crate) use self::record::RECORDS_CONFIG_INVALID_CODE;
 pub(crate) use self::record::RECORD_ASSIST_VERSION;
 pub(crate) use self::record::RECORD_DISCOVERY_INCOMPLETE_CODE;
+pub(crate) use self::rewrite::bullet_sigil_may_need_notebook_policy;
 pub(crate) use self::rewrite::rewrite_draft;
+pub(crate) use self::rewrite::rewrite_draft_with;
 pub(crate) use self::rewrite::DraftRewrite;
 pub(crate) use self::rewrite::RewriteRule;
 pub(crate) use self::rewrite::TextEdit;
