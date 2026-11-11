@@ -3013,6 +3013,9 @@ Budgets:
 - **`decisions:bob-cli-releases-ride-a-daily-train`.** No phase edits
   `Cargo.toml`'s version or `CHANGELOG.md`.
 
+- **Ledger forecast.** The [Keep-moving marks](keep-moving-marks.md) `⏭ N`
+  after a Task Link equals the rows this group will offer.
+
 ### 12.16 KM — keep-moving vectors
 
 All rows use leaf N = `sase_badges.md` (→ `sase` → `dev`). Its `^prj` R

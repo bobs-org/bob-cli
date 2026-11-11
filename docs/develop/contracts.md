@@ -48,6 +48,7 @@ These pages specify behavior that Bob components and their tests must agree on.
 - [Task tag marks](../task-tag-marks.md) — Task tag marks: the teal hash glyph that replaces the `#task` pill; explicit types render as colored `#TYPE`
 - [Today marks](../today-marks.md) — Today marks: a display-only tomato on task lines linked under today's open Pomodoros
 - [Frees marks](../frees-marks.md) — Frees marks: a quiet `🔑 N` after Task Links in today's ledger whose task is the last blocker of N open tasks
+- [Keep-moving marks](../keep-moving-marks.md) — Keep-moving marks: a quiet `⏭ N` after the last planned Task Link of a project, forecasting the Keep ‹N› moving picker
 - [Decay ladder](../decay-ladder.md) — Decay ladder live verification: isolated Obsidian e2e for keeps, the rung-aware card, step, stay, drop, undo, and batch skip
 - [Off-clock link chips](../off-clock-link-chips.md) — Off-clock link chips: the Event Task `off` chip after ledger Task Links whose task resolves off the clock, tagged or inherited
 - [Event link times](../event-link-times.md) — Event link times: the Event Task's time pill beside ledger Task Links that point at it

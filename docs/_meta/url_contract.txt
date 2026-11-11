@@ -25,6 +25,7 @@ https://bobs-org.github.io/develop/plugins/
 https://bobs-org.github.io/develop/plugins/deployment/
 https://bobs-org.github.io/develop/plugins/plugin-apis/
 https://bobs-org.github.io/freshness/
+https://bobs-org.github.io/keep-moving-marks/
 https://bobs-org.github.io/guides/fix-mac-capture-bob-resolution/
 https://bobs-org.github.io/guides/recover-bob-refs/
 https://bobs-org.github.io/guides/recover-mac-capture/

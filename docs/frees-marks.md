@@ -53,7 +53,8 @@ first when he plans the day.
   wording in the successor copy rules (§12.6), so they don't belong in `"frees"`
   either:
   - keep-moving offers (⏭, §12.15). These are already-Ready tasks of a leaf project,
-    never dependents.
+    never dependents; see [Keep-moving marks](keep-moving-marks.md) for the ledger
+    forecast and display contract.
   - relation successors (🪢 `starts after`, §12.18). These are never blocked, only
     sequenced. They are deferred as a possible separate 🪢 segment.
   - project-finished pull-ins (§12.10). Closing X finishes the project; it frees
@@ -344,7 +345,7 @@ open, has an `[id::]`, and frees 1 unless stated otherwise.
 | #   | Case                                     | Result                                                   |
 | --- | ---------------------------------------- | -------------------------------------------------------- |
 | FP1 | Live Preview                             | widget at the link end, `side: 2`; no line-height change |
-| FP2 | the same link also has 🔓                | order: link, 🔓, 🔑 mark                                 |
+| FP2 | the same link also has 🔓                | order: link, 🔓, 🔑, then ⏭                              |
 | FP3 | Reading view, no 🔓                      | host directly after `a.internal-link`                    |
 | FP4 | Reading view with 🔓                     | host directly after `span.bob-unblocked-glyph`           |
 | FP5 | cursor on the row (raw `[[…]]` revealed) | mark still at the link end                               |

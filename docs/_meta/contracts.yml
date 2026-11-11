@@ -10,7 +10,7 @@ groups:
         reader: guides/add-prerequisites.md
       - stem: command-catalog
         summary: "Command catalog protocol: `bob __catalog --protocol 1` handshake, fields, inclusion, and coverage"
-        order: 40
+        order: 41
       - stem: completion
         summary: "Shell completion: the runtime model, protocol 1, and what completes"
         order: 3
@@ -119,7 +119,7 @@ groups:
         order: 36
       - stem: mail-link-marks
         summary: "Mail link marks: the display-only reply badge, no-reply pill, and Also-replied tooltip pip on Gmail-watched tasks"
-        order: 45
+        order: 46
       - stem: today-marks
         summary: "Today marks: a display-only tomato on task lines linked under today's open Pomodoros"
         order: 37
@@ -127,15 +127,18 @@ groups:
       - stem: frees-marks
         summary: "Frees marks: a quiet `🔑 N` after Task Links in today's ledger whose task is the last blocker of N open tasks"
         order: 38
+      - stem: keep-moving-marks
+        summary: "Keep-moving marks: a quiet `⏭ N` after the last planned Task Link of a project, forecasting the Keep ‹N› moving picker"
+        order: 39
       - stem: off-clock-link-chips
         summary: "Off-clock link chips: the Event Task `off` chip after ledger Task Links whose task resolves off the clock, tagged or inherited"
-        order: 42
+        order: 43
       - stem: event-link-times
         summary: "Event link times: the Event Task's time pill beside ledger Task Links that point at it"
-        order: 43
+        order: 44
       - stem: decay-ladder
         summary: "Decay ladder live verification: isolated Obsidian e2e for keeps, the rung-aware card, step, stay, drop, undo, and batch skip"
-        order: 41
+        order: 42
   - title: "References"
     entries:
       - stem: dataview
@@ -157,14 +160,14 @@ groups:
         historical: true
       - stem: vault-git-sync
         summary: "Git-only Bob vault sync operations, triggers, conflict copies, Keep receipts, and the Stats review journal"
-        order: 39
+        order: 40
         reader: guides/sync-vault-across-machines.md
       - stem: attachments
         summary: "Attachment origin journal, resolution states, `bob attachments import` / `origin`, and `%c` recording"
-        order: 44
+        order: 45
       - stem: records
         summary: "Albums and record notes: vault albums, `bob albums` list/check, schema, capture `@dir/` creation, validation, filename planning, and rendered Markdown"
-        order: 46
+        order: 47
       - stem: notebooks
         summary: "`bob notebooks` list, check, sync, and create, the generated Notebooks catalog, JSON, and teaching refusals"
-        order: 47
+        order: 48

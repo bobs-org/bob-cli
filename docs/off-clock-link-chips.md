@@ -114,15 +114,16 @@ source-text cache).
 
 - **Live Preview:** a zero-width `Decoration.widget` at the link end — just after
   `]]`, or after the closing `~~` of a struck link, and before any trailing ` #` —
-  with `side: 3`, so a link that also has 🔓 (`side: 1`) and 🔑 (`side: 2`) reads
-  `link 🔓 🔑 N off`. The chip stays put while the cursor reveals raw `[[…]]`.
+  with `side: 4`, so a link with 🔓 (`side: 1`), 🔑 (`side: 2`), and ⏭ (`side: 3`)
+  reads `link 🔓 🔑 ⏭ off`. The chip stays put while the cursor reveals raw `[[…]]`.
 - **Reading view:** insert the host after the run of `span.bob-unblocked-glyph` /
-  `span.bob-frees-mark` siblings that follows the link's `a.internal-link` (or its
-  `del`/`s` wrapper when the anchor is that wrapper's only child); with none,
-  directly after the anchor or wrapper. A later 🔓 or 🔑 insertion lands before the
+  `span.bob-frees-mark` / `span.bob-keep-moving-mark` siblings that follows the
+  link's `a.internal-link` (or its `del`/`s` wrapper when the anchor is that
+  wrapper's only child); with none,
+  directly after the anchor or wrapper. A later 🔓, 🔑, or ⏭ insertion lands before the
   chip on its own, so the order converges in any processor order.
 - **Allow-list:** `bob-off-clock-link-chip` is in `ledgerMarkClass` in
-  `progressMarkReadingContext`, so ◐, 🔓, 🔑, and the ring's ledger-row exclusion
+  `progressMarkReadingContext`, so ◐, 🔓, 🔑, ⏭, and the ring's ledger-row exclusion
   still recognize a row that already wears a chip. Without this, a chipped ledger
   row would stop being a ledger row and could grow a status ring.
 
@@ -265,11 +266,11 @@ holds `- [ ] #task Fix the parser ^parser`.
 
 | #   | Case                                           | Result                                                   |
 | --- | ---------------------------------------------- | -------------------------------------------------------- |
-| OP1 | Live Preview                                   | widget at the link end, `side: 3`; no line-height change |
-| OP2 | the link also has 🔓 and 🔑                    | order: link, 🔓, 🔑 N, chip (both views)                 |
+| OP1 | Live Preview                                   | widget at the link end, `side: 4`; no line-height change |
+| OP2 | the link also has 🔓, 🔑, and ⏭               | order: link, 🔓, 🔑, ⏭, chip (both views)               |
 | OP3 | Reading view, no other mark                    | host directly after `a.internal-link` (or its `del`)     |
 | OP4 | cursor on the row (raw `[[…]]` revealed)       | chip still at the link end                               |
-| OP5 | a chipped row in Reading view                  | ◐ / 🔓 / 🔑 still paint; no status ring appears          |
+| OP5 | a chipped row in Reading view                  | ◐ / 🔓 / 🔑 / ⏭ still paint; no status ring appears     |
 | OP6 | Event Task chip and link chip, computed styles | same outline style, outline color, ink, font size, icon  |
 
 **OV — parity with the writer.** For every case in the shared
@@ -288,7 +289,7 @@ source-text freshness update.
 Verified 88/88 in an isolated scratch vault (light and dark, Live Preview and
 Reading) with screenshots reviewed against Anatomy and look. Dashed `timer-off`
 `off` chip after off-clock ledger links, matching Event Task outline style,
-outline color, ink, font size, and mask; 🔓 then 🔑 then the chip on the both-marks
+outline color, ink, font size, and mask; 🔓 then 🔑 then ⏭ then the chip on the both-marks
 row; Events and Notes prose links stay unchipped. CSS metrics from the landing
 pass: link chip `font-size` 14.08px (`0.88em`), `outline-style: dashed`,
 `outline-color: color(srgb 0.360784 0.360784 0.360784 / 0.55)`,
@@ -302,7 +303,7 @@ never the live vault. Tasks plugin `taskFormat: dataview` so `[id::]` /
 
 - OC1–OC6, OC10, OR1–OR3, OR5, OR11, OR12, OP2, and OP5 render the chip in Live
   Preview; OC14, OR4, OR6, embeds, mixed prose, Events, and Notes stay bare
-- Reading view paints the same chips and OP2 order (`link`, 🔓, 🔑, chip); OP3
+- Reading view paints the same chips and OP2 order (`link`, 🔓, 🔑, ⏭, chip); OP3
   places the host after `a.internal-link`
 - OP6 computed styles of the ledger chip match the Event Task chip on the same
   page (dashed outline, muted ink, timer-off mask)
