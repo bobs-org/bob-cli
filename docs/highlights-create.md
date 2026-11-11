@@ -174,6 +174,13 @@ the Contents list and the bookmarks with its author-written text, and pandoc
 adds no numbers of its own. A bare year-led heading such as `2026 roadmap` is
 not a manual number and keeps today's numbering. A PDF with no listed heading
 skips the Contents list.
+
+SVG image embeds in these Markdown renders use a same-stem sibling PNG, JPG,
+or JPEG when available, in that order. Without a sibling raster, Bob prints an
+“Image not printable” placeholder and a warning that names the SVG and suggests
+adding a same-stem PNG or using a Mermaid fence. Remote and data URI SVG images
+also become placeholders. This fallback does not require rsvg-convert.
+
 See [web article capture](highlights-clip.md) for reader-mode capture, headed
 retries, the `--html` escape hatch, and environment variables. `bob ref clip`
 is a hidden compatibility alias for `create` with the same targets and options.
@@ -342,9 +349,9 @@ version and SHA-256 in `web_clip_adapter.py` and the crate's `vendor/README.md`,
 then run
 `just check-web-clip-adapter` and the gated live Mermaid render test. Keep the
 bundle self-contained and verify the vector-font and no-raster checks before
-updating the pin. Other diagram languages, SVG image embeds, a listen-skip
-marker, persistent caching, landscape pages, and Mermaid accessibility-title
-metadata are outside this version's scope.
+updating the pin. Other diagram languages, a listen-skip marker, persistent
+caching, landscape pages, and Mermaid accessibility-title metadata are outside
+this version's scope.
 
 ### macOS BasicTeX: installing a missing package in user mode
 

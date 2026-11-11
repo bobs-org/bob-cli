@@ -320,14 +320,13 @@ struct CreatePlan {
     page_count_hint: Option<usize>,
 }
 
-/// Pandoc inputs for the Markdown render: the code-break/listen filter, the
-/// return-link filter that runs after it, the JSON report path the
-/// return-link filter writes for bob, and an optional first-position
-/// diagrams swap filter.
+/// Pandoc inputs for the Markdown render: its code-break/listen and return-link
+/// filters, report paths, table and image passes, and optional diagram swap.
 ///
 /// Shared with the note-snapshot print profile, which reuses the same
 /// filters plus its own contract filter. [`super::diagrams::prepare`]
-/// fills `diagrams` when the pass finds Mermaid blocks.
+/// fills `diagrams` when the pass finds Mermaid blocks. Generic Markdown
+/// rendering runs `image_guard` immediately after that swap.
 pub(crate) struct RenderFilters {
     pub(crate) code_catalog: PathBuf,
     pub(crate) code_break: PathBuf,
@@ -337,17 +336,20 @@ pub(crate) struct RenderFilters {
     pub(crate) code_catalog_report: PathBuf,
     pub(crate) table_layout: PathBuf,
     pub(crate) table_layout_report: PathBuf,
+    pub(crate) image_guard: PathBuf,
+    pub(crate) image_guard_report: PathBuf,
     pub(crate) layout_default: String,
     pub(crate) prose_words: u32,
     pub(crate) diagrams: Option<super::diagrams::DiagramFilter>,
 }
 
-/// Reports from the three non-fatal Lua render passes.
+/// Reports from the non-fatal Lua render passes.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct RenderReports {
     pub(crate) return_links: super::return_links::ReportOutcome,
     pub(crate) code_catalog: super::code_catalog::CatalogOutcome,
     pub(crate) table_layout: super::table_layout::ReportOutcome,
+    pub(crate) image_guard: super::image_guard::ReportOutcome,
 }
 
 /// Default `RenderFilters` table settings, for tests that render without
@@ -3149,6 +3151,13 @@ pub(crate) fn write_render_filters(
             table_layout.display()
         ))
     })?;
+    let image_guard = scratch.join("image-guard.lua");
+    fs::write(&image_guard, super::image_guard::FILTER).map_err(|error| {
+        CommandError::new(format!(
+            "write pandoc filter {}: {error}",
+            image_guard.display()
+        ))
+    })?;
     let code_catalog = scratch.join("code-catalog.lua");
     fs::write(
         &code_catalog,
@@ -3198,6 +3207,8 @@ pub(crate) fn write_render_filters(
         code_catalog_report: scratch.join("code-catalog.json"),
         table_layout,
         table_layout_report: scratch.join("table-layout.json"),
+        image_guard,
+        image_guard_report: scratch.join("image-guard.json"),
         layout_default: layout_default.to_string(),
         prose_words,
         diagrams: None,
@@ -4160,6 +4171,7 @@ fn create_markdown_plan(
     );
     super::return_links::emit_outcome(&render_reports.return_links, &styler);
     super::table_layout::emit_outcome(&render_reports.table_layout, &styler);
+    super::image_guard::emit_outcome(&render_reports.image_guard, &styler);
     diagram_pass.emit(&styler);
     finish_create_intake(
         config,
@@ -5927,6 +5939,20 @@ fn render_temp_pdf_from(
     }
     let output = cmd
         .arg("--lua-filter")
+        .arg(&filters.image_guard)
+        .arg("--metadata")
+        .arg(format!(
+            "{}={}",
+            super::image_guard::BASE_METADATA_KEY,
+            resource_path.display()
+        ))
+        .arg("--metadata")
+        .arg(format!(
+            "{}={}",
+            super::image_guard::REPORT_METADATA_KEY,
+            filters.image_guard_report.display()
+        ))
+        .arg("--lua-filter")
         .arg(&filters.code_break)
         .arg("--lua-filter")
         .arg(&filters.return_links)
@@ -6055,6 +6081,9 @@ fn render_temp_pdf_from(
         ),
         table_layout: super::table_layout::read_report(
             &filters.table_layout_report,
+        ),
+        image_guard: super::image_guard::read_report(
+            &filters.image_guard_report,
         ),
     })
 }
@@ -7614,6 +7643,52 @@ mod tests {
         false
     }
 
+    #[cfg(unix)]
+    fn pandoc_without_rsvg_convert(temp: &TempDir, pandoc: &OsStr) -> PathBuf {
+        use std::os::unix::fs::symlink;
+
+        let bin = temp.path.join("path-without-rsvg-convert");
+        fs::create_dir_all(&bin).expect("create isolated PATH");
+        let original = env::var_os("PATH").unwrap_or_default();
+        for directory in env::split_paths(&original) {
+            let Ok(entries) = fs::read_dir(directory) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                if name == "rsvg-convert" {
+                    continue;
+                }
+                let destination = bin.join(&name);
+                if destination.exists()
+                    || fs::symlink_metadata(&destination).is_ok()
+                {
+                    continue;
+                }
+                let _ = symlink(entry.path(), destination);
+            }
+        }
+        let path = env::join_paths([&bin]).expect("join isolated PATH");
+        let hidden = Command::new("sh")
+            .env("PATH", &path)
+            .args(["-c", "command -v rsvg-convert >/dev/null 2>&1"])
+            .status()
+            .expect("check isolated PATH");
+        assert!(!hidden.success(), "rsvg-convert must not be on test PATH");
+
+        let wrapper = temp.path.join("pandoc-without-rsvg-convert");
+        let quote = |value: &str| format!("'{}'", value.replace('\'', "'\\''"));
+        write_executable(
+            &wrapper,
+            &format!(
+                "#!/bin/sh\nexport PATH={}\nexec {} \"$@\"\n",
+                quote(&path.to_string_lossy()),
+                quote(&pandoc.to_string_lossy())
+            ),
+        );
+        wrapper
+    }
+
     const MERMAID_FLOW: &str = "flowchart LR\n  A --> B\n";
 
     fn mermaid_markdown() -> String {
@@ -8863,6 +8938,74 @@ fn main() {}
         );
     }
 
+    #[cfg(unix)]
+    fn render_svg_guard_case(name: &str, has_sibling: bool) {
+        const PNG: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00,
+            0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
+            0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE,
+            0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63,
+            0x38, 0xD3, 0xD1, 0x01, 0x00, 0x04, 0x00, 0x01, 0xDD, 0x34, 0xAF,
+            0x0D, 0xFB, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
+            0x42, 0x60, 0x82,
+        ];
+        if skip_pandoc_xelatex(name) {
+            return;
+        }
+        let temp = TempDir::new(name);
+        let source = temp.path.join("doc.md");
+        fs::write(
+            &source,
+            "# SVG image\n\n![Figure caption](figure.svg){width=40%}\n",
+        )
+        .expect("write source");
+        if has_sibling {
+            fs::write(temp.path.join("figure.png"), PNG)
+                .expect("write sibling PNG");
+        }
+        let pandoc = pandoc_command().expect("pandoc checked above");
+        let pandoc = pandoc_without_rsvg_convert(&temp, &pandoc);
+        let plan = mermaid_plan(&temp, &source);
+        let render_path = temp.path.join("render.pdf");
+        let filters = filters_with_optional_diagrams(&temp.path, None);
+        let reports = render_temp_pdf_from(
+            pandoc.as_os_str(),
+            &plan,
+            &render_path,
+            &filters,
+            None,
+            None,
+        )
+        .expect("SVG guard must keep the PDF render successful without rsvg-convert");
+        assert!(render_path.is_file(), "PDF was not written");
+        assert!(page_count(&render_path) > 0, "PDF has no pages");
+        let super::super::image_guard::ReportOutcome::Report(report) =
+            reports.image_guard
+        else {
+            panic!("image guard must write a report: {reports:?}");
+        };
+        assert_eq!(report.images.len(), 1);
+        if has_sibling {
+            assert_eq!(report.images[0].outcome, "sibling");
+            assert_eq!(report.images[0].replacement, "figure.png");
+        } else {
+            assert_eq!(report.images[0].outcome, "placeholder");
+            assert!(pdf_haystack(&render_path).contains("Image not printable"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn svg_with_sibling_png_renders_when_rsvg_convert_is_hidden() {
+        render_svg_guard_case("svg-sibling-no-rsvg", true);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn svg_without_sibling_renders_placeholder_when_rsvg_convert_is_hidden() {
+        render_svg_guard_case("svg-placeholder-no-rsvg", false);
+    }
+
     #[test]
     fn table_layout_filter_runs_first_on_generic_route() {
         let temp = TempDir::new("diagrams-generic-first");
@@ -8902,10 +9045,15 @@ fn main() {}
         let tables = log.find("table-layout.lua").expect("table-layout filter");
         let catalog = log.find("code-catalog.lua").expect("catalog filter");
         let diagrams = log.find("diagrams.lua").expect("diagrams filter");
+        let image_guard = log.find("image-guard.lua").expect("image guard");
         let cb = log.find("code-break.lua").expect("code-break");
         let rl = log.find("return-links.lua").expect("return-links");
         assert!(
-            tables < catalog && catalog < diagrams && diagrams < cb && cb < rl,
+            tables < catalog
+                && catalog < diagrams
+                && diagrams < image_guard
+                && image_guard < cb
+                && cb < rl,
             "table-layout filter first: {log}"
         );
         assert!(

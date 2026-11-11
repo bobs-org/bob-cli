@@ -243,6 +243,13 @@ pub(super) fn append_tex_doctor_rows(warnings: &mut Vec<String>) {
 
 /// Actionable hint for a pandoc render failure, if one applies.
 pub(super) fn render_failure_hint(detail: &str) -> Option<String> {
+    let folded = detail.to_ascii_lowercase();
+    if folded.contains("svg.sty") || folded.contains("rsvg-convert") {
+        return Some(
+            "an SVG image could not be converted; add a same-stem PNG next to it, then retry `bob ref create`"
+                .to_string(),
+        );
+    }
     if let Some(file) = missing_tex_file(detail) {
         if let Some(package) = RENDER_TEX_PACKAGES
             .iter()
@@ -438,6 +445,23 @@ mod tests {
                     .to_string()
             )
         );
+    }
+
+    #[test]
+    fn render_failure_hint_for_svg_conversion() {
+        for detail in [
+            "! LaTeX Error: File `svg.sty' not found.",
+            "rsvg-convert not found while converting an SVG image",
+        ] {
+            assert_eq!(
+                render_failure_hint(detail),
+                Some(
+                    "an SVG image could not be converted; add a same-stem PNG next to it, then retry `bob ref create`"
+                        .to_string()
+                ),
+                "detail: {detail}"
+            );
+        }
     }
 
     #[test]

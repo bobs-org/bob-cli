@@ -166,8 +166,9 @@ The documented workflows use these external-tool integrations:
   [configuration](configuration.md) for the exact fallback order)
 - `pandoc` and `xelatex` for `bob ref create` Markdown targets, plus the
   LaTeX packages `bob ref doctor` checks; override pandoc with
-  `BOB_PANDOC_COMMAND`. Doctor prints the `tlmgr install` line for any
-  missing packages
+  `BOB_PANDOC_COMMAND`. SVG image embeds use a sibling raster or a visible
+  placeholder, so rsvg-convert is not required. Doctor prints the
+  `tlmgr install` line for any missing packages
 - `pandoc` also saves web articles and collections as Markdown with code/link
   catalogs. Without it, web PDF capture can still succeed, but reports
   `source_markdown: none (pandoc unavailable)`; XeLaTeX is not needed for

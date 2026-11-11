@@ -53,6 +53,7 @@ pub(super) mod force;
 mod frontmatter;
 mod guard;
 mod hooks;
+pub(crate) mod image_guard;
 mod image_notes;
 mod intake_status;
 mod io;
