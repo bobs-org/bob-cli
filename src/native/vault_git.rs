@@ -19,15 +19,23 @@ pub(crate) fn check_ignore_quiet(
     child_env: &crate::native::ob::ChildEnv,
     rel: &Path,
 ) -> Result<IgnoreQuiet, String> {
-    let output = crate::native::ob::git_command(bob_dir, child_env)
-        .arg("check-ignore")
-        .arg("--quiet")
-        .arg("--")
-        .arg(rel)
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|error| format!("failed to run git check-ignore: {error}"))?;
+    if rel.as_os_str().as_encoded_bytes().first() == Some(&b':') {
+        return Err(format!(
+            "cannot inspect Git ignore rules for {}: path starts with ':' and would be read as pathspec magic",
+            rel.display()
+        ));
+    }
+    let output =
+        crate::native::ob::git_check_ignore_command(bob_dir, child_env)
+            .arg("--quiet")
+            .arg("--")
+            .arg(rel)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|error| {
+                format!("failed to run git check-ignore: {error}")
+            })?;
     match output.status.code() {
         Some(0) => Ok(IgnoreQuiet::Ignored),
         Some(1) => Ok(IgnoreQuiet::Trackable),
@@ -50,6 +58,48 @@ pub(crate) fn check_ignore_quiet(
             "cannot inspect Git ignore rules for {}: git check-ignore terminated by signal",
             rel.display()
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{fs, process::Command};
+
+    #[test]
+    fn check_ignore_quiet_handles_ignored_and_trackable_paths() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let vault = temp.path();
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(vault)
+            .args(["init", "--quiet"])
+            .status()
+            .expect("git init");
+        assert!(status.success());
+        fs::write(vault.join(".gitignore"), "ignored.md\n").expect("gitignore");
+        let child_env = Vec::new();
+
+        assert_eq!(
+            check_ignore_quiet(vault, &child_env, Path::new("ignored.md")),
+            Ok(IgnoreQuiet::Ignored)
+        );
+        assert_eq!(
+            check_ignore_quiet(vault, &child_env, Path::new("trackable.md")),
+            Ok(IgnoreQuiet::Trackable)
+        );
+    }
+
+    #[test]
+    fn check_ignore_quiet_rejects_leading_colon_paths() {
+        let child_env = Vec::new();
+        let error = check_ignore_quiet(
+            Path::new("/unused"),
+            &child_env,
+            Path::new(":secret.md"),
+        )
+        .expect_err("leading colon must not be interpreted as pathspec magic");
+        assert!(error.contains("cannot inspect Git ignore rules"), "{error}");
     }
 }
 

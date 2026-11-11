@@ -1045,8 +1045,7 @@ fn filter_ignored_paths(
     let mut ignored = Vec::new();
     for path in paths {
         let relative = path.strip_prefix(vault).unwrap_or(&path);
-        let result = ob::git_command(vault, child_env)
-            .arg("check-ignore")
+        let result = ob::git_check_ignore_command(vault, child_env)
             .arg("-q")
             .arg("--")
             .arg(relative)

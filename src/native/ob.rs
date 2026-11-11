@@ -40,6 +40,21 @@ pub(crate) fn git_command(vault: &Path, child_env: &ChildEnv) -> Command {
     command
 }
 
+/// Build a `git -C <vault> ... check-ignore` command.
+///
+/// `git check-ignore` rejects the global `--literal-pathspecs` hardening, so
+/// this builder switches it back off for the probe; the later global flag
+/// wins. `check-ignore` treats each argument as a plain path string and never
+/// glob-expands, so wildcard vault names stay safe without literal mode.
+pub(crate) fn git_check_ignore_command(
+    vault: &Path,
+    child_env: &ChildEnv,
+) -> Command {
+    let mut command = git_command(vault, child_env);
+    command.arg("--no-literal-pathspecs").arg("check-ignore");
+    command
+}
+
 /// Collect the environment injected into every child process: the ssh-agent
 /// variables plus a non-interactive `GIT_SSH_COMMAND` (unless one is already
 /// set).
@@ -435,6 +450,32 @@ mod tests {
         assert!(
             args.iter().any(|arg| arg == "--literal-pathspecs"),
             "git_command must pass --literal-pathspecs so `[`/`?` vault names never glob: {args:?}"
+        );
+    }
+
+    #[test]
+    fn git_check_ignore_command_disables_literal_pathspecs_after_enabling_them()
+    {
+        let child_env: ChildEnv = Vec::new();
+        let command =
+            git_check_ignore_command(Path::new("/tmp/vault"), &child_env);
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let literal = args
+            .iter()
+            .position(|arg| arg == "--literal-pathspecs")
+            .unwrap();
+        let no_literal = args
+            .iter()
+            .position(|arg| arg == "--no-literal-pathspecs")
+            .unwrap();
+        let check_ignore =
+            args.iter().position(|arg| arg == "check-ignore").unwrap();
+        assert!(
+            literal < no_literal && no_literal < check_ignore,
+            "{args:?}"
         );
     }
 

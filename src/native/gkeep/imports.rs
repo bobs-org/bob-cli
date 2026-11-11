@@ -697,21 +697,21 @@ fn check_ignore_verbose(
     child_env: &crate::native::ob::ChildEnv,
     rel: &Path,
 ) -> Result<Option<IgnoreDiag>, TrackError> {
-    let mut child = crate::native::ob::git_command(bob_dir, child_env)
-        .arg("check-ignore")
-        .arg("--stdin")
-        .arg("-z")
-        .arg("-v")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| {
-            TrackError::new(
-                format!("failed to run git check-ignore: {error}"),
-                None,
-            )
-        })?;
+    let mut child =
+        crate::native::ob::git_check_ignore_command(bob_dir, child_env)
+            .arg("--stdin")
+            .arg("-z")
+            .arg("-v")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| {
+                TrackError::new(
+                    format!("failed to run git check-ignore: {error}"),
+                    None,
+                )
+            })?;
     {
         let stdin = child.stdin.as_mut().ok_or_else(|| {
             TrackError::new("git check-ignore has no stdin".to_string(), None)
