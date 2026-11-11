@@ -398,7 +398,7 @@ See the [capture command reference](cli/capture.md) and
 | `BOB_HIGHLIGHTS_AUDIO_LIBRARY` | Configured `highlights.audio_library`, then XDG data path, then `~/.local/share/sase-listen/library` | Companion-audio search root; a leading `~` expands. |
 | `BOB_HIGHLIGHTS_AUDIO_LINK_TEMPLATE` | `highlights.audio_link_template`, then the default URI template | Overrides the PDF audio-button URI; empty disables the button. |
 | `BOB_HIGHLIGHTS_CURL` | `curl` resolved through `PATH` | Executable used for PDF and arXiv downloads. |
-| `BOB_HIGHLIGHTS_DIAGRAMS` | Mermaid diagrams render when the adapter is available | Case-insensitive values `off`, `0`, `false`, or `no` skip diagram rendering. |
+| `BOB_HIGHLIGHTS_DIAGRAMS` | Mermaid diagrams and local SVG images render when the adapter is available | Case-insensitive values `off`, `0`, `false`, or `no` skip vector rendering. SVG images still use the sibling or placeholder guard. |
 | `BOB_HIGHLIGHTS_INGEST_ON_CREATE` | `highlights.ingest_on_create`, default `true` | Case-insensitive `0/false/no/off` disables inline intake; `1/true/yes/on` enables it; blank inherits the config value. |
 | `BOB_HIGHLIGHTS_KEEP_WORKDIR` | Temporary work files are removed | Set to `1` to retain projected Markdown, TeX, logs, fonts, and staged assets for debugging. |
 | `BOB_HIGHLIGHTS_LISTEN_COMMAND` | `highlights.listen_command` | Command template for `bob ref create --listen`; it must be a direct SASE Listen render invocation. |

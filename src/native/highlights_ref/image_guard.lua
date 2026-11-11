@@ -6,6 +6,7 @@
 
 local BASE = nil
 local REPORT = nil
+local DIAGRAMS = nil
 local HANDLED = {}
 
 local function meta_text(meta, key)
@@ -89,6 +90,35 @@ local function sibling(target)
   return nil
 end
 
+local function renderer_error(target)
+  if not DIAGRAMS then return nil end
+  local diagrams = DIAGRAMS.diagrams
+  if type(diagrams) == "table" then
+    local entry = diagrams[pandoc.utils.sha1("svg\0" .. target)]
+    if type(entry) == "table"
+        and type(entry.error) == "string"
+        and entry.error ~= "" then
+      return entry.error
+    end
+  end
+  if type(DIAGRAMS.fallback_error) == "string"
+      and DIAGRAMS.fallback_error ~= "" then
+    return DIAGRAMS.fallback_error
+  end
+  return nil
+end
+
+local function record(target, outcome, replacement)
+  local entry = {
+    target = target,
+    outcome = outcome,
+    replacement = replacement,
+  }
+  local err = renderer_error(target)
+  if err then entry.error = err end
+  HANDLED[#HANDLED + 1] = entry
+end
+
 local function placeholder(target, image)
   local classes = {}
   for _, class in ipairs(image.classes or {}) do
@@ -113,7 +143,13 @@ local function write_report()
   pcall(function()
     local file = io.open(REPORT, "w")
     if not file then return end
-    file:write(pandoc.json.encode({ version = 1, images = HANDLED }))
+    -- Empty Lua tables encode as `{}`; `images` must stay a JSON array
+    -- so a fully vector-rendered document does not warn.
+    local encoded = pandoc.json.encode({ version = 1, images = HANDLED })
+    if #HANDLED == 0 then
+      encoded = '{"version":1,"images":[]}'
+    end
+    file:write(encoded)
     file:close()
   end)
 end
@@ -125,25 +161,28 @@ local function handle_image(image)
   local ok, replacement = pcall(sibling, target)
   if ok and replacement then
     image.src = replacement
-    HANDLED[#HANDLED + 1] = {
-      target = target,
-      outcome = "sibling",
-      replacement = replacement,
-    }
+    record(target, "sibling", replacement)
     return image
   end
 
-  HANDLED[#HANDLED + 1] = {
-    target = target,
-    outcome = "placeholder",
-    replacement = "Image not printable · " .. target,
-  }
+  record(target, "placeholder", "Image not printable · " .. target)
   return placeholder(target, image)
 end
 
 function Meta(meta)
   BASE = meta_text(meta, "bob-image-base")
   REPORT = meta_text(meta, "bob-image-guard-report")
+  local diagrams_path = meta_text(meta, "bob-diagrams-results")
+  if diagrams_path then
+    pcall(function()
+      local file = io.open(diagrams_path, "r")
+      if not file then return end
+      local body = file:read("*a")
+      file:close()
+      local data = pandoc.json.decode(body)
+      if type(data) == "table" then DIAGRAMS = data end
+    end)
+  end
 end
 
 function Image(image)
@@ -154,11 +193,7 @@ function Image(image)
   -- readable text rather than leaving the SVG for pandoc's PDF writer.
   local target = image.src or image.target or ""
   if is_svg(target) then
-    HANDLED[#HANDLED + 1] = {
-      target = target,
-      outcome = "placeholder",
-      replacement = "Image not printable · " .. target,
-    }
+    record(target, "placeholder", "Image not printable · " .. target)
     return placeholder(target, image)
   end
   return nil

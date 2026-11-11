@@ -172,7 +172,9 @@ height = float(os.environ.get("BOB_FAKE_DIAGRAMS_HEIGHT_PT", "100"))
 results = []
 for item in request.get("items") or []:
     source = item.get("source") or ""
-    assert item["id"] == hashlib.sha1(source.encode()).hexdigest()
+    kind = item.get("kind") or "mermaid"
+    if kind == "mermaid":
+        assert item["id"] == hashlib.sha1(source.encode()).hexdigest()
     fail = mode in ("fail-all",) or mode == "partial" and "not valid" in source
     if fail:
         results.append({{

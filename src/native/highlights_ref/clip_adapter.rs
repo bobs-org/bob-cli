@@ -539,11 +539,28 @@ pub(super) struct CaptureSuccess {
     pub(super) warnings: Vec<String>,
 }
 
-/// One `{id, source}` item in a `diagrams` request.
+/// Diagram source kind in a `diagrams` request.
+///
+/// Omitted on the wire for Mermaid so existing mermaid-only requests stay
+/// byte-identical. The adapter treats a missing `kind` as mermaid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum DiagramKind {
+    Mermaid,
+    Svg,
+}
+
+fn skip_mermaid_kind(kind: &DiagramKind) -> bool {
+    matches!(kind, DiagramKind::Mermaid)
+}
+
+/// One `{id, source}` item in a `diagrams` request, with optional `kind`.
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct DiagramItem {
     pub(super) id: String,
     pub(super) source: String,
+    #[serde(skip_serializing_if = "skip_mermaid_kind")]
+    pub(super) kind: DiagramKind,
 }
 
 /// One `diagrams` request: unique Mermaid sources in one Chrome page.
@@ -1007,6 +1024,7 @@ mod tests {
             vec![DiagramItem {
                 id: "a".repeat(40),
                 source: "flowchart LR\n  A --> B".into(),
+                kind: DiagramKind::Mermaid,
             }],
         );
         let json = serde_json::to_string(&request)
@@ -1018,6 +1036,22 @@ mod tests {
                 "a".repeat(40)
             )
         );
+    }
+
+    #[test]
+    fn diagrams_request_json_includes_svg_kind() {
+        let request = DiagramsRequest::new(
+            "/abs/scratch/diagrams".into(),
+            vec![DiagramItem {
+                id: "b".repeat(40),
+                source: "<svg xmlns='http://www.w3.org/2000/svg'/>".into(),
+                kind: DiagramKind::Svg,
+            }],
+        );
+        let json = serde_json::to_string(&request)
+            .expect("serialize svg diagrams request");
+        assert!(json.contains(r#""kind":"svg""#), "{json}");
+        assert!(!json.contains("mermaid"), "{json}");
     }
 
     #[test]

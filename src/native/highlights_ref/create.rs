@@ -325,8 +325,9 @@ struct CreatePlan {
 ///
 /// Shared with the note-snapshot print profile, which reuses the same
 /// filters plus its own contract filter. [`super::diagrams::prepare`]
-/// fills `diagrams` when the pass finds Mermaid blocks. Generic Markdown
-/// rendering runs `image_guard` immediately after that swap.
+/// fills `diagrams` when the pass finds Mermaid blocks or local SVG
+/// images. Generic Markdown rendering runs `image_guard` immediately
+/// after that swap.
 pub(crate) struct RenderFilters {
     pub(crate) code_catalog: PathBuf,
     pub(crate) code_break: PathBuf,
@@ -2296,6 +2297,7 @@ fn overwrite_markdown(
             text_height_pt: GENERIC_DIAGRAM_TEXT_HEIGHT_PT,
         },
         scratch.path(),
+        Path::new(&create_plan.source).parent(),
     );
     filters.diagrams = diagram_pass.filter.clone();
     let reports = render_temp_pdf_from(
@@ -2458,6 +2460,7 @@ fn overwrite_vault_note(
                 text_height_pt: GENERIC_DIAGRAM_TEXT_HEIGHT_PT,
             },
             scratch.path(),
+            Path::new(&create_plan.source).parent(),
         );
         filters.diagrams = diagram_pass.filter.clone();
         let reports = render_temp_pdf_from(
@@ -2488,6 +2491,7 @@ fn overwrite_vault_note(
                     note_snapshot::profile::SNAPSHOT_DIAGRAM_TEXT_HEIGHT_PT,
             },
             scratch.path(),
+            None,
         );
         filters.diagrams = diagram_pass.filter.clone();
         let outcome = note_snapshot::profile::render_note_pdf(
@@ -3003,6 +3007,7 @@ fn create_snapshot_plan(
                 note_snapshot::profile::SNAPSHOT_DIAGRAM_TEXT_HEIGHT_PT,
         },
         scratch.path(),
+        None,
     );
     filters.diagrams = diagram_pass.filter.clone();
     let outcome = note_snapshot::profile::render_note_pdf(
@@ -4023,6 +4028,7 @@ fn create_markdown_plan(
             text_height_pt: GENERIC_DIAGRAM_TEXT_HEIGHT_PT,
         },
         scratch.path(),
+        Path::new(&plan.source).parent(),
     );
     filters.diagrams = diagram_pass.filter.clone();
     let (page_count, render_reports) = match &listen_setup {
@@ -8097,10 +8103,12 @@ END_LONG_BLOCK
         )
         .expect("collect Mermaid source");
         assert_eq!(collected.len(), 1, "one Mermaid block: {collected:?}");
+        let mermaid_text = collected[0]
+            .mermaid_text()
+            .expect("Mermaid collect records source text");
         assert!(
-            collected[0].text.contains("A --> B"),
-            "collector expands tabs at the same stop: {:?}",
-            collected[0].text
+            mermaid_text.contains("A --> B"),
+            "collector expands tabs at the same stop: {mermaid_text:?}"
         );
         let (layout_default, prose_words) = default_table_settings();
         let filters =
@@ -8442,6 +8450,7 @@ fn main() {}
                 text_height_pt: GENERIC_DIAGRAM_TEXT_HEIGHT_PT,
             },
             &temp.path.join("diagrams"),
+            None,
         );
         filters.diagrams = diagram_pass.filter.clone();
         let render_path = temp.path.join("links.pdf");

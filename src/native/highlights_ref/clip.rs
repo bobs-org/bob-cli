@@ -1330,6 +1330,7 @@ fn doctor_diagram_probe() -> std::result::Result<(), String> {
         vec![DiagramItem {
             id: ID.into(),
             source: SOURCE.into(),
+            kind: DiagramKind::Mermaid,
         }],
     );
     let rendered = ClipAdapterClient::resolve_with_timeout(TIMEOUT_SECS)

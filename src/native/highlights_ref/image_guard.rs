@@ -25,6 +25,8 @@ pub(crate) struct HandledImage {
     pub(crate) target: String,
     pub(crate) outcome: String,
     pub(crate) replacement: String,
+    #[serde(default)]
+    pub(crate) error: Option<String>,
 }
 
 /// The JSON report written by the filter (contract version 1).
@@ -139,10 +141,21 @@ pub(crate) fn warning_lines(report: &Report) -> Vec<String> {
         .iter()
         .filter(|image| image.outcome == "placeholder")
         .map(|image| {
-            format!(
-                "SVG image {} is not printable; add a same-stem PNG next to it, or use a Mermaid fence",
-                image.target
-            )
+            match image
+                .error
+                .as_deref()
+                .map(str::trim)
+                .filter(|error| !error.is_empty())
+            {
+                Some(error) => format!(
+                    "SVG image {} is not printable ({error}); add a same-stem PNG next to it, or use a Mermaid fence",
+                    image.target
+                ),
+                None => format!(
+                    "SVG image {} is not printable; add a same-stem PNG next to it, or use a Mermaid fence",
+                    image.target
+                ),
+            }
         })
         .collect()
 }
@@ -404,6 +417,7 @@ mod tests {
                     target: "one.svg".to_string(),
                     outcome: "sibling".to_string(),
                     replacement: "one.png".to_string(),
+                    error: None,
                 },
                 HandledImage {
                     target: "https://example.test/two.svg".to_string(),
@@ -411,6 +425,7 @@ mod tests {
                     replacement:
                         "Image not printable · https://example.test/two.svg"
                             .to_string(),
+                    error: Some("render failed".to_string()),
                 },
             ],
         };
@@ -420,7 +435,7 @@ mod tests {
         );
         assert_eq!(
             warning_lines(&report),
-            vec!["SVG image https://example.test/two.svg is not printable; add a same-stem PNG next to it, or use a Mermaid fence"]
+            vec!["SVG image https://example.test/two.svg is not printable (render failed); add a same-stem PNG next to it, or use a Mermaid fence"]
         );
         let one = Report {
             version: 1,
@@ -430,6 +445,21 @@ mod tests {
             images_line(&one).as_deref(),
             Some("images: 1 SVG image printed from its sibling PNG")
         );
+    }
+
+    #[test]
+    fn empty_handled_report_is_a_json_array() {
+        let Some(run) = run_filter("empty-handled", "# No SVG\n\nHello.\n")
+        else {
+            return;
+        };
+        assert!(
+            run.report.images.is_empty(),
+            "empty Lua table must encode as []: {:?}",
+            run.report
+        );
+        assert!(images_line(&run.report).is_none());
+        assert!(warning_lines(&run.report).is_empty());
     }
 
     #[test]

@@ -3,6 +3,7 @@
 use super::fake_clip::FakeDiagrams;
 use crate::support::*;
 use std::{
+    fs,
     io::Write,
     process::{Command, Stdio},
 };
@@ -378,6 +379,156 @@ fn highlights_create_without_mermaid_does_not_spawn_stub() {
     assert!(!fake.called(), "no Mermaid must not spawn the adapter");
     let report = stdout(&output);
     assert!(!report.contains("diagrams: rendered"), "{report}");
+}
+
+const TINY_PNG: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+    0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+    0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00,
+    0x0C, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x38, 0xD3, 0xD1, 0x01,
+    0x00, 0x04, 0x00, 0x01, 0xDD, 0x34, 0xAF, 0x0D, 0xFB, 0x00, 0x00, 0x00,
+    0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+];
+
+const FOREIGN_OBJECT_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="80" viewBox="0 0 200 80">
+  <rect width="200" height="80" fill="#f8f9fa" stroke="#24292e"/>
+  <foreignObject x="8" y="20" width="184" height="40">
+    <div xmlns="http://www.w3.org/1999/xhtml" style="font-family: sans-serif; font-size: 18px;">VectorLabel</div>
+  </foreignObject>
+</svg>
+"##;
+
+fn write_svg_doc(
+    dir: &std::path::Path,
+    with_sibling: bool,
+) -> std::path::PathBuf {
+    write_file(&dir.join("figure.svg"), FOREIGN_OBJECT_SVG);
+    if with_sibling {
+        fs::write(dir.join("figure.png"), TINY_PNG).expect("write sibling PNG");
+    }
+    let source = dir.join("diagrams.md");
+    write_file(
+        &source,
+        "# SVG image\n\n![Figure caption](figure.svg){width=40%}\n",
+    );
+    source
+}
+
+#[test]
+fn highlights_create_renders_svg_only_document_via_stub_adapter() {
+    if skip_pdf_text_render("svg success") {
+        return;
+    }
+    let temp = TempDir::new("bob-cli-svg-success");
+    let vault = temp.path().join("vault");
+    seed_parent(&vault);
+    let source = write_svg_doc(temp.path(), false);
+    let fake = FakeDiagrams::new(&temp, "fake-diagrams");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .output()
+        .expect("create svg markdown");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("svg: rendered 1 of 1 SVG images"),
+        "{report}"
+    );
+    assert!(
+        !report.contains("images:"),
+        "vector success must not count as a guard hit: {report}"
+    );
+    assert!(fake.called(), "adapter should run for SVG-only documents");
+    let request: serde_json::Value =
+        serde_json::from_str(&fake.request()).expect("parse adapter request");
+    assert_eq!(request["items"][0]["kind"], "svg");
+    let text = pdf_haystack(&vault.join("xlib/chat/diagrams.pdf"));
+    assert!(
+        !text.contains("Image not printable"),
+        "placeholder leaked: {text}"
+    );
+}
+
+#[test]
+fn highlights_create_failed_svg_falls_back_to_sibling_png() {
+    if skip_pandoc_xelatex("svg sibling fallback") {
+        return;
+    }
+    let temp = TempDir::new("bob-cli-svg-fallback");
+    let vault = temp.path().join("vault");
+    seed_parent(&vault);
+    let source = write_svg_doc(temp.path(), true);
+    let fake = FakeDiagrams::new(&temp, "fake-diagrams");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_FAKE_DIAGRAMS_MODE", "fail-all")
+        .output()
+        .expect("create failed svg with sibling");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("svg: rendered 0 of 1 SVG images"),
+        "{report}"
+    );
+    assert!(
+        report.contains("images: 1 SVG image printed from its sibling PNG"),
+        "{report}"
+    );
+}
+
+#[test]
+fn highlights_create_svg_kill_switch_skips_adapter_and_uses_guard() {
+    if skip_pandoc_xelatex("svg kill switch") {
+        return;
+    }
+    let temp = TempDir::new("bob-cli-svg-kill-switch");
+    let vault = temp.path().join("vault");
+    seed_parent(&vault);
+    let source = write_svg_doc(temp.path(), true);
+    let fake = FakeDiagrams::new(&temp, "fake-diagrams");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_DIAGRAMS", "off")
+        .output()
+        .expect("create svg with kill switch");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        !report.contains("svg: rendered"),
+        "no svg summary when skipped: {report}"
+    );
+    assert!(
+        report.contains("images: 1 SVG image printed from its sibling PNG"),
+        "{report}"
+    );
+    assert!(!fake.called(), "kill switch must not spawn the adapter");
 }
 
 #[test]
@@ -908,6 +1059,103 @@ fn highlights_create_live_mermaid_pdf_is_highlights_safe() {
         .arg(&pdf)
         .output()
         .expect("inspect live Mermaid PDF images");
+    assert!(images.status.success());
+    let image_report = String::from_utf8_lossy(&images.stdout);
+    let image_rows = image_report
+        .lines()
+        .filter(|line| {
+            line.split_whitespace()
+                .next()
+                .is_some_and(|field| field.parse::<usize>().is_ok())
+        })
+        .collect::<Vec<_>>();
+    assert!(image_rows.is_empty(), "{image_report}");
+}
+
+#[test]
+fn highlights_create_live_svg_pdf_keeps_foreign_object_label() {
+    let required = [
+        ("uv", "--version"),
+        ("pandoc", "--version"),
+        ("xelatex", "--version"),
+        ("pdftotext", "-v"),
+        ("pdffonts", "-v"),
+        ("pdfimages", "-v"),
+    ];
+    let missing = required
+        .iter()
+        .filter_map(|(program, flag)| {
+            (!tool_available(program, flag)).then_some(*program)
+        })
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        eprintln!("skipping live SVG PDF test: missing {}", missing.join(", "));
+        return;
+    }
+    if !adapter_discovers_browser() {
+        eprintln!("skipping live SVG PDF test: no browser discovered");
+        return;
+    }
+
+    let temp = TempDir::new("bob-cli-svg-live");
+    let vault = temp.path().join("vault");
+    seed_parent(&vault);
+    let source = write_svg_doc(temp.path(), false);
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-P")
+        .arg("sase")
+        .arg("-b")
+        .arg(&vault)
+        .env_remove("BOB_WEB_CLIP_ADAPTER")
+        .env_remove("BOB_HIGHLIGHTS_DIAGRAMS")
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("run live SVG PDF render");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("svg: rendered 1 of 1 SVG images"),
+        "{report}"
+    );
+    assert!(
+        !report.contains("images:"),
+        "vector success must not count as a guard hit: {report}"
+    );
+
+    let pdf = vault.join("xlib/chat/diagrams.pdf");
+    let extracted = Command::new("pdftotext")
+        .arg(&pdf)
+        .arg("-")
+        .output()
+        .expect("extract live SVG PDF text");
+    assert!(extracted.status.success());
+    let text = String::from_utf8_lossy(&extracted.stdout);
+    assert!(
+        text.contains("VectorLabel"),
+        "foreignObject label missing: {text}"
+    );
+    assert!(
+        !text.contains("Image not printable"),
+        "placeholder leaked: {text}"
+    );
+
+    let fonts = Command::new("pdffonts")
+        .arg(&pdf)
+        .output()
+        .expect("inspect live SVG PDF fonts");
+    assert!(fonts.status.success());
+    let font_report = String::from_utf8_lossy(&fonts.stdout);
+    assert!(!font_report.contains("Type 3"), "{font_report}");
+
+    let images = Command::new("pdfimages")
+        .arg("-list")
+        .arg(&pdf)
+        .output()
+        .expect("inspect live SVG PDF images");
     assert!(images.status.success());
     let image_report = String::from_utf8_lossy(&images.stdout);
     let image_rows = image_report

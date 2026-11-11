@@ -130,7 +130,12 @@ def validate_request(request: object) -> dict[str, Any]:
             f"items cannot contain more than {MAX_DIAGRAM_ITEMS} diagrams"
         )
     for index, item in enumerate(items):
-        if not isinstance(item, dict) or set(item) != {"id", "source"}:
+        if not isinstance(item, dict):
+            raise DiagramRequestError(
+                f"items[{index}] must contain exactly id and source"
+            )
+        keys = set(item)
+        if keys - {"id", "source", "kind"} or not {"id", "source"} <= keys:
             raise DiagramRequestError(
                 f"items[{index}] must contain exactly id and source"
             )
@@ -140,6 +145,11 @@ def validate_request(request: object) -> dict[str, Any]:
             )
         if not isinstance(item["source"], str):
             raise DiagramRequestError(f"items[{index}].source must be a string")
+        kind = item.get("kind", "mermaid")
+        if kind not in ("mermaid", "svg"):
+            raise DiagramRequestError(
+                f"items[{index}].kind must be 'mermaid' or 'svg'"
+            )
 
     timeout = request["item_timeout_s"]
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
@@ -214,10 +224,90 @@ def _new_page(context, mermaid_js: str, font_b64: str):
     return page
 
 
+def _render_svg_one(page, item: dict[str, str], timeout_s: float, workdir: str) -> dict:
+    """Render one SVG source by inlining it into the offline page.
+
+    Chrome's SVG-as-``<img>`` path does not paint ``<foreignObject>`` HTML
+    (Mermaid labels). Inline DOM insertion with ``<script>`` elements and
+    ``on*`` attributes stripped keeps those labels as selectable vector
+    text, and the context still aborts every network route.
+    """
+    page.evaluate("() => { document.body.replaceChildren(); }")
+    dimensions = page.evaluate(
+        "async ([source, timeoutMs]) => {"
+        "document.body.replaceChildren();"
+        "const timeout = new Promise((_, reject) => setTimeout(() => "
+        "reject(new Error('diagram render timed out')), timeoutMs));"
+        "const render = (async () => {"
+        "const parsed = new DOMParser().parseFromString(source, 'image/svg+xml');"
+        "const root = parsed.documentElement;"
+        "if (!root || root.nodeName.toLowerCase() === 'parsererror' "
+        "|| root.querySelector('parsererror')) {"
+        "throw new Error('invalid SVG');"
+        "}"
+        "root.querySelectorAll('script').forEach((el) => el.remove());"
+        "for (const el of root.querySelectorAll('*')) {"
+        "for (const attr of [...el.attributes]) {"
+        "if (attr.name.toLowerCase().startsWith('on')) {"
+        "el.removeAttribute(attr.name);"
+        "}"
+        "}"
+        "}"
+        "const host = document.createElement('div');"
+        "host.style.display = 'inline-block';"
+        "host.appendChild(document.importNode(root, true));"
+        "document.body.appendChild(host);"
+        "await document.fonts.ready;"
+        "const svg = host.querySelector('svg') || host.firstElementChild;"
+        "if (!svg) throw new Error('diagram has no visible size');"
+        "const rect = svg.getBoundingClientRect();"
+        "let width = Math.ceil(rect.width);"
+        "let height = Math.ceil(rect.height);"
+        "if (!(width > 0 && height > 0) && svg.viewBox && svg.viewBox.baseVal "
+        "&& svg.viewBox.baseVal.width > 0) {"
+        "width = Math.ceil(svg.viewBox.baseVal.width);"
+        "height = Math.ceil(svg.viewBox.baseVal.height);"
+        "}"
+        "if (!(width > 0 && height > 0)) {"
+        "width = Math.ceil(parseFloat(svg.getAttribute('width')) || 0);"
+        "height = Math.ceil(parseFloat(svg.getAttribute('height')) || 0);"
+        "}"
+        "if (!(width > 0 && height > 0)) throw new Error('diagram has no visible size');"
+        "return {width, height};"
+        "})();"
+        "return await Promise.race([render, timeout]);"
+        "}",
+        [item["source"], int(timeout_s * 1000)],
+    )
+    output = os.path.abspath(os.path.join(workdir, f"{item['id']}.pdf"))
+    page.pdf(
+        path=output,
+        width=f"{dimensions['width']}px",
+        height=f"{dimensions['height'] + 1}px",
+        print_background=True,
+        page_ranges="1",
+        margin={"top": "0px", "right": "0px", "bottom": "0px", "left": "0px"},
+    )
+    with open(output, "rb") as handle:
+        header = handle.read(5)
+    if header != b"%PDF-" or os.path.getsize(output) <= 5:
+        raise RuntimeError("Chrome did not write a non-empty PDF")
+    page.evaluate("() => document.body.replaceChildren()")
+    return {
+        "id": item["id"],
+        "ok": True,
+        "pdf": output,
+        "width_pt": round(dimensions["width"] * 0.75, 2),
+        "height_pt": round((dimensions["height"] + 1) * 0.75, 2),
+    }
+
+
 def _render_one(
     page, item: dict[str, str], index: int, timeout_s: float, workdir: str
 ) -> dict:
     """Render one source, fit its PDF to the SVG, and validate the output."""
+    if item.get("kind", "mermaid") == "svg":
+        return _render_svg_one(page, item, timeout_s, workdir)
     page.evaluate("() => { document.body.replaceChildren(); }")
     dimensions = page.evaluate(
         "async ([id, source, timeoutMs]) => {"

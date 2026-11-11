@@ -175,11 +175,14 @@ adds no numbers of its own. A bare year-led heading such as `2026 roadmap` is
 not a manual number and keeps today's numbering. A PDF with no listed heading
 skips the Contents list.
 
-SVG image embeds in these Markdown renders use a same-stem sibling PNG, JPG,
-or JPEG when available, in that order. Without a sibling raster, Bob prints an
+SVG image embeds in these Markdown renders print in this order: a vector PDF
+from the same Chrome diagram renderer that handles Mermaid fences, then a
+same-stem sibling PNG, JPG, or JPEG when available, in that order, then an
 “Image not printable” placeholder and a warning that names the SVG and suggests
 adding a same-stem PNG or using a Mermaid fence. Remote and data URI SVG images
-also become placeholders. This fallback does not require rsvg-convert.
+become placeholders. The fallback does not require rsvg-convert.
+`BOB_HIGHLIGHTS_DIAGRAMS=off` skips only the vector step; the sibling or
+placeholder guard still runs.
 
 See [web article capture](highlights-clip.md) for reader-mode capture, headed
 retries, the `--html` escape hatch, and environment variables. `bob ref clip`
@@ -311,7 +314,9 @@ install is needed for that route.
 
 `bob ref create` renders explicit Mermaid code blocks as fitted vector figures
 on both Markdown routes: ordinary Markdown imports and vault-note snapshots,
-including `-M, --plain`. A block must be tagged as Mermaid: a backtick fence
+including `-M, --plain`. Local SVG image embeds on the generic Markdown route
+share that same browser launch and print as vector PDFs; vault-note snapshots
+keep their SVG placeholder. A block must be tagged as Mermaid: a backtick fence
 labelled `mermaid`, a tilde fence labelled `mermaid`, or a backtick fence with
 `{.mermaid}`; fences nested in lists and blockquotes
 are supported. Bob does not guess from untagged `flowchart` or `graph` source,
@@ -321,11 +326,14 @@ PDF, PDF URL, arXiv, and web-article imports are unchanged.
 Rendering uses the pinned, vendored Mermaid 12.2.0 bundle and DejaVu Sans
 font through one offline browser launch per document. A block-level parse or
 render failure keeps the source below an italic note and does not fail the
-import. If `uv`, the browser, or the adapter is unavailable, every Mermaid
-block remains as source with a note and Bob prints one warning. For example:
+import. A failed local SVG image falls through to the sibling raster or
+placeholder guard. If `uv`, the browser, or the adapter is unavailable, every
+Mermaid block remains as source with a note and Bob prints one warning. For
+example:
 
 ```text
 diagrams: rendered 3 of 4 Mermaid diagrams
+svg: rendered 1 of 1 SVG images
 warning: Mermaid diagram 4 of 4 not rendered: Parse error on line 2: …
 ```
 
@@ -342,6 +350,7 @@ The renderer does not backfill existing library PDFs. Recreate an individual
 reference manually when you want its existing PDF replaced. Set
 `BOB_HIGHLIGHTS_DIAGRAMS=off` to skip diagram rendering while debugging; the
 dry-run still counts the candidate fences and says rendering is disabled.
+Skipped SVG images still use the sibling or placeholder guard.
 
 To bump Mermaid, replace
 `crates/bob-obsidian-assets/scripts/web_clip/vendor/mermaid.min.js`, update its
@@ -1194,9 +1203,9 @@ legacy `BOB_WEB_CLIP_KEEP_WORKDIR=1`). The note snapshot renderer keeps the
 same ownership: with the keep flag set, the scratch directory retains
 `projected.md`, `note-profile.tex`, `note.lua`, `fonts/`, `glyphs.lua`, the
 pandoc-generated `note.tex`, `note.log`, and `note.pdf` for debugging.
-When Mermaid blocks are present, `diagrams/` holds the collect manifest,
-render results, and per-diagram PDFs until XeLaTeX finishes; the same keep flag
-retains those files for inspection.
+When Mermaid blocks or local SVG images are present, `diagrams/` holds the
+collect manifest, render results, and per-diagram PDFs until XeLaTeX finishes;
+the same keep flag retains those files for inspection.
 
 ## Environment variables
 
@@ -1205,7 +1214,7 @@ retains those files for inspection.
 | `BOB_HIGHLIGHTS_CURL` | Replaces `curl` (test seam, like `BOB_PANDOC_COMMAND`) |
 | `BOB_HIGHLIGHTS_RESOLVE` | Replaces DNS for the fetch address check: comma-separated `host=ip` pairs with `*` as a wildcard (test seam) |
 | `BOB_HIGHLIGHTS_KEEP_WORKDIR` | `1` keeps the scratch directory for debugging |
-| `BOB_HIGHLIGHTS_DIAGRAMS` | `off`, `0`, `false`, or `no` skips Mermaid rendering; skipped blocks print as source without a fallback note |
+| `BOB_HIGHLIGHTS_DIAGRAMS` | `off`, `0`, `false`, or `no` skips Mermaid and SVG vector rendering; skipped Mermaid blocks print as source without a fallback note, and SVG images still use the sibling or placeholder guard |
 | `BOB_PANDOC_COMMAND` | Overrides pandoc for the Markdown route |
 | `BOB_XELATEX_COMMAND` | Overrides xelatex for the note snapshot print profile (test seam, like `BOB_PANDOC_COMMAND`) |
 | `BOB_HIGHLIGHTS_AUDIO_LIBRARY` | sase-listen library for Markdown audio discovery |

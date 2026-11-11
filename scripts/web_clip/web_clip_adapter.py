@@ -2936,6 +2936,26 @@ def self_test() -> int:
         check("diagrams valid request", True)
     except _diagram_render.DiagramRequestError:
         check("diagrams valid request", False)
+    try:
+        _diagram_render.validate_request({
+            **diagram_request,
+            "items": [{**diagram_item, "kind": "mermaid"}],
+        })
+        check("diagrams kind mermaid", True)
+    except _diagram_render.DiagramRequestError:
+        check("diagrams kind mermaid", False)
+    try:
+        _diagram_render.validate_request({
+            **diagram_request,
+            "items": [{
+                "id": "b" * 40,
+                "source": "<svg xmlns='http://www.w3.org/2000/svg'/>",
+                "kind": "svg",
+            }],
+        })
+        check("diagrams kind svg", True)
+    except _diagram_render.DiagramRequestError:
+        check("diagrams kind svg", False)
 
     invalid_diagram_requests = [
         ("bad id", {**diagram_request,
@@ -2946,6 +2966,8 @@ def self_test() -> int:
         ("unknown request field", {**diagram_request, "unexpected": True}),
         ("unknown item field", {**diagram_request,
                                 "items": [{**diagram_item, "unexpected": True}]}),
+        ("bad kind", {**diagram_request,
+                      "items": [{**diagram_item, "kind": "dot"}]}),
         ("non-positive timeout", {**diagram_request, "item_timeout_s": 0}),
     ]
     for label, invalid in invalid_diagram_requests:

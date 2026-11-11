@@ -16,7 +16,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     clip_adapter::{
-        AdapterFailure, ClipAdapterClient, DiagramItem, DiagramsRequest,
+        AdapterFailure, ClipAdapterClient, DiagramItem, DiagramKind,
+        DiagramsRequest,
     },
     CommandError, Result,
 };
@@ -28,8 +29,9 @@ pub(crate) const ENV_DIAGRAMS: &str = "BOB_HIGHLIGHTS_DIAGRAMS";
 
 /// Unique diagrams sent to the adapter; extras degrade with [`LIMIT_ERROR`].
 pub(crate) const MAX_DIAGRAM_ITEMS: usize = 200;
-const LIMIT_ERROR: &str =
-    "too many Mermaid diagrams in one document (limit 200)";
+const LIMIT_ERROR: &str = "too many diagrams in one document (limit 200)";
+/// Local SVG files larger than this are left for the image guard.
+const MAX_SVG_BYTES: u64 = 4 * 1024 * 1024;
 const SCALE_WARN_BELOW: f64 = 0.5;
 
 /// Pandoc metadata key carrying the collect-pass manifest path.
@@ -84,14 +86,58 @@ pub(crate) enum DiagramReader {
     Snapshot,
 }
 
-/// One unique Mermaid source, in first-seen document order.
+/// One unique Mermaid source or local SVG image, in first-seen order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CollectedKind {
+    Mermaid { text: String },
+    Svg { target: String },
+}
+
+/// One unique diagram, in first-seen document order per kind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CollectedDiagram {
     pub(crate) id: String,
-    pub(crate) text: String,
-    /// One-based position of this source's first block in the document.
+    pub(crate) kind: CollectedKind,
+    /// One-based position of this source's first item among its kind.
     pub(crate) first_occurrence: usize,
     pub(crate) occurrences: usize,
+}
+
+impl CollectedDiagram {
+    fn is_mermaid(&self) -> bool {
+        matches!(self.kind, CollectedKind::Mermaid { .. })
+    }
+
+    fn is_svg(&self) -> bool {
+        matches!(self.kind, CollectedKind::Svg { .. })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mermaid_text(&self) -> Option<&str> {
+        match &self.kind {
+            CollectedKind::Mermaid { text } => Some(text),
+            CollectedKind::Svg { .. } => None,
+        }
+    }
+
+    #[cfg(test)]
+    fn svg_target(&self) -> Option<&str> {
+        match &self.kind {
+            CollectedKind::Svg { target } => Some(target),
+            CollectedKind::Mermaid { .. } => None,
+        }
+    }
+
+    fn scale_label(&self) -> &str {
+        match &self.kind {
+            CollectedKind::Mermaid { text } => diagram_label(text),
+            CollectedKind::Svg { target } => Path::new(target)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+                .unwrap_or(target),
+        }
+    }
 }
 
 /// Per-id swap entry: a rendered PDF or a visible error.
@@ -132,8 +178,10 @@ pub(crate) struct DiagramRoute {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DiagramPass {
     pub(crate) filter: Option<DiagramFilter>,
-    total: usize,
-    rendered: usize,
+    mermaid_total: usize,
+    mermaid_rendered: usize,
+    svg_total: usize,
+    svg_rendered: usize,
     warnings: Vec<String>,
 }
 
@@ -141,19 +189,28 @@ impl DiagramPass {
     fn skipped() -> Self {
         Self {
             filter: None,
-            total: 0,
-            rendered: 0,
+            mermaid_total: 0,
+            mermaid_rendered: 0,
+            svg_total: 0,
+            svg_rendered: 0,
             warnings: Vec::new(),
         }
     }
 
-    /// `diagrams: rendered N of M` on stdout when blocks exist, then
-    /// stderr warnings with [`Styler::warning_prefix`].
+    /// `diagrams: rendered N of M` and `svg: rendered N of M` on stdout
+    /// when those kinds exist, then stderr warnings with
+    /// [`Styler::warning_prefix`].
     pub(crate) fn emit(&self, styler: &Styler) {
-        if self.total > 0 {
+        if self.mermaid_total > 0 {
             println!(
                 "diagrams: rendered {} of {} Mermaid diagrams",
-                self.rendered, self.total
+                self.mermaid_rendered, self.mermaid_total
+            );
+        }
+        if self.svg_total > 0 {
+            println!(
+                "svg: rendered {} of {} SVG images",
+                self.svg_rendered, self.svg_total
             );
         }
         for warning in &self.warnings {
@@ -165,7 +222,12 @@ impl DiagramPass {
 #[derive(Debug, Deserialize)]
 struct ManifestEntry {
     id: String,
-    text: String,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    target: Option<String>,
 }
 
 /// `false` when `BOB_HIGHLIGHTS_DIAGRAMS` is `off`/`0`/`false`/`no`
@@ -183,7 +245,7 @@ pub(crate) fn enabled() -> bool {
 /// Mermaid-specific dry-run summary. The plan remains browser-free: this only
 /// counts candidate fence openers in text already available to the planner.
 pub(crate) fn dry_run_line(markdown: &str) -> Option<String> {
-    let count = prescan(markdown);
+    let count = prescan_mermaid(markdown);
     if count == 0 {
         return None;
     }
@@ -196,6 +258,14 @@ pub(crate) fn dry_run_line(markdown: &str) -> Option<String> {
     })
 }
 
+/// Count candidate Mermaid fence openers plus local SVG image embeds.
+/// May over-match and must never under-match, so SVG-only documents still
+/// run the diagram pass.
+#[cfg(test)]
+pub(crate) fn prescan(markdown: &str) -> usize {
+    prescan_mermaid(markdown) + prescan_svg(markdown)
+}
+
 /// Count candidate Mermaid fence openers. May over-match (a nested
 /// example inside a `markdown` fence) and must never under-match.
 ///
@@ -203,11 +273,100 @@ pub(crate) fn dry_run_line(markdown: &str) -> Option<String> {
 /// looks for Mermaid fence openers. It also recognizes `:` and `~`
 /// definition-list markers before the fence; Pandoc collection decides
 /// whether each candidate is an actual Mermaid code block.
-pub(crate) fn prescan(markdown: &str) -> usize {
+pub(crate) fn prescan_mermaid(markdown: &str) -> usize {
     markdown
         .lines()
         .filter(|line| is_mermaid_fence_opener(line))
         .count()
+}
+
+/// Count candidate Markdown/HTML SVG image embeds. May over-match
+/// (a `.svg` destination in a non-image link) and must never under-match.
+fn prescan_svg(markdown: &str) -> usize {
+    markdown.lines().map(count_svg_image_candidates).sum()
+}
+
+fn count_svg_image_candidates(line: &str) -> usize {
+    let rest = strip_quote_and_list_prefix(line);
+    count_markdown_svg_dests(rest) + count_html_svg_imgs(rest)
+}
+
+fn count_markdown_svg_dests(line: &str) -> usize {
+    let mut count = 0;
+    let mut rest = line;
+    while let Some(start) = rest.find("](") {
+        let after = &rest[start + 2..];
+        match after.find(')') {
+            Some(end) => {
+                if is_svg_dest(&after[..end]) {
+                    count += 1;
+                }
+                rest = &after[end + 1..];
+            }
+            None => break,
+        }
+    }
+    if let Some(colon) = line.find("]:") {
+        let dest = line[colon + 2..].trim();
+        if is_svg_dest(dest) {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn count_html_svg_imgs(line: &str) -> usize {
+    let lower = line.to_ascii_lowercase();
+    let mut count = 0;
+    let mut rest = lower.as_str();
+    while let Some(start) = rest.find("src=") {
+        let after = rest[start + 4..].trim_start();
+        let quote = after.as_bytes().first().copied();
+        let dest = match quote {
+            Some(b'"') | Some(b'\'') => {
+                let q = quote.unwrap() as char;
+                after[1..].split(q).next().unwrap_or("")
+            }
+            _ => after
+                .split(|character: char| {
+                    character.is_ascii_whitespace() || character == '>'
+                })
+                .next()
+                .unwrap_or(""),
+        };
+        if is_svg_dest(dest) {
+            count += 1;
+        }
+        rest = &rest[start + 4..];
+    }
+    count
+}
+
+fn is_svg_dest(dest: &str) -> bool {
+    let dest = dest.trim();
+    let dest = dest
+        .strip_prefix('<')
+        .and_then(|value| value.strip_suffix('>'))
+        .unwrap_or(dest);
+    let dest = dest
+        .split(|character: char| {
+            character.is_whitespace() || matches!(character, '"' | '\'')
+        })
+        .next()
+        .unwrap_or("");
+    let path = strip_query_fragment(dest);
+    path.to_ascii_lowercase().ends_with(".svg")
+}
+
+fn strip_query_fragment(target: &str) -> &str {
+    let query = target.find('?');
+    let fragment = target.find('#');
+    match (query, fragment) {
+        (Some(query), Some(fragment)) => &target[..query.min(fragment)],
+        (Some(query), None) => &target[..query],
+        (None, Some(fragment)) => &target[..fragment],
+        (None, None) => target,
+    }
 }
 
 fn is_mermaid_fence_opener(line: &str) -> bool {
@@ -405,20 +564,71 @@ fn parse_manifest(raw: &str) -> Result<Vec<CollectedDiagram>> {
     };
     let mut ordered: Vec<CollectedDiagram> = Vec::new();
     let mut index: BTreeMap<String, usize> = BTreeMap::new();
-    for (position, entry) in entries.into_iter().enumerate() {
+    let mut mermaid_pos = 0;
+    let mut svg_pos = 0;
+    for entry in entries {
+        let kind = manifest_kind(&entry)?;
         if let Some(&i) = index.get(&entry.id) {
             ordered[i].occurrences += 1;
+            match &kind {
+                CollectedKind::Mermaid { .. } => mermaid_pos += 1,
+                CollectedKind::Svg { .. } => svg_pos += 1,
+            }
             continue;
         }
+        let first_occurrence = match &kind {
+            CollectedKind::Mermaid { .. } => {
+                mermaid_pos += 1;
+                mermaid_pos
+            }
+            CollectedKind::Svg { .. } => {
+                svg_pos += 1;
+                svg_pos
+            }
+        };
         index.insert(entry.id.clone(), ordered.len());
         ordered.push(CollectedDiagram {
             id: entry.id,
-            text: entry.text,
-            first_occurrence: position + 1,
+            kind,
+            first_occurrence,
             occurrences: 1,
         });
     }
     Ok(ordered)
+}
+
+fn manifest_kind(entry: &ManifestEntry) -> Result<CollectedKind> {
+    match entry.kind.as_deref() {
+        Some("svg") => {
+            let target = entry
+                .target
+                .as_deref()
+                .map(str::trim)
+                .filter(|target| !target.is_empty())
+                .ok_or_else(|| {
+                    CommandError::new(format!(
+                        "diagrams manifest SVG entry {} is missing target",
+                        entry.id
+                    ))
+                })?;
+            Ok(CollectedKind::Svg {
+                target: target.to_string(),
+            })
+        }
+        Some("mermaid") | None => {
+            let text = entry.text.clone().ok_or_else(|| {
+                CommandError::new(format!(
+                    "diagrams manifest Mermaid entry {} is missing text",
+                    entry.id
+                ))
+            })?;
+            Ok(CollectedKind::Mermaid { text })
+        }
+        Some(other) => Err(CommandError::new(format!(
+            "diagrams manifest entry {} has unknown kind {other}",
+            entry.id
+        ))),
+    }
 }
 
 /// Write `results.json` with absolute PDF paths per the shared contract.
@@ -441,11 +651,16 @@ pub(crate) fn write_results(
 }
 
 /// Orchestrate collect → adapter → `results.json`. Never returns an error.
+///
+/// `image_base` is the original Markdown source directory used to resolve
+/// local SVG targets. Snapshot routes pass `None` so SVG embeds stay on
+/// the note-snapshot placeholder path.
 pub(crate) fn prepare(
     pandoc: Option<&OsStr>,
     source: DiagramSource<'_>,
     route: DiagramRoute,
     scratch: &Path,
+    image_base: Option<&Path>,
 ) -> DiagramPass {
     if !enabled() {
         return DiagramPass::skipped();
@@ -454,15 +669,23 @@ pub(crate) fn prepare(
         Ok(text) => text,
         Err(_) => return DiagramPass::skipped(),
     };
-    if prescan(&markdown) == 0 {
+    let mermaid_candidates = prescan_mermaid(&markdown);
+    let svg_candidates = if image_base.is_some() {
+        prescan_svg(&markdown)
+    } else {
+        0
+    };
+    if mermaid_candidates == 0 && svg_candidates == 0 {
         return DiagramPass::skipped();
     }
     let workdir = scratch.join("diagrams");
     if let Err(error) = fs::create_dir_all(&workdir) {
         return DiagramPass {
             filter: None,
-            total: 0,
-            rendered: 0,
+            mermaid_total: 0,
+            mermaid_rendered: 0,
+            svg_total: 0,
+            svg_rendered: 0,
             warnings: vec![unavailable_warning(
                 &format!(
                     "create diagrams workdir {}: {error}",
@@ -476,8 +699,10 @@ pub(crate) fn prepare(
     if let Err(error) = fs::write(&filter_path, SWAP_FILTER) {
         return DiagramPass {
             filter: None,
-            total: 0,
-            rendered: 0,
+            mermaid_total: 0,
+            mermaid_rendered: 0,
+            svg_total: 0,
+            svg_rendered: 0,
             warnings: vec![unavailable_warning(
                 &format!(
                     "write swap filter {}: {error}",
@@ -491,7 +716,14 @@ pub(crate) fn prepare(
     let collect_path = match collect_source_path(&source, &markdown, &workdir) {
         Ok(path) => path,
         Err(reason) => {
-            return fallback_pass(&filter_path, &results_path, reason, None, 0);
+            return fallback_pass(
+                &filter_path,
+                &results_path,
+                reason,
+                None,
+                0,
+                0,
+            );
         }
     };
     let Some(pandoc) = pandoc else {
@@ -502,10 +734,10 @@ pub(crate) fn prepare(
                 .to_string(),
             None,
             0,
+            0,
         );
     };
     let blocks = match collect(pandoc, &collect_path, route.reader, &workdir) {
-        Ok(blocks) if blocks.is_empty() => return DiagramPass::skipped(),
         Ok(blocks) => blocks,
         Err(error) => {
             return fallback_pass(
@@ -514,10 +746,29 @@ pub(crate) fn prepare(
                 error.message,
                 None,
                 0,
+                0,
             );
         }
     };
-    render_collected(blocks, route, &workdir, &filter_path, &results_path)
+    let blocks: Vec<CollectedDiagram> = if image_base.is_some() {
+        blocks
+    } else {
+        blocks
+            .into_iter()
+            .filter(CollectedDiagram::is_mermaid)
+            .collect()
+    };
+    if blocks.is_empty() {
+        return DiagramPass::skipped();
+    }
+    render_collected(
+        blocks,
+        route,
+        &workdir,
+        &filter_path,
+        &results_path,
+        image_base,
+    )
 }
 
 fn source_markdown(
@@ -564,7 +815,8 @@ fn fallback_pass(
     results: &Path,
     reason: String,
     hint: Option<&str>,
-    total: usize,
+    mermaid_total: usize,
+    svg_total: usize,
 ) -> DiagramPass {
     let _ = write_results(
         results,
@@ -573,14 +825,20 @@ fn fallback_pass(
             fallback_error: Some(compact_error(&reason)),
         },
     );
+    let mut warnings = Vec::new();
+    if mermaid_total > 0 {
+        warnings.push(unavailable_warning(&reason, hint));
+    }
     DiagramPass {
         filter: Some(DiagramFilter {
             filter: filter.to_path_buf(),
             results: results.to_path_buf(),
         }),
-        total,
-        rendered: 0,
-        warnings: vec![unavailable_warning(&reason, hint)],
+        mermaid_total,
+        mermaid_rendered: 0,
+        svg_total,
+        svg_rendered: 0,
+        warnings,
     }
 }
 
@@ -588,9 +846,17 @@ fn fallback_from_adapter(
     filter: &Path,
     results: &Path,
     fail: AdapterFailure,
-    total: usize,
+    mermaid_total: usize,
+    svg_total: usize,
 ) -> DiagramPass {
-    fallback_pass(filter, results, fail.message, fail.hint.as_deref(), total)
+    fallback_pass(
+        filter,
+        results,
+        fail.message,
+        fail.hint.as_deref(),
+        mermaid_total,
+        svg_total,
+    )
 }
 
 fn render_collected(
@@ -599,8 +865,10 @@ fn render_collected(
     workdir: &Path,
     filter_path: &Path,
     results_path: &Path,
+    image_base: Option<&Path>,
 ) -> DiagramPass {
-    let total = total_occurrences(&blocks);
+    let mermaid_total = kind_occurrences(&blocks, true);
+    let svg_total = kind_occurrences(&blocks, false);
     let send = blocks.len().min(MAX_DIAGRAM_ITEMS);
     let workdir_abs = match workdir.canonicalize() {
         Ok(path) => path,
@@ -613,29 +881,44 @@ fn render_collected(
                     workdir.display()
                 ),
                 None,
-                total,
+                mermaid_total,
+                svg_total,
             );
         }
     };
-    let client = match ClipAdapterClient::resolve_for_diagrams(send) {
+    let items = adapter_items(&blocks, send, image_base);
+    if items.is_empty() {
+        let _ = write_results(
+            results_path,
+            &DiagramResults {
+                diagrams: BTreeMap::new(),
+                fallback_error: None,
+            },
+        );
+        return DiagramPass {
+            filter: Some(DiagramFilter {
+                filter: filter_path.to_path_buf(),
+                results: results_path.to_path_buf(),
+            }),
+            mermaid_total,
+            mermaid_rendered: 0,
+            svg_total,
+            svg_rendered: 0,
+            warnings: Vec::new(),
+        };
+    }
+    let client = match ClipAdapterClient::resolve_for_diagrams(items.len()) {
         Ok(client) => client,
         Err(fail) => {
             return fallback_from_adapter(
                 filter_path,
                 results_path,
                 fail,
-                total,
+                mermaid_total,
+                svg_total,
             );
         }
     };
-    let items = blocks
-        .iter()
-        .take(send)
-        .map(|block| DiagramItem {
-            id: block.id.clone(),
-            source: block.text.clone(),
-        })
-        .collect();
     let request =
         DiagramsRequest::new(workdir_abs.to_string_lossy().into_owned(), items);
     let success = match client.diagrams(&request) {
@@ -645,7 +928,8 @@ fn render_collected(
                 filter_path,
                 results_path,
                 fail,
-                total,
+                mermaid_total,
+                svg_total,
             );
         }
     };
@@ -655,8 +939,107 @@ fn render_collected(
         route,
         filter_path,
         results_path,
-        total,
+        mermaid_total,
+        svg_total,
     )
+}
+
+fn adapter_items(
+    blocks: &[CollectedDiagram],
+    send: usize,
+    image_base: Option<&Path>,
+) -> Vec<DiagramItem> {
+    blocks
+        .iter()
+        .take(send)
+        .filter_map(|block| match &block.kind {
+            CollectedKind::Mermaid { text } => Some(DiagramItem {
+                id: block.id.clone(),
+                source: text.clone(),
+                kind: DiagramKind::Mermaid,
+            }),
+            CollectedKind::Svg { target } => {
+                let source =
+                    image_base.and_then(|base| read_local_svg(target, base))?;
+                Some(DiagramItem {
+                    id: block.id.clone(),
+                    source,
+                    kind: DiagramKind::Svg,
+                })
+            }
+        })
+        .collect()
+}
+
+fn read_local_svg(target: &str, image_base: &Path) -> Option<String> {
+    if !is_local_image_target(target) {
+        return None;
+    }
+    let stripped = strip_query_fragment(target);
+    let decoded = percent_decode(stripped);
+    for candidate in [stripped, decoded.as_str()] {
+        let path = if Path::new(candidate).is_absolute() {
+            PathBuf::from(candidate)
+        } else {
+            image_base.join(candidate)
+        };
+        let Ok(metadata) = fs::metadata(&path) else {
+            continue;
+        };
+        if !metadata.is_file() || metadata.len() > MAX_SVG_BYTES {
+            continue;
+        }
+        if let Ok(text) = fs::read_to_string(&path) {
+            return Some(text);
+        }
+    }
+    None
+}
+
+fn is_local_image_target(target: &str) -> bool {
+    if target.is_empty() || target.starts_with('#') || target.starts_with("//")
+    {
+        return false;
+    }
+    let scheme = target.split_once(':').map(|(scheme, _)| scheme);
+    if let Some(scheme) = scheme
+        && scheme
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_ascii_alphabetic())
+        && scheme.chars().all(|character| {
+            character.is_ascii_alphanumeric()
+                || matches!(character, '+' | '.' | '-')
+        })
+    {
+        return false;
+    }
+    true
+}
+
+fn percent_decode(target: &str) -> String {
+    let bytes = target.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && bytes[index + 1].is_ascii_hexdigit()
+            && bytes[index + 2].is_ascii_hexdigit()
+        {
+            let hex = std::str::from_utf8(&bytes[index + 1..index + 3])
+                .ok()
+                .and_then(|value| u8::from_str_radix(value, 16).ok());
+            if let Some(byte) = hex {
+                decoded.push(byte);
+                index += 3;
+                continue;
+            }
+        }
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8(decoded).unwrap_or_else(|_| target.to_string())
 }
 
 fn map_adapter_results(
@@ -665,14 +1048,16 @@ fn map_adapter_results(
     route: DiagramRoute,
     filter_path: &Path,
     results_path: &Path,
-    total: usize,
+    mermaid_total: usize,
+    svg_total: usize,
 ) -> DiagramPass {
     let mut by_id = BTreeMap::new();
     for item in success.results {
         by_id.insert(item.id.clone(), item);
     }
     let mut diagrams = BTreeMap::new();
-    let mut rendered = 0;
+    let mut mermaid_rendered = 0;
+    let mut svg_rendered = 0;
     let mut fail_warnings = Vec::new();
     let mut scale_warnings = Vec::new();
     for (index, block) in blocks.iter().enumerate() {
@@ -683,11 +1068,13 @@ fn map_adapter_results(
                     error: LIMIT_ERROR.to_string(),
                 },
             );
-            fail_warnings.push(not_rendered_warning(
-                block.first_occurrence,
-                total,
-                LIMIT_ERROR,
-            ));
+            if block.is_mermaid() {
+                fail_warnings.push(not_rendered_warning(
+                    block.first_occurrence,
+                    mermaid_total,
+                    LIMIT_ERROR,
+                ));
+            }
             continue;
         }
         match by_id.get(&block.id) {
@@ -704,11 +1091,13 @@ fn map_adapter_results(
                             error: error.clone(),
                         },
                     );
-                    fail_warnings.push(not_rendered_warning(
-                        block.first_occurrence,
-                        total,
-                        &error,
-                    ));
+                    if block.is_mermaid() {
+                        fail_warnings.push(not_rendered_warning(
+                            block.first_occurrence,
+                            mermaid_total,
+                            &error,
+                        ));
+                    }
                     continue;
                 };
                 diagrams.insert(
@@ -717,7 +1106,11 @@ fn map_adapter_results(
                         pdf: pdf.to_string(),
                     },
                 );
-                rendered += block.occurrences;
+                if block.is_svg() {
+                    svg_rendered += block.occurrences;
+                } else {
+                    mermaid_rendered += block.occurrences;
+                }
                 if let (Some(width_pt), Some(height_pt)) =
                     (result.width_pt, result.height_pt)
                     && let Some(scale) = effective_scale(
@@ -730,9 +1123,14 @@ fn map_adapter_results(
                 {
                     scale_warnings.push(scale_warning(
                         block.first_occurrence,
-                        total,
-                        diagram_label(&block.text),
+                        if block.is_svg() {
+                            svg_total
+                        } else {
+                            mermaid_total
+                        },
+                        block.scale_label(),
                         scale,
+                        block.is_svg(),
                     ));
                 }
             }
@@ -749,13 +1147,18 @@ fn map_adapter_results(
                         error: error.clone(),
                     },
                 );
-                fail_warnings.push(not_rendered_warning(
-                    block.first_occurrence,
-                    total,
-                    &error,
-                ));
+                if block.is_mermaid() {
+                    fail_warnings.push(not_rendered_warning(
+                        block.first_occurrence,
+                        mermaid_total,
+                        &error,
+                    ));
+                }
             }
             None => {
+                if block.is_svg() {
+                    continue;
+                }
                 let error = "no result from renderer";
                 diagrams.insert(
                     block.id.clone(),
@@ -765,7 +1168,7 @@ fn map_adapter_results(
                 );
                 fail_warnings.push(not_rendered_warning(
                     block.first_occurrence,
-                    total,
+                    mermaid_total,
                     error,
                 ));
             }
@@ -784,8 +1187,10 @@ fn map_adapter_results(
             filter: filter_path.to_path_buf(),
             results: results_path.to_path_buf(),
         }),
-        total,
-        rendered,
+        mermaid_total,
+        mermaid_rendered,
+        svg_total,
+        svg_rendered,
         warnings: fail_warnings,
     }
 }
@@ -808,11 +1213,18 @@ fn scale_warning(
     total: usize,
     label: &str,
     scale: f64,
+    svg: bool,
 ) -> String {
     let percent = (scale * 100.0).round() as i32;
-    format!(
-        "Mermaid diagram {first} of {total} ({label}) prints at {percent}% scale; labels may be small"
-    )
+    if svg {
+        format!(
+            "SVG image {first} of {total} ({label}) prints at {percent}% scale; labels may be small"
+        )
+    } else {
+        format!(
+            "Mermaid diagram {first} of {total} ({label}) prints at {percent}% scale; labels may be small"
+        )
+    }
 }
 
 fn diagram_label(source: &str) -> &str {
@@ -823,8 +1235,17 @@ fn diagram_label(source: &str) -> &str {
         .unwrap_or("diagram")
 }
 
+#[cfg(test)]
 fn total_occurrences(blocks: &[CollectedDiagram]) -> usize {
     blocks.iter().map(|block| block.occurrences).sum()
+}
+
+fn kind_occurrences(blocks: &[CollectedDiagram], mermaid: bool) -> usize {
+    blocks
+        .iter()
+        .filter(|block| block.is_mermaid() == mermaid)
+        .map(|block| block.occurrences)
+        .sum()
 }
 
 fn effective_scale(
@@ -1078,7 +1499,12 @@ plain flowchart LR in a paragraph\n\
         .expect("collect definition-list Mermaid fence");
         assert_eq!(blocks.len(), 1, "{blocks:?}");
         assert_eq!(blocks[0].first_occurrence, 1);
-        assert!(blocks[0].text.contains("flowchart LR"), "{blocks:?}");
+        assert!(
+            blocks[0]
+                .mermaid_text()
+                .is_some_and(|text| text.contains("flowchart LR")),
+            "{blocks:?}"
+        );
     }
 
     #[test]
@@ -1100,7 +1526,11 @@ plain flowchart LR in a paragraph\n\
             );
             let flow = blocks
                 .iter()
-                .find(|block| block.text.contains("flowchart LR"))
+                .find(|block| {
+                    block
+                        .mermaid_text()
+                        .is_some_and(|text| text.contains("flowchart LR"))
+                })
                 .expect("flowchart");
             assert_eq!(flow.occurrences, 2, "{reader:?} de-duplicates");
             assert_eq!(flow.id.len(), 40, "sha1 hex: {}", flow.id);
@@ -1111,7 +1541,11 @@ plain flowchart LR in a paragraph\n\
             );
             let seq = blocks
                 .iter()
-                .find(|block| block.text.contains("sequenceDiagram"))
+                .find(|block| {
+                    block
+                        .mermaid_text()
+                        .is_some_and(|text| text.contains("sequenceDiagram"))
+                })
                 .expect("sequence");
             assert_eq!(seq.occurrences, 1);
             assert_ne!(flow.id, seq.id);
@@ -1138,6 +1572,7 @@ plain flowchart LR in a paragraph\n\
             DiagramSource::Path(&source),
             generic_route(),
             &temp.path,
+            None,
         );
         assert!(pass.filter.is_none());
         assert!(!called.exists(), "no mermaid must not spawn");
@@ -1157,6 +1592,7 @@ plain flowchart LR in a paragraph\n\
             DiagramSource::Path(&mermaid),
             generic_route(),
             &temp.path,
+            None,
         );
         assert!(pass.filter.is_none());
         assert!(!called.exists(), "kill switch must not spawn");
@@ -1182,6 +1618,7 @@ plain flowchart LR in a paragraph\n\
             DiagramSource::Path(&source),
             generic_route(),
             &temp.path,
+            None,
         );
         assert!(pass.filter.is_some());
         assert!(
@@ -1214,6 +1651,7 @@ plain flowchart LR in a paragraph\n\
                 hint: Some("playwright install".into()),
             },
             1,
+            0,
         );
         let parsed: DiagramResults = serde_json::from_str(
             &fs::read_to_string(results).expect("read fallback results"),
@@ -1252,7 +1690,7 @@ plain flowchart LR in a paragraph\n\
             "tall diagram uses the budgeted height: {tall}"
         );
         assert_eq!(
-            scale_warning(1, 12, "flowchart LR", 0.46),
+            scale_warning(1, 12, "flowchart LR", 0.46, false),
             "Mermaid diagram 1 of 12 (flowchart LR) prints at 46% scale; labels may be small"
         );
         assert_eq!(
@@ -1537,5 +1975,138 @@ plain flowchart LR in a paragraph\n\
             .expect("corrupt results");
         assert!(corrupt.status.success(), "{corrupt:?}");
         assert_eq!(String::from_utf8_lossy(&corrupt.stdout), baseline_tex);
+    }
+
+    #[test]
+    fn prescan_counts_svg_image_embeds_and_leaves_mermaid_counts_intact() {
+        let mermaid = "```mermaid\nflowchart LR\n```\n";
+        assert_eq!(prescan_mermaid(mermaid), 1);
+        assert_eq!(prescan(mermaid), 1);
+        let svg_only = "# Fig\n\n![Which projects?](assets/work-leaf.svg)\n";
+        assert_eq!(prescan_mermaid(svg_only), 0);
+        assert_eq!(prescan(svg_only), 1);
+        assert_eq!(prescan("# No diagrams\n\nHello.\n"), 0);
+        let mixed = "![one](one.svg?download=1)\n\n```mermaid\nflowchart LR\n```\n\n<img src=\"two.svg\">\n";
+        assert_eq!(prescan_mermaid(mixed), 1);
+        assert_eq!(prescan(mixed), 3);
+    }
+
+    #[test]
+    fn collect_records_local_svg_images_in_document_order() {
+        let Some(pandoc) = skip_pandoc("collect svg") else {
+            return;
+        };
+        let temp = TempDir::new("collect-svg");
+        let source = temp.path.join("doc.md");
+        fs::write(
+            &source,
+            "# Mix\n\n![Leaf](figure.svg)\n\n```mermaid\nflowchart LR\n  A --> B\n```\n\n![Remote](https://example.test/skip.svg)\n",
+        )
+        .expect("write mixed source");
+        let blocks = collect(
+            &pandoc,
+            &source,
+            DiagramReader::Inferred,
+            &temp.path.join("collect"),
+        )
+        .expect("collect mixed");
+        assert_eq!(blocks.len(), 2, "{blocks:?}");
+        assert_eq!(blocks[0].svg_target(), Some("figure.svg"), "{blocks:?}");
+        assert_eq!(blocks[0].id, "320fd7203249d2fd8f404a12289663f7e44eb60d");
+        assert_eq!(blocks[0].first_occurrence, 1);
+        assert!(blocks[1].is_mermaid(), "{blocks:?}");
+        assert_eq!(blocks[1].first_occurrence, 1);
+    }
+
+    #[test]
+    fn prepare_svg_only_runs_adapter_and_kill_switch_skips() {
+        let Some(pandoc) = skip_pandoc("prepare svg") else {
+            return;
+        };
+        let temp = TempDir::new("prepare-svg");
+        let adapter = temp.path.join("adapter.sh");
+        write_executable(
+            &adapter,
+            "#!/bin/sh\necho called > \"$(dirname \"$0\")/called\"\nexit 99\n",
+        );
+        let called = temp.path.join("called");
+        fs::write(
+            temp.path.join("figure.svg"),
+            "<svg xmlns='http://www.w3.org/2000/svg'/>",
+        )
+        .expect("write svg");
+        let source = temp.path.join("doc.md");
+        fs::write(&source, "![Figure](figure.svg)\n").expect("write source");
+        let _guard = TestEnvGuard::set(&[(
+            super::super::clip_adapter::ENV_ADAPTER_OVERRIDE,
+            Some(adapter.as_os_str()),
+        )]);
+        let pass = prepare(
+            Some(pandoc.as_os_str()),
+            DiagramSource::Path(&source),
+            generic_route(),
+            &temp.path.join("scratch"),
+            Some(&temp.path),
+        );
+        assert!(called.exists(), "SVG-only documents must spawn the adapter");
+        assert_eq!(pass.svg_total, 1);
+        assert_eq!(pass.mermaid_total, 0);
+
+        let _ = fs::remove_file(&called);
+        let _guard = TestEnvGuard::set(&[
+            (ENV_DIAGRAMS, Some(OsStr::new("off"))),
+            (
+                super::super::clip_adapter::ENV_ADAPTER_OVERRIDE,
+                Some(adapter.as_os_str()),
+            ),
+        ]);
+        let pass = prepare(
+            Some(pandoc.as_os_str()),
+            DiagramSource::Path(&source),
+            generic_route(),
+            &temp.path.join("scratch-off"),
+            Some(&temp.path),
+        );
+        assert!(pass.filter.is_none());
+        assert!(!called.exists(), "kill switch must not spawn for SVG");
+    }
+
+    #[test]
+    fn swap_replaces_local_svg_image_and_keeps_caption_width() {
+        let temp = TempDir::new("svg-swap");
+        let pdf = temp.path.join("fig.pdf");
+        write_one_page_pdf(&pdf);
+        let Some(native) = swap_native(
+            "![Figure caption](figure.svg){#fig width=50%}\n",
+            &DiagramResults {
+                diagrams: BTreeMap::from([(
+                    "320fd7203249d2fd8f404a12289663f7e44eb60d".to_string(),
+                    DiagramOutcome::Pdf {
+                        pdf: pdf.display().to_string(),
+                    },
+                )]),
+                fallback_error: None,
+            },
+        ) else {
+            return;
+        };
+        assert!(
+            native.contains("fig.pdf")
+                || native.contains(&pdf.display().to_string()),
+            "{native}"
+        );
+        assert!(
+            native.contains("Caption")
+                || native.contains("figure caption")
+                || native.contains("Figure"),
+            "{native}"
+        );
+        assert!(native.contains("50%"), "width lost: {native}");
+        assert!(native.contains("fig"), "identifier lost: {native}");
+        assert!(
+            native.contains("BobFitBegin"),
+            "solo SVG must fit: {native}"
+        );
+        assert!(!native.contains("figure.svg"), "svg src remains: {native}");
     }
 }
