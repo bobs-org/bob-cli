@@ -4,16 +4,20 @@
 //! helper thread, drains stdout and stderr, and enforces a deadline.
 //! On timeout the whole process group is killed so an orphaned grandchild
 //! cannot hold the pipes open. After the leader exits, remaining
-//! stragglers in the group are killed before the reader joins.
+//! stragglers in the group are killed before the readers are given a bounded
+//! grace period to finish draining.
 
 use std::{
     ffi::OsString,
     io::{self, Read, Write},
     path::PathBuf,
     process::{Command, Stdio},
+    sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
+
+const PIPE_DRAIN_GRACE: Duration = Duration::from_millis(250);
 
 /// One subprocess invocation. Stdio is always piped; gog and the Keep
 /// adapter never own the terminal.
@@ -67,6 +71,8 @@ pub(crate) struct RawRunOutput {
     pub timed_out: bool,
     /// True when stdout held more than `stdout_cap` bytes.
     pub stdout_truncated: bool,
+    /// True when either pipe remained open past the post-exit drain grace.
+    pub output_incomplete: bool,
 }
 
 /// Spawn `spec.program`, enforce `spec.timeout`, and collect output.
@@ -92,18 +98,31 @@ pub(crate) fn run(spec: &RunSpec) -> io::Result<RunOutput> {
     let stdout_reader = thread::spawn(move || drain_pipe(stdout_pipe));
     let stderr_reader = thread::spawn(move || drain_pipe(stderr_pipe));
     let status = loop {
-        match child.try_wait()? {
-            Some(status) => break status,
-            None => {
+        match exited_without_reaping(&mut child)? {
+            true => {
+                kill_stragglers(child.id());
+                break child.wait()?;
+            }
+            false => {
                 if Instant::now() >= deadline {
                     kill_tree(&mut child);
                     let _ = stdin_writer.join();
-                    let _ = stdout_reader.join();
-                    let _ = stderr_reader.join();
+                    let drain_deadline = Instant::now() + PIPE_DRAIN_GRACE;
+                    let stdout = receive_before(stdout_reader, drain_deadline);
+                    let stderr = receive_before(stderr_reader, drain_deadline);
+                    let output_incomplete =
+                        stdout.is_none() || stderr.is_none();
+                    let mut stderr = stderr.unwrap_or_default();
+                    if output_incomplete {
+                        if !stderr.is_empty() {
+                            stderr.push('\n');
+                        }
+                        stderr.push_str("subprocess output truncated: inherited pipe remained open after child exit");
+                    }
                     return Ok(RunOutput {
                         status: None,
-                        stdout: String::new(),
-                        stderr: String::new(),
+                        stdout: stdout.unwrap_or_default(),
+                        stderr,
                         timed_out: true,
                         stdin_error: None,
                     });
@@ -112,13 +131,21 @@ pub(crate) fn run(spec: &RunSpec) -> io::Result<RunOutput> {
             }
         }
     };
-    kill_stragglers(child.id());
     let stdin_error = stdin_writer.join().unwrap_or(None);
-    let stdout = stdout_reader.join().unwrap_or_default();
-    let stderr = stderr_reader.join().unwrap_or_default();
+    let drain_deadline = Instant::now() + PIPE_DRAIN_GRACE;
+    let stdout = receive_before(stdout_reader, drain_deadline);
+    let stderr = receive_before(stderr_reader, drain_deadline);
+    let output_incomplete = stdout.is_none() || stderr.is_none();
+    let mut stderr = stderr.unwrap_or_default();
+    if output_incomplete {
+        if !stderr.is_empty() {
+            stderr.push('\n');
+        }
+        stderr.push_str("subprocess output truncated: inherited pipe remained open after child exit");
+    }
     Ok(RunOutput {
         status: status.code(),
-        stdout,
+        stdout: stdout.unwrap_or_default(),
         stderr,
         timed_out: false,
         stdin_error,
@@ -143,44 +170,95 @@ pub(crate) fn run_raw(spec: &RawRunSpec) -> io::Result<RawRunOutput> {
     let stderr_reader =
         thread::spawn(move || drain_pipe_capped(stderr_pipe, stderr_cap));
     let status = loop {
-        match child.try_wait()? {
-            Some(status) => break status,
-            None => {
+        match exited_without_reaping(&mut child)? {
+            true => {
+                kill_stragglers(child.id());
+                break child.wait()?;
+            }
+            false => {
                 if Instant::now() >= deadline {
                     kill_tree(&mut child);
-                    let (stdout, stdout_truncated) =
-                        stdout_reader.join().unwrap_or_default();
-                    let (stderr, _) = stderr_reader.join().unwrap_or_default();
+                    let drain_deadline = Instant::now() + PIPE_DRAIN_GRACE;
+                    let stdout = receive_before(stdout_reader, drain_deadline);
+                    let stderr = receive_before(stderr_reader, drain_deadline);
+                    let output_incomplete =
+                        stdout.is_none() || stderr.is_none();
+                    let (stdout, stdout_truncated) = stdout.unwrap_or_default();
+                    let (stderr, _) = stderr.unwrap_or_default();
                     return Ok(RawRunOutput {
                         status: None,
                         stdout,
                         stderr,
                         timed_out: true,
                         stdout_truncated,
+                        output_incomplete,
                     });
                 }
                 thread::sleep(Duration::from_millis(10));
             }
         }
     };
-    kill_stragglers(child.id());
-    let (stdout, stdout_truncated) = stdout_reader.join().unwrap_or_default();
-    let (stderr, _) = stderr_reader.join().unwrap_or_default();
+    let drain_deadline = Instant::now() + PIPE_DRAIN_GRACE;
+    let stdout = receive_before(stdout_reader, drain_deadline);
+    let stderr = receive_before(stderr_reader, drain_deadline);
+    let output_incomplete = stdout.is_none() || stderr.is_none();
+    let (stdout, stdout_truncated) = stdout.unwrap_or_default();
+    let (stderr, _) = stderr.unwrap_or_default();
     Ok(RawRunOutput {
         status: status.code(),
         stdout,
         stderr,
         timed_out: false,
         stdout_truncated,
+        output_incomplete,
     })
+}
+
+/// Poll for child exit without reaping it, keeping its process-group ID from
+/// being recycled until the straggler kill has been sent.
+fn exited_without_reaping(child: &mut std::process::Child) -> io::Result<bool> {
+    #[cfg(unix)]
+    {
+        let mut info = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                child.id() as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if result == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(unsafe { info.si_pid() } != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(child.try_wait()?.is_some())
+    }
+}
+
+fn receive_before<T: Send + 'static>(
+    reader: thread::JoinHandle<T>,
+    deadline: Instant,
+) -> Option<T> {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let value = reader.join().ok();
+        let _ = sender.send(value);
+    });
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    receiver.recv_timeout(remaining).ok().flatten()
 }
 
 /// Kill stragglers in the child's process group after the leader exits.
 fn kill_stragglers(pid: u32) {
     #[cfg(unix)]
     {
-        let target = format!("-{pid}");
-        let _ = Command::new("kill").args(["-KILL", "--", &target]).output();
+        // The leader is still an unreaped zombie here, so this process-group
+        // ID cannot yet have been recycled.
+        let _ = unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) };
     }
 }
 
@@ -189,12 +267,8 @@ fn kill_tree(child: &mut std::process::Child) {
     #[cfg(unix)]
     {
         let pid = child.id();
-        let target = format!("-{pid}");
-        let killed = Command::new("kill")
-            .args(["-KILL", "--", &target])
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false);
+        let killed =
+            unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) } == 0;
         if !killed {
             let _ = child.kill();
         }
@@ -366,5 +440,60 @@ mod tests {
             run_raw(&raw_spec("bob-definitely-missing-binary", &[], 5_000))
                 .expect_err("missing binary fails to spawn");
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_bounds_pipe_drain_when_detached_grandchild_holds_output() {
+        let spec = RunSpec {
+            program: PathBuf::from("sh"),
+            args: ["-c", "setsid sleep 5 & echo $!; exit 0"]
+                .into_iter()
+                .map(OsString::from)
+                .collect(),
+            stdin: None,
+            env: Vec::new(),
+            env_remove: Vec::new(),
+            timeout: Duration::from_secs(5),
+        };
+        let started = Instant::now();
+        let output = run(&spec).expect("shell runs");
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(output.stderr.contains("output truncated"));
+        if let Ok(pid) = output.stdout.trim().parse::<u32>() {
+            let _ = Command::new("kill")
+                .args(["-KILL", &pid.to_string()])
+                .status();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn raw_run_bounds_pipe_drain_when_detached_grandchild_holds_output() {
+        let spec = RawRunSpec {
+            program: PathBuf::from("sh"),
+            args: ["-c", "setsid sleep 5 & echo $!; exit 0"]
+                .into_iter()
+                .map(OsString::from)
+                .collect(),
+            env: Vec::new(),
+            env_remove: Vec::new(),
+            timeout: Duration::from_secs(5),
+            stdout_cap: 1024,
+            stderr_cap: 1024,
+        };
+        let started = Instant::now();
+        let output = run_raw(&spec).expect("shell runs");
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(output.output_incomplete);
+        if let Ok(pid) = std::str::from_utf8(&output.stdout)
+            .unwrap_or_default()
+            .trim()
+            .parse::<u32>()
+        {
+            let _ = Command::new("kill")
+                .args(["-KILL", &pid.to_string()])
+                .status();
+        }
     }
 }

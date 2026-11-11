@@ -11,6 +11,7 @@ use clap::{Arg, ArgAction, Command as ClapCommand};
 use super::{env as bob_env, pomodoro_status};
 
 const COMMAND_NAME: &str = "bob pomodoro notify";
+const MAX_SLEEP_SECONDS: f64 = 31_536_000.0;
 
 #[derive(Debug)]
 struct Args {
@@ -111,6 +112,16 @@ fn parse_args(args: Vec<OsString>) -> ParseResult {
 
     if positionals.len() != 2 {
         return ParseResult::Error(usage());
+    }
+
+    if positionals.iter().any(|value| {
+        value.parse::<f64>().is_ok_and(|seconds| {
+            seconds.is_finite() && seconds >= 0.0 && seconds > MAX_SLEEP_SECONDS
+        })
+    }) {
+        return ParseResult::Error(format!(
+            "sleep values must be at most {MAX_SLEEP_SECONDS:.0} seconds"
+        ));
     }
 
     ParseResult::Run(Args {
@@ -225,6 +236,7 @@ fn sleep_arg(value: &str) -> io::Result<()> {
     if let Ok(seconds) = value.parse::<f64>()
         && seconds.is_finite()
         && seconds >= 0.0
+        && seconds <= MAX_SLEEP_SECONDS
     {
         thread::sleep(Duration::from_secs_f64(seconds));
         return Ok(());
@@ -254,4 +266,19 @@ fn command_available(command: &str) -> bool {
 
 fn info(args: std::fmt::Arguments<'_>) {
     eprintln!("{COMMAND_NAME}: info: {args}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_sleep_values_above_one_year() {
+        match parse_args(vec!["1e20".into(), "300".into()]) {
+            ParseResult::Error(message) => {
+                assert!(message.contains("at most 31536000 seconds"));
+            }
+            _ => panic!("oversized sleep value should be a usage error"),
+        }
+    }
 }

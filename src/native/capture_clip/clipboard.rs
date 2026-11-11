@@ -841,6 +841,11 @@ pub(super) fn require_clipboard_success(
             CLIPBOARD_TIMEOUT.as_secs()
         ));
     }
+    if output.output_incomplete {
+        return Err(format!(
+            "{label}: clipboard output was incomplete because a child kept its pipe open"
+        ));
+    }
     if output.stdout_truncated {
         return Err(format!(
             "{label}: clipboard output exceeds 16 MiB; copy a file path instead"
