@@ -1714,19 +1714,30 @@ fn print_new_dry_run(
 }
 
 /// Show a planned album index change alongside record dry-run output.
-/// Dry-run writes nothing; these are the exact bytes a real run stages.
+/// Dry-run writes nothing; this is the unified original-to-final diff a
+/// real run stages.
 fn print_album_dry_run(album: &PlannedAlbumWrite, after: &str) {
     let styler = Styler::detect();
+    let path = album.relative.display().to_string().replace('\\', "/");
     println!(
         "\n{}  {} ({})",
         styler.dim("index"),
         album.relative.display(),
         album.state.as_str(),
     );
-    print!("{after}");
-    if !after.ends_with('\n') {
-        println!();
-    }
+    let before = album
+        .edit
+        .as_ref()
+        .map(|edit| edit.before.as_str())
+        .unwrap_or(&album.before);
+    print!(
+        "{}",
+        similar::TextDiff::from_lines(before, after)
+            .unified_diff()
+            .context_radius(3)
+            .header(&format!("a/{path}"), &format!("b/{path}"))
+            .to_string()
+    );
 }
 
 fn print_new_success(
@@ -1836,6 +1847,16 @@ fn plan_album_write_for_record(
     let folder = catalog.folder(&record_type.dir);
     let planned =
         album_write::plan_album_write(&declaration, &before, folder, overlays);
+    if planned.state == IndexState::Damaged {
+        let reason = planned
+            .findings
+            .first()
+            .map(|finding| finding.message.clone())
+            .unwrap_or_else(|| {
+                format!("{path}: records index is damaged; refusing to write")
+            });
+        return Err(reason);
+    }
     Ok(Some(PlannedAlbumWrite {
         relative: album_relative,
         before,

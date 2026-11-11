@@ -1088,16 +1088,58 @@ pub(super) fn plan_capture_batch_with_config_path(
     );
     #[cfg(test)]
     let (record_folders, record_files_opened) = record_context.catalog_stats();
-    let mut album_files: Vec<AlbumFileJson> = record_context
-        .take_album_edits()
-        .into_iter()
-        .map(|edit| AlbumFileJson {
-            path: edit.relative.display().to_string().replace('\\', "/"),
-            state: edit.state.as_str().to_owned(),
-            before: edit.before,
-            after: edit.after,
-        })
-        .collect();
+    // Derive the final album report from the planner's original/current
+    // bytes: one entry per actually changed album, with the original disk
+    // preimage, final postimage, and original missing/stale state.
+    // Net-zero entries are dropped but keep their read guard so a
+    // concurrent album change still refuses while record bodies change.
+    let raw_edits = record_context.take_album_edits();
+    let mut first_state: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut order: Vec<String> = Vec::new();
+    for edit in &raw_edits {
+        let key = edit.relative.display().to_string().replace('\\', "/");
+        if !first_state.contains_key(&key) {
+            first_state.insert(key.clone(), edit.state.as_str().to_owned());
+            order.push(key);
+        }
+    }
+    let mut album_files: Vec<AlbumFileJson> = Vec::new();
+    for key in order {
+        let relative = std::path::PathBuf::from(&key);
+        let absolute = request.bob_dir.join(&relative);
+        if let Some((original, current)) = planner.loaded_texts(&absolute) {
+            if original == current {
+                planner.guard_merge_read(&absolute, None);
+                continue;
+            }
+            let state = first_state.remove(&key).unwrap_or_else(|| {
+                raw_edits
+                    .iter()
+                    .find(|edit| {
+                        edit.relative.display().to_string().replace('\\', "/")
+                            == key
+                    })
+                    .map(|edit| edit.state.as_str().to_owned())
+                    .unwrap_or_else(|| "stale".to_owned())
+            });
+            album_files.push(AlbumFileJson {
+                path: key,
+                state,
+                before: original,
+                after: current,
+            });
+        } else if let Some(edit) = raw_edits.iter().find(|edit| {
+            edit.relative.display().to_string().replace('\\', "/") == key
+        }) {
+            album_files.push(AlbumFileJson {
+                path: key,
+                state: edit.state.as_str().to_owned(),
+                before: edit.before.clone(),
+                after: edit.after.clone(),
+            });
+        }
+    }
     album_files.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(PlannedCaptureBatch {
         items,

@@ -1835,3 +1835,155 @@ fn record_writes_config_new_carries_no_album_index() {
         "config kinds plan no album write: {payload}"
     );
 }
+
+#[test]
+fn record_writes_damaged_folder_refuses_new_and_update_including_dry_run() {
+    let fixture = album_fixture();
+    write_file(
+        &fixture.vault.join("eat/nagi.md"),
+        &album_record("eat", "record", "Nagi", ""),
+    );
+    fs::create_dir_all(fixture.vault.join("eat/blocked.md"))
+        .expect("directory occupant");
+    let album_before =
+        fs::read_to_string(fixture.vault.join("eat.md")).unwrap();
+
+    for extra in [&["-f", "json"][..], &["-d", "-f", "json"][..]] {
+        let mut args = vec![
+            "new",
+            "restaurant",
+            "Ramen Nagi",
+            "-s",
+            "status=liked",
+            "-s",
+            "category=Ramen",
+            "-s",
+            "location=Clark",
+        ];
+        args.extend(extra.iter().copied());
+        let refused = record_writes_new(&fixture, &args);
+        assert!(
+            !refused.status.success(),
+            "damaged folder refuses new {extra:?}: {}",
+            format_output(&refused)
+        );
+        assert!(
+            format_output(&refused).contains("eat"),
+            "reports the affected path: {}",
+            format_output(&refused)
+        );
+    }
+    let update = record_writes_new(
+        &fixture,
+        &[
+            "update",
+            "restaurant",
+            "nagi",
+            "-s",
+            "status=to_try",
+            "-f",
+            "json",
+        ],
+    );
+    assert!(!update.status.success(), "damaged folder refuses update");
+    assert!(
+        !fixture.vault.join("eat/ramen_nagi.md").exists(),
+        "writes neither record nor index"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("eat.md")).unwrap(),
+        album_before,
+        "album unchanged"
+    );
+}
+
+#[test]
+fn record_writes_unreadable_member_refuses_but_malformed_allows_write() {
+    let fixture = album_fixture();
+    fs::write(
+        fixture.vault.join("eat/unreadable.md"),
+        b"---\ntitle: \xff\n---\n".as_slice(),
+    )
+    .expect("unreadable member");
+    let album_before =
+        fs::read_to_string(fixture.vault.join("eat.md")).unwrap();
+    let refused = record_writes_new(
+        &fixture,
+        &[
+            "new",
+            "restaurant",
+            "Ramen Nagi",
+            "-s",
+            "status=liked",
+            "-s",
+            "category=Ramen",
+            "-s",
+            "location=Clark",
+            "-f",
+            "json",
+        ],
+    );
+    assert!(!refused.status.success(), "unreadable member refuses");
+    assert!(
+        !fixture.vault.join("eat/ramen_nagi.md").exists(),
+        "no record file"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("eat.md")).unwrap(),
+        album_before,
+        "no index published from incomplete inputs"
+    );
+    fs::remove_file(fixture.vault.join("eat/unreadable.md")).expect("cleanup");
+    write_file(
+        &fixture.vault.join("eat/malformed.md"),
+        "---\n: bad: [unclosed\n---\n\n# Malformed\n",
+    );
+    let allowed = record_writes_new(
+        &fixture,
+        &[
+            "new",
+            "restaurant",
+            "Ramen Nagi",
+            "-s",
+            "status=liked",
+            "-s",
+            "category=Ramen",
+            "-s",
+            "location=Clark",
+            "-f",
+            "json",
+        ],
+    );
+    assert_success(&allowed);
+}
+
+#[test]
+fn record_writes_human_dry_run_shows_unified_album_diff() {
+    let fixture = album_fixture();
+    let dry = record_writes_new(
+        &fixture,
+        &[
+            "new",
+            "restaurant",
+            "Ramen Nagi",
+            "-s",
+            "status=liked",
+            "-s",
+            "category=Ramen",
+            "-s",
+            "location=Clark",
+            "-d",
+        ],
+    );
+    assert_success(&dry);
+    let out = format_output(&dry);
+    assert!(out.contains("eat.md"), "file header: {out}");
+    assert!(
+        out.contains("--- a/eat.md") || out.contains("a/eat.md"),
+        "unified diff header: {out}"
+    );
+    assert!(
+        out.contains('+') && out.contains("Ramen Nagi"),
+        "changed lines: {out}"
+    );
+}

@@ -15,21 +15,38 @@ use super::{
     grouping::{group_records, GroupingRecord},
     index::{plan_index, IndexState},
     report::resolved_plural,
-    AlbumDeclaration,
+    AlbumDeclaration, AlbumFinding,
 };
 use crate::native::{
     host_catalog::FileEdit,
-    records::{staged_record, FolderIndex, IndexedRecord},
+    records::{
+        schema::RecordDiagnosticCode, staged_record, FolderIndex, IndexedRecord,
+    },
 };
 
 /// One planned album write: the preimage-bound edit when the index must
 /// change, plus the reported state. `Current` and `Damaged` carry no edit;
 /// callers still guard the preimage so a concurrent album edit refuses
-/// instead of silently publishing a stale index.
+/// instead of silently publishing a stale index. `Damaged` callers must
+/// refuse the whole record write using `findings` for the path/reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AlbumWritePlan {
     pub(crate) state: IndexState,
     pub(crate) edit: Option<FileEdit>,
+    pub(crate) findings: Vec<AlbumFinding>,
+}
+
+/// Shared folder/member completeness rule with the report path: the folder
+/// must have no diagnostics and no member may carry a `NoteRead`
+/// diagnostic (I/O or invalid UTF-8). Readable invalid YAML stays a
+/// counted member with its fallback title/status.
+pub(crate) fn folder_complete(folder: &FolderIndex) -> bool {
+    folder.diagnostics().is_empty()
+        && folder.notes().iter().all(|note| {
+            !note.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == RecordDiagnosticCode::NoteRead
+            })
+        })
 }
 
 /// Overlay staged record postimages onto the cached folder slice, keyed by
@@ -107,11 +124,12 @@ pub(crate) fn plan_album_write(
         &grouping,
         declaration.index_by.as_deref(),
         members.len(),
-        folder.diagnostics().is_empty(),
+        folder_complete(folder),
     );
     AlbumWritePlan {
         state: planned.state,
         edit: planned.edit,
+        findings: planned.findings,
     }
 }
 
@@ -319,6 +337,69 @@ mod tests {
                 .contains("drift"),
             "foreign bytes survive"
         );
+    }
+
+    #[test]
+    fn damaged_folder_and_unreadable_member_are_damaged() {
+        let temp = vault();
+        let root = temp.path();
+        let album_before =
+            std::fs::read_to_string(root.join("eat.md")).expect("album");
+        let declaration = declaration(&album_before);
+        // A direct `.md` occupant that is a directory damages the slice.
+        std::fs::create_dir_all(root.join("eat/blocked.md"))
+            .expect("directory occupant");
+        let mut catalog = RecordCatalog::new(root);
+        let folder = catalog.folder("eat");
+        let damaged = plan_album_write(
+            &declaration,
+            &album_before,
+            folder,
+            &[(relative("eat/new.md"), NINJA.to_owned())],
+        );
+        assert_eq!(damaged.state, IndexState::Damaged);
+        assert!(damaged.edit.is_none());
+        assert!(
+            damaged.findings.iter().any(|finding| finding
+                .message
+                .contains("could not be read completely")
+                || finding.message.contains("occupied")),
+            "useful path/reason: {:?}",
+            damaged.findings
+        );
+        // Unreadable frontmatter (invalid UTF-8, deterministic even as
+        // root) also damages; readable malformed YAML does not block.
+        std::fs::remove_dir_all(root.join("eat/blocked.md")).expect("cleanup");
+        std::fs::write(
+            root.join("eat/unreadable.md"),
+            b"---\ntitle: \xff\n---\n".as_slice(),
+        )
+        .expect("unreadable member");
+        let mut catalog = RecordCatalog::new(root);
+        let folder = catalog.folder("eat");
+        let unreadable = plan_album_write(
+            &declaration,
+            &album_before,
+            folder,
+            &[(relative("eat/new.md"), NINJA.to_owned())],
+        );
+        assert_eq!(unreadable.state, IndexState::Damaged);
+        assert!(unreadable.edit.is_none());
+        std::fs::remove_file(root.join("eat/unreadable.md")).expect("cleanup");
+        std::fs::write(
+            root.join("eat/malformed.md"),
+            "---\n: bad: [unclosed\n---\n\n# Malformed\n",
+        )
+        .expect("malformed member");
+        let mut catalog = RecordCatalog::new(root);
+        let folder = catalog.folder("eat");
+        let malformed = plan_album_write(
+            &declaration,
+            &album_before,
+            folder,
+            &[(relative("eat/new.md"), NINJA.to_owned())],
+        );
+        assert_ne!(malformed.state, IndexState::Damaged);
     }
 
     #[test]

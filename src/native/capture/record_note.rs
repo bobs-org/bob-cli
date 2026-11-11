@@ -478,6 +478,20 @@ fn stage_album_index(
     let folder = catalog.folder(dir);
     let planned =
         album_write::plan_album_write(&declaration, &before, folder, &overlays);
+    if planned.state == crate::native::albums::index::IndexState::Damaged {
+        let reason = planned
+            .findings
+            .first()
+            .map(|finding| finding.message.clone())
+            .unwrap_or_else(|| {
+                format!(
+                    "{}: records index is damaged; the records index was left unchanged",
+                    album_relative.display()
+                )
+            });
+        return Err(CaptureError::io(reason)
+            .with_typed(CaptureFailureKind::NoteChanged));
+    }
     match planned.edit {
         Some(edit) => {
             debug_assert_eq!(edit.before, before);

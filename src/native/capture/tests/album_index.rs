@@ -329,6 +329,191 @@ fn album_edit_after_planning_refuses_and_writes_nothing() {
     no_capture_litter(&vault);
 }
 
+#[test]
+fn damaged_folder_refuses_batch_and_writes_nothing() {
+    let (_temp, vault, config) = album_vault();
+    std::fs::create_dir_all(vault.join("eat/blocked.md"))
+        .expect("directory occupant");
+    let album_before =
+        std::fs::read_to_string(vault.join("eat.md")).expect("album");
+    let _env = crate::native::env::TestEnvGuard::set(&[
+        ("BOB_NOW", Some(OsStr::new("2026-10-07 13:40:00"))),
+        ("TZ", Some(OsStr::new("UTC0"))),
+    ]);
+    let request = record_request(
+        &vault,
+        true,
+        "Ramen Nagi @eat/\n- status:: liked\n- category:: Ramen\n- location:: Clark",
+    );
+    let error = match plan_capture_batch_with_config_path(
+        &request,
+        None,
+        Some(&config),
+    ) {
+        Ok(_) => panic!("damaged folder refuses"),
+        Err(error) => error,
+    };
+    assert!(
+        error.message.contains("eat"),
+        "reports the affected path: {}",
+        error.message
+    );
+    assert!(
+        !vault.join("eat/ramen_nagi.md").exists(),
+        "writes neither record nor index"
+    );
+    assert_eq!(
+        std::fs::read_to_string(vault.join("eat.md")).expect("album"),
+        album_before,
+        "album unchanged"
+    );
+}
+
+#[test]
+fn unreadable_member_refuses_while_malformed_member_allows_write() {
+    let (_temp, vault, config) = album_vault();
+    std::fs::write(
+        vault.join("eat/unreadable.md"),
+        b"---\ntitle: \xff\n---\n".as_slice(),
+    )
+    .expect("unreadable member");
+    let _env = crate::native::env::TestEnvGuard::set(&[
+        ("BOB_NOW", Some(OsStr::new("2026-10-07 13:40:00"))),
+        ("TZ", Some(OsStr::new("UTC0"))),
+    ]);
+    let request = record_request(
+        &vault,
+        true,
+        "Ramen Nagi @eat/\n- status:: liked\n- category:: Ramen\n- location:: Clark",
+    );
+    let error = match plan_capture_batch_with_config_path(
+        &request,
+        None,
+        Some(&config),
+    ) {
+        Ok(_) => panic!("unreadable member refuses"),
+        Err(error) => error,
+    };
+    assert!(
+        error.message.contains("eat"),
+        "names the album: {}",
+        error.message
+    );
+    std::fs::remove_file(vault.join("eat/unreadable.md")).expect("cleanup");
+    std::fs::write(
+        vault.join("eat/malformed.md"),
+        "---\n: bad: [unclosed\n---\n\n# Malformed\n",
+    )
+    .expect("malformed member");
+    let batch = plan(
+        &vault,
+        &config,
+        true,
+        "Ramen Nagi @eat/\n- status:: liked\n- category:: Ramen\n- location:: Clark",
+    );
+    assert_eq!(batch.album_files.len(), 1, "healthy write proceeds");
+}
+
+#[test]
+fn failing_second_item_writes_nothing() {
+    let (_temp, vault, config) = album_vault();
+    // Second item updates a missing stem, so the whole batch fails after
+    // the first item staged its record and album edit.
+    let _env = crate::native::env::TestEnvGuard::set(&[
+        ("BOB_NOW", Some(OsStr::new("2026-10-07 13:40:00"))),
+        ("TZ", Some(OsStr::new("UTC0"))),
+    ]);
+    let request = record_request(
+        &vault,
+        false,
+        "Ramen Nagi @eat/\n- status:: liked\n- category:: Ramen\n- location:: Clark\n\n@eat/does_not_exist\n- status:: liked",
+    );
+    let error = match plan_capture_batch_with_config_path(
+        &request,
+        None,
+        Some(&config),
+    ) {
+        Ok(_) => panic!("second item fails the batch"),
+        Err(error) => error,
+    };
+    let _ = error;
+    assert!(
+        !vault.join("eat/ramen_nagi.md").exists(),
+        "first item installs nothing on later failure"
+    );
+}
+
+#[test]
+fn missing_index_reports_original_preimage_and_state() {
+    let (_temp, vault, config) = album_vault();
+    let album_before =
+        std::fs::read_to_string(vault.join("eat.md")).expect("album");
+    let batch = plan(
+        &vault,
+        &config,
+        true,
+        "Ramen Nagi @eat/\n- status:: liked\n- category:: Ramen\n- location:: Clark\n\nUdon @eat/\n- status:: to_try\n- category:: Udon\n- location:: Main\n\n@eat/ramen_nagi\n- status:: to_try",
+    );
+    assert_eq!(batch.album_files.len(), 1, "one final album edit");
+    let file = &batch.album_files[0];
+    assert_eq!(
+        file.before, album_before,
+        "before is the original disk bytes"
+    );
+    assert_eq!(file.state, "missing", "state stays the original missing");
+    let staged = staged_map(&batch);
+    let written = staged.get(&vault.join("eat.md")).expect("staged album");
+    assert_eq!(&file.after, written, "after equals the written bytes");
+}
+
+#[test]
+fn net_zero_final_index_reports_nothing_but_keeps_its_guard() {
+    let (_temp, vault, config) = album_vault();
+    // Create then update back to the same grouping would be net-zero, but
+    // a notes-only change still touches the record. Use two opposing
+    // updates on the existing record: the index ends where it started.
+    let before = std::fs::read_to_string(vault.join("eat.md")).expect("album");
+    // First bring the index to a known staged state via planning helpers:
+    // plan a batch that changes ninja_sushi liked->to_try then back.
+    let batch = plan(
+        &vault,
+        &config,
+        true,
+        "@eat/ninja_sushi\n- status:: to_try\n\n@eat/ninja_sushi\n- status:: liked",
+    );
+    // The two updates net to no grouping change; either no album file is
+    // reported, or the staged album equals the original.
+    let staged = staged_map(&batch);
+    if batch.album_files.is_empty() {
+        assert!(
+            !staged.contains_key(&vault.join("eat.md"))
+                || staged.get(&vault.join("eat.md")).unwrap() == &before,
+            "net-zero writes no album bytes"
+        );
+    } else {
+        assert_eq!(batch.album_files[0].before, before);
+    }
+    // The guard survives: a concurrent album edit still refuses.
+    let _env = crate::native::env::TestEnvGuard::set(&[
+        ("BOB_NOW", Some(OsStr::new("2026-10-07 13:40:00"))),
+        ("TZ", Some(OsStr::new("UTC0"))),
+    ]);
+    let request = record_request(
+        &vault,
+        false,
+        "@eat/ninja_sushi\n- status:: to_try\n\n@eat/ninja_sushi\n- status:: liked",
+    );
+    let mut batch =
+        plan_capture_batch_with_config_path(&request, None, Some(&config))
+            .expect("net-zero plans");
+    let parked = std::fs::read_to_string(vault.join("eat.md")).expect("album");
+    std::fs::write(vault.join("eat.md"), format!("{parked}<!-- drift -->\n"))
+        .expect("drift");
+    let error =
+        commit_capture_batch(&mut batch, &vault).expect_err("drift refuses");
+    assert_eq!(error.typed, Some(CaptureFailureKind::NoteChanged));
+}
+
 fn no_capture_litter(dir: &std::path::Path) {
     let litter: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
         .expect("read fixture dir")

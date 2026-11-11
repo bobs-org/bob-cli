@@ -138,15 +138,16 @@ impl CaptureRecordContext {
         })
     }
 
-    /// Report one staged album edit, replacing any earlier postimage for
-    /// the same album so the batch carries exactly one edit per album.
+    /// Report one staged album edit, keeping the original disk preimage
+    /// and state while advancing to the latest postimage, so the batch
+    /// carries exactly one original-to-final edit per album.
     pub(crate) fn record_album_edit(&mut self, edit: AlbumIndexEdit) {
         if let Some(existing) = self
             .album_edits
             .iter_mut()
             .find(|existing| existing.relative == edit.relative)
         {
-            *existing = edit;
+            existing.after = edit.after;
         } else {
             self.album_edits.push(edit);
         }

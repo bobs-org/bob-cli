@@ -9,6 +9,7 @@ use super::{
     grouping::{group_records, GroupingRecord, RecordGroup},
     index::{self, IndexState},
     registry::{AlbumEntry, AlbumRegistry, DiscoveryHealth},
+    write::folder_complete,
     AlbumDeclaration, AlbumFinding, AlbumIssueSeverity,
 };
 use crate::native::records::{
@@ -331,12 +332,7 @@ pub(crate) fn project_album_from_folder(
         &declaration.index_facets,
         &members,
     );
-    let folder_complete = folder.diagnostics().is_empty()
-        && folder.notes().iter().all(|note| {
-            !note.diagnostics.iter().any(|diagnostic| {
-                diagnostic.code == RecordDiagnosticCode::NoteRead
-            })
-        });
+    let complete = folder_complete(folder);
     let mut plan = index::plan_index(
         &declaration.path,
         entry.contents.as_deref(),
@@ -346,7 +342,7 @@ pub(crate) fn project_album_from_folder(
         &grouping,
         declaration.index_by.as_deref(),
         members.len(),
-        folder_complete,
+        complete,
     );
     let album_invalid = entry
         .findings

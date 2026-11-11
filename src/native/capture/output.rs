@@ -646,10 +646,10 @@ impl CaptureResult {
     }
 }
 
-/// Batch-level album index changes. Dry-run shows the exact planned album
-/// bytes once per album; a committed run names each updated album.
-/// Record cards stay record-oriented; this section covers the album side
-/// effect after the items that caused it.
+/// Batch-level album index changes. Dry-run shows the unified
+/// original-to-final album diff once per album; a committed run names each
+/// updated album. Record cards stay record-oriented; this section covers
+/// the album side effect after the items that caused it.
 fn print_album_files(result: &CaptureResult) {
     if result.album_files.is_empty() {
         return;
@@ -664,10 +664,17 @@ fn print_album_files(result: &CaptureResult) {
                 album.path,
                 album.state,
             );
-            print!("{}", album.after);
-            if !album.after.ends_with('\n') {
-                println!();
-            }
+            print!(
+                "{}",
+                similar::TextDiff::from_lines(&album.before, &album.after)
+                    .unified_diff()
+                    .context_radius(3)
+                    .header(
+                        &format!("a/{}", album.path),
+                        &format!("b/{}", album.path)
+                    )
+                    .to_string()
+            );
         }
         return;
     }

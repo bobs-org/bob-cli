@@ -335,10 +335,11 @@ fn format_scalar(field: &RecordField, raw: &str) -> String {
 }
 
 fn tally_text(plural: &str, grouping: &RecordGrouping, total: usize) -> String {
+    let safe_plural = inert_text(plural);
     if total == 0 {
-        return format!("No {plural} yet");
+        return format!("No {safe_plural} yet");
     }
-    let mut parts = vec![format!("{total} {plural}")];
+    let mut parts = vec![format!("{total} {safe_plural}")];
     for group in &grouping.groups {
         parts.push(tally_fragment(&group.label, group.count));
     }
@@ -350,7 +351,7 @@ fn tally_text(plural: &str, grouping: &RecordGrouping, total: usize) -> String {
 
 fn tally_fragment(label: &str, count: usize) -> String {
     let (icon, rest) = split_icon(label);
-    let text = lowercase_rest(rest);
+    let text = inert_text(&lowercase_rest(rest));
     match icon {
         Some(icon) if !text.is_empty() => format!("{icon} {count} {text}"),
         Some(icon) => format!("{icon} {count}"),
@@ -1007,5 +1008,68 @@ mod tests {
     fn group_is_large_threshold_matches_contract() {
         assert!(!group_is_large(12));
         assert!(group_is_large(13));
+    }
+
+    #[test]
+    fn hostile_plural_and_choice_labels_stay_on_one_inert_line() {
+        let hostile_plural = "restaurants\n## Injected";
+        let hostile_label =
+            "To try\n## Injected [x](y) *bold* `code` [[link]] #tag";
+        let fields = vec![choices("status", &[("to_try", hostile_label)])];
+        let records =
+            vec![record("eat/one.md", "One", &[("status", scalar("to_try"))])];
+        let grouping = group_records(&fields, None, &[], &records);
+        let lines = render_callout(
+            "eat",
+            hostile_plural,
+            &fields,
+            &grouping,
+            None,
+            records.len(),
+        );
+        let head = lines.first().expect("head line");
+        assert!(
+            !head.contains('\n') && !head.contains('\r'),
+            "header stays one physical line: {head:?}"
+        );
+        assert!(
+            !join(&lines).contains("\n## Injected"),
+            "no raw newline injection: {}",
+            join(&lines)
+        );
+        assert!(
+            head.contains("restaurants"),
+            "normal plural text survives: {head}"
+        );
+        // Second render of the same bytes is a no-op: plan against the
+        // installed text yields Current with no edit.
+        let text = format!("# Eat\n\n{}\n", join(&lines));
+        let regroup = group_records(&fields, None, &[], &records);
+        let plan = plan_index(
+            "eat.md",
+            Some(&text),
+            "eat",
+            hostile_plural,
+            &fields,
+            &regroup,
+            None,
+            records.len(),
+            true,
+        );
+        assert_eq!(plan.state, IndexState::Current);
+        assert!(plan.edit.is_none());
+        let empty = render_callout(
+            "eat",
+            hostile_plural,
+            &fields,
+            &group_records(&fields, None, &[], &[]),
+            None,
+            0,
+        );
+        let empty_head = empty.first().expect("empty head");
+        assert!(
+            !empty_head.contains('\n'),
+            "empty-album plural is also inert: {empty_head:?}"
+        );
     }
 }
