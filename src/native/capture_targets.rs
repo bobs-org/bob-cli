@@ -606,10 +606,12 @@ fn append_record_targets(
     report: &mut CaptureTargetsReport,
 ) {
     let context = RecordContext::discover(bob_dir, config_path);
-    // Retain readable partial results: surface scan failures but still list
-    // the healthy albums the partial registry could prove. The root scan
-    // above already reports unreadable files, so skip registry errors that
-    // name an already-reported failure instead of listing one file twice.
+    // A partial album-registry walk hides every record capture target,
+    // including config-defined kinds that predate the registry. This is
+    // intentional and matches the completion provider, which also offers
+    // no record types unless discovery is Complete. The root scan above
+    // already reports unreadable files, so skip registry errors that name
+    // an already-reported failure instead of listing one file twice.
     if let super::albums::registry::DiscoveryHealth::Partial(errors) =
         &context.registry().health
     {
@@ -622,6 +624,7 @@ fn append_record_targets(
                     .push(ScanNote::path(PathBuf::from("."), error.clone()));
             }
         }
+        return;
     }
 
     // A broken album still owns its noun and folder, so report its schema
@@ -1260,6 +1263,58 @@ mod tests {
             .targets
             .iter()
             .all(|target| target.kind != CaptureTargetKind::Record));
+    }
+
+    #[test]
+    fn partial_registry_hides_every_record_capture_target() {
+        let temp = TempDir::new("bob-cli-capture-targets-partial-registry");
+        let config = temp.path().join("config.yml");
+        write_file(
+            &config,
+            "records:\n  restaurant:\n    dir: eat\n    label: Restaurant\n    fields: {}\n",
+        );
+        write_file(&temp.path().join("cash.md"), "---\ntype: [[area]]\n---\n");
+        write_file(
+            &temp.path().join("eat/ninja.md"),
+            "---\ntype: [[restaurant]]\n---\n",
+        );
+        let locked = temp.path().join("locked.md");
+        write_file(&locked, "---\ntype: [[area]]\n---\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o000))
+                .expect("remove read permission");
+        }
+        let report = scan_capture_targets_with_config(temp.path(), &config);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o644))
+                .expect("restore read permission");
+        }
+        if !report
+            .issues
+            .iter()
+            .any(|issue| issue.display().contains("failed to read"))
+        {
+            // Privileges that ignore file permissions never produce a
+            // partial registry walk, so the drop-all policy cannot fire.
+            return;
+        }
+        assert!(
+            report
+                .targets
+                .iter()
+                .all(|target| target.kind != CaptureTargetKind::Record),
+            "partial discovery must drop record routes: {:?}",
+            report.targets
+        );
+        assert!(
+            report.targets.iter().any(|target| target.route == "cash"),
+            "task routes remain: {:?}",
+            report.targets
+        );
     }
 
     #[test]

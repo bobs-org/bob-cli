@@ -21,30 +21,51 @@ pub(crate) type ChildEnv = Vec<(OsString, OsString)>;
 
 /// Build a `git -C <vault>` command carrying the shared child environment so
 /// pushes are non-interactive under cron.
+///
+/// This builder does not pass `--literal-pathspecs`. `git check-ignore`
+/// rejects pathspec magic (`fatal: ... pathspec magic not supported ...
+/// 'literal'`), and callers that pass glob pathspecs such as `*.md` need
+/// globbing. Use [`git_command_literal`] when the args are real filenames
+/// that may contain `*?[]`.
 pub(crate) fn git_command(vault: &Path, child_env: &ChildEnv) -> Command {
+    git_command_with(vault, child_env, false)
+}
+
+/// Like [`git_command`], but `--literal-pathspecs` so names such as
+/// `What is Rust?.png` or `Screenshot [2].png` never glob.
+pub(crate) fn git_command_literal(
+    vault: &Path,
+    child_env: &ChildEnv,
+) -> Command {
+    git_command_with(vault, child_env, true)
+}
+
+fn git_command_with(
+    vault: &Path,
+    child_env: &ChildEnv,
+    literal_pathspecs: bool,
+) -> Command {
     let mut command = Command::new("git");
     // Keep auto-maintenance in this process: a detached maintenance child can
     // hold HEAD.lock while the next vault operation updates refs.
-    // `--literal-pathspecs` disables fnmatch wildcards (`*?[]`) in every
-    // filename we pass after `--`: vault names like `What is Rust?.png` or
-    // `Screenshot [2].png` must never glob or abort a sync mid-merge.
     command
         .arg("-c")
         .arg("maintenance.autoDetach=false")
         .arg("-c")
-        .arg("gc.autoDetach=false")
-        .arg("--literal-pathspecs")
-        .arg("-C")
-        .arg(vault)
-        .envs(child_env.iter().cloned());
+        .arg("gc.autoDetach=false");
+    if literal_pathspecs {
+        command.arg("--literal-pathspecs");
+    }
+    command.arg("-C").arg(vault).envs(child_env.iter().cloned());
     command
 }
 
 /// Build a `git -C <vault> ... check-ignore` command.
 ///
-/// `git check-ignore` rejects the global `--literal-pathspecs` hardening, so
-/// this builder switches it back off for the probe; the later global flag
-/// wins. `check-ignore` treats each argument as a plain path string and never
+/// `git check-ignore` rejects `--literal-pathspecs` (`pathspec magic not
+/// supported`). [`git_command`] already omits that flag; this builder also
+/// passes `--no-literal-pathspecs` so a later global literal setting cannot
+/// win. `check-ignore` treats each argument as a plain path string and never
 /// glob-expands, so wildcard vault names stay safe without literal mode.
 pub(crate) fn git_check_ignore_command(
     vault: &Path,
@@ -334,7 +355,7 @@ pub(crate) fn commit_paths(
         return Ok(None);
     }
 
-    let add_status = git_command(vault, child_env)
+    let add_status = git_command_literal(vault, child_env)
         .arg("add")
         .arg("--")
         .args(paths)
@@ -344,7 +365,7 @@ pub(crate) fn commit_paths(
         return Err(format!("git add -- <{} path(s)> failed", paths.len()));
     }
 
-    let diff_status = git_command(vault, child_env)
+    let diff_status = git_command_literal(vault, child_env)
         .arg("diff")
         .arg("--cached")
         .arg("--quiet")
@@ -358,7 +379,7 @@ pub(crate) fn commit_paths(
         return Ok(None);
     }
 
-    let mut commit = git_command(vault, child_env);
+    let mut commit = git_command_literal(vault, child_env);
     commit
         .arg("commit")
         .arg("-F")
@@ -448,8 +469,17 @@ mod tests {
             ]
         );
         assert!(
-            args.iter().any(|arg| arg == "--literal-pathspecs"),
-            "git_command must pass --literal-pathspecs so `[`/`?` vault names never glob: {args:?}"
+            !args.iter().any(|arg| arg == "--literal-pathspecs"),
+            "git_command must omit --literal-pathspecs so check-ignore and `*.md` globs keep working: {args:?}"
+        );
+        let literal = git_command_literal(Path::new("/tmp/vault"), &child_env);
+        let literal_args: Vec<_> = literal
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            literal_args.iter().any(|arg| arg == "--literal-pathspecs"),
+            "git_command_literal must pass --literal-pathspecs so `[`/`?` vault names never glob: {literal_args:?}"
         );
     }
 
@@ -463,20 +493,17 @@ mod tests {
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
-        let literal = args
-            .iter()
-            .position(|arg| arg == "--literal-pathspecs")
-            .unwrap();
+        assert!(
+            !args.iter().any(|arg| arg == "--literal-pathspecs"),
+            "git_command omits --literal-pathspecs; check-ignore must not re-enable it: {args:?}"
+        );
         let no_literal = args
             .iter()
             .position(|arg| arg == "--no-literal-pathspecs")
             .unwrap();
         let check_ignore =
             args.iter().position(|arg| arg == "check-ignore").unwrap();
-        assert!(
-            literal < no_literal && no_literal < check_ignore,
-            "{args:?}"
-        );
+        assert!(no_literal < check_ignore, "{args:?}");
     }
 
     #[test]

@@ -56,6 +56,8 @@ pub(crate) fn vault_lines(
 
 fn record_types(context: &Context) -> Vec<String> {
     let records = record_context(context);
+    // Incomplete discovery hides every record type, matching
+    // `append_record_targets`: a partial registry must not offer routes.
     if !matches!(
         &records.registry().health,
         crate::native::albums::registry::DiscoveryHealth::Complete

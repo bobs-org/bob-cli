@@ -46,8 +46,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -75,6 +77,48 @@ def sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def read_text_raw(path: Path) -> str:
+    with path.open(encoding="utf-8", newline="") as handle:
+        return handle.read()
+
+
+def split_text_lines(text: str) -> tuple[list[str], str]:
+    """Split on any newline style and report the file's dominant ending."""
+    if "\r\n" in text:
+        newline = "\r\n"
+    elif "\r" in text:
+        newline = "\r"
+    else:
+        newline = "\n"
+    return text.splitlines(), newline
+
+
+def join_text_lines(lines: list[str], newline: str, original: str) -> str:
+    body = newline.join(lines)
+    if original.endswith(("\n", "\r")):
+        return f"{body}{newline}"
+    return body
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    directory = path.parent
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=directory
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
 @dataclass
 class Candidate:
     path: str
@@ -92,14 +136,14 @@ def iter_task_lines(
 ) -> tuple[list[Candidate], list[str]]:
     candidates: list[Candidate] = []
     errors: list[str] = []
-    seen_ref_lines: dict[int, int] = {}
-    for lineno, line in enumerate(text.split("\n"), start=1):
-        stripped = line.rstrip("\r")
-        task = TASK_LINE.match(stripped)
+    seen_ref_anchors: set[str] = set()
+    lines, _newline = split_text_lines(text)
+    for lineno, line in enumerate(lines, start=1):
+        task = TASK_LINE.match(line)
         if not task:
             continue
         status = task.group(2)
-        block = BLOCK_ID.search(stripped.split("\n")[0])
+        block = BLOCK_ID.search(line.split("\n")[0])
         block_id = block.group(1) if block else None
         if block_id != "ref":
             continue
@@ -108,21 +152,21 @@ def iter_task_lines(
         created_raw: str | None = None
         created: date | None = None
         created_valid = True
-        fields = CREATED_FIELD.findall(stripped)
+        fields = CREATED_FIELD.findall(line)
         if fields:
             created_raw = fields[0][1].strip()
             created = parse_date_strict(created_raw)
             if created is None:
                 created_valid = False
-        if lineno in seen_ref_lines:
+        if block_id in seen_ref_anchors:
             errors.append(f"{rel}:{lineno}: duplicate ^ref anchor in one file")
             continue
-        seen_ref_lines[lineno] = lineno
+        seen_ref_anchors.add(block_id)
         candidates.append(
             Candidate(
                 path=str(rel),
                 line=lineno,
-                raw_line=stripped,
+                raw_line=line,
                 status=status,
                 block_id=block_id,
                 created=created,
@@ -143,7 +187,7 @@ def census_vault(vault: Path) -> tuple[list[Candidate], list[str], dict[str, str
         if "_templates" in parts or "_conflicts" in parts:
             continue
         try:
-            text = path.read_text(encoding="utf-8")
+            text = read_text_raw(path)
         except (OSError, UnicodeDecodeError) as exc:
             errors.append(f"{rel}: unreadable ({exc})")
             continue
@@ -237,16 +281,16 @@ def apply_manifest(vault: Path, manifest: dict) -> dict:
         rel = Path(entry["path"])
         target = vault / rel
         try:
-            text = target.read_text(encoding="utf-8")
+            text = read_text_raw(target)
         except OSError as exc:
             stale.append({**entry, "stale_reason": f"unreadable: {exc}"})
             continue
-        lines = text.split("\n")
+        lines, newline = split_text_lines(text)
         lineno = int(entry["line"])
         if lineno < 1 or lineno > len(lines):
             stale.append({**entry, "stale_reason": "line-out-of-range"})
             continue
-        current = lines[lineno - 1].rstrip("\r")
+        current = lines[lineno - 1]
         if current != entry["raw_line"]:
             stale.append({**entry, "stale_reason": "source-bytes-changed"})
             continue
@@ -262,10 +306,7 @@ def apply_manifest(vault: Path, manifest: dict) -> dict:
             stale.append({**entry, "stale_reason": "already-closed"})
             continue
         lines[lineno - 1] = entry["after_line"]
-        newline = "\n"
-        if text.endswith("\r\n"):
-            newline = "\r\n"
-        target.write_text(newline.join(lines), encoding="utf-8", newline="")
+        atomic_write_text(target, join_text_lines(lines, newline, text))
         applied.append(entry)
     return {"applied": applied, "stale": stale}
 

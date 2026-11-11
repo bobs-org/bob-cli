@@ -65,7 +65,7 @@ fn run_loop(args: &Args) -> i32 {
         info(format_args!(
             "Sending notifications since pomodoro is done!"
         ));
-        notify_me(loop_count);
+        notify_me(loop_count, persist_notification(loop_count));
 
         info(format_args!(
             "Sleeping for {} seconds before restarting check loop.",
@@ -211,14 +211,27 @@ fn usage() -> String {
     )
 }
 
-fn notify_me(count: i32) {
+fn persist_notification(count: i32) -> bool {
+    count >= 10
+}
+
+fn notify_send_args(count: i32, no_timeout: bool) -> Vec<String> {
+    let mut args = Vec::new();
+    if no_timeout {
+        args.push("-t".to_string());
+        args.push("0".to_string());
+    }
+    args.push("-u".to_string());
+    args.push("critical".to_string());
+    args.push("bob".to_string());
+    args.push(format!(" Pomodoro is done! (#{count})"));
+    args
+}
+
+fn notify_me(count: i32, no_timeout: bool) {
     if command_available("notify-send") {
-        let message = format!(" Pomodoro is done! (#{count})");
         let _ = Command::new("notify-send")
-            .arg("-u")
-            .arg("critical")
-            .arg("bob")
-            .arg(message)
+            .args(notify_send_args(count, no_timeout))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -280,5 +293,31 @@ mod tests {
             }
             _ => panic!("oversized sleep value should be a usage error"),
         }
+    }
+
+    #[test]
+    fn tenth_and_later_overdue_alerts_stay_on_screen() {
+        assert!(!persist_notification(9));
+        assert!(persist_notification(10));
+        assert!(persist_notification(11));
+    }
+
+    #[test]
+    fn persistent_notify_send_uses_no_timeout() {
+        assert_eq!(
+            notify_send_args(10, true),
+            [
+                "-t",
+                "0",
+                "-u",
+                "critical",
+                "bob",
+                " Pomodoro is done! (#10)"
+            ]
+        );
+        assert_eq!(
+            notify_send_args(3, false),
+            ["-u", "critical", "bob", " Pomodoro is done! (#3)"]
+        );
     }
 }

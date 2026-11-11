@@ -2231,7 +2231,7 @@ fn git_success_os(
     prefix: &[&OsStr],
     path: &Path,
 ) -> Result<(), CycleError> {
-    let mut command = ob::git_command(vault, child_env);
+    let mut command = ob::git_command_literal(vault, child_env);
     command.args(prefix).arg(path);
     let output = command
         .stdout(Stdio::piped())

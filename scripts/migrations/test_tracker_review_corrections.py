@@ -19,6 +19,8 @@ from tracker_review_corrections import (
     build_preview,
     complete_line,
     parse_date_strict,
+    read_text_raw,
+    split_text_lines,
 )
 
 
@@ -135,6 +137,56 @@ class CutoffTests(unittest.TestCase):
             report = apply_manifest(tmp.vault, manifest)
             self.assertEqual(report["applied"], [])
             self.assertEqual(len(report["stale"]), 1)
+        finally:
+            tmp.cleanup()
+
+    def test_crlf_apply_does_not_double_carriage_returns(self):
+        tmp = make_vault(
+            {"a.md": "- [ ] #task Old [created:: 2026-09-01] ^ref\r\nline2\r\n"}
+        )
+        try:
+            lines, newline = split_text_lines(read_text_raw(tmp.vault / "a.md"))
+            self.assertEqual(newline, "\r\n")
+            self.assertEqual(lines[0].endswith("\r"), False)
+            manifest = build_preview(
+                tmp.vault, date(2026, 9, 26), date(2026, 10, 3), "head"
+            )
+            report = apply_manifest(tmp.vault, manifest)
+            self.assertEqual(len(report["applied"]), 1)
+            self.assertEqual(report["stale"], [])
+            data = (tmp.vault / "a.md").read_bytes()
+            self.assertNotIn(b"\r\r", data)
+            self.assertTrue(data.endswith(b"\r\n"))
+            self.assertIn(b"\r\nline2\r\n", data)
+            self.assertIn(b"- [x] #task Old", data)
+            self.assertIn(b"[completion:: 2026-10-03]", data)
+        finally:
+            tmp.cleanup()
+
+    def test_duplicate_ref_anchor_in_one_file_is_reported(self):
+        tmp = make_vault(
+            {
+                "dup.md": (
+                    "- [ ] #task First [created:: 2026-09-01] ^ref\n"
+                    "- [ ] #task Second [created:: 2026-09-01] ^ref\n"
+                )
+            }
+        )
+        try:
+            manifest = build_preview(
+                tmp.vault, date(2026, 9, 26), date(2026, 10, 3), "head"
+            )
+            self.assertTrue(
+                any(
+                    "duplicate ^ref anchor in one file" in error
+                    for error in manifest["scan_errors"]
+                ),
+                manifest["scan_errors"],
+            )
+            self.assertEqual(
+                [(entry["path"], entry["line"]) for entry in manifest["entries"]],
+                [("dup.md", 1)],
+            )
         finally:
             tmp.cleanup()
 

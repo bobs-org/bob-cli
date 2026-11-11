@@ -56,7 +56,7 @@ function run() {
     done
 
     log::info "Sending notifications since pomodoro is done!"
-    if [[ "${loop_count}" -eq 10 ]]; then
+    if [[ "${loop_count}" -ge 10 ]]; then
       notify_me "${loop_count}" --no-timeout
     else
       notify_me "${loop_count}"
@@ -70,10 +70,23 @@ function run() {
 function notify_me() {
   local count="$1"
   shift
+  local no_timeout=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+    --no-timeout)
+      no_timeout=1
+      ;;
+    esac
+    shift
+  done
 
   if command -v notify-send &>/dev/null; then
     local msg=" Pomodoro is done! (#${count})"
-    notify-send -u critical 'bob' "${msg}"
+    if [[ "${no_timeout}" -eq 1 ]]; then
+      notify-send -t 0 -u critical 'bob' "${msg}"
+    else
+      notify-send -u critical 'bob' "${msg}"
+    fi
   fi
 
   for _ in 0 1 2; do
