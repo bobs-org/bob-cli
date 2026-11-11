@@ -321,7 +321,7 @@ fn load_for_totals() -> (super::config::BankConfig, Vec<super::model::BankRow>)
         super::config::ConfigParse::Ok(config) => config,
         other => panic!("expected ok, got {other:?}"),
     };
-    let rows = super::model::collect_rows(&scan, Some(&config));
+    let rows = super::model::collect_rows(&scan, Some(&config), None);
     (config, rows)
 }
 
@@ -576,7 +576,7 @@ fn ack_ticks_ids_day_and_reports_unknown() {
         super::config::ConfigParse::Ok(config) => config,
         other => panic!("expected ok, got {other:?}"),
     };
-    let rows = super::model::collect_rows(&scan, Some(&config));
+    let rows = super::model::collect_rows(&scan, Some(&config), None);
     let mut contents = std::collections::HashMap::new();
     for month in &scan.months {
         contents.insert(month.path.clone(), month.contents.clone());
@@ -626,7 +626,7 @@ fn ack_ticks_ids_day_and_reports_unknown() {
     let ticked_body = body.replace("- [ ] $61.20", "- [x] $61.20");
     write(root.as_path(), "bank/2026-11.md", &ticked_body);
     let rescan = scan_bank(&root);
-    let rerows = super::model::collect_rows(&rescan, Some(&config));
+    let rerows = super::model::collect_rows(&rescan, Some(&config), None);
     let mut recontents = std::collections::HashMap::new();
     for month in &rescan.months {
         recontents.insert(month.path.clone(), month.contents.clone());

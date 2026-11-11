@@ -5,6 +5,7 @@ use chrono::NaiveDate;
 use super::{
     config::{AccountKind, BankConfig},
     grammar::{render_day_heading, YearMonth},
+    journal::{JournalSnapshot, TxnOutcome},
     month::{parse_month_note, LocatedRowKind, MonthNote},
     scan::BankScan,
 };
@@ -46,6 +47,7 @@ pub(crate) struct Totals {
 pub(crate) fn collect_rows(
     scan: &BankScan,
     config: Option<&BankConfig>,
+    journal: Option<&JournalSnapshot>,
 ) -> Vec<BankRow> {
     let mut rows = Vec::new();
     for month_file in &scan.months {
@@ -66,10 +68,27 @@ pub(crate) fn collect_rows(
                         .map(|account| account.alias.clone())
                         .unwrap_or_else(|| "checking".to_owned())
                 });
-                let origin = if parsed.id.is_some() {
-                    "imported"
-                } else {
-                    "typed"
+                // A matched journal outcome reports as matched; an ID
+                // without journal evidence keeps the imported fallback.
+                let origin = match parsed.id.as_deref() {
+                    None => "typed",
+                    Some(id) => {
+                        let matched = journal
+                            .and_then(|snapshot| snapshot.ids.get(id))
+                            .and_then(|key| {
+                                journal.and_then(|snapshot| {
+                                    snapshot.transactions.get(key)
+                                })
+                            })
+                            .is_some_and(|event| {
+                                event.outcome == TxnOutcome::Matched
+                            });
+                        if matched {
+                            "matched"
+                        } else {
+                            "imported"
+                        }
+                    }
                 };
                 rows.push(BankRow {
                     path: note.path.clone(),

@@ -397,7 +397,9 @@ fn execute_list(matches: &ArgMatches) -> i32 {
         .map(|config| config.categories.clone())
         .unwrap_or_default();
     let accounts = config.as_ref().map(status::accounts).unwrap_or_default();
-    let rows = super::model::collect_rows(&scan, config.as_ref());
+    let journal = super::journal::load(&bob_dir).ok();
+    let rows =
+        super::model::collect_rows(&scan, config.as_ref(), journal.as_ref());
     let default_alias = config
         .as_ref()
         .and_then(|config| config.default_account())
@@ -505,7 +507,9 @@ fn execute_report(matches: &ArgMatches) -> i32 {
         .and_then(|config| config.default_account())
         .map(|account| account.alias.clone())
         .unwrap_or_else(|| "checking".to_owned());
-    let rows = super::model::collect_rows(&scan, config.as_ref());
+    let journal = super::journal::load(&bob_dir).ok();
+    let rows =
+        super::model::collect_rows(&scan, config.as_ref(), journal.as_ref());
     let heading_lines = list::collect_heading_lines(&scan);
     let built = report::build(
         rows,
@@ -776,7 +780,9 @@ fn execute_ack(matches: &ArgMatches) -> i32 {
             return 1;
         }
     };
-    let rows = super::model::collect_rows(&scan, config.as_ref());
+    let journal = super::journal::load(&bob_dir).ok();
+    let rows =
+        super::model::collect_rows(&scan, config.as_ref(), journal.as_ref());
     let mut file_contents: HashMap<String, String> = HashMap::new();
     for month in &scan.months {
         file_contents.insert(month.path.clone(), month.contents.clone());
