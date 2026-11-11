@@ -334,10 +334,16 @@ in `suggestions` and in the message when matches are available, while other
 errors use an empty list.
 
 `status.state` is `preview`, `unchanged`, `waiting_note`, `applied`,
-`saved_elsewhere`, `waiting_reply`, `waiting_maybe`, `context`, or
-`sync_failed`. `preview` is used for a successful dry run, while
+`saved_elsewhere`, `waiting_reply`, `waiting_maybe`, `context`,
+`sync_failed`, or `cleared`. `preview` is used for a successful dry run, while
 `unchanged` means the canonical note already matches the saved note and no
-journal record was appended.
+journal record was appended. `cleared` is used only for by-key clears when
+no loadable event remains (a genuine orphan or a live bare master with no
+occurrence in the window): the series or event tombstone is saved and there
+is no day to sync. A live series cleared by its master id through an
+occurrence reuses the normal clear path, so its `status.state` is `applied`,
+`saved_elsewhere`, `waiting_note`, or another honest write status — never
+`cleared` claiming the event is gone.
 Listings never carry note text. The list document is
 `{schema_version, ok, window: {from, to, start, end}, notes|events, orphans, warnings}`:
 `events` for `-l -a`, `notes` otherwise — the key names the mode, not the

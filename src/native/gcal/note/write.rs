@@ -104,7 +104,20 @@ pub(super) fn write_one<S: HomeSource>(
         journal::load_notes(vault).unwrap_or_default();
     warnings.extend(journal_warnings);
     let scope = if args.clear {
-        choose_clear_scope(args, &candidate, &book, account)?
+        if args.edit {
+            // An empty editor result carries the scope resolved once in
+            // `present_candidate`. Reuse it verbatim: never re-prompt and
+            // never fail on a missing note here — the unchanged branch
+            // below reports a noteless empty edit. Direct `-c` keeps the
+            // existing `choose_clear_scope` errors.
+            match args.scope.as_deref() {
+                Some("series") => NoteScope::Series,
+                Some("event") => NoteScope::Event,
+                _ => choose_write_scope(args, &candidate)?,
+            }
+        } else {
+            choose_clear_scope(args, &candidate, &book, account)?
+        }
     } else {
         choose_write_scope(args, &candidate)?
     };
@@ -147,6 +160,24 @@ pub(super) fn write_one<S: HomeSource>(
             &candidate, config, vault, resolver, account, &book, scope, None,
         )?;
         let rendered = preview(&clear_candidate, vault)?;
+        if args.dry_run {
+            // Empty `-e -d` previews like a nonempty `-e -d`: no journal
+            // append, no sync. Direct `-c -d` is rejected before this path.
+            return print_result(
+                args,
+                &clear_candidate,
+                scope,
+                "preview",
+                "",
+                None,
+                "preview",
+                "nothing was saved",
+                None,
+                &warnings,
+                &rendered,
+                false,
+            );
+        }
         append(&clear_candidate, vault, account, scope, String::new())?;
         let (status, status_detail, status_path, sync_warnings) =
             apply_if_possible(

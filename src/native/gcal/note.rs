@@ -106,8 +106,19 @@ pub(crate) fn rewrite_note_tail(tail: &[OsString]) -> Vec<OsString> {
         let raw = &tail[i];
         let token = raw.to_string_lossy().into_owned();
         if in_text {
+            if token == "--" && !seen_dashdash {
+                // First explicit separator after implicit TEXT: it becomes
+                // the single clap separator. Options pulled before it stay
+                // options; everything after stays verbatim.
+                out.append(&mut extracted);
+                out.push(raw.clone());
+                seen_dashdash = true;
+                i += 1;
+                continue;
+            }
             if seen_dashdash {
                 // After an explicit `--`, everything stays verbatim.
+                // A second literal `--` remains text.
                 text.push(raw.clone());
                 i += 1;
                 continue;
@@ -1381,9 +1392,14 @@ fn run_show<S: HomeSource>(
                 && !candidate.recurring()
             {
                 // `-s series` names the series key, but a bare master has
-                // no recurringEventId: clear the series note by key instead
-                // of failing on the master.
-                return clear_by_key(args, config, vault, account, &id);
+                // no recurringEventId. When the master is live, resolve its
+                // affected occurrence days via the bounded window and reuse
+                // the normal clear path so rendered notes sync immediately;
+                // a genuine orphan still clears by key below.
+                return clear_live_series_by_master(
+                    args, config, vault, resolver, gog, account, calendars,
+                    candidate, &id, day_filter,
+                );
             }
             let mut related_days = vec![candidate.day];
             let mut selection_warnings = Vec::new();
@@ -1462,6 +1478,182 @@ fn run_show<S: HomeSource>(
         args, config, vault, resolver, account, candidates, warnings,
         day_filter,
     )
+}
+
+/// Clear a live series via its bare master id. The master lookup
+/// succeeded, so this is not an orphan: resolve affected occurrence days
+/// with the bounded window and reuse the normal clear path so already
+/// existing, rendered daily notes sync immediately on the writer host.
+/// Falls back to a live-aware by-key tombstone when no occurrence is in
+/// the window or the window lookup fails; true missing-master clears stay
+/// in `clear_by_key`.
+fn clear_live_series_by_master<S: HomeSource>(
+    args: &NoteArgs,
+    config: &GcalConfig,
+    vault: &std::path::Path,
+    resolver: &mut HomeResolver<S>,
+    gog: &Gog,
+    account: &str,
+    calendars: &[super::gog::GogCalendar],
+    master: NoteCandidate,
+    id: &str,
+    day_filter: Option<NaiveDate>,
+) -> Result<(), GcalError> {
+    let calendar_id = master.event.key.calendar_id.clone();
+    let (from, to, _, _) = window_range(day_filter)?;
+    match fetch_candidates(
+        config, vault, resolver, gog, account, calendars, &from, &to,
+        day_filter,
+    ) {
+        Ok((occurrences, occurrence_warnings)) => {
+            if let Some(index) = occurrences.iter().position(|candidate| {
+                candidate.event.series_id.as_deref() == Some(id)
+                    && candidate.event.key.calendar_id == calendar_id
+            }) {
+                let occurrence = clone_candidate(&occurrences[index]);
+                let related = series_days(&occurrences, &calendar_id, Some(id));
+                return write::write_one(
+                    args,
+                    config,
+                    vault,
+                    resolver,
+                    account,
+                    occurrence,
+                    occurrence_warnings,
+                    related,
+                );
+            }
+            clear_live_series_no_occurrence(
+                args,
+                vault,
+                account,
+                &master,
+                id,
+                &calendar_id,
+                occurrence_warnings,
+            )
+        }
+        Err(error) => clear_live_series_no_occurrence(
+            args,
+            vault,
+            account,
+            &master,
+            id,
+            &calendar_id,
+            vec![format!(
+                "could not inspect other occurrences for immediate sync: {}",
+                error.message()
+            )],
+        ),
+    }
+}
+
+/// Live-aware by-key clear when the master is live but no occurrence is in
+/// the bounded window (or the window lookup failed). Appends the series
+/// tombstone and reports `cleared` without claiming the event is gone;
+/// there are no rendered window notes to sync, and future notes are never
+/// created. Explicit `-c` with no note keeps its existing error.
+fn clear_live_series_no_occurrence(
+    args: &NoteArgs,
+    vault: &std::path::Path,
+    account: &str,
+    master: &NoteCandidate,
+    id: &str,
+    calendar_id: &str,
+    warnings: Vec<String>,
+) -> Result<(), GcalError> {
+    let (book, mut all_warnings) =
+        journal::load_notes(vault).unwrap_or_default();
+    all_warnings.extend(warnings);
+    let existing = book.series(account, calendar_id, id);
+    let Some(existing) = existing else {
+        return Err(GcalError::setup(
+            "no_match",
+            format!("no event with id {id}"),
+        )
+        .with_hint("run `bob gcal list -D <day>` to find the event id"));
+    };
+    if existing.cleared {
+        return Err(GcalError::setup(
+            "no_note",
+            "there is no private note in the series scope".to_string(),
+        ));
+    }
+    let title = existing
+        .seen
+        .as_ref()
+        .and_then(|seen| seen.title.clone())
+        .filter(|title| !title.trim().is_empty())
+        .unwrap_or_else(|| master.event.title.clone());
+    let record = journal::NewNote {
+        account: account.to_string(),
+        calendar_id: calendar_id.to_string(),
+        event_id: None,
+        series: Some(id.to_string()),
+        scope: NoteScope::Series,
+        text: String::new(),
+        seen: existing.seen.clone(),
+    };
+    journal::append_note(vault, &journal::host_label(), &record).map_err(
+        |error| {
+            GcalError::runtime(
+                "journal",
+                format!("clear private event note: {error}"),
+            )
+        },
+    )?;
+    print_cleared_live_series(args, calendar_id, id, &title, &all_warnings)
+}
+
+/// Report a live-master series clear with no occurrence in the window:
+/// the master is live, so never claim the event is gone.
+fn print_cleared_live_series(
+    args: &NoteArgs,
+    calendar_id: &str,
+    id: &str,
+    title: &str,
+    warnings: &[String],
+) -> Result<(), GcalError> {
+    if args.format.is_json() {
+        let document = json!({
+            "schema_version": 1,
+            "ok": true,
+            "action": "cleared",
+            "scope": "series",
+            "calendar_id": calendar_id,
+            "event_id": Value::Null,
+            "series_id": id,
+            "input": {"text": ""},
+            "spans": [],
+            "note": {"text": "", "lines": []},
+            "status": {
+                "state": "cleared",
+                "detail": "cleared; no occurrence in the window needed an immediate sync",
+                "path": Value::Null,
+            },
+            "errors": [],
+            "warnings": warnings,
+        });
+        println!(
+            "{}",
+            serde_json::to_string(&document).map_err(|error| {
+                GcalError::runtime(
+                    "output",
+                    format!("serialize gcal note JSON: {error}"),
+                )
+            })?
+        );
+        ui::flush_stdout();
+        return Ok(());
+    }
+    println!("✎ {title}");
+    println!("  All events · cleared");
+    println!("✓ Cleared · Google's description decides again");
+    for warning in warnings {
+        ui::warn(warning);
+    }
+    ui::flush_stdout();
+    Ok(())
 }
 
 /// Clear a live private note by its journal key when no eligible event
@@ -2005,7 +2197,12 @@ fn present_candidate<S: HomeSource>(
     let mut prepared;
     let args = if args.adopt || args.edit {
         prepared = args.clone();
-        let existing = current_scope_text(args, &candidate, vault, account)?;
+        let (resolved_scope, existing) =
+            current_scope_text(args, &candidate, vault, account)?;
+        // Carry the once-resolved scope through seed, validation, preview,
+        // save, and clear so a second prompt cannot seed from one scope
+        // and save into the other.
+        prepared.scope = Some(resolved_scope.as_str().to_string());
         let has_note = !existing.trim().is_empty();
         if args.adopt && !args.edit && has_note {
             return Err(GcalError::setup(
@@ -2194,7 +2391,7 @@ fn current_scope_text(
     candidate: &NoteCandidate,
     vault: &std::path::Path,
     account: &str,
-) -> Result<String, GcalError> {
+) -> Result<(NoteScope, String), GcalError> {
     let scope =
         resolve_show_scope(args, candidate)?.unwrap_or(NoteScope::Event);
     let (book, _) = journal::load_notes(vault).unwrap_or_default();
@@ -2214,10 +2411,13 @@ fn current_scope_text(
             })
         }
     };
-    Ok(record
-        .filter(|note| !note.cleared)
-        .map(|note| note.text.clone())
-        .unwrap_or_default())
+    Ok((
+        scope,
+        record
+            .filter(|note| !note.cleared)
+            .map(|note| note.text.clone())
+            .unwrap_or_default(),
+    ))
 }
 
 fn adopted_google_text(event: &GcalEvent) -> String {
@@ -2838,5 +3038,41 @@ mod prepass_tests {
         assert!(!is_sign_digit_token("-30"));
         assert!(!is_sign_digit_token("-c"));
         assert!(!is_sign_digit_token("+off"));
+    }
+
+    #[test]
+    fn explicit_separator_after_implicit_text_stops_option_extraction() {
+        // The land-audit probe: implicit TEXT then `--` must keep `-d` as
+        // text instead of extracting it as an option.
+        let out =
+            rewrite_note_tail(&tail(&["-i", "e1", "@family", "--", "-d"]));
+        assert_eq!(strings(&out), vec!["-i", "e1", "--", "@family", "-d"]);
+    }
+
+    #[test]
+    fn separator_after_text_keeps_options_on_either_side() {
+        // `-d` before the delimiter stays an option; `-d` after stays text.
+        let out =
+            rewrite_note_tail(&tail(&["-d", "@family", "lunch", "--", "-d"]));
+        assert_eq!(strings(&out), vec!["-d", "--", "@family", "lunch", "-d"]);
+        // Attached-value options before the delimiter still apply.
+        let out =
+            rewrite_note_tail(&tail(&["@fam", "-iabc", "Drive", "--", "-C"]));
+        assert_eq!(strings(&out), vec!["-iabc", "--", "@fam", "Drive", "-C"]);
+        // Valued options keep their separate value before the delimiter.
+        let out = rewrite_note_tail(&tail(&[
+            "@fam", "-C", "primary", "Drive", "--", "-C",
+        ]));
+        assert_eq!(
+            strings(&out),
+            vec!["-C", "primary", "--", "@fam", "Drive", "-C"]
+        );
+    }
+
+    #[test]
+    fn second_separator_after_delimiter_remains_text() {
+        let out =
+            rewrite_note_tail(&tail(&["@fam", "Drive", "--", "--", "-d"]));
+        assert_eq!(strings(&out), vec!["--", "@fam", "Drive", "--", "-d"]);
     }
 }

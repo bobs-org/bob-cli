@@ -365,16 +365,20 @@ fn notes_check(
             if unresolved.len() == 1 { "" } else { "s" }
         ));
         let first = unresolved[0];
-        let mut command = format!(
-            "bob gcal note -e -i {} -C {}",
-            first.key, first.calendar_id
-        );
-        if first.scope == journal::NoteScope::Series {
-            command = format!(
-                "bob gcal note -e -s series -i {} -C {}",
+        // A bare series master has no recurringEventId, so `-e -s series
+        // -i <master>` fails `resolve_show_scope`. The series-key clear
+        // works with the named identity; an exact occurrence edit needs an
+        // occurrence id we must not invent here.
+        let command = match first.scope {
+            journal::NoteScope::Series => format!(
+                "bob gcal note -c -s series -i {} -C {}",
                 first.key, first.calendar_id
-            );
-        }
+            ),
+            journal::NoteScope::Event => format!(
+                "bob gcal note -e -i {} -C {}",
+                first.key, first.calendar_id
+            ),
+        };
         fixes.push(command);
     }
     if !foreign.is_empty() {
@@ -395,7 +399,11 @@ fn notes_check(
         id: "notes",
         status: CheckStatus::Warn,
         summary: issues.join(" · "),
-        fix: fixes.into_iter().next(),
+        fix: if fixes.is_empty() {
+            None
+        } else {
+            Some(fixes.join("\n"))
+        },
     }
 }
 
@@ -747,7 +755,9 @@ fn finish(args: &DoctorArgs, host: &str, checks: Vec<Check>) -> i32 {
         if let Some(fix) = &check.fix
             && matches!(check.status, CheckStatus::Fail | CheckStatus::Warn)
         {
-            println!("  {}", styler.dim(&format!("fix: {fix}")));
+            for line in fix.lines() {
+                println!("  {}", styler.dim(&format!("fix: {line}")));
+            }
         }
     }
     if failed > 0 {

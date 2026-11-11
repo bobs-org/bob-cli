@@ -2734,3 +2734,653 @@ fn adopt_edit_prefills_the_editor_with_google_lines() {
         stdout(&output)
     );
 }
+
+#[test]
+fn explicit_separator_after_text_keeps_dash_d_as_text() {
+    let env = GcalEnv::new("bob-cli-gcal-note-separator-text");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.event_lookup(
+        "e1",
+        &serde_json::to_string(&json!({
+            "event": guest_event(
+                "e1",
+                "Deerwood",
+                "2026-12-13T10:00:00-05:00",
+                "2026-12-13T12:00:00-05:00",
+            )
+        }))
+        .expect("lookup body"),
+    );
+
+    // Implicit TEXT then an explicit `--`: the `-d` after the delimiter is
+    // note text, not the dry-run flag. The save must append one record.
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args([
+            "gcal", "note", "-i", "e1", "-f", "json", "@family", "--", "-d",
+        ])
+        .output()
+        .expect("save with explicit separator");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let saved = json_stdout(&output);
+    assert_eq!(saved["action"], "saved", "{saved}");
+    let text = saved["note"]["text"].as_str().unwrap_or_default();
+    assert!(text.contains("@family"), "{saved}");
+    assert!(text.contains("-d"), "-d must survive as note text: {saved}");
+    let journal_path = env.vault().join(".bob/gcal/test-host.jsonl");
+    assert_eq!(
+        fs::read_to_string(&journal_path).unwrap().lines().count(),
+        1,
+        "the separator fix must save exactly one record"
+    );
+
+    // Options on either side: `-d` before the delimiter still previews.
+    let env2 = GcalEnv::new("bob-cli-gcal-note-separator-preview");
+    prepare(&env2);
+    let fake2 = FakeGog::new(&env2, "fake-gog");
+    fake2.event_lookup(
+        "e1",
+        &serde_json::to_string(&json!({
+            "event": guest_event(
+                "e1",
+                "Deerwood",
+                "2026-12-13T10:00:00-05:00",
+                "2026-12-13T12:00:00-05:00",
+            )
+        }))
+        .expect("lookup body"),
+    );
+    let mut command = env2.command();
+    let output = fake2
+        .install(&mut command)
+        .args([
+            "gcal", "note", "-i", "e1", "-d", "-f", "json", "@family", "--",
+            "-d",
+        ])
+        .output()
+        .expect("preview with separator");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let preview = json_stdout(&output);
+    assert_eq!(preview["action"], "preview", "{preview}");
+    assert!(
+        !env2.vault().join(".bob/gcal/test-host.jsonl").exists(),
+        "a preview must not append"
+    );
+}
+
+#[test]
+fn edit_series_scope_is_resolved_once_and_carried() {
+    let env = GcalEnv::new("bob-cli-gcal-note-edit-series-once");
+    prepare(&env);
+    let occurrence = |id: &str, start: &str, end: &str| {
+        json!({
+            "id": id,
+            "summary": "Little Gym",
+            "status": "confirmed",
+            "recurringEventId": "gym-series",
+            "start": {"dateTime": start},
+            "end": {"dateTime": end},
+            "htmlLink": format!("https://calendar.google.com/event?eid={id}"),
+            "organizer": {"displayName": "Kelly", "email": "kelly@example.com", "self": false},
+            "attendees": [{"self": true, "responseStatus": "accepted"}],
+        })
+    };
+    let first = occurrence(
+        "gym-1",
+        "2026-11-13T09:00:00-05:00",
+        "2026-11-13T10:00:00-05:00",
+    );
+    let second = occurrence(
+        "gym-2",
+        "2026-11-20T09:00:00-05:00",
+        "2026-11-20T10:00:00-05:00",
+    );
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![first.clone(), second.clone()]));
+    fake.event_lookup(
+        "gym-1",
+        &serde_json::to_string(&json!({"event": first})).expect("lookup"),
+    );
+    append_journal(
+        &env,
+        "test-host",
+        event_note("test-host", "2026-10-29T12:00:00-04:00", "gym-1", "@body"),
+    );
+    append_journal(
+        &env,
+        "test-host",
+        json!({
+            "v": 1,
+            "ts": "2026-10-29T12:01:00-04:00",
+            "host": "test-host",
+            "kind": "gcal.note",
+            "account": ACCOUNT,
+            "key": {"calendar_id": "primary", "series": "gym-series"},
+            "scope": "series",
+            "text": "@family",
+        }),
+    );
+
+    let dump = env.root().join("editor-input");
+    let visual = env.root().join("visual.sh");
+    write_script(
+        &visual,
+        &format!(
+            "#!/bin/sh\ncp \"$1\" {dump}\nprintf '%s\\n' '@family' 'Bring socks' > \"$1\"\n",
+            dump = dump.display()
+        ),
+    );
+    // One prompt only: choosing series seeds from the series note and must
+    // save back into the series scope, leaving the event note alone.
+    let output = run_note_edit(
+        &env,
+        &fake,
+        &visual,
+        &["note", "-e", "-i", "gym-1"],
+        "2\n",
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let seed = fs::read_to_string(&dump).expect("editor seed");
+    let seed_top = seed
+        .split("------------------------ >8 ------------------------")
+        .next()
+        .unwrap_or_default();
+    assert!(seed_top.contains("@family"), "series seed:\n{seed}");
+    assert!(
+        !seed_top.contains("@body"),
+        "must not seed event text:\n{seed}"
+    );
+
+    let mut command = env.command();
+    let shown = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-i", "gym-1", "-s", "event", "-f", "json"])
+        .output()
+        .expect("show event scope");
+    assert_eq!(shown.status.code(), Some(0), "{}", stderr(&shown));
+    assert_eq!(
+        json_stdout(&shown)["event"]["note"]["text"],
+        "@body",
+        "event text must stay unchanged"
+    );
+    let mut command = env.command();
+    let shown = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-i", "gym-1", "-s", "series", "-f", "json"])
+        .output()
+        .expect("show series scope");
+    assert_eq!(shown.status.code(), Some(0), "{}", stderr(&shown));
+    let series_text = json_stdout(&shown)["event"]["note"]["text"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(series_text.contains("Bring socks"), "{series_text}");
+    assert_eq!(journal_note_count(&env), 3);
+}
+
+#[test]
+fn edit_empty_series_reports_unchanged_and_keeps_event_note() {
+    let env = GcalEnv::new("bob-cli-gcal-note-edit-empty-series");
+    prepare(&env);
+    let occurrence = |id: &str| {
+        json!({
+            "id": id,
+            "summary": "Little Gym",
+            "status": "confirmed",
+            "recurringEventId": "gym-series",
+            "start": {"dateTime": "2026-11-13T09:00:00-05:00"},
+            "end": {"dateTime": "2026-11-13T10:00:00-05:00"},
+            "htmlLink": format!("https://calendar.google.com/event?eid={id}"),
+            "organizer": {"displayName": "Kelly", "email": "kelly@example.com", "self": false},
+            "attendees": [{"self": true, "responseStatus": "accepted"}],
+        })
+    };
+    let first = occurrence("gym-1");
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![first.clone()]));
+    fake.event_lookup(
+        "gym-1",
+        &serde_json::to_string(&json!({"event": first})).expect("lookup"),
+    );
+    append_journal(
+        &env,
+        "test-host",
+        event_note("test-host", "2026-10-29T12:00:00-04:00", "gym-1", "@body"),
+    );
+    let visual = env.root().join("visual.sh");
+    write_script(&visual, "#!/bin/sh\n: > \"$1\"\n");
+
+    // Empty series edit with only an event note: the event note survives.
+    let output = run_note_edit(
+        &env,
+        &fake,
+        &visual,
+        &["note", "-e", "-i", "gym-1"],
+        "2\n",
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("✓ Unchanged"),
+        "{}",
+        stdout(&output)
+    );
+    assert_eq!(journal_note_count(&env), 1);
+    let mut command = env.command();
+    let shown = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-i", "gym-1", "-s", "event", "-f", "json"])
+        .output()
+        .expect("event note survives");
+    assert_eq!(json_stdout(&shown)["event"]["note"]["text"], "@body");
+
+    // Both scopes empty: either scope reports unchanged without an append.
+    let env2 = GcalEnv::new("bob-cli-gcal-note-edit-both-empty");
+    prepare(&env2);
+    let fake2 = FakeGog::new(&env2, "fake-gog");
+    fake2.events_json(&events_envelope(vec![first.clone()]));
+    fake2.event_lookup(
+        "gym-1",
+        &serde_json::to_string(&json!({"event": first})).expect("lookup"),
+    );
+    let visual2 = env2.root().join("visual.sh");
+    write_script(&visual2, "#!/bin/sh\n: > \"$1\"\n");
+    for (label, scope_input) in [("series", "2\n"), ("event", "1\n")] {
+        let output = run_note_edit(
+            &env2,
+            &fake2,
+            &visual2,
+            &["note", "-e", "-i", "gym-1"],
+            scope_input,
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{label}: {}",
+            stderr(&output)
+        );
+        assert!(
+            stdout(&output).contains("✓ Unchanged"),
+            "{label}: {}",
+            stdout(&output)
+        );
+    }
+    assert_eq!(journal_note_count(&env2), 0);
+
+    // Explicit `-c` with no note keeps its existing error.
+    let mut command = env2.command();
+    let output = fake2
+        .install(&mut command)
+        .args(["gcal", "note", "-c", "-s", "series", "-i", "gym-1"])
+        .output()
+        .expect("explicit clear with no note");
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+}
+
+#[test]
+fn edit_dry_run_leaves_journal_and_daily_note_unchanged() {
+    let env = GcalEnv::new("bob-cli-gcal-note-edit-dry-run");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    let event = guest_event(
+        "edit-dry",
+        "Deerwood",
+        "2026-10-30T09:00:00-04:00",
+        "2026-10-30T10:00:00-04:00",
+    );
+    install_lookup(&fake, &event);
+    let mut command = env.command();
+    let seeded = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-i", "edit-dry", "--", "@family"])
+        .output()
+        .expect("seed a note");
+    assert_eq!(seeded.status.code(), Some(0), "{}", stderr(&seeded));
+    let daily_path = env.vault().join("2026").join("20261030.md");
+    fs::create_dir_all(daily_path.parent().expect("daily dir"))
+        .expect("daily dir");
+    fs::write(&daily_path, "# 20261030\n\n## Pomodoros\n\nrendered\n")
+        .expect("daily note");
+    let journal_path = env.vault().join(".bob/gcal/test-host.jsonl");
+    let journal_before =
+        fs::read_to_string(&journal_path).expect("journal bytes");
+    let daily_before = fs::read_to_string(&daily_path).expect("daily bytes");
+
+    let visual = env.root().join("visual.sh");
+    write_script(&visual, "#!/bin/sh\nprintf '%s\\n' '@body' > \"$1\"\n");
+    let output = run_note_edit(
+        &env,
+        &fake,
+        &visual,
+        &["note", "-e", "-d", "-i", "edit-dry"],
+        "",
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(stdout(&output).contains("Preview"), "{}", stdout(&output));
+    assert_eq!(fs::read_to_string(&journal_path).unwrap(), journal_before);
+    assert_eq!(fs::read_to_string(&daily_path).unwrap(), daily_before);
+
+    write_script(&visual, "#!/bin/sh\n: > \"$1\"\n");
+    let output = run_note_edit(
+        &env,
+        &fake,
+        &visual,
+        &["note", "-e", "-d", "-i", "edit-dry"],
+        "",
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(fs::read_to_string(&journal_path).unwrap(), journal_before);
+    assert_eq!(fs::read_to_string(&daily_path).unwrap(), daily_before);
+}
+
+#[test]
+fn adopt_guard_uses_the_resolved_scope() {
+    let env = GcalEnv::new("bob-cli-gcal-note-adopt-scope");
+    prepare(&env);
+    let occurrence = |id: &str| {
+        let mut event = guest_event(
+            id,
+            "Little Gym",
+            "2026-11-13T09:00:00-05:00",
+            "2026-11-13T10:00:00-05:00",
+        );
+        event["recurringEventId"] = json!("gym-series");
+        event["description"] = json!("@family -30");
+        event
+    };
+    let first = occurrence("gym-1");
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![first.clone()]));
+    fake.event_lookup(
+        "gym-1",
+        &serde_json::to_string(&json!({"event": first})).expect("lookup"),
+    );
+    append_journal(
+        &env,
+        "test-host",
+        json!({
+            "v": 1,
+            "ts": "2026-10-29T12:00:00-04:00",
+            "host": "test-host",
+            "kind": "gcal.note",
+            "account": ACCOUNT,
+            "key": {"calendar_id": "primary", "series": "gym-series"},
+            "scope": "series",
+            "text": "@body",
+        }),
+    );
+
+    // Choosing This event adopts into the empty event scope.
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .env("BOB_GCAL_ASSUME_TTY", "1")
+        .args(["gcal", "note", "-A", "-i", "gym-1"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = output.spawn().expect("spawn adopt event");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(b"1\n")
+        .expect("choose event");
+    let output = child.wait_with_output().expect("adopt event");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+
+    // Choosing All events hits the existing series note guard.
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .env("BOB_GCAL_ASSUME_TTY", "1")
+        .args(["gcal", "note", "-A", "-i", "gym-1"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = output.spawn().expect("spawn adopt series");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(b"2\n")
+        .expect("choose series");
+    let output = child.wait_with_output().expect("adopt series");
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("already has a private note"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn clear_live_series_by_master_id_syncs_rendered_days() {
+    let env = GcalEnv::new("bob-cli-gcal-note-live-master-clear");
+    prepare(&env);
+    for day in ["20261030", "20261106"] {
+        fs::create_dir_all(env.vault().join("2026")).expect("daily dir");
+        fs::write(
+            env.vault().join("2026").join(format!("{day}.md")),
+            format!("# {day}\n\n## Pomodoros\n"),
+        )
+        .expect("daily note");
+    }
+    let occurrence = |id: &str, start: &str, end: &str| {
+        json!({
+            "id": id,
+            "summary": "Little Gym",
+            "status": "confirmed",
+            "recurringEventId": "gym-series",
+            "start": {"dateTime": start},
+            "end": {"dateTime": end},
+            "htmlLink": format!("https://calendar.google.com/event?eid={id}"),
+            "organizer": {"displayName": "Kelly", "email": "kelly@example.com", "self": false},
+            "attendees": [{"self": true, "responseStatus": "accepted"}],
+        })
+    };
+    let gym1 = occurrence(
+        "gym-1",
+        "2026-10-30T09:00:00-04:00",
+        "2026-10-30T10:00:00-04:00",
+    );
+    let gym2 = occurrence(
+        "gym-2",
+        "2026-11-06T09:00:00-05:00",
+        "2026-11-06T10:00:00-05:00",
+    );
+    let master = guest_event(
+        "gym-series",
+        "Little Gym",
+        "2026-10-30T09:00:00-04:00",
+        "2026-10-30T10:00:00-04:00",
+    );
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![gym1.clone(), gym2.clone()]));
+    for (id, event) in
+        [("gym-1", &gym1), ("gym-2", &gym2), ("gym-series", &master)]
+    {
+        fake.event_lookup(
+            id,
+            &serde_json::to_string(&json!({"event": event})).expect("lookup"),
+        );
+    }
+    let mut command = env.command();
+    let saved = fake
+        .install(&mut command)
+        .args([
+            "gcal", "note", "-i", "gym-1", "-s", "series", "-f", "json", "--",
+            "@family",
+        ])
+        .output()
+        .expect("seed series note");
+    assert_eq!(saved.status.code(), Some(0), "{}", stderr(&saved));
+    for day in ["20261030", "20261106"] {
+        let daily = fs::read_to_string(
+            env.vault().join("2026").join(format!("{day}.md")),
+        )
+        .expect("synced day");
+        assert!(daily.contains("[root:: family]"), "{day}: {daily}");
+    }
+
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args([
+            "gcal",
+            "note",
+            "-c",
+            "-s",
+            "series",
+            "-i",
+            "gym-series",
+            "-f",
+            "json",
+        ])
+        .output()
+        .expect("clear live series by master");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let cleared = json_stdout(&output);
+    assert_eq!(cleared["action"], "cleared");
+    assert_ne!(cleared["status"]["state"], "cleared");
+    let today =
+        fs::read_to_string(env.vault().join("2026").join("20261030.md"))
+            .expect("today reverted");
+    assert!(!today.contains("[root:: family]"), "{today}");
+}
+
+#[test]
+fn clear_live_series_by_master_off_writer_and_lookup_failure() {
+    // Off-writer: the clear is saved but the rendered day is untouched.
+    let env = GcalEnv::new("bob-cli-gcal-note-live-master-offwriter");
+    prepare(&env);
+    env.write_config(
+        "timezone: America/New_York\ngcal:\n  account: you@example.com\n  writer: other-host\n",
+    );
+    fs::create_dir_all(env.vault().join("2026")).expect("daily dir");
+    fs::write(
+        env.vault().join("2026").join("20261030.md"),
+        "# 20261030\n\n## Pomodoros\n",
+    )
+    .expect("daily note");
+    let occurrence = json!({
+        "id": "gym-1",
+        "summary": "Little Gym",
+        "status": "confirmed",
+        "recurringEventId": "gym-series",
+        "start": {"dateTime": "2026-10-30T09:00:00-04:00"},
+        "end": {"dateTime": "2026-10-30T10:00:00-04:00"},
+        "htmlLink": "https://calendar.google.com/event?eid=gym-1",
+        "organizer": {"displayName": "Kelly", "email": "kelly@example.com", "self": false},
+        "attendees": [{"self": true, "responseStatus": "accepted"}],
+    });
+    let master = guest_event(
+        "gym-series",
+        "Little Gym",
+        "2026-10-30T09:00:00-04:00",
+        "2026-10-30T10:00:00-04:00",
+    );
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![occurrence.clone()]));
+    for (id, event) in [("gym-1", &occurrence), ("gym-series", &master)] {
+        fake.event_lookup(
+            id,
+            &serde_json::to_string(&json!({"event": event})).expect("lookup"),
+        );
+    }
+    let mut command = env.command();
+    let saved = fake
+        .install(&mut command)
+        .args([
+            "gcal", "note", "-i", "gym-1", "-s", "series", "-f", "json", "--",
+            "@family",
+        ])
+        .output()
+        .expect("seed series note off-writer");
+    assert_eq!(saved.status.code(), Some(0), "{}", stderr(&saved));
+    let daily_before =
+        fs::read_to_string(env.vault().join("2026").join("20261030.md"))
+            .expect("daily before");
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args([
+            "gcal",
+            "note",
+            "-c",
+            "-s",
+            "series",
+            "-i",
+            "gym-series",
+            "-f",
+            "json",
+        ])
+        .output()
+        .expect("clear live series off-writer");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let cleared = json_stdout(&output);
+    assert_eq!(cleared["action"], "cleared");
+    assert_eq!(cleared["status"]["state"], "saved_elsewhere");
+    assert_eq!(
+        fs::read_to_string(env.vault().join("2026").join("20261030.md"))
+            .expect("daily untouched"),
+        daily_before
+    );
+
+    // Window lookup failure: the clear is still saved with an honest warning.
+    let env2 = GcalEnv::new("bob-cli-gcal-note-live-master-lookup-fail");
+    prepare(&env2);
+    fs::create_dir_all(env2.vault().join("2026")).expect("daily dir");
+    fs::write(
+        env2.vault().join("2026").join("20261030.md"),
+        "# 20261030\n\n## Pomodoros\n",
+    )
+    .expect("daily note");
+    let fake2 = FakeGog::new(&env2, "fake-gog").scenario("events_failure");
+    fake2.event_lookup(
+        "gym-series",
+        &serde_json::to_string(&json!({"event": master})).expect("lookup"),
+    );
+    append_journal(
+        &env2,
+        "test-host",
+        json!({
+            "v": 1,
+            "ts": "2026-10-29T12:00:00-04:00",
+            "host": "test-host",
+            "kind": "gcal.note",
+            "account": ACCOUNT,
+            "key": {"calendar_id": "primary", "series": "gym-series"},
+            "scope": "series",
+            "text": "@family",
+        }),
+    );
+    let mut command = env2.command();
+    let output = fake2
+        .install(&mut command)
+        .args([
+            "gcal",
+            "note",
+            "-c",
+            "-s",
+            "series",
+            "-i",
+            "gym-series",
+            "-f",
+            "json",
+        ])
+        .output()
+        .expect("clear live series with failed window");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let cleared = json_stdout(&output);
+    assert_eq!(cleared["action"], "cleared");
+    let warnings = cleared["warnings"].as_array().cloned().unwrap_or_default();
+    assert!(
+        warnings.iter().any(|warning| warning
+            .as_str()
+            .unwrap_or_default()
+            .contains("could not inspect other occurrences")),
+        "{cleared}"
+    );
+}

@@ -1660,3 +1660,103 @@ fn doctor_notes_lookup_errors_count_as_not_checked() {
     assert_eq!(notes["status"], "warn", "{notes}");
     assert_eq!(notes["summary"], "1 not checked");
 }
+
+#[test]
+fn doctor_notes_combined_remedies_all_survive_and_run() {
+    let env = GcalEnv::new("bob-cli-gcal-doctor-notes-combined");
+    env.prepare_healthy_vault();
+    let fake = FakeGog::new(&env, "gog");
+    // Orphan (not found), unresolved route, foreign-account, malformed.
+    append_journal(&env, event_note("gone-1", "@meet", ACCOUNT));
+    append_journal(&env, event_note("bad-1", "@no-such-area", ACCOUNT));
+    lookup_event(&fake, "bad-1", "confirmed", "accepted");
+    append_journal(&env, event_note("foreign-1", "@meet", "other@example.com"));
+    append_journal(
+        &env,
+        json!({
+            "v": 1,
+            "ts": "2026-10-30T12:00:00-04:00",
+            "host": HOST,
+            "kind": "gcal.note",
+            "account": ACCOUNT,
+            "key": {"calendar_id": "primary", "event_id": "broken-1"},
+            "scope": "this-and-following",
+            "text": "@meet",
+        }),
+    );
+    let notes = notes_from(&env, &fake);
+    assert_eq!(notes["status"], "warn", "{notes}");
+    let summary = notes["summary"].as_str().unwrap_or_default();
+    for needle in [
+        "orphaned",
+        "unresolved route",
+        "foreign-account",
+        "malformed",
+    ] {
+        assert!(summary.contains(needle), "{notes}");
+    }
+    let fix = notes["fix"].as_str().unwrap_or_default().to_string();
+    for needle in [
+        "bob gcal note -c -i gone-1 -C primary",
+        "bob gcal note -e -i bad-1 -C primary",
+        "sign in as other@example.com",
+        "inspect .bob/gcal/<host>.jsonl",
+    ] {
+        assert!(
+            fix.contains(needle),
+            "missing remedy {needle:?} in fix:\n{fix}"
+        );
+    }
+
+    // Run the actual printed orphan and unresolved remedies against the fixture.
+    let output = run_gcal(
+        &env,
+        &fake,
+        &["note", "-c", "-i", "gone-1", "-C", "primary", "-f", "json"],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(json_stdout(&output)["action"], "cleared");
+    // The unresolved series-key clear remedy must also run: seed a bad
+    // series note, read its doctor fix, then run that exact command.
+    let env2 = GcalEnv::new("bob-cli-gcal-doctor-notes-series-fix");
+    env2.prepare_healthy_vault();
+    let fake2 = FakeGog::new(&env2, "gog");
+    append_journal(
+        &env2,
+        json!({
+            "v": 1,
+            "ts": "2026-10-30T12:00:00-04:00",
+            "host": HOST,
+            "kind": "gcal.note",
+            "account": ACCOUNT,
+            "key": {"calendar_id": "primary", "series": "bad-series"},
+            "scope": "series",
+            "text": "@no-such-area",
+        }),
+    );
+    lookup_event(&fake2, "bad-series", "confirmed", "accepted");
+    let notes2 = notes_from(&env2, &fake2);
+    let fix2 = notes2["fix"].as_str().unwrap_or_default().to_string();
+    assert!(
+        fix2.contains("bob gcal note -c -s series -i bad-series -C primary"),
+        "series remedy must be a runnable clear:\n{fix2}"
+    );
+    let output = run_gcal(
+        &env2,
+        &fake2,
+        &[
+            "note",
+            "-c",
+            "-s",
+            "series",
+            "-i",
+            "bad-series",
+            "-C",
+            "primary",
+            "-f",
+            "json",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(json_stdout(&output)["action"], "cleared");
+}
