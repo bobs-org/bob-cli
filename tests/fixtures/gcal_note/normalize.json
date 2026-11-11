@@ -76,5 +76,33 @@
     "input": "@family\nBring snacks\nand water",
     "canonical": "@family\nBring snacks\nand water",
     "errors": []
+  },
+  {
+    "input": "-30 Find @family and #off",
+    "canonical": "-30 Find @family and #off",
+    "errors": []
+  },
+  {
+    "input": "-30 Drive there; +15 Drive home; Walk to the car",
+    "canonical": "-30 Drive there\n+15 Drive home\nWalk to the car",
+    "errors": []
+  },
+  {
+    "input": "+30min Drive",
+    "canonical": "+30min Drive",
+    "errors": [],
+    "warnings": ["directive_lookalike"]
+  },
+  {
+    "input": "@",
+    "canonical": "@",
+    "errors": [],
+    "warnings": ["directive_lookalike"]
+  },
+  {
+    "input": "-30 Drive -d",
+    "canonical": "-30 Drive -d",
+    "errors": [],
+    "warnings": ["option_like"]
   }
 ]

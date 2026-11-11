@@ -11,7 +11,9 @@
       "kind": "route_unknown",
       "message": "@famly: no area or project named 'famly'\nhint: did you mean family (area · family.md)?\nhint: to accept this name, add `project_name_aliases: [\"famly\"]` to family.md",
       "start": 0,
-      "suggestions": []
+      "suggestions": [
+        "family"
+      ]
     }
   ],
   "event": {
@@ -44,6 +46,11 @@
     {
       "end": 6,
       "kind": "route",
+      "start": 0
+    },
+    {
+      "end": 6,
+      "kind": "invalid",
       "start": 0
     }
   ],

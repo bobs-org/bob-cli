@@ -172,6 +172,7 @@ pub(super) fn write_one<S: HomeSource>(
             suggestions: Vec::new(),
         });
     }
+    refresh_invalid_spans(&mut note);
     warnings
         .extend(note.warnings.iter().map(|warning| warning.message.clone()));
     if !note.errors.is_empty() {
@@ -742,24 +743,7 @@ fn normalize(input: &str) -> NormalizedNote {
                 let text = clean.trim().to_string();
                 let start = line_start + clean.find(text.as_str()).unwrap_or(0);
                 let end = start + text.len();
-                if starts_with_unknown_hash(&text) {
-                    out.warnings.push(issue(
-                        start,
-                        end,
-                        "unknown_hash",
-                        format!(
-                            "{} is not a Bob directive; it will be a bullet",
-                            text.split_whitespace().next().unwrap_or("#word")
-                        ),
-                    ));
-                }
-                if text.split_whitespace().any(|word| {
-                    word.starts_with('-')
-                        && word.len() > 1
-                        && !is_buffer_token(word)
-                }) {
-                    out.warnings.push(issue(start, end, "option_like", "option-like text may look like a command option; put options before the event query".to_string()));
-                }
+                warn_prose(&text, start, end, &mut out);
                 out.spans.push(Span {
                     start,
                     end,
@@ -781,16 +765,15 @@ fn normalize(input: &str) -> NormalizedNote {
     let clock_off = out.clocks.iter().any(|(off, _)| *off);
     let clock_on = out.clocks.iter().any(|(off, _)| !*off);
     if clock_off && clock_on {
-        let span = out
-            .clocks
-            .iter()
-            .find(|(off, _)| *off)
-            .map(|(_, span)| span.clone())
-            .unwrap_or(Span {
-                start: 0,
-                end: 0,
-                kind: "clock",
-            });
+        let span =
+            out.clocks
+                .get(1)
+                .map(|(_, span)| span.clone())
+                .unwrap_or(Span {
+                    start: 0,
+                    end: 0,
+                    kind: "clock",
+                });
         out.errors.push(issue(
             span.start,
             span.end,
@@ -834,6 +817,7 @@ fn normalize(input: &str) -> NormalizedNote {
     }
     lines.extend(out.prose.iter().map(|(text, _)| text.clone()));
     out.canonical = lines.join("\n");
+    refresh_invalid_spans(&mut out);
     out
 }
 
@@ -915,7 +899,10 @@ fn parse_segment(input: &str, base: usize, out: &mut NormalizedNote) {
             let span = Span {
                 start: token.start,
                 end: token.end,
-                kind,
+                kind: match kind {
+                    "clock_off" | "clock_on" => "clock",
+                    other => other,
+                },
             };
             match kind {
                 "route" => {
@@ -977,24 +964,7 @@ fn parse_segment(input: &str, base: usize, out: &mut NormalizedNote) {
                 end,
                 kind: "prose",
             };
-            if starts_with_unknown_hash(&text) {
-                out.warnings.push(issue(
-                    start,
-                    end,
-                    "unknown_hash",
-                    format!(
-                        "{} is not a Bob directive; it will be a bullet",
-                        text.split_whitespace().next().unwrap_or("#word")
-                    ),
-                ));
-            }
-            if text.split_whitespace().any(|word| {
-                word.starts_with('-')
-                    && word.len() > 1
-                    && !is_buffer_token(word)
-            }) {
-                out.warnings.push(issue(start, end, "option_like", "option-like text may look like a command option; put options before the event query".to_string()));
-            }
+            warn_prose(&text, start, end, out);
             out.spans.push(span.clone());
             out.prose.push((text, span));
             return;
@@ -1022,6 +992,7 @@ fn parse_segment(input: &str, base: usize, out: &mut NormalizedNote) {
             .unwrap_or("")
             .trim()
             .to_string();
+        warn_option_like(&reason, raw_start, reason_end, out);
         if reason.is_empty() {
             // A bare value is canonicalized into the directive line.
             if let Some(value) = out.buffers.iter_mut().find(|value| {
@@ -1127,6 +1098,80 @@ fn starts_with_unknown_hash(text: &str) -> bool {
     })
 }
 
+fn warn_prose(text: &str, start: usize, end: usize, out: &mut NormalizedNote) {
+    if starts_with_unknown_hash(text) {
+        out.warnings.push(issue(
+            start,
+            end,
+            "unknown_hash",
+            format!(
+                "{} is not a Bob directive; it will be a bullet",
+                text.split_whitespace().next().unwrap_or("#word")
+            ),
+        ));
+    }
+    if let Some(first) = text.split_whitespace().next()
+        && (first == "@"
+            || is_sign_digit_token(first) && !is_buffer_token(first))
+    {
+        let suggestion = if first == "@" {
+            "write a route such as @family".to_string()
+        } else {
+            format!(
+                "write the canonical buffer token `{}` without a suffix",
+                canonical_buffer_lookalike(first)
+            )
+        };
+        out.warnings.push(issue(
+            start,
+            end,
+            "directive_lookalike",
+            format!(
+                "{first} looks like a Bob directive but will be prose; {suggestion}"
+            ),
+        ));
+    }
+    warn_option_like(text, start, end, out);
+}
+
+fn canonical_buffer_lookalike(token: &str) -> String {
+    let mut chars = token.chars();
+    let sign = match chars.next() {
+        Some('−' | '–' | '-') => '-',
+        Some('+') => '+',
+        _ => return token.to_string(),
+    };
+    let digits: String = chars.take_while(char::is_ascii_digit).collect();
+    format!("{sign}{digits}")
+}
+
+fn warn_option_like(
+    text: &str,
+    start: usize,
+    end: usize,
+    out: &mut NormalizedNote,
+) {
+    if text.split_whitespace().any(|word| {
+        word.starts_with('-') && word.len() > 1 && !is_buffer_token(word)
+    }) {
+        out.warnings.push(issue(
+            start,
+            end,
+            "option_like",
+            "option-like text may look like a command option; put options before the event query".to_string(),
+        ));
+    }
+}
+
+fn refresh_invalid_spans(note: &mut NormalizedNote) {
+    note.spans.retain(|span| span.kind != "invalid");
+    note.spans.extend(note.errors.iter().map(|error| Span {
+        start: error.start,
+        end: error.end,
+        kind: "invalid",
+    }));
+}
+
 fn issue(
     start: usize,
     end: usize,
@@ -1157,19 +1202,56 @@ fn validate(
                 &parent.route,
             ) {
                 Ok(_) => route.value = parent.route,
-                Err(error) => note.errors.push(issue(
+                Err(error) => {
+                    let suggestions = closest_valid_routes(vault, day, &raw);
+                    let message = if suggestions.is_empty() {
+                        format!("@{raw}: {}", error.message)
+                    } else {
+                        let names = suggestions
+                            .iter()
+                            .map(|route| format!("@{route}"))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!(
+                            "@{raw}: {}\nhint: nearby valid routes: {names}",
+                            error.message
+                        )
+                    };
+                    let mut problem = issue(
+                        route.span.start,
+                        route.span.end,
+                        "route_invalid",
+                        message,
+                    );
+                    problem.suggestions = suggestions;
+                    note.errors.push(problem);
+                }
+            },
+            Err(error) => {
+                let suggestions = match &error {
+                    parent_notes::ParentError::Unknown {
+                        suggestions, ..
+                    } => suggestions
+                        .iter()
+                        .map(|suggestion| suggestion.route.clone())
+                        .collect(),
+                    parent_notes::ParentError::Ambiguous {
+                        claimants, ..
+                    } => claimants
+                        .iter()
+                        .map(|claimant| claimant.route.clone())
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                let mut problem = issue(
                     route.span.start,
                     route.span.end,
-                    "route_invalid",
-                    format!("@{raw}: {}", error.message),
-                )),
-            },
-            Err(error) => note.errors.push(issue(
-                route.span.start,
-                route.span.end,
-                "route_unknown",
-                format!("@{raw}: {}", error.message()),
-            )),
+                    "route_unknown",
+                    format!("@{raw}: {}", error.message()),
+                );
+                problem.suggestions = suggestions;
+                note.errors.push(problem);
+            }
         }
     }
     let routes: Vec<&RouteValue> = note.routes.iter().collect();
@@ -1207,6 +1289,49 @@ fn validate(
             ),
         ));
     }
+    refresh_invalid_spans(note);
+}
+
+fn closest_valid_routes(
+    vault: &std::path::Path,
+    day: NaiveDate,
+    input: &str,
+) -> Vec<String> {
+    let lowered =
+        parent_notes::normalize_parent_input(input).to_ascii_lowercase();
+    let daily = snapshot::daily_relative_path(day);
+    let mut scored = parent_notes::parent_candidates(vault)
+        .into_iter()
+        .filter(|candidate| {
+            root::validate_root_candidate(vault, &daily, &candidate.route)
+                .is_ok()
+        })
+        .filter_map(|candidate| {
+            let distance = crate::native::note_tasks::bounded_levenshtein(
+                &lowered,
+                &candidate.route.to_ascii_lowercase(),
+                2,
+            )
+            .or_else(|| {
+                candidate
+                    .aliases
+                    .iter()
+                    .filter_map(|alias| {
+                        crate::native::note_tasks::bounded_levenshtein(
+                            &lowered,
+                            &alias.to_ascii_lowercase(),
+                            2,
+                        )
+                    })
+                    .min()
+            })?;
+            Some((distance, candidate.route))
+        })
+        .collect::<Vec<_>>();
+    scored.sort_by(|left, right| {
+        left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1))
+    });
+    scored.into_iter().take(3).map(|(_, route)| route).collect()
 }
 
 fn invalid_output(
@@ -1288,6 +1413,7 @@ fn print_result(
         );
         ui::flush_stdout();
     } else {
+        let styler = crate::native::style::Styler::detect();
         println!("✎ {}", candidate.event.title);
         println!(
             "  {} · {} · from {} · {}",
@@ -1298,7 +1424,7 @@ fn print_result(
         );
         if !cleared && !canonical.is_empty() {
             println!();
-            for line in canonical.lines() {
+            for line in canonical_display_lines(canonical, candidate) {
                 println!("  {line}");
             }
         }
@@ -1308,17 +1434,17 @@ fn print_result(
         }
         if let Some(row) = rendered.row.as_deref() {
             println!();
-            println!("  lands as");
-            println!("  {row}");
+            println!("  {}", styler.dim("lands as"));
+            println!("  {}", styler.dim(row));
             for bullet in &rendered.bullets {
-                println!("  {bullet}");
+                println!("  {}", styler.dim(bullet));
             }
         }
         println!();
         if cleared {
             println!("✓ Cleared · Google's description decides again");
         } else if action == "preview" {
-            println!("Preview · nothing saved · {status_detail}");
+            println!("Preview · {status_detail}");
         } else if action == "unchanged" {
             println!("✓ Unchanged · {status_detail}");
         } else {
@@ -1364,19 +1490,88 @@ pub(super) fn show_result(
         );
         ui::flush_stdout();
     } else {
+        let styler = crate::native::style::Styler::detect();
         super::print_show_human(args, candidate, scope, scope_text, warnings)?;
         if let Some(rail) = rendered.rail {
             println!("\n  {rail}");
         }
         if let Some(row) = rendered.row {
-            println!("\n  lands as\n  {row}");
+            println!("\n  {}\n  {}", styler.dim("lands as"), styler.dim(&row));
             for bullet in rendered.bullets {
-                println!("  {bullet}");
+                println!("  {}", styler.dim(&bullet));
             }
         }
         ui::flush_stdout();
     }
     Ok(())
+}
+
+pub(super) fn canonical_display_lines(
+    text: &str,
+    candidate: &NoteCandidate,
+) -> Vec<String> {
+    let display_note = normalize(text);
+    let styler = crate::native::style::Styler::detect();
+    let hue = candidate.root.as_ref().and_then(|root| root.hue);
+    color_spans(text, &display_note.spans, hue, styler)
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+fn color_spans(
+    text: &str,
+    spans: &[Span],
+    hue: Option<crate::native::pomodoro_homes::Hue>,
+    styler: crate::native::style::Styler,
+) -> String {
+    let mut boundaries = vec![0, text.len()];
+    for span in spans {
+        boundaries.push(span.start.min(text.len()));
+        boundaries.push(span.end.min(text.len()));
+    }
+    boundaries.sort_unstable();
+    boundaries.dedup();
+    let mut rendered = String::with_capacity(text.len());
+    for bounds in boundaries.windows(2) {
+        let (start, end) = (bounds[0], bounds[1]);
+        if start == end {
+            continue;
+        }
+        let Some(part) = text.get(start..end) else {
+            continue;
+        };
+        let kind = spans
+            .iter()
+            .filter(|span| span.start <= start && span.end >= end)
+            .max_by_key(|span| span_priority(span.kind))
+            .map(|span| span.kind);
+        let styled = match kind {
+            Some("route") => hue
+                .map(|hue| styler.paint(&format!("38;5;{}", hue.xterm()), part))
+                .unwrap_or_else(|| styler.bold(part)),
+            Some("buffer" | "reason_sign") => styler.paint("36;1", part),
+            Some("clock") => styler.paint("35;1", part),
+            Some("reason") => styler.paint("32", part),
+            Some("prose" | "separator") => styler.dim(part),
+            _ => part.to_string(),
+        };
+        rendered.push_str(&styled);
+    }
+    rendered
+}
+
+fn span_priority(kind: &str) -> u8 {
+    match kind {
+        "route" => 7,
+        "clock" => 6,
+        "buffer" => 5,
+        "reason_sign" => 5,
+        "reason" => 4,
+        "prose" => 3,
+        "separator" => 2,
+        _ => 0,
+    }
 }
 
 struct Preview {
@@ -1547,9 +1742,12 @@ fn time_rail(
     ];
     let required = lengths.iter().filter(|length| **length > 0).count();
     let route_hue = candidate.root.as_ref().and_then(|root| root.hue);
-    let full_name = route_hue
-        .map(|hue| hue.name().to_string())
-        .unwrap_or_else(|| "unrouted".to_string());
+    let full_name = candidate
+        .root
+        .as_ref()
+        .and_then(|root| root.value.as_deref())
+        .unwrap_or("unrouted")
+        .to_string();
     let mut hue = full_name.clone();
     let make_base = |name: &str| {
         if clipped_before {
@@ -1865,5 +2063,64 @@ mod tests {
             .expect("reason");
         assert_eq!(&input[sign.start..sign.end], "−");
         assert_eq!(&input[reason.start..reason.end], "Drive home");
+    }
+
+    #[test]
+    fn every_validation_error_marks_its_offending_range() {
+        let vault = tempfile::tempdir().expect("validation vault");
+        for area in ["body", "family"] {
+            std::fs::write(
+                vault.path().join(format!("{area}.md")),
+                "---\ntype: area\n---\n",
+            )
+            .expect("write area");
+        }
+        for (input, kind) in [
+            ("@body @family", "route_conflict"),
+            ("#off #on", "clock_conflict"),
+            ("-30 +15 -45", "buffer_conflict"),
+            ("+721", "minutes_range"),
+            ("-0 Walk there", "reason_zero"),
+        ] {
+            let mut actual = normalize(input);
+            validate(
+                &mut actual,
+                vault.path(),
+                NaiveDate::from_ymd_opt(2026, 12, 13).expect("day"),
+            );
+            let error = actual
+                .errors
+                .iter()
+                .find(|error| error.kind == kind)
+                .unwrap_or_else(|| panic!("expected {kind} for {input:?}"));
+            assert!(
+                actual.spans.iter().any(|span| {
+                    span.kind == "invalid"
+                        && span.start == error.start
+                        && span.end == error.end
+                }),
+                "missing invalid span for {kind} in {input:?}: {:?}",
+                actual.spans
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_display_colors_each_span_kind() {
+        use crate::native::{pomodoro_homes::Hue, style::Styler};
+
+        let input = "@family #off\n-30 Drive home\nBring snacks";
+        let note = normalize(input);
+        let rendered = color_spans(
+            input,
+            &note.spans,
+            Some(Hue::Orange),
+            Styler::colored(),
+        );
+        assert!(rendered.contains("\u{1b}[38;5;208m@family"), "{rendered:?}");
+        assert!(rendered.contains("\u{1b}[35;1m#off"), "{rendered:?}");
+        assert!(rendered.contains("\u{1b}[36;1m-"), "{rendered:?}");
+        assert!(rendered.contains("\u{1b}[32mDrive home"), "{rendered:?}");
+        assert!(rendered.contains("\u{1b}[2mBring snacks"), "{rendered:?}");
     }
 }

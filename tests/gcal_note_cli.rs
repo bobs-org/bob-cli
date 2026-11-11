@@ -227,6 +227,10 @@ fn preview_save_unchanged_clear_and_invalid_json() {
     );
     assert_eq!(preview["effective"]["buffer"]["after_reason"], "Drive home");
     assert_eq!(preview["preview"]["bullets"].as_array().unwrap().len(), 2);
+    assert!(preview["preview"]["rail"]
+        .as_str()
+        .unwrap()
+        .contains("● family"));
     assert!(preview["preview"]["row"]
         .as_str()
         .unwrap()
@@ -320,6 +324,10 @@ fn preview_save_unchanged_clear_and_invalid_json() {
     assert_eq!(invalid["ok"], false);
     assert_eq!(invalid["action"], "invalid");
     assert_eq!(invalid["errors"][0]["kind"], "route_unknown");
+    assert_eq!(invalid["errors"][0]["suggestions"][0], "family");
+    assert!(invalid["spans"].as_array().unwrap().iter().any(|span| {
+        span["kind"] == "invalid" && span["start"] == 0 && span["end"] == 6
+    }));
     assert_golden("invalid", &invalid);
     assert_eq!(
         fs::read_to_string(&journal_path).unwrap().lines().count(),
@@ -376,6 +384,11 @@ fn preview_save_unchanged_clear_and_invalid_json() {
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     let warnings = json_stdout(&output);
     assert_eq!(warnings["note"]["text"], "@family #off\n#foo -d");
+    assert!(warnings["spans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|span| { span["kind"] == "clock" }));
     let warning_messages = warnings["warnings"].as_array().unwrap();
     assert!(warning_messages.iter().any(|warning| {
         warning.as_str().unwrap_or_default().contains("deprecated")
@@ -392,6 +405,179 @@ fn preview_save_unchanged_clear_and_invalid_json() {
             .unwrap_or_default()
             .contains("put options before")
     }));
+
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args([
+            "gcal", "note", "-i", "e1", "-d", "-f", "json", "--", "-30",
+            "Drive", "-d",
+        ])
+        .output()
+        .expect("preview option-like text inside a reason");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let reason_warning = json_stdout(&output);
+    assert!(reason_warning["warnings"].as_array().unwrap().iter().any(
+        |warning| {
+            warning
+                .as_str()
+                .unwrap_or_default()
+                .contains("put options before")
+        }
+    ));
+}
+
+#[test]
+fn invalid_routes_and_empty_notes_have_ranged_errors() {
+    let env = GcalEnv::new("bob-cli-gcal-note-write-errors");
+    prepare(&env);
+    fs::write(
+        env.vault().join("family.md"),
+        "---\ntype: project\nparent: [[body]]\nroot: true\n---\n# family\n",
+    )
+    .expect("write root project");
+    fs::write(
+        env.vault().join("famil.md"),
+        "---\ntype: project\nparent: [[family]]\n---\n# famil\n",
+    )
+    .expect("write nearby nested project");
+    let event = guest_event(
+        "route-invalid",
+        "Lunch with Kelly",
+        "2026-12-13T13:00:00-05:00",
+        "2026-12-13T14:00:00-05:00",
+    );
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.event_lookup(
+        "route-invalid",
+        &serde_json::to_string(&json!({"event": event})).expect("lookup body"),
+    );
+
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args([
+            "gcal",
+            "note",
+            "-i",
+            "route-invalid",
+            "-f",
+            "json",
+            "--",
+            "@famil",
+        ])
+        .output()
+        .expect("reject invalid route");
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    let invalid = json_stdout(&output);
+    assert_eq!(invalid["errors"][0]["kind"], "route_invalid");
+    assert_eq!(invalid["errors"][0]["suggestions"][0], "family");
+    assert!(invalid["errors"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("@famil"));
+    assert!(invalid["spans"].as_array().unwrap().iter().any(|span| {
+        span["kind"] == "invalid" && span["start"] == 0 && span["end"] == 6
+    }));
+
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args([
+            "gcal",
+            "note",
+            "-i",
+            "route-invalid",
+            "-d",
+            "-f",
+            "json",
+            "--",
+        ])
+        .output()
+        .expect("reject empty note");
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    let empty = json_stdout(&output);
+    assert_eq!(empty["errors"][0]["kind"], "empty");
+    assert!(empty["spans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|span| { span["kind"] == "invalid" }));
+}
+
+#[test]
+fn human_write_and_clear_show_plain_preview_output() {
+    let env = GcalEnv::new("bob-cli-gcal-note-human-write");
+    prepare(&env);
+    let event = guest_event(
+        "human-write",
+        "Lunch with Kelly",
+        "2026-12-13T13:00:00-05:00",
+        "2026-12-13T14:00:00-05:00",
+    );
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.event_lookup(
+        "human-write",
+        &serde_json::to_string(&json!({"event": event})).expect("lookup body"),
+    );
+
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-i", "human-write", "-d", "@family"])
+        .output()
+        .expect("preview private note in human mode");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let preview = stdout(&output);
+    assert!(preview.contains("Preview · nothing was saved"), "{preview}");
+    assert!(
+        !preview.contains("nothing saved · nothing was saved"),
+        "{preview}"
+    );
+    assert!(preview.contains("● family"), "{preview}");
+
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args([
+            "gcal",
+            "note",
+            "-i",
+            "human-write",
+            "@family",
+            "-30",
+            "Drive",
+            "there",
+        ])
+        .output()
+        .expect("write private note in human mode");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let saved = stdout(&output);
+    assert!(saved.contains("✓ Noted · only in Bob"), "{saved}");
+    assert!(saved.contains("lands as"), "{saved}");
+    assert!(saved.contains("[root:: family]"), "{saved}");
+    assert!(
+        !saved.contains("\u{1b}["),
+        "non-TTY output must be plain: {saved:?}"
+    );
+
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-i", "human-write", "-c"])
+        .output()
+        .expect("clear private note in human mode");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let cleared = stdout(&output);
+    assert!(
+        cleared.contains("✓ Cleared · Google's description decides again"),
+        "{cleared}"
+    );
+    assert!(cleared.contains("lands as"), "{cleared}");
+    assert!(
+        !cleared.contains("\u{1b}["),
+        "non-TTY output must be plain: {cleared:?}"
+    );
 }
 
 #[test]
@@ -1971,4 +2157,50 @@ fn list_json_exposes_waiting_reply_and_maybe_events() {
     assert_eq!(events[0]["lands"], "waiting_reply");
     assert_eq!(events[1]["lands"], "waiting_maybe");
     assert_golden("waiting_states", &document);
+}
+
+#[test]
+fn write_json_reports_waiting_reply_and_maybe_statuses() {
+    let env = GcalEnv::new("bob-cli-gcal-note-waiting-write");
+    prepare(&env);
+    let mut reply = guest_event(
+        "waiting-reply-write",
+        "Review proposal",
+        "2026-11-11T09:00:00-05:00",
+        "2026-11-11T10:00:00-05:00",
+    );
+    reply["attendees"][0]["responseStatus"] = json!("needsAction");
+    let mut maybe = guest_event(
+        "waiting-maybe-write",
+        "Lunch invitation",
+        "2026-11-12T12:00:00-05:00",
+        "2026-11-12T13:00:00-05:00",
+    );
+    maybe["attendees"][0]["responseStatus"] = json!("tentative");
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.event_lookup(
+        "waiting-reply-write",
+        &serde_json::to_string(&json!({"event": reply})).expect("reply lookup"),
+    );
+    fake.event_lookup(
+        "waiting-maybe-write",
+        &serde_json::to_string(&json!({"event": maybe})).expect("maybe lookup"),
+    );
+
+    for (event_id, expected) in [
+        ("waiting-reply-write", "waiting_reply"),
+        ("waiting-maybe-write", "waiting_maybe"),
+    ] {
+        let mut command = env.command();
+        let output = fake
+            .install(&mut command)
+            .args([
+                "gcal", "note", "-i", event_id, "-f", "json", "--", "@family",
+            ])
+            .output()
+            .expect("write note for unanswered event");
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        let document = json_stdout(&output);
+        assert_eq!(document["status"]["state"], expected);
+    }
 }

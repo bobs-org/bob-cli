@@ -46,7 +46,7 @@ bob gcal doctor [-b|--bob-dir DIR] [-f|--format human|json]
 bob gcal [list] [-a] [-b|--bob-dir DIR] [-D|--day DAY] [-f|--format table|json]
 bob gcal login [-a|--account EMAIL] [-c|--credentials FILE] [-f|--format human|json] [-m|--manual]
 bob gcal logout [-a|--account EMAIL] [-f|--format human|json] [-y|--force]
-bob gcal note [-a|--all] [-c|--clear] [-d|--dry-run] [-e|--edit] [-i|--event-id ID] [-l|--list] [-s|--scope event|series] [QUERY...] [[--] TEXT...]
+bob gcal note [-A|--adopt] [-a|--all] [-b|--bob-dir DIR] [-C|--calendar ID] [-c|--clear] [-D|--day DAY] [-d|--dry-run] [-e|--edit] [-f|--format human|json] [-h|--help] [-i|--event-id ID] [-l|--list] [-s|--scope event|series] [QUERY...] [[--] TEXT...]
 bob gcal sync [-b|--bob-dir DIR] [-D|--day DAY] [-d|--dry-run] [-f|--format human|json] [-q|--quiet]
 ```
 

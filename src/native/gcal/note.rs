@@ -2554,7 +2554,7 @@ fn print_show_human(
     );
     println!();
     if let Some(text) = scope_text.filter(|text| !text.trim().is_empty()) {
-        for line in text.lines() {
+        for line in write::canonical_display_lines(&text, candidate) {
             println!("  {line}");
         }
         println!();
@@ -2571,8 +2571,7 @@ fn print_show_human(
         println!("  no private note yet · add one: {example}");
         println!();
     }
-    // Effective root, buffer, and clock (the write phase adds the rail
-    // and the "lands as" block).
+    // Effective root, buffer, and clock before the shared preview below.
     let root_label = candidate
         .root
         .as_ref()

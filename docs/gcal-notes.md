@@ -73,6 +73,12 @@ Canonical text holds the directive line first. It uses canonical spellings:
 reason lines follow, before then after, then the prose lines in input order.
 Directive lines never render, so the reordering is invisible in the vault.
 
+Text after a reason token stays part of that reason, including `@` and `#`
+words. Bob warns when prose starts with a bare `@` or a sign-and-number token
+that is not a valid buffer (for example `+30min`); write a complete route or
+the canonical buffer token instead. Option-like words such as `-d` also warn
+inside a reason, so move command options before the event query when needed.
+
 ## Precedence
 
 Each field takes the first layer that sets it:
@@ -303,9 +309,23 @@ include `effective`: root, explicit clock, buffer minutes and winning reason
 display text, contributed fields, and meeting and occupied bounds. A reason is
 `null` when none wins, including an explicit zero buffer. Writes add their
 canonical `note.text`, typed `note.lines`, preview path, row, bullets, and
-status. Their `spans` are half-open UTF-8 byte offsets into `input.text` for
-route, clock, buffer, reason, prose, separator, and invalid spans. Invalid
-JSON returns `ok: false`, `error`, and ranged `errors` without saving.
+status. Their `spans` are half-open UTF-8 byte offsets into `input.text`.
+Kinds are `route`, `clock`, `buffer`, `reason_sign`, `reason`, `prose`,
+`separator`, and `invalid`. A `buffer` span covers its complete `-30` or
+`+15` token; when it starts a reason line, the nested `reason_sign` span
+covers just the sign and `reason` covers the text after the token. Clock
+directives use the single `clock` kind for both `#off` and `#on`. Invalid
+input returns `ok: false`, `error`, and ranged `errors` without saving. An
+`invalid` span covers each offending token. Each error has `start`, `end`,
+`kind`, `message`, and `suggestions`; route errors include nearby route names
+in `suggestions` and in the message when matches are available, while other
+errors use an empty list.
+
+`status.state` is `preview`, `unchanged`, `waiting_note`, `applied`,
+`saved_elsewhere`, `waiting_reply`, `waiting_maybe`, `context`, or
+`sync_failed`. `preview` is used for a successful dry run, while
+`unchanged` means the canonical note already matches the saved note and no
+journal record was appended.
 Listings never carry note text. The list document is
 `{schema_version, ok, window: {from, to, start, end}, notes|events, orphans, warnings}`:
 `events` for `-l -a`, `notes` otherwise — the key names the mode, not the
