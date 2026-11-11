@@ -400,6 +400,24 @@ const TABLE: &[Entry] = &[
         arg: "day",
         kind: Kind::FreeText,
     },
+    // `bob bank ack ID...` takes bank row IDs (^bank-hex, bank-hex, or hex).
+    Entry {
+        path: &[],
+        arg: "ids",
+        kind: Kind::FreeText,
+    },
+    // `bob bank list|report -m` takes a month: YYYY-MM.
+    Entry {
+        path: &[],
+        arg: "month",
+        kind: Kind::FreeText,
+    },
+    // `bob bank report -w` takes an ISO week: YYYY-Www (Monday first).
+    Entry {
+        path: &[],
+        arg: "week",
+        kind: Kind::FreeText,
+    },
     // `bob gcal login -c` stores a Desktop-app OAuth client JSON.
     Entry {
         path: &[],

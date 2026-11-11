@@ -350,20 +350,57 @@ Examples:
 See docs/attachments.md for the origin journal contract.
 Run 'bob attachments <command> --help' for more information on a command.";
 
-const BANK_MEMBERS: &[Member] = &[Member {
-    name: "check",
-    about: "Check bank notes against the contract",
-    leaf: Leaf {
-        native_command: NativeCommand::BankCheck,
-        script_command: None,
+const BANK_MEMBERS: &[Member] = &[
+    Member {
+        name: "ack",
+        about: "Acknowledge waiting bank rows",
+        leaf: Leaf {
+            native_command: NativeCommand::BankAck,
+            script_command: None,
+        },
     },
-}];
+    Member {
+        name: "check",
+        about: "Check bank notes against the contract",
+        leaf: Leaf {
+            native_command: NativeCommand::BankCheck,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "ensure",
+        about: "Ensure the month note and day heading exist",
+        leaf: Leaf {
+            native_command: NativeCommand::BankEnsure,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "list",
+        about: "List waiting bank rows (default)",
+        leaf: Leaf {
+            native_command: NativeCommand::BankList,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "report",
+        about: "Report bank totals for a day, week, month, or year",
+        leaf: Leaf {
+            native_command: NativeCommand::BankReport,
+            script_command: None,
+        },
+    },
+];
 
 const BANK_AFTER_HELP: &str = "\
-Bare `bob bank` prints this help: list, report, ensure, and ack ship in a later phase.
+Bare `bob bank` runs the read-only list.
 
 Examples:
-  bob bank check                 Lint bank notes against the contract
+  bob bank                       List waiting rows
+  bob bank report                 Report this month's totals
+  bob bank ensure -D today        Ensure today's heading
+  bob bank ack -D 2026-11-10      Acknowledge one day
   bob bank check -f json         Findings as JSON
 
 See docs/bank.md for the bank contract.
@@ -1051,12 +1088,12 @@ const SUBCOMMANDS: &[Subcommand] = &[
         section: Section::Integrations,
         target: Target::Group(Group {
             members: BANK_MEMBERS,
-            default: None,
+            default: Some("list"),
             extra_about: Some(
-                "Bare `bob bank` prints this help. `check` lints bank notes against the contract. `list`, `report`, `ensure`, and `ack` ship in a later phase.",
+                "Bare `bob bank` runs the read-only list. `list` shows the waiting queue; `report` explains the month with exact cents. `ensure` creates the month note and day heading; `ack` ticks shown rows. `check` lints bank notes against the contract.",
             ),
             after_help: BANK_AFTER_HELP,
-            usage: "bob bank <COMMAND>",
+            usage: "bob bank [COMMAND]",
         }),
     },
     Subcommand {
@@ -2476,7 +2513,11 @@ mod tests {
             NativeCommand::AlbumsList,
             NativeCommand::AttachmentsImport,
             NativeCommand::AttachmentsOrigin,
+            NativeCommand::BankAck,
             NativeCommand::BankCheck,
+            NativeCommand::BankEnsure,
+            NativeCommand::BankList,
+            NativeCommand::BankReport,
             NativeCommand::Capture,
             NativeCommand::CaptureComplete,
             NativeCommand::CaptureParse,

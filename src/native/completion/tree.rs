@@ -34,7 +34,15 @@ impl NativeCommand {
             NativeCommand::AttachmentsOrigin => {
                 crate::native::attachments::cli::build_cli_origin()
             }
+            NativeCommand::BankAck => crate::native::bank::build_cli_ack(),
             NativeCommand::BankCheck => crate::native::bank::build_cli_check(),
+            NativeCommand::BankEnsure => {
+                crate::native::bank::build_cli_ensure()
+            }
+            NativeCommand::BankList => crate::native::bank::build_cli_list(),
+            NativeCommand::BankReport => {
+                crate::native::bank::build_cli_report()
+            }
             NativeCommand::Capture => crate::native::capture::cli::build_cli(),
             NativeCommand::CaptureComplete => {
                 crate::native::capture_complete::build_cli()

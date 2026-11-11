@@ -488,7 +488,8 @@ fn lint_parsed(
                 suggest_name(category, &keys),
                 day,
             ));
-        } else if row.cents > 0 && !SPENDING_EXEMPT.contains(&category.as_str())
+        } else if row.cents > 0
+            && !SPENDING_EXEMPT.iter().any(|exempt| *exempt == category)
         {
             findings.push(finding(
                 "bank_inflow_category",

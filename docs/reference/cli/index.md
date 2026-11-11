@@ -93,7 +93,11 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | Command | What it does |
 | --- | --- |
 | [`bob bank`](bank.md) | Commands over bank rows, bank month notes, and their import journal |
+| [`bob bank ack`](bank.md#bob-bank-ack) | Acknowledge waiting bank rows |
 | [`bob bank check`](bank.md#bob-bank-check) | Check bank notes against the contract |
+| [`bob bank ensure`](bank.md#bob-bank-ensure) | Ensure the month note and day heading exist |
+| [`bob bank list`](bank.md#bob-bank-list) | List waiting bank rows (default) |
+| [`bob bank report`](bank.md#bob-bank-report) | Report bank totals for a day, week, month, or year |
 | [`bob clipboard`](clipboard.md) | Diagnose clipboard history for counted capture |
 | [`bob gcal`](gcal.md) | Project Google Calendar events onto today's daily note |
 | [`bob gkeep`](gkeep.md) | Drain the Google Keep inbox into Obsidian tasks |

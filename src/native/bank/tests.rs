@@ -213,6 +213,13 @@ fn flagged_info_does_not_fail_check() {
 }
 
 #[test]
+fn bob_now_overrides_today_everywhere() {
+    let _guard = guard();
+    let now = crate::native::env::current_datetime();
+    assert_eq!(now.date(), today());
+}
+
+#[test]
 fn bank_rows_are_invisible_to_task_scanners() {
     let _guard = guard();
     let root = temp_vault("invisible");
@@ -238,4 +245,336 @@ fn bank_rows_are_invisible_to_task_scanners() {
         !task.description.contains("Smashburger")
             && !task.description.contains("ShopRite")
     }));
+}
+
+fn cli_hub_with_cash() -> &'static str {
+    "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-01\n    pocket:\n      label: Pocket cash\n      kind: cash\n  categories:\n    groceries: 🛒 Groceries\n    dining: 🍽️ Dining\n---\n\n# 🏦 Bank\n"
+}
+
+fn totals_body() -> String {
+    let mut body =
+        canonical_template(month(), "2026-11-12T07:30:00-05:00", today());
+    body.push_str("- [x] +$2,000.00 Salary [cat:: income]\n");
+    body.push_str("- [x] +$15.00 RefundThing [cat:: refund]\n");
+    body.push_str("- [x] $100.00 Card payment [cat:: transfer]\n");
+    body.push_str("- [x] +$100.00 From card [cat:: transfer]\n");
+    body.push_str("- [x] $63.50 ATM withdrawal [cat:: cash]\n");
+    body.push_str("- [x] $5.00 Pocket coffee [acct:: pocket]\n");
+    body.push_str("- [x] $0.10 Dime\n");
+    body.push_str("- [x] $0.20 Penny\n");
+    body.push_str("- [x] $1,234.56 Big shop [cat:: groceries]\n");
+    body.push_str("- [x] −$3.00 Minus sign [cat:: groceries]\n");
+    body.push_str("- [x] +$9.99 Mystery inflow\n");
+    body.push_str("- [ ] $61.20 ShopRite [cat:: groceries]\n");
+    body
+}
+
+fn load_for_totals() -> (super::config::BankConfig, Vec<super::model::BankRow>)
+{
+    let _guard = guard();
+    let root = temp_vault("totals-load");
+    write(root.as_path(), "bank.md", cli_hub_with_cash());
+    write(root.as_path(), "bank/2026-11.md", &totals_body());
+    let scan = scan_bank(&root);
+    let config = match super::config::parse_bank_config(
+        &scan.hub.as_ref().expect("hub").contents,
+    ) {
+        super::config::ConfigParse::Ok(config) => config,
+        other => panic!("expected ok, got {other:?}"),
+    };
+    let rows = super::model::collect_rows(&scan, Some(&config));
+    (config, rows)
+}
+
+#[test]
+fn totals_keep_transfer_and_cash_apart() {
+    let _guard = guard();
+    let (config, rows) = load_for_totals();
+    let totals = super::model::compute_totals(&rows, Some(&config));
+    // Out: 63.50 cash + 0.10 + 0.20 + 1,234.56 + 3.00 + 61.20 waiting.
+    assert_eq!(totals.out_cents, 63_50 + 10 + 20 + 123_456 + 300 + 6_120);
+    // In: income + refund only; a credit alone is never income.
+    assert_eq!(totals.in_cents, 200_000 + 1_500);
+    assert_eq!(totals.net_cents, totals.in_cents - totals.out_cents);
+    assert_eq!(totals.refund_cents, 1_500);
+    assert_eq!(totals.transfer_out_cents, 10_000);
+    assert_eq!(totals.transfer_in_cents, 10_000);
+    assert_eq!(totals.cash_out_cents, 6_350);
+    assert_eq!(totals.cash_traced_cents, 500);
+    assert_eq!(totals.unclassified_out_cents, 10 + 20);
+    assert_eq!(totals.unclassified_in_cents, 999);
+}
+
+#[test]
+fn account_status_is_unverified_until_import() {
+    let _guard = guard();
+    let (config, _) = load_for_totals();
+    let statuses = super::status::accounts(&config);
+    assert_eq!(statuses[0].status, "unverified");
+    assert_eq!(statuses[0].hint, "No import yet — bob bank import FILE");
+    assert_eq!(statuses[1].status, "untracked");
+}
+
+#[test]
+fn list_filters_waiting_all_and_month() {
+    let _guard = guard();
+    let (config, rows) = load_for_totals();
+    let scan = {
+        let root = temp_vault("list-scan");
+        write(root.as_path(), "bank.md", cli_hub_with_cash());
+        write(root.as_path(), "bank/2026-11.md", &totals_body());
+        scan_bank(&root)
+    };
+    let headings = super::list::collect_heading_lines(&scan);
+    let waiting = super::list::build(
+        rows.clone(),
+        today(),
+        super::list::ListFilter {
+            all: false,
+            month: None,
+        },
+        config.categories.clone(),
+        super::status::accounts(&config),
+        headings.clone(),
+    );
+    assert_eq!(waiting.filter, "waiting");
+    assert_eq!(waiting.waiting, 1);
+    assert!(waiting.days.iter().all(|day| !day.rows.is_empty()));
+    let all = super::list::build(
+        rows.clone(),
+        today(),
+        super::list::ListFilter {
+            all: true,
+            month: None,
+        },
+        config.categories.clone(),
+        super::status::accounts(&config),
+        headings,
+    );
+    assert_eq!(all.filter, "all");
+    assert!(all.rows_total > waiting.rows_total);
+    let json = super::list::to_json(&waiting, "checking");
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["filter"], "waiting");
+    assert_eq!(json["counts"]["waiting"], 1);
+}
+
+#[test]
+fn report_periods_and_breakdown() {
+    let _guard = guard();
+    let (config, rows) = load_for_totals();
+    let scan = {
+        let root = temp_vault("report-scan");
+        write(root.as_path(), "bank.md", cli_hub_with_cash());
+        write(root.as_path(), "bank/2026-11.md", &totals_body());
+        scan_bank(&root)
+    };
+    let headings = super::list::collect_heading_lines(&scan);
+    let period = super::report::resolve_period(
+        None,
+        Some("2026-11"),
+        None,
+        None,
+        today(),
+    )
+    .expect("month");
+    assert_eq!(period.key, "2026-11");
+    assert!(period.so_far);
+    let built = super::report::build(
+        rows,
+        today(),
+        period,
+        Some(&config),
+        config.categories.clone(),
+        super::status::accounts(&config),
+        "checking".to_owned(),
+        &headings,
+    );
+    // Breakdown is declared order, then cash, then unclassified.
+    let keys: Vec<&str> = built
+        .breakdown
+        .iter()
+        .map(|entry| entry.key.as_str())
+        .collect();
+    assert_eq!(keys, vec!["groceries", "cash", "unclassified"]);
+    // Every day of the month is present, including empty ones.
+    assert_eq!(built.days.len(), 30);
+    assert_eq!(built.waiting_all, 1);
+    assert!(built.waiting_oldest.is_some());
+    let json = super::report::to_json(&built);
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["period"]["kind"], "month");
+    assert!(json["totals"]["out_cents"].as_i64().unwrap() > 0);
+    // One day, one week, one year all resolve; at most one period.
+    assert!(super::report::resolve_period(
+        Some("2026-11-12"),
+        None,
+        None,
+        None,
+        today()
+    )
+    .is_ok());
+    assert!(super::report::resolve_period(
+        None,
+        None,
+        Some("2026-W46"),
+        None,
+        today()
+    )
+    .is_ok());
+    assert!(super::report::resolve_period(
+        None,
+        None,
+        None,
+        Some("2026"),
+        today()
+    )
+    .is_ok());
+    assert!(super::report::resolve_period(
+        None,
+        Some("2026-11"),
+        Some("2026-W46"),
+        None,
+        today()
+    )
+    .is_err());
+}
+
+#[test]
+fn ensure_plans_missing_note_heading_and_existing() {
+    let _guard = guard();
+    let root = temp_vault("ensure");
+    write(root.as_path(), "bank.md", valid_hub());
+    let config = match super::config::parse_bank_config(valid_hub()) {
+        super::config::ConfigParse::Ok(config) => config,
+        other => panic!("expected ok, got {other:?}"),
+    };
+    // Missing note creates both.
+    let plan =
+        super::ensure::plan(root.as_path(), today(), valid_hub(), &config)
+            .expect("plan");
+    assert!(plan.created_note);
+    assert!(!plan.created_heading);
+    assert_eq!(plan.path, "bank/2026-11.md");
+    // Write it, then a missing heading on another day is planned.
+    if let Some(parent) = root.join(&plan.path).parent() {
+        fs::create_dir_all(parent).expect("parent");
+    }
+    fs::write(
+        root.join(&plan.path),
+        plan.updated_contents.as_ref().expect("contents"),
+    )
+    .expect("write");
+    let other = NaiveDate::from_ymd_opt(2026, 11, 13).unwrap();
+    let second =
+        super::ensure::plan(root.as_path(), other, valid_hub(), &config)
+            .expect("plan");
+    assert!(!second.created_note);
+    assert!(second.created_heading);
+    fs::write(
+        root.join(&second.path),
+        second.updated_contents.as_ref().expect("contents"),
+    )
+    .expect("write");
+    // Existing heading is idempotent and points under the heading.
+    let third =
+        super::ensure::plan(root.as_path(), other, valid_hub(), &config)
+            .expect("plan");
+    assert!(!third.created_note);
+    assert!(!third.created_heading);
+    assert!(third.updated_contents.is_none());
+    let json = super::ensure::to_json(
+        &third,
+        today(),
+        &config.categories,
+        &super::status::accounts(&config),
+    );
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["day"], "2026-11-13");
+}
+
+#[test]
+fn ack_ticks_ids_day_and_reports_unknown() {
+    let _guard = guard();
+    let root = temp_vault("ack");
+    write(root.as_path(), "bank.md", valid_hub());
+    let mut body =
+        canonical_template(month(), "2026-11-12T07:30:00-05:00", today());
+    body.push_str("- [ ] $61.20 ShopRite [cat:: groceries] ^bank-2b91c0e4\n");
+    body.push_str("- [ ] $4.25 Latte [cat:: dining]\n");
+    body.push_str("- [x] $13.71 Smashburger [cat:: dining]\n");
+    write(root.as_path(), "bank/2026-11.md", &body);
+    let scan = scan_bank(&root);
+    let config = match super::config::parse_bank_config(
+        &scan.hub.as_ref().expect("hub").contents,
+    ) {
+        super::config::ConfigParse::Ok(config) => config,
+        other => panic!("expected ok, got {other:?}"),
+    };
+    let rows = super::model::collect_rows(&scan, Some(&config));
+    let mut contents = std::collections::HashMap::new();
+    for month in &scan.months {
+        contents.insert(month.path.clone(), month.contents.clone());
+    }
+    // By ID, with ^ prefix and bare hex both accepted.
+    let by_id = super::ack::plan_ack(
+        &rows,
+        &super::ack::AckSelection {
+            ids: vec!["^bank-2b91c0e4".to_owned()],
+            day: None,
+        },
+        &contents,
+    );
+    assert_eq!(by_id.acknowledged.len(), 1);
+    assert!(by_id.unknown.is_empty());
+    // By day ticks both waiting rows.
+    let by_day = super::ack::plan_ack(
+        &rows,
+        &super::ack::AckSelection {
+            ids: Vec::new(),
+            day: Some(today()),
+        },
+        &contents,
+    );
+    assert_eq!(by_day.acknowledged.len(), 2);
+    // Unknown IDs refuse.
+    let unknown = super::ack::plan_ack(
+        &rows,
+        &super::ack::AckSelection {
+            ids: vec!["deadbeef".to_owned()],
+            day: None,
+        },
+        &contents,
+    );
+    assert_eq!(unknown.unknown, vec!["deadbeef".to_owned()]);
+    assert!(unknown.edits.is_empty() || !unknown.acknowledged.is_empty());
+    // Already-ticked rows are no-ops.
+    let already = super::ack::plan_ack(
+        &rows,
+        &super::ack::AckSelection {
+            ids: vec!["^bank-2b91c0e4".to_owned()],
+            day: None,
+        },
+        &contents,
+    );
+    let _ = already;
+    let ticked_body = body.replace("- [ ] $61.20", "- [x] $61.20");
+    write(root.as_path(), "bank/2026-11.md", &ticked_body);
+    let rescan = scan_bank(&root);
+    let rerows = super::model::collect_rows(&rescan, Some(&config));
+    let mut recontents = std::collections::HashMap::new();
+    for month in &rescan.months {
+        recontents.insert(month.path.clone(), month.contents.clone());
+    }
+    let repeat = super::ack::plan_ack(
+        &rerows,
+        &super::ack::AckSelection {
+            ids: vec!["2b91c0e4".to_owned()],
+            day: None,
+        },
+        &recontents,
+    );
+    assert_eq!(repeat.acknowledged.len(), 0);
+    assert_eq!(repeat.already.len(), 1);
+    assert!(repeat.unknown.is_empty());
 }

@@ -6,19 +6,34 @@ are shown and never written into notes.
 
 `bob bank` lives in the Integrations section of `bob --help`. Membership:
 commands over bank rows, bank month notes, and their import journal. Bare
-`bob bank` prints the group help until `list` ships. This page is the
-contract. `bob bank check` ships now; `list`, `report`, `ensure`, `ack`, and
-`import` ship in later phases.
+`bob bank` runs the read-only `list`. This page is the contract. `check`,
+`list`, `report`, `ensure`, and `ack` ship now; `import` ships in a later
+phase.
 
 ```text
+bob bank [list] [-a] [-b DIR] [-f human|json] [-m MONTH]
+bob bank ack [ID...] [-b DIR] [-D DAY] [-d] [-f human|json]
 bob bank check [-b DIR] [-f human|json]
+bob bank ensure [-b DIR] [-D DAY] [-f human|json] [-o]
+bob bank report [-b DIR] [-D DAY] [-f human|json] [-m MONTH] [-w WEEK] [-y YEAR]
 ```
 
 - Every long option has a short alias; options stay alphabetical.
+  Subcommands are alphabetical.
+- `list`, `report`, and `ensure` exit 0, or 1 on a runtime failure.
 - `check` exits 1 on any error, 0 for warning-only, info-only, or clean
   reports, and 0 for the teaching empty state.
+- `ack` exits 2 when an ID is unknown or isn't a row, and changes nothing
+  on a refusal.
+- `ensure` exits 2 on an invalid day or configuration.
 - Real I/O failures are reported on stderr and exit 1.
-- `check` is read-only: vault bytes, index, and HEAD are unchanged.
+- `check`, `list`, and `report` are read-only: vault bytes, index, and
+  HEAD are unchanged. `ensure` and `ack` are guarded writes with no
+  commit, which vault-sync carries.
+- `-D` takes `today`, `yesterday`, `tomorrow`, or `YYYY-MM-DD`.
+  `-m` takes `YYYY-MM`, `-w` takes `YYYY-Www` (ISO, Monday first), and
+  `-y` takes `YYYY`. `report` takes at most one period and defaults to
+  the current month. `report -D` yields one day.
 - `BOB_NOW` overrides "today" everywhere.
 
 ## Files
@@ -159,9 +174,30 @@ bob writes a row once. After that, bob makes only two edits to a row:
 `ack` ticks `[ ]` to `[x]`, and import appends ` ^bank-<hex>` to a typed
 row it matched. Bryan's edits always win.
 
+## Commands
+
+`list` (the bare default) shows the waiting queue across every month,
+grouped by day, oldest first. `-a` shows all rows, and `-m` limits the
+output to one month.
+
+`report` explains one period with exact cents. Week boundaries are ISO,
+Monday first. `report -D` yields one day: that is the daily chip's data.
+Human output shows bars and a heat strip, and never depends on terminal
+width. Amounts are tabular and right-aligned with explicit signs;
+inflows are green and outflows are neutral, because spending is not an
+error. State is always carried by text and shape, never by color alone.
+
+`ensure` creates the folder, note, and heading on demand, and is
+idempotent. It prints the path and the line where the next row goes
+(after the day's last row, or the blank line under the heading). `-o`
+opens the note in Obsidian.
+
+`ack` ticks the named waiting rows, every waiting row of `-D DAY`, or
+both. A row that is already ticked is a no-op.
+
 ## Totals
 
-`report` (later) computes every total from rows at read time. Rows on
+`report` computes every total from rows at read time. Rows on
 `cash`-kind accounts and rows with `[cat:: transfer]` are kept apart.
 
 | Total | Rule |
@@ -169,16 +205,22 @@ row it matched. Bryan's edits always win.
 | Out | Outflows excluding `transfer` and cash-account rows. Includes `cash` (ATM) and uncategorized outflows. |
 | In | Inflows categorized `income` or `refund`. A credit alone is never income. |
 | Net | In − Out. |
-| Transfers | `transfer` in and out, shown, never in Out or In. |
-| Cash out | Outflows with `[cat:: cash]`. Cash-account rows sum into "cash traced". |
-| Unclassified | Uncategorized outflows (inside Out) and uncategorized inflows (outside In). |
+| Refunds | `refund` inflows, also shown on their own. |
+| Transfers | `transfer` in and out, shown, never in Out or In. A card purchase plus its payment from checking counts once. |
+| Cash out | Outflows with `[cat:: cash]`, labelled "destination unknown". Cash-account rows sum into "cash traced". |
+| Unclassified | Uncategorized outflows (inside Out) and uncategorized inflows (outside In). Always shown, never hidden. |
+| Breakdown | Out by category, in declared order, then `cash`, then unclassified. Each entry has a share of Out. |
+| Waiting / flagged | Counts of `[ ]` rows and `⚑` rows. |
 
-An inflow with a spending category is `bank_inflow_category` (info).
+An inflow with a spending category (for example, a restaurant refund
+tagged `dining`) is counted as unclassified in, and `check` gives the
+info hint `bank_inflow_category`: "use refund or income".
 
 ## Account status
 
-Until import ships, every importable account is `unverified` and cash is
-`untracked`. Later statuses: `balanced`, `delta`, `gap`, `stale`.
+Until import ships, every importable account is `unverified` (with the
+hint `No import yet — bob bank import FILE`) and cash is `untracked`.
+Later statuses: `balanced`, `delta`, `gap`, `stale`.
 
 ## Findings (`bob bank check`)
 
@@ -215,8 +257,31 @@ Import and balance findings (`bank_journal_malformed`,
 
 ## JSON
 
-`schema_version: 1`. Amounts are signed integer `*_cents`. `check` adds
-`findings[] {code, severity, path, line, message, hint}`. Shared objects:
+`schema_version: 1`. Amounts are always signed integer `*_cents`, never
+strings or floats. Every report shares the objects below. A row is
+`{path, line, date, account, cents, payee, category, links, note,
+flagged, acknowledged, id, origin}`; `origin` is `typed` (no ID),
+`matched`, or `imported` (before the journal exists, a row with an ID
+reports `imported`).
+
+- `list` adds `filter` (`waiting` or `all`), `month`,
+  `days[] {date, heading, path, line, rows[]}`, and
+  `counts {rows, waiting, flagged}`.
+- `report` adds `period {kind, key, start, end, label, so_far, note}`,
+  `totals {out_cents, in_cents, net_cents, refund_cents,
+  transfer_out_cents, transfer_in_cents, cash_out_cents,
+  cash_traced_cents, unclassified_out_cents, unclassified_in_cents}`,
+  `breakdown[] {key, emoji, label, out_cents, share, rows}`,
+  `days[] {date, heading, path, line, out_cents, in_cents, rows,
+  waiting, flagged}` (every day of the period, including empty ones),
+  and `waiting {period, all, oldest}` plus `flagged`.
+- `check` adds `findings[] {code, severity, path, line, message, hint}`.
+- `ensure` adds `{path, line, day, created_note, created_heading}`.
+- `ack` prints the envelope `ok`, `dry_run`, `changed`,
+  `changes[] {path, diff?}`, `findings`, `commit`, `sync`, and
+  `warnings`, plus `acknowledged[]`, `already[]`, and `unknown[]`.
+
+Shared objects:
 
 ```json
 {

@@ -181,7 +181,8 @@ Each notebook carries `stem`, `path`, `title`, `summary`, `parent`, `parent_kind
 
 ### Bank reports {#bank-reports}
 
-`bob bank check -f json` uses `schema_version: 1`. See [Bank](../bank.md#json).
+`bob bank check|list|report|ensure|ack -f json` use `schema_version: 1`.
+See [Bank](../bank.md#json).
 
 ### Session edits and successor offers
 

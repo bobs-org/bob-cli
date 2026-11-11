@@ -11,24 +11,71 @@ Commands over bank rows, bank month notes, and their import journal
 ```text title="bob bank --help"
 Commands over bank rows, bank month notes, and their import journal
 
-Bare `bob bank` prints this help. `check` lints bank notes against the contract. `list`, `report`, `ensure`, and `ack` ship in a later phase.
+Bare `bob bank` runs the read-only list. `list` shows the waiting queue; `report` explains the month with exact cents. `ensure` creates the month note and day heading; `ack` ticks shown rows. `check` lints bank notes against the contract.
 
-Usage: bob bank <COMMAND>
+Usage: bob bank [COMMAND]
 
 Commands:
-  check  Check bank notes against the contract
+  ack     Acknowledge waiting bank rows
+  check   Check bank notes against the contract
+  ensure  Ensure the month note and day heading exist
+  list    List waiting bank rows (default)
+  report  Report bank totals for a day, week, month, or year
 
 Options:
   -h, --help  Print help
 
-Bare `bob bank` prints this help: list, report, ensure, and ack ship in a later phase.
+Bare `bob bank` runs the read-only list.
 
 Examples:
-  bob bank check                 Lint bank notes against the contract
+  bob bank                       List waiting rows
+  bob bank report                 Report this month's totals
+  bob bank ensure -D today        Ensure today's heading
+  bob bank ack -D 2026-11-10      Acknowledge one day
   bob bank check -f json         Findings as JSON
 
 See docs/bank.md for the bank contract.
 Run 'bob bank <command> --help' for more information on a command.
+```
+
+## bob bank ack
+
+Acknowledge waiting bank rows
+
+```text title="bob bank ack --help"
+Ticks the named waiting rows, every waiting row of -D DAY, or both. A guarded, capture-style write with no commit. A row that is already ticked is a no-op. Refuses unknown IDs with exit 2 and changes nothing on a refusal. `-d` previews diffs without writing.
+
+Usage: bob bank ack [OPTIONS] [ID]...
+
+Arguments:
+  [ID]...
+          Bank row IDs to acknowledge (^bank-hex, bank-hex, or hex)
+
+Options:
+  -b, --bob-dir <DIR>
+          Bob vault root; defaults to BOB_DIR or ~/bob
+
+  -D, --day <DAY>
+          Acknowledge every waiting row of this day
+
+  -d, --dry-run
+          Preview diffs without writing
+
+  -f, --format <FORMAT>
+          Output format: human or json
+
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Show help
+
+Examples:
+  bob bank ack 8f3a2c1d
+  bob bank ack -D 2026-11-10
+  bob bank ack -d -D today -f json
+
+See docs/bank.md for the bank contract.
 ```
 
 ## bob bank check
@@ -58,6 +105,124 @@ Examples:
   bob bank check -f json
 
 See docs/bank.md for the bank contract.
+```
+
+## bob bank ensure
+
+Ensure the month note and day heading exist
+
+```text title="bob bank ensure --help"
+Creates the folder, month note, and day heading on demand; idempotent. Prints the path and the line where the next row goes (after the day's last row, or the blank line under the heading). A guarded write with no commit. Exits 2 on an invalid day or configuration.
+
+Usage: bob bank ensure [OPTIONS]
+
+Options:
+  -b, --bob-dir <DIR>
+          Bob vault root; defaults to BOB_DIR or ~/bob
+
+  -D, --day <DAY>
+          Day to ensure: today, yesterday, tomorrow, or YYYY-MM-DD
+
+          [default: today]
+
+  -f, --format <FORMAT>
+          Output format: human or json
+
+          [default: human]
+          [possible values: human, json]
+
+  -o, --open
+          Open the note in Obsidian after ensuring
+
+  -h, --help
+          Show help
+
+Examples:
+  bob bank ensure
+  bob bank ensure -D 2026-11-14
+  bob bank ensure -D today -o
+
+See docs/bank.md for the bank contract.
+```
+
+## bob bank list
+
+List waiting bank rows (default)
+
+```text title="bob bank list --help"
+The waiting queue across every month, grouped by day, oldest first. Bare `bob bank` runs this command. `-a` shows all rows; `-m` limits the output to one month. This command is read-only. With no bank.md and no bank/ folder, prints a teaching empty state and exits 0.
+
+Usage: bob bank list [OPTIONS]
+
+Options:
+  -a, --all
+          Show all rows, not only waiting rows
+
+  -b, --bob-dir <DIR>
+          Bob vault root; defaults to BOB_DIR or ~/bob
+
+  -f, --format <FORMAT>
+          Output format: human or json
+
+          [default: human]
+          [possible values: human, json]
+
+  -m, --month <MONTH>
+          Limit to one month: YYYY-MM
+
+  -h, --help
+          Show help
+
+Examples:
+  bob bank
+  bob bank list
+  bob bank list -a
+  bob bank list -m 2026-11 -f json
+
+See docs/bank.md for the bank contract.
+```
+
+## bob bank report
+
+Report bank totals for a day, week, month, or year
+
+```text title="bob bank report --help"
+Every total is computed from rows at read time; rows on cash-kind accounts and rows with [cat:: transfer] are kept apart. Takes at most one period and defaults to the current month. `-D` yields one day. This command is read-only. With no bank.md and no bank/ folder, prints a teaching empty state and exits 0.
+
+Usage: bob bank report [OPTIONS]
+
+Options:
+  -b, --bob-dir <DIR>
+          Bob vault root; defaults to BOB_DIR or ~/bob
+
+  -D, --day <DAY>
+          Report one day: today, yesterday, tomorrow, or YYYY-MM-DD
+
+  -f, --format <FORMAT>
+          Output format: human or json
+
+          [default: human]
+          [possible values: human, json]
+
+  -m, --month <MONTH>
+          Limit to one month: YYYY-MM
+
+  -w, --week <WEEK>
+          Report one ISO week: YYYY-Www (Monday first)
+
+  -y, --year <YEAR>
+          Report one year: YYYY
+
+  -h, --help
+          Show help
+
+Examples:
+  bob bank report
+  bob bank report -m 2026-11
+  bob bank report -w 2026-W46 -f json
+  bob bank report -D 2026-11-14
+
+See docs/bank.md for the totals contract.
 ```
 
 ## Related
