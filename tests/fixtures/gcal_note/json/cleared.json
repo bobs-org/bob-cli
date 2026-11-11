@@ -2,10 +2,10 @@
   "action": "cleared",
   "effective": {
     "buffer": {
-      "after_minutes": 15,
-      "after_reason": "Drive home",
-      "before_minutes": 30,
-      "before_reason": "Drive there"
+      "after_minutes": 0,
+      "after_reason": null,
+      "before_minutes": 0,
+      "before_reason": null
     },
     "clock": null,
     "fields": [],
@@ -15,8 +15,8 @@
     },
     "occupied": {
       "clipped": false,
-      "end": "12:15",
-      "start": "09:30"
+      "end": "12:00",
+      "start": "10:00"
     },
     "root": {
       "hue": "violet",
@@ -66,22 +66,19 @@
   },
   "ok": true,
   "preview": {
-    "bullets": [
-      "\t- ↤ *30m before* · Drive there",
-      "\t- ↦ *15m after* · Drive home"
-    ],
+    "bullets": [],
     "meeting": {
       "end": "12:00",
       "start": "10:00"
     },
     "occupied": {
       "clipped": false,
-      "end": "12:15",
-      "start": "09:30"
+      "end": "12:00",
+      "start": "10:00"
     },
     "path": "2026/20261213.md",
-    "rail": "● violet 09:30 ╱╱╱10:00 ━━━━━━━━━━━━12:00 ╱12:15",
-    "row": "- [*] #task **1000-1200** Deerwood [📅](https://calendar.google.com/event?eid=e1) [buffer:: -30m +15m] [root:: meet] [type:: MEET] ^deerwood"
+    "rail": "● violet 10:00 10:00 ━━━━━━━━━━━━━━━━12:00 12:00",
+    "row": "- [*] #task **1000-1200** Deerwood [📅](https://calendar.google.com/event?eid=e1) [root:: meet] [type:: MEET] ^deerwood"
   },
   "schema_version": 1,
   "scope": "event",

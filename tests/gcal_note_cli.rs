@@ -289,6 +289,19 @@ fn preview_save_unchanged_clear_and_invalid_json() {
     let cleared = json_stdout(&output);
     assert_eq!(cleared["action"], "cleared");
     assert_eq!(cleared["note"]["text"], "");
+    // The cleared preview rebuilds from the pre-note Google event: e1 has
+    // no Google description, so no buffers survive the clear.
+    assert_eq!(cleared["effective"]["buffer"]["before_minutes"], 0);
+    assert_eq!(cleared["effective"]["buffer"]["after_minutes"], 0);
+    assert_eq!(cleared["preview"]["occupied"]["start"], "10:00");
+    assert_eq!(cleared["preview"]["occupied"]["end"], "12:00");
+    assert_eq!(
+        cleared["preview"]["bullets"]
+            .as_array()
+            .expect("bullets")
+            .len(),
+        0
+    );
     assert_golden("cleared", &cleared);
     assert_eq!(
         fs::read_to_string(&journal_path).unwrap().lines().count(),
@@ -780,6 +793,152 @@ fn list_and_show_round_trip_with_notes() {
 }
 
 #[test]
+fn list_json_key_names_the_mode_not_the_rows() {
+    // Empty window: the key still follows the mode.
+    let env = GcalEnv::new("bob-cli-gcal-note-list-mode-empty");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![]));
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-f", "json"])
+        .output()
+        .expect("bare list empty window");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let document = json_stdout(&output);
+    assert!(document["notes"].is_array(), "{document}");
+    assert!(document.get("events").is_none(), "{document}");
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-l", "-a", "-f", "json"])
+        .output()
+        .expect("all list empty window");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let document = json_stdout(&output);
+    assert!(document["events"].is_array(), "{document}");
+    assert!(document.get("notes").is_none(), "{document}");
+    // All-noted window: `-l -a` still uses `events`, bare still `notes`.
+    let env2 = GcalEnv::new("bob-cli-gcal-note-list-mode-noted");
+    prepare(&env2);
+    let fake2 = FakeGog::new(&env2, "fake-gog");
+    fake2.events_json(&events_envelope(vec![guest_event(
+        "noted",
+        "Noted Meeting",
+        "2026-11-14T10:00:00-05:00",
+        "2026-11-14T11:00:00-05:00",
+    )]));
+    append_journal(
+        &env2,
+        "test-host",
+        event_note(
+            "test-host",
+            "2026-10-29T12:01:00-04:00",
+            "noted",
+            "@family",
+        ),
+    );
+    let mut command = env2.command();
+    let output = fake2
+        .install(&mut command)
+        .args(["gcal", "note", "-l", "-a", "-f", "json"])
+        .output()
+        .expect("all list all noted");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let document = json_stdout(&output);
+    assert!(document["events"].is_array(), "{document}");
+    assert!(document.get("notes").is_none(), "{document}");
+    let mut command = env2.command();
+    let output = fake2
+        .install(&mut command)
+        .args(["gcal", "note", "-f", "json"])
+        .output()
+        .expect("bare list all noted");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let document = json_stdout(&output);
+    assert!(document["notes"].is_array(), "{document}");
+    assert!(document.get("events").is_none(), "{document}");
+}
+
+#[test]
+fn show_hides_foreign_account_notes_with_a_warning() {
+    let env = GcalEnv::new("bob-cli-gcal-note-foreign-account");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![]));
+    fake.event_lookup(
+        "foreign-1",
+        &serde_json::to_string(&json!({
+            "event": guest_event(
+                "foreign-1",
+                "Foreign Meeting",
+                "2026-11-14T10:00:00-05:00",
+                "2026-11-14T11:00:00-05:00",
+            )
+        }))
+        .expect("lookup body"),
+    );
+    append_journal(
+        &env,
+        "test-host",
+        json!({
+            "v": 1,
+            "ts": "2026-10-29T12:01:00-04:00",
+            "host": "test-host",
+            "kind": "gcal.note",
+            "account": "someone-else@example.com",
+            "key": {"calendar_id": "primary", "event_id": "foreign-1"},
+            "scope": "event",
+            "text": "@elsewhere",
+            "seen": {"title": "Foreign Meeting"},
+        }),
+    );
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-i", "foreign-1"])
+        .output()
+        .expect("show foreign note");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    // Never the foreign text; always the warning.
+    assert!(
+        !stdout(&output).contains("@elsewhere"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stdout(&output).contains("no private note yet"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stderr(&output).contains("saved under another account"),
+        "{}",
+        stderr(&output)
+    );
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-i", "foreign-1", "-f", "json"])
+        .output()
+        .expect("show foreign note json");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let document = json_stdout(&output);
+    assert!(
+        document["warnings"]
+            .as_array()
+            .expect("warnings")
+            .iter()
+            .any(|warning| warning
+                .as_str()
+                .unwrap_or("")
+                .contains("another account")),
+        "{document}"
+    );
+}
+
+#[test]
 fn matching_requires_every_word_and_ranks_exact_first() {
     let env = GcalEnv::new("bob-cli-gcal-note-match");
     prepare(&env);
@@ -965,7 +1124,8 @@ fn url_eid_decodes_and_verify_and_fallback_works() {
     let document = json_stdout(&output);
     assert_eq!(document["event"]["event_id"], "evt123");
     // Unknown id falls back to a title search with a warning, then exits 2
-    // because the URL carries no title words.
+    // because the URL carries no title words. The warning prints with the
+    // error, in both human output and JSON.
     let bad_payload = URL_SAFE_NO_PAD.encode("missing-id other-part");
     let bad_url =
         format!("https://calendar.google.com/calendar/event?eid={bad_payload}");
@@ -977,10 +1137,34 @@ fn url_eid_decodes_and_verify_and_fallback_works() {
         .expect("run note bad url");
     assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
     assert!(
-        stderr(&output).contains("falling back")
-            || stderr(&output).contains("no events match"),
+        stderr(&output).contains("falling back"),
         "{}",
         stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("no events match"),
+        "{}",
+        stderr(&output)
+    );
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args(["gcal", "note", &bad_url, "-f", "json"])
+        .output()
+        .expect("run note bad url json");
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    let document = json_stdout(&output);
+    assert_eq!(document["ok"], false);
+    assert!(
+        document["warnings"]
+            .as_array()
+            .expect("warnings")
+            .iter()
+            .any(|warning| warning
+                .as_str()
+                .unwrap_or("")
+                .contains("falling back")),
+        "{document}"
     );
 }
 
@@ -1115,10 +1299,43 @@ fn tty_picker_and_scope_prompt_select_recurring() {
             "2026-11-20T09:00:00-05:00",
             "2026-11-20T09:30:00-05:00",
         ),
+        guest_event(
+            "alpha",
+            "Alpha Sync",
+            "2026-11-10T10:00:00-05:00",
+            "2026-11-10T11:00:00-05:00",
+        ),
     ]));
+    append_journal(
+        &env2,
+        "test-host",
+        event_note("test-host", "2026-10-29T12:01:00-04:00", "s1", "@family"),
+    );
+    // A query matching a grouped series and a one-off shows the series
+    // group with its next occurrence and the applied note summary. The
+    // picker chooses row 2 (Standup); the scope prompt then reads EOF and
+    // keeps This event.
+    let output = run_gcal_stdin(&env2, &fake2, &["note", "a"], "2\n");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(stdout(&output).contains("Standup"), "{}", stdout(&output));
+    let picker = stderr(&output);
+    assert!(picker.contains("↻ next Fri Nov 20"), "{picker}");
+    assert!(picker.contains("✎ this event"), "{picker}");
+    assert!(picker.contains("● family"), "{picker}");
+    assert!(
+        picker.contains("Standup repeats · Fridays 09:00-09:30 · guest · Yes"),
+        "{picker}"
+    );
     let output = run_gcal_stdin(&env2, &fake2, &["note", "standup"], "2\n");
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert!(stdout(&output).contains("Standup"), "{}", stdout(&output));
+    // The single-group run skips the picker but still shows the prompt.
+    assert!(
+        stderr(&output)
+            .contains("Standup repeats · Fridays 09:00-09:30 · guest · Yes"),
+        "{}",
+        stderr(&output)
+    );
     // JSON never prompts: `-s series` selects the scope without stdin.
     let mut command = env2.command();
     let output = fake2
@@ -1267,6 +1484,334 @@ fn list_orphans_and_past_hiding() {
     assert!(listing.contains("no longer on your calendar"), "{listing}");
     assert!(listing.contains("bob gcal note -c -i gone-1"), "{listing}");
     assert!(!listing.contains("Past Meeting"), "{listing}");
+}
+
+#[test]
+fn orphan_clear_commands_remove_the_note_by_key() {
+    let env = GcalEnv::new("bob-cli-gcal-note-orphan-clear");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![]));
+    // An event-scope orphan: no lookup file, so the lookup is not found.
+    append_journal(
+        &env,
+        "test-host",
+        json!({
+            "v": 1,
+            "ts": "2026-10-29T12:01:00-04:00",
+            "host": "test-host",
+            "kind": "gcal.note",
+            "account": ACCOUNT,
+            "key": {"calendar_id": "primary", "event_id": "gone-1"},
+            "scope": "event",
+            "text": "@family",
+            "seen": {"title": "Gone Meeting"},
+        }),
+    );
+    // A series-scope orphan: the master is gone too.
+    append_journal(
+        &env,
+        "test-host",
+        json!({
+            "v": 1,
+            "ts": "2026-10-29T12:02:00-04:00",
+            "host": "test-host",
+            "kind": "gcal.note",
+            "account": ACCOUNT,
+            "key": {"calendar_id": "primary", "series": "gone-series"},
+            "scope": "series",
+            "text": "@family",
+            "seen": {"title": "Gone Series"},
+        }),
+    );
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args(["gcal", "note"])
+        .output()
+        .expect("list orphans");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let listing = stdout(&output);
+    assert!(listing.contains("bob gcal note -c -i gone-1"), "{listing}");
+    assert!(
+        listing.contains("bob gcal note -c -s series -i gone-series"),
+        "{listing}"
+    );
+    // Run the exact printed event-scope clear command.
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-c", "-i", "gone-1"])
+        .output()
+        .expect("clear event orphan");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(stdout(&output).contains("✓ Cleared"), "{}", stdout(&output));
+    // Run the exact printed series-scope clear command.
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-c", "-s", "series", "-i", "gone-series"])
+        .output()
+        .expect("clear series orphan");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(stdout(&output).contains("✓ Cleared"), "{}", stdout(&output));
+    // Both orphans are gone from the next listing.
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args(["gcal", "note"])
+        .output()
+        .expect("list after clear");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let listing = stdout(&output);
+    assert!(!listing.contains("Gone Meeting"), "{listing}");
+    assert!(!listing.contains("Gone Series"), "{listing}");
+    // Clearing again reports no note, not a lookup failure.
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-c", "-i", "gone-1"])
+        .output()
+        .expect("clear twice");
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("no private note"),
+        "{}",
+        stderr(&output)
+    );
+    // A JSON by-key clear carries the key and an empty note.
+    append_journal(
+        &env,
+        "test-host",
+        json!({
+            "v": 1,
+            "ts": "2026-10-29T12:04:00-04:00",
+            "host": "test-host",
+            "kind": "gcal.note",
+            "account": ACCOUNT,
+            "key": {"calendar_id": "primary", "event_id": "gone-2"},
+            "scope": "event",
+            "text": "@family",
+            "seen": {"title": "Gone Two"},
+        }),
+    );
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-c", "-i", "gone-2", "-f", "json"])
+        .output()
+        .expect("clear orphan json");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let cleared = json_stdout(&output);
+    assert_eq!(cleared["action"], "cleared");
+    assert_eq!(cleared["scope"], "event");
+    assert_eq!(cleared["event_id"], "gone-2");
+    assert_eq!(cleared["note"]["text"], "");
+
+    // A bare series master (no recurringEventId) still clears by key.
+    let env2 = GcalEnv::new("bob-cli-gcal-note-bare-master-clear");
+    prepare(&env2);
+    let fake2 = FakeGog::new(&env2, "fake-gog");
+    fake2.events_json(&events_envelope(vec![]));
+    fake2.event_lookup(
+        "bare-master",
+        &serde_json::to_string(&json!({
+            "event": guest_event(
+                "bare-master",
+                "Bare Series",
+                "2026-11-14T10:00:00-05:00",
+                "2026-11-14T11:00:00-05:00",
+            )
+        }))
+        .expect("lookup body"),
+    );
+    append_journal(
+        &env2,
+        "test-host",
+        json!({
+            "v": 1,
+            "ts": "2026-10-29T12:03:00-04:00",
+            "host": "test-host",
+            "kind": "gcal.note",
+            "account": ACCOUNT,
+            "key": {"calendar_id": "primary", "series": "bare-master"},
+            "scope": "series",
+            "text": "@family",
+            "seen": {"title": "Bare Series"},
+        }),
+    );
+    let mut command = env2.command();
+    let output = fake2
+        .install(&mut command)
+        .args(["gcal", "note", "-c", "-s", "series", "-i", "bare-master"])
+        .output()
+        .expect("clear bare master series");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(stdout(&output).contains("✓ Cleared"), "{}", stdout(&output));
+}
+
+#[test]
+fn orphans_check_gone_before_past() {
+    let env = GcalEnv::new("bob-cli-gcal-note-gone-before-past");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![]));
+    let mut cancelled_past = guest_event(
+        "cancelled-past",
+        "Cancelled Past",
+        "2026-01-05T10:00:00-05:00",
+        "2026-01-05T11:00:00-05:00",
+    );
+    cancelled_past["status"] = json!("cancelled");
+    let mut declined_past = guest_event(
+        "declined-past",
+        "Declined Past",
+        "2026-01-06T10:00:00-05:00",
+        "2026-01-06T11:00:00-05:00",
+    );
+    declined_past["attendees"][0]["responseStatus"] = json!("declined");
+    // A live series master whose first occurrence is in the past: judged
+    // by status, so the series note is neither orphan nor hidden.
+    let live_master = guest_event(
+        "old-series",
+        "Old Series",
+        "2026-01-01T10:00:00-05:00",
+        "2026-01-01T11:00:00-05:00",
+    );
+    let mut cancelled_master = guest_event(
+        "dead-series",
+        "Dead Series",
+        "2026-01-02T10:00:00-05:00",
+        "2026-01-02T11:00:00-05:00",
+    );
+    cancelled_master["status"] = json!("cancelled");
+    for event in [
+        &cancelled_past,
+        &declined_past,
+        &live_master,
+        &cancelled_master,
+    ] {
+        fake.event_lookup(
+            event["id"].as_str().unwrap(),
+            &serde_json::to_string(&json!({"event": event}))
+                .expect("lookup body"),
+        );
+    }
+    for (title, key) in [
+        ("Cancelled Past", "cancelled-past"),
+        ("Declined Past", "declined-past"),
+    ] {
+        append_journal(
+            &env,
+            "test-host",
+            json!({
+                "v": 1,
+                "ts": "2026-10-29T12:01:00-04:00",
+                "host": "test-host",
+                "kind": "gcal.note",
+                "account": ACCOUNT,
+                "key": {"calendar_id": "primary", "event_id": key},
+                "scope": "event",
+                "text": "@family",
+                "seen": {"title": title},
+            }),
+        );
+    }
+    for (series, title) in
+        [("old-series", "Old Series"), ("dead-series", "Dead Series")]
+    {
+        append_journal(
+            &env,
+            "test-host",
+            json!({
+                "v": 1,
+                "ts": "2026-10-29T12:02:00-04:00",
+                "host": "test-host",
+                "kind": "gcal.note",
+                "account": ACCOUNT,
+                "key": {"calendar_id": "primary", "series": series},
+                "scope": "series",
+                "text": "@family",
+                "seen": {"title": title},
+            }),
+        );
+    }
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args(["gcal", "note"])
+        .output()
+        .expect("list gone before past");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let listing = stdout(&output);
+    // Cancelled and declined beat past-hiding: both stay orphans.
+    assert!(listing.contains("Cancelled Past"), "{listing}");
+    assert!(listing.contains("Declined Past"), "{listing}");
+    assert!(listing.contains("Dead Series"), "{listing}");
+    // The live series is judged by its master's status, never its start.
+    assert!(!listing.contains("Old Series"), "{listing}");
+}
+
+#[test]
+fn lookup_outages_are_warnings_not_orphans() {
+    let env = GcalEnv::new("bob-cli-gcal-note-lookup-outage");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![]));
+    // A genuinely gone note: no lookup file, so the lookup is not found.
+    append_journal(
+        &env,
+        "test-host",
+        json!({
+            "v": 1,
+            "ts": "2026-10-29T12:01:00-04:00",
+            "host": "test-host",
+            "kind": "gcal.note",
+            "account": ACCOUNT,
+            "key": {"calendar_id": "primary", "event_id": "gone-9"},
+            "scope": "event",
+            "text": "@family",
+            "seen": {"title": "Gone Nine"},
+        }),
+    );
+    // A note whose lookup fails outright: an outage, not an orphan.
+    fake.event_lookup(
+        "flaky-1",
+        &serde_json::to_string(&json!({
+            "_fail": {"stderr": "boom: connection reset", "code": 1}
+        }))
+        .expect("failure body"),
+    );
+    append_journal(
+        &env,
+        "test-host",
+        json!({
+            "v": 1,
+            "ts": "2026-10-29T12:02:00-04:00",
+            "host": "test-host",
+            "kind": "gcal.note",
+            "account": ACCOUNT,
+            "key": {"calendar_id": "primary", "event_id": "flaky-1"},
+            "scope": "event",
+            "text": "@family",
+            "seen": {"title": "Flaky One"},
+        }),
+    );
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args(["gcal", "note"])
+        .output()
+        .expect("list with outage");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let listing = stdout(&output);
+    assert!(listing.contains("Gone Nine"), "{listing}");
+    assert!(!listing.contains("Flaky One"), "{listing}");
+    assert!(
+        stderr(&output).contains("could not check 1 note"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]

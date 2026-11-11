@@ -308,5 +308,6 @@ route, clock, buffer, reason, prose, separator, and invalid spans. Invalid
 JSON returns `ok: false`, `error`, and ranged `errors` without saving.
 Listings never carry note text. The list document is
 `{schema_version, ok, window: {from, to, start, end}, notes|events, orphans, warnings}`:
-`notes` when every row is noted, otherwise `events`. Orphans carry
+`events` for `-l -a`, `notes` otherwise — the key names the mode, not the
+rows, so an empty window or an all-noted window still follows the mode. Orphans carry
 `calendar_id`, `event_id`, `series_id`, `scope`, `title`, and `reason`.

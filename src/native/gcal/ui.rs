@@ -14,18 +14,21 @@ use crate::native::pomodoro_themes::ThemeRef;
 /// the error document to stdout instead. Returns the error's exit code.
 pub(crate) fn report_error(cmd: &str, error: &GcalError, format: &str) -> i32 {
     if format == "json" {
-        println!(
-            "{}",
-            json!({
-                "schema_version": 1,
-                "ok": false,
-                "error": {
-                    "kind": error.kind(),
-                    "message": error.message(),
-                    "hint": error.hint(),
-                }
-            })
-        );
+        let mut document = json!({
+            "schema_version": 1,
+            "ok": false,
+            "error": {
+                "kind": error.kind(),
+                "message": error.message(),
+                "hint": error.hint(),
+            }
+        });
+        // The warnings key only appears when an error carries warnings,
+        // so every existing error document is byte-identical.
+        if !error.warnings().is_empty() {
+            document["warnings"] = json!(error.warnings());
+        }
+        println!("{document}");
         return error.exit_code();
     }
     let styler = Styler::detect();
@@ -40,6 +43,9 @@ pub(crate) fn report_error(cmd: &str, error: &GcalError, format: &str) -> i32 {
     }
     if let Some(hint) = error.hint() {
         eprintln!("{}", styler.dim(&format!("  hint: {hint}")));
+    }
+    for warning in error.warnings() {
+        warn(warning);
     }
     error.exit_code()
 }
