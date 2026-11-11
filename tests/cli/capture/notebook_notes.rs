@@ -592,3 +592,109 @@ fn test_notebook_list_summary_says_notes() {
         format_output(&output)
     );
 }
+
+#[test]
+fn test_section_bullets_file_nested_notes_and_keep_top_siblings() {
+    let temp = TempDir::new("bob-cli-capture-notebook-section-bullets");
+    let vault = vault_with_notebook(&temp);
+    let before = read_notebook(&vault);
+    let draft = "@dev_tools\n- #Git\n  - Use worktrees ^worktrees\n- Prefer fd over find\n  - Keep this detail with the top note";
+    let json = dry_json_captures(&vault, draft);
+    let captures = json["captures"].as_array().expect("captures");
+    assert_eq!(captures.len(), 2);
+    assert_eq!(captures[0]["text"], "Use worktrees");
+    assert_eq!(captures[0]["notebook"]["section"], "Git");
+    assert_eq!(captures[0]["notebook"]["section_action"], "existing");
+    assert_eq!(captures[0]["notebook"]["block_id"], "worktrees");
+    assert_eq!(captures[0]["fanout"]["marker"], "#Git");
+    assert_eq!(captures[0]["fanout"]["position"], 1);
+    assert_eq!(captures[0]["fanout"]["count"], 1);
+    assert_eq!(captures[1]["text"], "Prefer fd over find");
+    assert!(captures[1]["notebook"]["section"].is_null());
+    assert_eq!(captures[1]["list"]["count"], 2);
+    assert_eq!(read_notebook(&vault), before);
+
+    let output = run_capture(&vault, draft, &[], true);
+    assert_success(&output);
+    let after = read_notebook(&vault);
+    let prefer = after.find("- Prefer fd over find").expect("top note");
+    let git = after.find("## Git").expect("git heading");
+    let worktrees = after.find("- Use worktrees").expect("git note");
+    assert!(prefer < git, "plain siblings stay in the top region");
+    assert!(git < worktrees);
+    assert!(after.contains("^worktrees"));
+    assert!(after.contains("Keep this detail with the top note"));
+}
+
+#[test]
+fn test_section_bullet_parse_needs_and_refusals() {
+    let temp = TempDir::new("bob-cli-capture-notebook-section-parse");
+    let vault = vault_with_notebook(&temp);
+    let parse = |draft: &str| {
+        let output = bob_command()
+            .arg("capture-parse")
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(draft)
+            .env("BOB_DIR", &vault)
+            .output()
+            .expect("run capture-parse");
+        assert_success(&output);
+        serde_json::from_str::<Value>(stdout(&output).trim())
+            .expect("parse JSON")
+    };
+
+    let bare = parse("@dev_tools\n- #");
+    assert_eq!(bare["grammar"], 26);
+    assert_eq!(bare["mode"], "incomplete");
+    assert_eq!(bare["needs"], serde_json::json!(["section"]));
+    assert!(bare["diagnostics"]
+        .as_array()
+        .is_none_or(|rows| rows.is_empty()));
+    assert!(bare["spans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|span| { span["kind"] == "interactive_placeholder" }));
+
+    let empty = parse("@dev_tools\n- #Git");
+    assert_eq!(empty["mode"], "incomplete");
+    assert_eq!(empty["needs"], serde_json::json!(["section_notes"]));
+    let section = empty["spans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|span| span["kind"] == "section")
+        .expect("section span");
+    assert_eq!(section["title"], "Git");
+    assert_eq!(section["section_action"], "existing");
+
+    let before = read_notebook(&vault);
+    for (draft, code) in [
+        ("@dev_tools\n- #Git leftover", "section_bullet_text"),
+        (
+            "@dev_tools#Git\n- #Docker\n  - x",
+            "section_bullet_position",
+        ),
+        (
+            "@dev_tools\n- #Git\n  - one line\n    - too deep",
+            "section_bullet_depth",
+        ),
+    ] {
+        let dry = run_capture(&vault, draft, &[], false);
+        assert_eq!(dry.status.code(), Some(2), "{draft}");
+        let value: Value =
+            serde_json::from_str(stdout(&dry).trim()).expect("refusal");
+        assert_eq!(value["code"], code, "{draft}");
+        let write = run_capture(&vault, draft, &[], true);
+        assert_eq!(write.status.code(), Some(2), "{draft}");
+        assert_eq!(read_notebook(&vault), before, "{draft}");
+    }
+}
+
+fn dry_json_captures(vault: &std::path::Path, draft: &str) -> Value {
+    let output = run_capture(vault, draft, &[], false);
+    assert_success(&output);
+    serde_json::from_str(stdout(&output).trim()).expect("capture JSON")
+}

@@ -3,11 +3,11 @@
 use super::output::NoteFileJson;
 use super::*;
 use crate::native::capture_language::notebook::{
-    strip_trailing_caret_id, NotebookRouteInfo, NotebookRoutePolicy,
+    notebook_create_seed_sections, NotebookRouteInfo, NotebookRoutePolicy,
     NotebookSection,
 };
-use crate::native::capture_project_note::{
-    format_project_section_title, is_project_section_title,
+use crate::native::capture_language::section_bullet::{
+    plan_from_sub_bullets, NotebookBodyPlan, NotebookPlannedNote,
 };
 use crate::native::notebooks::{plan_create, CreateRefusal, CreateRequest};
 
@@ -172,87 +172,47 @@ fn map_create_refusal(refusal: CreateRefusal) -> CaptureError {
 }
 
 fn seed_body(sub_bullets: &[AuthoredSubBullet], created: &str) -> String {
+    format_seed_plan(&plan_from_sub_bullets(sub_bullets, true), created)
+}
+
+fn format_seed_plan(plan: &NotebookBodyPlan, created: &str) -> String {
     let mut out = String::new();
-    let mut index = 0;
-    while index < sub_bullets.len() {
-        let bullet = &sub_bullets[index];
-        let is_section = bullet.depth == capture_language::AuthoredDepth::First
-            && is_project_section_title(&bullet.body)
-            && sub_bullets.get(index + 1).is_some_and(|next| {
-                next.depth == capture_language::AuthoredDepth::Nested
-            });
-        if is_section {
-            if !out.is_empty() && !out.ends_with("\n\n") {
-                out.push('\n');
-            }
-            out.push_str(&format!(
-                "## {}\n\n",
-                format_project_section_title(&bullet.body)
-            ));
-            index += 1;
-            while index < sub_bullets.len()
-                && sub_bullets[index].depth
-                    == capture_language::AuthoredDepth::Nested
-            {
-                out.push_str(&format_seed_note(
-                    &sub_bullets[index].body,
-                    created,
-                    true,
-                ));
-                index += 1;
-            }
-            continue;
+    for note in &plan.top_notes {
+        out.push_str(&format_planned_note(note, created, true));
+    }
+    for section in &plan.sections {
+        if !out.is_empty() && !out.ends_with("\n\n") {
+            out.push('\n');
         }
-        if bullet.depth == capture_language::AuthoredDepth::First {
-            out.push_str(&format_seed_note(&bullet.body, created, true));
-            index += 1;
-            while index < sub_bullets.len()
-                && sub_bullets[index].depth
-                    == capture_language::AuthoredDepth::Nested
-            {
-                out.push_str(&format_seed_note(
-                    &sub_bullets[index].body,
-                    created,
-                    false,
-                ));
-                index += 1;
-            }
-            continue;
+        out.push_str(&format!("## {}\n\n", section.selector));
+        for note in &section.notes {
+            out.push_str(&format_planned_note(note, created, true));
         }
-        out.push_str(&format_seed_note(&bullet.body, created, true));
-        index += 1;
     }
     out
 }
 
-fn format_seed_note(body: &str, created: &str, stamp: bool) -> String {
-    let (text, block_id) = strip_trailing_caret_id(body.trim());
+fn format_planned_note(
+    note: &NotebookPlannedNote,
+    created: &str,
+    stamp: bool,
+) -> String {
     let mut line = if stamp {
-        format!("- {text} [created::{created}]")
+        format!("- {} [created::{created}]", note.text)
     } else {
-        format!("\t- {text}")
+        format!("\t- {}", note.text)
     };
-    if let Some(block_id) = block_id {
-        plan::append_block_id(&mut line, &block_id);
+    if let Some(block_id) = &note.block_id {
+        plan::append_block_id(&mut line, block_id);
     }
     line.push('\n');
-    line
+    let mut out = line;
+    for child in &note.detail {
+        out.push_str(&format_planned_note(child, created, false));
+    }
+    out
 }
 
 fn seed_sections(sub_bullets: &[AuthoredSubBullet]) -> Vec<NotebookSection> {
-    let mut bullets = Vec::new();
-    let mut index = 0;
-    while index < sub_bullets.len() {
-        let bullet = &sub_bullets[index];
-        let has_children = sub_bullets.get(index + 1).is_some_and(|next| {
-            next.depth == capture_language::AuthoredDepth::Nested
-        });
-        if bullet.depth == capture_language::AuthoredDepth::First {
-            bullets.push((bullet.body.clone(), has_children));
-        }
-        index += 1;
-    }
-    crate::native::capture_language::notebook::notebook_create_seed_sections(
-        bullets,
-    )
+    notebook_create_seed_sections(sub_bullets)
 }

@@ -432,6 +432,7 @@ impl LinkSyntax {
             project_note: None,
             title: None,
             key: None,
+            section_action: None,
         }));
         if let Some(target) = self.target.filter(Component::is_non_empty) {
             spans.push(target.span(SpanKind::WikilinkTarget));
@@ -616,6 +617,7 @@ impl Component {
             project_note: None,
             title: None,
             key: None,
+            section_action: None,
         }
     }
 }

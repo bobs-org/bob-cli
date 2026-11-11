@@ -75,6 +75,7 @@ pub(crate) fn parse_template_protocol(text: &str) -> TemplateProtocolParse {
             project_note: span.project_note,
             title: span.title.clone(),
             key: span.key.clone(),
+            section_action: span.section_action,
             directive: span.directive,
             count: span.count,
             gmail: None,
@@ -194,7 +195,7 @@ command also best-effort reads the configured vault's theme catalog and adds \
 theme refs; if the catalog is unavailable, parsing still succeeds without \
 those refs. It never writes to the vault or reads the clipboard, and takes no \
 --bob-dir. A '%c' directive still succeeds without reading the clipboard.\n\n\
-Success JSON reports `grammar: 25` for the capture-language revision while \
+Success JSON reports `grammar: 26` for the capture-language revision while \
 `schema_version` stays 1. Gmail URLs add `gmail_url` spans with offline \
 `gmail: {verdict, date_hint?}`, decoded thread `key`, and saved-label `title`. \
 No Gmail calls are made.\n\n\
@@ -258,8 +259,10 @@ not errors, on any line: '@', '@#', '@#Ideas', '@route#', '@^', \
 '@route:#name', and the legacy '@!' aliases \
 all report mode 'incomplete' plus what they still need. A free-standing '#' \
 at an item edge reports mode 'incomplete' needing 'task_type', except a \
-first-level bullet start (`- #`) which names a drawer (`needs: [\"drawer\"]` \
-or `[\"drawer_notes\"]`). '#' plus a \
+first-level bullet start (`- #`) which names a drawer under a task \
+(`needs: [\"drawer\"]` or `[\"drawer_notes\"]`) or a notebook section \
+under a route-only `@nb` list or `%n` body (`needs: [\"section\"]` or \
+`[\"section_notes\"]`). '#' plus a \
 digit, '##…', '#-…', mid-line '#', and glued hashes stay ordinary prose. A valid `=<X>` start \
 suffix on a `@<route>:<block-id>[#<name>]` marker reports mode \
 'pomodoro_task' with a `pomodoro_start` object (`raw` plus 5-minute \
@@ -1115,6 +1118,10 @@ pub(crate) struct CaptureParseSpan {
     pub(crate) title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) key: Option<String>,
+    /// `"existing"` or `"create"` on a notebook section span. Omitted on
+    /// unrelated spans so older drafts stay byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) section_action: Option<&'static str>,
     /// Named directive (`"clip"`, `"note"`, `"listen"`). Present on a
     /// complete `%c` / `%c<N>`, `%n`, or `%l` token; omitted for a bare `%`
     /// and for unknown tokens.
@@ -1171,6 +1178,7 @@ fn attach_gmail_spans(result: &mut CaptureParseResult) {
             project_note: None,
             title: None,
             key: None,
+            section_action: None,
         }])
         .remove(0);
         span.key = preview.thread_id;
@@ -2308,6 +2316,7 @@ fn wire_spans(spans: Vec<Span>) -> Vec<CaptureParseSpan> {
             project_note: span.project_note,
             title: span.title.clone(),
             key: span.key.clone(),
+            section_action: span.section_action,
             directive: None,
             count: None,
             gmail: None,
@@ -2350,6 +2359,7 @@ fn fill_span_gaps(spans: &mut Vec<CaptureParseSpan>, candidates: Vec<Span>) {
                     project_note: candidate.project_note,
                     title: candidate.title.clone(),
                     key: candidate.key.clone(),
+                    section_action: candidate.section_action,
                     directive: None,
                     count: None,
                     gmail: None,
@@ -2378,6 +2388,7 @@ fn fill_span_gaps(spans: &mut Vec<CaptureParseSpan>, candidates: Vec<Span>) {
                 directive: None,
                 count: None,
                 gmail: None,
+                section_action: None,
             });
         }
         spans.append(&mut additions);
@@ -2479,6 +2490,7 @@ fn template_spans(
                     project_note: span.project_note,
                     title: span.title.clone(),
                     key: span.key.clone(),
+                    section_action: span.section_action,
                     directive: None,
                     count: None,
                     gmail: None,
@@ -2504,6 +2516,7 @@ fn template_spans(
                 directive: None,
                 count: None,
                 gmail: None,
+                section_action: None,
             });
         }
     }
@@ -2526,6 +2539,7 @@ fn template_spans(
             directive: None,
             count: None,
             gmail: None,
+            section_action: None,
         });
     }
     result.extend(analysis.placeholders.iter().map(|placeholder| {
@@ -2546,6 +2560,7 @@ fn template_spans(
             directive: None,
             count: None,
             gmail: None,
+            section_action: None,
         }
     }));
     result.extend(rows.iter().flat_map(|row| {
@@ -2566,6 +2581,7 @@ fn template_spans(
             directive: None,
             count: None,
             gmail: None,
+            section_action: None,
         })
     }));
     result.sort_by_key(|span| (span.start, span.end));
@@ -5004,7 +5020,7 @@ mod tests {
         let value = json("Call bank @Cash+");
         assert_eq!(value["ok"], true);
         assert_eq!(value["schema_version"], 1);
-        assert_eq!(value["grammar"], 25);
+        assert_eq!(value["grammar"], 26);
         assert_eq!(value["input"], "Call bank @Cash+");
         assert_eq!(value["body"], "Call bank");
         assert_eq!(value["mode"], "incomplete");
@@ -5070,7 +5086,7 @@ mod tests {
         // "start a list" from it.
         let value = json("@sase");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 25);
+        assert_eq!(value["grammar"], 26);
         assert_eq!(value["mode"], "note_pull");
         assert_eq!(value["route"], "sase");
         assert!(value["section"].is_null());
@@ -5882,10 +5898,10 @@ mod tests {
     }
 
     #[test]
-    fn json_reports_merge_in_wire_shape_and_grammar_25() {
+    fn json_reports_merge_in_wire_shape_and_grammar_26() {
         let value = json("New task < @a+x @b+y");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 25);
+        assert_eq!(value["grammar"], 26);
         assert_eq!(value["schema_version"], 1);
         assert_eq!(value["mode"], "task");
         let merge_in = value.get("merge_in").expect("merge_in");

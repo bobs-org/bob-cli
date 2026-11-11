@@ -102,7 +102,9 @@ Notebook routes parse as `notebook_note` or `notebook_sub_note`. Use
 `@notes` for a note, `@notes#Ideas` for a section, `@notes^id` for an
 authored block ID, or `@notes+id` for a sub-note. A complete
 `@parent^id@ %n` item is `notebook_create`: it writes `<parent>_<id>.md`,
-seeds ALL-CAPS first-level bullets as Title Case `##` sections, updates
+seeds ALL-CAPS first-level bullets as Title Case `##` sections and
+`- #Section` groups through the same body plan (plain siblings stay in
+the top region in source order), updates
 owner catalogs, and lets later same-draft notes use the new route. The body stays opaque to
 task-marker parsing. `bob capture` writes these modes through the guarded
 capture transaction: top-level and section notes append after the last note
@@ -114,8 +116,28 @@ word that contains an uppercase letter), named notes carry `^id`, sub-notes
 append unstamped after their parent at any depth, and `--route`, `--section`,
 and `--task` follow the destination. A later glued `@nb#` lists disk
 sections plus sections earlier valid items in the same draft create. Human
-`@nb` list summaries say `note(s)`. A first-level `- #` under a notebook
-note opens no drawer.
+`@nb` list summaries say `note(s)` and count emitted notes, not section
+selectors. A first-level `- #` under a notebook
+note opens no drawer. A route-only `@nb` list's `- #Section` with nested
+one-line notes files those notes under `## Section`.
+
+```text
+@dev_tools
+- #Git
+  - Use worktrees ^worktrees
+- Prefer fd over find
+```
+
+```markdown
+# Developer tools
+
+- Prefer fd over find [created::2026-11-09]
+
+## Git
+
+- Existing note [created::2026-11-08] ^existing
+- Use worktrees [created::2026-11-09] ^worktrees
+```
 Dry-run and commit share the same plan and bytes; each item carries
 `kind: notebook_note` or `notebook_sub_note` plus a `notebook` object with
 `route`, `title`, `breadcrumb`, `section`, `section_action`, `block_id`, and

@@ -55,7 +55,7 @@ fn gmail_spans_preserve_identity_and_do_not_route_to_references() {
         let draft = format!("Répondre [my label]({url})");
         let json = f.json(f.command("capture-parse").arg("--").arg(&draft));
         assert_eq!(json["mode"], "task");
-        assert_eq!(json["grammar"], 25);
+        assert_eq!(json["grammar"], 26);
         assert_eq!(json["diagnostics"], serde_json::json!([]));
         let span = json["spans"].as_array().unwrap().iter().find(|span| span["kind"] == "gmail_url").unwrap();
         assert_eq!(span["gmail"]["verdict"], "decoded");

@@ -117,6 +117,7 @@ anything is written, and any failure rolls the whole batch back.
 | Notebook `@route`, `@route#section`, `@route^id`, `@route+id` | Parse a notebook note or sub-note; commit writes it through the guarded transaction (see [Notebook notes](#notebook-notes)) |
 | `@route#section^id` | Ordinary bullet or notebook note with an authored block ID; a caret inside a quoted title stays title text |
 | `@route` on its line, bullets below | Task list: each first-level bullet below becomes its own task in `<route>.md` (see [Lists](#lists-several-tasks-or-notes-at-once)) |
+| Notebook `@route` on its line, bullets below | Note list: each first-level bullet is a note; `- #Section` with nested one-line notes files those notes under `## Section` |
 | `@route#Section` alone on its line, bullets below | Section list: each first-level bullet below becomes its own bullet under that heading |
 | `- <task> :<task-id>` (list bullet) | Same as the project-note bullet: name the task, make it Next, and link it into the Pomodoro the task's type places |
 | `- <task> ^<task-id>` (list bullet) | Same as the project-note bullet: name the task only |
@@ -192,12 +193,13 @@ anything is written, and any failure rolls the whole batch back.
 | bare `#` / `%` | Open the task-type or directive menu with no row preselected |
 | `#<type>` | Type a new task or retype the existing task it targets (`#fix`); at either item edge, one per item; unknown names are refused |
 | `#off`, `#on`, `#offclock`, `#off-clock`, `#untracked` | At an item edge, keep the clock tag as task text; it never selects a type |
-| `#` | Incomplete `#<type>` at a parent-line or nested-bullet edge: add a type (`#fix`) or write `\#` to keep a literal `#`; a first-level `- #` names a drawer instead; `#`+digit, `##…`, `#-…`, mid-line, and glued hashes stay prose |
+| `#` | Incomplete `#<type>` at a parent-line or nested-bullet edge: add a type (`#fix`) or write `\#` to keep a literal `#`; a first-level `- #` names a drawer under a task or a notebook section under a route-only `@nb` list / `%n` body; `#`+digit, `##…`, `#-…`, mid-line, and glued hashes stay prose |
 | `#"NAME"` | Same with a quoted name for spaces or punctuation (`#"DEEP WORK"`) |
 | `\#<type>` | Keep a literal hash tag in the body; escaped markers do not open type completion |
 | `- #future-work` | Drawer shortcut on a first-level bullet under a new task or new project note: nest notes beneath it; capture writes `- FUTURE WORK` |
 | `- FUTURE WORK` with nested notes | Drawer bullet: an ALL-CAPS title with nested notes is a drawer; a childless ALL-CAPS bullet stays a plain note |
-| `- #` | Incomplete drawer shortcut: add `#future-work` (`needs: ["drawer"]`) or write `\#`; a complete childless shortcut needs nested notes (`needs: ["drawer_notes"]`) |
+| `- #` | Incomplete drawer shortcut under a task, or incomplete notebook section under a route-only `@nb` list / `%n` body: add a name (`needs: ["drawer"]` / `["section"]`) or write `\#`; a complete childless shortcut needs nested notes (`needs: ["drawer_notes"]` / `["section_notes"]`) |
+| `- #Section` under `@nb` or `%n` | Notebook section bullet: nested one-line notes file under `## Section`; the selector line is never a note; `\#git` keeps a literal `#git` note |
 
 ### Several tasks on one line
 
@@ -1044,10 +1046,15 @@ clipboard children, then the schedule log.
 A first line that is only `@route` or only `@route#section`, followed by one
 or more bullets, files each first-level bullet below it as its own item in
 that file, with the bullet's nested bullets as its children. A notebook header
-files each bullet as its own stamped note (a terminal `^id` names that note),
-and `@dev_tools+id` files each bullet as an unstamped child of that parent;
-text on a notebook route plus authored bullets nests those bullets beneath the
-one note. A bare `@route`
+files each bullet as its own stamped note (a terminal `^id` names that note).
+A first-level `- #Section` in a route-only `@nb` list is a section bullet:
+nested one-line notes file under that `##`, the selector is never a note, and
+plain first-level siblings stay in the top region in source order. A header
+that already names a section (`@nb#Git`) refuses a nested `- #` with
+`section_bullet_position`. `@dev_tools+id` files each bullet as an unstamped
+child of that parent; text on a notebook route plus authored bullets nests
+those bullets beneath the one note, and a leading `#` there stays opaque
+detail. A bare `@route`
 with no bullets is a note pull instead; see
 [Pulling ready tasks from a note](#pulling-ready-tasks-from-a-note). A header
 line also starts a new list when no blank line precedes it, so `@dev` / `- a`
@@ -1213,7 +1220,7 @@ uses the normal successor-offer shape with `trigger: "note_pull"`, an empty
 `pull_in.groups[]` row carries `note` and Bob-authored copy. Capture remains
 unversioned; `capture-parse` reports `mode: "note_pull"`, `needs: []`, no
 diagnostics, the route spans, and the ordinary list summary with
-`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 25`.
+`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 26`.
 See [task-dependencies.md §12.20](task-dependencies.md#1220-note-pull-offers)
 for the JSON, copy, gate, and protocol contracts, and
 [§12.21](task-dependencies.md#1221-np-note-pull-vectors) for the NP vectors.
@@ -6791,10 +6798,39 @@ list notebook rows after projects with `kind: notebook`, `title`,
 `summary`, `owner`, and `breadcrumb` through the opt-in scanner. A first-level
 `- #` under a notebook note is opaque detail: it opens no drawer menu.
 
+A route-only `@nb` list or a `@parent^id@ %n` body treats a first-level
+`- #Section` as a section bullet. Nested one-line notes file into that `##`;
+the selector line is never a note; optional trailing `^id` on a nested note
+is preserved. Plain first-level siblings stay in the top region in source
+order even when they sit between or after section groups. Repeated `#`
+groups merge in source order. Unquoted create words keep typed capitals
+(`#API-keys` → `API Keys`). Quoted titles stay verbatim. `#1`, `##`, and
+`#-` stay prose. `- \#git` writes a literal `#git` note. ALL-CAPS
+first-level bullets with children remain `%n` section seeds (Title Case);
+in `@nb` lists they stay plain notes with detail. A complete selector
+without nested notes is `incomplete` with `needs: ["section_notes"]` in
+the editor and `empty_section_bullet` at capture. Bare `- #`, `Note @nb#`,
+and an `@nb#` header need `section`. Same-line leftover text is
+`section_bullet_text`; a third-level line under a section child is
+`section_bullet_depth`. Notebook section spans cover `#` through the
+selector and add `section_action` (`existing` or `create`).
+
+```text
+@dev_tools
+- #Git
+  - Use worktrees ^worktrees
+- Prefer fd over find
+  - Keep this detail with the top note
+```
+
+writes the plain note and its detail before the first H2, then the Git
+note under `## Git`.
+
 A complete `@parent^id@` caret seal plus `%n` creates a notebook named
 `<parent>_<id>.md` in the same capture transaction: `Neovim config notes
 @dev^nvim@ %n` writes `dev_nvim.md`, seeds ALL-CAPS first-level bullets as
-Title Case `##` sections, updates owner catalogs, and lets later items in
+Title Case `##` sections and `- #Section` groups through the same body
+plan, updates owner catalogs, and lets later items in
 the same draft write notes into the new route. JSON `kind` is
 `notebook_create`; human output is `📓 New notebook dev_nvim.md · in dev`.
 The new file is in top-level `note_files[]` with `action: "create"`. An
@@ -7065,7 +7101,7 @@ merge hand-off offer rows, omitted when empty) and `repaired_files[]`;
 ordinary items omit the empty fields. Merge-only offers get their own Pull-In
 copy (`Link “T” in place of “S”` / `Link “T” in place of N merged tasks`), and
 the CLI's dependent rows print titles from `consequences`.
-`capture-parse` and `capture-complete` report grammar revision 25. Grammar 19
+`capture-parse` and `capture-complete` report grammar revision 26. Grammar 19
 refuses an operator-only first-line body after an existing-task link start,
 teaching a glued later-start `+` for a single `++[N]` operator. Grammar 18
 treats trailing `+` after a bare start name as later-start timing (`=fix2+`,
@@ -8470,7 +8506,7 @@ bob capture-parse [-f|--format human|json] [-R|--no-ref] [--] [TEXT]...
 
 Reports the authoritative capture grammar's reading of `TEXT` so an editor can
 highlight capture syntax and Obsidian wikilinks while the user is still typing.
-Success JSON includes top-level `grammar: 25` while keeping `schema_version: 1`.
+Success JSON includes top-level `grammar: 26` while keeping `schema_version: 1`.
 It shares the tokenizer, terminal-marker extraction, and `@token`
 classification with `bob capture`. Parse consults local metadata but never
 executes the draft; a successful parse does not guarantee a successful
@@ -8759,7 +8795,7 @@ JSON output is a single versioned object:
 {
   "ok": true,
   "schema_version": 1,
-  "grammar": 25,
+  "grammar": 26,
   "input": "Call bank @Cash+",
   "body": "Call bank",
   "mode": "incomplete",
@@ -8836,12 +8872,14 @@ the Pomodoro name when one was typed — the same "whichever applies" reuse
 `block_id` already has, and `mode` disambiguates — and the same holds for the
 `^` project-note form, where `section` is the `#pomodoro` name. `needs` lists what a picker
 still has to supply, in the
-order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `drawer`, `drawer_notes`, `task_type`, `active_task`, `task_link`, `task_goto`, `task_parent`, `pomodoro_close_task`, `pomodoro_close_log_text`, `pomodoro_start_task`, `task_dependency`, `blocked_task`, `dependency_target`, `task_complete`; it is an independent
+order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `drawer`, `drawer_notes`, `section_notes`, `task_type`, `active_task`, `task_link`, `task_goto`, `task_parent`, `pomodoro_close_task`, `pomodoro_close_log_text`, `pomodoro_start_task`, `task_dependency`, `blocked_task`, `dependency_target`, `task_complete`; it is an independent
 completion hint, so the executable `@route#` bullet reports mode `bullet` and
 needs `["section"]`, an unterminated `@route#"…` reports mode `incomplete` and
 needs `["section"]` with no diagnostic, while `@route+id#` with an empty drawer name reports mode
-`incomplete` and needs `["drawer"]`, a first-level `- #` reports `["drawer"]`, a
-complete childless `- #future-work` reports `["drawer_notes"]`, and `@route:id#` reports mode
+`incomplete` and needs `["drawer"]`, a first-level `- #` under a task reports `["drawer"]`, a
+complete childless `- #future-work` reports `["drawer_notes"]`, a first-level
+`- #` under a route-only notebook list or `%n` reports `["section"]`, a
+complete childless `- #Git` there reports `["section_notes"]`, and `@route:id#` reports mode
 `incomplete` and needs `["pomodoro_name"]`. A complete
 `@route+id#drawer <text>` sub-bullet populates `route`, `block_id`, and
 `drawer` together. A complete `@route:id#name` Pomodoro marker populates
@@ -8991,7 +9029,9 @@ non-overlapping, and always on a character boundary. Each `kind` is one of
 `wikilink_task_delimiter`, or `wikilink_task_query`. A first-level
 `- #future-work` shortcut is a `drawer` span with lexical `title` and `key`.
 An ALL-CAPS first-level drawer bullet with nested notes is a `drawer_bullet`
-span over the title text. A placeholder
+span over the title text. A notebook section selector is a `section` span
+with `notebook: true`, the resolved or to-be-created `title`, and optional
+`section_action` (`existing` or `create`); unrelated spans omit the field. A placeholder
 marks the part of a marker the user has not filled in yet: the trailing `+` in
 `@cash+`, the `%n` in `@cash:id#`, a task-type span in
 `@cash+id#`, the dangling `,` or `!` in `x1,` or `x!`, a lone `:` or `^` ending a project-note task bullet, or the whole `@+` /
@@ -9938,7 +9978,7 @@ space), label `🍽️ New restaurant · 92`, and the same next-field
 continuation. See [Guided fields](#guided-fields).
 
 Every successful `capture-parse` and `capture-complete` response includes
-top-level `grammar: 25`; `schema_version` remains 1. An empty query opened by a
+top-level `grammar: 26`; `schema_version` remains 1. An empty query opened by a
 bare `#` or `%` adds `initial_selection: "none"`, so clients leave every row
 unselected. The field is omitted for typed queries and other contexts.
 

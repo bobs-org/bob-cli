@@ -1164,6 +1164,10 @@ pub(crate) struct ListContext {
     pub(crate) header_end: usize,
     #[serde(skip)]
     pub(crate) ownerless: bool,
+    /// True when the header token included `#`, even if the section name
+    /// is still empty (`@nb#`).
+    #[serde(skip)]
+    pub(crate) has_section_hash: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -68,9 +68,11 @@ Old top-level spellings remain as hidden aliases. See
 ## Capture-language revision
 
 `capture-parse` and `capture-complete` keep `schema_version: 1` and report the
-additive top-level `grammar: 25` revision. Clients can use it to distinguish
+additive top-level `grammar: 26` revision. Clients can use it to distinguish
 capture-language updates while continuing to read the same versioned JSON
-envelope. Grammar 24 restores the established notebook span labels and adds
+envelope. Grammar 26 adds notebook section bullets (`- #Section` under a
+route-only `@nb` list or `%n`) and the additive `section_action` span
+field. Grammar 24 restores the established notebook span labels and adds
 `notebook: true` to identify those spans without changing other span labels.
 Grammar 23 splits `#section^id` into a section selector plus an
 optional named bullet ID (a caret inside a quoted title stays title text) and

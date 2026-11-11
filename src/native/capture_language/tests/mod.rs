@@ -144,6 +144,7 @@ mod record;
 mod ref_grammar;
 mod retired_close;
 mod rewrite;
+mod section_bullet;
 mod sized_close;
 mod target_runs;
 mod template;

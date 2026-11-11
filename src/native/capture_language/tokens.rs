@@ -43,7 +43,7 @@ pub(super) fn parse_hash_section_and_id(after_hash: &str) -> HashSectionAndId {
             section_len: 0,
             has_caret: false,
             id_len: 0,
-            incomplete_section: false,
+            incomplete_section: true,
             incomplete_block_id: false,
             quoted_incomplete: false,
         };
@@ -164,9 +164,13 @@ pub(super) fn parse_route_token(token: &str) -> Option<RouteToken> {
     let (route_part, bullet) = match rest.split_once('#') {
         Some((route, prefix)) => {
             let parsed = parse_hash_section_and_id(prefix);
+            // A bare `@route#` stays a complete "any non-Tasks section"
+            // bullet. Incomplete quoted titles, dangling carets, and a
+            // non-empty unfinished section still fail the token.
             if parsed.quoted_incomplete
-                || parsed.incomplete_section
                 || parsed.incomplete_block_id
+                || (parsed.incomplete_section
+                    && (parsed.section_len > 0 || parsed.has_caret))
             {
                 return None;
             }

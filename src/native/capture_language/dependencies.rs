@@ -789,6 +789,7 @@ fn extract_line_relation<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 result.spans.push(Span {
                     start: entry.note_start,
@@ -801,6 +802,7 @@ fn extract_line_relation<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 result.spans.push(Span {
                     start: entry.block_start,
@@ -813,6 +815,7 @@ fn extract_line_relation<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 if sigil == b'*' {
                     result.blocked_entries.push(entry.clone());
@@ -837,6 +840,7 @@ fn extract_line_relation<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 if sigil == b'*' {
                     result.blocked_partials.push((*start, *end));
@@ -861,6 +865,7 @@ fn extract_line_relation<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 if sigil == b'*' {
                     result.blocked_invalid.push(invalid.clone());
@@ -1094,6 +1099,7 @@ fn extract_line_relations<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 result.spans.push(Span {
                     start: entry.note_start,
@@ -1102,6 +1108,7 @@ fn extract_line_relations<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 result.spans.push(Span {
                     start: entry.block_start,
@@ -1110,6 +1117,7 @@ fn extract_line_relations<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 if let Some(separator) = entry.separator {
                     result.spans.push(Span {
@@ -1119,6 +1127,7 @@ fn extract_line_relations<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     });
                 }
                 if let (Some(label_start), Some(label_end)) =
@@ -1131,6 +1140,7 @@ fn extract_line_relations<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     });
                 }
                 result.relation_entries.push(entry.clone());
@@ -1152,6 +1162,7 @@ fn extract_line_relations<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 result.relation_target_partials.push((*start, *end));
             }
@@ -1172,6 +1183,7 @@ fn extract_line_relations<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 result.relation_label_partials.push((*start, *end));
             }
@@ -1192,6 +1204,7 @@ fn extract_line_relations<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 result.relation_invalid.push(InvalidDependency {
                     raw: invalid.raw.clone(),

@@ -1614,6 +1614,7 @@ pub(crate) fn editor_view_for_claim(claim: &RecordClaim) -> RecordEditorView {
                 project_note: None,
                 title: Some(intent.dir.clone()),
                 key: None,
+                section_action: None,
             }];
             if intent.action == RecordAction::Create
                 && intent.title.trim().is_empty()
@@ -1628,6 +1629,7 @@ pub(crate) fn editor_view_for_claim(claim: &RecordClaim) -> RecordEditorView {
                     project_note: None,
                     title: None,
                     key: Some(field.key.clone()),
+                    section_action: None,
                 });
                 spans.push(Span {
                     start: field.value_range.0,
@@ -1636,6 +1638,7 @@ pub(crate) fn editor_view_for_claim(claim: &RecordClaim) -> RecordEditorView {
                     project_note: None,
                     title: None,
                     key: Some(field.key.clone()),
+                    section_action: None,
                 });
                 // On an update, an empty optional field is a legal key
                 // removal, so the editor never needs `record_value` for it.

@@ -157,8 +157,8 @@ fn assert_code(raw: &str, code: &str) {
 }
 
 #[test]
-fn grammar_revision_is_twenty_five() {
-    assert_eq!(GRAMMAR_REVISION, 25);
+fn grammar_revision_is_twenty_six() {
+    assert_eq!(GRAMMAR_REVISION, 26);
 }
 
 #[test]
@@ -362,7 +362,20 @@ fn empty_unsectioned_notebook_list_holds_no_tasks() {
 #[test]
 fn empty_notebook_notes_list_is_empty_list() {
     assert_code("@dev#Ideas", "empty_list");
-    assert_code("@dev#", "empty_list");
+}
+
+#[test]
+fn empty_notebook_hash_header_needs_a_section() {
+    assert_eq!(draft_code("@dev#"), "notebook_section_required");
+    assert_eq!(draft_code("@dev#\n- a note"), "notebook_section_required");
+    let editor = editor_parse("@dev#");
+    assert_eq!(editor.mode, EditorMode::Incomplete);
+    assert_eq!(editor.needs, vec![Need::Section]);
+    assert!(editor.diagnostics.is_empty());
+    assert!(editor
+        .spans
+        .iter()
+        .any(|span| span.kind == SpanKind::InteractivePlaceholder));
 }
 
 #[test]

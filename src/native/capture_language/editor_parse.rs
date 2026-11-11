@@ -130,6 +130,7 @@ pub(super) fn parse_editor_line<'a>(
             project_note: None,
             title: None,
             key: None,
+            section_action: None,
         })
         .collect();
     terminal_spans.extend(dependencies.spans.iter().cloned());
@@ -363,6 +364,7 @@ pub(crate) fn parse_for_editor_with(
                 header_start: first.raw.start,
                 header_end: first.raw.end,
                 ownerless: false,
+                has_section_hash: detected.has_section_hash,
             };
             outcome.item = list_refusal_item(
                 raw_item,
@@ -1128,6 +1130,7 @@ pub(super) fn parse_editor_task_link_item<'a>(
                 project_note: None,
                 title: None,
                 key: None,
+                section_action: None,
             }],
             diagnostics: Vec::new(),
             sub_bullets: Vec::new(),
@@ -1184,6 +1187,7 @@ pub(super) fn parse_editor_task_goto_item<'a>(
                 project_note: None,
                 title: None,
                 key: None,
+                section_action: None,
             }],
             diagnostics: Vec::new(),
             sub_bullets: Vec::new(),
@@ -1268,6 +1272,7 @@ pub(super) fn parse_editor_task_complete_item<'a>(
                 project_note: None,
                 title: None,
                 key: None,
+                section_action: None,
             }],
             Vec::new(),
         )),
@@ -1293,6 +1298,7 @@ pub(super) fn parse_editor_task_complete_item<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     },
                     Span {
                         start: dependency.start + 1,
@@ -1301,6 +1307,7 @@ pub(super) fn parse_editor_task_complete_item<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     },
                     Span {
                         start: dependency.block_start,
@@ -1309,6 +1316,7 @@ pub(super) fn parse_editor_task_complete_item<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     },
                 ],
                 Vec::new(),
@@ -1398,6 +1406,7 @@ pub(super) fn parse_editor_parent_task_item<'a>(
         project_note: None,
         title: None,
         key: None,
+        section_action: None,
     });
     spans.sort_by_key(|span| (span.start, span.end));
     Some(EditorItemOutcome {
@@ -1523,6 +1532,7 @@ fn parse_editor_ref_item<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 }],
                 diagnostics: Vec::new(),
                 sub_bullets: Vec::new(),
@@ -1586,6 +1596,7 @@ fn parse_editor_ref_item<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     },
                     Span {
                         start: route_token.start,
@@ -1594,6 +1605,7 @@ fn parse_editor_ref_item<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     },
                 ],
                 diagnostics: Vec::new(),
@@ -1935,6 +1947,7 @@ fn parse_editor_merge_claim<'a>(
                 project_note: None,
                 title: None,
                 key: None,
+                section_action: None,
             });
             for source in &sources {
                 spans.push(Span {
@@ -1944,6 +1957,7 @@ fn parse_editor_merge_claim<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
             }
             if let Some((partial_start, partial_end)) = partial {
@@ -1954,6 +1968,7 @@ fn parse_editor_merge_claim<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
             } else {
                 spans.push(Span {
@@ -1963,6 +1978,7 @@ fn parse_editor_merge_claim<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
             }
             spans.sort_by_key(|span| (span.start, span.end));
@@ -2025,6 +2041,7 @@ fn parse_editor_merge_claim<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 }],
                 vec![diagnostic],
             );
@@ -2155,6 +2172,7 @@ fn parse_editor_merge_valid<'a>(
                 project_note: None,
                 title: None,
                 key: None,
+                section_action: None,
             });
             for source in &sources {
                 left_parse.spans.push(Span {
@@ -2164,6 +2182,7 @@ fn parse_editor_merge_valid<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
             }
             left_parse.spans.sort_by_key(|span| (span.start, span.end));
@@ -2686,6 +2705,7 @@ fn transfer_span(start: usize, end: usize, kind: SpanKind) -> Span {
         project_note: None,
         title: None,
         key: None,
+        section_action: None,
     }
 }
 
@@ -3374,6 +3394,7 @@ fn attach_type_marker_metadata(
             project_note: None,
             title: None,
             key: None,
+            section_action: None,
         });
     }
     // Like execution, duplicates refuse before any subject judgment.
@@ -3567,6 +3588,7 @@ fn attach_drawer_bullet_metadata(
                     project_note: None,
                     title: Some(title),
                     key: Some(key),
+                    section_action: None,
                 });
                 if !leftover.is_empty() {
                     continue;
@@ -3612,6 +3634,7 @@ fn attach_drawer_bullet_metadata(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 if !needs.contains(&Need::Drawer) {
                     needs.push(Need::Drawer);
@@ -3649,6 +3672,7 @@ fn attach_drawer_bullet_metadata(
                         project_note: None,
                         title: Some(title),
                         key: Some(key),
+                        section_action: None,
                     });
                 }
             }
@@ -3693,6 +3717,7 @@ fn attach_directive_metadata(
             project_note: None,
             title: None,
             key: None,
+            section_action: None,
         });
     }
     match super::directive::resolve(occurrences) {
@@ -4174,6 +4199,7 @@ pub(super) fn parse_editor_list_item<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
             }
             TaskIdLex::Invalid { raw, .. } => {
@@ -4213,6 +4239,7 @@ pub(super) fn parse_editor_list_item<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     });
                 }
                 spans.push(Span {
@@ -4222,6 +4249,7 @@ pub(super) fn parse_editor_list_item<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 block_id = Some(id);
             }
@@ -4353,6 +4381,7 @@ pub(super) fn parse_editor_list_item<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     });
                 }
             }
@@ -4458,6 +4487,7 @@ fn interpret_editor_move(
                 project_note: None,
                 title: None,
                 key: None,
+                section_action: None,
             });
         };
     match hit {
@@ -5376,6 +5406,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                             project_note: None,
                             title: None,
                             key: None,
+                            section_action: None,
                         });
                     }
                 }
@@ -5409,6 +5440,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                                 project_note: None,
                                 title: None,
                                 key: None,
+                                section_action: None,
                             });
                         }
                         spans.push(Span {
@@ -5418,6 +5450,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                             project_note: None,
                             title: None,
                             key: None,
+                            section_action: None,
                         });
                     }
                 }
@@ -5512,6 +5545,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 spans.push(Span {
                     start: route_end + 1,
@@ -5520,6 +5554,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 if let Some((name_start, name_end)) = name_range
                     && name_end > name_start
@@ -5531,6 +5566,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     });
                 }
                 if let Some(offset) = start_offset {
@@ -5546,6 +5582,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                             project_note: None,
                             title: None,
                             key: None,
+                            section_action: None,
                         });
                         if let Some((start, end)) = close_in_progress {
                             spans.push(Span {
@@ -5555,6 +5592,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                                 project_note: None,
                                 title: None,
                                 key: None,
+                                section_action: None,
                             });
                         }
                         if let Some((start, end)) = close_park {
@@ -5565,6 +5603,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                                 project_note: None,
                                 title: None,
                                 key: None,
+                                section_action: None,
                             });
                         }
                         if let Some((start, end)) = close_complete {
@@ -5575,6 +5614,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                                 project_note: None,
                                 title: None,
                                 key: None,
+                                section_action: None,
                             });
                         }
                         if let Some((start, end)) = close_drop {
@@ -5585,6 +5625,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                                 project_note: None,
                                 title: None,
                                 key: None,
+                                section_action: None,
                             });
                         }
                     } else {
@@ -5597,6 +5638,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                                     project_note: None,
                                     title: None,
                                     key: None,
+                                    section_action: None,
                                 });
                             }
                         }
@@ -5687,6 +5729,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 spans.push(Span {
                     start: route_end + 1,
@@ -5695,6 +5738,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 let close_op_len = pomodoro_close
                     .as_ref()
@@ -5707,6 +5751,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 if let Some((start, end)) = close_in_progress {
                     spans.push(Span {
@@ -5716,6 +5761,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     });
                 }
                 if let Some((start, end)) = close_park {
@@ -5726,6 +5772,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     });
                 }
                 if let Some((start, end)) = close_complete {
@@ -5736,6 +5783,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     });
                 }
                 if let Some((start, end)) = close_drop {
@@ -5746,6 +5794,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     });
                 }
                 spans.push(Span {
@@ -5755,6 +5804,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 local_destination_markers.push(LocalDestinationMarker {
                     start: token_start,
@@ -5845,6 +5895,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
             }
             CaretItemKind::NamePartial {
@@ -5873,6 +5924,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 spans.push(Span {
                     start: route_end + 1,
@@ -5881,6 +5933,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 for (start, end) in start_ranges {
                     if end > start {
@@ -5891,6 +5944,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                             project_note: None,
                             title: None,
                             key: None,
+                            section_action: None,
                         });
                     }
                 }
@@ -5901,6 +5955,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
             }
             CaretItemKind::Invalid { message } => {
@@ -6311,6 +6366,7 @@ fn extend_target_run_terminal_spans(
             project_note: None,
             title: None,
             key: None,
+            section_action: None,
         };
         if !spans.contains(&span) {
             spans.push(span);

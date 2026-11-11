@@ -2539,12 +2539,16 @@ fn print_fanout_summary(items: &[CaptureItemResult], item: &CaptureItemResult) {
     if targets.len() != fanout.count {
         return;
     }
-    let markers = targets
-        .into_iter()
-        .map(|target| target.marker.as_str())
-        .collect::<Vec<_>>()
-        .join(" · ");
-    println!("{}", Styler::detect().dim(&format!("targets  {markers}")));
+    let mut markers = Vec::new();
+    for target in targets {
+        if !markers.contains(&target.marker.as_str()) {
+            markers.push(target.marker.as_str());
+        }
+    }
+    println!(
+        "{}",
+        Styler::detect().dim(&format!("targets  {}", markers.join(" · ")))
+    );
 }
 
 /// Requested source note of a note-pull row: the frozen `offer.note`,

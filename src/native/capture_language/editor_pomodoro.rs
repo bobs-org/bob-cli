@@ -61,6 +61,7 @@ pub(super) fn parse_editor_adjust_item<'a>(
         project_note: None,
         title: None,
         key: None,
+        section_action: None,
     };
     let exact = parent_trimmed.len() == prefix_len && item.lines.len() == 1;
     if !exact {
@@ -339,6 +340,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
         project_note: None,
         title: None,
         key: None,
+        section_action: None,
     }];
     if name.is_empty() {
         // Bare tokens never have an empty name; only `=#` uses the
@@ -352,6 +354,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
                 project_note: None,
                 title: None,
                 key: None,
+                section_action: None,
             });
         }
     } else {
@@ -362,6 +365,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
             project_note: None,
             title: None,
             key: None,
+            section_action: None,
         });
     }
     let token_text = parent_trimmed.get(..len).unwrap_or(parent_trimmed);
@@ -543,6 +547,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
                 project_note: None,
                 title: None,
                 key: None,
+                section_action: None,
             });
             spans.sort_by_key(|span| span.start);
         }
@@ -565,6 +570,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 return Some(editor_named_valid_outcome(
                     item,
@@ -584,6 +590,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     });
                 }
                 spans.push(Span {
@@ -593,6 +600,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 return Some(editor_start_drop_incomplete_outcome(
                     item,
@@ -1140,6 +1148,7 @@ pub(super) fn parse_editor_start_item<'a>(
         project_note: None,
         title: None,
         key: None,
+        section_action: None,
     };
     enum DropLex {
         None,
@@ -1196,6 +1205,7 @@ pub(super) fn parse_editor_start_item<'a>(
             project_note: None,
             title: None,
             key: None,
+            section_action: None,
         });
     }
     if let Some((timing_offset, timing_after)) = timing.as_ref()
@@ -1208,6 +1218,7 @@ pub(super) fn parse_editor_start_item<'a>(
             project_note: None,
             title: None,
             key: None,
+            section_action: None,
         });
         valid_spans.sort_by_key(|span| span.start);
     }
@@ -1472,6 +1483,7 @@ pub(super) fn parse_editor_start_item<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
             }
             spans.push(Span {
@@ -1481,6 +1493,7 @@ pub(super) fn parse_editor_start_item<'a>(
                 project_note: None,
                 title: None,
                 key: None,
+                section_action: None,
             });
             Some(editor_start_drop_incomplete_outcome(
                 item,
@@ -1531,6 +1544,7 @@ pub(super) fn parse_editor_split_item<'a>(
         project_note: None,
         title: None,
         key: None,
+        section_action: None,
     }];
     let mut offset = token_start + 2;
     if let Some(base_name) = base.as_deref() {
@@ -1542,6 +1556,7 @@ pub(super) fn parse_editor_split_item<'a>(
                 project_note: None,
                 title: None,
                 key: None,
+                section_action: None,
             });
         }
         offset += base_name.len();
@@ -1592,6 +1607,7 @@ pub(super) fn parse_editor_split_item<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 cursor += lex.literal_len;
                 continue;
@@ -1603,6 +1619,7 @@ pub(super) fn parse_editor_split_item<'a>(
                 project_note: None,
                 title: None,
                 key: None,
+                section_action: None,
             });
             cursor += selector.text.len();
         } else {
@@ -1613,6 +1630,7 @@ pub(super) fn parse_editor_split_item<'a>(
                 project_note: None,
                 title: None,
                 key: None,
+                section_action: None,
             });
             cursor += selector.text.len();
         }
@@ -1809,6 +1827,7 @@ pub(super) fn parse_editor_merge_item<'a>(
         project_note: None,
         title: None,
         key: None,
+        section_action: None,
     }];
     let mut offset = token_start + 2;
     let first_token = parent_trimmed
@@ -1834,6 +1853,7 @@ pub(super) fn parse_editor_merge_item<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 offset += lex.literal_len;
             } else {
@@ -1844,6 +1864,7 @@ pub(super) fn parse_editor_merge_item<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 offset += src_name.len();
             }
@@ -1884,6 +1905,7 @@ pub(super) fn parse_editor_merge_item<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 cursor += lex.literal_len;
                 continue;
@@ -1895,6 +1917,7 @@ pub(super) fn parse_editor_merge_item<'a>(
                 project_note: None,
                 title: None,
                 key: None,
+                section_action: None,
             });
             cursor += dest.text.len();
         } else {
@@ -1905,6 +1928,7 @@ pub(super) fn parse_editor_merge_item<'a>(
                 project_note: None,
                 title: None,
                 key: None,
+                section_action: None,
             });
             cursor += dest.text.len();
         }
@@ -2236,6 +2260,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     },
                     pomodoro_double_start_error(token_text),
                     Some((token_start, token_start + len)),
@@ -2309,6 +2334,7 @@ pub(super) fn parse_editor_close_item<'a>(
                 project_note: None,
                 title: None,
                 key: None,
+                section_action: None,
             },
             pomodoro_double_close_error(first, &close_spelling),
             Some((token_start, token_start + first.len())),
@@ -2331,6 +2357,7 @@ pub(super) fn parse_editor_close_item<'a>(
                 project_note: None,
                 title: None,
                 key: None,
+                section_action: None,
             }],
             Vec::new(),
             vec![Diagnostic {
@@ -2365,6 +2392,7 @@ pub(super) fn parse_editor_close_item<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 }],
                 Vec::new(),
                 vec![Diagnostic {
@@ -2394,6 +2422,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     }],
                     Vec::new(),
                     vec![Diagnostic {
@@ -2418,6 +2447,7 @@ pub(super) fn parse_editor_close_item<'a>(
         project_note: None,
         title: None,
         key: None,
+        section_action: None,
     };
     let selection_after_x = if prefix.after_x.is_empty() {
         None
@@ -2457,6 +2487,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     });
                 }
                 if let Some((start, end)) = lex.park_range {
@@ -2467,6 +2498,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     });
                 }
                 if let Some((start, end)) = lex.complete_range {
@@ -2477,6 +2509,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     });
                 }
                 if let Some((start, end)) = lex.drop_range {
@@ -2487,6 +2520,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     });
                 }
                 return Some(editor_close_outcome(
@@ -2512,6 +2546,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     });
                 }
                 if let Some((start, end)) = incomplete.park_range {
@@ -2522,6 +2557,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     });
                 }
                 if let Some((start, end)) = incomplete.complete_range {
@@ -2532,6 +2568,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     });
                 }
                 if let Some((start, end)) = incomplete.drop_range {
@@ -2542,6 +2579,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     });
                 }
                 spans.push(Span {
@@ -2551,6 +2589,7 @@ pub(super) fn parse_editor_close_item<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 return Some(editor_close_outcome(
                     item,
@@ -2624,6 +2663,7 @@ pub(super) fn parse_editor_close_item<'a>(
                             project_note: None,
                             title: None,
                             key: None,
+                            section_action: None,
                         });
                     }
                     if let Some((start, end)) = incomplete.park_range {
@@ -2634,6 +2674,7 @@ pub(super) fn parse_editor_close_item<'a>(
                             project_note: None,
                             title: None,
                             key: None,
+                            section_action: None,
                         });
                     }
                     if let Some((start, end)) = incomplete.complete_range {
@@ -2644,6 +2685,7 @@ pub(super) fn parse_editor_close_item<'a>(
                             project_note: None,
                             title: None,
                             key: None,
+                            section_action: None,
                         });
                     }
                     if let Some((start, end)) = incomplete.drop_range {
@@ -2654,6 +2696,7 @@ pub(super) fn parse_editor_close_item<'a>(
                             project_note: None,
                             title: None,
                             key: None,
+                            section_action: None,
                         });
                     }
                     spans.push(Span {
@@ -2663,6 +2706,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     });
                     EditorSelection::Incomplete(incomplete, spans)
                 }
@@ -2682,6 +2726,7 @@ pub(super) fn parse_editor_close_item<'a>(
                 project_note: None,
                 title: None,
                 key: None,
+                section_action: None,
             });
         }
         if let Some((start, end)) = lex.park_range {
@@ -2692,6 +2737,7 @@ pub(super) fn parse_editor_close_item<'a>(
                 project_note: None,
                 title: None,
                 key: None,
+                section_action: None,
             });
         }
         if let Some((start, end)) = lex.complete_range {
@@ -2702,6 +2748,7 @@ pub(super) fn parse_editor_close_item<'a>(
                 project_note: None,
                 title: None,
                 key: None,
+                section_action: None,
             });
         }
         if let Some((start, end)) = lex.drop_range {
@@ -2712,6 +2759,7 @@ pub(super) fn parse_editor_close_item<'a>(
                 project_note: None,
                 title: None,
                 key: None,
+                section_action: None,
             });
         }
         spans
@@ -2779,6 +2827,7 @@ pub(super) fn parse_editor_close_item<'a>(
                             project_note: None,
                             title: None,
                             key: None,
+                            section_action: None,
                         });
                     }
                 }
@@ -2806,6 +2855,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     });
                 }
                 base_spans.sort_by_key(|span| (span.start, span.end));
@@ -2954,6 +3004,7 @@ pub(super) fn parse_editor_close_item<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
                 spans.sort_by_key(|span| (span.start, span.end));
                 return Some(editor_close_outcome(
@@ -2979,6 +3030,7 @@ pub(super) fn parse_editor_close_item<'a>(
                 project_note: None,
                 title: None,
                 key: None,
+                section_action: None,
             });
             base_spans.sort_by_key(|span| (span.start, span.end));
             let mut spec =
@@ -3025,6 +3077,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         project_note: None,
                         title: None,
                         key: None,
+                        section_action: None,
                     });
                 }
                 spans.sort_by_key(|span| (span.start, span.end));
@@ -3052,6 +3105,7 @@ pub(super) fn parse_editor_close_item<'a>(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
             }
             base_spans.sort_by_key(|span| (span.start, span.end));
@@ -3345,6 +3399,7 @@ fn parse_editor_past_item<'a>(
         project_note: None,
         title: None,
         key: None,
+        section_action: None,
     };
     // Base Past spans for a valid `E` (leading count, name, repair,
     // second `=`). Used for valid outcomes; invalid outcomes use a single

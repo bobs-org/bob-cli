@@ -1,6 +1,6 @@
 //! Lexical notebook-route classification shared by capture and its editor.
 
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, ops::Range, path::PathBuf};
 
 use super::{
     editor_model::{Diagnostic, EditorMode, Need, Severity, Span, SpanKind},
@@ -8,6 +8,12 @@ use super::{
     model::{
         AuthoredSubBullet, CaptureItem, CaptureKind, CaptureParseOptions,
         EditorParseOptions, FanoutContext, ParsedCaptureText,
+    },
+    section_bullet::{
+        empty_section_bullet_error, notebook_section_required_error,
+        plan_create_item, plan_from_sub_bullets, plan_list_item, scan_leading,
+        section_bullet_position_error, section_operations_from_item,
+        NotebookBodyOutcome, SectionBulletHit,
     },
 };
 
@@ -453,7 +459,9 @@ pub(crate) fn notebook_section_ambiguous_message(
 /// Headings at `at_offset` for `route`: disk H2s, then sections earlier
 /// valid operations in this draft create, in source order. Later items,
 /// failed claims, and the item at the offset never appear. Draft sections
-/// that resolve to an existing heading dedupe into it.
+/// that resolve to an existing heading dedupe into it. Operations carry
+/// their own selector offsets so earlier bullets of the item under the
+/// caret remain visible.
 pub(crate) fn staged_notebook_sections(
     policy: &NotebookRoutePolicy,
     raw_text: &str,
@@ -462,38 +470,89 @@ pub(crate) fn staged_notebook_sections(
 ) -> Vec<StagedNotebookSection> {
     let route_key = route.to_ascii_lowercase();
     let mut staged = disk_staged_sections(policy, &route_key);
-    let options = super::model::CaptureParseOptions {
-        url_routing: None,
-        record_policy: None,
-        notebook_policy: Some(policy),
-        explicit_destination: false,
-        has_global_destination: false,
-        recognize_lists: true,
-        global_route: None,
-        forced_task: None,
-        forced_drawer: None,
-    };
     let draft = super::draft::split_capture_draft(raw_text);
     for item in &draft.items {
-        if item.start >= at_offset {
-            continue;
-        }
-        let outcomes = match claim_notebook_members(item, None, None, &options)
-        {
-            Ok(Some(outcomes)) => outcomes,
-            Ok(None) | Err(_) => continue,
-        };
-        for outcome in outcomes {
-            absorb_claimed_sections(
-                &mut staged,
-                &route_key,
-                item.start,
-                &outcome.parsed,
-                item,
-            );
+        for operation in notebook_section_operations(policy, item) {
+            if operation.offset >= at_offset {
+                continue;
+            }
+            if !operation.route.eq_ignore_ascii_case(&route_key) {
+                continue;
+            }
+            absorb_operation(&mut staged, &operation);
         }
     }
     staged
+}
+
+fn notebook_section_operations(
+    policy: &NotebookRoutePolicy,
+    item: &CaptureItem<'_>,
+) -> Vec<super::section_bullet::NotebookSectionOperation> {
+    if let Some(shape) = complete_notebook_create_shape(item) {
+        let created =
+            crate::native::capture_project_note::project_note_basename(
+                &shape.parent,
+                &shape.notebook_id,
+            );
+        let created = created
+            .strip_suffix(".md")
+            .unwrap_or(&created)
+            .to_ascii_lowercase();
+        return section_operations_from_item(
+            item,
+            &shape.parent,
+            Some(&created),
+        );
+    }
+    if let Some(list) = item.list.as_ref() {
+        match policy.lookup(&list.route, item.start) {
+            NotebookRouteLookup::Hit(_) => {
+                return section_operations_from_item(item, &list.route, None);
+            }
+            NotebookRouteLookup::Miss
+            | NotebookRouteLookup::UsedBeforeCreated { .. } => {
+                return Vec::new();
+            }
+        }
+    }
+    let Ok(Some(claim)) = classify_item(item, Some(policy), None) else {
+        return Vec::new();
+    };
+    let NotebookForm::Note {
+        section: Some(selector),
+        exact_section,
+        section_range: Some(range),
+        ..
+    } = &claim.marker.form
+    else {
+        return Vec::new();
+    };
+    vec![super::section_bullet::NotebookSectionOperation {
+        offset: range.0,
+        selector: selector.clone(),
+        exact: *exact_section,
+        route: claim.marker.route,
+    }]
+}
+
+fn absorb_operation(
+    staged: &mut Vec<StagedNotebookSection>,
+    operation: &super::section_bullet::NotebookSectionOperation,
+) {
+    let headings: Vec<NotebookSection> = staged
+        .iter()
+        .map(StagedNotebookSection::as_heading)
+        .collect();
+    if let NotebookSectionResolution::Create { title } =
+        resolve_notebook_section(
+            &operation.selector,
+            operation.exact,
+            &headings,
+        )
+    {
+        push_draft_section(staged, title, operation.offset);
+    }
 }
 
 pub(crate) fn staged_headings(
@@ -588,56 +647,6 @@ fn is_column_zero_note(line: &str) -> bool {
         .is_some_and(char::is_whitespace)
 }
 
-fn absorb_claimed_sections(
-    staged: &mut Vec<StagedNotebookSection>,
-    route: &str,
-    item_start: usize,
-    parsed: &super::model::ParsedCaptureText,
-    item: &super::model::CaptureItem<'_>,
-) {
-    match &parsed.kind {
-        super::model::CaptureKind::NotebookNote {
-            section: Some(selector),
-            exact_section,
-            ..
-        } if parsed.route.as_deref().is_some_and(|item_route| {
-            item_route.eq_ignore_ascii_case(route)
-        }) =>
-        {
-            let headings: Vec<NotebookSection> = staged
-                .iter()
-                .map(StagedNotebookSection::as_heading)
-                .collect();
-            if let NotebookSectionResolution::Create { title } =
-                resolve_notebook_section(selector, *exact_section, &headings)
-            {
-                push_draft_section(staged, title, item_start);
-            }
-        }
-        super::model::CaptureKind::NotebookCreate {
-            parent,
-            notebook_id,
-        } => {
-            let filename =
-                crate::native::capture_project_note::project_note_basename(
-                    parent,
-                    notebook_id,
-                );
-            let created = filename
-                .strip_suffix(".md")
-                .unwrap_or(&filename)
-                .to_ascii_lowercase();
-            if created != route {
-                return;
-            }
-            for heading in notebook_create_seed_sections_from_item(item) {
-                push_draft_section(staged, heading.title, item_start);
-            }
-        }
-        _ => {}
-    }
-}
-
 fn push_draft_section(
     staged: &mut Vec<StagedNotebookSection>,
     title: String,
@@ -664,66 +673,36 @@ fn push_draft_section(
     });
 }
 
-/// ALL-CAPS `%n` seed headings, Title Case as today. Shared by the
+fn sections_from_plan(
+    plan: &super::section_bullet::NotebookBodyPlan,
+) -> Vec<NotebookSection> {
+    plan.sections
+        .iter()
+        .map(|section| NotebookSection {
+            title: section.selector.clone(),
+            line_index: 0,
+        })
+        .collect()
+}
+
+/// `%n` seed headings from the shared body plan. Shared by the
 /// provisional policy snapshot and the writer's seed builder.
 pub(crate) fn notebook_create_seed_sections(
-    bullets: impl IntoIterator<Item = (String, bool)>,
+    sub_bullets: &[AuthoredSubBullet],
 ) -> Vec<NotebookSection> {
-    let mut sections = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for (text, has_children) in bullets {
-        if !has_children
-            || !crate::native::capture_project_note::is_project_section_title(
-                &text,
-            )
-        {
-            continue;
-        }
-        let title =
-            crate::native::capture_project_note::format_project_section_title(
-                &text,
-            );
-        let key =
-            crate::native::capture_project_note::normalize_project_section_title(
-                &title,
-            );
-        if seen.insert(key) {
-            sections.push(NotebookSection {
-                title,
-                line_index: 0,
-            });
-        }
-    }
-    sections
+    sections_from_plan(&plan_from_sub_bullets(sub_bullets, true))
 }
 
 fn notebook_create_seed_sections_from_item(
     item: &super::model::CaptureItem<'_>,
 ) -> Vec<NotebookSection> {
-    let mut bullets = Vec::new();
-    let mut index = 1;
-    while index < item.lines.len() {
-        let line = item.lines[index];
-        match super::draft::classify_authored_line(line.raw) {
-            super::draft::AuthoredLineClass::Item(authored)
-                if authored.depth == super::model::AuthoredDepth::First =>
-            {
-                let (text, _) = strip_trailing_caret_id(authored.body.trim());
-                let has_children =
-                    item.lines.get(index + 1).is_some_and(|next| {
-                        matches!(
-                            super::draft::classify_authored_line(next.raw),
-                            super::draft::AuthoredLineClass::Item(child)
-                                if child.depth != super::model::AuthoredDepth::First
-                        )
-                    });
-                bullets.push((text.to_string(), has_children));
-            }
-            _ => {}
+    match plan_create_item(item, "") {
+        NotebookBodyOutcome::Ready(plan)
+        | NotebookBodyOutcome::Pending { plan, .. } => {
+            sections_from_plan(&plan)
         }
-        index += 1;
+        NotebookBodyOutcome::Failed { .. } => Vec::new(),
     }
-    notebook_create_seed_sections(bullets)
 }
 
 fn section_resolution_diagnostic(
@@ -2012,7 +1991,7 @@ fn claim_forced_notebook<'a>(
 fn claim_list_notebook<'a>(
     item: &CaptureItem<'a>,
     options: &CaptureParseOptions<'_>,
-) -> Result<Option<ParsedCaptureItemOutcome<'a>>, CaptureItemParseError> {
+) -> Result<Option<Vec<ParsedCaptureItemOutcome<'a>>>, CaptureItemParseError> {
     let Some(list) = item.list.as_ref() else {
         return Ok(None);
     };
@@ -2046,6 +2025,13 @@ fn claim_list_notebook<'a>(
             Some(header_range),
         ));
     }
+    if list.has_section_hash && list.section.is_none() {
+        return Err(CaptureItemParseError::coded_at(
+            "notebook_section_required",
+            notebook_section_required_error(),
+            Some(header_range),
+        ));
+    }
     if list.count == 0 {
         let header = item
             .source
@@ -2057,12 +2043,124 @@ fn claim_list_notebook<'a>(
             super::project_tasks::empty_list_error(header, true),
         ));
     }
+    let outcome = plan_list_item(item, &route);
+    let is_section_bullet = match &outcome {
+        NotebookBodyOutcome::Ready(plan) => !plan.sections.is_empty(),
+        NotebookBodyOutcome::Pending { needs, .. } => {
+            needs.contains(&Need::Section)
+                || needs.contains(&Need::SectionNotes)
+        }
+        NotebookBodyOutcome::Failed { diagnostics, .. } => {
+            diagnostics.iter().any(|diagnostic| {
+                matches!(
+                    diagnostic.code,
+                    "section_bullet_text"
+                        | "section_bullet_depth"
+                        | "empty_section_bullet"
+                )
+            })
+        }
+    };
+    if is_section_bullet {
+        if let Some(header) = list.section.as_deref() {
+            let headings = info.sections.clone();
+            let title =
+                match resolve_notebook_section(header, list.exact, &headings) {
+                    NotebookSectionResolution::Existing { title, .. }
+                    | NotebookSectionResolution::Create { title } => title,
+                    _ => header.to_string(),
+                };
+            let authored = item
+                .lines
+                .first()
+                .and_then(|line| scan_leading(line.raw.text, line.raw.start))
+                .and_then(|hit| match hit {
+                    SectionBulletHit::Complete { authored, .. } => {
+                        Some(authored)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| "#".to_string());
+            return Err(CaptureItemParseError::coded_at(
+                "section_bullet_position",
+                section_bullet_position_error(
+                    &title, &authored, &route, header,
+                ),
+                Some(header_range),
+            ));
+        }
+        return match outcome {
+            NotebookBodyOutcome::Failed { diagnostics, .. } => {
+                Err(diagnostic_error(&diagnostics[0]))
+            }
+            NotebookBodyOutcome::Pending {
+                needs, placeholder, ..
+            } if needs.contains(&Need::Section) => {
+                Err(CaptureItemParseError::coded_at(
+                    "notebook_section_required",
+                    notebook_section_required_error(),
+                    placeholder.map(|span| (span.start, span.end)),
+                ))
+            }
+            NotebookBodyOutcome::Pending { .. } => {
+                let authored = item
+                    .lines
+                    .first()
+                    .map(|line| line.raw.text.trim())
+                    .unwrap_or("#");
+                Err(CaptureItemParseError::coded_at(
+                    "empty_section_bullet",
+                    empty_section_bullet_error(authored),
+                    item.lines
+                        .first()
+                        .map(|line| (line.raw.start, line.raw.end)),
+                ))
+            }
+            NotebookBodyOutcome::Ready(plan) => {
+                if let Some(section) = plan.sections.first() {
+                    let headings = staged_headings(
+                        policy,
+                        item.source,
+                        &route,
+                        section.selector_span.start,
+                    );
+                    if let Some(diagnostic) = section_resolution_diagnostic(
+                        &route,
+                        &section.selector,
+                        section.exact,
+                        &headings,
+                        Some((
+                            section.selector_span.start,
+                            section.selector_span.end,
+                        )),
+                    ) {
+                        return Err(diagnostic_error(&diagnostic));
+                    }
+                }
+                fanout_list_section_notes(
+                    item, &route, owner, &info, &plan, list,
+                )
+                .map(Some)
+            }
+        };
+    }
     let clip = refuse_notebook_item_markers(item, &route, owner, header_range)?;
     let body = item
         .lines
         .first()
         .map(|line| line.raw.text.trim().to_string())
         .unwrap_or_default();
+    let body = if matches!(
+        scan_leading(
+            item.lines.first().map(|line| line.raw.text).unwrap_or(""),
+            item.lines.first().map(|line| line.raw.start).unwrap_or(0),
+        ),
+        Some(SectionBulletHit::Escaped { .. })
+    ) {
+        super::section_bullet::unescape_escaped_body(&body)
+    } else {
+        body
+    };
     let claim = NotebookClaim {
         body,
         marker: RouteMarker {
@@ -2081,7 +2179,96 @@ fn claim_list_notebook<'a>(
         inherited: false,
     };
     finish_notebook_claim(item, claim, clip, Some(format!("@{}", list.route)))
-        .map(Some)
+        .map(|outcome| Some(vec![outcome]))
+}
+
+fn diagnostic_error(diagnostic: &Diagnostic) -> CaptureItemParseError {
+    CaptureItemParseError::coded_at(
+        diagnostic.code,
+        diagnostic.message.clone(),
+        diagnostic.range,
+    )
+}
+
+fn fanout_list_section_notes<'a>(
+    item: &CaptureItem<'a>,
+    route: &str,
+    owner: Option<&str>,
+    info: &NotebookRouteInfo,
+    plan: &super::section_bullet::NotebookBodyPlan,
+    list: &super::model::ListContext,
+) -> Result<Vec<ParsedCaptureItemOutcome<'a>>, CaptureItemParseError> {
+    let Some(section) = plan.sections.first().cloned() else {
+        return Ok(Vec::new());
+    };
+    let mut outcomes = Vec::new();
+    let count = section.notes.len();
+    for (index, note) in section.notes.iter().enumerate() {
+        let child = CaptureItem {
+            source: item.source,
+            index: item.index,
+            start: note.source_range.start,
+            end: note.source_range.end,
+            line_start: note.line_number,
+            line_end: note.line_number,
+            lines: vec![super::model::ItemLine {
+                raw: super::model::RawLine {
+                    text: item
+                        .source
+                        .get(note.source_range.start..note.source_range.end)
+                        .unwrap_or(""),
+                    start: note.source_range.start,
+                    end: note.source_range.end,
+                },
+                line_number: note.line_number,
+            }],
+            list: item.list.clone(),
+        };
+        let clip = refuse_notebook_item_markers(
+            &child,
+            route,
+            owner,
+            (note.source_range.start, note.source_range.end),
+        )?;
+        let claim = NotebookClaim {
+            body: note.text.clone(),
+            marker: RouteMarker {
+                route: route.to_string(),
+                route_range: (list.header_start, list.header_end),
+                token_range: (list.header_start, list.header_end),
+                form: NotebookForm::Note {
+                    section: Some(section.selector.clone()),
+                    exact_section: section.exact,
+                    block_id: note.block_id.clone(),
+                    section_range: Some((
+                        section.selector_span.start,
+                        section.selector_span.end,
+                    )),
+                    block_id_range: None,
+                },
+            },
+            info: info.clone(),
+            inherited: false,
+        };
+        let mut outcome = finish_notebook_claim(
+            &child,
+            claim,
+            clip,
+            Some(format!("@{}", list.route)),
+        )?;
+        outcome.start = note.source_range.start;
+        outcome.end = note.source_range.end;
+        outcome.line_start = note.line_number;
+        outcome.line_end = note.line_number;
+        outcome.fanout = Some(FanoutContext {
+            line: section.line_number,
+            position: index + 1,
+            count,
+            marker: section.authored_marker.clone(),
+        });
+        outcomes.push(outcome);
+    }
+    Ok(outcomes)
 }
 
 pub(super) fn claim_strict_notebook<'a>(
@@ -2096,8 +2283,8 @@ pub(super) fn claim_strict_notebook<'a>(
     if forced_section.is_some() || options.explicit_destination {
         return Ok(None);
     }
-    if let Some(outcome) = claim_list_notebook(item, options)? {
-        return Ok(Some(outcome));
+    if item.list.is_some() {
+        return Ok(None);
     }
     if item_is_claimed_operator(item) {
         return Ok(None);
@@ -2347,6 +2534,45 @@ fn refuse_notebook_create_markers(
     refuse_notebook_create_children(item, token_range)
 }
 
+fn created_notebook_route(item: &CaptureItem<'_>) -> String {
+    complete_notebook_create_shape(item)
+        .map(|shape| {
+            let filename =
+                crate::native::capture_project_note::project_note_basename(
+                    &shape.parent,
+                    &shape.notebook_id,
+                );
+            filename
+                .strip_suffix(".md")
+                .unwrap_or(&filename)
+                .to_ascii_lowercase()
+        })
+        .unwrap_or_default()
+}
+
+fn first_empty_section_authored(item: &CaptureItem<'_>) -> String {
+    for line in item.lines.iter().skip(1) {
+        let super::draft::AuthoredLineClass::Item(authored) =
+            super::draft::classify_authored_line(line.raw)
+        else {
+            continue;
+        };
+        if authored.depth != super::model::AuthoredDepth::First {
+            continue;
+        }
+        if let Some(SectionBulletHit::Complete {
+            leftover,
+            authored: marker,
+            ..
+        }) = scan_leading(authored.body, authored.body_start)
+            && leftover.is_empty()
+        {
+            return marker;
+        }
+    }
+    "#".to_string()
+}
+
 fn refuse_notebook_create_children(
     item: &CaptureItem<'_>,
     token_range: (usize, usize),
@@ -2355,6 +2581,11 @@ fn refuse_notebook_create_children(
         match super::draft::classify_authored_line(line.raw) {
             super::draft::AuthoredLineClass::EmptyOrPlaceholder => continue,
             super::draft::AuthoredLineClass::Invalid => {
+                if super::section_bullet::looks_like_deeper_bullet(
+                    line.raw.text,
+                ) {
+                    continue;
+                }
                 return Err(CaptureItemParseError::coded(
                     "invalid_child_line",
                     super::line::invalid_child_line_error(line.line_number),
@@ -2409,7 +2640,20 @@ fn refuse_notebook_create_children(
             }
         }
     }
-    let sub_bullets = notebook_sub_bullets(item)?;
+    let sub_bullets = match notebook_sub_bullets(item) {
+        Ok(bullets) => bullets,
+        Err(error)
+            if error.code == Some("invalid_child_line")
+                && item.lines.iter().skip(1).any(|line| {
+                    super::section_bullet::looks_like_deeper_bullet(
+                        line.raw.text,
+                    )
+                }) =>
+        {
+            Vec::new()
+        }
+        Err(error) => return Err(error),
+    };
     let body = item.lines.first().map(|line| line.raw.text).unwrap_or("");
     if notebook_authored_block_has_checkbox(body, &sub_bullets) {
         return Err(CaptureItemParseError::coded_at(
@@ -2422,6 +2666,39 @@ fn refuse_notebook_create_children(
     Ok(())
 }
 
+fn refuse_notebook_create_plan(
+    item: &CaptureItem<'_>,
+) -> Result<(), CaptureItemParseError> {
+    let route = created_notebook_route(item);
+    match plan_create_item(item, &route) {
+        NotebookBodyOutcome::Failed { diagnostics, .. } => {
+            Err(diagnostic_error(&diagnostics[0]))
+        }
+        NotebookBodyOutcome::Pending {
+            needs, placeholder, ..
+        } if needs.contains(&Need::Section) => {
+            Err(CaptureItemParseError::coded_at(
+                "notebook_section_required",
+                notebook_section_required_error(),
+                placeholder.map(|span| (span.start, span.end)),
+            ))
+        }
+        NotebookBodyOutcome::Pending { needs, .. }
+            if needs.contains(&Need::SectionNotes) =>
+        {
+            let authored = first_empty_section_authored(item);
+            Err(CaptureItemParseError::coded_at(
+                "empty_section_bullet",
+                empty_section_bullet_error(&authored),
+                item.lines.get(1).map(|line| (line.raw.start, line.raw.end)),
+            ))
+        }
+        NotebookBodyOutcome::Pending { .. } | NotebookBodyOutcome::Ready(_) => {
+            Ok(())
+        }
+    }
+}
+
 fn claim_notebook_create<'a>(
     item: &CaptureItem<'a>,
 ) -> Result<Option<ParsedCaptureItemOutcome<'a>>, CaptureItemParseError> {
@@ -2429,6 +2706,7 @@ fn claim_notebook_create<'a>(
         return Ok(None);
     };
     refuse_notebook_create_markers(item, claim.token_range)?;
+    refuse_notebook_create_plan(item)?;
     let sub_bullets = notebook_sub_bullets(item)?;
     let local_marker = item
         .source
@@ -2461,6 +2739,7 @@ fn claim_notebook_create<'a>(
 
 fn notebook_create_editor_view(
     item: &CaptureItem<'_>,
+    options: &EditorParseOptions<'_>,
 ) -> Option<NotebookEditorView> {
     let claim = complete_notebook_create_shape(item)?;
     if let Err(error) = refuse_notebook_create_markers(item, claim.token_range)
@@ -2479,6 +2758,7 @@ fn notebook_create_editor_view(
                 project_note: None,
                 title: None,
                 key: None,
+                section_action: None,
             }],
             diagnostics: vec![Diagnostic {
                 severity: Severity::Error,
@@ -2498,6 +2778,7 @@ fn notebook_create_editor_view(
             project_note: None,
             title: Some(provisional_create_title(&claim.notebook_id)),
             key: Some(claim.parent.clone()),
+            section_action: None,
         },
         Span {
             start: claim.id_range.0,
@@ -2506,6 +2787,7 @@ fn notebook_create_editor_view(
             project_note: None,
             title: None,
             key: None,
+            section_action: None,
         },
     ];
     let occurrences = super::directive::collect_item(item);
@@ -2525,11 +2807,57 @@ fn notebook_create_editor_view(
                 project_note: None,
                 title: None,
                 key: None,
+                section_action: None,
             });
         }
     }
-    spans.sort_by_key(|span| (span.start, span.end));
+    let created = created_notebook_route(item);
+    let outcome = plan_create_item(item, &created);
+    let mut needs = Vec::new();
     let mut diagnostics = Vec::new();
+    let mut mode = EditorMode::NotebookCreate;
+    let mut section = None;
+    match outcome {
+        NotebookBodyOutcome::Failed {
+            diagnostics: extra, ..
+        } => {
+            diagnostics.extend(extra);
+        }
+        NotebookBodyOutcome::Pending {
+            needs: extra,
+            placeholder,
+            diagnostics: extra_diag,
+            plan,
+        } => {
+            diagnostics.extend(extra_diag);
+            needs.extend(extra.iter().copied());
+            mode = EditorMode::Incomplete;
+            if extra.contains(&Need::Section)
+                && let Some(span) = placeholder
+            {
+                spans.push(Span {
+                    start: span.start,
+                    end: span.end,
+                    kind: SpanKind::InteractivePlaceholder,
+                    project_note: None,
+                    title: None,
+                    key: None,
+                    section_action: None,
+                });
+            }
+            section = plan
+                .sections
+                .first()
+                .map(|entry| entry.selector.clone())
+                .or_else(|| first_complete_section_selector(item));
+            push_create_body_section_spans(&mut spans, item, options, &created);
+        }
+        NotebookBodyOutcome::Ready(plan) => {
+            section = plan.sections.first().map(|entry| entry.selector.clone());
+            push_create_body_section_spans(&mut spans, item, options, &created);
+        }
+    }
+    spans.sort_by_key(|span| (span.start, span.end));
     if claim.body.trim().is_empty() {
         diagnostics.push(Diagnostic {
             severity: Severity::Error,
@@ -2540,16 +2868,76 @@ fn notebook_create_editor_view(
         });
     }
     Some(NotebookEditorView {
-        mode: EditorMode::NotebookCreate,
+        mode,
         body: claim.body,
         route: claim.parent,
-        section: None,
+        section,
         block_id: Some(claim.notebook_id),
-        needs: Vec::new(),
+        needs,
         spans,
         diagnostics,
         sub_bullets: notebook_sub_bullets(item).unwrap_or_default(),
     })
+}
+
+fn first_complete_section_selector(item: &CaptureItem<'_>) -> Option<String> {
+    for line in item.lines.iter().skip(1) {
+        let super::draft::AuthoredLineClass::Item(authored) =
+            super::draft::classify_authored_line(line.raw)
+        else {
+            continue;
+        };
+        if authored.depth != super::model::AuthoredDepth::First {
+            continue;
+        }
+        if let Some(SectionBulletHit::Complete {
+            leftover, selector, ..
+        }) = scan_leading(authored.body, authored.body_start)
+            && leftover.is_empty()
+        {
+            return Some(selector);
+        }
+    }
+    None
+}
+
+fn push_create_body_section_spans(
+    spans: &mut Vec<Span>,
+    item: &CaptureItem<'_>,
+    options: &EditorParseOptions<'_>,
+    created: &str,
+) {
+    let Some(policy) = options.notebook_policy else {
+        return;
+    };
+    for line in item.lines.iter().skip(1) {
+        let super::draft::AuthoredLineClass::Item(authored) =
+            super::draft::classify_authored_line(line.raw)
+        else {
+            continue;
+        };
+        if authored.depth != super::model::AuthoredDepth::First {
+            continue;
+        }
+        if let Some(SectionBulletHit::Complete {
+            span,
+            selector,
+            exact,
+            leftover,
+            ..
+        }) = scan_leading(authored.body, authored.body_start)
+            && leftover.is_empty()
+        {
+            spans.push(section_span(
+                policy,
+                item.source,
+                created,
+                &selector,
+                exact,
+                span,
+            ));
+        }
+    }
 }
 
 /// Fan out a marker-only `@nb+id` plus first-level bullets into one
@@ -2567,6 +2955,16 @@ pub(super) fn claim_notebook_members<'a>(
         && let Some(outcome) = claim_notebook_create(item)?
     {
         return Ok(Some(vec![outcome]));
+    }
+    if forced_route.is_none()
+        && forced_section.is_none()
+        && !options.explicit_destination
+        && item.list.is_some()
+    {
+        if let Some(outcomes) = claim_list_notebook(item, options)? {
+            return Ok(Some(outcomes));
+        }
+        return Ok(None);
     }
     if forced_route.is_some()
         || forced_section.is_some()
@@ -2764,12 +3162,220 @@ pub(crate) struct NotebookEditorView {
     pub(crate) sub_bullets: Vec<AuthoredSubBullet>,
 }
 
+fn section_span(
+    policy: &NotebookRoutePolicy,
+    raw: &str,
+    route: &str,
+    selector: &str,
+    exact: bool,
+    span: Range<usize>,
+) -> Span {
+    let headings = staged_headings(policy, raw, route, span.start);
+    let (title, action) =
+        match resolve_notebook_section(selector, exact, &headings) {
+            NotebookSectionResolution::Existing { title, .. } => {
+                (title, Some("existing"))
+            }
+            NotebookSectionResolution::Create { title } => {
+                (title, Some("create"))
+            }
+            _ => (selector.to_string(), None),
+        };
+    Span {
+        start: span.start,
+        end: span.end,
+        kind: SpanKind::NotebookSection,
+        project_note: None,
+        title: Some(title),
+        key: Some(if exact { "exact" } else { "slug" }.to_string()),
+        section_action: action,
+    }
+}
+
+fn list_section_bullet_editor_view(
+    item: &CaptureItem<'_>,
+    list: &super::model::ListContext,
+    info: &NotebookRouteInfo,
+    policy: &NotebookRoutePolicy,
+) -> Option<NotebookEditorView> {
+    let route = list.route.as_str();
+    let outcome = plan_list_item(item, route);
+    let is_section = match &outcome {
+        NotebookBodyOutcome::Ready(plan) => !plan.sections.is_empty(),
+        NotebookBodyOutcome::Pending { needs, .. } => {
+            needs.contains(&Need::Section)
+                || needs.contains(&Need::SectionNotes)
+        }
+        NotebookBodyOutcome::Failed { diagnostics, .. } => {
+            diagnostics.iter().any(|diagnostic| {
+                matches!(
+                    diagnostic.code,
+                    "section_bullet_text"
+                        | "section_bullet_depth"
+                        | "empty_section_bullet"
+                )
+            })
+        }
+    };
+    if !is_section {
+        return None;
+    }
+    let header_span = Span {
+        start: list.header_start,
+        end: list.header_end,
+        kind: SpanKind::NotebookRoute,
+        project_note: None,
+        title: Some(info.title.clone()),
+        key: info.owner.clone(),
+        section_action: None,
+    };
+    if let Some(header) = list.section.as_deref() {
+        let headings = info.sections.clone();
+        let title =
+            match resolve_notebook_section(header, list.exact, &headings) {
+                NotebookSectionResolution::Existing { title, .. }
+                | NotebookSectionResolution::Create { title } => title,
+                _ => header.to_string(),
+            };
+        let authored = item
+            .lines
+            .first()
+            .and_then(|line| scan_leading(line.raw.text, line.raw.start))
+            .and_then(|hit| match hit {
+                SectionBulletHit::Complete { authored, .. } => Some(authored),
+                _ => None,
+            })
+            .unwrap_or_else(|| "#".to_string());
+        return Some(notebook_editor_error(
+            list.route.clone(),
+            "section_bullet_position",
+            section_bullet_position_error(&title, &authored, route, header),
+            Some((list.header_start, list.header_end)),
+        ));
+    }
+    match outcome {
+        NotebookBodyOutcome::Failed { diagnostics, .. } => {
+            let diagnostic = diagnostics.into_iter().next()?;
+            Some(NotebookEditorView {
+                mode: EditorMode::NotebookNote,
+                body: String::new(),
+                route: list.route.clone(),
+                section: None,
+                block_id: None,
+                needs: Vec::new(),
+                spans: vec![header_span],
+                diagnostics: vec![diagnostic],
+                sub_bullets: notebook_sub_bullets(item).unwrap_or_default(),
+            })
+        }
+        NotebookBodyOutcome::Pending {
+            needs,
+            placeholder,
+            diagnostics,
+            plan,
+        } => {
+            let mut spans = vec![header_span];
+            if needs.contains(&Need::Section)
+                && let Some(span) = placeholder.clone()
+            {
+                spans.push(Span {
+                    start: span.start,
+                    end: span.end,
+                    kind: SpanKind::InteractivePlaceholder,
+                    project_note: None,
+                    title: None,
+                    key: None,
+                    section_action: None,
+                });
+            } else if let Some(section) = plan.sections.first() {
+                spans.push(section_span(
+                    policy,
+                    item.source,
+                    route,
+                    &section.selector,
+                    section.exact,
+                    section.selector_span.clone(),
+                ));
+            } else if let Some(first) = item.lines.first()
+                && let Some(SectionBulletHit::Complete {
+                    span,
+                    selector,
+                    exact,
+                    ..
+                }) = scan_leading(first.raw.text, first.raw.start)
+            {
+                spans.push(section_span(
+                    policy,
+                    item.source,
+                    route,
+                    &selector,
+                    exact,
+                    span,
+                ));
+            }
+            Some(NotebookEditorView {
+                mode: EditorMode::Incomplete,
+                body: String::new(),
+                route: list.route.clone(),
+                section: plan
+                    .sections
+                    .first()
+                    .map(|section| section.selector.clone()),
+                block_id: None,
+                needs,
+                spans,
+                diagnostics,
+                sub_bullets: notebook_sub_bullets(item).unwrap_or_default(),
+            })
+        }
+        NotebookBodyOutcome::Ready(plan) => {
+            let section = plan.sections.first()?;
+            let mut spans = vec![header_span];
+            spans.push(section_span(
+                policy,
+                item.source,
+                route,
+                &section.selector,
+                section.exact,
+                section.selector_span.clone(),
+            ));
+            let mut diagnostics = Vec::new();
+            let headings = staged_headings(
+                policy,
+                item.source,
+                route,
+                section.selector_span.start,
+            );
+            if let Some(diagnostic) = section_resolution_diagnostic(
+                route,
+                &section.selector,
+                section.exact,
+                &headings,
+                Some((section.selector_span.start, section.selector_span.end)),
+            ) {
+                diagnostics.push(diagnostic);
+            }
+            Some(NotebookEditorView {
+                mode: EditorMode::NotebookNote,
+                body: String::new(),
+                route: list.route.clone(),
+                section: Some(section.selector.clone()),
+                block_id: None,
+                needs: Vec::new(),
+                spans,
+                diagnostics,
+                sub_bullets: notebook_sub_bullets(item).unwrap_or_default(),
+            })
+        }
+    }
+}
+
 pub(crate) fn editor_view_for_item(
     item: &CaptureItem<'_>,
     options: &EditorParseOptions<'_>,
 ) -> Option<NotebookEditorView> {
     if item.list.is_none()
-        && let Some(view) = notebook_create_editor_view(item)
+        && let Some(view) = notebook_create_editor_view(item, options)
     {
         return Some(view);
     }
@@ -2805,6 +3411,44 @@ pub(crate) fn editor_view_for_item(
                 Some(header_range),
             ));
         }
+        if list.has_section_hash && list.section.is_none() {
+            let hash = item
+                .source
+                .get(list.header_start..list.header_end)
+                .and_then(|header| header.find('#'))
+                .map(|rel| list.header_start + rel)
+                .unwrap_or(list.header_end.saturating_sub(1));
+            return Some(NotebookEditorView {
+                mode: EditorMode::Incomplete,
+                body: String::new(),
+                route: list.route.clone(),
+                section: None,
+                block_id: None,
+                needs: vec![Need::Section],
+                spans: vec![
+                    Span {
+                        start: list.header_start,
+                        end: list.header_end,
+                        kind: SpanKind::NotebookRoute,
+                        project_note: None,
+                        title: Some(info.title.clone()),
+                        key: info.owner.clone(),
+                        section_action: None,
+                    },
+                    Span {
+                        start: hash,
+                        end: hash + 1,
+                        kind: SpanKind::InteractivePlaceholder,
+                        project_note: None,
+                        title: None,
+                        key: None,
+                        section_action: None,
+                    },
+                ],
+                diagnostics: Vec::new(),
+                sub_bullets: Vec::new(),
+            });
+        }
         if list.count == 0 {
             let header = item
                 .source
@@ -2817,6 +3461,11 @@ pub(crate) fn editor_view_for_item(
                 super::project_tasks::empty_list_error(header, true),
                 Some(header_range),
             ));
+        }
+        if let Some(view) =
+            list_section_bullet_editor_view(item, list, info, policy)
+        {
+            return Some(view);
         }
         let clip = match refuse_notebook_item_markers(
             item,
@@ -2839,6 +3488,17 @@ pub(crate) fn editor_view_for_item(
             .first()
             .map(|line| line.raw.text.trim().to_string())
             .unwrap_or_default();
+        let body = if matches!(
+            scan_leading(
+                item.lines.first().map(|line| line.raw.text).unwrap_or(""),
+                item.lines.first().map(|line| line.raw.start).unwrap_or(0),
+            ),
+            Some(SectionBulletHit::Escaped { .. })
+        ) {
+            super::section_bullet::unescape_escaped_body(&body)
+        } else {
+            body
+        };
         let (mut body, trailing) = strip_trailing_caret_id(&body);
         if clip.is_some() {
             body = strip_clip_tokens(&body);
@@ -2857,6 +3517,15 @@ pub(crate) fn editor_view_for_item(
             ));
         }
         let mut diagnostics = Vec::new();
+        let mut spans = vec![Span {
+            start: list.header_start,
+            end: list.header_end,
+            kind: SpanKind::NotebookRoute,
+            project_note: None,
+            title: Some(info.title.clone()),
+            key: info.owner.clone(),
+            section_action: None,
+        }];
         if let Some(selector) = list.section.as_deref() {
             let headings =
                 staged_headings(policy, item.source, &list.route, item.start);
@@ -2869,6 +3538,21 @@ pub(crate) fn editor_view_for_item(
             ) {
                 diagnostics.push(diagnostic);
             }
+            if let Some(hash) = item
+                .source
+                .get(list.header_start..list.header_end)
+                .and_then(|header| header.find('#'))
+            {
+                let start = list.header_start + hash;
+                spans.push(section_span(
+                    policy,
+                    item.source,
+                    &list.route,
+                    selector,
+                    list.exact,
+                    start..list.header_end,
+                ));
+            }
         }
         return Some(NotebookEditorView {
             mode: EditorMode::NotebookNote,
@@ -2877,14 +3561,7 @@ pub(crate) fn editor_view_for_item(
             section: list.section.clone(),
             block_id: trailing,
             needs,
-            spans: vec![Span {
-                start: list.header_start,
-                end: list.header_end,
-                kind: SpanKind::NotebookRoute,
-                project_note: None,
-                title: Some(info.title.clone()),
-                key: info.owner.clone(),
-            }],
+            spans,
             diagnostics,
             sub_bullets,
         });
@@ -2936,6 +3613,7 @@ pub(crate) fn editor_view_for_item(
         project_note: None,
         title: Some(claim.info.title.clone()),
         key: claim.info.owner.clone(),
+        section_action: None,
     }];
     let (mode, section, block_id) = match &claim.marker.form {
         NotebookForm::Note {
@@ -2946,19 +3624,45 @@ pub(crate) fn editor_view_for_item(
             block_id_range,
         } => {
             if let Some(range) = section_range {
-                spans.push(Span {
-                    start: range.0,
-                    end: range.1,
-                    kind: SpanKind::NotebookSection,
-                    project_note: None,
-                    title: section.clone(),
-                    key: Some(
-                        if *exact_section { "exact" } else { "slug" }
-                            .to_string(),
-                    ),
-                });
+                if section.as_ref().is_none_or(|value| value.is_empty()) {
+                    spans.push(Span {
+                        start: range.0,
+                        end: range.1,
+                        kind: SpanKind::InteractivePlaceholder,
+                        project_note: None,
+                        title: None,
+                        key: None,
+                        section_action: None,
+                    });
+                } else if let (Some(selector), Some(policy)) =
+                    (section.as_deref(), options.notebook_policy)
+                {
+                    spans.push(section_span(
+                        policy,
+                        item.source,
+                        &claim.marker.route,
+                        selector,
+                        *exact_section,
+                        range.0..range.1,
+                    ));
+                } else {
+                    spans.push(Span {
+                        start: range.0,
+                        end: range.1,
+                        kind: SpanKind::NotebookSection,
+                        project_note: None,
+                        title: section.clone(),
+                        key: Some(
+                            if *exact_section { "exact" } else { "slug" }
+                                .to_string(),
+                        ),
+                        section_action: None,
+                    });
+                }
             }
             if let Some(section) = section.as_deref() {
+                let offset =
+                    section_range.map(|(start, _)| start).unwrap_or(item.start);
                 let headings = options.notebook_policy.map_or_else(
                     || claim.info.sections.clone(),
                     |policy| {
@@ -2966,7 +3670,7 @@ pub(crate) fn editor_view_for_item(
                             policy,
                             item.source,
                             &claim.marker.route,
-                            item.start,
+                            offset,
                         )
                     },
                 );
@@ -2988,6 +3692,7 @@ pub(crate) fn editor_view_for_item(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
             }
             if section_range.is_some()
@@ -3012,6 +3717,7 @@ pub(crate) fn editor_view_for_item(
                     project_note: None,
                     title: None,
                     key: None,
+                    section_action: None,
                 });
             }
             if parent_block_id.is_empty() {
@@ -3061,6 +3767,13 @@ pub(crate) fn editor_view_for_item(
     {
         needs.push(Need::NotebookNote);
     }
+    let mode = if needs.contains(&Need::Section)
+        || needs.contains(&Need::SectionNotes)
+    {
+        EditorMode::Incomplete
+    } else {
+        mode
+    };
     spans.sort_by_key(|span| (span.start, span.end));
     Some(NotebookEditorView {
         mode,

@@ -168,6 +168,7 @@ pub(crate) struct ListHeader {
     pub(crate) section: Option<String>,
     pub(crate) exact: bool,
     pub(crate) kind: ListKind,
+    pub(crate) has_section_hash: bool,
 }
 
 /// Parse one complete list-header route token, recognizing a quoted
@@ -176,7 +177,7 @@ pub(crate) struct ListHeader {
 /// trailing bytes after a closing quote are not a complete header.
 fn parse_list_header_token(
     trimmed: &str,
-) -> Option<(String, Option<String>, bool, ListKind)> {
+) -> Option<(String, Option<String>, bool, ListKind, bool)> {
     use super::pomodoro_literal::expand_literal_token;
     if trimmed.starts_with("@@") || !trimmed.starts_with('@') {
         return None;
@@ -196,6 +197,7 @@ fn parse_list_header_token(
             None,
             false,
             ListKind::Tasks,
+            false,
         ));
     };
     let route_part = marker[1..hash].to_string();
@@ -209,6 +211,7 @@ fn parse_list_header_token(
             None,
             false,
             ListKind::Notes,
+            true,
         ));
     }
     let parsed = super::tokens::parse_hash_section_and_id(after_hash);
@@ -230,6 +233,7 @@ fn parse_list_header_token(
             Some(section),
             true,
             ListKind::Notes,
+            true,
         ));
     }
     if after_hash.contains(char::is_whitespace) {
@@ -240,6 +244,7 @@ fn parse_list_header_token(
         parsed.section,
         false,
         ListKind::Notes,
+        true,
     ))
 }
 
@@ -257,7 +262,8 @@ pub(crate) fn detect_list_header(line: &RawLine<'_>) -> Option<ListHeader> {
     if trimmed.is_empty() {
         return None;
     }
-    let (route, section, exact, kind) = parse_list_header_token(trimmed)?;
+    let (route, section, exact, kind, has_section_hash) =
+        parse_list_header_token(trimmed)?;
     // Only task and bullet markers head lists; operators, links, toggles,
     // and project notes keep their existing meanings.
     match kind {
@@ -266,6 +272,7 @@ pub(crate) fn detect_list_header(line: &RawLine<'_>) -> Option<ListHeader> {
             section,
             exact,
             kind,
+            has_section_hash,
         }),
     }
 }
@@ -334,6 +341,7 @@ fn push_list_items<'a>(
         header_start: first.raw.start,
         header_end: first.raw.end,
         ownerless: false,
+        has_section_hash: header.has_section_hash,
     };
     let mut emitted_ownerless = false;
     if !ownerless.is_empty() {
@@ -1277,6 +1285,48 @@ pub(crate) fn parse_capture_draft_with_options_coded(
         .map_err(TemplateCodedError::from)
 }
 
+/// After section-bullet fan-out, list `position`/`count` must count
+/// emitted notes rather than first-level selector bullets.
+fn recount_list_notes(outcomes: &mut [ParsedCaptureItemOutcome<'_>]) {
+    use std::collections::{HashMap, HashSet};
+    let mut fanout_headers = HashSet::new();
+    for outcome in outcomes.iter() {
+        let Some(list) = outcome.list.as_ref() else {
+            continue;
+        };
+        if outcome.fanout.is_some() {
+            fanout_headers.insert(list.header_start);
+        }
+    }
+    if fanout_headers.is_empty() {
+        return;
+    }
+    let mut counts: HashMap<usize, usize> = HashMap::new();
+    for outcome in outcomes.iter() {
+        let Some(list) = outcome.list.as_ref() else {
+            continue;
+        };
+        if list.ownerless || !fanout_headers.contains(&list.header_start) {
+            continue;
+        }
+        *counts.entry(list.header_start).or_default() += 1;
+    }
+    let mut seen: HashMap<usize, usize> = HashMap::new();
+    for outcome in outcomes.iter_mut() {
+        let Some(list) = outcome.list.as_mut() else {
+            continue;
+        };
+        if list.ownerless || !fanout_headers.contains(&list.header_start) {
+            continue;
+        }
+        let count = counts.get(&list.header_start).copied().unwrap_or(0);
+        let position = seen.entry(list.header_start).or_default();
+        *position += 1;
+        list.position = *position;
+        list.count = count;
+    }
+}
+
 fn parse_ordinary_draft(
     raw_text: &str,
     forced_route: Option<&str>,
@@ -1320,6 +1370,7 @@ fn parse_ordinary_draft(
         .map_err(|error| capture_item_error_at(item, error))?;
         item_outcomes.extend(outcomes);
     }
+    recount_list_notes(&mut item_outcomes);
     // A second `- ^^` anywhere in the draft names the first line, across
     // items. Per-item duplicates already refused above.
     {

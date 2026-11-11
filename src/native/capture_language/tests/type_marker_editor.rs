@@ -434,6 +434,7 @@ fn masked_items_match_their_baseline_across_grammar_families() {
             project_note: None,
             title: None,
             key: None,
+            section_action: None,
         })
         .collect();
     assert_eq!(var.items[1].spans, shifted);

@@ -230,6 +230,10 @@ pub(crate) struct Span {
     pub(crate) title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) key: Option<String>,
+    /// `"existing"` or `"create"` on a notebook section span. Omitted
+    /// elsewhere so unrelated drafts stay byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) section_action: Option<&'static str>,
 }
 
 /// The full documented severity vocabulary of the `capture-parse` JSON
@@ -372,6 +376,8 @@ pub(crate) enum Need {
     DrawerText,
     /// A complete first-level drawer shortcut still needs nested notes.
     DrawerNotes,
+    /// A complete first-level section shortcut still needs nested notes.
+    SectionNotes,
     ActiveTask,
     TaskLink,
     /// A whole-draft `/query` Go To picker is still open.
@@ -428,6 +434,7 @@ impl Need {
             Self::Drawer => "drawer",
             Self::DrawerText => "drawer_text",
             Self::DrawerNotes => "drawer_notes",
+            Self::SectionNotes => "section_notes",
             Self::ActiveTask => "active_task",
             Self::TaskLink => "task_link",
             Self::TaskGoto => "task_goto",

@@ -228,3 +228,38 @@ fn test_later_glued_selector_lists_earlier_seed_sections() {
         "later create is hidden: {rows:?}"
     );
 }
+
+#[test]
+fn test_hash_section_bullets_seed_before_plain_siblings() {
+    let temp = TempDir::new("bob-cli-capture-notebook-create-hash");
+    let vault = vault_with_area(&temp);
+    let draft = "Neovim config notes @dev^nvim@ %n\n- #Git\n  - Use worktrees\n- Prefer fd over find\n  - Keep this";
+    let json = dry_json(&vault, draft);
+    let markdown = json["note_files"][0]["markdown"]
+        .as_str()
+        .expect("markdown");
+    let prefer = markdown.find("- Prefer fd over find").expect("top");
+    let git = markdown.find("## Git").expect("git");
+    let worktrees = markdown.find("- Use worktrees").expect("git note");
+    assert!(prefer < git);
+    assert!(git < worktrees);
+    assert!(markdown.contains("Keep this"));
+
+    let output = run_capture(&vault, draft, &[], true);
+    assert_success(&output);
+    let created = fs::read_to_string(vault.join("dev_nvim.md")).expect("read");
+    assert_eq!(created, markdown);
+
+    let later = "Later into git @dev_nvim#git";
+    let later_json = dry_json(&vault, later);
+    assert_eq!(later_json["kind"], "notebook_note");
+    assert_eq!(later_json["notebook"]["section"], "Git");
+    assert_eq!(later_json["notebook"]["section_action"], "existing");
+    let output = run_capture(&vault, later, &[], true);
+    assert_success(&output);
+    let later_md =
+        fs::read_to_string(vault.join("dev_nvim.md")).expect("later");
+    let git_at = later_md.find("## Git").expect("git later");
+    let later_at = later_md.find("- Later into git").expect("later note");
+    assert!(git_at < later_at);
+}

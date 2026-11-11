@@ -291,7 +291,7 @@ fn capture_parse_pomodoro_start_reports_later_units_additively() {
         ("=bugs+2", "+2", 5, 2),
     ] {
         let value = parse(text);
-        assert_eq!(value["grammar"], 25, "{text}");
+        assert_eq!(value["grammar"], 26, "{text}");
         assert_eq!(value["mode"], "pomodoro_start", "{text}");
         assert_eq!(
             value["pomodoro_start"],

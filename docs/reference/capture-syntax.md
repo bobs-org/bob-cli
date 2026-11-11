@@ -82,7 +82,7 @@ Incomplete **picker** input cannot execute.
 | `@a+x @b+y > @c` / `@a+x @b+y > @c+id` / `@a+x > @c+id#drawer` / `@a+x > @c#section` | Move or merge tasks with `>` | [`>` transfer](#transfer) |
 | `T < @a+x @b+y` | Merge into the new task | [`<` merge-in](#merge-in) |
 | `@route+block-id#drawer` | Child inside a task drawer | [`@route+block-id#drawer`](#plus-child-section) |
-| `- #drawer` with nested notes | First-level drawer bullet | [Drawer bullets](#drawer-bullets) |
+| `- #drawer` / `- #Section` | Drawer, or notebook section under `@nb`/`%n` | [Drawer bullets](#drawer-bullets) |
 | `@route+block-id` with no other text | Ensure Next and move its Task Link | [Ensure Next](#plus-ensure-next) |
 | `@route+block-id!` | Toggle that task's Pomodoro Task Link | [`@route+block-id!`](#plus-toggle) |
 | `%n` | Pomodoro note, or notebook with `@parent^id@` | [`%n`](#trailing-hash) |
@@ -1349,9 +1349,9 @@ Contract: [Sub-bullets under existing tasks](../capture.md#sub-bullets-under-exi
 ### Drawer bullets and several notes {#drawer-bullets}
 
 A first-level `- #requirements` under a task, with nested notes, names a
-drawer. Completion inserts the ALL-CAPS title; an ALL-CAPS bullet with
-nested notes has the same meaning. A `- #drawer` without notes is refused;
-an ALL-CAPS bullet without notes stays a plain bullet.
+drawer (ALL-CAPS with nested notes is the same). Empty `- #drawer` is
+refused; empty ALL-CAPS stays a note. Under `@nb` or `%n`, `- #Section`
+names a `##`; nest notes or write `\#git`.
 
 A note-less `@route+id` files each first-level bullet as a separate note;
 drawer bullets append inside their drawers. With `@route+id#drawer`, every
