@@ -238,6 +238,35 @@ pub(super) fn plan_capture_batch_with_config_path(
         .map(|item| item.template_row.clone())
         .collect();
     let mut parsed_items = parsed_draft.items;
+    // Albums never host tasks: an explicit `--route`, a draft-wide
+    // `@@route`, or an inline `@route` naming an album refuses before
+    // anything stages, leaving files unchanged.
+    if let Some(route) = request.forced_route.as_deref()
+        && let Some(error) = album_task_home_refusal(
+            &request.bob_dir,
+            config_path,
+            record_context.policy(),
+            route,
+        )
+    {
+        return Err(error);
+    }
+    if let Some(global) = parsed_draft.global.as_ref() {
+        let inherits = parsed_items.iter().any(|item| {
+            item.parsed.route.is_none()
+                && is_album_guarded_task_kind(&item.parsed.kind)
+        });
+        if inherits
+            && let Some(error) = album_task_home_refusal(
+                &request.bob_dir,
+                config_path,
+                record_context.policy(),
+                &global.route,
+            )
+        {
+            return Err(error);
+        }
+    }
     let gmail_context = parsed_items
         .iter()
         .any(|item| {
@@ -1237,6 +1266,100 @@ fn assign_ref_verdicts(
     assignments
 }
 
+/// Refuse an album as a task home before anything stages. Valid albums
+/// name their owner and record route; broken albums report their schema
+/// problem without inventing an owner or offering an unsafe rewrite.
+/// Returns `None` when the route is not an album, so config and ordinary
+/// task routes pass through. Per-route policy decisions win; forced and
+/// global routes that never pass through lexical candidates resolve
+/// boundedly (one album head plus its owner chain) here instead.
+fn album_task_home_refusal(
+    bob_dir: &Path,
+    config_path: Option<&Path>,
+    policy: &capture_language::RecordRoutePolicy,
+    route: &str,
+) -> Option<CaptureError> {
+    if route.is_empty() {
+        return None;
+    }
+    match policy.route_decision(route) {
+        Some(capture_language::PerRouteDecision::AlbumValid {
+            record_type,
+            album,
+        }) => Some(CaptureError::usage_code(
+            capture_language::album_holds_no_tasks_error(
+                &album.stem,
+                &record_type.id,
+                album.owner.as_deref(),
+            ),
+            capture_language::ALBUM_HOLDS_NO_TASKS_CODE,
+        )),
+        Some(capture_language::PerRouteDecision::AlbumInvalid {
+            paths,
+            findings,
+        }) => Some(CaptureError::usage_code(
+            capture_language::album_task_home_invalid_message(
+                route, paths, findings,
+            ),
+            capture_language::ALBUM_SCHEMA_INVALID_CODE,
+        )),
+        Some(_) => None,
+        None => {
+            let path = config_path
+                .map(Path::to_path_buf)
+                .unwrap_or_else(super::super::config::config_path);
+            match super::super::records::context::RecordContext::resolve_route_head(
+                bob_dir, &path, route, None,
+            ) {
+                Ok(super::super::records::context::RecordKindResolution::Valid {
+                    kind,
+                    ..
+                }) if kind.source_name() == "album" => {
+                    let album = kind.album.clone()?;
+                    Some(CaptureError::usage_code(
+                        capture_language::album_holds_no_tasks_error(
+                            &album.stem,
+                            kind.record_type().id.as_str(),
+                            album.owner.as_deref(),
+                        ),
+                        capture_language::ALBUM_HOLDS_NO_TASKS_CODE,
+                    ))
+                }
+                Ok(super::super::records::context::RecordKindResolution::Invalid {
+                    paths,
+                    findings,
+                    ..
+                }) => Some(CaptureError::usage_code(
+                    capture_language::album_task_home_invalid_message(
+                        route, &paths, &findings,
+                    ),
+                    capture_language::ALBUM_SCHEMA_INVALID_CODE,
+                )),
+                _ => None,
+            }
+        }
+    }
+}
+
+/// Whether an item kind writes its body to its route's note (or targets
+/// tasks in it). Record, notebook, transfer, ref-parent, project-note,
+/// and note-pull items own their destinations elsewhere and are excluded
+/// so this guard never masks their own diagnostics.
+fn is_album_guarded_task_kind(kind: &CaptureKind) -> bool {
+    !matches!(
+        kind,
+        CaptureKind::RecordNote { .. }
+            | CaptureKind::RecordUpdate { .. }
+            | CaptureKind::NotebookNote { .. }
+            | CaptureKind::NotebookSubNote { .. }
+            | CaptureKind::NotebookCreate { .. }
+            | CaptureKind::Transfer { .. }
+            | CaptureKind::Ref(_)
+            | CaptureKind::ProjectNote { .. }
+            | CaptureKind::NotePull { .. }
+    )
+}
+
 fn capture_error_context(
     item_number: usize,
     parsed_item: &ParsedCaptureItem,
@@ -1799,6 +1922,21 @@ pub(super) fn plan_capture_item(
     earlier_items: &[PlannedCaptureItem],
     project_moves: &[ProjectMoveLanding],
 ) -> Result<PlannedCaptureItem, CaptureError> {
+    // Albums never host tasks: an inline `@route` naming an album refuses
+    // before the item stages anything, leaving files unchanged. Record,
+    // notebook, transfer, ref, project-note, and note-pull items own
+    // their destinations elsewhere.
+    if is_album_guarded_task_kind(&parsed_item.parsed.kind)
+        && let Some(route) = parsed_item.parsed.route.as_deref()
+        && let Some(error) = album_task_home_refusal(
+            &request.bob_dir,
+            config_path,
+            record_context.policy(),
+            route,
+        )
+    {
+        return Err(error);
+    }
     if matches!(
         parsed_item.parsed.kind,
         CaptureKind::RecordNote { .. } | CaptureKind::RecordUpdate { .. }

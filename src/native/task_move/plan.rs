@@ -25,8 +25,9 @@ use super::super::{
     note_tasks::clean_description,
     pomodoro_homes::{HomeResolver, IndexedHomeSource},
     projects::{
-        frontmatter_is_area, frontmatter_is_notebook, frontmatter_is_project,
-        frontmatter_value, parse_frontmatter, trim_yaml_scalar, ProjectStatus,
+        frontmatter_is_album, frontmatter_is_area, frontmatter_is_notebook,
+        frontmatter_is_project, frontmatter_value, parse_frontmatter,
+        trim_yaml_scalar, ProjectStatus,
     },
     relation_labels::relation_label_key,
     task_complete::tree::remove_completion_fields,
@@ -822,6 +823,20 @@ pub(crate) fn plan_task_move(
                 detail: notebook_teaching_detail(&path, owner.as_deref()),
             });
         }
+        Err(PlanError::DestKind { path, detail })
+            if detail.contains("is an album and holds no tasks") =>
+        {
+            let owner = notebook_owner_from_snapshot(snapshot, &dest_path);
+            let noun = album_noun_from_contents(dest_contents);
+            return Err(PlanError::DestKind {
+                path: path.clone(),
+                detail: album_teaching_detail(
+                    &path,
+                    owner.as_deref(),
+                    noun.as_deref(),
+                ),
+            });
+        }
         Err(error) => return Err(error),
     };
     let dest_has_tasks = tasks_heading_index(dest_contents).is_some();
@@ -1450,6 +1465,12 @@ fn classify_dest(path: &Path, contents: &str) -> Result<DestKind, PlanError> {
             detail: notebook_teaching_detail(path, None),
         });
     }
+    if frontmatter_is_album(&frontmatter) {
+        return Err(PlanError::DestKind {
+            path: path.to_path_buf(),
+            detail: album_teaching_detail(path, None, None),
+        });
+    }
     if frontmatter_is_project(&frontmatter) {
         match ProjectStatus::parse(frontmatter_value(&frontmatter, "status")) {
             ProjectStatus::Wip | ProjectStatus::Waiting => {
@@ -1483,6 +1504,47 @@ fn notebook_teaching_detail(path: &Path, owner: Option<&str>) -> String {
             "{display} is a notebook and holds no tasks — choose an area or project and repair it with `bob notebooks check`"
         ),
     }
+}
+
+fn album_teaching_detail(
+    path: &Path,
+    owner: Option<&str>,
+    noun: Option<&str>,
+) -> String {
+    let display = path.to_string_lossy().replace('\\', "/");
+    let stem = display
+        .rsplit('/')
+        .next()
+        .unwrap_or(&display)
+        .strip_suffix(".md")
+        .unwrap_or(&display);
+    match (noun, owner) {
+        (Some(noun), Some(route)) => format!(
+            "{display} is an album and holds no tasks — @{stem}/ adds a {noun}; tasks go to @{route}"
+        ),
+        (Some(noun), None) => format!(
+            "{display} is an album and holds no tasks — @{stem}/ adds a {noun}; choose an area or project for tasks"
+        ),
+        (None, Some(route)) => format!(
+            "{display} is an album and holds no tasks — fix the album and use its owner @{route} for tasks"
+        ),
+        (None, None) => format!(
+            "{display} is an album and holds no tasks — fix the album and choose an area or project for tasks"
+        ),
+    }
+}
+
+fn album_noun_from_contents(contents: &str) -> Option<String> {
+    let head = contents.split_inclusive('\n').take(64).collect::<String>();
+    // The snapshot path is unknown here; the declaration parser only needs
+    // the relative file name for diagnostics, and the noun for teaching
+    // copy comes from the parsed schema.
+    crate::native::albums::parse_album_declaration(
+        std::path::Path::new("album.md"),
+        &head,
+    )
+    .and_then(|declaration| declaration.record_type)
+    .map(|record_type| record_type.id)
 }
 
 fn notebook_owner_from_snapshot(

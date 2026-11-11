@@ -293,6 +293,21 @@ pub(crate) fn notebook_holds_no_tasks_error(
     }
 }
 
+pub(crate) fn album_holds_no_tasks_error(
+    stem: &str,
+    noun: &str,
+    owner: Option<&str>,
+) -> String {
+    match owner {
+        Some(owner) => format!(
+            "{stem}.md is an album and holds no tasks — @{stem}/ adds a {noun}; tasks go to @{owner}"
+        ),
+        None => format!(
+            "{stem}.md is an album and holds no tasks — @{stem}/ adds a {noun}; choose an area or project for tasks"
+        ),
+    }
+}
+
 pub(super) fn notebook_marker_unsupported_error(
     marker: &str,
     route: &str,

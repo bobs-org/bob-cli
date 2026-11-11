@@ -10,12 +10,14 @@
 use std::path::Path;
 
 use super::{
+    capture_language::album_holds_no_tasks_error,
     capture_targets::{self, CaptureTargetKind},
     note_tasks::bounded_levenshtein,
     pomodoro_homes::{DiskHomeSource, HomeResolver},
     projects::{
-        frontmatter_is_area, frontmatter_is_notebook, frontmatter_is_project,
-        frontmatter_value, parse_frontmatter, ProjectStatus,
+        frontmatter_is_album, frontmatter_is_area, frontmatter_is_notebook,
+        frontmatter_is_project, frontmatter_value, parse_frontmatter,
+        ProjectStatus,
     },
 };
 
@@ -133,6 +135,11 @@ pub(crate) enum ParentError {
         label: String,
         owner: Option<String>,
     },
+    Album {
+        label: String,
+        owner: Option<String>,
+        noun: Option<String>,
+    },
 }
 
 /// One near-miss or ambiguity claimant for hints.
@@ -201,6 +208,26 @@ impl ParentError {
                     "{label} is a notebook and holds no tasks — choose an area or project and repair it with `bob notebooks check`"
                 ),
             },
+            Self::Album { label, owner, noun } => {
+                let stem = label
+                    .strip_suffix(".md")
+                    .unwrap_or(label.as_str());
+                match noun.as_deref() {
+                    Some(noun) => album_holds_no_tasks_error(
+                        stem,
+                        noun,
+                        owner.as_deref(),
+                    ),
+                    None => match owner.as_deref() {
+                        Some(route) => format!(
+                            "{label} is an album and holds no tasks — fix the album and use its owner @{route} for tasks"
+                        ),
+                        None => format!(
+                            "{label} is an album and holds no tasks — fix the album and choose an area or project for tasks"
+                        ),
+                    },
+                }
+            }
         }
     }
 }
@@ -381,6 +408,11 @@ fn check_non_candidate_note(
         let owner = notebook_owner_route(bob_dir, lowered);
         return Some(Err(ParentError::Notebook { label, owner }));
     }
+    if frontmatter_is_album(&frontmatter) {
+        let owner = notebook_owner_route(bob_dir, lowered);
+        let noun = album_noun(bob_dir, lowered, &contents);
+        return Some(Err(ParentError::Album { label, owner, noun }));
+    }
     if !frontmatter_is_project(&frontmatter) {
         return Some(Err(ParentError::NotParent { label }));
     }
@@ -398,6 +430,21 @@ fn check_non_candidate_note(
         label,
         matched: ParentMatchKind::Stem,
     }))
+}
+
+/// Album noun for teaching refusals, via the shared album declaration
+/// parser. Returns `None` for broken albums without a usable schema, so
+/// callers report the album problem without inventing a noun.
+fn album_noun(bob_dir: &Path, lowered: &str, contents: &str) -> Option<String> {
+    use std::path::PathBuf;
+    let relative = PathBuf::from(format!("{lowered}.md"));
+    // Bound the head the same way route presentation does: frontmatter
+    // plus the first H1, so body edits cannot change refusal copy.
+    let head = contents.split_inclusive('\n').take(64).collect::<String>();
+    let _ = bob_dir;
+    crate::native::albums::parse_album_declaration(&relative, &head)
+        .and_then(|declaration| declaration.record_type)
+        .map(|record_type| record_type.id)
 }
 
 /// Resolve a notebook's owner for teaching refusals, including nested
@@ -680,5 +727,56 @@ mod tests {
                 });
             assert_eq!(resolved.route, inbox);
         }
+    }
+
+    #[test]
+    fn albums_refuse_as_task_parents_with_owner_guidance() {
+        let temp = TempDir::new("bob-cli-parent-album");
+        write_file(
+            &temp.path().join("body.md"),
+            "---\ntype: [[area]]\n---\n# Body\n",
+        );
+        write_file(
+            &temp.path().join("eat.md"),
+            "---\ntype: [[album]]\nparent: \"[[body]]\"\nsummary: Places\nrecord:\n  noun: restaurant\n  fields: {}\n---\n# Restaurants\n",
+        );
+        let error =
+            resolve_parent(temp.path(), "eat").expect_err("album refuses");
+        let message = error.message();
+        assert!(
+            message.contains("eat.md is an album and holds no tasks"),
+            "{message}"
+        );
+        assert!(message.contains("@eat/ adds a restaurant"), "{message}");
+        assert!(message.contains("@body"), "{message}");
+        assert!(
+            matches!(
+                error,
+                ParentError::Album {
+                    owner: Some(_),
+                    noun: Some(_),
+                    ..
+                }
+            ),
+            "owner and noun resolve: {message}"
+        );
+    }
+
+    #[test]
+    fn broken_albums_refuse_without_inventing_owner_or_noun() {
+        let temp = TempDir::new("bob-cli-parent-broken-album");
+        write_file(
+            &temp.path().join("eat.md"),
+            "---\ntype: [[album]]\nparent: \"[[body]]\"\nrecord: {noun: restaurant, fields: []}\n---\n# Restaurants\n",
+        );
+        let error =
+            resolve_parent(temp.path(), "eat").expect_err("broken refuses");
+        let message = error.message();
+        assert!(
+            message.contains("is an album and holds no tasks"),
+            "{message}"
+        );
+        assert!(message.contains("fix the album"), "{message}");
+        assert!(!message.contains("@body"), "{message}");
     }
 }

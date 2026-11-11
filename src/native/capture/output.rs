@@ -969,6 +969,16 @@ pub(crate) struct CaptureItemResult {
     pub(super) notebook: Option<super::notebook_note::NotebookSummary>,
 }
 
+/// Album identity carried on album-backed record payloads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RecordAlbumJson {
+    pub(super) stem: String,
+    pub(super) title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) owner: Option<String>,
+    pub(super) breadcrumb: Vec<String>,
+}
+
 /// One planned record file in top-level `note_files`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct NoteFileJson {
@@ -976,6 +986,10 @@ pub(super) struct NoteFileJson {
     pub(super) action: &'static str,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub(super) record_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) source: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) album: Option<RecordAlbumJson>,
     pub(super) properties: Vec<NoteFilePropertyJson>,
     pub(super) body: String,
     pub(super) markdown: String,
@@ -1015,6 +1029,10 @@ pub(super) struct RecordNoteSummary {
     pub(super) path: String,
     pub(super) notes: usize,
     pub(super) properties: Vec<NoteFilePropertyJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) source: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) album: Option<RecordAlbumJson>,
     #[serde(skip)]
     pub(super) markdown: String,
     #[serde(skip)]
@@ -7284,6 +7302,19 @@ fn print_human_record_note_success(
         .unwrap_or_default();
     let kind = record.label.to_lowercase();
     let updating = record.action == "update";
+    // Album records name the album and owner instead of the bare path,
+    // e.g. `Restaurants · body`. Config records keep the path label.
+    let destination;
+    let target_label = match record.album.as_ref() {
+        Some(album) => {
+            destination = match album.owner.as_deref() {
+                Some(owner) => format!("{} · {owner}", album.title),
+                None => album.title.clone(),
+            };
+            destination.as_str()
+        }
+        None => target_label,
+    };
     if result.dry_run {
         if updating {
             println!(

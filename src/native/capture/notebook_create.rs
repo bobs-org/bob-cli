@@ -103,6 +103,8 @@ pub(super) fn plan_notebook_create_item(
         path: relative.clone(),
         action: "create",
         record_type: String::new(),
+        source: None,
+        album: None,
         properties: Vec::new(),
         body: seed,
         markdown: plan.contents.clone(),

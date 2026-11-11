@@ -1791,3 +1791,111 @@ fn update_noop_prefilled_edit_changes_no_bytes() {
         "all lines unchanged: {file}"
     );
 }
+
+const ALBUM_BODY: &str = "---\ntype: [[area]]\n---\n# Body\n";
+
+const ALBUM_EAT: &str = "---\ntype: [[album]]\nparent: \"[[body]]\"\nsummary: City restaurants worth revisiting.\nrecord:\n  noun: restaurant\n  label: Restaurant\n  fields: {}\n---\n# Restaurants and Cafes\n";
+
+fn album_fixture() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let temp = TempDir::new("bob-cli-capture-album");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_file(&vault.join("body.md"), ALBUM_BODY);
+    write_file(&vault.join("eat.md"), ALBUM_EAT);
+    let config = write_records_config(&temp);
+    (temp, vault, config)
+}
+
+#[test]
+fn capture_album_create_writes_canonical_storage_with_metadata() {
+    let (_temp, vault, config) = album_fixture();
+    // No fields typed: the album schema (no required fields) wins over the
+    // transitional config, which would demand status/category/location.
+    let dry = capture(
+        &vault,
+        &config,
+        &["--dry-run", "-f", "json", "Ramen Nagi @eat/"],
+    )
+    .output()
+    .expect("album dry-run");
+    assert_success(&dry);
+    let dry_json = json_output(&dry);
+    let dry_file = dry_json["note_files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|file| file["path"] == "eat/ramen_nagi.md")
+        .expect("album note file");
+    assert_eq!(dry_file["action"], "create");
+    assert_eq!(dry_file["record_type"], "restaurant", "noun identity kept");
+    assert_eq!(dry_file["source"], "album");
+    assert_eq!(dry_file["album"]["stem"], "eat");
+    assert_eq!(dry_file["album"]["title"], "Restaurants and Cafes");
+    assert_eq!(dry_file["album"]["owner"], "body");
+    let markdown = dry_file["markdown"].as_str().unwrap_or_default();
+    assert!(markdown.contains("parent: \"[[eat]]\""), "{markdown}");
+    assert!(markdown.contains("type: \"[[record]]\""), "{markdown}");
+    assert!(!markdown.contains("[[restaurant]]"), "{markdown}");
+    assert!(!vault.join("eat").exists(), "dry-run creates no folder");
+
+    let committed =
+        capture(&vault, &config, &["-f", "json", "Ramen Nagi @eat/"])
+            .output()
+            .expect("album commit");
+    assert_success(&committed);
+    let committed_json = json_output(&committed);
+    assert_eq!(
+        committed_json["note_files"][0]["markdown"],
+        dry_json["note_files"][0]["markdown"],
+        "dry-run bytes equal committed bytes"
+    );
+    let written = fs::read_to_string(vault.join("eat/ramen_nagi.md"))
+        .expect("record note written");
+    assert_eq!(
+        written,
+        dry_json["note_files"][0]["markdown"].as_str().unwrap()
+    );
+}
+
+#[test]
+fn capture_album_human_success_names_album_and_owner() {
+    let (_temp, vault, config) = album_fixture();
+    let output = capture(&vault, &config, &["Ramen Nagi @eat/"])
+        .output()
+        .expect("human album capture");
+    assert_success(&output);
+    let text = stdout(&output);
+    assert!(
+        text.contains("new restaurant")
+            && text.contains("Restaurants and Cafes")
+            && text.contains("body"),
+        "human success names album and owner: {text}"
+    );
+}
+
+#[test]
+fn capture_bare_album_task_home_fails_and_writes_nothing() {
+    let (_temp, vault, config) = album_fixture();
+    let before =
+        fs::read_to_string(vault.join("eat.md")).expect("read album note");
+    let draft = "Ramen Nagi @eat/\n\nBlaze @eat";
+    let output = capture(&vault, &config, &["-f", "json", draft])
+        .output()
+        .expect("mixed album capture");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    let json = json_output(&output);
+    assert_eq!(json["code"], "album_holds_no_tasks");
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("holds no tasks"),
+        "{json}"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("eat.md")).expect("album unchanged"),
+        before,
+        "album note untouched"
+    );
+    assert!(!vault.join("eat").exists(), "no record folder written");
+}

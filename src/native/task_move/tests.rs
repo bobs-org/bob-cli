@@ -1963,3 +1963,35 @@ fn restore_repairs_inbound_links_to_the_source() {
     let result = restore_plan(&notes, "done/work_done", "", vec![block("a")]);
     assert!(post(&result, "notes.md").contains("[[work#^a]]"));
 }
+
+#[test]
+fn album_destinations_refuse_with_owner_guidance() {
+    let source = area(
+        "
+## Tasks
+
+- [ ] #task Move me ^m
+",
+    );
+    let body = area("# Body\n");
+    let album = "---\ntype: [[album]]\nparent: \"[[body]]\"\nsummary: Drinks\nrecord:\n  noun: drink\n  fields: {}\n---\n# Drinks\n";
+    let error = plan_err(
+        &[
+            ("src.md", source.as_str()),
+            ("body.md", body.as_str()),
+            ("drink.md", album),
+        ],
+        "src",
+        "drink",
+        vec![block("m")],
+    );
+    let PlanError::DestKind { detail, .. } = error else {
+        panic!("expected a destination refusal");
+    };
+    assert!(
+        detail.contains("is an album and holds no tasks"),
+        "{detail}"
+    );
+    assert!(detail.contains("@drink/ adds a drink"), "{detail}");
+    assert!(detail.contains("@body"), "{detail}");
+}

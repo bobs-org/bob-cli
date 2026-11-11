@@ -56,22 +56,41 @@ fn plan_record_create_item(
     planner: &mut CaptureBatchPlanner,
     record_context: &mut CaptureRecordContext,
 ) -> Result<PlannedCaptureItem, CaptureError> {
-    let Some((config, catalog)) = record_context.config_and_catalog() else {
-        return Err(CaptureError::usage(
-            "record notes need a valid records config",
-        ));
-    };
-    let Some(record_type) = config.by_directory(&intent.dir).cloned() else {
+    let Some((record_type, source, album)) =
+        record_context.route_kind_for(&intent.dir)
+    else {
         return Err(CaptureError::usage(format!(
             "`{}/` is not a configured record folder",
             intent.dir
         )));
     };
+    let render_identity = match source {
+        "album" => records::RecordRenderIdentity::Album,
+        _ => records::RecordRenderIdentity::Config,
+    };
+    // Album kinds plan against a single-type synthetic config; the planner
+    // looks types up by id, and album kinds are not in the transitional
+    // config.
+    let synthetic;
+    let (config, catalog) = if source == "album" {
+        synthetic = records::RecordsConfig {
+            types: vec![record_type.clone()],
+        };
+        (&synthetic, record_context.catalog_mut())
+    } else {
+        let Some((config, catalog)) = record_context.config_and_catalog()
+        else {
+            return Err(CaptureError::usage(
+                "record notes need a valid records config",
+            ));
+        };
+        (config, catalog)
+    };
     let field_inputs = field_inputs_from_intent(&intent);
     let notes = record_note_inputs(&intent);
     let reserved_paths = reserved_paths(planner, &request.bob_dir);
     let timezone = crate::native::day_timezone().ok().flatten();
-    let plan = match records::plan_create(
+    let plan = match records::plan_create_with_identity(
         RecordCreateRequest {
             config,
             record_type: &record_type.id,
@@ -85,6 +104,7 @@ fn plan_record_create_item(
             reserved_paths: &reserved_paths,
         },
         catalog,
+        render_identity,
     ) {
         Ok(plan) => plan,
         Err(error) => {
@@ -114,10 +134,21 @@ fn plan_record_create_item(
         .collect::<Vec<_>>();
     let note_count = ordinary_note_count(&intent);
     let body = plan.body.clone().unwrap_or_default();
+    let album_json = album.as_ref().map(|album| {
+        crate::native::capture::output::RecordAlbumJson {
+            stem: album.stem.clone(),
+            title: album.title.clone(),
+            owner: album.owner.clone(),
+            breadcrumb: album.breadcrumb.clone(),
+        }
+    });
+    let source_json = (source == "album").then_some(source);
     let note_file = NoteFileJson {
         path: relative.clone(),
         action: "create",
         record_type: plan.record_type.clone(),
+        source: source_json,
+        album: album_json.clone(),
         properties: properties.clone(),
         body,
         markdown: markdown.clone(),
@@ -130,6 +161,8 @@ fn plan_record_create_item(
         path: relative.clone(),
         notes: note_count,
         properties,
+        source: source_json,
+        album: album_json,
         markdown,
         note_file,
     };
@@ -160,16 +193,28 @@ fn plan_record_update_item(
     record_context: &mut CaptureRecordContext,
     warnings: &mut Vec<CaptureWarning>,
 ) -> Result<PlannedCaptureItem, CaptureError> {
-    let Some((config, catalog)) = record_context.config_and_catalog() else {
-        return Err(CaptureError::usage(
-            "record notes need a valid records config",
-        ));
-    };
-    let Some(record_type) = config.by_directory(&intent.dir).cloned() else {
+    let Some((record_type, source, album)) =
+        record_context.route_kind_for(&intent.dir)
+    else {
         return Err(CaptureError::usage(format!(
             "`{}/` is not a configured record folder",
             intent.dir
         )));
+    };
+    let synthetic;
+    let (config, catalog) = if source == "album" {
+        synthetic = records::RecordsConfig {
+            types: vec![record_type.clone()],
+        };
+        (&synthetic, record_context.catalog_mut())
+    } else {
+        let Some((config, catalog)) = record_context.config_and_catalog()
+        else {
+            return Err(CaptureError::usage(
+                "record notes need a valid records config",
+            ));
+        };
+        (config, catalog)
     };
     let stem = intent.update_stem.as_deref().unwrap_or_default();
     let (target, original) = match staged_update_snapshot(
@@ -243,10 +288,21 @@ fn plan_record_update_item(
         ordinary_note_count(&intent) + usize::from(!intent.title.is_empty());
     let body = plan.body.clone().unwrap_or_default();
     let lines = record_update_lines(&original, &markdown);
+    let album_json = album.as_ref().map(|album| {
+        crate::native::capture::output::RecordAlbumJson {
+            stem: album.stem.clone(),
+            title: album.title.clone(),
+            owner: album.owner.clone(),
+            breadcrumb: album.breadcrumb.clone(),
+        }
+    });
+    let source_json = (source == "album").then_some(source);
     let note_file = NoteFileJson {
         path: relative.clone(),
         action: "update",
         record_type: plan.record_type.clone(),
+        source: source_json,
+        album: album_json.clone(),
         properties: properties.clone(),
         body,
         markdown: markdown.clone(),
@@ -259,6 +315,8 @@ fn plan_record_update_item(
         path: relative.clone(),
         notes: note_count,
         properties,
+        source: source_json,
+        album: album_json,
         markdown,
         note_file,
     };

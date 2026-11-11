@@ -1507,6 +1507,8 @@ fn empty_entry(intent: &RecordNoteIntent) -> RecordParseEntry {
             fields: Vec::new(),
             legacy: Vec::new(),
         },
+        source: "config",
+        album: None,
         title: None,
         path: None,
         stem: None,

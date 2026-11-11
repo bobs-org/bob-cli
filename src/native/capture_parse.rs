@@ -893,6 +893,15 @@ struct CaptureParseItem {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ParseAlbumMeta {
+    stem: String,
+    title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    owner: Option<String>,
+    breadcrumb: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct ParseRecord {
     action: &'static str,
     #[serde(rename = "type")]
@@ -909,6 +918,10 @@ struct ParseRecord {
     fields: Vec<ParseRecordField>,
     #[serde(skip_serializing_if = "Option::is_none")]
     assist_version: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    album: Option<ParseAlbumMeta>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -3215,6 +3228,13 @@ fn parse_record(
                 .collect(),
         },
         assist_version: Some(super::capture_language::RECORD_ASSIST_VERSION),
+        source: (entry.source == "album").then_some(entry.source),
+        album: entry.album.as_ref().map(|album| ParseAlbumMeta {
+            stem: album.stem.clone(),
+            title: album.title.clone(),
+            owner: album.owner.clone(),
+            breadcrumb: album.breadcrumb.clone(),
+        }),
     }
 }
 
@@ -3505,7 +3525,6 @@ fn collection_route_diagnostics(
                 return None;
             }
             let route = item.route.as_deref()?;
-            let record_type = policy.configured_dir(route)?;
             let span = item
                 .spans
                 .iter()
@@ -3514,6 +3533,90 @@ fn collection_route_diagnostics(
             if token != format!("@{route}") {
                 return None;
             }
+            // Album bare routes refuse as task homes before config logic:
+            // the album owns its stem entirely.
+            match policy.route_decision(route) {
+                Some(capture_language::PerRouteDecision::AlbumValid {
+                    record_type,
+                    album,
+                }) => {
+                    let noun = record_type.id.as_str();
+                    let article = if matches!(
+                        noun.as_bytes().first(),
+                        Some(b'a' | b'e' | b'i' | b'o' | b'u' | b'A' | b'E'
+                        | b'I'
+                        | b'O'
+                        | b'U')
+                    ) {
+                        "an"
+                    } else {
+                        "a"
+                    };
+                    let message = match album.owner.as_deref() {
+                        Some(owner) => format!(
+                            "{}.md is an album and holds no tasks — `@{route}/` adds {article} {noun}; tasks go to `@{owner}`",
+                            album.stem,
+                        ),
+                        None => format!(
+                            "{}.md is an album and holds no tasks — `@{route}/` adds {article} {noun}; choose an area or project for tasks",
+                            album.stem,
+                        ),
+                    };
+                    return Some(Diagnostic {
+                        severity: Severity::Error,
+                        code: capture_language::ALBUM_HOLDS_NO_TASKS_CODE,
+                        message,
+                        range: Some((span.start, span.end)),
+                        rewrite: Some(DiagnosticRewrite {
+                            start: span.start,
+                            end: span.end,
+                            replacement: format!("@{route}/"),
+                            label: format!(
+                                "Use `@{route}/` to add {article} {noun}"
+                            ),
+                        }),
+                    });
+                }
+                Some(capture_language::PerRouteDecision::AlbumInvalid {
+                    paths,
+                    findings,
+                }) => {
+                    return Some(Diagnostic {
+                        severity: Severity::Error,
+                        code: capture_language::ALBUM_SCHEMA_INVALID_CODE,
+                        message:
+                            capture_language::album_task_home_invalid_message(
+                                route, paths, findings,
+                            ),
+                        range: Some((span.start, span.end)),
+                        rewrite: None,
+                    });
+                }
+                Some(capture_language::PerRouteDecision::ConfigValid {
+                    record_type,
+                }) => {
+                    let label = record_type.label.as_str();
+                    return Some(Diagnostic {
+                        severity: Severity::Warning,
+                        code: "record_collection_route",
+                        message: format!(
+                            "{}.md is the {label} collection — `@{route}/` creates a record note",
+                            route,
+                        ),
+                        range: Some((span.start, span.end)),
+                        rewrite: Some(DiagnosticRewrite {
+                            start: span.start,
+                            end: span.end,
+                            replacement: format!("@{route}/"),
+                            label: format!(
+                                "Use `@{route}/` to create a {label} note"
+                            ),
+                        }),
+                    });
+                }
+                _ => {}
+            }
+            let record_type = policy.configured_dir(route)?;
             let label = policy
                 .records_config()?
                 .record_type(record_type)?
@@ -4490,6 +4593,91 @@ mod tests {
             .unwrap()
             .iter()
             .any(|diagnostic| diagnostic["code"] == "records_config_invalid"));
+    }
+
+    fn album_vault(root: &std::path::Path) {
+        std::fs::write(
+            root.join("body.md"),
+            "---\ntype: [[area]]\n---\n# Body\n",
+        )
+        .expect("area note");
+        std::fs::write(
+            root.join("eat.md"),
+            "---\ntype: [[album]]\nparent: \"[[body]]\"\nsummary: Places\nrecord:\n  noun: restaurant\n  label: Restaurant\n  fields: {}\n---\n# Restaurants and Cafes\n",
+        )
+        .expect("album note");
+        std::fs::create_dir_all(root.join("eat")).expect("record folder");
+    }
+
+    fn parse_with_albums(
+        input: &str,
+        vault: &std::path::Path,
+    ) -> serde_json::Value {
+        // No config file: album resolution must not need transitional config.
+        let policy = super::super::capture_record::record_policy_for_draft(
+            vault,
+            Some(&vault.join("missing-config.yml")),
+            input,
+        );
+        let options = EditorParseOptions {
+            url_routing: None,
+            has_global_destination: false,
+            record_policy: Some(&policy),
+            notebook_policy: None,
+            global_route: None,
+        };
+        let parsed = CaptureParseResult::new(input.to_string(), &options);
+        serde_json::to_value(parsed).unwrap()
+    }
+
+    #[test]
+    fn album_routes_carry_source_metadata_through_parse() {
+        let vault = tempfile::tempdir().expect("scratch vault");
+        album_vault(vault.path());
+        let value = parse_with_albums("Ani Ramen House @eat/", vault.path());
+        let record = &value["record"];
+        assert_eq!(record["action"], "create");
+        assert_eq!(record["type"], "restaurant");
+        assert_eq!(record["source"], "album");
+        assert_eq!(record["album"]["stem"], "eat");
+        assert_eq!(record["album"]["title"], "Restaurants and Cafes");
+        assert_eq!(record["album"]["owner"], "body");
+        assert!(record["album"]["breadcrumb"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry == "Restaurants and Cafes"));
+    }
+
+    #[test]
+    fn bare_album_task_home_refuses_with_owner_and_rewrite() {
+        let vault = tempfile::tempdir().expect("scratch vault");
+        album_vault(vault.path());
+        let input = "Blaze @eat";
+        let value = parse_with_albums(input, vault.path());
+        let diagnostics = value["diagnostics"].as_array().unwrap();
+        let refusal = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic["code"] == "album_holds_no_tasks")
+            .expect("bare album refusal");
+        let message = refusal["message"].as_str().unwrap();
+        assert!(message.contains("holds no tasks"), "{message}");
+        assert!(message.contains("`@eat/` adds a restaurant"), "{message}");
+        assert!(message.contains("tasks go to `@body`"), "{message}");
+        let rewrite = refusal["rewrite"].as_object().unwrap();
+        assert_eq!(rewrite["replacement"], "@eat/");
+        // The rewrite touches only the route token, preserving the title.
+        let (start, end) = (
+            rewrite["start"].as_u64().unwrap() as usize,
+            rewrite["end"].as_u64().unwrap() as usize,
+        );
+        assert_eq!(&input[start..end], "@eat");
+        let mut rewritten = input.to_string();
+        rewritten.replace_range(
+            start..end,
+            rewrite["replacement"].as_str().unwrap(),
+        );
+        assert_eq!(rewritten, "Blaze @eat/");
     }
 
     #[test]
