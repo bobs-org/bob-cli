@@ -335,6 +335,44 @@ open, unblocked `^prj` task, and no sub-project marker.
 
 ## Live verification
 
-Pending the real-vault audit phase. That phase will record the scratch-vault
-snapshot and current-HEAD counts, mismatches, environment, screenshots reviewed,
-and parity results here.
+Scratch vaults only (never `~/bob`). Two git clones of the vault repo:
+research snapshot `d5d358c4` and current `HEAD` `8d0e2532`. Today's daily
+note is already `2026/20261111.md`, so no copy was required. Release `bob`
+`0.5.0` from this tree, `BOB_NOW=2026-11-11 11:30:00`. Obsidian 1.15.0
+(`/snap/obsidian/72/app/obsidian`) under `xvfb-run -a`, Tasks
+`taskFormat: dataview`, bob-plugins from the linked repo. Isolated profile
+and vault under `/tmp`; Chrome's singleton socket needs a short `TMPDIR`.
+
+**Snapshot `d5d358c4` — `bob capture --dry-run -f json`.** Ten live dedicated
+Task Links under open Pomodoros. Exactly one non-empty `keep_moving` array:
+`!job_email_recruiters:bryan-stephen-luzern-risk` offers four rows
+(`^ecogpt`, `^ray-lyles`, `^product-engineer-dan-dowd`,
+`^senior-rust-java-engineer`), `pull_in.offer_count` 4, title
+`Keep ‹job_email_recruiters› moving`, every row `selected: false`. The other
+nine links (`bob`, `sase`, `sase_blog`, `cash`, `body`) return empty
+`keep_moving`. Zero capture mismatches.
+
+**Snapshot — rendered marks (Live Preview).** After scrolling the WRITE
+entry into view, exactly one `.bob-keep-moving-mark`: `data-count="4"`,
+`data-block-id="bryan-stephen-luzern-risk"`,
+`data-project="job_email_recruiters.md"`, compact text `4`, glyph child
+present. Tooltip (aria-label) lists EcoGPT, Ray Lyles, Dan Dowd, then
+`+1 more`, matching KT3 truncation and the capture identity set. No
+keep-moving host on `bob`, `sase`, `sase_blog`, `cash`, or `body` links
+(`sase_blog#^s0-spike` shows a 🔑 frees pill only). Screenshot reviewed
+against Anatomy and look.
+
+**Current `HEAD`.** The screenshot recruiter link is already struck under a
+closed WRITE. Ten live links remain; capture marks exactly one:
+`!job_email_recruiters:product-engineer-dan-dowd` offers the three leftover
+Next rows (`^ecogpt`, `^ray-lyles`, `^senior-rust-java-engineer`). Quiet
+stems stay empty. Zero capture mismatches.
+
+**Picker.** Capture JSON is the picker identity set: `Keep ‹job_email_recruiters›
+moving` with those four rows and nothing preselected. In the isolated
+scratch Obsidian, the cycler's Task-Link close (`handleActiveTaskBlockLinkOpenDone`,
+nav `api.successors` v4 present) completed the linked task and struck the
+ledger row; the successor modal did not open within 30s and `successors.pick`
+was not invoked. Esc therefore had no extra pull-in (the four offered tasks
+were not linked). That hang is outside this audit's small-fix budget; the
+mark and capture already agree on the four-row group.
