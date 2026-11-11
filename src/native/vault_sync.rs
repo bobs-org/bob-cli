@@ -596,6 +596,38 @@ fn handle_clobbers(
             continue;
         }
 
+        // The quarantine decision was made from `hit.work_bytes`, but
+        // `detect_clobbers` spent time in `git grep` + candidate reads
+        // since then. If the user saved a newer edit in that window,
+        // restoring HEAD now would silently drop it (and the conflict copy
+        // above would hold the stale bytes). Re-read and skip this cycle.
+        match fs::read(vault.join(&hit.path)) {
+            Ok(live) if live != hit.work_bytes => {
+                clobber_warn(
+                    styler,
+                    &format!(
+                        "skipping quarantine of {path_display}: file changed since detection; will retry next cycle"
+                    ),
+                );
+                continue;
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                clobber_warn(
+                    styler,
+                    &format!(
+                        "skipping quarantine of {path_display}: file disappeared before restore ({error})"
+                    ),
+                );
+                continue;
+            }
+            Err(error) => {
+                return Err(CycleError::fatal(format!(
+                    "failed to re-read {} before quarantine: {error}",
+                    vault.join(&hit.path).display()
+                )));
+            }
+        }
         let conflict_copy = write_conflict_copy_bytes(
             vault,
             &hit.path,
@@ -810,6 +842,15 @@ fn restore_head_bytes(
             tmp.display()
         ))
     })?;
+    fs::File::open(&tmp)
+        .and_then(|file| file.sync_all())
+        .map_err(|error| {
+            let _ = fs::remove_file(&tmp);
+            CycleError::fatal(format!(
+                "failed to sync restore temp {}: {error}",
+                tmp.display()
+            ))
+        })?;
     fs::rename(&tmp, &dest).map_err(|error| {
         CycleError::fatal(format!(
             "failed to restore {}: {error}",
@@ -958,6 +999,60 @@ fn gate_pending_overwrite_intent(
     }
 }
 
+/// Copy the live worktree bytes of every dirty (non-`_conflicts/`) path into
+/// `_conflicts/` before a `merge/rebase/cherry-pick --abort` destroys a
+/// hand-resolution the user made in Obsidian between cycles. Reuses the same
+/// `write_conflict_copy_bytes` mechanism `resolve_conflicts` uses; the copies
+/// are picked up by the `git add -A` later in this cycle.
+fn preserve_worktree_before_abort(
+    vault: &Path,
+    child_env: &ChildEnv,
+    styler: &Styler,
+    status: &mut StatusRecord,
+    operation: &str,
+) -> Result<(), CycleError> {
+    let entries = git_status_entries(
+        vault,
+        child_env,
+        ["status", "--porcelain=v1", "-z", "--untracked-files=no"],
+    )?;
+    let host = hostname_slug();
+    let timestamp = Local::now().format("%Y-%m-%dT%H%M%S%z").to_string();
+    for entry in entries {
+        if entry.path.starts_with("_conflicts") || entry.code.trim().is_empty()
+        {
+            continue;
+        }
+        let full = vault.join(&entry.path);
+        if !full.is_file() {
+            continue;
+        }
+        let Ok(bytes) = fs::read(&full) else {
+            continue;
+        };
+        let copy = write_conflict_copy_bytes(
+            vault,
+            &entry.path,
+            &host,
+            &timestamp,
+            &bytes,
+        )?;
+        let path_display = display_path(&entry.path);
+        let copy_display = display_path(&copy);
+        warn(
+            styler,
+            &format!(
+                "preserved {path_display} worktree before {operation} abort at {copy_display}"
+            ),
+        );
+        status.quarantined.push(QuarantinedPath {
+            path: path_display,
+            conflict_copy: copy_display,
+        });
+    }
+    Ok(())
+}
+
 fn recover_interrupted_operation(
     vault: &Path,
     child_env: &ChildEnv,
@@ -986,6 +1081,9 @@ fn recover_interrupted_operation(
             warn(styler, "would abort interrupted merge before reconciling");
         } else {
             warn(styler, "aborting interrupted merge before reconciling");
+            preserve_worktree_before_abort(
+                vault, child_env, styler, status, "merge",
+            )?;
             status.aborted_merge_head = Some(merge_head);
             git_success(vault, child_env, ["merge", "--abort"])?;
         }
@@ -998,6 +1096,9 @@ fn recover_interrupted_operation(
             warn(styler, "would abort interrupted rebase before reconciling");
         } else {
             warn(styler, "aborting interrupted rebase before reconciling");
+            preserve_worktree_before_abort(
+                vault, child_env, styler, status, "rebase",
+            )?;
             git_success(vault, child_env, ["rebase", "--abort"])?;
         }
     }
@@ -1013,6 +1114,13 @@ fn recover_interrupted_operation(
                 styler,
                 "aborting interrupted cherry-pick before reconciling",
             );
+            preserve_worktree_before_abort(
+                vault,
+                child_env,
+                styler,
+                status,
+                "cherry-pick",
+            )?;
             git_success(vault, child_env, ["cherry-pick", "--abort"])?;
         }
     }
@@ -1621,8 +1729,34 @@ fn write_union_merge(
     relative_path: &Path,
     text: &str,
 ) -> Result<(), CycleError> {
+    // Temp-file + fsync + rename (not a truncating `fs::write`) so a power
+    // loss cannot leave a half-written auto-merged note in the vault.
     let full_path = vault.join(relative_path);
-    fs::write(&full_path, text).map_err(|error| {
+    let tmp_name = format!(
+        ".{}.bob-union-merge",
+        relative_path
+            .file_name()
+            .and_then(OsStr::to_str)
+            .unwrap_or("note")
+    );
+    let tmp = full_path.with_file_name(tmp_name);
+    fs::write(&tmp, text).map_err(|error| {
+        CycleError::fatal(format!(
+            "failed to write auto-merge temp {}: {error}",
+            tmp.display()
+        ))
+    })?;
+    fs::File::open(&tmp)
+        .and_then(|file| file.sync_all())
+        .map_err(|error| {
+            let _ = fs::remove_file(&tmp);
+            CycleError::fatal(format!(
+                "failed to sync auto-merge temp {}: {error}",
+                tmp.display()
+            ))
+        })?;
+    fs::rename(&tmp, &full_path).map_err(|error| {
+        let _ = fs::remove_file(&tmp);
         CycleError::fatal(format!(
             "failed to write auto-merged {}: {error}",
             full_path.display()
@@ -1677,6 +1811,19 @@ fn write_conflict_copy_bytes(
             final_relative.display()
         ))
     })?;
+    // Best-effort durability for the safety copy itself; a sync failure
+    // must not block the quarantine, so only warn.
+    if let Err(error) = fs::File::open(vault.join(&final_relative))
+        .and_then(|file| file.sync_all())
+    {
+        warn(
+            &Styler::detect(),
+            &format!(
+                "could not sync conflict copy {}: {error}",
+                final_relative.display()
+            ),
+        );
+    }
     Ok(final_relative)
 }
 
@@ -2319,6 +2466,7 @@ fn write_status_record(path: &Path, status: &StatusRecord) -> io::Result<()> {
     let json =
         serde_json::to_string_pretty(status).map_err(io::Error::other)?;
     fs::write(&temp_path, json)?;
+    fs::File::open(&temp_path)?.sync_all()?;
     fs::rename(temp_path, path)
 }
 
@@ -2608,5 +2756,68 @@ mod tests {
         assert!(sync_notifications_enabled());
         drop(enable);
         assert!(!sync_notifications_enabled());
+    }
+
+    #[test]
+    fn union_merge_installs_atomically_with_no_temp_left() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path().join("vault");
+        fs::create_dir(&vault).unwrap();
+        write_union_merge(&vault, Path::new("note.md"), "merged\n").unwrap();
+        assert_eq!(
+            fs::read_to_string(vault.join("note.md")).unwrap(),
+            "merged\n"
+        );
+        let leftovers: Vec<_> = fs::read_dir(&vault)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .contains("bob-union-merge")
+            })
+            .collect();
+        assert!(leftovers.is_empty(), "leftovers: {leftovers:?}");
+    }
+
+    #[test]
+    fn abort_preservation_copies_dirty_worktree() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path().join("vault");
+        fs::create_dir(&vault).unwrap();
+        let run = |args: &[&str]| {
+            let status = Command::new("git")
+                .arg("-C")
+                .arg(&vault)
+                .args(args)
+                .status()
+                .expect("git runs");
+            assert!(status.success(), "git {args:?} failed");
+        };
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        fs::write(vault.join("note.md"), "committed\n").unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "-qm", "init"]);
+        // Hand-resolution made after the interrupted merge started.
+        fs::write(vault.join("note.md"), "hand-resolved\n").unwrap();
+
+        let child_env: ChildEnv = Vec::new();
+        let styler = Styler::detect();
+        let mut status = StatusRecord::default();
+        preserve_worktree_before_abort(
+            &vault,
+            &child_env,
+            &styler,
+            &mut status,
+            "merge",
+        )
+        .unwrap();
+        assert_eq!(status.quarantined.len(), 1);
+        assert_eq!(status.quarantined[0].path, "note.md");
+        let copy = vault.join(&status.quarantined[0].conflict_copy);
+        assert_eq!(fs::read_to_string(&copy).unwrap(), "hand-resolved\n");
     }
 }

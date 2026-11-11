@@ -580,6 +580,14 @@ pub(crate) fn atomic_write(path: &Path, contents: &str) -> io::Result<()> {
     let _ = fs::remove_file(&temp_path);
     fs::write(&temp_path, contents)
         .map_err(|error| fs_error("write temporary file", &temp_path, error))?;
+    // Flush the temp file to disk before the rename so a power loss cannot
+    // install an empty/truncated note (matches task_status_hooks_write).
+    fs::File::open(&temp_path)
+        .and_then(|file| file.sync_all())
+        .map_err(|error| {
+            let _ = fs::remove_file(&temp_path);
+            fs_error("sync temporary file", &temp_path, error)
+        })?;
     fs::rename(&temp_path, path).map_err(|error| {
         let _ = fs::remove_file(&temp_path);
         fs_error("install file", path, error)
@@ -608,4 +616,28 @@ pub(super) fn fs_error(
         error.kind(),
         format!("{action} {}: {error}", path.display()),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn atomic_write_round_trips_and_syncs_before_rename() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("note.md");
+        atomic_write(&path, "hello\n").expect("write");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "hello\n");
+        atomic_write(&path, "updated\n").expect("rewrite");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "updated\n");
+        // No temp file may survive the install.
+        let leftovers: Vec<_> = fs::read_dir(temp.path())
+            .expect("readdir")
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry.file_name().to_string_lossy().starts_with(".note.md.")
+            })
+            .collect();
+        assert!(leftovers.is_empty(), "leftovers: {leftovers:?}");
+    }
 }

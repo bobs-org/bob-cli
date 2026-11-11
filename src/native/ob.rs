@@ -25,11 +25,15 @@ pub(crate) fn git_command(vault: &Path, child_env: &ChildEnv) -> Command {
     let mut command = Command::new("git");
     // Keep auto-maintenance in this process: a detached maintenance child can
     // hold HEAD.lock while the next vault operation updates refs.
+    // `--literal-pathspecs` disables fnmatch wildcards (`*?[]`) in every
+    // filename we pass after `--`: vault names like `What is Rust?.png` or
+    // `Screenshot [2].png` must never glob or abort a sync mid-merge.
     command
         .arg("-c")
         .arg("maintenance.autoDetach=false")
         .arg("-c")
         .arg("gc.autoDetach=false")
+        .arg("--literal-pathspecs")
         .arg("-C")
         .arg(vault)
         .envs(child_env.iter().cloned());
@@ -427,6 +431,87 @@ mod tests {
                 "-c",
                 "gc.autoDetach=false"
             ]
+        );
+        assert!(
+            args.iter().any(|arg| arg == "--literal-pathspecs"),
+            "git_command must pass --literal-pathspecs so `[`/`?` vault names never glob: {args:?}"
+        );
+    }
+
+    #[test]
+    fn commit_paths_handles_wildcard_filenames_literally() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let vault = temp.path().join("vault");
+        fs::create_dir(&vault).unwrap();
+        init_repo(&vault);
+        let env = git_env();
+
+        // A literal `[2]` name: without `--literal-pathspecs` git reads it
+        // as a bracket expression and stages nothing.
+        let bracketed = PathBuf::from("Screenshot [2].png");
+        fs::write(vault.join(&bracketed), "pixels\n").unwrap();
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(&vault)
+            .args(["add", "-A"])
+            .status()
+            .expect("git add");
+        assert!(status.success());
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(&vault)
+            .args(["commit", "-m", "seed wildcards", "--quiet"])
+            .status()
+            .expect("git commit");
+        assert!(status.success());
+
+        fs::write(vault.join(&bracketed), "pixels-changed\n").unwrap();
+        let sha =
+            commit_paths(&vault, &env, "bracket change", &[bracketed.clone()])
+                .expect("commit")
+                .expect("bracketed file must commit literally");
+        assert!(!sha.is_empty());
+        assert_eq!(
+            git_names(&vault, &["show", "--name-only", "--format="]),
+            ["Screenshot [2].png"]
+        );
+
+        // A literal `?` name must not over-match its `X` sibling.
+        for name in ["What is Rust?.png", "What is RustX.png"] {
+            fs::write(vault.join(name), "v1\n").unwrap();
+        }
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(&vault)
+            .args(["add", "-A"])
+            .status()
+            .expect("git add");
+        assert!(status.success());
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(&vault)
+            .args(["commit", "-m", "seed question", "--quiet"])
+            .status()
+            .expect("git commit");
+        assert!(status.success());
+
+        fs::write(vault.join("What is Rust?.png"), "v2\n").unwrap();
+        let sha = commit_paths(
+            &vault,
+            &env,
+            "question change",
+            &[PathBuf::from("What is Rust?.png")],
+        )
+        .expect("commit")
+        .expect("question-mark file must commit literally");
+        assert!(!sha.is_empty());
+        assert_eq!(
+            git_names(&vault, &["show", "--name-only", "--format="]),
+            ["What is Rust?.png"]
+        );
+        assert_eq!(
+            fs::read_to_string(vault.join("What is RustX.png")).unwrap(),
+            "v1\n"
         );
     }
 

@@ -265,8 +265,29 @@ pub(crate) fn run<C>(
     // the host journal did not exist before the append.
     let journal_before = snapshot_journal(vault);
     // Write each file atomically, then run the post-write hook.
+    // Re-compare each file immediately before its own write: a concurrent
+    // Obsidian save landing between the bulk stale check above and this
+    // file's write must fail through `stale_note`, not be overwritten.
     for file in &ready.files {
         let absolute = vault.join(&file.path);
+        let stale_now = match &file.before_contents {
+            Some(expected) => {
+                fs::read_to_string(&absolute).unwrap_or_default() != *expected
+            }
+            None => absolute.exists(),
+        };
+        if stale_now {
+            let _ =
+                restore_before_images(vault, &before_images, &BTreeMap::new());
+            return Err(TxnFailure::new(
+                "stale_note",
+                format!(
+                    "{} changed since planning; retry the rename",
+                    file.path
+                ),
+                Some("re-run {command_name} to replan from the latest files"),
+            ));
+        }
         if let Err(error) =
             collect_done::atomic_write(&absolute, &file.after_contents)
         {
@@ -555,6 +576,7 @@ pub(crate) fn dirty_touched_paths(
     let output = Command::new("git")
         .arg("-C")
         .arg(vault)
+        .arg("--literal-pathspecs")
         .args(["status", "--porcelain=v1", "-z", "--untracked-files=all"])
         .output()
         .map_err(|error| {
