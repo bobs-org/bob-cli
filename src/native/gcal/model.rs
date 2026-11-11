@@ -143,12 +143,34 @@ impl AppliedNote {
         }
     }
 
+    fn retain_won_fields(&mut self, root_won: bool, bullets_won: bool) {
+        self.fields.retain(|field| match field {
+            NoteField::Root => root_won,
+            NoteField::Bullets => bullets_won,
+            _ => true,
+        });
+    }
+
     pub(crate) fn json(&self, bullet_lines: usize) -> Value {
         json!({
             "scope": self.scope.as_str(),
             "fields": self.fields.iter().map(|field| field.as_str()).collect::<Vec<_>>(),
             "bullet_lines": bullet_lines,
         })
+    }
+}
+
+impl GcalEvent {
+    /// Drop `root` unless a note route won, and `bullets` unless a note
+    /// bullet is actually rendered.
+    pub(crate) fn finalize_note_fields(
+        &mut self,
+        root_won: bool,
+        bullets_won: bool,
+    ) {
+        if let Some(note) = &mut self.note {
+            note.retain_won_fields(root_won, bullets_won);
+        }
     }
 }
 

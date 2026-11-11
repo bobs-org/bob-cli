@@ -248,18 +248,18 @@ fn note_for_scope<'a>(
     account: &str,
     scope: NoteScope,
 ) -> Option<&'a FoldedNote> {
-    let record = match scope {
+    match scope {
         NoteScope::Event => book.event(
+            account,
             &candidate.event.key.calendar_id,
             &candidate.event.key.event_id,
         ),
         NoteScope::Series => {
             candidate.event.series_id.as_deref().and_then(|series| {
-                book.series(&candidate.event.key.calendar_id, series)
+                book.series(account, &candidate.event.key.calendar_id, series)
             })
         }
-    }?;
-    (record.account == account).then_some(record)
+    }
 }
 
 fn choose_write_scope(
@@ -307,18 +307,19 @@ fn choose_clear_scope(
 ) -> Result<NoteScope, GcalError> {
     let event = book
         .event(
+            account,
             &candidate.event.key.calendar_id,
             &candidate.event.key.event_id,
         )
-        .filter(|note| !note.cleared && note.account == account);
+        .filter(|note| !note.cleared);
     let series = candidate
         .event
         .series_id
         .as_deref()
         .and_then(|series| {
-            book.series(&candidate.event.key.calendar_id, series)
+            book.series(account, &candidate.event.key.calendar_id, series)
         })
-        .filter(|note| !note.cleared && note.account == account);
+        .filter(|note| !note.cleared);
     if !candidate.recurring() {
         if args.scope.as_deref() == Some("series") {
             return Err(GcalError::setup(
@@ -461,11 +462,14 @@ fn rebuild_candidate<S: HomeSource>(
 ) -> Result<NoteCandidate, GcalError> {
     let mut event = original.google_event.clone();
     let mut occurrence = matching_note(
-        book.event(&event.key.calendar_id, &event.key.event_id),
+        book.event(account, &event.key.calendar_id, &event.key.event_id),
         account,
     );
     let mut series = event.series_id.as_ref().and_then(|series_id| {
-        matching_note(book.series(&event.key.calendar_id, series_id), account)
+        matching_note(
+            book.series(account, &event.key.calendar_id, series_id),
+            account,
+        )
     });
     if selected_scope == NoteScope::Event {
         occurrence =
@@ -503,6 +507,10 @@ fn rebuild_candidate<S: HomeSource>(
     } else {
         None
     };
+    event.finalize_note_fields(
+        chosen.as_ref().is_some_and(root::EventRoot::is_from_note),
+        inclusion == Inclusion::Task && config.description_bullets(),
+    );
     let title = chosen
         .as_ref()
         .map(|root| root.title.clone())

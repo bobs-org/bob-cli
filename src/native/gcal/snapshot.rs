@@ -100,12 +100,16 @@ pub(crate) fn fetch_day<S: HomeSource>(
         for raw_event in raw_events {
             let mut event = GcalEvent::from_google(&configured.id, raw_event)?;
             let occurrence_note = matching_note(
-                notes.event(&event.key.calendar_id, &event.key.event_id),
+                notes.event(
+                    &account,
+                    &event.key.calendar_id,
+                    &event.key.event_id,
+                ),
                 &account,
             );
             let series_note = event.series_id.as_ref().and_then(|series| {
                 matching_note(
-                    notes.series(&event.key.calendar_id, series),
+                    notes.series(&account, &event.key.calendar_id, series),
                     &account,
                 )
             });
@@ -134,6 +138,10 @@ pub(crate) fn fetch_day<S: HomeSource>(
             } else {
                 None
             };
+            event.finalize_note_fields(
+                root.as_ref().is_some_and(root::EventRoot::is_from_note),
+                inclusion == Inclusion::Task && config.description_bullets(),
+            );
             let title = root
                 .as_ref()
                 .map(|chosen| chosen.title.clone())

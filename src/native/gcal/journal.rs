@@ -4,7 +4,7 @@
 //! `gcal.flag`, `gcal.reset`, and `gcal.note`, union-merged and folded
 //! into state keyed by (occurrence key, day). Series roots fold into a
 //! series-keyed map of learned `[root::]` values; notes fold into a
-//! last-writer-wins book keyed by event or series; flags remember
+//! last-writer-wins book keyed by (account, event or series); flags remember
 //! once-reported lifecycle notices. One host-local status file under
 //! `$XDG_STATE_HOME/bob/gcal/` feeds `list` and `doctor`; it is never
 //! written to the vault.
@@ -147,50 +147,69 @@ pub(crate) struct FoldedNote {
     pub ts: DateTime<FixedOffset>,
 }
 
-/// Last-writer-wins fold of `gcal.note` records.
+/// `(account, calendar_id, event_id | series)`.
+type NoteKey = (String, String, String);
+
+/// Last-writer-wins fold of `gcal.note` records, per account.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct NoteBook {
-    events: BTreeMap<(String, String), FoldedNote>,
-    series: BTreeMap<(String, String), FoldedNote>,
+    events: BTreeMap<NoteKey, FoldedNote>,
+    series: BTreeMap<NoteKey, FoldedNote>,
 }
 
 impl NoteBook {
     pub(crate) fn event(
         &self,
+        account: &str,
         calendar_id: &str,
         event_id: &str,
     ) -> Option<&FoldedNote> {
-        self.events
-            .get(&(calendar_id.to_string(), event_id.to_string()))
+        self.events.get(&note_key(account, calendar_id, event_id))
     }
 
     pub(crate) fn series(
         &self,
+        account: &str,
         calendar_id: &str,
         series: &str,
     ) -> Option<&FoldedNote> {
-        self.series
-            .get(&(calendar_id.to_string(), series.to_string()))
+        self.series.get(&note_key(account, calendar_id, series))
     }
 
-    /// Raw event-scope record, including clears and foreign accounts.
+    /// Raw event-scope record for this account, including clears.
     /// Hold logic decides whether it counts.
     pub(crate) fn event_record(
         &self,
+        account: &str,
         calendar_id: &str,
         event_id: &str,
     ) -> Option<&FoldedNote> {
-        self.event(calendar_id, event_id)
+        self.event(account, calendar_id, event_id)
     }
 
-    /// Raw series-scope record, including clears and foreign accounts.
+    /// Raw series-scope record for this account, including clears.
     pub(crate) fn series_record(
         &self,
+        account: &str,
         calendar_id: &str,
         series: &str,
     ) -> Option<&FoldedNote> {
-        self.series(calendar_id, series)
+        self.series(account, calendar_id, series)
     }
+
+    /// Every folded note, including clears and foreign-account records.
+    #[allow(dead_code)] // Doctor and list orphans iterate the full book.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &FoldedNote> {
+        self.events.values().chain(self.series.values())
+    }
+}
+
+fn note_key(account: &str, calendar_id: &str, part: &str) -> NoteKey {
+    (
+        account.to_string(),
+        calendar_id.to_string(),
+        part.to_string(),
+    )
 }
 
 /// A new `gcal.note` to append.
@@ -530,7 +549,7 @@ pub(crate) fn load_notes(
         }
         match parse_note_record(event) {
             Some(note) => {
-                let key = (note.calendar_id.clone(), note.key.clone());
+                let key = note_key(&note.account, &note.calendar_id, &note.key);
                 match note.scope {
                     NoteScope::Event => {
                         book.events.insert(key, note);
@@ -1416,7 +1435,9 @@ mod tests {
         );
         let (book, warnings) = load_notes(dir.path()).expect("notes");
         assert!(warnings.is_empty(), "{warnings:?}");
-        let note = book.event("primary", "deerwood").expect("event note");
+        let note = book
+            .event("you@example.com", "primary", "deerwood")
+            .expect("event note");
         assert_eq!(note.text, "@family\n-30 Drive");
         assert!(!note.cleared);
         assert_eq!(note.host, "mac");
@@ -1429,9 +1450,60 @@ mod tests {
         );
         let (book, warnings) = load_notes(dir.path()).expect("cleared");
         assert!(warnings.is_empty(), "{warnings:?}");
-        let note = book.event("primary", "deerwood").expect("cleared note");
+        let note = book
+            .event("you@example.com", "primary", "deerwood")
+            .expect("cleared note");
         assert!(note.cleared);
         assert!(note.text.is_empty());
+    }
+
+    #[test]
+    fn notes_fold_per_account_so_a_foreign_note_does_not_hide_this_one() {
+        let dir = tempfile::tempdir().expect("vault");
+        note_record(
+            dir.path(),
+            "athena",
+            "2026-11-09T10:00:00-05:00",
+            json!({"text": "@family\n-30 Drive"}),
+        );
+        note_record(
+            dir.path(),
+            "mac",
+            "2026-11-09T11:00:00-05:00",
+            json!({
+                "account": "other@example.com",
+                "text": "@job\n+15 Later",
+            }),
+        );
+        let (book, warnings) = load_notes(dir.path()).expect("notes");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let mine = book
+            .event("you@example.com", "primary", "deerwood")
+            .expect("this account");
+        assert_eq!(mine.text, "@family\n-30 Drive");
+        let foreign = book
+            .event("other@example.com", "primary", "deerwood")
+            .expect("foreign account");
+        assert_eq!(foreign.text, "@job\n+15 Later");
+        assert_eq!(book.iter().count(), 2);
+
+        note_record(
+            dir.path(),
+            "athena",
+            "2026-11-09T12:00:00-05:00",
+            json!({"text": ""}),
+        );
+        let (book, warnings) = load_notes(dir.path()).expect("cleared mine");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let mine = book
+            .event("you@example.com", "primary", "deerwood")
+            .expect("cleared this account");
+        assert!(mine.cleared);
+        let foreign = book
+            .event("other@example.com", "primary", "deerwood")
+            .expect("foreign survives");
+        assert_eq!(foreign.text, "@job\n+15 Later");
+        assert!(!foreign.cleared);
     }
 
     #[test]
@@ -1475,7 +1547,9 @@ mod tests {
             json!({"text": "x".repeat(MAX_NOTE_BYTES + 1)}),
         );
         let (book, warnings) = load_notes(dir.path()).expect("notes");
-        assert!(book.event("primary", "deerwood").is_none());
+        assert!(book
+            .event("you@example.com", "primary", "deerwood")
+            .is_none());
         assert!(!warnings.is_empty(), "{warnings:?}");
         assert_eq!(malformed_count(dir.path()), 2);
     }

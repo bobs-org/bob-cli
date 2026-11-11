@@ -847,6 +847,66 @@ fn note_prose_is_exempt_from_the_cap_and_off_hides_bullets() {
 }
 
 #[test]
+fn two_accounts_on_one_key_keep_separate_notes() {
+    let env = GcalEnv::new("bob-cli-gcal-notes-two-accounts");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![guest_event(
+        "deerwood",
+        "Deerwood. Christmas breakfast",
+        None,
+        "2026-10-30T18:00:00-04:00",
+        "2026-10-30T19:00:00-04:00",
+    )]));
+    append_journal(
+        &env,
+        "athena",
+        event_note(
+            "athena",
+            "2026-10-29T18:02:11-04:00",
+            "deerwood",
+            "@family\n-30 Drive",
+            ACCOUNT,
+        ),
+    );
+    append_journal(
+        &env,
+        "mac",
+        event_note(
+            "mac",
+            "2026-10-29T19:02:11-04:00",
+            "deerwood",
+            "@job\n+15 Later",
+            "other@example.com",
+        ),
+    );
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let row = event_row(&today_note(&env), "^deerwood");
+    assert!(row.contains("[root:: family]"), "{row}");
+    assert!(row.contains("[buffer:: -30m]"), "{row}");
+    assert!(!row.contains("[root:: job]"), "{row}");
+
+    append_journal(
+        &env,
+        "athena",
+        event_note(
+            "athena",
+            "2026-10-30T12:00:00-04:00",
+            "deerwood",
+            "",
+            ACCOUNT,
+        ),
+    );
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let cleared = event_row(&today_note(&env), "^deerwood");
+    assert!(cleared.contains("[root:: meet]"), "{cleared}");
+    assert!(!cleared.contains("[buffer::"), "{cleared}");
+    let journal = fs::read_to_string(env.vault().join(".bob/gcal/mac.jsonl"))
+        .expect("foreign journal");
+    assert!(journal.contains("@job"), "{journal}");
+}
+
+#[test]
 fn foreign_account_note_is_ignored() {
     let env = GcalEnv::new("bob-cli-gcal-notes-account");
     prepare(&env);
@@ -899,6 +959,37 @@ fn journal_rows(env: &GcalEnv) -> Vec<Value> {
         }
     }
     rows
+}
+
+fn field_names(note: &Value) -> Vec<&str> {
+    note.get("fields")
+        .and_then(Value::as_array)
+        .expect("fields")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect()
+}
+
+fn remove_note_lines(env: &GcalEnv) {
+    let dir = env.vault().join(".bob/gcal");
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return;
+    };
+    for entry in entries.filter_map(|entry| entry.ok()) {
+        let path = entry.path();
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let kept = text
+            .lines()
+            .filter(|line| !line.contains("\"gcal.note\""))
+            .fold(String::new(), |mut out, line| {
+                out.push_str(line);
+                out.push('\n');
+                out
+            });
+        fs::write(&path, kept).expect("strip note lines");
+    }
 }
 
 fn truncate_first_note_line(env: &GcalEnv) {
@@ -999,6 +1090,7 @@ fn hold_on_truncated_note_line_and_clear_restores() {
     let held = sync_output(&env, &fake, &["-f", "json"]);
     assert_eq!(held.status.code(), Some(0), "{}", stderr(&held));
     let report = json_report(&held);
+    assert_eq!(report["status"], "unchanged", "{report}");
     let warnings = report["warnings"].as_array().expect("warnings");
     assert!(
         warnings.iter().any(|warning| warning.as_str().is_some_and(
@@ -1008,7 +1100,22 @@ fn hold_on_truncated_note_line_and_clear_restores() {
         )),
         "{warnings:?}"
     );
+    let held_row = sync_row(&report, "Deerwood. Christmas breakfast");
+    assert_eq!(held_row["action"], "held", "{held_row}");
+    assert_eq!(held_row["buffer"]["before_minutes"], 30, "{held_row}");
     assert_eq!(today_note(&env), before, "held rows skip vault updates");
+    assert_eq!(journal_rows(&env).len(), 1, "no duplicate gcal.row on hold");
+    let human = sync_output(&env, &fake, &[]);
+    assert_eq!(human.status.code(), Some(0), "{}", stderr(&human));
+    let combined = format!("{}{}", stdout(&human), stderr(&human));
+    assert!(!stdout(&human).contains('~'), "{combined}");
+    assert!(combined.contains("held Deerwood"), "{combined}");
+    assert_eq!(today_note(&env), before);
+    assert_eq!(
+        journal_rows(&env).len(),
+        1,
+        "a second hold does not append gcal.row"
+    );
 
     // A deliberate clear is never held: it restores Google's values.
     append_journal(
@@ -1027,6 +1134,157 @@ fn hold_on_truncated_note_line_and_clear_restores() {
     let row = event_row(&today_note(&env), "^deerwood");
     assert!(row.contains("[root:: meet]"), "{row}");
     assert!(!row.contains("[buffer::"), "{row}");
+}
+
+#[test]
+fn note_fields_omit_invalid_root_and_off_bullets() {
+    let env = GcalEnv::new("bob-cli-gcal-notes-fields-root");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![guest_event(
+        "deerwood",
+        "Deerwood. Christmas breakfast",
+        None,
+        "2026-10-30T18:00:00-04:00",
+        "2026-10-30T19:00:00-04:00",
+    )]));
+    append_journal(
+        &env,
+        "athena",
+        event_note(
+            "athena",
+            "2026-10-29T18:02:11-04:00",
+            "deerwood",
+            "@no-such-area\n-30 Drive",
+            ACCOUNT,
+        ),
+    );
+    let output = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let report = json_report(&output);
+    let added = sync_row(&report, "Deerwood. Christmas breakfast");
+    let names = field_names(&added["note"]);
+    assert!(names.contains(&"before"), "{names:?}");
+    assert!(!names.contains(&"root"), "{names:?}");
+    let rows = journal_rows(&env);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    let journaled = field_names(&rows[0]["note"]);
+    assert_eq!(journaled, names);
+    let listed = list_json(&env, &fake, &[]);
+    let listed_report = json_report(&listed);
+    let event = list_event(&listed_report, "Deerwood. Christmas breakfast");
+    assert_eq!(field_names(&event["note"]), names);
+
+    let off = GcalEnv::new("bob-cli-gcal-notes-fields-off");
+    prepare(&off);
+    off.write_config(
+        "timezone: America/New_York\ngcal:\n  account: you@example.com\n  writer: test-host\n  description: off\n",
+    );
+    let fake_off = FakeGog::new(&off, "fake-gog");
+    fake_off.events_json(&events_envelope(vec![guest_event(
+        "deerwood",
+        "Deerwood. Christmas breakfast",
+        None,
+        "2026-10-30T18:00:00-04:00",
+        "2026-10-30T19:00:00-04:00",
+    )]));
+    append_journal(
+        &off,
+        "athena",
+        event_note(
+            "athena",
+            "2026-10-29T18:02:11-04:00",
+            "deerwood",
+            "@family\n-30 Drive\nNote snacks",
+            ACCOUNT,
+        ),
+    );
+    let off_out = sync_output(&off, &fake_off, &["-f", "json"]);
+    assert_eq!(off_out.status.code(), Some(0), "{}", stderr(&off_out));
+    let off_report = json_report(&off_out);
+    let off_added = sync_row(&off_report, "Deerwood. Christmas breakfast");
+    let off_names = field_names(&off_added["note"]);
+    assert!(off_names.contains(&"root"), "{off_names:?}");
+    assert!(off_names.contains(&"before"), "{off_names:?}");
+    assert!(!off_names.contains(&"bullets"), "{off_names:?}");
+    let off_rows = journal_rows(&off);
+    assert_eq!(field_names(&off_rows[0]["note"]), off_names);
+}
+
+#[test]
+fn no_hold_when_nothing_is_malformed() {
+    let env = GcalEnv::new("bob-cli-gcal-notes-no-hold");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![guest_event(
+        "deerwood",
+        "Deerwood. Christmas breakfast",
+        None,
+        "2026-10-30T18:00:00-04:00",
+        "2026-10-30T19:00:00-04:00",
+    )]));
+    append_journal(
+        &env,
+        "athena",
+        event_note(
+            "athena",
+            "2026-10-29T18:02:11-04:00",
+            "deerwood",
+            "@family\n-30 Drive to Deerwood",
+            ACCOUNT,
+        ),
+    );
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    assert!(today_note(&env).contains("[root:: family]"));
+    remove_note_lines(&env);
+    let output = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let report = json_report(&output);
+    let warnings = report["warnings"].as_array().expect("warnings");
+    assert!(
+        !warnings.iter().any(|warning| warning
+            .as_str()
+            .is_some_and(|text| text.contains("could not be read"))),
+        "{warnings:?}"
+    );
+    let row = event_row(&today_note(&env), "^deerwood");
+    assert!(row.contains("[root:: meet]"), "{row}");
+    assert!(!row.contains("[buffer::"), "{row}");
+}
+
+#[test]
+fn aliased_title_token_is_stripped_when_note_route_wins() {
+    let env = GcalEnv::new("bob-cli-gcal-notes-alias-title");
+    prepare(&env);
+    fs::write(
+        env.vault().join("family.md"),
+        "---\ntype: area\nproject_name_aliases: [\"fam\"]\n---\n# family\n",
+    )
+    .expect("write family alias");
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![guest_event(
+        "breakfast",
+        "Breakfast @fam",
+        None,
+        "2026-10-30T10:00:00-04:00",
+        "2026-10-30T12:00:00-04:00",
+    )]));
+    append_journal(
+        &env,
+        "athena",
+        event_note(
+            "athena",
+            "2026-10-29T18:02:11-04:00",
+            "breakfast",
+            "@family",
+            ACCOUNT,
+        ),
+    );
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let row = event_row(&today_note(&env), "^breakfast");
+    assert!(row.contains("Breakfast"), "{row}");
+    assert!(!row.contains("@fam"), "{row}");
+    assert!(row.contains("[root:: family]"), "{row}");
 }
 
 #[test]

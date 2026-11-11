@@ -292,6 +292,10 @@ pub(crate) struct SyncPlan {
     pub links_sorted: usize,
     /// Google-owned spans and unedited `[root::]` values replaced in place.
     pub rows_updated: Vec<PlannedRow>,
+    /// Journaled rows held because their private note could not be read.
+    /// These are report-only: they do not mark the run written and they
+    /// do not append a `gcal.row`.
+    pub rows_held: Vec<PlannedRow>,
     /// Untouched tasks cancelled for declined, deleted, or moved events.
     pub rows_cancelled: Vec<CancelledRow>,
     /// Untouched context rows removed for declined or deleted events.
@@ -425,7 +429,8 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
                         hold_note_row(input, occurrence, journaled)
                     {
                         hold_journaled_row(
-                            input, &mut plan, occurrence, journaled, held,
+                            &working, &mut plan, occurrence, journaled,
+                            line_index, held,
                         );
                         continue;
                     }
@@ -666,9 +671,12 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
         plan.extra_link_wants.clear();
         plan.entries_removed = 0;
         plan.pomodoro_entries.clear();
-        plan.warnings.clear();
+        if plan.rows_held.is_empty() {
+            plan.warnings.clear();
+        }
         // Keep `stamp` / `stamp_refreshed` so an unchanged run still
-        // reports the line the note already carries.
+        // reports the line the note already carries. Held rows and their
+        // warnings stay so a hold-only run can report them without writing.
     }
     plan
 }
@@ -1211,13 +1219,17 @@ fn hold_note_row(
     }
     let has_note = input
         .notes
-        .event_record(&occurrence.calendar_id, &occurrence.event_id)
-        .is_some_and(|record| record.account == input.account)
+        .event_record(
+            input.account,
+            &occurrence.calendar_id,
+            &occurrence.event_id,
+        )
+        .is_some()
         || occurrence.series_id.as_deref().is_some_and(|series| {
             input
                 .notes
-                .series_record(&occurrence.calendar_id, series)
-                .is_some_and(|record| record.account == input.account)
+                .series_record(input.account, &occurrence.calendar_id, series)
+                .is_some()
         });
     if has_note {
         return None;
@@ -1237,14 +1249,20 @@ fn hold_note_row(
 /// description updates, report the hold warning, and record the row with
 /// its journaled spans so the report carries the row's detail.
 fn hold_journaled_row(
-    input: &SyncPlanInput<'_>,
+    working: &WorkingNote,
     plan: &mut SyncPlan,
     occurrence: &PlannedOccurrence,
     journaled: &super::journal::RowRecord,
+    line_index: usize,
     warning: String,
 ) {
     plan.warnings.push(warning.clone());
-    plan.rows_updated.push(PlannedRow {
+    let buffer = working
+        .lines
+        .get(line_index)
+        .map(|line| event_task::parse_event_buffer(line))
+        .unwrap_or_default();
+    plan.rows_held.push(PlannedRow {
         calendar_id: occurrence.calendar_id.clone(),
         event_id: occurrence.event_id.clone(),
         ical_uid: occurrence.ical_uid.clone(),
@@ -1259,12 +1277,11 @@ fn hold_journaled_row(
         title: occurrence.title.clone(),
         off_clock: occurrence.off_clock,
         note: journaled.note.clone(),
-        buffer: buffer_for_row(occurrence),
+        buffer,
         description: journaled.description.clone(),
         wrote_description_lines: 0,
         detail: Some(warning),
     });
-    let _ = input;
 }
 
 fn forced_reset_detail(
@@ -2789,6 +2806,14 @@ fn apply_effective_clocks<C: ClockLookup + ?Sized>(
         }
     }
     for row in &mut plan.rows_updated {
+        if row.row_kind != "task" {
+            continue;
+        }
+        if let Some(off_clock) = resolve(&row.block_id, row.url.as_deref()) {
+            row.off_clock = off_clock;
+        }
+    }
+    for row in &mut plan.rows_held {
         if row.row_kind != "task" {
             continue;
         }

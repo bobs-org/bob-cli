@@ -391,12 +391,12 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
             day,
             path: display_path.clone(),
             status: "unchanged",
-            rows: Vec::new(),
+            rows: report_rows(&plan, &snapshot, is_today),
             entries: Vec::new(),
             links_added: 0,
             links_refiled: 0,
             links_sorted: 0,
-            warnings,
+            warnings: merge_warnings(warnings, &plan.warnings),
             deprecations,
             quiet: args.quiet,
             force: args.force,
@@ -524,12 +524,15 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
                         day,
                         path: display_path.clone(),
                         status: "unchanged",
-                        rows: Vec::new(),
+                        rows: report_rows(&plan, &snapshot, is_today),
                         entries: Vec::new(),
                         links_added: 0,
                         links_refiled: 0,
                         links_sorted: 0,
-                        warnings: warnings.clone(),
+                        warnings: merge_warnings(
+                            warnings.clone(),
+                            &plan.warnings,
+                        ),
                         deprecations: deprecations.clone(),
                         quiet: args.quiet,
                         force: args.force,
@@ -1333,6 +1336,27 @@ fn report_rows(
             ),
         });
     }
+    for held in &plan.rows_held {
+        rows.push(ReportRow {
+            action: "held",
+            kind: if held.row_kind == "task" {
+                "task"
+            } else {
+                "context"
+            },
+            time: held.time_label.clone(),
+            title: held.title.clone(),
+            root: held.root.clone(),
+            source: held.source.clone(),
+            off_clock: held.off_clock,
+            untracked: held.off_clock,
+            buffer: held.buffer,
+            description_lines: held.wrote_description_lines,
+            skip: None,
+            detail: held.detail.clone(),
+            note: listed_note(snapshot, &held.calendar_id, &held.event_id),
+        });
+    }
     for cancelled in &plan.rows_cancelled {
         rows.push(ReportRow {
             action: "cancelled",
@@ -1892,6 +1916,9 @@ fn print_human(report: &SyncReport) {
     let reset_suffix = if report.force { " · reset" } else { "" };
     println!("bob gcal sync · {}{reset_suffix}", report.path);
     for row in &report.rows {
+        if row.action == "held" {
+            continue;
+        }
         let sigil = match row.action {
             "added" => "+",
             "adopted" => "=",

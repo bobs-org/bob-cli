@@ -505,12 +505,16 @@ fn fetch_candidates<S: HomeSource>(
             let mut event = GcalEvent::from_google(&configured.id, raw)?;
             let google_event = event.clone();
             let occurrence_note = matching_note(
-                book.event(&event.key.calendar_id, &event.key.event_id),
+                book.event(
+                    account,
+                    &event.key.calendar_id,
+                    &event.key.event_id,
+                ),
                 account,
             );
             let series_note = event.series_id.as_ref().and_then(|series| {
                 matching_note(
-                    book.series(&event.key.calendar_id, series),
+                    book.series(account, &event.key.calendar_id, series),
                     account,
                 )
             });
@@ -567,6 +571,10 @@ fn fetch_candidates<S: HomeSource>(
             } else {
                 None
             };
+            event.finalize_note_fields(
+                chosen.as_ref().is_some_and(root::EventRoot::is_from_note),
+                inclusion == Inclusion::Task && config.description_bullets(),
+            );
             let title = chosen
                 .as_ref()
                 .map(|root| root.title.clone())
@@ -708,11 +716,14 @@ fn lookup_exact<S: HomeSource>(
         };
         let mut event = GcalEvent::from_google(&configured.id, raw)?;
         let occurrence_note = matching_note(
-            book.event(&event.key.calendar_id, &event.key.event_id),
+            book.event(account, &event.key.calendar_id, &event.key.event_id),
             account,
         );
         let series_note = event.series_id.as_ref().and_then(|series| {
-            matching_note(book.series(&event.key.calendar_id, series), account)
+            matching_note(
+                book.series(account, &event.key.calendar_id, series),
+                account,
+            )
         });
         event.apply_notes(occurrence_note.as_ref(), series_note.as_ref());
         let calendar_name = calendars
@@ -772,6 +783,10 @@ fn lookup_exact<S: HomeSource>(
     } else {
         None
     };
+    event.finalize_note_fields(
+        chosen.as_ref().is_some_and(root::EventRoot::is_from_note),
+        inclusion == Inclusion::Task && config.description_bullets(),
+    );
     let title = chosen
         .as_ref()
         .map(|root| root.title.clone())
@@ -1689,7 +1704,7 @@ fn present_candidate<S: HomeSource>(
             related_days,
         )
     } else {
-        show_one(args, vault, candidate, warnings)
+        show_one(args, vault, account, candidate, warnings)
     }
 }
 
@@ -1767,17 +1782,22 @@ fn current_scope_text(
     let (book, _) = journal::load_notes(vault).unwrap_or_default();
     let record = match scope {
         NoteScope::Event => book.event_record(
+            account,
             &candidate.event.key.calendar_id,
             &candidate.event.key.event_id,
         ),
         NoteScope::Series => {
             candidate.event.series_id.as_deref().and_then(|series| {
-                book.series_record(&candidate.event.key.calendar_id, series)
+                book.series_record(
+                    account,
+                    &candidate.event.key.calendar_id,
+                    series,
+                )
             })
         }
     };
     Ok(record
-        .filter(|note| note.account == account && !note.cleared)
+        .filter(|note| !note.cleared)
         .map(|note| note.text.clone())
         .unwrap_or_default())
 }
@@ -1821,24 +1841,26 @@ fn adopted_google_text(event: &GcalEvent) -> String {
 fn show_one(
     args: &NoteArgs,
     vault: &std::path::Path,
+    account: &str,
     candidate: NoteCandidate,
     warnings: Vec<String>,
 ) -> Result<(), GcalError> {
     let scope = resolve_show_scope(args, &candidate)?;
     let (book, _) = journal::load_notes(vault).unwrap_or_default();
-    // Scope-specific note text: the selected scope's record, when live.
+    // Scope-specific note text: this account's selected-scope record.
     let scope_text = match scope {
         Some(NoteScope::Series) => candidate
             .event
             .series_id
             .as_ref()
             .and_then(|series| {
-                book.series(&candidate.event.key.calendar_id, series)
+                book.series(account, &candidate.event.key.calendar_id, series)
             })
             .filter(|record| !record.cleared)
             .map(|record| record.text.clone()),
         Some(NoteScope::Event) | None => book
             .event(
+                account,
                 &candidate.event.key.calendar_id,
                 &candidate.event.key.event_id,
             )

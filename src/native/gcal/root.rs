@@ -84,6 +84,12 @@ pub(crate) struct EventRoot {
     pub title: String,
 }
 
+impl EventRoot {
+    pub(crate) fn is_from_note(&self) -> bool {
+        matches!(self.kind, RootSourceKind::Note | RootSourceKind::SeriesNote)
+    }
+}
+
 /// Choose the first valid root in the fixed precedence order.
 pub(crate) fn choose_event_root<S: HomeSource>(
     resolver: &mut HomeResolver<S>,
@@ -333,10 +339,10 @@ fn strip_resolvable_title_route<S: HomeSource>(
     let Some(route) = event.title_route_hint.as_deref() else {
         return title;
     };
-    if parent_notes::resolve_parent(vault, route).is_err() {
+    let Ok(parent) = parent_notes::resolve_parent(vault, route) else {
         return title;
-    }
-    if validate_root_with(resolver, daily_rel, route).is_err() {
+    };
+    if validate_root_with(resolver, daily_rel, &parent.route).is_err() {
         return title;
     }
     strip_title_route(&event.title, route)
@@ -612,6 +618,35 @@ mod tests {
         assert_eq!(root.source.as_deref(), Some("✎ @family"));
         assert_eq!(root.kind, RootSourceKind::Note);
         assert_eq!(root.title, "Dentist");
+        assert!(root.warnings.is_empty());
+    }
+
+    #[test]
+    fn note_route_strips_aliased_title_token() {
+        let vault = root_vault();
+        write_note(
+            vault.path(),
+            "family.md",
+            "---\ntype: area\nproject_name_aliases: [\"fam\"]\n---\n# family\n",
+        );
+        let event = event("Breakfast @fam", None, None);
+        let note = NoteRootCandidate {
+            event: Some("family".to_string()),
+            series: None,
+        };
+        let root = choose_at_note(
+            vault.path(),
+            Path::new("2026/20261030.md"),
+            &event,
+            "Personal",
+            &config(None, None, "meet"),
+            None,
+            Some(&note),
+        );
+        assert_eq!(root.value.as_deref(), Some("family"));
+        assert_eq!(root.source.as_deref(), Some("✎ @family"));
+        assert_eq!(root.kind, RootSourceKind::Note);
+        assert_eq!(root.title, "Breakfast");
         assert!(root.warnings.is_empty());
     }
 
