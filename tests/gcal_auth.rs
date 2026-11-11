@@ -1104,6 +1104,7 @@ fn doctor_json_healthy_setup() {
             "today",
             "journal",
             "journal_malformed",
+            "notes",
             "writer",
             "last_sync",
         ]
