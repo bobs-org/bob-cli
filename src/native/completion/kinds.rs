@@ -496,6 +496,12 @@ const TABLE: &[Entry] = &[
         arg: "path",
         kind: Kind::Files(None),
     },
+    // `bob bank import` consumes one or more input exports.
+    Entry {
+        path: &["bank", "import"],
+        arg: "files",
+        kind: Kind::Files(None),
+    },
     Entry {
         path: &["attachments", "origin"],
         arg: "vault-path",

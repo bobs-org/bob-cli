@@ -72,7 +72,9 @@ pub(super) fn plan_notebook_create_item(
     for (relative, expected) in plan.deps.iter() {
         planner.guard_merge_read(
             &request.bob_dir.join(relative),
-            expected.map(str::to_string),
+            expected.and_then(|bytes| {
+                std::str::from_utf8(bytes).ok().map(str::to_owned)
+            }),
         );
     }
 

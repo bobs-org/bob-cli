@@ -22,6 +22,9 @@ pub(crate) struct BankScan {
     pub(crate) hub: Option<HubFile>,
     pub(crate) bank_dir_exists: bool,
     pub(crate) months: Vec<MonthFile>,
+    /// Names of month note files included in the scan. Import guards this
+    /// directory membership so a newly arrived month cannot evade dedupe.
+    pub(crate) month_entries: Vec<String>,
     pub(crate) io_errors: Vec<String>,
 }
 
@@ -29,16 +32,30 @@ pub(crate) fn scan_bank(bob_dir: &Path) -> BankScan {
     let mut io_errors = Vec::new();
     let hub = read_hub(bob_dir, &mut io_errors);
     let bank_dir = bob_dir.join("bank");
-    let bank_dir_exists = bank_dir.is_dir();
-    let months = if bank_dir_exists {
+    let (bank_dir_exists, bank_dir_is_dir) = match fs::metadata(&bank_dir) {
+        Ok(metadata) if metadata.is_dir() => (true, true),
+        Ok(_) => {
+            io_errors.push("bank/: expected a directory".to_owned());
+            (true, false)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            (false, false)
+        }
+        Err(error) => {
+            io_errors.push(format!("bank/: {error}"));
+            (true, false)
+        }
+    };
+    let (months, month_entries) = if bank_dir_is_dir {
         read_months(&bank_dir, &mut io_errors)
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
     BankScan {
         hub,
         bank_dir_exists,
         months,
+        month_entries,
         io_errors,
     }
 }
@@ -62,15 +79,19 @@ fn read_hub(bob_dir: &Path, io_errors: &mut Vec<String>) -> Option<HubFile> {
     }
 }
 
-fn read_months(bank_dir: &Path, io_errors: &mut Vec<String>) -> Vec<MonthFile> {
+fn read_months(
+    bank_dir: &Path,
+    io_errors: &mut Vec<String>,
+) -> (Vec<MonthFile>, Vec<String>) {
     let entries = match fs::read_dir(bank_dir) {
         Ok(entries) => entries,
         Err(error) => {
             io_errors.push(format!("bank/: {error}"));
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         }
     };
     let mut months = Vec::new();
+    let mut month_entries = Vec::new();
     for entry in entries {
         let entry = match entry {
             Ok(entry) => entry,
@@ -83,6 +104,7 @@ fn read_months(bank_dir: &Path, io_errors: &mut Vec<String>) -> Vec<MonthFile> {
         if !is_markdown(&path) {
             continue;
         }
+        month_entries.push(entry.file_name().to_string_lossy().into_owned());
         let Some(month) = filename_month_for(&path) else {
             continue;
         };
@@ -98,7 +120,8 @@ fn read_months(bank_dir: &Path, io_errors: &mut Vec<String>) -> Vec<MonthFile> {
         }
     }
     months.sort_by(|left, right| left.path.cmp(&right.path));
-    months
+    month_entries.sort();
+    (months, month_entries)
 }
 
 fn is_markdown(path: &Path) -> bool {

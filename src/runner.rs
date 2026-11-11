@@ -376,6 +376,14 @@ const BANK_MEMBERS: &[Member] = &[
         },
     },
     Member {
+        name: "import",
+        about: "Import posted bank transactions",
+        leaf: Leaf {
+            native_command: NativeCommand::BankImport,
+            script_command: None,
+        },
+    },
+    Member {
         name: "list",
         about: "List waiting bank rows (default)",
         leaf: Leaf {
@@ -400,6 +408,7 @@ Examples:
   bob bank                       List waiting rows
   bob bank report                 Report this month's totals
   bob bank ensure -D today        Ensure today's heading
+  bob bank import ~/Downloads/*.qfx  Import posted transactions
   bob bank ack -D 2026-11-10      Acknowledge one day
   bob bank check -f json         Findings as JSON
 
@@ -1100,7 +1109,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
             members: BANK_MEMBERS,
             default: Some("list"),
             extra_about: Some(
-                "Bare `bob bank` runs the read-only list. `list` shows the waiting queue; `report` explains the month with exact cents. `ensure` creates the month note and day heading; `ack` ticks shown rows. `check` lints bank notes against the contract.",
+                "Bare `bob bank` runs the read-only list. `list` shows the waiting queue; `report` explains the month with exact cents. `import` plans and records posted exports; `ensure` creates the month note and day heading; `ack` ticks shown rows. `check` lints bank notes against the contract.",
             ),
             after_help: BANK_AFTER_HELP,
             usage: "bob bank [COMMAND]",
@@ -2527,6 +2536,7 @@ mod tests {
             NativeCommand::BankAck,
             NativeCommand::BankCheck,
             NativeCommand::BankEnsure,
+            NativeCommand::BankImport,
             NativeCommand::BankList,
             NativeCommand::BankReport,
             NativeCommand::Capture,

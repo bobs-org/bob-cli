@@ -12,8 +12,10 @@
 
 use std::{
     collections::BTreeMap,
-    fs,
+    fs::{self, File, OpenOptions},
+    io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
 
@@ -40,13 +42,22 @@ const LOCK_WAIT: Duration = Duration::from_secs(3);
 /// points of the shared writer.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ReadDependencies {
-    files: BTreeMap<PathBuf, Option<String>>,
+    files: BTreeMap<PathBuf, Option<Vec<u8>>>,
     frontmatter: BTreeMap<PathBuf, Option<String>>,
     directories: BTreeMap<PathBuf, Option<Vec<PathBuf>>>,
+    directory_entries: BTreeMap<PathBuf, (Option<String>, Vec<String>)>,
 }
 
 impl ReadDependencies {
     pub(crate) fn insert(&mut self, path: PathBuf, expected: Option<String>) {
+        self.insert_bytes(path, expected.map(String::into_bytes));
+    }
+
+    pub(crate) fn insert_bytes(
+        &mut self,
+        path: PathBuf,
+        expected: Option<Vec<u8>>,
+    ) {
         self.files.insert(path, expected);
     }
 
@@ -70,9 +81,23 @@ impl ReadDependencies {
         self.directories.insert(path, expected);
     }
 
+    /// Guard the names in a directory when a plan depends on the set of
+    /// files it contains (for example bank months or host journals).
+    pub(crate) fn insert_directory(
+        &mut self,
+        path: PathBuf,
+        extension: Option<&str>,
+        mut expected: Vec<String>,
+    ) {
+        expected.sort();
+        expected.dedup();
+        self.directory_entries
+            .insert(path, (extension.map(str::to_owned), expected));
+    }
+
     pub(crate) fn iter(
         &self,
-    ) -> impl Iterator<Item = (&Path, Option<&str>)> + '_ {
+    ) -> impl Iterator<Item = (&Path, Option<&[u8]>)> + '_ {
         self.files
             .iter()
             .map(|(path, contents)| (path.as_path(), contents.as_deref()))
@@ -82,8 +107,8 @@ impl ReadDependencies {
         for (relative, expected) in &self.files {
             let absolute = vault.join(relative);
             match (fs::read(&absolute), expected) {
-                (Ok(bytes), Some(expected)) if bytes == expected.as_bytes() => {
-                }
+                (Ok(bytes), Some(expected))
+                    if bytes.as_slice() == expected.as_slice() => {}
                 (Ok(_), Some(_)) => {
                     return Err(changed_after_planning(format!(
                         "{} changed on disk after planning",
@@ -148,6 +173,53 @@ impl ReadDependencies {
             if &current != expected {
                 return Err(changed_after_planning(format!(
                     "Markdown membership in {} changed on disk after planning",
+                    relative.display()
+                )));
+            }
+        }
+        for (relative, (extension, expected)) in &self.directory_entries {
+            let absolute = vault.join(relative);
+            let mut actual = match fs::read_dir(&absolute) {
+                Ok(entries) => entries
+                    .filter_map(|entry| match entry {
+                        Ok(entry) => {
+                            let name = entry
+                                .file_name()
+                                .to_string_lossy()
+                                .into_owned();
+                            let matches =
+                                extension.as_ref().is_none_or(|extension| {
+                                    Path::new(&name).extension().is_some_and(
+                                        |actual| actual == extension.as_str(),
+                                    )
+                                });
+                            matches.then_some(Ok(name))
+                        }
+                        Err(error) => Some(Err(error)),
+                    })
+                    .map(|entry| {
+                        entry.map_err(|error| {
+                            read_failed(format!(
+                                "read directory {}: {error}",
+                                absolute.display()
+                            ))
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    Vec::new()
+                }
+                Err(error) => {
+                    return Err(read_failed(format!(
+                        "read directory {}: {error}",
+                        absolute.display()
+                    )));
+                }
+            };
+            actual.sort();
+            if &actual != expected {
+                return Err(changed_after_planning(format!(
+                    "directory {} changed on disk after planning",
                     relative.display()
                 )));
             }
@@ -222,10 +294,21 @@ fn markdown_membership(
     Ok(Some(members))
 }
 
+/// One ordered append to a journal file. `original_target` is the exact byte
+/// preimage (`None` means the path must still be absent); `suffix` is one or
+/// more already-serialized newline-terminated events.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PlannedAppend {
+    pub(crate) target: PathBuf,
+    pub(crate) original_target: Option<Vec<u8>>,
+    pub(crate) suffix: Vec<u8>,
+}
+
 /// One planned vault write: staged files, the read inputs guarded beside
 /// them, the single scoped commit subject, and a post-install verifier.
 pub(crate) struct PlannedTxn<T> {
     pub(crate) files: Vec<StagedTextFile>,
+    pub(crate) appends: Vec<PlannedAppend>,
     pub(crate) deps: ReadDependencies,
     pub(crate) subject: String,
     pub(crate) verify: Box<dyn FnOnce() -> Result<(), String>>,
@@ -317,6 +400,294 @@ fn rollback_note(left: &[String]) -> String {
     }
 }
 
+#[derive(Debug)]
+struct AppliedAppend {
+    target: PathBuf,
+    before: Option<Vec<u8>>,
+    after: Vec<u8>,
+}
+
+static APPEND_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+fn append_postimage(before: Option<&[u8]>, suffix: &[u8]) -> Vec<u8> {
+    let mut after = Vec::with_capacity(
+        before.map_or(0, <[u8]>::len).saturating_add(suffix.len()),
+    );
+    if let Some(before) = before {
+        after.extend_from_slice(before);
+    }
+    after.extend_from_slice(suffix);
+    after
+}
+
+/// Open an append target without replacing a planted file, then verify the
+/// bytes through the opened handle before adding anything.
+fn open_append_target(
+    path: &Path,
+    expected: Option<&[u8]>,
+) -> Result<File, String> {
+    match expected {
+        Some(_) => {
+            let mut file = OpenOptions::new()
+                .read(true)
+                .append(true)
+                .open(path)
+                .map_err(|error| {
+                    if error.kind() == std::io::ErrorKind::NotFound {
+                        format!(
+                            "{} was deleted on disk after planning",
+                            path.display()
+                        )
+                    } else {
+                        format!("open {}: {error}", path.display())
+                    }
+                })?;
+            file.seek(SeekFrom::Start(0))
+                .map_err(|error| format!("seek {}: {error}", path.display()))?;
+            let mut actual = Vec::new();
+            file.read_to_end(&mut actual)
+                .map_err(|error| format!("read {}: {error}", path.display()))?;
+            if Some(actual.as_slice()) != expected {
+                return Err(format!(
+                    "{} changed on disk after planning",
+                    path.display()
+                ));
+            }
+            Ok(file)
+        }
+        None => {
+            let mut options = OpenOptions::new();
+            options.read(true).append(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt as _;
+                options.mode(0o644);
+            }
+            options.open(path).map_err(|error| {
+                if error.kind() == std::io::ErrorKind::AlreadyExists {
+                    format!(
+                        "{} appeared on disk after planning",
+                        path.display()
+                    )
+                } else {
+                    format!("create {}: {error}", path.display())
+                }
+            })
+        }
+    }
+}
+
+fn read_append_target(file: &mut File, path: &Path) -> Result<Vec<u8>, String> {
+    file.seek(SeekFrom::Start(0))
+        .map_err(|error| format!("seek {}: {error}", path.display()))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|error| format!("read {}: {error}", path.display()))?;
+    Ok(bytes)
+}
+
+/// Append one planned suffix. A failed short write is rolled back only when
+/// the file still consists of its exact preimage plus the bytes this call
+/// wrote; a concurrent edit is preserved and reported.
+fn append_guarded(append: &PlannedAppend) -> Result<AppliedAppend, String> {
+    let path = &append.target;
+    if append.suffix.is_empty() {
+        return Ok(AppliedAppend {
+            target: path.clone(),
+            before: append.original_target.clone(),
+            after: append.original_target.clone().unwrap_or_default(),
+        });
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("create {}: {error}", parent.display()))?;
+    let mut file = open_append_target(path, append.original_target.as_deref())?;
+    let mut written = 0usize;
+    while written < append.suffix.len() {
+        match file.write(&append.suffix[written..]) {
+            Ok(0) => break,
+            Ok(count) => written += count,
+            Err(error) => {
+                let detail = rollback_partial_append(
+                    file,
+                    path,
+                    append.original_target.as_deref(),
+                    &append.suffix[..written],
+                );
+                return Err(format!(
+                    "append {}: {error}{detail}",
+                    path.display()
+                ));
+            }
+        }
+    }
+    if written != append.suffix.len() {
+        let detail = rollback_partial_append(
+            file,
+            path,
+            append.original_target.as_deref(),
+            &append.suffix[..written],
+        );
+        return Err(format!("append {}: short write{detail}", path.display()));
+    }
+    if let Err(error) = file.flush() {
+        let detail = rollback_partial_append(
+            file,
+            path,
+            append.original_target.as_deref(),
+            &append.suffix,
+        );
+        return Err(format!("flush {}: {error}{detail}", path.display()));
+    }
+    let actual = match read_append_target(&mut file, path) {
+        Ok(actual) => actual,
+        Err(error) => {
+            let detail = rollback_partial_append(
+                file,
+                path,
+                append.original_target.as_deref(),
+                &append.suffix,
+            );
+            return Err(format!("{error}{detail}"));
+        }
+    };
+    let expected_after =
+        append_postimage(append.original_target.as_deref(), &append.suffix);
+    if actual != expected_after {
+        let detail = rollback_partial_append(
+            file,
+            path,
+            append.original_target.as_deref(),
+            &append.suffix,
+        );
+        return Err(format!(
+            "{} changed while appending{detail}",
+            path.display()
+        ));
+    }
+    Ok(AppliedAppend {
+        target: path.clone(),
+        before: append.original_target.clone(),
+        after: expected_after,
+    })
+}
+
+fn rollback_partial_append(
+    mut file: File,
+    path: &Path,
+    before: Option<&[u8]>,
+    written_suffix: &[u8],
+) -> String {
+    let expected = append_postimage(before, written_suffix);
+    match read_append_target(&mut file, path) {
+        Ok(actual) if actual == expected => {
+            if let Some(before) = before {
+                if let Err(error) = file.set_len(before.len() as u64) {
+                    return format!(
+                        "; partial append rollback failed: {error}"
+                    );
+                }
+                if let Err(error) = file.sync_all() {
+                    return format!(
+                        "; partial append rollback failed: {error}"
+                    );
+                }
+            } else {
+                drop(file);
+                if let Err(error) = fs::remove_file(path) {
+                    return format!(
+                        "; partial append rollback failed: {error}"
+                    );
+                }
+            }
+            "; partial append was rolled back".to_owned()
+        }
+        Ok(_) => {
+            "; partial append diverged; later bytes were preserved".to_owned()
+        }
+        Err(error) => format!("; could not inspect partial append: {error}"),
+    }
+}
+
+fn atomic_write_bytes(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "append target has no parent",
+        )
+    })?;
+    let stem = path.file_name().unwrap_or_default().to_string_lossy();
+    let (temporary, mut file) = loop {
+        let id = APPEND_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+        let temporary = parent
+            .join(format!(".{stem}.bob-rollback-{}-{id}", std::process::id()));
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o644);
+        }
+        match options.open(&temporary) {
+            Ok(file) => break (temporary, file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                continue;
+            }
+            Err(error) => return Err(error),
+        }
+    };
+    if let Err(error) = file.write_all(contents).and_then(|()| file.sync_all())
+    {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
+    drop(file);
+    if let Err(error) = fs::rename(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn rollback_appends(appends: &[AppliedAppend]) -> Vec<String> {
+    let mut left = Vec::new();
+    for append in appends.iter().rev() {
+        match fs::read(&append.target) {
+            Ok(current) if current == append.after => match &append.before {
+                Some(before) => {
+                    if let Err(error) =
+                        atomic_write_bytes(&append.target, before)
+                    {
+                        left.push(format!(
+                            "could not restore {}: {error}",
+                            append.target.display()
+                        ));
+                    }
+                }
+                None => {
+                    if let Err(error) = fs::remove_file(&append.target) {
+                        left.push(format!(
+                            "could not remove {}: {error}",
+                            append.target.display()
+                        ));
+                    }
+                }
+            },
+            Ok(_) => left.push(format!(
+                "{} changed since the append and was left in place",
+                append.target.display()
+            )),
+            Err(error) => left.push(format!(
+                "could not read {} during rollback: {error}",
+                append.target.display()
+            )),
+        }
+    }
+    left
+}
+
 /// Install, verify, and commit one plan. No lock, no vault-sync cycles.
 pub(crate) fn apply_and_commit<T>(
     vault: &Path,
@@ -325,24 +696,54 @@ pub(crate) fn apply_and_commit<T>(
 ) -> Result<(Option<CommitInfo>, T), TxnFailure> {
     let PlannedTxn {
         files,
+        appends,
         deps,
         subject,
         verify,
         context,
         kind,
     } = planned;
-    if files.is_empty() {
+    if files.is_empty() && appends.iter().all(|append| append.suffix.is_empty())
+    {
         return Ok((None, context));
     }
-    let relatives: Vec<PathBuf> = files
+    let mut relatives: Vec<PathBuf> = files
         .iter()
         .map(|staged| relative_of(vault, &staged.target))
         .collect();
+    relatives.extend(
+        appends
+            .iter()
+            .filter(|append| !append.suffix.is_empty())
+            .map(|append| relative_of(vault, &append.target)),
+    );
+    relatives.sort();
+    relatives.dedup();
     let old_head = git_head(vault, child_env).ok();
 
-    if let Err(error) =
-        write_staged_files_guarded(&files, || deps.validate(vault))
-    {
+    if !files.is_empty() {
+        if let Err(error) =
+            write_staged_files_guarded(&files, || deps.validate(vault))
+        {
+            let stale = error.typed == Some(CaptureFailureKind::NoteChanged);
+            return Err(if stale {
+                failure(
+                    "stale_note",
+                    error.message,
+                    "re-run the command to replan from the latest files",
+                )
+            } else {
+                failure(
+                    "verify_failed",
+                    format!(
+                        "could not install the {kind} files: {}",
+                        error.message
+                    ),
+                    "the write was rolled back; inspect the listed paths and retry",
+                )
+            });
+        }
+    } else if let Err(error) = deps.validate(vault) {
         let stale = error.typed == Some(CaptureFailureKind::NoteChanged);
         return Err(if stale {
             failure(
@@ -353,17 +754,46 @@ pub(crate) fn apply_and_commit<T>(
         } else {
             failure(
                 "verify_failed",
-                format!(
-                    "could not install the {kind} files: {}",
-                    error.message
-                ),
-                "the write was rolled back; inspect the listed paths and retry",
+                error.message,
+                "inspect the vault and retry",
             )
         });
     }
 
+    let mut applied_appends = Vec::new();
+    for append in &appends {
+        if append.suffix.is_empty() {
+            continue;
+        }
+        match append_guarded(append) {
+            Ok(applied) => applied_appends.push(applied),
+            Err(error) => {
+                let append_left = rollback_appends(&applied_appends);
+                let file_left = rollback_guarded(&files);
+                let mut left = append_left;
+                left.extend(file_left);
+                let stale = error.contains("changed on disk after planning")
+                    || error.contains("appeared on disk after planning")
+                    || error.contains("was deleted on disk after planning");
+                return Err(failure(
+                    if stale { "stale_note" } else { "verify_failed" },
+                    format!(
+                        "could not append the {kind} journal: {error}{}",
+                        rollback_note(&left)
+                    ),
+                    if stale {
+                        "re-run the command to replan from the latest files"
+                    } else {
+                        "the write was rolled back; inspect the listed paths and retry"
+                    },
+                ));
+            }
+        }
+    }
+
     if let Err(message) = verify() {
-        let left = rollback_guarded(&files);
+        let mut left = rollback_appends(&applied_appends);
+        left.extend(rollback_guarded(&files));
         return Err(failure(
             "verify_failed",
             format!(
@@ -381,7 +811,8 @@ pub(crate) fn apply_and_commit<T>(
         Ok(Some(sha)) => sha,
         Ok(None) => {
             let unstage = unstage_paths(vault, child_env, &relatives);
-            let left = rollback_guarded(&files);
+            let mut left = rollback_appends(&applied_appends);
+            left.extend(rollback_guarded(&files));
             return Err(failure(
                 "verify_failed",
                 format!(
@@ -401,7 +832,8 @@ pub(crate) fn apply_and_commit<T>(
                 Some((sha, committed)) if committed == subject => sha,
                 _ => {
                     let unstage = unstage_paths(vault, child_env, &relatives);
-                    let left = rollback_guarded(&files);
+                    let mut left = rollback_appends(&applied_appends);
+                    left.extend(rollback_guarded(&files));
                     return Err(failure(
                         "verify_failed",
                         format!(
@@ -582,6 +1014,7 @@ mod tests {
         let _ = vault;
         PlannedTxn {
             files,
+            appends: Vec::new(),
             deps,
             subject: "notebooks: test".to_string(),
             verify: Box::new(|| Ok(())),
@@ -794,6 +1227,175 @@ mod tests {
         assert!(
             !vault.join("new_note.md").exists(),
             "our own file is removed"
+        );
+    }
+
+    #[test]
+    fn ordered_append_is_committed_with_staged_rows() {
+        let (_temp, vault) = scratch();
+        let target = vault.join(".bob/bank/athena.jsonl");
+        let before = b"legacy malformed \xff".to_vec();
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(&target, &before).unwrap();
+        let suffix = b"\n{\"kind\":\"bank.txn\"}\n".to_vec();
+        let mut planned = plan(
+            &vault,
+            staged(&vault, "host\n", "host+\n"),
+            deps("ancestor\n"),
+        );
+        planned.appends.push(PlannedAppend {
+            target: target.clone(),
+            original_target: Some(before.clone()),
+            suffix: suffix.clone(),
+        });
+
+        let (commit, ()) = apply_and_commit(&vault, &Vec::new(), planned)
+            .expect("rows and journal commit together");
+        assert!(commit.is_some());
+        let mut expected = before;
+        expected.extend_from_slice(&suffix);
+        assert_eq!(fs::read(&target).unwrap(), expected);
+        let changed =
+            git(&vault, &["show", "--name-only", "--format=", "HEAD"]);
+        assert!(changed.lines().any(|line| line == "host.md"));
+        assert!(changed.lines().any(|line| line == "new_note.md"));
+        assert!(changed.lines().any(|line| line == ".bob/bank/athena.jsonl"));
+    }
+
+    #[test]
+    fn verify_failure_rolls_back_rows_and_journal_append() {
+        let (_temp, vault) = scratch();
+        let target = vault.join(".bob/bank/athena.jsonl");
+        let mut planned = plan(
+            &vault,
+            staged(&vault, "host\n", "host+\n"),
+            deps("ancestor\n"),
+        );
+        planned.appends.push(PlannedAppend {
+            target: target.clone(),
+            original_target: None,
+            suffix: b"{\"kind\":\"bank.txn\"}\n".to_vec(),
+        });
+        planned.verify = Box::new(|| Err("forced verifier failure".to_owned()));
+
+        let error = apply_and_commit(&vault, &Vec::new(), planned)
+            .expect_err("failed verification rolls back");
+        assert_eq!(error.code, "verify_failed");
+        assert_eq!(
+            fs::read_to_string(vault.join("host.md")).unwrap(),
+            "host\n"
+        );
+        assert!(!vault.join("new_note.md").exists());
+        assert!(!target.exists());
+        assert_eq!(git(&vault, &["diff", "--cached", "--name-only"]), "");
+    }
+
+    #[test]
+    fn stale_journal_preimage_rolls_back_installed_rows() {
+        let (_temp, vault) = scratch();
+        let target = vault.join(".bob/bank/athena.jsonl");
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(&target, b"changed after planning\n").unwrap();
+        let mut planned = plan(
+            &vault,
+            staged(&vault, "host\n", "host+\n"),
+            deps("ancestor\n"),
+        );
+        planned.appends.push(PlannedAppend {
+            target: target.clone(),
+            original_target: Some(b"planned bytes\n".to_vec()),
+            suffix: b"{\"kind\":\"bank.txn\"}\n".to_vec(),
+        });
+
+        let error = apply_and_commit(&vault, &Vec::new(), planned)
+            .expect_err("stale journal preimage refuses");
+        assert_eq!(error.code, "stale_note");
+        assert_eq!(fs::read(&target).unwrap(), b"changed after planning\n");
+        assert_eq!(
+            fs::read_to_string(vault.join("host.md")).unwrap(),
+            "host\n"
+        );
+        assert!(!vault.join("new_note.md").exists());
+        assert_eq!(git(&vault, &["diff", "--cached", "--name-only"]), "");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn commit_failure_rolls_back_rows_and_journal_append() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_temp, vault) = scratch();
+        let target = vault.join(".bob/bank/athena.jsonl");
+        let mut planned = plan(
+            &vault,
+            staged(&vault, "host\n", "host+\n"),
+            deps("ancestor\n"),
+        );
+        planned.appends.push(PlannedAppend {
+            target: target.clone(),
+            original_target: None,
+            suffix: b"{\"kind\":\"bank.txn\"}\n".to_vec(),
+        });
+        let hook = vault.join(".git/hooks/pre-commit");
+        fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let error = apply_and_commit(&vault, &Vec::new(), planned)
+            .expect_err("commit failure rolls back both effects");
+        assert_eq!(error.code, "verify_failed");
+        assert!(error.message.contains("rolled back"), "{}", error.message);
+        assert_eq!(
+            fs::read_to_string(vault.join("host.md")).unwrap(),
+            "host\n"
+        );
+        assert!(!vault.join("new_note.md").exists());
+        assert!(!target.exists());
+        assert_eq!(git(&vault, &["diff", "--cached", "--name-only"]), "");
+    }
+
+    #[test]
+    fn partial_append_recovery_restores_exact_binary_preimage() {
+        let (_temp, vault) = scratch();
+        let target = vault.join(".bob/bank/athena.jsonl");
+        let before = b"broken \xff event";
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(&target, before).unwrap();
+        let mut file = OpenOptions::new()
+            .read(true)
+            .append(true)
+            .open(&target)
+            .unwrap();
+        file.write_all(b"\n{\"kind\":").unwrap();
+        let result = rollback_partial_append(
+            file,
+            &target,
+            Some(before),
+            b"\n{\"kind\":",
+        );
+        assert!(result.contains("rolled back"), "{result}");
+        assert_eq!(fs::read(&target).unwrap(), before);
+    }
+
+    #[test]
+    fn changed_directory_membership_refuses_before_staged_writes() {
+        let (_temp, vault) = scratch();
+        let mut directory_deps = ReadDependencies::default();
+        directory_deps.insert_directory(
+            PathBuf::from("bank"),
+            Some("md"),
+            Vec::new(),
+        );
+        let mut planned =
+            plan(&vault, staged(&vault, "host\n", "host+\n"), directory_deps);
+        planned.subject = "bank: import 1 rows (checking)".to_owned();
+        fs::create_dir_all(vault.join("bank")).unwrap();
+        fs::write(vault.join("bank/2026-11.md"), "month\n").unwrap();
+
+        let error = apply_and_commit(&vault, &Vec::new(), planned)
+            .expect_err("new month invalidates the snapshot");
+        assert_eq!(error.code, "stale_note");
+        assert_eq!(
+            fs::read_to_string(vault.join("host.md")).unwrap(),
+            "host\n"
         );
     }
 }

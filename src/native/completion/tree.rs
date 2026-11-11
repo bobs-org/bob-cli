@@ -42,6 +42,9 @@ impl NativeCommand {
             NativeCommand::BankEnsure => {
                 crate::native::bank::build_cli_ensure()
             }
+            NativeCommand::BankImport => {
+                crate::native::bank::build_cli_import()
+            }
             NativeCommand::BankList => crate::native::bank::build_cli_list(),
             NativeCommand::BankReport => {
                 crate::native::bank::build_cli_report()

@@ -7,7 +7,9 @@ use clap::{
     Command as ClapCommand,
 };
 
-use super::{ack, check, dates, ensure, list, output, report, scan, status};
+use super::{
+    ack, check, dates, ensure, import_run, list, output, report, scan, status,
+};
 use crate::native::env as bob_env;
 
 const COMMAND_NAME: &str = "bob bank";
@@ -57,6 +59,10 @@ pub(crate) fn run_ensure(args: Vec<OsString>) -> i32 {
 
 pub(crate) fn run_ack(args: Vec<OsString>) -> i32 {
     run_with(build_cli_ack(), args, execute_ack)
+}
+
+pub(crate) fn run_import(args: Vec<OsString>) -> i32 {
+    run_with(build_cli_import(), args, execute_import)
 }
 
 pub(crate) fn build_cli_check() -> ClapCommand {
@@ -140,6 +146,37 @@ pub(crate) fn build_cli_ack() -> ClapCommand {
         .arg(ids_arg())
         .arg(bob_dir_arg())
         .arg(day_arg_optional())
+        .arg(dry_run_arg())
+        .arg(format_arg())
+        .arg(help_arg())
+}
+
+pub(crate) fn build_cli_import() -> ClapCommand {
+    ClapCommand::new("bob bank import")
+        .about("Import posted bank transactions from QFX, OFX, or Wells Fargo CSV")
+        .long_about(
+            "Plans the whole batch before writing. Existing rows are matched only by account, exact signed cents, and the documented posted-date window; new rows and the private bank journal commit together. Refused input exits 2; runtime failures exit 1.",
+        )
+        .after_help(
+            "Examples:\n  bob bank import ~/Downloads/*.qfx\n  bob bank import -d ~/Downloads/checking.qfx\n  bob bank import -a checking -f json ~/Downloads/export.csv\n\nSee docs/bank.md for import matching and recovery behavior.",
+        )
+        .disable_help_flag(true)
+        .arg(
+            Arg::new("files")
+                .value_name("FILE")
+                .num_args(1..)
+                .value_parser(OsStringValueParser::new())
+                .help("QFX/OFX or the supported Wells Fargo CSV export; repeatable"),
+        )
+        .arg(
+            Arg::new("account")
+                .long("account")
+                .short('a')
+                .value_name("ALIAS")
+                .value_parser(OsStringValueParser::new())
+                .help("Choose a configured importable account"),
+        )
+        .arg(bob_dir_arg())
         .arg(dry_run_arg())
         .arg(format_arg())
         .arg(help_arg())
@@ -281,6 +318,60 @@ fn print_io_errors(errors: &[String]) {
     for error in errors {
         eprintln!("{COMMAND_NAME}: {error}");
     }
+}
+
+fn execute_import(matches: &ArgMatches) -> i32 {
+    let vault = vault_from(matches);
+    let json = format_is_json(matches);
+    let dry_run = matches.get_flag("dry-run");
+    let now = bob_env::current_datetime();
+    let today = now.date();
+    let now_stamp = import_run::now_stamp(now);
+    let paths = matches
+        .get_many::<OsString>("files")
+        .map(|files| files.map(PathBuf::from).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let requested_account = opt_string(matches, "account");
+    let prepared = match import_run::prepare_sources(&paths) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            let report = import_run::ImportReport::failed(
+                dry_run,
+                today,
+                import_run::source_error_failure(error),
+            );
+            if json {
+                println!("{}", report.to_json());
+            } else {
+                import_run::print_human(&report);
+            }
+            return report.exit_code();
+        }
+    };
+    let report = if dry_run {
+        import_run::dry_run(
+            &vault,
+            &prepared,
+            requested_account.as_deref(),
+            &now_stamp,
+            today,
+        )
+    } else {
+        import_run::apply(
+            &vault,
+            &prepared,
+            requested_account.as_deref(),
+            &now_stamp,
+            today,
+            json,
+        )
+    };
+    if json {
+        println!("{}", report.to_json());
+    } else {
+        import_run::print_human(&report);
+    }
+    report.exit_code()
 }
 
 fn execute_check(matches: &ArgMatches) -> i32 {

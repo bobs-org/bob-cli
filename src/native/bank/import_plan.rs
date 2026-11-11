@@ -1174,6 +1174,7 @@ mod tests {
             }),
             bank_dir_exists: true,
             months,
+            month_entries: Vec::new(),
             io_errors: Vec::new(),
         }
     }

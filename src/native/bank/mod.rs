@@ -11,6 +11,7 @@ pub(crate) mod grammar;
 pub(crate) mod identity;
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod import_plan;
+pub(crate) mod import_run;
 pub(crate) mod journal;
 pub(crate) mod list;
 pub(crate) mod model;
@@ -25,8 +26,8 @@ pub(crate) mod source;
 pub(crate) mod status;
 
 pub(crate) use cli::{
-    build_cli_ack, build_cli_check, build_cli_ensure, build_cli_list,
-    build_cli_report,
+    build_cli_ack, build_cli_check, build_cli_ensure, build_cli_import,
+    build_cli_list, build_cli_report,
 };
 
 #[cfg(test)]

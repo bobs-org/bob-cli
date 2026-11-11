@@ -1249,6 +1249,15 @@ pub(crate) const ENTRIES: &[Row] = &[
         Some(DRY_RUN),
         60,
     ),
+    writes(
+        "bank-import",
+        &["bank", "import"],
+        "Import bank transactions",
+        &["bank", "import", "qfx", "ofx", "csv", "transactions"],
+        Policy::PreviewFirst,
+        Some(DRY_RUN),
+        60,
+    ),
     reads(
         "clipboard",
         &["clipboard"],

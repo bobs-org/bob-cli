@@ -20,8 +20,8 @@ pub(crate) use region::{
     NOTEBOOKS,
 };
 pub(crate) use txn::{
-    apply_and_commit, run_locked, staged_rewrites, CommitInfo, PlannedTxn,
-    ReadDependencies, TxnResult,
+    apply_and_commit, run_locked, staged_rewrites, CommitInfo, PlannedAppend,
+    PlannedTxn, ReadDependencies, TxnResult,
 };
 
 /// One host's before/after bytes when its owned region must change.

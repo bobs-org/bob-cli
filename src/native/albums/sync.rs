@@ -289,6 +289,7 @@ fn planned_txn(vault: &Path, plan: IndexSyncPlan) -> PlannedTxn<SyncContext> {
     let verify = Box::new(move || verify_current_hosts(&verify_vault, hosts));
     PlannedTxn {
         files,
+        appends: Vec::new(),
         deps: plan.dependencies,
         subject: format!("albums: sync ({count} notes)"),
         verify,

@@ -164,6 +164,7 @@ fn planned_txn(vault: &Path, plan: CreatePlan) -> PlannedTxn<CreatePlan> {
     PlannedTxn {
         subject: format!("notebooks: create {}", slash(&plan.path)),
         files,
+        appends: Vec::new(),
         deps: plan.deps.clone(),
         verify: verify_hosts_current(vault.to_path_buf(), hosts),
         context: plan,

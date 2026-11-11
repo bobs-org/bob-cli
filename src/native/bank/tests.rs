@@ -16,6 +16,43 @@ use super::{
 };
 use crate::native::{env::TestEnvGuard, note_tasks};
 
+#[test]
+fn import_command_help_and_option_aliases_are_complete() {
+    let mut command = super::build_cli_import();
+    let help = command.render_help().to_string();
+    for option in [
+        "-a, --account <ALIAS>",
+        "-b, --bob-dir <DIR>",
+        "-d, --dry-run",
+        "-f, --format <FORMAT>",
+        "-h, --help",
+    ] {
+        assert!(help.contains(option), "missing {option} in:\n{help}");
+    }
+    let parsed = super::build_cli_import()
+        .try_get_matches_from([
+            "bob bank import",
+            "-a",
+            "checking",
+            "-d",
+            "one.csv",
+            "two.qfx",
+        ])
+        .expect("account, dry-run, and positional files parse together");
+    assert_eq!(
+        parsed.get_one::<std::ffi::OsString>("account"),
+        Some(&std::ffi::OsString::from("checking"))
+    );
+    assert!(parsed.get_flag("dry-run"));
+    assert_eq!(
+        parsed
+            .get_many::<std::ffi::OsString>("files")
+            .unwrap()
+            .count(),
+        2
+    );
+}
+
 fn month() -> super::grammar::YearMonth {
     super::grammar::YearMonth {
         year: 2026,

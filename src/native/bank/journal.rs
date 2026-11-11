@@ -1,10 +1,6 @@
 //! Per-host bank journal: `.bob/bank/<host>.jsonl`.
 
-use std::{
-    collections::BTreeMap,
-    fs, io,
-    path::{Path, PathBuf},
-};
+use std::{collections::BTreeMap, fs, io, path::Path};
 
 use chrono::{DateTime, FixedOffset, NaiveDate};
 use serde_json::{json, Map, Value};
@@ -115,28 +111,50 @@ pub(crate) struct JournalSnapshot {
     pub(crate) contradictions: Vec<JournalContradiction>,
     pub(crate) malformed: Vec<MalformedLine>,
     pub(crate) preimages: BTreeMap<String, Vec<u8>>,
+    /// Host journal filenames observed while loading the directory.
+    pub(crate) directory_entries: Vec<String>,
+    /// Read failures make import unsafe because an unseen identity could be
+    /// present in the unreadable host file.
+    pub(crate) io_errors: Vec<String>,
 }
 
 pub(crate) fn load(vault: &Path) -> io::Result<JournalSnapshot> {
     let directory = pref_journal::journal_dir(vault, NAMESPACE);
-    if !directory.is_dir() {
-        return Ok(JournalSnapshot::default());
-    }
-    let mut paths = match fs::read_dir(&directory) {
-        Ok(entries) => entries
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.extension().is_some_and(|ext| ext == "jsonl")
-                    && path.is_file()
-            })
-            .collect::<Vec<PathBuf>>(),
+    let entries = match fs::read_dir(&directory) {
+        Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             return Ok(JournalSnapshot::default());
         }
         Err(error) => return Err(error),
     };
+    let mut paths = Vec::new();
+    let mut directory_entries = Vec::new();
+    let mut io_errors = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                io_errors.push(format!("{}: {error}", NAMESPACE.dir));
+                continue;
+            }
+        };
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "jsonl") {
+            directory_entries
+                .push(entry.file_name().to_string_lossy().into_owned());
+            if path.is_file() {
+                paths.push(path);
+            } else {
+                io_errors.push(format!(
+                    "{}/{}: expected a regular journal file",
+                    NAMESPACE.dir,
+                    entry.file_name().to_string_lossy()
+                ));
+            }
+        }
+    }
     paths.sort();
+    directory_entries.sort();
 
     let mut stored = Vec::new();
     let mut malformed = Vec::new();
@@ -144,7 +162,14 @@ pub(crate) fn load(vault: &Path) -> io::Result<JournalSnapshot> {
     for path in paths {
         let bytes = match fs::read(&path) {
             Ok(bytes) => bytes,
-            Err(_) => continue,
+            Err(error) => {
+                io_errors.push(format!(
+                    "{}/{}: {error}",
+                    NAMESPACE.dir,
+                    path.file_name().unwrap_or_default().to_string_lossy()
+                ));
+                continue;
+            }
         };
         let filename = path
             .file_name()
@@ -209,6 +234,8 @@ pub(crate) fn load(vault: &Path) -> io::Result<JournalSnapshot> {
     let mut snapshot = JournalSnapshot {
         malformed,
         preimages,
+        directory_entries,
+        io_errors,
         ..JournalSnapshot::default()
     };
     for payload in parsed {
@@ -535,6 +562,8 @@ pub(crate) fn serialize_txn(
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
     use crate::native::bank::identity::{sha256_hex, transaction_key};
     use crate::native::pref_journal;

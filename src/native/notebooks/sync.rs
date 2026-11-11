@@ -220,6 +220,7 @@ fn planned_txn(
     PlannedTxn {
         subject: subject(files.len()),
         files,
+        appends: Vec::new(),
         deps: ReadDependencies::from_snapshot(snapshot),
         verify: verify_hosts_current(vault.to_path_buf(), hosts),
         context: SyncContext {
