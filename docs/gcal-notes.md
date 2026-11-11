@@ -162,7 +162,10 @@ Notes live in the existing per-host journal, `.bob/gcal/<host>.jsonl`
 
 Note text never appears in `bob gcal list` or `bob gcal sync` JSON, which
 carry only summaries (`scope`, `fields`, `bullet_lines`). Only `bob gcal note`
-itself and `sync -d` diffs show the words.
+itself and `sync -d` diffs show the words. `bob gcal list` also sets
+`fragile_directives: true` and prints a ⚑ hint when a task you don't organize
+still carries Bob lines only in the organizer's description; `-A` adopts
+those lines.
 
 ## Ownership
 
@@ -224,11 +227,20 @@ Modes:
 - `-c`: append a deliberate clear for the selected scope. Recurring events
   offer only scopes that currently have a note.
 - `-A`: adopt the Google description's directive and buffer-reason lines as a
-  Bob-only note. The adopted text goes through normal route validation and the
-  usual preview/save path; prose and Google-owned bullets are not copied.
-- `-e`: open the selected scope's current note in `$VISUAL` or `$EDITOR`.
-  The scissors marker and help block are removed before validation and save.
-  Combining `-A -e` opens an editor prefilled with the adopted Google lines.
+  Bob-only note, including bare `-N`/`+M` and explicit `-0`/`+0`. The adopted
+  text goes through normal route validation and the usual preview/save path;
+  prose and Google-owned bullets are not copied. If the chosen scope already
+  has a note, the command exits 2 and tells you to edit it with `-e`. Combining `-A -e`
+  opens an editor prefilled with the adopted Google lines. On success the
+  lines "now live in Bob too: they survive the organizer's next update".
+- `-e`: open the selected scope's current note in `$VISUAL`, then `$EDITOR`,
+  then `vi`. A TTY is required (`BOB_GCAL_ASSUME_TTY` counts); off a TTY the
+  command exits 2 and hints to pass TEXT instead. The git-style scissors line
+  `------------------------ >8 ------------------------` and everything below
+  it (identity, grammar cheat sheet, "An empty note clears it.") are dropped
+  before validation and save. Empty text clears the note, or reports
+  `unchanged` when there was no note. Validation errors print and ask
+  `Edit again? [Y/n]`; `n` exits 2 and saves nothing.
 
 Exit status is 0 on success, 1 on gog or network failure, and 2 on usage or
 setup errors, no match, an ambiguous match off a TTY, a missing scope off a

@@ -14,6 +14,7 @@ use super::{
     config::GcalConfig,
     gog::{Gog, CLIENT},
     journal,
+    model::{GcalEvent, MyAnswer, ParsedNote},
     root::validate_root_candidate,
     ui, DoctorArgs, GcalError,
 };
@@ -247,6 +248,8 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
     finish(args, &host, checks)
 }
 
+const NOTES_LOOKUP_CAP: usize = 25;
+
 fn notes_check(
     vault: &Path,
     account: Option<&str>,
@@ -255,9 +258,7 @@ fn notes_check(
     let Some(account) = account else {
         return skipped("notes", "no resolved account");
     };
-    let Ok((records, _)) =
-        crate::native::pref_journal::read_raw(vault, journal::NAMESPACE)
-    else {
+    let Ok((book, _)) = journal::load_notes(vault) else {
         return Check {
             id: "notes",
             status: CheckStatus::Warn,
@@ -265,149 +266,143 @@ fn notes_check(
             fix: Some("inspect .bob/gcal/<host>.jsonl".to_string()),
         };
     };
-    let mut latest = std::collections::BTreeMap::<
-        (String, String, String),
-        (String, String),
-    >::new();
-    let mut ordered = records.iter().collect::<Vec<_>>();
-    crate::native::pref_journal::sort_by_writer_order(&mut ordered, |event| {
-        (
-            event.ts,
-            event.host.as_str(),
-            event.path.as_str(),
-            event.line,
-        )
-    });
-    for stored in ordered
-        .into_iter()
-        .filter(|record| record.kind.as_str() == "gcal.note")
-    {
-        let Some(object) = stored.value.as_object() else {
-            continue;
-        };
-        let Some(scope) =
-            object.get("scope").and_then(serde_json::Value::as_str)
-        else {
-            continue;
-        };
-        let Some(key) =
-            object.get("key").and_then(serde_json::Value::as_object)
-        else {
-            continue;
-        };
-        let Some(calendar) =
-            key.get("calendar_id").and_then(serde_json::Value::as_str)
-        else {
-            continue;
-        };
-        let part = match scope {
-            "event" => key.get("event_id"),
-            "series" => key.get("series"),
-            _ => None,
-        }
-        .and_then(serde_json::Value::as_str);
-        let Some(part) = part else { continue };
-        let email = object
-            .get("account")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        let text = object
-            .get("text")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        latest.insert(
-            (scope.to_string(), calendar.to_string(), part.to_string()),
-            (email, text),
-        );
-    }
-    let foreign = latest
-        .values()
-        .filter(|(email, text)| {
-            !text.is_empty() && !email.eq_ignore_ascii_case(account)
+    let live_mine: Vec<_> = book
+        .iter()
+        .filter(|record| {
+            !record.cleared && record.account.eq_ignore_ascii_case(account)
         })
-        .count();
-    let mut unresolved = 0usize;
-    let mut orphans = 0usize;
-    let mut lookup_failed = false;
-    for ((scope, calendar, key), (email, text)) in &latest {
-        if text.is_empty() || !email.eq_ignore_ascii_case(account) {
-            continue;
-        }
-        if let Some(scope) = match scope.as_str() {
-            "event" => Some(journal::NoteScope::Event),
-            "series" => Some(journal::NoteScope::Series),
-            _ => None,
-        } {
-            let parsed = super::model::ParsedNote::parse(scope, text);
-            if let Some(route) = parsed.description.directives.route.as_deref()
-                && validate_root_candidate(
-                    vault,
-                    pomodoro::day_file_for(vault)
-                        .strip_prefix(vault)
-                        .unwrap_or(Path::new("")),
-                    route,
-                )
-                .is_err()
-            {
-                unresolved += 1;
+        .collect();
+    let foreign: Vec<_> = book
+        .iter()
+        .filter(|record| {
+            !record.cleared && !record.account.eq_ignore_ascii_case(account)
+        })
+        .collect();
+    let daily_rel = pomodoro::day_file_for(vault)
+        .strip_prefix(vault)
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    let unresolved: Vec<_> = live_mine
+        .iter()
+        .copied()
+        .filter(|record| {
+            let parsed = ParsedNote::parse(record.scope, &record.text);
+            parsed.description.directives.route.as_deref().is_some_and(
+                |route| {
+                    validate_root_candidate(vault, &daily_rel, route).is_err()
+                },
+            )
+        })
+        .collect();
+    let mut orphans = Vec::new();
+    let mut not_checked = 0usize;
+    if let Some(gog) = gog {
+        for (index, record) in live_mine.iter().enumerate() {
+            if index >= NOTES_LOOKUP_CAP {
+                not_checked += live_mine.len() - NOTES_LOOKUP_CAP;
+                break;
             }
-        }
-        if scope == "event"
-            && let Some(gog) = gog
-        {
-            match gog.event(calendar, key, account) {
-                Ok(_) => {}
-                Err(error)
-                    if error.kind() == "not_found"
-                        || error
-                            .message()
-                            .to_ascii_lowercase()
-                            .contains("not found") =>
-                {
-                    orphans += 1
+            match gog.event(&record.calendar_id, &record.key, account) {
+                Ok(raw) => {
+                    match GcalEvent::from_google(&record.calendar_id, raw) {
+                        Ok(event)
+                            if event.status == "cancelled"
+                                || matches!(event.my_answer, MyAnswer::No) =>
+                        {
+                            orphans.push(*record);
+                        }
+                        Ok(_) => {}
+                        Err(_) => not_checked += 1,
+                    }
                 }
-                Err(_) => lookup_failed = true,
+                Err(error) if is_notes_not_found(&error) => {
+                    orphans.push(*record);
+                }
+                Err(_) => not_checked += 1,
             }
         }
+    } else {
+        not_checked += live_mine.len();
     }
-    let total = foreign + unresolved + orphans;
-    if total == 0 && !lookup_failed {
+    let malformed = book.malformed;
+    if orphans.is_empty()
+        && unresolved.is_empty()
+        && foreign.is_empty()
+        && malformed == 0
+        && not_checked == 0
+    {
+        let count = live_mine.len();
         return Check {
             id: "notes",
             status: CheckStatus::Ok,
-            summary:
-                "no orphaned notes, unresolved routes, or foreign-account notes"
-                    .to_string(),
+            summary: format!(
+                "{count} private note{}",
+                if count == 1 { "" } else { "s" }
+            ),
             fix: None,
         };
     }
     let mut issues = Vec::new();
-    if orphans > 0 {
-        issues.push(format!("{orphans} orphaned"));
+    let mut fixes = Vec::new();
+    if !orphans.is_empty() {
+        issues.push(format!("{} orphaned", orphans.len()));
+        let first = orphans[0];
+        fixes.push(match first.scope {
+            journal::NoteScope::Series => format!(
+                "bob gcal note -c -s series -i {} -C {}",
+                first.key, first.calendar_id
+            ),
+            journal::NoteScope::Event => format!(
+                "bob gcal note -c -i {} -C {}",
+                first.key, first.calendar_id
+            ),
+        });
     }
-    if unresolved > 0 {
+    if !unresolved.is_empty() {
         issues.push(format!(
-            "{unresolved} unresolved route{}",
-            if unresolved == 1 { "" } else { "s" }
+            "{} unresolved route{}",
+            unresolved.len(),
+            if unresolved.len() == 1 { "" } else { "s" }
+        ));
+        let first = unresolved[0];
+        let mut command = format!(
+            "bob gcal note -e -i {} -C {}",
+            first.key, first.calendar_id
+        );
+        if first.scope == journal::NoteScope::Series {
+            command = format!(
+                "bob gcal note -e -s series -i {} -C {}",
+                first.key, first.calendar_id
+            );
+        }
+        fixes.push(command);
+    }
+    if !foreign.is_empty() {
+        issues.push(format!("{} foreign-account", foreign.len()));
+        fixes.push(format!(
+            "sign in as {} to apply that account's notes",
+            foreign[0].account
         ));
     }
-    if foreign > 0 {
-        issues.push(format!("{foreign} foreign-account"));
+    if malformed > 0 {
+        issues.push(format!("{malformed} malformed"));
+        fixes.push("inspect .bob/gcal/<host>.jsonl".to_string());
     }
-    if lookup_failed {
-        issues.push("some event identities could not be checked".to_string());
+    if not_checked > 0 {
+        issues.push(format!("{not_checked} not checked"));
     }
     Check {
         id: "notes",
         status: CheckStatus::Warn,
         summary: issues.join(" · "),
-        fix: Some(
-            "review `bob gcal note` and `bob gcal list`; rewrite or clear stale notes, correct routes, or sign in with the matching account"
-                .to_string(),
-        ),
+        fix: fixes.into_iter().next(),
     }
+}
+
+fn is_notes_not_found(error: &GcalError) -> bool {
+    error.kind() == "not_found"
+        || error.message().to_ascii_lowercase().contains("not found")
+        || error.message().to_ascii_lowercase().contains("no such")
 }
 
 fn fail_from(error: &GcalError, id: &'static str) -> Check {

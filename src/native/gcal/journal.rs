@@ -155,6 +155,8 @@ type NoteKey = (String, String, String);
 pub(crate) struct NoteBook {
     events: BTreeMap<NoteKey, FoldedNote>,
     series: BTreeMap<NoteKey, FoldedNote>,
+    /// `gcal.note` lines [`load_notes`] skipped as malformed.
+    pub malformed: usize,
 }
 
 impl NoteBook {
@@ -574,6 +576,7 @@ pub(crate) fn load_notes(
         warnings
             .push(format!("skipped {malformed} malformed gcal journal lines"));
     }
+    book.malformed = malformed;
     Ok((book, warnings))
 }
 

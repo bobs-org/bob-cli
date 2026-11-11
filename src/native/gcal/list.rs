@@ -567,6 +567,25 @@ fn counts(events: &[ListedEvent]) -> Counts {
     counts
 }
 
+fn fragile_directives(event: &ListedEvent) -> bool {
+    event.inclusion == Inclusion::Task
+        && !event.event.organizer_or_no_guests
+        && event.event.note.is_none()
+        && google_carries_bob_lines(&event.event.description)
+}
+
+fn google_carries_bob_lines(
+    description: &super::description::EventDescription,
+) -> bool {
+    let directives = &description.directives;
+    directives.route.is_some()
+        || directives.clock_tag.kind()
+            != crate::native::clock_tags::ClockKind::None
+        || directives.before_set
+        || directives.after_set
+        || !description.buffer_reasons.is_empty()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn print_json(
     day: NaiveDate,
@@ -610,6 +629,7 @@ fn print_json(
                     "warnings": root.map(|root| root.warnings.as_slice()).unwrap_or(&[]),
                 },
                 "note": crate::native::gcal::model::note_summary_json(&event.event),
+                "fragile_directives": fragile_directives(event),
                 "vault": cell.vault,
                 "skip": cell.skip_json(),
             })
@@ -741,15 +761,10 @@ fn print_table(
                 output.push('\n');
             }
         }
-        if !event.event.organizer_is_self
-            && (event.event.description.directives.route.is_some()
-                || event.event.description.directives.clock_tag.kind()
-                    != crate::native::clock_tags::ClockKind::None
-                || event.event.description.directives.before_set
-                || event.event.description.directives.after_set)
-        {
+        if fragile_directives(event) {
             output.push_str(&styler.yellow(&format!(
-                "  hint · directives live only in someone else's Google description · `bob gcal note -i {} -C {} -A` adopts them",
+                "  ⚑ {}: its Bob lines live in the organizer's description and may vanish on their next update · bob gcal note -A -i {} -C {}",
+                event.event.title,
                 event.event.key.event_id,
                 event.event.key.calendar_id
             )));

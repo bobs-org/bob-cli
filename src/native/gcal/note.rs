@@ -10,7 +10,7 @@ use std::{
 };
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use chrono::{DateTime, FixedOffset, NaiveDate};
+use chrono::{DateTime, Datelike, FixedOffset, NaiveDate};
 use serde_json::{json, Value};
 
 use super::{
@@ -328,6 +328,13 @@ fn inner(args: &NoteArgs) -> Result<(), GcalError> {
             "bad_arguments",
             "`-e` cannot be combined with note text".to_string(),
         ));
+    }
+    if args.edit && !is_tty() {
+        return Err(GcalError::setup(
+            "needs_tty",
+            "editing a private event note needs a TTY".to_string(),
+        )
+        .with_hint("pass the note as TEXT instead of `-e`"));
     }
     if args.clear && (!args.text.is_empty() || args.dry_run) {
         return Err(GcalError::setup(
@@ -1998,22 +2005,60 @@ fn present_candidate<S: HomeSource>(
     let mut prepared;
     let args = if args.adopt || args.edit {
         prepared = args.clone();
-        let seed = if args.adopt {
-            adopted_google_text(&candidate.google_event)
-        } else {
-            current_scope_text(args, &candidate, vault, account)?
-        };
-        let text = if args.edit { edit_text(&seed)? } else { seed };
-        if text.trim().is_empty() {
+        let existing = current_scope_text(args, &candidate, vault, account)?;
+        let has_note = !existing.trim().is_empty();
+        if args.adopt && !args.edit && has_note {
             return Err(GcalError::setup(
-                "empty_note",
-                "the editor/adoption produced no note text".to_string(),
-            )
-            .with_hint(
-                "add a directive or reason line, or use `-c` to clear",
+                "note_exists",
+                "this event already has a private note · edit it with `-e`"
+                    .to_string(),
             ));
         }
-        prepared.text = vec![text];
+        let adopted = if args.adopt {
+            adopted_google_text(&candidate.google_event)
+        } else {
+            String::new()
+        };
+        if args.adopt && adopted.trim().is_empty() {
+            return Err(GcalError::setup(
+                "nothing_to_adopt",
+                "this event's Google description has no directive or reason lines to adopt"
+                    .to_string(),
+            )
+            .with_hint(
+                "add @route, #off/#on, or -N/+M lines in Google, or write a note with TEXT",
+            ));
+        }
+        let mut seed = if args.adopt { adopted } else { existing };
+        if args.edit {
+            loop {
+                let edited = edit_text(&seed, &candidate)?;
+                let trimmed = edited.trim().to_string();
+                if trimmed.is_empty() {
+                    prepared.clear = true;
+                    prepared.text.clear();
+                    break;
+                }
+                let errors =
+                    write::validation_errors(vault, candidate.day, &trimmed);
+                if errors.is_empty() {
+                    prepared.text = vec![trimmed];
+                    break;
+                }
+                for error in &errors {
+                    eprintln!("{error}");
+                }
+                if !ask_edit_again()? {
+                    return Err(GcalError::setup(
+                        "printed_exit_2",
+                        "invalid private note".to_string(),
+                    ));
+                }
+                seed = trimmed;
+            }
+        } else {
+            prepared.text = vec![seed];
+        }
         &prepared
     } else {
         args
@@ -2035,26 +2080,45 @@ fn present_candidate<S: HomeSource>(
 }
 
 const EDITOR_SCISSORS: &str =
-    "# --- Bob event note help (delete this line and below to save) ---";
+    "------------------------ >8 ------------------------";
 
-fn edit_text(seed: &str) -> Result<String, GcalError> {
+fn edit_text(
+    seed: &str,
+    candidate: &NoteCandidate,
+) -> Result<String, GcalError> {
     let editor = std::env::var_os("VISUAL")
         .filter(|value| !value.is_empty())
-        .or_else(|| std::env::var_os("EDITOR"))
-        .ok_or_else(|| {
-            GcalError::setup(
-                "editor_missing",
-                "set $EDITOR (or $VISUAL) to edit a private event note"
-                    .to_string(),
-            )
-        })?;
+        .or_else(|| {
+            std::env::var_os("EDITOR").filter(|value| !value.is_empty())
+        })
+        .unwrap_or_else(|| std::ffi::OsString::from("vi"));
     let mut file = tempfile::NamedTempFile::new().map_err(|error| {
         GcalError::setup("editor_file", format!("create editor file: {error}"))
     })?;
-    let initial = format!(
-        "{seed}{}\n\n{EDITOR_SCISSORS}\n# Lines above this marker are saved as the private event note.\n# Examples: @family, #off, -30 Walk home, +15 Drive there\n# Blank lines are ignored; use `bob gcal note -d` to preview.\n",
-        if seed.is_empty() { "" } else { "\n" }
+    let mut initial = String::new();
+    if !seed.is_empty() {
+        initial.push_str(seed);
+        if !seed.ends_with('\n') {
+            initial.push('\n');
+        }
+    }
+    initial.push_str(EDITOR_SCISSORS);
+    initial.push('\n');
+    initial.push_str(
+        "Do not modify or remove the line above; everything below it is ignored.\n",
     );
+    initial
+        .push_str(&format!("Private note for {}\n", identity_line(candidate)));
+    initial.push_str(
+        "  @route  #off  #on  -30  +15        directives: root, clock, buffers\n",
+    );
+    initial.push_str(
+        "  -30 Drive there   +15 Drive home   buffer reasons (bullets)\n",
+    );
+    initial.push_str(
+        "  anything else                      bullets on the Event Task\n",
+    );
+    initial.push_str("An empty note clears it.\n");
     file.write_all(initial.as_bytes()).map_err(|error| {
         GcalError::setup("editor_file", format!("write editor file: {error}"))
     })?;
@@ -2095,6 +2159,34 @@ fn edit_text(seed: &str) -> Result<String, GcalError> {
         .unwrap_or_default()
         .trim()
         .to_string())
+}
+
+fn identity_line(candidate: &NoteCandidate) -> String {
+    let time = candidate.time.replace('-', "\u{2013}");
+    format!(
+        "{} {} {} {} {} (from {} · {})",
+        candidate.day.format("%a"),
+        candidate.day.format("%b"),
+        candidate.day.day(),
+        time,
+        candidate.event.title,
+        candidate.organizer_name(),
+        answer_chip(candidate.event.my_answer),
+    )
+}
+
+fn ask_edit_again() -> Result<bool, GcalError> {
+    eprint!("Edit again? [Y/n] ");
+    let _ = io::stderr().flush();
+    match read_line()? {
+        None => Ok(false),
+        Some(line) => {
+            let trimmed = line.trim();
+            Ok(trimmed.is_empty()
+                || trimmed.eq_ignore_ascii_case("y")
+                || trimmed.eq_ignore_ascii_case("yes"))
+        }
+    }
 }
 
 fn current_scope_text(
@@ -2143,23 +2235,60 @@ fn adopted_google_text(event: &GcalEvent) -> String {
         }
         crate::native::clock_tags::ClockKind::None => {}
     }
-    for (part, reason) in description.buffer_reasons.iter() {
+    for (part, set) in [
+        (
+            crate::native::event_task::BufferPart::Before,
+            description.directives.before_set,
+        ),
+        (
+            crate::native::event_task::BufferPart::After,
+            description.directives.after_set,
+        ),
+    ] {
+        if !set {
+            continue;
+        }
         let sign = match part {
             crate::native::event_task::BufferPart::Before => '-',
             crate::native::event_task::BufferPart::After => '+',
         };
-        let reason_text = reason
-            .inlines
-            .iter()
-            .map(|inline| match inline {
-                super::description::Inline::Text { text, .. } => text.clone(),
-                super::description::Inline::Link { text, .. } => text.clone(),
-            })
-            .collect::<String>();
-        lines.push(format!("{sign}{} {reason_text}", reason.minutes));
-    }
-    if lines.is_empty() {
-        return String::new();
+        let reason = match part {
+            crate::native::event_task::BufferPart::Before => {
+                description.buffer_reasons.before.as_ref()
+            }
+            crate::native::event_task::BufferPart::After => {
+                description.buffer_reasons.after.as_ref()
+            }
+        };
+        if let Some(reason) = reason {
+            let reason_text = reason
+                .inlines
+                .iter()
+                .map(|inline| match inline {
+                    super::description::Inline::Text { text, .. } => {
+                        text.clone()
+                    }
+                    super::description::Inline::Link { text, .. } => {
+                        text.clone()
+                    }
+                })
+                .collect::<String>();
+            if reason_text.trim().is_empty() {
+                lines.push(format!("{sign}{}", reason.minutes));
+            } else {
+                lines.push(format!("{sign}{} {reason_text}", reason.minutes));
+            }
+        } else {
+            let minutes = match part {
+                crate::native::event_task::BufferPart::Before => {
+                    description.directives.buffer.before_min
+                }
+                crate::native::event_task::BufferPart::After => {
+                    description.directives.buffer.after_min
+                }
+            };
+            lines.push(format!("{sign}{minutes}"));
+        }
     }
     lines.join("\n")
 }

@@ -147,7 +147,13 @@ fn list_help_has_sorted_short_options_and_day_examples() {
             "-h, --help",
         ],
     );
-    for needle in ["bob gcal list -D tomorrow", "YYYY-MM-DD", "BOB_NOW"] {
+    for needle in [
+        "bob gcal list -D tomorrow",
+        "YYYY-MM-DD",
+        "BOB_NOW",
+        "fragile_directives",
+        "⚑",
+    ] {
         assert!(help.contains(needle), "missing `{needle}`:\n{help}");
     }
     assert_no_long_only_option_lines("bob gcal list --help", &help);
@@ -207,7 +213,13 @@ fn logout_and_doctor_help_carry_examples() {
         ),
         (
             &["gcal", "doctor", "--help"],
-            &["Check the Calendar setup", "bob gcal doctor", "BOB_DIR"],
+            &[
+                "Check the Calendar setup",
+                "bob gcal doctor",
+                "BOB_DIR",
+                "notes",
+                "25-lookup",
+            ],
         ),
         (
             &["gcal", "calendars", "--help"],

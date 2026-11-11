@@ -13,6 +13,7 @@ mod gcal_support;
 
 use std::{
     fs,
+    fs::OpenOptions,
     io::{Read, Write},
 };
 
@@ -22,7 +23,7 @@ use gcal_support::{
     stdout, wait_printed_auth_url, FakeBrowser, FakeGog, GcalEnv, ACCOUNT,
     HOST,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 
 fn check<'a>(doc: &'a Value, id: &str) -> &'a Value {
     doc["checks"]
@@ -1434,4 +1435,228 @@ fn common_flags_precede_the_subcommand() {
     assert!(json_at < calendar_at, "{calendars:?}");
     assert!(client_at < calendar_at, "{calendars:?}");
     assert_eq!(calendars[client_at + 1], "bob-gcal");
+}
+
+fn append_journal(env: &GcalEnv, value: Value) {
+    let dir = env.vault().join(".bob/gcal");
+    fs::create_dir_all(&dir).expect("journal dir");
+    let path = dir.join(format!("{HOST}.jsonl"));
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .expect("open journal");
+    writeln!(file, "{}", serde_json::to_string(&value).expect("json"))
+        .expect("append journal");
+}
+
+fn event_note(event_id: &str, text: &str, account: &str) -> Value {
+    json!({
+        "v": 1,
+        "ts": "2026-10-30T12:00:00-04:00",
+        "host": HOST,
+        "kind": "gcal.note",
+        "account": account,
+        "key": {"calendar_id": "primary", "event_id": event_id},
+        "scope": "event",
+        "text": text,
+    })
+}
+
+fn series_note(series: &str, text: &str) -> Value {
+    json!({
+        "v": 1,
+        "ts": "2026-10-30T12:00:00-04:00",
+        "host": HOST,
+        "kind": "gcal.note",
+        "account": ACCOUNT,
+        "key": {"calendar_id": "primary", "series": series},
+        "scope": "series",
+        "text": text,
+    })
+}
+
+fn google_event(id: &str, status: &str, answer: &str) -> Value {
+    json!({
+        "id": id,
+        "summary": id,
+        "status": status,
+        "start": {"dateTime": "2026-10-30T09:00:00-04:00"},
+        "end": {"dateTime": "2026-10-30T10:00:00-04:00"},
+        "attendees": [{"self": true, "responseStatus": answer}],
+    })
+}
+
+fn lookup_event(fake: &FakeGog, id: &str, status: &str, answer: &str) {
+    fake.event_lookup(
+        id,
+        &serde_json::to_string(&json!({
+            "event": google_event(id, status, answer)
+        }))
+        .expect("lookup body"),
+    );
+}
+
+fn notes_from(env: &GcalEnv, fake: &FakeGog) -> Value {
+    let output = run_gcal(env, fake, &["doctor", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    check(&json_stdout(&output), "notes").clone()
+}
+
+#[test]
+fn doctor_notes_ok_counts_a_live_note() {
+    let env = GcalEnv::new("bob-cli-gcal-doctor-notes-ok");
+    env.prepare_healthy_vault();
+    let fake = FakeGog::new(&env, "gog");
+    append_journal(&env, event_note("live-note", "@meet", ACCOUNT));
+    lookup_event(&fake, "live-note", "confirmed", "accepted");
+    let notes = notes_from(&env, &fake);
+    assert_eq!(notes["status"], "ok", "{notes}");
+    assert_eq!(notes["summary"], "1 private note");
+}
+
+#[test]
+fn doctor_notes_orphans_not_found_cancelled_declined_and_series() {
+    let env = GcalEnv::new("bob-cli-gcal-doctor-notes-orphans");
+    env.prepare_healthy_vault();
+    let fake = FakeGog::new(&env, "gog");
+    append_journal(&env, event_note("gone-event", "@meet", ACCOUNT));
+    let notes = notes_from(&env, &fake);
+    assert_eq!(notes["status"], "warn", "{notes}");
+    assert_eq!(notes["summary"], "1 orphaned");
+    assert_eq!(notes["fix"], "bob gcal note -c -i gone-event -C primary");
+
+    let env = GcalEnv::new("bob-cli-gcal-doctor-notes-cancelled");
+    env.prepare_healthy_vault();
+    let fake = FakeGog::new(&env, "gog");
+    append_journal(&env, event_note("cancelled-event", "@meet", ACCOUNT));
+    lookup_event(&fake, "cancelled-event", "cancelled", "accepted");
+    let notes = notes_from(&env, &fake);
+    assert_eq!(notes["status"], "warn", "{notes}");
+    assert!(
+        notes["summary"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("orphaned"),
+        "{notes}"
+    );
+    assert_eq!(
+        notes["fix"],
+        "bob gcal note -c -i cancelled-event -C primary"
+    );
+
+    let env = GcalEnv::new("bob-cli-gcal-doctor-notes-declined");
+    env.prepare_healthy_vault();
+    let fake = FakeGog::new(&env, "gog");
+    append_journal(&env, event_note("declined-event", "@meet", ACCOUNT));
+    lookup_event(&fake, "declined-event", "confirmed", "declined");
+    let notes = notes_from(&env, &fake);
+    assert_eq!(notes["status"], "warn", "{notes}");
+    assert!(
+        notes["summary"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("orphaned"),
+        "{notes}"
+    );
+
+    let env = GcalEnv::new("bob-cli-gcal-doctor-notes-series");
+    env.prepare_healthy_vault();
+    let fake = FakeGog::new(&env, "gog");
+    append_journal(&env, series_note("gone-series", "@meet"));
+    let notes = notes_from(&env, &fake);
+    assert_eq!(notes["status"], "warn", "{notes}");
+    assert_eq!(notes["summary"], "1 orphaned");
+    assert_eq!(
+        notes["fix"],
+        "bob gcal note -c -s series -i gone-series -C primary"
+    );
+}
+
+#[test]
+fn doctor_notes_unresolved_foreign_malformed_and_cap() {
+    let env = GcalEnv::new("bob-cli-gcal-doctor-notes-unresolved");
+    env.prepare_healthy_vault();
+    let fake = FakeGog::new(&env, "gog");
+    append_journal(&env, event_note("bad-route", "@no-such-area", ACCOUNT));
+    lookup_event(&fake, "bad-route", "confirmed", "accepted");
+    let notes = notes_from(&env, &fake);
+    assert_eq!(notes["status"], "warn", "{notes}");
+    assert!(
+        notes["summary"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("unresolved route"),
+        "{notes}"
+    );
+    assert_eq!(notes["fix"], "bob gcal note -e -i bad-route -C primary");
+
+    let env = GcalEnv::new("bob-cli-gcal-doctor-notes-foreign");
+    env.prepare_healthy_vault();
+    let fake = FakeGog::new(&env, "gog");
+    append_journal(
+        &env,
+        event_note("foreign-note", "@meet", "other@example.com"),
+    );
+    let notes = notes_from(&env, &fake);
+    assert_eq!(notes["status"], "warn", "{notes}");
+    assert_eq!(notes["summary"], "1 foreign-account");
+    assert_eq!(
+        notes["fix"],
+        "sign in as other@example.com to apply that account's notes"
+    );
+
+    let env = GcalEnv::new("bob-cli-gcal-doctor-notes-malformed");
+    env.prepare_healthy_vault();
+    let fake = FakeGog::new(&env, "gog");
+    append_journal(
+        &env,
+        json!({
+            "v": 1,
+            "ts": "2026-10-30T12:00:00-04:00",
+            "host": HOST,
+            "kind": "gcal.note",
+            "account": ACCOUNT,
+            "key": {"calendar_id": "primary", "event_id": "broken"},
+            "scope": "this-and-following",
+            "text": "@meet",
+        }),
+    );
+    let notes = notes_from(&env, &fake);
+    assert_eq!(notes["status"], "warn", "{notes}");
+    assert!(
+        notes["summary"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("malformed"),
+        "{notes}"
+    );
+    assert_eq!(notes["fix"], "inspect .bob/gcal/<host>.jsonl");
+
+    let env = GcalEnv::new("bob-cli-gcal-doctor-notes-cap");
+    env.prepare_healthy_vault();
+    let fake = FakeGog::new(&env, "gog");
+    for index in 1..=26 {
+        let id = format!("cap-{index:02}");
+        append_journal(&env, event_note(&id, "@meet", ACCOUNT));
+        lookup_event(&fake, &id, "confirmed", "accepted");
+    }
+    let notes = notes_from(&env, &fake);
+    assert_eq!(notes["status"], "warn", "{notes}");
+    assert_eq!(notes["summary"], "1 not checked");
+}
+
+#[test]
+fn doctor_notes_lookup_errors_count_as_not_checked() {
+    let env = GcalEnv::new("bob-cli-gcal-doctor-notes-lookup-err");
+    env.prepare_healthy_vault();
+    let fake = FakeGog::new(&env, "gog");
+    append_journal(&env, event_note("flaky-note", "@meet", ACCOUNT));
+    fake.event_lookup(
+        "flaky-note",
+        r#"{"_fail": {"stderr": "boom: connection reset", "code": 1}}"#,
+    );
+    let notes = notes_from(&env, &fake);
+    assert_eq!(notes["status"], "warn", "{notes}");
+    assert_eq!(notes["summary"], "1 not checked");
 }

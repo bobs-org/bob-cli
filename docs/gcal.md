@@ -282,9 +282,18 @@ asks for confirmation on a TTY and exits 2 on a pipe.
 `bob gcal doctor` walks gog, client, account and scope, a live calendars call
 (the token refresh), configured calendars, default-root validity and its type
 suggestion, today's daily note, journal git rules, malformed journal lines,
-the writer host, and the last sync (including its error, when the last run
-failed). The `last_sync` check warns when the last sync held (fix:
-`bob gcal sync -F`) and shows the waiting reason when the last sync waited.
+the writer host, private event notes, and the last sync (including its error,
+when the last run failed). The `notes` check is `N private notes` when every
+folded note is healthy. It warns on orphans (the event is not found,
+cancelled, or declined, or the series master is gone, cancelled, or declined),
+routes that no longer resolve, notes saved under another account, malformed
+`gcal.note` records, and
+notes past a 25-lookup cap (`N not checked`; lookup errors other than
+not-found also count as not checked). Each warning's `fix` names a concrete
+command for the first offender (`bob gcal note -c -i … -C …`,
+`bob gcal note -e -i …`, or a sign-in hint). The `last_sync` check warns when
+the last sync held (fix: `bob gcal sync -F`) and shows the waiting reason when
+the last sync waited.
 
 A failing check prints `✗ <check>  <problem>` plus `  fix: <one command or
 step>`. Exit 1 when any check fails; exit 0 when every check is `ok` or
@@ -367,7 +376,10 @@ even when their rows are hidden. The header carries the last sync: `synced
 3 min ago on kellys-macbook-pro`, falling back to the newest journal record,
 else `never synced`. When the note's Events section was replaced, the header
 reads `held · Events replaced`, computed from the note and journal the same
-way sync does.
+way sync does. When an Event Task you don't organize still carries Bob
+directives or reason lines only in the organizer's Google description, and it
+has no private note, a ⚑ hint names the event and the adopt command
+(`bob gcal note -A -i <id> -C <cal>`).
 
 JSON has `schema_version`, `day`, `calendars`, `events`, `counts`,
 `last_sync`, `past_open`, `warnings`, and `deprecations` fields. Each event
@@ -383,7 +395,10 @@ reasons included, 0 otherwise), `vault`, `skip` (the [skip reason](#skipped-even
 (`note`, `series_note`, `learned`, `token`, `colour`, `calendar`,
 `default`), `root.warnings`, and `note` (`null` or
 `{"scope": "event"|"series"|"both", "fields": [...], "bullet_lines": N}`,
-never note text). `vault` appends ` · off-clock` for explicit off tags
+never note text). `fragile_directives` is `true` only when that ⚑ hint would
+print (the event lands as a task, you don't organize it and it has guests, its
+Google description carries Bob directives or reasons, and it has no private
+note). `vault` appends ` · off-clock` for explicit off tags
 and ` · off-clock via <stem>` for inherited clocks. Descriptions and
 attendee details are omitted. A root may be null when no candidate is
 valid; per-event `root.warnings` explain each rejected candidate and its

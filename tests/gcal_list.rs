@@ -2,9 +2,9 @@
 
 mod gcal_support;
 
-use gcal_support::{stderr, stdout, FakeGog, GcalEnv};
-use serde_json::Value;
-use std::fs;
+use gcal_support::{stderr, stdout, FakeGog, GcalEnv, ACCOUNT, HOST};
+use serde_json::{json, Value};
+use std::{fs, fs::OpenOptions, io::Write};
 
 fn prepare(env: &GcalEnv) {
     env.prepare_healthy_vault();
@@ -645,4 +645,113 @@ fn list_reads_a_replaced_section_before_any_held_sync() {
     let table = stdout(&restored);
     assert!(!table.contains("held · Events replaced"), "{table}");
     assert!(!table.contains("lost · run sync -F"), "{table}");
+}
+
+fn list_events_json(events: Vec<Value>) -> String {
+    serde_json::to_string(&json!({
+        "events": events,
+        "nextPageToken": Value::Null,
+    }))
+    .expect("events envelope")
+}
+
+fn guest_task(id: &str, title: &str, description: &str) -> Value {
+    json!({
+        "id": id,
+        "summary": title,
+        "description": description,
+        "status": "confirmed",
+        "start": {"dateTime": "2026-10-30T18:30:00-04:00"},
+        "end": {"dateTime": "2026-10-30T19:00:00-04:00"},
+        "organizer": {
+            "displayName": "Kelly",
+            "email": "kelly@example.com",
+            "self": false
+        },
+        "attendees": [
+            {"self": true, "responseStatus": "accepted"},
+            {"email": "kelly@example.com", "responseStatus": "accepted"}
+        ]
+    })
+}
+
+fn run_list_json(env: &GcalEnv, fake: &FakeGog, extra: &[&str]) -> Value {
+    let mut command = env.command();
+    let mut args = vec!["gcal", "list", "-f", "json"];
+    args.extend_from_slice(extra);
+    fake.install(&mut command).args(args);
+    let output = command.output().expect("run gcal list json");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    serde_json::from_str(&stdout(&output)).expect("list JSON")
+}
+
+#[test]
+fn list_marks_fragile_directives_only_for_guest_tasks_with_google_bob_lines() {
+    let env = GcalEnv::new("bob-cli-gcal-list-fragile");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    let fragile =
+        guest_task("fragile-yes", "Planning", "@body\n-30 Drive there");
+    let mut organized = guest_task("fragile-org", "Standup", "@body\n-30");
+    organized["organizer"]["self"] = json!(true);
+    let mut no_guests = guest_task("fragile-solo", "Focus", "@body\n-30");
+    no_guests["attendees"] = json!([]);
+    let mut declined = guest_task("fragile-no", "Skipped", "@body\n-30");
+    declined["attendees"][0]["responseStatus"] = json!("declined");
+    let noted = guest_task("fragile-noted", "Noted", "@body\n-30 Drive there");
+    let prose = guest_task("fragile-prose", "Snacks", "Bring insurance card");
+    fake.events_json(&list_events_json(vec![
+        fragile, organized, no_guests, declined, noted, prose,
+    ]));
+    let dir = env.vault().join(".bob/gcal");
+    fs::create_dir_all(&dir).expect("journal dir");
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join(format!("{HOST}.jsonl")))
+        .expect("open journal");
+    writeln!(
+        file,
+        "{}",
+        serde_json::to_string(&json!({
+            "v": 1,
+            "ts": "2026-10-30T12:00:00-04:00",
+            "host": HOST,
+            "kind": "gcal.note",
+            "account": ACCOUNT,
+            "key": {"calendar_id": "primary", "event_id": "fragile-noted"},
+            "scope": "event",
+            "text": "@body",
+        }))
+        .expect("json")
+    )
+    .expect("append note");
+
+    let report = run_list_json(&env, &fake, &["-a"]);
+    let planning = list_event(&report, "Planning");
+    assert_eq!(planning["inclusion"], "task", "{planning}");
+    assert_eq!(planning["fragile_directives"], true, "{planning}");
+    assert_eq!(planning["note"], Value::Null, "{planning}");
+    assert_eq!(list_event(&report, "Standup")["fragile_directives"], false);
+    assert_eq!(list_event(&report, "Focus")["fragile_directives"], false);
+    assert_eq!(list_event(&report, "Skipped")["fragile_directives"], false);
+    let noted_row = list_event(&report, "Noted");
+    assert!(noted_row["note"].is_object(), "{noted_row}");
+    assert_eq!(noted_row["fragile_directives"], false, "{noted_row}");
+    assert_eq!(list_event(&report, "Snacks")["fragile_directives"], false);
+
+    let mut table = env.command();
+    fake.install(&mut table).args(["gcal", "list"]);
+    let table_out = table.output().expect("run table list");
+    assert_eq!(table_out.status.code(), Some(0), "{}", stderr(&table_out));
+    let text = stdout(&table_out);
+    let calendar = planning["calendar_id"].as_str().unwrap_or("primary");
+    let expected = format!(
+        "⚑ Planning: its Bob lines live in the organizer's description and may vanish on their next update · bob gcal note -A -i fragile-yes -C {calendar}"
+    );
+    assert!(text.contains(&expected), "{text}");
+    assert!(!text.contains("⚑ Standup"), "{text}");
+    assert!(!text.contains("⚑ Focus"), "{text}");
+    assert!(!text.contains("⚑ Noted"), "{text}");
+    assert!(!text.contains("⚑ Snacks"), "{text}");
 }

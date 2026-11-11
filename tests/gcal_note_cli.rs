@@ -9,7 +9,12 @@ use serde_json::{json, Value};
 use std::{
     fs::{self, OpenOptions},
     io::Write,
+    path::Path,
+    process::Stdio,
 };
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 fn prepare(env: &GcalEnv) {
     env.prepare_healthy_vault();
@@ -175,7 +180,12 @@ fn note_help_pins_sorted_options_and_examples() {
     for needle in [
         "bob gcal note",
         "bob gcal note -a -f json",
+        "bob gcal note deerwood -e",
+        "bob gcal note deerwood -A",
         "BOB_GCAL_ASSUME_TTY",
+        "VISUAL",
+        "git-style scissors",
+        "Edit again? [Y/n]",
         "QUERY",
         "TEXT",
     ] {
@@ -2203,4 +2213,524 @@ fn write_json_reports_waiting_reply_and_maybe_statuses() {
         let document = json_stdout(&output);
         assert_eq!(document["status"]["state"], expected);
     }
+}
+
+fn chmod_exec(path: &Path) {
+    #[cfg(unix)]
+    {
+        let mut permissions =
+            fs::metadata(path).expect("stat script").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).expect("chmod script");
+    }
+}
+
+fn write_script(path: &Path, body: &str) {
+    fs::write(path, body).expect("write script");
+    chmod_exec(path);
+}
+
+fn install_lookup(fake: &FakeGog, event: &Value) {
+    let id = event["id"].as_str().expect("event id");
+    fake.event_lookup(
+        id,
+        &serde_json::to_string(&json!({ "event": event }))
+            .expect("lookup body"),
+    );
+}
+
+fn run_note_edit(
+    env: &GcalEnv,
+    fake: &FakeGog,
+    visual: &Path,
+    args: &[&str],
+    stdin_text: &str,
+) -> std::process::Output {
+    let mut command = env.command();
+    fake.install(&mut command);
+    command.arg("gcal");
+    for arg in args {
+        command.arg(arg);
+    }
+    command
+        .env("BOB_GCAL_ASSUME_TTY", "1")
+        .env("VISUAL", visual)
+        .env_remove("EDITOR")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("spawn bob gcal note -e");
+    let write_result = child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(stdin_text.as_bytes());
+    if let Err(error) = write_result {
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe, "write stdin");
+    }
+    child.wait_with_output().expect("wait for bob gcal note -e")
+}
+
+fn journal_note_count(env: &GcalEnv) -> usize {
+    let path = env.vault().join(".bob/gcal/test-host.jsonl");
+    fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.contains("\"gcal.note\""))
+        .count()
+}
+
+#[test]
+fn edit_requires_a_tty_and_hints_to_pass_text() {
+    let env = GcalEnv::new("bob-cli-gcal-note-edit-tty");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    let event = guest_event(
+        "edit-tty",
+        "Deerwood",
+        "2026-10-30T09:00:00-04:00",
+        "2026-10-30T10:00:00-04:00",
+    );
+    install_lookup(&fake, &event);
+
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-e", "-i", "edit-tty"])
+        .output()
+        .expect("edit off a TTY");
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    let err = stderr(&output);
+    assert!(
+        err.contains("editing a private event note needs a TTY"),
+        "{err}"
+    );
+    assert!(
+        err.contains("pass the note as TEXT instead of `-e`"),
+        "{err}"
+    );
+}
+
+#[test]
+fn edit_uses_visual_over_editor_and_drops_the_scissors_block() {
+    let env = GcalEnv::new("bob-cli-gcal-note-edit-scissors");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    let event = guest_event(
+        "edit-scissors",
+        "Deerwood",
+        "2026-10-30T09:00:00-04:00",
+        "2026-10-30T10:00:00-04:00",
+    );
+    install_lookup(&fake, &event);
+
+    let dump = env.root().join("editor-input");
+    let visual = env.root().join("visual.sh");
+    let editor = env.root().join("editor.sh");
+    write_script(
+        &visual,
+        &format!(
+            "#!/bin/sh\ncp \"$1\" {dump}\nprintf '%s\\n' '@family' '-30 Drive there' > \"$1\"\n",
+            dump = dump.display()
+        ),
+    );
+    write_script(&editor, "#!/bin/sh\nprintf '%s\\n' '@body' > \"$1\"\n");
+
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .env("BOB_GCAL_ASSUME_TTY", "1")
+        .env("VISUAL", &visual)
+        .env("EDITOR", &editor)
+        .args(["gcal", "note", "-e", "-i", "edit-scissors"])
+        .output()
+        .expect("edit with VISUAL");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let saved = stdout(&output);
+    assert!(saved.contains("✓ Noted · only in Bob"), "{saved}");
+    assert!(saved.contains("@family"), "{saved}");
+    assert!(saved.contains("-30 Drive there"), "{saved}");
+    assert!(!saved.contains("@body"), "{saved}");
+
+    let input = fs::read_to_string(&dump).expect("editor dump");
+    assert!(
+        input.contains("------------------------ >8 ------------------------"),
+        "{input}"
+    );
+    assert!(
+        input.contains("Do not modify or remove the line above; everything below it is ignored."),
+        "{input}"
+    );
+    assert!(
+        input.contains("Private note for Fri Oct 30 09:00–10:00 Deerwood (from Kelly · Yes)"),
+        "{input}"
+    );
+    assert!(input.contains("An empty note clears it."), "{input}");
+    assert!(
+        !input.contains("# --- Bob event note help"),
+        "retired comment marker must not appear:\n{input}"
+    );
+}
+
+#[test]
+fn edit_empty_clears_or_reports_unchanged_when_there_is_no_note() {
+    let env = GcalEnv::new("bob-cli-gcal-note-edit-empty");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    let event = guest_event(
+        "edit-empty",
+        "Deerwood",
+        "2026-10-30T09:00:00-04:00",
+        "2026-10-30T10:00:00-04:00",
+    );
+    install_lookup(&fake, &event);
+    let visual = env.root().join("visual.sh");
+    write_script(&visual, "#!/bin/sh\n: > \"$1\"\n");
+
+    let empty = run_note_edit(
+        &env,
+        &fake,
+        &visual,
+        &["note", "-e", "-i", "edit-empty"],
+        "",
+    );
+    assert_eq!(empty.status.code(), Some(0), "{}", stderr(&empty));
+    let unchanged = stdout(&empty);
+    assert!(
+        unchanged.contains("✓ Unchanged · there is no private note"),
+        "{unchanged}"
+    );
+    assert_eq!(journal_note_count(&env), 0);
+
+    let mut command = env.command();
+    let saved = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-i", "edit-empty", "--", "@family"])
+        .output()
+        .expect("seed a note");
+    assert_eq!(saved.status.code(), Some(0), "{}", stderr(&saved));
+    assert_eq!(journal_note_count(&env), 1);
+
+    let cleared = run_note_edit(
+        &env,
+        &fake,
+        &visual,
+        &["note", "-e", "-i", "edit-empty"],
+        "",
+    );
+    assert_eq!(cleared.status.code(), Some(0), "{}", stderr(&cleared));
+    assert!(
+        stdout(&cleared)
+            .contains("✓ Cleared · Google's description decides again"),
+        "{}",
+        stdout(&cleared)
+    );
+    assert_eq!(journal_note_count(&env), 2);
+}
+
+#[test]
+fn edit_unchanged_text_appends_nothing() {
+    let env = GcalEnv::new("bob-cli-gcal-note-edit-unchanged");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    let event = guest_event(
+        "edit-unchanged",
+        "Deerwood",
+        "2026-10-30T09:00:00-04:00",
+        "2026-10-30T10:00:00-04:00",
+    );
+    install_lookup(&fake, &event);
+    let mut command = env.command();
+    let saved = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-i", "edit-unchanged", "--", "@family"])
+        .output()
+        .expect("seed a note");
+    assert_eq!(saved.status.code(), Some(0), "{}", stderr(&saved));
+    assert_eq!(journal_note_count(&env), 1);
+
+    let visual = env.root().join("visual.sh");
+    write_script(&visual, "#!/bin/sh\nprintf '%s\\n' '@family' > \"$1\"\n");
+    let output = run_note_edit(
+        &env,
+        &fake,
+        &visual,
+        &["note", "-e", "-i", "edit-unchanged"],
+        "",
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        stdout(&output)
+            .contains("✓ Unchanged · the canonical note is already saved"),
+        "{}",
+        stdout(&output)
+    );
+    assert_eq!(journal_note_count(&env), 1);
+}
+
+#[test]
+fn edit_again_yes_reopens_and_no_saves_nothing() {
+    let env = GcalEnv::new("bob-cli-gcal-note-edit-again");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    let event = guest_event(
+        "edit-again",
+        "Deerwood",
+        "2026-10-30T09:00:00-04:00",
+        "2026-10-30T10:00:00-04:00",
+    );
+    install_lookup(&fake, &event);
+
+    let count = env.root().join("edit-count");
+    let visual = env.root().join("visual.sh");
+    write_script(
+        &visual,
+        &format!(
+            "#!/bin/sh
+n=0
+if [ -f {count} ]; then n=$(cat {count}); fi
+n=$((n+1))
+echo \"$n\" > {count}
+if [ \"$n\" -eq 1 ]; then
+  printf '%s\\n' '@no-such-area' > \"$1\"
+else
+  printf '%s\\n' '@family' > \"$1\"
+fi
+",
+            count = count.display()
+        ),
+    );
+
+    let refused = run_note_edit(
+        &env,
+        &fake,
+        &visual,
+        &["note", "-e", "-i", "edit-again"],
+        "n\n",
+    );
+    assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
+    let err = stderr(&refused);
+    assert!(err.contains("Edit again? [Y/n]"), "{err}");
+    assert!(
+        err.contains("@no-such-area")
+            || err.to_ascii_lowercase().contains("route"),
+        "{err}"
+    );
+    assert_eq!(journal_note_count(&env), 0);
+    fs::remove_file(&count).ok();
+
+    let accepted = run_note_edit(
+        &env,
+        &fake,
+        &visual,
+        &["note", "-e", "-i", "edit-again"],
+        "Y\n",
+    );
+    assert_eq!(accepted.status.code(), Some(0), "{}", stderr(&accepted));
+    assert!(
+        stdout(&accepted).contains("✓ Noted · only in Bob"),
+        "{}",
+        stdout(&accepted)
+    );
+    assert_eq!(journal_note_count(&env), 1);
+    let rounds = fs::read_to_string(&count).expect("edit count");
+    assert_eq!(rounds.trim(), "2", "{rounds}");
+}
+
+#[test]
+fn adopt_copies_bare_buffers_and_says_they_live_in_bob() {
+    let env = GcalEnv::new("bob-cli-gcal-note-adopt");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    let mut event = guest_event(
+        "adopt-bare",
+        "Deerwood",
+        "2026-10-30T09:00:00-04:00",
+        "2026-10-30T10:00:00-04:00",
+    );
+    event["description"] =
+        json!("@family\n#off\n-30 Drive there\n+15\nPlease bring the form");
+    install_lookup(&fake, &event);
+
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-A", "-i", "adopt-bare"])
+        .output()
+        .expect("adopt Google lines");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let saved = stdout(&output);
+    assert!(
+        saved.contains(
+            "✓ Noted · now live in Bob too: they survive the organizer's next update"
+        ),
+        "{saved}"
+    );
+    assert!(saved.contains("@family"), "{saved}");
+    assert!(saved.contains("#off"), "{saved}");
+    assert!(saved.contains("-30 Drive there"), "{saved}");
+    assert!(saved.contains("+15"), "{saved}");
+
+    let mut command = env.command();
+    let shown = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-i", "adopt-bare", "-f", "json"])
+        .output()
+        .expect("show adopted note");
+    assert_eq!(shown.status.code(), Some(0), "{}", stderr(&shown));
+    let shown_doc = json_stdout(&shown);
+    assert_eq!(
+        shown_doc["event"]["note"]["text"],
+        "@family #off +15\n-30 Drive there"
+    );
+    assert!(
+        !shown_doc["event"]["note"]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Please bring the form"),
+        "{shown_doc}"
+    );
+
+    let mut zeros = guest_event(
+        "adopt-zeros",
+        "Zeros",
+        "2026-10-30T11:00:00-04:00",
+        "2026-10-30T12:00:00-04:00",
+    );
+    zeros["description"] = json!("-0\n+0");
+    install_lookup(&fake, &zeros);
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-A", "-i", "adopt-zeros", "-f", "json"])
+        .output()
+        .expect("adopt explicit zeros");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let document = json_stdout(&output);
+    let zero_text = document["note"]["text"]
+        .as_str()
+        .or_else(|| document["event"]["note"]["text"].as_str())
+        .unwrap_or_default();
+    assert!(
+        zero_text.contains("-0") && zero_text.contains("+0"),
+        "{document}"
+    );
+}
+
+#[test]
+fn adopt_refuses_an_existing_note_and_nothing_to_copy() {
+    let env = GcalEnv::new("bob-cli-gcal-note-adopt-refuse");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    let mut event = guest_event(
+        "adopt-exists",
+        "Deerwood",
+        "2026-10-30T09:00:00-04:00",
+        "2026-10-30T10:00:00-04:00",
+    );
+    event["description"] = json!("@family -30");
+    install_lookup(&fake, &event);
+    let mut command = env.command();
+    let seeded = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-i", "adopt-exists", "--", "@family"])
+        .output()
+        .expect("seed a note");
+    assert_eq!(seeded.status.code(), Some(0), "{}", stderr(&seeded));
+
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-A", "-i", "adopt-exists"])
+        .output()
+        .expect("adopt over an existing note");
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    let err = stderr(&output);
+    assert!(
+        err.contains(
+            "this event already has a private note · edit it with `-e`"
+        ),
+        "{err}"
+    );
+
+    let mut empty = guest_event(
+        "adopt-empty",
+        "Empty",
+        "2026-10-30T11:00:00-04:00",
+        "2026-10-30T12:00:00-04:00",
+    );
+    empty["description"] = json!("Please bring the form");
+    install_lookup(&fake, &empty);
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-A", "-i", "adopt-empty"])
+        .output()
+        .expect("adopt with no directives");
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    let err = stderr(&output);
+    assert!(
+        err.contains("no directive or reason lines to adopt"),
+        "{err}"
+    );
+}
+
+#[test]
+fn adopt_edit_prefills_the_editor_with_google_lines() {
+    let env = GcalEnv::new("bob-cli-gcal-note-adopt-edit");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    let mut event = guest_event(
+        "adopt-edit",
+        "Deerwood",
+        "2026-10-30T09:00:00-04:00",
+        "2026-10-30T10:00:00-04:00",
+    );
+    event["description"] = json!("@family\n-30\n+15");
+    install_lookup(&fake, &event);
+    append_journal(
+        &env,
+        "test-host",
+        event_note(
+            "test-host",
+            "2026-10-30T08:00:00-04:00",
+            "adopt-edit",
+            "@body",
+        ),
+    );
+
+    let dump = env.root().join("editor-input");
+    let visual = env.root().join("visual.sh");
+    write_script(
+        &visual,
+        &format!(
+            "#!/bin/sh\ncp \"$1\" {dump}\nprintf '%s\\n' '@family' '-30 Drive there' > \"$1\"\n",
+            dump = dump.display()
+        ),
+    );
+    let output = run_note_edit(
+        &env,
+        &fake,
+        &visual,
+        &["note", "-A", "-e", "-i", "adopt-edit"],
+        "",
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let input = fs::read_to_string(&dump).expect("editor dump");
+    let seed = input
+        .split("------------------------ >8 ------------------------")
+        .next()
+        .unwrap_or_default();
+    assert!(seed.contains("@family"), "{input}");
+    assert!(seed.contains("-30"), "{input}");
+    assert!(seed.contains("+15"), "{input}");
+    assert!(
+        !seed.contains("@body"),
+        "adopt prefills Google lines, not the existing note:\n{input}"
+    );
+    assert!(
+        stdout(&output).contains("now live in Bob too"),
+        "{}",
+        stdout(&output)
+    );
 }

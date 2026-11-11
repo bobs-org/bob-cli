@@ -121,6 +121,23 @@ pub(super) fn write_one<S: HomeSource>(
 
     if args.clear {
         if current.is_none() {
+            if args.edit {
+                let rendered = preview(&candidate, vault)?;
+                return print_result(
+                    args,
+                    &candidate,
+                    scope,
+                    "unchanged",
+                    "",
+                    None,
+                    "unchanged",
+                    "there is no private note",
+                    None,
+                    &warnings,
+                    &rendered,
+                    false,
+                );
+            }
             return Err(GcalError::setup(
                 "no_note",
                 "there is no private note in that scope to clear".to_string(),
@@ -699,6 +716,16 @@ fn apply_one_if_possible(
             vec![format!("immediate sync failed: {}", error.message())],
         ),
     }
+}
+
+pub(super) fn validation_errors(
+    vault: &std::path::Path,
+    day: NaiveDate,
+    input: &str,
+) -> Vec<String> {
+    let mut note = normalize(input);
+    validate(&mut note, vault, day);
+    note.errors.into_iter().map(|error| error.message).collect()
 }
 
 fn normalize(input: &str) -> NormalizedNote {
@@ -1447,6 +1474,10 @@ fn print_result(
             println!("Preview · {status_detail}");
         } else if action == "unchanged" {
             println!("✓ Unchanged · {status_detail}");
+        } else if args.adopt {
+            println!(
+                "✓ Noted · now live in Bob too: they survive the organizer's next update · {status_detail}"
+            );
         } else {
             println!("✓ Noted · only in Bob · {status_detail}");
         }
