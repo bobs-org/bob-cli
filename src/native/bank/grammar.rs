@@ -538,23 +538,37 @@ fn parse_iso_heading(title: &str, month: YearMonth) -> Option<DayHeading> {
     let mut parts = title.split_whitespace();
     let iso = parts.next()?;
     let date = NaiveDate::parse_from_str(iso, "%Y-%m-%d").ok()?;
-    if !month.contains(date) {
-        return Some(DayHeading {
-            date,
-            kind: DayHeadingKind::Iso,
-            weekday_mismatch: false,
-        });
+    // Validate trailing tokens before the out-of-month early return, mirroring
+    // the in-month branch: at most one token, so `## 2025-12-31 year-end
+    // review` is prose, not a day heading.
+    let trailing = parts.next();
+    if parts.next().is_some() {
+        return None;
     }
-    match parts.next() {
+    if !month.contains(date) {
+        return match trailing {
+            None => Some(DayHeading {
+                date,
+                kind: DayHeadingKind::Iso,
+                weekday_mismatch: false,
+            }),
+            Some(weekday) => {
+                let expected = weekday_abbr(date);
+                Some(DayHeading {
+                    date,
+                    kind: DayHeadingKind::IsoWeekday,
+                    weekday_mismatch: weekday != expected,
+                })
+            }
+        };
+    }
+    match trailing {
         None => Some(DayHeading {
             date,
             kind: DayHeadingKind::Iso,
             weekday_mismatch: false,
         }),
         Some(weekday) => {
-            if parts.next().is_some() {
-                return None;
-            }
             let expected = weekday_abbr(date);
             Some(DayHeading {
                 date,
@@ -747,6 +761,21 @@ mod tests {
         let wrong = parse_day_heading("2026-11-12 Wed", month()).unwrap();
         assert!(wrong.weekday_mismatch);
         assert!(parse_day_heading("Notes", month()).is_none());
+        // Trailing junk disqualifies ISO headings in and out of the month.
+        assert!(parse_day_heading("2026-11-12 trip retro", month()).is_none());
+        assert!(
+            parse_day_heading("2025-12-31 year-end review", month()).is_none()
+        );
+        // A bare out-of-month ISO date still parses as a day heading so the
+        // checker can report `bank_day_invalid` for it.
+        let outside = parse_day_heading("2025-12-31", month()).unwrap();
+        assert_eq!(
+            outside.date,
+            NaiveDate::from_ymd_opt(2025, 12, 31).unwrap()
+        );
+        let outside_weekday =
+            parse_day_heading("2025-12-31 Wed", month()).unwrap();
+        assert!(!outside_weekday.weekday_mismatch);
         assert!(looks_like_day_heading("Thu Nov 31"));
         assert!(looks_like_day_heading("2026-11-32"));
         assert!(looks_like_day_heading("Nov 32"));

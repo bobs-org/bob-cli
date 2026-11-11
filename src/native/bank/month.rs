@@ -118,7 +118,10 @@ pub(crate) fn parse_month_note(
 ) -> MonthNote {
     let doc = PhysicalDoc::parse(contents);
     let logical = doc.contents();
-    let frontmatter = parse_frontmatter(contents);
+    // Parse frontmatter from the BOM-stripped text so a BOM month note keeps
+    // its `month:` / `type:` readings like the body scan does.
+    let stripped = contents.strip_prefix('\u{feff}').unwrap_or(contents);
+    let frontmatter = parse_frontmatter(stripped);
     let frontmatter_month = frontmatter.as_ref().and_then(|fm| {
         frontmatter_top_level_value(fm, "month")
             .and_then(|value| YearMonth::parse(trim_quotes(value)))
@@ -256,7 +259,8 @@ pub(crate) fn plan_insert_day(
     let doc = PhysicalDoc::parse(text);
     let ending = doc.default_ending;
     let heading = render_day_heading(date);
-    let insert_after = insert_after_line(&parsed, date);
+    let logical = doc.contents();
+    let insert_after = insert_after_line(&parsed, &logical, date);
     let at = match insert_after {
         Some(line) => doc.line_end_offset(line - 1),
         None => after_fence_or_title(&doc),
@@ -276,28 +280,54 @@ pub(crate) fn plan_insert_day(
     })
 }
 
-fn insert_after_line(parsed: &MonthNote, date: NaiveDate) -> Option<usize> {
+fn insert_after_line(
+    parsed: &MonthNote,
+    logical: &[&str],
+    date: NaiveDate,
+) -> Option<usize> {
     let mut last_before = None;
     for day in &parsed.days {
         if day.date < date {
-            last_before = Some(day_end_line(day));
+            last_before = Some(day_end_line(day, logical));
         }
     }
     last_before
 }
 
-fn day_end_line(day: &DaySection) -> usize {
-    day.rows
+/// Last line of a day's contiguous block: the heading (or last row) plus any
+/// indented free-note children, so inserts land after the children instead of
+/// reparenting them under a new row or heading.
+fn day_end_line(day: &DaySection, logical: &[&str]) -> usize {
+    let mut end = day
+        .rows
         .last()
         .map(|row| row.line)
-        .unwrap_or(day.heading_line)
+        .unwrap_or(day.heading_line);
+    while let Some(next) = logical.get(end) {
+        if next.trim().is_empty() {
+            break;
+        }
+        if next.starts_with(' ') || next.starts_with('\t') {
+            end += 1;
+        } else {
+            break;
+        }
+    }
+    end
 }
 
 fn after_fence_or_title(doc: &PhysicalDoc<'_>) -> usize {
     let logical = doc.contents();
     let fenced = fenced_lines(&logical, 0..logical.len());
-    if let Some(last_fence) = fenced.iter().max().copied() {
-        return doc.line_end_offset(last_fence);
+    // Anchor after the first fence block closes: a later fence may sit
+    // inside a day's notes, which would misplace an inserted earliest-day
+    // heading.
+    if let Some(&first) = fenced.iter().next() {
+        let mut end = first;
+        while fenced.contains(&(end + 1)) {
+            end += 1;
+        }
+        return doc.line_end_offset(end);
     }
     if let Some(index) = logical
         .iter()
@@ -343,11 +373,22 @@ pub(crate) fn plan_append_row(
     let day = parsed.days.iter().find(|day| day.date == date)?;
     let doc = PhysicalDoc::parse(text);
     let ending = doc.default_ending;
-    let after_line = day_end_line(day);
+    let logical = doc.contents();
+    let after_line = day_end_line(day, &logical);
     let at = doc.line_end_offset(after_line - 1);
     let mut insert = String::new();
+    if day.rows.is_empty() && after_line == day.heading_line {
+        // One blank line after the heading before the first row.
+        insert.push_str(ending);
+    }
     insert.push_str(row);
     if !row.ends_with('\n') {
+        insert.push_str(ending);
+    }
+    if let Some(next) = logical.get(after_line)
+        && !next.trim().is_empty()
+    {
+        // Keep one blank line between the appended row and whatever follows.
         insert.push_str(ending);
     }
     Some(ByteEdit {
@@ -478,6 +519,70 @@ mod tests {
         let edit = plan_append_id(&text, shop.line, "2b91c0e4").unwrap();
         let text = edit.apply(&text);
         assert!(text.contains("^bank-2b91c0e4"));
+    }
+
+    #[test]
+    fn bom_month_note_keeps_frontmatter() {
+        let text = format!("\u{feff}{}", sample());
+        let parsed = parse_month_note("bank/2026-11.md", &text, month());
+        assert!(parsed.type_is_bank_month);
+        assert_eq!(parsed.frontmatter_month, Some(month()));
+        assert_eq!(parsed.days.len(), 1);
+    }
+
+    #[test]
+    fn append_row_lands_after_free_note_children() {
+        let mut text = sample();
+        text.push_str(
+            "\n- [ ] $61.20 ShopRite\n  free note stays with ShopRite\n",
+        );
+        let date = NaiveDate::from_ymd_opt(2026, 11, 12).unwrap();
+        let edit = plan_append_row(
+            &text,
+            month(),
+            date,
+            "- [ ] $5.00 Other [cat:: groceries]",
+        )
+        .unwrap();
+        let after = edit.apply(&text);
+        let child = after.find("free note stays with ShopRite").unwrap();
+        let row = after.find("$5.00 Other").unwrap();
+        assert!(child < row, "{after}");
+        let parsed = parse_month_note("bank/2026-11.md", &after, month());
+        assert_eq!(parsed.days.len(), 1);
+        assert_eq!(parsed.days[0].rows.len(), 2);
+    }
+
+    #[test]
+    fn append_row_to_empty_day_keeps_blank_line() {
+        let text = sample();
+        let date = NaiveDate::from_ymd_opt(2026, 11, 12).unwrap();
+        let edit = plan_append_row(
+            &text,
+            month(),
+            date,
+            "- [ ] $5.00 Other [cat:: groceries]",
+        )
+        .unwrap();
+        let after = edit.apply(&text);
+        assert!(
+            after.contains("## Thu Nov 12\n\n- [ ] $5.00 Other"),
+            "{after}"
+        );
+    }
+
+    #[test]
+    fn insert_day_ignores_fence_inside_day_notes() {
+        let mut text = sample();
+        text.push_str("\n- [ ] $61.20 ShopRite\n\n```csv\nnote,block\n```\n");
+        let date = NaiveDate::from_ymd_opt(2026, 11, 10).unwrap();
+        let edit = plan_insert_day(&text, month(), date).unwrap();
+        let after = edit.apply(&text);
+        let inserted = after.find("## Tue Nov 10").unwrap();
+        let existing = after.find("## Thu Nov 12").unwrap();
+        let fence = after.find("```bob-bank").unwrap();
+        assert!(inserted > fence, "{after}");
+        assert!(inserted < existing, "{after}");
     }
 
     #[test]
