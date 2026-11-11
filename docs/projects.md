@@ -147,6 +147,8 @@ The trailing block id must be exactly `^prj`. The `#prj` tag immediately after
 task views can tell it apart from ordinary follow-up tasks; it is additive, and
 legacy lines without `#prj` are still recognized. Multiple `^prj` tasks or a
 `^prj` line that is not a valid `#task` checkbox are per-file errors.
+Obsidian renders `#prj` and `#hide` as icon marks per
+[`docs/task-tag-marks.md`](task-tag-marks.md).
 
 Capture into the project note through its `^prj` task with a `#drawer`
 selector (`note text @proj+prj#requirements`): the selector resolves against

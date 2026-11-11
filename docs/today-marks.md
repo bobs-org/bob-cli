@@ -66,9 +66,8 @@ A line gets a mark only when all of these hold:
 
 The mark goes at the first non-space character after the identity slot, before
 the title. The slot is the leading exact `#task` token, the `#task #ref`
-pair (📖), or the canonical `#task #gtd #pre` / `#task #gtd #post`
-checklist run (☀ / ⚑). On `#task #prj` lines it sits between the hash and the
-`#prj` pill.
+pair (📖), the `#task #prj` pair (◎), or the canonical `#task #gtd #pre` /
+`#task #gtd #post` checklist run (☀ / ⚑).
 When `#task` is not the body's first token, the mark goes at the body start,
 right after the checkbox and its space.
 
@@ -192,7 +191,7 @@ stated.
 | TM13 | the task lives in a canonical daily note (`^gtd`), or T is rendered inside a daily note | no |
 | TM14 | cache not ready (startup), or the date rolled over | no |
 | TM15 | `^fix` ends two lines of T | no mark on either |
-| TM16 | `#task #ref` / `#task #prj` / `#task #gtd #pre` lines | after the 📖 pair / between the hash and `#prj` / after the sunrise run |
+| TM16 | `#task #ref` / `#task #prj` / `#task #gtd #pre` lines | after the 📖 pair / after the ◎ pair / after the sunrise run |
 | TM17 | cursor at the title start; cursor inside `#task` | mark shown, caret after it; hash revealed, mark stays |
 | TM18 | Ctrl+Shift+Enter link, then unlink, from T | appears with the entrance pop, then disappears |
 | TM19 | rendered view where the source line cannot be proven | no (neutral) |
@@ -219,7 +218,7 @@ Bryan verifies in Obsidian after `live_preview` and again after `reading`:
 - [ ] Ctrl+Shift+Enter link and unlink make the mark pop in and vanish within about a quarter second, with the daily note open in another pane and with it closed.
 - [ ] Completing a marked task removes its mark on the same frame.
 - [ ] Starting the placeholder Pomodoro flips the tooltip from `queued in` to `running in`.
-- [ ] Light and dark themes look right on green (Next) and amber (Pending) tints, beside a violet `#prj` pill, after the 📖 pair, and with Apple emoji on the Mac.
+- [ ] Light and dark themes look right on green (Next) and amber (Pending) tints, after the ◎ project glyph, after the 📖 pair, and with Apple emoji on the Mac.
 - [ ] vim `j`/`k` does not jitter, and the caret sits after the mark at the title start.
 - [ ] Mod+click and “Go to today's Task Link” land on the Task Link, reusing the open daily pane.
 - [ ] Midnight (or waking the laptop the next day) clears the marks without a reload.

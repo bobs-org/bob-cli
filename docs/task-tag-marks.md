@@ -2,10 +2,11 @@
 
 This guide is the authoritative display contract for task tag marks,
 in the style of `docs/date-marks.md`. The JavaScript mirror lives in
-bob-ledger-tools (`src/138-task-tag-marks.js` and
-`src/138-checklist-task-marks.js` pure core plus
-`src/264-plugin-task-tag-marks.js` Live Preview, rendered views, and
-toggle); its tests run the conformance vectors below verbatim. There
+bob-ledger-tools (`src/138-task-tag-marks.js`,
+`src/138-checklist-task-marks.js`, and `src/138-prj-hide-marks.js`
+pure core plus `src/264-plugin-task-tag-marks.js` Live Preview,
+rendered views, and toggle); its tests run the conformance vectors
+below verbatim. There
 is **no api namespace** (the top-level api stays v3; add one only
 when a consumer exists).
 
@@ -91,8 +92,10 @@ stays legible on the red Blocked line tint.
 Vault counts (2026-10-08): 3,406 `#task` lines, 2,934 closed, about
 470 open — mostly Blocked (`[?]`, 383 lines) on the red tint, plus
 Next (`[*]`, 19), In Progress (`[/]`, 7), and plain `[ ]` (63).
-656 `#task` lines carry another tag pill, usually `#prj` in the
-violet accent, beside the glyph.
+656 `#task` lines carry another tag pill. Canonical `#task #prj`
+pairs now share the identity slot (one project glyph) instead of a
+violet `#prj` pill; a leftover `#prj` pill is the honest
+non-canonical signal.
 
 The chosen teal blends theme cyan toward the text color so it adapts
 to both themes: about `#0a9391` in light (about 3.8:1 on white, above
@@ -174,8 +177,9 @@ The `--bob-task-tag-color` hook is unset by default. The generic hash ink
 names a tracked task, never its lane. When `data-bob-type` is set on a
 hash mark, CSS hides the `::before` mask and draws `#TYPE` as text in
 `::after`, using the same ink for the hash and name. The host keeps only
-the capsule padding. The book and checklist variants retain their glyph
-and draw the type name beside it.
+the capsule padding. The book, checklist, and project variants retain their glyph
+and draw the type name beside it. A hide mark never draws a type
+name.
 
 ## Tooltip
 
@@ -313,6 +317,58 @@ the task pickers, the Task Card header, and inbox-route subtitles. The
 stored line keeps both tags, so Tasks, Dataview, `bob query`, and grep
 keep working.
 
+## Project tasks
+
+A task line whose exact `#task` tag is immediately followed by one
+whitespace run and `#prj` (any case, so `#PRJ` and `#Prj` pair) is a
+project lifecycle task: the pair renders as **one** target glyph in
+the slot, in the same teal identity ink the hash uses. Shape says the
+kind; ink still says "tracked task".
+
+```text
+before: - [ ] #task #prj Ship the project outcome! ^prj
+after:  - [ ] ◎ Ship the project outcome!               (◎ ≈ the teal target glyph)
+```
+
+One identity slot: `#prj` anywhere else (mid-title, reversed
+`#prj #task` order, `#project`, `#prj_is_blocked`, non-task lines,
+code) never renders the target. Those leftover pills are the honest
+non-canonical signal. The existing `#task #ref` pair takes
+precedence, so `#task #ref #prj` is the book and `#prj` keeps its
+pill.
+
+The glyph is a 16×16 stroked target mask in the hash's stroke
+language (`fill='none'`, `stroke-width` 1.8, round caps and joins):
+outer `<circle cx='8' cy='8' r='5.7'/>` plus inner
+`<circle cx='8' cy='8' r='1.7'/>` (geometry tunable ±0.3 units).
+Defined once as `--bob-prj-task-glyph` beside `--bob-ref-task-glyph`.
+Closed project tasks rest at the same 40 % mix toward `--text-faint`
+as closed hashes.
+
+| Kind | Variant class | Accessible label | Tooltip |
+| --- | --- | --- | --- |
+| prj | `bob-prj-task-mark` | `Project task` | `#task #prj · project lifecycle task` / `States what done means for this project` |
+
+An explicit `[type::]` draws the type name beside the glyph through
+the existing identity machinery, exactly like the book and checklist
+variants. None of the tooltip or aria strings contain `::`.
+
+Behavior matches the book: the cursor or a click reveals both raw
+tags (one touch anywhere on the pair exposes both); the session
+toggle, keyboard access, and PDF export behave as for `#task`.
+Reading view turns the `#task` anchor into the target and hides the
+adjacent `#prj` anchor in place via `bob-prj-task-hidden` (it stays
+in the DOM for copy and Dataview's `innerHTML` round trip). In Tasks
+query results, where `#task` already hides, the `#prj` pill renders
+as the target (CSS-only, like the `#ref` book rule). CSS cannot
+verify line canonicality there; the vault's rows are canonical.
+
+The Today 🍅 follows the complete `#task #prj` identity run, so it
+stays between the glyph and the title.
+
+Pickers and the Task Card keep showing `#prj` in display text for
+now (a follow-up bead tracks parity with `#ref`).
+
 ## GTD checklist tasks
 
 The canonical run `#task #gtd #pre` is one teal sunrise in the task
@@ -443,6 +499,60 @@ theme-aware identity hue with reduced emphasis; the closed-row fade reuses
 the glyph's resting mix. No live Obsidian session was available in this
 phase; the rollout phase confirms the footer and labels on open rows.
 
+## Hidden tasks
+
+An exact whole-token `#hide` tag on a task line renders as **one**
+quiet eye-off glyph in place — a metadata mark (like the date and
+priority marks) that says "hidden from review and lanes". Every task
+line is eligible, not only `^prj` or `#ref` rows: `#hide` on an
+ordinary `#task` line gets the same mark.
+
+```text
+before: - [ ] #task #prj Ship it [scheduled:: 2026-07-16] #hide ^prj
+after:  - [ ] ◎ Ship it  + Jul 16  👁off ^prj     (👁off ≈ the grey eye-off glyph)
+```
+
+Eligibility is deliberately exact. Matching is case-sensitive and
+uses the same boundary rule as `#task`, so `#hidden`, `#hideaway`,
+`#hide/x`, and `#Hide` keep their pills; they are not the canonical
+machine-written form. The same inline-code / `pre` exclusions apply.
+Non-task lines keep pills.
+
+The glyph is a 16×16 stroked eye-off mask in the family stroke
+language: eye outline
+`M1.9 8c1.7-3 3.9-4.4 6.1-4.4s4.4 1.4 6.1 4.4c-1.7 3-3.9 4.4-6.1 4.4S3.6 11 1.9 8Z`,
+pupil `<circle cx='8' cy='8' r='1.9'/>`, slash `M2.6 2.6l10.8 10.8`
+(tunable). Defined once as `--bob-hide-tag-glyph`. Ink is the quiet
+metadata grey the date marks use (`--text-muted`), exposed as
+`--bob-hide-tag-ink`. Closed rows fade like the family (40 % mix of
+that grey toward `--text-faint`, opacity 0.75).
+
+| Kind | Variant class | Accessible label | Tooltip |
+| --- | --- | --- | --- |
+| hide | `bob-hide-tag-mark` | `Hidden from review` | `#hide · hidden from review and lanes` / `bob writes and removes this tag` |
+
+The hide mark reuses the shared `bob-task-tag-mark` host rules
+(sizing, hover capsule, reveal, toggle, teardown) with an ink
+override. It never draws a type name and is excluded from the
+`data-bob-type` type-name rules. None of the tooltip or aria strings
+contain `::`.
+
+Live Preview replaces the `#hide` token with one stable widget;
+touching the range reveals the raw tag. Reading view annotates the
+`#hide` anchor in place (attribute-only, never creating or removing
+nodes). Tasks query results stay CSS-only: the `#hide` pill draws the
+eye-off under
+`body.bob-task-tag-marks .plugin-tasks-list-item .task-description`.
+The existing "Toggle task tag marks" command gates this mark with the
+rest of the family.
+
+Rejected: folding `#hide` to zero width like `#prj_is_blocked` (that
+fold is for a tag made redundant by the chevron box; `#hide` carries
+unique information — "why isn't this row in my review?" — so it
+earns a visible icon); a moon/snooze glyph (implies time-based
+snooze; `#hide` is occupancy/lifecycle-driven); teal ink (claims
+identity for a state).
+
 ## No-reply pill
 
 A Ready (`[ ]`) `#task` row whose exact `#awaiting_reply` token is paired
@@ -528,15 +638,18 @@ writes.
 
 Non-goals: storage, Rust CLI and TUI, `bob query`, Bob Mac Capture,
 the Obsidian search and backlinks panes, the tag pane, source mode,
-Mod+click tag search from Live Preview, and repair flags (tags have no
-malformed canonical form).
+Mod+click tag search from Live Preview, repair flags (tags have no
+malformed canonical form), and picker / Task Card display-text
+parity for `#prj` and `#hide` (deferred to a follow-up).
 
 ## Conformance vectors
 
 Live Preview core: `taskTagMarkRanges(lineText)` returns
 `[{ from, to, kind }]` in UTF-16 line offsets, where `kind` is `task | ref
-| pre | post`. A `ref` range spans `#task #ref`; `pre` and `post` ranges
-span the whole three-tag checklist identity run.
+| pre | post | prj | hide`. A `ref` range spans `#task #ref`; a `prj`
+range spans `#task #prj`; `pre` and `post` ranges span the whole
+three-tag checklist identity run; a `hide` range spans one `#hide`
+token.
 
 | #    | Input                                                      | Expected                                                                             |
 | ---- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------ |
@@ -588,6 +701,29 @@ PRE/POST checklist marks:
 | CK13 | `- [ ] #task #gtd #pre Brush teeth ^teeth`, Today-linked | 🍅 widget at offset 22 |
 | CK14 | `checklistKindForText` on `#gtd #pre` / `#GTD #Post` / `#gtd #pre #post` / `#gtd/pre` / `#pre, #gtd` | `pre` / `post` / `pre` / `null` / `pre` |
 
+Project and hidden marks:
+
+| #    | Input                                                          | Expected                                             |
+| ---- | -------------------------------------------------------------- | ---------------------------------------------------- |
+| PJ1  | `- [ ] #task #prj Ship the project outcome! ^prj`              | `[{[6,16), prj}]`                                    |
+| PJ2  | `- [x] #task #prj Done project ^prj`                           | `[{[6,16), prj}]` (resting tone is CSS)              |
+| PJ3  | `- [ ] #task #PRJ Loud ^prj`                                   | `[{[6,16), prj}]` (case-insensitive partner)         |
+| PJ4  | `- [ ] #task   #prj Extra spaces ^prj`                         | `[{[6,18), prj}]` (extra whitespace still pairs)     |
+| PJ5  | `- [ ] #task #project Not a project`                           | `[{[6,11), task}]`                                   |
+| PJ6  | `- [ ] #task #prj_is_blocked Odd`                              | `[{[6,11), task}]` (boundary: `_` continues the tag) |
+| PJ7  | `- [ ] #prj #task Reversed`                                    | `[{[11,16), task}]`; `#prj` keeps its pill           |
+| PJ8  | `- [ ] #task Fix the #prj renderer`                            | `[{[6,11), task}]` (not in the slot)                 |
+| PJ9  | `- #task #prj Not a task line`                                 | none                                                 |
+| PJ10 | `- [ ] #task #ref #prj Odd`                                    | `[{[6,16), ref}]`; `#prj` keeps its pill (ref wins)  |
+| PJ11 | ``- [ ] Note `#task #prj` here``                               | none in Live Preview (code)                          |
+| HD1  | `- [ ] #task #prj Ship it [scheduled:: 2026-07-16] #hide ^prj` | `prj` range + one `hide` range over `#hide`          |
+| HD2  | `- [ ] #task #ref [[lib/papers/x.pdf]] #hide ^ref`             | `ref` range + one `hide` range                       |
+| HD3  | `- [ ] #task Plan trip #hide [priority:: high] ^trip`          | `task` range + one `hide` range (any task line)      |
+| HD4  | `- [ ] #task A #hidden B` / `#hideaway` / `#hide/x` / `#Hide`  | `task` range only (exact token only)                 |
+| HD5  | `- #hide bullet` / `Paragraph #hide text`                      | none (not a task line)                               |
+| HD6  | ``- [ ] #task Note `#hide` here``                              | `task` range only in Live Preview (code)             |
+| HD7  | cursor touches the `#hide` range                               | raw tag revealed                                     |
+
 Type identity (D11). `taskTagTypeFieldOf` / `taskTagIdentity*` / `ledgerTypeMarkKind`.
 Ink now encodes type when the field is explicit; lane, priority, freshness, and
 checkbox state still never tint the hash.
@@ -631,6 +767,14 @@ Rendered views (fake DOM in tests):
 | CR3 | checklist pair present / toggle off / toggle on | variants, labels, and hidden classes stripped document-wide / then re-annotated |
 | CR4 | Today reading view on a CR1 row | 🍅 inserted after the hidden `#pre` anchor and before the title |
 | CR5 | Tasks row with `#gtd` + `#post` / with `#pre` + `#post` | flag drawn and `#gtd` hidden / every pill stays native |
+| PR1 | task li with adjacent `#task #prj` anchors | `#task` annotated with the target (project label and tooltip); `#prj` hidden in place |
+| PR2 | `#prj` before `#task`, or `#task` + a word + `#prj` | hash only on `#task`; `#prj` stays a pill |
+| PR3 | pair present / toggle off / toggle on | target plus hidden `#prj` / stripped and `#prj` revealed document-wide / pair re-annotated |
+| PR4 | a second pass over PR1 | no change (idempotent) |
+| HR1 | task li with a `#hide` anchor | `#hide` annotated in place (hide class, label, tooltip) |
+| HR2 | `#hide` under a plain bullet | not annotated |
+| HR3 | `#hide` inside `.plugin-tasks-list-item .task-description` | not annotated (Tasks rows are CSS-only: the `#hide` pill renders the eye-off) |
+| HR4 | hide present / toggle off / toggle on | hide stripped document-wide / then re-annotated |
 
 ## Live verification (Bryan, in Obsidian)
 
@@ -639,8 +783,8 @@ Rendered views (fake DOM in tests):
 - An explicit `#FIX` reads as type ink, not as another tag pill, and
   the trailing `[type:: FIX]` is gone.
 - The ink stays legible on Blocked (red tint), Next (green tint),
-  and In Progress (yellow tint) lines, and sits well beside a
-  `#prj` pill.
+  and In Progress (yellow tint) lines, and the project target sits
+  well on those tints.
 - A BUILD task under a FIX Pomodoro shows a dashed `#BUILD` before
   the Task Link.
 - The hover capsule appears in both Live Preview and reading view.
@@ -666,3 +810,10 @@ Rendered views (fake DOM in tests):
 - Touching the checklist glyph reveals all three tags; typing stays raw.
 - Tasks query rows show the matching CSS glyph, while a hand-typed
   `#pre #post` conflict keeps all its pills.
+- The teal target and the grey eye-off stay legible in light and dark
+  and on the red Blocked `[?]` tint (most `^prj` rows are Blocked).
+- About 320 ref-note reading rows look calm with the grey eye-off
+  beside the book.
+- Toggle round-trips restore `#prj` and `#hide` pills everywhere and
+  back again.
+- PDF export keeps both glyphs; iOS renders them.
