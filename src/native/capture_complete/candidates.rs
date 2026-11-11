@@ -487,8 +487,23 @@ pub(super) fn mix_record_section_create(
         return None;
     };
     let dir = field.route.as_deref()?.trim_end_matches('/');
-    let records = crate::native::config::records::load_records_config().ok()?;
-    let record_type = records.by_directory(dir)?.clone();
+    let config_path = config::config_path();
+    let resolution =
+        crate::native::records::context::RecordContext::resolve_route_head(
+            bob_dir,
+            &config_path,
+            dir,
+            None,
+        )
+        .ok()?;
+    let crate::native::records::context::RecordKindResolution::Valid {
+        kind,
+        ..
+    } = resolution
+    else {
+        return None;
+    };
+    let record_type = kind.record_type();
     let token_start =
         record_section_token_start(raw_text, field.replacement.0)?;
     if token_start > 0
@@ -527,8 +542,8 @@ pub(super) fn mix_record_section_create(
                 replacement,
                 label,
                 route,
-                record_type: record_type.id,
-                emoji: record_type.emoji,
+                record_type: record_type.id.clone(),
+                emoji: record_type.emoji.clone(),
                 count: Some(count),
                 cursor_after,
                 continuation: Some(CandidateContinuation {

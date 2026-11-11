@@ -1188,14 +1188,29 @@ fn shell_from_record_result(
 }
 
 fn record_section_create_shell_row(
-    _bob_dir: &Path,
+    bob_dir: &Path,
     raw_text: &str,
     route: &str,
     marker_start: usize,
 ) -> Option<ShellRow> {
     let dir = route.trim_end_matches('/');
-    let records = crate::native::config::records::load_records_config().ok()?;
-    let record_type = records.by_directory(dir)?;
+    let config_path = crate::native::config::config_path();
+    let resolution =
+        crate::native::records::context::RecordContext::resolve_route_head(
+            bob_dir,
+            &config_path,
+            dir,
+            None,
+        )
+        .ok()?;
+    let crate::native::records::context::RecordKindResolution::Valid {
+        kind,
+        ..
+    } = resolution
+    else {
+        return None;
+    };
+    let record_type = kind.record_type();
     if marker_start > 0
         && raw_text.as_bytes().get(marker_start - 1) == Some(&b'@')
     {

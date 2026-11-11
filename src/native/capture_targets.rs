@@ -18,7 +18,7 @@ use super::{
         frontmatter_value, is_markdown_file, parse_frontmatter,
         project_name_aliases, ProjectStatus,
     },
-    records::RecordCatalog,
+    records::{context::RecordContext, RecordCatalog},
     style::{display_width, pad_right, Styler},
 };
 
@@ -392,7 +392,7 @@ fn scan_capture_targets_with_config(
     sort_targets(&mut projects);
     report.targets.extend(areas);
     report.targets.extend(projects);
-    append_record_targets(bob_dir, config_path, &mut report.targets);
+    append_record_targets(bob_dir, config_path, &mut report);
     let conflicts = alias_conflict_warnings(&report.targets);
     report.warnings.extend(conflicts.iter().cloned());
     report.alias_warnings.extend(conflicts);
@@ -603,28 +603,53 @@ fn target_from_route(
 fn append_record_targets(
     bob_dir: &Path,
     config_path: &Path,
-    targets: &mut Vec<CaptureTarget>,
+    report: &mut CaptureTargetsReport,
 ) {
-    let Ok(records) =
-        super::config::records::load_records_config_from(config_path)
-    else {
-        return;
-    };
-    if records.types.is_empty() {
+    let context = RecordContext::discover(bob_dir, config_path);
+    if let super::albums::registry::DiscoveryHealth::Partial(errors) =
+        &context.registry().health
+    {
+        report.issues.extend(
+            errors
+                .iter()
+                .map(|error| ScanNote::path(PathBuf::from("."), error.clone())),
+        );
         return;
     }
-    let mut record_types = records.types;
+
+    // A broken album still owns its noun and folder, so report its schema
+    // findings while keeping it out of the actionable record routes. Other
+    // valid albums and transitional config kinds remain available.
+    for album in context.invalid_album_claims() {
+        for finding in &album.findings {
+            if finding.severity != super::albums::AlbumIssueSeverity::Error {
+                continue;
+            }
+            let mut message = format!("{}: {}", finding.code, finding.message);
+            if let Some(line) = finding.line_number {
+                message.push_str(&format!(" (line {line})"));
+            }
+            report
+                .warnings
+                .push(ScanNote::path(PathBuf::from(&finding.path), message));
+        }
+    }
+
+    let mut record_types = context.usable_kinds();
     record_types.sort_by(|left, right| {
-        left.dir
+        left.record_type()
+            .dir
             .to_ascii_lowercase()
-            .cmp(&right.dir.to_ascii_lowercase())
-            .then_with(|| left.id.cmp(&right.id))
+            .cmp(&right.record_type().dir.to_ascii_lowercase())
+            .then_with(|| left.record_type().id.cmp(&right.record_type().id))
     });
     let mut catalog = RecordCatalog::new(bob_dir);
-    for record_type in record_types {
+    for kind in record_types {
+        let record_type = kind.record_type();
         let count = catalog.folder(&record_type.dir).notes().len();
         let route = format!("{}/", record_type.dir);
-        targets.push(CaptureTarget {
+        let album = kind.album.as_ref();
+        report.targets.push(CaptureTarget {
             route: route.clone(),
             name: route.clone(),
             label: record_type.label.clone(),
@@ -633,13 +658,13 @@ fn append_record_targets(
             status: None,
             relative_path: route,
             project_name_aliases: Vec::new(),
-            record_type: Some(record_type.id),
-            emoji: record_type.emoji,
+            record_type: Some(record_type.id.clone()),
+            emoji: record_type.emoji.clone(),
             count: Some(count),
-            title: None,
-            summary: None,
-            owner: None,
-            breadcrumb: None,
+            title: album.map(|album| album.title.clone()),
+            summary: context.album_summary_for(&kind).map(str::to_owned),
+            owner: album.and_then(|album| album.owner.clone()),
+            breadcrumb: album.map(|album| album.breadcrumb.clone()),
         });
     }
 }
@@ -1067,6 +1092,126 @@ mod tests {
         assert_eq!(record_row["label"], "Restaurant");
         assert_eq!(record_row["emoji"], "🍽️");
         assert_eq!(record_row["count"], 1);
+    }
+
+    #[test]
+    fn scan_uses_album_registry_and_enriches_record_target_metadata() {
+        let temp = TempDir::new("bob-cli-capture-targets-album");
+        let config = temp.path().join("config.yml");
+        write_file(
+            &temp.path().join("body.md"),
+            "---\ntype: [[area]]\n---\n# Body\n",
+        );
+        write_file(
+            &temp.path().join("eat.md"),
+            concat!(
+                "---\n",
+                "parent: \"[[body]]\"\n",
+                "type: [[album]]\n",
+                "summary: Restaurants we have tried.\n",
+                "emoji: 🍽️\n",
+                "record:\n",
+                "  noun: restaurant\n",
+                "  label: Restaurant\n",
+                "---\n",
+                "# Restaurants\n",
+            ),
+        );
+        write_file(
+            &temp.path().join("eat/nagi.md"),
+            "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\n---\n# Nagi\n",
+        );
+
+        let report = scan_capture_targets_with_config(temp.path(), &config);
+        assert!(report.issues.is_empty(), "{:?}", report.issues);
+        let target = report
+            .targets
+            .iter()
+            .find(|target| target.route == "eat/")
+            .expect("album target");
+        assert_eq!(target.kind, CaptureTargetKind::Record);
+        assert_eq!(target.record_type.as_deref(), Some("restaurant"));
+        assert_eq!(target.label, "Restaurant");
+        assert_eq!(target.emoji.as_deref(), Some("🍽️"));
+        assert_eq!(target.count, Some(1));
+        assert_eq!(target.title.as_deref(), Some("Restaurants"));
+        assert_eq!(
+            target.summary.as_deref(),
+            Some("Restaurants we have tried.")
+        );
+        assert_eq!(target.owner.as_deref(), Some("body"));
+        assert_eq!(
+            target.breadcrumb.as_deref(),
+            Some(&["body".to_string(), "Restaurants".to_string()][..])
+        );
+
+        let value: serde_json::Value =
+            serde_json::from_str(&success_json(&report.result(temp.path())))
+                .expect("json");
+        let row = value["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["route"] == "eat/")
+            .expect("album row json");
+        assert_eq!(row["title"], "Restaurants");
+        assert_eq!(row["summary"], "Restaurants we have tried.");
+        assert_eq!(row["owner"], "body");
+        assert_eq!(
+            row["breadcrumb"],
+            serde_json::json!(["body", "Restaurants"])
+        );
+    }
+
+    #[test]
+    fn broken_album_is_reported_without_hiding_healthy_or_config_routes() {
+        let temp = TempDir::new("bob-cli-capture-targets-broken-album");
+        let config = temp.path().join("config.yml");
+        write_file(
+            &config,
+            "records:\n  restaurant:\n    dir: eat\n    label: Legacy restaurant\n    fields: {}\n  book:\n    dir: books\n    label: Book\n    fields: {}\n",
+        );
+        write_file(
+            &temp.path().join("body.md"),
+            "---\ntype: [[area]]\n---\n# Body\n",
+        );
+        write_file(
+            &temp.path().join("eat.md"),
+            "---\nparent: \"[[body]]\"\ntype: [[album]]\nrecord:\n  noun: restaurant\n  unknown: value\n---\n# Broken restaurants\n",
+        );
+        write_file(
+            &temp.path().join("podcasts.md"),
+            "---\nparent: \"[[body]]\"\ntype: [[album]]\nrecord:\n  noun: podcast\n---\n# Podcasts\n",
+        );
+        write_file(
+            &temp.path().join("podcasts/show.md"),
+            "---\nparent: \"[[podcasts]]\"\ntype: \"[[record]]\"\n---\n# Show\n",
+        );
+
+        let report = scan_capture_targets_with_config(temp.path(), &config);
+        assert!(report.issues.is_empty(), "{:?}", report.issues);
+        let record_routes = report
+            .targets
+            .iter()
+            .filter(|target| target.kind == CaptureTargetKind::Record)
+            .map(|target| target.route.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(record_routes, ["books/", "podcasts/"]);
+        let podcast = report
+            .targets
+            .iter()
+            .find(|target| target.route == "podcasts/")
+            .expect("healthy album remains available");
+        assert_eq!(podcast.record_type.as_deref(), Some("podcast"));
+        assert_eq!(podcast.count, Some(1));
+        assert!(report.warnings.iter().any(|warning| {
+            warning.display().contains("album_schema_invalid")
+                && warning.display().contains("eat.md")
+        }));
+        assert!(
+            report.targets.iter().all(|target| target.route != "eat/"),
+            "broken album is not actionable"
+        );
     }
 
     #[test]

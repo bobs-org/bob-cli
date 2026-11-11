@@ -88,6 +88,64 @@ fn capture_targets_json_lists_picker_targets_in_order() {
 }
 
 #[test]
+fn capture_targets_uses_the_explicit_vault_for_album_registry_and_metadata() {
+    let temp = TempDir::new("bob-cli-capture-targets-album-vault");
+    let explicit_vault = temp.path().join("explicit");
+    let env_vault = temp.path().join("from-env");
+    let config = temp.path().join("config.yml");
+    write_file(&config, "\n");
+    write_file(
+        &explicit_vault.join("body.md"),
+        "---\ntype: [[area]]\n---\n# Body\n",
+    );
+    write_file(
+        &explicit_vault.join("eat.md"),
+        concat!(
+            "---\nparent: \"[[body]]\"\ntype: [[album]]\n",
+            "summary: Explicit vault album.\nemoji: 🍽️\n",
+            "record:\n  noun: restaurant\n  label: Restaurant\n---\n",
+            "# Restaurants\n",
+        ),
+    );
+    write_file(
+        &env_vault.join("fun.md"),
+        "---\ntype: [[area]]\n---\n# Fun\n",
+    );
+    write_file(
+        &env_vault.join("movies.md"),
+        "---\nparent: \"[[fun]]\"\ntype: [[album]]\nrecord:\n  noun: movie\n---\n# Movies\n",
+    );
+
+    let output = bob_command()
+        .env("BOB_DIR", &env_vault)
+        .env("BOB_CONFIG_FILE", &config)
+        .arg("capture-targets")
+        .arg("--bob-dir")
+        .arg(&explicit_vault)
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("run capture-targets");
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .unwrap_or_else(|error| {
+            panic!("stdout should be JSON: {error}\n{}", format_output(&output))
+        });
+    assert_eq!(json["bob_dir"], explicit_vault.display().to_string());
+    let rows = json["targets"].as_array().expect("targets");
+    let routes = rows
+        .iter()
+        .map(|row| row["route"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(routes.contains(&"eat/"));
+    assert!(!routes.contains(&"movies/"));
+    let eat = rows.iter().find(|row| row["route"] == "eat/").unwrap();
+    assert_eq!(eat["title"], "Restaurants");
+    assert_eq!(eat["summary"], "Explicit vault album.");
+    assert_eq!(eat["owner"], "body");
+}
+
+#[test]
 fn capture_targets_json_reports_aliases_and_human_shows_aka() {
     let temp = TempDir::new("bob-cli-capture-targets-aliases");
     let vault = temp.path().join("vault");

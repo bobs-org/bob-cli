@@ -189,12 +189,30 @@ impl RecordRoutePolicy {
         self.records_config.as_ref()
     }
 
-    pub(crate) fn config_error(&self) -> Option<&str> {
-        self.config_error.as_deref()
+    /// Usable schema for one record folder after album claim precedence.
+    /// A broken or unclaimed album-owned route never falls back to config.
+    pub(crate) fn usable_record_type_for_route(
+        &self,
+        route: &str,
+    ) -> Option<&RecordType> {
+        match self.route_decision(route) {
+            Some(PerRouteDecision::AlbumValid { record_type, .. })
+            | Some(PerRouteDecision::ConfigValid { record_type }) => {
+                Some(record_type)
+            }
+            Some(
+                PerRouteDecision::AlbumInvalid { .. }
+                | PerRouteDecision::Unclaimed { .. },
+            ) => None,
+            None => self
+                .records_config
+                .as_ref()
+                .and_then(|config| config.by_directory(route)),
+        }
     }
 
-    pub(crate) fn config_path_display(&self) -> Option<&str> {
-        self.config_path.as_deref()
+    pub(crate) fn config_error(&self) -> Option<&str> {
+        self.config_error.as_deref()
     }
 
     pub(crate) fn vault_root(&self) -> Option<&Path> {

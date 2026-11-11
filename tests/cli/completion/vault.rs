@@ -1051,3 +1051,116 @@ fn records_update_completion_uses_retained_type() {
         "completion wrote to the vault"
     );
 }
+
+#[test]
+fn record_providers_use_the_explicit_vaults_album_registry() {
+    let fixture = fixture();
+    let explicit_vault = fixture._temp.path().join("explicit-vault");
+    write_file(&fixture.config, "\n");
+
+    for (vault, noun, label, title, choice, choice_label, stem) in [
+        (
+            &fixture.vault,
+            "movie",
+            "Film",
+            "Films",
+            "watched",
+            "Watched",
+            "env_film",
+        ),
+        (
+            &explicit_vault,
+            "restaurant",
+            "Restaurant",
+            "Restaurants",
+            "liked",
+            "Liked",
+            "explicit_place",
+        ),
+    ] {
+        write_file(
+            &vault.join("body.md"),
+            "---\ntype: [[area]]\n---\n# Body\n",
+        );
+        write_file(
+            &vault.join("eat.md"),
+            &format!(
+                "---\nparent: \"[[body]]\"\ntype: [[album]]\nrecord:\n  noun: {noun}\n  label: {label}\n  fields:\n    status:\n      values:\n        {choice}: \"{choice_label}\"\n---\n# {title}\n"
+            ),
+        );
+        write_file(
+            &vault.join(format!("eat/{stem}.md")),
+            &format!(
+                "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\nstatus: {choice}\n---\n# {stem}\n"
+            ),
+        );
+    }
+
+    let types = complete(
+        &fixture,
+        &[
+            "bob",
+            "records",
+            "update",
+            "--bob-dir",
+            explicit_vault.to_str().unwrap(),
+            "",
+        ],
+    );
+    assert_success(&types);
+    assert!(values(&types).contains(&"restaurant".to_string()));
+    assert!(!values(&types).contains(&"movie".to_string()));
+
+    let stems = complete(
+        &fixture,
+        &[
+            "bob",
+            "records",
+            "update",
+            "--bob-dir",
+            explicit_vault.to_str().unwrap(),
+            "eat",
+            "",
+        ],
+    );
+    assert_success(&stems);
+    assert!(values(&stems).contains(&"explicit_place".to_string()));
+    assert!(!values(&stems).contains(&"env_film".to_string()));
+
+    let sets = complete(
+        &fixture,
+        &[
+            "bob",
+            "records",
+            "update",
+            "--bob-dir",
+            explicit_vault.to_str().unwrap(),
+            "eat",
+            "explicit_place",
+            "--set",
+            "",
+        ],
+    );
+    assert_success(&sets);
+    assert!(values(&sets).contains(&"status=liked".to_string()));
+    assert!(!values(&sets).contains(&"status=watched".to_string()));
+
+    let before = tree_hashes(&explicit_vault);
+    let lock = lock_tree(&explicit_vault);
+    let locked = complete(
+        &fixture,
+        &[
+            "bob",
+            "records",
+            "update",
+            "--bob-dir",
+            explicit_vault.to_str().unwrap(),
+            "eat",
+            "",
+        ],
+    );
+    assert_success(&locked);
+    assert!(values(&locked).contains(&"explicit_place".to_string()));
+    drop(lock);
+    assert_eq!(tree_hashes(&explicit_vault), before);
+}

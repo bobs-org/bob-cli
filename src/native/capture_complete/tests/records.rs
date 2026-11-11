@@ -486,6 +486,143 @@ fn empty_section_query_prepends_record_create_and_expands_the_token() {
 }
 
 #[test]
+fn album_route_and_field_completion_follow_the_explicit_vault() {
+    let temp = TempDir::new("bob-cli-complete-album-vaults");
+    let first = temp.path().join("first");
+    let second = temp.path().join("second");
+    let config = temp.path().join("config.yml");
+    write_file(&config, "\n");
+    for (root, title, label, emoji, value, value_label) in [
+        (&first, "Restaurants", "Restaurant", "🍽️", "liked", "Liked"),
+        (&second, "Films", "Film", "🎬", "watched", "Watched"),
+    ] {
+        write_file(&root.join("body.md"), "---\ntype: [[area]]\n---\n# Body\n");
+        write_file(
+            &root.join("eat.md"),
+            &format!(
+                "---\nparent: \"[[body]]\"\ntype: [[album]]\nsummary: {title} summary.\nemoji: {emoji}\nrecord:\n  noun: restaurant\n  label: {label}\n  fields:\n    status:\n      required: true\n      values:\n        {value}: \"{value_label}\"\n---\n# {title}\n## Ideas\n"
+            ),
+        );
+    }
+
+    let _guard = TestEnvGuard::set(&[
+        ("BOB_CONFIG_FILE", Some(config.as_os_str())),
+        ("BOB_DIR", Some(second.as_os_str())),
+        ("BOB_NOW", Some(OsStr::new(NOW))),
+    ]);
+
+    let first_route = build_result(&first, "@", 1, false, false)
+        .expect("first vault route completion");
+    let Candidates::Route(first_rows) = first_route.candidates else {
+        panic!("route candidates: {first_route:?}");
+    };
+    let first_eat = first_rows
+        .iter()
+        .find(|row| row.route == "eat/")
+        .expect("first vault eat route");
+    assert_eq!(first_eat.label, "🍽️ New restaurant · 0");
+    assert_eq!(first_eat.title.as_deref(), Some("Restaurants"));
+    assert_eq!(first_eat.summary.as_deref(), Some("Restaurants summary."));
+    assert_eq!(first_eat.owner.as_deref(), Some("body"));
+    assert_eq!(
+        first_eat.breadcrumb.as_deref(),
+        Some(&["body".to_string(), "Restaurants".to_string()][..])
+    );
+
+    let first_field = build_result(
+        &first,
+        "Cafe @eat/\n- status:: ",
+        "Cafe @eat/\n- status:: ".len(),
+        false,
+        false,
+    )
+    .expect("first vault field completion");
+    assert!(value_rows(&first_field)
+        .iter()
+        .any(|row| row.value == "liked"));
+
+    let second_field = build_result(
+        &second,
+        "Film @eat/\n- status:: ",
+        "Film @eat/\n- status:: ".len(),
+        false,
+        false,
+    )
+    .expect("second vault field completion");
+    assert!(value_rows(&second_field)
+        .iter()
+        .any(|row| row.value == "watched"));
+    assert!(value_rows(&second_field)
+        .iter()
+        .all(|row| row.value != "liked"));
+
+    let section = build_result(&first, "@eat#", 5, false, false)
+        .expect("album section completion");
+    let Candidates::Section(rows) = &section.candidates else {
+        panic!("section candidates: {section:?}");
+    };
+    let SectionMenuRow::Create(create) = rows.first().expect("create row")
+    else {
+        panic!("record create row should lead: {rows:?}");
+    };
+    assert_eq!(create.kind, "record_create");
+    assert_eq!(create.record_type, "restaurant");
+    assert_eq!(create.label, "🍽️ New restaurant · eat/");
+
+    let shell = shell_completion(&first, "@eat#", 5)
+        .expect("shell completion")
+        .expect("section shell completion");
+    let create = shell
+        .rows
+        .iter()
+        .find(|row| row.full == "@eat/")
+        .expect("album section-create shell row");
+    assert_eq!(create.description, "new restaurant");
+}
+
+#[test]
+fn broken_album_stays_diagnosed_and_does_not_hide_a_healthy_route() {
+    let temp = TempDir::new("bob-cli-complete-broken-album-isolation");
+    let config = temp.path().join("config.yml");
+    write_file(
+        &config,
+        "records:\n  restaurant:\n    dir: eat\n    label: Legacy restaurant\n    fields: {}\n",
+    );
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("body.md"), "---\ntype: [[area]]\n---\n# Body\n");
+    write_file(
+        &vault.join("eat.md"),
+        "---\nparent: \"[[body]]\"\ntype: [[album]]\nrecord:\n  noun: restaurant\n  unknown: value\n---\n# Broken\n",
+    );
+    write_file(
+        &vault.join("podcasts.md"),
+        "---\nparent: \"[[body]]\"\ntype: [[album]]\nrecord:\n  noun: podcast\n  label: Podcast\n---\n# Podcasts\n",
+    );
+
+    let _guard =
+        TestEnvGuard::set(&[("BOB_CONFIG_FILE", Some(config.as_os_str()))]);
+    let routes = build_result(&vault, "@", 1, false, false)
+        .expect("healthy route completion despite broken album");
+    let Candidates::Route(rows) = routes.candidates else {
+        panic!("route candidates: {routes:?}");
+    };
+    assert!(rows.iter().any(|row| row.route == "podcasts/"));
+    assert!(rows.iter().all(|row| row.route != "eat/"));
+
+    let broken =
+        build_result(&vault, "Place @eat/", "Place @eat/".len(), false, false)
+            .expect("broken route diagnostics");
+    assert!(
+        broken.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "album_schema_invalid"
+                && diagnostic.message.contains("eat.md")
+        }),
+        "{:?}",
+        broken.diagnostics
+    );
+}
+
+#[test]
 fn typed_section_query_keeps_headings_and_omits_the_create_row() {
     let vault = RecordVault::new("bob-cli-complete-record-section-query");
     write_file(&vault.path().join("eat.md"), "# Ideas\n");

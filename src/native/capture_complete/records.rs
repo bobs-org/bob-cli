@@ -19,7 +19,7 @@ use super::model::{
 use crate::native::capture_language::{
     self, candidate_collection_routes, candidate_dirs, CompletionContext,
     EditorItemParse, EditorParse, EditorParseOptions, RecordNoteIntent,
-    RECORDS_CONFIG_INVALID_CODE, RECORD_ASSIST_VERSION,
+    RecordRoutePolicy, RECORDS_CONFIG_INVALID_CODE, RECORD_ASSIST_VERSION,
 };
 use crate::native::capture_record::{
     record_policy_for_draft, resolve_record_intents_with_catalog,
@@ -60,9 +60,7 @@ pub(super) fn try_complete(
     {
         return Ok(None);
     }
-    let Some(mut session) = Session::open(request) else {
-        return Ok(None);
-    };
+    let mut session = Session::open(request);
     session.complete()
 }
 
@@ -70,9 +68,7 @@ pub(super) fn next_missing_field(
     request: &CompleteRequest<'_>,
 ) -> Result<CaptureCompleteResult, CompleteError> {
     set_files_opened(0);
-    let Some(mut session) = Session::open(request) else {
-        return Ok(CaptureCompleteResult::empty(request.cursor));
-    };
+    let mut session = Session::open(request);
     session.next_missing()
 }
 
@@ -83,41 +79,32 @@ pub(super) fn named_field(
     let key = request.record_field.unwrap_or("");
     let policy =
         record_policy_for_draft(request.bob_dir, None, request.raw_text);
-    if let Some(detail) = policy.config_error() {
-        let path = policy.config_path_display().unwrap_or("<config>");
-        let mut result = CaptureCompleteResult::empty(request.cursor);
-        result.diagnostics.push(CaptureCompleteDiagnostic {
-            severity: "error",
-            code: RECORDS_CONFIG_INVALID_CODE,
-            message: format!(
-                "records config `{path}` is invalid: {detail}; fix the \
-                 `records:` block and retry"
-            ),
-            range: None,
-            field: Some(key.to_string()),
-            authored: None,
-            proposed: None,
-        });
+    let mut session = Session::open_with_policy(request, policy);
+    if let Some(result) = session.route_diagnostic_result() {
         return Ok(result);
     }
-    let Some(mut session) = Session::open(request) else {
-        return Ok(CaptureCompleteResult::empty(request.cursor));
-    };
     session.named_field(key)
 }
 
 struct Session<'a> {
     request: &'a CompleteRequest<'a>,
+    policy: RecordRoutePolicy,
     parsed: EditorParse,
     catalog: RecordCatalog,
     today: chrono::NaiveDate,
 }
 
 impl<'a> Session<'a> {
-    fn open(request: &'a CompleteRequest<'a>) -> Option<Self> {
+    fn open(request: &'a CompleteRequest<'a>) -> Self {
         let policy =
             record_policy_for_draft(request.bob_dir, None, request.raw_text);
-        policy.records_config()?;
+        Self::open_with_policy(request, policy)
+    }
+
+    fn open_with_policy(
+        request: &'a CompleteRequest<'a>,
+        policy: RecordRoutePolicy,
+    ) -> Self {
         let notebook_policy =
             crate::native::capture_notebooks::notebook_policy_for_draft(
                 request.bob_dir,
@@ -133,25 +120,58 @@ impl<'a> Session<'a> {
                 global_route: None,
             },
         );
-        Some(Self {
+        Self {
             request,
+            policy,
             parsed,
             catalog: RecordCatalog::new(request.bob_dir),
             today: crate::native::env::current_datetime().date(),
-        })
+        }
+    }
+
+    fn route_diagnostic_result(&self) -> Option<CaptureCompleteResult> {
+        let diagnostic = self.parsed.diagnostics.iter().find(|diagnostic| {
+            diagnostic.code == "album_schema_invalid"
+                || diagnostic.code == RECORDS_CONFIG_INVALID_CODE
+        })?;
+        let mut result = CaptureCompleteResult::empty(self.request.cursor);
+        result.diagnostics.push(CaptureCompleteDiagnostic {
+            severity: diagnostic.severity.label(),
+            code: diagnostic.code,
+            message: diagnostic.message.clone(),
+            range: diagnostic
+                .range
+                .map(|(start, end)| Replacement { start, end }),
+            field: self.request.record_field.map(str::to_owned),
+            authored: None,
+            proposed: None,
+        });
+        Some(result)
     }
 
     fn complete(
         &mut self,
     ) -> Result<Option<CaptureCompleteResult>, CompleteError> {
         let Some((item, intent)) = self.record_item() else {
+            if let Some(result) = self.route_diagnostic_result() {
+                set_files_opened(self.catalog.files_opened());
+                return Ok(Some(result));
+            }
             set_files_opened(self.catalog.files_opened());
             return Ok(None);
         };
         let item = item.clone();
         let intent = intent.cloned();
+        if intent.is_none() {
+            if let Some(result) = self.route_diagnostic_result() {
+                set_files_opened(self.catalog.files_opened());
+                return Ok(Some(result));
+            }
+            set_files_opened(self.catalog.files_opened());
+            return Ok(None);
+        }
         if let Some(intent) = intent.as_ref()
-            && let Some(probe) = value_probe(self.request, intent)
+            && let Some(probe) = value_probe(self.request, intent, &self.policy)
         {
             let result = self.value_menu(&item, intent, probe)?;
             set_files_opened(self.catalog.files_opened());
@@ -184,17 +204,15 @@ impl<'a> Session<'a> {
         intent: &RecordNoteIntent,
         probe: TargetProbe,
     ) -> CaptureCompleteResult {
-        let policy = record_policy_for_draft(
-            self.request.bob_dir,
-            None,
-            self.request.raw_text,
-        );
-        let Some(config) = policy.records_config().cloned() else {
-            return CaptureCompleteResult::empty(self.request.cursor);
-        };
-        let Some(record_type) = config.by_directory(&intent.dir).cloned()
+        let Some(record_type) = self
+            .policy
+            .usable_record_type_for_route(&intent.dir)
+            .cloned()
         else {
             return CaptureCompleteResult::empty(self.request.cursor);
+        };
+        let config = crate::native::records::RecordsConfig {
+            types: vec![record_type.clone()],
         };
         let notes = self.catalog.folder(&intent.dir).notes().to_vec();
         let mut ranked = Vec::new();
@@ -297,11 +315,19 @@ impl<'a> Session<'a> {
 
     fn next_missing(&mut self) -> Result<CaptureCompleteResult, CompleteError> {
         let Some((item, intent)) = self.record_item() else {
+            if let Some(result) = self.route_diagnostic_result() {
+                set_files_opened(self.catalog.files_opened());
+                return Ok(result);
+            }
             set_files_opened(self.catalog.files_opened());
             return Ok(CaptureCompleteResult::empty(self.request.cursor));
         };
         let item = item.clone();
         let Some(intent) = intent.cloned() else {
+            if let Some(result) = self.route_diagnostic_result() {
+                set_files_opened(self.catalog.files_opened());
+                return Ok(result);
+            }
             set_files_opened(self.catalog.files_opened());
             return Ok(CaptureCompleteResult::empty(self.request.cursor));
         };
@@ -413,14 +439,9 @@ impl<'a> Session<'a> {
     }
 
     fn plan_entry(&mut self, intent: &RecordNoteIntent) -> RecordParseEntry {
-        let policy = record_policy_for_draft(
-            self.request.bob_dir,
-            None,
-            self.request.raw_text,
-        );
         resolve_record_intents_with_catalog(
             &[(0, intent.clone())],
-            Some(&policy),
+            Some(&self.policy),
             &mut self.catalog,
         )
         .into_iter()
@@ -429,14 +450,8 @@ impl<'a> Session<'a> {
     }
 
     fn record_type(&self, intent: &RecordNoteIntent) -> Option<RecordType> {
-        let policy = record_policy_for_draft(
-            self.request.bob_dir,
-            None,
-            self.request.raw_text,
-        );
-        policy
-            .records_config()
-            .and_then(|config| config.by_directory(&intent.dir))
+        self.policy
+            .usable_record_type_for_route(&intent.dir)
             .cloned()
     }
 
@@ -866,11 +881,10 @@ fn first_level_dash_body(line_text: &str) -> Option<(usize, &str)> {
 fn value_probe(
     request: &CompleteRequest<'_>,
     intent: &RecordNoteIntent,
+    policy: &RecordRoutePolicy,
 ) -> Option<ValueProbe> {
     let cursor = request.cursor;
-    let policy =
-        record_policy_for_draft(request.bob_dir, None, request.raw_text);
-    let record_type = policy.records_config()?.by_directory(&intent.dir)?;
+    let record_type = policy.usable_record_type_for_route(&intent.dir)?;
     for input in &intent.fields {
         let schema =
             record_type.field(&input.key).cloned().unwrap_or_else(|| {

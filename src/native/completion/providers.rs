@@ -43,7 +43,7 @@ pub(crate) fn vault_lines(
         Kind::Metric => Some(metrics()),
         Kind::RelationLabel => Some(relation_labels(context)),
         Kind::ThemeName => Some(theme_names(context)),
-        Kind::RecordType => Some(record_types()),
+        Kind::RecordType => Some(record_types(context)),
         Kind::RecordStem => Some(record_stems(context)),
         Kind::RecordSet => Some(record_sets(context)),
         Kind::VaultNote => Some(vault_notes(context)),
@@ -54,15 +54,25 @@ pub(crate) fn vault_lines(
     }
 }
 
-fn record_types() -> Vec<String> {
-    let Ok(config) = crate::native::config::records::load_records_config()
-    else {
+fn record_types(context: &Context) -> Vec<String> {
+    let records = record_context(context);
+    if !matches!(
+        &records.registry().health,
+        crate::native::albums::registry::DiscoveryHealth::Complete
+    ) {
         return Vec::new();
-    };
-    config
-        .types
+    }
+    let mut kinds = records.usable_kinds();
+    kinds.sort_by(|left, right| {
+        left.record_type()
+            .dir
+            .cmp(&right.record_type().dir)
+            .then_with(|| left.record_type().id.cmp(&right.record_type().id))
+    });
+    kinds
         .iter()
-        .filter_map(|record_type| {
+        .filter_map(|kind| {
+            let record_type = kind.record_type();
             protocol::candidate_line(
                 OsStr::new(&record_type.id),
                 &format!("{} · {}/", record_type.label, record_type.dir),
@@ -80,11 +90,8 @@ fn record_stems(context: &Context) -> Vec<String> {
     let Some(record_type_id) = context.record_type.as_deref() else {
         return vec![protocol::message_line(MISSING_RECORD_TYPE_MESSAGE)];
     };
-    let Ok(config) = crate::native::config::records::load_records_config()
+    let Some(record_type) = resolved_record_type(context, record_type_id)
     else {
-        return Vec::new();
-    };
-    let Some(record_type) = config.record_type(record_type_id) else {
         return Vec::new();
     };
     let mut catalog =
@@ -114,11 +121,8 @@ fn record_sets(context: &Context) -> Vec<String> {
     let Some(record_type_id) = context.record_type.as_deref() else {
         return vec![protocol::message_line(MISSING_RECORD_TYPE_MESSAGE)];
     };
-    let Ok(config) = crate::native::config::records::load_records_config()
+    let Some(record_type) = resolved_record_type(context, record_type_id)
     else {
-        return Vec::new();
-    };
-    let Some(record_type) = config.record_type(record_type_id) else {
         return Vec::new();
     };
     let mut catalog =
@@ -176,6 +180,37 @@ fn record_sets(context: &Context) -> Vec<String> {
         }
     }
     lines
+}
+
+fn record_context(
+    context: &Context,
+) -> crate::native::records::context::RecordContext {
+    crate::native::records::context::RecordContext::discover(
+        &context.bob_dir,
+        &crate::native::config::config_path(),
+    )
+}
+
+/// Record completion accepts either the schema noun or its album/folder
+/// stem, and never picks a winner from an incomplete or conflicting registry.
+fn resolved_record_type(
+    context: &Context,
+    selector: &str,
+) -> Option<crate::native::records::RecordType> {
+    let records = record_context(context);
+    if !matches!(
+        &records.registry().health,
+        crate::native::albums::registry::DiscoveryHealth::Complete
+    ) {
+        return None;
+    }
+    match records.resolve(selector) {
+        crate::native::records::context::RecordKindResolution::Valid {
+            kind,
+            ..
+        } => Some(kind.record_type().clone()),
+        _ => None,
+    }
 }
 
 /// Remembered task types, including hidden names so hide, unhide,

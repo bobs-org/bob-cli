@@ -172,6 +172,22 @@ impl RecordContext {
         &self.registry.albums
     }
 
+    /// Album summary for an inventory row. Summary stays presentation data;
+    /// the shared record metadata object keeps its stable transport shape.
+    pub(crate) fn album_summary_for(
+        &self,
+        kind: &ResolvedRecordKind,
+    ) -> Option<&str> {
+        let RecordTypeSource::Album { path } = &kind.sourced.source else {
+            return None;
+        };
+        self.registry
+            .albums
+            .iter()
+            .find(|entry| entry.declaration.path == *path)
+            .and_then(|entry| entry.declaration.summary.as_deref())
+    }
+
     /// Only invalid claims, while preserving their original folders/findings.
     pub(crate) fn invalid_album_claims(&self) -> Vec<&AlbumEntry> {
         self.registry
