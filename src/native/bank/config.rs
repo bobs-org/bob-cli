@@ -722,7 +722,7 @@ fn optional_string(mapping: &Mapping, key: &str) -> Option<String> {
     }
 }
 
-fn is_alias(value: &str) -> bool {
+pub(crate) fn is_alias(value: &str) -> bool {
     let mut chars = value.chars();
     matches!(chars.next(), Some('a'..='z'))
         && chars

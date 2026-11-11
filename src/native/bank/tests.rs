@@ -64,7 +64,7 @@ fn valid_hub() -> &'static str {
 
 fn report_for(root: &Path) -> CheckReport {
     let scan = scan_bank(root);
-    lint(&scan, today())
+    lint(root, &scan, today())
 }
 
 fn codes(report: &CheckReport) -> BTreeSet<&str> {
@@ -194,6 +194,45 @@ fn clean_month_is_ok() {
     write(root.as_path(), "bank/2026-11.md", &body);
     let report = report_for(&root);
     assert!(report.findings.is_empty(), "{:?}", report.findings);
+    assert_eq!(report.exit_code(), 0);
+}
+
+#[test]
+fn journal_malformed_is_a_bounded_check_warning() {
+    let _guard = guard();
+    let root = temp_vault("journal-malformed");
+    write(root.as_path(), "bank.md", valid_hub());
+    let mut body =
+        canonical_template(month(), "2026-11-12T07:30:00-05:00", today());
+    body.push_str("- [x] $13.71 Smashburger [cat:: dining]\n");
+    write(root.as_path(), "bank/2026-11.md", &body);
+    let journal = root.join(".bob/bank");
+    fs::create_dir_all(&journal).unwrap();
+    let mut lines = String::new();
+    for index in 0..12 {
+        lines.push_str(&format!("{{not json {index} secret-fitid-9999}}\n"));
+    }
+    fs::write(journal.join("athena.jsonl"), lines).unwrap();
+    let report = report_for(&root);
+    let malformed: Vec<&super::check::Finding> = report
+        .findings
+        .iter()
+        .filter(|finding| finding.code == "bank_journal_malformed")
+        .collect();
+    assert_eq!(malformed.len(), 9);
+    assert!(malformed.iter().all(|finding| {
+        finding.severity == super::check::Severity::Warning
+            && !finding.message.contains("secret-fitid-9999")
+            && !finding.path.contains("secret-fitid")
+    }));
+    assert!(malformed.iter().any(|finding| {
+        finding.path == ".bob/bank/athena.jsonl" && finding.line == Some(1)
+    }));
+    assert!(malformed.iter().any(|finding| {
+        finding
+            .message
+            .contains("skipped 12 malformed bank journal lines")
+    }));
     assert_eq!(report.exit_code(), 0);
 }
 

@@ -5,7 +5,8 @@
 //! hides) and every attachment origin lives in one namespaced directory
 //! of per-host JSONL files: `.bob/themes/<host>.jsonl` for `theme.*`
 //! events, `.bob/relations/<host>.jsonl` for `relation_label.*` events,
-//! and `.bob/attachments/<host>.jsonl` for `attachment.import` events.
+//! `.bob/attachments/<host>.jsonl` for `attachment.import` events, and
+//! `.bob/bank/<host>.jsonl` for `bank.import` / `bank.txn` events.
 //! This module owns the namespace mechanics every journal shares:
 //! directory paths, the host label, event timestamps, single-`O_APPEND`
 //! writes, the read-all scan with bounded malformed-line warnings,
@@ -221,7 +222,7 @@ fn push_malformed(
     }
 }
 
-fn parse_envelope(
+pub(crate) fn parse_envelope(
     line: &str,
     path: &str,
     line_number: u32,

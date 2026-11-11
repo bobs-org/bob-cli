@@ -1,9 +1,12 @@
 //! Grammar-phase findings for `bob bank check`.
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use chrono::NaiveDate;
 use serde_json::{json, Value};
+
+use crate::native::pref_journal::MAX_MALFORMED_WARNINGS;
 
 use super::{
     config::{
@@ -11,6 +14,7 @@ use super::{
         BankConfig, Category, ConfigDiagnostic, ConfigParse,
     },
     grammar::{looks_like_day_heading, render_day_heading, ParsedRow},
+    journal,
     month::{parse_month_note, LocatedRow, LocatedRowKind, MonthNote},
     scan::{is_teaching_empty, BankScan},
 };
@@ -93,7 +97,11 @@ impl CheckReport {
     }
 }
 
-pub(crate) fn lint(scan: &BankScan, today: NaiveDate) -> CheckReport {
+pub(crate) fn lint(
+    vault: &Path,
+    scan: &BankScan,
+    today: NaiveDate,
+) -> CheckReport {
     if is_teaching_empty(scan) {
         return CheckReport {
             teaching_empty: true,
@@ -156,6 +164,7 @@ pub(crate) fn lint(scan: &BankScan, today: NaiveDate) -> CheckReport {
         let note = parse_month_note(&month.path, &month.contents, month.month);
         lint_month(&note, config.as_ref(), &mut findings, &mut id_seen);
     }
+    lint_journal(vault, &mut findings);
 
     findings.sort_by(|left, right| {
         left.path
@@ -520,6 +529,49 @@ fn lint_parsed(
             suggest_name(account, &aliases),
             day,
         ));
+    }
+}
+
+fn lint_journal(vault: &Path, findings: &mut Vec<Finding>) {
+    match journal::load(vault) {
+        Ok(snapshot) => {
+            for item in snapshot.malformed.iter().take(MAX_MALFORMED_WARNINGS) {
+                findings.push(finding(
+                    "bank_journal_malformed",
+                    Severity::Warning,
+                    &item.path,
+                    Some(item.line),
+                    "skipped malformed bank journal line",
+                    None,
+                    None,
+                ));
+            }
+            if snapshot.malformed.len() > MAX_MALFORMED_WARNINGS {
+                findings.push(finding(
+                    "bank_journal_malformed",
+                    Severity::Warning,
+                    ".bob/bank",
+                    None,
+                    format!(
+                        "skipped {} malformed bank journal lines",
+                        snapshot.malformed.len()
+                    ),
+                    None,
+                    None,
+                ));
+            }
+        }
+        Err(error) => {
+            findings.push(finding(
+                "bank_journal_malformed",
+                Severity::Warning,
+                ".bob/bank",
+                None,
+                format!("could not read bank journal: {error}"),
+                None,
+                None,
+            ));
+        }
     }
 }
 

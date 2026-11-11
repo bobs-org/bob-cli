@@ -292,7 +292,7 @@ fn execute_check(matches: &ArgMatches) -> i32 {
         return 1;
     }
     let today = bob_env::current_datetime().date();
-    let report = check::lint(&scan, today);
+    let report = check::lint(&bob_dir, &scan, today);
     if json {
         println!("{}", report.to_json());
     } else if scan.io_errors.is_empty() {

@@ -7,12 +7,17 @@ pub(crate) mod config;
 pub(crate) mod dates;
 pub(crate) mod ensure;
 pub(crate) mod grammar;
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod identity;
+pub(crate) mod journal;
 pub(crate) mod list;
 pub(crate) mod model;
 pub(crate) mod month;
 pub(crate) mod output;
 pub(crate) mod report;
 pub(crate) mod scan;
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod source;
 pub(crate) mod status;
 
 pub(crate) use cli::{
