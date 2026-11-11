@@ -397,21 +397,31 @@ generated `## Notebooks` catalog of the notebooks beneath them. See
 
 Contract: [Notebooks](../notebooks.md).
 
+### Album notes
+
+An album is a vault-root Markdown file with `type: "[[album]]"`. Its stem is
+the record folder. `record.noun` names the Obsidian type; `record.fields` is
+the schema. `index_by` and `index_facets` shape grouping peeks and facets.
+`bob albums list` and `bob albums check` report albums, groups, freshness,
+and findings. `bob albums create` ships in a later phase.
+
+Contract: [Albums and record notes](../records.md).
+
 ### Record notes
 
-Each configured `records:` type owns one folder. A record uses
+Each album (or configured `records:` type) owns one folder. A record uses
 `type: "[[<type-id>]]"` and lives at `<dir>/<stem>.md`; its properties come
 from that type's schema. Bob writes `parent` when available, then `type`,
 `title`, schema fields, and `created`. Ordinary note bullets live under
 `## Notes`, with dates when `dated_notes: true`.
 
-For a configured `restaurant` type owning `eat/`, `Ramen Nagi @eat/` plus
+For a `restaurant` type owning `eat/`, `Ramen Nagi @eat/` plus
 its required field bullets creates `eat/ramen_nagi.md`. `@eat/ramen_nagi`
 updates supplied fields and appends notes. `bob records init restaurant -p food`
 scaffolds missing `restaurant.md`, `eat.md`, and `eat.base`; `-p/--parent`
 sets the collection note's parent and is required when that note is missing.
 
-Contract: [Record notes](../records.md).
+Contract: [Albums and record notes](../records.md).
 
 ### Task archives
 

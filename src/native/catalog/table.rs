@@ -7,6 +7,7 @@
 /// treat an unknown slot as `text`.
 #[cfg(test)]
 pub(crate) const KNOWN_SLOTS: &[&str] = &[
+    "album-root",
     "area-note",
     "article-note",
     "metric",
@@ -755,6 +756,29 @@ pub(crate) const ENTRIES: &[Row] = &[
             &["records", "show"],
             "Record Note schema",
             &["records", "show", "schema", "fields", "values"],
+            Presentation::Report,
+            60,
+        )
+    },
+    Row {
+        fixed: JSON,
+        slots: &[("ROOT", "album-root"), ("root", "album-root")],
+        ..reads(
+            "albums-list",
+            &["albums", "list"],
+            "Albums grouped by root",
+            &["albums", "list", "records", "roots", "collections"],
+            Presentation::Report,
+            60,
+        )
+    },
+    Row {
+        fixed: JSON,
+        ..reads(
+            "albums-check",
+            &["albums", "check"],
+            "Check albums",
+            &["albums", "check", "lint", "contract", "records"],
             Presentation::Report,
             60,
         )

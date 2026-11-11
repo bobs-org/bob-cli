@@ -281,4 +281,4 @@ See docs/records.md for update semantics, optional clearing, and failure behavio
 
 ## Related
 
-- [Record notes](../../records.md)
+- [Albums and record notes](../../records.md)

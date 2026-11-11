@@ -77,7 +77,7 @@ queued intake; full scans also synchronize annotations. The
 | [event-link-times.md](event-link-times.md) | Event link times: the Event Task's time pill beside ledger Task Links that point at it |
 | [attachments.md](attachments.md) | Attachment origin journal, resolution states, `bob attachments import` / `origin`, and `%c` recording |
 | [mail-link-marks.md](mail-link-marks.md) | Mail link marks: the display-only reply badge, no-reply pill, and Also-replied tooltip pip on Gmail-watched tasks |
-| [records.md](records.md) | Config-declared Record Notes: schema, capture `@dir/` creation, validation, filename planning, and rendered Markdown |
+| [records.md](records.md) | Albums and record notes: vault albums, `bob albums` list/check, schema, capture `@dir/` creation, validation, filename planning, and rendered Markdown |
 | [notebooks.md](notebooks.md) | `bob notebooks` list, check, sync, and create, the generated Notebooks catalog, JSON, and teaching refusals |
 <!-- END GENERATED: contract table -->
 

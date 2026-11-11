@@ -24,6 +24,7 @@ Tasks and projects:
                restore, split
 
 Vault:
+  albums       Inspect album notes
   articles     Format and inspect article notes with bob-owned section numbers
   attachments  Copy files into the vault and show where copies came from
   nightly      Run nightly maintenance: vault-sync, task archive, articles,

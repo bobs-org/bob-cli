@@ -22,6 +22,12 @@ impl NativeCommand {
             NativeCommand::Articles => {
                 crate::native::articles::cli::build_cli()
             }
+            NativeCommand::AlbumsCheck => {
+                crate::native::albums::build_cli_check()
+            }
+            NativeCommand::AlbumsList => {
+                crate::native::albums::build_cli_list()
+            }
             NativeCommand::AttachmentsImport => {
                 crate::native::attachments::cli::build_cli_import()
             }

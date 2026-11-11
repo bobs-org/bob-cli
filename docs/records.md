@@ -1,21 +1,93 @@
 ---
-title: Record notes
-description: Config-declared note collections, their schemas, capture creation, and how Bob plans record-note files.
+title: Albums and record notes
+description: Vault album notes, record schemas, capture creation, and how Bob plans record-note files.
 ---
 
-# Record notes
+# Albums and record notes
 
 A record note represents one durable thing, such as a restaurant, podcast, show,
-or movie. Each record type is declared under `records:` in Bob's configuration
-and owns one folder. The record type id names the Obsidian `type` link; the
-folder is where notes of that type live.
+or movie. An **album** is a vault-root note that owns one record type: its stem
+is the folder, `record.noun` names the Obsidian `type` link, and `record.fields`
+is the schema. Config `records:` remains a fallback for capture and
+`bob records` until a later phase migrates those consumers.
 
-This contract covers schema loading, value validation, filename planning, and
-the Markdown Bob writes. Capture creates notes through the same planner;
-exact token forms live in [Capture syntax](reference/capture-syntax.md#record-notes)
+This contract covers album reports, schema loading, value validation, filename
+planning, and the Markdown Bob writes. Capture creates notes through the same
+planner; exact token forms live in [Capture syntax](reference/capture-syntax.md#record-notes)
 and the workflow in [Capture](capture.md#record-notes). Record types are
-config-declared collections (`records:`). They are not Task Types (`#fix`,
-`bob types`).
+collections (`records:` or an album's `record:` block). They are not Task Types
+(`#fix`, `bob types`).
+
+## Albums
+
+An album is a vault-root Markdown file with `type: "[[album]]"` (any form
+`frontmatter_type_names` accepts). Identity is the file stem; that stem is the
+record folder (`eat.md` owns `eat/`). Albums must live at the vault root.
+
+```markdown
+---
+parent: "[[body]]"
+type: "[[album]]"
+summary: Places to eat around here.
+emoji: 🍽️
+index_by: location
+record:
+  noun: restaurant
+  label: Restaurant
+  plural: restaurants
+  fields:
+    status:
+      required: true
+      values: {to_try: 🔖 To try, liked: 💚 Liked, not_liked: 🚫 Not liked}
+    category: {required: true, suggest: true}
+    location: {required: true, suggest: true}
+---
+
+# Eat
+```
+
+- **Parent:** exactly one quoted `"[[stem]]"` that resolves to an area or
+  project. The chain must reach a Root Parent and must not cycle.
+- **Summary:** one plain line, at most 140 characters.
+- **Grouping:** `status` choices when present, otherwise the first choices
+  field, otherwise none. Empty groups are omitted. Missing, unknown, or
+  list-mismatched values count as `needs_status`.
+- **`index_by`:** a declared field name. Groups larger than 12 with at least
+  two distinct values peek by that field's display (wikilink phrase, then
+  title), otherwise by title then path. Peeks are the first three titles.
+- **`index_facets`:** an explicit list of at most three field names, or the
+  default of other choice fields then `suggest` fields, excluding the group
+  field and `index_by`, capped at three.
+- **`last_record`:** the latest valid `created` date (`YYYY-MM-DD`) among
+  folder members, or null.
+
+`bob albums` lives in the Vault section of `bob --help`. Bare `bob albums`
+defaults to the read-only `list`. `bob albums create` ships in a later phase.
+
+```text
+bob albums [list] [-b DIR] [-f human|json] [-r ROOT]
+bob albums check [-b DIR] [-f human|json]
+```
+
+- Every long option has a short alias; options stay alphabetical.
+- Root filtering uses the computed root identity (trim, optional `.md`),
+  never ownership or directory location, and recomputes `counts`.
+- Findings do not make `list` nonzero. `check` exits 1 on any error, 0 for
+  warning-only or clean reports, and 2 on usage errors.
+- Real I/O failures are reported on stderr and exit 1; they never look like
+  an empty successful scan.
+- `list` and `check` are read-only: vault bytes, index, and HEAD are
+  unchanged.
+
+Human `list` groups albums by root with root hues, record and group counts,
+freshness (`today` / `Nd` / `Nw`, using `BOB_NOW` when set), and `!N` / `~N`
+issue markers. Invalid or unowned albums get a visible group. Human `check`
+groups findings by album path and ends with an album, record, error, and
+warning summary.
+
+List and check share one JSON envelope (`schema_version: 1`). Albums are
+ordered by path. `parent` is the parent stem. `ok` is false when error
+findings exist. See [JSON outputs](reference/json-outputs.md#album-reports).
 
 ## Schema
 
@@ -293,6 +365,8 @@ After the scaffold, create records with capture (`<title> @<dir>/`) or
 
 - [Capture](capture.md#record-notes)
 - [Capture syntax](reference/capture-syntax.md#record-notes)
+- [JSON outputs](reference/json-outputs.md#album-reports)
 - [JSON outputs](reference/json-outputs.md#record-notes)
 - [Task types](task-types.md)
+- [`bob albums` CLI](reference/cli/albums.md)
 - [`bob records` CLI](reference/cli/records.md)

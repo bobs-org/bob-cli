@@ -249,5 +249,5 @@ Clipboard source order:
 - [Capture](../../capture.md)
 - [Notebooks](../../notebooks.md)
 - [Plan budget, Today, and lanes](../../plan.md)
-- [Record notes](../../records.md)
+- [Albums and record notes](../../records.md)
 - [Task dependency links](../../task-dependencies.md)

@@ -170,6 +170,15 @@ The response includes `hidden_count` for this context. Rows also carry
 `hide_replacement` for the `||` spelling; a `||` probe preserves both pipes
 in each row's `replacement` and adds `one_off: true` to the response.
 
+### Album reports {#album-reports}
+
+| Command | Flag | Shape | Version | Contract |
+| --- | --- | --- | --- | --- |
+| `bob albums list` | `-f json` | Albums, groups, counts, issues | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
+| `bob albums check` | `-f json` | Same report as list; `ok` reflects error findings | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
+
+Each album carries `stem`, `path`, `title`, `emoji`, `summary`, `noun`, `label`, `plural`, `parent`, `parent_kind`, `owner`, `root`, `breadcrumb`, `fields[]`, `group_field`, `index_by`, `index_facets`, `records`, `groups[]` (`value`, `label`, `count`, `peek`), `needs_status`, `last_record`, and `issues[]`. `counts`: `albums`, `records`, `roots`, `errors`, `warnings`. Albums are ordered by path. `parent` is the parent stem. I/O failures print to stderr and exit 1.
+
 ### Notebook reports {#notebook-reports}
 
 | Command | Flag | Shape | Version | Contract |

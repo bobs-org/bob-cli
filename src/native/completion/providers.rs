@@ -49,6 +49,7 @@ pub(crate) fn vault_lines(
         Kind::VaultNote => Some(vault_notes(context)),
         Kind::ArticleNote => Some(article_notes(context)),
         Kind::NotebookRoot => Some(notebook_roots(&context.bob_dir)),
+        Kind::AlbumRoot => Some(album_roots(&context.bob_dir)),
         Kind::Choices | Kind::Dirs | Kind::Files(_) | Kind::FreeText => None,
     }
 }
@@ -547,6 +548,38 @@ fn article_notes(context: &Context) -> Vec<String> {
                 OsStr::new(path),
                 description,
                 "articles",
+                false,
+            )
+        })
+        .collect()
+}
+
+/// Computed album roots for `bob albums list -r`. Read-only scan;
+/// never broadens the task-route provider.
+fn album_roots(bob_dir: &Path) -> Vec<String> {
+    let registry = crate::native::albums::registry::AlbumRegistry::discover(
+        bob_dir,
+        &crate::native::config::config_path(),
+    );
+    let mut roots = registry
+        .albums
+        .iter()
+        .filter_map(|entry| entry.root.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    roots.sort_by(|a, b| {
+        a.to_lowercase()
+            .cmp(&b.to_lowercase())
+            .then_with(|| a.cmp(b))
+    });
+    roots
+        .into_iter()
+        .filter_map(|root| {
+            protocol::candidate_line(
+                OsStr::new(&root),
+                &format!("albums in {root}"),
+                "album roots",
                 false,
             )
         })

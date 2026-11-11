@@ -163,7 +163,7 @@ groups:
         summary: "Attachment origin journal, resolution states, `bob attachments import` / `origin`, and `%c` recording"
         order: 44
       - stem: records
-        summary: "Config-declared Record Notes: schema, capture `@dir/` creation, validation, filename planning, and rendered Markdown"
+        summary: "Albums and record notes: vault albums, `bob albums` list/check, schema, capture `@dir/` creation, validation, filename planning, and rendered Markdown"
         order: 46
       - stem: notebooks
         summary: "`bob notebooks` list, check, sync, and create, the generated Notebooks catalog, JSON, and teaching refusals"

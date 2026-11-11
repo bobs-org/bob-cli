@@ -350,6 +350,37 @@ Examples:
 See docs/attachments.md for the origin journal contract.
 Run 'bob attachments <command> --help' for more information on a command.";
 
+const ALBUMS_MEMBERS: &[Member] = &[
+    Member {
+        name: "check",
+        about: "Check albums against the contract",
+        leaf: Leaf {
+            native_command: NativeCommand::AlbumsCheck,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "list",
+        about: "List albums grouped by root (default)",
+        leaf: Leaf {
+            native_command: NativeCommand::AlbumsList,
+            script_command: None,
+        },
+    },
+];
+
+const ALBUMS_AFTER_HELP: &str = "\
+Bare `bob albums` runs the read-only list.
+
+Examples:
+  bob albums                       List albums grouped by root
+  bob albums list -r body          List one root's albums
+  bob albums check                 Lint albums against the contract
+  bob albums check -f json         Findings as JSON
+
+See docs/records.md for the album contract.
+Run 'bob albums <command> --help' for more information on a command.";
+
 const RECORDS_MEMBERS: &[Member] = &[
     Member {
         name: "check",
@@ -878,6 +909,20 @@ const SUBCOMMANDS: &[Subcommand] = &[
             ),
             after_help: TASK_AFTER_HELP,
             usage: "bob task <COMMAND>",
+        }),
+    },
+    Subcommand {
+        name: "albums",
+        about: "Inspect album notes",
+        section: Section::Vault,
+        target: Target::Group(Group {
+            members: ALBUMS_MEMBERS,
+            default: Some("list"),
+            extra_about: Some(
+                "Bare `bob albums` runs the read-only list. `list` shows albums grouped by root. `check` lints albums against the contract. `bob albums create` ships in a later phase.",
+            ),
+            after_help: ALBUMS_AFTER_HELP,
+            usage: "bob albums [COMMAND]",
         }),
     },
     Subcommand {
@@ -2394,6 +2439,8 @@ mod tests {
 
         let expected = [
             NativeCommand::Articles,
+            NativeCommand::AlbumsCheck,
+            NativeCommand::AlbumsList,
             NativeCommand::AttachmentsImport,
             NativeCommand::AttachmentsOrigin,
             NativeCommand::Capture,

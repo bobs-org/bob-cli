@@ -1,10 +1,12 @@
-//! Album declaration parsing and schema validation.
-//!
-//! This phase owns the album header model. Vault-wide discovery and report
-//! analysis are layered on top by the registry phase.
+//! Album declaration parsing, vault registry, and read-only reports.
 
-#[allow(dead_code)] // The next album phase consumes this registry API.
+pub(crate) mod cli;
+pub(crate) mod grouping;
+pub(crate) mod output;
 pub(crate) mod registry;
+pub(crate) mod report;
+
+pub(crate) use cli::{build_cli_check, build_cli_list};
 
 use std::{collections::HashMap, path::Path};
 
@@ -30,7 +32,6 @@ const RESERVED_ALBUM_STEMS: &[&str] = &["done", "ref"];
 pub(crate) enum AlbumIssueSeverity {
     Error,
     Warning,
-    #[allow(dead_code)] // Used by album registry's informational findings.
     Info,
 }
 

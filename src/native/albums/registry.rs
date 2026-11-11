@@ -56,6 +56,7 @@ pub(crate) struct SourcedRecordType {
 pub(crate) enum DiscoveryHealth {
     Complete,
     Partial(Vec<String>),
+    #[allow(dead_code)]
     TargetOnly,
 }
 
@@ -72,6 +73,7 @@ pub(crate) struct AlbumEntry {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub(crate) enum RouteResolution {
     AlbumValid {
         record_type: SourcedRecordType,
@@ -99,11 +101,15 @@ pub(crate) enum RouteResolution {
 #[derive(Debug, Clone)]
 pub(crate) struct AlbumRegistry {
     pub(crate) albums: Vec<AlbumEntry>,
+    #[allow(dead_code)]
     pub(crate) usable_types: Vec<SourcedRecordType>,
+    #[allow(dead_code)]
     pub(crate) config_diagnostic: Option<RecordDiagnostic>,
     pub(crate) health: DiscoveryHealth,
     pub(crate) vault_root: PathBuf,
+    #[allow(dead_code)]
     config_path: PathBuf,
+    #[allow(dead_code)]
     claims: BTreeMap<String, Vec<usize>>,
 }
 
@@ -277,6 +283,7 @@ impl AlbumRegistry {
     /// Resolve a route against this registry's complete inventory. A
     /// conflicting or invalid album claim always refuses the route, and the
     /// returned health makes the scope of global checks explicit.
+    #[allow(dead_code)]
     pub(crate) fn resolve_route(&self, route: &str) -> RouteResolution {
         let key = route.to_ascii_lowercase();
         if let Some(indices) = self.claims.get(&key) {
@@ -342,6 +349,7 @@ impl AlbumRegistry {
 /// one, this reads only `<bob_dir>/<route>.md` through its frontmatter. If a
 /// matching config fallback exists, an explicit full discovery follows to
 /// prove the config kind is not claimed elsewhere.
+#[allow(dead_code)]
 pub(crate) fn resolve_route_head(
     bob_dir: &Path,
     config_path: &Path,
@@ -444,6 +452,7 @@ pub(crate) fn resolve_route_head(
     })
 }
 
+#[allow(dead_code)]
 fn read_frontmatter_head(path: &Path) -> Result<String, std::io::Error> {
     let mut file = fs::File::open(path)?;
     let mut head = Vec::new();
@@ -927,6 +936,7 @@ fn push_finding(
     });
 }
 
+#[allow(dead_code)]
 fn sort_findings(findings: &mut Vec<AlbumFinding>) {
     findings.sort_by(|left, right| {
         left.path

@@ -61,6 +61,8 @@ pub(crate) enum Kind {
     RecordSet,
     /// A computed notebook root for `bob notebooks list -r`.
     NotebookRoot,
+    /// A computed album root for `bob albums list -r`.
+    AlbumRoot,
 }
 
 struct Entry {
@@ -73,6 +75,16 @@ struct Entry {
 
 /// Static decisions, most specific entry first per (path, arg).
 const TABLE: &[Entry] = &[
+    Entry {
+        path: &["albums"],
+        arg: "root",
+        kind: Kind::AlbumRoot,
+    },
+    Entry {
+        path: &["albums", "list"],
+        arg: "root",
+        kind: Kind::AlbumRoot,
+    },
     Entry {
         path: &["articles", "adopt"],
         arg: "note",
