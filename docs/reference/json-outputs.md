@@ -211,7 +211,8 @@ Managed Done results can carry `keep_moving` offers beside `unblocked`, with
 `keep_moving_folds` counting hidden, blocked, and future-scheduled candidates.
 These offers are eligible Pending, Next, and Ready tasks from a leaf project
 whose last task linked in today's open Pomodoros was closed. A leaf project
-is a subproject with a different root parent; it may itself have subprojects.
+is a recognised project that is not an umbrella (a root whose `^prj` lists
+sub-projects); it may itself have subprojects.
 These offers do not require a dependency on the completed task. They join
 the batch's `pull_in` choices and link only when picked.
 See [keep-moving offers](../task-dependencies.md#1215-keep-moving-offers-leaf-projects).

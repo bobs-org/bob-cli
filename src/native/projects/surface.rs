@@ -32,6 +32,9 @@ pub(crate) struct ProjectSurface {
     /// Open children on R's `🧩 **Sub-projects:**` marker, counted with
     /// the same predicate as `subopen` (a `closed_child` stem is ignored).
     pub(crate) open_subprojects: usize,
+    /// Every display on R's first marker line, whatever its state. Keep-moving
+    /// uses this to tell an umbrella from a leaf without walking ancestors.
+    pub(crate) subprojects_listed: usize,
 }
 
 impl ProjectSurface {
@@ -109,21 +112,20 @@ fn project_surface_inner(
             .and_then(|stem| stem.to_str())
             .map(|stem| stem.to_ascii_lowercase())
     });
-    let open_subprojects = project
+    let displays = project
         .prj_task
         .sub_block
         .first_marker_line()
         .map(|line| subproject_displays_in_marker_line(&line.trimmed_text))
-        .map(|displays| {
-            displays
-                .iter()
-                .filter(|(link_name, display)| {
-                    display.state.is_open()
-                        && closed_stem.as_deref() != Some(link_name.as_str())
-                })
-                .count()
+        .unwrap_or_default();
+    let subprojects_listed = displays.len();
+    let open_subprojects = displays
+        .iter()
+        .filter(|(link_name, display)| {
+            display.state.is_open()
+                && closed_stem.as_deref() != Some(link_name.as_str())
         })
-        .unwrap_or(0);
+        .count();
     let prj_line = project.task_lines.iter().find(|task| task.is_prj)?;
     Some(ProjectSurface {
         prj_line_number: prj_line.line_number,
@@ -132,5 +134,6 @@ fn project_surface_inner(
         remaining,
         subopen: open_subprojects > 0,
         open_subprojects,
+        subprojects_listed,
     })
 }

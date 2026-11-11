@@ -55,6 +55,7 @@ fn surface_agrees_open_sibling_hides() {
     assert!(!has_remove_hide(&sync_changes(&project)));
     let surface = surface_of("Proj.md", &contents).expect("surface");
     assert_eq!(surface.remaining, 1);
+    assert_eq!(surface.subprojects_listed, 0);
     assert!(!surface.is_empty());
 }
 
@@ -142,6 +143,8 @@ fn surface_marker_proxy_divergence_and_agreement() {
         assert!(has_remove_hide(&sync_changes(&project)), "{marker}");
         let surface = surface_of("Proj.md", &contents).expect("surface");
         assert!(surface.subopen, "{marker}");
+        assert_eq!(surface.subprojects_listed, 1, "{marker}");
+        assert_eq!(surface.open_subprojects, 1, "{marker}");
         assert!(!surface.is_empty(), "{marker}");
     }
 
@@ -159,6 +162,8 @@ fn surface_marker_proxy_divergence_and_agreement() {
         assert!(has_remove_hide(&sync_changes(&project)), "{marker}");
         let surface = surface_of("Proj.md", &contents).expect("surface");
         assert!(!surface.subopen, "{marker}");
+        assert_eq!(surface.subprojects_listed, 1, "{marker}");
+        assert_eq!(surface.open_subprojects, 0, "{marker}");
         assert!(surface.is_empty(), "{marker}");
     }
 }

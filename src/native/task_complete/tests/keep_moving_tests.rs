@@ -1,4 +1,4 @@
-//! Keep-moving engine tests: LP1–LP12 leafness and pure KM vectors
+//! Keep-moving engine tests: LP1–LP17 leafness and pure KM vectors
 //! (`docs/task-dependencies.md` §12.15–§12.17).
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -54,10 +54,30 @@ fn project(parent: Option<&str>, extra: &str, title: &str) -> String {
     )
 }
 
+fn with_subprojects(note: String, links: &str) -> String {
+    format!("{note}\t- 🧩 **Sub-projects:** {links}\n")
+}
+
+fn lp_index(notes: &BTreeMap<PathBuf, String>) -> NoteIndex {
+    NoteIndex::from_paths(
+        notes
+            .keys()
+            .filter(|path| {
+                !path
+                    .components()
+                    .any(|component| component.as_os_str() == "_generated")
+            })
+            .cloned(),
+    )
+}
+
 fn leaf_tree() -> BTreeMap<PathBuf, String> {
     let mut notes = BTreeMap::new();
     notes.insert(PathBuf::from("dev.md"), area(None));
-    notes.insert(PathBuf::from("sase.md"), project(Some("dev"), "", "Sase"));
+    notes.insert(
+        PathBuf::from("sase.md"),
+        with_subprojects(project(Some("dev"), "", "Sase"), "[[sase_badges]]"),
+    );
     notes.insert(
         PathBuf::from("sase_badges.md"),
         project(Some("sase"), "", "Badges"),
@@ -174,7 +194,10 @@ fn lp_notes() -> BTreeMap<PathBuf, String> {
     );
     notes.insert(
         PathBuf::from("sase_blog.md"),
-        project(Some("sase"), "root: true\n", "Blog"),
+        with_subprojects(
+            project(Some("sase"), "root: true\n", "Blog"),
+            "[[sase_pre_blog]]",
+        ),
     );
     notes.insert(
         PathBuf::from("sase_pre_blog.md"),
@@ -193,8 +216,63 @@ fn lp_notes() -> BTreeMap<PathBuf, String> {
         "---\ntype: [[note]]\nparent: [[sase]]\n---\n".to_string(),
     );
     notes.insert(PathBuf::from("k.md"), project(Some("wrapper"), "", "K"));
-    notes.insert(PathBuf::from("m.md"), project(Some("sase"), "", "Middle"));
+    notes.insert(
+        PathBuf::from("m.md"),
+        with_subprojects(project(Some("sase"), "", "Middle"), "[[m_child]]"),
+    );
     notes.insert(PathBuf::from("m_child.md"), project(Some("m"), "", "Child"));
+    notes.insert(PathBuf::from("job.md"), area(None));
+    notes.insert(
+        PathBuf::from("job_email_recruiters.md"),
+        project(Some("job"), "", "Recruiters"),
+    );
+    notes.insert(
+        PathBuf::from("flagged_leaf.md"),
+        project(Some("sase"), "root: true\n", "Flagged leaf"),
+    );
+    notes.insert(
+        PathBuf::from("split_once.md"),
+        with_subprojects(
+            project(Some("dev"), "", "Split once"),
+            "~~[[x]]~~ ✅ • ~~[[y]]~~ ❌",
+        ),
+    );
+    notes.insert(
+        PathBuf::from("missing_parent_marked.md"),
+        with_subprojects(
+            project(Some("no_such_note"), "", "Missing marked"),
+            "[[ghost]]",
+        ),
+    );
+    notes.insert(PathBuf::from("dup.md"), area(None));
+    notes.insert(PathBuf::from("other/dup.md"), area(None));
+    notes.insert(
+        PathBuf::from("ambiguous.md"),
+        project(Some("dup"), "", "Ambiguous"),
+    );
+    notes.insert(
+        PathBuf::from("ambiguous_marked.md"),
+        with_subprojects(
+            project(Some("dup"), "", "Ambiguous marked"),
+            "[[ghost]]",
+        ),
+    );
+    notes.insert(
+        PathBuf::from("prose_marker.md"),
+        concat!(
+            "---\ntype: [[project]]\nparent: [[dev]]\nstatus: wip\n---\n",
+            "See 🧩 **Sub-projects:** [[ghost]] in prose.\n\n",
+            "```\n- 🧩 **Sub-projects:** [[fenced]]\n```\n",
+            "- [ ] #task Other ^other\n",
+            "\t- 🧩 **Sub-projects:** [[otherchild]]\n",
+            "- [ ] #task #prj Prose marker ^prj\n",
+        )
+        .to_string(),
+    );
+    notes.insert(
+        PathBuf::from("_generated/tag_pages/topic/sase.md"),
+        "# sase\n".to_string(),
+    );
     notes.insert(
         PathBuf::from("inbox.md"),
         "---\ntype: [[area]]\n---\n".to_string(),
@@ -229,7 +307,7 @@ fn assert_leaf(
     expected: bool,
     vector: &str,
 ) {
-    let index = NoteIndex::from_paths(notes.keys().cloned());
+    let index = lp_index(notes);
     let mut resolver = HomeResolver::new(IndexedHomeSource::new(&index, notes));
     let contents = notes
         .get(Path::new(path))
@@ -247,7 +325,7 @@ fn assert_leaf(
     );
 }
 
-// LP1–LP12: leafness via HomeResolver, in-memory HomeSource.
+// LP1–LP17: leafness via the umbrella rule, in-memory HomeSource.
 #[test]
 fn lp_vectors_match_r2_walk() {
     let notes = lp_notes();
@@ -255,9 +333,12 @@ fn lp_vectors_match_r2_walk() {
     assert_leaf(&notes, "sase.md", false, "LP2");
     assert_leaf(&notes, "sase_blog.md", false, "LP3");
     assert_leaf(&notes, "sase_pre_blog.md", true, "LP4");
-    assert_leaf(&notes, "p.md", false, "LP5");
-    assert_leaf(&notes, "o.md", false, "LP6");
-    assert_leaf(&notes, "missing_parent.md", false, "LP7");
+    assert_leaf(&notes, "p.md", true, "LP5");
+    assert_leaf(&notes, "o.md", true, "LP6");
+    assert_leaf(&notes, "missing_parent.md", true, "LP7 no marker");
+    assert_leaf(&notes, "missing_parent_marked.md", false, "LP7 marker");
+    assert_leaf(&notes, "ambiguous.md", true, "LP7 ambiguous no marker");
+    assert_leaf(&notes, "ambiguous_marked.md", false, "LP7 ambiguous marker");
     assert_leaf(&notes, "k.md", true, "LP8");
     assert_leaf(&notes, "m.md", true, "LP9");
     assert_leaf(&notes, "sase_goals.md", true, "LP10");
@@ -268,6 +349,11 @@ fn lp_vectors_match_r2_walk() {
     assert_leaf(&notes, "terminal.md", false, "LP11 terminal");
     assert_leaf(&notes, "cycle_a.md", true, "LP12");
     assert_leaf(&notes, "cycle_b.md", true, "LP12");
+    assert_leaf(&notes, "job_email_recruiters.md", true, "LP13");
+    assert_leaf(&notes, "flagged_leaf.md", true, "LP14");
+    assert_leaf(&notes, "split_once.md", false, "LP15");
+    assert_leaf(&notes, "sase_goals.md", true, "LP16");
+    assert_leaf(&notes, "prose_marker.md", true, "LP17");
 }
 
 // LP10: a task `[root::]` field does not change its note's leafness.
@@ -284,6 +370,26 @@ fn lp10_task_root_field_does_not_change_leafness() {
         .to_string(),
     );
     assert_leaf(&notes, "sase_goals.md", true, "LP10");
+}
+
+// LP16: a generated tag page in the index still leaves sase_goals a leaf,
+// because the cheap path does not walk when there is no marker.
+#[test]
+fn lp16_generated_tag_page_does_not_change_leafness() {
+    let notes = lp_notes();
+    let index = NoteIndex::from_paths(notes.keys().cloned());
+    let mut resolver =
+        HomeResolver::new(IndexedHomeSource::new(&index, &notes));
+    assert!(
+        is_leaf_project(
+            &mut resolver,
+            Path::new("sase_goals.md"),
+            &notes[Path::new("sase_goals.md")],
+            today(),
+            &index
+        ),
+        "LP16"
+    );
 }
 
 // Cheap G1–G3 gate: no HomeSource, so no ancestor reads.
@@ -367,11 +473,12 @@ fn needs_dependents_only_for_dependency_bearing_open_tasks() {
     ));
 }
 
-// Counting source: leaf walk reads only reached ancestors, not the vault.
+// Counting source: no marker ⇒ no ancestor reads; a marker walks only
+// the ancestors the umbrella check needs.
 #[test]
 fn leaf_walk_reads_only_reached_ancestors() {
     let notes = lp_notes();
-    let index = NoteIndex::from_paths(notes.keys().cloned());
+    let index = lp_index(&notes);
     let source = CountingHomeSource::new(&index, &notes);
     let mut resolver = HomeResolver::new(source);
     assert!(is_leaf_project(
@@ -381,8 +488,19 @@ fn leaf_walk_reads_only_reached_ancestors() {
         today(),
         &index,
     ));
-    // sase_badges → sase → dev, not the rest of the fixture.
-    assert_eq!(resolver.source_mut().reads.get(), 3);
+    assert_eq!(resolver.source_mut().reads.get(), 0);
+
+    let source = CountingHomeSource::new(&index, &notes);
+    let mut resolver = HomeResolver::new(source);
+    assert!(!is_leaf_project(
+        &mut resolver,
+        Path::new("sase.md"),
+        &notes[Path::new("sase.md")],
+        today(),
+        &index,
+    ));
+    // sase → dev, not the rest of the fixture.
+    assert_eq!(resolver.source_mut().reads.get(), 2);
 }
 
 // KM1: lane order Pending → Next → Ready; trigger last_planned; unpicked
@@ -548,14 +666,15 @@ fn km5_prj_live_link_suppresses() {
     assert!(plan.keep_moving.is_empty(), "KM5");
 }
 
-// KM6: top-level / root: true / orphan never keep-moving.
+// KM6: umbrella notes never keep-moving (LP2, LP3, LP15).
 #[test]
-fn km6_non_leaf_notes_do_not_trigger() {
+fn km6_umbrella_notes_do_not_trigger() {
     let tree = leaf_tree();
     let sase = concat!(
         "---\ntype: [[project]]\nparent: [[dev]]\nstatus: wip\n---\n",
         "- [x] #task Top [id:: t] ^t\n",
         "- [ ] #task #prj Sase ^prj\n",
+        "\t- 🧩 **Sub-projects:** [[sase_badges]]\n",
         "- [ ] #task Ready [id:: a] ^a\n",
     );
     let snapshot = [
@@ -570,6 +689,67 @@ fn km6_non_leaf_notes_do_not_trigger() {
         SuccessorSelection::None,
     );
     assert!(plan.keep_moving.is_empty(), "KM6 LP2");
+
+    let split_once = concat!(
+        "---\ntype: [[project]]\nparent: [[dev]]\nstatus: wip\n---\n",
+        "- [x] #task Top [id:: t] ^t\n",
+        "- [ ] #task #prj Split once ^prj\n",
+        "\t- 🧩 **Sub-projects:** ~~[[x]]~~ ✅ • ~~[[y]]~~ ❌\n",
+        "- [ ] #task Ready [id:: a] ^a\n",
+    );
+    let snapshot = [
+        ("dev.md", tree[Path::new("dev.md")].as_str()),
+        ("split_once.md", split_once),
+    ];
+    let plan = run_km(
+        vec![pred("split_once.md", "t", "t", "Top")],
+        &snapshot,
+        Some(&day_link("split_once#^t")),
+        &["dev.md", "split_once.md", "20261005.md"],
+        SuccessorSelection::None,
+    );
+    assert!(plan.keep_moving.is_empty(), "KM6 LP15");
+}
+
+// KM33: a standalone top-level project (the screenshot) offers keep-moving.
+#[test]
+fn km33_standalone_top_level_offers_keep_moving() {
+    let job = area(None);
+    let recruiters = concat!(
+        "---\ntype: [[project]]\nparent: [[job]]\nstatus: wip\n---\n",
+        "- [x] #task Reply to Luzern [id:: luzern] ^luzern\n",
+        "- [ ] #task #prj Recruiters ^prj\n",
+        "- [*] #task EcoGPT [id:: ecogpt] ^ecogpt\n",
+        "- [*] #task Ray Lyles [id:: ray-lyles] ^ray-lyles\n",
+        "- [*] #task Product engineer Dan Dowd [id:: product-engineer-dan-dowd] ^product-engineer-dan-dowd\n",
+        "- [*] #task Senior rust java engineer [id:: senior-rust-java-engineer] ^senior-rust-java-engineer\n",
+    );
+    let snapshot = [
+        ("job.md", job.as_str()),
+        ("job_email_recruiters.md", recruiters),
+    ];
+    let plan = run_km(
+        vec![pred(
+            "job_email_recruiters.md",
+            "luzern",
+            "luzern",
+            "Reply to Luzern",
+        )],
+        &snapshot,
+        Some(&day_link("job_email_recruiters#^luzern")),
+        &["job.md", "job_email_recruiters.md", "20261005.md"],
+        SuccessorSelection::None,
+    );
+    assert_eq!(
+        km_keys(&plan),
+        [
+            "ecogpt",
+            "ray-lyles",
+            "product-engineer-dan-dowd",
+            "senior-rust-java-engineer"
+        ],
+        "KM33"
+    );
 }
 
 // KM7: middle project offers only its own residents.
