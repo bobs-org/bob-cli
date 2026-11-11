@@ -11,13 +11,14 @@ Inspect album notes
 ```text title="bob albums --help"
 Inspect album notes
 
-Bare `bob albums` runs the read-only list. `list` shows albums grouped by root. `check` lints albums against the contract. `bob albums create` ships in a later phase.
+Bare `bob albums` runs the read-only list. `list` shows albums grouped by root. `check` lints albums against the contract. `sync` repairs generated records indexes in one guarded transaction. `bob albums create` ships in a later phase.
 
 Usage: bob albums [COMMAND]
 
 Commands:
   check  Check albums against the contract
   list   List albums grouped by root (default)
+  sync   Repair generated records indexes
 
 Options:
   -h, --help  Print help
@@ -29,6 +30,8 @@ Examples:
   bob albums list -r body          List one root's albums
   bob albums check                 Lint albums against the contract
   bob albums check -f json         Findings as JSON
+  bob albums sync -d               Preview index repairs as diffs
+  bob albums sync                  Repair every healthy album index
 
 See docs/records.md for the album contract.
 Run 'bob albums <command> --help' for more information on a command.
@@ -94,6 +97,39 @@ Examples:
   bob albums list -r body -f json
 
 See docs/records.md for the album contract.
+```
+
+## bob albums sync
+
+Repair generated records indexes
+
+```text title="bob albums sync --help"
+Repair each album's generated [!records] index from its record folder. A real run takes the shared vault lock, pre-syncs, guards album declarations, record frontmatter, and folder membership, then makes one scoped commit `albums: sync (N notes)` when indexes change. Current indexes write and commit nothing and skip post-sync. `--dry-run` plans diffs without a lock or sync cycle. Damaged albums are left intact, healthy albums continue, and any damaged album or runtime failure exits 1.
+
+Usage: bob albums sync [OPTIONS]
+
+Options:
+  -b, --bob-dir <DIR>
+          Bob vault root; defaults to BOB_DIR or ~/bob
+
+  -d, --dry-run
+          Print planned unified diffs; write nothing
+
+  -f, --format <FORMAT>
+          Output format: human or json
+
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Show help
+
+Examples:
+  bob albums sync
+  bob albums sync -d
+  bob albums sync -b ~/bob-work -f json
+
+See docs/records.md for the index and sync contract.
 ```
 
 ## Related

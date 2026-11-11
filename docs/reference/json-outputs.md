@@ -168,8 +168,12 @@ sets `one_off: true`.
 | --- | --- | --- | --- | --- |
 | `bob albums list` | `-f json` | Albums, groups, counts, issues | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
 | `bob albums check` | `-f json` | Same report as list | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
+| `bob albums sync` | `-f json` | Index entries and transaction results | `schema_version: 1` | [Albums and record notes](../records.md#syncing-records-indexes) |
 
-Each album carries `stem`, `path`, `title`, `emoji`, `summary`, `noun`, `label`, `plural`, `parent` (stem), `parent_kind`, `owner`, `root`, `breadcrumb`, `fields[]`, `group_field`, `index_by`, `index_facets`, `records`, `groups[]`, `needs_status`, `last_record`, `index.state` (`current`/`missing`/`stale`/`damaged`), and `issues[]` (`code`, `severity`, `path`, `line`, `key_path`, `message`, `suggestions`). `counts`: `albums`, `records`, `roots`, `errors`, `warnings`. Path order. `ok` is false on error findings or I/O (stderr, exit 1).
+Album rows add index state; see the [album contract](../records.md#albums)
+for their payload.
+
+Sync returns index entries and transaction results; see the sync contract.
 
 ### Notebook reports {#notebook-reports}
 
@@ -178,8 +182,6 @@ Each album carries `stem`, `path`, `title`, `emoji`, `summary`, `noun`, `label`,
 | `bob notebooks list` | `-f json` | Notebooks, counts, issues, and host `catalogs` | `schema_version: 1` | [Notebooks](../notebooks.md#json) |
 | `bob notebooks check` | `-f json` | Same report as list; `ok` reflects error findings | `schema_version: 1` | [Notebooks](../notebooks.md#json) |
 | `bob notebooks sync`, `create` | `-f json` | Envelope: `ok`, `changes[]`, `commit`, `error`; `create` adds `notebook` | `schema_version: 1` | [Notebooks](../notebooks.md#sync) |
-
-Each notebook carries `stem`, `path`, `title`, `summary`, `parent`, `parent_kind`, `owner`, `root`, `breadcrumb`, `children`, `notes`, `sections`, `last_note`, and `issues`. `catalogs[]`: `host`, `path`, `root`, `state`, `notebooks`, `issues`.
 
 ### Bank reports {#bank-reports}
 

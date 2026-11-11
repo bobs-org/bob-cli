@@ -643,7 +643,8 @@ fn nightly_help_names_the_period_notes_step() {
             "4. report article notes that need formatting (write nothing)",
             "5. report period-note problems (write nothing)",
             "6. repair generated notebook catalogs",
-            "7. run vault-sync against the vault",
+            "7. repair generated album records indexes",
+            "8. run vault-sync against the vault",
         ],
     );
 }

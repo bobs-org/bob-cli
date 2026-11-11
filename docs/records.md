@@ -102,6 +102,7 @@ defaults to the read-only `list`. `bob albums create` ships in a later phase.
 ```text
 bob albums [list] [-b DIR] [-f human|json] [-r ROOT]
 bob albums check [-b DIR] [-f human|json]
+bob albums sync [-b DIR] [-d] [-f human|json]
 ```
 
 - Every long option has a short alias; options stay alphabetical.
@@ -113,6 +114,30 @@ bob albums check [-b DIR] [-f human|json]
   an empty successful scan.
 - `list` and `check` are read-only: vault bytes, index, and HEAD are
   unchanged.
+
+### Syncing records indexes
+
+`bob albums sync` plans every album index from one coherent album inventory
+and each album's direct Markdown folder members. `-d` prints the unified diffs
+without taking the maintenance lock, writing files, running Git, or syncing
+the vault. A real run takes the shared maintenance lock, pre-syncs the vault,
+guards album preimages, record frontmatter, and folder membership, writes all
+healthy album indexes, then makes one scoped `albums: sync (N notes)` commit.
+It runs a post-sync only when it made that commit. A current run writes and
+commits nothing and skips post-sync.
+
+Damaged or invalid albums remain unchanged. Sync continues with healthy
+albums, reports each damaged album and its records, and exits 1 if an album is
+damaged or a runtime operation fails. An unreadable or incomplete source is
+never treated as an empty folder. In `bob nightly`, album sync runs directly
+after `notebooks` and before the final `vault-sync`; a failed maintenance step
+does not prevent that final publish.
+
+JSON uses schema version 1. `albums[]` repeats the list/check entry shape;
+`counts.damaged` counts unsafe or invalid indexes. `findings[]` flattens album
+issues, while `changes[]` includes path and dry-run diff. `commit`, `sync`,
+`warnings[]`, and `io_errors[]` report transaction state; `ok` is false on
+damage or runtime failure.
 
 Human `list` groups albums by root with root hues, record and group counts,
 freshness (`today` / `Nd` / `Nw`, using `BOB_NOW` when set), and `!N` / `~N`

@@ -592,7 +592,7 @@ fn albums_broken_album_members_still_count() {
     let broken = album_by_stem(&payload, "broken");
     assert_eq!(broken["records"], 2);
     assert_eq!(broken["root"], "body");
-    assert_eq!(broken["index"]["state"], "missing");
+    assert_eq!(broken["index"]["state"], "damaged");
     assert!(broken["issues"]
         .as_array()
         .unwrap()

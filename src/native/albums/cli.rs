@@ -7,7 +7,7 @@ use clap::{
     Command as ClapCommand,
 };
 
-use super::{output, registry::AlbumRegistry, report};
+use super::{output, registry::AlbumRegistry, report, sync};
 use crate::native::{config, env as bob_env};
 
 const COMMAND_NAME: &str = "bob albums";
@@ -48,6 +48,18 @@ pub(crate) fn run_check(args: Vec<OsString>) -> i32 {
     execute_check(&matches)
 }
 
+pub(crate) fn run_sync(args: Vec<OsString>) -> i32 {
+    let mut command = build_cli_sync();
+    let name = command.get_name().to_owned();
+    let matches = match command.try_get_matches_from_mut(
+        std::iter::once(OsString::from(name)).chain(args),
+    ) {
+        Ok(matches) => matches,
+        Err(error) => return print_clap_error(error),
+    };
+    execute_sync(&matches)
+}
+
 pub(crate) fn build_cli_list() -> ClapCommand {
     ClapCommand::new("bob albums list")
         .about("List albums grouped by root (default)")
@@ -79,6 +91,22 @@ pub(crate) fn build_cli_check() -> ClapCommand {
         .arg(help_arg())
 }
 
+pub(crate) fn build_cli_sync() -> ClapCommand {
+    ClapCommand::new("bob albums sync")
+        .about("Repair generated records indexes")
+        .long_about(
+            "Repair each album's generated [!records] index from its record folder. A real run takes the shared vault lock, pre-syncs, guards album declarations, record frontmatter, and folder membership, then makes one scoped commit `albums: sync (N notes)` when indexes change. Current indexes write and commit nothing and skip post-sync. `--dry-run` plans diffs without a lock or sync cycle. Damaged albums are left intact, healthy albums continue, and any damaged album or runtime failure exits 1.",
+        )
+        .after_help(
+            "Examples:\n  bob albums sync\n  bob albums sync -d\n  bob albums sync -b ~/bob-work -f json\n\nSee docs/records.md for the index and sync contract.",
+        )
+        .disable_help_flag(true)
+        .arg(bob_dir_arg())
+        .arg(dry_run_arg())
+        .arg(format_arg())
+        .arg(help_arg())
+}
+
 fn bob_dir_arg() -> Arg {
     Arg::new("bob-dir")
         .long("bob-dir")
@@ -86,6 +114,14 @@ fn bob_dir_arg() -> Arg {
         .value_name("DIR")
         .value_parser(OsStringValueParser::new())
         .help("Bob vault root; defaults to BOB_DIR or ~/bob")
+}
+
+fn dry_run_arg() -> Arg {
+    Arg::new("dry-run")
+        .long("dry-run")
+        .short('d')
+        .action(ArgAction::SetTrue)
+        .help("Print planned unified diffs; write nothing")
 }
 
 fn format_arg() -> Arg {
@@ -198,4 +234,20 @@ fn execute_check(matches: &ArgMatches) -> i32 {
     } else {
         0
     }
+}
+
+fn execute_sync(matches: &ArgMatches) -> i32 {
+    let bob_dir = vault_from(matches);
+    let json = format_is_json(matches);
+    let report = if matches.get_flag("dry-run") {
+        sync::dry_run(&bob_dir)
+    } else {
+        sync::run_standalone(&bob_dir, json)
+    };
+    if json {
+        println!("{}", report.to_json());
+    } else {
+        sync::print_human(&report);
+    }
+    report.exit_code()
 }

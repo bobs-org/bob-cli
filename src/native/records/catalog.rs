@@ -35,6 +35,7 @@ pub(crate) struct RecordCatalog {
 #[derive(Debug, Clone)]
 pub(crate) struct FolderIndex {
     directory: String,
+    present: bool,
     notes: Vec<IndexedRecord>,
     occupants: Vec<OccupiedRecordPath>,
     diagnostics: Vec<RecordDiagnostic>,
@@ -55,6 +56,9 @@ pub(crate) struct OccupiedRecordPath {
 pub(crate) struct IndexedRecord {
     pub(crate) relative_path: PathBuf,
     pub(crate) stem: String,
+    /// Exact YAML head between the opening and closing frontmatter markers.
+    /// `None` is also meaningful: the file had no complete frontmatter block.
+    pub(crate) frontmatter: Option<String>,
     pub(crate) title: Option<String>,
     pub(crate) display: String,
     pub(crate) fields: Vec<IndexedField>,
@@ -160,6 +164,19 @@ impl FolderIndex {
 
     pub(crate) fn notes(&self) -> &[IndexedRecord] {
         &self.notes
+    }
+
+    pub(crate) fn present(&self) -> bool {
+        self.present
+    }
+
+    /// Direct Markdown paths, including malformed notes and occupied paths
+    /// that could not be decoded as files.
+    pub(crate) fn membership(&self) -> Vec<PathBuf> {
+        self.occupants
+            .iter()
+            .map(|occupant| occupant.relative_path.clone())
+            .collect()
     }
 
     pub(crate) fn diagnostics(&self) -> &[RecordDiagnostic] {
@@ -328,9 +345,11 @@ fn reserved_matches(directory: &str, stem: &str, reserved: &Path) -> bool {
 fn empty_folder(
     directory: &str,
     diagnostics: Vec<RecordDiagnostic>,
+    present: bool,
 ) -> FolderIndex {
     FolderIndex {
         directory: directory.to_owned(),
+        present,
         notes: Vec::new(),
         occupants: Vec::new(),
         diagnostics,
@@ -342,6 +361,7 @@ fn empty_folder(
 fn unusable_folder(directory: &str, message: String) -> FolderIndex {
     FolderIndex {
         directory: directory.to_owned(),
+        present: false,
         notes: Vec::new(),
         occupants: Vec::new(),
         diagnostics: vec![RecordDiagnostic::note(
@@ -366,7 +386,7 @@ fn load_folder(vault_root: &Path, directory: &str) -> FolderIndex {
     let metadata = match fs::symlink_metadata(&folder_path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return empty_folder(directory, Vec::new());
+            return empty_folder(directory, Vec::new(), false);
         }
         Err(error) => {
             return unusable_folder(
@@ -416,7 +436,13 @@ fn load_folder(vault_root: &Path, directory: &str) -> FolderIndex {
     let entries = match fs::read_dir(&folder_path) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return empty_folder(directory, Vec::new());
+            return unusable_folder(
+                directory,
+                format!(
+                    "record folder {} disappeared while it was being read",
+                    folder_path.display()
+                ),
+            );
         }
         Err(error) => {
             return unusable_folder(
@@ -533,6 +559,7 @@ fn load_folder(vault_root: &Path, directory: &str) -> FolderIndex {
         .sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     FolderIndex {
         directory: directory.to_owned(),
+        present: true,
         notes,
         occupants,
         diagnostics,
@@ -618,6 +645,7 @@ fn unreadable_note(
         display: stem.clone(),
         title: None,
         stem,
+        frontmatter: None,
         fields: Vec::new(),
         diagnostics: vec![RecordDiagnostic::note(
             None,
@@ -650,6 +678,7 @@ fn index_file(
                 display: stem.clone(),
                 title: None,
                 stem,
+                frontmatter: None,
                 fields: Vec::new(),
                 diagnostics,
                 modified,
@@ -679,7 +708,7 @@ fn indexed_record_from_frontmatter(
     modified: Option<SystemTime>,
 ) -> IndexedRecord {
     let mut diagnostics = Vec::new();
-    let Some(yaml) = frontmatter else {
+    let Some(yaml) = frontmatter.clone() else {
         diagnostics.push(RecordDiagnostic::note(
             Some("title"),
             RecordDiagnosticCode::MissingTitle,
@@ -690,6 +719,7 @@ fn indexed_record_from_frontmatter(
             display: stem.clone(),
             title: None,
             stem,
+            frontmatter,
             fields: Vec::new(),
             diagnostics,
             modified,
@@ -701,6 +731,7 @@ fn indexed_record_from_frontmatter(
             stem,
             mapping,
             diagnostics,
+            frontmatter,
             modified,
         ),
         Ok(_) => {
@@ -719,6 +750,7 @@ fn indexed_record_from_frontmatter(
                 display: stem.clone(),
                 title: None,
                 stem,
+                frontmatter,
                 fields: Vec::new(),
                 diagnostics,
                 modified,
@@ -740,6 +772,7 @@ fn indexed_record_from_frontmatter(
                 display: stem.clone(),
                 title: None,
                 stem,
+                frontmatter,
                 fields: Vec::new(),
                 diagnostics,
                 modified,
@@ -753,6 +786,7 @@ fn record_from_mapping(
     stem: String,
     mapping: Mapping,
     mut diagnostics: Vec<RecordDiagnostic>,
+    frontmatter: Option<String>,
     modified: Option<SystemTime>,
 ) -> IndexedRecord {
     let mut fields = Vec::with_capacity(mapping.len());
@@ -781,6 +815,7 @@ fn record_from_mapping(
     IndexedRecord {
         relative_path,
         stem,
+        frontmatter,
         title,
         display,
         fields,
@@ -836,6 +871,14 @@ fn read_through_frontmatter(path: &Path) -> std::io::Result<Option<String>> {
         }
         yaml.push_str(&line);
     }
+}
+
+/// Read only the bytes that determine an indexed record's frontmatter
+/// projection. Bodies are not part of the records index dependency set.
+pub(crate) fn read_frontmatter_head(
+    path: &Path,
+) -> std::io::Result<Option<String>> {
+    read_through_frontmatter(path)
 }
 
 fn trim_line_ending(line: &str) -> &str {
@@ -1525,11 +1568,13 @@ mod tests {
 
         let injected = FolderIndex {
             directory: "eat".into(),
+            present: true,
             occupants: Vec::new(),
             notes: vec![
                 IndexedRecord {
                     relative_path: PathBuf::from("eat/Alpha.md"),
                     stem: "Alpha".into(),
+                    frontmatter: None,
                     title: Some("Alpha".into()),
                     display: "Alpha".into(),
                     fields: Vec::new(),
@@ -1539,6 +1584,7 @@ mod tests {
                 IndexedRecord {
                     relative_path: PathBuf::from("eat/alpha.md"),
                     stem: "alpha".into(),
+                    frontmatter: None,
                     title: Some("alpha".into()),
                     display: "alpha".into(),
                     fields: Vec::new(),

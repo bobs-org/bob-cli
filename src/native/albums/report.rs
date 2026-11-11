@@ -13,7 +13,7 @@ use super::{
 };
 use crate::native::records::{
     schema::{RecordDiagnosticCode, RecordField},
-    RecordCatalog,
+    FolderIndex, RecordCatalog,
 };
 
 const SCHEMA_VERSION: u32 = 1;
@@ -42,7 +42,7 @@ impl AlbumIssue {
         }
     }
 
-    fn to_json(&self) -> Value {
+    pub(crate) fn to_json(&self) -> Value {
         json!({
             "code": self.code,
             "severity": severity_name(self.severity),
@@ -86,7 +86,7 @@ impl AlbumField {
         }
     }
 
-    fn to_json(&self) -> Value {
+    pub(crate) fn to_json(&self) -> Value {
         json!({
             "key": self.key,
             "label": self.label,
@@ -129,7 +129,7 @@ pub(crate) struct AlbumReportEntry {
 }
 
 impl AlbumReportEntry {
-    fn to_json(&self) -> Value {
+    pub(crate) fn to_json(&self) -> Value {
         json!({
             "stem": self.stem,
             "path": self.path,
@@ -176,6 +176,12 @@ pub(crate) struct AlbumCounts {
 pub(crate) struct AlbumReport {
     pub(crate) albums: Vec<AlbumReportEntry>,
     pub(crate) counts: AlbumCounts,
+    pub(crate) io_errors: Vec<String>,
+}
+
+pub(crate) struct AlbumProjection {
+    pub(crate) entry: AlbumReportEntry,
+    pub(crate) index_plan: index::IndexPlan,
     pub(crate) io_errors: Vec<String>,
 }
 
@@ -239,9 +245,9 @@ pub(crate) fn build_report(registry: &AlbumRegistry) -> AlbumReport {
         .albums
         .iter()
         .map(|entry| {
-            let (projected, io) = project_album(entry, &mut catalog);
-            folder_io.extend(io);
-            projected
+            let projection = project_album(entry, &mut catalog);
+            folder_io.extend(projection.io_errors);
+            projection.entry
         })
         .collect::<Vec<_>>();
     albums.sort_by(|left, right| left.path.cmp(&right.path));
@@ -265,10 +271,18 @@ pub(crate) fn build_report(registry: &AlbumRegistry) -> AlbumReport {
     report
 }
 
-fn project_album(
+pub(crate) fn project_album(
     entry: &AlbumEntry,
     catalog: &mut RecordCatalog,
-) -> (AlbumReportEntry, Vec<String>) {
+) -> AlbumProjection {
+    let folder = catalog.folder(&entry.declaration.stem);
+    project_album_from_folder(entry, folder)
+}
+
+pub(crate) fn project_album_from_folder(
+    entry: &AlbumEntry,
+    folder: &FolderIndex,
+) -> AlbumProjection {
     let declaration = &entry.declaration;
     let record_type = declaration.record_type.as_ref().or_else(|| {
         entry
@@ -285,7 +299,6 @@ fn project_album(
                 .collect()
         })
         .unwrap_or_default();
-    let folder = catalog.folder(&declaration.stem);
     let mut io_errors = folder
         .diagnostics()
         .iter()
@@ -318,7 +331,13 @@ fn project_album(
         &declaration.index_facets,
         &members,
     );
-    let plan = index::plan_index(
+    let folder_complete = folder.diagnostics().is_empty()
+        && folder.notes().iter().all(|note| {
+            !note.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == RecordDiagnosticCode::NoteRead
+            })
+        });
+    let mut plan = index::plan_index(
         &declaration.path,
         entry.contents.as_deref(),
         &declaration.stem,
@@ -327,8 +346,38 @@ fn project_album(
         &grouping,
         declaration.index_by.as_deref(),
         members.len(),
-        folder.diagnostics().is_empty(),
+        folder_complete,
     );
+    let album_invalid = entry
+        .findings
+        .iter()
+        .any(|finding| finding.severity == AlbumIssueSeverity::Error);
+    if album_invalid {
+        plan.state = IndexState::Damaged;
+        plan.edit = None;
+        plan.findings
+            .retain(|finding| finding.code != "album_index_stale");
+        if !plan
+            .findings
+            .iter()
+            .any(|finding| finding.code == "album_index_damaged")
+        {
+            plan.findings.push(AlbumFinding {
+                code: "album_index_damaged",
+                severity: AlbumIssueSeverity::Error,
+                path: declaration.path.clone(),
+                line_number: None,
+                key_path: None,
+                message: format!(
+                    "{}: album is invalid; the records index was left unchanged",
+                    declaration.path
+                ),
+                suggestions: vec![
+                    "repair the album findings, then run `bob albums sync`".to_owned(),
+                ],
+            });
+        }
+    }
     let mut issues: Vec<AlbumIssue> = entry
         .findings
         .iter()
@@ -342,8 +391,8 @@ fn project_album(
             .then_with(|| left.code.cmp(right.code))
             .then_with(|| left.message.cmp(&right.message))
     });
-    (
-        AlbumReportEntry {
+    AlbumProjection {
+        entry: AlbumReportEntry {
             stem: declaration.stem.clone(),
             path: declaration.path.clone(),
             title: declaration.title.clone(),
@@ -368,8 +417,9 @@ fn project_album(
             index: plan.state,
             issues,
         },
+        index_plan: plan,
         io_errors,
-    )
+    }
 }
 
 pub(crate) fn resolved_plural(declaration: &AlbumDeclaration) -> String {

@@ -1,6 +1,7 @@
 //! CLI integration tests.
 
 mod albums;
+mod albums_sync;
 mod aliases;
 mod articles;
 mod attachments;

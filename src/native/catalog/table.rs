@@ -785,6 +785,19 @@ pub(crate) const ENTRIES: &[Row] = &[
     },
     Row {
         fixed: JSON,
+        preview: Some(DRY_RUN),
+        ..syncs(
+            "albums-sync",
+            &["albums", "sync"],
+            "Sync album indexes",
+            &["albums", "sync", "records", "index", "repair"],
+            Policy::PreviewFirst,
+            Some(DRY_RUN),
+            120,
+        )
+    },
+    Row {
+        fixed: JSON,
         slots: &[("ROOT", "notebook-root"), ("root", "notebook-root")],
         ..reads(
             "notebooks-list",

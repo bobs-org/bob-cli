@@ -41,11 +41,33 @@ const LOCK_WAIT: Duration = Duration::from_secs(3);
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ReadDependencies {
     files: BTreeMap<PathBuf, Option<String>>,
+    frontmatter: BTreeMap<PathBuf, Option<String>>,
+    directories: BTreeMap<PathBuf, Option<Vec<PathBuf>>>,
 }
 
 impl ReadDependencies {
     pub(crate) fn insert(&mut self, path: PathBuf, expected: Option<String>) {
         self.files.insert(path, expected);
+    }
+
+    /// Guard only a Markdown note's frontmatter projection. This keeps
+    /// maintenance indexes independent of unrelated record bodies.
+    pub(crate) fn insert_frontmatter(
+        &mut self,
+        path: PathBuf,
+        expected: Option<String>,
+    ) {
+        self.frontmatter.insert(path, expected);
+    }
+
+    /// Guard the presence and direct Markdown membership of one folder.
+    /// `None` means that the folder itself was absent when planned.
+    pub(crate) fn insert_directory_membership(
+        &mut self,
+        path: PathBuf,
+        expected: Option<Vec<PathBuf>>,
+    ) {
+        self.directories.insert(path, expected);
     }
 
     pub(crate) fn iter(
@@ -92,8 +114,112 @@ impl ReadDependencies {
                 }
             }
         }
+        for (relative, expected) in &self.frontmatter {
+            let absolute = vault.join(relative);
+            let current =
+                match crate::native::records::catalog::read_frontmatter_head(
+                    &absolute,
+                ) {
+                    Ok(current) => current,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::NotFound =>
+                    {
+                        return Err(changed_after_planning(format!(
+                            "{} was deleted after planning",
+                            relative.display()
+                        )));
+                    }
+                    Err(error) => {
+                        return Err(read_failed(format!(
+                            "read frontmatter {}: {error}",
+                            absolute.display()
+                        )));
+                    }
+                };
+            if &current != expected {
+                return Err(changed_after_planning(format!(
+                    "{} frontmatter changed on disk after planning",
+                    relative.display()
+                )));
+            }
+        }
+        for (relative, expected) in &self.directories {
+            let current = markdown_membership(vault, relative)?;
+            if &current != expected {
+                return Err(changed_after_planning(format!(
+                    "Markdown membership in {} changed on disk after planning",
+                    relative.display()
+                )));
+            }
+        }
         Ok(())
     }
+}
+
+fn markdown_membership(
+    vault: &Path,
+    relative: &Path,
+) -> Result<Option<Vec<PathBuf>>, CaptureError> {
+    let directory = vault.join(relative);
+    let metadata = match fs::symlink_metadata(&directory) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(None);
+        }
+        Err(error) => {
+            return Err(read_failed(format!(
+                "inspect record folder {}: {error}",
+                directory.display()
+            )));
+        }
+    };
+    if !metadata.is_dir() && !metadata.file_type().is_symlink() {
+        return Err(changed_after_planning(format!(
+            "{} is no longer a directory",
+            relative.display()
+        )));
+    }
+    let vault_canon = fs::canonicalize(vault).map_err(|error| {
+        read_failed(format!("resolve vault {}: {error}", vault.display()))
+    })?;
+    let directory_canon = fs::canonicalize(&directory).map_err(|error| {
+        read_failed(format!(
+            "resolve record folder {}: {error}",
+            directory.display()
+        ))
+    })?;
+    if !directory_canon.starts_with(&vault_canon) {
+        return Err(changed_after_planning(format!(
+            "record folder {} resolves outside the vault",
+            relative.display()
+        )));
+    }
+    let entries = fs::read_dir(&directory).map_err(|error| {
+        read_failed(format!(
+            "list record folder {}: {error}",
+            directory.display()
+        ))
+    })?;
+    let mut members = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            read_failed(format!(
+                "read an entry in record folder {}: {error}",
+                directory.display()
+            ))
+        })?;
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Some((stem, extension)) = name.rsplit_once('.') else {
+            continue;
+        };
+        if !stem.is_empty() && extension.eq_ignore_ascii_case("md") {
+            members.push(relative.join(name));
+        }
+    }
+    members.sort();
+    Ok(Some(members))
 }
 
 /// One planned vault write: staged files, the read inputs guarded beside

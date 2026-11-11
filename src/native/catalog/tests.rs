@@ -426,8 +426,8 @@ fn document_shape() {
             .collect::<Vec<_>>(),
         vec!["daily", "tasks", "vault", "integrations", "setup"]
     );
-    assert_eq!(catalog.entries.len(), 96);
-    assert_eq!(ENTRIES.len(), 96);
+    assert_eq!(catalog.entries.len(), 97);
+    assert_eq!(ENTRIES.len(), 97);
     assert!(catalog.entries.iter().any(|entry| entry.id == "plan"));
     assert!(catalog.entries.iter().any(|entry| {
         entry.id == "records-init" && entry.path == ["records", "init"]
@@ -437,6 +437,9 @@ fn document_shape() {
     }));
     assert!(catalog.entries.iter().any(|entry| {
         entry.id == "albums-check" && entry.path == ["albums", "check"]
+    }));
+    assert!(catalog.entries.iter().any(|entry| {
+        entry.id == "albums-sync" && entry.path == ["albums", "sync"]
     }));
     assert!(catalog.entries.iter().any(|entry| {
         entry.id == "bank-check" && entry.path == ["bank", "check"]

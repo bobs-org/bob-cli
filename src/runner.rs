@@ -423,6 +423,14 @@ const ALBUMS_MEMBERS: &[Member] = &[
             script_command: None,
         },
     },
+    Member {
+        name: "sync",
+        about: "Repair generated records indexes",
+        leaf: Leaf {
+            native_command: NativeCommand::AlbumsSync,
+            script_command: None,
+        },
+    },
 ];
 
 const ALBUMS_AFTER_HELP: &str = "\
@@ -433,6 +441,8 @@ Examples:
   bob albums list -r body          List one root's albums
   bob albums check                 Lint albums against the contract
   bob albums check -f json         Findings as JSON
+  bob albums sync -d               Preview index repairs as diffs
+  bob albums sync                  Repair every healthy album index
 
 See docs/records.md for the album contract.
 Run 'bob albums <command> --help' for more information on a command.";
@@ -975,7 +985,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
             members: ALBUMS_MEMBERS,
             default: Some("list"),
             extra_about: Some(
-                "Bare `bob albums` runs the read-only list. `list` shows albums grouped by root. `check` lints albums against the contract. `bob albums create` ships in a later phase.",
+                "Bare `bob albums` runs the read-only list. `list` shows albums grouped by root. `check` lints albums against the contract. `sync` repairs generated records indexes in one guarded transaction. `bob albums create` ships in a later phase.",
             ),
             after_help: ALBUMS_AFTER_HELP,
             usage: "bob albums [COMMAND]",
@@ -1006,7 +1016,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "nightly",
-        about: "Run nightly maintenance: vault-sync, task archive, articles, period notes, notebooks, vault-sync",
+        about: "Run nightly maintenance: vault-sync, task archive, articles, period notes, notebooks, albums, vault-sync",
         section: Section::Vault,
         target: Target::Leaf(Leaf {
             native_command: NativeCommand::Nightly,
@@ -2511,6 +2521,7 @@ mod tests {
             NativeCommand::Articles,
             NativeCommand::AlbumsCheck,
             NativeCommand::AlbumsList,
+            NativeCommand::AlbumsSync,
             NativeCommand::AttachmentsImport,
             NativeCommand::AttachmentsOrigin,
             NativeCommand::BankAck,

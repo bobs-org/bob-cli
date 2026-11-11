@@ -1130,7 +1130,7 @@ fn nightly(vault: &Path, temp: &TempDir) -> Output {
 }
 
 #[test]
-fn nightly_has_six_ordered_steps_and_syncs_catalogs_once() {
+fn nightly_has_seven_ordered_steps_and_syncs_catalogs_once() {
     let temp = TempDir::new("nb-nightly");
     let vault = online_vault(&temp);
     let base = head(&vault);
@@ -1141,12 +1141,13 @@ fn nightly_has_six_ordered_steps_and_syncs_catalogs_once() {
     assert_text_order(
         &out,
         &[
-            "step 1/6 · vault-sync",
-            "step 2/6 · task archive",
-            "step 3/6 · articles",
-            "step 4/6 · period notes",
-            "step 5/6 · notebooks — Repair generated notebook catalogs",
-            "step 6/6 · vault-sync",
+            "step 1/7 · vault-sync",
+            "step 2/7 · task archive",
+            "step 3/7 · articles",
+            "step 4/7 · period notes",
+            "step 5/7 · notebooks — Repair generated notebook catalogs",
+            "step 6/7 · albums — Repair generated records indexes",
+            "step 7/7 · vault-sync",
             "All steps passed",
         ],
     );
@@ -1197,7 +1198,7 @@ fn nightly_still_publishes_after_a_notebooks_step_failure() {
     let out = stdout(&output);
     assert!(out.contains("\u{2717} notebooks"), "{out}");
     assert!(
-        out.contains("step 6/6") && out.contains("1 step failed"),
+        out.contains("step 7/7") && out.contains("1 step failed"),
         "{out}"
     );
     assert_eq!(
