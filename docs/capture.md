@@ -9317,7 +9317,9 @@ wherever a bare `%` would open the directive menu: at either edge of an
 item line, with only other markers between it and that edge. A `\` at a line
 start or after only spaces or tabs on its line, glued to a word, doubled
 after another `\`, or anywhere the swapped `%` would not open that menu
-stays literal. For example, `Buy milk \` becomes `Buy milk %`. A `\` after `\`
+stays literal. For example, `Buy milk \` becomes `Buy milk %`. A `\` no
+longer types `#` anywhere, including former slash-literal hash positions such
+as `=\` and `[[cash\`; `/` remains the hash alias where eligible. A `\` after `\`
 (or `/` after `/`) never aliases, so `\#` and `\%` escapes stay typeable
 directly (Mac Capture's double-tap below gives the same text).
 Typing `,` wherever the Parent Task picker would open aliases `+`, including
