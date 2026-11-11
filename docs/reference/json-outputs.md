@@ -177,6 +177,10 @@ Each album carries `stem`, `path`, `title`, `emoji`, `summary`, `noun`, `label`,
 
 Each notebook carries `stem`, `path`, `title`, `summary`, `parent`, `parent_kind`, `owner`, `root`, `breadcrumb`, `children`, `notes`, `sections`, `last_note`, and `issues`. `catalogs[]`: `host`, `path`, `root`, `state`, `notebooks`, `issues`.
 
+### Bank reports {#bank-reports}
+
+`bob bank check -f json` uses `schema_version: 1`. See [Bank](../bank.md#json).
+
 ### Session edits and successor offers
 
 Capture results are unversioned, including these per-item session payloads:

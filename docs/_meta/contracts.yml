@@ -171,3 +171,6 @@ groups:
       - stem: notebooks
         summary: "`bob notebooks` list, check, sync, and create, the generated Notebooks catalog, JSON, and teaching refusals"
         order: 48
+      - stem: bank
+        summary: "Bank hub, month notes, row grammar, and `bob bank check`"
+        order: 49

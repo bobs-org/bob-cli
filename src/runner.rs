@@ -350,6 +350,25 @@ Examples:
 See docs/attachments.md for the origin journal contract.
 Run 'bob attachments <command> --help' for more information on a command.";
 
+const BANK_MEMBERS: &[Member] = &[Member {
+    name: "check",
+    about: "Check bank notes against the contract",
+    leaf: Leaf {
+        native_command: NativeCommand::BankCheck,
+        script_command: None,
+    },
+}];
+
+const BANK_AFTER_HELP: &str = "\
+Bare `bob bank` prints this help: list, report, ensure, and ack ship in a later phase.
+
+Examples:
+  bob bank check                 Lint bank notes against the contract
+  bob bank check -f json         Findings as JSON
+
+See docs/bank.md for the bank contract.
+Run 'bob bank <command> --help' for more information on a command.";
+
 const ALBUMS_MEMBERS: &[Member] = &[
     Member {
         name: "check",
@@ -1024,6 +1043,20 @@ const SUBCOMMANDS: &[Subcommand] = &[
         target: Target::Leaf(Leaf {
             native_command: NativeCommand::VaultSync,
             script_command: None,
+        }),
+    },
+    Subcommand {
+        name: "bank",
+        about: "Commands over bank rows, bank month notes, and their import journal",
+        section: Section::Integrations,
+        target: Target::Group(Group {
+            members: BANK_MEMBERS,
+            default: None,
+            extra_about: Some(
+                "Bare `bob bank` prints this help. `check` lints bank notes against the contract. `list`, `report`, `ensure`, and `ack` ship in a later phase.",
+            ),
+            after_help: BANK_AFTER_HELP,
+            usage: "bob bank <COMMAND>",
         }),
     },
     Subcommand {
@@ -2443,6 +2476,7 @@ mod tests {
             NativeCommand::AlbumsList,
             NativeCommand::AttachmentsImport,
             NativeCommand::AttachmentsOrigin,
+            NativeCommand::BankCheck,
             NativeCommand::Capture,
             NativeCommand::CaptureComplete,
             NativeCommand::CaptureParse,

@@ -500,7 +500,11 @@ fn record_section(frontmatter: &Frontmatter<'_>) -> Option<RecordSection> {
     })
 }
 
-fn key_line_map(frontmatter: &Frontmatter<'_>) -> HashMap<String, usize> {
+/// Indentation-aware YAML key → 1-based physical line map for nested
+/// frontmatter diagnostics. Bank reuses this walk for `bank:` key paths.
+pub(crate) fn key_line_map(
+    frontmatter: &Frontmatter<'_>,
+) -> HashMap<String, usize> {
     let mut lines_by_path = HashMap::new();
     let mut stack: Vec<(usize, String)> = Vec::new();
     for (index, line) in frontmatter.lines.iter().enumerate() {

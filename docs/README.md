@@ -80,6 +80,7 @@ queued intake; full scans also synchronize annotations. The
 | [mail-link-marks.md](mail-link-marks.md) | Mail link marks: the display-only reply badge, no-reply pill, and Also-replied tooltip pip on Gmail-watched tasks |
 | [records.md](records.md) | Albums and record notes: vault albums, `bob albums` list/check, schema, capture `@dir/` creation, validation, filename planning, and rendered Markdown |
 | [notebooks.md](notebooks.md) | `bob notebooks` list, check, sync, and create, the generated Notebooks catalog, JSON, and teaching refusals |
+| [bank.md](bank.md) | Bank hub, month notes, row grammar, and `bob bank check` |
 <!-- END GENERATED: contract table -->
 
 `bob <command> --help` is the concise usage source for that command, and

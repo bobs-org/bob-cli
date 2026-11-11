@@ -18,6 +18,7 @@ pub(crate) fn is_always_excluded_note_directory_name(name: &OsStr) -> bool {
 pub(crate) mod albums;
 mod articles;
 pub(crate) mod attachments;
+pub(crate) mod bank;
 mod capture;
 mod capture_active_tasks;
 mod capture_block_ids;
@@ -139,6 +140,7 @@ pub(crate) enum NativeCommand {
     AlbumsList,
     AttachmentsImport,
     AttachmentsOrigin,
+    BankCheck,
     Capture,
     CaptureComplete,
     CaptureParse,
@@ -231,6 +233,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::AlbumsList => albums::cli::run_list(args),
         NativeCommand::AttachmentsImport => attachments::run_import(args),
         NativeCommand::AttachmentsOrigin => attachments::run_origin(args),
+        NativeCommand::BankCheck => bank::cli::run_check(args),
         NativeCommand::Capture => capture::run(args),
         NativeCommand::CaptureComplete => capture_complete::run(args),
         NativeCommand::CaptureParse => capture_parse::run(args),

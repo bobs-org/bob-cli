@@ -142,7 +142,8 @@ fn group_count_text(
     }
 }
 
-fn split_icon(label: &str) -> (Option<&str>, &str) {
+/// Album choice-label split: a leading non-ASCII-alnum run is the icon.
+pub(crate) fn split_icon(label: &str) -> (Option<&str>, &str) {
     let trimmed = label.trim();
     let mut chars = trimmed.char_indices();
     let Some((_, first)) = chars.next() else {

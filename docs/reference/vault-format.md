@@ -425,6 +425,25 @@ sets the collection note's parent and is required when that note is missing.
 
 Contract: [Albums and record notes](../records.md).
 
+### Bank notes
+
+The bank hub is `bank.md` at the vault root (`type: "[[area]]"`,
+`parent: "[[cash]]"`) with a nested `bank:` mapping for accounts,
+categories, rules, and `stale_after`. Month notes live at
+`bank/YYYY-MM.md` with `type: "[[bank_month]]"`, `parent: "[[bank]]"`, and
+`month: YYYY-MM`. The filename is authoritative. Other files in `bank/`
+are ignored.
+
+Each month note is a statement: one `##` heading per day, oldest first,
+canonical `## Thu Nov 12` (also `Nov 12`, `2026-11-12`, `2026-11-12 Thu`).
+Bank rows are top-level checkbox lines whose body starts with a `$`
+amount. `[ ]` is waiting and `[x]` is acknowledged. Rows never carry
+`#task`. Empty stubs `- [x] $` are ignored. Totals are drawn, never
+written. `bob bank check` lints the hub, the `bank:` mapping, month notes,
+and rows.
+
+Contract: [Bank](../bank.md).
+
 ### Task archives
 
 `bob task archive` pairs a live source with

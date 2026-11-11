@@ -136,6 +136,7 @@ plugins:
           - attachments.md
           - records.md
           - notebooks.md
+          - bank.md
 
 markdown_extensions:
   - admonition
@@ -249,6 +250,7 @@ nav:
               - "bob ref": reference/cli/ref.md
               - "bob vault-sync": reference/cli/vault-sync.md
           - "Integrations":
+              - "bob bank": reference/cli/bank.md
               - "bob clipboard": reference/cli/clipboard.md
               - "bob gcal": reference/cli/gcal.md
               - "bob gkeep": reference/cli/gkeep.md
@@ -358,4 +360,5 @@ nav:
               - "Attachment origins": attachments.md
               - "Albums and record notes": records.md
               - "Notebooks": notebooks.md
+              - "Bank": bank.md
           # END GENERATED: contracts nav

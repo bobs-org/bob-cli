@@ -1191,6 +1191,17 @@ pub(crate) const ENTRIES: &[Row] = &[
         30,
     ),
     // Integrations
+    Row {
+        fixed: JSON,
+        ..reads(
+            "bank-check",
+            &["bank", "check"],
+            "Check bank notes",
+            &["bank", "check", "lint", "contract", "transactions"],
+            Presentation::Report,
+            60,
+        )
+    },
     reads(
         "clipboard",
         &["clipboard"],

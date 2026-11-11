@@ -92,6 +92,8 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 
 | Command | What it does |
 | --- | --- |
+| [`bob bank`](bank.md) | Commands over bank rows, bank month notes, and their import journal |
+| [`bob bank check`](bank.md#bob-bank-check) | Check bank notes against the contract |
 | [`bob clipboard`](clipboard.md) | Diagnose clipboard history for counted capture |
 | [`bob gcal`](gcal.md) | Project Google Calendar events onto today's daily note |
 | [`bob gkeep`](gkeep.md) | Drain the Google Keep inbox into Obsidian tasks |
@@ -169,6 +171,8 @@ Vault:
   vault-sync   Reconcile the vault through Git (default: run) or show status
 
 Integrations:
+  bank         Commands over bank rows, bank month notes, and their import
+               journal
   clipboard    Diagnose clipboard history for counted capture
   gcal         Project Google Calendar events onto today's daily note
   gkeep        Drain the Google Keep inbox into Obsidian tasks

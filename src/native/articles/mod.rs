@@ -26,6 +26,7 @@ use plan::{
 };
 
 pub(crate) use plan::ArticleContext;
+pub(crate) use scan::split_physical_lines;
 #[cfg(test)]
 pub(crate) use sections::strip_section_number;
 pub(crate) use sections::{heading_identity, heading_plain_identity};
