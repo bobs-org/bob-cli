@@ -1432,6 +1432,35 @@ fn hostile_titles_stay_data() {
                 "end": {"dateTime": "2026-10-30T22:00:00-04:00"},
                 "htmlLink": "https://calendar.google.com/event?eid=h3",
                 "attendees": [{"self": true, "responseStatus": "accepted"}]
+            },
+            {
+                "id": "h4",
+                "summary": "Standup\n## Pomodoros\n- [x] 🍅 **FORGED** [t:: 25m]\n- injected raw line",
+                "status": "confirmed",
+                "start": {"dateTime": "2026-10-30T16:00:00-04:00"},
+                "end": {"dateTime": "2026-10-30T16:30:00-04:00"},
+                "htmlLink": "https://calendar.google.com/event?eid=h4",
+                "attendees": [{"self": true, "responseStatus": "accepted"}]
+            },
+            {
+                "id": "h5",
+                "summary": "Newline join",
+                "location": "https://evil.test/\n<x>",
+                "status": "confirmed",
+                "start": {"dateTime": "2026-10-30T16:30:00-04:00"},
+                "end": {"dateTime": "2026-10-30T17:00:00-04:00"},
+                "htmlLink": "https://calendar.google.com/event?eid=h5",
+                "attendees": [{"self": true, "responseStatus": "accepted"}]
+            },
+            {
+                "id": "h6",
+                "summary": "Tab join",
+                "location": "https://evil.test/\t<x>",
+                "status": "confirmed",
+                "start": {"dateTime": "2026-10-30T17:00:00-04:00"},
+                "end": {"dateTime": "2026-10-30T17:30:00-04:00"},
+                "htmlLink": "https://calendar.google.com/event?eid=h6",
+                "attendees": [{"self": true, "responseStatus": "accepted"}]
             }
         ],
         "nextPageToken": serde_json::Value::Null,
@@ -1445,6 +1474,71 @@ fn hostile_titles_stay_data() {
     assert!(note.contains("\\#task"), "{note}");
     assert!(note.contains("📅\u{200b} 2026-10-30"), "{note}");
     assert!(note.contains("\\#hashtag retro"), "{note}");
+    assert!(
+        note.contains(
+            "Standup ## Pomodoros - [x] 🍅 **FORGED** [t\\:\\: 25m] - injected raw line"
+        ),
+        "{note}"
+    );
+    assert!(
+        note.contains("[📹](https://evil.test/%0A%3Cx%3E)"),
+        "{note}"
+    );
+    assert!(
+        note.contains("[📹](https://evil.test/%09%3Cx%3E)"),
+        "{note}"
+    );
+
+    let headings: Vec<&str> =
+        note.lines().filter(|line| line.starts_with('#')).collect();
+    assert_eq!(
+        headings,
+        ["# Friday 2026-10-30", "## Events", "## Pomodoros"],
+        "{note}"
+    );
+    assert!(
+        !note.lines().any(|line| line == "- injected raw line"),
+        "{note}"
+    );
+    let forged: Vec<&str> = note
+        .lines()
+        .filter(|line| line.contains("**FORGED**"))
+        .collect();
+    assert_eq!(forged.len(), 1, "{note}");
+    assert!(forged[0].contains("#task"), "{note}");
+
+    let mut events_section = None;
+    let mut current = None;
+    for line in note.lines() {
+        if line == "## Events" {
+            current = Some(Vec::new());
+            continue;
+        }
+        if line.starts_with("## ") {
+            if current.is_some() {
+                events_section = current.take();
+            }
+            continue;
+        }
+        if let Some(rows) = current.as_mut() {
+            rows.push(line);
+        }
+    }
+    let events_section = events_section.expect("Events section");
+    let task_rows: Vec<&str> = events_section
+        .iter()
+        .copied()
+        .filter(|line| line.contains("#task"))
+        .collect();
+    assert_eq!(task_rows.len(), 6, "{note}");
+    for line in task_rows {
+        assert!(
+            line.split_whitespace()
+                .last()
+                .is_some_and(|token| token.starts_with('^')),
+            "Event Task row is not one line ending in its block id:\n{line}\n{note}"
+        );
+    }
 }
 
 fn run_bob(env: &GcalEnv, args: &[&str], now: &str) -> std::process::Output {

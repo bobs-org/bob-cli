@@ -155,12 +155,25 @@ pub(crate) fn render_context_row(input: &ContextRowInput<'_>) -> String {
     row
 }
 
-/// Escape a calendar title: the shared task-line escaper, then the gcal
-/// pass (Tasks emoji, priority emojis, leading markers).
+/// Escape a calendar title: collapse control and Unicode whitespace to
+/// a single space so a summary cannot forge daily-note lines, then the
+/// shared task-line escaper and the gcal pass (Tasks emoji, priority
+/// emojis, leading markers).
 pub(crate) fn escape_title(title: &str) -> String {
-    let escaped = task_text_escape::escape_task_text(title);
+    let collapsed = collapse_whitespace(title);
+    let escaped = task_text_escape::escape_task_text(&collapsed);
     let neutralized = neutralize_tasks_emoji(&escaped);
     escape_leading_title_marker(&neutralized)
+}
+
+/// Collapse every whitespace or control run to one space and trim, so
+/// the result is safe to embed on one renderer-owned line.
+fn collapse_whitespace(text: &str) -> String {
+    let staged: String = text
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect();
+    staged.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Whether the PT13 suggestion for `line` (already carrying `[root::]`)
@@ -256,20 +269,35 @@ fn calendar_badge(html_link: &str) -> String {
 }
 
 /// Keep an already-encoded Google URL intact while protecting the
-/// Markdown link: encode spaces and parentheses.
+/// Markdown link: encode spaces, parentheses, angle brackets, backticks,
+/// and every ASCII whitespace or control byte so the destination cannot
+/// split the Event Task row.
 pub(super) fn escape_badge_url(url: &str) -> String {
-    url.replace(' ', "%20")
-        .replace('(', "%28")
-        .replace(')', "%29")
-        .replace('<', "%3C")
-        .replace('>', "%3E")
-        .replace('`', "%60")
+    let mut out = String::with_capacity(url.len());
+    for ch in url.chars() {
+        match ch {
+            ' ' => out.push_str("%20"),
+            '(' => out.push_str("%28"),
+            ')' => out.push_str("%29"),
+            '<' => out.push_str("%3C"),
+            '>' => out.push_str("%3E"),
+            '`' => out.push_str("%60"),
+            ch if ch.is_ascii()
+                && (ch.is_ascii_control() || ch.is_ascii_whitespace()) =>
+            {
+                use std::fmt::Write as _;
+                let _ = write!(out, "%{:02X}", ch as u8);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 fn maps_url(location: &str) -> String {
     format!(
         "https://www.google.com/maps/search/?api=1&query={}",
-        percent_encode_query(location.trim()),
+        percent_encode_query(&collapse_whitespace(location)),
     )
 }
 
@@ -436,6 +464,69 @@ mod tests {
         let priority = escape_title("Urgent ⏫ now");
         assert!(priority.contains("⏫\u{200b}"), "{priority}");
         assert_eq!(escape_title("Dentist \"Main St\""), "Dentist \"Main St\"",);
+        assert_eq!(
+            escape_title(
+                "Standup\n## Pomodoros\n- [x] 🍅 **FORGED** [t:: 25m]\n- injected raw line"
+            ),
+            "Standup ## Pomodoros - [x] 🍅 **FORGED** [t\\:\\: 25m] - injected raw line",
+        );
+        assert_eq!(escape_title("Fix\t#task\r\nnow"), "Fix \\#task now");
+        assert_eq!(escape_title("  padded  title  "), "padded title");
+    }
+
+    #[test]
+    fn badge_urls_encode_ascii_whitespace_and_controls() {
+        assert_eq!(
+            escape_badge_url("https://evil.test/\n<x>"),
+            "https://evil.test/%0A%3Cx%3E",
+        );
+        assert_eq!(
+            escape_badge_url("https://evil.test/\t<x>"),
+            "https://evil.test/%09%3Cx%3E",
+        );
+        assert_eq!(
+            escape_badge_url("https://evil.test/\r<x>"),
+            "https://evil.test/%0D%3Cx%3E",
+        );
+        assert_eq!(
+            escape_badge_url("https://evil.test/\u{0007}x"),
+            "https://evil.test/%07x",
+        );
+    }
+
+    #[test]
+    fn hostile_join_and_maps_locations_stay_on_one_row() {
+        let join = render_task_row(
+            &TaskRowInput {
+                join_link: Some("https://evil.test/\n<x>"),
+                location: Some("https://evil.test/\n<x>"),
+                ..task_input("Standup", Some("meet"), false, ' ')
+            },
+            "standup",
+        );
+        assert_eq!(join.lines().count(), 1, "{join}");
+        assert!(
+            join.contains("[📹](https://evil.test/%0A%3Cx%3E)"),
+            "{join}",
+        );
+        assert!(!join.contains("[📍]"), "{join}");
+        assert!(join.ends_with(" ^standup"), "{join}");
+
+        let maps = render_task_row(
+            &TaskRowInput {
+                location: Some("Main St\nDental"),
+                ..task_input("Dentist", Some("body"), true, '*')
+            },
+            "dentist",
+        );
+        assert_eq!(maps.lines().count(), 1, "{maps}");
+        assert!(
+            maps.contains(
+                "[📍](https://www.google.com/maps/search/?api=1&query=Main%20St%20Dental"
+            ),
+            "{maps}",
+        );
+        assert!(maps.ends_with(" ^dentist"), "{maps}");
     }
 
     #[test]
