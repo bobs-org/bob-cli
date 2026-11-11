@@ -33,6 +33,7 @@ pub(super) fn plan_record_note_item(
             today,
             planner,
             record_context,
+            warnings,
         ),
         CaptureKind::RecordUpdate { intent } => plan_record_update_item(
             request,
@@ -55,6 +56,7 @@ fn plan_record_create_item(
     today: NaiveDate,
     planner: &mut CaptureBatchPlanner,
     record_context: &mut CaptureRecordContext,
+    warnings: &mut Vec<CaptureWarning>,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     let Some((record_type, source, album)) =
         record_context.route_kind_for(&intent.dir)
@@ -64,6 +66,12 @@ fn plan_record_create_item(
             intent.dir
         )));
     };
+    for finding in record_context.route_warnings_for(&intent.dir) {
+        warnings.push(CaptureWarning::Text(format!(
+            "{}: {}",
+            finding.code, finding.message
+        )));
+    }
     let render_identity = match source {
         "album" => records::RecordRenderIdentity::Album,
         _ => records::RecordRenderIdentity::Config,
@@ -201,6 +209,12 @@ fn plan_record_update_item(
             intent.dir
         )));
     };
+    for finding in record_context.route_warnings_for(&intent.dir) {
+        warnings.push(CaptureWarning::Text(format!(
+            "{}: {}",
+            finding.code, finding.message
+        )));
+    }
     let synthetic;
     let (config, catalog) = if source == "album" {
         synthetic = records::RecordsConfig {

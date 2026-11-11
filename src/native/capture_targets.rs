@@ -606,15 +606,22 @@ fn append_record_targets(
     report: &mut CaptureTargetsReport,
 ) {
     let context = RecordContext::discover(bob_dir, config_path);
+    // Retain readable partial results: surface scan failures but still list
+    // the healthy albums the partial registry could prove. The root scan
+    // above already reports unreadable files, so skip registry errors that
+    // name an already-reported failure instead of listing one file twice.
     if let super::albums::registry::DiscoveryHealth::Partial(errors) =
         &context.registry().health
     {
-        report.issues.extend(
-            errors
-                .iter()
-                .map(|error| ScanNote::path(PathBuf::from("."), error.clone())),
-        );
-        return;
+        for error in errors {
+            let duplicate =
+                report.issues.iter().any(|issue| issue.display() == *error);
+            if !duplicate {
+                report
+                    .issues
+                    .push(ScanNote::path(PathBuf::from("."), error.clone()));
+            }
+        }
     }
 
     // A broken album still owns its noun and folder, so report its schema
@@ -644,6 +651,20 @@ fn append_record_targets(
             .then_with(|| left.record_type().id.cmp(&right.record_type().id))
     });
     let mut catalog = RecordCatalog::new(bob_dir);
+    let mut seen_deprecations = std::collections::BTreeSet::new();
+    for kind in &record_types {
+        if kind.source_name() == "config"
+            && seen_deprecations.insert(kind.record_type().id.clone())
+        {
+            report.warnings.push(ScanNote::path(
+                PathBuf::from("."),
+                format!(
+                    "records_config_deprecated: record type {:?} still comes from config; declare it in a root album before the config migration lands",
+                    kind.record_type().id
+                ),
+            ));
+        }
+    }
     for kind in record_types {
         let record_type = kind.record_type();
         let count = catalog.folder(&record_type.dir).notes().len();

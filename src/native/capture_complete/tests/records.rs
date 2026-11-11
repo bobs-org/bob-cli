@@ -1059,3 +1059,85 @@ fn caret_and_next_missing_advertise_assist_version_without_edit() {
     assert_eq!(meta.assist_version, Some(RECORD_ASSIST_VERSION));
     assert!(meta.edit.is_none());
 }
+
+#[test]
+fn mixed_draft_scopes_route_errors_to_the_cursor_item() {
+    // One broken album item must not block a healthy album's field picker,
+    // and cursor position (before/after) must not change the scoping.
+    let temp = TempDir::new("bob-cli-complete-mixed-draft-scoping");
+    let config = temp.path().join("config.yml");
+    write_file(&config, RECORDS_CONFIG);
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("body.md"), "---\ntype: [[area]]\n---\n# Body\n");
+    write_file(
+        &vault.join("eat.md"),
+        "---\nparent: \"[[body]]\"\ntype: [[album]]\nrecord:\n  noun: restaurant\n  unknown: value\n---\n# Broken\n",
+    );
+    write_file(
+        &vault.join("drink.md"),
+        "---\nparent: \"[[body]]\"\ntype: [[album]]\nsummary: Drinks\nrecord:\n  noun: drink\n  label: Drink\n  fields:\n    status:\n      required: true\n      values:\n        to_try: To try\n---\n# Drinks\n",
+    );
+    let _guard =
+        TestEnvGuard::set(&[("BOB_CONFIG_FILE", Some(config.as_os_str()))]);
+    for broken_first in [true, false] {
+        let (first, second) = if broken_first {
+            ("Bad @eat/\n- status:: liked", "Good @drink/\n- status:: ")
+        } else {
+            ("Good @drink/\n- status:: ", "Bad @eat/\n- status:: liked")
+        };
+        let raw = format!("{first}\n\n{second}");
+        // Cursor on the healthy drink item: field completion works, no
+        // leaked broken-album diagnostic.
+        let healthy_offset = raw.find("Good @drink/").expect("healthy item");
+        let healthy_cursor = raw
+            .find("- status:: ")
+            .map(|index| {
+                if raw.find("Good @drink/").unwrap() < index
+                    && (broken_first || index > raw.find("Bad @eat/").unwrap())
+                {
+                    index + "- status:: ".len()
+                } else {
+                    // Find the status probe inside the healthy item.
+                    let start = raw.find("Good @drink/").unwrap();
+                    raw[start..]
+                        .find("- status:: ")
+                        .map(|offset| start + offset + "- status:: ".len())
+                        .unwrap_or(raw.len())
+                }
+            })
+            .unwrap_or(raw.len());
+        let _ = (healthy_offset, healthy_cursor);
+        // Use the engine directly with explicit cursors on each item.
+        let drink_pos = raw.find("Good @drink/").expect("drink item");
+        let drink_probe = raw[drink_pos..]
+            .find("- status:: ")
+            .map(|offset| drink_pos + offset + "- status:: ".len())
+            .expect("drink probe");
+        let healthy = build_result(&vault, &raw, drink_probe, false, false)
+            .expect("healthy item completion");
+        assert!(
+            !healthy.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "album_schema_invalid"
+            }),
+            "healthy cursor leaks broken diagnostic (broken_first={broken_first}): {:?}",
+            healthy.diagnostics,
+        );
+        // Cursor on the broken eat item: keeps its diagnostic, non-actionable.
+        let eat_pos = raw.find("Bad @eat/").expect("broken item");
+        let broken = build_result(
+            &vault,
+            &raw,
+            eat_pos + "Bad @eat/".len(),
+            false,
+            false,
+        )
+        .expect("broken item diagnostic");
+        assert!(
+            broken.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "album_schema_invalid"
+            }),
+            "broken cursor loses its diagnostic (broken_first={broken_first}): {:?}",
+            broken.diagnostics,
+        );
+    }
+}

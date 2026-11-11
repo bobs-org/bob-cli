@@ -57,8 +57,10 @@ impl CaptureRecordContext {
     }
 
     /// Usable record schema for one route: album-valid and config-valid
-    /// routes resolve here; broken and unclaimed routes return `None` so
-    /// callers refuse instead of planning against a fallback.
+    /// routes resolve here; every other explicit per-route outcome returns
+    /// `None` so callers refuse instead of planning against a fallback. Only
+    /// the legacy `None` path (no per-route decision) consults the
+    /// transitional config map.
     pub(crate) fn route_kind_for(
         &self,
         dir: &str,
@@ -70,12 +72,26 @@ impl CaptureRecordContext {
             Some(PerRouteDecision::ConfigValid { record_type }) => {
                 Some((record_type.clone(), "config", None))
             }
-            _ => self
+            Some(
+                PerRouteDecision::AlbumInvalid { .. }
+                | PerRouteDecision::Unclaimed { .. }
+                | PerRouteDecision::DiscoveryIncomplete { .. },
+            ) => None,
+            None => self
                 .policy
                 .records_config()
                 .and_then(|config| config.by_directory(dir))
                 .map(|record_type| (record_type.clone(), "config", None)),
         }
+    }
+
+    /// Additive per-route warnings (for example `records_config_deprecated`)
+    /// resolved alongside the route.
+    pub(crate) fn route_warnings_for(
+        &self,
+        dir: &str,
+    ) -> &[crate::native::albums::AlbumFinding] {
+        self.policy.route_warnings(dir)
     }
 
     pub(crate) fn config_and_catalog(
@@ -220,45 +236,68 @@ pub(crate) fn record_policy_for_draft(
         let resolution = RecordContext::resolve_route_head(
             vault_root, &path, candidate, None,
         );
-        let decision = match resolution {
-            Ok(RecordKindResolution::Valid { kind, .. }) => {
+        let (decision, warnings) = match resolution {
+            Ok(RecordKindResolution::Valid { kind, warnings, .. }) => {
                 if kind.source_name() == "album" {
                     match kind.album.clone() {
-                        Some(identity) => PerRouteDecision::AlbumValid {
-                            record_type: kind.record_type().clone(),
-                            album: AlbumRouteMeta {
-                                stem: identity.stem,
-                                title: identity.title,
-                                owner: identity.owner,
-                                breadcrumb: identity.breadcrumb,
+                        Some(identity) => (
+                            PerRouteDecision::AlbumValid {
+                                record_type: kind.record_type().clone(),
+                                album: AlbumRouteMeta {
+                                    stem: identity.stem,
+                                    title: identity.title,
+                                    owner: identity.owner,
+                                    breadcrumb: identity.breadcrumb,
+                                },
                             },
-                        },
-                        None => PerRouteDecision::Unclaimed {
-                            config_diagnostic: None,
-                        },
+                            warnings,
+                        ),
+                        None => (
+                            PerRouteDecision::Unclaimed {
+                                config_diagnostic: None,
+                            },
+                            Vec::new(),
+                        ),
                     }
                 } else {
-                    PerRouteDecision::ConfigValid {
-                        record_type: kind.record_type().clone(),
-                    }
+                    (
+                        PerRouteDecision::ConfigValid {
+                            record_type: kind.record_type().clone(),
+                        },
+                        warnings,
+                    )
                 }
             }
             Ok(RecordKindResolution::Invalid {
                 paths, findings, ..
-            }) => PerRouteDecision::AlbumInvalid { paths, findings },
+            }) => (
+                PerRouteDecision::AlbumInvalid { paths, findings },
+                Vec::new(),
+            ),
             Ok(RecordKindResolution::Unclaimed {
                 config_diagnostic, ..
-            }) => PerRouteDecision::Unclaimed { config_diagnostic },
-            Ok(RecordKindResolution::DiscoveryIncomplete { .. }) => {
-                PerRouteDecision::Unclaimed {
-                    config_diagnostic: None,
-                }
-            }
-            Err(_) => PerRouteDecision::Unclaimed {
-                config_diagnostic: None,
-            },
+            }) => (
+                PerRouteDecision::Unclaimed { config_diagnostic },
+                Vec::new(),
+            ),
+            Ok(RecordKindResolution::DiscoveryIncomplete { errors }) => (
+                PerRouteDecision::DiscoveryIncomplete {
+                    errors: errors.clone(),
+                },
+                Vec::new(),
+            ),
+            Err(error) => (
+                PerRouteDecision::DiscoveryIncomplete {
+                    errors: vec![format!(
+                        "could not read album head for `{candidate}`: {error}"
+                    )],
+                },
+                Vec::new(),
+            ),
         };
-        merged = merged.insert_route(candidate.clone(), decision);
+        merged = merged
+            .insert_route(candidate.clone(), decision)
+            .insert_route_warnings(candidate.clone(), warnings);
     }
     let mut existing = HashSet::new();
     for dir in &folder_candidates {
@@ -346,7 +385,8 @@ pub(crate) fn resolve_record_intents_with_catalog(
                 super::records::RecordRenderIdentity::Config,
             ),
             Some(PerRouteDecision::AlbumInvalid { .. })
-            | Some(PerRouteDecision::Unclaimed { .. }) => {
+            | Some(PerRouteDecision::Unclaimed { .. })
+            | Some(PerRouteDecision::DiscoveryIncomplete { .. }) => {
                 // The grammar already refused these routes; no intent
                 // should exist. Skip rather than planning against a
                 // fallback the album owns entirely.
@@ -1320,6 +1360,158 @@ mod tests {
         assert!(policy.route_decision("eat").is_none());
         let context = CaptureRecordContext::new(policy, root);
         assert!(!context.catalog_is_loaded("eat"));
+    }
+
+    #[test]
+    fn suppressed_config_kind_never_resurrects_legacy_route() {
+        // eat.md claims noun `restaurant`; transitional config declares the
+        // same noun with dir `old_eat`. The registry suppresses that entire
+        // config kind, so `Place @old_eat/` must not resurrect its schema.
+        for broken in [false, true] {
+            for with_legacy_folder in [false, true] {
+                let temp = tempfile::tempdir().expect("temporary vault");
+                let root = temp.path();
+                std::fs::write(
+                    root.join("body.md"),
+                    "---\ntype: [[area]]\n---\n# Body\n",
+                )
+                .expect("area note");
+                let album_frontmatter = if broken {
+                    "---\ntype: [[album]]\nparent: \"[[body]]\"\nrecord: {noun: restaurant, fields: []}\n---\n"
+                } else {
+                    "---\ntype: [[album]]\nparent: \"[[body]]\"\nsummary: Places\nrecord:\n  noun: restaurant\n  label: Restaurant\n  fields: {}\n---\n"
+                };
+                std::fs::write(
+                    root.join("eat.md"),
+                    format!("{album_frontmatter}# Eat\n"),
+                )
+                .expect("claiming album");
+                if with_legacy_folder {
+                    std::fs::create_dir_all(root.join("old_eat"))
+                        .expect("legacy folder");
+                }
+                let config_path = root.join("config.yml");
+                std::fs::write(
+                    &config_path,
+                    "records:\n  restaurant:\n    dir: old_eat\n    label: Restaurant\n    fields: {}\n",
+                )
+                .expect("transitional config");
+                let policy = record_policy_for_draft(
+                    root,
+                    Some(&config_path),
+                    "Place @old_eat/",
+                );
+                // A valid claim suppresses config: no usable schema for the
+                // legacy dir. A broken claim also suppresses it entirely.
+                assert!(
+                    policy.route_decision("old_eat").is_none()
+                        || matches!(
+                            policy.route_decision("old_eat"),
+                            Some(PerRouteDecision::Unclaimed { .. })
+                        ),
+                    "legacy route stays unclaimed (broken={broken}, folder={with_legacy_folder}): {:?}",
+                    policy.route_decision("old_eat"),
+                );
+                assert!(
+                    CaptureRecordContext::new(policy, root)
+                        .route_kind_for("old_eat")
+                        .is_none(),
+                    "no fallback schema for suppressed kind (broken={broken})",
+                );
+            }
+        }
+        // Ordinary unknown routes keep their literal meaning (unclaimed,
+        // never a fallback schema).
+        let temp = tempfile::tempdir().expect("temporary vault");
+        let root = temp.path();
+        album_vault(root);
+        let policy = record_policy_for_draft(
+            root,
+            Some(&root.join("missing-config.yml")),
+            "Buy milk @nowhere/",
+        );
+        assert!(matches!(
+            policy.route_decision("nowhere"),
+            Some(PerRouteDecision::Unclaimed { .. }) | None
+        ));
+        assert!(CaptureRecordContext::new(policy, root)
+            .route_kind_for("nowhere")
+            .is_none());
+    }
+
+    #[test]
+    fn bad_byte_album_head_is_explicit_discovery_incomplete() {
+        // Deterministic bad-byte fixture (works as root, unlike
+        // permission-only tests): invalid UTF-8 in the album head makes
+        // route-local resolution return an I/O error, which the policy keeps
+        // as explicit `DiscoveryIncomplete` instead of unclaimed fallback.
+        let temp = tempfile::tempdir().expect("temporary vault");
+        let root = temp.path();
+        std::fs::write(
+            root.join("body.md"),
+            "---\ntype: [[area]]\n---\n# Body\n",
+        )
+        .expect("area note");
+        std::fs::write(
+            root.join("eat.md"),
+            b"---\ntype: [[album]]\nparent: \"[[body]]\"\nsummary: \xff\xfe places\nrecord:\n  noun: restaurant\n  fields: {}\n---\n# Eat\n",
+        )
+        .expect("bad-byte album");
+        std::fs::create_dir_all(root.join("eat")).expect("record folder");
+        let policy = record_policy_for_draft(
+            root,
+            Some(&root.join("missing-config.yml")),
+            "Ramen @eat/",
+        );
+        assert!(
+            matches!(
+                policy.route_decision("eat"),
+                Some(PerRouteDecision::DiscoveryIncomplete { .. })
+            ),
+            "bad-byte head is incomplete, not unclaimed: {:?}",
+            policy.route_decision("eat")
+        );
+        // No fallback schema and no planned intent for the incomplete route.
+        assert!(CaptureRecordContext::new(policy, root)
+            .route_kind_for("eat")
+            .is_none());
+        let entries = resolve_record_intents(
+            &[(0, create_intent("eat", "Ramen"))],
+            Some(&record_policy_for_draft(
+                root,
+                Some(&root.join("missing-config.yml")),
+                "Ramen @eat/",
+            )),
+        );
+        assert!(entries.is_empty(), "incomplete route plans nothing");
+    }
+
+    #[test]
+    fn healthy_album_stays_usable_despite_unrelated_bad_file() {
+        // A healthy directly resolved album remains usable even when an
+        // unrelated file has bad bytes, as long as the bounded route does
+        // not need global discovery.
+        let temp = tempfile::tempdir().expect("temporary vault");
+        let root = temp.path();
+        album_vault(root);
+        std::fs::create_dir_all(root.join("eat")).expect("record folder");
+        std::fs::write(root.join("unrelated.md"), b"\xff\xfe bad\n")
+            .expect("unrelated bad file");
+        let policy = record_policy_for_draft(
+            root,
+            Some(&root.join("missing-config.yml")),
+            "Ramen @eat/",
+        );
+        assert!(matches!(
+            policy.route_decision("eat"),
+            Some(PerRouteDecision::AlbumValid { .. })
+        ));
+        let entries = resolve_record_intents(
+            &[(0, create_intent("eat", "Ramen"))],
+            Some(&policy),
+        );
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].source, "album");
     }
 
     #[test]

@@ -51,6 +51,11 @@ pub(crate) const RECORD_FOLDER_NOT_RECORD_CODE: &str =
 pub(crate) const RECORD_TYPE_AS_FOLDER_CODE: &str = "record_type_as_folder";
 /// Strict refusal for record candidates under a malformed records block.
 pub(crate) const RECORDS_CONFIG_INVALID_CODE: &str = "records_config_invalid";
+/// Strict refusal when route-local resolution cannot prove the global
+/// discovery is complete. The route keeps its diagnostic and never falls
+/// back to config.
+pub(crate) const RECORD_DISCOVERY_INCOMPLETE_CODE: &str =
+    "record_discovery_incomplete";
 /// Strict refusal for a record route whose album schema is broken. The
 /// album owns its noun and folder entirely, so the candidate never falls
 /// back to config or becomes a task.
@@ -97,6 +102,9 @@ pub(crate) enum PerRouteDecision {
     Unclaimed {
         config_diagnostic: Option<RecordDiagnostic>,
     },
+    DiscoveryIncomplete {
+        errors: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -123,6 +131,9 @@ pub(crate) struct RecordRoutePolicy {
     /// Lower-cased route → per-route album/config resolution. When present
     /// for a route, it wins over the global `config_error` above.
     routes: HashMap<String, PerRouteDecision>,
+    /// Lower-cased route → additive warnings (for example
+    /// `records_config_deprecated`) resolved alongside the route.
+    route_warnings: HashMap<String, Vec<AlbumFinding>>,
 }
 
 impl RecordRoutePolicy {
@@ -169,6 +180,7 @@ impl RecordRoutePolicy {
             vault_root: None,
             existing_dirs: HashSet::new(),
             routes: HashMap::new(),
+            route_warnings: HashMap::new(),
         }
     }
 
@@ -190,7 +202,9 @@ impl RecordRoutePolicy {
     }
 
     /// Usable schema for one record folder after album claim precedence.
-    /// A broken or unclaimed album-owned route never falls back to config.
+    /// A broken, incomplete, or unclaimed album-owned route never falls back
+    /// to config. Only the legacy `None` path (policies without per-route
+    /// outcomes) consults the transitional config map.
     pub(crate) fn usable_record_type_for_route(
         &self,
         route: &str,
@@ -202,7 +216,8 @@ impl RecordRoutePolicy {
             }
             Some(
                 PerRouteDecision::AlbumInvalid { .. }
-                | PerRouteDecision::Unclaimed { .. },
+                | PerRouteDecision::Unclaimed { .. }
+                | PerRouteDecision::DiscoveryIncomplete { .. },
             ) => None,
             None => self
                 .records_config
@@ -232,6 +247,27 @@ impl RecordRoutePolicy {
     ) -> Self {
         self.routes.insert(route.to_ascii_lowercase(), decision);
         self
+    }
+
+    /// Attach additive warnings for one route. Keys are lower-cased.
+    pub(crate) fn insert_route_warnings(
+        mut self,
+        route: String,
+        warnings: Vec<AlbumFinding>,
+    ) -> Self {
+        if !warnings.is_empty() {
+            self.route_warnings
+                .insert(route.to_ascii_lowercase(), warnings);
+        }
+        self
+    }
+
+    /// Additive warnings resolved alongside one route.
+    pub(crate) fn route_warnings(&self, route: &str) -> &[AlbumFinding] {
+        self.route_warnings
+            .get(&route.to_ascii_lowercase())
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     /// Per-route decision for a lower-cased or mixed-case route.
@@ -744,6 +780,21 @@ fn resolve_record_route(
             } => {
                 // Fall through to type-id / existing-dir / literal handling
                 // so unclaimed routes keep their established meaning.
+            }
+            PerRouteDecision::DiscoveryIncomplete { errors } => {
+                let detail = if errors.is_empty() {
+                    "record discovery did not complete".to_owned()
+                } else {
+                    errors.join("; ")
+                };
+                return RouteResolution::Refused(RecordClaim::refused(
+                    RECORD_DISCOVERY_INCOMPLETE_CODE,
+                    format!(
+                        "`@{}/` cannot claim a record folder: {detail}; retry once the vault scan succeeds",
+                        route.dir,
+                    ),
+                    Some(route.range),
+                ));
             }
         }
     } else if let Some(detail) = policy.config_error.as_deref() {

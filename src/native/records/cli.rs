@@ -476,7 +476,35 @@ fn execute_list(matches: &ArgMatches) -> i32 {
         "schema_version": SCHEMA_VERSION,
         "types": rows,
     });
+    // Emit additive config-deprecation warnings without changing payloads.
+    let mut seen_warnings = std::collections::BTreeSet::new();
+    let mut list_warnings = Vec::new();
+    for collection in &collections {
+        let selector = match collection {
+            Collection::Usable(kind) => kind.record_type().id.as_str(),
+            Collection::InvalidAlbum(entry) => entry
+                .declaration
+                .noun_claim
+                .as_deref()
+                .unwrap_or(entry.declaration.stem.as_str()),
+        };
+        for warning in kind_warnings(&context, selector) {
+            let key = format!("{}:{}", warning.code, warning.message);
+            if seen_warnings.insert(key) {
+                list_warnings.push(warning);
+            }
+        }
+    }
+    print_warnings("bob records list", output_format, &list_warnings);
     print_list(&payload, output_format);
+    // A partial vault scan never silently reports complete: retain the
+    // partial rows but fail so operators notice the missing coverage.
+    if matches!(
+        context.registry().health,
+        crate::native::albums::registry::DiscoveryHealth::Partial(_)
+    ) {
+        return 1;
+    }
     0
 }
 
@@ -534,8 +562,19 @@ fn execute_check(matches: &ArgMatches) -> i32 {
     if selected_type.is_none() {
         add_orphan_records(&vault, &context, &mut reports);
     }
-    let errors: usize = reports.iter().map(|report| report.errors).sum();
+    let mut errors: usize = reports.iter().map(|report| report.errors).sum();
     let warnings: usize = reports.iter().map(|report| report.warnings).sum();
+    // A partial vault scan never silently reports complete: retain the
+    // readable partial results but fail full-inventory checks. A healthy
+    // selected album is never blocked solely on unrelated scan failures.
+    let partial_full_scan = selected_type.is_none()
+        && matches!(
+            context.registry().health,
+            crate::native::albums::registry::DiscoveryHealth::Partial(_)
+        );
+    if partial_full_scan {
+        errors += 1;
+    }
     let payload = json!({
         "schema_version": SCHEMA_VERSION,
         "types": reports,
@@ -1824,12 +1863,11 @@ fn kind_warnings(context: &RecordContext, selector: &str) -> Vec<AlbumFinding> {
 
 fn print_warnings(
     command: &str,
-    format: OutputFormat,
+    _format: OutputFormat,
     warnings: &[AlbumFinding],
 ) {
-    if format == OutputFormat::Json {
-        return;
-    }
+    // Emit to stderr for both human and JSON so machine payloads keep their
+    // meaning while operators still see the deprecation. Exit codes unchanged.
     let styler = Styler::detect();
     for warning in warnings {
         eprintln!(
@@ -1842,14 +1880,15 @@ fn print_warnings(
 
 fn report_discovery_errors(
     command: &str,
-    format: OutputFormat,
+    _format: OutputFormat,
     context: &RecordContext,
 ) -> Option<i32> {
+    // Never block a healthy selected album on an unrelated partial scan:
+    // emit to stderr for both formats and let callers decide failure status
+    // from their own scope. Inventory callers surface the failure below.
     if let DiscoveryHealth::Partial(errors) = &context.registry().health {
         for error in errors {
-            if format == OutputFormat::Human {
-                eprintln!("{command}: {error}");
-            }
+            eprintln!("{command}: {error}");
         }
     }
     None

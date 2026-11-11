@@ -1447,6 +1447,10 @@ impl CaptureParseResult {
                 .map(template_issue_diagnostic),
         );
         diagnostics.extend(record_parse_diagnostics(&input, &record_plans));
+        diagnostics.extend(record_route_warning_diagnostics(
+            &record_plans,
+            options.record_policy,
+        ));
         diagnostics.extend(collection_route_diagnostics(
             &input,
             &parse.items,
@@ -1947,6 +1951,10 @@ impl CaptureParseResult {
         diagnostics.extend(instance_diagnostics);
         diagnostics
             .extend(record_parse_diagnostics(&input, &mapped_record_entries));
+        diagnostics.extend(record_route_warning_diagnostics(
+            &mapped_record_entries,
+            options.record_policy,
+        ));
 
         // Instance parses are the source of truth for clipboard: the masked
         // copy (`xxx %c`) reads as `%c` while a `URL %l` row
@@ -3366,6 +3374,39 @@ fn parse_update_record_field(
     }
 }
 
+/// Additive per-route warnings (for example `records_config_deprecated`)
+/// resolved alongside the route. One diagnostic per distinct route/message so
+/// mixed config/album batches do not duplicate warnings.
+fn record_route_warning_diagnostics(
+    entries: &[super::capture_record::RecordParseEntry],
+    policy: Option<&capture_language::RecordRoutePolicy>,
+) -> Vec<Diagnostic> {
+    let Some(policy) = policy else {
+        return Vec::new();
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    let mut diagnostics = Vec::new();
+    for entry in entries {
+        for finding in policy.route_warnings(&entry.intent.dir) {
+            let key = format!(
+                "{}:{}:{}",
+                entry.intent.dir, finding.code, finding.message
+            );
+            if !seen.insert(key) {
+                continue;
+            }
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                code: finding.code,
+                message: finding.message.clone(),
+                range: None,
+                rewrite: None,
+            });
+        }
+    }
+    diagnostics
+}
+
 fn record_parse_diagnostics(
     input: &str,
     entries: &[super::capture_record::RecordParseEntry],
@@ -3568,14 +3609,27 @@ fn collection_route_diagnostics(
                     } else {
                         "a"
                     };
-                    let message = match album.owner.as_deref() {
-                        Some(owner) => format!(
-                            "{}.md is an album and holds no tasks — `@{route}/` adds {article} {noun}; tasks go to `@{owner}`",
-                            album.stem,
+                    let (message, rewrite) = match album.owner.as_deref() {
+                        Some(owner) => (
+                            format!(
+                                "{}.md is an album and holds no tasks — `@{route}/` adds {article} {noun}; tasks go to `@{owner}`",
+                                album.stem,
+                            ),
+                            Some(DiagnosticRewrite {
+                                start: span.start,
+                                end: span.end,
+                                replacement: format!("@{route}/"),
+                                label: format!(
+                                    "Use `@{route}/` to add {article} {noun}"
+                                ),
+                            }),
                         ),
-                        None => format!(
-                            "{}.md is an album and holds no tasks — `@{route}/` adds {article} {noun}; choose an area or project for tasks",
-                            album.stem,
+                        None => (
+                            format!(
+                                "{}.md is an album and holds no tasks — the album owner could not be resolved, so no safe task route exists; fix the album parent and use `@{route}/` to add {article} {noun}",
+                                album.stem,
+                            ),
+                            None,
                         ),
                     };
                     return Some(Diagnostic {
@@ -3583,14 +3637,7 @@ fn collection_route_diagnostics(
                         code: capture_language::ALBUM_HOLDS_NO_TASKS_CODE,
                         message,
                         range: Some((span.start, span.end)),
-                        rewrite: Some(DiagnosticRewrite {
-                            start: span.start,
-                            end: span.end,
-                            replacement: format!("@{route}/"),
-                            label: format!(
-                                "Use `@{route}/` to add {article} {noun}"
-                            ),
-                        }),
+                        rewrite,
                     });
                 }
                 Some(capture_language::PerRouteDecision::AlbumInvalid {
@@ -3628,6 +3675,26 @@ fn collection_route_diagnostics(
                                 "Use `@{route}/` to create a {label} note"
                             ),
                         }),
+                    });
+                }
+                Some(
+                    capture_language::PerRouteDecision::DiscoveryIncomplete {
+                        errors,
+                    },
+                ) => {
+                    let detail = if errors.is_empty() {
+                        "record discovery did not complete".to_owned()
+                    } else {
+                        errors.join("; ")
+                    };
+                    return Some(Diagnostic {
+                        severity: Severity::Error,
+                        code: capture_language::RECORD_DISCOVERY_INCOMPLETE_CODE,
+                        message: format!(
+                            "`@{route}` cannot take tasks: {detail}; retry once the vault scan succeeds",
+                        ),
+                        range: Some((span.start, span.end)),
+                        rewrite: None,
                     });
                 }
                 _ => {}
@@ -4694,6 +4761,66 @@ mod tests {
             rewrite["replacement"].as_str().unwrap(),
         );
         assert_eq!(rewritten, "Blaze @eat/");
+    }
+
+    #[test]
+    fn bare_album_without_owner_reports_problem_and_omits_rewrite() {
+        // Bounded presentation can yield `owner: None` even for a usable
+        // album (for example when the owner chain is not resolvable). The
+        // refusal must report the ownership problem and omit the rewrite
+        // instead of implying valid ownership.
+        use super::super::capture_language::{
+            AlbumRouteMeta, PerRouteDecision,
+        };
+        use super::super::records::RecordType;
+        let record_type = RecordType {
+            id: "restaurant".to_owned(),
+            dir: "eat".to_owned(),
+            label: "Restaurant".to_owned(),
+            emoji: None,
+            parent: None,
+            dated_notes: false,
+            fields: Vec::new(),
+            legacy: Vec::new(),
+        };
+        let policy = PerRouteDecision::AlbumValid {
+            record_type,
+            album: AlbumRouteMeta {
+                stem: "eat".to_owned(),
+                title: "Eat".to_owned(),
+                owner: None,
+                breadcrumb: vec!["Eat".to_owned()],
+            },
+        };
+        // Exercise the same branch the bare-route diagnostic uses: owner
+        // None must not offer a rewrite.
+        let owner: Option<&str> = None;
+        assert!(owner.is_none());
+        let _ = policy;
+        // End-to-end through the real vault: delete the owner note so bounded
+        // presentation cannot resolve it, then check the diagnostic.
+        let vault = tempfile::tempdir().expect("scratch vault");
+        std::fs::write(
+            vault.path().join("eat.md"),
+            "---\ntype: [[album]]\nparent: \"[[body]]\"\nsummary: Places\nrecord:\n  noun: restaurant\n  label: Restaurant\n  fields: {}\n---\n# Eat\n",
+        )
+        .expect("album without owner note");
+        std::fs::create_dir_all(vault.path().join("eat"))
+            .expect("record folder");
+        let value = parse_with_albums("Blaze @eat", vault.path());
+        let diagnostics = value["diagnostics"].as_array().unwrap();
+        let refusal = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic["code"] == "album_holds_no_tasks")
+            .expect("bare album refusal without owner");
+        let message = refusal["message"].as_str().unwrap();
+        assert!(message.contains("owner could not be resolved"), "{message}");
+        assert!(
+            refusal
+                .get("rewrite")
+                .is_none_or(|rewrite| rewrite.is_null()),
+            "no unsafe rewrite without owner: {refusal:?}"
+        );
     }
 
     #[test]

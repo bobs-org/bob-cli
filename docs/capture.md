@@ -6574,10 +6574,11 @@ refusal writes nothing, including the project note.
 
 ### Record notes
 
-A Record Note is one durable thing of a config-declared record type, such as
-a restaurant in `eat/`. Record types live under `records:` in Bob's
-configuration; they are not Task Types (`#fix`, `bob types`). See
-[Record notes](records.md) for schema, rendering, and `bob records`.
+A Record Note is one durable thing of an album or transitional-config record
+kind, such as a restaurant in `eat/`. Album schemas own their noun and
+directory; `records:` serves only kinds no album claims. They are not Task
+Types (`#fix`, `bob types`). See [Record notes](records.md) for schema,
+rendering, and `bob records`.
 
 When `records:` names a folder, a leading or trailing `@dir/` or
 `@dir/^stem` claims the item as record creation **before** transfer,
@@ -6607,12 +6608,21 @@ bullets under a field refuse with `record_field_nested`. A first-level
 `key: value` with one colon stays a note and warns
 `record_field_single_colon`.
 
-Only a configured folder claims creation. An existing non-record folder
-yields `record_folder_not_record`. A configured type id used as the folder
-(`@restaurant/`) yields `record_type_as_folder` and names the real
-directory. Unknown `@notafolder/` stays literal task text. A malformed
-`records:` block yields `records_config_invalid` for record candidates;
-unrelated capture keeps working.
+Only an album or unclaimed-config folder claims creation. An existing
+non-record folder yields `record_folder_not_record`. A configured type id
+used as the folder (`@restaurant/`) yields `record_type_as_folder` and names
+the real directory. Unknown `@notafolder/` stays literal task text. A broken
+album yields `album_schema_invalid` with file, line, and key path and never
+falls back to config; a malformed `records:` block yields
+`records_config_invalid` for unclaimed routes; incomplete discovery yields
+`record_discovery_incomplete`. Album failures are isolated per route, and
+transitional uses warn `records_config_deprecated`. Unrelated capture keeps
+working. A bare album route (`Blaze @eat`) refuses with
+`album_holds_no_tasks` and a safe `@eat/` rewrite limited to the route token
+(when the owner resolves); other task-home routes (`-P`, move, inbox) teach
+the owner the same way. Album creates write `parent: "[[<album>]]"` and
+`type: "[[record]]"`, carry album metadata through parse, items, and
+note_files, and complete field/shell targets album-aware.
 
 `@eat/ramen_nagi` without a caret is an existing-record update. `capture-parse`
 reports mode `record_update`, resolves the exact stem, and shows the stored

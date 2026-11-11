@@ -334,8 +334,11 @@ fn expand_capture(matches: &ArgMatches, output_format: OutputFormat) -> i32 {
         Ok(raw) => raw,
         Err(error) => return print_capture_error(error, output_format),
     };
+    // Template field masking must resolve against the effective vault, not
+    // the default: `--bob-dir`/`-b` wins over `BOB_DIR`, so a record route in
+    // another vault keeps its opaque field values during expansion.
     let record_policy = super::capture_record::record_policy_for_draft(
-        &super::env::bob_dir(),
+        &cli::bob_dir_from_matches(matches),
         None,
         &raw,
     );

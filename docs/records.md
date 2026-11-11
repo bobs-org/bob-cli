@@ -6,11 +6,15 @@ description: Vault album notes, record schemas, capture creation, and how Bob pl
 # Albums and record notes
 
 A record note represents one durable thing, such as a restaurant, podcast, show,
-or movie. Canonical records use `type: "[[record]]"`; `record.noun` names the
-kind and the legacy type spelling (`[[restaurant]]`). An **album** is a
+or movie. Canonical records use `type: "[[record]]"` with
+`parent: "[[<album>]]"`; `record.noun` names the kind and the legacy type
+spelling (`[[restaurant]]`) warns as `record_type_legacy`. An **album** is a
 vault-root note that owns one kind: its stem is the folder and capture route
-(`eat.md` owns `eat/` and `@eat/`). Config `records:` still feeds capture and
-`bob records` until `bob-cli-k3.4`.
+(`eat.md` owns `eat/` and `@eat/`). Album schemas route every record consumer
+through the effective vault (`--bob-dir`/`-b` wins over `BOB_DIR`); an album
+claiming a noun or directory owns that kind entirely, even when invalid.
+Transitional config `records:` serves only kinds no album claims, and every
+such use warns `records_config_deprecated`. `bob records init` is unchanged.
 
 This contract covers album reports, schema loading, value validation, filename
 planning, and the Markdown Bob writes. Capture creates notes through the same
@@ -103,8 +107,18 @@ findings exist or runtime I/O failed. See
 [JSON outputs](reference/json-outputs.md#album-reports).
 
 A broken album refuses only its own route and stays visible; other albums,
-config kinds it does not claim, and notebook catalogs keep working. Capture
-and `bob records` still read config until `bob-cli-k3.4`.
+unclaimed config kinds, and notebook catalogs keep working. Each album's
+failure is isolated per route: `album_schema_invalid` names the file, 1-based
+line, and key path, and discovery failures surface as explicit
+`record_discovery_incomplete` diagnostics without falling back to config.
+Membership is structural in the immediate album-folder scope: direct children
+count even when invalid or when the schema is broken, nested descendants
+report `record_outside_album`, and `record_parent_mismatch`,
+`record_checkbox`, and `record_outside_album` join the existing field errors.
+`bob records list` and `check` add `source: "album" | "config"` and album
+identity; human success output names the album and owner. A partial vault scan
+keeps readable partial results but fails inventory checks; a healthy selected
+album is never blocked solely on unrelated failures.
 
 ## Schema
 

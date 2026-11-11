@@ -130,7 +130,7 @@ validate as values of their field, and `status` cannot have one. Numeric bounds
 apply only to number fields. Shared properties across record types must agree
 on storage kind and scalar/list shape.
 
-An absent `records:` block means no configured record types. A malformed block
+Deprecated: `records:` serves only unclaimed kinds. A malformed block
 is reported to record features without changing how other config sections are
 loaded. See the [Record Notes contract](../records.md) for field validation,
 defaults, rendering, and filename rules.

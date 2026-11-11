@@ -571,12 +571,18 @@ fn legacy_field(key: &str, legacy: &[String]) -> bool {
 }
 
 /// Walk the vault for `[[record]]` notes that sit outside every album folder.
+/// Membership is structural in the immediate album-folder catalog scope: direct
+/// children of an album folder are members (even when invalid), while nested
+/// descendants like `eat/nested/stray.md` escape both member and orphan checks
+/// in the old whole-directory skip. Scan descendants and exclude only actual
+/// immediate members so nested canonical records report `record_outside_album`.
+/// Symlinks and standard vault exclusions stay excluded.
 pub(crate) fn collect_orphan_records(
     vault: &Path,
     album_dirs: &BTreeSet<String>,
 ) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    collect_markdown(vault, vault, album_dirs, &mut files);
+    collect_markdown(vault, vault, &BTreeSet::new(), &mut files);
     let mut orphans = Vec::new();
     for path in files {
         let Ok(contents) = std::fs::read_to_string(&path) else {
@@ -591,9 +597,43 @@ pub(crate) fn collect_orphan_records(
         {
             continue;
         }
+        // Direct children of an album folder are members, not orphans.
+        // Everything else (vault root, other folders, nested album
+        // descendants) reports `record_outside_album`.
+        if is_immediate_album_member(vault, &path, album_dirs) {
+            continue;
+        }
         orphans.push(path);
     }
     orphans
+}
+
+/// Whether `path` is an immediate child of a claimed album folder.
+fn is_immediate_album_member(
+    vault: &Path,
+    path: &Path,
+    album_dirs: &BTreeSet<String>,
+) -> bool {
+    let Ok(relative) = path.strip_prefix(vault) else {
+        return false;
+    };
+    let mut components = relative.components();
+    let (Some(first), Some(second), None) =
+        (components.next(), components.next(), components.next())
+    else {
+        return false;
+    };
+    let (Some(dir), Some(file)) =
+        (first.as_os_str().to_str(), second.as_os_str().to_str())
+    else {
+        return false;
+    };
+    if !file.to_ascii_lowercase().ends_with(".md") {
+        return false;
+    }
+    album_dirs
+        .iter()
+        .any(|album| album.eq_ignore_ascii_case(dir))
 }
 
 fn collect_markdown(
@@ -779,6 +819,73 @@ mod tests {
             1,
             "fenced checkbox is ignored: {:?}",
             report.findings
+        );
+    }
+
+    #[test]
+    fn nested_album_descendants_are_orphans_direct_children_are_not() {
+        use std::collections::BTreeSet;
+        let temp = tempfile::tempdir().expect("temp");
+        let vault = temp.path();
+        write(&vault.join("body.md"), "---\ntype: [[area]]\n---\n# Body\n");
+        write(
+            &vault.join("eat.md"),
+            "---\ntype: [[album]]\nparent: \"[[body]]\"\n---\n# Eat\n",
+        );
+        // Direct child: member, never an orphan (even when broken schema
+        // would apply elsewhere).
+        write(
+            &vault.join("eat/nagi.md"),
+            "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\ntitle: Nagi\n---\n# Nagi\n",
+        );
+        // Nested descendant: escapes member checks but must surface as an
+        // orphan `record_outside_album` candidate.
+        write(
+            &vault.join("eat/nested/stray.md"),
+            "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\ntitle: Stray\n---\n# Stray\n",
+        );
+        // Outside note: classic orphan.
+        write(
+            &vault.join("loose.md"),
+            "---\ntype: \"[[record]]\"\ntitle: Loose\n---\n# Loose\n",
+        );
+        // Symlinked dir stays excluded.
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(
+                vault.join("eat"),
+                vault.join("linked_eat"),
+            )
+            .expect("symlink");
+        }
+        let mut album_dirs = BTreeSet::new();
+        album_dirs.insert("eat".to_owned());
+        let mut orphans = collect_orphan_records(vault, &album_dirs);
+        orphans.sort();
+        let relative: Vec<String> = orphans
+            .iter()
+            .map(|path| {
+                path.strip_prefix(vault)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+        assert!(
+            relative.iter().any(|path| path == "eat/nested/stray.md"),
+            "nested descendant is an orphan: {relative:?}"
+        );
+        assert!(
+            relative.iter().any(|path| path == "loose.md"),
+            "outside record is an orphan: {relative:?}"
+        );
+        assert!(
+            !relative.iter().any(|path| path == "eat/nagi.md"),
+            "direct child stays a member: {relative:?}"
+        );
+        assert!(
+            !relative.iter().any(|path| path.starts_with("linked_eat")),
+            "symlinks stay excluded: {relative:?}"
         );
     }
 }

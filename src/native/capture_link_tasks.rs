@@ -134,9 +134,16 @@ pub(crate) fn discover_at(
                 // A missing inbox file is silent.
             }
             Err(error) => {
-                warnings.push(capture_active_tasks::bounded_warning(format!(
-                    "failed to read {relative}: {error}"
-                )));
+                // The album registry scan already surfaces unreadable notes
+                // through report.issues; don't report the same file twice.
+                let already_reported = warnings
+                    .iter()
+                    .any(|warning| warning.contains(relative.as_str()));
+                if !already_reported {
+                    warnings.push(capture_active_tasks::bounded_warning(
+                        format!("failed to read {relative}: {error}"),
+                    ));
+                }
             }
         }
     }

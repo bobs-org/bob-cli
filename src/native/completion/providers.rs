@@ -193,17 +193,13 @@ fn record_context(
 
 /// Record completion accepts either the schema noun or its album/folder
 /// stem, and never picks a winner from an incomplete or conflicting registry.
+/// A healthy selected album still resolves when unrelated vault discovery is
+/// partial; the full type list stays gated on complete discovery.
 fn resolved_record_type(
     context: &Context,
     selector: &str,
 ) -> Option<crate::native::records::RecordType> {
     let records = record_context(context);
-    if !matches!(
-        &records.registry().health,
-        crate::native::albums::registry::DiscoveryHealth::Complete
-    ) {
-        return None;
-    }
     match records.resolve(selector) {
         crate::native::records::context::RecordKindResolution::Valid {
             kind,

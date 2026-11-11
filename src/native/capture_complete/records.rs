@@ -129,11 +129,49 @@ impl<'a> Session<'a> {
         }
     }
 
-    fn route_diagnostic_result(&self) -> Option<CaptureCompleteResult> {
-        let diagnostic = self.parsed.diagnostics.iter().find(|diagnostic| {
-            diagnostic.code == "album_schema_invalid"
+    /// Route error scoped to the cursor item: a broken album item keeps its
+    /// diagnostic and remains non-actionable, while a different healthy
+    /// album's field picker or an ordinary/notebook item keeps working.
+    /// Diagnostics without a range are only returned when the cursor item
+    /// itself carries a record intent.
+    fn route_diagnostic_for_current(
+        &self,
+    ) -> Option<&capture_language::Diagnostic> {
+        let cursor = self.request.cursor;
+        let current = self
+            .parsed
+            .items
+            .iter()
+            .find(|item| item.start <= cursor && cursor <= item.end)?;
+        let current_intent =
+            self.parsed
+                .record_intents
+                .iter()
+                .find_map(|(index, intent)| {
+                    (*index == current.index).then_some(intent)
+                });
+        self.parsed.diagnostics.iter().find(|diagnostic| {
+            let is_route_error = diagnostic.code == "album_schema_invalid"
                 || diagnostic.code == RECORDS_CONFIG_INVALID_CODE
-        })?;
+                || diagnostic.code
+                    == capture_language::RECORD_DISCOVERY_INCOMPLETE_CODE;
+            if !is_route_error {
+                return false;
+            }
+            match diagnostic.range {
+                Some((start, end)) => {
+                    // Overlap the cursor item so another item's broken album
+                    // never blocks this item's completion.
+                    start < current.end && end > current.start
+                }
+                None => current_intent.is_some(),
+            }
+        })
+    }
+
+    fn route_diagnostic_result(&self) -> Option<CaptureCompleteResult> {
+        let diagnostic = self.route_diagnostic_for_current()?;
+        let diagnostic = diagnostic.clone();
         let mut result = CaptureCompleteResult::empty(self.request.cursor);
         result.diagnostics.push(CaptureCompleteDiagnostic {
             severity: diagnostic.severity.label(),

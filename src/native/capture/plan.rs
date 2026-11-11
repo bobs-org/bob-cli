@@ -1303,6 +1303,19 @@ fn album_task_home_refusal(
             ),
             capture_language::ALBUM_SCHEMA_INVALID_CODE,
         )),
+        Some(capture_language::PerRouteDecision::DiscoveryIncomplete {
+            errors,
+        }) => Some(CaptureError::usage_code(
+            format!(
+                "`@{route}` cannot take tasks: record discovery did not complete ({}); retry once the vault scan succeeds",
+                if errors.is_empty() {
+                    "unknown scan failure".to_owned()
+                } else {
+                    errors.join("; ")
+                },
+            ),
+            capture_language::RECORD_DISCOVERY_INCOMPLETE_CODE,
+        )),
         Some(_) => None,
         None => {
             let path = config_path
@@ -1334,6 +1347,21 @@ fn album_task_home_refusal(
                         route, &paths, &findings,
                     ),
                     capture_language::ALBUM_SCHEMA_INVALID_CODE,
+                )),
+                Ok(
+                    super::super::records::context::RecordKindResolution::DiscoveryIncomplete {
+                        errors,
+                    },
+                ) => Some(CaptureError::usage_code(
+                    format!(
+                        "`@{route}` cannot take tasks: record discovery did not complete ({}); retry once the vault scan succeeds",
+                        if errors.is_empty() {
+                            "unknown scan failure".to_owned()
+                        } else {
+                            errors.join("; ")
+                        },
+                    ),
+                    capture_language::RECORD_DISCOVERY_INCOMPLETE_CODE,
                 )),
                 _ => None,
             }
