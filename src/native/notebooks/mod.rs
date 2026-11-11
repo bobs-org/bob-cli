@@ -1,4 +1,10 @@
 //! Notebook recognition, list, check, catalogs, sync, and creation.
+//!
+//! The owned-callout region, first-write placement, and guarded catalog
+//! transaction live in [`crate::native::host_catalog`], parameterized by a
+//! [`crate::native::host_catalog::RegionSpec`]. Notebooks use the
+//! [`crate::native::host_catalog::NOTEBOOKS`] spec; albums and the records
+//! index reuse the same engine.
 
 pub(crate) mod catalog;
 pub(crate) mod cli;

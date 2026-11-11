@@ -13,8 +13,11 @@ use std::{
 
 use super::{
     model::{CatalogRecord, CatalogState, NotebookIssue},
-    region::{self, EditState, HostOutcome},
+    region::{EditState, HostOutcome},
 };
+use crate::native::host_catalog::{self, NOTEBOOKS};
+
+pub(crate) use crate::native::host_catalog::FileEdit;
 
 /// An area or project note that carries (or should carry) a catalog.
 #[derive(Debug, Clone)]
@@ -52,14 +55,6 @@ pub(crate) struct CatalogNotebook {
 pub(crate) struct CatalogGraph {
     pub(crate) hosts: BTreeMap<PathBuf, CatalogHost>,
     pub(crate) notebooks: BTreeMap<PathBuf, CatalogNotebook>,
-}
-
-/// One host's before/after bytes when its catalog must change.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FileEdit {
-    pub(crate) path: PathBuf,
-    pub(crate) before: String,
-    pub(crate) after: String,
 }
 
 #[derive(Debug, Clone)]
@@ -110,7 +105,12 @@ pub(crate) fn plan_catalogs(graph: &CatalogGraph) -> CatalogPlan {
             lines.extend(rows);
             lines
         };
-        let outcome = region::plan_host(&host.contents, &callout);
+        let planned = host_catalog::plan_host_region(
+            host.path.clone(),
+            &host.contents,
+            &NOTEBOOKS,
+            &callout,
+        );
         let path = slash(&host.path);
         let mut record = CatalogRecord {
             host: host.stem.clone(),
@@ -121,10 +121,10 @@ pub(crate) fn plan_catalogs(graph: &CatalogGraph) -> CatalogPlan {
             issues: Vec::new(),
         };
         let mut edit = None;
-        match outcome {
+        match planned.outcome {
             HostOutcome::Nothing => continue,
             HostOutcome::Current => {}
-            HostOutcome::Update { state, after } => {
+            HostOutcome::Update { state, after: _ } => {
                 record.state = match state {
                     EditState::Missing => CatalogState::Missing,
                     EditState::Stale => CatalogState::Stale,
@@ -137,11 +137,7 @@ pub(crate) fn plan_catalogs(graph: &CatalogGraph) -> CatalogPlan {
                         record.state.as_str()
                     ),
                 ));
-                edit = Some(FileEdit {
-                    path: host.path.clone(),
-                    before: host.contents.clone(),
-                    after,
-                });
+                edit = planned.edit;
             }
             HostOutcome::Damaged(damage) => {
                 record.state = CatalogState::Damaged;

@@ -21,7 +21,6 @@ use super::{
     },
 };
 use crate::native::{
-    capture::StagedTextFile,
     ob::{self, ChildEnv},
     style::Styler,
     vault_rewrite::TxnFailure,
@@ -215,17 +214,9 @@ fn planned_txn(
     analysis: &Analysis,
 ) -> PlannedTxn<SyncContext> {
     let edits = analysis.plan.edits();
-    let files: Vec<StagedTextFile> = edits
-        .iter()
-        .map(|edit| StagedTextFile {
-            target: vault.join(&edit.path),
-            target_existed: true,
-            original_target: edit.before.clone(),
-            updated_target: edit.after.clone(),
-        })
-        .collect();
     let hosts: Vec<PathBuf> =
         edits.iter().map(|edit| edit.path.clone()).collect();
+    let files = crate::native::host_catalog::staged_rewrites(vault, edits);
     PlannedTxn {
         subject: subject(files.len()),
         files,
@@ -235,6 +226,7 @@ fn planned_txn(
             catalogs: analysis.plan.records(),
             changes: changes_of(analysis),
         },
+        kind: "notebook",
     }
 }
 

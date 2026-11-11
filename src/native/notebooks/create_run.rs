@@ -156,12 +156,10 @@ fn planned_txn(vault: &Path, plan: CreatePlan) -> PlannedTxn<CreatePlan> {
         original_target: String::new(),
         updated_target: plan.contents.clone(),
     }];
-    files.extend(plan.edits.iter().map(|edit| StagedTextFile {
-        target: vault.join(&edit.path),
-        target_existed: true,
-        original_target: edit.before.clone(),
-        updated_target: edit.after.clone(),
-    }));
+    files.extend(crate::native::host_catalog::staged_rewrites(
+        vault,
+        &plan.edits,
+    ));
     let hosts = plan.edits.iter().map(|edit| edit.path.clone()).collect();
     PlannedTxn {
         subject: format!("notebooks: create {}", slash(&plan.path)),
@@ -169,6 +167,7 @@ fn planned_txn(vault: &Path, plan: CreatePlan) -> PlannedTxn<CreatePlan> {
         deps: plan.deps.clone(),
         verify: verify_hosts_current(vault.to_path_buf(), hosts),
         context: plan,
+        kind: "notebook",
     }
 }
 

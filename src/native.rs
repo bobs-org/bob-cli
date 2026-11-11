@@ -72,6 +72,7 @@ mod gkeep;
 pub(crate) mod gmail;
 pub(crate) mod google;
 mod highlights_ref;
+pub(crate) mod host_catalog;
 mod ledger_place;
 mod markdown;
 mod nightly;
