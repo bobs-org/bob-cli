@@ -405,10 +405,12 @@ In [Capture](#capture), the destination decides. On a notebook route, `@nb` adds
 top-level note, `@nb#section` adds one to that `##` section (exact match,
 created on demand), `@nb^id` or `@nb#section^id` adds a named note, `@nb+id`
 adds a child of the note bullet `^id`, and a draft-wide `@@nb` sends every
-unrouted item there as a note. Task-only markers are refused with a rewrite to
-the owner's route. A [Project Note Capture](#project-note-capture) seal plus the `%n` directive
-creates one: `@parent^id@ %n <summary>` writes `<parent>_<id>.md`; a bare `%n`
-stays a Pomodoro note.
+unrouted item there as a note. In a route-only `@nb` list, a first-level
+`- #Section` bullet selects a section and its nested one-line bullets become
+notes in that section; plain first-level siblings remain top-region notes.
+`@parent^id@ %n <summary>` creates a notebook with the same section-bullet
+behavior, while a bare `%n` stays a Pomodoro note. Task-only markers are
+refused with a rewrite to the owner's route.
 
 Not a [Reference Note](#reference-note), a record note, a [Task Drawer](#task-drawer), a [Period Note](#period-note),
 the Pomodoro note `%n` writes, or an Obsidian folder. See `docs/notebooks.md`
@@ -743,7 +745,9 @@ bob. `bob capture-drawers` lists one task's drawers plus catalog recents.
 In a capture draft, a `#` right after a first-level bullet's `- ` completes to the
 drawer's title (`- #future-work` becomes `- FUTURE WORK`), and an ALL-CAPS first-level
 bullet with nested notes is a drawer bullet, merging into an existing drawer under a
-note-less `@route+id`. See [Capture Bullets Mirror The Task Block](../develop/decisions.md#capture-bullets-mirror-the-task-block).
+note-less `@route+id`. On a direct notebook-body route, `- #Section` instead selects
+a notebook section for its nested notes; it is not a drawer. See
+[Capture Bullets Mirror The Task Block](../develop/decisions.md#capture-bullets-mirror-the-task-block).
 
 Managed lines and logs are never drawers: Depends-On, BLOCKS, [Task Relation](#task-relation) LINKS
 lines, and the Schedule, Work, Rotten, and Cancel logs, plus `TASKS`. A drawer is not a

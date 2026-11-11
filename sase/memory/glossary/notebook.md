@@ -26,10 +26,12 @@ In [[capture]], the destination decides. On a notebook route, `@nb` adds a
 top-level note, `@nb#section` adds one to that `##` section (exact match,
 created on demand), `@nb^id` or `@nb#section^id` adds a named note, `@nb+id`
 adds a child of the note bullet `^id`, and a draft-wide `@@nb` sends every
-unrouted item there as a note. Task-only markers are refused with a rewrite to
-the owner's route. A [[project-note-capture]] seal plus the `%n` directive
-creates one: `@parent^id@ %n <summary>` writes `<parent>_<id>.md`; a bare `%n`
-stays a Pomodoro note.
+unrouted item there as a note. In a route-only `@nb` list, a first-level
+`- #Section` bullet selects a section and its nested one-line bullets become
+notes in that section; plain first-level siblings remain top-region notes.
+`@parent^id@ %n <summary>` creates a notebook with the same section-bullet
+behavior, while a bare `%n` stays a Pomodoro note. Task-only markers are
+refused with a rewrite to the owner's route.
 
 Not a [[reference-note]], a record note, a [[task-drawer]], a [[period-note]],
 the Pomodoro note `%n` writes, or an Obsidian folder. See `docs/notebooks.md`

@@ -24,7 +24,9 @@ bob. `bob capture-drawers` lists one task's drawers plus catalog recents.
 In a capture draft, a `#` right after a first-level bullet's `- ` completes to the
 drawer's title (`- #future-work` becomes `- FUTURE WORK`), and an ALL-CAPS first-level
 bullet with nested notes is a drawer bullet, merging into an existing drawer under a
-note-less `@route+id`. See [[decisions:capture-bullets-mirror-the-task-block]].
+note-less `@route+id`. On a direct notebook-body route, `- #Section` instead selects
+a notebook section for its nested notes; it is not a drawer. See
+[[decisions:capture-bullets-mirror-the-task-block]].
 
 Managed lines and logs are never drawers: Depends-On, BLOCKS, [[task-relation]] LINKS
 lines, and the Schedule, Work, Rotten, and Cancel logs, plus `TASKS`. A drawer is not a
