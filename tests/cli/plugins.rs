@@ -737,82 +737,79 @@ fn plugins_sync_refuses_dirty_vault_file_then_forces() {
 }
 
 #[test]
-fn plugins_sync_bare_from_foreign_checkout_refuses_before_pull_or_copy() {
-    let temp = TempDir::new("bob-cli-plugins-sync-guard-foreign");
-    let (repo, upstream) = init_pullable_plugins_repo(&temp);
-    advance_plugins_remote(&upstream, "new");
-    let fixture = temp.path().join("fixture");
+fn plugins_sync_bare_from_enclosing_checkout_deploys_with_notice() {
+    let temp = TempDir::new("bob-cli-plugins-sync-enclosing");
+    let repo = temp.path().join("repo");
     let vault = temp.path().join("vault");
     let backups = temp.path().join("backups");
-    write_plugins_fixture(&fixture, &vault);
+    write_plugins_fixture(&repo, &vault);
 
-    // A second bob-plugins checkout, identified by its origin remote, that
-    // the bare sync must not deploy over.
+    // An enclosing bob-plugins checkout identified by its origin remote.
+    // The origin is a local bare repo whose path still contains the
+    // `bobs-org/bob-plugins` marker, so no network is needed.
+    let origin = temp.path().join("bobs-org/bob-plugins.git");
+    fs::create_dir_all(origin.parent().expect("origin parent"))
+        .expect("create origin parent");
+    git(["init", "-q", "--bare", path_str(&origin)]);
     let foreign = temp.path().join("foreign");
     git(["init", "-q", path_str(&foreign)]);
     configure_test_git_identity(&foreign);
     write_plugin(&foreign.join("plugins/alpha"), "alpha", "9.9.9", "foreign");
     git_in(&foreign, ["add", "."]);
     git_in(&foreign, ["commit", "-q", "-m", "foreign plugins"]);
-    git_in(
-        &foreign,
-        [
-            "remote",
-            "add",
-            "origin",
-            "https://github.com/bobs-org/bob-plugins.git",
-        ],
-    );
+    git_in(&foreign, ["remote", "add", "origin", path_str(&origin)]);
     let foreign_cwd = foreign.join("plugins/alpha");
     let foreign_canonical = foreign
         .canonicalize()
         .expect("canonicalize foreign checkout");
 
-    // Both the real sync and its preview refuse.
-    for extra in [vec![], vec!["--dry-run"]] {
-        let mut command = bob_command();
-        command
-            .arg("plugins")
-            .arg("sync")
-            .arg("-b")
-            .arg(&vault)
-            .arg("-B")
-            .arg(&backups)
-            .env("BOB_PLUGINS_DIR", &repo)
-            .current_dir(&foreign_cwd);
-        for arg in &extra {
-            command.arg(arg);
-        }
-        let output = command.output().expect("run bare bob plugins sync");
-
-        assert_eq!(
-            output.status.code(),
-            Some(2),
-            "a bare sync from a foreign checkout must refuse:\n{}",
-            format_output(&output)
-        );
-        let err = stderr(&output);
-        assert!(
-            err.contains("refusing bare sync"),
-            "expected a refusal on stderr:\n{}",
-            format_output(&output)
-        );
-        assert!(
-            err.contains(&repo.display().to_string())
-                && err.contains(&foreign_canonical.display().to_string()),
-            "the refusal must name both checkouts:\n{}",
-            format_output(&output)
-        );
-        assert!(
-            err.contains("--repo"),
-            "the refusal must name the flag to run instead:\n{}",
-            format_output(&output)
-        );
-    }
-
-    let refused_json = bob_command()
+    let output = bob_command()
         .arg("plugins")
         .arg("sync")
+        .arg("--no-pull")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .env("BOB_PLUGINS_DIR", &repo)
+        .current_dir(&foreign_cwd)
+        .output()
+        .expect("run bare bob plugins sync");
+
+    assert_success(&output);
+    let err = stderr(&output);
+    assert!(
+        err.contains("using enclosing checkout")
+            && err.contains(&foreign_canonical.display().to_string())
+            && err.contains(&repo.display().to_string())
+            && err.contains("--repo"),
+        "bare sync must print the enclosing-checkout notice naming both repos:\n{}",
+        format_output(&output)
+    );
+    let out = stdout(&output);
+    assert!(
+        out.contains(&foreign_canonical.display().to_string()),
+        "table header must name the enclosing checkout:\n{out}"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/alpha/main.js"))
+            .expect("read vault plugin"),
+        "// foreign\n",
+        "a bare sync must deploy the enclosing checkout"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.join("plugins/alpha/main.js"))
+            .expect("read resolved repo plugin"),
+        "// alpha\n",
+        "the enclosing sync must not touch the resolved repo"
+    );
+
+    // JSON mode reports the same repo with the additive source field.
+    // Stdout stays parseable; the notice rides on stderr.
+    let json_out = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("--no-pull")
         .arg("-f")
         .arg("json")
         .arg("-b")
@@ -824,45 +821,142 @@ fn plugins_sync_bare_from_foreign_checkout_refuses_before_pull_or_copy() {
         .output()
         .expect("run bare bob plugins sync -f json");
 
+    assert_success(&json_out);
+    assert!(
+        stderr(&json_out).contains("using enclosing checkout"),
+        "json mode must still print the notice on stderr:\n{}",
+        format_output(&json_out)
+    );
+    let value: serde_json::Value = serde_json::from_str(&stdout(&json_out))
+        .expect("parse enclosing sync json");
+    assert_eq!(value["ok"], true);
     assert_eq!(
-        refused_json.status.code(),
-        Some(2),
-        "a refused bare sync must stay nonzero in json mode:\n{}",
-        format_output(&refused_json)
+        value["repo"].as_str().unwrap_or_default(),
+        foreign_canonical.to_string_lossy().as_ref()
+    );
+    assert_eq!(value["repo_source"], "enclosing_checkout");
+
+    // A dry-run preview from the same cwd prints the notice and writes
+    // nothing.
+    let dry_vault = temp.path().join("dry-vault");
+    let dry_backups = temp.path().join("dry-backups");
+    write_plugins_fixture(&temp.path().join("dry-fixture"), &dry_vault);
+    let dry = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("--dry-run")
+        .arg("--no-pull")
+        .arg("-b")
+        .arg(&dry_vault)
+        .arg("-B")
+        .arg(&dry_backups)
+        .env("BOB_PLUGINS_DIR", &repo)
+        .current_dir(&foreign_cwd)
+        .output()
+        .expect("run bare bob plugins sync --dry-run");
+
+    assert_success(&dry);
+    assert!(
+        stderr(&dry).contains("using enclosing checkout"),
+        "dry-run must print the notice:\n{}",
+        format_output(&dry)
+    );
+    assert_eq!(
+        fs::read_to_string(dry_vault.join(".obsidian/plugins/alpha/main.js"))
+            .expect("read dry vault plugin"),
+        "// alpha\n",
+        "dry-run must not modify the vault"
+    );
+    assert!(!dry_backups.exists(), "dry-run must not write backups");
+}
+
+#[test]
+fn plugins_list_bare_from_enclosing_checkout_names_same_repo() {
+    let temp = TempDir::new("bob-cli-plugins-list-enclosing");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    write_plugins_fixture(&repo, &vault);
+
+    // Marker checkout (no origin): plugins/ plus package.json.
+    let foreign = temp.path().join("foreign");
+    git(["init", "-q", path_str(&foreign)]);
+    configure_test_git_identity(&foreign);
+    write_plugin(&foreign.join("plugins/alpha"), "alpha", "9.9.9", "foreign");
+    write_file(
+        &foreign.join("package.json"),
+        "{\"name\":\"bob-plugins\"}\n",
+    );
+    git_in(&foreign, ["add", "."]);
+    git_in(&foreign, ["commit", "-q", "-m", "foreign plugins"]);
+    let foreign_cwd = foreign.join("plugins");
+    let foreign_canonical = foreign
+        .canonicalize()
+        .expect("canonicalize foreign checkout");
+
+    // `bob plugins list` from inside the worktree names the same repo.
+    let output = bob_command()
+        .arg("plugins")
+        .arg("list")
+        .arg("--no-pull")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_PLUGINS_DIR", &repo)
+        .current_dir(&foreign_cwd)
+        .output()
+        .expect("run bob plugins list from enclosing checkout");
+
+    assert_success(&output);
+    assert!(
+        stderr(&output).contains("using enclosing checkout"),
+        "list must print the notice:\n{}",
+        format_output(&output)
     );
     assert!(
-        stderr(&refused_json).is_empty(),
-        "json errors must not also echo to stderr:\n{}",
-        format_output(&refused_json)
-    );
-    let value: serde_json::Value = serde_json::from_str(&stdout(&refused_json))
-        .expect("parse refused sync json");
-    assert_eq!(value["ok"], false);
-    assert!(
-        value["error"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("refusing bare sync"),
-        "json error must carry the refusal:\n{value}"
+        stdout(&output).contains(&foreign_canonical.display().to_string()),
+        "list header must name the enclosing checkout:\n{}",
+        stdout(&output)
     );
 
-    assert_eq!(
-        fs::read_to_string(repo.join("plugins/alpha/main.js"))
-            .expect("read resolved repo plugin"),
-        "// old\n",
-        "the refused sync must not pull the resolved repo"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join(".obsidian/plugins/beta/main.js"))
-            .expect("read vault plugin"),
-        "// beta-stale\n",
-        "the refused sync must not touch the vault"
-    );
+    // The bare default (`bob plugins`) agrees, and JSON carries the source.
+    let bare = bob_command()
+        .arg("plugins")
+        .arg("--no-pull")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_PLUGINS_DIR", &repo)
+        .current_dir(&foreign_cwd)
+        .output()
+        .expect("run bare bob plugins from enclosing checkout");
+
+    assert_success(&bare);
     assert!(
-        !vault.join(".obsidian/plugins/gamma").exists(),
-        "the refused sync must not create the missing gamma plugin"
+        stdout(&bare).contains(&foreign_canonical.display().to_string()),
+        "bare list must name the enclosing checkout:\n{}",
+        stdout(&bare)
     );
-    assert!(!backups.exists(), "the refused sync must not write backups");
+
+    let json_out = bob_command()
+        .arg("plugins")
+        .arg("list")
+        .arg("--no-pull")
+        .arg("-f")
+        .arg("json")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_PLUGINS_DIR", &repo)
+        .current_dir(&foreign_cwd)
+        .output()
+        .expect("run bob plugins list -f json from enclosing checkout");
+
+    assert_success(&json_out);
+    let value: serde_json::Value = serde_json::from_str(&stdout(&json_out))
+        .expect("parse enclosing list json");
+    assert_eq!(value["ok"], true);
+    assert_eq!(
+        value["repo"].as_str().unwrap_or_default(),
+        foreign_canonical.to_string_lossy().as_ref()
+    );
+    assert_eq!(value["repo_source"], "enclosing_checkout");
 }
 
 #[test]
@@ -880,6 +974,7 @@ fn plugins_sync_bare_from_resolved_checkout_is_allowed() {
     let output = bob_command()
         .arg("plugins")
         .arg("sync")
+        .arg("--no-pull")
         .arg("-b")
         .arg(&vault)
         .arg("-B")
@@ -890,12 +985,38 @@ fn plugins_sync_bare_from_resolved_checkout_is_allowed() {
         .expect("run bare bob plugins sync from the resolved checkout");
 
     assert_success(&output);
+    assert!(
+        !stderr(&output).contains("using enclosing checkout"),
+        "no notice when the cwd sits inside the resolved checkout:\n{}",
+        format_output(&output)
+    );
     assert_eq!(
         fs::read_to_string(vault.join(".obsidian/plugins/beta/main.js"))
             .expect("read vault plugin"),
         "// beta\n",
         "a bare sync from the resolved checkout must still deploy"
     );
+
+    let json_out = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("--no-pull")
+        .arg("-f")
+        .arg("json")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .env("BOB_PLUGINS_DIR", &repo)
+        .current_dir(repo.join("plugins"))
+        .output()
+        .expect("run bare sync json from the resolved checkout");
+
+    assert_success(&json_out);
+    let value: serde_json::Value = serde_json::from_str(&stdout(&json_out))
+        .expect("parse resolved sync json");
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["repo_source"], "env");
 }
 
 #[test]
@@ -931,6 +1052,7 @@ fn plugins_sync_bare_from_unrelated_cwd_is_allowed() {
         let output = bob_command()
             .arg("plugins")
             .arg("sync")
+            .arg("--no-pull")
             .arg("-b")
             .arg(&vault)
             .arg("-B")
@@ -941,6 +1063,11 @@ fn plugins_sync_bare_from_unrelated_cwd_is_allowed() {
             .expect("run bare bob plugins sync from an unrelated cwd");
 
         assert_success(&output);
+        assert!(
+            !stderr(&output).contains("using enclosing checkout"),
+            "no notice from outside any bob-plugins checkout:\n{}",
+            format_output(&output)
+        );
     }
     assert_eq!(
         fs::read_to_string(vault.join(".obsidian/plugins/beta/main.js"))
@@ -971,9 +1098,11 @@ fn plugins_sync_explicit_repo_from_foreign_checkout_is_allowed() {
     git_in(&foreign, ["add", "."]);
     git_in(&foreign, ["commit", "-q", "-m", "foreign plugins"]);
 
-    let refused = bob_command()
+    // A bare sync from the marker checkout deploys it with a notice.
+    let bare = bob_command()
         .arg("plugins")
         .arg("sync")
+        .arg("--no-pull")
         .arg("-b")
         .arg(&vault)
         .arg("-B")
@@ -983,38 +1112,58 @@ fn plugins_sync_explicit_repo_from_foreign_checkout_is_allowed() {
         .output()
         .expect("run bare bob plugins sync from a marker checkout");
 
-    assert_eq!(
-        refused.status.code(),
-        Some(2),
-        "a bare sync from a marker checkout must refuse:\n{}",
-        format_output(&refused)
-    );
+    assert_success(&bare);
     assert!(
-        stderr(&refused).contains("refusing bare sync"),
-        "expected a refusal on stderr:\n{}",
-        format_output(&refused)
+        stderr(&bare).contains("using enclosing checkout"),
+        "bare sync must print the notice:\n{}",
+        format_output(&bare)
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/alpha/main.js"))
+            .expect("read vault plugin"),
+        "// foreign\n",
+        "a bare sync must deploy the enclosing checkout"
     );
 
+    // An explicit --repo always wins, with no notice and source flag.
+    // Use a fresh vault so the deploy-protection guard (which would refuse
+    // to overwrite the foreign clean stamp with unrelated canonical history)
+    // does not stand in for resolution.
+    let flag_vault = temp.path().join("flag-vault");
+    let flag_backups = temp.path().join("flag-backups");
+    write_plugins_fixture(&temp.path().join("flag-fixture"), &flag_vault);
     let output = bob_command()
         .arg("plugins")
         .arg("sync")
+        .arg("--no-pull")
         .arg("-r")
-        .arg(&foreign)
+        .arg(&canonical)
         .arg("-b")
-        .arg(&vault)
+        .arg(&flag_vault)
         .arg("-B")
-        .arg(&backups)
+        .arg(&flag_backups)
+        .arg("-f")
+        .arg("json")
         .env("BOB_PLUGINS_DIR", &canonical)
         .current_dir(&foreign)
         .output()
         .expect("run bob plugins sync --repo from a foreign checkout");
 
     assert_success(&output);
+    assert!(
+        !stderr(&output).contains("using enclosing checkout"),
+        "explicit --repo must not print the notice:\n{}",
+        format_output(&output)
+    );
+    let value: serde_json::Value = serde_json::from_str(&stdout(&output))
+        .expect("parse explicit sync json");
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["repo_source"], "flag");
     assert_eq!(
-        fs::read_to_string(vault.join(".obsidian/plugins/alpha/main.js"))
+        fs::read_to_string(flag_vault.join(".obsidian/plugins/alpha/main.js"))
             .expect("read vault plugin"),
-        "// foreign\n",
-        "an explicit --repo must deploy the foreign checkout"
+        "// alpha\n",
+        "an explicit --repo must deploy that checkout even from a foreign cwd"
     );
 }
 

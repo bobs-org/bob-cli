@@ -12,6 +12,7 @@ use super::model::COMMAND_NAME;
 pub(super) enum PullOutcome {
     Skipped,
     Pulled { summary: String },
+    FetchedOnly { pull_error: String },
     Failed { message: String },
 }
 
@@ -40,16 +41,38 @@ pub(super) fn pull_repo(repo: &Path) -> PullOutcome {
         Ok(output) if output.status.success() => PullOutcome::Pulled {
             summary: summarize_git_pull(&output),
         },
-        Ok(output) => PullOutcome::Failed {
-            message: git_pull_failure_message(&output),
-        },
+        Ok(output) => {
+            let pull_error = git_pull_failure_message(&output);
+            if fetch_repo(repo, &child_env) {
+                PullOutcome::FetchedOnly { pull_error }
+            } else {
+                PullOutcome::Failed {
+                    message: pull_error,
+                }
+            }
+        }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             PullOutcome::Skipped
         }
-        Err(error) => PullOutcome::Failed {
-            message: format!("failed to run git pull: {error}"),
-        },
+        Err(error) => {
+            let pull_error = format!("failed to run git pull: {error}");
+            if fetch_repo(repo, &child_env) {
+                PullOutcome::FetchedOnly { pull_error }
+            } else {
+                PullOutcome::Failed {
+                    message: pull_error,
+                }
+            }
+        }
     }
+}
+
+fn fetch_repo(repo: &Path, child_env: &ob::ChildEnv) -> bool {
+    ob::git_command(repo, child_env)
+        .arg("fetch")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .is_ok_and(|output| output.status.success())
 }
 
 fn detect_git_worktree(repo: &Path, child_env: &ob::ChildEnv) -> GitDetection {
@@ -81,6 +104,11 @@ pub(super) fn print_pull_outcome(outcome: PullOutcome) {
             if !is_up_to_date_summary(&summary) {
                 eprintln!("{COMMAND_NAME}: git pull: {summary}");
             }
+        }
+        PullOutcome::FetchedOnly { pull_error } => {
+            eprintln!(
+                "{COMMAND_NAME}: warning: git pull failed ({pull_error}); fetched remote refs instead — checkout files unchanged"
+            );
         }
         PullOutcome::Failed { message } => {
             eprintln!(

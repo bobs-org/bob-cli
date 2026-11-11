@@ -3,13 +3,17 @@ use std::{collections::HashSet, fs, io, path::Path};
 use super::{
     deploy::{check_plugin_ignore, scan_deployment},
     model::{
-        Manifest, PluginEntry, PluginsReport, SyncState, VaultState,
-        COMMUNITY_PLUGINS_FILE, MANAGED_FILES, REPO_PLUGINS_SUBDIR,
+        Manifest, PluginEntry, PluginsReport, RepoSource, SyncState,
+        VaultState, COMMUNITY_PLUGINS_FILE, MANAGED_FILES, REPO_PLUGINS_SUBDIR,
         VAULT_PLUGINS_SUBDIR,
     },
 };
 
-pub(super) fn scan_plugins(repo: &Path, bob_dir: &Path) -> PluginsReport {
+pub(super) fn scan_plugins(
+    repo: &Path,
+    bob_dir: &Path,
+    repo_source: RepoSource,
+) -> PluginsReport {
     let mut plugins = Vec::new();
     let mut issues = Vec::new();
     let plugins_root = repo.join(REPO_PLUGINS_SUBDIR);
@@ -24,6 +28,7 @@ pub(super) fn scan_plugins(repo: &Path, bob_dir: &Path) -> PluginsReport {
             ));
             return PluginsReport {
                 repo: repo.to_path_buf(),
+                repo_source,
                 bob_dir: bob_dir.to_path_buf(),
                 plugins,
                 issues,
@@ -75,6 +80,7 @@ pub(super) fn scan_plugins(repo: &Path, bob_dir: &Path) -> PluginsReport {
     plugins.sort_by(|left, right| left.id.cmp(&right.id));
     PluginsReport {
         repo: repo.to_path_buf(),
+        repo_source,
         bob_dir: bob_dir.to_path_buf(),
         plugins,
         issues,

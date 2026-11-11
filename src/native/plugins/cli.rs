@@ -14,8 +14,8 @@ use crate::native::{env as bob_env, style::Styler};
 
 use super::{
     git::{print_pull_outcome, pull_repo},
-    guard::{check_bare_sync, refusal_message},
-    model::{SyncOptions, COMMAND_NAME},
+    guard::resolve_default_repo,
+    model::{RepoSource, SyncOptions, COMMAND_NAME},
     render::{
         print_plugins_table, print_sync_report, success_json, sync_success_json,
     },
@@ -146,10 +146,12 @@ unchanged. In a Git vault, sync also warns when a plugin's whole vault folder \
 prints under the plugin row and appears as `vault_ignore` in JSON output, in \
 dry-run too, and never blocks the copy, edits .gitignore, or untracks files. \
 The plugins repo is refreshed with a non-interactive `git pull` \
-before analysis unless --no-pull is given. Pass `-f json` to print a single \
-machine-readable object instead of the table and diffs. A bare sync (no \
---repo) run from inside a different bob-plugins checkout refuses before any \
-pull or copy: pass --repo <checkout> to deploy that checkout.",
+before analysis unless --no-pull is given; when the pull fails the refresh \
+falls back to `git fetch` so remote-tracking refs stay fresh while checkout \
+files are left untouched. Pass `-f json` to print a single \
+machine-readable object instead of the table and diffs. The repo root \
+resolves from --repo, then the enclosing bob-plugins checkout when the cwd \
+sits inside one, then BOB_PLUGINS_DIR, then the default checkout.",
         )
         .after_help(
             "Examples:\n  bob plugins sync --dry-run\n  bob plugins sync --dry-run -f json\n  bob plugins sync --no-pull --dry-run\n  bob plugins sync -p bob-project-tasks\n  bob plugins sync -F -b ~/bob -r ~/projects/github/bobs-org/bob-plugins",
@@ -202,8 +204,8 @@ fn repo_arg() -> Arg {
         .value_name("DIR")
         .value_parser(OsStringValueParser::new())
         .help(
-            "Plugins repo root; defaults to BOB_PLUGINS_DIR or \
-~/projects/github/bobs-org/bob-plugins",
+            "Plugins repo root; defaults to the enclosing bob-plugins checkout, \
+then BOB_PLUGINS_DIR or ~/projects/github/bobs-org/bob-plugins",
         )
 }
 
@@ -261,12 +263,18 @@ impl OutputFormat {
     }
 }
 
-fn repo_from_matches(matches: &ArgMatches) -> PathBuf {
-    matches
-        .get_one::<OsString>("repo")
-        .map(PathBuf::from)
-        .map(|path| bob_env::expand_tilde(&path))
-        .unwrap_or_else(bob_env::plugins_dir)
+fn repo_from_matches(matches: &ArgMatches) -> (PathBuf, RepoSource) {
+    if let Some(flag) = matches.get_one::<OsString>("repo") {
+        return (
+            bob_env::expand_tilde(&PathBuf::from(flag)),
+            RepoSource::Flag,
+        );
+    }
+    let resolved = resolve_default_repo();
+    if let Some(notice) = resolved.notice {
+        eprintln!("{notice}");
+    }
+    (resolved.repo, resolved.source)
 }
 
 fn bob_dir_from_matches(matches: &ArgMatches) -> PathBuf {
@@ -286,10 +294,10 @@ fn backup_dir_from_matches(matches: &ArgMatches) -> PathBuf {
 }
 
 fn run_list(matches: &ArgMatches) -> i32 {
-    let repo = repo_from_matches(matches);
+    let (repo, repo_source) = repo_from_matches(matches);
     maybe_pull_repo(matches, &repo);
     let bob_dir = bob_dir_from_matches(matches);
-    let report = scan_plugins(&repo, &bob_dir);
+    let report = scan_plugins(&repo, &bob_dir, repo_source);
 
     match OutputFormat::from_matches(matches) {
         OutputFormat::Table => {
@@ -321,20 +329,12 @@ fn run_list(matches: &ArgMatches) -> i32 {
 }
 
 fn run_sync(matches: &ArgMatches) -> i32 {
-    let repo = repo_from_matches(matches);
-    // A bare sync from inside a different bob-plugins checkout would
-    // silently deploy the resolved repo instead of the cwd checkout
-    // (bob-cli-59). Refuse before any pull or copy, in dry-run too; an
-    // explicit --repo always names the checkout the caller means.
-    let repo_is_explicit = matches.get_one::<OsString>("repo").is_some();
-    if let Some(foreign) = check_bare_sync(&repo, repo_is_explicit) {
-        let message = refusal_message(&repo, &foreign);
-        return refuse_bare_sync(matches, &message);
-    }
+    let (repo, repo_source) = repo_from_matches(matches);
     maybe_pull_repo(matches, &repo);
     let timestamp = bob_env::current_datetime().format("%Y%m%d-%H%M%S");
     let options = SyncOptions {
         repo,
+        repo_source,
         bob_dir: bob_dir_from_matches(matches),
         backup_run_dir: backup_dir_from_matches(matches)
             .join(timestamp.to_string()),
@@ -375,20 +375,6 @@ fn run_sync(matches: &ArgMatches) -> i32 {
     } else {
         1
     }
-}
-
-/// Refuse a bare sync from a foreign checkout: report the error the same
-/// way other sync failures report, without pulling or copying anything.
-fn refuse_bare_sync(matches: &ArgMatches, message: &str) -> i32 {
-    match OutputFormat::from_matches(matches) {
-        OutputFormat::Table => {
-            eprintln!("{COMMAND_NAME}: {message}");
-        }
-        OutputFormat::Json => {
-            println!("{}", json!({ "ok": false, "error": message }));
-        }
-    }
-    2
 }
 
 fn maybe_pull_repo(matches: &ArgMatches, repo: &Path) {

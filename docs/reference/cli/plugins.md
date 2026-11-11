@@ -38,7 +38,7 @@ Options:
           Skip 'git pull' on the plugins repo before analyzing
 
   -r, --repo <DIR>
-          Plugins repo root; defaults to BOB_PLUGINS_DIR or ~/projects/github/bobs-org/bob-plugins
+          Plugins repo root; defaults to the enclosing bob-plugins checkout, then BOB_PLUGINS_DIR or ~/projects/github/bobs-org/bob-plugins
 
   -h, --help
           Print help (see a summary with '-h')

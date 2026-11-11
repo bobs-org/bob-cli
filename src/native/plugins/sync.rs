@@ -31,6 +31,7 @@ struct FileOutcome {
 pub(super) fn sync_plugins(options: &SyncOptions) -> SyncReport {
     let mut report = SyncReport {
         repo: options.repo.clone(),
+        repo_source: options.repo_source,
         bob_dir: options.bob_dir.clone(),
         backup_run_dir: options.backup_run_dir.clone(),
         plugins: Vec::new(),

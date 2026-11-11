@@ -50,9 +50,13 @@ checkout exactly as-is.
 A repo path that is not a Git worktree, or a system without `git`, skips the
 refresh silently. If `git pull` fails because the network is unavailable,
 authentication would require a prompt, histories diverged, or local edits block
-the pull, the command writes a warning to stderr and continues with the
-existing checkout. Pull output never goes to stdout, so table and JSON output
-stay parseable.
+the pull, the refresh falls back to a non-interactive `git fetch` (default
+remote and refspec) so remote-tracking refs stay fresh while checkout files
+are left untouched. When the fallback fetch succeeds the command writes one
+stderr warning naming the pull failure and noting that remote refs were
+fetched instead; when the fetch also fails it keeps the single pull-failure
+warning. `--no-pull` skips both pull and fetch. Pull and fetch output never
+goes to stdout, so table and JSON output stay parseable.
 
 ## Discovery
 
@@ -64,9 +68,12 @@ on stderr and the command exits non-zero, but the remaining plugins still list.
 
 Two roots feed the report:
 
-- **Repo root.** Resolves from `-r, --repo`, then the `BOB_PLUGINS_DIR`
-  environment variable, then the default
-  `~/projects/github/bobs-org/bob-plugins`. Plugins live under
+- **Repo root.** Resolves from `-r, --repo`, then the enclosing
+  bob-plugins checkout when the cwd sits inside one, then the
+  `BOB_PLUGINS_DIR` environment variable, then the default
+  `~/projects/github/bobs-org/bob-plugins`. `list`, the bare default, and
+  `sync` all resolve the same repo from the cwd, so the table header, JSON
+  `repo`, and the deploy target always agree. Plugins live under
   `<repo>/plugins/<id>/`.
 - **Vault root.** Resolves from `-b, --bob-dir`, then `BOB_DIR`, then `~/bob`.
   Installed plugins live under `<bob-dir>/.obsidian/plugins/<id>/`, and the
@@ -129,6 +136,7 @@ error to stderr.
 {
   "ok": true,
   "repo": "/home/bryan/projects/github/bobs-org/bob-plugins",
+  "repo_source": "default",
   "bob_dir": "/home/bryan/bob",
   "count": 6,
   "synced": 6,
@@ -152,7 +160,9 @@ error to stderr.
 }
 ```
 
-The `sync` field is `synced`, `drift`, or `missing`; the `vault` field is
+`repo_source` is `flag`, `enclosing_checkout`, `env`, or `default`,
+naming which resolution rule selected the repo root. The `sync` field is
+`synced`, `drift`, or `missing`; the `vault` field is
 `enabled`, `disabled`, or `not_installed`. `deployment` is omitted when the
 plugin has no stamp (legacy installs and plugins that have never been synced
 by a stamp-aware `bob`). When present it includes `status`, `source_root`,
@@ -227,28 +237,35 @@ For every managed file, `sync` reports one of:
   repo.
 - `-p, --plugin <ID>` syncs a single plugin instead of all of them. An id that
   the repo does not contain is an error.
-- `-r, --repo <DIR>` selects the plugins repo root.
+- `-r, --repo <DIR>` selects the plugins repo root. An explicit flag
+  always wins; without it the enclosing bob-plugins checkout wins over
+  `BOB_PLUGINS_DIR` and the default.
 
-### Foreign-checkout guard
+### Enclosing-checkout resolution
 
-A bare sync (no `--repo`) deploys the resolved repo root (`--repo`, then
-`BOB_PLUGINS_DIR`, then `~/projects/github/bobs-org/bob-plugins`). When the
-current directory sits inside a *different* bob-plugins checkout — for
-example a SASE linked worktree — the bare sync would silently deploy the
-resolved checkout instead of the worktree, rolling back whatever the
-worktree just deployed. So the sync refuses before any pull or copy (exit 2,
-in `--dry-run` too) and prints the `--repo` command to run instead:
+A bare sync (no `--repo`) deploys the enclosing bob-plugins checkout when the
+cwd sits inside one — for example a SASE linked worktree — even when
+`BOB_PLUGINS_DIR` or the default points somewhere else. The resolution order
+is `--repo`, then the enclosing checkout, then `BOB_PLUGINS_DIR`, then
+`~/projects/github/bobs-org/bob-plugins`.
 
-```bash
-bob plugins sync --repo <checkout> [-p <id>]
+When the enclosing checkout wins and its toplevel differs from what the
+env/default rules would have resolved, the command prints one stderr notice
+naming both paths:
+
+```text
+bob plugins: using enclosing checkout <toplevel> (default is <resolved>; pass --repo to override)
 ```
+
+No notice is printed when the cwd sits inside the env/default checkout
+itself (resolution is unchanged) or outside any bob-plugins checkout. The
+notice rides on stderr, so stdout JSON stays parseable.
 
 A checkout counts as a bob-plugins checkout when its `origin` remote points
 at `bobs-org/bob-plugins`, or when its root holds a `plugins/` dir plus the
-monorepo `package.json`. An explicit `--repo`, a bare sync from inside the
-resolved checkout itself, and a bare sync from outside any bob-plugins
-checkout all behave as before. From a SASE worktree, deploy with
-`bob plugins sync --repo <worktree> -p <id>` to move one plugin.
+monorepo `package.json`. An explicit `--repo` always names the checkout the
+caller means and never prints the notice. From a SASE worktree, a bare
+`bob plugins sync -p <id>` deploys that worktree.
 
 ### Deploy-protection guard
 
@@ -286,8 +303,10 @@ Without `--force`:
 A non-Git source directory can bootstrap, but later differing assets require
 `--force` because ancestry is unavailable. A clean unpushed commit is protected
 when it is absent from incoming history. Protection never depends on a remote
-fetch. The refusal's landed-build hint reads only remote-tracking refs already
-present, never fetches, and never changes the decision.
+fetch: the refresh fetches, the guard still only reads local state. Because
+the refresh falls back to `git fetch` when `git pull` cannot advance the
+worktree, the refusal's landed-build hint usually names the landed commit and
+ref instead of the generic fetch hint, and it never changes the decision.
 
 In a Git vault the stamp path must be ignored (for example
 `.obsidian/plugins/*/.bob-deploy.json`) and must not be tracked. `--force`
@@ -347,10 +366,8 @@ uses `would copy` and `would back up to` wording and writes nothing. This makes
 `sync` exits `0` even when it skips dirty vault files — that skip is a
 deliberate warning, matching how `list` treats drift. Deploy-protection
 refusals, unreadable repos, unknown `--plugin` ids, lock contention, unsafe
-stamp storage, and failed copies exit `1` and write the cause to stderr. A
-refused bare sync from a foreign checkout exits `2` (see
-[Foreign-checkout guard](#foreign-checkout-guard)). Dry-run uses the same
-exit codes and writes nothing.
+stamp storage, and failed copies exit `1` and write the cause to stderr.
+Dry-run uses the same exit codes and writes nothing.
 
 ### JSON output
 
@@ -362,6 +379,7 @@ on stderr.
   "ok": true,
   "dry_run": false,
   "repo": "/home/bryan/projects/github/bobs-org/bob-plugins",
+  "repo_source": "default",
   "bob_dir": "/home/bryan/bob",
   "copied": 1,
   "skipped": 0,
@@ -388,6 +406,7 @@ on stderr.
 }
 ```
 
+`repo_source` is `flag`, `enclosing_checkout`, `env`, or `default`.
 `action` is `created`, `updated`, `forced`, `unchanged`, `skipped_dirty`, or
 `failed`. `backup` is the backup path when the file is backed up (or, in a dry
 run, would be), otherwise `null`. `copied` counts managed assets, not stamp

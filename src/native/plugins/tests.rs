@@ -19,8 +19,8 @@ use super::{
     diff::{diff_existing_file, diff_text, MINIFIED_BYTE_THRESHOLD},
     git::{pull_repo, PullOutcome},
     model::{
-        BackupOutcome, DiffKind, FileAction, FileDiff, FileSync, SyncOptions,
-        SyncReport, SyncState, VaultState,
+        BackupOutcome, DiffKind, FileAction, FileDiff, FileSync, RepoSource,
+        SyncOptions, SyncReport, SyncState, VaultState,
     },
     render::{success_json, sync_success_json},
     scan::{scan_plugins, sync_state, vault_state},
@@ -91,7 +91,7 @@ fn scan_reports_states_and_counts() {
         "[\"alpha\"]\n",
     );
 
-    let report = scan_plugins(&repo, &vault);
+    let report = scan_plugins(&repo, &vault, RepoSource::Flag);
     assert!(report.issues.is_empty(), "issues: {:?}", report.issues);
     assert_eq!(report.plugins.len(), 3);
 
@@ -118,7 +118,11 @@ fn scan_reports_states_and_counts() {
 #[test]
 fn unreadable_repo_is_an_error() {
     let temp = TempDir::new("bob-cli-plugins-empty");
-    let report = scan_plugins(&temp.path().join("missing"), temp.path());
+    let report = scan_plugins(
+        &temp.path().join("missing"),
+        temp.path(),
+        RepoSource::Flag,
+    );
     assert_eq!(report.issues.len(), 1);
     assert!(report.plugins.is_empty());
 }
@@ -189,6 +193,102 @@ fn pull_repo_fast_forwards_from_remote() {
 }
 
 #[test]
+fn pull_fallback_fetch_updates_refs_and_names_landed_build() {
+    let temp = TempDir::new("bob-cli-plugins-pull-fetch");
+    let remote = temp.path().join("remote.git");
+    let seed = temp.path().join("seed");
+    let repo = temp.path().join("repo");
+    let checkout_a = temp.path().join("a");
+
+    run_git(temp.path(), &["init", "-q", "--bare", path_str(&remote)]);
+    run_git(
+        temp.path(),
+        &["clone", "-q", path_str(&remote), path_str(&seed)],
+    );
+    git_config_identity(&seed);
+    write_plugin(&seed, "alpha", "1.0.0", "Alpha plugin", "base");
+    run_git(&seed, &["add", "."]);
+    run_git(&seed, &["commit", "-q", "-m", "initial"]);
+    run_git(&seed, &["push", "-q", "-u", "origin", "HEAD"]);
+    let branch = git_branch(&seed);
+    let remote_ref = format!("origin/{branch}");
+
+    run_git(
+        temp.path(),
+        &["clone", "-q", path_str(&remote), path_str(&repo)],
+    );
+    run_git(
+        temp.path(),
+        &["clone", "-q", path_str(&remote), path_str(&checkout_a)],
+    );
+    git_config_identity(&checkout_a);
+    // Pull with rebase refuses when the worktree is dirty, so the pull
+    // fails before updating remote-tracking refs.
+    run_git(&repo, &["config", "pull.rebase", "true"]);
+
+    let vault = temp.path().join("vault");
+    write_stamp_ignore(&vault);
+
+    // Dirty deploy from A.
+    write_file(&checkout_a.join("plugins/alpha/main.js"), "// dirty-a\n");
+    let (opts_a, _guard_a) = options(&checkout_a, &vault);
+    assert!(sync_plugins(&opts_a).issues.is_empty());
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/alpha/main.js"))
+            .unwrap(),
+        "// dirty-a\n"
+    );
+
+    // Land those bytes, then advance the remote past repo's checkout.
+    run_git(&checkout_a, &["add", "plugins/alpha/main.js"]);
+    run_git(&checkout_a, &["commit", "-q", "-m", "land dirty-a"]);
+    run_git(&checkout_a, &["push", "-q"]);
+    let landed = git_head_sha(&checkout_a, "HEAD");
+
+    // Dirty a tracked file so `git pull --rebase` refuses.
+    write_file(&repo.join("plugins/alpha/main.js"), "// local-edit\n");
+
+    match pull_repo(&repo) {
+        PullOutcome::FetchedOnly { pull_error } => {
+            assert!(
+                !pull_error.is_empty(),
+                "fetch fallback must carry the pull failure reason"
+            );
+        }
+        outcome => panic!("expected fetch fallback, got {outcome:?}"),
+    }
+    // Checkout files are untouched, but the remote-tracking ref is fresh.
+    assert_eq!(
+        fs::read_to_string(repo.join("plugins/alpha/main.js")).unwrap(),
+        "// local-edit\n"
+    );
+    assert_eq!(
+        git_head_sha(&repo, &remote_ref),
+        landed,
+        "fetch fallback must update the remote-tracking ref"
+    );
+
+    // The dirty-stamp refusal now names the landed commit and ref instead
+    // of the generic fetch hint.
+    let (opts_b, _guard_b) = options(&repo, &vault);
+    let refused = sync_plugins(&opts_b);
+    let issue = refused
+        .issues
+        .iter()
+        .find(|issue| issue.contains("refusing to overwrite plugin alpha"))
+        .expect("expected a deploy-guard refusal");
+    assert!(
+        issue.contains(&landed[..7]) && issue.contains(&remote_ref),
+        "refusal must name the landed commit and ref: {issue}"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/alpha/main.js"))
+            .unwrap(),
+        "// dirty-a\n"
+    );
+}
+
+#[test]
 fn json_shape_is_stable() {
     let temp = TempDir::new("bob-cli-plugins-json");
     let repo = temp.path().join("repo");
@@ -200,10 +300,11 @@ fn json_shape_is_stable() {
         "[\"alpha\"]\n",
     );
 
-    let result = scan_plugins(&repo, &vault).result();
+    let result = scan_plugins(&repo, &vault, RepoSource::Flag).result();
     let value: serde_json::Value =
         serde_json::from_str(&success_json(&result)).expect("json");
     assert_eq!(value["ok"], true);
+    assert_eq!(value["repo_source"], "flag");
     assert_eq!(value["count"], 1);
     assert_eq!(value["synced"], 1);
     assert_eq!(value["drift"], 0);
@@ -212,6 +313,15 @@ fn json_shape_is_stable() {
     assert_eq!(value["plugins"][0]["version"], "1.0.0");
     assert_eq!(value["plugins"][0]["sync"], "synced");
     assert_eq!(value["plugins"][0]["vault"], "enabled");
+    assert_eq!(
+        serde_json::to_value(RepoSource::EnclosingCheckout).unwrap(),
+        "enclosing_checkout"
+    );
+    assert_eq!(serde_json::to_value(RepoSource::Env).unwrap(), "env");
+    assert_eq!(
+        serde_json::to_value(RepoSource::Default).unwrap(),
+        "default"
+    );
 }
 
 #[test]
@@ -245,12 +355,14 @@ fn sync_json_shape_is_stable() {
             "ok",
             "plugins",
             "repo",
+            "repo_source",
             "skipped",
             "unchanged",
         ]
     );
     assert_eq!(value["ok"], true);
     assert_eq!(value["dry_run"], false);
+    assert_eq!(value["repo_source"], "flag");
     assert_eq!(value["copied"], 3);
     assert_eq!(value["skipped"], 0);
     assert_eq!(value["unchanged"], 3);
@@ -1206,7 +1318,7 @@ fn nongit_vault_has_no_ignore_warning() {
     assert!(report.issues.is_empty(), "{:?}", report.issues);
     assert_eq!(report.plugins[0].vault_ignore, None);
 
-    let scanned = scan_plugins(&repo, &vault);
+    let scanned = scan_plugins(&repo, &vault, RepoSource::Flag);
     assert!(scanned.issues.is_empty(), "{:?}", scanned.issues);
     assert_eq!(scanned.plugins[0].vault_ignore, None);
 }
@@ -1228,7 +1340,7 @@ fn ignored_folder_has_no_warning_in_git_vault() {
     assert!(report.issues.is_empty(), "{:?}", report.issues);
     assert_eq!(report.plugins[0].vault_ignore, None);
 
-    let scanned = scan_plugins(&repo, &vault);
+    let scanned = scan_plugins(&repo, &vault, RepoSource::Flag);
     assert_eq!(scanned.plugins[0].vault_ignore, None);
 }
 
@@ -1368,7 +1480,7 @@ fn list_carries_ignore_warning_without_changing_columns() {
     write_stamp_ignore(&vault);
     run_git(&vault, &["init", "-q"]);
 
-    let report = scan_plugins(&repo, &vault);
+    let report = scan_plugins(&repo, &vault, RepoSource::Flag);
     assert!(report.issues.is_empty(), "{:?}", report.issues);
     let entry = &report.plugins[0];
     // The warning rides along without changing the sync/vault columns.
@@ -1465,7 +1577,7 @@ fn list_reports_uncommitted_deployment() {
     let (opts, _guard) = options(&repo, &vault);
     assert!(sync_plugins(&opts).issues.is_empty());
 
-    let report = scan_plugins(&repo, &vault);
+    let report = scan_plugins(&repo, &vault, RepoSource::Flag);
     let info = report.plugins[0]
         .deployment
         .as_ref()
@@ -1630,6 +1742,7 @@ fn options(repo: &Path, vault: &Path) -> (SyncOptions, TestEnvGuard) {
     (
         SyncOptions {
             repo: repo.to_path_buf(),
+            repo_source: RepoSource::Flag,
             bob_dir: vault.to_path_buf(),
             backup_run_dir: vault
                 .parent()
@@ -1728,6 +1841,19 @@ fn git_head_sha(repo: &Path, rev: &str) -> String {
         .output()
         .unwrap_or_else(|error| panic!("git rev-parse {rev}: {error}"));
     assert!(output.status.success(), "git rev-parse {rev} failed");
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+fn git_branch(repo: &Path) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .arg("rev-parse")
+        .arg("--abbrev-ref")
+        .arg("HEAD")
+        .output()
+        .expect("git rev-parse HEAD");
+    assert!(output.status.success(), "git rev-parse HEAD failed");
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 

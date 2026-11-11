@@ -17,6 +17,7 @@ pub(super) const MANAGED_FILES: &[&str] =
 #[derive(Debug)]
 pub(super) struct SyncOptions {
     pub(super) repo: PathBuf,
+    pub(super) repo_source: RepoSource,
     pub(super) bob_dir: PathBuf,
     pub(super) backup_run_dir: PathBuf,
     pub(super) only: Option<String>,
@@ -24,9 +25,24 @@ pub(super) struct SyncOptions {
     pub(super) force: bool,
 }
 
+/// Where the plugins repo root came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum RepoSource {
+    /// Explicit `-r/--repo` flag.
+    Flag,
+    /// Enclosing bob-plugins checkout containing the cwd.
+    EnclosingCheckout,
+    /// `BOB_PLUGINS_DIR` environment variable.
+    Env,
+    /// `~/projects/github/bobs-org/bob-plugins` default.
+    Default,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SyncReport {
     pub(super) repo: PathBuf,
+    pub(super) repo_source: RepoSource,
     pub(super) bob_dir: PathBuf,
     pub(super) backup_run_dir: PathBuf,
     pub(super) plugins: Vec<PluginSync>,
@@ -69,6 +85,7 @@ impl SyncReport {
             ok: true,
             dry_run,
             repo: self.repo.display().to_string(),
+            repo_source: self.repo_source,
             bob_dir: self.bob_dir.display().to_string(),
             copied: self.copied(),
             skipped: self.skipped(),
@@ -107,6 +124,7 @@ pub(super) struct SyncResult {
     pub(super) ok: bool,
     pub(super) dry_run: bool,
     pub(super) repo: String,
+    pub(super) repo_source: RepoSource,
     pub(super) bob_dir: String,
     pub(super) copied: usize,
     pub(super) skipped: usize,
@@ -219,6 +237,7 @@ impl FileAction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PluginsReport {
     pub(super) repo: PathBuf,
+    pub(super) repo_source: RepoSource,
     pub(super) bob_dir: PathBuf,
     pub(super) plugins: Vec<PluginEntry>,
     pub(super) issues: Vec<String>,
@@ -242,6 +261,7 @@ impl PluginsReport {
         PluginsResult {
             ok: true,
             repo: self.repo.display().to_string(),
+            repo_source: self.repo_source,
             bob_dir: self.bob_dir.display().to_string(),
             count: self.plugins.len(),
             synced: counts.synced,
@@ -267,6 +287,7 @@ pub(super) struct StateCounts {
 pub(super) struct PluginsResult {
     pub(super) ok: bool,
     pub(super) repo: String,
+    pub(super) repo_source: RepoSource,
     pub(super) bob_dir: String,
     pub(super) count: usize,
     pub(super) synced: usize,
