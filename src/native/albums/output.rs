@@ -168,7 +168,7 @@ pub(crate) fn split_icon(label: &str) -> (Option<&str>, &str) {
     }
 }
 
-fn lowercase_rest(rest: &str) -> String {
+pub(crate) fn lowercase_rest(rest: &str) -> String {
     if rest
         .as_bytes()
         .get(0..2)

@@ -402,9 +402,10 @@ Contract: [Notebooks](../notebooks.md).
 An album is a vault-root Markdown file with `type: "[[album]]"`. Its stem is
 the record folder and route. Canonical records use `type: "[[record]]"`;
 `record.noun` names the kind and legacy type spelling. `record.fields` is
-optional. `index_by` and `index_facets` shape grouping peeks and facets.
-`bob albums list` and `bob albums check` report albums, groups, freshness,
-and findings. A broken album fails only its own route. `bob albums create`
+optional. `index_by` and `index_facets` shape grouping peeks, subgroup
+headings, and row facets. Each album owns a `[!records]` index; `list` and
+`check` report `index.state` (`current`, `missing`, `stale`, `damaged`)
+without writing. A broken album fails only its own route. `bob albums create`
 ships in a later phase.
 
 Contract: [Albums and record notes](../records.md).

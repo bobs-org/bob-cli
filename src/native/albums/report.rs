@@ -3,21 +3,17 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use chrono::NaiveDate;
 use serde_json::{json, Value};
 
 use super::{
-    grouping::{group_records, GroupingRecord, RecordGroup, RecordGrouping},
+    grouping::{group_records, GroupingRecord, RecordGroup},
+    index::{self, IndexState},
     registry::{AlbumEntry, AlbumRegistry, DiscoveryHealth},
-    AlbumFinding, AlbumIssueSeverity,
+    AlbumDeclaration, AlbumFinding, AlbumIssueSeverity,
 };
-use crate::native::{
-    highlights_ref::humanize_stem,
-    records::{
-        catalog::IndexedRecord,
-        schema::{RecordDiagnosticCode, RecordField},
-        IndexedFieldValue, RecordCatalog,
-    },
+use crate::native::records::{
+    schema::{RecordDiagnosticCode, RecordField},
+    RecordCatalog,
 };
 
 const SCHEMA_VERSION: u32 = 1;
@@ -128,6 +124,7 @@ pub(crate) struct AlbumReportEntry {
     pub(crate) groups: Vec<RecordGroup>,
     pub(crate) needs_status: usize,
     pub(crate) last_record: Option<String>,
+    pub(crate) index: IndexState,
     pub(crate) issues: Vec<AlbumIssue>,
 }
 
@@ -160,6 +157,7 @@ impl AlbumReportEntry {
             })).collect::<Vec<_>>(),
             "needs_status": self.needs_status,
             "last_record": self.last_record,
+            "index": { "state": self.index.as_str() },
             "issues": self.issues.iter().map(AlbumIssue::to_json).collect::<Vec<_>>(),
         })
     }
@@ -306,31 +304,35 @@ fn project_album(
             }
         }
     }
-    let members: Vec<GroupingRecord> =
-        folder.notes().iter().map(grouping_record).collect();
-    let grouping = if let Some(record_type) = record_type {
-        group_records(
-            &record_type.fields,
-            declaration.index_by.as_deref(),
-            &declaration.index_facets,
-            &members,
-        )
-    } else {
-        RecordGrouping {
-            group_field: None,
-            groups: Vec::new(),
-            needs_status: 0,
-            last_record: members
-                .iter()
-                .filter_map(|record| record.created)
-                .max()
-                .map(|date| date.format("%Y-%m-%d").to_string()),
-            index_facets: declaration.index_facets.clone(),
-        }
-    };
+    let members: Vec<GroupingRecord> = folder
+        .notes()
+        .iter()
+        .map(GroupingRecord::from_indexed)
+        .collect();
+    let schema_fields: &[RecordField] = record_type
+        .map(|record_type| record_type.fields.as_slice())
+        .unwrap_or(&[]);
+    let grouping = group_records(
+        schema_fields,
+        declaration.index_by.as_deref(),
+        &declaration.index_facets,
+        &members,
+    );
+    let plan = index::plan_index(
+        &declaration.path,
+        entry.contents.as_deref(),
+        &declaration.stem,
+        &resolved_plural(declaration),
+        schema_fields,
+        &grouping,
+        declaration.index_by.as_deref(),
+        members.len(),
+        folder.diagnostics().is_empty(),
+    );
     let mut issues: Vec<AlbumIssue> = entry
         .findings
         .iter()
+        .chain(plan.findings.iter())
         .map(AlbumIssue::from_finding)
         .collect();
     issues.sort_by(|left, right| {
@@ -363,37 +365,24 @@ fn project_album(
             groups: grouping.groups,
             needs_status: grouping.needs_status,
             last_record: grouping.last_record,
+            index: plan.state,
             issues,
         },
         io_errors,
     )
 }
 
-fn grouping_record(note: &IndexedRecord) -> GroupingRecord {
-    let title = note
-        .title
+fn resolved_plural(declaration: &AlbumDeclaration) -> String {
+    declaration
+        .plural
         .clone()
-        .filter(|title| !title.trim().is_empty())
-        .unwrap_or_else(|| humanize_stem(&note.stem));
-    GroupingRecord {
-        path: note.relative_path.to_string_lossy().replace('\\', "/"),
-        title,
-        created: created_date(note),
-        fields: note
-            .fields
-            .iter()
-            .map(|field| (field.key.clone(), field.value.clone()))
-            .collect(),
-    }
-}
-
-fn created_date(note: &IndexedRecord) -> Option<NaiveDate> {
-    let field = note.fields.iter().find(|field| field.key == "created")?;
-    let IndexedFieldValue::Scalar(text) = &field.value else {
-        return None;
-    };
-    let date = text.get(..10)?;
-    NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()
+        .or_else(|| {
+            declaration
+                .noun_claim
+                .as_deref()
+                .map(|noun| format!("{noun}s"))
+        })
+        .unwrap_or_else(|| "records".to_owned())
 }
 
 fn stem_of_parent(path: Option<&Path>) -> Option<String> {

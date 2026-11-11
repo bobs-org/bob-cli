@@ -1,13 +1,16 @@
-//! Pure record grouping for album reports and the later album index.
+//! Pure record grouping for album reports and the records index.
 //!
 //! The helper reads already-indexed folder members plus the album schema.
-//! It never writes Markdown, dates, or vault files.
+//! It never writes Markdown, dates, or vault files. Report peeks and
+//! rendered rows share the same member order.
 
 use chrono::NaiveDate;
 
 use crate::native::{
     capture_block_ids::wikilink_phrase,
+    highlights_ref::humanize_stem,
     records::{
+        catalog::IndexedRecord,
         schema::{
             validate_field_values, FieldKind, RecordField, RecordScalar,
             RecordValue,
@@ -20,16 +23,43 @@ use crate::native::{
 /// when that field yields at least two distinct values.
 pub(crate) const LARGE_GROUP: usize = 12;
 
+/// Display heading for records missing the `index_by` value.
+pub(crate) const MISSING_SUBGROUP: &str = "\u{2014}";
+
 const PEEK: usize = 3;
 const FACET_CAP: usize = 3;
+const NEEDS_STATUS_LABEL: &str = "⚠️ Needs a status";
 
 /// One already-indexed record folder member.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GroupingRecord {
     pub(crate) path: String,
+    pub(crate) stem: String,
     pub(crate) title: String,
     pub(crate) created: Option<NaiveDate>,
     pub(crate) fields: Vec<(String, IndexedFieldValue)>,
+}
+
+impl GroupingRecord {
+    /// Project a catalog member into the shared grouping record.
+    pub(crate) fn from_indexed(note: &IndexedRecord) -> Self {
+        let title = note
+            .title
+            .clone()
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or_else(|| humanize_stem(&note.stem));
+        Self {
+            path: note.relative_path.to_string_lossy().replace('\\', "/"),
+            stem: note.stem.clone(),
+            title,
+            created: created_date(note),
+            fields: note
+                .fields
+                .iter()
+                .map(|field| (field.key.clone(), field.value.clone()))
+                .collect(),
+        }
+    }
 }
 
 /// Grouping projection shared by `bob albums` reports and album-index.
@@ -37,9 +67,13 @@ pub(crate) struct GroupingRecord {
 pub(crate) struct RecordGrouping {
     pub(crate) group_field: Option<String>,
     pub(crate) groups: Vec<RecordGroup>,
+    pub(crate) needs: Option<RecordGroup>,
     pub(crate) needs_status: usize,
+    /// Title-then-path order when the album has no choice groups.
+    pub(crate) ungrouped: Vec<GroupingRecord>,
     pub(crate) last_record: Option<String>,
     pub(crate) index_facets: Vec<String>,
+    pub(crate) explicit_facets: bool,
 }
 
 /// One nonempty choice group in declaration order.
@@ -49,6 +83,18 @@ pub(crate) struct RecordGroup {
     pub(crate) label: String,
     pub(crate) count: usize,
     pub(crate) peek: Vec<String>,
+    /// Nonempty only when this group actually renders `index_by` headings.
+    pub(crate) subgroups: Vec<RecordSubgroup>,
+    /// Members in render order: subgroup order, else title then path.
+    pub(crate) members: Vec<GroupingRecord>,
+}
+
+/// One `index_by` subgroup inside a large choice group.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RecordSubgroup {
+    pub(crate) display: String,
+    pub(crate) missing: bool,
+    pub(crate) members: Vec<GroupingRecord>,
 }
 
 /// Project counts, groups, peeks, facets, and freshness from schema
@@ -65,13 +111,19 @@ pub(crate) fn group_records(
         .filter_map(|record| record.created)
         .max()
         .map(|date| date.format("%Y-%m-%d").to_string());
+    let explicit = !explicit_facets.is_empty();
     let Some(group_field) = group_field(fields) else {
+        let mut ungrouped = records.to_vec();
+        ungrouped.sort_by(title_order);
         return RecordGrouping {
             group_field: None,
             groups: Vec::new(),
+            needs: None,
             needs_status: 0,
+            ungrouped,
             last_record,
-            index_facets: facets(fields, None, index_by, explicit_facets),
+            index_facets: facets(fields, None, explicit_facets),
+            explicit_facets: explicit,
         };
     };
 
@@ -101,26 +153,38 @@ pub(crate) fn group_records(
         if members.is_empty() {
             continue;
         }
-        let peek = peek_titles(&members, index_by);
-        groups.push(RecordGroup {
-            value: choice.value.clone(),
-            label: choice.label.clone(),
-            count: members.len(),
-            peek,
-        });
+        groups.push(finish_group(
+            choice.value.clone(),
+            choice.label.clone(),
+            &members,
+            index_by,
+        ));
     }
+    let needs_status = needs.len();
+    let needs = if needs.is_empty() {
+        None
+    } else {
+        Some(finish_group(
+            String::new(),
+            NEEDS_STATUS_LABEL.to_owned(),
+            &needs,
+            index_by,
+        ))
+    };
 
     RecordGrouping {
         group_field: Some(group_field.key.clone()),
         groups,
-        needs_status: needs.len(),
+        needs,
+        needs_status,
+        ungrouped: Vec::new(),
         last_record,
         index_facets: facets(
             fields,
             Some(group_field.key.as_str()),
-            index_by,
             explicit_facets,
         ),
+        explicit_facets: explicit,
     }
 }
 
@@ -140,16 +204,12 @@ fn group_field(fields: &[RecordField]) -> Option<&RecordField> {
 fn facets(
     fields: &[RecordField],
     group_key: Option<&str>,
-    index_by: Option<&str>,
     explicit: &[String],
 ) -> Vec<String> {
     if !explicit.is_empty() {
         return explicit.to_vec();
     }
-    let excluded = |key: &str| {
-        group_key.is_some_and(|group| group == key)
-            || index_by.is_some_and(|by| by == key)
-    };
+    let excluded = |key: &str| group_key.is_some_and(|group| group == key);
     let mut selected = Vec::new();
     for field in fields {
         if matches!(field.kind, FieldKind::Choices(_))
@@ -213,33 +273,132 @@ fn group_value(field: &RecordField, record: &GroupingRecord) -> Option<String> {
     }
 }
 
-fn peek_titles(
+fn finish_group(
+    value: String,
+    label: String,
     members: &[&GroupingRecord],
     index_by: Option<&str>,
-) -> Vec<String> {
-    let mut ordered = members.to_vec();
-    if let Some(field) = index_by
-        && members.len() > LARGE_GROUP
-        && distinct_index_values(members, field) >= 2
-    {
-        ordered.sort_by(|left, right| {
-            match (index_sort_key(left, field), index_sort_key(right, field)) {
-                (None, None) => title_order(left, right),
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (Some(left_key), Some(right_key)) => left_key
-                    .cmp(&right_key)
-                    .then_with(|| title_order(left, right)),
-            }
-        });
+) -> RecordGroup {
+    let (subgroups, ordered) = if uses_subgroups(members, index_by) {
+        let subgroups = build_subgroups(members, index_by.unwrap());
+        let ordered = subgroups
+            .iter()
+            .flat_map(|subgroup| subgroup.members.iter().cloned())
+            .collect::<Vec<_>>();
+        (subgroups, ordered)
     } else {
-        ordered.sort_by(|left, right| title_order(left, right));
-    }
-    ordered
-        .into_iter()
+        let mut ordered = members.iter().copied().cloned().collect::<Vec<_>>();
+        ordered.sort_by(title_order);
+        (Vec::new(), ordered)
+    };
+    let peek = ordered
+        .iter()
         .take(PEEK)
         .map(|record| record.title.clone())
-        .collect()
+        .collect();
+    RecordGroup {
+        value,
+        label,
+        count: ordered.len(),
+        peek,
+        subgroups,
+        members: ordered,
+    }
+}
+
+fn uses_subgroups(members: &[&GroupingRecord], index_by: Option<&str>) -> bool {
+    index_by.is_some_and(|field| {
+        members.len() > LARGE_GROUP
+            && distinct_index_values(members, field) >= 2
+    })
+}
+
+fn build_subgroups(
+    members: &[&GroupingRecord],
+    field: &str,
+) -> Vec<RecordSubgroup> {
+    let mut present: Vec<(String, Vec<GroupingRecord>)> = Vec::new();
+    let mut missing = Vec::new();
+    for record in members {
+        match field_text(record, field) {
+            None => missing.push((*record).clone()),
+            Some(raw) => {
+                let fold = fold_display(&raw);
+                if let Some((_, bucket)) =
+                    present.iter_mut().find(|(key, _)| key == &fold)
+                {
+                    bucket.push((*record).clone());
+                } else {
+                    present.push((fold, vec![(*record).clone()]));
+                }
+            }
+        }
+    }
+    let mut subgroups = present
+        .into_iter()
+        .map(|(_, mut bucket)| {
+            let raws = bucket
+                .iter()
+                .filter_map(|record| field_text(record, field))
+                .collect::<Vec<_>>();
+            let display = representative_display(&raws);
+            bucket.sort_by(title_order);
+            RecordSubgroup {
+                display,
+                missing: false,
+                members: bucket,
+            }
+        })
+        .collect::<Vec<_>>();
+    subgroups.sort_by(|left, right| {
+        left.display
+            .to_lowercase()
+            .cmp(&right.display.to_lowercase())
+            .then_with(|| left.display.cmp(&right.display))
+    });
+    if !missing.is_empty() {
+        missing.sort_by(title_order);
+        subgroups.push(RecordSubgroup {
+            display: MISSING_SUBGROUP.to_owned(),
+            missing: true,
+            members: missing,
+        });
+    }
+    subgroups
+}
+
+fn representative_display(raws: &[String]) -> String {
+    #[derive(Default)]
+    struct Stat {
+        count: usize,
+        plain: bool,
+    }
+    let mut stats = std::collections::BTreeMap::<String, Stat>::new();
+    for raw in raws {
+        let display = display_value(raw);
+        let entry = stats.entry(display).or_default();
+        entry.count += 1;
+        if !is_wikilink(raw.trim()) {
+            entry.plain = true;
+        }
+    }
+    stats
+        .into_iter()
+        .max_by(|(left_display, left), (right_display, right)| {
+            left.count
+                .cmp(&right.count)
+                .then_with(|| left.plain.cmp(&right.plain))
+                .then_with(|| right_display.cmp(left_display))
+        })
+        .map(|(display, _)| display)
+        .unwrap_or_else(|| MISSING_SUBGROUP.to_owned())
+}
+
+fn is_wikilink(value: &str) -> bool {
+    value
+        .strip_prefix("[[")
+        .and_then(|rest| rest.strip_suffix("]]"))
+        .is_some_and(|inner| !inner.contains("[["))
 }
 
 fn title_order(
@@ -260,10 +419,6 @@ fn distinct_index_values(members: &[&GroupingRecord], field: &str) -> usize {
     folds.sort();
     folds.dedup();
     folds.len()
-}
-
-fn index_sort_key(record: &GroupingRecord, field: &str) -> Option<String> {
-    Some(display_value(&field_text(record, field)?).to_lowercase())
 }
 
 fn field_text(record: &GroupingRecord, key: &str) -> Option<String> {
@@ -287,7 +442,7 @@ fn fold_display(value: &str) -> String {
     display_value(value).to_lowercase()
 }
 
-fn display_value(value: &str) -> String {
+pub(crate) fn display_value(value: &str) -> String {
     let trimmed = value.trim();
     if let Some(inner) = trimmed
         .strip_prefix("[[")
@@ -297,6 +452,15 @@ fn display_value(value: &str) -> String {
         return wikilink_phrase(inner);
     }
     trimmed.to_owned()
+}
+
+fn created_date(note: &IndexedRecord) -> Option<NaiveDate> {
+    let field = note.fields.iter().find(|field| field.key == "created")?;
+    let IndexedFieldValue::Scalar(text) = &field.value else {
+        return None;
+    };
+    let date = text.get(..10)?;
+    NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()
 }
 
 #[cfg(test)]
@@ -346,8 +510,14 @@ mod tests {
         created: Option<&str>,
         fields: &[(&str, IndexedFieldValue)],
     ) -> GroupingRecord {
+        let stem = std::path::Path::new(path)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or(path)
+            .to_owned();
         GroupingRecord {
             path: path.to_owned(),
+            stem,
             title: title.to_owned(),
             created: created.and_then(|raw| {
                 NaiveDate::parse_from_str(raw, "%Y-%m-%d").ok()
@@ -475,7 +645,7 @@ mod tests {
     }
 
     #[test]
-    fn default_facets_skip_group_and_index_by() {
+    fn default_facets_skip_group_field_and_keep_index_by() {
         let fields = vec![
             choices("status", &[("to_try", "To try")]),
             choices("kind", &[("bar", "Bar")]),
@@ -484,7 +654,7 @@ mod tests {
             text("quiet", false),
         ];
         let grouping = group_records(&fields, Some("location"), &[], &[]);
-        assert_eq!(grouping.index_facets, ["kind", "category"]);
+        assert_eq!(grouping.index_facets, ["kind", "location", "category"]);
     }
 
     #[test]
@@ -563,9 +733,130 @@ mod tests {
         }
         let grouping = group_records(&fields, Some("location"), &[], &records);
         assert_eq!(grouping.groups[0].count, 13);
+        assert_eq!(grouping.groups[0].subgroups.len(), 2);
+        assert_eq!(grouping.groups[0].subgroups[0].display, "Clark");
+        assert_eq!(grouping.groups[0].subgroups[1].display, "Cranford");
         assert_eq!(
             grouping.groups[0].peek,
             ["Place 06", "Place 07", "Place 08"]
         );
+        let first_titles: Vec<&str> = grouping.groups[0]
+            .members
+            .iter()
+            .take(3)
+            .map(|record| record.title.as_str())
+            .collect();
+        assert_eq!(grouping.groups[0].peek, first_titles);
+    }
+
+    #[test]
+    fn twelve_members_stay_flat_even_with_two_index_values() {
+        let fields = vec![
+            choices("status", &[("to_try", "To try")]),
+            text("location", true),
+        ];
+        let mut records = Vec::new();
+        for index in 0..12 {
+            let location = if index < 6 { "Clark" } else { "Cranford" };
+            records.push(record(
+                &format!("eat/place_{index:02}.md"),
+                &format!("Place {index:02}"),
+                None,
+                &[("status", scalar("to_try")), ("location", scalar(location))],
+            ));
+        }
+        let grouping = group_records(&fields, Some("location"), &[], &records);
+        assert!(grouping.groups[0].subgroups.is_empty());
+        assert_eq!(
+            grouping.groups[0].peek,
+            ["Place 00", "Place 01", "Place 02"]
+        );
+    }
+
+    #[test]
+    fn thirteen_members_with_one_folded_value_stay_flat() {
+        let fields = vec![
+            choices("status", &[("to_try", "To try")]),
+            text("location", true),
+        ];
+        let mut records = Vec::new();
+        for index in 0..13 {
+            let location = if index % 2 == 0 {
+                "Clark"
+            } else {
+                "[[x|clark]]"
+            };
+            records.push(record(
+                &format!("eat/place_{index:02}.md"),
+                &format!("Place {index:02}"),
+                None,
+                &[("status", scalar("to_try")), ("location", scalar(location))],
+            ));
+        }
+        let grouping = group_records(&fields, Some("location"), &[], &records);
+        assert!(grouping.groups[0].subgroups.is_empty());
+        assert_eq!(
+            grouping.groups[0].peek,
+            ["Place 00", "Place 01", "Place 02"]
+        );
+    }
+
+    #[test]
+    fn subgroup_heading_prefers_plain_text_on_a_frequency_tie() {
+        let fields = vec![
+            choices("status", &[("to_try", "To try")]),
+            text("location", true),
+        ];
+        let mut records = Vec::new();
+        for index in 0..13 {
+            let location = if index < 4 {
+                "Cranford"
+            } else if index < 8 {
+                "[[towns#x|Cranford]]"
+            } else {
+                "Clark"
+            };
+            records.push(record(
+                &format!("eat/place_{index:02}.md"),
+                &format!("Place {index:02}"),
+                None,
+                &[("status", scalar("to_try")), ("location", scalar(location))],
+            ));
+        }
+        let grouping = group_records(&fields, Some("location"), &[], &records);
+        let cranford = grouping.groups[0]
+            .subgroups
+            .iter()
+            .find(|subgroup| subgroup.display == "Cranford")
+            .expect("cranford subgroup");
+        assert_eq!(cranford.members.len(), 8);
+    }
+
+    #[test]
+    fn missing_index_by_values_sort_last_under_an_em_dash() {
+        let fields = vec![
+            choices("status", &[("to_try", "To try")]),
+            text("location", true),
+        ];
+        let mut records = Vec::new();
+        for index in 0..13 {
+            let mut values = vec![("status", scalar("to_try"))];
+            if index < 7 {
+                values.push(("location", scalar("Clark")));
+            }
+            records.push(record(
+                &format!("eat/place_{index:02}.md"),
+                &format!("Place {index:02}"),
+                None,
+                &values,
+            ));
+        }
+        let grouping = group_records(&fields, Some("location"), &[], &records);
+        let subgroups = &grouping.groups[0].subgroups;
+        assert_eq!(subgroups.len(), 2);
+        assert_eq!(subgroups[0].display, "Clark");
+        assert!(subgroups[1].missing);
+        assert_eq!(subgroups[1].display, MISSING_SUBGROUP);
+        assert_eq!(subgroups[1].members[0].title, "Place 07");
     }
 }

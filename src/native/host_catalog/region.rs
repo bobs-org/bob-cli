@@ -28,7 +28,6 @@ pub(crate) enum Placement<'a> {
     AfterSectionThenTasks(&'a str),
     /// Immediately before the first real `##` heading after the frontmatter,
     /// else at EOF.
-    #[cfg_attr(not(test), allow(dead_code))]
     BeforeFirstH2,
 }
 
@@ -442,7 +441,6 @@ fn atx_heading(content: &str) -> Option<(usize, &str)> {
 }
 
 /// Canonical `> [!{callout}]` head, with the spec's title when present.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn canonical_head(spec: &RegionSpec<'_>) -> String {
     match spec.head_title {
         Some(title) if !title.is_empty() => {
@@ -454,7 +452,6 @@ pub(crate) fn canonical_head(spec: &RegionSpec<'_>) -> String {
 
 /// Head line plus `rows` (each already a callout body line, including a
 /// leading `>`).
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn canonical_callout(
     spec: &RegionSpec<'_>,
     rows: &[String],

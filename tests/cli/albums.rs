@@ -228,10 +228,14 @@ fn albums_list_and_check_json_shape() {
     assert_eq!(eat["root"], "body");
     assert_eq!(eat["group_field"], "status");
     assert_eq!(eat["index_by"], "location");
-    assert_eq!(eat["index_facets"], serde_json::json!(["category"]));
+    assert_eq!(
+        eat["index_facets"],
+        serde_json::json!(["category", "location"])
+    );
     assert_eq!(eat["records"], 4);
     assert_eq!(eat["needs_status"], 1);
     assert_eq!(eat["last_record"], "2026-11-08");
+    assert_eq!(eat["index"]["state"], "missing");
     let groups = eat["groups"].as_array().unwrap();
     assert_eq!(groups.len(), 2);
     assert_eq!(groups[0]["value"], "to_try");
@@ -247,7 +251,7 @@ fn albums_list_and_check_json_shape() {
     assert_eq!(payload["counts"]["records"], 4);
     assert_eq!(payload["counts"]["roots"], 2);
     assert_eq!(payload["counts"]["errors"], 0);
-    assert_eq!(payload["counts"]["warnings"], 0);
+    assert_eq!(payload["counts"]["warnings"], 4);
 
     let output = albums_command(&vault)
         .arg("check")
@@ -261,6 +265,7 @@ fn albums_list_and_check_json_shape() {
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["schema_version"], 1);
     assert_eq!(payload["counts"]["errors"], 0);
+    assert_eq!(payload["counts"]["warnings"], 4);
 }
 
 #[test]
@@ -293,6 +298,7 @@ fn albums_human_list_groups_by_root_and_shows_freshness() {
     assert!(text.contains("💚 1"), "text:\n{text}");
     assert!(text.contains("⚠️ 1"), "text:\n{text}");
     assert!(text.contains("2d"), "freshness uses BOB_NOW:\n{text}");
+    assert!(text.contains("~1"), "missing index warns:\n{text}");
     assert!(!text.contains("No albums."), "text:\n{text}");
 }
 
@@ -586,6 +592,7 @@ fn albums_broken_album_members_still_count() {
     let broken = album_by_stem(&payload, "broken");
     assert_eq!(broken["records"], 2);
     assert_eq!(broken["root"], "body");
+    assert_eq!(broken["index"]["state"], "missing");
     assert!(broken["issues"]
         .as_array()
         .unwrap()
@@ -667,7 +674,14 @@ fn albums_schema_suggestion_and_healthy_neighbour_are_isolated() {
         serde_json::from_str(stdout(&json).trim()).expect("parse");
     assert_eq!(payload["ok"], false);
     let eat = album_by_stem(&payload, "eat");
-    assert!(eat["issues"].as_array().unwrap().is_empty());
+    assert!(
+        eat["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|issue| issue["code"] == "album_index_stale"),
+        "healthy neighbour keeps only index warnings:\n{eat}"
+    );
     let typo = album_by_stem(&payload, "typo");
     let issue = typo["issues"]
         .as_array()
@@ -848,6 +862,143 @@ fn albums_completion_offers_members_and_roots() {
         .collect();
     assert!(names.contains(&"body"), "roots: {names:?}\n{roots_out}");
     assert!(names.contains(&"mind"), "roots: {names:?}\n{roots_out}");
+}
+
+fn eat_records_index() -> &'static str {
+    "\
+## Records
+
+> [!records] 4 restaurants · 🔖 2 to try · 💚 1 liked · ⚠️ 1 need a status
+>
+> - **🔖 To try** · 2
+>   - [[eat/ani_ramen_house|Ani Ramen House]] — Ramen · Clark
+>   - [[eat/bubble_tea|Bubble Tea]] — Ramen · Cranford
+> - **💚 Liked** · 1
+>   - [[eat/cafe|Cafe]] — Ramen · Clark
+> - **⚠️ Needs a status** · 1
+>   - [[eat/unknown|Unknown]] — Ramen · Clark
+"
+}
+
+fn write_eat_with_index(vault: &Path, index: &str) {
+    four_valid_albums(vault);
+    let mut contents = album(
+        "body",
+        "Eat",
+        "Places to eat.",
+        "restaurant",
+        "emoji: 🍽️\nindex_by: location\n",
+        restaurant_fields(),
+    );
+    contents.push('\n');
+    contents.push_str(index);
+    write_note(vault, "eat.md", &contents);
+}
+
+#[test]
+fn albums_index_states_cover_current_missing_stale_and_damaged() {
+    let (_temp, vault) = vault_fixture("albums-index-states");
+    write_eat_with_index(&vault, eat_records_index());
+    let current = albums_command(&vault)
+        .args(["list", "-f", "json"])
+        .output()
+        .expect("current json");
+    assert_eq!(
+        current.status.code(),
+        Some(0),
+        "{}",
+        format_output(&current)
+    );
+    let payload: Value =
+        serde_json::from_str(stdout(&current).trim()).expect("parse");
+    let eat = album_by_stem(&payload, "eat");
+    assert_eq!(eat["index"]["state"], "current");
+    assert!(
+        !eat["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|issue| issue["code"] == "album_index_stale"
+                || issue["code"] == "album_index_damaged"),
+        "current index is quiet:\n{eat}"
+    );
+    assert_eq!(
+        album_by_stem(&payload, "movies")["index"]["state"],
+        "missing"
+    );
+
+    write_eat_with_index(
+        &vault,
+        "## Records\n\n> [!records] hand edited\n>\n> - stale\n",
+    );
+    let stale = albums_command(&vault)
+        .args(["check", "-f", "json"])
+        .output()
+        .expect("stale json");
+    assert_eq!(stale.status.code(), Some(0), "{}", format_output(&stale));
+    let payload: Value =
+        serde_json::from_str(stdout(&stale).trim()).expect("parse");
+    assert_eq!(payload["ok"], true);
+    let eat = album_by_stem(&payload, "eat");
+    assert_eq!(eat["index"]["state"], "stale");
+    let issue = eat["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|issue| issue["code"] == "album_index_stale")
+        .expect("stale warning");
+    assert_eq!(issue["severity"], "warning");
+    assert!(issue["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|value| value == "bob albums sync"));
+
+    let human = albums_command(&vault).arg("check").output().expect("check");
+    assert_eq!(human.status.code(), Some(0), "{}", format_output(&human));
+    let text = stdout(&human);
+    assert!(text.contains("album_index_stale"), "human:\n{text}");
+    assert!(text.contains("bob albums sync"), "human:\n{text}");
+
+    fs::create_dir_all(vault.join("eat/extra.md")).expect("non-file occupant");
+    let damaged = albums_command(&vault)
+        .args(["check", "-f", "json"])
+        .output()
+        .expect("damaged json");
+    assert_eq!(
+        damaged.status.code(),
+        Some(1),
+        "{}",
+        format_output(&damaged)
+    );
+    let payload: Value =
+        serde_json::from_str(stdout(&damaged).trim()).expect("parse");
+    assert_eq!(payload["ok"], false);
+    let eat = album_by_stem(&payload, "eat");
+    assert_eq!(eat["index"]["state"], "damaged");
+    assert_eq!(eat["records"], 4);
+    assert!(eat["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| issue["code"] == "album_index_damaged"));
+}
+
+#[test]
+fn albums_index_warning_only_check_exits_zero() {
+    let (_temp, vault) = vault_fixture("albums-index-warning");
+    four_valid_albums(&vault);
+    let output = albums_command(&vault).arg("check").output().expect("check");
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let json = albums_command(&vault)
+        .args(["check", "-f", "json"])
+        .output()
+        .expect("check json");
+    let payload: Value =
+        serde_json::from_str(stdout(&json).trim()).expect("parse");
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["counts"]["errors"], 0);
+    assert!(payload["counts"]["warnings"].as_u64().unwrap() >= 4);
 }
 
 fn init_vault_git(vault: &Path) {

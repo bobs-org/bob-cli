@@ -68,11 +68,28 @@ record:
   field, otherwise none. Empty groups are omitted. Missing, unknown, or
   list-mismatched values count as `needs_status`.
 - **`index_by`:** a declared field name. Groups larger than 12 with at least
-  two distinct values peek by that field's display (wikilink phrase, then
-  title), otherwise by title then path. Peeks are the first three titles.
+  two distinct normalized values render `index_by` subgroup headings (and
+  peeks follow that order). Values fold by case and wikilink display text.
+  The heading is the most frequent displayed spelling, preferring a
+  plain-text spelling on ties. Missing values sort last under `**—**`.
+  Smaller groups stay flat. Peeks are the first three rendered titles.
 - **`index_facets`:** an explicit list of at most three field names, or the
   default of other choice fields then `suggest` fields, excluding the group
-  field and `index_by`, capped at three.
+  field, capped at three. Flat rows keep `index_by` as a facet; subgrouped
+  rows omit that repeated field unless `index_facets` is explicit. Choices
+  show labels, links show display text, lists join with `, `, numbers stay
+  plain, and empty values disappear.
+- **Records index:** a bob-owned `[!records]` callout whose title is the
+  tally (`N <plural>` plus nonzero group counts, then `⚠️ k need a status`).
+  Rows are `[[<album>/<stem>|<title>]]`; alias text drops `|[]#^`, then
+  alias and facets escape active Markdown.
+  Empty albums keep a teaching index (`No restaurants yet` / `Name @eat/`).
+  First write inserts `## Records` before the first real H2 (or at EOF);
+  later writes patch only the callout. `list` and `check` report
+  `index.state` as `current`, `missing`, `stale`, or `damaged` and never
+  write. Missing and stale indexes warn `album_index_stale` with
+  `bob albums sync`; region damage or incomplete inputs error
+  `album_index_damaged` and leave the authored region intact.
 - **`last_record`:** the latest valid `created` date (`YYYY-MM-DD`) among
   folder members, or null. A missing folder is an empty album. Immediate
   Markdown members still count when the schema is broken.

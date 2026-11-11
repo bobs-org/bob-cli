@@ -167,7 +167,7 @@ sets `one_off: true`.
 | `bob albums list` | `-f json` | Albums, groups, counts, issues | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
 | `bob albums check` | `-f json` | Same report as list | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
 
-Each album carries `stem`, `path`, `title`, `emoji`, `summary`, `noun`, `label`, `plural`, `parent` (stem), `parent_kind`, `owner`, `root`, `breadcrumb`, `fields[]`, `group_field`, `index_by`, `index_facets`, `records`, `groups[]`, `needs_status`, `last_record`, and `issues[]` (`code`, `severity`, `path`, `line`, `key_path`, `message`, `suggestions`). `counts`: `albums`, `records`, `roots`, `errors`, `warnings`. Path order. `ok` is false on error findings or I/O (stderr, exit 1).
+Each album carries `stem`, `path`, `title`, `emoji`, `summary`, `noun`, `label`, `plural`, `parent` (stem), `parent_kind`, `owner`, `root`, `breadcrumb`, `fields[]`, `group_field`, `index_by`, `index_facets`, `records`, `groups[]`, `needs_status`, `last_record`, `index.state` (`current`/`missing`/`stale`/`damaged`), and `issues[]` (`code`, `severity`, `path`, `line`, `key_path`, `message`, `suggestions`). `counts`: `albums`, `records`, `roots`, `errors`, `warnings`. Path order. `ok` is false on error findings or I/O (stderr, exit 1).
 
 ### Notebook reports {#notebook-reports}
 

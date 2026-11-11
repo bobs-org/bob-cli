@@ -70,6 +70,8 @@ pub(crate) struct AlbumEntry {
     pub(crate) breadcrumb: Vec<String>,
     pub(crate) findings: Vec<AlbumFinding>,
     pub(crate) usable_type: Option<SourcedRecordType>,
+    /// Original album bytes from discovery, used to plan the records region.
+    pub(crate) contents: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -215,6 +217,7 @@ impl AlbumRegistry {
                 breadcrumb,
                 findings,
                 usable_type: None,
+                contents: file.and_then(|file| file.contents.clone()),
             });
         }
 

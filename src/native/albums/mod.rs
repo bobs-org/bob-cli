@@ -2,6 +2,7 @@
 
 pub(crate) mod cli;
 pub(crate) mod grouping;
+pub(crate) mod index;
 pub(crate) mod output;
 pub(crate) mod registry;
 pub(crate) mod report;

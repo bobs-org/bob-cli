@@ -1,10 +1,11 @@
 //! Disk loading and in-memory overlays for the notebook scanner.
 //!
 //! One sorted discovery pass indexes every included note, reads its
-//! frontmatter facts, and retains original bytes for notebooks, areas, and
-//! projects (the only notes catalogs read or rewrite). Analysis then runs on
-//! the snapshot alone, so a caller can overlay staged files (a new notebook,
-//! a changed host) and plan catalogs without touching the filesystem.
+//! frontmatter facts, and retains original bytes for notebooks, areas, albums,
+//! and projects (the notes catalogs and records indexes read or rewrite).
+//! Analysis then runs on the snapshot alone, so a caller can overlay staged
+//! files (a new notebook, a changed host) and plan catalogs without touching
+//! the filesystem.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -181,7 +182,7 @@ impl VaultSnapshot {
         NoteIndex::from_paths(self.discovered.iter().cloned())
     }
 
-    /// Original bytes for a retained note (notebook, area, or project).
+    /// Original bytes for a retained note (notebook, area, album, or project).
     pub(crate) fn contents(&self, relative: &Path) -> Option<&str> {
         self.files
             .get(relative)
