@@ -61,6 +61,18 @@ pub(crate) fn check_ignore_quiet(
     }
 }
 
+/// Boolean probe: `true` when the path is ignored.
+pub(crate) fn is_ignored(
+    bob_dir: &Path,
+    child_env: &crate::native::ob::ChildEnv,
+    rel: &Path,
+) -> bool {
+    matches!(
+        check_ignore_quiet(bob_dir, child_env, rel),
+        Ok(IgnoreQuiet::Ignored)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,16 +113,4 @@ mod tests {
         .expect_err("leading colon must not be interpreted as pathspec magic");
         assert!(error.contains("cannot inspect Git ignore rules"), "{error}");
     }
-}
-
-/// Boolean probe: `true` when the path is ignored.
-pub(crate) fn is_ignored(
-    bob_dir: &Path,
-    child_env: &crate::native::ob::ChildEnv,
-    rel: &Path,
-) -> bool {
-    matches!(
-        check_ignore_quiet(bob_dir, child_env, rel),
-        Ok(IgnoreQuiet::Ignored)
-    )
 }
