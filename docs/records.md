@@ -89,7 +89,9 @@ record:
   `index.state` as `current`, `missing`, `stale`, or `damaged` and never
   write. Missing and stale indexes warn `album_index_stale` with
   `bob albums sync`; region damage or incomplete inputs error
-  `album_index_damaged` and leave the authored region intact.
+  `album_index_damaged` and leave the authored region intact. Album-backed
+  record writes rebuild this index inside their own transaction (see
+  [`bob records`](#bob-records)).
 - **`last_record`:** the latest valid `created` date (`YYYY-MM-DD`) among
   folder members, or null. A missing folder is an empty album. Immediate
   Markdown members still count when the schema is broken.
@@ -313,7 +315,8 @@ put. `capture-parse` and `bob capture --dry-run` show the same planned
 Markdown that commit writes. `Blaze @eat` stays a task and warns
 `record_collection_route`, teaching `@eat/`.
 
-`--dry-run` prints the exact bytes commit writes. A later-item failure,
+`--dry-run` prints the exact bytes commit writes, including the staged album
+index edit (`album_files` in JSON). A later-item failure,
 including an incomplete record after a task, writes nothing. Duplicate paths
 refuse with `record_exists` and never add a suffix. See
 [Capture](capture.md#record-notes) and
@@ -350,12 +353,13 @@ bob records new restaurant 'Ramen Nagi' \
 `-S/--stem STEM` supplies a filename stem for titles that normalize to an empty
 stem or need a curated name. Duplicate paths are refused. Missing required fields
 and invalid values exit 2; bob prints a ready-to-copy draft for missing fields.
-`-d/--dry-run` prints the exact planned Markdown without writing, and `-o/--open`
-opens a successfully created note in Obsidian.
+`-d/--dry-run` prints the exact planned Markdown without writing, plus the staged
+album index edit, and `-o/--open` opens a successfully created note in Obsidian.
 
 The planner applies defaults only to fields that were not supplied, validates all
 provided values, and never writes incomplete notes. A completed write goes through
-the same staged writer as capture, including its no-replace install guard.
+the same staged writer as capture, including its no-replace install guard, plus
+the album index edit with its own preimage guard.
 
 Update one record with repeated `-s/--set KEY=VALUE` fields and optional repeated
 `-n/--note TEXT` bullets. Only supplied fields change; defaults never apply to an
@@ -382,6 +386,18 @@ Usage, missing targets, and supplied-value refusals exit 2. A no-op update succe
 without rewriting the note. Human and JSON results report changed fields with
 before and effective values, notes, and warnings; warnings name `bob records check`
 and never block the update.
+
+Album-backed `new` and `update` rebuild the album's records index in the same
+guarded write. The index renders from each record's final fields, so a create
+followed by an update in one capture batch counts every postimage exactly once,
+and one album file change is staged per affected album. A current index stages
+nothing but still guards the album preimage; a no-op update still repairs a
+stale index. An album edit that landed after planning refuses the whole write
+with a stale-note error and installs nothing. Dry-run shows the planned album
+bytes alongside the record Markdown and writes nothing; JSON adds `album_index`
+(`path`, `state`, `before`, `after`) only when the index changes. Config-backed
+kinds stage no album write, and the owner and unrelated albums stay
+byte-identical.
 
 ## Adding a record type
 

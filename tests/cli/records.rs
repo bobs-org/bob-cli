@@ -1403,3 +1403,435 @@ fn records_outside_a_broken_album_are_members_not_orphans() {
         "broken album members are not orphans: {payload}"
     );
 }
+
+// record-writes: every album-backed record write keeps the index current.
+
+fn record_writes_new(
+    fixture: &RecordsFixture,
+    args: &[&str],
+) -> std::process::Output {
+    records_command(fixture)
+        .args(args)
+        .output()
+        .expect("records new")
+}
+
+#[test]
+fn record_writes_new_stages_record_and_index_together() {
+    let fixture = album_fixture();
+    let body_before =
+        fs::read_to_string(fixture.vault.join("body.md")).unwrap();
+
+    let created = record_writes_new(
+        &fixture,
+        &[
+            "new",
+            "restaurant",
+            "Ramen Nagi",
+            "-s",
+            "status=to_try",
+            "-s",
+            "category=Ramen",
+            "-s",
+            "location=Clark",
+            "-f",
+            "json",
+        ],
+    );
+    assert_success(&created);
+    let payload = json(&created);
+    assert_eq!(payload["status"], "written");
+    assert_eq!(payload["source"], "album");
+    let album_index = &payload["album_index"];
+    assert_eq!(album_index["path"], "eat.md");
+    assert_eq!(album_index["state"], "missing");
+    assert!(
+        album_index["after"]
+            .as_str()
+            .unwrap()
+            .contains("Ramen Nagi"),
+        "{payload}"
+    );
+
+    let record =
+        fs::read_to_string(fixture.vault.join("eat/ramen_nagi.md")).unwrap();
+    assert!(record.contains("title: \"Ramen Nagi\""), "{record}");
+    let album = fs::read_to_string(fixture.vault.join("eat.md")).unwrap();
+    assert!(album.contains("Ramen Nagi"), "{album}");
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("body.md")).unwrap(),
+        body_before,
+        "owner note is byte-identical"
+    );
+
+    // A stem selector with an explicit `-b` vault routes to the same
+    // album and index.
+    let vault = fixture.vault.to_str().expect("vault path").to_owned();
+    let second = record_writes_new(
+        &fixture,
+        &[
+            "new",
+            "eat",
+            "Udon",
+            "-s",
+            "status=liked",
+            "-s",
+            "category=Udon",
+            "-s",
+            "location=Main",
+            "-b",
+            &vault,
+            "-f",
+            "json",
+        ],
+    );
+    assert_success(&second);
+    let second_json = json(&second);
+    assert_eq!(second_json["album_index"]["path"], "eat.md");
+    let album = fs::read_to_string(fixture.vault.join("eat.md")).unwrap();
+    assert!(album.contains("Ramen Nagi"), "{album}");
+    assert!(album.contains("Udon"), "{album}");
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("body.md")).unwrap(),
+        body_before,
+        "owner note stays byte-identical"
+    );
+}
+
+#[test]
+fn record_writes_update_regroups_the_index() {
+    let fixture = album_fixture();
+    write_file(
+        &fixture.vault.join("eat/ninja_sushi.md"),
+        &album_record("eat", "record", "Ninja Sushi", ""),
+    );
+
+    let updated = record_writes_new(
+        &fixture,
+        &[
+            "update",
+            "restaurant",
+            "ninja_sushi",
+            "-s",
+            "status=to_try",
+            "-f",
+            "json",
+        ],
+    );
+    assert_success(&updated);
+    let payload = json(&updated);
+    assert!(
+        payload["album_index"]["after"]
+            .as_str()
+            .unwrap()
+            .contains("To try"),
+        "{payload}"
+    );
+    let album = fs::read_to_string(fixture.vault.join("eat.md")).unwrap();
+    let liked = album.find("Liked").expect("liked group");
+    let row = album.find("Ninja Sushi").expect("row");
+    assert!(liked < row, "row regrouped under Liked: {album}");
+}
+
+#[test]
+fn record_writes_notes_only_update_keeps_current_album_identical() {
+    let fixture = album_fixture();
+    assert_success(&record_writes_new(
+        &fixture,
+        &[
+            "new",
+            "restaurant",
+            "Ramen Nagi",
+            "-s",
+            "status=liked",
+            "-s",
+            "category=Ramen",
+            "-s",
+            "location=Clark",
+        ],
+    ));
+    let album_before =
+        fs::read_to_string(fixture.vault.join("eat.md")).unwrap();
+
+    let updated = record_writes_new(
+        &fixture,
+        &[
+            "update",
+            "eat",
+            "ramen_nagi",
+            "-n",
+            "Went back, still great",
+            "-f",
+            "json",
+        ],
+    );
+    assert_success(&updated);
+    let payload = json(&updated);
+    assert!(
+        payload.get("album_index").is_none(),
+        "current index contributes no write: {payload}"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("eat.md")).unwrap(),
+        album_before,
+        "notes-only update leaves a current album unchanged"
+    );
+    let record =
+        fs::read_to_string(fixture.vault.join("eat/ramen_nagi.md")).unwrap();
+    assert!(record.contains("Went back, still great"), "{record}");
+}
+
+#[test]
+fn record_writes_noop_update_repairs_a_stale_index() {
+    let fixture = album_fixture();
+    assert_success(&record_writes_new(
+        &fixture,
+        &[
+            "new",
+            "restaurant",
+            "Ramen Nagi",
+            "-s",
+            "status=liked",
+            "-s",
+            "category=Ramen",
+            "-s",
+            "location=Clark",
+        ],
+    ));
+    let record_before =
+        fs::read_to_string(fixture.vault.join("eat/ramen_nagi.md")).unwrap();
+    let album_before =
+        fs::read_to_string(fixture.vault.join("eat.md")).unwrap();
+    let stale = album_before.replace("Ramen Nagi", "WRONG");
+    assert_ne!(stale, album_before, "test edits the index");
+    write_file(&fixture.vault.join("eat.md"), &stale);
+
+    // Repeating the stored values is a record no-op that still repairs.
+    let repaired = record_writes_new(
+        &fixture,
+        &[
+            "update",
+            "restaurant",
+            "ramen_nagi",
+            "-s",
+            "status=liked",
+            "-s",
+            "category=Ramen",
+            "-s",
+            "location=Clark",
+            "-f",
+            "json",
+        ],
+    );
+    assert_success(&repaired);
+    let payload = json(&repaired);
+    assert_eq!(payload["album_index"]["state"], "stale");
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("eat/ramen_nagi.md")).unwrap(),
+        record_before,
+        "no-op update rewrites no record bytes"
+    );
+    let album = fs::read_to_string(fixture.vault.join("eat.md")).unwrap();
+    assert!(album.contains("Ramen Nagi"), "{album}");
+    assert!(!album.contains("WRONG"), "{album}");
+}
+
+#[test]
+fn record_writes_dry_run_matches_commit_without_touching_disk() {
+    let fixture = album_fixture();
+    let dry = record_writes_new(
+        &fixture,
+        &[
+            "new",
+            "restaurant",
+            "Ramen Nagi",
+            "-s",
+            "status=liked",
+            "-s",
+            "category=Ramen",
+            "-s",
+            "location=Clark",
+            "-d",
+            "-f",
+            "json",
+        ],
+    );
+    assert_success(&dry);
+    let dry_json = json(&dry);
+    assert_eq!(dry_json["status"], "planned");
+    let planned_album = dry_json["album_index"]["after"]
+        .as_str()
+        .expect("planned album bytes")
+        .to_owned();
+    assert!(
+        !fixture.vault.join("eat/ramen_nagi.md").exists(),
+        "dry-run writes no record"
+    );
+
+    let committed = record_writes_new(
+        &fixture,
+        &[
+            "new",
+            "restaurant",
+            "Ramen Nagi",
+            "-s",
+            "status=liked",
+            "-s",
+            "category=Ramen",
+            "-s",
+            "location=Clark",
+            "-f",
+            "json",
+        ],
+    );
+    assert_success(&committed);
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("eat/ramen_nagi.md")).unwrap(),
+        dry_json["markdown"].as_str().unwrap()
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("eat.md")).unwrap(),
+        planned_album,
+        "dry-run and commit share planned album bytes"
+    );
+
+    let human = record_writes_new(
+        &fixture,
+        &[
+            "new",
+            "restaurant",
+            "Second",
+            "-s",
+            "status=liked",
+            "-s",
+            "category=Ramen",
+            "-s",
+            "location=Clark",
+            "-d",
+        ],
+    );
+    assert_success(&human);
+    let text = stdout(&human);
+    assert!(text.contains("eat.md"), "{text}");
+    assert!(text.contains("Second"), "{text}");
+    assert!(
+        !fixture.vault.join("eat/second.md").exists(),
+        "human dry-run writes nothing"
+    );
+}
+
+#[test]
+fn record_writes_crlf_album_stays_crlf_and_matches_dry_run() {
+    let fixture = album_fixture();
+    let album = fs::read_to_string(fixture.vault.join("eat.md")).unwrap();
+    write_file(&fixture.vault.join("eat.md"), &album.replace('\n', "\r\n"));
+
+    let dry = record_writes_new(
+        &fixture,
+        &[
+            "new",
+            "restaurant",
+            "Ramen Nagi",
+            "-s",
+            "status=liked",
+            "-s",
+            "category=Ramen",
+            "-s",
+            "location=Clark",
+            "-d",
+            "-f",
+            "json",
+        ],
+    );
+    assert_success(&dry);
+    let planned = json(&dry)["album_index"]["after"]
+        .as_str()
+        .expect("planned album bytes")
+        .to_owned();
+    assert!(planned.contains("\r\n"), "CRLF preserved");
+
+    let committed = record_writes_new(
+        &fixture,
+        &[
+            "new",
+            "restaurant",
+            "Ramen Nagi",
+            "-s",
+            "status=liked",
+            "-s",
+            "category=Ramen",
+            "-s",
+            "location=Clark",
+            "-f",
+            "json",
+        ],
+    );
+    assert_success(&committed);
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("eat.md")).unwrap(),
+        planned
+    );
+}
+
+#[test]
+fn record_writes_incomplete_new_writes_neither_file() {
+    let fixture = album_fixture();
+    let album_before =
+        fs::read_to_string(fixture.vault.join("eat.md")).unwrap();
+
+    let incomplete = record_writes_new(
+        &fixture,
+        &[
+            "new",
+            "restaurant",
+            "Ramen Nagi",
+            "-s",
+            "status=liked",
+            "-s",
+            "category=Ramen",
+        ],
+    );
+    assert!(
+        !incomplete.status.success(),
+        "missing required field refuses"
+    );
+    assert!(
+        !fixture.vault.join("eat/ramen_nagi.md").exists(),
+        "no record file"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("eat.md")).unwrap(),
+        album_before,
+        "incomplete input stages no album edit"
+    );
+}
+
+#[test]
+fn record_writes_config_new_carries_no_album_index() {
+    let fixture = fixture();
+    write_valid_collection(&fixture);
+
+    let created = records_command(&fixture)
+        .args([
+            "new",
+            "restaurant",
+            "Ramen Nagi",
+            "-s",
+            "status=liked",
+            "-s",
+            "category=Ramen",
+            "-s",
+            "location=Clark",
+            "-f",
+            "json",
+        ])
+        .output()
+        .expect("config new");
+    assert_success(&created);
+    let payload = json(&created);
+    assert_eq!(payload["source"], "config");
+    assert!(
+        payload.get("album_index").is_none(),
+        "config kinds plan no album write: {payload}"
+    );
+}

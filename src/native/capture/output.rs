@@ -560,6 +560,10 @@ pub(super) struct CaptureResult {
     /// empty so older capture JSON stays byte-identical.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) note_files: Vec<NoteFileJson>,
+    /// Staged album records-index edits, in path order. Additive and
+    /// omitted when empty; dry-run and commit share these bytes.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) album_files: Vec<AlbumFileJson>,
 }
 
 /// One Pomodoro name agreement applied to today's daily note.
@@ -595,6 +599,7 @@ impl CaptureResult {
         inbox_route: InboxRouteReport,
         move_choice: super::move_choice::MoveChoiceReport,
         type_agreement: Vec<TypeAgreementJson>,
+        album_files: Vec<AlbumFileJson>,
     ) -> Self {
         let note_files = items
             .iter()
@@ -636,7 +641,38 @@ impl CaptureResult {
             move_choice,
             type_agreement,
             note_files,
+            album_files,
         }
+    }
+}
+
+/// Batch-level album index changes. Dry-run shows the exact planned album
+/// bytes once per album; a committed run names each updated album.
+/// Record cards stay record-oriented; this section covers the album side
+/// effect after the items that caused it.
+fn print_album_files(result: &CaptureResult) {
+    if result.album_files.is_empty() {
+        return;
+    }
+    let styler = Styler::detect();
+    if result.dry_run {
+        for album in &result.album_files {
+            println!();
+            println!(
+                "{}  {} ({})",
+                styler.dim("index"),
+                album.path,
+                album.state,
+            );
+            print!("{}", album.after);
+            if !album.after.ends_with('\n') {
+                println!();
+            }
+        }
+        return;
+    }
+    for album in &result.album_files {
+        println!("  {}  {}", styler.dim("index"), album.path);
     }
 }
 
@@ -977,6 +1013,19 @@ pub(super) struct RecordAlbumJson {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) owner: Option<String>,
     pub(super) breadcrumb: Vec<String>,
+}
+
+/// One staged album records-index edit in top-level `album_files`.
+///
+/// The album is an ordinary additional file change, never another capture
+/// item: `note_files` and item cards stay record-oriented. `before` and
+/// `after` carry the exact planned bytes so dry-run and commit agree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct AlbumFileJson {
+    pub(super) path: String,
+    pub(super) state: String,
+    pub(super) before: String,
+    pub(super) after: String,
 }
 
 /// One planned record file in top-level `note_files`.
@@ -2373,6 +2422,7 @@ pub(super) fn print_human_success(result: &CaptureResult) {
         print_inbox_route_hint(result);
         print_move_choice_report(result);
         print_type_agreement(result);
+        print_album_files(result);
         return;
     }
 
@@ -2414,6 +2464,7 @@ pub(super) fn print_human_success(result: &CaptureResult) {
     print_inbox_route_hint(result);
     print_move_choice_report(result);
     print_type_agreement(result);
+    print_album_files(result);
 }
 
 fn print_type_agreement(result: &CaptureResult) {

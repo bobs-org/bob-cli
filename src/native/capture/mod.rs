@@ -499,6 +499,7 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         batch.inbox_route,
         batch.move_choice,
         batch.type_agreement,
+        batch.album_files,
     );
     result.warnings.extend(hide_failures);
     result.warnings.extend(origin_failures);

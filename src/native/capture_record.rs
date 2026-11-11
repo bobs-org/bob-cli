@@ -12,11 +12,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use super::capture_language::{
-    candidate_collection_routes, candidate_dirs, AlbumRouteMeta,
-    DiagnosticRewrite, PerRouteDecision, RecordRoutePolicy,
-};
 use super::records::context::{RecordContext, RecordKindResolution};
+use super::{
+    albums::index::IndexState,
+    capture_language::{
+        candidate_collection_routes, candidate_dirs, AlbumRouteMeta,
+        DiagnosticRewrite, PerRouteDecision, RecordRoutePolicy,
+    },
+};
 use super::{
     capture_language::record::RecordNoteIntent,
     config,
@@ -35,6 +38,17 @@ pub(crate) struct CaptureRecordContext {
     policy: RecordRoutePolicy,
     vault_root: PathBuf,
     catalog: Option<RecordCatalog>,
+    album_edits: Vec<AlbumIndexEdit>,
+}
+
+/// One staged album records-index edit reported for batch output.
+/// Repeated items re-render the same album; the latest postimage wins.
+#[derive(Debug, Clone)]
+pub(crate) struct AlbumIndexEdit {
+    pub(crate) relative: PathBuf,
+    pub(crate) state: IndexState,
+    pub(crate) before: String,
+    pub(crate) after: String,
 }
 
 impl CaptureRecordContext {
@@ -43,6 +57,7 @@ impl CaptureRecordContext {
             policy,
             vault_root: vault_root.to_path_buf(),
             catalog: None,
+            album_edits: Vec::new(),
         }
     }
 
@@ -114,6 +129,31 @@ impl CaptureRecordContext {
     #[cfg(test)]
     pub(crate) fn catalog_files_opened(&self) -> usize {
         self.catalog.as_ref().map_or(0, RecordCatalog::files_opened)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn catalog_stats(&self) -> (Vec<String>, usize) {
+        self.catalog.as_ref().map_or((Vec::new(), 0), |catalog| {
+            (catalog.loaded_directories(), catalog.files_opened())
+        })
+    }
+
+    /// Report one staged album edit, replacing any earlier postimage for
+    /// the same album so the batch carries exactly one edit per album.
+    pub(crate) fn record_album_edit(&mut self, edit: AlbumIndexEdit) {
+        if let Some(existing) = self
+            .album_edits
+            .iter_mut()
+            .find(|existing| existing.relative == edit.relative)
+        {
+            *existing = edit;
+        } else {
+            self.album_edits.push(edit);
+        }
+    }
+
+    pub(crate) fn take_album_edits(&mut self) -> Vec<AlbumIndexEdit> {
+        std::mem::take(&mut self.album_edits)
     }
 }
 

@@ -372,7 +372,7 @@ fn project_album(
     )
 }
 
-fn resolved_plural(declaration: &AlbumDeclaration) -> String {
+pub(crate) fn resolved_plural(declaration: &AlbumDeclaration) -> String {
     declaration
         .plural
         .clone()

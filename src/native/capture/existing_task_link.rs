@@ -112,6 +112,11 @@ pub(crate) fn link_existing_task(
             catalog_walks: 0,
             #[cfg(test)]
             snapshot_read_counts: BTreeMap::new(),
+            #[cfg(test)]
+            record_folders: Vec::new(),
+            #[cfg(test)]
+            record_files_opened: 0,
+            album_files: Vec::new(),
         };
         commit_capture_batch(&mut batch, bob_dir)?;
     }

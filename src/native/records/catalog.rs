@@ -136,6 +136,14 @@ impl RecordCatalog {
         self.folders.contains_key(directory)
     }
 
+    #[cfg(test)]
+    pub(crate) fn loaded_directories(&self) -> Vec<String> {
+        let mut directories: Vec<String> =
+            self.folders.keys().cloned().collect();
+        directories.sort();
+        directories
+    }
+
     pub(crate) fn files_opened(&self) -> usize {
         self.files_opened
     }
@@ -146,6 +154,10 @@ impl RecordCatalog {
 }
 
 impl FolderIndex {
+    pub(crate) fn directory(&self) -> &str {
+        &self.directory
+    }
+
     pub(crate) fn notes(&self) -> &[IndexedRecord] {
         &self.notes
     }
@@ -644,6 +656,29 @@ fn index_file(
             };
         }
     };
+    indexed_record_from_frontmatter(relative_path, stem, frontmatter, modified)
+}
+
+/// Project one staged record postimage into the shared catalog member shape
+/// without disk I/O. The frontmatter decoder matches disk entries exactly:
+/// only bytes through the closing delimiter are parsed, and unreadable or
+/// invalid members stay visible as structural members.
+pub(crate) fn staged_record(
+    relative_path: PathBuf,
+    stem: String,
+    markdown: &str,
+) -> IndexedRecord {
+    let frontmatter = frontmatter_from_markdown(markdown);
+    indexed_record_from_frontmatter(relative_path, stem, frontmatter, None)
+}
+
+fn indexed_record_from_frontmatter(
+    relative_path: PathBuf,
+    stem: String,
+    frontmatter: Option<String>,
+    modified: Option<SystemTime>,
+) -> IndexedRecord {
+    let mut diagnostics = Vec::new();
     let Some(yaml) = frontmatter else {
         diagnostics.push(RecordDiagnostic::note(
             Some("title"),
@@ -805,6 +840,26 @@ fn read_through_frontmatter(path: &Path) -> std::io::Result<Option<String>> {
 
 fn trim_line_ending(line: &str) -> &str {
     line.trim_end_matches('\n').trim_end_matches('\r')
+}
+
+/// String twin of [`read_through_frontmatter`]: return the YAML between the
+/// first `---` line and its closing delimiter, or `None` when the note has
+/// no frontmatter block. Only bytes through the closing delimiter are
+/// ever parsed, exactly as on disk.
+fn frontmatter_from_markdown(markdown: &str) -> Option<String> {
+    let mut lines = markdown.split_inclusive('\n');
+    let first = lines.next()?;
+    if trim_line_ending(first) != "---" {
+        return None;
+    }
+    let mut yaml = String::new();
+    for line in lines {
+        if trim_line_ending(line) == "---" {
+            return Some(yaml);
+        }
+        yaml.push_str(line);
+    }
+    None
 }
 
 fn markdown_stem(filename: &str) -> Option<&str> {

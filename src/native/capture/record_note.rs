@@ -4,6 +4,7 @@
 use std::collections::HashSet;
 
 use super::*;
+use crate::native::albums::{parse_album_declaration, write as album_write};
 use crate::native::capture_language::record::RecordNoteIntent;
 use crate::native::capture_record::{
     collision_message, field_inputs_from_intent, record_note_inputs,
@@ -134,6 +135,9 @@ fn plan_record_create_item(
     };
     let target = request.bob_dir.join(&plan.path);
     planner.stage(&target, markdown.clone())?;
+    if source == "album" {
+        stage_album_index(request, planner, record_context, &record_type)?;
+    }
     let relative = plan.path.display().to_string().replace('\\', "/");
     let properties = plan
         .properties
@@ -292,6 +296,9 @@ fn plan_record_update_item(
     } else {
         let _ = planner.ensure_loaded(&absolute)?;
     }
+    if source == "album" {
+        stage_album_index(request, planner, record_context, &record_type)?;
+    }
     let relative = plan.path.display().to_string().replace('\\', "/");
     let properties = plan
         .properties
@@ -422,6 +429,97 @@ fn existing_record_warning(warning: &RecordDiagnostic) -> String {
         "existing record{field}: {}; review it with `bob records check`",
         warning.message
     )
+}
+
+/// Render the album's records index from the current batch overlay and
+/// stage the single final album edit. Repeated items re-render from the
+/// same in-memory postimages, so `into_staged_files` emits one album file
+/// change per affected album. Config-backed records keep their behavior
+/// and never touch the index path.
+fn stage_album_index(
+    request: &CaptureRequest,
+    planner: &mut CaptureBatchPlanner,
+    record_context: &mut CaptureRecordContext,
+    record_type: &RecordType,
+) -> Result<(), CaptureError> {
+    let dir = record_type.dir.as_str();
+    let album_relative = PathBuf::from(format!("{dir}.md"));
+    let album_absolute = request.bob_dir.join(&album_relative);
+    // Load through the planner so this exact preimage guards the commit
+    // and survives repeated batch stages unchanged.
+    let before = match planner.current_contents(&album_absolute)? {
+        Some(contents) => contents,
+        None => {
+            return Err(stale_album_error(
+                &album_relative,
+                "was deleted on disk after planning",
+            ));
+        }
+    };
+    let declaration = match parse_album_declaration(&album_relative, &before) {
+        Some(declaration) => declaration,
+        None => {
+            return Err(stale_album_error(
+                &album_relative,
+                "is no longer a readable album declaration",
+            ));
+        }
+    };
+    // Bind the schema to this same preimage: a declaration change after
+    // route resolution refuses instead of rendering with a stale schema.
+    if declaration.record_type.as_ref() != Some(record_type) {
+        return Err(stale_album_error(
+            &album_relative,
+            "changed on disk after planning",
+        ));
+    }
+    let overlays = record_overlays(planner, &request.bob_dir);
+    let catalog = record_context.catalog_mut();
+    let folder = catalog.folder(dir);
+    let planned =
+        album_write::plan_album_write(&declaration, &before, folder, &overlays);
+    match planned.edit {
+        Some(edit) => {
+            debug_assert_eq!(edit.before, before);
+            record_context.record_album_edit(
+                crate::native::capture_record::AlbumIndexEdit {
+                    relative: album_relative.clone(),
+                    state: planned.state,
+                    before: before.clone(),
+                    after: edit.after.clone(),
+                },
+            );
+            planner.stage(&album_absolute, edit.after)?;
+        }
+        None => planner.guard_merge_read(&album_absolute, None),
+    }
+    Ok(())
+}
+
+/// Staged record postimages keyed by vault-relative path for the album
+/// overlay. The planner already holds every item staged so far, so a
+/// create followed by an update renders the final fields exactly once.
+fn record_overlays(
+    planner: &CaptureBatchPlanner,
+    vault: &Path,
+) -> Vec<(PathBuf, String)> {
+    planner
+        .staged_snapshot()
+        .into_iter()
+        .filter_map(|(absolute, contents)| {
+            let contents = contents?;
+            let relative = absolute.strip_prefix(vault).ok()?.to_path_buf();
+            Some((relative, contents))
+        })
+        .collect()
+}
+
+fn stale_album_error(relative: &Path, detail: &str) -> CaptureError {
+    CaptureError::io(format!(
+        "refusing to update records index in {}: album {detail}",
+        relative.display(),
+    ))
+    .with_typed(CaptureFailureKind::NoteChanged)
 }
 
 fn reserved_paths(planner: &CaptureBatchPlanner, vault: &Path) -> Vec<PathBuf> {

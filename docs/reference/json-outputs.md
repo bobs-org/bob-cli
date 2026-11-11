@@ -102,7 +102,9 @@ bob capture -f json --dry-run -- "$(printf '%s\n' 'Ramen Nagi @eat/' '- status::
 
 Record items add `record_note` summaries; incomplete drafts include `draft`,
 `missing[]`, and `invalid[]`. Add `source`/`album`; targets enrich identity
-fields. `records_config_deprecated`, `album_schema_invalid`,
+fields. Album-backed writes add top-level `album_files[]` (`path`, `state`,
+`before`, `after`) whenever the records index changes; dry-run and commit
+share those bytes. `records_config_deprecated`, `album_schema_invalid`,
 `record_discovery_incomplete`.
 
 ```bash

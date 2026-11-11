@@ -15,8 +15,8 @@ pub(crate) mod stem;
 
 #[allow(unused_imports)]
 pub(crate) use catalog::{
-    FolderIndex, IndexedField, IndexedFieldValue, IndexedRecord, NearValueHint,
-    RecordCatalog, StemLookup, ValueSuggestion,
+    staged_record, FolderIndex, IndexedField, IndexedFieldValue, IndexedRecord,
+    NearValueHint, RecordCatalog, StemLookup, ValueSuggestion,
 };
 #[allow(unused_imports)]
 pub(crate) use plan::{

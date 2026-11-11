@@ -33,6 +33,17 @@ pub(super) struct PlannedCaptureBatch {
     pub(super) catalog_walks: usize,
     #[cfg(test)]
     pub(super) snapshot_read_counts: BTreeMap<PathBuf, usize>,
+    /// Record-catalog folders loaded while planning this batch, plus the
+    /// files opened for them. Library tests use these to prove that
+    /// ordinary drafts never touch the record-index path, album drafts
+    /// read only their album slice, and multi-item drafts scan once.
+    #[cfg(test)]
+    pub(super) record_folders: Vec<String>,
+    #[cfg(test)]
+    pub(super) record_files_opened: usize,
+    /// Staged album records-index edits, in path order. Dry-run and commit
+    /// share these bytes through the result's `album_files`.
+    pub(super) album_files: Vec<AlbumFileJson>,
 }
 
 /// One reference item's staged ref job plus its position in the
@@ -1075,10 +1086,28 @@ pub(super) fn plan_capture_batch_with_config_path(
         &planner,
         &request.bob_dir,
     );
+    #[cfg(test)]
+    let (record_folders, record_files_opened) = record_context.catalog_stats();
+    let mut album_files: Vec<AlbumFileJson> = record_context
+        .take_album_edits()
+        .into_iter()
+        .map(|edit| AlbumFileJson {
+            path: edit.relative.display().to_string().replace('\\', "/"),
+            state: edit.state.as_str().to_owned(),
+            before: edit.before,
+            after: edit.after,
+        })
+        .collect();
+    album_files.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(PlannedCaptureBatch {
         items,
         read_guards: std::mem::take(&mut planner.read_guards),
         text_files: planner.into_staged_files()?,
+        #[cfg(test)]
+        record_folders,
+        #[cfg(test)]
+        record_files_opened,
+        album_files,
         global_destination,
         offer_closes,
         warnings,

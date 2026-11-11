@@ -34,12 +34,15 @@ use super::{
 };
 use crate::native::{
     albums::{
+        index::IndexState,
+        parse_album_declaration,
         registry::{AlbumEntry, DiscoveryHealth, RecordTypeSource},
-        AlbumFinding, AlbumIssueSeverity,
+        write as album_write, AlbumFinding, AlbumIssueSeverity,
     },
-    capture::{write_staged_files, StagedTextFile},
+    capture::{write_staged_files, write_staged_files_guarded, StagedTextFile},
     config::{self, records::load_records_config},
     env as bob_env,
+    host_catalog::ReadDependencies,
     projects::frontmatter_type_names,
     style::Styler,
     vault_links::VaultLinkResolver,
@@ -669,9 +672,30 @@ fn execute_new(matches: &ArgMatches) -> i32 {
     let Some(markdown) = plan.markdown.as_deref() else {
         return report_incomplete(&config, &plan, output_format);
     };
+    // Plan the album write set before any dry-run output, directory
+    // creation, or real write, so dry-run and commit share bytes and an
+    // incomplete record never stages an album edit.
+    let album = match plan_album_write_for_record(
+        &vault,
+        &mut catalog,
+        &kind,
+        &[(plan.path.clone(), markdown.to_owned())],
+    ) {
+        Ok(album) => album,
+        Err(message) => {
+            return report_error("bob records new", output_format, &message, 2);
+        }
+    };
+    let edited_album = album.as_ref().filter(|album| album.edit.is_some());
     let target = vault.join(&plan.path);
     if matches.get_flag("dry-run") {
-        print_new_dry_run(&plan, markdown, Some(&kind), output_format);
+        print_new_dry_run(
+            &plan,
+            markdown,
+            Some(&kind),
+            edited_album,
+            output_format,
+        );
         return 0;
     }
 
@@ -688,13 +712,26 @@ fn execute_new(matches: &ArgMatches) -> i32 {
             2,
         );
     }
-    let staged = StagedTextFile {
+    let mut staged = vec![StagedTextFile {
         target: target.clone(),
         target_existed: false,
         original_target: String::new(),
         updated_target: markdown.to_owned(),
-    };
-    if let Err(error) = write_staged_files(&[staged]) {
+    }];
+    if let Some(album) = edited_album
+        && let Some(edit) = &album.edit
+    {
+        staged.push(StagedTextFile {
+            target: vault.join(&album.relative),
+            target_existed: true,
+            original_target: edit.before.clone(),
+            updated_target: edit.after.clone(),
+        });
+    }
+    let deps = album_read_dependencies(album.as_ref(), &[]);
+    if let Err(error) =
+        write_staged_files_guarded(&staged, || deps.validate(&vault))
+    {
         return report_error(
             "bob records new",
             output_format,
@@ -722,7 +759,10 @@ fn execute_new(matches: &ArgMatches) -> i32 {
         })).collect::<Vec<_>>(),
     });
     merge_kind_metadata(&mut payload, &kind);
-    print_new_success(&payload, &plan, &kind, output_format);
+    if let Some(album) = edited_album {
+        merge_album_index(&mut payload, album);
+    }
+    print_new_success(&payload, &plan, &kind, edited_album, output_format);
     if matches.get_flag("open")
         && let Err(message) = open_in_obsidian(&vault, &plan.path)
     {
@@ -832,33 +872,79 @@ fn execute_update(matches: &ArgMatches) -> i32 {
     let Some(markdown) = plan.markdown.as_deref() else {
         return report_update_incomplete(&config, &plan, output_format);
     };
+    // Plan the album before the no-op early return so a no-op record
+    // update still repairs a stale index. Index planning never writes.
+    let album = match plan_album_write_for_record(
+        &vault,
+        &mut catalog,
+        &kind,
+        &[(plan.path.clone(), markdown.to_owned())],
+    ) {
+        Ok(album) => album,
+        Err(message) => {
+            return report_error(
+                "bob records update",
+                output_format,
+                &message,
+                1,
+            );
+        }
+    };
+    let edited_album = album.as_ref().filter(|album| album.edit.is_some());
     if matches.get_flag("dry-run") {
         print_update_dry_run(
             &config,
             &plan,
             markdown,
             Some(&kind),
+            edited_album,
             output_format,
         );
         return 0;
     }
-    if markdown == original {
+    // A current index contributes no write, even for a notes-only record
+    // update; the album read guard still applies below.
+    if markdown == original && edited_album.is_none() {
         print_update_success(
             &config,
             &plan,
             &notes,
             Some(&kind),
+            None,
             output_format,
         );
         return 0;
     }
-    let staged = StagedTextFile {
-        target: absolute.clone(),
-        target_existed: true,
-        original_target: original.clone(),
-        updated_target: markdown.to_owned(),
-    };
-    if let Err(error) = write_staged_files(&[staged]) {
+    let mut staged = Vec::new();
+    if markdown != original {
+        staged.push(StagedTextFile {
+            target: absolute.clone(),
+            target_existed: true,
+            original_target: original.clone(),
+            updated_target: markdown.to_owned(),
+        });
+    }
+    if let Some(album) = edited_album
+        && let Some(edit) = &album.edit
+    {
+        staged.push(StagedTextFile {
+            target: vault.join(&album.relative),
+            target_existed: true,
+            original_target: edit.before.clone(),
+            updated_target: edit.after.clone(),
+        });
+    }
+    // Guard the album on every write, and the untouched record on an
+    // album-only repair, so a concurrent edit refuses instead of
+    // publishing a stale index.
+    let mut extra = Vec::new();
+    if markdown == original {
+        extra.push((plan.path.clone(), original.clone()));
+    }
+    let deps = album_read_dependencies(album.as_ref(), &extra);
+    if let Err(error) =
+        write_staged_files_guarded(&staged, || deps.validate(&vault))
+    {
         return report_error(
             "bob records update",
             output_format,
@@ -866,7 +952,14 @@ fn execute_update(matches: &ArgMatches) -> i32 {
             1,
         );
     }
-    print_update_success(&config, &plan, &notes, Some(&kind), output_format);
+    print_update_success(
+        &config,
+        &plan,
+        &notes,
+        Some(&kind),
+        edited_album,
+        output_format,
+    );
     if matches.get_flag("open")
         && let Err(message) = open_in_obsidian(&vault, &plan.path)
     {
@@ -1225,6 +1318,7 @@ fn print_update_dry_run(
     plan: &super::plan::RecordUpdatePlan,
     markdown: &str,
     kind: Option<&ResolvedRecordKind>,
+    album: Option<&PlannedAlbumWrite>,
     format: OutputFormat,
 ) {
     if format == OutputFormat::Json {
@@ -1248,10 +1342,18 @@ fn print_update_dry_run(
         if let Some(kind) = kind {
             merge_kind_metadata(&mut payload, kind);
         }
+        if let Some(album) = album {
+            merge_album_index(&mut payload, album);
+        }
         println!("{payload}");
         return;
     }
     print!("{markdown}");
+    if let Some(album) = album
+        && let Some(edit) = &album.edit
+    {
+        print_album_dry_run(album, &edit.after);
+    }
 }
 
 fn print_update_success(
@@ -1259,6 +1361,7 @@ fn print_update_success(
     plan: &super::plan::RecordUpdatePlan,
     notes: &[RecordNoteInput],
     kind: Option<&ResolvedRecordKind>,
+    album: Option<&PlannedAlbumWrite>,
     format: OutputFormat,
 ) {
     let record_type = config.record_type(&plan.record_type);
@@ -1284,6 +1387,9 @@ fn print_update_success(
         });
         if let Some(kind) = kind {
             merge_kind_metadata(&mut payload, kind);
+        }
+        if let Some(album) = album {
+            merge_album_index(&mut payload, album);
         }
         println!("{payload}");
     } else {
@@ -1326,6 +1432,15 @@ fn print_update_success(
             println!(
                 "  {}",
                 Styler::detect().dim(&format!("{} {word}", notes.len()))
+            );
+        }
+        if let Some(album) = album
+            && let Some(_) = &album.edit
+        {
+            println!(
+                "  {}  {}",
+                Styler::detect().dim("index"),
+                album.relative.display(),
             );
         }
     }
@@ -1561,6 +1676,7 @@ fn print_new_dry_run(
     plan: &super::plan::RecordCreatePlan,
     markdown: &str,
     kind: Option<&ResolvedRecordKind>,
+    album: Option<&PlannedAlbumWrite>,
     format: OutputFormat,
 ) {
     if format == OutputFormat::Json {
@@ -1581,9 +1697,33 @@ fn print_new_dry_run(
         if let Some(kind) = kind {
             merge_kind_metadata(&mut payload, kind);
         }
+        if let Some(album) = album {
+            merge_album_index(&mut payload, album);
+        }
         println!("{payload}");
     } else {
         print!("{markdown}");
+        if let Some(album) = album
+            && let Some(edit) = &album.edit
+        {
+            print_album_dry_run(album, &edit.after);
+        }
+    }
+}
+
+/// Show a planned album index change alongside record dry-run output.
+/// Dry-run writes nothing; these are the exact bytes a real run stages.
+fn print_album_dry_run(album: &PlannedAlbumWrite, after: &str) {
+    let styler = Styler::detect();
+    println!(
+        "\n{}  {} ({})",
+        styler.dim("index"),
+        album.relative.display(),
+        album.state.as_str(),
+    );
+    print!("{after}");
+    if !after.ends_with('\n') {
+        println!();
     }
 }
 
@@ -1591,6 +1731,7 @@ fn print_new_success(
     payload: &Value,
     plan: &super::plan::RecordCreatePlan,
     kind: &ResolvedRecordKind,
+    album: Option<&PlannedAlbumWrite>,
     format: OutputFormat,
 ) {
     if format == OutputFormat::Json {
@@ -1599,8 +1740,8 @@ fn print_new_success(
     }
     let emoji = kind.record_type().emoji.as_deref().unwrap_or("");
     let prefix = Styler::detect().green("✓");
-    if let Some(album) = &kind.album {
-        let owner = album
+    if let Some(identity) = &kind.album {
+        let owner = identity
             .owner
             .as_deref()
             .map(|owner| format!(" · {owner}"))
@@ -1609,23 +1750,126 @@ fn print_new_success(
             "{}  {emoji} New {} → {}{owner}",
             prefix,
             kind.record_type().id,
-            album.title
+            identity.title
         );
         println!("  {}  {}", plan.path.display(), plan.title);
-        return;
+    } else {
+        println!(
+            "{}  {emoji} {}  {}",
+            prefix,
+            plan.path.display(),
+            plan.title
+        );
     }
-    println!(
-        "{}  {emoji} {}  {}",
-        prefix,
-        plan.path.display(),
-        plan.title
-    );
+    if let Some(album) = album
+        && let Some(_) = &album.edit
+    {
+        println!(
+            "  {}  {}",
+            Styler::detect().dim("index"),
+            album.relative.display(),
+        );
+    }
 }
 
 fn config_from_kind(kind: &ResolvedRecordKind) -> RecordsConfig {
     RecordsConfig {
         types: vec![kind.record_type().clone()],
     }
+}
+
+/// One album's planned records-index write for a record command. `edit`
+/// is `Some` only when the index must change; the `before` preimage
+/// always guards the write, even for a current index.
+struct PlannedAlbumWrite {
+    relative: PathBuf,
+    before: String,
+    edit: Option<PlannedAlbumEdit>,
+    state: IndexState,
+}
+
+struct PlannedAlbumEdit {
+    before: String,
+    after: String,
+}
+
+/// Plan the album's records index from the same preimage the record
+/// schema was bound to. Config-backed kinds plan no album write.
+/// Returns a stale-note message when the album changed after kind
+/// resolution; callers write nothing in that case.
+fn plan_album_write_for_record(
+    vault: &Path,
+    catalog: &mut RecordCatalog,
+    kind: &ResolvedRecordKind,
+    overlays: &[(PathBuf, String)],
+) -> Result<Option<PlannedAlbumWrite>, String> {
+    let RecordTypeSource::Album { path } = &kind.sourced.source else {
+        return Ok(None);
+    };
+    let record_type = kind.record_type();
+    let album_relative = PathBuf::from(path);
+    let before = match fs::read_to_string(vault.join(&album_relative)) {
+        Ok(before) => before,
+        Err(error) => {
+            return Err(format!(
+                "refusing to update records index in {path}: album could not be read: {error}"
+            ));
+        }
+    };
+    let declaration = match parse_album_declaration(&album_relative, &before) {
+        Some(declaration) => declaration,
+        None => {
+            return Err(format!(
+                "refusing to update records index in {path}: album is no longer a readable album declaration"
+            ));
+        }
+    };
+    // Bind the schema to this same preimage: a declaration change after
+    // kind resolution refuses instead of rendering with a stale schema.
+    if declaration.record_type.as_ref() != Some(record_type) {
+        return Err(format!(
+            "refusing to update records index in {path}: album changed on disk after planning"
+        ));
+    }
+    let folder = catalog.folder(&record_type.dir);
+    let planned =
+        album_write::plan_album_write(&declaration, &before, folder, overlays);
+    Ok(Some(PlannedAlbumWrite {
+        relative: album_relative,
+        before,
+        edit: planned.edit.map(|edit| PlannedAlbumEdit {
+            before: edit.before,
+            after: edit.after,
+        }),
+        state: planned.state,
+    }))
+}
+
+/// Guard every read input the album plan consumed. The guarded writer
+/// validates these at both commit points, so an album edit that landed
+/// after planning refuses instead of publishing a stale index.
+fn album_read_dependencies(
+    album: Option<&PlannedAlbumWrite>,
+    extra: &[(PathBuf, String)],
+) -> ReadDependencies {
+    let mut deps = ReadDependencies::default();
+    if let Some(album) = album {
+        deps.insert(album.relative.clone(), Some(album.before.clone()));
+    }
+    for (relative, expected) in extra {
+        deps.insert(relative.clone(), Some(expected.clone()));
+    }
+    deps
+}
+
+fn album_index_json(album: &PlannedAlbumWrite) -> Value {
+    let edit = album.edit.as_ref().expect("album_index is planned only");
+    json!({
+        "path": album.relative.display().to_string(),
+        "state": album.state.as_str(),
+        "before": edit.before,
+        "after": edit.after,
+    })
 }
 
 fn merge_kind_metadata(payload: &mut Value, kind: &ResolvedRecordKind) {
@@ -1637,6 +1881,15 @@ fn merge_kind_metadata(payload: &mut Value, kind: &ResolvedRecordKind) {
                 serde_json::to_value(album).expect("album identity"),
             );
         }
+    }
+}
+
+/// Add the planned album index change to a record payload. Present only
+/// when the index actually changes, with the path and exact before/after
+/// bytes; the record's own keys are untouched.
+fn merge_album_index(payload: &mut Value, album: &PlannedAlbumWrite) {
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("album_index".to_owned(), album_index_json(album));
     }
 }
 

@@ -29,6 +29,7 @@ fn insert_bullet_line(
     super::insert_bullet_line(contents, bullet_line, section_prefix, false)
 }
 
+mod album_index;
 mod assembly;
 mod commit;
 mod grammar;

@@ -6632,7 +6632,11 @@ inputs. Only explicitly supplied fields are validated, so old missing or
 invalid fields do not become required inputs. `bob capture` stages the update
 through the same preimage-checked writer as other edits: dry-run and commit
 share the planned Markdown, later updates in the same draft see earlier staged
-bytes, and a no-op does not rewrite the note. Forced-destination flags
+bytes, and a no-op does not rewrite the note. Album-backed creates and updates
+also stage the album's records-index edit in the same transaction: one album
+file change per affected album, rendered from every final postimage and guarded
+by the album preimage, so a concurrent album edit refuses the whole batch and
+installs nothing. Forced-destination flags
 (`--route` and friends) and escaped `\@eat/` keep the text literal. Task
 markers outside field values (`#TYPE`, `s:N`, `$N`, `%c`, `%n`, `%l`, `&`,
 `*`, `~`, `!`, `+`, `:`, session operators, task-ID bullets) refuse with
@@ -6653,12 +6657,16 @@ rewrite parses as record creation. Heading, task-ID, escaped, and
 forced-literal routes do not get the warning.
 
 `--dry-run` prints `would create` or `would update` plus the exact Markdown
-that commit writes. Success names the type emoji, `new restaurant` or
+that commit writes. Album-backed drafts also print the staged album index
+edit after the record card; a committed run names each updated album.
+Success names the type emoji, `new restaurant` or
 `updated restaurant` (or the configured label), path, field displays, and
 appended note count. JSON adds top-level `note_files` (omitted when empty)
 with `path`, `action` (`"create"` or `"update"`), `record_type`,
 `properties`, `body`, and `markdown`; updates also include `before` /
-`before_display` on properties and the existing block-diff `lines`. Dry-run
+`before_display` on properties and the existing block-diff `lines`. JSON also
+adds top-level `album_files` (omitted when empty) with `path`, `state`,
+`before`, and `after`. Dry-run
 and commit share those bytes. Each property has a canonical JSON `value` and
 a separate human `display`: choices use schema value plus label (`"liked"` /
 `"Liked"`), lists keep JSON arrays (for example `["hot", "soup"]`), and
