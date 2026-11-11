@@ -1,5 +1,5 @@
 //! Keep-moving capture integration (`docs/task-dependencies.md` §12.15,
-//! KM1–KM32; `plan:202611/leaf_keep_moving_rust.md` phases `capture` and
+//! KM1–KM33; `plan:202611/leaf_keep_moving_rust.md` phases `capture` and
 //! `finish`).
 //!
 //! Focused CLI coverage for `!`, Pomodoro completion, retargeted close,
@@ -1694,4 +1694,59 @@ fn km24_stale_pick_keys_refuse_after_a_replan() {
     );
     assert!(!output.status.success(), "{}", format_output(&output));
     assert_eq!(vault_bytes(&vault), before, "stale pick writes nothing");
+}
+
+// KM33/LP13: the corrected recruiter sub-project keeps four Next rows moving.
+// KM6: the same project directly under an area is a root and offers nothing.
+#[test]
+fn km33_recruiter_subproject_dry_run_and_km6_root_exclusion() {
+    let (_temp, vault, day_file) = vault("bob-cli-km33-corrected-parent");
+    write_file(&vault.join("job.md"), &area());
+    write_file(
+        &vault.join("job_2026.md"),
+        &top_project().replace("[[dev]]", "[[job]]"),
+    );
+    let recruiter = concat!(
+        "---\ntype: [[project]]\nparent: [[job_2026]]\nstatus: wip\n---\n",
+        "- [ ] #task Recruiters ^prj\n",
+        "- [*] #task Reply to Luzern ^luzern\n",
+        "- [*] #task EcoGPT ^ecogpt\n",
+        "- [*] #task Ray Lyles ^ray-lyles\n",
+        "- [*] #task Product engineer Dan Dowd ^product-engineer-dan-dowd\n",
+        "- [*] #task Senior rust java engineer ^senior-rust-java-engineer\n",
+    );
+    write_file(&vault.join("job_email_recruiters.md"), recruiter);
+    write_file(&day_file, "## Pomodoros\n- [ ] () — WRITE\n  - [[job_email_recruiters#^luzern]]\n");
+    let before = vault_bytes(&vault);
+    let json = capture_json(
+        &vault,
+        &day_file,
+        &["--dry-run"],
+        "!job_email_recruiters:luzern",
+    );
+    let offers = json["task_complete"]["keep_moving"]
+        .as_array()
+        .expect("offers");
+    assert_eq!(offers.len(), 4, "KM33: {json}");
+    assert!(offers
+        .iter()
+        .all(|row| row["offer"]["group"] == "keep_moving"));
+    assert_eq!(vault_bytes(&vault), before, "dry-run never writes");
+    write_file(
+        &vault.join("job_email_recruiters.md"),
+        &recruiter.replace("[[job_2026]]", "[[job]]"),
+    );
+    let before = vault_bytes(&vault);
+    let json = capture_json(
+        &vault,
+        &day_file,
+        &["--dry-run"],
+        "!job_email_recruiters:luzern",
+    );
+    assert_eq!(
+        json["task_complete"]["keep_moving"],
+        serde_json::json!([]),
+        "KM6"
+    );
+    assert_eq!(vault_bytes(&vault), before, "root dry-run never writes");
 }

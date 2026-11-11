@@ -12,8 +12,8 @@ stdout `schema_version` counts.
 
 ## Framing
 
-JSON reports print to stdout. Warnings, progress, and hook chatter print to
-stderr so a JSON pipe stays parseable. Usage errors exit 2.
+JSON goes to stdout; warnings, progress, and hook chatter go to stderr.
+Usage errors exit 2.
 
 Envelopes vary by family:
 
@@ -206,20 +206,18 @@ a trailing `#` still needs `pomodoro_merge_dest`.
 See [split](../capture.md#splitting-a-merged-pomodoro) and
 [merge](../capture.md#merging-pomodoros).
 
-Managed Done results can carry `keep_moving` offers beside `unblocked`, with
+Managed Done results carry `keep_moving` beside `unblocked`, with
 `keep_moving_folds` counting hidden, blocked, and future-scheduled candidates.
-These offers are eligible Pending, Next, and Ready tasks from a leaf project
-whose last task linked in today's open Pomodoros was closed. A leaf project
-is a recognised project that is not an umbrella (a root whose `^prj` lists
-sub-projects); it may itself have subprojects.
-These offers do not require a dependency on the completed task. They join
-the batch's `pull_in` choices and link only when picked.
+Offers are eligible Pending, Next, and Ready residents of a leaf project
+whose last Task Link in today's open Pomodoros was closed. A leaf project
+is a subproject with a different root parent; it may itself have subprojects.
+No dependency on the completed task is required. Offers join batch `pull_in`
+choices and link only when picked.
 See [keep-moving offers](../task-dependencies.md#1215-keep-moving-offers-leaf-projects).
 
-Relation successors are tasks whose configured successor relation (such as
-`starts after`) points to a task just completed or parked Pending with no
-link left under today's open Pomodoros. They use the same explicit selection
-flow. The additive fields are:
+Relation successors point through a configured relation (such as `starts after`)
+to a task just completed or parked Pending without a link under today's open
+Pomodoros. They require explicit selection. Fields:
 
 | Location | Fields |
 | --- | --- |
@@ -238,7 +236,7 @@ held rows are not selectable. Empty `groups` and absent copy are omitted.
 Note-pull empty refusals use `nothing_to_pull_in` with the `note_pull` fold payload; missing source notes use `pull_note_missing`. The flat `offers` list appears on a `pull_in_choice_required` refusal;
 successful results keep the rows on their owning capture items.
 
-These are the final batch's offers: later items can remove an offer by
+Later batch items can remove an offer by
 linking, completing, blocking, or dropping its task, or by re-linking a
 parked predecessor. A picked relation successor appears in `task_blocks`
 with `relation_successor` in `roles[]`; its added Pomodoro line has

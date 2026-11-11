@@ -11,8 +11,8 @@ See [Capture contract](../capture.md).
 `@` chooses a destination; `#` names a section, drawer, or task type; `%` selects a
 capture directive. In completion, standalone `#` and `%` open menus.
 
-Examples use a synthetic vault (`BOB_NOW=2026-10-20 12:00:00`, `TZ=UTC`).
-Put options before the draft; `--` ends option parsing.
+Examples use synthetic notes (`BOB_NOW=2026-10-20 12:00:00`, `TZ=UTC`).
+Put options before drafts; `--` ends option parsing.
 
 ## Token index
 

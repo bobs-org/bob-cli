@@ -273,16 +273,16 @@ card instead of stamping; see [Task Decay Is One Ladder](../develop/decisions.md
 
 *Requested · project*
 
-A recognised [Project Note](#project-note) that is not an umbrella. An umbrella is a root
-project (its own [Root Parent](#root-parent)) whose open [Project Task](#project-task) (`^prj`) carries
-a `🧩 **Sub-projects:**` marker line listing at least one wikilink child, in
-any state. A standalone [Top-Level Project](#top-level-project), a `root: true` project with no
-sub-projects, and an orphan project are leaves. A root that has split out
-children stays an umbrella even when every child is closed. Leafness is
-derived at gesture time from the note's held text, never stored, and a task's
-`[root::]` field never changes it. Closing the task behind a leaf project's
-last live [Task Link](#task-link) in today's Pomodoros offers the project's ready tasks
-as keep-moving [Successor Offer](#successor-offer)s, which are never dependents (see
+A [Project Note](#project-note) that is not its own [Root Parent](#root-parent), meaning a sub-project
+at any depth whose `parent` walk meets another project before any
+[Area Note](#area-note) and that does not set `root: true` itself. A
+[Top-Level Project](#top-level-project), a `root: true` project, and an orphan project (nothing
+above it) are roots, never leaves. "Leaf" names the reporting role, not tree
+position: a leaf project may have sub-projects. Leafness is derived from the
+note tree at gesture time, never stored, and a task's `[root::]` field never
+changes it. Closing the task behind a leaf project's last live
+[Task Link](#task-link) in today's Pomodoros offers the project's ready tasks as
+keep-moving [Successor Offer](#successor-offer)s, which are never dependents (see
 `docs/task-dependencies.md` §12.15).
 
 ### Mac Menu Bar Pomodoro Indicator {#mac-menu-bar-pomodoro-indicator}

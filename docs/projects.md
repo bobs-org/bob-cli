@@ -78,19 +78,18 @@ into the top-level project above it. See
 
 ### Leaf projects
 
-A **leaf project** is a recognised project note that is not an umbrella.
-An umbrella is a root project (its own root parent) whose open `^prj`
-carries a `🧩 **Sub-projects:**` marker line listing at least one
-wikilink child, in any state: open, done, or canceled. A standalone
-top-level project, a `root: true` project with no sub-projects, an
-orphan, and a project whose parent cannot be resolved are leaves. A
-root that has split out children stays an umbrella even when every
-child is closed. A middle project with children of its own is still a
-leaf, because it is not its own root. Leafness is derived at gesture
-time from the note's held text, never stored, and a task's `[root::]`
-field never changes it. Closing the task behind a leaf project's last
-live Task Link in today's Pomodoros offers the project's ready tasks as
-keep-moving successor offers, which are never dependents. See
+A **leaf project** is a project note that is not its own root parent: a
+sub-project at any depth whose `parent` walk meets another project
+before any area note, and that does not set `root: true` itself. A
+top-level project, a `root: true` project, and an orphan project
+(nothing above it) are roots, never leaves. "Leaf" names the reporting
+role, not tree position: a leaf project may have sub-projects of its
+own. Leafness is derived from the note tree at gesture time, never
+stored, and a task's `[root::]` field never changes it. A root project
+is never a leaf, so it never gets keep-moving offers. Closing the task
+behind a leaf project's last live Task Link in today's Pomodoros offers
+the project's ready tasks as keep-moving successor offers, which are
+never dependents. See
 [Keep-moving offers](task-dependencies.md#1215-keep-moving-offers-leaf-projects).
 
 ## External Names (`project_name_aliases`)

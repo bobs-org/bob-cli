@@ -223,9 +223,7 @@ pub(crate) fn keep_moving_needs_dependents(
 }
 
 /// Whether N is a leaf project: recognised, non-terminal, outside `done/`,
-/// one open `^prj`, and not an umbrella. An umbrella is a root project
-/// whose `^prj` marker lists at least one sub-project (any state). No
-/// marker means no ancestor walk.
+/// one open `^prj`, Project kind, own path as key, different root parent.
 pub(crate) fn is_leaf_project<S: HomeSource>(
     resolver: &mut HomeResolver<S>,
     path: &Path,
@@ -239,16 +237,13 @@ pub(crate) fn is_leaf_project<S: HomeSource>(
     if is_inbox_note(path, contents, index) {
         return false;
     }
-    let Some(surface) = project_surface(path, contents, today) else {
+    if project_surface(path, contents, today).is_none() {
         return false;
-    };
-    if surface.subprojects_listed == 0 {
-        return true;
     }
     let home = resolver.resolve_note(path);
-    home.kind != HomeKind::Project
-        || home.key != path_string(path)
-        || home.root_parent != home.key
+    home.kind == HomeKind::Project
+        && home.key == path_string(path)
+        && home.root_parent != home.key
 }
 
 /// Classify keep-moving offers after hand-off, project, and pull-in groups

@@ -2673,35 +2673,19 @@ and visual system. See the Leaf Project term in
 
 **Vocabulary**
 
-- **Leaf project.** A recognised project note that is **not an umbrella**.
-  Recognition is the §12.10 rule: outside `done/`, non-terminal, exactly
-  one open `^prj`, no scan issue; never an area, daily note, or inbox
-  file. The definitions:
-
-  ```text
-  ROOT(N)      ⇔  R2 root parent of N is N itself        (pomodoro-homes.md R2; Rust resolve_note)
-  UMBRELLA(N)  ⇔  ROOT(N)  ∧  N's open ^prj R has a direct-child `🧩 **Sub-projects:**`
-                  marker line (the one sync maintains) listing ≥ 1 wikilink child,
-                  in any state: open, ~~✅~~, or ~~❌~~
-  LEAF(N)      ⇔  N is a recognised project ∧  ¬UMBRELLA(N)
-  ```
-
-  What changes: a standalone top-level project, a `root: true` project
-  with no sub-projects, an orphan, and a project whose parent cannot be
-  resolved all become leaves. A root that has ever split out children
-  stays an umbrella, even when every child is closed. That keeps `bob`
-  quiet, and it preserves the original reason roots were excluded: broad
-  containers whose daily links routinely run out, so a prompt there
-  would be noise. Middle projects with children (LP9) stay leaves, as
-  today. `root: true` no longer decides offer behaviour on its own.
-
-  Source of truth: read the marker line from N's held text, never from
-  child frontmatter. If N has no marker line, N is a leaf without any
-  parent walk. The R2 walk runs only when the line exists, to tell a
-  middle project (leaf) from a root umbrella.
-
-  Leafness is derived at gesture time, never stored. A task's
-  `[root::]` field never changes its note's leafness.
+- **Leaf project.** A project note that is **not its own root parent**.
+  Leafness is computed with the R2 root-parent walk
+  ([pomodoro-homes.md R2](pomodoro-homes.md#r2-root-parent)) on the note
+  tree and never stored. The rule:
+  - A top-level project, a project marked `root: true`, and an orphan
+    project (no project or area above it) are roots, so they are never
+    leaves.
+  - A sub-project at any depth without `root: true` is a leaf.
+  - "Leaf" names the reporting role, not the tree position, so a leaf
+    project may have sub-projects of its own.
+  - A task's `[root::]` field never changes its note's leafness.
+  - Areas, daily notes, inbox files, `done/` archives, and terminal
+    projects are never leaves.
 - **Keep-moving offer.** A successor offer in the new group
   `keep_moving`, with the new row trigger `last_planned`. It offers a
   ready task of a leaf project N because this gesture closed the task
@@ -2724,7 +2708,7 @@ C = tasks this gesture moved open → Done (roots + closed embedded subtasks)   
 For each note N that holds some c ∈ C:
   K1  N is a project note that sync recognizes: outside done/, non-terminal, exactly
       one open ^prj R, no scan issue (the §12.10 recognition)
-  K2  LEAF(N): N is not an umbrella (Vocabulary)
+  K2  LEAF(N): the R2 root parent of N is not N        (Rust: HomeResolver::resolve_note)
   K3  PRED(N) = { c ∈ C : c lives in N, c ≠ R, c has a block ID, and c has its OWN live
                   link on the baseline }               — must be non-empty
   K4  no live link on the baseline targets an OPEN task of N outside C
@@ -2985,8 +2969,7 @@ Order the checks from cheapest to most expensive, in both engines:
 3. **G3, byte check on the day text.** The day text contains
    `#^<c.block_id>`. Capture already holds the day text. The cycler reads
    the daily note only now, and only for project-note closes.
-4. **G4.** LEAF(N): umbrella check on N's held text; the R2 walk only
-   when the marker exists.
+4. **G4.** LEAF(N), using frontmatter reads of N's ancestors only.
 5. **G5.** K3 and K4 on the `DayView` / live-link parse. This is the first
    step that may need the `NoteIndex`.
 
@@ -3029,7 +3012,7 @@ Select-all is the default selection unless a row says otherwise.
 | KM3 | U's live link targets a task already Done | group (closed targets do not count) |
 | KM4 | U's link is struck, or sits under a closed Pomodoro | group |
 | KM5 | R itself is live-linked today | nothing |
-| KM6 | N is an umbrella (LP2, LP3, LP15) | nothing |
+| KM6 | N is top-level, `root: true`, or orphan (LP2/3/6) | nothing |
 | KM7 | N is a middle project with child K (LP9); K's tasks are Ready | group lists N's residents only |
 | KM8 | T has no live link (not planned today), even though no N work is planned | nothing |
 | KM9 | T's link sits under a planned `()` placeholder | group; destination is that placeholder |
@@ -3056,7 +3039,7 @@ Select-all is the default selection unless a row says otherwise.
 | KM30 | only keep-moving offers, plus `--require-pull-in-choice` without `-p` | write-free refusal `pull_in_choice_required` listing them |
 | KM31 | a candidate carries `[dependsOn::]` and the dependents snapshot is unavailable | that candidate is folded `blocked`; the others are offered |
 | KM32 | close of a task outside any project note | zero added reads (wiring test) |
-| KM33 | N is a standalone top-level project, a `root: true` project without sub-projects, or an orphan (LP5, LP6, LP13, LP14) | a `keep_moving` group exactly as in KM1 |
+| KM33 | N is `job_email_recruiters.md` → `job_2026` project → `job` area (LP13), with four Next residents | a four-row `keep_moving` group exactly as in KM1 |
 
 Implementations copy the rows they implement into tests, citing the
 vector id in a comment. If an implementation disagrees with a vector,
@@ -3064,33 +3047,29 @@ fix this section first in the same change.
 
 ### 12.17 LP — leaf vectors
 
-Each fixture states whether `^prj` carries a `🧩 **Sub-projects:**`
-marker line. Both engines read that line from N's held text; the R2
-walk
-([pomodoro-homes.md R2](pomodoro-homes.md#r2-root-parent)) runs only
-when the line lists a child. Rust uses `HomeResolver::resolve_note`.
-Rust's note index already excludes `_generated`, so LP16 never sees a
-generated tag page as a colliding stem.
+Both engines compute leafness with the R2 walk
+([pomodoro-homes.md R2](pomodoro-homes.md#r2-root-parent)); Rust uses
+`HomeResolver::resolve_note`.
 
 | # | Note | Leaf? |
 | --- | --- | --- |
 | LP1 | `sase_goals.md` (project → `sase` project → `dev` area) | leaf |
-| LP2 | `sase.md` (project → `dev` area), marker present | no (umbrella) |
-| LP3 | `sase_blog.md` (project, `root: true`, → `sase`), marker present | no (umbrella) |
+| LP2 | `sase.md` (project → `dev` area) | no (top-level) |
+| LP3 | `sase_blog.md` (project, `root: true`, → `sase`) | no (root project) |
 | LP4 | `sase_pre_blog.md` (project → `sase_blog`) | leaf |
-| LP5 | `p.md` (project → sub-area `gtd_daily`), no marker | **leaf** (was no) |
-| LP6 | orphan project `o.md` (no `parent`), no marker | **leaf** (was no) |
-| LP7 | project whose `parent` is unresolved or ambiguous: no marker / marker present | **leaf** / no (umbrella; the walk stops, so it is its own root) |
-| LP8 | `k.md` → untyped wrapper note → `sase` | leaf (wrappers are walked through) |
-| LP9 | `m.md` (project → `sase`) with its own child project and marker | leaf (not its own root) |
+| LP5 | `p.md` (project → sub-area `gtd_daily`) | no |
+| LP6 | orphan project `o.md` (no `parent`) | no (outermost project) |
+| LP7 | project whose `parent` is unresolved or ambiguous | no (the walk stops; it is outermost) |
+| LP8 | project `k.md` → untyped wrapper note → `sase` | leaf (wrappers are walked through) |
+| LP9 | `m.md` (project → `sase`) that has its own child project | leaf ("leaf" is the reporting role) |
 | LP10 | task in `sase_goals.md` with `[root:: sase_blog]` | its note is still a leaf |
 | LP11 | area, daily note, inbox file, `done/` archive, terminal project | never a leaf |
-| LP12 | `parent` cycle `a ↔ b`, neither `root: true` | leaf (matches `resolve_note`) |
-| LP13 | `job_email_recruiters.md` (project → `job` area), no marker | **leaf** (new; the screenshot) |
-| LP14 | `root: true` project, no marker | **leaf** (new) |
-| LP15 | root project whose marker lists only `~~[[x]]~~ ✅` / `~~[[y]]~~ ❌` children | no (umbrella; it split out children once) |
+| LP12 | `parent` cycle `a ↔ b`, neither with `root: true` | leaf (matches `resolve_note`) |
+| LP13 | `job_email_recruiters.md` (project → `job_2026` project → `job` area) | leaf (corrected parent) |
+| LP14 | `root: true` project, no marker | no (root project) |
+| LP15 | root project whose marker lists only `~~[[x]]~~ ✅` / `~~[[y]]~~ ❌` children | no (root project) |
 | LP16 | LP1 plus a file `_generated/tag_pages/topic/sase.md` | leaf (excluded directories never make a stem ambiguous) |
-| LP17 | root project whose only `Sub-projects` text is not R's direct-child marker (prose elsewhere, a fenced block, another task's child) | leaf |
+| LP17 | root project whose only `Sub-projects` text is prose, fenced, or another task's child | no (root project; markers never change leafness) |
 
 ### 12.18 Relation successors (starts after)
 

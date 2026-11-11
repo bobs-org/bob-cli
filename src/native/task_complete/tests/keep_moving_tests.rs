@@ -223,8 +223,15 @@ fn lp_notes() -> BTreeMap<PathBuf, String> {
     notes.insert(PathBuf::from("m_child.md"), project(Some("m"), "", "Child"));
     notes.insert(PathBuf::from("job.md"), area(None));
     notes.insert(
+        PathBuf::from("job_2026.md"),
+        with_subprojects(
+            project(Some("job"), "", "Job 2026"),
+            "[[job_email_recruiters]]",
+        ),
+    );
+    notes.insert(
         PathBuf::from("job_email_recruiters.md"),
-        project(Some("job"), "", "Recruiters"),
+        project(Some("job_2026"), "", "Recruiters"),
     );
     notes.insert(
         PathBuf::from("flagged_leaf.md"),
@@ -325,7 +332,7 @@ fn assert_leaf(
     );
 }
 
-// LP1–LP17: leafness via the umbrella rule, in-memory HomeSource.
+// LP1–LP17: leafness via the R2 root-parent walk, in-memory HomeSource.
 #[test]
 fn lp_vectors_match_r2_walk() {
     let notes = lp_notes();
@@ -333,11 +340,11 @@ fn lp_vectors_match_r2_walk() {
     assert_leaf(&notes, "sase.md", false, "LP2");
     assert_leaf(&notes, "sase_blog.md", false, "LP3");
     assert_leaf(&notes, "sase_pre_blog.md", true, "LP4");
-    assert_leaf(&notes, "p.md", true, "LP5");
-    assert_leaf(&notes, "o.md", true, "LP6");
-    assert_leaf(&notes, "missing_parent.md", true, "LP7 no marker");
+    assert_leaf(&notes, "p.md", false, "LP5");
+    assert_leaf(&notes, "o.md", false, "LP6");
+    assert_leaf(&notes, "missing_parent.md", false, "LP7 no marker");
     assert_leaf(&notes, "missing_parent_marked.md", false, "LP7 marker");
-    assert_leaf(&notes, "ambiguous.md", true, "LP7 ambiguous no marker");
+    assert_leaf(&notes, "ambiguous.md", false, "LP7 ambiguous no marker");
     assert_leaf(&notes, "ambiguous_marked.md", false, "LP7 ambiguous marker");
     assert_leaf(&notes, "k.md", true, "LP8");
     assert_leaf(&notes, "m.md", true, "LP9");
@@ -350,10 +357,10 @@ fn lp_vectors_match_r2_walk() {
     assert_leaf(&notes, "cycle_a.md", true, "LP12");
     assert_leaf(&notes, "cycle_b.md", true, "LP12");
     assert_leaf(&notes, "job_email_recruiters.md", true, "LP13");
-    assert_leaf(&notes, "flagged_leaf.md", true, "LP14");
+    assert_leaf(&notes, "flagged_leaf.md", false, "LP14");
     assert_leaf(&notes, "split_once.md", false, "LP15");
     assert_leaf(&notes, "sase_goals.md", true, "LP16");
-    assert_leaf(&notes, "prose_marker.md", true, "LP17");
+    assert_leaf(&notes, "prose_marker.md", false, "LP17");
 }
 
 // LP10: a task `[root::]` field does not change its note's leafness.
@@ -373,7 +380,7 @@ fn lp10_task_root_field_does_not_change_leafness() {
 }
 
 // LP16: a generated tag page in the index still leaves sase_goals a leaf,
-// because the cheap path does not walk when there is no marker.
+// because excluded paths cannot make the ancestor walk ambiguous.
 #[test]
 fn lp16_generated_tag_page_does_not_change_leafness() {
     let notes = lp_notes();
@@ -473,8 +480,7 @@ fn needs_dependents_only_for_dependency_bearing_open_tasks() {
     ));
 }
 
-// Counting source: no marker ⇒ no ancestor reads; a marker walks only
-// the ancestors the umbrella check needs.
+// Counting source: leafness reads only reached ancestors, not the vault.
 #[test]
 fn leaf_walk_reads_only_reached_ancestors() {
     let notes = lp_notes();
@@ -488,7 +494,8 @@ fn leaf_walk_reads_only_reached_ancestors() {
         today(),
         &index,
     ));
-    assert_eq!(resolver.source_mut().reads.get(), 0);
+    // sase_badges → sase → dev, not the rest of the fixture.
+    assert_eq!(resolver.source_mut().reads.get(), 3);
 
     let source = CountingHomeSource::new(&index, &notes);
     let mut resolver = HomeResolver::new(source);
@@ -666,9 +673,9 @@ fn km5_prj_live_link_suppresses() {
     assert!(plan.keep_moving.is_empty(), "KM5");
 }
 
-// KM6: umbrella notes never keep-moving (LP2, LP3, LP15).
+// KM6: root projects never keep-moving, with or without a marker.
 #[test]
-fn km6_umbrella_notes_do_not_trigger() {
+fn km6_non_leaf_notes_do_not_trigger() {
     let tree = leaf_tree();
     let sase = concat!(
         "---\ntype: [[project]]\nparent: [[dev]]\nstatus: wip\n---\n",
@@ -711,12 +718,16 @@ fn km6_umbrella_notes_do_not_trigger() {
     assert!(plan.keep_moving.is_empty(), "KM6 LP15");
 }
 
-// KM33: a standalone top-level project (the screenshot) offers keep-moving.
+// KM33: the corrected recruiter sub-project offers four Next residents.
 #[test]
-fn km33_standalone_top_level_offers_keep_moving() {
+fn km33_recruiter_subproject_offers_keep_moving() {
     let job = area(None);
+    let job_2026 = with_subprojects(
+        project(Some("job"), "", "Job 2026"),
+        "[[job_email_recruiters]]",
+    );
     let recruiters = concat!(
-        "---\ntype: [[project]]\nparent: [[job]]\nstatus: wip\n---\n",
+        "---\ntype: [[project]]\nparent: [[job_2026]]\nstatus: wip\n---\n",
         "- [x] #task Reply to Luzern [id:: luzern] ^luzern\n",
         "- [ ] #task #prj Recruiters ^prj\n",
         "- [*] #task EcoGPT [id:: ecogpt] ^ecogpt\n",
@@ -726,6 +737,7 @@ fn km33_standalone_top_level_offers_keep_moving() {
     );
     let snapshot = [
         ("job.md", job.as_str()),
+        ("job_2026.md", job_2026.as_str()),
         ("job_email_recruiters.md", recruiters),
     ];
     let plan = run_km(
@@ -737,7 +749,12 @@ fn km33_standalone_top_level_offers_keep_moving() {
         )],
         &snapshot,
         Some(&day_link("job_email_recruiters#^luzern")),
-        &["job.md", "job_email_recruiters.md", "20261005.md"],
+        &[
+            "job.md",
+            "job_2026.md",
+            "job_email_recruiters.md",
+            "20261005.md",
+        ],
         SuccessorSelection::None,
     );
     assert_eq!(

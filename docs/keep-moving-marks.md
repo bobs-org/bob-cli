@@ -58,10 +58,9 @@ All these gates must hold:
    Struck, embedded, prose, nested, fenced, Events, closed-entry, and other-day
    links do not receive a mark.
 3. X's note N is a recognized leaf project, and X is not the project's `^prj`
-   task. Leaf means a recognized project that is not an umbrella. An umbrella
-   is a root project whose open `^prj` task has a direct-child
-   `🧩 **Sub-projects:**` marker listing at least one wikilink child, in any
-   state. This is the rule in [task-dependencies.md §12.15](task-dependencies.md#1215-keep-moving-offers-leaf-projects).
+   task. A leaf is a sub-project whose R2 root parent differs from itself;
+   top-level, `root: true`, orphan, and unresolved-parent projects are roots.
+   See [task-dependencies.md §12.15](task-dependencies.md#1215-keep-moving-offers-leaf-projects).
 4. No live link anywhere in today's Pomodoros targets another open task in N.
    The `^prj` task counts as work; closed targets and sub-project tasks do not.
    Live links include plain, embedded, and `#`-deferred Task Links under open
@@ -255,9 +254,8 @@ project notes.
 The core is pure, synchronous, and never throws. Rendering, Reading view,
 tests, and parity checks use the same functions with injected project text,
 frontmatter, link resolution, Markdown paths, config, and relation edges. The
-leaf predicate ports the cycler's root-parent walk plus the umbrella marker
-rule. Residents come from held project text; the Tasks memo supplies link
-resolution and open ids. Relation successors come from ledger-tools' own
+leaf predicate ports the cycler's root-parent walk. Residents come from held
+project text; the Tasks memo supplies link resolution and open ids. Relation successors come from ledger-tools' own
 relation index. If configured successor labels exist but the index is not
 ready, the answer is unknown. Rendering does not call the cycler or a Rust JSON
 count.
@@ -266,7 +264,7 @@ count.
 
 - Mac Capture idle agenda, Task Card, and nav pickers; revisit when Bryan asks.
 - A dimmed “queued” mark for non-last sibling links; revisit when Bryan asks.
-- A per-note `keep_moving: false`; revisit if a non-umbrella project proves noisy.
+- A per-note `keep_moving: false`; revisit if a leaf project proves noisy.
 - Links in other daily notes, closed entries, or prose.
 
 ## Conformance vectors
@@ -279,7 +277,8 @@ The leaf rule and LP1–LP17 are defined in [task-dependencies.md §12.17](task-
 
 Unless a row says otherwise: today's daily note has an open Pomodoro and a live
 link to X (`Reply to Luzern ^luzern`) in N, `job_email_recruiters.md`; N has an
-open, unblocked `^prj` task, and no sub-project marker.
+open, unblocked `^prj` task and parent `job_2026`, a project under the `job`
+area whose Sub-projects marker lists N.
 
 | # | Situation | Mark |
 | --- | --- | --- |
@@ -288,7 +287,7 @@ open, unblocked `^prj` task, and no sub-project marker.
 | KB3 | KB2, then U's link is struck or U closes | X gains `⏭ N` with one tick (Live Preview) |
 | KB4 | U is linked only struck, under a closed entry, in another day's note, or in prose | X marked; U counted when offerable |
 | KB5 | R itself is live-linked | none |
-| KB6 | N is an umbrella (LP2, LP3, LP15) | none |
+| KB6 | N is a root project (LP2, LP3, LP5, LP14, LP15) | none |
 | KB7 | N has 4 other Next residents and nothing else open (the screenshot) | `⏭ 4` |
 | KB8 | N is a sub-project (LP1) | marked as KB1 |
 | KB9 | every other resident is Blocked, scheduled after today, or `#hide` | none |
@@ -299,7 +298,7 @@ open, unblocked `^prj` task, and no sub-project marker.
 | KB14 | `plan.keep_moving: false`; `plan.link_unblocked: false`; toggle off; cold Tasks memo; N's text not yet cached; successor labels configured but relation index not ready | none (each) |
 | KB15 | X has no `[id::]` | marked |
 | KB16 | X is linked under two open entries | both rows show the same `⏭ N` |
-| KB17 | N's parent stem collides with `_generated/tag_pages/topic/<stem>.md` | same answer as without the tag page |
+| KB17 | N's parent stem collides with `_generated/tag_pages/topic/job_2026.md` | same answer as without the tag page |
 | KB18 | a resident scheduled today; a `#ref` line without `#task`; a nested subtask; a recurring task due today | each counted |
 | KB19 | a resident's `[dependsOn::]` names an id that resolves to nothing | counted (unresolved never blocks) |
 | KB20 | X's subtree embeds a task (`![[…#^…]]`) | none (neutral) |
@@ -380,3 +379,32 @@ wiring test (`scripts/test-task-status-cycler-keep-moving.cjs`) drives the
 same daily-note Task-Link close through `handleActiveTaskBlockLinkOpenDone`:
 it opens exactly one `Keep ‹job_email_recruiters› moving` group with those
 four rows and nothing preselected, and Esc writes only the close and strike.
+
+
+**2026-11-11 — sub-project rule restored.** The earlier record's standalone
+recruiter premise no longer describes the vault: `job_email_recruiters` now
+has project parent `job_2026`, under the `job` area. Root projects never qualify,
+with or without a Sub-projects marker; the mark and picker still agree for
+sub-projects. LP1–LP17 and KB24 cover the reverted rule, including generated
+parent-stem collisions and equal offered identities and fold counts.
+
+A fresh scratch clone of vault HEAD `5c2bec06`, built `bob` 0.5.0, and the
+updated plugin bundles were checked at `BOB_NOW=2026-11-11 16:00:00`.
+`bob capture --dry-run -f json '!job_email_recruiters:product-engineer-dan-dowd'` offers
+three Next rows: `ecogpt`, `ray-lyles`, and `senior-rust-java-engineer`.
+Scratch Obsidian 1.15.0 renders `⏭ 3` on that link with the same tooltip rows.
+`job_update_cv` is already closed, so the negative case uses
+`dev_plex_hack_patch`, whose parent is the `dev` area. Only in scratch, a live
+link to its open `no-clip-secrets` task and a Next resident were staged.
+That dry-run returns no keep-moving offers, and its visible ledger link has
+no mark. Both screenshots were inspected. Live vault notes were unchanged;
+the existing picker-stall investigation remains separate.
+
+The packaged startup smoke check passed, and Cycler 1.49.1 synced successfully.
+After Bryan approved replacing the abandoned Ledger 1.110.2 build, upstream was
+rechecked and advanced to `934bbbb`, preserving the landed navigation update.
+The approved deployment stamp still matched `99ccca1` at `2026-11-11T19:43:12Z`.
+Ledger 1.111.1 synced at `2026-11-11T22:21:07Z`, backing up the three replaced files
+under `~/.local/state/bob-cli/plugin-backups/20261111-172107/bob-ledger-tools/`.
+The post-sync Obsidian gate passed: all ten plugins matched, all four editors
+mounted, the relation index was ready, and no exceptions or crashes occurred.
