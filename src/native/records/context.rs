@@ -541,18 +541,18 @@ fn read_presentation_head(path: &Path) -> io::Result<Option<String>> {
             }
             frontmatter_seen = true;
             in_frontmatter = true;
-            head.push_str(&line);
+            head.push_str(line);
             continue;
         }
         if in_frontmatter {
-            head.push_str(&line);
+            head.push_str(line);
             if trimmed == "---" {
                 in_frontmatter = false;
             }
             continue;
         }
 
-        head.push_str(&line);
+        head.push_str(line);
         // The title is selected from the first H1 before an H2/column bullet.
         // Read one bounded head, keeping the shared title parser authoritative.
         if rules::track_fence(trimmed, &mut fence) || fence.is_some() {

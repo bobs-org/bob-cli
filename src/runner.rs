@@ -384,7 +384,7 @@ Run 'bob albums <command> --help' for more information on a command.";
 const RECORDS_MEMBERS: &[Member] = &[
     Member {
         name: "check",
-        about: "Check configured Record Notes against their schemas",
+        about: "Check Record Notes against their album or config schemas",
         leaf: Leaf {
             native_command: NativeCommand::RecordsCheck,
             script_command: None,
@@ -400,7 +400,7 @@ const RECORDS_MEMBERS: &[Member] = &[
     },
     Member {
         name: "list",
-        about: "List configured Record Note collections (default)",
+        about: "List Record Note collections (default)",
         leaf: Leaf {
             native_command: NativeCommand::RecordsList,
             script_command: None,
@@ -408,7 +408,7 @@ const RECORDS_MEMBERS: &[Member] = &[
     },
     Member {
         name: "new",
-        about: "Create one Record Note from its configured schema",
+        about: "Create one Record Note from its schema",
         leaf: Leaf {
             native_command: NativeCommand::RecordsNew,
             script_command: None,
@@ -438,7 +438,7 @@ Bare `bob records` runs the read-only list.
 Examples:
   bob records                                      List record types and counts
   bob records show restaurant                     Inspect a schema and common values
-  bob records check -f json                       Lint every configured record folder
+  bob records check -f json                       Lint every record folder
   bob records init movie -p fun                   Scaffold movie.md, movies.md, and movies.base
   bob records new restaurant 'Ramen Nagi' -s status=to_try
 
@@ -996,7 +996,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "records",
-        about: "List, inspect, check, scaffold, and create or update configured Record Notes",
+        about: "List, inspect, check, scaffold, and create or update Record Notes",
         section: Section::Vault,
         target: Target::Group(Group {
             members: RECORDS_MEMBERS,

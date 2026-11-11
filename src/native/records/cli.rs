@@ -1,6 +1,7 @@
 //! Public `bob records` commands.
 
 use std::{
+    collections::BTreeSet,
     ffi::OsString,
     fs, io, iter,
     path::{Path, PathBuf},
@@ -15,20 +16,33 @@ use serde_json::{json, Value};
 
 use super::{
     catalog::RecordCatalog,
-    check::TypeReport,
+    check::{
+        collect_markdown_outside_config_folders, collect_orphan_records,
+        AlbumMembership, TypeReport,
+    },
+    context::{
+        AlbumRecordIdentity, RecordContext, RecordKindResolution,
+        ResolvedRecordKind,
+    },
     init::{plan_init, PieceAction, PlannedPiece},
-    plan::{plan_create, RecordCreateRequest},
+    plan::{plan_create_with_identity, RecordCreateRequest},
     render::RecordNoteInput,
     schema::{
         FieldInputState, FieldKind, RecordDate, RecordFieldInput, RecordScalar,
-        RecordValue, RecordsConfig,
+        RecordType, RecordValue, RecordsConfig,
     },
 };
 use crate::native::{
+    albums::{
+        registry::{AlbumEntry, DiscoveryHealth, RecordTypeSource},
+        AlbumFinding, AlbumIssueSeverity,
+    },
     capture::{write_staged_files, StagedTextFile},
     config::{self, records::load_records_config},
     env as bob_env,
+    projects::frontmatter_type_names,
     style::Styler,
+    vault_links::VaultLinkResolver,
 };
 
 const SCHEMA_VERSION: u32 = 1;
@@ -76,95 +90,94 @@ pub(crate) fn run_show(args: Vec<OsString>) -> i32 {
     };
     let output_format = format_from(&matches);
     let vault = vault_from(&matches);
-    match load_config() {
-        Ok(config) => {
-            let Some(record_type) = matches
-                .get_one::<String>("type")
-                .and_then(|id| config.record_type(id))
-            else {
-                let id = matches
-                    .get_one::<String>("type")
-                    .map_or("", String::as_str);
-                return report_error(
-                    "bob records show",
-                    output_format,
-                    &format!("unknown record type `{id}`"),
-                    2,
-                );
-            };
-            let mut catalog = RecordCatalog::new(vault);
-            let folder = catalog.folder(&record_type.dir);
-            let fields: Vec<Value> = record_type
-                .fields
-                .iter()
-                .map(|field| {
-                    let kind = kind_name(&field.kind);
-                    let choices: Vec<Value> = match &field.kind {
-                        FieldKind::Choices(choices) => choices
-                            .iter()
-                            .map(|choice| {
-                                json!({
-                                    "value": choice.value,
-                                    "label": choice.label,
-                                })
-                            })
-                            .collect(),
-                        _ => Vec::new(),
-                    };
-                    let top_values: Vec<Value> = if field.suggest {
-                        folder
-                            .value_suggestions(&field.key)
-                            .into_iter()
-                            .take(5)
-                            .map(|value| {
-                                json!({
-                                    "value": value.insert,
-                                    "count": value.count,
-                                })
-                            })
-                            .collect()
-                    } else {
-                        Vec::new()
-                    };
-                    json!({
-                        "key": field.key,
-                        "label": field.label,
-                        "kind": kind,
-                        "required": field.required,
-                        "list": field.list,
-                        "default": field.default.as_ref().map(value_display),
-                        "choices": choices,
-                        "top_values": top_values,
-                    })
-                })
-                .collect();
-            let payload = json!({
-                "schema_version": SCHEMA_VERSION,
-                "type": record_type.id,
-                "label": record_type.label,
-                "dir": record_type.dir,
-                "emoji": record_type.emoji,
-                "dated_notes": record_type.dated_notes,
-                "count": folder.notes().len(),
-                "fields": fields,
-            });
-            print_show(&payload, record_type, output_format);
-            0
-        }
-        Err(error) => {
-            report_config_error("bob records show", output_format, error)
-        }
+    let context = load_context(&vault);
+    if let Some(code) =
+        report_discovery_errors("bob records show", output_format, &context)
+    {
+        return code;
     }
+    let selector = matches.get_one::<String>("type").map_or("", String::as_str);
+    let kind = match resolve_usable_kind(&context, selector) {
+        Ok(kind) => kind,
+        Err(message) => {
+            return report_error("bob records show", output_format, &message, 2)
+        }
+    };
+    let record_type = kind.record_type();
+    let mut catalog = RecordCatalog::new(vault);
+    let folder = catalog.folder(&record_type.dir);
+    let fields: Vec<Value> = record_type
+        .fields
+        .iter()
+        .map(|field| {
+            let kind_name = kind_name(&field.kind);
+            let choices: Vec<Value> = match &field.kind {
+                FieldKind::Choices(choices) => choices
+                    .iter()
+                    .map(|choice| {
+                        json!({
+                            "value": choice.value,
+                            "label": choice.label,
+                        })
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            let top_values: Vec<Value> = if field.suggest {
+                folder
+                    .value_suggestions(&field.key)
+                    .into_iter()
+                    .take(5)
+                    .map(|value| {
+                        json!({
+                            "value": value.insert,
+                            "count": value.count,
+                        })
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            json!({
+                "key": field.key,
+                "label": field.label,
+                "kind": kind_name,
+                "required": field.required,
+                "list": field.list,
+                "default": field.default.as_ref().map(value_display),
+                "choices": choices,
+                "top_values": top_values,
+            })
+        })
+        .collect();
+    let mut payload = json!({
+        "schema_version": SCHEMA_VERSION,
+        "type": record_type.id,
+        "label": record_type.label,
+        "dir": record_type.dir,
+        "emoji": record_type.emoji,
+        "dated_notes": record_type.dated_notes,
+        "count": folder.notes().len(),
+        "fields": fields,
+    });
+    merge_kind_metadata(&mut payload, &kind);
+    print_warnings(
+        "bob records show",
+        output_format,
+        &kind_warnings(&context, selector),
+    );
+    print_show(&payload, record_type, kind.album.as_ref(), output_format);
+    0
 }
 
 pub(crate) fn build_cli_check() -> ClapCommand {
     ClapCommand::new("bob records check")
-        .about("Check configured Record Notes against their schemas")
+        .about("Check Record Notes against their album or config schemas")
         .long_about(
-            "Lint each configured Record Note folder. Checks the type link, required and typed fields, legacy keys, and records filed outside their configured folder.",
+            "Lint each record folder from the effective vault's albums, falling back to unclaimed config kinds. Checks the type link, parent membership for album records, required and typed fields, legacy keys, checkboxes, and records filed outside their folder. TYPE accepts a noun or album stem.",
         )
         .after_help(
-            "Examples:\n  bob records check\n  bob records check restaurant\n  bob records check -f json\n\nSee docs/records.md for the schema and lint rules.",
+            "Examples:\n  bob records check\n  bob records check restaurant\n  bob records check eat\n  bob records check -f json\n\nSee docs/records.md for the schema and lint rules.",
         )
         .disable_help_flag(true)
         .arg(record_type_arg(false))
@@ -175,9 +188,9 @@ pub(crate) fn build_cli_check() -> ClapCommand {
 
 pub(crate) fn build_cli_list() -> ClapCommand {
     ClapCommand::new("bob records list")
-        .about("List configured Record Note collections (default)")
+        .about("List Record Note collections (default)")
         .long_about(
-            "Show each configured record type, its folder, note count, and required fields. This command is read-only. Bare `bob records` runs this command.",
+            "Show each album or config record type, its folder, note count, required fields, and source. Invalid albums still contribute their folder counts. This command is read-only. Bare `bob records` runs this command.",
         )
         .after_help(
             "Examples:\n  bob records\n  bob records list\n  bob records list -f json\n\nSee docs/records.md for record schemas.",
@@ -190,12 +203,12 @@ pub(crate) fn build_cli_list() -> ClapCommand {
 
 pub(crate) fn build_cli_new() -> ClapCommand {
     ClapCommand::new("bob records new")
-        .about("Create one Record Note from its configured schema")
+        .about("Create one Record Note from its schema")
         .long_about(
-            "Plan and create a single Record Note. Supply fields with repeated --set KEY=VALUE arguments and notes with repeated --note arguments. Missing required fields are refused with a ready-to-copy draft. --dry-run prints the exact Markdown without writing.",
+            "Plan and create a single Record Note. TYPE accepts a noun or album stem. Supply fields with repeated --set KEY=VALUE arguments and notes with repeated --note arguments. Missing required fields are refused with a ready-to-copy draft. --dry-run prints the exact Markdown without writing.",
         )
         .after_help(
-            "Examples:\n  bob records new restaurant 'Ramen Nagi' -s status=to_try -s category=Ramen -s location=Clark\n  bob records new podcast 'The Daily' -s status=to_try -s category=News -n 'Recommended by Kelly' -d\n  bob records new restaurant '1950 Originals' -S 1950s_originals -s status=to_try -s category=Pizza -s location=Westwood\n  bob records new restaurant 'Ninja Sushi' -d -f json\n\nSee docs/records.md for field kinds, defaults, and failure behavior.",
+            "Examples:\n  bob records new restaurant 'Ramen Nagi' -s status=to_try -s category=Ramen -s location=Clark\n  bob records new eat 'Ramen Nagi' -s status=to_try -s category=Ramen -s location=Clark\n  bob records new podcast 'The Daily' -s status=to_try -s category=News -n 'Recommended by Kelly' -d\n  bob records new restaurant '1950 Originals' -S 1950s_originals -s status=to_try -s category=Pizza -s location=Westwood\n  bob records new restaurant 'Ninja Sushi' -d -f json\n\nSee docs/records.md for field kinds, defaults, and failure behavior.",
         )
         .disable_help_flag(true)
         .arg(record_type_arg(true))
@@ -247,10 +260,10 @@ pub(crate) fn build_cli_update() -> ClapCommand {
     ClapCommand::new("bob records update")
         .about("Update one existing Record Note in place")
         .long_about(
-            "Resolve an existing record by TYPE and STEM, then edit only the supplied YAML value spans and append notes with repeated --note arguments. Field-only and note-only updates work without repeating required creation fields. --dry-run prints the exact Markdown without writing.",
+            "Resolve an existing record by TYPE and STEM, then edit only the supplied YAML value spans and append notes with repeated --note arguments. TYPE accepts a noun or album stem. Field-only and note-only updates work without repeating required creation fields. --dry-run prints the exact Markdown without writing.",
         )
         .after_help(
-            "Examples:\n  bob records update restaurant ninja_sushi -s status=liked -n 'Went back, still great'\n  bob records update restaurant ninja_sushi -s location= -d\n  bob records update podcast talk_python -n 'Listened to the async episode' -d -f json\n\nSee docs/records.md for update semantics, optional clearing, and failure behavior.",
+            "Examples:\n  bob records update restaurant ninja_sushi -s status=liked -n 'Went back, still great'\n  bob records update eat ninja_sushi -s status=liked\n  bob records update restaurant ninja_sushi -s location= -d\n  bob records update podcast talk_python -n 'Listened to the async episode' -d -f json\n\nSee docs/records.md for update semantics, optional clearing, and failure behavior.",
         )
         .disable_help_flag(true)
         .arg(record_type_arg(true))
@@ -301,7 +314,7 @@ pub(crate) fn build_cli_init() -> ClapCommand {
             "Examples:\n  bob records init show\n  bob records init movie -p fun\n  bob records init movie -p fun -d\n  bob records init movie -p fun -f json\n\nSee docs/records.md for adding a record type.",
         )
         .disable_help_flag(true)
-        .arg(record_type_arg(true))
+        .arg(record_type_arg(true).help("Configured record type id"))
         .arg(bob_dir_arg())
         .arg(dry_run_arg().help("Print the planned files without writing"))
         .arg(format_arg())
@@ -321,10 +334,10 @@ pub(crate) fn build_cli_show() -> ClapCommand {
     ClapCommand::new("bob records show")
         .about("Show one record schema and its common values")
         .long_about(
-            "Display a record type's ordered fields, kinds, required marks, defaults, choices, and most-used suggested values.",
+            "Display a record type's ordered fields, kinds, required marks, defaults, choices, and most-used suggested values. TYPE accepts a noun or album stem.",
         )
         .after_help(
-            "Examples:\n  bob records show restaurant\n  bob records show podcast -f json\n\nSee docs/records.md for the schema contract.",
+            "Examples:\n  bob records show restaurant\n  bob records show eat\n  bob records show podcast -f json\n\nSee docs/records.md for the schema contract.",
         )
         .disable_help_flag(true)
         .arg(record_type_arg(true))
@@ -375,7 +388,7 @@ fn record_type_arg(required: bool) -> Arg {
         .value_name("TYPE")
         .required(required)
         .value_hint(ValueHint::Other)
-        .help("Configured record type id")
+        .help("Record noun or album stem")
 }
 
 fn bob_dir_arg() -> Arg {
@@ -431,129 +444,108 @@ fn vault_from(matches: &ArgMatches) -> PathBuf {
         .unwrap_or_else(bob_env::bob_dir)
 }
 
-fn load_config() -> Result<RecordsConfig, super::schema::RecordDiagnostic> {
-    load_records_config()
+fn load_context(vault: &Path) -> RecordContext {
+    RecordContext::discover(vault, &config::config_path())
 }
 
 fn execute_list(matches: &ArgMatches) -> i32 {
     let output_format = format_from(matches);
-    match load_config() {
-        Ok(config) => {
-            let mut catalog = RecordCatalog::new(vault_from(matches));
-            let rows: Vec<Value> = config
-                .types
-                .iter()
-                .map(|record_type| {
-                    let folder = catalog.folder(&record_type.dir);
-                    let required: Vec<&str> = record_type
-                        .fields
-                        .iter()
-                        .filter(|field| field.required)
-                        .map(|field| field.key.as_str())
-                        .collect();
-                    json!({
-                        "id": record_type.id,
-                        "label": record_type.label,
-                        "dir": record_type.dir,
-                        "emoji": record_type.emoji,
-                        "count": folder.notes().len(),
-                        "required_fields": required,
-                    })
-                })
-                .collect();
-            let payload = json!({
-                "schema_version": SCHEMA_VERSION,
-                "types": rows,
-            });
-            print_list(&payload, &config, output_format);
-            0
-        }
-        Err(error) => {
-            report_config_error("bob records list", output_format, error)
-        }
+    let vault = vault_from(matches);
+    let context = load_context(&vault);
+    if let Some(code) =
+        report_discovery_errors("bob records list", output_format, &context)
+    {
+        return code;
     }
+    if context.album_claims().is_empty()
+        && context.usable_kinds().is_empty()
+        && let Some(error) = context.registry().config_diagnostic.clone()
+    {
+        return report_config_error("bob records list", output_format, error);
+    }
+    let mut catalog = RecordCatalog::new(&vault);
+    let collections = all_collections(&context);
+    let rows: Vec<Value> = collections
+        .iter()
+        .map(|collection| {
+            let folder = catalog.folder(collection.dir());
+            collection.list_row(folder)
+        })
+        .collect();
+    let payload = json!({
+        "schema_version": SCHEMA_VERSION,
+        "types": rows,
+    });
+    print_list(&payload, output_format);
+    0
 }
 
 fn execute_check(matches: &ArgMatches) -> i32 {
     let output_format = format_from(matches);
-    match load_config() {
-        Ok(config) => {
-            let selected_type =
-                matches.get_one::<String>("type").map(String::as_str);
-            if let Some(id) = selected_type
-                && config.record_type(id).is_none()
-            {
+    let vault = vault_from(matches);
+    let context = load_context(&vault);
+    if let Some(code) =
+        report_discovery_errors("bob records check", output_format, &context)
+    {
+        return code;
+    }
+    let selected_type = matches.get_one::<String>("type").map(String::as_str);
+    let collections = match selected_type {
+        Some(selector) => match resolve_check_collection(&context, selector) {
+            Ok(collection) => vec![collection],
+            Err(message) => {
                 return report_error(
                     "bob records check",
                     output_format,
-                    &format!("unknown record type `{id}`"),
+                    &message,
                     2,
+                )
+            }
+        },
+        None => {
+            if context.album_claims().is_empty()
+                && context.usable_kinds().is_empty()
+                && let Some(error) =
+                    context.registry().config_diagnostic.clone()
+            {
+                return report_config_error(
+                    "bob records check",
+                    output_format,
+                    error,
                 );
             }
-            let vault = vault_from(matches);
-            let today = bob_env::current_datetime().date();
-            let mut catalog = RecordCatalog::new(vault.clone());
-            let mut reports = Vec::new();
-            for record_type in &config.types {
-                if selected_type
-                    .is_some_and(|selected| selected != record_type.id)
-                {
-                    continue;
-                }
-                let folder = catalog.folder(&record_type.dir);
-                let mut report = TypeReport::new(record_type, folder);
-                for note in folder.notes() {
-                    report.check_note(record_type, note, today);
-                }
-                report.check_suggested_values(record_type, folder);
-                for (path, note_kind) in [
-                    (PathBuf::from(format!("{}.md", record_type.id)), "type"),
-                    (
-                        PathBuf::from(format!("{}.md", record_type.dir)),
-                        "collection",
-                    ),
-                ] {
-                    if note_kind == "collection"
-                        && record_type.id == record_type.dir
-                    {
-                        continue;
-                    }
-                    if !vault.join(&path).is_file() {
-                        let path_text = path.display().to_string();
-                        report.push(
-                            "error",
-                            "record_missing_collection_note",
-                            Some(&path_text),
-                            None,
-                            format!(
-                                "required {note_kind} note is missing: {}",
-                                path.display()
-                            ),
-                        );
-                    }
-                }
-                reports.push(report);
-            }
-            add_external_records(&vault, &config, &mut reports);
-            let errors: usize =
-                reports.iter().map(|report| report.errors).sum();
-            let warnings: usize =
-                reports.iter().map(|report| report.warnings).sum();
-            let payload = json!({
-                "schema_version": SCHEMA_VERSION,
-                "types": reports,
-                "summary": { "errors": errors, "warnings": warnings },
-            });
-            print_check(&payload, &config, output_format);
-            if errors > 0 {
-                1
-            } else {
-                0
-            }
+            all_collections(&context)
         }
-        Err(error) => {
-            report_config_error("bob records check", output_format, error)
-        }
+    };
+    let today = bob_env::current_datetime().date();
+    let mut catalog = RecordCatalog::new(vault.clone());
+    let resolver = VaultLinkResolver::new(&vault);
+    let mut reports = Vec::new();
+    for collection in &collections {
+        reports.push(check_collection(
+            collection,
+            &vault,
+            &mut catalog,
+            &resolver,
+            today,
+        ));
+    }
+    add_config_outside_records(&vault, &collections, &mut reports);
+    if selected_type.is_none() {
+        add_orphan_records(&vault, &context, &mut reports);
+    }
+    let errors: usize = reports.iter().map(|report| report.errors).sum();
+    let warnings: usize = reports.iter().map(|report| report.warnings).sum();
+    let payload = json!({
+        "schema_version": SCHEMA_VERSION,
+        "types": reports,
+        "summary": { "errors": errors, "warnings": warnings },
+    });
+    print_check(&payload, output_format);
+    if errors > 0 {
+        1
+    } else {
+        0
     }
 }
 
@@ -564,12 +556,24 @@ fn execute_new(matches: &ArgMatches) -> i32 {
     let title = matches
         .get_one::<String>("title")
         .expect("required by clap");
-    let config = match load_config() {
-        Ok(config) => config,
-        Err(error) => {
-            return report_config_error("bob records new", output_format, error)
+    let context = load_context(&vault);
+    if let Some(code) =
+        report_discovery_errors("bob records new", output_format, &context)
+    {
+        return code;
+    }
+    let kind = match resolve_usable_kind(&context, type_id) {
+        Ok(kind) => kind,
+        Err(message) => {
+            return report_error("bob records new", output_format, &message, 2)
         }
     };
+    print_warnings(
+        "bob records new",
+        output_format,
+        &kind_warnings(&context, type_id),
+    );
+    let config = config_from_kind(&kind);
     let timezone = match crate::native::day_timezone() {
         Ok(timezone) => timezone,
         Err(error) => {
@@ -596,10 +600,10 @@ fn execute_new(matches: &ArgMatches) -> i32 {
     let stem = matches.get_one::<String>("stem").map(String::as_str);
     let now = bob_env::current_datetime();
     let mut catalog = RecordCatalog::new(&vault);
-    let plan = match plan_create(
+    let plan = match plan_create_with_identity(
         RecordCreateRequest {
             config: &config,
-            record_type: type_id,
+            record_type: &kind.record_type().id,
             title,
             explicit_stem: stem,
             fields: &fields,
@@ -610,6 +614,7 @@ fn execute_new(matches: &ArgMatches) -> i32 {
             reserved_paths: &[],
         },
         &mut catalog,
+        kind.render_identity(),
     ) {
         Ok(plan) => plan,
         Err(error) => {
@@ -627,7 +632,7 @@ fn execute_new(matches: &ArgMatches) -> i32 {
     };
     let target = vault.join(&plan.path);
     if matches.get_flag("dry-run") {
-        print_new_dry_run(&plan, markdown, output_format);
+        print_new_dry_run(&plan, markdown, Some(&kind), output_format);
         return 0;
     }
 
@@ -659,7 +664,7 @@ fn execute_new(matches: &ArgMatches) -> i32 {
         );
     }
 
-    let payload = json!({
+    let mut payload = json!({
         "schema_version": SCHEMA_VERSION,
         "status": "written",
         "type": plan.record_type,
@@ -677,14 +682,8 @@ fn execute_new(matches: &ArgMatches) -> i32 {
             },
         })).collect::<Vec<_>>(),
     });
-    let record_type =
-        config.record_type(type_id).expect("validated by planner");
-    print_new_success(
-        &payload,
-        &plan,
-        record_type.emoji.as_deref(),
-        output_format,
-    );
+    merge_kind_metadata(&mut payload, &kind);
+    print_new_success(&payload, &plan, &kind, output_format);
     if matches.get_flag("open")
         && let Err(message) = open_in_obsidian(&vault, &plan.path)
     {
@@ -698,16 +697,29 @@ fn execute_update(matches: &ArgMatches) -> i32 {
     let vault = vault_from(matches);
     let type_id = matches.get_one::<String>("type").expect("required by clap");
     let stem = matches.get_one::<String>("stem").expect("required by clap");
-    let config = match load_config() {
-        Ok(config) => config,
-        Err(error) => {
-            return report_config_error(
+    let context = load_context(&vault);
+    if let Some(code) =
+        report_discovery_errors("bob records update", output_format, &context)
+    {
+        return code;
+    }
+    let kind = match resolve_usable_kind(&context, type_id) {
+        Ok(kind) => kind,
+        Err(message) => {
+            return report_error(
                 "bob records update",
                 output_format,
-                error,
-            );
+                &message,
+                2,
+            )
         }
     };
+    print_warnings(
+        "bob records update",
+        output_format,
+        &kind_warnings(&context, type_id),
+    );
+    let config = config_from_kind(&kind);
     let fields = match parse_field_inputs(matches) {
         Ok(fields) => fields,
         Err(message) => {
@@ -730,7 +742,7 @@ fn execute_update(matches: &ArgMatches) -> i32 {
     let target = match super::plan::resolve_update_target(
         &config,
         &mut catalog,
-        type_id,
+        &kind.record_type().id,
         stem,
     ) {
         Ok(target) => target,
@@ -782,11 +794,23 @@ fn execute_update(matches: &ArgMatches) -> i32 {
         return report_update_incomplete(&config, &plan, output_format);
     };
     if matches.get_flag("dry-run") {
-        print_update_dry_run(&config, &plan, markdown, output_format);
+        print_update_dry_run(
+            &config,
+            &plan,
+            markdown,
+            Some(&kind),
+            output_format,
+        );
         return 0;
     }
     if markdown == original {
-        print_update_success(&config, &plan, &notes, output_format);
+        print_update_success(
+            &config,
+            &plan,
+            &notes,
+            Some(&kind),
+            output_format,
+        );
         return 0;
     }
     let staged = StagedTextFile {
@@ -803,7 +827,7 @@ fn execute_update(matches: &ArgMatches) -> i32 {
             1,
         );
     }
-    print_update_success(&config, &plan, &notes, output_format);
+    print_update_success(&config, &plan, &notes, Some(&kind), output_format);
     if matches.get_flag("open")
         && let Err(message) = open_in_obsidian(&vault, &plan.path)
     {
@@ -816,7 +840,7 @@ fn execute_init(matches: &ArgMatches) -> i32 {
     let output_format = format_from(matches);
     let vault = vault_from(matches);
     let type_id = matches.get_one::<String>("type").expect("required by clap");
-    let config = match load_config() {
+    let config = match load_records_config() {
         Ok(config) => config,
         Err(error) => {
             return report_config_error(
@@ -1161,29 +1185,31 @@ fn print_update_dry_run(
     _config: &RecordsConfig,
     plan: &super::plan::RecordUpdatePlan,
     markdown: &str,
+    kind: Option<&ResolvedRecordKind>,
     format: OutputFormat,
 ) {
     if format == OutputFormat::Json {
-        println!(
-            "{}",
-            json!({
-                "schema_version": SCHEMA_VERSION,
-                "status": "planned",
-                "type": plan.record_type,
-                "title": plan.title,
-                "stem": plan.stem,
-                "path": plan.path.display().to_string(),
-                "markdown": markdown,
-                "body": plan.body,
-                "changed": plan.changed,
-                "properties": plan.properties.iter().map(update_property_json).collect::<Vec<_>>(),
-                "warnings": plan.warnings.iter().map(|warning| json!({
-                    "field": warning.field,
-                    "code": warning.diagnostic_code(),
-                    "message": warning.message,
-                })).collect::<Vec<_>>(),
-            })
-        );
+        let mut payload = json!({
+            "schema_version": SCHEMA_VERSION,
+            "status": "planned",
+            "type": plan.record_type,
+            "title": plan.title,
+            "stem": plan.stem,
+            "path": plan.path.display().to_string(),
+            "markdown": markdown,
+            "body": plan.body,
+            "changed": plan.changed,
+            "properties": plan.properties.iter().map(update_property_json).collect::<Vec<_>>(),
+            "warnings": plan.warnings.iter().map(|warning| json!({
+                "field": warning.field,
+                "code": warning.diagnostic_code(),
+                "message": warning.message,
+            })).collect::<Vec<_>>(),
+        });
+        if let Some(kind) = kind {
+            merge_kind_metadata(&mut payload, kind);
+        }
+        println!("{payload}");
         return;
     }
     print!("{markdown}");
@@ -1193,6 +1219,7 @@ fn print_update_success(
     config: &RecordsConfig,
     plan: &super::plan::RecordUpdatePlan,
     notes: &[RecordNoteInput],
+    kind: Option<&ResolvedRecordKind>,
     format: OutputFormat,
 ) {
     let record_type = config.record_type(&plan.record_type);
@@ -1200,25 +1227,26 @@ fn print_update_success(
     let label = record_type
         .map_or(plan.record_type.as_str(), |kind| kind.label.as_str());
     if format == OutputFormat::Json {
-        println!(
-            "{}",
-            json!({
-                "schema_version": SCHEMA_VERSION,
-                "status": "written",
-                "type": plan.record_type,
-                "title": plan.title,
-                "stem": plan.stem,
-                "path": plan.path.display().to_string(),
-                "changed": plan.changed,
-                "notes": notes.len(),
-                "properties": plan.properties.iter().map(update_property_json).collect::<Vec<_>>(),
-                "warnings": plan.warnings.iter().map(|warning| json!({
-                    "field": warning.field,
-                    "code": warning.diagnostic_code(),
-                    "message": warning.message,
-                })).collect::<Vec<_>>(),
-            })
-        );
+        let mut payload = json!({
+            "schema_version": SCHEMA_VERSION,
+            "status": "written",
+            "type": plan.record_type,
+            "title": plan.title,
+            "stem": plan.stem,
+            "path": plan.path.display().to_string(),
+            "changed": plan.changed,
+            "notes": notes.len(),
+            "properties": plan.properties.iter().map(update_property_json).collect::<Vec<_>>(),
+            "warnings": plan.warnings.iter().map(|warning| json!({
+                "field": warning.field,
+                "code": warning.diagnostic_code(),
+                "message": warning.message,
+            })).collect::<Vec<_>>(),
+        });
+        if let Some(kind) = kind {
+            merge_kind_metadata(&mut payload, kind);
+        }
+        println!("{payload}");
     } else {
         let prefix = Styler::detect().green("✓");
         let emoji_text =
@@ -1273,109 +1301,22 @@ fn print_update_success(
     let _ = config;
 }
 
-fn add_external_records(
-    vault: &Path,
-    config: &RecordsConfig,
-    reports: &mut [TypeReport],
-) {
-    let mut files = Vec::new();
-    collect_markdown(vault, vault, config, &mut files);
-    for report in reports.iter_mut() {
-        let Some(record_type) = config.record_type(&report.id) else {
-            continue;
-        };
-        for path in &files {
-            let relative = path
-                .strip_prefix(vault)
-                .unwrap_or(path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            if relative.split('/').next() == Some(record_type.dir.as_str()) {
-                continue;
-            }
-            let Ok(contents) = fs::read_to_string(path) else {
-                continue;
-            };
-            let Some(frontmatter) =
-                crate::native::projects::parse_frontmatter(&contents)
-            else {
-                continue;
-            };
-            if crate::native::projects::frontmatter_type_names(&frontmatter)
-                .iter()
-                .any(|name| name == &record_type.id)
-            {
-                report.push(
-                    "error",
-                    "record_outside_folder",
-                    Some(&relative),
-                    Some("type"),
-                    format!(
-                        "record type {} belongs in {}/",
-                        record_type.id, record_type.dir
-                    ),
-                );
-            }
-        }
-    }
-}
-
-fn collect_markdown(
-    root: &Path,
-    directory: &Path,
-    config: &RecordsConfig,
-    files: &mut Vec<PathBuf>,
-) {
-    let Ok(entries) = fs::read_dir(directory) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if file_type.is_symlink() {
-            continue;
-        }
-        if file_type.is_dir() {
-            let Some(name) = path.file_name() else {
-                continue;
-            };
-            if crate::native::is_always_excluded_note_directory_name(name)
-                || (directory == root
-                    && config.types.iter().any(|record_type| {
-                        name.to_string_lossy()
-                            .eq_ignore_ascii_case(&record_type.dir)
-                    }))
-            {
-                continue;
-            }
-            collect_markdown(root, &path, config, files);
-        } else if file_type.is_file()
-            && path
-                .extension()
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
-        {
-            files.push(path);
-        }
-    }
-}
-
-fn print_list(payload: &Value, config: &RecordsConfig, format: OutputFormat) {
+fn print_list(payload: &Value, format: OutputFormat) {
     if format == OutputFormat::Json {
         println!("{payload}");
         return;
     }
-    if config.types.is_empty() {
+    let rows = payload["types"].as_array().cloned().unwrap_or_default();
+    if rows.is_empty() {
         println!(
-            "No record types configured in {}.",
+            "No record types in the effective vault or {}.",
             config::config_path().display()
         );
         return;
     }
     let styler = Styler::detect();
     println!("{}", styler.bold("Record Notes"));
-    for row in payload["types"].as_array().into_iter().flatten() {
+    for row in &rows {
         let emoji = row["emoji"].as_str().unwrap_or("");
         let label = row["label"].as_str().unwrap_or("");
         let dir = row["dir"].as_str().unwrap_or("");
@@ -1390,8 +1331,9 @@ fn print_list(payload: &Value, config: &RecordsConfig, format: OutputFormat) {
                     .join(", ")
             })
             .unwrap_or_default();
+        let album = album_owner_suffix(row);
         println!(
-            "{} {}  {}/  {} note{}  required: {}",
+            "{} {}  {}/  {} note{}  required: {}{}",
             if emoji.is_empty() { "•" } else { emoji },
             styler.bold(label),
             dir,
@@ -1402,6 +1344,7 @@ fn print_list(payload: &Value, config: &RecordsConfig, format: OutputFormat) {
             } else {
                 &required
             },
+            album,
         );
     }
 }
@@ -1409,6 +1352,7 @@ fn print_list(payload: &Value, config: &RecordsConfig, format: OutputFormat) {
 fn print_show(
     payload: &Value,
     record_type: &super::schema::RecordType,
+    album: Option<&AlbumRecordIdentity>,
     format: OutputFormat,
 ) {
     if format == OutputFormat::Json {
@@ -1417,8 +1361,14 @@ fn print_show(
     }
     let styler = Styler::detect();
     let emoji = record_type.emoji.as_deref().unwrap_or("•");
+    let album_text = album
+        .map(|album| match album.owner.as_deref() {
+            Some(owner) => format!("  {} · {owner}", album.title),
+            None => format!("  {}", album.title),
+        })
+        .unwrap_or_default();
     println!(
-        "{} {}  {}/ · {} note{}",
+        "{} {}  {}/ · {} note{}{album_text}",
         emoji,
         styler.bold(&record_type.label),
         record_type.dir,
@@ -1495,7 +1445,7 @@ fn print_show(
     }
 }
 
-fn print_check(payload: &Value, config: &RecordsConfig, format: OutputFormat) {
+fn print_check(payload: &Value, format: OutputFormat) {
     if format == OutputFormat::Json {
         println!("{payload}");
         return;
@@ -1519,7 +1469,7 @@ fn print_check(payload: &Value, config: &RecordsConfig, format: OutputFormat) {
     let summary = format!(
         "{} — {} errors, {} warnings",
         if counts.is_empty() {
-            "No record types configured"
+            "No record types"
         } else {
             &counts
         },
@@ -1566,32 +1516,33 @@ fn print_check(payload: &Value, config: &RecordsConfig, format: OutputFormat) {
             );
         }
     }
-    let _ = config;
 }
 
 fn print_new_dry_run(
     plan: &super::plan::RecordCreatePlan,
     markdown: &str,
+    kind: Option<&ResolvedRecordKind>,
     format: OutputFormat,
 ) {
     if format == OutputFormat::Json {
-        println!(
-            "{}",
-            json!({
-                "schema_version": SCHEMA_VERSION,
-                "status": "planned",
-                "type": plan.record_type,
-                "title": plan.title,
-                "path": plan.path.display().to_string(),
-                "markdown": markdown,
-                "properties": plan.properties.iter().map(|property| json!({
-                    "key": property.key,
-                    "label": property.label,
-                    "state": property.state.as_str(),
-                    "value": property.display,
-                })).collect::<Vec<_>>(),
-            })
-        );
+        let mut payload = json!({
+            "schema_version": SCHEMA_VERSION,
+            "status": "planned",
+            "type": plan.record_type,
+            "title": plan.title,
+            "path": plan.path.display().to_string(),
+            "markdown": markdown,
+            "properties": plan.properties.iter().map(|property| json!({
+                "key": property.key,
+                "label": property.label,
+                "state": property.state.as_str(),
+                "value": property.display,
+            })).collect::<Vec<_>>(),
+        });
+        if let Some(kind) = kind {
+            merge_kind_metadata(&mut payload, kind);
+        }
+        println!("{payload}");
     } else {
         print!("{markdown}");
     }
@@ -1600,20 +1551,542 @@ fn print_new_dry_run(
 fn print_new_success(
     payload: &Value,
     plan: &super::plan::RecordCreatePlan,
-    emoji: Option<&str>,
+    kind: &ResolvedRecordKind,
     format: OutputFormat,
 ) {
     if format == OutputFormat::Json {
         println!("{payload}");
         return;
     }
+    let emoji = kind.record_type().emoji.as_deref().unwrap_or("");
+    let prefix = Styler::detect().green("✓");
+    if let Some(album) = &kind.album {
+        let owner = album
+            .owner
+            .as_deref()
+            .map(|owner| format!(" · {owner}"))
+            .unwrap_or_default();
+        println!(
+            "{}  {emoji} New {} → {}{owner}",
+            prefix,
+            kind.record_type().id,
+            album.title
+        );
+        println!("  {}  {}", plan.path.display(), plan.title);
+        return;
+    }
     println!(
-        "{}  {} {}  {}",
-        Styler::detect().green("✓"),
-        emoji.unwrap_or(""),
+        "{}  {emoji} {}  {}",
+        prefix,
         plan.path.display(),
         plan.title
     );
+}
+
+fn config_from_kind(kind: &ResolvedRecordKind) -> RecordsConfig {
+    RecordsConfig {
+        types: vec![kind.record_type().clone()],
+    }
+}
+
+fn merge_kind_metadata(payload: &mut Value, kind: &ResolvedRecordKind) {
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("source".to_owned(), json!(kind.source_name()));
+        if let Some(album) = &kind.album {
+            object.insert(
+                "album".to_owned(),
+                serde_json::to_value(album).expect("album identity"),
+            );
+        }
+    }
+}
+
+fn album_identity(entry: &AlbumEntry) -> AlbumRecordIdentity {
+    AlbumRecordIdentity {
+        stem: entry.declaration.stem.clone(),
+        title: entry.declaration.title.clone(),
+        owner: entry.owner.clone(),
+        breadcrumb: entry.breadcrumb.clone(),
+    }
+}
+
+fn album_owner_suffix(row: &Value) -> String {
+    let Some(album) = row.get("album") else {
+        return String::new();
+    };
+    let title = album["title"].as_str().unwrap_or("");
+    if title.is_empty() {
+        return String::new();
+    }
+    match album["owner"].as_str() {
+        Some(owner) => format!("  {title} · {owner}"),
+        None => format!("  {title}"),
+    }
+}
+
+enum Collection {
+    Usable(ResolvedRecordKind),
+    InvalidAlbum(AlbumEntry),
+}
+
+impl Collection {
+    fn dir(&self) -> &str {
+        match self {
+            Self::Usable(kind) => kind.record_type().dir.as_str(),
+            Self::InvalidAlbum(entry) => entry.declaration.stem.as_str(),
+        }
+    }
+
+    fn config_dir(&self) -> Option<&str> {
+        match self {
+            Self::Usable(kind)
+                if matches!(
+                    kind.sourced.source,
+                    RecordTypeSource::Config { .. }
+                ) =>
+            {
+                Some(kind.record_type().dir.as_str())
+            }
+            _ => None,
+        }
+    }
+
+    fn list_row(&self, folder: &super::catalog::FolderIndex) -> Value {
+        match self {
+            Self::Usable(kind) => {
+                let record_type = kind.record_type();
+                let required: Vec<&str> = record_type
+                    .fields
+                    .iter()
+                    .filter(|field| field.required)
+                    .map(|field| field.key.as_str())
+                    .collect();
+                let mut row = json!({
+                    "id": record_type.id,
+                    "label": record_type.label,
+                    "dir": record_type.dir,
+                    "emoji": record_type.emoji,
+                    "count": folder.notes().len(),
+                    "required_fields": required,
+                });
+                merge_kind_metadata(&mut row, kind);
+                row
+            }
+            Self::InvalidAlbum(entry) => {
+                let id = entry
+                    .declaration
+                    .noun_claim
+                    .clone()
+                    .unwrap_or_else(|| entry.declaration.stem.clone());
+                let label = entry
+                    .declaration
+                    .label
+                    .clone()
+                    .unwrap_or_else(|| entry.declaration.title.clone());
+                json!({
+                    "id": id,
+                    "label": label,
+                    "dir": entry.declaration.stem,
+                    "emoji": entry.declaration.emoji,
+                    "count": folder.notes().len(),
+                    "required_fields": Vec::<String>::new(),
+                    "source": "album",
+                    "album": album_identity(entry),
+                })
+            }
+        }
+    }
+}
+
+fn all_collections(context: &RecordContext) -> Vec<Collection> {
+    let usable = context.usable_kinds();
+    let mut collections = Vec::new();
+    for entry in context.album_claims() {
+        if let Some(kind) =
+            usable.iter().find(|kind| match &kind.sourced.source {
+                RecordTypeSource::Album { path } => {
+                    path == &entry.declaration.path
+                }
+                RecordTypeSource::Config { .. } => false,
+            })
+        {
+            collections.push(Collection::Usable(kind.clone()));
+        } else {
+            collections.push(Collection::InvalidAlbum(entry.clone()));
+        }
+    }
+    for kind in usable {
+        if matches!(kind.sourced.source, RecordTypeSource::Config { .. }) {
+            collections.push(Collection::Usable(kind));
+        }
+    }
+    collections
+}
+
+fn resolve_usable_kind(
+    context: &RecordContext,
+    selector: &str,
+) -> Result<ResolvedRecordKind, String> {
+    match context.resolve(selector) {
+        RecordKindResolution::Valid { kind, .. } => Ok(kind),
+        RecordKindResolution::Invalid {
+            paths, findings, ..
+        } => Err(invalid_claim_message(selector, &paths, &findings)),
+        RecordKindResolution::Unclaimed {
+            config_diagnostic, ..
+        } => Err(unclaimed_message(selector, config_diagnostic.as_ref())),
+        RecordKindResolution::DiscoveryIncomplete { errors } => {
+            Err(errors.join("\n"))
+        }
+    }
+}
+
+fn resolve_check_collection(
+    context: &RecordContext,
+    selector: &str,
+) -> Result<Collection, String> {
+    match context.resolve(selector) {
+        RecordKindResolution::Valid { kind, .. } => {
+            Ok(Collection::Usable(kind))
+        }
+        RecordKindResolution::Invalid {
+            paths, findings, ..
+        } => {
+            if paths.len() != 1 {
+                return Err(invalid_claim_message(selector, &paths, &findings));
+            }
+            context
+                .album_claims()
+                .iter()
+                .find(|entry| entry.declaration.path == paths[0])
+                .cloned()
+                .map(Collection::InvalidAlbum)
+                .ok_or_else(|| {
+                    invalid_claim_message(selector, &paths, &findings)
+                })
+        }
+        RecordKindResolution::Unclaimed {
+            config_diagnostic, ..
+        } => Err(unclaimed_message(selector, config_diagnostic.as_ref())),
+        RecordKindResolution::DiscoveryIncomplete { errors } => {
+            Err(errors.join("\n"))
+        }
+    }
+}
+
+fn invalid_claim_message(
+    selector: &str,
+    paths: &[String],
+    findings: &[AlbumFinding],
+) -> String {
+    let details = if findings.is_empty() {
+        format!("claimed by {}", paths.join(", "))
+    } else {
+        findings
+            .iter()
+            .map(format_album_finding)
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    format!("record type `{selector}` is not usable: {details}")
+}
+
+fn unclaimed_message(
+    selector: &str,
+    config_diagnostic: Option<&super::schema::RecordDiagnostic>,
+) -> String {
+    if let Some(diagnostic) = config_diagnostic {
+        diagnostic.to_string()
+    } else {
+        format!("unknown record type `{selector}`")
+    }
+}
+
+fn format_album_finding(finding: &AlbumFinding) -> String {
+    let mut location = finding.path.clone();
+    if let Some(line) = finding.line_number {
+        location.push(':');
+        location.push_str(&line.to_string());
+    }
+    if let Some(key) = &finding.key_path {
+        location.push_str(": ");
+        location.push_str(key);
+    }
+    format!("{location}: {}", finding.message)
+}
+
+fn kind_warnings(context: &RecordContext, selector: &str) -> Vec<AlbumFinding> {
+    match context.resolve(selector) {
+        RecordKindResolution::Valid { warnings, .. } => warnings,
+        _ => Vec::new(),
+    }
+}
+
+fn print_warnings(
+    command: &str,
+    format: OutputFormat,
+    warnings: &[AlbumFinding],
+) {
+    if format == OutputFormat::Json {
+        return;
+    }
+    let styler = Styler::detect();
+    for warning in warnings {
+        eprintln!(
+            "{command}: {}: {}",
+            styler.warning_prefix(),
+            format_album_finding(warning)
+        );
+    }
+}
+
+fn report_discovery_errors(
+    command: &str,
+    format: OutputFormat,
+    context: &RecordContext,
+) -> Option<i32> {
+    if let DiscoveryHealth::Partial(errors) = &context.registry().health {
+        for error in errors {
+            if format == OutputFormat::Human {
+                eprintln!("{command}: {error}");
+            }
+        }
+    }
+    None
+}
+
+fn check_collection(
+    collection: &Collection,
+    vault: &Path,
+    catalog: &mut RecordCatalog,
+    resolver: &VaultLinkResolver,
+    today: chrono::NaiveDate,
+) -> TypeReport {
+    match collection {
+        Collection::Usable(kind) => {
+            let record_type = kind.record_type();
+            let folder = catalog.folder(&record_type.dir);
+            let mut report = TypeReport::new(record_type, folder)
+                .with_source(kind.source_name())
+                .with_album(kind.album.clone());
+            let membership = match &kind.sourced.source {
+                RecordTypeSource::Album { path } => Some(AlbumMembership {
+                    album_path: Path::new(path),
+                    stem: record_type.dir.as_str(),
+                    noun: record_type.id.as_str(),
+                    resolver,
+                }),
+                RecordTypeSource::Config { .. } => None,
+            };
+            let notes = folder.notes().to_vec();
+            for note in &notes {
+                let contents =
+                    fs::read_to_string(vault.join(&note.relative_path)).ok();
+                report.check_note(
+                    record_type,
+                    note,
+                    today,
+                    membership,
+                    contents.as_deref(),
+                );
+            }
+            report.check_suggested_values(record_type, folder);
+            match &kind.sourced.source {
+                RecordTypeSource::Album { path } => {
+                    if !vault.join(path).is_file() {
+                        report.push(
+                            "error",
+                            "record_missing_collection_note",
+                            Some(path),
+                            None,
+                            format!("required album note is missing: {path}"),
+                        );
+                    }
+                }
+                RecordTypeSource::Config { .. } => {
+                    require_config_notes(vault, record_type, &mut report);
+                    report.push(
+                        "warning",
+                        "records_config_deprecated",
+                        None,
+                        None,
+                        format!(
+                            "record type {:?} still comes from config; declare it in a root album before the config migration lands",
+                            record_type.id
+                        ),
+                    );
+                }
+            }
+            report
+        }
+        Collection::InvalidAlbum(entry) => {
+            let dir = entry.declaration.stem.as_str();
+            let folder = catalog.folder(dir);
+            let id = entry
+                .declaration
+                .noun_claim
+                .clone()
+                .unwrap_or_else(|| entry.declaration.stem.clone());
+            let label = entry
+                .declaration
+                .label
+                .clone()
+                .unwrap_or_else(|| entry.declaration.title.clone());
+            let mut report = TypeReport::for_folder(id, label, dir, folder)
+                .with_source("album")
+                .with_album(Some(album_identity(entry)));
+            let noun = entry.declaration.noun_claim.as_deref().unwrap_or(dir);
+            let album_path = Path::new(&entry.declaration.path);
+            let membership = AlbumMembership {
+                album_path,
+                stem: dir,
+                noun,
+                resolver,
+            };
+            let notes = folder.notes().to_vec();
+            for note in &notes {
+                let contents =
+                    fs::read_to_string(vault.join(&note.relative_path)).ok();
+                report.check_album_membership(
+                    note,
+                    membership,
+                    contents.as_deref(),
+                );
+            }
+            for finding in &entry.findings {
+                if finding.severity != AlbumIssueSeverity::Error {
+                    continue;
+                }
+                report.push(
+                    "error",
+                    finding.code,
+                    Some(&finding.path),
+                    finding.key_path.as_deref(),
+                    finding.message.clone(),
+                );
+            }
+            report
+        }
+    }
+}
+
+fn require_config_notes(
+    vault: &Path,
+    record_type: &RecordType,
+    report: &mut TypeReport,
+) {
+    for (path, note_kind) in [
+        (PathBuf::from(format!("{}.md", record_type.id)), "type"),
+        (
+            PathBuf::from(format!("{}.md", record_type.dir)),
+            "collection",
+        ),
+    ] {
+        if note_kind == "collection" && record_type.id == record_type.dir {
+            continue;
+        }
+        if !vault.join(&path).is_file() {
+            let path_text = path.display().to_string();
+            report.push(
+                "error",
+                "record_missing_collection_note",
+                Some(&path_text),
+                None,
+                format!(
+                    "required {note_kind} note is missing: {}",
+                    path.display()
+                ),
+            );
+        }
+    }
+}
+
+fn add_config_outside_records(
+    vault: &Path,
+    collections: &[Collection],
+    reports: &mut [TypeReport],
+) {
+    let skip_dirs: BTreeSet<String> = collections
+        .iter()
+        .filter_map(Collection::config_dir)
+        .map(str::to_owned)
+        .collect();
+    let files = collect_markdown_outside_config_folders(vault, &skip_dirs);
+    for (collection, report) in collections.iter().zip(reports.iter_mut()) {
+        let Collection::Usable(kind) = collection else {
+            continue;
+        };
+        if !matches!(kind.sourced.source, RecordTypeSource::Config { .. }) {
+            continue;
+        }
+        let record_type = kind.record_type();
+        for path in &files {
+            let relative = path
+                .strip_prefix(vault)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            if relative.split('/').next() == Some(record_type.dir.as_str()) {
+                continue;
+            }
+            let Ok(contents) = fs::read_to_string(path) else {
+                continue;
+            };
+            let Some(frontmatter) =
+                crate::native::projects::parse_frontmatter(&contents)
+            else {
+                continue;
+            };
+            if frontmatter_type_names(&frontmatter)
+                .iter()
+                .any(|name| name == &record_type.id)
+            {
+                report.push(
+                    "error",
+                    "record_outside_folder",
+                    Some(&relative),
+                    Some("type"),
+                    format!(
+                        "record type {} belongs in {}/",
+                        record_type.id, record_type.dir
+                    ),
+                );
+            }
+        }
+    }
+}
+
+fn add_orphan_records(
+    vault: &Path,
+    context: &RecordContext,
+    reports: &mut Vec<TypeReport>,
+) {
+    let album_dirs = context
+        .album_claims()
+        .iter()
+        .map(|entry| entry.declaration.stem.clone())
+        .collect();
+    let orphans = collect_orphan_records(vault, &album_dirs);
+    if orphans.is_empty() {
+        return;
+    }
+    let mut report = TypeReport::orphan_bucket();
+    report.count = orphans.len();
+    for path in orphans {
+        let relative = path
+            .strip_prefix(vault)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        report.push(
+            "error",
+            "record_outside_album",
+            Some(&relative),
+            Some("type"),
+            "type [[record]] belongs in an album folder".to_owned(),
+        );
+    }
+    reports.push(report);
 }
 
 fn report_config_error(

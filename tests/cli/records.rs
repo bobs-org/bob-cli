@@ -895,3 +895,511 @@ fn init_refuses_a_missing_collection_without_parent() {
     assert!(!fixture.vault.join("widgets.md").exists());
     assert!(!fixture.vault.join("widgets.base").exists());
 }
+
+fn album_fixture() -> RecordsFixture {
+    let temp = TempDir::new("bob-cli-records-album");
+    let vault = temp.path().join("vault");
+    let config = temp.path().join("config.yml");
+    fs::create_dir_all(vault.join("eat")).expect("eat folder");
+    write_file(&config, "other: true\n");
+    write_file(
+        &vault.join("body.md"),
+        "---\ntype: [[area]]\n---\n\n# Body\n",
+    );
+    write_file(
+        &vault.join("eat.md"),
+        concat!(
+            "---\n",
+            "type: [[album]]\n",
+            "parent: \"[[body]]\"\n",
+            "summary: Places to eat.\n",
+            "emoji: \"🍽️\"\n",
+            "record:\n",
+            "  noun: restaurant\n",
+            "  label: Restaurant\n",
+            "  dated_notes: true\n",
+            "  fields:\n",
+            "    status:\n",
+            "      required: true\n",
+            "      values:\n",
+            "        to_try: \"To try\"\n",
+            "        liked: \"Liked\"\n",
+            "    category:\n",
+            "      required: true\n",
+            "      suggest: true\n",
+            "    location:\n",
+            "      required: true\n",
+            "---\n\n",
+            "# Restaurants\n",
+        ),
+    );
+    RecordsFixture {
+        _temp: temp,
+        vault,
+        config,
+    }
+}
+
+fn album_record(
+    parent: &str,
+    type_link: &str,
+    title: &str,
+    extra_body: &str,
+) -> String {
+    format!(
+        "---\nparent: \"[[{parent}]]\"\ntype: \"[[{type_link}]]\"\ntitle: {title:?}\nstatus: liked\ncategory: Ramen\nlocation: Clark\n---\n\n# {title}\n{extra_body}"
+    )
+}
+
+fn findings(payload: &Value) -> Vec<&Value> {
+    payload["types"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|report| report["findings"].as_array())
+        .flatten()
+        .collect()
+}
+
+#[test]
+fn album_noun_and_stem_aliases_share_source_metadata() {
+    let fixture = album_fixture();
+    write_file(
+        &fixture.vault.join("eat/nagi.md"),
+        &album_record("eat", "record", "Nagi", ""),
+    );
+
+    let by_noun = records_command(&fixture)
+        .args(["show", "restaurant", "-f", "json"])
+        .output()
+        .expect("show by noun");
+    assert_success(&by_noun);
+    let noun_json = json(&by_noun);
+    assert_eq!(noun_json["type"], "restaurant");
+    assert_eq!(noun_json["source"], "album");
+    assert_eq!(noun_json["album"]["stem"], "eat");
+    assert_eq!(noun_json["album"]["title"], "Restaurants");
+    assert_eq!(noun_json["album"]["owner"], "body");
+    assert_eq!(noun_json["count"], 1);
+
+    let by_stem = records_command(&fixture)
+        .args(["show", "eat", "-f", "json"])
+        .output()
+        .expect("show by stem");
+    assert_success(&by_stem);
+    assert_eq!(json(&by_stem)["album"]["stem"], "eat");
+
+    let list = records_command(&fixture)
+        .args(["-f", "json"])
+        .output()
+        .expect("list albums");
+    assert_success(&list);
+    let list_json = json(&list);
+    assert_eq!(list_json["types"][0]["source"], "album");
+    assert_eq!(list_json["types"][0]["count"], 1);
+    assert_eq!(
+        list_json["types"][0]["required_fields"],
+        serde_json::json!(["status", "category", "location"])
+    );
+}
+
+#[test]
+fn bob_dir_flag_beats_env_for_album_schemas() {
+    let first = album_fixture();
+    let second = album_fixture();
+    write_file(
+        &second.vault.join("eat.md"),
+        concat!(
+            "---\n",
+            "type: [[album]]\n",
+            "parent: \"[[body]]\"\n",
+            "summary: Other vault.\n",
+            "record:\n",
+            "  noun: restaurant\n",
+            "  label: Other\n",
+            "  fields:\n",
+            "    cuisine: {}\n",
+            "---\n\n",
+            "# Other Restaurants\n",
+        ),
+    );
+
+    let output = bob_command()
+        .args(["records", "show", "eat", "-b"])
+        .arg(&second.vault)
+        .args(["-f", "json"])
+        .env("BOB_DIR", &first.vault)
+        .env("BOB_CONFIG_FILE", &first.config)
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("show with -b");
+    assert_success(&output);
+    let payload = json(&output);
+    assert_eq!(payload["label"], "Other");
+    assert_eq!(payload["album"]["title"], "Other Restaurants");
+    assert_eq!(payload["fields"][0]["key"], "cuisine");
+}
+
+#[test]
+fn album_claim_suppresses_config_even_when_the_album_is_broken() {
+    let fixture = album_fixture();
+    write_file(
+        &fixture.config,
+        "records:\n  restaurant:\n    dir: eat\n    label: Config Restaurant\n    fields: {}\n",
+    );
+    write_file(
+        &fixture.vault.join("eat.md"),
+        concat!(
+            "---\n",
+            "type: [[album]]\n",
+            "parent: \"[[body]]\"\n",
+            "record: {noun: restaurant, fields: []}\n",
+            "---\n\n",
+            "# Broken Eat\n",
+        ),
+    );
+    write_file(
+        &fixture.vault.join("eat/nagi.md"),
+        &album_record("eat", "record", "Nagi", ""),
+    );
+
+    let list = records_command(&fixture)
+        .args(["-f", "json"])
+        .output()
+        .expect("list mixed");
+    assert_success(&list);
+    let list_json = json(&list);
+    assert_eq!(list_json["types"].as_array().unwrap().len(), 1);
+    assert_eq!(list_json["types"][0]["source"], "album");
+    assert_eq!(list_json["types"][0]["count"], 1);
+    assert_eq!(list_json["types"][0]["album"]["title"], "Broken Eat");
+
+    let show = records_command(&fixture)
+        .args(["show", "restaurant", "-f", "json"])
+        .output()
+        .expect("show broken album");
+    assert_eq!(show.status.code(), Some(2));
+    assert!(
+        json(&show)["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("not usable"),
+        "{}",
+        format_output(&show)
+    );
+}
+
+#[test]
+fn healthy_album_survives_malformed_config_and_a_broken_neighbor() {
+    let fixture = album_fixture();
+    write_file(&fixture.config, "records: [\n");
+    write_file(
+        &fixture.vault.join("tv.md"),
+        concat!(
+            "---\n",
+            "type: [[album]]\n",
+            "parent: \"[[body]]\"\n",
+            "record: {noun: show, fields: []}\n",
+            "---\n\n",
+            "# Broken Shows\n",
+        ),
+    );
+    fs::create_dir_all(fixture.vault.join("tv")).expect("tv folder");
+    write_file(
+        &fixture.vault.join("tv/lost.md"),
+        "---\nparent: \"[[tv]]\"\ntype: \"[[record]]\"\ntitle: Lost\n---\n# Lost\n",
+    );
+    write_file(
+        &fixture.vault.join("eat/nagi.md"),
+        &album_record("eat", "record", "Nagi", ""),
+    );
+
+    let list = records_command(&fixture)
+        .args(["-f", "json"])
+        .output()
+        .expect("list with neighbor");
+    assert_success(&list);
+    let types = json(&list)["types"].as_array().cloned().unwrap();
+    let eat = types.iter().find(|row| row["dir"] == "eat").expect("eat");
+    assert_eq!(eat["source"], "album");
+    assert_eq!(eat["count"], 1);
+    let tv = types.iter().find(|row| row["dir"] == "tv").expect("tv");
+    assert_eq!(tv["count"], 1);
+
+    let created = records_command(&fixture)
+        .args([
+            "new",
+            "eat",
+            "Ramen Nagi",
+            "-s",
+            "status=to_try",
+            "-s",
+            "category=Ramen",
+            "-s",
+            "location=Clark",
+            "-f",
+            "json",
+        ])
+        .output()
+        .expect("create in healthy album");
+    assert_success(&created);
+    let markdown = fs::read_to_string(fixture.vault.join("eat/ramen_nagi.md"))
+        .expect("created album record");
+    assert!(markdown.contains("type: \"[[record]]\""), "{markdown}");
+    assert!(markdown.contains("parent: \"[[eat]]\""), "{markdown}");
+}
+
+#[test]
+fn album_check_accepts_canonical_type_and_warns_on_legacy() {
+    let fixture = album_fixture();
+    write_file(
+        &fixture.vault.join("eat/nagi.md"),
+        &album_record("eat", "record", "Nagi", ""),
+    );
+    write_file(
+        &fixture.vault.join("eat/legacy.md"),
+        &album_record("eat", "restaurant", "Legacy", ""),
+    );
+
+    let check = records_command(&fixture)
+        .args(["check", "-f", "json"])
+        .output()
+        .expect("check types");
+    assert_success(&check);
+    let payload = json(&check);
+    assert_eq!(payload["summary"]["errors"], 0);
+    let codes: Vec<_> = findings(&payload)
+        .iter()
+        .map(|finding| finding["code"].as_str().unwrap_or_default())
+        .collect();
+    assert!(codes.contains(&"record_type_legacy"), "{codes:?}");
+}
+
+#[test]
+fn album_check_reports_parent_checkbox_orphan_and_missing_stub_is_ok() {
+    let fixture = album_fixture();
+    write_file(
+        &fixture.vault.join("eat/wrong.md"),
+        &album_record(
+            "body",
+            "record",
+            "Wrong Parent",
+            "\n- [ ] book a table\n\n```\n- [ ] fenced example\n```\n",
+        ),
+    );
+    write_file(
+        &fixture.vault.join("stray.md"),
+        "---\ntype: \"[[record]]\"\ntitle: Stray\n---\n# Stray\n",
+    );
+    assert!(!fixture.vault.join("restaurant.md").exists());
+
+    let check = records_command(&fixture)
+        .args(["check", "-f", "json"])
+        .output()
+        .expect("check membership");
+    assert_eq!(check.status.code(), Some(1));
+    let payload = json(&check);
+    let codes: Vec<_> = findings(&payload)
+        .iter()
+        .map(|finding| finding["code"].as_str().unwrap_or_default())
+        .collect();
+    assert!(codes.contains(&"record_parent_mismatch"), "{codes:?}");
+    assert!(codes.contains(&"record_checkbox"), "{codes:?}");
+    assert!(codes.contains(&"record_outside_album"), "{codes:?}");
+    assert!(
+        !codes.contains(&"record_missing_collection_note"),
+        "album kinds do not require noun stubs: {codes:?}"
+    );
+    assert_eq!(
+        findings(&payload)
+            .iter()
+            .filter(|finding| finding["code"] == "record_checkbox")
+            .count(),
+        1,
+        "fenced checkbox is ignored: {payload}"
+    );
+}
+
+#[test]
+fn malformed_album_schema_still_counts_folder_records() {
+    let fixture = album_fixture();
+    write_file(
+        &fixture.vault.join("eat.md"),
+        concat!(
+            "---\n",
+            "type: [[album]]\n",
+            "parent: \"[[body]]\"\n",
+            "record: {noun: restaurant, fields: []}\n",
+            "---\n\n",
+            "# Broken Eat\n",
+        ),
+    );
+    write_file(
+        &fixture.vault.join("eat/nagi.md"),
+        &album_record("eat", "record", "Nagi", ""),
+    );
+
+    let list = records_command(&fixture)
+        .args(["-f", "json"])
+        .output()
+        .expect("list broken counts");
+    assert_success(&list);
+    assert_eq!(json(&list)["types"][0]["count"], 1);
+
+    let check = records_command(&fixture)
+        .args(["check", "eat", "-f", "json"])
+        .output()
+        .expect("check broken counts");
+    let payload = json(&check);
+    assert_eq!(payload["types"][0]["count"], 1);
+    assert!(
+        payload["types"][0]["errors"].as_u64().unwrap_or(0) > 0,
+        "{payload}"
+    );
+}
+
+#[test]
+fn album_create_is_byte_exact_and_dry_run_matches_write() {
+    let fixture = album_fixture();
+    let args = [
+        "new",
+        "restaurant",
+        "Ramen Nagi",
+        "-s",
+        "status=to_try",
+        "-s",
+        "category=Ramen",
+        "-s",
+        "location=Clark",
+    ];
+
+    let dry = records_command(&fixture)
+        .args(args)
+        .args(["-d", "-f", "json"])
+        .output()
+        .expect("album dry-run");
+    assert_success(&dry);
+    let dry_json = json(&dry);
+    assert_eq!(dry_json["status"], "planned");
+    assert_eq!(dry_json["source"], "album");
+    let markdown = dry_json["markdown"].as_str().unwrap();
+    assert!(markdown.contains("type: \"[[record]]\""), "{markdown}");
+    assert!(markdown.contains("parent: \"[[eat]]\""), "{markdown}");
+    assert!(!fixture.vault.join("eat/ramen_nagi.md").exists());
+
+    let written = records_command(&fixture)
+        .args(args)
+        .args(["-f", "json"])
+        .output()
+        .expect("album write");
+    assert_success(&written);
+    let written_json = json(&written);
+    assert_eq!(written_json["status"], "written");
+    assert_eq!(written_json["source"], "album");
+    assert_eq!(written_json["album"]["stem"], "eat");
+    let on_disk = fs::read_to_string(fixture.vault.join("eat/ramen_nagi.md"))
+        .expect("read album record");
+    assert_eq!(on_disk, markdown);
+}
+
+#[test]
+fn album_update_preserves_unrelated_bytes_and_matches_dry_run() {
+    let fixture = album_fixture();
+    let original = concat!(
+        "---\n",
+        "parent: \"[[eat]]\"\n",
+        "type: \"[[record]]\"\n",
+        "title: Ninja Sushi\n",
+        "status: to_try\n",
+        "category: Sushi\n",
+        "location: Clark\n",
+        "---\n",
+        "## Notes\n",
+        "- 2025-01-02: First visit.\n",
+        "\n",
+        "Keep this trailer.\n",
+    );
+    write_file(&fixture.vault.join("eat/ninja_sushi.md"), original);
+
+    let dry = records_command(&fixture)
+        .args([
+            "update",
+            "eat",
+            "ninja_sushi",
+            "-s",
+            "status=liked",
+            "-d",
+            "-f",
+            "json",
+        ])
+        .output()
+        .expect("album update dry-run");
+    assert_success(&dry);
+    let dry_json = json(&dry);
+    assert_eq!(dry_json["status"], "planned");
+    assert_eq!(dry_json["source"], "album");
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("eat/ninja_sushi.md")).unwrap(),
+        original,
+        "dry-run writes nothing"
+    );
+
+    let committed = records_command(&fixture)
+        .args([
+            "update",
+            "restaurant",
+            "ninja_sushi",
+            "-s",
+            "status=liked",
+            "-f",
+            "json",
+        ])
+        .output()
+        .expect("album update write");
+    assert_success(&committed);
+    let written =
+        fs::read_to_string(fixture.vault.join("eat/ninja_sushi.md")).unwrap();
+    assert_eq!(written, dry_json["markdown"].as_str().unwrap());
+    assert!(written.contains("Keep this trailer."), "{written}");
+    assert!(written.contains("status: liked"), "{written}");
+}
+
+#[test]
+fn records_outside_a_broken_album_are_members_not_orphans() {
+    let fixture = album_fixture();
+    write_file(
+        &fixture.vault.join("eat.md"),
+        concat!(
+            "---\n",
+            "type: [[album]]\n",
+            "parent: \"[[body]]\"\n",
+            "record: {noun: restaurant, fields: []}\n",
+            "---\n\n",
+            "# Broken Eat\n",
+        ),
+    );
+    write_file(
+        &fixture.vault.join("eat/nagi.md"),
+        &album_record("eat", "record", "Nagi", ""),
+    );
+    write_file(
+        &fixture.vault.join("orphan.md"),
+        "---\ntype: \"[[record]]\"\ntitle: Orphan\n---\n# Orphan\n",
+    );
+
+    let check = records_command(&fixture)
+        .args(["check", "-f", "json"])
+        .output()
+        .expect("check broken members");
+    let payload = json(&check);
+    let orphan_files: Vec<_> = findings(&payload)
+        .iter()
+        .filter(|finding| finding["code"] == "record_outside_album")
+        .map(|finding| finding["file"].as_str().unwrap_or_default())
+        .collect();
+    assert!(orphan_files.contains(&"orphan.md"), "{payload}");
+    assert!(
+        !orphan_files.contains(&"eat/nagi.md"),
+        "broken album members are not orphans: {payload}"
+    );
+}

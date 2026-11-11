@@ -683,7 +683,7 @@ fn records_help_lists_subcommands_and_options_alphabetically() {
     let help = stdout(&output);
     assert!(
         help.contains(
-            "List, inspect, check, scaffold, and create or update configured Record Notes"
+            "List, inspect, check, scaffold, and create or update Record Notes"
         ) && help.contains("Bare `bob records` runs the read-only list")
             && help.contains("(default)")
             && help.contains("\n  check ")

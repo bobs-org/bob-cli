@@ -28,8 +28,7 @@ Vault:
   notebooks    Inspect or maintain notebook notes
   periods      Manage period notes: weeks, quarters, years, and all time
   query        Run Dataview or Tasks queries against the vault
-  records      List, inspect, check, scaffold, and create or update configured
-               Record Notes
+  records      List, inspect, check, scaffold, and create or update Record Notes
   ref          Find, list, read, rename, and plan references for today; sync
                Highlights PDFs into them
   vault-sync   Reconcile the vault through Git (default: run) or show status
