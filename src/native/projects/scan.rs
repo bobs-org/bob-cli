@@ -350,11 +350,13 @@ pub(crate) fn parse_frontmatter(contents: &str) -> Option<Frontmatter<'_>> {
 }
 
 pub(crate) fn frontmatter_is_project(frontmatter: &Frontmatter<'_>) -> bool {
-    frontmatter_has_type(frontmatter, "[[project]]")
+    !frontmatter_is_album(frontmatter)
+        && frontmatter_has_type(frontmatter, "[[project]]")
 }
 
 pub(crate) fn frontmatter_is_area(frontmatter: &Frontmatter<'_>) -> bool {
-    frontmatter_has_type(frontmatter, "[[area]]")
+    !frontmatter_is_album(frontmatter)
+        && frontmatter_has_type(frontmatter, "[[area]]")
 }
 
 pub(crate) fn frontmatter_is_article(frontmatter: &Frontmatter<'_>) -> bool {
@@ -362,7 +364,8 @@ pub(crate) fn frontmatter_is_article(frontmatter: &Frontmatter<'_>) -> bool {
 }
 
 pub(crate) fn frontmatter_is_notebook(frontmatter: &Frontmatter<'_>) -> bool {
-    frontmatter_has_type(frontmatter, "[[notebook]]")
+    !frontmatter_is_album(frontmatter)
+        && frontmatter_has_type(frontmatter, "[[notebook]]")
 }
 
 #[allow(dead_code)] // Consumed by album parsing and registry analysis.

@@ -413,7 +413,7 @@ impl FieldKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum PropertyStorageKind {
     String,
     Date,

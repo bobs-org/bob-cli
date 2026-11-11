@@ -3,6 +3,9 @@
 //! This phase owns the album header model. Vault-wide discovery and report
 //! analysis are layered on top by the registry phase.
 
+#[allow(dead_code)] // The next album phase consumes this registry API.
+pub(crate) mod registry;
+
 use std::{collections::HashMap, path::Path};
 
 use serde_yaml::{Mapping, Value};
@@ -27,6 +30,8 @@ const RESERVED_ALBUM_STEMS: &[&str] = &["done", "ref"];
 pub(crate) enum AlbumIssueSeverity {
     Error,
     Warning,
+    #[allow(dead_code)] // Used by album registry's informational findings.
+    Info,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

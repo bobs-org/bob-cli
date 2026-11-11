@@ -15,9 +15,7 @@ pub(crate) fn is_always_excluded_note_directory_name(name: &OsStr) -> bool {
     })
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-// The registry phase consumes this parser.
-mod albums;
+pub(crate) mod albums;
 mod articles;
 pub(crate) mod attachments;
 mod capture;

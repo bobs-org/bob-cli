@@ -4,12 +4,10 @@ use crate::native::records::schema::{
     parse_records_config, RecordDiagnostic, RecordDiagnosticCode, RecordsConfig,
 };
 
-#[allow(dead_code)]
 pub(crate) fn load_records_config() -> Result<RecordsConfig, RecordDiagnostic> {
     load_records_config_from(&super::config_path())
 }
 
-#[allow(dead_code)]
 pub(crate) fn load_records_config_from(
     path: &Path,
 ) -> Result<RecordsConfig, RecordDiagnostic> {
