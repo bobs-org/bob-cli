@@ -123,6 +123,9 @@ impl<'a> HomesEngine<'a> {
     ) {
         let mut top_areas: BTreeMap<Hue, Vec<(String, String)>> =
             BTreeMap::new();
+        // Resolve under one borrow, then remember after it drops:
+        // remember -> ensure_root re-borrows the resolver for unseen roots.
+        let mut inspected = Vec::new();
         {
             let mut resolver = self.resolver.borrow_mut();
             for (path, contents) in &index.buffers {
@@ -135,12 +138,10 @@ impl<'a> HomesEngine<'a> {
                 };
                 match facts.kind {
                     NoteKind::Project => {
-                        let home = resolver.resolve_note(path);
-                        self.remember(&home);
+                        inspected.push(resolver.resolve_note(path));
                     }
                     NoteKind::Area => {
                         let home = resolver.resolve_note(path);
-                        self.remember(&home);
                         let path_key = path_string(path);
                         if home.area == path_key
                             && let Some(hue) = home.hue
@@ -150,10 +151,14 @@ impl<'a> HomesEngine<'a> {
                                 .or_default()
                                 .push((home.label.clone(), path_key));
                         }
+                        inspected.push(home);
                     }
                     NoteKind::Other => {}
                 }
             }
+        }
+        for home in inspected {
+            self.remember(&home);
         }
 
         let mut health = HomesHealthReport::default();
@@ -290,15 +295,18 @@ impl<'a> HomesEngine<'a> {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
+        let mut extra_areas = Vec::new();
         {
             let mut resolver = self.resolver.borrow_mut();
             for area in needed_areas {
                 if self.seen.borrow().contains_key(&area) {
                     continue;
                 }
-                let home = resolver.resolve_note(Path::new(&area));
-                self.remember(&home);
+                extra_areas.push(resolver.resolve_note(Path::new(&area)));
             }
+        }
+        for home in extra_areas {
+            self.remember(&home);
         }
 
         // Clock and root-field lookups can add resolver lints while sessions
@@ -1792,6 +1800,76 @@ mod tests {
                 .map_or(0, |entries| entries.values().sum());
             let _ = (area_app, root_app, project_app);
         }
+    }
+
+    #[test]
+    fn single_metric_worked_today_resolves_unseen_inspect_roots() {
+        let workspace = TempDir::new().unwrap();
+        let vault = workspace.path().join("vault");
+        copy_tree(&homes_vault(), &vault);
+        // Child sorts before its parent so global inspect reaches it first,
+        // and neither note is linked from today's sessions.
+        std::fs::write(
+            vault.join("aaa_leaf.md"),
+            [
+                "---",
+                "type: \"[[project]]\"",
+                "parent: \"[[zzz_root]]\"",
+                "---",
+                "# Nested leaf",
+                "",
+                "## Tasks",
+                "",
+                "- [ ] #task Nested leaf task ^t",
+                "",
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            vault.join("zzz_root.md"),
+            [
+                "---",
+                "type: \"[[project]]\"",
+                "parent: \"[[dev]]\"",
+                "---",
+                "# Nested root",
+                "",
+                "## Tasks",
+                "",
+                "- [ ] #task Nested root task ^t",
+                "",
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let config = write_config(&workspace);
+        let today = NaiveDate::from_ymd_opt(2026, 10, 18)
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap();
+        let mut request = StatsRequest::at(vault, config, today);
+        request.selection = MetricSelection::Explicit(
+            ["worked"].into_iter().map(str::to_string).collect(),
+        );
+        request.range = Some("2026-10-18..2026-10-18".to_string());
+        request.grouping = Grouping::Day;
+        let report = compute(&request)
+            .expect("single-metric worked covering today computes");
+        // Today's span is incomplete, so the headline total stays empty;
+        // session facts still include the day's BLOG row.
+        assert!(metric(&report, "worked").summary.total.is_none());
+        assert_eq!(report.sessions.len(), 1);
+        assert_eq!(report.sessions[0].name.as_deref(), Some("BLOG"));
+        assert_eq!(report.sessions[0].minutes, Some(15));
+        assert_eq!(
+            report.sessions[0].date,
+            NaiveDate::from_ymd_opt(2026, 10, 18).unwrap()
+        );
+        assert_eq!(
+            report.homes["sase_blog.md"].root_parent,
+            "sase.md".to_string()
+        );
     }
 
     #[test]
