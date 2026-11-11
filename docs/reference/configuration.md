@@ -98,6 +98,22 @@ See [priority and schedule rolls](../plan.md#config) and
 See [capture templates](../capture.md#saved-templates). Use [`bob clipboard`](cli/clipboard.md)
 to diagnose the active history provider and whether a counted capture would succeed.
 
+### `copy`
+
+| Key | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `copy.templates` | List of `{label, template, key?}` | `[]` | Adds rows to the Obsidian `Cmd+Y` Copy card; the CLI ignores it |
+
+```yaml
+copy:
+  templates:
+    - label: Task ref
+      key: t
+      template: "the ^{block_id} task in the {path}"
+```
+
+See the [Copy card](plugins/copy-card.md).
+
 ### `records`
 
 `records` is an optional mapping from record type id to a schema. Each type
@@ -483,15 +499,9 @@ deploy from this documentation.
 | `SHELL`, `BASH_COMPLETION_USER_DIR`, `ZSH`, `ZSH_CUSTOM`, `XDG_DATA_HOME` | Shell completion installation target discovery. |
 | `GIT_SSH_COMMAND` | Passed through to Git; Bob's SSH wrapper is used only when this is unset. |
 
-The principal external requirements are `git` for vault sync and several
-maintenance commands; `obsidian` plus the Dataview plugin for the Obsidian
-query engine; `curl` for PDF and arXiv URLs; `uv` and a browser for web
-articles; `pandoc` and `xelatex` for Markdown-to-PDF rendering; `pass` for
-the default Keep token store; and `uv` plus the pinned adapter packages for
-Google Keep. Clipboard tools are platform-specific. Native execution does
-not require Bash or Perl; the compatibility fallback may. See the
-[runtime dependency list](compatibility.md#runtime-dependencies) and the
-individual command references for command-specific requirements.
+See the [runtime dependency list](compatibility.md#runtime-dependencies)
+and each command reference for external tools and command-specific
+requirements.
 
 ## Mac Capture hotkeys
 
