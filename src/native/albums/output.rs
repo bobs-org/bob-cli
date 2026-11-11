@@ -28,7 +28,7 @@ pub(crate) fn print_list(report: &AlbumReport, bob_dir: &Path) {
     let mut groups: BTreeMap<Option<String>, Vec<&AlbumReportEntry>> =
         BTreeMap::new();
     for entry in &report.albums {
-        groups.entry(entry.root.clone()).or_default().push(entry);
+        groups.entry(list_group_key(entry)).or_default().push(entry);
     }
     let mut ordered_keys: Vec<Option<String>> =
         groups.keys().cloned().collect();
@@ -63,6 +63,18 @@ pub(crate) fn print_list(report: &AlbumReport, bob_dir: &Path) {
         println!("{header}");
         print_rows(&entries, &styler);
         println!();
+    }
+}
+
+fn list_group_key(entry: &AlbumReportEntry) -> Option<String> {
+    if entry
+        .issues
+        .iter()
+        .any(|issue| issue.severity == AlbumIssueSeverity::Error)
+    {
+        None
+    } else {
+        entry.root.clone()
     }
 }
 
@@ -255,17 +267,23 @@ fn print_issues(issues: &[AlbumIssue], styler: &Styler) {
             AlbumIssueSeverity::Warning => styler.yellow("warning"),
             AlbumIssueSeverity::Info => styler.dim("info"),
         };
-        match issue.line {
-            Some(line) => println!(
-                "  {line}: [{code}/{severity}] {message}",
-                code = issue.code,
-                message = issue.message
-            ),
-            None => println!(
-                "  [{code}/{severity}] {message}",
-                code = issue.code,
-                message = issue.message
-            ),
+        let location = issue_location(issue);
+        println!(
+            "  {location}: [{code}/{severity}] {message}",
+            code = issue.code,
+            message = issue.message
+        );
+        if !issue.suggestions.is_empty() {
+            println!("    suggestions: {}", issue.suggestions.join(", "));
         }
+    }
+}
+
+fn issue_location(issue: &AlbumIssue) -> String {
+    match (issue.line, issue.key_path.as_deref()) {
+        (Some(line), Some(key)) => format!("{}:{line} {key}", issue.path),
+        (Some(line), None) => format!("{}:{line}", issue.path),
+        (None, Some(key)) => format!("{} {key}", issue.path),
+        (None, None) => issue.path.clone(),
     }
 }

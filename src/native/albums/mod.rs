@@ -57,6 +57,8 @@ pub(crate) struct AlbumDeclaration {
     pub(crate) created: Option<String>,
     pub(crate) index_by: Option<String>,
     pub(crate) index_facets: Vec<String>,
+    /// Physical 1-based line of the `record:` key, when present.
+    pub(crate) record_line: Option<usize>,
     /// Noun and folder claims survive schema failure so discovery can still
     /// suppress a matching legacy config kind.
     pub(crate) noun_claim: Option<String>,
@@ -121,10 +123,9 @@ pub(crate) fn parse_album_declaration(
 
     let line_by_path = key_line_map(&frontmatter);
     let record_section = record_section(&frontmatter);
-    let record_line = record_section
-        .as_ref()
-        .map(|section| section.line_number)
-        .unwrap_or(2);
+    let record_section_line =
+        record_section.as_ref().map(|section| section.line_number);
+    let record_line = record_section_line.unwrap_or(2);
     let (record_value, record_parse_error, recovered_noun) =
         match record_section {
             None => (None, None, None),
@@ -263,6 +264,7 @@ pub(crate) fn parse_album_declaration(
         created,
         index_by,
         index_facets,
+        record_line: record_section_line,
         noun_claim: parsed_schema.noun_claim,
         label: parsed_schema.label,
         plural: parsed_schema.plural,
@@ -276,6 +278,19 @@ fn valid_album_stem(stem: &str) -> bool {
     stem == stem.to_ascii_lowercase()
         && is_route_token(stem)
         && !RESERVED_ALBUM_STEMS.contains(&stem)
+}
+
+/// One vault-root album route: a capture token with no separators, dots, or
+/// reserved folder names. The returned stem is lower-cased.
+pub(crate) fn confined_album_route(route: &str) -> Option<String> {
+    if route.is_empty() || Path::new(route).is_absolute() {
+        return None;
+    }
+    if !is_route_token(route) {
+        return None;
+    }
+    let stem = route.to_ascii_lowercase();
+    (!RESERVED_ALBUM_STEMS.contains(&stem.as_str())).then_some(stem)
 }
 
 fn top_level_string(
@@ -526,31 +541,68 @@ fn key_line_map(frontmatter: &Frontmatter<'_>) -> HashMap<String, usize> {
 }
 
 fn recover_noun_from_yaml(yaml: &str) -> Option<String> {
-    let record = yaml.strip_prefix("record:")?.trim();
+    let record = yaml.strip_prefix("record:")?.trim_start();
     if record.starts_with('{') {
-        let inner = record.strip_prefix('{')?.strip_suffix('}')?;
-        for item in split_flow_items(inner) {
-            let (key, value) = item.split_once(':')?;
-            if key.trim().trim_matches(['\'', '"']) == "noun" {
-                let value = trim_yaml_scalar(value).trim();
-                if !value.is_empty() {
-                    return Some(value.to_owned());
-                }
-            }
+        return recover_noun_from_flow(record);
+    }
+    recover_noun_from_block(yaml)
+}
+
+fn recover_noun_from_flow(record: &str) -> Option<String> {
+    let inner = record.strip_prefix('{')?;
+    let inner = inner.strip_suffix('}').unwrap_or(inner);
+    for item in split_flow_items(inner) {
+        let Some((key, value)) = item.split_once(':') else {
+            continue;
+        };
+        if yaml_key_name(key) == "noun" {
+            return recover_yaml_scalar(value);
         }
+    }
+    None
+}
+
+fn recover_noun_from_block(yaml: &str) -> Option<String> {
+    let mut child_indent = None;
+    for line in yaml.lines().skip(1) {
+        if line.trim().is_empty() || line.trim_start().starts_with('#') {
+            continue;
+        }
+        let indent = line
+            .bytes()
+            .take_while(|byte| matches!(byte, b' ' | b'\t'))
+            .count();
+        if child_indent.is_none() {
+            child_indent = Some(indent);
+        }
+        if Some(indent) != child_indent {
+            continue;
+        }
+        let trimmed = line.trim_start();
+        let Some((key, value)) = trimmed.split_once(':') else {
+            continue;
+        };
+        if !value.is_empty() && !value.starts_with([' ', '\t', '#']) {
+            continue;
+        }
+        if yaml_key_name(key) == "noun" {
+            return recover_yaml_scalar(value);
+        }
+    }
+    None
+}
+
+fn yaml_key_name(raw: &str) -> String {
+    trim_yaml_scalar(raw.trim()).trim().to_owned()
+}
+
+fn recover_yaml_scalar(raw: &str) -> Option<String> {
+    let stripped = strip_yaml_comment(raw).trim();
+    if stripped.is_empty() {
         return None;
     }
-    yaml.lines().skip(1).find_map(|line| {
-        let trimmed = line.trim_start();
-        if line.starts_with([' ', '\t']) {
-            let (key, value) = trimmed.split_once(':')?;
-            if key.trim() == "noun" {
-                let noun = trim_yaml_scalar(value).trim();
-                return (!noun.is_empty()).then(|| noun.to_owned());
-            }
-        }
-        None
-    })
+    let value = trim_yaml_scalar(stripped).trim();
+    (!value.is_empty()).then(|| value.to_owned())
 }
 
 fn split_flow_items(raw: &str) -> Vec<&str> {
@@ -833,6 +885,31 @@ mod tests {
         assert_eq!(diagnostic.file_path.as_deref(), Some(Path::new("eat.md")));
         assert!(diagnostic.line_number.is_some());
         assert_eq!(diagnostic.key_path.as_deref(), Some("record"));
+    }
+
+    #[test]
+    fn noun_recovery_keeps_only_a_direct_record_noun() {
+        let commented = parse(
+            "---\ntype: [[album]]\nrecord:\n  noun: restaurant # comment\n  fields: [\n---\n",
+        );
+        assert_eq!(commented.noun_claim.as_deref(), Some("restaurant"));
+        assert!(commented.record_type.is_none());
+
+        let quoted = parse(
+            "---\ntype: [[album]]\nrecord:\n  noun: \"restaurant\"\n  fields: [\n---\n",
+        );
+        assert_eq!(quoted.noun_claim.as_deref(), Some("restaurant"));
+
+        let unclosed_flow = parse(
+            "---\ntype: [[album]]\nrecord: {noun: restaurant, fields: [\n---\n",
+        );
+        assert_eq!(unclosed_flow.noun_claim.as_deref(), Some("restaurant"));
+
+        let nested_only = parse(
+            "---\ntype: [[album]]\nrecord:\n  fields:\n    thing:\n      noun: restaurant\n    broken: [\n---\n",
+        );
+        assert_eq!(nested_only.noun_claim, None);
+        assert_eq!(nested_only.stem, "eat");
     }
 
     #[test]

@@ -14,8 +14,9 @@ use super::{
 use crate::native::{
     highlights_ref::humanize_stem,
     records::{
-        catalog::IndexedRecord, schema::RecordField, IndexedFieldValue,
-        RecordCatalog,
+        catalog::IndexedRecord,
+        schema::{RecordDiagnosticCode, RecordField},
+        IndexedFieldValue, RecordCatalog,
     },
 };
 
@@ -25,6 +26,7 @@ const SCHEMA_VERSION: u32 = 1;
 pub(crate) struct AlbumIssue {
     pub(crate) code: &'static str,
     pub(crate) severity: AlbumIssueSeverity,
+    pub(crate) path: String,
     pub(crate) line: Option<usize>,
     pub(crate) key_path: Option<String>,
     pub(crate) message: String,
@@ -36,6 +38,7 @@ impl AlbumIssue {
         Self {
             code: finding.code,
             severity: finding.severity,
+            path: finding.path.clone(),
             line: finding.line_number,
             key_path: finding.key_path.clone(),
             message: finding.message.clone(),
@@ -47,6 +50,7 @@ impl AlbumIssue {
         json!({
             "code": self.code,
             "severity": severity_name(self.severity),
+            "path": self.path,
             "line": self.line,
             "key_path": self.key_path,
             "message": self.message,
@@ -179,7 +183,7 @@ pub(crate) struct AlbumReport {
 
 impl AlbumReport {
     pub(crate) fn ok(&self) -> bool {
-        self.counts.errors == 0
+        self.counts.errors == 0 && self.io_errors.is_empty()
     }
 
     pub(crate) fn filter_root(&mut self, root: &str) {
@@ -232,16 +236,22 @@ impl AlbumReport {
 /// Build the shared list/check report from a discovered registry.
 pub(crate) fn build_report(registry: &AlbumRegistry) -> AlbumReport {
     let mut catalog = RecordCatalog::new(&registry.vault_root);
+    let mut folder_io = Vec::new();
     let mut albums = registry
         .albums
         .iter()
-        .map(|entry| project_album(entry, &mut catalog))
+        .map(|entry| {
+            let (projected, io) = project_album(entry, &mut catalog);
+            folder_io.extend(io);
+            projected
+        })
         .collect::<Vec<_>>();
     albums.sort_by(|left, right| left.path.cmp(&right.path));
-    let io_errors = match &registry.health {
+    let mut io_errors = match &registry.health {
         DiscoveryHealth::Partial(errors) => errors.clone(),
         DiscoveryHealth::Complete | DiscoveryHealth::TargetOnly => Vec::new(),
     };
+    io_errors.extend(folder_io);
     let mut report = AlbumReport {
         albums,
         counts: AlbumCounts {
@@ -260,7 +270,7 @@ pub(crate) fn build_report(registry: &AlbumRegistry) -> AlbumReport {
 fn project_album(
     entry: &AlbumEntry,
     catalog: &mut RecordCatalog,
-) -> AlbumReportEntry {
+) -> (AlbumReportEntry, Vec<String>) {
     let declaration = &entry.declaration;
     let record_type = declaration.record_type.as_ref().or_else(|| {
         entry
@@ -278,6 +288,24 @@ fn project_album(
         })
         .unwrap_or_default();
     let folder = catalog.folder(&declaration.stem);
+    let mut io_errors = folder
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| {
+            format!("{}: {}", declaration.path, diagnostic.message)
+        })
+        .collect::<Vec<_>>();
+    for note in folder.notes() {
+        for diagnostic in &note.diagnostics {
+            if diagnostic.code == RecordDiagnosticCode::NoteRead {
+                io_errors.push(format!(
+                    "{}: {}",
+                    note.relative_path.to_string_lossy().replace('\\', "/"),
+                    diagnostic.message
+                ));
+            }
+        }
+    }
     let members: Vec<GroupingRecord> =
         folder.notes().iter().map(grouping_record).collect();
     let grouping = if let Some(record_type) = record_type {
@@ -306,35 +334,39 @@ fn project_album(
         .map(AlbumIssue::from_finding)
         .collect();
     issues.sort_by(|left, right| {
-        left.line
-            .cmp(&right.line)
+        left.path
+            .cmp(&right.path)
+            .then_with(|| left.line.cmp(&right.line))
             .then_with(|| left.code.cmp(right.code))
             .then_with(|| left.message.cmp(&right.message))
     });
-    AlbumReportEntry {
-        stem: declaration.stem.clone(),
-        path: declaration.path.clone(),
-        title: declaration.title.clone(),
-        emoji: declaration.emoji.clone(),
-        summary: declaration.summary.clone(),
-        noun: declaration.noun_claim.clone(),
-        label: declaration.label.clone(),
-        plural: declaration.plural.clone(),
-        parent: stem_of_parent(entry.parent_path.as_deref()),
-        parent_kind: entry.parent_kind,
-        owner: entry.owner.clone(),
-        root: entry.root.clone(),
-        breadcrumb: entry.breadcrumb.clone(),
-        fields,
-        group_field: grouping.group_field,
-        index_by: declaration.index_by.clone(),
-        index_facets: grouping.index_facets,
-        records: members.len(),
-        groups: grouping.groups,
-        needs_status: grouping.needs_status,
-        last_record: grouping.last_record,
-        issues,
-    }
+    (
+        AlbumReportEntry {
+            stem: declaration.stem.clone(),
+            path: declaration.path.clone(),
+            title: declaration.title.clone(),
+            emoji: declaration.emoji.clone(),
+            summary: declaration.summary.clone(),
+            noun: declaration.noun_claim.clone(),
+            label: declaration.label.clone(),
+            plural: declaration.plural.clone(),
+            parent: stem_of_parent(entry.parent_path.as_deref()),
+            parent_kind: entry.parent_kind,
+            owner: entry.owner.clone(),
+            root: entry.root.clone(),
+            breadcrumb: entry.breadcrumb.clone(),
+            fields,
+            group_field: grouping.group_field,
+            index_by: declaration.index_by.clone(),
+            index_facets: grouping.index_facets,
+            records: members.len(),
+            groups: grouping.groups,
+            needs_status: grouping.needs_status,
+            last_record: grouping.last_record,
+            issues,
+        },
+        io_errors,
+    )
 }
 
 fn grouping_record(note: &IndexedRecord) -> GroupingRecord {

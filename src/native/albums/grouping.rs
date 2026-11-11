@@ -488,6 +488,56 @@ mod tests {
     }
 
     #[test]
+    fn missing_unknown_and_invalid_shapes_count_as_needs_status() {
+        let mut status =
+            choices("status", &[("to_try", "To try"), ("liked", "Liked")]);
+        status.list = true;
+        let scalar_status = choices("status", &[("to_try", "To try")]);
+        let list_records = vec![
+            record("eat/ok.md", "Ok", None, &[("status", scalar("to_try"))]),
+            record("eat/missing.md", "Missing", None, &[]),
+            record(
+                "eat/unknown.md",
+                "Unknown",
+                None,
+                &[("status", scalar("nope"))],
+            ),
+            record(
+                "eat/null.md",
+                "Null",
+                None,
+                &[("status", IndexedFieldValue::Null)],
+            ),
+            record(
+                "eat/unsupported.md",
+                "Unsupported",
+                None,
+                &[("status", IndexedFieldValue::Unsupported)],
+            ),
+        ];
+        let grouping = group_records(&[status], None, &[], &list_records);
+        assert_eq!(grouping.groups[0].count, 1);
+        assert_eq!(grouping.needs_status, 4);
+
+        let scalar_records = vec![
+            record(
+                "eat/list.md",
+                "List",
+                None,
+                &[(
+                    "status",
+                    IndexedFieldValue::List(vec!["to_try".to_owned()]),
+                )],
+            ),
+            record("eat/empty.md", "Empty", None, &[("status", scalar(""))]),
+        ];
+        let grouping =
+            group_records(&[scalar_status], None, &[], &scalar_records);
+        assert!(grouping.groups.is_empty());
+        assert_eq!(grouping.needs_status, 2);
+    }
+
+    #[test]
     fn large_index_by_group_orders_peeks_by_folded_value_then_title() {
         let fields = vec![
             choices("status", &[("to_try", "To try")]),

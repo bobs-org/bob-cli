@@ -25,8 +25,8 @@ use std::{
 
 use crate::native::{
     albums::{
-        parse_album_declaration, AlbumDeclaration, AlbumFinding,
-        AlbumIssueSeverity,
+        confined_album_route, parse_album_declaration, AlbumDeclaration,
+        AlbumFinding, AlbumIssueSeverity,
     },
     notebooks::{
         rules,
@@ -356,11 +356,19 @@ pub(crate) fn resolve_route_head(
     route: &str,
     known: Option<&AlbumRegistry>,
 ) -> Result<RouteResolution, std::io::Error> {
-    if let Some(registry) = known {
-        return Ok(registry.resolve_route(route));
+    let Some(stem) = confined_album_route(route) else {
+        return Ok(unsafe_route_resolution(route));
+    };
+    if let Some(registry) = known
+        .filter(|registry| same_registry_target(registry, bob_dir, config_path))
+    {
+        return Ok(registry.resolve_route(&stem));
     }
-    let note_path = PathBuf::from(format!("{route}.md"));
+    let note_path = PathBuf::from(format!("{stem}.md"));
     let disk_path = bob_dir.join(&note_path);
+    if let Err(message) = confine_vault_file(bob_dir, &disk_path) {
+        return Ok(confined_target_resolution(&stem, &message));
+    }
     let head = match read_frontmatter_head(&disk_path) {
         Ok(head) => head,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -450,6 +458,87 @@ pub(crate) fn resolve_route_head(
         health: DiscoveryHealth::TargetOnly,
         config_diagnostic: config.err(),
     })
+}
+
+fn same_registry_target(
+    registry: &AlbumRegistry,
+    bob_dir: &Path,
+    config_path: &Path,
+) -> bool {
+    paths_equal(&registry.vault_root, bob_dir)
+        && paths_equal(&registry.config_path, config_path)
+}
+
+fn paths_equal(left: &Path, right: &Path) -> bool {
+    match (fs::canonicalize(left), fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
+}
+
+fn confine_vault_file(vault: &Path, path: &Path) -> Result<(), String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(());
+        }
+        Err(error) => {
+            return Err(format!(
+                "could not inspect album target {}: {error}",
+                path.display()
+            ));
+        }
+    };
+    if !metadata.file_type().is_symlink() {
+        return Ok(());
+    }
+    let vault_canon = fs::canonicalize(vault).map_err(|error| {
+        format!("could not resolve vault root {}: {error}", vault.display())
+    })?;
+    let target = fs::canonicalize(path).map_err(|error| {
+        format!("could not resolve album target {}: {error}", path.display())
+    })?;
+    if !target.starts_with(&vault_canon) {
+        return Err(format!(
+            "album target {} resolves outside the vault",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn unsafe_route_resolution(route: &str) -> RouteResolution {
+    RouteResolution::AlbumInvalid {
+        paths: vec![route.to_owned()],
+        findings: vec![AlbumFinding {
+            code: "album_stem_invalid",
+            severity: AlbumIssueSeverity::Error,
+            path: route.to_owned(),
+            line_number: None,
+            key_path: None,
+            message: format!(
+                "album route {route:?} must be a vault-root capture stem and cannot leave the vault"
+            ),
+            suggestions: Vec::new(),
+        }],
+        health: DiscoveryHealth::TargetOnly,
+    }
+}
+
+fn confined_target_resolution(stem: &str, message: &str) -> RouteResolution {
+    RouteResolution::AlbumInvalid {
+        paths: vec![format!("{stem}.md")],
+        findings: vec![AlbumFinding {
+            code: "album_stem_invalid",
+            severity: AlbumIssueSeverity::Error,
+            path: format!("{stem}.md"),
+            line_number: None,
+            key_path: None,
+            message: message.to_owned(),
+            suggestions: Vec::new(),
+        }],
+        health: DiscoveryHealth::TargetOnly,
+    }
 }
 
 #[allow(dead_code)]
@@ -727,10 +816,10 @@ fn add_child_reparent_findings(
                     line_number: child.lite.parent_line,
                     key_path: Some("parent".to_owned()),
                     message: format!(
-                        "this child lives outside {}/; move it into the album folder or change its parent",
-                        album.declaration.stem
+                        "this child lives outside {}/; keep [[{}]] as its owner by moving it into that folder, or change its parent",
+                        album.declaration.stem, album.declaration.stem
                     ),
-                    suggestions: Vec::new(),
+                    suggestions: vec![format!("{}/", album.declaration.stem)],
                 });
             }
         }
@@ -771,12 +860,13 @@ fn add_claim_conflicts(
             .collect::<Vec<_>>();
         for index in indices {
             let album = &mut albums[*index];
+            let record_line = album.declaration.record_line;
             push_finding(
                 &mut album.findings,
                 "album_noun_duplicate",
                 AlbumIssueSeverity::Error,
                 &album.declaration.path.clone(),
-                None,
+                record_line,
                 Some("record.noun".to_owned()),
                 format!(
                     "album route or noun claim {claim:?} conflicts with {}",
@@ -826,12 +916,13 @@ fn add_property_conflicts(albums: &mut [AlbumEntry]) {
             .collect::<BTreeSet<_>>()
         {
             let path = albums[index].declaration.path.clone();
+            let record_line = albums[index].declaration.record_line;
             push_finding(
                 &mut albums[index].findings,
                 "album_property_conflict",
                 AlbumIssueSeverity::Error,
                 &path,
-                None,
+                record_line,
                 Some(format!("record.fields.{key}")),
                 format!(
                     "field {key:?} has incompatible property storage across {}",
@@ -1457,5 +1548,151 @@ mod tests {
                 RecordTypeSource::Album { .. }
             ));
         }
+    }
+
+    #[test]
+    fn route_head_refuses_traversal_absolute_and_reserved_stems() {
+        let temp = fixture();
+        let vault = temp.path().join("vault");
+        let outside = temp.path().join("outside.md");
+        let config = temp.path().join("config.yml");
+        fs::create_dir_all(&vault).expect("create vault");
+        write(
+            &outside,
+            "---\ntype: [[album]]\nparent: \"[[area]]\"\nrecord: {noun: escaped}\n---\n# Outside\n",
+        );
+        write(
+            &vault.join("eat.md"),
+            "---\ntype: [[album]]\nparent: \"[[area]]\"\nrecord: {noun: restaurant}\n---\n# Eat\n",
+        );
+        write(
+            &config,
+            "records:\n  escaped:\n    dir: escaped\n    label: Escaped\n    fields: {}\n",
+        );
+
+        for route in ["../outside", "/tmp/outside", "done", "ref", ".bob"] {
+            match resolve_route_head(&vault, &config, route, None)
+                .expect("unsafe routes refuse without I/O")
+            {
+                RouteResolution::AlbumInvalid {
+                    findings, health, ..
+                } => {
+                    assert!(
+                        findings.iter().any(|finding| finding.code == "album_stem_invalid"),
+                        "route {route:?}"
+                    );
+                    assert_eq!(health, DiscoveryHealth::TargetOnly);
+                }
+                other => {
+                    panic!("expected invalid route {route:?}, got {other:?}")
+                }
+            }
+        }
+
+        let valid = resolve_route_head(&vault, &config, "eat", None)
+            .expect("bounded head");
+        assert!(matches!(
+            valid,
+            RouteResolution::AlbumValid {
+                health: DiscoveryHealth::TargetOnly,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn route_head_refuses_a_symlink_escape_and_foreign_known_registry() {
+        let temp = fixture();
+        let first = temp.path().join("first");
+        let second = temp.path().join("second");
+        let config = temp.path().join("config.yml");
+        let outside = temp.path().join("outside.md");
+        write(&first.join("area.md"), area());
+        write(&second.join("area.md"), area());
+        write(
+            &first.join("movies.md"),
+            &album("movies", "movie", "    year: {values: number}\n"),
+        );
+        write(
+            &second.join("movies.md"),
+            &album("movies", "movie", "    name: {}\n"),
+        );
+        write(
+            &outside,
+            "---\ntype: [[album]]\nparent: \"[[area]]\"\nrecord: {noun: escaped}\n---\n",
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink(&outside, first.join("eat.md")).expect("symlink album");
+            match resolve_route_head(&first, &config, "eat", None)
+                .expect("symlink escape is a refusal")
+            {
+                RouteResolution::AlbumInvalid { findings, .. } => {
+                    assert!(findings.iter().any(|finding| {
+                        finding.code == "album_stem_invalid"
+                            && finding.message.contains("outside")
+                    }));
+                }
+                other => panic!("expected confined refusal, got {other:?}"),
+            }
+        }
+
+        let first_registry = AlbumRegistry::discover(&first, &config);
+        let from_second = resolve_route_head(
+            &second,
+            &config,
+            "movies",
+            Some(&first_registry),
+        )
+        .expect("foreign known registry is ignored");
+        match from_second {
+            RouteResolution::AlbumValid { record_type, .. } => {
+                assert_eq!(record_type.record_type.fields[0].key, "name");
+            }
+            other => panic!("expected second vault schema, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn broken_noun_recovery_does_not_claim_an_unrelated_config_kind() {
+        let temp = fixture();
+        let vault = temp.path().join("vault");
+        let config = temp.path().join("elsewhere").join("config.yml");
+        write(&vault.join("area.md"), area());
+        write(
+            &vault.join("eat.md"),
+            "---\ntype: [[album]]\nparent: \"[[area]]\"\nsummary: Nested noun only\nrecord:\n  fields:\n    thing:\n      noun: restaurant\n    broken: [\n---\n# Eat\n",
+        );
+        write(
+            &vault.join("books.md"),
+            &album("books", "book", "    author: {}\n"),
+        );
+        write(
+            &config,
+            "records:\n  restaurant:\n    dir: restaurants\n    label: Restaurant\n    fields: {}\n  leftover:\n    dir: eat\n    label: Leftover\n    fields: {}\n  book:\n    dir: volumes\n    label: Book\n    fields: {}\n",
+        );
+
+        let registry = AlbumRegistry::discover(&vault, &config);
+        let ids: Vec<&str> = registry
+            .usable_types
+            .iter()
+            .map(|sourced| sourced.record_type.id.as_str())
+            .collect();
+        assert!(ids.contains(&"book"));
+        assert!(
+            ids.contains(&"restaurant"),
+            "nested noun must not suppress restaurant: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"leftover"),
+            "folder claim still suppresses dir eat: {ids:?}"
+        );
+        let eat = registry
+            .albums
+            .iter()
+            .find(|entry| entry.declaration.stem == "eat")
+            .expect("eat album");
+        assert_eq!(eat.declaration.noun_claim, None);
     }
 }

@@ -87,11 +87,10 @@ bob capture-parse -f json -- 'Ramen Nagi @eat/'
 {"ok":true,"schema_version":1,"grammar":25,"input":"Ramen Nagi @eat/","body":"Ramen Nagi","mode":"record_note","route":"eat","needs":["record_value"],"record":{"action":"create","type":"restaurant","label":"Restaurant","dir":"eat","path":"eat/ramen_nagi.md","stem":"ramen_nagi","stem_source":"title","title":"Ramen Nagi","missing":["status","category","location"],"notes":0,"assist_version":1,"fields":[{"key":"status","kind":"choices","required":true,"state":"missing"}]}}
 ```
 
-Existing `@eat/ninja_sushi` parses as `record_update` / `action: "update"`, with
-`stem_source: "existing"` and stored title. Fields expose `value`/`display` and
-prior `before`/`before_display`; `missing` lists required fields still empty.
-`bob records check` reports legacy defects. Updates use `kind: "record_update"`,
-`placement: "updated"`, and `note_files[].action: "update"` with `before` and `lines`.
+Existing `@eat/ninja_sushi` is `record_update` (`stem_source: "existing"`). Fields
+expose `value`/`display` and `before`/`before_display`; `missing` lists empty
+required fields. Capture writes `kind: "record_update"`, `placement: "updated"`,
+and `note_files[].action: "update"`.
 
 ```bash
 bob capture -f json --dry-run -- "$(printf '%s\n' 'Ramen Nagi @eat/' '- status:: liked' '- category:: Ramen' '- location:: Clark')"
@@ -112,10 +111,9 @@ bob capture -f json --dry-run -- "$(printf '%s\n' 'Went back, still great @eat/n
 {"ok":true,"dry_run":true,"kind":"record_update","placement":"updated","relative_target":"eat/ninja_sushi.md","note_files":[{"path":"eat/ninja_sushi.md","action":"update","record_type":"restaurant","properties":[{"key":"status","label":"Status","value":"liked","display":"💚 Liked","source":"typed","before":"to_try","before_display":"🔖 To try"}],"markdown":"---\n…\n","lines":[{"text":"- 2026-10-20: Went back, still great","depth":0,"change":"added"}]}]}
 ```
 
-Properties pair canonical `value` and human `display`. Lists are arrays, numbers
-stay numeric, and dates, links, and URLs are strings. Empty optional fields omit
-values.
-See [Capture](../capture.md#record-notes) for the full representation.
+Lists are arrays; numbers stay numeric; dates, links, and URLs are strings.
+Empty optional fields omit values. See
+[Capture](../capture.md#record-notes).
 
 ```bash
 bob capture-complete -n -c 16 -f json -- 'Ramen Nagi @eat/'
@@ -125,10 +123,8 @@ bob capture-complete -n -c 16 -f json -- 'Ramen Nagi @eat/'
 {"ok":true,"schema_version":1,"grammar":25,"cursor":16,"context":"record_value","record":{"type":"restaurant","dir":"eat","label":"Restaurant","field":"status","assist_version":1},"candidates":[{"replacement":"\n- status:: liked","value":"liked","display":"💚 Liked","kind":"choices","cursor_after":33,"continuation":{"cursor":33,"next_missing_field":true}}]}
 ```
 
-Accepting inserts `- status:: liked`; `-n` at `continuation.cursor` walks
-remaining required fields, and the last omits `continuation`. `-F visited`
-on the same draft is the unfiltered named-field request, with `record.edit`
-for starting free-form entry:
+Accepting inserts `- status:: liked`. `-n` walks remaining required fields.
+`-F visited` is the unfiltered named-field request (`record.edit`):
 
 ```bash
 bob capture-complete -F visited -c 16 -f json -- 'Ramen Nagi @eat/'
@@ -151,33 +147,25 @@ bob capture-complete -c 5 -f json -- '@eat#'
 
 Near-spellings warn `record_value_near` with no rewrite. Parse reports
 `severity`/`code`/`message`/`range`; complete adds `authored`/`proposed`.
+Past results are `kind: "pomodoro_past"`; batches report `recorded`/`trimmed`
+and warn `pomodoro_past_trim`. Pinned runs add `segment` and `stack.pin`.
+Stale previews refuse `pomodoro_past_windows_changed`; `pomodoro_past_segment`
+lists tail/`~1…~N`/head rows.
 
-Past results are `kind: "pomodoro_past"` with `placement`; batches report
-`recorded`/`trimmed`, warn `pomodoro_past_trim`, omit `pomodoro_close`.
-Pinned runs add `segment`, `stack.pin`, `window.requested_minutes`/`cut`/`wall`/`fit`.
-Stale previews refuse `pomodoro_past_windows_changed`; shell-expanded `~`
-refuses `shell_expanded_tilde`; `pomodoro_past_segment` lists tail/`~1…~N`/head
-rows (empty all, `~` head, digits filter, `+` end).
-
-For `bob capture-complete` in `relation_label` context, visible catalog rows include
-`label`, normalized `key`, `count`, `replacement`, and optional `inverse`. A nonempty
-query adds a typed row first, with `typed: true`, `existing`, and `hidden`; that row
-may also carry `inverse` from the §10 rule, including for a brand-new label.
-When its key exists, it also includes `count` and uses the catalog spelling.
-Hidden labels are omitted from
-the visible rows, but an exact typed hidden label remains available with `hidden: true`.
-The response includes `hidden_count` for this context. Rows also carry
-`hide_replacement` for the `||` spelling; a `||` probe preserves both pipes
-in each row's `replacement` and adds `one_off: true` to the response.
+`relation_label` rows include `label`, `key`, `count`, `replacement`, optional
+`inverse`, and `hide_replacement` (`||`). A typed query row is first (`typed`,
+`existing`, `hidden`; `inverse` per §10). Hidden labels drop unless typed
+exactly (`hidden: true`, `hidden_count`). A `||` probe keeps both pipes and
+sets `one_off: true`.
 
 ### Album reports {#album-reports}
 
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
 | `bob albums list` | `-f json` | Albums, groups, counts, issues | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
-| `bob albums check` | `-f json` | Same report as list; `ok` reflects error findings | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
+| `bob albums check` | `-f json` | Same report as list | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
 
-Each album carries `stem`, `path`, `title`, `emoji`, `summary`, `noun`, `label`, `plural`, `parent`, `parent_kind`, `owner`, `root`, `breadcrumb`, `fields[]`, `group_field`, `index_by`, `index_facets`, `records`, `groups[]` (`value`, `label`, `count`, `peek`), `needs_status`, `last_record`, and `issues[]`. `counts`: `albums`, `records`, `roots`, `errors`, `warnings`. Albums are ordered by path. `parent` is the parent stem. I/O failures print to stderr and exit 1.
+Each album carries `stem`, `path`, `title`, `emoji`, `summary`, `noun`, `label`, `plural`, `parent` (stem), `parent_kind`, `owner`, `root`, `breadcrumb`, `fields[]`, `group_field`, `index_by`, `index_facets`, `records`, `groups[]`, `needs_status`, `last_record`, and `issues[]` (`code`, `severity`, `path`, `line`, `key_path`, `message`, `suggestions`). `counts`: `albums`, `records`, `roots`, `errors`, `warnings`. Path order. `ok` is false on error findings or I/O (stderr, exit 1).
 
 ### Notebook reports {#notebook-reports}
 

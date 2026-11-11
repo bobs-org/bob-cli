@@ -190,6 +190,9 @@ impl RecordDiagnostic {
 
 impl fmt::Display for RecordDiagnostic {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let album_location = self.file_path.is_some()
+            && self.line_number.is_some()
+            && self.key_path.is_some();
         if let Some(path) = &self.config_path {
             write!(formatter, "records config in {}", path.display())?;
         } else if let (Some(path), Some(line), Some(key_path)) =
@@ -199,15 +202,13 @@ impl fmt::Display for RecordDiagnostic {
         } else {
             formatter.write_str("record value")?;
         }
-        if self.config_path.is_some()
-            && let Some(record_type) = &self.record_type
-        {
-            write!(formatter, ", type {record_type}")?;
-        }
-        if self.config_path.is_some()
-            && let Some(field) = &self.field
-        {
-            write!(formatter, ", field {field}")?;
+        if !album_location {
+            if let Some(record_type) = &self.record_type {
+                write!(formatter, ", type {record_type}")?;
+            }
+            if let Some(field) = &self.field {
+                write!(formatter, ", field {field}")?;
+            }
         }
         write!(formatter, ": {}", self.message)
     }
@@ -1879,9 +1880,9 @@ mod tests {
 
     use super::{
         parse_records_config, validate_field_input, validate_field_values,
-        FieldInputState, FieldKind, RecordDate, RecordDiagnosticCode,
-        RecordField, RecordScalar, RecordValue, RecordsConfig,
-        ValidatedFieldInput,
+        FieldInputState, FieldKind, RecordDate, RecordDiagnostic,
+        RecordDiagnosticCode, RecordField, RecordScalar, RecordValue,
+        RecordsConfig, ValidatedFieldInput,
     };
 
     const CONFIG: &str = "/config.yml";
@@ -1918,6 +1919,54 @@ mod tests {
             min,
             max,
         }
+    }
+
+    #[test]
+    fn diagnostic_display_keeps_config_value_and_album_context() {
+        let config = RecordDiagnostic::config(
+            Path::new(CONFIG),
+            Some("restaurant"),
+            Some("status"),
+            RecordDiagnosticCode::InvalidChoice,
+            "unknown choice",
+        );
+        assert_eq!(
+            config.to_string(),
+            "records config in /config.yml, type restaurant, field status: unknown choice"
+        );
+
+        let value = RecordDiagnostic::value(
+            &field("status", FieldKind::Text, false, None, None),
+            RecordDiagnosticCode::InvalidChoice,
+            "unknown choice",
+        );
+        assert_eq!(
+            value.to_string(),
+            "record value, field status: unknown choice"
+        );
+
+        let note = RecordDiagnostic::note(
+            Some("title"),
+            RecordDiagnosticCode::MissingTitle,
+            "record is missing a title",
+        );
+        assert_eq!(
+            note.to_string(),
+            "record value, field title: record is missing a title"
+        );
+
+        let album = RecordDiagnostic::album(
+            Path::new("eat.md"),
+            8,
+            "record.fields.location.requred",
+            Some("restaurant"),
+            RecordDiagnosticCode::InvalidFieldOption,
+            "unknown option requred",
+        );
+        assert_eq!(
+            album.to_string(),
+            "eat.md:8 record.fields.location.requred: unknown option requred"
+        );
     }
 
     #[test]

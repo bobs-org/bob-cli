@@ -506,13 +506,22 @@ fn albums_io_failure_is_not_empty_success() {
     let payload: Value =
         serde_json::from_str(stdout(&json).trim()).expect("parse json");
     assert_eq!(payload["schema_version"], 1);
+    assert_eq!(payload["ok"], false);
 }
 
 #[test]
 fn albums_vault_bytes_unchanged_by_list_and_check() {
     let (_temp, vault) = vault_fixture("albums-clean");
     four_valid_albums(&vault);
-    let snapshot = snapshot_tree(&vault);
+    write_note(
+        &vault,
+        "broken.md",
+        "---\ntype: [[album]]\nparent: \"[[body]]\"\nsummary: Broken schema\nrecord: {noun: broken, fields: {state: {values: []}}}\n---\n\n# Broken\n",
+    );
+    write_note(&vault, "broken/good.md", "---\ntitle: Good\n---\n# Good\n");
+    write_note(&vault, "broken/bad.md", "---\n[not: mapping\n---\n# Bad\n");
+    init_vault_git(&vault);
+    let snapshot = vault_state(&vault);
     for args in [
         &["list"][..],
         &["check"][..],
@@ -522,9 +531,240 @@ fn albums_vault_bytes_unchanged_by_list_and_check() {
         let mut command = albums_command(&vault);
         command.args(args);
         let output = command.output().expect("run");
-        assert!(output.status.success(), "{}", format_output(&output));
+        let code = output.status.code();
+        assert!(
+            code == Some(0) || code == Some(1),
+            "{}",
+            format_output(&output)
+        );
     }
-    assert_eq!(snapshot_tree(&vault), snapshot);
+    assert_eq!(vault_state(&vault), snapshot);
+}
+
+#[test]
+fn albums_list_places_invalid_schemas_in_the_unowned_group() {
+    let (_temp, vault) = vault_fixture("albums-invalid-group");
+    four_valid_albums(&vault);
+    write_note(
+        &vault,
+        "broken.md",
+        "---\ntype: [[album]]\nparent: \"[[body]]\"\nsummary: Broken schema\nrecord: {noun: broken, fields: {state: {values: []}}}\n---\n\n# Broken\n",
+    );
+    let output = albums_command(&vault).arg("list").output().expect("list");
+    assert!(output.status.success(), "{}", format_output(&output));
+    let text = stdout(&output);
+    assert_text_order(&text, &["body", "Eat", "invalid / unowned", "Broken"]);
+    let body_block = text.split("invalid / unowned").next().unwrap();
+    assert!(
+        body_block.contains("Eat"),
+        "healthy stay under root:\n{text}"
+    );
+    assert!(
+        !body_block.contains("Broken"),
+        "invalid schema leaves the healthy root group:\n{text}"
+    );
+}
+
+#[test]
+fn albums_broken_album_members_still_count() {
+    let (_temp, vault) = vault_fixture("albums-broken-members");
+    write_note(&vault, "body.md", area_note());
+    write_note(
+        &vault,
+        "broken.md",
+        "---\ntype: [[album]]\nparent: \"[[body]]\"\nsummary: Broken schema\nrecord: {noun: broken, fields: {state: {values: []}}}\n---\n\n# Broken\n",
+    );
+    write_note(&vault, "broken/good.md", "---\ntitle: Good\n---\n# Good\n");
+    write_note(&vault, "broken/bad.md", "---\n[not: mapping\n---\n# Bad\n");
+    let output = albums_command(&vault)
+        .args(["list", "-f", "json"])
+        .output()
+        .expect("list json");
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let payload: Value =
+        serde_json::from_str(stdout(&output).trim()).expect("parse");
+    let broken = album_by_stem(&payload, "broken");
+    assert_eq!(broken["records"], 2);
+    assert_eq!(broken["root"], "body");
+    assert!(broken["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| issue["code"] == "album_schema_invalid"));
+}
+
+#[test]
+fn albums_child_reparent_keeps_the_child_path() {
+    let (_temp, vault) = vault_fixture("albums-child-path");
+    write_note(&vault, "body.md", area_note());
+    write_note(
+        &vault,
+        "cards.md",
+        &album("body", "Cards", "Card games.", "card", "", ""),
+    );
+    write_note(
+        &vault,
+        "stray.md",
+        "---\ntype: [[record]]\nparent: \"[[cards]]\"\n---\n# Stray\n",
+    );
+    let json = albums_command(&vault)
+        .args(["check", "-f", "json"])
+        .output()
+        .expect("check json");
+    assert_eq!(json.status.code(), Some(0), "{}", format_output(&json));
+    let payload: Value =
+        serde_json::from_str(stdout(&json).trim()).expect("parse");
+    let issue = album_by_stem(&payload, "cards")["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|issue| issue["code"] == "album_child_reparent")
+        .expect("child reparent");
+    assert_eq!(issue["path"], "stray.md");
+    assert_eq!(issue["severity"], "info");
+    assert!(issue["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|value| value == "cards/"));
+
+    let human = albums_command(&vault).arg("check").output().expect("check");
+    let text = stdout(&human);
+    assert!(text.contains("stray.md"), "human names the child:\n{text}");
+    assert!(
+        text.contains("cards/"),
+        "human suggests the owner folder:\n{text}"
+    );
+}
+
+#[test]
+fn albums_schema_suggestion_and_healthy_neighbour_are_isolated() {
+    let (_temp, vault) = vault_fixture("albums-suggestion");
+    write_note(&vault, "body.md", area_note());
+    write_note(
+        &vault,
+        "eat.md",
+        &album(
+            "body",
+            "Eat",
+            "Places to eat.",
+            "restaurant",
+            "",
+            restaurant_fields(),
+        ),
+    );
+    write_note(
+        &vault,
+        "typo.md",
+        "---\ntype: [[album]]\nparent: \"[[body]]\"\nsummary: Typo option\nrecord:\n  noun: sample\n  fields:\n    location:\n      requred: true\n---\n\n# Typo\n",
+    );
+    let json = albums_command(&vault)
+        .args(["check", "-f", "json"])
+        .output()
+        .expect("check json");
+    assert_eq!(json.status.code(), Some(1), "{}", format_output(&json));
+    let payload: Value =
+        serde_json::from_str(stdout(&json).trim()).expect("parse");
+    assert_eq!(payload["ok"], false);
+    let eat = album_by_stem(&payload, "eat");
+    assert!(eat["issues"].as_array().unwrap().is_empty());
+    let typo = album_by_stem(&payload, "typo");
+    let issue = typo["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|issue| issue["code"] == "album_schema_invalid")
+        .expect("schema issue");
+    assert_eq!(issue["path"], "typo.md");
+    assert_eq!(issue["key_path"], "record.fields.location.requred");
+    assert!(issue["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|value| value == "required"));
+
+    let human = albums_command(&vault).arg("check").output().expect("check");
+    let text = stdout(&human);
+    assert!(
+        text.contains("requred"),
+        "human keeps the key path:\n{text}"
+    );
+    assert!(
+        text.contains("required"),
+        "human prints the suggestion:\n{text}"
+    );
+}
+
+#[test]
+fn albums_non_directory_folder_is_runtime_failure() {
+    let (_temp, vault) = vault_fixture("albums-not-dir");
+    write_note(&vault, "body.md", area_note());
+    write_note(
+        &vault,
+        "eat.md",
+        &album(
+            "body",
+            "Eat",
+            "Places to eat.",
+            "restaurant",
+            "",
+            restaurant_fields(),
+        ),
+    );
+    write_file(&vault.join("eat"), "this is a file, not a folder\n");
+    let json = albums_command(&vault)
+        .args(["list", "-f", "json"])
+        .output()
+        .expect("list json");
+    assert_eq!(json.status.code(), Some(1), "{}", format_output(&json));
+    let payload: Value =
+        serde_json::from_str(stdout(&json).trim()).expect("parse");
+    assert_eq!(payload["ok"], false);
+    assert!(
+        stderr(&json).contains("bob albums:"),
+        "folder I/O on stderr:\n{}",
+        stderr(&json)
+    );
+
+    let human = albums_command(&vault).arg("list").output().expect("list");
+    assert_eq!(human.status.code(), Some(1), "{}", format_output(&human));
+    assert!(
+        !stdout(&human).contains("No albums."),
+        "runtime failure is not an empty vault:\n{}",
+        format_output(&human)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn albums_folder_symlink_escape_is_runtime_failure() {
+    let temp = TempDir::new("albums-symlink");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let outside = temp.path().join("outside");
+    fs::create_dir_all(&outside).expect("outside dir");
+    write_note(&vault, "body.md", area_note());
+    write_note(
+        &vault,
+        "eat.md",
+        &album(
+            "body",
+            "Eat",
+            "Places to eat.",
+            "restaurant",
+            "",
+            restaurant_fields(),
+        ),
+    );
+    std::os::unix::fs::symlink(&outside, vault.join("eat")).expect("symlink");
+    let json = albums_command(&vault)
+        .args(["check", "-f", "json"])
+        .output()
+        .expect("check json");
+    assert_eq!(json.status.code(), Some(1), "{}", format_output(&json));
+    let payload: Value =
+        serde_json::from_str(stdout(&json).trim()).expect("parse");
+    assert_eq!(payload["ok"], false);
 }
 
 #[test]
@@ -610,11 +850,64 @@ fn albums_completion_offers_members_and_roots() {
     assert!(names.contains(&"mind"), "roots: {names:?}\n{roots_out}");
 }
 
+fn init_vault_git(vault: &Path) {
+    git_in(vault, ["init", "-q"]);
+    git_in(vault, ["symbolic-ref", "HEAD", "refs/heads/master"]);
+    configure_test_git_identity(vault);
+    git_in(vault, ["add", "."]);
+    git_in(vault, ["commit", "-q", "-m", "album fixture"]);
+}
+
+fn vault_state(root: &Path) -> VaultState {
+    VaultState {
+        paths: collect_paths(root),
+        files: snapshot_tree(root),
+        head: stdout(&git_in(root, ["rev-parse", "HEAD"])),
+        index: stdout(&git_in(root, ["diff-index", "--cached", "HEAD"])),
+        worktree: stdout(&git_in(root, ["status", "--porcelain=v1"])),
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct VaultState {
+    paths: Vec<PathBuf>,
+    files: Vec<(PathBuf, String)>,
+    head: String,
+    index: String,
+    worktree: String,
+}
+
 fn snapshot_tree(root: &Path) -> Vec<(PathBuf, String)> {
     let mut files = Vec::new();
     collect_files(root, root, &mut files);
     files.sort();
     files
+}
+
+fn collect_paths(root: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    collect_path_entries(root, root, &mut paths);
+    paths.sort();
+    paths
+}
+
+fn collect_path_entries(
+    root: &Path,
+    directory: &Path,
+    paths: &mut Vec<PathBuf>,
+) {
+    for entry in fs::read_dir(directory).expect("read dir") {
+        let entry = entry.expect("dir entry");
+        let path = entry.path();
+        let relative = path.strip_prefix(root).unwrap().to_path_buf();
+        if relative.starts_with(".git") {
+            continue;
+        }
+        paths.push(relative);
+        if path.is_dir() {
+            collect_path_entries(root, &path, paths);
+        }
+    }
 }
 
 fn collect_files(
@@ -625,11 +918,15 @@ fn collect_files(
     for entry in fs::read_dir(directory).expect("read dir") {
         let entry = entry.expect("dir entry");
         let path = entry.path();
+        let relative = path.strip_prefix(root).unwrap().to_path_buf();
+        if relative.starts_with(".git") {
+            continue;
+        }
         if path.is_dir() {
             collect_files(root, &path, files);
         } else {
             files.push((
-                path.strip_prefix(root).unwrap().to_path_buf(),
+                relative,
                 fs::read_to_string(&path).expect("read file"),
             ));
         }

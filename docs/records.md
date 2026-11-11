@@ -6,10 +6,11 @@ description: Vault album notes, record schemas, capture creation, and how Bob pl
 # Albums and record notes
 
 A record note represents one durable thing, such as a restaurant, podcast, show,
-or movie. An **album** is a vault-root note that owns one record type: its stem
-is the folder, `record.noun` names the Obsidian `type` link, and `record.fields`
-is the schema. Config `records:` remains a fallback for capture and
-`bob records` until a later phase migrates those consumers.
+or movie. Canonical records use `type: "[[record]]"`; `record.noun` names the
+kind and the legacy type spelling (`[[restaurant]]`). An **album** is a
+vault-root note that owns one kind: its stem is the folder and capture route
+(`eat.md` owns `eat/` and `@eat/`). Config `records:` still feeds capture and
+`bob records` until `bob-cli-k3.4`.
 
 This contract covers album reports, schema loading, value validation, filename
 planning, and the Markdown Bob writes. Capture creates notes through the same
@@ -47,7 +48,17 @@ record:
 ```
 
 - **Parent:** exactly one quoted `"[[stem]]"` that resolves to an area or
-  project. The chain must reach a Root Parent and must not cycle.
+  project. The chain must reach a Root Parent and must not cycle. Folder and
+  parent on the record schema are derived (`dir` = stem, `parent` =
+  `"[[stem]]"`); they are not album schema keys.
+- **Stem / noun:** the stem is a lower-case capture route and cannot be
+  `done`, `ref`, a dot folder, or `.bob`. `record.noun` is required
+  `[a-z][a-z0-9_]*`. Reserved nouns include today's record ids plus `album`
+  and `record`.
+- **`record.fields`:** optional. Field kinds, defaults, lists, choices, and
+  legacy patterns follow [Schema](#schema) below. `label` defaults to the
+  noun in title case; `plural` lowercases that label unless it starts with
+  an acronym, then appends `s`.
 - **Summary:** one plain line, at most 140 characters.
 - **Grouping:** `status` choices when present, otherwise the first choices
   field, otherwise none. Empty groups are omitted. Missing, unknown, or
@@ -59,7 +70,8 @@ record:
   default of other choice fields then `suggest` fields, excluding the group
   field and `index_by`, capped at three.
 - **`last_record`:** the latest valid `created` date (`YYYY-MM-DD`) among
-  folder members, or null.
+  folder members, or null. A missing folder is an empty album. Immediate
+  Markdown members still count when the schema is broken.
 
 `bob albums` lives in the Vault section of `bob --help`. Bare `bob albums`
 defaults to the read-only `list`. `bob albums create` ships in a later phase.
@@ -87,7 +99,12 @@ warning summary.
 
 List and check share one JSON envelope (`schema_version: 1`). Albums are
 ordered by path. `parent` is the parent stem. `ok` is false when error
-findings exist. See [JSON outputs](reference/json-outputs.md#album-reports).
+findings exist or runtime I/O failed. See
+[JSON outputs](reference/json-outputs.md#album-reports).
+
+A broken album refuses only its own route and stays visible; other albums,
+config kinds it does not claim, and notebook catalogs keep working. Capture
+and `bob records` still read config until `bob-cli-k3.4`.
 
 ## Schema
 
@@ -236,6 +253,11 @@ available, the record type and field. It disables record features only; task
 capture, planning, hooks, and unrelated config sections keep their existing
 behavior. Loading the schema does not scan the vault or require type and
 collection notes to exist.
+
+A broken album is the same isolation at vault scope: its claim still
+suppresses a matching config kind, neighbouring albums stay usable, and a
+schema typo never presents as a clean empty report or a global notebook
+catalog failure. Runtime folder read failures stay in the I/O channel.
 
 ## Capture
 

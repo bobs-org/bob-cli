@@ -400,10 +400,12 @@ Contract: [Notebooks](../notebooks.md).
 ### Album notes
 
 An album is a vault-root Markdown file with `type: "[[album]]"`. Its stem is
-the record folder. `record.noun` names the Obsidian type; `record.fields` is
-the schema. `index_by` and `index_facets` shape grouping peeks and facets.
+the record folder and route. Canonical records use `type: "[[record]]"`;
+`record.noun` names the kind and legacy type spelling. `record.fields` is
+optional. `index_by` and `index_facets` shape grouping peeks and facets.
 `bob albums list` and `bob albums check` report albums, groups, freshness,
-and findings. `bob albums create` ships in a later phase.
+and findings. A broken album fails only its own route. `bob albums create`
+ships in a later phase.
 
 Contract: [Albums and record notes](../records.md).
 
