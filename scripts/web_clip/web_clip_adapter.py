@@ -60,7 +60,7 @@ import threading
 import time
 import traceback
 import unicodedata
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 PROTOCOL_VERSION = 1
 DEFUDDLE_VERSION = "0.19.4"
@@ -131,6 +131,8 @@ REQUEST_TIMEOUT_MS = 15000
 IMAGE_MAX_BYTES = 15 * 1024 * 1024
 IMAGES_TOTAL_MAX_BYTES = 60 * 1024 * 1024
 PDF_MAX_BYTES = 95 * 1024 * 1024
+# Match src/native/highlights_ref/fetch.rs: walk this many hops, then refuse.
+MAX_FETCH_REDIRECTS = 10
 PDF_WARN_BYTES = 50 * 1024 * 1024
 FIXTURE_HOST = "fixture.bob-clip.invalid"
 
@@ -180,6 +182,10 @@ class AdapterFail(Exception):
         self.kind = kind
         self.message = message
         self.hint = hint
+
+
+class GuardedFetchError(Exception):
+    """A page-derived URL resolved to a private host or a redirect loop."""
 
 
 def _table_settings(request: dict) -> dict:
@@ -575,6 +581,9 @@ def sanitize_html(dirty: str) -> str:
     }
     for tag in _SVG_TAGS:
         attributes[tag] = set(_SVG_ATTRS)
+    # snapshot.js marks live SVGs; sanitize runs before localization, so
+    # the marker has to survive nh3 or inline SVGs are never externalized.
+    attributes["svg"].add("data-bob-svg")
     return nh3.clean(
         dirty,
         tags=tags,
@@ -672,7 +681,45 @@ def classify_probe(probe: dict, cf_mitigated: bool) -> tuple[str, str]:
 # Private-network guard and browser discovery (ping uses these too).
 # ---------------------------------------------------------------------------
 
+# Verdict cache scoped to one capture. The route guard and guarded API
+# fetches resolve with getaddrinfo, then Chrome re-resolves on continue;
+# a 0-TTL attacker name can still flip public→loopback between those two
+# lookups. Pinning the connection to the vetted IP would close that
+# window; the residual race is accepted (dns_rebinding_depth = cache_scope).
 _host_global_cache: dict[str, bool] = {}
+# Self-test seam: hostname → addresses. When set, replaces DNS entirely
+# and an unlisted host fails closed.
+_resolve_override: dict[str, list[str]] | None = None
+
+
+def _begin_capture_host_cache() -> None:
+    """Drop cached host verdicts so the next capture re-resolves DNS."""
+    _host_global_cache.clear()
+
+
+def _set_resolve_override(mapping: dict[str, list[str]] | None) -> None:
+    """Replace DNS for tests; ``None`` restores getaddrinfo."""
+    global _resolve_override
+    _resolve_override = mapping
+
+
+def _host_addresses(host: str) -> set[str] | None:
+    """Resolved addresses for ``host``, or ``None`` when lookup fails."""
+    stripped = host.strip("[]")
+    try:
+        ipaddress.ip_address(stripped)
+        return {stripped}
+    except ValueError:
+        pass
+    if _resolve_override is not None:
+        mapped = _resolve_override.get(host.lower())
+        return set(mapped) if mapped else None
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return None
+    addresses = {info[4][0] for info in infos}
+    return addresses or None
 
 
 def host_is_global(host: str) -> bool:
@@ -680,12 +727,7 @@ def host_is_global(host: str) -> bool:
     key = host.lower()
     if key in _host_global_cache:
         return _host_global_cache[key]
-    try:
-        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
-    except socket.gaierror:
-        _host_global_cache[key] = False
-        return False
-    addresses = {info[4][0] for info in infos}
+    addresses = _host_addresses(host)
     if not addresses:
         _host_global_cache[key] = False
         return False
@@ -701,6 +743,55 @@ def host_is_global(host: str) -> bool:
             break
     _host_global_cache[key] = result
     return result
+
+
+def _response_header(response, name: str) -> str | None:
+    """Read a response header, matching names case-insensitively."""
+    headers = getattr(response, "headers", None) or {}
+    wanted = name.lower()
+    for key, value in headers.items():
+        if str(key).lower() == wanted:
+            return value
+    return None
+
+
+def _request_host_is_global(url: str) -> bool:
+    """Whether ``url`` is http(s) to a host that passes ``host_is_global``."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return False
+    return host_is_global(parts.hostname)
+
+
+def guarded_fetch(api, url: str, *, method: str = "get", **kwargs):
+    """GET/HEAD ``url`` with per-hop ``host_is_global`` checks.
+
+    Playwright's ``APIRequestContext`` is not covered by ``context.route``,
+    so image and PDF fetches re-apply the private-network guard themselves.
+    Automatic redirects are disabled; each ``Location`` is resolved and
+    re-checked, matching the curl walker in
+    ``src/native/highlights_ref/fetch.rs``.
+    """
+    current = url
+    extra = dict(kwargs)
+    extra["max_redirects"] = 0
+    fetch = getattr(api, method)
+    for _ in range(MAX_FETCH_REDIRECTS + 1):
+        if not _request_host_is_global(current):
+            raise GuardedFetchError(
+                f"refused a private-network request for {current}")
+        response = fetch(current, **extra)
+        status = int(getattr(response, "status", 0) or 0)
+        if not (300 <= status < 400):
+            return response
+        location = _response_header(response, "location")
+        if not location:
+            return response
+        current = urljoin(current, location)
+    raise GuardedFetchError(f"too many redirects for {url}")
 
 
 def _chrome_version(executable: str) -> str:
@@ -1220,8 +1311,12 @@ _SRC_ATTR_RE = re.compile(
     r"""\bsrc\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""", re.IGNORECASE)
 _DATA_URI_RE = re.compile(r"^data:([^;,]+)?(;base64)?,(.*)$", re.DOTALL)
 _SVG_TAG_RE = re.compile(
-    r"""<svg\b[^>]*data-bob-svg="1"[^>]*>.*?</svg>""",
+    r"""<svg\b[^>]*data-bob-svg\s*=\s*(["']?)1\1[^>]*>.*?</svg>""",
     re.IGNORECASE | re.DOTALL,
+)
+_DATA_BOB_SVG_ATTR_RE = re.compile(
+    r"""\s+data-bob-svg\s*=\s*(["'][^"']*["']|[^\s>]+)""",
+    re.IGNORECASE,
 )
 _CONTENT_TYPE_EXT = {
     "image/jpeg": "jpg",
@@ -1295,6 +1390,7 @@ def _clean_inline_svg(markup: str) -> str:
                     "", markup)
     markup = re.sub(r"""\s+(?:xlink:)?href\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""",
                     "", markup)
+    markup = _DATA_BOB_SVG_ATTR_RE.sub("", markup)
     return markup
 
 
@@ -1328,8 +1424,8 @@ def _localize_images(api, markup: str, assets_dir: str, page_url: str,
             data, content_type = decoded
         elif raw_src.startswith(("http://", "https://")):
             try:
-                response = api.get(
-                    raw_src,
+                response = guarded_fetch(
+                    api, raw_src,
                     headers={"Referer": page_url},
                     timeout=REQUEST_TIMEOUT_MS,
                 )
@@ -1402,6 +1498,7 @@ def _localize_images(api, markup: str, assets_dir: str, page_url: str,
         return f'<img src="assets/{name}" alt="">'
 
     markup = _SVG_TAG_RE.sub(_replace_svg, markup)
+    markup = _DATA_BOB_SVG_ATTR_RE.sub("", markup)
     return markup, manifest
 
 
@@ -1474,22 +1571,31 @@ def _is_pdf_response(response) -> bool:
 def _probe_pdf(api, url: str) -> bool:
     """HEAD (falling back to ranged GET) to spot PDF URLs before navigating."""
     try:
-        response = api.head(url, timeout=REQUEST_TIMEOUT_MS)
+        response = guarded_fetch(
+            api, url, method="head", timeout=REQUEST_TIMEOUT_MS)
         if response.status < 400:
             return _is_pdf_response(response)
+    except GuardedFetchError:
+        return False
     except Exception:  # noqa: BLE001 - fall back to a ranged GET
         pass
     try:
-        response = api.get(url, headers={"Range": "bytes=0-0"},
-                           timeout=REQUEST_TIMEOUT_MS)
+        response = guarded_fetch(
+            api, url, method="get",
+            headers={"Range": "bytes=0-0"},
+            timeout=REQUEST_TIMEOUT_MS)
         return _is_pdf_response(response)
+    except GuardedFetchError:
+        return False
     except Exception:  # noqa: BLE001 - navigation will surface real errors
         return False
 
 
 def _download_remote_pdf(api, url: str, out_pdf: str) -> int:
     try:
-        response = api.get(url, timeout=60000)
+        response = guarded_fetch(api, url, timeout=60000)
+    except GuardedFetchError as exc:
+        raise AdapterFail("network", str(exc), PRIVATE_HINT) from exc
     except Exception as exc:  # noqa: BLE001 - network failure
         raise AdapterFail("network", f"could not download the PDF: {exc}",
                           PRIVATE_HINT) from exc
@@ -1594,6 +1700,9 @@ def run_capture(request: dict, *, allow_headed: bool = True,
                           f"snapshot.js is missing: {exc}") from exc
     if "window.__bobClip" not in snapshot_js:
         raise AdapterFail("internal", "snapshot.js defines no __bobClip")
+
+    # Each capture re-resolves DNS; see _host_global_cache.
+    _begin_capture_host_cache()
 
     # With a route hook (self-test fixtures) the hook fulfills the document
     # before any DNS happens, so skip the fail-fast check; the per-request
@@ -2978,6 +3087,9 @@ def self_test() -> int:
           'id="fnref-1"' in safe and 'href="#fn-1"' in safe)
     check("sanitize keeps svg shell",
           "<svg" in safe and "<circle" in safe)
+    check("sanitize keeps the live-svg marker",
+          'data-bob-svg="1"' in sanitize_html(
+              '<svg data-bob-svg="1"><circle r="3"/></svg>'))
     check("sanitize keeps math",
           "<math>" in safe and "<mi>x</mi>" in safe)
     check("sanitize keeps code and details",
@@ -3179,6 +3291,9 @@ def self_test() -> int:
           and _render.short_footer_title(long_title).endswith("…"))
     check("css string escaped",
           _render.css_escape_string('a"b\\c') == 'a\\"b\\\\c')
+    check("css string escapes angle brackets",
+          _render.css_escape_string("</style><img>")
+          == "\\3c /style\\3e \\3c img\\3e ")
     check("headings shift to h2",
           "<h2>" in _render.shift_headings("<h1>T</h1><h2>U</h2>")
           and "<h1>" not in _render.shift_headings("<h1>T</h1>"))
@@ -3223,6 +3338,21 @@ def self_test() -> int:
           "@bottom-left" in assembled and "content:" in assembled)
     check("assemble drops first-page footer title",
           "@page :first" in assembled and "content: none" in assembled)
+    breakout_title = "</style><img src=x onerror=alert(1)>"
+    assembled_breakout = _render.assemble({
+        "title": breakout_title,
+        "author": None,
+        "published": None,
+        "captured": "2026-10-01",
+        "site": "Example",
+        "description": None,
+        "html": "<p>Body.</p>",
+        "source_url": "https://example.com/x",
+        "word_count": 1,
+    })
+    check("assemble css title cannot break out of style",
+          "</style><img" not in assembled_breakout
+          and "\\3c /style\\3e " in assembled_breakout)
 
     import tempfile as _offline_tf
 
@@ -3282,16 +3412,124 @@ def self_test() -> int:
         def get(_url: str, **_kwargs):
             return _ImageResponse()
 
-    localized_dir = os.path.join(offline_dir, "localized-assets")
-    os.makedirs(localized_dir, exist_ok=True)
-    localized_markup, _localized_images = _localize_images(
-        _ImageApi(),
-        '<img src="https://example.com/pic.png?a=1&amp;b=2" '
-        'alt="remote" title="original title">'
-        '<img src="data:image/png;base64,bm90LWltYWdl" alt="inline">'
-        '<svg data-bob-svg="1"><circle r="3"/></svg>',
-        localized_dir, "https://example.com/article", time.monotonic() + 30,
-        [])
+    class _RedirectResponse:
+        def __init__(self, status: int, headers: dict,
+                     body: bytes = b"") -> None:
+            self.status = status
+            self.headers = headers
+            self._body = body
+
+        def body(self) -> bytes:
+            return self._body
+
+    class _RecordingApi:
+        def __init__(self, responses: dict[str, object]) -> None:
+            self.calls: list[tuple[str, str, object]] = []
+            self.responses = responses
+
+        def get(self, url: str, **kwargs):
+            self.calls.append(("get", url, kwargs.get("max_redirects")))
+            return self.responses[url]
+
+        def head(self, url: str, **kwargs):
+            self.calls.append(("head", url, kwargs.get("max_redirects")))
+            return self.responses[url]
+
+    class _NoFetchApi:
+        @staticmethod
+        def get(url: str, **_kwargs):
+            raise AssertionError(f"must not fetch {url}")
+
+        @staticmethod
+        def head(url: str, **_kwargs):
+            raise AssertionError(f"must not fetch {url}")
+
+    _begin_capture_host_cache()
+    check("loopback is not global", not host_is_global("127.0.0.1"))
+    check("rfc1918 is not global", not host_is_global("192.168.1.1"))
+    check("host verdict is cached", "127.0.0.1" in _host_global_cache)
+    _begin_capture_host_cache()
+    check("host cache is per capture", "127.0.0.1" not in _host_global_cache)
+
+    public_pdf = "http://8.8.8.8/doc.pdf"
+    private_pdf = "http://127.0.0.1:9000/x.pdf"
+    redirect_api = _RecordingApi({
+        public_pdf: _RedirectResponse(302, {"Location": private_pdf}),
+        private_pdf: _RedirectResponse(
+            200, {"content-type": "application/pdf"}, b"%PDF"),
+    })
+    redirect_refused = False
+    try:
+        guarded_fetch(redirect_api, public_pdf)
+    except GuardedFetchError as exc:
+        redirect_refused = "127.0.0.1" in str(exc)
+    check("redirect to private is refused before the private hop",
+          redirect_refused
+          and redirect_api.calls == [("get", public_pdf, 0)])
+
+    relative_api = _RecordingApi({
+        "http://8.8.8.8/a": _RedirectResponse(302, {"location": "/b"}),
+        "http://8.8.8.8/b": _RedirectResponse(
+            200, {"content-type": "application/pdf"}, b"%PDF-1"),
+    })
+    relative_response = guarded_fetch(relative_api, "http://8.8.8.8/a")
+    check("relative redirect stays on the public hop",
+          relative_response.body() == b"%PDF-1"
+          and relative_api.calls == [
+              ("get", "http://8.8.8.8/a", 0),
+              ("get", "http://8.8.8.8/b", 0),
+          ])
+
+    loop_api = _RecordingApi({})
+
+    def _loop_get(url: str, **kwargs):
+        loop_api.calls.append(("get", url, kwargs.get("max_redirects")))
+        return _RedirectResponse(302, {"Location": url})
+
+    loop_api.get = _loop_get  # type: ignore[method-assign]
+    loop_refused = False
+    try:
+        guarded_fetch(loop_api, public_pdf)
+    except GuardedFetchError as exc:
+        loop_refused = "too many redirects" in str(exc)
+    check("redirect hop cap is enforced",
+          loop_refused
+          and len(loop_api.calls) == MAX_FETCH_REDIRECTS + 1)
+
+    probe_api = _RecordingApi({
+        public_pdf: _RedirectResponse(302, {"Location": private_pdf}),
+        private_pdf: _RedirectResponse(
+            200, {"content-type": "application/pdf"}, b"%PDF"),
+    })
+    check("pdf probe treats a private redirect as not a pdf",
+          _probe_pdf(probe_api, public_pdf) is False
+          and all(url != private_pdf for _, url, _ in probe_api.calls))
+    download_refused = False
+    try:
+        _download_remote_pdf(
+            redirect_api, public_pdf,
+            os.path.join(offline_dir, "refused.pdf"))
+    except AdapterFail as exc:
+        download_refused = (exc.kind == "network"
+                            and "127.0.0.1" in exc.message)
+    check("pdf download refuses a redirect to a private host",
+          download_refused
+          and not os.path.isfile(os.path.join(offline_dir, "refused.pdf")))
+
+    _set_resolve_override({"example.com": ["8.8.8.8"]})
+    try:
+        localized_dir = os.path.join(offline_dir, "localized-assets")
+        os.makedirs(localized_dir, exist_ok=True)
+        localized_markup, _localized_images = _localize_images(
+            _ImageApi(),
+            '<img src="https://example.com/pic.png?a=1&amp;b=2" '
+            'alt="remote" title="original title">'
+            '<img src="data:image/png;base64,bm90LWltYWdl" alt="inline">'
+            '<svg data-bob-svg="1"><circle r="3"/></svg>',
+            localized_dir, "https://example.com/article",
+            time.monotonic() + 30, [])
+    finally:
+        _set_resolve_override(None)
     check("image localization keeps remote origin",
           'data-bob-origin="https://example.com/pic.png?a=1&amp;b=2"'
           in localized_markup)
@@ -3304,6 +3542,41 @@ def self_test() -> int:
           'alt="remote" title="original title">'
           and "assets/" not in source_image_markup
           and "data-bob-origin" not in source_image_markup)
+
+    private_warnings: list[str] = []
+    private_dir = os.path.join(offline_dir, "private-assets")
+    os.makedirs(private_dir, exist_ok=True)
+    private_markup, private_images = _localize_images(
+        _NoFetchApi(),
+        '<img src="http://192.168.1.1/cgi/reboot" alt="lan">'
+        '<img src="http://127.0.0.1/secret.png" alt="loop">',
+        private_dir, "https://example.com/article", time.monotonic() + 30,
+        private_warnings)
+    check("private image src is dropped without a fetch",
+          private_images["failed"] == 2 and private_images["kept"] == 0
+          and "<img" not in private_markup
+          and any("dropped image" in warning for warning in private_warnings)
+          and os.listdir(private_dir) == [])
+
+    svg_pipeline_src = '<p>keep</p><svg data-bob-svg="1"><circle r="3"/></svg>'
+    sanitized_svg = sanitize_html(svg_pipeline_src)
+    svg_dir = os.path.join(offline_dir, "svg-pipeline")
+    os.makedirs(svg_dir, exist_ok=True)
+    pipeline_markup, pipeline_images = _localize_images(
+        _NoFetchApi(), sanitized_svg, svg_dir,
+        "https://example.com/article", time.monotonic() + 30, [])
+    saved_svg = os.path.join(svg_dir, "svg-001.svg")
+    saved_svg_text = ""
+    if os.path.isfile(saved_svg):
+        with open(saved_svg, encoding="utf-8") as handle:
+            saved_svg_text = handle.read()
+    check("sanitize-then-localize externalizes inline svg",
+          pipeline_images["kept"] == 1
+          and 'src="assets/svg-001.svg"' in pipeline_markup
+          and "<svg" not in pipeline_markup
+          and "data-bob-svg" not in pipeline_markup
+          and "data-bob-svg" not in saved_svg_text
+          and "<circle" in saved_svg_text)
 
     source_view = _render.assemble_source({
         "title": "Source title",

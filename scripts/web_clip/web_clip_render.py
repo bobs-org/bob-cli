@@ -358,7 +358,12 @@ def short_footer_title(title: str, limit: int = 60) -> str:
 def css_escape_string(text: str) -> str:
     """Escape ``text`` for a double-quoted CSS string."""
     cleaned = re.sub(r"[\x00-\x1f\x7f]", " ", text)
-    return cleaned.replace("\\", "\\\\").replace('"', '\\"')
+    return (
+        cleaned.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("<", "\\3c ")
+        .replace(">", "\\3e ")
+    )
 
 
 def shift_headings(markup: str, target_level: int = 2) -> str:
