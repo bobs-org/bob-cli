@@ -275,6 +275,34 @@ fn type_forms_match_article_and_keep_project_area() {
 }
 
 #[test]
+fn album_and_record_predicates_use_top_level_type_names() {
+    for contents in [
+        "---\ntype: \"[[album]]\"\n---\n",
+        "---\ntype: [[album]]\n---\n",
+        "---\ntype: [\"[[area]]\", \"[[album]]\"]\n---\n",
+        "---\ntype:\n  - \"[[area]]\"\n  - \"[[album]]\"\n---\n",
+    ] {
+        let frontmatter = parse_frontmatter(contents).expect("frontmatter");
+        assert!(frontmatter_is_album(&frontmatter), "{contents:?}");
+        assert!(!frontmatter_is_record(&frontmatter), "{contents:?}");
+    }
+
+    let record = parse_frontmatter("---\ntype: [[record]]\n---\n")
+        .expect("record frontmatter");
+    assert!(frontmatter_is_record(&record));
+    assert!(!frontmatter_is_album(&record));
+    assert!(frontmatter_is_legacy_record(
+        &parse_frontmatter("---\ntype: [[restaurant]]\n---\n").unwrap(),
+        &["restaurant".to_owned()]
+    ));
+
+    let nested_only =
+        parse_frontmatter("---\nrecord:\n  type: [[album]]\n---\n")
+            .expect("nested-only frontmatter");
+    assert!(!frontmatter_is_album(&nested_only));
+}
+
+#[test]
 fn non_project_notes_are_ignored() {
     let mut issues = Vec::new();
     let note = parse_project(

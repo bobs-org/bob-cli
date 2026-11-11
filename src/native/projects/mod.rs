@@ -212,6 +212,12 @@ pub(crate) use model::{
     Frontmatter, ProjectStatus, SubprojectDisplay, SubprojectState,
     WikilinkRef, WikilinkSpan,
 };
+#[allow(unused_imports)]
+// Added now for the album parser and registry phases.
+pub(crate) use scan::{
+    frontmatter_is_album, frontmatter_is_legacy_record, frontmatter_is_record,
+    frontmatter_top_level_value,
+};
 pub(crate) use scan::{
     frontmatter_is_area, frontmatter_is_article, frontmatter_is_notebook,
     frontmatter_is_project, frontmatter_scalar, frontmatter_type_names,

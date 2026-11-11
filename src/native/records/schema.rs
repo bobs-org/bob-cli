@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fmt,
     ops::Range,
     path::{Path, PathBuf},
@@ -12,6 +13,12 @@ const RESERVED_RECORD_IDS: &[&str] = &[
     "project", "area", "ref", "day", "done", "mail", "article", "type",
     "notebook",
 ];
+const ALBUM_RESERVED_RECORD_IDS: &[&str] = &[
+    "project", "area", "ref", "day", "done", "mail", "article", "type",
+    "notebook", "album", "record",
+];
+const ALBUM_RECORD_KEYS: &[&str] =
+    &["noun", "label", "plural", "dated_notes", "fields", "legacy"];
 const RESERVED_FIELD_NAMES: &[&str] = &["parent", "type", "title", "created"];
 const RECORD_KEYS: &[&str] = &[
     "dir",
@@ -72,6 +79,10 @@ pub(crate) struct RecordDiagnostic {
     pub(crate) allowed_keys: Vec<String>,
     /// Caller-provided byte ranges; the engine never invents ranges.
     pub(crate) source_ranges: Option<Vec<Range<usize>>>,
+    /// Album declarations use file/line/key paths instead of config provenance.
+    pub(crate) file_path: Option<PathBuf>,
+    pub(crate) line_number: Option<usize>,
+    pub(crate) key_path: Option<String>,
 }
 
 impl RecordDiagnostic {
@@ -91,6 +102,9 @@ impl RecordDiagnostic {
             suggestions: Vec::new(),
             allowed_keys: Vec::new(),
             source_ranges: None,
+            file_path: None,
+            line_number: None,
+            key_path: None,
         }
     }
 
@@ -108,6 +122,9 @@ impl RecordDiagnostic {
             suggestions: Vec::new(),
             allowed_keys: Vec::new(),
             source_ranges: None,
+            file_path: None,
+            line_number: None,
+            key_path: None,
         }
     }
 
@@ -125,6 +142,32 @@ impl RecordDiagnostic {
             suggestions: Vec::new(),
             allowed_keys: Vec::new(),
             source_ranges: None,
+            file_path: None,
+            line_number: None,
+            key_path: None,
+        }
+    }
+
+    pub(crate) fn album(
+        path: &Path,
+        line_number: usize,
+        key_path: impl Into<String>,
+        record_type: Option<&str>,
+        code: RecordDiagnosticCode,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            code,
+            config_path: None,
+            record_type: record_type.map(str::to_owned),
+            field: None,
+            message: message.into(),
+            suggestions: Vec::new(),
+            allowed_keys: Vec::new(),
+            source_ranges: None,
+            file_path: Some(path.to_path_buf()),
+            line_number: Some(line_number),
+            key_path: Some(key_path.into()),
         }
     }
 
@@ -149,16 +192,127 @@ impl fmt::Display for RecordDiagnostic {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(path) = &self.config_path {
             write!(formatter, "records config in {}", path.display())?;
+        } else if let (Some(path), Some(line), Some(key_path)) =
+            (&self.file_path, self.line_number, &self.key_path)
+        {
+            write!(formatter, "{}:{line} {key_path}", path.display())?;
         } else {
             formatter.write_str("record value")?;
         }
-        if let Some(record_type) = &self.record_type {
+        if self.config_path.is_some()
+            && let Some(record_type) = &self.record_type
+        {
             write!(formatter, ", type {record_type}")?;
         }
-        if let Some(field) = &self.field {
+        if self.config_path.is_some()
+            && let Some(field) = &self.field
+        {
             write!(formatter, ", field {field}")?;
         }
         write!(formatter, ": {}", self.message)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SchemaSourceKind<'a> {
+    Config,
+    Album {
+        line_by_path: &'a HashMap<String, usize>,
+        record_line: usize,
+    },
+}
+
+/// Carries the location/provenance policy through the shared field-schema
+/// validators. Config callers retain their existing structured diagnostics;
+/// album callers get a physical line and a complete YAML key path.
+#[derive(Clone)]
+struct RecordSchemaSource<'a> {
+    path: &'a Path,
+    record_type: &'a str,
+    field: Option<String>,
+    key_path: Vec<String>,
+    kind: SchemaSourceKind<'a>,
+}
+
+impl<'a> RecordSchemaSource<'a> {
+    fn config(path: &'a Path, record_type: &'a str) -> Self {
+        Self {
+            path,
+            record_type,
+            field: None,
+            key_path: Vec::new(),
+            kind: SchemaSourceKind::Config,
+        }
+    }
+
+    fn album(
+        path: &'a Path,
+        record_type: &'a str,
+        line_by_path: &'a HashMap<String, usize>,
+        record_line: usize,
+    ) -> Self {
+        Self {
+            path,
+            record_type,
+            field: None,
+            key_path: vec!["record".to_owned()],
+            kind: SchemaSourceKind::Album {
+                line_by_path,
+                record_line,
+            },
+        }
+    }
+
+    fn field(&self, key: &str) -> Self {
+        let mut source = self.clone();
+        source.field = Some(key.to_owned());
+        if let SchemaSourceKind::Album { .. } = source.kind {
+            source.key_path.push("fields".to_owned());
+            source.key_path.push(key.to_owned());
+        }
+        source
+    }
+
+    fn at(&self, key: &str) -> Self {
+        let mut source = self.clone();
+        if let SchemaSourceKind::Album { .. } = source.kind {
+            source.key_path.push(key.to_owned());
+        }
+        source
+    }
+
+    fn diagnostic(
+        &self,
+        code: RecordDiagnosticCode,
+        message: impl Into<String>,
+    ) -> RecordDiagnostic {
+        match self.kind {
+            SchemaSourceKind::Config => RecordDiagnostic::config(
+                self.path,
+                Some(self.record_type),
+                self.field.as_deref(),
+                code,
+                message,
+            ),
+            SchemaSourceKind::Album {
+                line_by_path,
+                record_line,
+            } => {
+                let key_path = self.key_path.join(".");
+                let line =
+                    line_by_path.get(&key_path).copied().unwrap_or(record_line);
+                let mut diagnostic = RecordDiagnostic::album(
+                    self.path,
+                    line,
+                    key_path,
+                    Some(self.record_type),
+                    code,
+                    message,
+                );
+                diagnostic.field = self.field.clone();
+                diagnostic
+            }
+        }
     }
 }
 
@@ -191,6 +345,16 @@ pub(crate) struct RecordType {
     pub(crate) dated_notes: bool,
     pub(crate) fields: Vec<RecordField>,
     pub(crate) legacy: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct AlbumRecordSchemaParse {
+    /// Preserved even when another part of the declaration is invalid.
+    pub(crate) noun_claim: Option<String>,
+    pub(crate) label: Option<String>,
+    pub(crate) plural: Option<String>,
+    pub(crate) record_type: Option<RecordType>,
+    pub(crate) diagnostic: Option<RecordDiagnostic>,
 }
 
 impl RecordType {
@@ -468,14 +632,8 @@ pub(crate) fn parse_records_config(
             RecordDiagnosticCode::InvalidRecordType,
             "record type definition",
         )?;
-        reject_unknown_keys(
-            type_map,
-            RECORD_KEYS,
-            path,
-            id,
-            None,
-            "record type",
-        )?;
+        let source = RecordSchemaSource::config(path, id);
+        reject_unknown_keys(type_map, RECORD_KEYS, &source, "record type")?;
 
         let dir = required_string(type_map, "dir", path, id, None)?;
         if !valid_directory(&dir) {
@@ -552,7 +710,7 @@ pub(crate) fn parse_records_config(
                     "field name is reserved by record-note frontmatter",
                 ));
             }
-            let field = parse_field(field_value, path, id, key)?;
+            let field = parse_field(field_value, &source.field(key), key)?;
             if let Some((previous_kind, previous_list, previous_type)) =
                 property_shapes.get(key)
             {
@@ -581,7 +739,7 @@ pub(crate) fn parse_records_config(
             }
             fields.push(field);
         }
-        let legacy = parse_legacy(type_map, path, id)?;
+        let legacy = parse_legacy(type_map, &source.at("legacy"))?;
         types.push(RecordType {
             id: id.to_owned(),
             dir,
@@ -597,77 +755,289 @@ pub(crate) fn parse_records_config(
     Ok(RecordsConfig { types })
 }
 
+/// Parse the nested schema owned by an album note. Config parsing remains a
+/// separate caller with its historical required `dir`, `label`, and `fields`
+/// contract; only the field validators and value rules are shared.
+pub(crate) fn parse_album_record_schema(
+    value: Option<&Value>,
+    path: &Path,
+    stem: &str,
+    emoji: Option<String>,
+    line_by_path: &HashMap<String, usize>,
+    record_line: usize,
+) -> AlbumRecordSchemaParse {
+    let mapping = match value {
+        Some(Value::Mapping(mapping)) => mapping,
+        Some(value) => {
+            let diagnostic = RecordDiagnostic::album(
+                path,
+                record_line,
+                "record",
+                None,
+                RecordDiagnosticCode::InvalidRecordType,
+                format!("record must be a mapping; got {}", yaml_kind(value)),
+            );
+            return AlbumRecordSchemaParse {
+                noun_claim: recover_album_noun(value),
+                label: None,
+                plural: None,
+                record_type: None,
+                diagnostic: Some(diagnostic),
+            };
+        }
+        None => {
+            let diagnostic = RecordDiagnostic::album(
+                path,
+                record_line,
+                "record.noun",
+                None,
+                RecordDiagnosticCode::MissingRecordProperty,
+                "record is required and must define noun",
+            );
+            return AlbumRecordSchemaParse {
+                noun_claim: None,
+                label: None,
+                plural: None,
+                record_type: None,
+                diagnostic: Some(diagnostic),
+            };
+        }
+    };
+
+    let noun_claim = mapping_get(mapping, "noun")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let display_label = noun_claim.as_deref().map(|noun| {
+        mapping_get(mapping, "label")
+            .and_then(Value::as_str)
+            .filter(|label| !label.trim().is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| album_label(noun))
+    });
+    let display_plural = mapping_get(mapping, "plural")
+        .and_then(Value::as_str)
+        .filter(|plural| !plural.trim().is_empty())
+        .map(str::to_owned)
+        .or_else(|| display_label.as_deref().map(album_plural));
+    let source_type = noun_claim.as_deref().unwrap_or("album");
+    let source =
+        RecordSchemaSource::album(path, source_type, line_by_path, record_line);
+
+    let result = (|| {
+        reject_unknown_keys(mapping, ALBUM_RECORD_KEYS, &source, "record")?;
+
+        let noun = mapping_get(mapping, "noun")
+            .ok_or_else(|| {
+                source.at("noun").diagnostic(
+                    RecordDiagnosticCode::MissingRecordProperty,
+                    "noun is required",
+                )
+            })?
+            .as_str()
+            .filter(|noun| !noun.trim().is_empty())
+            .ok_or_else(|| {
+                source.at("noun").diagnostic(
+                    RecordDiagnosticCode::InvalidRecordId,
+                    "noun must be a non-empty string matching [a-z][a-z0-9_]*",
+                )
+            })?;
+        if !valid_identifier(noun) {
+            return Err(source.at("noun").diagnostic(
+                RecordDiagnosticCode::InvalidRecordId,
+                "noun must match [a-z][a-z0-9_]*",
+            ));
+        }
+        if ALBUM_RESERVED_RECORD_IDS.contains(&noun) {
+            return Err(source.at("noun").diagnostic(
+                RecordDiagnosticCode::ReservedRecordId,
+                "record noun is reserved for a built-in note type",
+            ));
+        }
+
+        let label = album_optional_string(mapping, "label", &source)?
+            .unwrap_or_else(|| album_label(noun));
+        let _plural = album_optional_string(mapping, "plural", &source)?
+            .unwrap_or_else(|| album_plural(&label));
+        let dated_notes =
+            source_optional_bool(mapping, "dated_notes", false, &source)?;
+        let fields_value = mapping_get(mapping, "fields");
+        let mut fields = Vec::new();
+        if let Some(fields_value) = fields_value {
+            let Some(field_map) = fields_value.as_mapping() else {
+                return Err(source.at("fields").diagnostic(
+                    RecordDiagnosticCode::InvalidField,
+                    format!(
+                        "fields must be an ordered mapping; got {}",
+                        yaml_kind(fields_value)
+                    ),
+                ));
+            };
+            fields.reserve(field_map.len());
+            for (field_key_value, field_value) in field_map {
+                let Some(key) = field_key_value.as_str() else {
+                    return Err(source.at("fields").diagnostic(
+                        RecordDiagnosticCode::InvalidField,
+                        format!(
+                            "field keys must be strings; got {}",
+                            yaml_kind(field_key_value)
+                        ),
+                    ));
+                };
+                let field_source = source.field(key);
+                if !valid_identifier(key) {
+                    return Err(field_source.diagnostic(
+                        RecordDiagnosticCode::InvalidFieldName,
+                        "field name must match [a-z][a-z0-9_]*",
+                    ));
+                }
+                if RESERVED_FIELD_NAMES.contains(&key) {
+                    return Err(field_source.diagnostic(
+                        RecordDiagnosticCode::ReservedFieldName,
+                        "field name is reserved by record-note frontmatter",
+                    ));
+                }
+                fields.push(parse_field(field_value, &field_source, key)?);
+            }
+        }
+        let legacy = parse_legacy(mapping, &source.at("legacy"))?;
+        Ok(RecordType {
+            id: noun.to_owned(),
+            dir: stem.to_owned(),
+            label,
+            emoji,
+            parent: Some(format!("[[{stem}]]")),
+            dated_notes,
+            fields,
+            legacy,
+        })
+    })();
+
+    match result {
+        Ok(record_type) => AlbumRecordSchemaParse {
+            noun_claim: Some(record_type.id.clone()),
+            label: Some(record_type.label.clone()),
+            plural: display_plural,
+            record_type: Some(record_type),
+            diagnostic: None,
+        },
+        Err(diagnostic) => AlbumRecordSchemaParse {
+            noun_claim,
+            label: display_label,
+            plural: display_plural,
+            record_type: None,
+            diagnostic: Some(diagnostic),
+        },
+    }
+}
+
+fn album_optional_string(
+    mapping: &Mapping,
+    name: &str,
+    source: &RecordSchemaSource<'_>,
+) -> Result<Option<String>, RecordDiagnostic> {
+    let Some(value) = mapping_get(mapping, name) else {
+        return Ok(None);
+    };
+    let Some(text) = value.as_str() else {
+        return Err(source.at(name).diagnostic(
+            RecordDiagnosticCode::InvalidFieldOption,
+            format!(
+                "{name} must be a non-empty string; got {}",
+                yaml_kind(value)
+            ),
+        ));
+    };
+    if text.trim().is_empty() {
+        return Err(source.at(name).diagnostic(
+            RecordDiagnosticCode::InvalidFieldOption,
+            format!("{name} must be a non-empty string"),
+        ));
+    }
+    Ok(Some(text.to_owned()))
+}
+
+fn album_label(noun: &str) -> String {
+    let mut label = noun.replace('_', " ");
+    if let Some(first) = label.get_mut(..1) {
+        first.make_ascii_uppercase();
+    }
+    label
+}
+
+fn album_plural(label: &str) -> String {
+    let lowered = if label
+        .as_bytes()
+        .get(0..2)
+        .is_some_and(|prefix| prefix.iter().all(u8::is_ascii_uppercase))
+    {
+        label.to_owned()
+    } else {
+        let mut chars = label.chars();
+        chars
+            .next()
+            .map(|first| first.to_lowercase().chain(chars).collect())
+            .unwrap_or_default()
+    };
+    format!("{lowered}s")
+}
+
+fn recover_album_noun(value: &Value) -> Option<String> {
+    let Value::String(raw) = value else {
+        return None;
+    };
+    let inner = raw
+        .trim()
+        .trim_start_matches('{')
+        .trim_end_matches('}')
+        .trim();
+    inner.split(',').find_map(|part| {
+        let (key, value) = part.split_once(':')?;
+        (key.trim().trim_matches(['\'', '"']) == "noun")
+            .then(|| value.trim().trim_matches(['\'', '"']).to_owned())
+    })
+}
+
 fn parse_field(
     value: &Value,
-    path: &Path,
-    record_type: &str,
+    source: &RecordSchemaSource<'_>,
     key: &str,
 ) -> Result<RecordField, RecordDiagnostic> {
-    let field_map = expect_mapping(
-        value,
-        path,
-        record_type,
-        Some(key),
-        RecordDiagnosticCode::InvalidField,
-        "field definition",
-    )?;
-    reject_unknown_keys(
-        field_map,
-        FIELD_KEYS,
-        path,
-        record_type,
-        Some(key),
-        "field",
-    )?;
+    let field_map = value.as_mapping().ok_or_else(|| {
+        source.diagnostic(
+            RecordDiagnosticCode::InvalidField,
+            format!(
+                "field definition must be a mapping; got {}",
+                yaml_kind(value)
+            ),
+        )
+    })?;
+    reject_unknown_keys(field_map, FIELD_KEYS, source, "field")?;
 
-    let required = optional_bool(
-        field_map,
-        "required",
-        false,
-        path,
-        record_type,
-        Some(key),
-    )?;
-    let list =
-        optional_bool(field_map, "list", false, path, record_type, Some(key))?;
-    let suggest = optional_bool(
-        field_map,
-        "suggest",
-        false,
-        path,
-        record_type,
-        Some(key),
-    )?;
-    let label =
-        optional_string(field_map, "label", path, record_type, Some(key))?
-            .unwrap_or_else(|| title_case_field(key));
+    let required = source_optional_bool(field_map, "required", false, source)?;
+    let list = source_optional_bool(field_map, "list", false, source)?;
+    let suggest = source_optional_bool(field_map, "suggest", false, source)?;
+    let label = source_optional_string(field_map, "label", source)?
+        .unwrap_or_else(|| title_case_field(key));
     if label.trim().is_empty() {
-        return Err(RecordDiagnostic::config(
-            path,
-            Some(record_type),
-            Some(key),
+        return Err(source.at("label").diagnostic(
             RecordDiagnosticCode::InvalidFieldOption,
             "label must be a non-empty string",
         ));
     }
 
-    let kind = parse_field_kind(field_map, path, record_type, key)?;
-    let min = optional_number(field_map, "min", path, record_type, key)?;
-    let max = optional_number(field_map, "max", path, record_type, key)?;
+    let kind = parse_field_kind(field_map, source)?;
+    let min = source_optional_number(field_map, "min", source)?;
+    let max = source_optional_number(field_map, "max", source)?;
     if (min.is_some() || max.is_some()) && kind != FieldKind::Number {
-        return Err(RecordDiagnostic::config(
-            path,
-            Some(record_type),
-            Some(key),
-            RecordDiagnosticCode::InvalidNumberBound,
-            "min and max are only valid for number fields",
-        ));
+        return Err(source
+            .at(if min.is_some() { "min" } else { "max" })
+            .diagnostic(
+                RecordDiagnosticCode::InvalidNumberBound,
+                "min and max are only valid for number fields",
+            ));
     }
     if min.zip(max).is_some_and(|(min, max)| min > max) {
-        return Err(RecordDiagnostic::config(
-            path,
-            Some(record_type),
-            Some(key),
+        return Err(source.at("min").diagnostic(
             RecordDiagnosticCode::InvalidNumberBound,
             "min must be less than or equal to max",
         ));
@@ -685,26 +1055,22 @@ fn parse_field(
     };
     if let Some(default_value) = mapping_get(field_map, "default") {
         if key == "status" {
-            return Err(RecordDiagnostic::config(
-                path,
-                Some(record_type),
-                Some(key),
+            return Err(source.at("default").diagnostic(
                 RecordDiagnosticCode::InvalidDefault,
                 "status fields cannot have a default",
             ));
         }
         field.default =
-            Some(parse_default(default_value, &field, path, record_type)?);
+            Some(parse_default(default_value, &field, &source.at("default"))?);
     }
     Ok(field)
 }
 
 fn parse_field_kind(
     field_map: &Mapping,
-    path: &Path,
-    record_type: &str,
-    key: &str,
+    source: &RecordSchemaSource<'_>,
 ) -> Result<FieldKind, RecordDiagnostic> {
+    let source = source.at("values");
     let Some(value) = mapping_get(field_map, "values") else {
         return Ok(FieldKind::Text);
     };
@@ -714,20 +1080,14 @@ fn parse_field_kind(
             "link" => Ok(FieldKind::Link),
             "url" => Ok(FieldKind::Url),
             "number" => Ok(FieldKind::Number),
-            _ => Err(RecordDiagnostic::config(
-                path,
-                Some(record_type),
-                Some(key),
+            _ => Err(source.diagnostic(
                 RecordDiagnosticCode::InvalidFieldKind,
                 format!("values must be date, link, url, number, or a non-empty choice mapping; got {kind:?}"),
             )),
         };
     }
     let Some(choices) = value.as_mapping() else {
-        return Err(RecordDiagnostic::config(
-            path,
-            Some(record_type),
-            Some(key),
+        return Err(source.diagnostic(
             RecordDiagnosticCode::InvalidFieldKind,
             format!(
                 "values must be a supported kind or choice mapping; got {}",
@@ -736,10 +1096,7 @@ fn parse_field_kind(
         ));
     };
     if choices.is_empty() {
-        return Err(RecordDiagnostic::config(
-            path,
-            Some(record_type),
-            Some(key),
+        return Err(source.diagnostic(
             RecordDiagnosticCode::InvalidChoice,
             "choice mappings must not be empty",
         ));
@@ -747,10 +1104,7 @@ fn parse_field_kind(
     let mut parsed = Vec::with_capacity(choices.len());
     for (choice_value, label_value) in choices {
         let Some(choice) = choice_value.as_str() else {
-            return Err(RecordDiagnostic::config(
-                path,
-                Some(record_type),
-                Some(key),
+            return Err(source.diagnostic(
                 RecordDiagnosticCode::InvalidChoice,
                 format!(
                     "choice keys must be strings; got {}",
@@ -759,10 +1113,7 @@ fn parse_field_kind(
             ));
         };
         let Some(label) = label_value.as_str() else {
-            return Err(RecordDiagnostic::config(
-                path,
-                Some(record_type),
-                Some(key),
+            return Err(source.diagnostic(
                 RecordDiagnosticCode::InvalidChoice,
                 format!(
                     "choice label for {choice:?} must be a string; got {}",
@@ -771,10 +1122,7 @@ fn parse_field_kind(
             ));
         };
         if choice.is_empty() || label.trim().is_empty() {
-            return Err(RecordDiagnostic::config(
-                path,
-                Some(record_type),
-                Some(key),
+            return Err(source.diagnostic(
                 RecordDiagnosticCode::InvalidChoice,
                 "choice keys and display labels must be non-empty",
             ));
@@ -790,15 +1138,12 @@ fn parse_field_kind(
 fn parse_default(
     value: &Value,
     field: &RecordField,
-    path: &Path,
-    record_type: &str,
+    source: &RecordSchemaSource<'_>,
 ) -> Result<RecordValue, RecordDiagnostic> {
     if field.list {
         let Some(items) = value.as_sequence() else {
             return Err(default_error(
-                path,
-                record_type,
-                field,
+                source,
                 format!(
                     "list default must be a sequence; got {}",
                     yaml_kind(value)
@@ -807,34 +1152,29 @@ fn parse_default(
         };
         let values = items
             .iter()
-            .map(|item| default_scalar(item, field, path, record_type))
+            .map(|item| default_scalar(item, field, source))
             .collect::<Result<Vec<_>, _>>()?;
         return Ok(RecordValue::List(values));
     }
     if value.is_sequence() {
         return Err(default_error(
-            path,
-            record_type,
-            field,
+            source,
             "scalar default must not be a sequence",
         ));
     }
-    default_scalar(value, field, path, record_type).map(RecordValue::Scalar)
+    default_scalar(value, field, source).map(RecordValue::Scalar)
 }
 
 fn default_scalar(
     value: &Value,
     field: &RecordField,
-    path: &Path,
-    record_type: &str,
+    source: &RecordSchemaSource<'_>,
 ) -> Result<RecordScalar, RecordDiagnostic> {
     let input = match (&field.kind, value) {
         (FieldKind::Number, Value::Number(number)) => number.to_string(),
         (FieldKind::Number, _) => {
             return Err(default_error(
-                path,
-                record_type,
-                field,
+                source,
                 format!(
                     "number default must be an integer or decimal; got {}",
                     yaml_kind(value)
@@ -844,9 +1184,7 @@ fn default_scalar(
         (_, Value::String(text)) => text.clone(),
         (_, _) => {
             return Err(default_error(
-                path,
-                record_type,
-                field,
+                source,
                 format!(
                     "default must be a string{}; got {}",
                     if field.list { " member" } else { "" },
@@ -867,10 +1205,7 @@ fn default_scalar(
     let date =
         NaiveDate::from_ymd_opt(2000, 1, 1).expect("valid validation date");
     validate_scalar(field, &input, date).map_err(|error| {
-        RecordDiagnostic::config(
-            path,
-            Some(record_type),
-            Some(&field.key),
+        source.diagnostic(
             RecordDiagnosticCode::InvalidDefault,
             format!("default is invalid: {}", error.message),
         )
@@ -878,18 +1213,10 @@ fn default_scalar(
 }
 
 fn default_error(
-    path: &Path,
-    record_type: &str,
-    field: &RecordField,
+    source: &RecordSchemaSource<'_>,
     message: impl Into<String>,
 ) -> RecordDiagnostic {
-    RecordDiagnostic::config(
-        path,
-        Some(record_type),
-        Some(&field.key),
-        RecordDiagnosticCode::InvalidDefault,
-        message,
-    )
+    source.diagnostic(RecordDiagnosticCode::InvalidDefault, message)
 }
 
 fn validate_scalar(
@@ -1047,6 +1374,9 @@ fn parse_number(
             suggestions: Vec::new(),
             allowed_keys: Vec::new(),
             source_ranges: None,
+            file_path: None,
+            line_number: None,
+            key_path: None,
         });
     }
     let number = raw
@@ -1062,6 +1392,9 @@ fn parse_number(
             suggestions: Vec::new(),
             allowed_keys: Vec::new(),
             source_ranges: None,
+            file_path: None,
+            line_number: None,
+            key_path: None,
         })?;
     if min.is_some_and(|min| number < min)
         || max.is_some_and(|max| number > max)
@@ -1079,6 +1412,9 @@ fn parse_number(
             suggestions: Vec::new(),
             allowed_keys: Vec::new(),
             source_ranges: None,
+            file_path: None,
+            line_number: None,
+            key_path: None,
         });
     }
     Ok(number)
@@ -1175,17 +1511,13 @@ fn push_list_member(
 
 fn parse_legacy(
     type_map: &Mapping,
-    path: &Path,
-    record_type: &str,
+    source: &RecordSchemaSource<'_>,
 ) -> Result<Vec<String>, RecordDiagnostic> {
     let Some(value) = mapping_get(type_map, "legacy") else {
         return Ok(Vec::new());
     };
     let Some(patterns) = value.as_sequence() else {
-        return Err(RecordDiagnostic::config(
-            path,
-            Some(record_type),
-            None,
+        return Err(source.diagnostic(
             RecordDiagnosticCode::InvalidRecordType,
             format!(
                 "legacy must be a sequence of non-empty strings; got {}",
@@ -1201,10 +1533,7 @@ fn parse_legacy(
                 .filter(|pattern| !pattern.is_empty())
                 .map(str::to_owned)
                 .ok_or_else(|| {
-                    RecordDiagnostic::config(
-                        path,
-                        Some(record_type),
-                        None,
+                    source.diagnostic(
                         RecordDiagnosticCode::InvalidRecordType,
                         "legacy entries must be non-empty strings",
                     )
@@ -1331,49 +1660,16 @@ fn optional_bool(
     })
 }
 
-fn optional_number(
-    mapping: &Mapping,
-    name: &str,
-    path: &Path,
-    record_type: &str,
-    field: &str,
-) -> Result<Option<f64>, RecordDiagnostic> {
-    let Some(value) = mapping_get(mapping, name) else {
-        return Ok(None);
-    };
-    let parsed = value
-        .as_f64()
-        .filter(|number| number.is_finite())
-        .ok_or_else(|| {
-            RecordDiagnostic::config(
-                path,
-                Some(record_type),
-                Some(field),
-                RecordDiagnosticCode::InvalidNumberBound,
-                format!(
-                    "{name} must be a finite number; got {}",
-                    yaml_kind(value)
-                ),
-            )
-        })?;
-    Ok(Some(parsed))
-}
-
 fn reject_unknown_keys(
     mapping: &Mapping,
     allowed: &[&str],
-    path: &Path,
-    record_type: &str,
-    field: Option<&str>,
+    source: &RecordSchemaSource<'_>,
     description: &str,
 ) -> Result<(), RecordDiagnostic> {
     for key in mapping.keys() {
         let Some(key) = key.as_str() else {
-            return Err(RecordDiagnostic::config(
-                path,
-                Some(record_type),
-                field,
-                if field.is_some() {
+            return Err(source.diagnostic(
+                if source.field.is_some() {
                     RecordDiagnosticCode::InvalidFieldOption
                 } else {
                     RecordDiagnosticCode::InvalidRecordType
@@ -1385,20 +1681,125 @@ fn reject_unknown_keys(
             ));
         };
         if !allowed.contains(&key) {
-            return Err(RecordDiagnostic::config(
-                path,
-                Some(record_type),
-                field,
-                if field.is_some() {
+            let mut diagnostic = source.at(key).diagnostic(
+                if source.field.is_some() {
                     RecordDiagnosticCode::InvalidFieldOption
                 } else {
                     RecordDiagnosticCode::InvalidRecordType
                 },
                 format!("unknown {description} key {key:?}"),
-            ));
+            );
+            if matches!(source.kind, SchemaSourceKind::Album { .. }) {
+                diagnostic.suggestions = spelling_suggestions(key, allowed);
+                diagnostic.allowed_keys = allowed
+                    .iter()
+                    .map(|allowed| (*allowed).to_owned())
+                    .collect();
+            }
+            return Err(diagnostic);
         }
     }
     Ok(())
+}
+
+fn source_optional_bool(
+    mapping: &Mapping,
+    name: &str,
+    default: bool,
+    source: &RecordSchemaSource<'_>,
+) -> Result<bool, RecordDiagnostic> {
+    let Some(value) = mapping_get(mapping, name) else {
+        return Ok(default);
+    };
+    value.as_bool().ok_or_else(|| {
+        source.at(name).diagnostic(
+            RecordDiagnosticCode::InvalidFieldOption,
+            format!("{name} must be a boolean; got {}", yaml_kind(value)),
+        )
+    })
+}
+
+fn source_optional_string(
+    mapping: &Mapping,
+    name: &str,
+    source: &RecordSchemaSource<'_>,
+) -> Result<Option<String>, RecordDiagnostic> {
+    let Some(value) = mapping_get(mapping, name) else {
+        return Ok(None);
+    };
+    let Some(text) = value.as_str() else {
+        return Err(source.at(name).diagnostic(
+            RecordDiagnosticCode::InvalidFieldOption,
+            format!(
+                "{name} must be a non-empty string; got {}",
+                yaml_kind(value)
+            ),
+        ));
+    };
+    if text.trim().is_empty() {
+        return Err(source.at(name).diagnostic(
+            RecordDiagnosticCode::InvalidFieldOption,
+            format!("{name} must be a non-empty string"),
+        ));
+    }
+    Ok(Some(text.to_owned()))
+}
+
+fn source_optional_number(
+    mapping: &Mapping,
+    name: &str,
+    source: &RecordSchemaSource<'_>,
+) -> Result<Option<f64>, RecordDiagnostic> {
+    let Some(value) = mapping_get(mapping, name) else {
+        return Ok(None);
+    };
+    let parsed = value
+        .as_f64()
+        .filter(|number| number.is_finite())
+        .ok_or_else(|| {
+            source.at(name).diagnostic(
+                RecordDiagnosticCode::InvalidNumberBound,
+                format!(
+                    "{name} must be a finite number; got {}",
+                    yaml_kind(value)
+                ),
+            )
+        })?;
+    Ok(Some(parsed))
+}
+
+fn spelling_suggestions(key: &str, allowed: &[&str]) -> Vec<String> {
+    let mut candidates = allowed
+        .iter()
+        .filter_map(|candidate| {
+            let distance = edit_distance(key, candidate);
+            (distance <= 2).then_some((distance, *candidate))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| left.cmp(right));
+    candidates
+        .into_iter()
+        .take(3)
+        .map(|(_, candidate)| candidate.to_owned())
+        .collect()
+}
+
+fn edit_distance(left: &str, right: &str) -> usize {
+    let mut previous = (0..=right.len()).collect::<Vec<_>>();
+    let mut current = vec![0; right.len() + 1];
+    for (left_index, left_byte) in left.bytes().enumerate() {
+        current[0] = left_index + 1;
+        for (right_index, right_byte) in right.bytes().enumerate() {
+            current[right_index + 1] = (previous[right_index + 1] + 1)
+                .min(current[right_index] + 1)
+                .min(
+                    previous[right_index]
+                        + usize::from(left_byte != right_byte),
+                );
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[right.len()]
 }
 
 fn mapping_get<'a>(mapping: &'a Mapping, key: &str) -> Option<&'a Value> {

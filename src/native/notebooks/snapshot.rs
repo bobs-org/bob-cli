@@ -367,7 +367,7 @@ pub(super) fn reconstruct_header(
     header
 }
 
-pub(super) fn first_alias(contents: &str) -> Option<String> {
+pub(crate) fn first_alias(contents: &str) -> Option<String> {
     let start = contents.find("---")?;
     let rest = &contents[start + 3..];
     let end = rest.find("---")?;

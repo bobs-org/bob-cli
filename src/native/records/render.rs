@@ -1028,6 +1028,9 @@ fn collect_warnings(
                     suggestions: Vec::new(),
                     allowed_keys: Vec::new(),
                     source_ranges: None,
+                    file_path: None,
+                    line_number: None,
+                    key_path: None,
                 });
             }
             continue;
@@ -1043,6 +1046,9 @@ fn collect_warnings(
                 suggestions: Vec::new(),
                 allowed_keys: Vec::new(),
                 source_ranges: None,
+                file_path: None,
+                line_number: None,
+                key_path: None,
             });
             continue;
         }
@@ -1085,6 +1091,9 @@ fn collect_warnings(
                 suggestions: Vec::new(),
                 allowed_keys: Vec::new(),
                 source_ranges: None,
+                file_path: None,
+                line_number: None,
+                key_path: None,
             });
             continue;
         }
@@ -1112,6 +1121,9 @@ fn collect_warnings(
                 suggestions: Vec::new(),
                 allowed_keys: Vec::new(),
                 source_ranges: None,
+                file_path: None,
+                line_number: None,
+                key_path: None,
             });
         }
     }

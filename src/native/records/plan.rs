@@ -361,6 +361,9 @@ pub(crate) fn plan_fields(
                 suggestions: nearest_field_keys(&allowed_keys, &input.key),
                 allowed_keys,
                 source_ranges: source_ranges_for(inputs, &input.key),
+                file_path: None,
+                line_number: None,
+                key_path: None,
             };
             invalid.push(diagnostic);
         }
@@ -407,6 +410,9 @@ fn combine_field_inputs(
             suggestions: Vec::new(),
             allowed_keys: Vec::new(),
             source_ranges: None,
+            file_path: None,
+            line_number: None,
+            key_path: None,
         });
     }
     if has_values {
@@ -1186,6 +1192,9 @@ pub(crate) fn plan_update(
                 suggestions: nearest_field_keys(&allowed_keys, &input.key),
                 allowed_keys,
                 source_ranges: source_ranges_for(request.fields, &input.key),
+                file_path: None,
+                line_number: None,
+                key_path: None,
             };
             invalid.push(diagnostic);
             invalid_keys.push(input.key.clone());

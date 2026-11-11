@@ -365,6 +365,26 @@ pub(crate) fn frontmatter_is_notebook(frontmatter: &Frontmatter<'_>) -> bool {
     frontmatter_has_type(frontmatter, "[[notebook]]")
 }
 
+#[allow(dead_code)] // Consumed by album parsing and registry analysis.
+pub(crate) fn frontmatter_is_album(frontmatter: &Frontmatter<'_>) -> bool {
+    frontmatter_has_type(frontmatter, "[[album]]")
+}
+
+#[allow(dead_code)] // Consumed by album registry classification.
+pub(crate) fn frontmatter_is_record(frontmatter: &Frontmatter<'_>) -> bool {
+    frontmatter_has_type(frontmatter, "[[record]]")
+}
+
+#[allow(dead_code)] // Consumed by album registry classification.
+pub(crate) fn frontmatter_is_legacy_record(
+    frontmatter: &Frontmatter<'_>,
+    known_nouns: &[String],
+) -> bool {
+    frontmatter_type_names(frontmatter)
+        .iter()
+        .any(|name| known_nouns.iter().any(|noun| noun == name))
+}
+
 pub(crate) fn frontmatter_has_type(
     frontmatter: &Frontmatter<'_>,
     expected: &str,
@@ -381,7 +401,7 @@ pub(crate) fn frontmatter_has_type(
 pub(crate) fn frontmatter_type_names(
     frontmatter: &Frontmatter<'_>,
 ) -> Vec<String> {
-    if let Some(raw) = frontmatter_value(frontmatter, "type") {
+    if let Some(raw) = frontmatter_top_level_value(frontmatter, "type") {
         let trimmed = raw.trim();
         if !trimmed.is_empty() {
             if trimmed.starts_with('[') {
@@ -468,6 +488,23 @@ pub(crate) fn frontmatter_value<'a>(
         return Some(value.trim());
     }
     None
+}
+
+/// The line-based frontmatter value for a top-level key. Unlike
+/// `frontmatter_value`, this does not match a nested schema property with the
+/// same name.
+pub(crate) fn frontmatter_top_level_value<'a>(
+    frontmatter: &'a Frontmatter<'a>,
+    key: &str,
+) -> Option<&'a str> {
+    frontmatter.lines.iter().find_map(|line| {
+        if line.starts_with([' ', '\t']) {
+            return None;
+        }
+        let rest = line.strip_prefix(key)?;
+        let value = rest.strip_prefix(':')?;
+        Some(value.trim())
+    })
 }
 
 /// A frontmatter key's scalar-or-not shape. Distinguishes a blank
