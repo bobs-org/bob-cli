@@ -17,7 +17,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const PIPE_DRAIN_GRACE: Duration = Duration::from_millis(250);
+const PIPE_DRAIN_GRACE: Duration = Duration::from_secs(2);
 
 /// One subprocess invocation. Stdio is always piped; gog and the Keep
 /// adapter never own the terminal.
@@ -447,7 +447,7 @@ mod tests {
     fn run_bounds_pipe_drain_when_detached_grandchild_holds_output() {
         let spec = RunSpec {
             program: PathBuf::from("sh"),
-            args: ["-c", "setsid sleep 5 & echo $!; exit 0"]
+            args: ["-c", "setsid sleep 8 & echo $!; exit 0"]
                 .into_iter()
                 .map(OsString::from)
                 .collect(),
@@ -458,7 +458,7 @@ mod tests {
         };
         let started = Instant::now();
         let output = run(&spec).expect("shell runs");
-        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(started.elapsed() < Duration::from_secs(4));
         assert!(output.stderr.contains("output truncated"));
         if let Ok(pid) = output.stdout.trim().parse::<u32>() {
             let _ = Command::new("kill")
@@ -472,7 +472,7 @@ mod tests {
     fn raw_run_bounds_pipe_drain_when_detached_grandchild_holds_output() {
         let spec = RawRunSpec {
             program: PathBuf::from("sh"),
-            args: ["-c", "setsid sleep 5 & echo $!; exit 0"]
+            args: ["-c", "setsid sleep 8 & echo $!; exit 0"]
                 .into_iter()
                 .map(OsString::from)
                 .collect(),
@@ -484,7 +484,7 @@ mod tests {
         };
         let started = Instant::now();
         let output = run_raw(&spec).expect("shell runs");
-        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(started.elapsed() < Duration::from_secs(4));
         assert!(output.output_incomplete);
         if let Ok(pid) = std::str::from_utf8(&output.stdout)
             .unwrap_or_default()

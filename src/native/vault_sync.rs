@@ -596,54 +596,35 @@ fn handle_clobbers(
             continue;
         }
 
-        // The quarantine decision was made from `hit.work_bytes`, but
-        // `detect_clobbers` spent time in `git grep` + candidate reads
-        // since then. If the user saved a newer edit in that window,
-        // restoring HEAD now would silently drop it (and the conflict copy
-        // above would hold the stale bytes). Re-read and skip this cycle.
-        match fs::read(vault.join(&hit.path)) {
-            Ok(live) if live != hit.work_bytes => {
-                clobber_warn(
-                    styler,
-                    &format!(
-                        "skipping quarantine of {path_display}: file changed since detection; will retry next cycle"
-                    ),
-                );
-                continue;
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                clobber_warn(
-                    styler,
-                    &format!(
-                        "skipping quarantine of {path_display}: file disappeared before restore ({error})"
-                    ),
-                );
-                continue;
-            }
-            Err(error) => {
-                return Err(CycleError::fatal(format!(
-                    "failed to re-read {} before quarantine: {error}",
-                    vault.join(&hit.path).display()
-                )));
-            }
-        }
-        let conflict_copy = write_conflict_copy_bytes(
-            vault,
-            &hit.path,
-            &host,
-            &timestamp,
-            &hit.work_bytes,
-        )?;
-        restore_head_bytes(vault, &hit.path, &hit.head_bytes)?;
+        let Some((conflict_copy, refreshed)) =
+            quarantine_clobber_hit(vault, hit, &host, &timestamp)?
+        else {
+            clobber_warn(
+                styler,
+                &format!(
+                    "skipping quarantine of {path_display}: file disappeared before restore"
+                ),
+            );
+            continue;
+        };
         let conflict_display = display_path(&conflict_copy);
-        clobber_warn(
-            styler,
-            &format!(
-                "quarantined clobber of {path_display} (matches {matched}: {}); conflict copy at {conflict_display}",
-                hit.evidence
-            ),
-        );
+        if refreshed {
+            clobber_warn(
+                styler,
+                &format!(
+                    "quarantined clobber of {path_display} (matches {matched}: {}; file changed after detection; newest bytes quarantined); conflict copy at {conflict_display}",
+                    hit.evidence
+                ),
+            );
+        } else {
+            clobber_warn(
+                styler,
+                &format!(
+                    "quarantined clobber of {path_display} (matches {matched}: {}); conflict copy at {conflict_display}",
+                    hit.evidence
+                ),
+            );
+        }
         note_lines.push(format!(
             "- {timestamp} {path_display} -> {conflict_display} (clobber; matches {matched}: {})",
             hit.evidence
@@ -670,6 +651,52 @@ fn handle_clobbers(
     record_clobbers(status, records);
     notify_clobbers(&hits);
     Ok(force_add.into_iter().collect())
+}
+
+/// Quarantine one clobber hit from the freshest on-disk bytes.
+///
+/// Re-reads the live file: when it differs from `hit.work_bytes` the conflict
+/// copy is written from the fresh bytes first, then the note is restored to
+/// `head_bytes` as normal. Returns the conflict copy and whether the bytes
+/// were refreshed, or `None` when the file disappeared before the restore
+/// (a deletion that gets committed stays recoverable from history).
+fn quarantine_clobber_hit(
+    vault: &Path,
+    hit: &vault_clobber::ClobberHit,
+    host: &str,
+    timestamp: &str,
+) -> Result<Option<(PathBuf, bool)>, CycleError> {
+    // The quarantine decision was made from `hit.work_bytes`, but
+    // `detect_clobbers` spent time in `git grep` + candidate reads since
+    // then. Refresh the conflict copy from the fresh bytes first so the
+    // newest edit is preserved instead of being skipped and committed.
+    let live = match fs::read(vault.join(&hit.path)) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(None);
+        }
+        Err(error) => {
+            return Err(CycleError::fatal(format!(
+                "failed to re-read {} before quarantine: {error}",
+                vault.join(&hit.path).display()
+            )));
+        }
+    };
+    let refreshed = live != hit.work_bytes;
+    let quarantine_bytes = if refreshed {
+        live
+    } else {
+        hit.work_bytes.clone()
+    };
+    let conflict_copy = write_conflict_copy_bytes(
+        vault,
+        &hit.path,
+        host,
+        timestamp,
+        &quarantine_bytes,
+    )?;
+    restore_head_bytes(vault, &hit.path, &hit.head_bytes)?;
+    Ok(Some((conflict_copy, refreshed)))
 }
 
 fn record_clobbers(status: &mut StatusRecord, records: Vec<ClobberRecord>) {
@@ -1021,6 +1048,14 @@ fn preserve_worktree_before_abort(
     for entry in entries {
         if entry.path.starts_with("_conflicts") || entry.code.trim().is_empty()
         {
+            continue;
+        }
+        // During an interrupted merge, index-only staged changes (`M `/`A `,
+        // worktree equal to the index) hold no hand-resolution: the re-merge
+        // recreates them. Copy only unmerged entries or entries whose
+        // worktree differs from the index (second column is not a space).
+        let worktree_differs = entry.code.as_bytes().get(1) != Some(&b' ');
+        if !is_unmerged_code(&entry.code) && !worktree_differs {
             continue;
         }
         let full = vault.join(&entry.path);
@@ -2819,5 +2854,73 @@ mod tests {
         assert_eq!(status.quarantined[0].path, "note.md");
         let copy = vault.join(&status.quarantined[0].conflict_copy);
         assert_eq!(fs::read_to_string(&copy).unwrap(), "hand-resolved\n");
+    }
+
+    #[test]
+    fn abort_preservation_skips_index_only_staged() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path().join("vault");
+        fs::create_dir(&vault).unwrap();
+        let run = |args: &[&str]| {
+            let status = Command::new("git")
+                .arg("-C")
+                .arg(&vault)
+                .args(args)
+                .status()
+                .expect("git runs");
+            assert!(status.success(), "git {args:?} failed");
+        };
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        fs::write(vault.join("note.md"), "committed\n").unwrap();
+        fs::write(vault.join("staged.md"), "committed\n").unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "-qm", "init"]);
+        // Worktree-dirty file holds a hand-resolution.
+        fs::write(vault.join("note.md"), "hand-resolved\n").unwrap();
+        // Index-only staged change: worktree equals the index.
+        fs::write(vault.join("staged.md"), "staged change\n").unwrap();
+        run(&["add", "staged.md"]);
+
+        let child_env: ChildEnv = Vec::new();
+        let styler = Styler::detect();
+        let mut status = StatusRecord::default();
+        preserve_worktree_before_abort(
+            &vault,
+            &child_env,
+            &styler,
+            &mut status,
+            "merge",
+        )
+        .unwrap();
+        assert_eq!(status.quarantined.len(), 1);
+        assert_eq!(status.quarantined[0].path, "note.md");
+    }
+
+    #[test]
+    fn clobber_quarantine_refreshes_from_newer_bytes() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path().join("vault");
+        fs::create_dir(&vault).unwrap();
+        fs::write(vault.join("note.md"), b"newer\n").unwrap();
+        let hit = vault_clobber::ClobberHit {
+            path: PathBuf::from("note.md"),
+            matched_note: PathBuf::from("other.md"),
+            evidence: "test evidence".to_string(),
+            head_bytes: b"head\n".to_vec(),
+            work_bytes: b"stale\n".to_vec(),
+        };
+        let (copy, refreshed) = quarantine_clobber_hit(
+            &vault,
+            &hit,
+            "testhost",
+            "20261111T000000+0000",
+        )
+        .expect("quarantine runs")
+        .expect("file exists");
+        assert!(refreshed, "newer bytes should refresh the quarantine");
+        assert_eq!(fs::read(vault.join(&copy)).unwrap(), b"newer\n");
+        assert_eq!(fs::read(vault.join("note.md")).unwrap(), b"head\n");
     }
 }

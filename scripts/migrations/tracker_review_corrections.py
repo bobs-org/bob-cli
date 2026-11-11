@@ -48,6 +48,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -83,14 +84,19 @@ def read_text_raw(path: Path) -> str:
 
 
 def split_text_lines(text: str) -> tuple[list[str], str]:
-    """Split on any newline style and report the file's dominant ending."""
+    """Split only on CR, LF, and CRLF and report the file's dominant ending."""
     if "\r\n" in text:
         newline = "\r\n"
     elif "\r" in text:
         newline = "\r"
     else:
         newline = "\n"
-    return text.splitlines(), newline
+    if not text:
+        return [], newline
+    parts = re.split(r"\r\n|\r|\n", text)
+    if text.endswith(("\n", "\r")) and parts and parts[-1] == "":
+        parts.pop()
+    return parts, newline
 
 
 def join_text_lines(lines: list[str], newline: str, original: str) -> str:
@@ -110,6 +116,12 @@ def atomic_write_text(path: Path, text: str) -> None:
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
+        try:
+            mode = stat.S_IMODE(os.stat(path).st_mode)
+        except FileNotFoundError:
+            pass
+        else:
+            os.chmod(tmp_name, mode)
         os.replace(tmp_name, path)
     except Exception:
         try:

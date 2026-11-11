@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tracker_review_corrections import (
     FROZEN_CUTOFF,
     apply_manifest,
+    atomic_write_text,
     build_parser,
     build_preview,
     complete_line,
@@ -160,6 +161,63 @@ class CutoffTests(unittest.TestCase):
             self.assertIn(b"\r\nline2\r\n", data)
             self.assertIn(b"- [x] #task Old", data)
             self.assertIn(b"[completion:: 2026-10-03]", data)
+        finally:
+            tmp.cleanup()
+
+    def test_u2028_in_non_target_line_round_trips(self):
+        before = "- [ ] #task Old [created:: 2026-09-01] ^ref\nnote with separator\n"
+        self.assertIn(" ", before)
+        tmp = make_vault({"a.md": before})
+        try:
+            lines, _newline = split_text_lines(read_text_raw(tmp.vault / "a.md"))
+            self.assertEqual(len(lines), 2, lines)
+            manifest = build_preview(
+                tmp.vault, date(2026, 9, 26), date(2026, 10, 3), "head"
+            )
+            self.assertEqual(len(manifest["entries"]), 1)
+            report = apply_manifest(tmp.vault, manifest)
+            self.assertEqual(len(report["applied"]), 1)
+            self.assertEqual(report["stale"], [])
+            data = (tmp.vault / "a.md").read_bytes()
+            self.assertIn(" ".encode("utf-8"), data)
+            self.assertIn(b"- [x] #task Old", data)
+            after_lines, _ = split_text_lines(data.decode("utf-8"))
+            self.assertEqual(len(after_lines), 2, after_lines)
+        finally:
+            tmp.cleanup()
+
+    def test_atomic_write_keeps_0644_mode(self):
+        import os
+        import stat as stat_module
+
+        tmp = make_vault(
+            {"a.md": "- [ ] #task Old [created:: 2026-09-01] ^ref\n"}
+        )
+        try:
+            target = tmp.vault / "a.md"
+            os.chmod(target, 0o644)
+            manifest = build_preview(
+                tmp.vault, date(2026, 9, 26), date(2026, 10, 3), "head"
+            )
+            report = apply_manifest(tmp.vault, manifest)
+            self.assertEqual(len(report["applied"]), 1)
+            mode = stat_module.S_IMODE(os.stat(target).st_mode)
+            self.assertEqual(oct(mode), oct(0o644))
+        finally:
+            tmp.cleanup()
+
+    def test_atomic_write_text_copies_mode_directly(self):
+        import os
+        import stat as stat_module
+
+        tmp = make_vault({"a.md": "before\n"})
+        try:
+            target = tmp.vault / "a.md"
+            os.chmod(target, 0o640)
+            atomic_write_text(target, "after\n")
+            mode = stat_module.S_IMODE(os.stat(target).st_mode)
+            self.assertEqual(oct(mode), oct(0o640))
+            self.assertEqual(target.read_text(encoding="utf-8"), "after\n")
         finally:
             tmp.cleanup()
 

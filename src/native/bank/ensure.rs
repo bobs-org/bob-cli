@@ -55,11 +55,7 @@ pub(crate) fn plan(
     }
     let note = parse_month_note(&path, &contents, month);
     let line = match note.days.iter().find(|section| section.date == day) {
-        Some(section) => section
-            .rows
-            .last()
-            .map(|row| row.line + 1)
-            .unwrap_or(section.heading_line + 2),
+        Some(section) => super::month::next_row_line(&contents, section),
         None => 1,
     };
     let updated = if created_note || created_heading {

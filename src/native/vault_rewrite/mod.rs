@@ -265,41 +265,7 @@ pub(crate) fn run<C>(
     // the host journal did not exist before the append.
     let journal_before = snapshot_journal(vault);
     // Write each file atomically, then run the post-write hook.
-    // Re-compare each file immediately before its own write: a concurrent
-    // Obsidian save landing between the bulk stale check above and this
-    // file's write must fail through `stale_note`, not be overwritten.
-    for file in &ready.files {
-        let absolute = vault.join(&file.path);
-        let stale_now = match &file.before_contents {
-            Some(expected) => {
-                fs::read_to_string(&absolute).unwrap_or_default() != *expected
-            }
-            None => absolute.exists(),
-        };
-        if stale_now {
-            let _ =
-                restore_before_images(vault, &before_images, &BTreeMap::new());
-            return Err(TxnFailure::new(
-                "stale_note",
-                format!(
-                    "{} changed since planning; retry the rename",
-                    file.path
-                ),
-                Some("re-run {command_name} to replan from the latest files"),
-            ));
-        }
-        if let Err(error) =
-            collect_done::atomic_write(&absolute, &file.after_contents)
-        {
-            let _ =
-                restore_before_images(vault, &before_images, &BTreeMap::new());
-            return Err(TxnFailure::new(
-                "verify_failed",
-                format!("could not write {}: {error}", file.path),
-                Some("the rename was rolled back; inspect the listed paths and retry"),
-            ));
-        }
-    }
+    write_planned_files(vault, &ready.files, &before_images, command_name)?;
     let extra_paths = match (ready.post_write)() {
         Ok(paths) => paths,
         Err(message) => {
@@ -438,6 +404,57 @@ pub(crate) fn run<C>(
         dirty_warning,
         context: ready.context,
     })
+}
+
+/// Write each planned file, re-checking staleness immediately before its
+/// own write. Tracks every installed after-image so a stale file or a write
+/// failure rolls back earlier writes in the same loop.
+fn write_planned_files(
+    vault: &Path,
+    files: &[FileRewrite],
+    before_images: &BTreeMap<PathBuf, Option<Vec<u8>>>,
+    command_name: &'static str,
+) -> Result<(), TxnFailure> {
+    let mut written: BTreeMap<PathBuf, Vec<u8>> = BTreeMap::new();
+    // Re-compare each file immediately before its own write: a concurrent
+    // Obsidian save landing between the bulk stale check and this file's
+    // write must fail through `stale_note`, not be overwritten.
+    for file in files {
+        let absolute = vault.join(&file.path);
+        let stale_now = match &file.before_contents {
+            Some(expected) => {
+                fs::read_to_string(&absolute).unwrap_or_default() != *expected
+            }
+            None => absolute.exists(),
+        };
+        if stale_now {
+            let rollback =
+                restore_before_images(vault, before_images, &written);
+            return Err(TxnFailure::new(
+                "stale_note",
+                format!(
+                    "{} changed since planning; retry the rename{rollback}",
+                    file.path
+                ),
+                Some(format!(
+                    "re-run {command_name} to replan from the latest files"
+                )),
+            ));
+        }
+        if let Err(error) =
+            collect_done::atomic_write(&absolute, &file.after_contents)
+        {
+            let rollback =
+                restore_before_images(vault, before_images, &written);
+            return Err(TxnFailure::new(
+                "verify_failed",
+                format!("could not write {}: {error}{rollback}", file.path),
+                Some("the rename was rolled back; inspect the listed paths and retry"),
+            ));
+        }
+        written.insert(absolute, file.after_contents.as_bytes().to_vec());
+    }
+    Ok(())
 }
 
 fn snapshot_before_images(
@@ -978,6 +995,49 @@ mod tests {
             "aborted run writes nothing"
         );
         assert_eq!(commit_count(&vault), 1, "aborted run commits nothing");
+    }
+
+    #[test]
+    fn per_file_stale_rolls_back_earlier_writes() {
+        let (_temp, vault, _guard) = scratch_vault("txn-per-file-stale");
+        fs::write(vault.join("a.md"), "a before\n").expect("seed a");
+        fs::write(vault.join("b.md"), "b before\n").expect("seed b");
+        let before_images = snapshot_before_images(
+            &vault,
+            &["a.md".to_string(), "b.md".to_string()],
+        );
+        // Concurrent Obsidian save lands on B after the bulk check.
+        fs::write(vault.join("b.md"), "b concurrent\n").expect("concurrent");
+        let files = vec![
+            FileRewrite {
+                path: "a.md".to_string(),
+                before_contents: Some("a before\n".to_string()),
+                after_contents: "a after\n".to_string(),
+            },
+            FileRewrite {
+                path: "b.md".to_string(),
+                before_contents: Some("b before\n".to_string()),
+                after_contents: "b after\n".to_string(),
+            },
+        ];
+        let failure =
+            write_planned_files(&vault, &files, &before_images, COMMAND)
+                .expect_err("stale B aborts");
+        assert_eq!(failure.code, "stale_note");
+        assert!(failure.message.contains("b.md"), "{}", failure.message);
+        let hint = failure.hint.as_deref().unwrap_or("");
+        assert!(hint.contains("bob types rename"), "{hint:?}");
+        assert!(!hint.contains('{'), "literal placeholder leaked: {hint:?}");
+        assert_eq!(
+            fs::read_to_string(vault.join("a.md")).expect("a"),
+            "a before\n",
+            "earlier write is rolled back"
+        );
+        assert_eq!(
+            fs::read_to_string(vault.join("b.md")).expect("b"),
+            "b concurrent\n",
+            "concurrent bytes are kept"
+        );
     }
 
     #[test]

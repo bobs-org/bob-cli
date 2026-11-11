@@ -533,6 +533,32 @@ fn ensure_plans_missing_note_heading_and_existing() {
 }
 
 #[test]
+fn ensure_line_lands_after_free_note_children() {
+    let _guard = guard();
+    let root = temp_vault("ensure-child");
+    write(root.as_path(), "bank.md", valid_hub());
+    let config = match super::config::parse_bank_config(valid_hub()) {
+        super::config::ConfigParse::Ok(config) => config,
+        other => panic!("expected ok, got {other:?}"),
+    };
+    let mut body =
+        canonical_template(month(), "2026-11-12T07:30:00-05:00", today());
+    body.push_str("\n- [ ] $61.20 ShopRite [cat:: groceries]\n  free note stays with ShopRite\n");
+    write(root.as_path(), "bank/2026-11.md", &body);
+    let plan =
+        super::ensure::plan(root.as_path(), today(), valid_hub(), &config)
+            .expect("plan");
+    assert!(!plan.created_note);
+    assert!(!plan.created_heading);
+    let child_line = body
+        .lines()
+        .position(|line| line.contains("free note stays with ShopRite"))
+        .expect("child line")
+        + 1;
+    assert_eq!(plan.line, child_line + 1, "next row goes after the child");
+}
+
+#[test]
 fn ack_ticks_ids_day_and_reports_unknown() {
     let _guard = guard();
     let root = temp_vault("ack");

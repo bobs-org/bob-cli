@@ -316,6 +316,17 @@ fn day_end_line(day: &DaySection, logical: &[&str]) -> usize {
     end
 }
 
+/// Line where the next row goes: one past the day's end (including indented
+/// free-note children), or the blank line under the heading for an empty day.
+pub(crate) fn next_row_line(text: &str, day: &DaySection) -> usize {
+    if day.rows.is_empty() {
+        return day.heading_line + 2;
+    }
+    let doc = PhysicalDoc::parse(text);
+    let logical = doc.contents();
+    day_end_line(day, &logical) + 1
+}
+
 fn after_fence_or_title(doc: &PhysicalDoc<'_>) -> usize {
     let logical = doc.contents();
     let fenced = fenced_lines(&logical, 0..logical.len());
