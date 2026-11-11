@@ -162,6 +162,76 @@ pub(super) fn section_candidates(
     query: &str,
 ) -> Result<Candidates, CompleteError> {
     section_candidates_with_raw(bob_dir, route, query, None, None, None, None)
+        .map(|(candidates, _)| candidates)
+}
+
+/// Where a notebook section menu files its rows: an existing notebook
+/// (disk H2s plus staged draft sections) or a `%n` notebook that exists
+/// only in this draft.
+pub(super) struct NotebookMenuTarget {
+    pub(super) title: String,
+    pub(super) owner: Option<String>,
+    pub(super) is_new: bool,
+}
+
+/// Resolve the menu target for a policy-visible notebook route: the
+/// stored title and owner, or the prospective `%n` create's provisional
+/// title and owner when the notebook exists only in this draft.
+pub(super) fn notebook_menu_target(
+    policy: &crate::native::capture_language::NotebookRoutePolicy,
+    route: &str,
+    at_offset: usize,
+) -> Option<NotebookMenuTarget> {
+    if let Some(info) = policy.get(route) {
+        return Some(NotebookMenuTarget {
+            title: info.title.clone(),
+            owner: info.owner.clone(),
+            is_new: false,
+        });
+    }
+    if let crate::native::capture_language::notebook::NotebookRouteLookup::Hit(
+        info,
+    ) = policy.lookup(route, at_offset)
+    {
+        return Some(NotebookMenuTarget {
+            title: info.title.clone(),
+            owner: info.owner.clone(),
+            is_new: true,
+        });
+    }
+    None
+}
+
+/// The section-bullet menu for a notebook body: the staged sections at
+/// the bullet offset with the target's title and owner for chrome and
+/// consequences. The route is policy-visible by construction (the field
+/// probe checked), so this never reads the vault and never warns.
+pub(super) fn notebook_bullet_candidates(
+    policy: &crate::native::capture_language::NotebookRoutePolicy,
+    raw_text: &str,
+    route: &str,
+    query: &str,
+    replacement: (usize, usize),
+) -> Candidates {
+    let staged = crate::native::capture_language::staged_notebook_sections(
+        policy,
+        raw_text,
+        route,
+        replacement.0,
+    );
+    let target = notebook_menu_target(policy, route, replacement.0);
+    match target {
+        Some(target) => notebook_section_rows(
+            &staged,
+            Some(&target),
+            query,
+            Some(raw_text),
+            Some(replacement),
+            route,
+        )
+        .unwrap_or(Candidates::Section(Vec::new())),
+        None => Candidates::Section(Vec::new()),
+    }
 }
 
 pub(super) fn section_candidates_with_raw(
@@ -174,7 +244,7 @@ pub(super) fn section_candidates_with_raw(
         &crate::native::capture_language::NotebookRoutePolicy,
     >,
     at_offset: Option<usize>,
-) -> Result<Candidates, CompleteError> {
+) -> Result<(Candidates, Vec<String>), CompleteError> {
     let offset = at_offset.or_else(|| replacement.map(|(start, _)| start));
     if let Some(policy) = notebook_policy
         && policy.is_visible(route, offset.unwrap_or(0))
@@ -185,38 +255,62 @@ pub(super) fn section_candidates_with_raw(
             route,
             offset.unwrap_or(0),
         );
-        return notebook_section_candidates_from_staged(
-            &staged,
-            query,
-            raw_text,
-            replacement,
-            route,
-        );
+        let target = notebook_menu_target(policy, route, offset.unwrap_or(0));
+        return Ok((
+            notebook_section_rows(
+                &staged,
+                target.as_ref(),
+                query,
+                raw_text,
+                replacement,
+                route,
+            )?,
+            Vec::new(),
+        ));
     }
-    let contents = read_target(bob_dir, route)?;
+    let contents = match read_target(bob_dir, route) {
+        Ok(contents) => contents,
+        Err(error) => {
+            // A notebook section menu never errors on a read failure:
+            // it reports a bounded warning with no rows and no create
+            // row, so the menu opens calm instead of failing the draft.
+            return Ok((
+                Candidates::Section(Vec::new()),
+                vec![format!(
+                    "notebook {route} unavailable: {}",
+                    error.message
+                )],
+            ));
+        }
+    };
     if is_notebook_route_contents(&contents) {
-        return notebook_section_candidates(
-            &contents,
-            query,
-            raw_text,
-            replacement,
-            route,
-        );
+        return Ok((
+            notebook_section_candidates(
+                &contents,
+                query,
+                raw_text,
+                replacement,
+                route,
+            )?,
+            Vec::new(),
+        ));
     }
     let ranked = capture::section_completion_rows(&contents, query);
 
-    Ok(Candidates::Section(
-        ranked
-            .into_iter()
-            .map(|section| {
-                SectionMenuRow::Section(SectionCandidate {
-                    replacement: section.replacement,
-                    title: section.title,
-                    level: section.level,
-                    refused: None,
+    Ok((
+        Candidates::Section(
+            ranked
+                .into_iter()
+                .map(|section| {
+                    SectionMenuRow::Section(SectionCandidate::plain(
+                        section.replacement,
+                        section.title,
+                        section.level,
+                    ))
                 })
-            })
-            .collect(),
+                .collect(),
+        ),
+        Vec::new(),
     ))
 }
 
@@ -231,9 +325,11 @@ pub(super) fn is_notebook_route_contents(contents: &str) -> bool {
     contents.contains("[[notebook]]")
 }
 
-/// Notebook `@nb#` sections: real H2s in document order, never H1/H3 or
-/// fenced headings, plus one additive create row for a nonempty query
-/// with no exact title/whole-slug match.
+/// Notebook `@nb#` sections from disk only: real H2s in document order
+/// (never H1/H3 or fenced headings) with their note stats, plus one
+/// additive create row for a nonempty query with no exact title or
+/// whole-slug match. Without a menu target the rows keep the plain
+/// `{replacement, title, level}` shape.
 fn notebook_section_candidates(
     contents: &str,
     query: &str,
@@ -241,37 +337,51 @@ fn notebook_section_candidates(
     replacement: Option<(usize, usize)>,
     route: &str,
 ) -> Result<Candidates, CompleteError> {
+    use crate::native::capture_language::notebook::{
+        NotebookSectionProvenance, StagedNotebookSection,
+    };
     let headings =
         crate::native::capture_language::notebook::notebook_sections(contents);
-    notebook_section_rows(&headings, query, raw_text, replacement, route)
-}
-
-fn notebook_section_candidates_from_staged(
-    staged: &[crate::native::capture_language::notebook::StagedNotebookSection],
-    query: &str,
-    raw_text: Option<&str>,
-    replacement: Option<(usize, usize)>,
-    route: &str,
-) -> Result<Candidates, CompleteError> {
-    let headings: Vec<_> = staged
-        .iter()
-        .map(
-            crate::native::capture_language::notebook::StagedNotebookSection::as_heading,
-        )
+    let stats =
+        crate::native::capture_language::notebook::section_note_stats(contents);
+    let staged: Vec<StagedNotebookSection> = headings
+        .into_iter()
+        .enumerate()
+        .map(|(index, heading)| {
+            let (note_count, last_note) =
+                stats.get(index).cloned().unwrap_or((0, None));
+            StagedNotebookSection {
+                title: heading.title.clone(),
+                line_index: heading.line_index,
+                line: Some(heading.line_index + 1),
+                note_count,
+                last_note,
+                provenance: NotebookSectionProvenance::Notebook,
+                draft_offset: None,
+            }
+        })
         .collect();
-    notebook_section_rows(&headings, query, raw_text, replacement, route)
+    notebook_section_rows(&staged, None, query, raw_text, replacement, route)
 }
 
 fn notebook_section_rows(
-    headings: &[crate::native::capture_language::notebook::NotebookSection],
+    staged: &[crate::native::capture_language::notebook::StagedNotebookSection],
+    target: Option<&NotebookMenuTarget>,
     query: &str,
     raw_text: Option<&str>,
     replacement: Option<(usize, usize)>,
     route: &str,
 ) -> Result<Candidates, CompleteError> {
     use crate::native::capture_language::notebook::{
-        resolve_notebook_section, NotebookSectionResolution,
+        resolve_notebook_section, NotebookSectionProvenance,
+        NotebookSectionResolution,
     };
+    let headings: Vec<_> = staged
+        .iter()
+        .map(
+            crate::native::capture_language::notebook::StagedNotebookSection::as_heading,
+        )
+        .collect();
     let query_lower = query.to_lowercase();
     let query_slug = crate::native::capture_language::selector_slug(query);
     // Exact title/whole-slug match suppresses the create row, including
@@ -284,34 +394,81 @@ fn notebook_section_rows(
                     &heading.title,
                 ) == query_slug)
     });
-    // Filtered H2s retain document order. Duplicate titles stay listed
-    // as refused rows and are never a unique replacement.
-    let mut rows: Vec<SectionMenuRow> = Vec::new();
-    for heading in headings {
-        if !query.is_empty() {
-            let title_lower = heading.title.to_lowercase();
-            let slug =
-                crate::native::capture_language::selector_slug(&heading.title);
-            let matches = title_lower.contains(&query_lower)
-                || (!query_slug.is_empty()
-                    && !slug.is_empty()
-                    && (slug.contains(&query_slug)
-                        || slug.starts_with(&query_slug)));
-            if !matches {
-                continue;
-            }
-        }
-        let (replacement, refused) =
-            notebook_section_row(heading, headings, route);
-        rows.push(SectionMenuRow::Section(SectionCandidate {
-            replacement,
-            title: heading.title.clone(),
-            level: 2,
-            refused,
-        }));
+    // The create row stays hidden while the query is a strict prefix of
+    // any staged title or slug: the menu already lists where that
+    // prefix leads.
+    let prefix_hidden = !query.is_empty()
+        && staged.iter().any(|section| {
+            let title_lower = section.title.to_lowercase();
+            (title_lower.starts_with(&query_lower)
+                && title_lower != query_lower)
+                || {
+                    let slug = crate::native::capture_language::selector_slug(
+                        &section.title,
+                    );
+                    !query_slug.is_empty()
+                        && !slug.is_empty()
+                        && slug.starts_with(&query_slug)
+                        && slug != query_slug
+                }
+        });
+    // Ranked rows keep group order first (`notebook`, then `draft`) and,
+    // under a typed query, exact, prefix, then substring within the
+    // group; an empty query keeps document order throughout. The sort is
+    // stable so document order always breaks ties.
+    let mut ranked: Vec<(u8, usize)> = Vec::new();
+    for (index, section) in staged.iter().enumerate() {
+        let tier = section_rank(&section.title, &query_lower, &query_slug);
+        let Some(tier) = tier else {
+            continue;
+        };
+        ranked.push((tier, index));
     }
+    if !query.is_empty() {
+        ranked.sort_by_key(|(tier, _)| *tier);
+    }
+    // Notebook rows keep document order across groups (disk H2s precede
+    // draft sections in the staged view), so a stable group partition
+    // preserves the ranked order inside each group.
+    let mut notebook_rows = Vec::new();
+    let mut draft_rows = Vec::new();
+    for (_, index) in ranked {
+        let section = &staged[index];
+        let (replacement, refused) =
+            notebook_section_row(&section.as_heading(), &headings, route);
+        let mut row =
+            SectionCandidate::plain(replacement, section.title.clone(), 2);
+        if let Some(target) = target {
+            row.kind = Some("notebook_section");
+            row.group = Some(match section.provenance {
+                NotebookSectionProvenance::Notebook => "notebook",
+                NotebookSectionProvenance::Draft => "draft",
+            });
+            row.line = section.line;
+            row.note_count = (section.provenance
+                == NotebookSectionProvenance::Notebook)
+                .then_some(section.note_count);
+            row.detail = Some(section_row_detail(section));
+            row.consequence =
+                Some(section_row_consequence(section, &section.title, target));
+        }
+        if refused.is_some() {
+            row.refused = refused;
+        }
+        match section.provenance {
+            NotebookSectionProvenance::Notebook => {
+                notebook_rows.push(row);
+            }
+            NotebookSectionProvenance::Draft => draft_rows.push(row),
+        }
+    }
+    let mut rows: Vec<SectionMenuRow> = notebook_rows
+        .into_iter()
+        .map(SectionMenuRow::Section)
+        .chain(draft_rows.into_iter().map(SectionMenuRow::Section))
+        .collect();
     // Additive create row for a nonempty query with no exact match.
-    if !query.is_empty() && !has_exact {
+    if !query.is_empty() && !has_exact && !prefix_hidden {
         let exact = raw_text
             .zip(replacement)
             .and_then(|(text, (start, end))| text.get(start..end))
@@ -323,12 +480,12 @@ fn notebook_section_rows(
             });
         // Preserve authored quoted titles: an exact (quoted) query creates
         // verbatim; otherwise resolve the bare query.
-        let resolution = resolve_notebook_section(query, exact, headings);
+        let resolution = resolve_notebook_section(query, exact, &headings);
         let create = match resolution {
             NotebookSectionResolution::Existing { title, .. } => {
                 // Should not happen when `has_exact` is false, but keep
                 // the row additive rather than dropping the query.
-                Some((title.clone(), query.to_string()))
+                Some((title.clone(), query.to_string(), None))
             }
             NotebookSectionResolution::Create { title } => {
                 if exact {
@@ -348,38 +505,189 @@ fn notebook_section_rows(
                         .unwrap_or_else(|| {
                             format!("\"{}\"", quote_escape(&title))
                         });
-                    Some((title, quoted))
+                    Some((title, quoted, None))
                 } else {
                     // Bare slug when the resolver would create it.
                     let slug =
                         crate::native::capture_language::selector_slug(&title);
                     let selector =
                         if slug.is_empty() { title.clone() } else { slug };
-                    Some((title, selector))
+                    Some((title, selector, None))
                 }
             }
-            NotebookSectionResolution::NearMiss {
-                slug: _,
-                quoted_title,
-            } => {
+            NotebookSectionResolution::NearMiss { slug, quoted_title } => {
                 // An unquoted slug would be a near miss: offer the quoted
-                // selector so the create is explicit.
+                // selector so the create is explicit, and point at the
+                // existing heading the query almost spelled.
                 let selector = format!("\"{}\"", quote_escape(&quoted_title));
-                Some((quoted_title, selector))
+                let meant = staged
+                    .iter()
+                    .find(|section| {
+                        crate::native::capture_language::selector_slug(
+                            &section.title,
+                        ) == slug
+                    })
+                    .map(|section| section.title.clone())
+                    .unwrap_or_else(|| quoted_title.clone());
+                Some((quoted_title, selector, Some(meant)))
             }
             NotebookSectionResolution::Ambiguous { .. } => None,
         };
-        if let Some((title, replacement)) = create {
+        if let Some((title, replacement, meant)) = create {
             let label = format!("New section \u{201c}{title}\u{201d}");
-            rows.push(SectionMenuRow::NotebookCreate(NotebookSectionCreate {
+            let mut row = NotebookSectionCreate {
                 kind: "notebook_section_create",
                 replacement,
                 label,
-                title,
-            }));
+                title: title.clone(),
+                group: None,
+                detail: None,
+                consequence: None,
+                creates: false,
+                cursor_after: None,
+            };
+            if let Some(target) = target {
+                row.group = Some("new");
+                row.creates = true;
+                if let Some(meant) = meant {
+                    row.detail = Some(format!("did you mean {meant}?"));
+                }
+                row.consequence = Some(if target.is_new {
+                    format!("Seeds ## {title} in the new notebook")
+                } else {
+                    format!("Creates ## {title} at the end of {}", target.title)
+                });
+            }
+            rows.push(SectionMenuRow::NotebookCreate(row));
         }
     }
     Ok(Candidates::Section(rows))
+}
+
+/// Rank one staged title against a typed query: exact title or slug (0),
+/// prefix (1), then substring (2). `None` filters the row out; an empty
+/// query keeps every row in document order.
+fn section_rank(
+    title: &str,
+    query_lower: &str,
+    query_slug: &str,
+) -> Option<u8> {
+    if query_lower.is_empty() {
+        return Some(0);
+    }
+    let title_lower = title.to_lowercase();
+    let slug = crate::native::capture_language::selector_slug(title);
+    if title_lower == *query_lower
+        || (!query_slug.is_empty() && !slug.is_empty() && slug == *query_slug)
+    {
+        return Some(0);
+    }
+    if title_lower.starts_with(query_lower)
+        || (!query_slug.is_empty()
+            && !slug.is_empty()
+            && slug.starts_with(query_slug))
+    {
+        return Some(1);
+    }
+    if title_lower.contains(query_lower)
+        || (!query_slug.is_empty()
+            && !slug.is_empty()
+            && slug.contains(query_slug))
+    {
+        return Some(2);
+    }
+    None
+}
+
+/// The picker detail for one staged row: note counts for notebook rows,
+/// `new` for draft rows.
+fn section_row_detail(
+    section: &crate::native::capture_language::notebook::StagedNotebookSection,
+) -> String {
+    use crate::native::capture_language::notebook::NotebookSectionProvenance;
+    match section.provenance {
+        NotebookSectionProvenance::Draft => "new".to_string(),
+        NotebookSectionProvenance::Notebook => match section.note_count {
+            0 => "empty".to_string(),
+            1 => "1 note".to_string(),
+            count => format!("{count} notes"),
+        },
+    }
+}
+
+/// Where accepting one staged row files the note, in Bob's words.
+fn section_row_consequence(
+    section: &crate::native::capture_language::notebook::StagedNotebookSection,
+    title: &str,
+    target: &NotebookMenuTarget,
+) -> String {
+    use crate::native::capture_language::notebook::NotebookSectionProvenance;
+    match section.provenance {
+        NotebookSectionProvenance::Draft => {
+            if target.is_new {
+                format!("Seeds ## {title} in the new notebook")
+            } else {
+                format!("Adds to ## {title}, new in this draft")
+            }
+        }
+        NotebookSectionProvenance::Notebook => {
+            match section.last_note.as_deref() {
+                Some(note) if section.note_count > 0 && !note.is_empty() => {
+                    format!(
+                        "Adds after \u{201c}{}\u{201d} in ## {title}",
+                        ellipsize_note(note)
+                    )
+                }
+                _ => format!("First note in ## {title}"),
+            }
+        }
+    }
+}
+
+/// Ellipsize a note snippet for a consequence line: whole when short,
+/// otherwise the first 26 characters plus `…`.
+fn ellipsize_note(text: &str) -> String {
+    const KEEP: usize = 26;
+    if text.chars().count() <= KEEP {
+        text.to_string()
+    } else {
+        let kept: String = text.chars().take(KEEP).collect();
+        format!("{kept}\u{2026}")
+    }
+}
+
+/// Open the nested `  - ` bullet right after an accepted section row
+/// and record each row's `cursor_after` past its replacement, so the
+/// caret lands where the section's first note goes. Only the
+/// `notebook_section_bullet` context calls this; glued rows keep no
+/// continuation and no `cursor_after`.
+pub(super) fn append_section_continuation(
+    candidates: &mut Candidates,
+    continuation: bool,
+    replacement_start: usize,
+) {
+    let Candidates::Section(rows) = candidates else {
+        return;
+    };
+    for row in rows {
+        match row {
+            SectionMenuRow::Section(section) => {
+                if continuation {
+                    section.replacement.push_str("\n  - ");
+                }
+                section.cursor_after =
+                    Some(replacement_start + section.replacement.len());
+            }
+            SectionMenuRow::NotebookCreate(create) => {
+                if continuation {
+                    create.replacement.push_str("\n  - ");
+                }
+                create.cursor_after =
+                    Some(replacement_start + create.replacement.len());
+            }
+            SectionMenuRow::Create(_) => {}
+        }
+    }
 }
 
 fn quote_escape(value: &str) -> String {

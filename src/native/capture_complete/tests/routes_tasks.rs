@@ -522,8 +522,18 @@ fn notebook_section_create_row_for_unrelated_slug_and_near_miss() {
     assert_eq!(create.replacement, "merge-tools");
     assert_eq!(create.title, "Merge Tools");
     assert_eq!(create.kind, "notebook_section_create");
-    // Near-miss unquoted slug offers the quoted selector.
+    // A strict prefix of a listed title hides the create row.
     let raw = "@dev_tools#gi";
+    let value = result(temp.path(), raw, raw.len());
+    let Candidates::Section(rows) = &value.candidates else {
+        panic!("expected section candidates");
+    };
+    assert!(
+        rows.iter().all(|row| row.as_section().is_some()),
+        "{raw}: {rows:?}"
+    );
+    // Near-miss unquoted slug offers the quoted selector.
+    let raw = "@dev_tools#gti";
     let value = result(temp.path(), raw, raw.len());
     let Candidates::Section(rows) = &value.candidates else {
         panic!("expected section candidates");
@@ -537,7 +547,7 @@ fn notebook_section_create_row_for_unrelated_slug_and_near_miss() {
             _ => None,
         })
         .expect("near-miss create row");
-    assert_eq!(create.replacement, "\"Gi\"");
+    assert_eq!(create.replacement, "\"Gti\"");
     // Quoted title preserves the authored spelling.
     let raw = "@dev_tools#\"Merge tools\"";
     let value = result(temp.path(), raw, raw.len());

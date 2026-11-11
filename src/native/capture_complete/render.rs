@@ -838,6 +838,7 @@ pub(super) fn context_label(context: CompletionContext) -> &'static str {
         CompletionContext::PomodoroPastSegment => "pomodoro_past_segment",
         CompletionContext::Task => "task",
         CompletionContext::Drawer => "drawer",
+        CompletionContext::NotebookSectionBullet => "notebook_section_bullet",
         CompletionContext::ActiveTask => "active_task",
         CompletionContext::TaskLink => "task_link",
         CompletionContext::TaskGoto => "task_goto",

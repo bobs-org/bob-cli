@@ -64,6 +64,9 @@ pub(crate) struct StagedNotebookSection {
     /// 1-based disk line, or `None` for a draft-only section.
     pub(crate) line: Option<usize>,
     pub(crate) note_count: usize,
+    /// The section's last top-level note text on disk, for menu
+    /// consequences. `None` for draft sections and empty sections.
+    pub(crate) last_note: Option<String>,
     pub(crate) provenance: NotebookSectionProvenance,
     /// Byte offset of the draft operation that created this section.
     pub(crate) draft_offset: Option<usize>,
@@ -555,6 +558,40 @@ fn absorb_operation(
     }
 }
 
+/// The notebook route whose body an item's first-level bullets land in,
+/// when they do: a route-only `@nb` list header visible to `policy`, or a
+/// `@parent^id@ %n` item's created notebook. `None` under an `@nb#Section`
+/// header, under one notebook note, and outside notebook claims, so the
+/// section-bullet menu never opens there.
+pub(crate) fn section_bullet_notebook_route(
+    policy: &NotebookRoutePolicy,
+    item: &super::model::CaptureItem<'_>,
+) -> Option<String> {
+    if let Some(list) = item.list.as_ref() {
+        if list.section.is_some() || list.has_section_hash {
+            return None;
+        }
+        if list.ownerless {
+            return None;
+        }
+        if !policy.is_visible(&list.route, item.start) {
+            return None;
+        }
+        return Some(list.route.clone());
+    }
+    let shape = complete_notebook_create_shape(item)?;
+    let created = crate::native::capture_project_note::project_note_basename(
+        &shape.parent,
+        &shape.notebook_id,
+    );
+    Some(
+        created
+            .strip_suffix(".md")
+            .unwrap_or(&created)
+            .to_ascii_lowercase(),
+    )
+}
+
 pub(crate) fn staged_headings(
     policy: &NotebookRoutePolicy,
     raw_text: &str,
@@ -574,25 +611,34 @@ fn disk_staged_sections(
     let Some(info) = policy.get(route) else {
         return Vec::new();
     };
-    let counts = policy
+    let stats = policy
         .source(route)
-        .map(section_note_counts)
-        .unwrap_or_else(|| vec![0; info.sections.len()]);
+        .map(section_note_stats)
+        .unwrap_or_else(|| vec![(0, None); info.sections.len()]);
     info.sections
         .iter()
         .enumerate()
-        .map(|(index, heading)| StagedNotebookSection {
-            title: heading.title.clone(),
-            line_index: heading.line_index,
-            line: Some(heading.line_index + 1),
-            note_count: counts.get(index).copied().unwrap_or(0),
-            provenance: NotebookSectionProvenance::Notebook,
-            draft_offset: None,
+        .map(|(index, heading)| {
+            let (note_count, last_note) =
+                stats.get(index).cloned().unwrap_or((0, None));
+            StagedNotebookSection {
+                title: heading.title.clone(),
+                line_index: heading.line_index,
+                line: Some(heading.line_index + 1),
+                note_count,
+                last_note,
+                provenance: NotebookSectionProvenance::Notebook,
+                draft_offset: None,
+            }
         })
         .collect()
 }
 
-fn section_note_counts(contents: &str) -> Vec<usize> {
+/// Per-section note stats over note `contents`: the top-level note count
+/// plus the last top-level note's text, for menu detail and consequences.
+pub(crate) fn section_note_stats(
+    contents: &str,
+) -> Vec<(usize, Option<String>)> {
     let headings = notebook_sections(contents);
     if headings.is_empty() {
         return Vec::new();
@@ -606,7 +652,8 @@ fn section_note_counts(contents: &str) -> Vec<usize> {
     let scan_start = frontmatter_end.map_or(0, |end| end + 1);
     let fenced =
         crate::native::markdown::fenced_lines(&lines, scan_start..lines.len());
-    let mut counts = vec![0; headings.len()];
+    let mut stats: Vec<(usize, Option<String>)> =
+        vec![(0, None); headings.len()];
     for (index, line) in lines.iter().enumerate() {
         if index < scan_start || fenced.contains(&index) {
             continue;
@@ -623,9 +670,40 @@ fn section_note_counts(contents: &str) -> Vec<usize> {
         else {
             continue;
         };
-        counts[section_index] += 1;
+        let entry = &mut stats[section_index];
+        entry.0 += 1;
+        entry.1 = Some(column_zero_note_text(line));
     }
-    counts
+    stats
+}
+
+/// The note text behind a column-zero `- `/`* `/`+ ` bullet line,
+/// without Bob's `[created::…]` stamp or trailing `^id`.
+fn column_zero_note_text(line: &str) -> String {
+    let text = line[first_note_text_offset(line)..].trim();
+    let (text, _) = strip_trailing_caret_id(text);
+    strip_created_stamp(&text)
+}
+
+/// Drop one trailing `[created::…]` stamp token, when present.
+fn strip_created_stamp(text: &str) -> String {
+    let mut tokens: Vec<&str> = text.split_whitespace().collect();
+    if tokens.last().is_some_and(|last| {
+        last.starts_with("[created::") && last.ends_with(']')
+    }) {
+        tokens.pop();
+    }
+    tokens.join(" ")
+}
+
+fn first_note_text_offset(line: &str) -> usize {
+    let mut offset = 1;
+    while line.as_bytes().get(offset) == Some(&b' ')
+        || line.as_bytes().get(offset) == Some(&b'\t')
+    {
+        offset += 1;
+    }
+    offset
 }
 
 fn is_column_zero_note(line: &str) -> bool {
@@ -668,6 +746,7 @@ fn push_draft_section(
         line_index,
         line: None,
         note_count: 0,
+        last_note: None,
         provenance: NotebookSectionProvenance::Draft,
         draft_offset: Some(item_start),
     });

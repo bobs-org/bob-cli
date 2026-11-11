@@ -77,6 +77,7 @@ pub(crate) use self::completion::completion_field_at;
 pub(crate) use self::completion::completion_field_at_with;
 pub(crate) use self::completion::drawer_bullet_completion_at;
 pub(crate) use self::completion::merge_in_completion_role;
+pub(crate) use self::completion::notebook_section_bullet_completion_at;
 pub(crate) use self::completion::pomodoro_start_override_at;
 pub(crate) use self::completion::project_task_block_id_detail;
 pub(crate) use self::completion::project_task_move_detail;

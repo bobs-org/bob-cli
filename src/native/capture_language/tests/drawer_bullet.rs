@@ -425,11 +425,15 @@ fn notebook_note_bullet_hash_is_empty_success_with_policy() {
         completion_field_at_with(note, note.len(), Some(&policy)).is_none(),
         "notebook note detail opens no drawer"
     );
+    // A route-only notebook list bullet opens the section menu, never
+    // the drawer menu (grammar 26 section bullets).
     let list = "@dev_tools\n- #fu";
-    assert!(
-        completion_field_at_with(list, list.len(), Some(&policy)).is_none(),
-        "notebook list bullets open no drawer"
-    );
+    let bullet = completion_field_at_with(list, list.len(), Some(&policy))
+        .expect("notebook list bullets open the section menu");
+    assert_eq!(bullet.context, CompletionContext::NotebookSectionBullet);
+    assert_eq!(bullet.route.as_deref(), Some("dev_tools"));
+    assert_eq!(bullet.query, "fu");
+    assert_eq!(bullet.replacement, (list.len() - 2, list.len()));
     let lexical =
         completion_field_at(note, note.len()).expect("lexical drawer");
     assert_eq!(lexical.context, CompletionContext::Drawer);

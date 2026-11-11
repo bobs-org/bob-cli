@@ -107,6 +107,60 @@ pub(super) struct SectionCandidate {
     pub(super) level: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) refused: Option<String>,
+    /// Additive notebook row discriminator: `"notebook_section"` on rows
+    /// backed by a notebook's staged sections. Absent everywhere else so
+    /// record, area, and project section rows stay byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) kind: Option<&'static str>,
+    /// Provenance group: `"notebook"` (disk H2s) or `"draft"` (sections
+    /// earlier draft operations create). Absent off notebook menus.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) group: Option<&'static str>,
+    /// 1-based disk line for notebook rows; absent for draft rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) line: Option<usize>,
+    /// Top-level note count for notebook rows; absent for draft rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) note_count: Option<usize>,
+    /// `8 notes` / `1 note` / `empty` for notebook rows, `new` for draft
+    /// rows, and `did you mean Title?` on a near-miss create row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) detail: Option<String>,
+    /// Where accepting files the note, in Bob's words. Absent off
+    /// notebook menus.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) consequence: Option<String>,
+    /// True when accepting creates the section. Always false here, so
+    /// omitted; only the create row sets it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(super) creates: bool,
+    /// Draft offset just past this row's replacement, set only for the
+    /// `notebook_section_bullet` context's continuation rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) cursor_after: Option<usize>,
+}
+
+impl SectionCandidate {
+    pub(super) fn plain(
+        replacement: String,
+        title: String,
+        level: usize,
+    ) -> Self {
+        Self {
+            replacement,
+            title,
+            level,
+            refused: None,
+            kind: None,
+            group: None,
+            line: None,
+            note_count: None,
+            detail: None,
+            consequence: None,
+            creates: false,
+            cursor_after: None,
+        }
+    }
 }
 
 /// Mixed section menu: ordinary heading rows plus an optional record-create
@@ -163,6 +217,48 @@ pub(super) struct NotebookSectionCreate {
     pub(super) replacement: String,
     pub(super) label: String,
     pub(super) title: String,
+    /// The `new` provenance group. Always present so the row sorts after
+    /// `notebook` and `draft` rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) group: Option<&'static str>,
+    /// `did you mean Title?` when the query is a near miss; absent
+    /// otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) detail: Option<String>,
+    /// Where accepting files the note, in Bob's words.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) consequence: Option<String>,
+    /// Always true: accepting this row creates the section.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(super) creates: bool,
+    /// Draft offset just past this row's replacement, set only for the
+    /// `notebook_section_bullet` context's continuation rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) cursor_after: Option<usize>,
+}
+
+/// One `place_menu` group header: the `new` group carries an empty title.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PlaceMenuGroup {
+    pub(super) id: String,
+    pub(super) title: String,
+}
+
+/// Bob-authored place-menu chrome: the Mac paints one menu from this
+/// instead of hard-coding per-context copy. Additive on `drawer`,
+/// notebook `section`, and `notebook_section_bullet` responses; older
+/// apps ignore it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PlaceMenu {
+    pub(super) kind: &'static str,
+    pub(super) title: String,
+    pub(super) caption: String,
+    pub(super) groups: Vec<PlaceMenuGroup>,
+    pub(super) new_row_prefix: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) empty_hint: Option<String>,
+    pub(super) results_label: String,
+    pub(super) footer_hint: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1209,6 +1305,11 @@ pub(super) struct CaptureCompleteResult {
     /// when empty so older responses stay byte-identical.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) diagnostics: Vec<CaptureCompleteDiagnostic>,
+    /// Bob-authored place-menu chrome for `drawer`, notebook `section`,
+    /// and `notebook_section_bullet` responses. Omitted everywhere else
+    /// so older responses stay byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) place_menu: Option<PlaceMenu>,
 }
 
 impl CaptureCompleteResult {
@@ -1244,6 +1345,7 @@ impl CaptureCompleteResult {
             one_off: None,
             record: None,
             diagnostics: Vec::new(),
+            place_menu: None,
         }
     }
 }

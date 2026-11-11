@@ -41,6 +41,10 @@ pub(crate) enum CompletionContext {
     /// An edge `%` capture directive (`%c`, `%n`, `%t`, or URL-only `%l`).
     Directive,
     Drawer,
+    /// A first-level `- #Section` bullet in a notebook body (a route-only
+    /// `@nb` list or a `@parent^id@ %n` item). The replacement covers only
+    /// the selector text after `#`; the `#` stays in the draft.
+    NotebookSectionBullet,
     ActiveTask,
     TaskLink,
     /// A whole-draft `/query` Go To search over the `:` task catalog.
@@ -2148,6 +2152,17 @@ pub(crate) fn completion_field_at_with(
         }
     }
 
+    // A first-level bullet's leading `#` in a notebook body names a
+    // `##` section. It opens the section menu before the drawer probe
+    // runs; anywhere else the probe below yields nothing and completion
+    // falls through to the drawer and marker claims.
+    if let Some(policy) = notebook_policy
+        && let Some(bullet) =
+            notebook_section_bullet_completion_at(raw_text, cursor, policy)
+    {
+        return Some(bullet.into_field());
+    }
+
     // A first-level bullet's leading `#` names a drawer. It either opens
     // the drawer menu or is an empty success; it never reaches the
     // task-type or marker claims below.
@@ -3635,6 +3650,114 @@ fn exact_name_query(
             super::pomodoro_literal::decode_partial_literal_text(inner)
         }
     }
+}
+
+/// A first-level bullet's section shortcut under the cursor: the bare
+/// `#`, a `#slug`, or a quoted `#"TITLE"` literal, in a position where
+/// the item's first-level bullets land directly in a notebook body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SectionBulletCompletion {
+    pub(crate) route: String,
+    /// The decoded selector typed so far, up to the cursor.
+    pub(crate) query: String,
+    /// The selector text after `#`, which a row replaces in full.
+    pub(crate) replacement: (usize, usize),
+    /// True when the token ends its line and the next physical line of the
+    /// item is not a nested bullet, so accepting a row also opens the
+    /// section's first nested `  - ` bullet.
+    pub(crate) continuation: bool,
+}
+
+impl SectionBulletCompletion {
+    fn into_field(self) -> CompletionField {
+        CompletionField {
+            context: CompletionContext::NotebookSectionBullet,
+            route: Some(self.route),
+            block_id: None,
+            query: self.query,
+            replacement: self.replacement,
+            bare_name: false,
+        }
+    }
+}
+
+/// Probe for a section shortcut at a first-level bullet start in a
+/// notebook body. `None` anywhere else — including a bullet-start `#`
+/// under a task, a notebook note, or an `@nb#Section` header — so other
+/// completion claims run as usual.
+pub(crate) fn notebook_section_bullet_completion_at(
+    raw_text: &str,
+    cursor: usize,
+    notebook_policy: &super::notebook::NotebookRoutePolicy,
+) -> Option<SectionBulletCompletion> {
+    use super::section_bullet::{scan_leading, SectionBulletHit};
+
+    let draft = split_capture_draft(raw_text);
+    let (item, line_index, line) = draft.items.iter().find_map(|item| {
+        item.lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| {
+                cursor >= line.raw.start && cursor <= line.raw.end
+            })
+            .map(|(line_index, line)| (item, line_index, line.raw))
+    })?;
+    // A list bullet lives at its per-bullet item's parent line, whose raw
+    // text is already the stripped body; a `%n` bullet is a first-level
+    // authored line below the parent. Nested note detail never opens the
+    // menu in either shape.
+    let (body, body_start) = if item.list.is_some() {
+        if line_index != 0 {
+            return None;
+        }
+        (line.text, line.start)
+    } else {
+        if line_index == 0 {
+            return None;
+        }
+        let AuthoredLineClass::Item(authored) = classify_authored_line(line)
+        else {
+            return None;
+        };
+        if authored.depth != AuthoredDepth::First {
+            return None;
+        }
+        (authored.body, authored.body_start)
+    };
+    let hit = scan_leading(body, body_start)?;
+    let span = match &hit {
+        SectionBulletHit::Complete { span, .. } => span.clone(),
+        SectionBulletHit::Incomplete { span } => span.clone(),
+        SectionBulletHit::Escaped { .. } => return None,
+    };
+    // The `#` itself is outside the claim: the replacement covers only
+    // the selector after it, so the `#` stays in the draft.
+    if cursor <= span.start || cursor > span.end {
+        return None;
+    }
+    let route =
+        super::notebook::section_bullet_notebook_route(notebook_policy, item)?;
+    let name_start = span.start + 1;
+    let part = raw_text.get(name_start..span.end)?;
+    let split = cursor - name_start;
+    let query = if super::pomodoro_literal::opens_exact_name(part) {
+        exact_name_query(part, split, true)
+    } else {
+        part.get(..split)?.to_string()
+    };
+    let next_is_nested = item.lines.get(line_index + 1).is_some_and(|next| {
+        matches!(
+            classify_authored_line(next.raw),
+            AuthoredLineClass::Item(next_line)
+                if next_line.depth == AuthoredDepth::Nested
+        )
+    });
+    Some(SectionBulletCompletion {
+        route,
+        query,
+        replacement: (name_start, span.end),
+        continuation: span.end == line.end && !next_is_nested,
+    })
 }
 
 /// A first-level bullet's drawer shortcut under the cursor: the bare `#`,

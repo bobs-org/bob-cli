@@ -139,7 +139,16 @@ starts a first-level bullet (`- #`, `- #fut`) where its bullets land directly un
 task (a new task, a new project note, or a note-less '@route+id'): every row's \
 replacement is the bare ALL-CAPS title (`FUTURE WORK`), with a nested `  - ` bullet \
 opened after it when nothing nested follows, and a bullet-start '#' that cannot name \
-a drawer returns a successful empty result. Pomodoro-name completion covers '@route:id#prefix', a bare \
+a drawer returns a successful empty result. A first-level bullet's \
+leading '#' in a notebook body (a route-only '@nb' list or a \
+'@parent^id@ %n' item) instead opens context 'notebook_section_bullet': \
+the replacement covers only the selector after '#', rows share the glued \
+notebook row model (kind, group, line, note_count, detail, consequence, \
+creates, refused) plus the nested '  - ' continuation and cursor_after, \
+groups order notebook, draft, then the create row, and an additive \
+place_menu object on drawer, notebook section, and section-bullet \
+responses carries the client copy (title, caption, groups, new_row_prefix, \
+empty_hint, results_label, footer_hint). Pomodoro-name completion covers '@route:id#prefix', a bare \
 '@route:id#', '@route:#prefix', '@route^id@#prefix', and a bare '@route^id@#'; \
 Today rows come from `bob capture-pomodoros`: link-name completion offers \
 open entries, while start-name completion also offers completed names as \

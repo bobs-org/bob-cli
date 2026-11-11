@@ -755,10 +755,14 @@ fn notebook_note_bullet_hash_opens_no_drawer_menu() {
         json["context"].is_null(),
         "Text @nb + - # returns no context: {json}"
     );
+    // A route-only notebook list bullet opens the section menu, never
+    // the drawer menu (grammar 26 section bullets).
     let list = "@dev_tools\n- #fu";
     let json = complete_at(&temp, &vault, list, list.len());
-    assert!(
-        json["context"].is_null(),
-        "notebook list - # opens no drawer: {json}"
+    assert_eq!(json["context"], "notebook_section_bullet", "{json}");
+    assert_eq!(
+        json["replacement"],
+        serde_json::json!({"start": list.len() - 2, "end": list.len()}),
+        "the replacement covers the selector after `#`: {json}"
     );
 }

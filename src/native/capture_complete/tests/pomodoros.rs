@@ -800,6 +800,7 @@ fn pomodoro_creation_json_omits_ref_and_keeps_schema_version() {
         project_task_move: None,
         record: None,
         diagnostics: Vec::new(),
+        place_menu: None,
     })
     .expect("creation json");
 
@@ -876,6 +877,7 @@ fn pomodoro_start_name_orders_repeated_completed_names_newest_first() {
         project_task_move: None,
         record: None,
         diagnostics: Vec::new(),
+        place_menu: None,
     })
     .expect("start-name json");
     let names = json["candidates"]

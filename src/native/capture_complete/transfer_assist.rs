@@ -483,12 +483,11 @@ fn scope_transfer_sections(
         return Ok(());
     }
     items.push(super::model::SectionMenuRow::Section(
-        super::model::SectionCandidate {
-            replacement: section_creation_selector(&title),
+        super::model::SectionCandidate::plain(
+            section_creation_selector(&title),
             title,
-            level: 2,
-            refused: None,
-        },
+            2,
+        ),
     ));
     Ok(())
 }

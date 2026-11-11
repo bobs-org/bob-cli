@@ -244,6 +244,7 @@ fn json_shape_is_stable() {
         project_task_move: None,
         record: None,
         diagnostics: Vec::new(),
+        place_menu: None,
     })
     .expect("pomodoro json");
 
@@ -312,6 +313,7 @@ fn json_shape_is_stable() {
         project_task_move: None,
         record: None,
         diagnostics: Vec::new(),
+        place_menu: None,
     })
     .expect("json");
 
@@ -637,6 +639,7 @@ fn human_output_is_plain_without_color() {
             project_task_move: None,
             record: None,
             diagnostics: Vec::new(),
+            place_menu: None,
         },
         &styler,
     );

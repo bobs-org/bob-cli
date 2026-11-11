@@ -177,6 +177,7 @@ fn build_result_inner(
             | CompletionContext::PomodoroSplitType
             | CompletionContext::PomodoroMergeSrc
             | CompletionContext::PomodoroMergeDest
+            | CompletionContext::NotebookSectionBullet
             | CompletionContext::WikilinkTask
             | CompletionContext::RecordTarget
             | CompletionContext::RecordField
@@ -216,6 +217,7 @@ fn build_result_inner(
             project_task_move: None,
             record: None,
             diagnostics: Vec::new(),
+            place_menu: None,
         });
     }
 
@@ -283,6 +285,7 @@ fn build_result_inner(
             project_task_move: None,
             record: None,
             diagnostics: Vec::new(),
+            place_menu: None,
         });
     }
 
@@ -381,6 +384,7 @@ fn build_result_inner(
             hidden_count: None,
             record: None,
             diagnostics: Vec::new(),
+            place_menu: None,
         });
     }
 
@@ -463,6 +467,7 @@ fn build_result_inner(
             project_task_move: None,
             record: None,
             diagnostics: Vec::new(),
+            place_menu: None,
         });
     }
 
@@ -500,16 +505,26 @@ fn build_result_inner(
         }
         CompletionContext::Section => {
             let route = field.route.as_deref().expect("route resolved");
+            super::candidates::section_candidates_with_raw(
+                bob_dir,
+                route,
+                &field.query,
+                Some(raw_text),
+                Some(field.replacement),
+                Some(&notebook_policy),
+                Some(field.replacement.0),
+            )?
+        }
+        CompletionContext::NotebookSectionBullet => {
+            let route = field.route.as_deref().expect("route resolved");
             (
-                super::candidates::section_candidates_with_raw(
-                    bob_dir,
+                super::candidates::notebook_bullet_candidates(
+                    &notebook_policy,
+                    raw_text,
                     route,
                     &field.query,
-                    Some(raw_text),
-                    Some(field.replacement),
-                    Some(&notebook_policy),
-                    Some(field.replacement.0),
-                )?,
+                    field.replacement,
+                ),
                 Vec::new(),
             )
         }
@@ -947,6 +962,7 @@ fn build_result_inner(
             | CompletionContext::TaskType
             | CompletionContext::Directive
             | CompletionContext::Drawer
+            | CompletionContext::NotebookSectionBullet
             | CompletionContext::RelationTo
             | CompletionContext::RelationFrom
             | CompletionContext::RelationLabel
@@ -973,6 +989,17 @@ fn build_result_inner(
         )
     } else {
         (None, None)
+    };
+    // Notebook section menus carry the typed query (empty for an
+    // unfiltered list) so selection can tell an empty filter, which
+    // opens with nothing selected, from a typed one. Every other
+    // `section` menu keeps its query-free shape.
+    let query = match field.context {
+        CompletionContext::NotebookSectionBullet => Some(field.query.clone()),
+        CompletionContext::Section if is_notebook_section_menu(&candidates) => {
+            Some(field.query.clone())
+        }
+        _ => query,
     };
     // The relation token behind a label field: its direction plus the
     // sigil-to-`|` range, derived from the same scan that produced the
@@ -1027,6 +1054,24 @@ fn build_result_inner(
             field.replacement.0,
         );
     }
+    // A section bullet's continuation appends the nested `  - ` line to
+    // every row and records `cursor_after` past it; without a
+    // continuation the rows still carry `cursor_after` past their
+    // replacement so clients can place the caret.
+    if field.context == CompletionContext::NotebookSectionBullet {
+        let continuation =
+            capture_language::notebook_section_bullet_completion_at(
+                raw_text,
+                cursor,
+                &notebook_policy,
+            )
+            .is_some_and(|bullet| bullet.continuation);
+        super::candidates::append_section_continuation(
+            &mut candidates,
+            continuation,
+            replacement.start,
+        );
+    }
 
     let drawer_target = if field.context == CompletionContext::Drawer {
         bullet
@@ -1038,6 +1083,21 @@ fn build_result_inner(
     } else {
         None
     };
+    let place_menu = place_menu_for(
+        &field,
+        &candidates,
+        drawer_target.as_ref(),
+        (field.context == CompletionContext::Section
+            || field.context == CompletionContext::NotebookSectionBullet)
+            .then(|| {
+                super::candidates::notebook_menu_target(
+                    &notebook_policy,
+                    field.route.as_deref().unwrap_or_default(),
+                    field.replacement.0,
+                )
+            })
+            .flatten(),
+    );
     Ok(CaptureCompleteResult {
         ok: true,
         schema_version: SCHEMA_VERSION,
@@ -1066,7 +1126,154 @@ fn build_result_inner(
         project_task_move: None,
         record: None,
         diagnostics: Vec::new(),
+        place_menu,
     })
+}
+
+/// Preselect for a typed notebook section menu (`create_row_return =
+/// preselect_clean`): any enabled non-create row keeps the default first
+/// row, a lone create row is selected unless it is a near miss, and
+/// refused-only or empty menus open with nothing selected.
+fn notebook_menu_initial_selection(
+    candidates: &Candidates,
+) -> Option<&'static str> {
+    let Candidates::Section(rows) = candidates else {
+        return None;
+    };
+    let has_enabled_section = rows.iter().any(|row| {
+        matches!(
+            row,
+            super::model::SectionMenuRow::Section(section)
+                if section.refused.is_none()
+        )
+    });
+    if has_enabled_section {
+        return None;
+    }
+    let create = rows.iter().find_map(|row| match row {
+        super::model::SectionMenuRow::NotebookCreate(create) => Some(create),
+        _ => None,
+    });
+    match create {
+        None => Some("none"),
+        Some(row)
+            if row
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.starts_with("did you mean")) =>
+        {
+            Some("none")
+        }
+        Some(_) => None,
+    }
+}
+
+/// True for a `section` response backed by a notebook menu: any row
+/// carries the `notebook_section` kind or a section-create row. Plain
+/// record, area, and project section menus stay chrome-free.
+fn is_notebook_section_menu(candidates: &Candidates) -> bool {
+    if let Candidates::Section(rows) = candidates {
+        rows.iter().any(|row| match row {
+            super::model::SectionMenuRow::Section(section) => {
+                section.kind == Some("notebook_section")
+            }
+            super::model::SectionMenuRow::NotebookCreate(_) => true,
+            super::model::SectionMenuRow::Create(_) => false,
+        })
+    } else {
+        false
+    }
+}
+
+/// Bob-authored place-menu chrome for the `drawer`, notebook `section`,
+/// and `notebook_section_bullet` contexts. Drawer chrome reproduces
+/// today's Mac copy so older apps can keep their fallback when it is
+/// absent.
+fn place_menu_for(
+    field: &capture_language::CompletionField,
+    candidates: &Candidates,
+    drawer_target: Option<&super::model::DrawerTarget>,
+    notebook_target: Option<super::candidates::NotebookMenuTarget>,
+) -> Option<super::model::PlaceMenu> {
+    use super::model::{PlaceMenu, PlaceMenuGroup};
+    const FOOTER: &str = "⏎ choose · ⎋ close";
+    if field.context == CompletionContext::Drawer {
+        let caption = drawer_target
+            .map(|target| {
+                let id = target
+                    .block_id
+                    .as_deref()
+                    .map(|id| format!("^{id} "))
+                    .unwrap_or_default();
+                format!("{id}{} ({})", target.text, target.route)
+            })
+            .unwrap_or_default();
+        return Some(PlaceMenu {
+            kind: "drawer",
+            title: "Drawer".to_string(),
+            caption,
+            groups: vec![
+                PlaceMenuGroup {
+                    id: "task".to_string(),
+                    title: "On this task".to_string(),
+                },
+                PlaceMenuGroup {
+                    id: "recent".to_string(),
+                    title: "Recent".to_string(),
+                },
+                PlaceMenuGroup {
+                    id: "new".to_string(),
+                    title: String::new(),
+                },
+            ],
+            new_row_prefix: "＋ ".to_string(),
+            empty_hint: None,
+            results_label: "drawers".to_string(),
+            footer_hint: FOOTER.to_string(),
+        });
+    }
+    let target = notebook_target?;
+    if field.context == CompletionContext::NotebookSectionBullet
+        || (field.context == CompletionContext::Section
+            && is_notebook_section_menu(candidates))
+    {
+        let caption = match (&target.owner, target.is_new) {
+            (Some(owner), false) => {
+                format!("📓 {} · {owner}", target.title)
+            }
+            (None, false) => format!("📓 {}", target.title),
+            (Some(owner), true) => {
+                format!("📓 New notebook · {} · {owner}", target.title)
+            }
+            (None, true) => {
+                format!("📓 New notebook · {}", target.title)
+            }
+        };
+        return Some(PlaceMenu {
+            kind: "notebook_section",
+            title: "Section".to_string(),
+            caption,
+            groups: vec![
+                PlaceMenuGroup {
+                    id: "notebook".to_string(),
+                    title: "In this notebook".to_string(),
+                },
+                PlaceMenuGroup {
+                    id: "draft".to_string(),
+                    title: "Earlier in this draft".to_string(),
+                },
+                PlaceMenuGroup {
+                    id: "new".to_string(),
+                    title: String::new(),
+                },
+            ],
+            new_row_prefix: "＋ ".to_string(),
+            empty_hint: Some("Type a section name".to_string()),
+            results_label: "sections".to_string(),
+            footer_hint: FOOTER.to_string(),
+        });
+    }
+    None
 }
 
 /// Template completion uses a same-length masked draft so template syntax and
@@ -1238,6 +1445,20 @@ fn initial_selection(
         && result.replacement.start == result.replacement.end
     {
         return Some("none");
+    }
+    // Notebook section menus open unfiltered with nothing selected; a
+    // typed query selects the first enabled non-create row, except a
+    // lone create row follows the preselect rule below.
+    if matches!(
+        result.context,
+        Some(CompletionContext::NotebookSectionBullet)
+    ) || (matches!(result.context, Some(CompletionContext::Section))
+        && is_notebook_section_menu(&result.candidates))
+    {
+        if result.query.as_deref() == Some("") {
+            return Some("none");
+        }
+        return notebook_menu_initial_selection(&result.candidates);
     }
     if result.query.as_deref() != Some("") {
         return None;

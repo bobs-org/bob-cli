@@ -320,6 +320,12 @@ pub(crate) fn shell_completion(
                 });
             }
         }
+        // Shell completion serves one-line drafts only, so the lexical
+        // field never yields a section bullet; the arm exists for
+        // exhaustiveness.
+        CompletionContext::NotebookSectionBullet => {
+            return Ok(None);
+        }
         CompletionContext::PomodoroName
         | CompletionContext::PomodoroStartName
         | CompletionContext::PomodoroPastName => {

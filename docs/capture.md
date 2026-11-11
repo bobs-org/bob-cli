@@ -9679,6 +9679,49 @@ global destinations, transfer/merge lines, and non-record notes omit that
 row. See [Guided fields](#guided-fields).
 
 Notebook routes are first-class completion citizens (see [Notebooks](notebooks.md) for the contract). Route rows for notebooks carry a 📓 badge, the breadcrumb as the displayed label, and the summary as detail, with the route and file identity kept separate from presentation. A notebook `@nb#` field lists real H2 sections in document order (never the H1 title, H3s, or fenced headings), plus sections earlier valid items in this draft create. Duplicate headings stay listed as refused rows carrying the `notebook_section_ambiguous` copy. A nonempty query with no exact title or whole-slug match appends one additive `kind: "notebook_section_create"` row (`New section “Title”`); its `replacement` is the bare slug, or the quoted selector when the bare slug would be a near miss, the advertised title keeps typed capitals, and the response replacement keeps exactly one `#` while preserving any `^id` suffix. Block-ID fields on `@nb^` and `@nb#section^` keep `intent: "new"` and add `destination_kind: "notebook"`. Note-scoped `@nb+` lists eligible note bullets (any depth, no checkboxes, headings, fences, or prose) with ID'd rows first, then ID-less rows in document order; each row carries additive `item_kind: "note"` plus the usual route, text, line, section, depth, child count, `ref`, `block_id`, `requires_block_id`, and `block_id_suggestions`. A complete caret-sealed `@parent^id@` item enables the `%n` directive as `New notebook` even with no Pomodoro available.
+
+In a notebook body (a route-only `@nb` list, or a `@parent^id@ %n` item),
+a first-level `- #` bullet opens context `notebook_section_bullet` instead
+of the drawer menu: `- #`, `- #git`, `- #"API Design"`. Its `replacement`
+covers only the selector text after `#` (the `#` stays in the draft), and
+every row splices back through the resolver to the section it advertises,
+so `capture-parse` and `capture --dry-run` of the spliced draft report the
+same section and `section_action`. Rows share one notebook row model with
+the glued `@nb#` menu: today's `{replacement, title, level}` plus `kind`
+(`notebook_section`), `group` (`notebook`, `draft`, or `new` on the create
+row), `line` (1-based disk line), `note_count`, `detail` (`8 notes`,
+`1 note`, `empty`, `new` for draft rows, `did you mean Docker?` on a
+near-miss create row), `consequence` (`Adds after “…” in ## Git`,
+`First note in ## Git`, `Adds to ## Docker, new in this draft`,
+`Creates ## Docker at the end of Developer tools`, or
+`Seeds ## Keymaps in the new notebook` during `%n`), `creates`, and
+`refused` on ambiguous duplicates. A bullet row's `replacement` is the
+title-preferring selector (the bare title when it round-trips, else the
+quoted exact title); when the shortcut ends its line with no nested bullet
+following, each `replacement` gains the `\n  - ` continuation and every row
+(including the create row) carries `cursor_after`. Rows order by group
+(`notebook`, then `draft`, then the create row); under a typed query each
+group ranks exact title-or-slug, then prefix, then substring, with document
+order breaking ties. The create row appears only for a nonempty query with
+no exact match, stays hidden while the query is a strict prefix of any
+listed title or slug, and takes the quoted spelling on a near miss. An
+empty query opens with `initial_selection: "none"`; a typed query selects
+the first enabled non-create row, except a lone create row is preselected
+unless it is a near miss. A bullet under a notebook note (`Text @nb`),
+an `@nb+id` fan-out, an `@@nb` item, an `@nb#Section` header, or a nested
+line opens no place menu. When the notebook cannot be read the menu returns
+no rows and no create row with a bounded warning.
+
+`drawer`, notebook `section`, and `notebook_section_bullet` responses carry
+an additive `place_menu` object (`kind`, `title`, `caption`, `groups` with
+the `new` group untitled, `new_row_prefix`, `empty_hint`, `results_label`,
+`footer_hint`) so clients paint one menu from Bob's copy: `Drawer` /
+`On this task` / `Recent` / `＋ New drawer` / `⏎ choose · ⎋ close` for
+drawers, and `Section` / `In this notebook` / `Earlier in this draft` /
+`Type a section name` for notebook sections, whose caption reads
+`📓 <title> · <owner>` (`📓 New notebook · <title> · <owner>` during `%n`).
+Older clients ignore it.
+
 Drawer completion
 covers `@route+id#prefix` and a bare `@route+id#` once the item has body text,
 backed by the same scanner as `bob capture-drawers`; the candidate
