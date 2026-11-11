@@ -2635,6 +2635,121 @@ def _diagram_browser_test_failures(browser_info: dict) -> list[str]:
                           and "Agent finishes its work" in extracted)
                 except (OSError, subprocess.SubprocessError):
                     check("Mermaid flowchart text extraction", False)
+
+        # -- SVG root sanitization: root on* stripped like descendants ----
+        malicious_svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="80" '
+            'viewBox="0 0 200 80" onmouseover="window.bobRootHandlerRan=true">'
+            '<script>alert(1)</script>'
+            '<g onload="window.bobDescendantRan=true">'
+            '<circle cx="10" cy="10" r="5"/></g>'
+            '<foreignObject x="8" y="20" width="184" height="40">'
+            '<div xmlns="http://www.w3.org/1999/xhtml">VectorLabel</div>'
+            '</foreignObject></svg>'
+        )
+        svg_id = hashlib.sha1(b"svg-root-sanitize").hexdigest()
+        svg_item = {"id": svg_id, "source": malicious_svg, "kind": "svg"}
+        try:
+            with sync_playwright() as pw:
+                browser = _launch_with_fallback(
+                    pw, browser_info["launch"], headless=True, warnings=[]
+                )
+                try:
+                    with open(diagram_render.MERMAID_JS_PATH,
+                              encoding="utf-8") as handle:
+                        mermaid_js = handle.read()
+                    with open(diagram_render.DIAGRAM_FONT_PATH, "rb") as handle:
+                        import base64 as _b64
+                        font_b64 = _b64.b64encode(handle.read()).decode("ascii")
+                    context = browser.new_context(
+                        offline=True,
+                        service_workers="block",
+                        accept_downloads=False,
+                        color_scheme="light",
+                    )
+                    attempted: list[str] = []
+
+                    def _abort(route) -> None:
+                        attempted.append(route.request.url)
+                        route.abort()
+
+                    context.route("**/*", _abort)
+                    page = diagram_render._new_page(
+                        context, mermaid_js, font_b64)
+                    try:
+                        original_pdf = page.pdf
+                        inspected: dict[str, object] = {}
+
+                        def _inspecting_pdf(*args, **kwargs):
+                            root_on = page.evaluate(
+                                "() => { const svg = document.querySelector('svg');"
+                                " return svg ? svg.hasAttribute('onmouseover') : 'missing'; }")
+                            script_left = page.evaluate(
+                                "() => { const svg = document.querySelector('svg');"
+                                " return svg ? !!svg.querySelector('script') : false; }")
+                            desc_on = page.evaluate(
+                                "() => { const g = document.querySelector('g');"
+                                " return g ? g.hasAttribute('onload') : 'missing'; }")
+                            page.evaluate(
+                                "() => { window.bobRootHandlerRan = undefined;"
+                                " window.bobDescendantRan = undefined;"
+                                " const svg = document.querySelector('svg');"
+                                " if (svg) svg.dispatchEvent(new Event('mouseover')); }")
+                            ran = page.evaluate(
+                                "() => !!window.bobRootHandlerRan"
+                                " || !!window.bobDescendantRan")
+                            inspected["root_on"] = root_on
+                            inspected["script_left"] = script_left
+                            inspected["desc_on"] = desc_on
+                            inspected["ran"] = ran
+                            return original_pdf(*args, **kwargs)
+
+                        page.pdf = _inspecting_pdf  # type: ignore[method-assign]
+                        svg_result = diagram_render._render_svg_one(
+                            page, svg_item, 10, workdir)
+                    finally:
+                        try:
+                            page.close()
+                        except Exception:  # noqa: BLE001 - best effort
+                            pass
+                        context.close()
+                finally:
+                    browser.close()
+        except Exception as exc:  # noqa: BLE001 - reported as one test failure
+            check(f"SVG sanitization fixture ({exc})", False)
+            svg_result = {"ok": False}
+            inspected = {}
+            attempted = ["setup-failed"]
+        else:
+            check("SVG malicious render ok",
+                  isinstance(svg_result, dict) and svg_result.get("ok") is True)
+            check("SVG root handler stripped",
+                  inspected.get("root_on") is False)
+            check("SVG descendant handler stripped",
+                  inspected.get("desc_on") is False)
+            check("SVG script element removed",
+                  inspected.get("script_left") is False)
+            check("SVG root handler cannot execute",
+                  inspected.get("ran") is False)
+            check("SVG renderer makes no requests", attempted == [])
+            svg_pdf = svg_result.get("pdf", "") if isinstance(
+                svg_result, dict) else ""
+            if svg_pdf and os.path.isfile(svg_pdf):
+                check("SVG malicious PDF is one page",
+                      diagram_render.pdf_page_count(svg_pdf) == 1)
+                if pdftotext:
+                    try:
+                        proc = subprocess.run(
+                            [pdftotext, svg_pdf, "-"], capture_output=True,
+                            text=True, timeout=10,
+                        )
+                        check("SVG foreignObject label prints",
+                              proc.returncode == 0
+                              and "VectorLabel" in proc.stdout)
+                    except (OSError, subprocess.SubprocessError):
+                        check("SVG foreignObject label prints", False)
+            else:
+                check("SVG malicious PDF is one page", False)
     return failures
 
 

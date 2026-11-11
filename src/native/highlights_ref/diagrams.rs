@@ -280,82 +280,12 @@ pub(crate) fn prescan_mermaid(markdown: &str) -> usize {
         .count()
 }
 
-/// Count candidate Markdown/HTML SVG image embeds. May over-match
-/// (a `.svg` destination in a non-image link) and must never under-match.
+/// Count candidate SVG marker occurrences. May over-match (a `.svg`
+/// mention in prose or a non-image link) and must never under-match, so
+/// every Pandoc `Image` form reaches the authoritative collector. The
+/// Pandoc collector decides whether each candidate is a real local SVG.
 fn prescan_svg(markdown: &str) -> usize {
-    markdown.lines().map(count_svg_image_candidates).sum()
-}
-
-fn count_svg_image_candidates(line: &str) -> usize {
-    let rest = strip_quote_and_list_prefix(line);
-    count_markdown_svg_dests(rest) + count_html_svg_imgs(rest)
-}
-
-fn count_markdown_svg_dests(line: &str) -> usize {
-    let mut count = 0;
-    let mut rest = line;
-    while let Some(start) = rest.find("](") {
-        let after = &rest[start + 2..];
-        match after.find(')') {
-            Some(end) => {
-                if is_svg_dest(&after[..end]) {
-                    count += 1;
-                }
-                rest = &after[end + 1..];
-            }
-            None => break,
-        }
-    }
-    if let Some(colon) = line.find("]:") {
-        let dest = line[colon + 2..].trim();
-        if is_svg_dest(dest) {
-            count += 1;
-        }
-    }
-    count
-}
-
-fn count_html_svg_imgs(line: &str) -> usize {
-    let lower = line.to_ascii_lowercase();
-    let mut count = 0;
-    let mut rest = lower.as_str();
-    while let Some(start) = rest.find("src=") {
-        let after = rest[start + 4..].trim_start();
-        let quote = after.as_bytes().first().copied();
-        let dest = match quote {
-            Some(b'"') | Some(b'\'') => {
-                let q = quote.unwrap() as char;
-                after[1..].split(q).next().unwrap_or("")
-            }
-            _ => after
-                .split(|character: char| {
-                    character.is_ascii_whitespace() || character == '>'
-                })
-                .next()
-                .unwrap_or(""),
-        };
-        if is_svg_dest(dest) {
-            count += 1;
-        }
-        rest = &rest[start + 4..];
-    }
-    count
-}
-
-fn is_svg_dest(dest: &str) -> bool {
-    let dest = dest.trim();
-    let dest = dest
-        .strip_prefix('<')
-        .and_then(|value| value.strip_suffix('>'))
-        .unwrap_or(dest);
-    let dest = dest
-        .split(|character: char| {
-            character.is_whitespace() || matches!(character, '"' | '\'')
-        })
-        .next()
-        .unwrap_or("");
-    let path = strip_query_fragment(dest);
-    path.to_ascii_lowercase().ends_with(".svg")
+    markdown.to_ascii_lowercase().matches(".svg").count()
 }
 
 fn strip_query_fragment(target: &str) -> &str {
@@ -2069,6 +1999,192 @@ plain flowchart LR in a paragraph\n\
         );
         assert!(pass.filter.is_none());
         assert!(!called.exists(), "kill switch must not spawn for SVG");
+    }
+
+    #[test]
+    fn prescan_covers_all_pandoc_svg_image_forms() {
+        for markdown in [
+            "![Label](<figure name.svg>)\n",
+            "![Label](figure.svg)\n",
+            "![Label][fig]\n\n[fig]: figure.svg\n",
+        ] {
+            assert_eq!(prescan_mermaid(markdown), 0, "{markdown:?}");
+            assert!(
+                prescan(markdown) > 0,
+                "conservative gate must reach adapter: {markdown:?}"
+            );
+        }
+        assert_eq!(prescan("# No diagrams\n\nHello.\n"), 0);
+    }
+
+    #[test]
+    fn prepare_reaches_adapter_for_all_pandoc_svg_forms() {
+        let Some(pandoc) = skip_pandoc("prepare svg forms") else {
+            return;
+        };
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "angle-space",
+                "![Label](<figure name.svg>)\n",
+                "figure name.svg",
+            ),
+            ("plain", "![Label](figure.svg)\n", "figure.svg"),
+            (
+                "reference",
+                "![Label][fig]\n\n[fig]: figure.svg\n",
+                "figure.svg",
+            ),
+        ];
+        for (name, markdown, filename) in cases {
+            let temp = TempDir::new(&format!("prepare-svg-{name}"));
+            let adapter = temp.path.join("adapter.sh");
+            write_executable(
+                &adapter,
+                "#!/bin/sh\ncat > \"$(dirname \"$0\")/request.json\"\necho called > \"$(dirname \"$0\")/called\"\nexit 99\n",
+            );
+            let svg_bytes = format!("<svg xmlns='http://www.w3.org/2000/svg'><text>{name}</text></svg>");
+            fs::write(temp.path.join(filename), &svg_bytes)
+                .expect("write svg with real filename");
+            let source = temp.path.join("doc.md");
+            fs::write(&source, markdown).expect("write source");
+            let _guard = TestEnvGuard::set(&[(
+                super::super::clip_adapter::ENV_ADAPTER_OVERRIDE,
+                Some(adapter.as_os_str()),
+            )]);
+            let pass = prepare(
+                Some(pandoc.as_os_str()),
+                DiagramSource::Path(&source),
+                generic_route(),
+                &temp.path.join("scratch"),
+                Some(&temp.path),
+            );
+            assert!(
+                temp.path.join("called").exists(),
+                "{name}: adapter must run for {markdown:?}"
+            );
+            assert_eq!(pass.svg_total, 1, "{name}: {markdown:?}");
+            let request = fs::read_to_string(temp.path.join("request.json"))
+                .expect("read adapter request");
+            assert!(
+                request.contains(name),
+                "{name}: source bytes must resolve: {request}"
+            );
+            assert!(
+                request.contains("\"kind\":\"svg\""),
+                "{name}: svg kind must reach adapter: {request}"
+            );
+        }
+    }
+
+    #[test]
+    fn collect_preserves_document_order_across_kinds() {
+        let Some(pandoc) = skip_pandoc("collect order") else {
+            return;
+        };
+        // Mermaid first, then SVG: typewise traversal used to emit SVG first.
+        let temp = TempDir::new("collect-order-mermaid-first");
+        let source = temp.path.join("doc.md");
+        fs::write(
+            &source,
+            "# Mix\n\n```mermaid\nflowchart LR\n  A --> B\n```\n\n![Later](later.svg)\n",
+        )
+        .expect("write mermaid-first source");
+        let blocks = collect(
+            &pandoc,
+            &source,
+            DiagramReader::Inferred,
+            &temp.path.join("collect"),
+        )
+        .expect("collect mermaid-first");
+        assert_eq!(blocks.len(), 2, "{blocks:?}");
+        assert!(blocks[0].is_mermaid(), "document order: {blocks:?}");
+        assert_eq!(
+            blocks[1].svg_target(),
+            Some("later.svg"),
+            "document order: {blocks:?}"
+        );
+
+        // SVG first, then Mermaid: both orders must follow the document.
+        let temp = TempDir::new("collect-order-svg-first");
+        let source = temp.path.join("doc.md");
+        fs::write(
+            &source,
+            "# Mix\n\n![First](first.svg)\n\n```mermaid\nflowchart LR\n  A --> B\n```\n",
+        )
+        .expect("write svg-first source");
+        let blocks = collect(
+            &pandoc,
+            &source,
+            DiagramReader::Inferred,
+            &temp.path.join("collect"),
+        )
+        .expect("collect svg-first");
+        assert_eq!(blocks.len(), 2, "{blocks:?}");
+        assert_eq!(
+            blocks[0].svg_target(),
+            Some("first.svg"),
+            "document order: {blocks:?}"
+        );
+        assert!(blocks[1].is_mermaid(), "document order: {blocks:?}");
+
+        // Alternating kinds, including nested lists and quotes, stay ordered.
+        let temp = TempDir::new("collect-order-nested");
+        let source = temp.path.join("doc.md");
+        fs::write(
+            &source,
+            "# Mix\n\n```mermaid\nflowchart LR\n  A --> B\n```\n\n![One](one.svg)\n\n- ```mermaid\n  flowchart TD\n    C --> D\n  ```\n\n  ![Nested](nested.svg)\n\n> ```mermaid\n> flowchart TB\n>   E --> F\n> ```\n>\n> ![Quoted](quoted.svg)\n",
+        )
+        .expect("write alternating source");
+        let blocks = collect(
+            &pandoc,
+            &source,
+            DiagramReader::Inferred,
+            &temp.path.join("collect"),
+        )
+        .expect("collect alternating");
+        assert_eq!(blocks.len(), 6, "{blocks:?}");
+        assert!(blocks[0].is_mermaid(), "{blocks:?}");
+        assert_eq!(blocks[1].svg_target(), Some("one.svg"), "{blocks:?}");
+        assert!(blocks[2].is_mermaid(), "{blocks:?}");
+        assert_eq!(blocks[3].svg_target(), Some("nested.svg"), "{blocks:?}");
+        assert!(blocks[4].is_mermaid(), "{blocks:?}");
+        assert_eq!(blocks[5].svg_target(), Some("quoted.svg"), "{blocks:?}");
+    }
+
+    #[test]
+    fn collect_budget_keeps_document_order_not_type_order() {
+        let Some(pandoc) = skip_pandoc("collect budget") else {
+            return;
+        };
+        let temp = TempDir::new("collect-budget");
+        let source = temp.path.join("doc.md");
+        let mut markdown = String::from("# Budget\n\n");
+        for index in 0..200 {
+            markdown.push_str(&format!(
+                "```mermaid\nflowchart LR\n  A{index} --> B\n```\n\n"
+            ));
+        }
+        markdown.push_str("![Late](late.svg)\n");
+        fs::write(&source, &markdown).expect("write budget source");
+        let blocks = collect(
+            &pandoc,
+            &source,
+            DiagramReader::Inferred,
+            &temp.path.join("collect"),
+        )
+        .expect("collect budget");
+        assert_eq!(blocks.len(), 201, "{blocks:?}");
+        // Document order: 200 Mermaids first, late SVG last. Typewise order
+        // would put the SVG first and displace the last Mermaid.
+        assert!(blocks[0].is_mermaid(), "{blocks:?}");
+        assert!(blocks[199].is_mermaid(), "{blocks:?}");
+        assert_eq!(blocks[200].svg_target(), Some("late.svg"), "{blocks:?}");
+        let send = blocks.len().min(MAX_DIAGRAM_ITEMS);
+        assert_eq!(send, 200);
+        assert!(
+            blocks[..send].iter().all(|block| block.is_mermaid()),
+            "later SVG must not displace earlier Mermaid items: {blocks:?}"
+        );
     }
 
     #[test]

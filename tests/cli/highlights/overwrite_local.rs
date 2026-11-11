@@ -1,5 +1,6 @@
 //! Local Markdown, original local PDF, and same-day vault-note overwrite.
 
+use super::fake_clip::FakeDiagrams;
 use super::overwrite_recovery;
 use crate::support::*;
 use std::fs;
@@ -2060,4 +2061,142 @@ pub(crate) fn snapshot_tree(root: &Path) -> Vec<(String, Vec<u8>)> {
     walk(root, root, &mut files);
     files.sort_by(|left, right| left.0.cmp(&right.0));
     files
+}
+
+const OVERWRITE_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="80" viewBox="0 0 200 80">
+  <rect width="200" height="80" fill="#f8f9fa"/>
+  <text x="10" y="40">OverwriteVector</text>
+</svg>
+"##;
+
+fn write_overwrite_svg_source(dir: &Path, with_sibling: bool) -> PathBuf {
+    write_file(&dir.join("figure.svg"), OVERWRITE_SVG);
+    if with_sibling {
+        // Minimal 1x1 PNG sibling so the guard can swap without the adapter.
+        let png: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00,
+            0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
+            0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE,
+            0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63,
+            0x38, 0xD3, 0xD1, 0x01, 0x00, 0x04, 0x00, 0x01, 0xDD, 0x34, 0xAF,
+            0x0D, 0xFB, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
+            0x42, 0x60, 0x82,
+        ];
+        fs::write(dir.join("figure.png"), png).expect("write sibling PNG");
+    }
+    let source = dir.join(format!("{STEM}.md"));
+    write_file(
+        &source,
+        "# Report\n\nReplacement body with SVG.\n\n![Figure](figure.svg)\n",
+    );
+    source
+}
+
+#[test]
+fn markdown_overwrite_reports_svg_vector_success() {
+    if skip_pandoc_xelatex("markdown overwrite svg vector") {
+        return;
+    }
+    let fixture =
+        filed_vault("bob-cli-overwrite-svg-vector", "ready", false, false);
+    let src_dir = fixture.temp.path().join("svg-vector-src");
+    fs::create_dir_all(&src_dir).expect("create svg source dir");
+    let source = write_overwrite_svg_source(&src_dir, false);
+    let fake = FakeDiagrams::new(&fixture.temp, "fake-overwrite-svg");
+    let output = overwrite_command(&fixture, &source)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .output()
+        .expect("markdown overwrite with svg");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("ok replaced Highlights-ready PDF"),
+        "overwrite must commit: {report}"
+    );
+    assert!(
+        report.contains("svg: rendered 1 of 1 SVG images"),
+        "vector success must emit svg line exactly once: {report}"
+    );
+    assert!(
+        !report.contains("images:"),
+        "vector success must not count as guard hit: {report}"
+    );
+    assert!(fake.called(), "adapter should run for svg overwrite");
+    let request = fake.request();
+    assert!(
+        request.contains("OverwriteVector"),
+        "original source-directory bytes must reach adapter: {request}"
+    );
+    assert!(
+        request.contains("\"kind\": \"svg\"")
+            || request.contains("\"kind\":\"svg\""),
+        "svg kind must reach adapter: {request}"
+    );
+}
+
+#[test]
+fn markdown_overwrite_reports_svg_sibling_fallback() {
+    if skip_pandoc_xelatex("markdown overwrite svg sibling") {
+        return;
+    }
+    let fixture =
+        filed_vault("bob-cli-overwrite-svg-sibling", "ready", false, false);
+    let src_dir = fixture.temp.path().join("svg-sibling-src");
+    fs::create_dir_all(&src_dir).expect("create svg source dir");
+    let source = write_overwrite_svg_source(&src_dir, true);
+    // Force the adapter to fail so the guard's sibling path applies.
+    let fake = FakeDiagrams::new(&fixture.temp, "fake-overwrite-sibling");
+    let output = overwrite_command(&fixture, &source)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_FAKE_DIAGRAMS_MODE", "fail-all")
+        .output()
+        .expect("markdown overwrite with failing svg");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("ok replaced Highlights-ready PDF"),
+        "overwrite must commit: {report}"
+    );
+    assert!(
+        report.contains("images: 1 SVG image printed from its sibling PNG"),
+        "sibling fallback must emit images line: {report}"
+    );
+}
+
+#[test]
+fn markdown_overwrite_reports_svg_placeholder_warning() {
+    if skip_pandoc_xelatex("markdown overwrite svg placeholder") {
+        return;
+    }
+    let fixture =
+        filed_vault("bob-cli-overwrite-svg-placeholder", "ready", false, false);
+    let src_dir = fixture.temp.path().join("svg-placeholder-src");
+    fs::create_dir_all(&src_dir).expect("create svg source dir");
+    let source = write_overwrite_svg_source(&src_dir, false);
+    let fake = FakeDiagrams::new(&fixture.temp, "fake-overwrite-placeholder");
+    let output = overwrite_command(&fixture, &source)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_FAKE_DIAGRAMS_MODE", "fail-all")
+        .output()
+        .expect("markdown overwrite with unrenderable svg");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("ok replaced Highlights-ready PDF"),
+        "overwrite must commit: {report}"
+    );
+    assert!(
+        report.contains("images: 1 SVG image replaced with an Image not printable placeholder"),
+        "placeholder must emit images line: {report}"
+    );
+    let combined =
+        format!("{}{}", report, String::from_utf8_lossy(&output.stderr));
+    assert!(
+        combined.contains("warning:"),
+        "placeholder must emit warning: {combined}"
+    );
+    assert!(
+        combined.contains("figure.svg"),
+        "warning must name original source file: {combined}"
+    );
 }

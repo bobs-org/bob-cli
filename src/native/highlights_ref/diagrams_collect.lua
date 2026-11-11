@@ -37,6 +37,7 @@ local function is_local_svg(target)
 end
 
 return {{
+  traverse = "topdown",
   CodeBlock = function(cb)
     if cb.classes:includes("mermaid") then
       cb.text = bob_expand_tabs(cb.text)

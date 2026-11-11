@@ -2360,7 +2360,11 @@ fn overwrite_markdown(
         scratch,
         &rebind_source,
         Some(source_store),
-    )
+    )?;
+    let styler = Styler::detect();
+    super::image_guard::emit_outcome(&reports.image_guard, &styler);
+    diagram_pass.emit(&styler);
+    Ok(())
 }
 
 fn overwrite_vault_note(
@@ -2417,97 +2421,116 @@ fn overwrite_vault_note(
     } else {
         snapshot.projected_markdown.clone()
     };
-    let (render_path, store_catalog) = if options.plain {
-        let dummy_target = scratch.path().join("overwrite.pdf");
-        let create_plan = CreatePlan {
-            source: snapshot.note.canonical_path.display().to_string(),
-            source_kind: "vault note",
-            target: dummy_target.clone(),
-            sidecar: dummy_target.with_extension("md"),
-            workflow: TargetWorkflow::External,
-            stem: plan.member.stem.clone(),
-            renamed_from: None,
-            title: title.clone(),
-            title_source: snapshot.title_source.as_str(),
-            author: author.clone(),
-            published: published.clone(),
-            source_url: None,
-            source_note: Some(source_note.clone()),
-            source_markdown: Some(snapshot.source_markdown.clone()),
-            captured: Some(super::note::capture_clock().stamp),
-            id: Some(plan.member.stem.clone()),
-            marker: String::new(),
-            audio: None,
-            page_count_hint: None,
-        };
-        let pandoc = pandoc_command().ok_or_else(|| {
+    let (render_path, store_catalog, overwrite_reports, overwrite_diagrams) =
+        if options.plain {
+            let dummy_target = scratch.path().join("overwrite.pdf");
+            let create_plan = CreatePlan {
+                source: snapshot.note.canonical_path.display().to_string(),
+                source_kind: "vault note",
+                target: dummy_target.clone(),
+                sidecar: dummy_target.with_extension("md"),
+                workflow: TargetWorkflow::External,
+                stem: plan.member.stem.clone(),
+                renamed_from: None,
+                title: title.clone(),
+                title_source: snapshot.title_source.as_str(),
+                author: author.clone(),
+                published: published.clone(),
+                source_url: None,
+                source_note: Some(source_note.clone()),
+                source_markdown: Some(snapshot.source_markdown.clone()),
+                captured: Some(super::note::capture_clock().stamp),
+                id: Some(plan.member.stem.clone()),
+                marker: String::new(),
+                audio: None,
+                page_count_hint: None,
+            };
+            let pandoc = pandoc_command().ok_or_else(|| {
             CommandError::new(format!(
                 "pandoc command not found; install pandoc or set {ENV_PANDOC_COMMAND}"
             ))
         })?;
-        let render_path = scratch.path().join("render.pdf");
-        let frozen_source =
-            freeze_markdown_source(&create_plan, scratch.path())?;
-        let (layout_default, prose_words) = table_layout_settings()?;
-        let mut filters =
-            write_render_filters(scratch.path(), &layout_default, prose_words)?;
-        let diagram_pass = super::diagrams::prepare(
-            Some(pandoc.as_os_str()),
-            super::diagrams::DiagramSource::Path(&frozen_source),
-            super::diagrams::DiagramRoute {
-                reader: super::diagrams::DiagramReader::Inferred,
-                text_width_pt: GENERIC_DIAGRAM_TEXT_WIDTH_PT,
-                text_height_pt: GENERIC_DIAGRAM_TEXT_HEIGHT_PT,
-            },
-            scratch.path(),
-            Path::new(&create_plan.source).parent(),
-        );
-        filters.diagrams = diagram_pass.filter.clone();
-        let reports = render_temp_pdf_from(
-            &pandoc,
-            &create_plan,
-            &render_path,
-            &filters,
-            audio_uri.as_deref(),
-            Some(&frozen_source),
-        )?;
-        (render_path, reports.code_catalog)
-    } else {
-        let mut snapshot = snapshot;
-        let asset_preparation = note_snapshot::assets::prepare(&mut snapshot)
-            .map_err(CommandError::new)?;
-        stage_snapshot_assets(&asset_preparation, scratch.path())?;
-        let (layout_default, prose_words) = table_layout_settings()?;
-        let mut filters =
-            write_render_filters(scratch.path(), &layout_default, prose_words)?;
-        let diagram_pass = super::diagrams::prepare(
-            pandoc_command().as_deref(),
-            super::diagrams::DiagramSource::Text(&snapshot.projected_markdown),
-            super::diagrams::DiagramRoute {
-                reader: super::diagrams::DiagramReader::Snapshot,
-                text_width_pt:
-                    note_snapshot::profile::SNAPSHOT_DIAGRAM_TEXT_WIDTH_PT,
-                text_height_pt:
-                    note_snapshot::profile::SNAPSHOT_DIAGRAM_TEXT_HEIGHT_PT,
-            },
-            scratch.path(),
-            None,
-        );
-        filters.diagrams = diagram_pass.filter.clone();
-        let outcome = note_snapshot::profile::render_note_pdf(
-            &snapshot.projected_markdown,
-            scratch.path(),
-            &filters,
-            &note_snapshot::profile::NoteMeta {
-                identity_title: snapshot.identity_title.clone(),
-                source_path: snapshot.note.identity.vault_relative_path.clone(),
-                kind: snapshot.source_kind.to_string(),
-                listen_uri: audio_uri,
-            },
-        )?;
-        let _ = diagram_pass;
-        (outcome.pdf, outcome.code_catalog)
-    };
+            let render_path = scratch.path().join("render.pdf");
+            let frozen_source =
+                freeze_markdown_source(&create_plan, scratch.path())?;
+            let (layout_default, prose_words) = table_layout_settings()?;
+            let mut filters = write_render_filters(
+                scratch.path(),
+                &layout_default,
+                prose_words,
+            )?;
+            let diagram_pass = super::diagrams::prepare(
+                Some(pandoc.as_os_str()),
+                super::diagrams::DiagramSource::Path(&frozen_source),
+                super::diagrams::DiagramRoute {
+                    reader: super::diagrams::DiagramReader::Inferred,
+                    text_width_pt: GENERIC_DIAGRAM_TEXT_WIDTH_PT,
+                    text_height_pt: GENERIC_DIAGRAM_TEXT_HEIGHT_PT,
+                },
+                scratch.path(),
+                Path::new(&create_plan.source).parent(),
+            );
+            filters.diagrams = diagram_pass.filter.clone();
+            let reports = render_temp_pdf_from(
+                &pandoc,
+                &create_plan,
+                &render_path,
+                &filters,
+                audio_uri.as_deref(),
+                Some(&frozen_source),
+            )?;
+            let catalog = reports.code_catalog.clone();
+            let image_guard = reports.image_guard.clone();
+            // Keep the original source directory (the vault note's parent)
+            // for the report lines below; the frozen scratch copy must not
+            // leak into user-visible diagnostics.
+            (render_path, catalog, Some(image_guard), Some(diagram_pass))
+        } else {
+            let mut snapshot = snapshot;
+            let asset_preparation =
+                note_snapshot::assets::prepare(&mut snapshot)
+                    .map_err(CommandError::new)?;
+            stage_snapshot_assets(&asset_preparation, scratch.path())?;
+            let (layout_default, prose_words) = table_layout_settings()?;
+            let mut filters = write_render_filters(
+                scratch.path(),
+                &layout_default,
+                prose_words,
+            )?;
+            let diagram_pass = super::diagrams::prepare(
+                pandoc_command().as_deref(),
+                super::diagrams::DiagramSource::Text(
+                    &snapshot.projected_markdown,
+                ),
+                super::diagrams::DiagramRoute {
+                    reader: super::diagrams::DiagramReader::Snapshot,
+                    text_width_pt:
+                        note_snapshot::profile::SNAPSHOT_DIAGRAM_TEXT_WIDTH_PT,
+                    text_height_pt:
+                        note_snapshot::profile::SNAPSHOT_DIAGRAM_TEXT_HEIGHT_PT,
+                },
+                scratch.path(),
+                None,
+            );
+            filters.diagrams = diagram_pass.filter.clone();
+            let outcome = note_snapshot::profile::render_note_pdf(
+                &snapshot.projected_markdown,
+                scratch.path(),
+                &filters,
+                &note_snapshot::profile::NoteMeta {
+                    identity_title: snapshot.identity_title.clone(),
+                    source_path: snapshot
+                        .note
+                        .identity
+                        .vault_relative_path
+                        .clone(),
+                    kind: snapshot.source_kind.to_string(),
+                    listen_uri: audio_uri,
+                },
+            )?;
+            let _ = diagram_pass;
+            (outcome.pdf, outcome.code_catalog, None, None)
+        };
     let stamped = stamp_overwrite_source(
         config,
         &plan,
@@ -2557,7 +2580,18 @@ fn overwrite_vault_note(
         scratch,
         &source_note,
         Some(source_store),
-    )
+    )?;
+    // Emit image-guard and diagram summaries only after the overwrite
+    // commits. Snapshot overwrites keep their placeholder path with no
+    // extra lines; the plain `-M` route mirrors ordinary create.
+    if let (Some(image_guard), Some(diagram_pass)) =
+        (overwrite_reports, overwrite_diagrams)
+    {
+        let styler = Styler::detect();
+        super::image_guard::emit_outcome(&image_guard, &styler);
+        diagram_pass.emit(&styler);
+    }
+    Ok(())
 }
 
 fn create_article_route(
