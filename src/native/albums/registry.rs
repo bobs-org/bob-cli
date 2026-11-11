@@ -280,6 +280,14 @@ impl AlbumRegistry {
         Self::from_snapshot(bob_dir, config_path, &snapshot)
     }
 
+    pub(crate) fn is_for_target(
+        &self,
+        bob_dir: &Path,
+        config_path: &Path,
+    ) -> bool {
+        same_registry_target(self, bob_dir, config_path)
+    }
+
     /// Resolve a route against this registry's complete inventory. A
     /// conflicting or invalid album claim always refuses the route, and the
     /// returned health makes the scope of global checks explicit.
@@ -476,7 +484,10 @@ fn paths_equal(left: &Path, right: &Path) -> bool {
     }
 }
 
-fn confine_vault_file(vault: &Path, path: &Path) -> Result<(), String> {
+pub(crate) fn confine_vault_file(
+    vault: &Path,
+    path: &Path,
+) -> Result<(), String> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {

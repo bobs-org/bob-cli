@@ -61,6 +61,16 @@ pub(crate) struct RecordRenderRequest<'a> {
     pub(crate) today: NaiveDate,
 }
 
+/// Storage spelling for a newly rendered record. Existing config callers
+/// keep noun-linked types; album consumers opt into the canonical record
+/// type while preserving the noun on the resolved `RecordType`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum RecordRenderIdentity {
+    #[default]
+    Config,
+    Album,
+}
+
 /// New note bytes plus the body after frontmatter for previews.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RenderedRecord {
@@ -300,15 +310,27 @@ fn render_note_bullet(
 pub(crate) fn render_record(
     request: &RecordRenderRequest<'_>,
 ) -> RenderedRecord {
+    render_record_with_identity(request, RecordRenderIdentity::Config)
+}
+
+pub(crate) fn render_record_with_identity(
+    request: &RecordRenderRequest<'_>,
+    identity: RecordRenderIdentity,
+) -> RenderedRecord {
     let record_type = request.record_type;
+    let parent = match identity {
+        RecordRenderIdentity::Config => request.parent.map(str::to_owned),
+        RecordRenderIdentity::Album => Some(format!("[[{}]]", record_type.dir)),
+    };
+    let type_link = match identity {
+        RecordRenderIdentity::Config => format!("[[{}]]", record_type.id),
+        RecordRenderIdentity::Album => "[[record]]".to_owned(),
+    };
     let mut frontmatter = String::from("---\n");
-    if let Some(parent) = request.parent {
+    if let Some(parent) = parent.as_deref() {
         frontmatter.push_str(&format!("parent: {}\n", yaml_quote(parent)));
     }
-    frontmatter.push_str(&format!(
-        "type: {}\n",
-        yaml_quote(&format!("[[{}]]", record_type.id))
-    ));
+    frontmatter.push_str(&format!("type: {}\n", yaml_quote(&type_link)));
     frontmatter.push_str(&format!("title: {}\n", yaml_quote(request.title)));
     for field in &record_type.fields {
         let Some(value) = request.values.get(&field.key) else {
@@ -1898,9 +1920,9 @@ mod tests {
     };
     use super::{
         apply_record_update, has_date_prefix, is_bare_choice_token,
-        render_record, split_preserving_ends, AppliedRecordUpdate,
-        RecordNoteInput, RecordRenderRequest, RecordUpdateErrorCode,
-        RecordUpdateRequest,
+        render_record, render_record_with_identity, split_preserving_ends,
+        AppliedRecordUpdate, RecordNoteInput, RecordRenderIdentity,
+        RecordRenderRequest, RecordUpdateErrorCode, RecordUpdateRequest,
     };
 
     const TODAY: NaiveDate = match NaiveDate::from_ymd_opt(2026, 11, 8) {
@@ -2251,6 +2273,30 @@ mod tests {
             yaml.get(serde_yaml::Value::String("status".to_owned())),
             Some(&serde_yaml::Value::String("liked".to_owned()))
         );
+    }
+
+    #[test]
+    fn album_create_uses_canonical_record_type_and_keeps_noun_identity() {
+        let record_type = restaurant_type();
+        let values = BTreeMap::new();
+        let request = RecordRenderRequest {
+            record_type: &record_type,
+            title: "Ramen Nagi",
+            parent: Some("[[eat]]"),
+            created: CREATED,
+            values: &values,
+            notes: &[],
+            note_date: None,
+            today: TODAY,
+        };
+
+        let rendered =
+            render_record_with_identity(&request, RecordRenderIdentity::Album);
+        assert!(rendered.markdown.starts_with(
+            "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\ntitle: \"Ramen Nagi\"\n"
+        ));
+        assert_eq!(record_type.id, "restaurant");
+        assert!(!rendered.markdown.contains("[[restaurant]]"));
     }
 
     #[test]

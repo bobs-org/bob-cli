@@ -6,6 +6,7 @@
 pub(crate) mod catalog;
 pub(crate) mod check;
 pub(crate) mod cli;
+pub(crate) mod context;
 pub(crate) mod init;
 pub(crate) mod plan;
 pub(crate) mod render;
@@ -19,10 +20,10 @@ pub(crate) use catalog::{
 };
 #[allow(unused_imports)]
 pub(crate) use plan::{
-    display_scalar, display_value, plan_create, plan_fields, plan_update,
-    resolve_update_target, PlanUpdateRequest, PlannedRecordProperty,
-    PlannedUpdateProperty, RecordCreatePlan, RecordCreateRequest,
-    RecordFieldPlan, RecordPlanError, RecordPlanErrorCode,
+    display_scalar, display_value, plan_create, plan_create_with_identity,
+    plan_fields, plan_update, resolve_update_target, PlanUpdateRequest,
+    PlannedRecordProperty, PlannedUpdateProperty, RecordCreatePlan,
+    RecordCreateRequest, RecordFieldPlan, RecordPlanError, RecordPlanErrorCode,
     RecordPropertySource, RecordPropertyState, RecordStemSource,
     RecordUpdatePlan, RecordUpdateTargetError, RecordUpdateTargetErrorCode,
     ResolvedUpdateTarget,
@@ -30,8 +31,8 @@ pub(crate) use plan::{
 #[allow(unused_imports)]
 pub(crate) use render::{
     yaml_quote, yaml_string_scalar, AppliedRecordUpdate, RecordNoteInput,
-    RecordRenderRequest, RecordUpdateError, RecordUpdateErrorCode,
-    RecordUpdateRequest, RenderedRecord,
+    RecordRenderIdentity, RecordRenderRequest, RecordUpdateError,
+    RecordUpdateErrorCode, RecordUpdateRequest, RenderedRecord,
 };
 #[allow(unused_imports)]
 pub(crate) use schema::{

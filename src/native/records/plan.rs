@@ -19,8 +19,8 @@ use chrono_tz::Tz;
 use super::{
     catalog::{FolderIndex, RecordCatalog, StemLookup},
     render::{
-        apply_record_update, render_record, RecordNoteInput,
-        RecordRenderRequest, RecordUpdateRequest,
+        apply_record_update, render_record_with_identity, RecordNoteInput,
+        RecordRenderIdentity, RecordRenderRequest, RecordUpdateRequest,
     },
     schema::{
         validate_field_input, FieldInputState, RecordDiagnostic,
@@ -103,6 +103,7 @@ pub(crate) struct PlannedRecordProperty {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct RecordCreatePlan {
     pub(crate) record_type: String,
+    pub(crate) render_identity: RecordRenderIdentity,
     pub(crate) title: String,
     pub(crate) stem: String,
     pub(crate) stem_source: RecordStemSource,
@@ -173,6 +174,17 @@ impl std::error::Error for RecordPlanError {}
 pub(crate) fn plan_create(
     request: RecordCreateRequest<'_>,
     catalog: &mut RecordCatalog,
+) -> Result<RecordCreatePlan, RecordPlanError> {
+    plan_create_with_identity(request, catalog, RecordRenderIdentity::Config)
+}
+
+/// Build a new plan while keeping the resolved record source explicit.
+/// Existing config callers use [`plan_create`] and retain their old bytes;
+/// album consumers select the canonical `[[record]]` storage spelling.
+pub(crate) fn plan_create_with_identity(
+    request: RecordCreateRequest<'_>,
+    catalog: &mut RecordCatalog,
+    render_identity: RecordRenderIdentity,
 ) -> Result<RecordCreatePlan, RecordPlanError> {
     let Some(record_type) = request.config.record_type(request.record_type)
     else {
@@ -265,16 +277,19 @@ pub(crate) fn plan_create(
     let (markdown, body) = if missing.is_empty() && invalid.is_empty() {
         let parent = resolve_parent(&request, record_type);
         let created = format_created_timestamp(request.now, request.timezone);
-        let rendered = render_record(&RecordRenderRequest {
-            record_type,
-            title: request.title,
-            parent: parent.as_deref(),
-            created: &created,
-            values: &values,
-            notes: request.notes,
-            note_date: Some(&today.format("%Y-%m-%d").to_string()),
-            today,
-        });
+        let rendered = render_record_with_identity(
+            &RecordRenderRequest {
+                record_type,
+                title: request.title,
+                parent: parent.as_deref(),
+                created: &created,
+                values: &values,
+                notes: request.notes,
+                note_date: Some(&today.format("%Y-%m-%d").to_string()),
+                today,
+            },
+            render_identity,
+        );
         (Some(rendered.markdown), Some(rendered.body))
     } else {
         (None, None)
@@ -282,6 +297,7 @@ pub(crate) fn plan_create(
 
     Ok(RecordCreatePlan {
         record_type: record_type.id.clone(),
+        render_identity,
         title: request.title.to_owned(),
         stem: stem.clone(),
         stem_source,
@@ -1539,13 +1555,14 @@ mod tests {
     use chrono::{NaiveDate, NaiveDateTime};
 
     use super::{
-        plan_create, plan_update, resolve_update_target, PlanUpdateRequest,
-        RecordCreateRequest, RecordPlanErrorCode, RecordPropertySource,
-        RecordPropertyState, RecordStemSource, RecordUpdateTargetErrorCode,
+        plan_create, plan_create_with_identity, plan_update,
+        resolve_update_target, PlanUpdateRequest, RecordCreateRequest,
+        RecordPlanErrorCode, RecordPropertySource, RecordPropertyState,
+        RecordStemSource, RecordUpdateTargetErrorCode,
     };
     use crate::native::records::{
         catalog::RecordCatalog,
-        render::RecordNoteInput,
+        render::{RecordNoteInput, RecordRenderIdentity},
         schema::{
             parse_records_config, FieldInputState, RecordDate,
             RecordDiagnosticCode, RecordFieldInput, RecordScalar, RecordValue,
@@ -1679,6 +1696,43 @@ records:
         assert!(markdown.contains("created: 2026-11-08T12:41:07-0500\n"));
         assert!(markdown.contains("- 2026-11-08: Great lunch"));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn album_identity_flows_through_create_planning_and_rendering() {
+        let root = temp_dir("album-identity");
+        let config = config();
+        let fields = required_fields();
+        let mut catalog = RecordCatalog::new(&root);
+        let plan = plan_create_with_identity(
+            RecordCreateRequest {
+                config: &config,
+                record_type: "restaurant",
+                title: "Nagi Ramen",
+                explicit_stem: None,
+                fields: &fields,
+                notes: &[],
+                now: NaiveDate::from_ymd_opt(2026, 11, 8)
+                    .unwrap()
+                    .and_hms_opt(12, 41, 7)
+                    .unwrap(),
+                timezone: Some(chrono_tz::America::New_York),
+                vault_root: &root,
+                reserved_paths: &[],
+            },
+            &mut catalog,
+            RecordRenderIdentity::Album,
+        )
+        .expect("album create plan");
+
+        assert_eq!(plan.record_type, "restaurant");
+        assert_eq!(plan.render_identity, RecordRenderIdentity::Album);
+        assert_eq!(
+            plan.markdown.as_deref(),
+            Some(
+                "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\ntitle: \"Nagi Ramen\"\nstatus: liked\ncategory: \"Coffee\"\nlocation: \"Cranford\"\ncompanions:\n  - \"[[kelly]]\"\ncreated: 2026-11-08T12:41:07-0500\n---\n\n# Nagi Ramen\n\n## Notes\n"
+            )
+        );
     }
 
     #[test]
