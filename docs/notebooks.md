@@ -106,11 +106,16 @@ seeds ALL-CAPS first-level bullets as Title Case `##` sections, updates
 owner catalogs, and lets later same-draft notes use the new route. The body stays opaque to
 task-marker parsing. `bob capture` writes these modes through the guarded
 capture transaction: top-level and section notes append after the last note
-in the target region (exact title or whole-slug match; unquoted near misses
-refuse with `notebook_section_near_miss` and quoted selectors create
-verbatim; otherwise a missing section creates a Title Case `##` at EOF),
-named notes carry `^id`, sub-notes append unstamped after their parent at any
-depth, and `--route`, `--section`, and `--task` follow the destination.
+in the target region (exact title or whole-slug match; duplicate headings
+refuse with `notebook_section_ambiguous`; unquoted near misses refuse with
+`notebook_section_near_miss` and quoted selectors create verbatim; otherwise
+a missing section creates a `##` at EOF that keeps typed capitals in any
+word that contains an uppercase letter), named notes carry `^id`, sub-notes
+append unstamped after their parent at any depth, and `--route`, `--section`,
+and `--task` follow the destination. A later glued `@nb#` lists disk
+sections plus sections earlier valid items in the same draft create. Human
+`@nb` list summaries say `note(s)`. A first-level `- #` under a notebook
+note opens no drawer.
 Dry-run and commit share the same plan and bytes; each item carries
 `kind: notebook_note` or `notebook_sub_note` plus a `notebook` object with
 `route`, `title`, `breadcrumb`, `section`, `section_action`, `block_id`, and

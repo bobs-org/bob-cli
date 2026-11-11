@@ -171,3 +171,60 @@ fn test_colon_seal_plus_n_stays_conflict() {
     let json = refusal(&vault, "Keep @dev_tools:nvim@ %n");
     assert_eq!(json["code"], "pomodoro_note_conflict");
 }
+
+#[test]
+fn test_later_glued_selector_lists_earlier_seed_sections() {
+    let temp = TempDir::new("bob-cli-capture-notebook-create-staged");
+    let vault = vault_with_area(&temp);
+    let draft =
+        "Neovim notes @dev^nvim@ %n\n- KEYMAPS\n  - x\n\nMore @dev_nvim#";
+    let cursor = draft.len();
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg(cursor.to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run capture-complete");
+    assert_success(&output);
+    let value: Value =
+        serde_json::from_str(stdout(&output).trim()).expect("complete JSON");
+    assert_eq!(value["context"], "section");
+    let rows = value["candidates"].as_array().expect("candidates");
+    assert!(
+        rows.iter().any(|row| row["title"] == "Keymaps"),
+        "seeded section is visible: {rows:?}"
+    );
+
+    let later = format!("{draft}\n\nLater @dev_nvim#docker");
+    let here =
+        later.find("More @dev_nvim#").expect("more") + "More @dev_nvim#".len();
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg(here.to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(&later)
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run capture-complete at earlier item");
+    assert_success(&output);
+    let value: Value =
+        serde_json::from_str(stdout(&output).trim()).expect("complete JSON");
+    let rows = value["candidates"].as_array().expect("candidates");
+    assert!(rows.iter().any(|row| row["title"] == "Keymaps"), "{rows:?}");
+    assert!(
+        rows.iter().all(|row| row["title"] != "Docker"),
+        "later create is hidden: {rows:?}"
+    );
+}

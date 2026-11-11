@@ -286,8 +286,11 @@ fn build_result_inner(
         });
     }
 
-    let Some(field) = capture_language::completion_field_at(raw_text, cursor)
-    else {
+    let Some(field) = capture_language::completion_field_at_with(
+        raw_text,
+        cursor,
+        Some(&notebook_policy),
+    ) else {
         return Ok(CaptureCompleteResult::empty(cursor));
     };
     let transfer_role =
@@ -504,6 +507,8 @@ fn build_result_inner(
                     &field.query,
                     Some(raw_text),
                     Some(field.replacement),
+                    Some(&notebook_policy),
+                    Some(field.replacement.0),
                 )?,
                 Vec::new(),
             )

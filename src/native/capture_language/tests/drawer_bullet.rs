@@ -406,6 +406,36 @@ fn bullet_continuation_needs_a_token_ending_the_line_without_a_nested_bullet() {
 }
 
 #[test]
+fn notebook_note_bullet_hash_is_empty_success_with_policy() {
+    let mut policy =
+        crate::native::capture_language::notebook::NotebookRoutePolicy::default(
+        );
+    policy.insert(
+        "dev_tools".into(),
+        crate::native::capture_language::notebook::NotebookRouteInfo {
+            title: "Developer tools".into(),
+            summary: Some("Tools".into()),
+            owner: Some("dev".into()),
+            breadcrumb: vec!["dev".into(), "Developer tools".into()],
+            sections: Vec::new(),
+        },
+    );
+    let note = "Parent @dev_tools\n- #fu";
+    assert!(
+        completion_field_at_with(note, note.len(), Some(&policy)).is_none(),
+        "notebook note detail opens no drawer"
+    );
+    let list = "@dev_tools\n- #fu";
+    assert!(
+        completion_field_at_with(list, list.len(), Some(&policy)).is_none(),
+        "notebook list bullets open no drawer"
+    );
+    let lexical =
+        completion_field_at(note, note.len()).expect("lexical drawer");
+    assert_eq!(lexical.context, CompletionContext::Drawer);
+}
+
+#[test]
 fn bullet_query_decodes_a_partial_and_a_closed_literal() {
     let query = |raw: &str, cursor: usize| {
         drawer_bullet_completion_at(raw, cursor)

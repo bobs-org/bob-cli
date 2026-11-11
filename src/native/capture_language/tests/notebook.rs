@@ -7,8 +7,10 @@
 use super::super::draft::TemplateCodedError;
 use super::*;
 use crate::native::capture_language::notebook::{
-    candidate_notebook_routes, discover_notebook_creates, NotebookRouteInfo,
-    NotebookRoutePolicy,
+    candidate_notebook_routes, discover_notebook_creates,
+    format_notebook_section_create_title, resolve_notebook_section,
+    staged_notebook_sections, NotebookRouteInfo, NotebookRoutePolicy,
+    NotebookSection, NotebookSectionProvenance, NotebookSectionResolution,
 };
 
 fn policy() -> NotebookRoutePolicy {
@@ -810,4 +812,166 @@ fn later_create_is_used_before_created() {
     )
     .expect_err("used before created");
     assert_eq!(error.code, Some("notebook_used_before_created"));
+}
+
+fn heading(title: &str, line_index: usize) -> NotebookSection {
+    NotebookSection {
+        title: title.to_string(),
+        line_index,
+    }
+}
+
+#[test]
+fn resolve_notebook_section_follows_precedence_and_typed_capitals() {
+    let git = heading("Git", 8);
+    let merge = heading("Merge Tools", 20);
+    let headings = vec![git.clone(), merge.clone()];
+
+    assert_eq!(
+        resolve_notebook_section("Git", true, &headings),
+        NotebookSectionResolution::Existing {
+            title: "Git".into(),
+            line_index: 8,
+        }
+    );
+    assert_eq!(
+        resolve_notebook_section("git", false, &headings),
+        NotebookSectionResolution::Existing {
+            title: "Git".into(),
+            line_index: 8,
+        }
+    );
+    assert_eq!(
+        resolve_notebook_section("merge-tools", false, &headings),
+        NotebookSectionResolution::Existing {
+            title: "Merge Tools".into(),
+            line_index: 20,
+        }
+    );
+    match resolve_notebook_section("API Design", true, &headings) {
+        NotebookSectionResolution::Create { title } => {
+            assert_eq!(title, "API Design");
+        }
+        other => panic!("quoted miss creates verbatim: {other:?}"),
+    }
+    match resolve_notebook_section("gi", false, &headings) {
+        NotebookSectionResolution::NearMiss { slug, quoted_title } => {
+            assert_eq!(slug, "git");
+            assert_eq!(quoted_title, "Gi");
+        }
+        other => panic!("strict prefix is a near miss: {other:?}"),
+    }
+    match resolve_notebook_section("gt", false, &headings) {
+        NotebookSectionResolution::NearMiss { slug, .. } => {
+            assert_eq!(slug, "git");
+        }
+        other => panic!("distance 1 is a near miss: {other:?}"),
+    }
+    match resolve_notebook_section("gti", false, &headings) {
+        NotebookSectionResolution::NearMiss { slug, .. } => {
+            assert_eq!(slug, "git");
+        }
+        other => panic!("distance 2 is a near miss: {other:?}"),
+    }
+    match resolve_notebook_section("docker", false, &headings) {
+        NotebookSectionResolution::Create { title } => {
+            assert_eq!(title, "Docker");
+        }
+        other => panic!("unrelated slug creates: {other:?}"),
+    }
+
+    let duplicates = vec![heading("Git", 8), heading("Git", 22)];
+    match resolve_notebook_section("git", false, &duplicates) {
+        NotebookSectionResolution::Ambiguous { matches } => {
+            assert_eq!(matches.len(), 2);
+            assert_eq!(matches[0].line, 9);
+            assert_eq!(matches[1].line, 23);
+        }
+        other => panic!("duplicate titles are ambiguous: {other:?}"),
+    }
+    let slug_ties = vec![heading("Git Tools", 4), heading("Git  Tools", 10)];
+    match resolve_notebook_section("git-tools", false, &slug_ties) {
+        NotebookSectionResolution::Ambiguous { matches } => {
+            assert_eq!(matches.len(), 2);
+            assert_eq!(matches[0].title, "Git Tools");
+            assert_eq!(matches[1].title, "Git  Tools");
+        }
+        other => panic!("duplicate slugs are ambiguous: {other:?}"),
+    }
+
+    assert_eq!(format_notebook_section_create_title("API-keys"), "API Keys");
+    assert_eq!(format_notebook_section_create_title("git"), "Git");
+    assert_eq!(format_notebook_section_create_title("coc.nvim"), "Coc.nvim");
+    match resolve_notebook_section("API-keys", false, &headings) {
+        NotebookSectionResolution::Create { title } => {
+            assert_eq!(title, "API Keys");
+        }
+        other => panic!("typed capitals survive create: {other:?}"),
+    }
+}
+
+#[test]
+fn staged_sections_include_earlier_creates_and_skip_later_and_failed() {
+    let policy = policy();
+    let raw =
+        "Create @dev#docker\n\nNear @dev#gi\n\nHere @dev#\n\nLater @dev#api";
+    let draft = split_capture_draft(raw);
+    let here = draft
+        .items
+        .iter()
+        .find(|item| item.lines[0].raw.text.contains("Here"))
+        .expect("here item");
+    let staged = staged_notebook_sections(&policy, raw, "dev", here.start);
+    let titles: Vec<&str> = staged
+        .iter()
+        .map(|section| section.title.as_str())
+        .collect();
+    assert_eq!(titles, vec!["Git", "Docker"], "{titles:?}");
+    assert_eq!(staged[0].provenance, NotebookSectionProvenance::Notebook);
+    assert_eq!(staged[1].provenance, NotebookSectionProvenance::Draft);
+    assert!(!titles.contains(&"Api") && !titles.contains(&"API"));
+}
+
+#[test]
+fn staged_sections_surface_percent_n_seeds_to_a_later_glued_selector() {
+    let raw = "Neovim notes @dev^nvim@ %n\n- KEYMAPS\n  - x\n\nMore @dev_nvim#";
+    let draft = split_capture_draft(raw);
+    let later = draft.items.last().expect("later item");
+    let staged =
+        staged_notebook_sections(&policy(), raw, "dev_nvim", later.start);
+    let titles: Vec<&str> = staged
+        .iter()
+        .map(|section| section.title.as_str())
+        .collect();
+    assert_eq!(titles, vec!["Keymaps"], "{titles:?}");
+    assert_eq!(staged[0].provenance, NotebookSectionProvenance::Draft);
+}
+
+#[test]
+fn editor_reports_notebook_section_ambiguous() {
+    let mut policy = NotebookRoutePolicy::default();
+    policy.insert(
+        "dev".into(),
+        NotebookRouteInfo {
+            title: "Developer tools".into(),
+            summary: Some("Tools".into()),
+            owner: Some("dev".into()),
+            breadcrumb: vec!["dev".into(), "Developer tools".into()],
+            sections: vec![heading("Git", 8), heading("Git", 22)],
+        },
+    );
+    let parsed =
+        parse_for_editor_with("Keep @dev#git", &editor_options(Some(&policy)))
+            .items
+            .remove(0);
+    let diagnostic = parsed
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "notebook_section_ambiguous")
+        .expect("ambiguous diagnostic");
+    assert!(
+        diagnostic.message.contains("lines 9 and 23"),
+        "{}",
+        diagnostic.message
+    );
 }

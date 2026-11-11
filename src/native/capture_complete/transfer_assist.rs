@@ -487,6 +487,7 @@ fn scope_transfer_sections(
             replacement: section_creation_selector(&title),
             title,
             level: 2,
+            refused: None,
         },
     ));
     Ok(())

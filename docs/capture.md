@@ -6767,21 +6767,29 @@ Try mergiraf @dev_tools^mergiraf
 Faster with -j @dev_tools+mergiraf
 ```
 
-Notebook section lookup uses exact title or whole slug. An unquoted selector
-that prefixes an existing slug or is within edit distance two refuses with
+Notebook section lookup uses exact title or whole slug. Two or more headings
+that tie at that step refuse with `notebook_section_ambiguous` and name every
+matching line (`dev_tools.md has 2 sections titled “Git” (lines 9 and 23);
+rename one, then capture again`). An unquoted selector that prefixes an
+existing slug or is within edit distance two refuses with
 `notebook_section_near_miss` and suggests the existing heading; quoted
-selectors create their exact title. Other missing selectors create a Title
-Case `##` at EOF and preview it as a new section. `#section^id` works on
-every route: a caret inside a quoted title stays literal title text, while a
-caret outside the closing quote names the note. Each item carries
-`kind: notebook_note` or `notebook_sub_note` plus a `notebook` object with
-`route`, `title`, `breadcrumb`, `section`, `section_action` (`existing`,
-`create`, or null), `block_id`, and `parent_block_id`. Human output is
+selectors create their exact title. Other missing selectors create a `##` at
+EOF, keeping typed capitals in any word that contains an uppercase letter
+(`#API-keys` → `API Keys`, `#git` → `Git`, `#coc.nvim` → `Coc.nvim`). A later
+glued `@nb#` in the same draft lists sections already on disk plus sections
+earlier valid items create. `#section^id` works on every route: a caret
+inside a quoted title stays literal title text, while a caret outside the
+closing quote names the note. Each item carries `kind: notebook_note` or
+`notebook_sub_note` plus a `notebook` object with `route`, `title`,
+`breadcrumb`, `section`, `section_action` (`existing`, `create`, or null),
+`block_id`, and `parent_block_id`. Human `@nb` list summaries count notes
+(`list  dev_tools.md · 4 notes`). Human output is
 `📓 Note → Title › Section`, `📓 Note → Title › new section Name`, or
 `📓 Note → Title › ^id`. Notebook notes have no Similar-tasks band; mixed
 task/record drafts keep theirs. `bob capture-targets` and route completion
 list notebook rows after projects with `kind: notebook`, `title`,
-`summary`, `owner`, and `breadcrumb` through the opt-in scanner.
+`summary`, `owner`, and `breadcrumb` through the opt-in scanner. A first-level
+`- #` under a notebook note is opaque detail: it opens no drawer menu.
 
 A complete `@parent^id@` caret seal plus `%n` creates a notebook named
 `<parent>_<id>.md` in the same capture transaction: `Neovim config notes
@@ -9630,7 +9638,7 @@ complete token (`@eat/ ` or `@eat#Ideas`). Typed heading queries, `@@`
 global destinations, transfer/merge lines, and non-record notes omit that
 row. See [Guided fields](#guided-fields).
 
-Notebook routes are first-class completion citizens (see [Notebooks](notebooks.md) for the contract). Route rows for notebooks carry a 📓 badge, the breadcrumb as the displayed label, and the summary as detail, with the route and file identity kept separate from presentation. A notebook `@nb#` field lists only real H2 sections in document order (never the H1 title, H3s, or fenced headings). A nonempty query with no exact title or whole-slug match appends one additive `kind: "notebook_section_create"` row (`New section “Title”`); its `replacement` is the bare slug, or the quoted selector when the bare slug would be a near miss, and the response replacement keeps exactly one `#` while preserving any `^id` suffix. Block-ID fields on `@nb^` and `@nb#section^` keep `intent: "new"` and add `destination_kind: "notebook"`. Note-scoped `@nb+` lists eligible note bullets (any depth, no checkboxes, headings, fences, or prose) with ID'd rows first, then ID-less rows in document order; each row carries additive `item_kind: "note"` plus the usual route, text, line, section, depth, child count, `ref`, `block_id`, `requires_block_id`, and `block_id_suggestions`. A complete caret-sealed `@parent^id@` item enables the `%n` directive as `New notebook` even with no Pomodoro available.
+Notebook routes are first-class completion citizens (see [Notebooks](notebooks.md) for the contract). Route rows for notebooks carry a 📓 badge, the breadcrumb as the displayed label, and the summary as detail, with the route and file identity kept separate from presentation. A notebook `@nb#` field lists real H2 sections in document order (never the H1 title, H3s, or fenced headings), plus sections earlier valid items in this draft create. Duplicate headings stay listed as refused rows carrying the `notebook_section_ambiguous` copy. A nonempty query with no exact title or whole-slug match appends one additive `kind: "notebook_section_create"` row (`New section “Title”`); its `replacement` is the bare slug, or the quoted selector when the bare slug would be a near miss, the advertised title keeps typed capitals, and the response replacement keeps exactly one `#` while preserving any `^id` suffix. Block-ID fields on `@nb^` and `@nb#section^` keep `intent: "new"` and add `destination_kind: "notebook"`. Note-scoped `@nb+` lists eligible note bullets (any depth, no checkboxes, headings, fences, or prose) with ID'd rows first, then ID-less rows in document order; each row carries additive `item_kind: "note"` plus the usual route, text, line, section, depth, child count, `ref`, `block_id`, `requires_block_id`, and `block_id_suggestions`. A complete caret-sealed `@parent^id@` item enables the `%n` directive as `New notebook` even with no Pomodoro available.
 Drawer completion
 covers `@route+id#prefix` and a bare `@route+id#` once the item has body text,
 backed by the same scanner as `bob capture-drawers`; the candidate

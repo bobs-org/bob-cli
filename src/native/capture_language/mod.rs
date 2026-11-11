@@ -71,6 +71,7 @@ pub(crate) use self::close_log::lexical_worked_tasks_with_all;
 pub(crate) use self::close_log::PositionalLogError;
 pub(crate) use self::completion::claimed_task_complete_tokens;
 pub(crate) use self::completion::completion_field_at;
+pub(crate) use self::completion::completion_field_at_with;
 pub(crate) use self::completion::drawer_bullet_completion_at;
 pub(crate) use self::completion::merge_in_completion_role;
 pub(crate) use self::completion::pomodoro_start_override_at;
@@ -194,9 +195,11 @@ pub(crate) use self::model::TaskToggleIntent;
 pub(crate) use self::model::TemplateRowSummary;
 pub(crate) use self::notebook::{
     candidate_notebook_route, candidate_notebook_routes,
-    discover_notebook_creates, notebook_section_near_miss_message,
-    notebook_sections, resolve_notebook_section, DiscoveredNotebookCreate,
-    NotebookRouteInfo, NotebookRoutePolicy, NotebookSectionResolution,
+    discover_notebook_creates, notebook_section_ambiguous_message,
+    notebook_section_near_miss_message, notebook_sections,
+    resolve_notebook_section, staged_notebook_sections,
+    DiscoveredNotebookCreate, NotebookRouteInfo, NotebookRoutePolicy,
+    NotebookSectionResolution,
 };
 pub(crate) use self::pomodoro_literal::canonicalize_exact_name;
 pub(crate) use self::project_tasks::split_leading_checkbox;

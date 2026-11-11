@@ -739,3 +739,26 @@ fn target_run_completion_crosses_schedule_and_clipboard_tokens() {
         "the selected member owns its drawer candidates: {drawer}"
     );
 }
+
+#[test]
+fn notebook_note_bullet_hash_opens_no_drawer_menu() {
+    let temp = TempDir::new("bob-cli-complete-notebook-no-drawer");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("dev.md"), "---\ntype: [[area]]\n---\n# Dev\n");
+    write_file(
+        &vault.join("dev_tools.md"),
+        "---\nparent: \"[[dev]]\"\ntype: \"[[notebook]]\"\nsummary: Tools.\n---\n\n# Developer tools\n",
+    );
+    let note = "Parent @dev_tools\n- #fu";
+    let json = complete_at(&temp, &vault, note, note.len());
+    assert!(
+        json["context"].is_null(),
+        "Text @nb + - # returns no context: {json}"
+    );
+    let list = "@dev_tools\n- #fu";
+    let json = complete_at(&temp, &vault, list, list.len());
+    assert!(
+        json["context"].is_null(),
+        "notebook list - # opens no drawer: {json}"
+    );
+}

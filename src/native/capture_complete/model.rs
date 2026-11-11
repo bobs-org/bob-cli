@@ -105,6 +105,8 @@ pub(super) struct SectionCandidate {
     pub(super) replacement: String,
     pub(super) title: String,
     pub(super) level: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) refused: Option<String>,
 }
 
 /// Mixed section menu: ordinary heading rows plus an optional record-create

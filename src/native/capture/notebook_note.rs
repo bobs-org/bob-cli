@@ -594,6 +594,16 @@ fn plan_notebook_note(
                             "notebook_section_near_miss",
                         ));
                     }
+                    capture_language::NotebookSectionResolution::Ambiguous {
+                        matches,
+                    } => {
+                        return Err(CaptureError::usage_code(
+                            capture_language::notebook_section_ambiguous_message(
+                                &route, &matches,
+                            ),
+                            "notebook_section_ambiguous",
+                        ));
+                    }
                 }
             }
         };

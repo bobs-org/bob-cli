@@ -238,31 +238,19 @@ fn format_seed_note(body: &str, created: &str, stamp: bool) -> String {
 }
 
 fn seed_sections(sub_bullets: &[AuthoredSubBullet]) -> Vec<NotebookSection> {
-    let mut sections = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut bullets = Vec::new();
     let mut index = 0;
     while index < sub_bullets.len() {
         let bullet = &sub_bullets[index];
         let has_children = sub_bullets.get(index + 1).is_some_and(|next| {
             next.depth == capture_language::AuthoredDepth::Nested
         });
-        if bullet.depth == capture_language::AuthoredDepth::First
-            && has_children
-            && is_project_section_title(&bullet.body)
-        {
-            let title = format_project_section_title(&bullet.body);
-            let key =
-                crate::native::capture_project_note::normalize_project_section_title(
-                    &title,
-                );
-            if seen.insert(key) {
-                sections.push(NotebookSection {
-                    title,
-                    line_index: 0,
-                });
-            }
+        if bullet.depth == capture_language::AuthoredDepth::First {
+            bullets.push((bullet.body.clone(), has_children));
         }
         index += 1;
     }
-    sections
+    crate::native::capture_language::notebook::notebook_create_seed_sections(
+        bullets,
+    )
 }

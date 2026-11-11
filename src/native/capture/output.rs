@@ -2689,10 +2689,18 @@ fn print_list_summary(item: &CaptureItemResult) {
         target.push('#');
         target.push_str(section);
     }
-    let noun = match (list.kind, list.count) {
-        (ListKind::Tasks, 1) => "task",
-        (ListKind::Notes, 1) => "note",
-        (kind, _) => kind.label(),
+    let noun = if item.notebook.is_some() {
+        if list.count == 1 {
+            "note"
+        } else {
+            "notes"
+        }
+    } else {
+        match (list.kind, list.count) {
+            (ListKind::Tasks, 1) => "task",
+            (ListKind::Notes, 1) => "note",
+            (kind, _) => kind.label(),
+        }
     };
     println!("list  {target} · {} {noun}", list.count);
 }

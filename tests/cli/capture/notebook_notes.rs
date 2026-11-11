@@ -486,3 +486,109 @@ fn test_notebook_checkbox_guard_covers_generated_authored_and_clip_rows() {
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(read_notebook(&vault), before);
 }
+
+fn vault_with_duplicate_git(temp: &TempDir) -> std::path::PathBuf {
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_file(
+        &vault.join("dev.md"),
+        "---\ntype: \"[[area]]\"\n---\n# Dev\n",
+    );
+    write_file(
+        &vault.join("dev_tools.md"),
+        "---\nparent: \"[[dev]]\"\ntype: \"[[notebook]]\"\nsummary: Tools.\n---\n\n# Developer tools\n\n## Git\n\n- First [created::2026-11-08]\n\n## Git\n\n- Second [created::2026-11-08]\n",
+    );
+    vault
+}
+
+#[test]
+fn test_ambiguous_duplicate_section_is_refused() {
+    let temp = TempDir::new("bob-cli-capture-notebook-ambiguous");
+    let vault = vault_with_duplicate_git(&temp);
+    let draft = "Try mergiraf @dev_tools#git";
+    let parse = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("run capture-parse");
+    assert_success(&parse);
+    let parsed: Value =
+        serde_json::from_str(stdout(&parse).trim()).expect("parse JSON");
+    let diagnostic = parsed["diagnostics"]
+        .as_array()
+        .expect("diagnostics")
+        .iter()
+        .find(|entry| entry["code"] == "notebook_section_ambiguous")
+        .expect("ambiguous diagnostic");
+    let message = diagnostic["message"].as_str().expect("message");
+    assert!(
+        message.contains("dev_tools.md has 2 sections titled “Git”"),
+        "{message}"
+    );
+
+    let complete = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg(draft.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run capture-complete");
+    assert_success(&complete);
+    let menu: Value =
+        serde_json::from_str(stdout(&complete).trim()).expect("complete JSON");
+    let rows = menu["candidates"].as_array().expect("candidates");
+    let refused: Vec<&Value> =
+        rows.iter().filter(|row| row["title"] == "Git").collect();
+    assert_eq!(refused.len(), 2, "{rows:?}");
+    for row in refused {
+        assert!(
+            row["refused"]
+                .as_str()
+                .is_some_and(|text| text.contains("rename one")),
+            "{row}"
+        );
+    }
+
+    let dry = run_capture(&vault, draft, &[], false);
+    assert_eq!(dry.status.code(), Some(2));
+    let refusal: Value =
+        serde_json::from_str(stdout(&dry).trim()).expect("refusal JSON");
+    assert_eq!(refusal["code"], "notebook_section_ambiguous");
+    let before = read_notebook(&vault);
+    let write = run_capture(&vault, draft, &[], true);
+    assert_eq!(write.status.code(), Some(2));
+    assert_eq!(read_notebook(&vault), before);
+}
+
+#[test]
+fn test_notebook_list_summary_says_notes() {
+    let temp = TempDir::new("bob-cli-capture-notebook-list-noun");
+    let vault = vault_with_notebook(&temp);
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--dry-run")
+        .arg("--")
+        .arg("@dev_tools\n- first idea\n- second idea")
+        .env("BOB_NOW", NOW)
+        .env("TZ", "UTC0")
+        .output()
+        .expect("run human notebook list");
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("list  dev_tools.md · 2 notes"),
+        "notebook lists count notes:\n{}",
+        format_output(&output)
+    );
+}

@@ -161,7 +161,7 @@ pub(super) fn section_candidates(
     route: &str,
     query: &str,
 ) -> Result<Candidates, CompleteError> {
-    section_candidates_with_raw(bob_dir, route, query, None, None)
+    section_candidates_with_raw(bob_dir, route, query, None, None, None, None)
 }
 
 pub(super) fn section_candidates_with_raw(
@@ -170,7 +170,29 @@ pub(super) fn section_candidates_with_raw(
     query: &str,
     raw_text: Option<&str>,
     replacement: Option<(usize, usize)>,
+    notebook_policy: Option<
+        &crate::native::capture_language::NotebookRoutePolicy,
+    >,
+    at_offset: Option<usize>,
 ) -> Result<Candidates, CompleteError> {
+    let offset = at_offset.or_else(|| replacement.map(|(start, _)| start));
+    if let Some(policy) = notebook_policy
+        && policy.is_visible(route, offset.unwrap_or(0))
+    {
+        let staged = crate::native::capture_language::staged_notebook_sections(
+            policy,
+            raw_text.unwrap_or(""),
+            route,
+            offset.unwrap_or(0),
+        );
+        return notebook_section_candidates_from_staged(
+            &staged,
+            query,
+            raw_text,
+            replacement,
+            route,
+        );
+    }
     let contents = read_target(bob_dir, route)?;
     if is_notebook_route_contents(&contents) {
         return notebook_section_candidates(
@@ -178,6 +200,7 @@ pub(super) fn section_candidates_with_raw(
             query,
             raw_text,
             replacement,
+            route,
         );
     }
     let ranked = capture::section_completion_rows(&contents, query);
@@ -190,6 +213,7 @@ pub(super) fn section_candidates_with_raw(
                     replacement: section.replacement,
                     title: section.title,
                     level: section.level,
+                    refused: None,
                 })
             })
             .collect(),
@@ -215,14 +239,43 @@ fn notebook_section_candidates(
     query: &str,
     raw_text: Option<&str>,
     replacement: Option<(usize, usize)>,
+    route: &str,
+) -> Result<Candidates, CompleteError> {
+    let headings =
+        crate::native::capture_language::notebook::notebook_sections(contents);
+    notebook_section_rows(&headings, query, raw_text, replacement, route)
+}
+
+fn notebook_section_candidates_from_staged(
+    staged: &[crate::native::capture_language::notebook::StagedNotebookSection],
+    query: &str,
+    raw_text: Option<&str>,
+    replacement: Option<(usize, usize)>,
+    route: &str,
+) -> Result<Candidates, CompleteError> {
+    let headings: Vec<_> = staged
+        .iter()
+        .map(
+            crate::native::capture_language::notebook::StagedNotebookSection::as_heading,
+        )
+        .collect();
+    notebook_section_rows(&headings, query, raw_text, replacement, route)
+}
+
+fn notebook_section_rows(
+    headings: &[crate::native::capture_language::notebook::NotebookSection],
+    query: &str,
+    raw_text: Option<&str>,
+    replacement: Option<(usize, usize)>,
+    route: &str,
 ) -> Result<Candidates, CompleteError> {
     use crate::native::capture_language::notebook::{
-        notebook_sections, resolve_notebook_section, NotebookSectionResolution,
+        resolve_notebook_section, NotebookSectionResolution,
     };
-    let headings = notebook_sections(contents);
     let query_lower = query.to_lowercase();
     let query_slug = crate::native::capture_language::selector_slug(query);
-    // Exact title/whole-slug match suppresses the create row.
+    // Exact title/whole-slug match suppresses the create row, including
+    // when that match is Ambiguous across duplicate headings.
     let has_exact = headings.iter().any(|heading| {
         heading.title.eq_ignore_ascii_case(query)
             || (!crate::native::capture_language::selector_slug(&heading.title)
@@ -231,9 +284,10 @@ fn notebook_section_candidates(
                     &heading.title,
                 ) == query_slug)
     });
-    // Filtered H2s retain document order.
+    // Filtered H2s retain document order. Duplicate titles stay listed
+    // as refused rows and are never a unique replacement.
     let mut rows: Vec<SectionMenuRow> = Vec::new();
-    for heading in &headings {
+    for heading in headings {
         if !query.is_empty() {
             let title_lower = heading.title.to_lowercase();
             let slug =
@@ -247,17 +301,14 @@ fn notebook_section_candidates(
                 continue;
             }
         }
-        if let Some(replacement) = notebook_section_replacement(
-            &heading.title,
-            heading.line_index,
-            &headings,
-        ) {
-            rows.push(SectionMenuRow::Section(SectionCandidate {
-                replacement,
-                title: heading.title.clone(),
-                level: 2,
-            }));
-        }
+        let (replacement, refused) =
+            notebook_section_row(heading, headings, route);
+        rows.push(SectionMenuRow::Section(SectionCandidate {
+            replacement,
+            title: heading.title.clone(),
+            level: 2,
+            refused,
+        }));
     }
     // Additive create row for a nonempty query with no exact match.
     if !query.is_empty() && !has_exact {
@@ -272,12 +323,12 @@ fn notebook_section_candidates(
             });
         // Preserve authored quoted titles: an exact (quoted) query creates
         // verbatim; otherwise resolve the bare query.
-        let resolution = resolve_notebook_section(query, exact, &headings);
-        let (title, replacement) = match resolution {
+        let resolution = resolve_notebook_section(query, exact, headings);
+        let create = match resolution {
             NotebookSectionResolution::Existing { title, .. } => {
                 // Should not happen when `has_exact` is false, but keep
                 // the row additive rather than dropping the query.
-                (title.clone(), query.to_string())
+                Some((title.clone(), query.to_string()))
             }
             NotebookSectionResolution::Create { title } => {
                 if exact {
@@ -295,21 +346,16 @@ fn notebook_section_candidates(
                         })
                         .map(str::to_string)
                         .unwrap_or_else(|| {
-                            format!(
-                                "\"{}\"",
-                                title
-                                    .replace('\\', "\\\\")
-                                    .replace('"', "\\\"")
-                            )
+                            format!("\"{}\"", quote_escape(&title))
                         });
-                    (title, quoted)
+                    Some((title, quoted))
                 } else {
                     // Bare slug when the resolver would create it.
                     let slug =
                         crate::native::capture_language::selector_slug(&title);
                     let selector =
                         if slug.is_empty() { title.clone() } else { slug };
-                    (title, selector)
+                    Some((title, selector))
                 }
             }
             NotebookSectionResolution::NearMiss {
@@ -318,22 +364,70 @@ fn notebook_section_candidates(
             } => {
                 // An unquoted slug would be a near miss: offer the quoted
                 // selector so the create is explicit.
-                let selector = format!(
-                    "\"{}\"",
-                    quoted_title.replace('\\', "\\\\").replace('"', "\\\"")
-                );
-                (quoted_title, selector)
+                let selector = format!("\"{}\"", quote_escape(&quoted_title));
+                Some((quoted_title, selector))
             }
+            NotebookSectionResolution::Ambiguous { .. } => None,
         };
-        let label = format!("New section \u{201c}{title}\u{201d}");
-        rows.push(SectionMenuRow::NotebookCreate(NotebookSectionCreate {
-            kind: "notebook_section_create",
-            replacement,
-            label,
-            title,
-        }));
+        if let Some((title, replacement)) = create {
+            let label = format!("New section \u{201c}{title}\u{201d}");
+            rows.push(SectionMenuRow::NotebookCreate(NotebookSectionCreate {
+                kind: "notebook_section_create",
+                replacement,
+                label,
+                title,
+            }));
+        }
     }
     Ok(Candidates::Section(rows))
+}
+
+fn quote_escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn notebook_section_row(
+    heading: &crate::native::capture_language::notebook::NotebookSection,
+    headings: &[crate::native::capture_language::notebook::NotebookSection],
+    route: &str,
+) -> (String, Option<String>) {
+    if let Some(replacement) = notebook_section_replacement(
+        &heading.title,
+        heading.line_index,
+        headings,
+    ) {
+        return (replacement, None);
+    }
+    (
+        format!("\"{}\"", quote_escape(&heading.title)),
+        notebook_section_refused_reason(heading, headings, route),
+    )
+}
+
+fn notebook_section_refused_reason(
+    heading: &crate::native::capture_language::notebook::NotebookSection,
+    headings: &[crate::native::capture_language::notebook::NotebookSection],
+    route: &str,
+) -> Option<String> {
+    use crate::native::capture_language::notebook::{
+        notebook_section_ambiguous_message, resolve_notebook_section,
+        NotebookSectionResolution,
+    };
+    for exact in [true, false] {
+        if let NotebookSectionResolution::Ambiguous { matches } =
+            resolve_notebook_section(&heading.title, exact, headings)
+        {
+            return Some(notebook_section_ambiguous_message(route, &matches));
+        }
+    }
+    let slug = crate::native::capture_language::selector_slug(&heading.title);
+    if !slug.is_empty()
+        && let NotebookSectionResolution::Ambiguous { matches } =
+            resolve_notebook_section(&slug, false, headings)
+    {
+        return Some(notebook_section_ambiguous_message(route, &matches));
+    }
+    None
 }
 
 fn notebook_section_replacement(
@@ -341,21 +435,19 @@ fn notebook_section_replacement(
     line_index: usize,
     headings: &[crate::native::capture_language::notebook::NotebookSection],
 ) -> Option<String> {
-    use crate::native::capture_language::notebook::resolve_notebook_section;
+    use crate::native::capture_language::notebook::{
+        resolve_notebook_section, NotebookSectionResolution,
+    };
     fn unquoted_spelling(value: &str) -> bool {
         !value.is_empty()
             && !value.chars().any(char::is_whitespace)
             && !value.starts_with('"')
             && !value.starts_with('\u{201c}')
     }
-    fn quote_escape(value: &str) -> String {
-        value.replace('\\', "\\\\").replace('"', "\\\"")
-    }
     // Bare title when it round-trips to this heading.
     if unquoted_spelling(title)
-        && let crate::native::capture_language::notebook::NotebookSectionResolution::Existing {
-            line_index: found,
-            ..
+        && let NotebookSectionResolution::Existing {
+            line_index: found, ..
         } = resolve_notebook_section(title, false, headings)
         && found == line_index
     {
@@ -364,18 +456,16 @@ fn notebook_section_replacement(
     let slug = crate::native::capture_language::selector_slug(title);
     if !slug.is_empty()
         && unquoted_spelling(&slug)
-        && let crate::native::capture_language::notebook::NotebookSectionResolution::Existing {
-            line_index: found,
-            ..
+        && let NotebookSectionResolution::Existing {
+            line_index: found, ..
         } = resolve_notebook_section(&slug, false, headings)
         && found == line_index
     {
         return Some(slug);
     }
     // Quoted exact title as the explicit spelling.
-    if let crate::native::capture_language::notebook::NotebookSectionResolution::Existing {
-        line_index: found,
-        ..
+    if let NotebookSectionResolution::Existing {
+        line_index: found, ..
     } = resolve_notebook_section(title, true, headings)
         && found == line_index
     {

@@ -27,10 +27,49 @@ pub(crate) struct NotebookSection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AmbiguousSectionMatch {
+    pub(crate) title: String,
+    /// 1-based physical line of the matching `##` heading.
+    pub(crate) line: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum NotebookSectionResolution {
     Existing { title: String, line_index: usize },
     Create { title: String },
     NearMiss { slug: String, quoted_title: String },
+    Ambiguous { matches: Vec<AmbiguousSectionMatch> },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NotebookSectionProvenance {
+    Notebook,
+    Draft,
+}
+
+/// One section in the staged view of a route at a draft offset: disk H2s
+/// first, then sections earlier valid operations in this draft create.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StagedNotebookSection {
+    pub(crate) title: String,
+    /// Identity used by the resolver. Disk headings use their 0-based
+    /// line index; draft headings use a unique synthetic index.
+    pub(crate) line_index: usize,
+    /// 1-based disk line, or `None` for a draft-only section.
+    pub(crate) line: Option<usize>,
+    pub(crate) note_count: usize,
+    pub(crate) provenance: NotebookSectionProvenance,
+    /// Byte offset of the draft operation that created this section.
+    pub(crate) draft_offset: Option<usize>,
+}
+
+impl StagedNotebookSection {
+    pub(crate) fn as_heading(&self) -> NotebookSection {
+        NotebookSection {
+            title: self.title.clone(),
+            line_index: self.line_index,
+        }
+    }
 }
 
 /// Immutable notebook route lookup for a single parse/capture invocation.
@@ -168,6 +207,10 @@ impl NotebookRoutePolicy {
         }
         NotebookRouteLookup::Miss
     }
+
+    pub(crate) fn is_visible(&self, route: &str, item_start: usize) -> bool {
+        matches!(self.lookup(route, item_start), NotebookRouteLookup::Hit(_))
+    }
 }
 
 /// H2 section headings from the same note snapshot used to classify its route.
@@ -185,36 +228,57 @@ pub(crate) fn notebook_sections(contents: &str) -> Vec<NotebookSection> {
 
 /// Resolve a selector against real H2s. The same pure operation serves the
 /// editor snapshot and the writer's later staged snapshot.
+///
+/// Precedence: quoted exact title (else create verbatim); unquoted exact
+/// title then unique whole slug; two or more ties at the winning step are
+/// `Ambiguous`; otherwise near-miss (strict slug prefix or edit distance
+/// ≤ 2); otherwise `Create`. Matching is never by prefix or fuzz at write
+/// time.
 pub(crate) fn resolve_notebook_section(
     selector: &str,
     exact: bool,
     headings: &[NotebookSection],
 ) -> NotebookSectionResolution {
     if exact {
-        if let Some(heading) = headings
-            .iter()
-            .find(|heading| heading.title.eq_ignore_ascii_case(selector))
-        {
+        return match classify_matches(title_matches(selector, headings)) {
+            MatchClass::Unique(heading) => {
+                NotebookSectionResolution::Existing {
+                    title: heading.title.clone(),
+                    line_index: heading.line_index,
+                }
+            }
+            MatchClass::None => NotebookSectionResolution::Create {
+                title: selector.to_string(),
+            },
+            MatchClass::Many(matches) => ambiguous_resolution(matches),
+        };
+    }
+
+    match classify_matches(title_matches(selector, headings)) {
+        MatchClass::Unique(heading) => {
             return NotebookSectionResolution::Existing {
                 title: heading.title.clone(),
                 line_index: heading.line_index,
             };
         }
-        return NotebookSectionResolution::Create {
-            title: selector.to_string(),
-        };
+        MatchClass::Many(matches) => {
+            return ambiguous_resolution(matches);
+        }
+        MatchClass::None => {}
     }
 
     let query_slug = super::selector_slug(selector);
-    if let Some(heading) = headings.iter().find(|heading| {
-        heading.title.eq_ignore_ascii_case(selector)
-            || (!super::selector_slug(&heading.title).is_empty()
-                && super::selector_slug(&heading.title) == query_slug)
-    }) {
-        return NotebookSectionResolution::Existing {
-            title: heading.title.clone(),
-            line_index: heading.line_index,
-        };
+    match classify_matches(slug_matches(&query_slug, headings)) {
+        MatchClass::Unique(heading) => {
+            return NotebookSectionResolution::Existing {
+                title: heading.title.clone(),
+                line_index: heading.line_index,
+            };
+        }
+        MatchClass::Many(matches) => {
+            return ambiguous_resolution(matches);
+        }
+        MatchClass::None => {}
     }
 
     let mut suggestion = headings.iter().find_map(|heading| {
@@ -256,17 +320,90 @@ pub(crate) fn resolve_notebook_section(
     if let Some((slug, _)) = suggestion {
         return NotebookSectionResolution::NearMiss {
             slug,
-            quoted_title: crate::native::capture_project_note::format_project_section_title(
-                &selector.replace('-', " "),
-            ),
+            quoted_title: format_notebook_section_create_title(selector),
         };
     }
 
     NotebookSectionResolution::Create {
-        title:
-            crate::native::capture_project_note::format_project_section_title(
-                &selector.replace('-', " "),
-            ),
+        title: format_notebook_section_create_title(selector),
+    }
+}
+
+enum MatchClass<'a> {
+    None,
+    Unique(&'a NotebookSection),
+    Many(Vec<&'a NotebookSection>),
+}
+
+fn classify_matches<'a>(matches: Vec<&'a NotebookSection>) -> MatchClass<'a> {
+    match matches.len() {
+        0 => MatchClass::None,
+        1 => MatchClass::Unique(matches[0]),
+        _ => MatchClass::Many(matches),
+    }
+}
+
+fn title_matches<'a>(
+    selector: &str,
+    headings: &'a [NotebookSection],
+) -> Vec<&'a NotebookSection> {
+    headings
+        .iter()
+        .filter(|heading| heading.title.eq_ignore_ascii_case(selector))
+        .collect()
+}
+
+fn slug_matches<'a>(
+    query_slug: &str,
+    headings: &'a [NotebookSection],
+) -> Vec<&'a NotebookSection> {
+    if query_slug.is_empty() {
+        return Vec::new();
+    }
+    headings
+        .iter()
+        .filter(|heading| {
+            let slug = super::selector_slug(&heading.title);
+            !slug.is_empty() && slug == query_slug
+        })
+        .collect()
+}
+
+fn ambiguous_resolution(
+    matches: Vec<&NotebookSection>,
+) -> NotebookSectionResolution {
+    NotebookSectionResolution::Ambiguous {
+        matches: matches
+            .into_iter()
+            .map(|heading| AmbiguousSectionMatch {
+                title: heading.title.clone(),
+                line: heading.line_index + 1,
+            })
+            .collect(),
+    }
+}
+
+/// Create-title for an unquoted selector: `-` becomes a space, then each
+/// whitespace-separated word that contains an uppercase letter keeps the
+/// typed capitals (`#API-keys` → `API Keys`) and every other word takes
+/// first-character Title Case (`#git` → `Git`, `#coc.nvim` → `Coc.nvim`).
+pub(crate) fn format_notebook_section_create_title(selector: &str) -> String {
+    selector
+        .replace('-', " ")
+        .split_whitespace()
+        .map(format_create_word)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn format_create_word(word: &str) -> String {
+    if word.chars().any(char::is_uppercase) {
+        return word.to_string();
+    }
+    let mut chars = word.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(first) => first.to_uppercase().chain(chars).collect(),
     }
 }
 
@@ -279,6 +416,348 @@ pub(crate) fn notebook_section_near_miss_message(
     format!(
         "no section `{selector}` in {route}.md — did you mean `#{slug}`? Write `#\"{quoted_title}\"` to create it"
     )
+}
+
+pub(crate) fn notebook_section_ambiguous_message(
+    route: &str,
+    matches: &[AmbiguousSectionMatch],
+) -> String {
+    let count = matches.len();
+    let lines = matches
+        .iter()
+        .map(|entry| entry.line.to_string())
+        .collect::<Vec<_>>()
+        .join(" and ");
+    let titles: Vec<&str> =
+        matches.iter().map(|entry| entry.title.as_str()).collect();
+    let same_title = titles
+        .first()
+        .is_some_and(|first| titles.iter().all(|title| title == first));
+    if same_title {
+        let title = titles.first().copied().unwrap_or_default();
+        format!(
+            "{route}.md has {count} sections titled “{title}” (lines {lines}); rename one, then capture again"
+        )
+    } else {
+        let named = matches
+            .iter()
+            .map(|entry| format!("“{}” line {}", entry.title, entry.line))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "{route}.md has {count} matching sections ({named}); rename one, then capture again"
+        )
+    }
+}
+
+/// Headings at `at_offset` for `route`: disk H2s, then sections earlier
+/// valid operations in this draft create, in source order. Later items,
+/// failed claims, and the item at the offset never appear. Draft sections
+/// that resolve to an existing heading dedupe into it.
+pub(crate) fn staged_notebook_sections(
+    policy: &NotebookRoutePolicy,
+    raw_text: &str,
+    route: &str,
+    at_offset: usize,
+) -> Vec<StagedNotebookSection> {
+    let route_key = route.to_ascii_lowercase();
+    let mut staged = disk_staged_sections(policy, &route_key);
+    let options = super::model::CaptureParseOptions {
+        url_routing: None,
+        record_policy: None,
+        notebook_policy: Some(policy),
+        explicit_destination: false,
+        has_global_destination: false,
+        recognize_lists: true,
+        global_route: None,
+        forced_task: None,
+        forced_drawer: None,
+    };
+    let draft = super::draft::split_capture_draft(raw_text);
+    for item in &draft.items {
+        if item.start >= at_offset {
+            continue;
+        }
+        let outcomes = match claim_notebook_members(item, None, None, &options)
+        {
+            Ok(Some(outcomes)) => outcomes,
+            Ok(None) | Err(_) => continue,
+        };
+        for outcome in outcomes {
+            absorb_claimed_sections(
+                &mut staged,
+                &route_key,
+                item.start,
+                &outcome.parsed,
+                item,
+            );
+        }
+    }
+    staged
+}
+
+pub(crate) fn staged_headings(
+    policy: &NotebookRoutePolicy,
+    raw_text: &str,
+    route: &str,
+    at_offset: usize,
+) -> Vec<NotebookSection> {
+    staged_notebook_sections(policy, raw_text, route, at_offset)
+        .iter()
+        .map(StagedNotebookSection::as_heading)
+        .collect()
+}
+
+fn disk_staged_sections(
+    policy: &NotebookRoutePolicy,
+    route: &str,
+) -> Vec<StagedNotebookSection> {
+    let Some(info) = policy.get(route) else {
+        return Vec::new();
+    };
+    let counts = policy
+        .source(route)
+        .map(section_note_counts)
+        .unwrap_or_else(|| vec![0; info.sections.len()]);
+    info.sections
+        .iter()
+        .enumerate()
+        .map(|(index, heading)| StagedNotebookSection {
+            title: heading.title.clone(),
+            line_index: heading.line_index,
+            line: Some(heading.line_index + 1),
+            note_count: counts.get(index).copied().unwrap_or(0),
+            provenance: NotebookSectionProvenance::Notebook,
+            draft_offset: None,
+        })
+        .collect()
+}
+
+fn section_note_counts(contents: &str) -> Vec<usize> {
+    let headings = notebook_sections(contents);
+    if headings.is_empty() {
+        return Vec::new();
+    }
+    let lines: Vec<&str> = contents
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .collect();
+    let frontmatter_end =
+        crate::native::markdown::strictly_closed_frontmatter_end(&lines);
+    let scan_start = frontmatter_end.map_or(0, |end| end + 1);
+    let fenced =
+        crate::native::markdown::fenced_lines(&lines, scan_start..lines.len());
+    let mut counts = vec![0; headings.len()];
+    for (index, line) in lines.iter().enumerate() {
+        if index < scan_start || fenced.contains(&index) {
+            continue;
+        }
+        if !is_column_zero_note(line) {
+            continue;
+        }
+        let Some(section_index) = headings
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, heading)| heading.line_index < index)
+            .map(|(section_index, _)| section_index)
+        else {
+            continue;
+        };
+        counts[section_index] += 1;
+    }
+    counts
+}
+
+fn is_column_zero_note(line: &str) -> bool {
+    if line.starts_with([' ', '\t']) {
+        return false;
+    }
+    if crate::native::notebooks::rules::is_checkbox_line(line) {
+        return false;
+    }
+    let Some(first) = line.chars().next() else {
+        return false;
+    };
+    if !matches!(first, '-' | '*' | '+') {
+        return false;
+    }
+    line[first.len_utf8()..]
+        .chars()
+        .next()
+        .is_some_and(char::is_whitespace)
+}
+
+fn absorb_claimed_sections(
+    staged: &mut Vec<StagedNotebookSection>,
+    route: &str,
+    item_start: usize,
+    parsed: &super::model::ParsedCaptureText,
+    item: &super::model::CaptureItem<'_>,
+) {
+    match &parsed.kind {
+        super::model::CaptureKind::NotebookNote {
+            section: Some(selector),
+            exact_section,
+            ..
+        } if parsed.route.as_deref().is_some_and(|item_route| {
+            item_route.eq_ignore_ascii_case(route)
+        }) =>
+        {
+            let headings: Vec<NotebookSection> = staged
+                .iter()
+                .map(StagedNotebookSection::as_heading)
+                .collect();
+            if let NotebookSectionResolution::Create { title } =
+                resolve_notebook_section(selector, *exact_section, &headings)
+            {
+                push_draft_section(staged, title, item_start);
+            }
+        }
+        super::model::CaptureKind::NotebookCreate {
+            parent,
+            notebook_id,
+        } => {
+            let filename =
+                crate::native::capture_project_note::project_note_basename(
+                    parent,
+                    notebook_id,
+                );
+            let created = filename
+                .strip_suffix(".md")
+                .unwrap_or(&filename)
+                .to_ascii_lowercase();
+            if created != route {
+                return;
+            }
+            for heading in notebook_create_seed_sections_from_item(item) {
+                push_draft_section(staged, heading.title, item_start);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn push_draft_section(
+    staged: &mut Vec<StagedNotebookSection>,
+    title: String,
+    item_start: usize,
+) {
+    let headings: Vec<NotebookSection> = staged
+        .iter()
+        .map(StagedNotebookSection::as_heading)
+        .collect();
+    if !matches!(
+        resolve_notebook_section(&title, true, &headings),
+        NotebookSectionResolution::Create { .. }
+    ) {
+        return;
+    }
+    let line_index = usize::MAX - staged.len();
+    staged.push(StagedNotebookSection {
+        title,
+        line_index,
+        line: None,
+        note_count: 0,
+        provenance: NotebookSectionProvenance::Draft,
+        draft_offset: Some(item_start),
+    });
+}
+
+/// ALL-CAPS `%n` seed headings, Title Case as today. Shared by the
+/// provisional policy snapshot and the writer's seed builder.
+pub(crate) fn notebook_create_seed_sections(
+    bullets: impl IntoIterator<Item = (String, bool)>,
+) -> Vec<NotebookSection> {
+    let mut sections = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for (text, has_children) in bullets {
+        if !has_children
+            || !crate::native::capture_project_note::is_project_section_title(
+                &text,
+            )
+        {
+            continue;
+        }
+        let title =
+            crate::native::capture_project_note::format_project_section_title(
+                &text,
+            );
+        let key =
+            crate::native::capture_project_note::normalize_project_section_title(
+                &title,
+            );
+        if seen.insert(key) {
+            sections.push(NotebookSection {
+                title,
+                line_index: 0,
+            });
+        }
+    }
+    sections
+}
+
+fn notebook_create_seed_sections_from_item(
+    item: &super::model::CaptureItem<'_>,
+) -> Vec<NotebookSection> {
+    let mut bullets = Vec::new();
+    let mut index = 1;
+    while index < item.lines.len() {
+        let line = item.lines[index];
+        match super::draft::classify_authored_line(line.raw) {
+            super::draft::AuthoredLineClass::Item(authored)
+                if authored.depth == super::model::AuthoredDepth::First =>
+            {
+                let (text, _) = strip_trailing_caret_id(authored.body.trim());
+                let has_children =
+                    item.lines.get(index + 1).is_some_and(|next| {
+                        matches!(
+                            super::draft::classify_authored_line(next.raw),
+                            super::draft::AuthoredLineClass::Item(child)
+                                if child.depth != super::model::AuthoredDepth::First
+                        )
+                    });
+                bullets.push((text.to_string(), has_children));
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    notebook_create_seed_sections(bullets)
+}
+
+fn section_resolution_diagnostic(
+    route: &str,
+    selector: &str,
+    exact: bool,
+    headings: &[NotebookSection],
+    range: Option<(usize, usize)>,
+) -> Option<Diagnostic> {
+    match resolve_notebook_section(selector, exact, headings) {
+        NotebookSectionResolution::NearMiss { slug, quoted_title } => {
+            Some(Diagnostic {
+                severity: Severity::Error,
+                code: "notebook_section_near_miss",
+                message: notebook_section_near_miss_message(
+                    route,
+                    selector,
+                    &slug,
+                    &quoted_title,
+                ),
+                range,
+                rewrite: None,
+            })
+        }
+        NotebookSectionResolution::Ambiguous { matches } => Some(Diagnostic {
+            severity: Severity::Error,
+            code: "notebook_section_ambiguous",
+            message: notebook_section_ambiguous_message(route, &matches),
+            range,
+            rewrite: None,
+        }),
+        NotebookSectionResolution::Existing { .. }
+        | NotebookSectionResolution::Create { .. } => None,
+    }
 }
 
 /// Routes mentioned by capture syntax, in first-seen order. This is a
@@ -1756,48 +2235,7 @@ fn provisional_create_title(id: &str) -> String {
 }
 
 fn provisional_create_sections(item: &CaptureItem<'_>) -> Vec<NotebookSection> {
-    let mut sections = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    let mut index = 1;
-    while index < item.lines.len() {
-        let line = item.lines[index];
-        match super::draft::classify_authored_line(line.raw) {
-            super::draft::AuthoredLineClass::Item(authored)
-                if authored.depth == super::model::AuthoredDepth::First =>
-            {
-                let (text, _) = strip_trailing_caret_id(authored.body.trim());
-                let has_children = item.lines.get(index + 1).is_some_and(|next| {
-                    matches!(
-                        super::draft::classify_authored_line(next.raw),
-                        super::draft::AuthoredLineClass::Item(child)
-                            if child.depth != super::model::AuthoredDepth::First
-                    )
-                });
-                if has_children
-                    && crate::native::capture_project_note::is_project_section_title(
-                        &text,
-                    )
-                {
-                    let title =
-                        crate::native::capture_project_note::format_project_section_title(
-                            &text,
-                        );
-                    let key = crate::native::capture_project_note::normalize_project_section_title(
-                        &title,
-                    );
-                    if seen.insert(key) {
-                        sections.push(NotebookSection {
-                            title,
-                            line_index: 0,
-                        });
-                    }
-                }
-            }
-            _ => {}
-        }
-        index += 1;
-    }
-    sections
+    notebook_create_seed_sections_from_item(item)
 }
 
 fn refuse_notebook_create_markers(
@@ -2419,22 +2857,18 @@ pub(crate) fn editor_view_for_item(
             ));
         }
         let mut diagnostics = Vec::new();
-        if let Some(selector) = list.section.as_deref()
-            && let NotebookSectionResolution::NearMiss { slug, quoted_title } =
-                resolve_notebook_section(selector, list.exact, &info.sections)
-        {
-            diagnostics.push(Diagnostic {
-                severity: Severity::Error,
-                code: "notebook_section_near_miss",
-                message: notebook_section_near_miss_message(
-                    &list.route,
-                    selector,
-                    &slug,
-                    &quoted_title,
-                ),
-                range: Some(header_range),
-                rewrite: None,
-            });
+        if let Some(selector) = list.section.as_deref() {
+            let headings =
+                staged_headings(policy, item.source, &list.route, item.start);
+            if let Some(diagnostic) = section_resolution_diagnostic(
+                &list.route,
+                selector,
+                list.exact,
+                &headings,
+                Some(header_range),
+            ) {
+                diagnostics.push(diagnostic);
+            }
         }
         return Some(NotebookEditorView {
             mode: EditorMode::NotebookNote,
@@ -2524,28 +2958,27 @@ pub(crate) fn editor_view_for_item(
                     ),
                 });
             }
-            if let Some(section) = section.as_deref()
-                && let NotebookSectionResolution::NearMiss {
-                    slug,
-                    quoted_title,
-                } = resolve_notebook_section(
+            if let Some(section) = section.as_deref() {
+                let headings = options.notebook_policy.map_or_else(
+                    || claim.info.sections.clone(),
+                    |policy| {
+                        staged_headings(
+                            policy,
+                            item.source,
+                            &claim.marker.route,
+                            item.start,
+                        )
+                    },
+                );
+                if let Some(diagnostic) = section_resolution_diagnostic(
+                    &claim.marker.route,
                     section,
                     *exact_section,
-                    &claim.info.sections,
-                )
-            {
-                diagnostics.push(Diagnostic {
-                    severity: Severity::Error,
-                    code: "notebook_section_near_miss",
-                    message: notebook_section_near_miss_message(
-                        &claim.marker.route,
-                        section,
-                        &slug,
-                        &quoted_title,
-                    ),
-                    range: *section_range,
-                    rewrite: None,
-                });
+                    &headings,
+                    *section_range,
+                ) {
+                    diagnostics.push(diagnostic);
+                }
             }
             if let Some(range) = block_id_range {
                 spans.push(Span {

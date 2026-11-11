@@ -2117,6 +2117,17 @@ pub(crate) fn completion_field_at(
     raw_text: &str,
     cursor: usize,
 ) -> Option<CompletionField> {
+    completion_field_at_with(raw_text, cursor, None)
+}
+
+/// Identify the completable marker at `cursor`, optionally classifying
+/// notebook routes so a first-level `#` under a notebook-claimed item is
+/// an empty success instead of the drawer menu.
+pub(crate) fn completion_field_at_with(
+    raw_text: &str,
+    cursor: usize,
+    notebook_policy: Option<&super::notebook::NotebookRoutePolicy>,
+) -> Option<CompletionField> {
     // Work Log lines are literal text: no marker completion at all,
     // including the global `@@` path below. Note and heading wikilink
     // completion keeps working through the separate wikilink path.
@@ -2140,7 +2151,7 @@ pub(crate) fn completion_field_at(
     // A first-level bullet's leading `#` names a drawer. It either opens
     // the drawer menu or is an empty success; it never reaches the
     // task-type or marker claims below.
-    match drawer_bullet_probe(raw_text, cursor) {
+    match drawer_bullet_probe(raw_text, cursor, notebook_policy) {
         Some(Some(bullet)) => return Some(bullet.into_field()),
         Some(None) => return None,
         None => {}
@@ -3686,6 +3697,7 @@ impl DrawerBulletCompletion {
 fn drawer_bullet_probe(
     raw_text: &str,
     cursor: usize,
+    notebook_policy: Option<&super::notebook::NotebookRoutePolicy>,
 ) -> Option<Option<DrawerBulletCompletion>> {
     use super::drawer_bullet::{scan_leading, DrawerBulletHit};
 
@@ -3717,8 +3729,13 @@ fn drawer_bullet_probe(
     if cursor <= span.start || cursor > span.end {
         return None;
     }
-    let Some(target) = super::editor_parse::editor_item_at(raw_text, cursor)
-        .and_then(|parsed| parsed.drawer_bullet_target)
+    let options = EditorParseOptions {
+        notebook_policy,
+        ..EditorParseOptions::routing_off()
+    };
+    let Some(target) =
+        super::editor_parse::editor_item_at_with(raw_text, cursor, &options)
+            .and_then(|parsed| parsed.drawer_bullet_target)
     else {
         return Some(None);
     };
@@ -3751,7 +3768,7 @@ pub(crate) fn drawer_bullet_completion_at(
     raw_text: &str,
     cursor: usize,
 ) -> Option<DrawerBulletCompletion> {
-    drawer_bullet_probe(raw_text, cursor).flatten()
+    drawer_bullet_probe(raw_text, cursor, None).flatten()
 }
 
 /// Build the completion field for one decomposed `@<route><sep><right>`

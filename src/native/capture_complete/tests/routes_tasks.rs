@@ -735,3 +735,46 @@ fn notebook_section_completion_keeps_block_id_suffix_range() {
     assert_eq!(draft.matches('#').count(), 1, "{draft:?}");
     assert!(draft.ends_with("^myid"), "{draft:?}");
 }
+
+#[test]
+fn notebook_duplicate_headings_are_refused_rows() {
+    let temp = TempDir::new("bob-cli-capture-complete-notebook-ambiguous");
+    write_file(&temp.path().join("dev.md"), "---\ntype: [[area]]\n---\n");
+    write_notebook(&temp, "dev_tools", "## Git\n\n- a\n\n## Git\n\n- b\n");
+    let raw = "@dev_tools#";
+    let value = result(temp.path(), raw, raw.len());
+    let rows = section_rows(&value.candidates);
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    for row in &rows {
+        assert_eq!(row.title, "Git");
+        let refused = row.refused.as_deref().expect("refused");
+        assert!(
+            refused.contains("dev_tools.md has 2 sections titled “Git”"),
+            "{refused}"
+        );
+        assert!(refused.contains("lines 9 and 13"), "{refused}");
+    }
+}
+
+#[test]
+fn notebook_create_row_keeps_typed_capitals() {
+    let temp = TempDir::new("bob-cli-capture-complete-notebook-capitals");
+    write_file(&temp.path().join("dev.md"), "---\ntype: [[area]]\n---\n");
+    write_notebook(&temp, "dev_tools", "## Git\n\n- a\n");
+    let raw = "@dev_tools#API-keys";
+    let value = result(temp.path(), raw, raw.len());
+    let Candidates::Section(rows) = &value.candidates else {
+        panic!("expected section candidates");
+    };
+    let create = rows
+        .iter()
+        .find_map(|row| match row {
+            super::super::model::SectionMenuRow::NotebookCreate(create) => {
+                Some(create)
+            }
+            _ => None,
+        })
+        .expect("create row");
+    assert_eq!(create.title, "API Keys");
+    assert_eq!(create.replacement, "api-keys");
+}
