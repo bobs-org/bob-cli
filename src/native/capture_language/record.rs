@@ -1393,16 +1393,6 @@ pub(crate) fn editor_view_for_claim(claim: &RecordClaim) -> RecordEditorView {
                 title: Some(intent.dir.clone()),
                 key: None,
             }];
-            if let Some(range) = intent.stem_range {
-                spans.push(Span {
-                    start: range.0,
-                    end: range.1,
-                    kind: SpanKind::RecordStem,
-                    project_note: None,
-                    title: None,
-                    key: None,
-                });
-            }
             if intent.action == RecordAction::Create
                 && intent.title.trim().is_empty()
             {

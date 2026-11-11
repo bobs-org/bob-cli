@@ -598,16 +598,22 @@ fn editor_spans_cover_route_stem_and_fields() {
     let kinds: Vec<SpanKind> =
         item.spans.iter().map(|span| span.kind).collect();
     assert!(kinds.contains(&SpanKind::RecordRoute), "{kinds:?}");
-    assert!(kinds.contains(&SpanKind::RecordStem), "{kinds:?}");
     assert!(kinds.contains(&SpanKind::RecordFieldKey), "{kinds:?}");
     assert!(kinds.contains(&SpanKind::RecordFieldValue), "{kinds:?}");
+    assert_eq!(
+        kinds
+            .iter()
+            .filter(|kind| **kind == SpanKind::RecordRoute)
+            .count(),
+        1,
+        "one record_route over the whole token: {kinds:?}"
+    );
     // Ranges re-slice the typed text.
     let raw = "@eat/^nagi-shop Ramen\n- location:: Clark";
     for span in &item.spans {
         let text = &raw[span.start..span.end];
         match span.kind {
             SpanKind::RecordRoute => assert_eq!(text, "@eat/^nagi-shop"),
-            SpanKind::RecordStem => assert_eq!(text, "nagi-shop"),
             SpanKind::RecordFieldKey => assert_eq!(text, "location"),
             SpanKind::RecordFieldValue => assert_eq!(text, "Clark"),
             _ => {}

@@ -1129,7 +1129,6 @@ fn attach_gmail_spans(result: &mut CaptureParseResult) {
             matches!(
                 span.kind,
                 capture_language::SpanKind::RecordRoute
-                    | capture_language::SpanKind::RecordStem
                     | capture_language::SpanKind::RecordFieldKey
                     | capture_language::SpanKind::RecordFieldValue
             )
@@ -1636,7 +1635,6 @@ impl CaptureParseResult {
                             matches!(
                                 span.kind,
                                 capture_language::SpanKind::RecordRoute
-                                    | capture_language::SpanKind::RecordStem
                                     | capture_language::SpanKind::RecordFieldKey
                                     | capture_language::SpanKind::RecordFieldValue
                             )
@@ -3630,10 +3628,6 @@ fn merge_spans(
                 previous.kind == span.kind
             } else {
                 previous.end > span.start
-                    && !(previous.kind
-                        == capture_language::SpanKind::RecordRoute
-                        && span.kind == capture_language::SpanKind::RecordStem
-                        && span.end <= previous.end)
             }
         }) {
             continue;

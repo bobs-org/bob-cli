@@ -74,8 +74,6 @@ pub(crate) enum SpanKind {
     RelationLabel,
     /// A record creation's `@dir/` route token.
     RecordRoute,
-    /// A record creation's explicit `^stem` (without the `@dir/`).
-    RecordStem,
     /// A record field bullet's key (without the `::`).
     RecordFieldKey,
     /// A record field bullet's value (without the `key::`).
@@ -179,7 +177,6 @@ impl SpanKind {
             Self::RelationLabelSeparator => "relation_label_separator",
             Self::RelationLabel => "relation_label",
             Self::RecordRoute => "record_route",
-            Self::RecordStem => "record_stem",
             Self::RecordFieldKey => "record_field_key",
             Self::RecordFieldValue => "record_field_value",
             Self::NotebookRoute => "route",

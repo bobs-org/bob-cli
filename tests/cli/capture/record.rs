@@ -997,11 +997,11 @@ fn capture_parse_reports_existing_record_values_and_update_ranges() {
     assert_eq!(status["display"], "Liked");
     assert_eq!(status["before"], "to_try");
     assert_eq!(status["before_display"], "To try");
-    let (stem_start, stem_end) = json["spans"]
+    let (route_start, route_end) = json["spans"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|span| span["kind"] == "record_stem")
+        .find(|span| span["kind"] == "record_route")
         .map(|span| {
             (
                 span["start"].as_u64().unwrap() as usize,
@@ -1009,9 +1009,72 @@ fn capture_parse_reports_existing_record_values_and_update_ranges() {
             )
         })
         .unwrap_or_else(|| {
-            panic!("record stem span missing: {}", json["spans"])
+            panic!("record route span missing: {}", json["spans"])
         });
-    assert_eq!(&draft[stem_start..stem_end], "ninja_sushi");
+    assert_eq!(&draft[route_start..route_end], "@eat/ninja_sushi");
+    assert_spans_sorted_and_disjoint(&json);
+}
+
+/// The Mac's `validatedSpanRanges` rule: spans are already ordered, and
+/// each `start` is at or after the previous `end`.
+fn assert_spans_sorted_and_disjoint(json: &Value) {
+    let spans = json["spans"].as_array().expect("spans");
+    let mut previous_end = 0u64;
+    for span in spans {
+        let start = span["start"].as_u64().expect("span start");
+        let end = span["end"].as_u64().expect("span end");
+        assert!(
+            start >= previous_end,
+            "overlapping or unsorted spans: {}",
+            json["spans"]
+        );
+        previous_end = end;
+    }
+}
+
+#[test]
+fn capture_parse_record_spans_are_disjoint() {
+    let temp = TempDir::new("bob-cli-capture-record-disjoint-spans");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(vault.join("eat")).expect("create eat folder");
+    let config = write_records_config(&temp);
+    write_ninja(&vault);
+
+    for draft in [
+        "@eat/",
+        "Ramen Nagi @eat/^custom-stem",
+        "@eat/ninja_sushi",
+        "Went back @eat/ninja_sushi\n- status:: liked\n- still great",
+    ] {
+        let output = capture_parse(&vault, &config, draft);
+        assert_success(&output);
+        let json = json_output(&output);
+        let route = json["spans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|span| span["kind"] == "record_route")
+            .unwrap_or_else(|| panic!("record_route missing for {draft:?}"));
+        let start = route["start"].as_u64().unwrap() as usize;
+        let end = route["end"].as_u64().unwrap() as usize;
+        let token = &draft[start..end];
+        assert!(
+            token.starts_with("@eat/"),
+            "route token for {draft:?}: {token:?}"
+        );
+        assert_eq!(
+            json["spans"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|span| span["kind"] == "record_stem")
+                .count(),
+            0,
+            "no nested record_stem for {draft:?}: {}",
+            json["spans"]
+        );
+        assert_spans_sorted_and_disjoint(&json);
+    }
 }
 
 #[test]
