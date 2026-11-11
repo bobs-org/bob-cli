@@ -375,4 +375,8 @@ nav `api.successors` v4 present) completed the linked task and struck the
 ledger row; the successor modal did not open within 30s and `successors.pick`
 was not invoked. Esc therefore had no extra pull-in (the four offered tasks
 were not linked). That hang is outside this audit's small-fix budget; the
-mark and capture already agree on the four-row group.
+mark and capture already agree on the four-row group. The cycler's KM33
+wiring test (`scripts/test-task-status-cycler-keep-moving.cjs`) drives the
+same daily-note Task-Link close through `handleActiveTaskBlockLinkOpenDone`:
+it opens exactly one `Keep ‹job_email_recruiters› moving` group with those
+four rows and nothing preselected, and Esc writes only the close and strike.
