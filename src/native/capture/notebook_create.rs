@@ -15,6 +15,7 @@ pub(super) fn plan_notebook_create_item(
     request: &CaptureRequest,
     parsed_item: ParsedCaptureItem,
     now: chrono::NaiveDateTime,
+    timezone: Option<chrono_tz::Tz>,
     today: NaiveDate,
     planner: &mut CaptureBatchPlanner,
     policy: &mut NotebookRoutePolicy,
@@ -51,6 +52,7 @@ pub(super) fn plan_notebook_create_item(
             title: None,
             body: (!seed.trim().is_empty()).then_some(seed.clone()),
             now,
+            timezone,
         },
     )
     .map_err(map_create_refusal)?;

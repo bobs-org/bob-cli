@@ -344,7 +344,30 @@ fn request(parent: &str, id: &str) -> CreateRequest {
             .unwrap()
             .and_hms_opt(9, 14, 0)
             .unwrap(),
+        timezone: None,
     }
+}
+
+#[test]
+fn created_stamp_uses_the_configured_zone_on_utc_clock_hosts() {
+    // Apollo runs Etc/UTC: `now` is already New York wall time, so the
+    // stamp must carry the configured offset, not the host's `+0000`.
+    // Pin the host zone to UTC so the old `Local` resolution fails here
+    // on every host, not just UTC-clock ones.
+    let _guard = guard();
+    crate::native::env::pin_tz_utc0_for_test();
+    let temp = tempfile::tempdir().unwrap();
+    tree(temp.path());
+    let snapshot = VaultSnapshot::load(temp.path());
+    let mut dated = request("dev", "nvim");
+    dated.timezone = Some("America/New_York".parse().unwrap());
+    let plan = plan_create(&snapshot, &dated).unwrap();
+    assert!(
+        plan.contents
+            .contains("created: 2026-11-09T09:14:00-0500\n"),
+        "{}",
+        plan.contents
+    );
 }
 
 fn refusal(snapshot: &VaultSnapshot, request: &CreateRequest) -> CreateRefusal {

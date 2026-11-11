@@ -12,6 +12,7 @@
 use std::path::{Path, PathBuf};
 
 use chrono::NaiveDateTime;
+use chrono_tz::Tz;
 
 use super::{
     catalog::FileEdit,
@@ -75,6 +76,9 @@ pub(crate) struct CreateRequest {
     pub(crate) title: Option<String>,
     pub(crate) body: Option<String>,
     pub(crate) now: NaiveDateTime,
+    /// Bob's configured zone for the `created` stamp offset. `now` is
+    /// already wall-clock time in this zone; `None` resolves via the host.
+    pub(crate) timezone: Option<Tz>,
 }
 
 /// A refusal with a stable code and an optional fix hint. Exit code 2.
@@ -284,7 +288,7 @@ pub(crate) fn plan_create(
         .title
         .clone()
         .unwrap_or_else(|| default_title(&request.id));
-    let created = format_created_timestamp(request.now);
+    let created = format_created_timestamp(request.now, request.timezone);
     let parent_link = link_destination(&index, &parent_path);
     let contents = render_new_notebook(&NewNotebookInput {
         parent_link: &parent_link,

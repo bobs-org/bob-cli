@@ -64,6 +64,7 @@ pub(super) fn pipeline_metadata(
 pub(super) fn new_note_created_timestamp() -> String {
     super::super::capture_project_note::format_created_timestamp(
         bob_env::current_datetime(),
+        bob_env::configured_timezone(),
     )
 }
 
@@ -693,6 +694,7 @@ pub(super) fn capture_clock() -> CaptureClock {
     CaptureClock {
         stamp: super::super::capture_project_note::format_captured_timestamp(
             now,
+            bob_env::configured_timezone(),
         ),
         date: now.format("%Y-%m-%d").to_string(),
     }

@@ -340,9 +340,16 @@ pub fn expand_tilde(path: &Path) -> PathBuf {
 pub fn current_datetime() -> NaiveDateTime {
     if let Some(override_value) =
         var("BOB_NOW").ok().filter(|value| !value.is_empty())
-        && let Some(parsed) = parse_datetime_override(&override_value)
     {
-        return parsed;
+        if let Some(parsed) = parse_offset_datetime_override(
+            &override_value,
+            configured_timezone(),
+        ) {
+            return parsed;
+        }
+        if let Some(parsed) = parse_datetime_override(&override_value) {
+            return parsed;
+        }
     }
 
     if let Some(date_value) = var("DATE").ok().filter(|value| !value.is_empty())
@@ -390,6 +397,22 @@ pub fn default_day_file(bob_dir: &Path) -> PathBuf {
         today.month(),
         today.day()
     ))
+}
+
+/// Parse an RFC 3339 `BOB_NOW` carrying an explicit offset (for example
+/// `2026-11-11T10:00:00-05:00` or a `Z` suffix) into wall-clock time in
+/// `timezone`, preserving the instant. Without a configured zone the host
+/// zone applies. Values without an offset are not handled here; they fall
+/// through to [`parse_datetime_override`].
+fn parse_offset_datetime_override(
+    value: &str,
+    timezone: Option<Tz>,
+) -> Option<NaiveDateTime> {
+    let parsed = DateTime::parse_from_rfc3339(value.trim()).ok()?;
+    Some(match timezone {
+        Some(timezone) => parsed.with_timezone(&timezone).naive_local(),
+        None => parsed.with_timezone(&Local).naive_local(),
+    })
 }
 
 pub fn parse_datetime_override(value: &str) -> Option<NaiveDateTime> {
@@ -581,5 +604,28 @@ mod tests {
             before <= reported && reported <= after,
             "{reported} not within {before}..={after}"
         );
+    }
+
+    #[test]
+    fn bob_now_with_an_explicit_offset_is_honored() {
+        // `BOB_NOW=2026-11-11T10:00:00-05:00` used to fall back to the
+        // clock; the offset form must win and name the same wall time in
+        // the configured zone.
+        let dir = tempfile::tempdir().expect("config dir");
+        let config = dir.path().join("config.yml");
+        std::fs::write(&config, "timezone: America/New_York\n")
+            .expect("config");
+        let _guard = TestEnvGuard::set(&[
+            ("BOB_CONFIG_FILE", Some(config.as_os_str())),
+            ("BOB_NOW", Some(OsStr::new("2026-11-11T10:00:00-05:00"))),
+            ("DATE", None),
+        ]);
+        assert_eq!(current_datetime().to_string(), "2026-11-11 10:00:00");
+        // The same instant expressed in UTC lands on Eastern wall time.
+        let _utc_guard = TestEnvGuard::set(&[(
+            "BOB_NOW",
+            Some(OsStr::new("2026-11-11T15:00:00Z")),
+        )]);
+        assert_eq!(current_datetime().to_string(), "2026-11-11 10:00:00");
     }
 }

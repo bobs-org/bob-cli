@@ -344,6 +344,7 @@ fn execute_create(matches: &ArgMatches) -> i32 {
         title: matches.get_one::<String>("title").cloned(),
         body: None,
         now: bob_env::current_datetime(),
+        timezone: bob_env::configured_timezone(),
     };
     let mut report = if dry_run {
         create_run::dry_run(&bob_dir, &request)

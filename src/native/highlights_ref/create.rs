@@ -2796,7 +2796,10 @@ fn create_vault_note_route(
     let now = bob_env::current_datetime();
     let snapshot_date = now.date();
     let clock_stamp =
-        super::super::capture_project_note::format_captured_timestamp(now);
+        super::super::capture_project_note::format_captured_timestamp(
+            now,
+            bob_env::configured_timezone(),
+        );
     let settings =
         crate::native::task_status_hooks::read_tasks_settings(&config.bob_dir);
     let parent = options

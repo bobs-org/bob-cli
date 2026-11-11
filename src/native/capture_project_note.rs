@@ -24,7 +24,10 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use chrono::{Local, LocalResult, NaiveDate, NaiveDateTime, TimeZone};
+use chrono::{
+    Local, LocalResult, NaiveDate, NaiveDateTime, Offset as _, TimeZone,
+};
+use chrono_tz::Tz;
 
 use super::capture_dependency_tasks::has_hide_tag;
 use super::capture_language::{
@@ -51,6 +54,9 @@ pub(crate) struct ProjectNoteRenderInput<'a> {
     pub(crate) block_id: &'a str,
     pub(crate) body: &'a str,
     pub(crate) now: NaiveDateTime,
+    /// Bob's configured zone for the `created` stamp offset. `now` is
+    /// already wall-clock time in this zone; `None` resolves via the host.
+    pub(crate) timezone: Option<Tz>,
     pub(crate) scheduled: Option<&'a str>,
     pub(crate) priority: Option<(&'a str, &'a str)>,
     pub(crate) schedule_log_lines: &'a [String],
@@ -127,47 +133,77 @@ pub(crate) fn project_note_basename(route: &str, block_id: &str) -> String {
 }
 
 /// Format the frontmatter `created` stamp (`YYYY-MM-DDTHH:mm:ss±ZZZZ`) from a
-/// naive local datetime. The local offset is resolved for that naive value via
-/// `chrono::Local` rather than calling `Local::now()` again, so `BOB_NOW`
-/// keeps controlling the field.
-pub(crate) fn format_created_timestamp(now: NaiveDateTime) -> String {
+/// naive datetime that is already wall-clock time in Bob's configured zone.
+/// The offset is resolved for that naive value via the passed zone rather
+/// than calling `Local::now()` again, so `BOB_NOW` keeps controlling the
+/// field and UTC-clock hosts still stamp the configured offset. `None` keeps
+/// the legacy host-local (`chrono::Local`) resolution.
+pub(crate) fn format_created_timestamp(
+    now: NaiveDateTime,
+    timezone: Option<Tz>,
+) -> String {
     const FORMAT: &str = "%Y-%m-%dT%H:%M:%S%z";
-    format_timestamp_with_format(now, FORMAT)
+    format_timestamp_with_format(now, timezone, FORMAT)
 }
 
 /// Format the minute-precision `captured` stamp (`YYYY-MM-DDTHH:mm±ZZZZ`)
 /// from the same naive local datetime, with the same offset resolution as
 /// `format_created_timestamp` so `created` and `captured` always agree on
 /// offsets (including ambiguous times and DST gaps).
-pub(crate) fn format_captured_timestamp(now: NaiveDateTime) -> String {
+pub(crate) fn format_captured_timestamp(
+    now: NaiveDateTime,
+    timezone: Option<Tz>,
+) -> String {
     const FORMAT: &str = "%Y-%m-%dT%H:%M%z";
-    format_timestamp_with_format(now, FORMAT)
+    format_timestamp_with_format(now, timezone, FORMAT)
 }
 
 /// Shared offset resolution for a caller-supplied `strftime` format.
 pub(crate) fn format_timestamp_with_format(
     now: NaiveDateTime,
+    timezone: Option<Tz>,
     format: &str,
 ) -> String {
-    match Local.from_local_datetime(&now) {
+    match timezone {
+        Some(timezone) => format_in_zone(timezone, now, format),
+        None => format_in_zone(Local, now, format),
+    }
+}
+
+/// Resolve one naive wall time in `zone`, covering ambiguous times and the
+/// spring-forward gap.
+fn format_in_zone<Zone>(zone: Zone, now: NaiveDateTime, format: &str) -> String
+where
+    Zone: TimeZone,
+    Zone::Offset: std::fmt::Display,
+{
+    match zone.from_local_datetime(&now) {
         LocalResult::Single(datetime) => datetime.format(format).to_string(),
         LocalResult::Ambiguous(earliest, _) => {
             earliest.format(format).to_string()
         }
-        LocalResult::None => gap_offset_timestamp(now, format),
+        LocalResult::None => gap_offset_timestamp(zone, now, format),
     }
 }
 
 /// Fallback for nonexistent wall times in the spring-forward gap: borrow the
 /// offset in effect an hour later so the authored wall time is preserved.
-fn gap_offset_timestamp(now: NaiveDateTime, format: &str) -> String {
+fn gap_offset_timestamp<Zone>(
+    zone: Zone,
+    now: NaiveDateTime,
+    format: &str,
+) -> String
+where
+    Zone: TimeZone,
+    Zone::Offset: std::fmt::Display,
+{
     const FALLBACK_SUFFIX: &str = "+0000";
     let later = now
         .checked_add_signed(chrono::Duration::hours(1))
         .unwrap_or(now);
-    let offset = match Local.from_local_datetime(&later) {
-        LocalResult::Single(datetime) => Some(*datetime.offset()),
-        LocalResult::Ambiguous(earliest, _) => Some(*earliest.offset()),
+    let offset = match zone.from_local_datetime(&later) {
+        LocalResult::Single(datetime) => Some(datetime.offset().fix()),
+        LocalResult::Ambiguous(earliest, _) => Some(earliest.offset().fix()),
         LocalResult::None => None,
     };
     offset
@@ -344,7 +380,7 @@ pub(crate) fn render_project_note(
 ) -> RenderedProjectNote {
     let basename = project_note_basename(input.route, input.block_id);
     let created_date = input.now.format("%Y-%m-%d").to_string();
-    let created_timestamp = format_created_timestamp(input.now);
+    let created_timestamp = format_created_timestamp(input.now, input.timezone);
 
     let status = if input.scheduled.is_some() { '?' } else { ' ' };
     let mut task_line =
@@ -652,6 +688,7 @@ mod tests {
             block_id: "goog-exit",
             body: "Finish the Google exit packet!",
             now: test_now(),
+            timezone: None,
             scheduled: None,
             priority: None,
             schedule_log_lines: &[],
@@ -718,23 +755,75 @@ mod tests {
     #[test]
     fn created_timestamp_derives_from_the_passed_datetime() {
         pin_utc();
-        let first = format_created_timestamp(test_now());
+        let first = format_created_timestamp(test_now(), None);
         let later = format_created_timestamp(
             NaiveDate::from_ymd_opt(2026, 9, 21)
                 .expect("valid test date")
                 .and_hms_opt(9, 0, 0)
                 .expect("valid test time"),
+            None,
         );
         assert_eq!(first, "2026-09-20T14:31:07+0000");
         assert_eq!(later, "2026-09-21T09:00:00+0000");
     }
 
     #[test]
+    fn configured_zone_controls_created_offset_on_utc_clock_hosts() {
+        // Apollo runs Etc/UTC while Bob's day is America/New_York: `now`
+        // is already New York wall time, and the configured zone must win
+        // without consulting the host clock. This test pins nothing on
+        // purpose; the `Some` branch never reads `Local`.
+        let eastern: Tz = "America/New_York".parse().unwrap();
+        let winter = NaiveDate::from_ymd_opt(2026, 11, 11)
+            .expect("valid test date")
+            .and_hms_opt(8, 1, 12)
+            .expect("valid test time");
+        assert_eq!(
+            format_created_timestamp(winter, Some(eastern)),
+            "2026-11-11T08:01:12-0500"
+        );
+        assert_eq!(
+            format_captured_timestamp(winter, Some(eastern)),
+            "2026-11-11T08:01-0500"
+        );
+        let summer = NaiveDate::from_ymd_opt(2026, 7, 11)
+            .expect("valid test date")
+            .and_hms_opt(8, 1, 12)
+            .expect("valid test time");
+        assert_eq!(
+            format_created_timestamp(summer, Some(eastern)),
+            "2026-07-11T08:01:12-0400"
+        );
+        assert_eq!(
+            format_created_timestamp(winter, Some(chrono_tz::UTC)),
+            "2026-11-11T08:01:12+0000"
+        );
+    }
+
+    #[test]
+    fn render_stamps_created_in_the_configured_zone() {
+        // Simulate apollo's Etc/UTC clock: with the host zone at UTC the
+        // old `Local` resolution stamped `+0000`, so only the configured
+        // zone can produce `-0400` here.
+        pin_utc();
+        let mut input = base_input(&[]);
+        input.timezone = Some("America/New_York".parse().unwrap());
+        let rendered = render_project_note(&input);
+        assert!(
+            rendered
+                .contents
+                .contains("created: 2026-09-20T14:31:07-0400\n"),
+            "{}",
+            rendered.contents
+        );
+    }
+
+    #[test]
     fn captured_timestamp_is_minute_precision_with_matching_offset() {
         pin_utc();
         let now = test_now();
-        let captured = format_captured_timestamp(now);
-        let created = format_created_timestamp(now);
+        let captured = format_captured_timestamp(now, None);
+        let created = format_created_timestamp(now, None);
         assert_eq!(captured, "2026-09-20T14:31+0000");
         // Same `Local` resolution, so `created` and `captured` agree on
         // offsets; the minute stamp is the created prefix without seconds.
@@ -749,12 +838,12 @@ mod tests {
         pin_utc();
         let now = test_now();
         assert_eq!(
-            format_timestamp_with_format(now, "%Y-%m-%dT%H:%M%z"),
-            format_captured_timestamp(now)
+            format_timestamp_with_format(now, None, "%Y-%m-%dT%H:%M%z"),
+            format_captured_timestamp(now, None)
         );
         assert_eq!(
-            format_timestamp_with_format(now, "%Y-%m-%dT%H:%M:%S%z"),
-            format_created_timestamp(now)
+            format_timestamp_with_format(now, None, "%Y-%m-%dT%H:%M:%S%z"),
+            format_created_timestamp(now, None)
         );
     }
 

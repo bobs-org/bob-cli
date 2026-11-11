@@ -1983,6 +1983,11 @@ pub(super) fn plan_capture_item(
     // before the item stages anything, leaving files unchanged. Record,
     // notebook, transfer, ref, project-note, and note-pull items own
     // their destinations elsewhere.
+    //
+    // `now` is already wall-clock time in Bob's configured zone; notebook
+    // and project-note stamps resolve their offset in that same zone so
+    // UTC-clock hosts do not stamp `+0000`.
+    let timezone = crate::native::day_timezone().ok().flatten();
     if is_album_guarded_task_kind(&parsed_item.parsed.kind)
         && let Some(route) = parsed_item.parsed.route.as_deref()
         && let Some(error) = album_task_home_refusal(
@@ -2013,6 +2018,7 @@ pub(super) fn plan_capture_item(
             request,
             parsed_item,
             now,
+            timezone,
             today,
             planner,
             notebook_policy,
@@ -2684,6 +2690,7 @@ pub(super) fn plan_capture_item(
             request,
             parsed,
             now,
+            timezone,
             today,
             roll_seed,
             parsed_item.index,

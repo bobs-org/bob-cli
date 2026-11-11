@@ -11,9 +11,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use chrono::{
-    Duration, LocalResult, NaiveDate, NaiveDateTime, Offset, TimeZone,
-};
+use chrono::{NaiveDate, NaiveDateTime};
 use chrono_tz::Tz;
 
 use super::{
@@ -772,36 +770,7 @@ fn format_created_timestamp(
     now: NaiveDateTime,
     timezone: Option<Tz>,
 ) -> String {
-    const FORMAT: &str = "%Y-%m-%dT%H:%M:%S%z";
-    let Some(timezone) = timezone else {
-        return super::super::capture_project_note::format_created_timestamp(
-            now,
-        );
-    };
-
-    match timezone.from_local_datetime(&now) {
-        LocalResult::Single(datetime) => datetime.format(FORMAT).to_string(),
-        LocalResult::Ambiguous(earliest, _) => {
-            earliest.format(FORMAT).to_string()
-        }
-        LocalResult::None => {
-            let later =
-                now.checked_add_signed(Duration::hours(1)).unwrap_or(now);
-            let offset = match timezone.from_local_datetime(&later) {
-                LocalResult::Single(datetime) => Some(datetime.offset().fix()),
-                LocalResult::Ambiguous(earliest, _) => {
-                    Some(earliest.offset().fix())
-                }
-                LocalResult::None => None,
-            };
-            offset
-                .and_then(|offset| offset.from_local_datetime(&now).single())
-                .map(|datetime| datetime.format(FORMAT).to_string())
-                .unwrap_or_else(|| {
-                    format!("{}+0000", now.format("%Y-%m-%dT%H:%M:%S"))
-                })
-        }
-    }
+    super::super::capture_project_note::format_created_timestamp(now, timezone)
 }
 
 /// An existing record resolved through the lazy folder catalog.

@@ -990,8 +990,10 @@ fn execute_init(matches: &ArgMatches) -> i32 {
             2,
         );
     };
+    let timezone = crate::native::day_timezone().ok().flatten();
     let created = crate::native::capture_project_note::format_created_timestamp(
         bob_env::current_datetime(),
+        timezone,
     );
     let parent = matches.get_one::<String>("parent").map(String::as_str);
     let plan = match plan_init(&vault, record_type, parent, &created) {
