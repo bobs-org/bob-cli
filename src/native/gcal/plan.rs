@@ -46,7 +46,9 @@ use super::{
         remove_meet_link, row_untouched, split_row_spans, status_char,
         AbsentVerdict, KeptNotice, LearnedSeries, LifecycleItem,
     },
-    render::{render_context_row, render_task_row, ContextRowInput},
+    render::{
+        escape_title, render_context_row, render_task_row, ContextRowInput,
+    },
     reset::DayReset,
     root::RootSourceKind,
     stamp::{self, Stamp},
@@ -1047,7 +1049,7 @@ fn apply_span_updates(
     }
     let fresh = [
         ("time", occurrence.time_label.clone()),
-        ("title", occurrence.title.clone()),
+        ("title", escape_title(&occurrence.title)),
         ("badges", fresh_badges),
     ];
     let mut edited: Vec<&str> = Vec::new();

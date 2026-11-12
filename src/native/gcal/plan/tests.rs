@@ -101,7 +101,7 @@ fn occurrence_off_clock(
     );
     let mut spans = BTreeMap::new();
     spans.insert("time".to_string(), span_hash(time_label));
-    spans.insert("title".to_string(), span_hash(title));
+    spans.insert("title".to_string(), span_hash(&render::escape_title(title)));
     spans.insert("badges".to_string(), span_hash(&badges));
     let end_min = end_min_from_label(time_label, start_min);
     PlannedOccurrence {
@@ -2643,6 +2643,49 @@ fn kept_title_edit_still_reroutes() {
     );
     assert_eq!(plan.kept.len(), 1);
     assert_eq!(plan.kept[0].flag, "kept_edit");
+}
+
+#[test]
+fn untouched_mid_line_title_tags_rewrite_once() {
+    let (contents, mut journal, mut occ, block_id) =
+        seed_task(occurrence("budget", "Budget sync", true, "0900-0930", 540));
+    let row = row_line(&contents, &block_id);
+    let old_title = "Budget sync #gtd #pre";
+    let old_row = row.replace("Budget sync", old_title);
+    let contents = contents.replace(&row, &old_row);
+    for state in journal.values_mut() {
+        if let Some(record) = state.row.as_mut() {
+            record
+                .spans
+                .insert("title".to_string(), span_hash(old_title));
+        }
+    }
+    occ.title = old_title.to_string();
+    occ.id_hint = old_title.to_string();
+    occ.spans.insert(
+        "title".to_string(),
+        span_hash(&render::escape_title(old_title)),
+    );
+    let plan = run_with_journal(&contents, vec![occ], &journal);
+    let row = row_line(&plan.contents, &block_id);
+    assert!(row.contains("Budget sync \\#gtd \\#pre"), "{row}");
+    assert!(!row.contains(" #gtd "), "{row}");
+    assert!(plan.kept.is_empty(), "{:?}", plan.kept);
+    assert_eq!(plan.rows_updated.len(), 1);
+}
+
+#[test]
+fn escaped_title_is_stable_on_the_next_plan() {
+    let occ =
+        occurrence("budget", "Budget sync #gtd #pre", true, "0900-0930", 540);
+    let first = run(empty_ledger(), vec![occ.clone()]);
+    let block_id = first.rows_added[0].block_id.clone();
+    let row = row_line(&first.contents, &block_id);
+    assert!(row.contains("Budget sync \\#gtd \\#pre"), "{row}");
+    let journal = journal_from_added(&first);
+    let second = run_with_journal(&first.contents, vec![occ], &journal);
+    assert!(!second.changed, "{}", second.contents);
+    assert!(second.kept.is_empty(), "{:?}", second.kept);
 }
 
 #[test]

@@ -1461,6 +1461,33 @@ fn hostile_titles_stay_data() {
                 "end": {"dateTime": "2026-10-30T17:30:00-04:00"},
                 "htmlLink": "https://calendar.google.com/event?eid=h6",
                 "attendees": [{"self": true, "responseStatus": "accepted"}]
+            },
+            {
+                "id": "h7",
+                "summary": "Budget sync #gtd #pre",
+                "status": "confirmed",
+                "start": {"dateTime": "2026-10-30T14:00:00-04:00"},
+                "end": {"dateTime": "2026-10-30T14:30:00-04:00"},
+                "htmlLink": "https://calendar.google.com/event?eid=h7",
+                "attendees": [{"self": true, "responseStatus": "accepted"}]
+            },
+            {
+                "id": "h8",
+                "summary": "See [[Secret Note]]",
+                "status": "confirmed",
+                "start": {"dateTime": "2026-10-30T14:30:00-04:00"},
+                "end": {"dateTime": "2026-10-30T15:00:00-04:00"},
+                "htmlLink": "https://calendar.google.com/event?eid=h8",
+                "attendees": [{"self": true, "responseStatus": "accepted"}]
+            },
+            {
+                "id": "h9",
+                "summary": "[join here](obsidian://vault)",
+                "status": "confirmed",
+                "start": {"dateTime": "2026-10-30T15:00:00-04:00"},
+                "end": {"dateTime": "2026-10-30T15:30:00-04:00"},
+                "htmlLink": "https://calendar.google.com/event?eid=h9",
+                "attendees": [{"self": true, "responseStatus": "accepted"}]
             }
         ],
         "nextPageToken": serde_json::Value::Null,
@@ -1488,6 +1515,10 @@ fn hostile_titles_stay_data() {
         note.contains("[📹](https://evil.test/%09%3Cx%3E)"),
         "{note}"
     );
+    assert!(note.contains("Budget sync \\#gtd \\#pre"), "{note}");
+    assert!(!note.contains(" #gtd "), "{note}");
+    assert!(note.contains("See \\[\\[Secret Note]]"), "{note}");
+    assert!(note.contains("[join here\\](obsidian://vault)"), "{note}");
 
     let headings: Vec<&str> =
         note.lines().filter(|line| line.starts_with('#')).collect();
@@ -1530,7 +1561,7 @@ fn hostile_titles_stay_data() {
         .copied()
         .filter(|line| line.contains("#task"))
         .collect();
-    assert_eq!(task_rows.len(), 6, "{note}");
+    assert_eq!(task_rows.len(), 9, "{note}");
     for line in task_rows {
         assert!(
             line.split_whitespace()

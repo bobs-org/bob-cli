@@ -611,7 +611,7 @@ pub(crate) fn classify_gog_failure(
         || blob.contains("quota_exceeded")
         || blob.contains("quota-exceeded")
         || blob.contains("quota exceeded")
-        || blob.contains("429")
+        || looks_like_http_status(&blob, "429")
     {
         return GoogleError::runtime(
             "rate_limited",
@@ -828,6 +828,40 @@ pub(crate) fn classify_gog_failure(
         .or_else(|| stdout.lines().map(str::trim).find(|line| !line.is_empty()))
         .unwrap_or("gog failed");
     GoogleError::runtime("gog", detail.to_string())
+}
+
+/// True when `code` appears as an HTTP status, matching the `"code":N`
+/// shapes used for 5xx, or as a token that is not part of an identifier
+/// (`team-429@group.calendar.google.com` is not a 429).
+fn looks_like_http_status(blob: &str, code: &str) -> bool {
+    blob.contains(&format!("\"code\":{code}"))
+        || blob.contains(&format!("\"code\": {code}"))
+        || contains_status_token(blob, code)
+}
+
+fn contains_status_token(blob: &str, code: &str) -> bool {
+    let bytes = blob.as_bytes();
+    let mut search_at = 0;
+    while let Some(rel) = blob.get(search_at..).and_then(|rest| rest.find(code))
+    {
+        let start = search_at + rel;
+        let end = start + code.len();
+        let prev_ident = start
+            .checked_sub(1)
+            .is_some_and(|index| is_status_ident_byte(bytes[index]));
+        let next_ident = bytes
+            .get(end)
+            .is_some_and(|byte| is_status_ident_byte(*byte));
+        if !prev_ident && !next_ident {
+            return true;
+        }
+        search_at = start + 1;
+    }
+    false
+}
+
+fn is_status_ident_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'@')
 }
 
 fn is_gog_usage_failure(stdout: &str, blob: &str) -> bool {
@@ -1061,6 +1095,8 @@ mod tests {
             "rateLimitExceeded: Rate limit exceeded",
             "User-rate-limit-exceeded",
             "429 Too Many Requests",
+            "\"code\":429",
+            "\"code\": 429",
             "quotaExceeded: Quota exceeded",
         ] {
             let error = classify_gog_failure(GMAIL, "", stderr);
@@ -1077,6 +1113,23 @@ mod tests {
             assert_eq!(error.kind(), "transient", "{stderr}");
             assert_eq!(error.exit_code(), 1);
         }
+    }
+
+    #[test]
+    fn rate_limit_ignores_429_inside_identifiers() {
+        let error = classify_gog_failure(
+            GCAL,
+            "",
+            "notFound: calendar team-429@group.calendar.google.com",
+        );
+        assert_eq!(error.kind(), "not_found");
+
+        let error = classify_gog_failure(
+            GMAIL,
+            "",
+            "calendar team-429@group.calendar.google.com",
+        );
+        assert_eq!(error.kind(), "gog");
     }
 
     #[test]

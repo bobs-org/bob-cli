@@ -78,7 +78,10 @@ fn escape_backslash_before_punct(text: &str) -> String {
 /// `\#` for a `#` that starts the node or follows whitespace, when a
 /// non-space, non-`#` character follows. That is the tag shape
 /// (`#offclock`, `#task`); `##`, `# `, and `/#frag` stay literal.
-fn escape_tag_hashes(text: &str) -> String {
+///
+/// `gcal::render::escape_title` reuses this after clock tokens are
+/// stripped, so organizer-authored mid-line tags stay data.
+pub(crate) fn escape_tag_hashes(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
     for (index, &current) in chars.iter().enumerate() {

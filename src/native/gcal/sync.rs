@@ -795,7 +795,7 @@ pub(super) fn build_occurrences<S: HomeSource>(
         spans.insert("time".to_string(), journal::span_hash(&time_label));
         spans.insert(
             "title".to_string(),
-            journal::span_hash(&event.event.title),
+            journal::span_hash(&render::escape_title(&event.event.title)),
         );
         spans.insert("badges".to_string(), journal::span_hash(&badges));
         let qualifier = if task {

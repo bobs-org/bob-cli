@@ -1,10 +1,11 @@
 //! Render Event Task and context rows exactly as `docs/gcal.md` specifies.
 //!
 //! Titles pass through the shared escaper plus a gcal pass that
-//! neutralizes `🔁`, Tasks emoji signifiers, and priority emojis, and
-//! escapes a leading `#` or list marker. Badges are title-free
-//! URL-encoded links; `[type:: MEET]` is added only when the PT13
-//! suggestion for the rooted line is not MEET.
+//! neutralizes `🔁`, Tasks emoji signifiers, and priority emojis,
+//! escapes mid-line `#tags`, breaks `[[` and `](` so wikilinks and
+//! Markdown links cannot survive, and escapes a leading `#` or list
+//! marker. Badges are title-free URL-encoded links; `[type:: MEET]` is
+//! added only when the PT13 suggestion for the rooted line is not MEET.
 
 use std::path::Path;
 
@@ -158,12 +159,24 @@ pub(crate) fn render_context_row(input: &ContextRowInput<'_>) -> String {
 /// Escape a calendar title: collapse control and Unicode whitespace to
 /// a single space so a summary cannot forge daily-note lines, then the
 /// shared task-line escaper and the gcal pass (Tasks emoji, priority
-/// emojis, leading markers).
+/// emojis, mid-line `#tags`, `[[` / `](` sequences, leading markers).
+///
+/// Clock tokens are stripped before this runs, so intended `#on`/`#off`
+/// directives are gone; leftover hashes are organizer data.
 pub(crate) fn escape_title(title: &str) -> String {
     let collapsed = collapse_whitespace(title);
     let escaped = task_text_escape::escape_task_text(&collapsed);
     let neutralized = neutralize_tasks_emoji(&escaped);
-    escape_leading_title_marker(&neutralized)
+    let tagged = task_text_escape::escape_tag_hashes(&neutralized);
+    let unlinked = break_title_link_sequences(&tagged);
+    escape_leading_title_marker(&unlinked)
+}
+
+/// Break wikilink `[[` and Markdown-link `](` the way description
+/// escaping does, without turning every `[field]` into an escaped
+/// bracket (task rows still carry `[root::]` after the title).
+fn break_title_link_sequences(text: &str) -> String {
+    text.replace("[[", "\\[\\[").replace("](", "\\](")
 }
 
 /// Collapse every whitespace or control run to one space and trim, so
@@ -472,6 +485,40 @@ mod tests {
         );
         assert_eq!(escape_title("Fix\t#task\r\nnow"), "Fix \\#task now");
         assert_eq!(escape_title("  padded  title  "), "padded title");
+    }
+
+    #[test]
+    fn mid_line_title_hazards_stay_data() {
+        use crate::native::dataview::{parse_details, TaskFormat};
+        assert_eq!(
+            escape_title("Budget sync #gtd #pre"),
+            "Budget sync \\#gtd \\#pre",
+        );
+        assert_eq!(
+            escape_title("See [[Secret Note]]"),
+            "See \\[\\[Secret Note]]",
+        );
+        assert_eq!(
+            escape_title("[join here](obsidian://vault)"),
+            "[join here\\](obsidian://vault)",
+        );
+        assert_eq!(escape_title("C# and F#"), "C# and F#");
+        assert_eq!(
+            escape_title("see https://x.test/#frag"),
+            "see https://x.test/#frag",
+        );
+        let escaped = escape_title("Budget sync #gtd #pre");
+        for format in [TaskFormat::Dataview, TaskFormat::Emoji] {
+            let details = parse_details(&escaped, format);
+            assert!(
+                !details
+                    .tags
+                    .iter()
+                    .any(|tag| tag == "#gtd" || tag == "#pre"),
+                "{format:?}: {escaped} tags={:?}",
+                details.tags
+            );
+        }
     }
 
     #[test]
