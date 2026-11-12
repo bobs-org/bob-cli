@@ -478,7 +478,7 @@ fn parse_event_time(
     }
 }
 
-fn parse_instant(
+pub(crate) fn parse_instant(
     value: &str,
     timezone: Option<&str>,
 ) -> Option<DateTime<FixedOffset>> {

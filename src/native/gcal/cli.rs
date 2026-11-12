@@ -123,13 +123,15 @@ fn note_after_help() -> &'static str {
 
 fn sync_command() -> ClapCommand {
     ClapCommand::new("sync")
-        .about("Write one day's Events rows and MEET links")
+        .about("Write one or more days of Events rows and MEET links")
         .long_about(
-            "Write one day's Events rows and MEET links: reconcile one \
-             bounded, idempotent day (default today, `-D` for another day \
-             whose note exists). `-d` prints the exact unified diff of the \
-             plan and writes nothing. `-F` resets the day's sync journal and \
-             reapplies Google over its Events rows and MEET links. Writes \
+            "Write one or more days of Events rows and MEET links: reconcile \
+             each bounded, idempotent day (today by default, repeat `-D` \
+             for several existing daily notes). Google events are fetched in \
+             one pass before any day is written. `-d` prints the exact unified \
+             diffs of the plans and writes nothing. `-F` resets every selected \
+             day's sync journal and reapplies Google over its Events rows and \
+             MEET links. Writes \
              nothing, and exits 0 with a reason and hint, while the note is \
              missing, has no `## Pomodoros`, or still has Templater tags \
              (`<% … %>`) Templater has not rendered.",
@@ -137,7 +139,7 @@ fn sync_command() -> ClapCommand {
         .after_help(sync_after_help())
         .disable_help_flag(true)
         .arg(bob_dir_arg())
-        .arg(day_arg())
+        .arg(sync_day_arg())
         .arg(dry_run_arg())
         .arg(sync_force_arg())
         .arg(human_format_arg())
@@ -146,7 +148,7 @@ fn sync_command() -> ClapCommand {
 }
 
 fn sync_after_help() -> &'static str {
-    "Examples:\n  bob gcal sync\n  bob gcal sync -D tomorrow\n  bob gcal sync -d\n  bob gcal sync -F\n  bob gcal sync -F -d\n  bob gcal sync -q\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH\n  BOB_NOW            Local datetime override for default day selection"
+    "Examples:\n  bob gcal sync\n  bob gcal sync -D tomorrow\n  bob gcal sync -D today -D tomorrow\n  bob gcal sync -d\n  bob gcal sync -F\n  bob gcal sync -F -d\n  bob gcal sync -q\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH\n  BOB_NOW            Local datetime override for default day selection"
 }
 
 fn doctor_command() -> ClapCommand {
@@ -290,6 +292,17 @@ fn day_arg() -> Arg {
         .default_value("today")
         .value_parser(OsStringValueParser::new())
         .help("Local day: today, tomorrow, yesterday, or YYYY-MM-DD")
+}
+
+fn sync_day_arg() -> Arg {
+    Arg::new("day")
+        .long("day")
+        .short('D')
+        .value_name("DAY")
+        .default_value("today")
+        .value_parser(OsStringValueParser::new())
+        .action(ArgAction::Append)
+        .help("Local day: today, tomorrow, yesterday, or YYYY-MM-DD (repeat to sync several days)")
 }
 
 fn manual_arg() -> Arg {
@@ -585,7 +598,7 @@ impl LoginArgs {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SyncArgs {
     pub bob_dir: Option<PathBuf>,
-    pub day: String,
+    pub days: Vec<String>,
     pub dry_run: bool,
     pub force: bool,
     pub format: HumanFormat,
@@ -596,10 +609,12 @@ impl SyncArgs {
     pub(crate) fn from_matches(matches: &ArgMatches) -> Self {
         Self {
             bob_dir: raw_bob_dir(matches),
-            day: matches
-                .get_one::<OsString>("day")
+            days: matches
+                .get_many::<OsString>("day")
+                .into_iter()
+                .flatten()
                 .map(|value| value.to_string_lossy().trim().to_string())
-                .unwrap_or_else(|| "today".to_string()),
+                .collect(),
             dry_run: matches.get_flag("dry-run"),
             force: matches.get_flag("force"),
             format: HumanFormat::from_matches(matches),
@@ -788,12 +803,21 @@ mod tests {
             "sync",
         ));
         assert_eq!(args.bob_dir(), bob_env::home_dir().join("vault"));
-        assert_eq!(args.day, "tomorrow");
+        assert_eq!(args.days, ["tomorrow"]);
         assert!(args.dry_run);
         assert!(args.force);
         assert!(args.format.is_json());
         assert!(args.quiet);
         assert_eq!(args.error_format(), "json");
+    }
+
+    #[test]
+    fn sync_args_accept_repeated_days() {
+        let args = SyncArgs::from_matches(&sub_matches_for(
+            &["bob gcal", "sync", "-D", "tomorrow", "--day", "2026-10-30"],
+            "sync",
+        ));
+        assert_eq!(args.days, ["tomorrow", "2026-10-30"]);
     }
 
     #[test]

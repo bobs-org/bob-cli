@@ -6,7 +6,11 @@
 //! `write_staged_files` with a single retry, and append the journal
 //! only after the note write succeeds.
 
-use std::{collections::BTreeMap, path::PathBuf, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+    time::Duration,
+};
 
 use chrono::{NaiveDate, Timelike};
 use serde_json::{json, Value};
@@ -39,23 +43,57 @@ use crate::native::{
 
 pub(crate) fn run(args: &SyncArgs) -> i32 {
     let format = args.error_format();
-    match sync(args) {
-        Ok(report) => {
-            print_report(&report, args);
+    match sync(args, true) {
+        Ok(mut result) => {
+            if let Some((day, error)) = result.failure.take() {
+                record_last_error(args, Some(day), &error);
+                if format == "json" && result.selected_days > 1 {
+                    print_json_run(&result.reports, Some((day, &error)));
+                    return error.exit_code();
+                }
+                if result.selected_days == 1 && result.reports.is_empty() {
+                    return ui::report_error("sync", &error, format);
+                }
+                return ui::report_error("sync", &error, format);
+            }
+            if format == "json" && result.selected_days > 1 {
+                print_json_run(&result.reports, None);
+            } else if format == "json"
+                && let Some(report) = result.reports.first()
+            {
+                print_report(report, args);
+            }
             0
         }
         Err(error) => {
-            record_last_error(args, &error);
+            record_last_error(args, None, &error);
             ui::report_error("sync", &error, format)
         }
     }
 }
 
+struct SyncRun {
+    reports: Vec<SyncReport>,
+    failure: Option<(NaiveDate, GcalError)>,
+    selected_days: usize,
+}
+
 /// Remember a failed run in host-local status so `doctor` can show the
 /// last error. Best effort: a broken config must not hide the error.
-fn record_last_error(args: &SyncArgs, error: &GcalError) {
+fn record_last_error(
+    args: &SyncArgs,
+    failed_day: Option<NaiveDate>,
+    error: &GcalError,
+) {
     let today = bob_env::current_datetime().date();
-    let Ok(day) = classify::resolve_day(&args.day, today) else {
+    let day = failed_day.or_else(|| {
+        args.days
+            .iter()
+            .filter_map(|value| classify::resolve_day(value, today).ok())
+            .min()
+            .or_else(|| args.days.is_empty().then_some(today))
+    });
+    let Some(day) = day else {
         return;
     };
     record_status(
@@ -171,7 +209,10 @@ fn snapshot_diagnostics(
     diagnostics::collect(&inputs)
 }
 
-fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
+fn sync(
+    args: &SyncArgs,
+    stream_human_reports: bool,
+) -> Result<SyncRun, GcalError> {
     let config = GcalConfig::resolve()?;
     let host = journal::host_label();
     if (!args.dry_run || args.force)
@@ -187,16 +228,76 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
         )));
     }
     let today = bob_env::current_datetime().date();
-    let day = classify::resolve_day(&args.day, today)?;
-    let is_today = day == today;
     let vault = args.bob_dir();
+    let days = resolve_days(args, today)?;
+    let context = snapshot::FetchContext::new(&config)?;
+    // Fetch all selected Google data before any day is allowed to write.
+    let mut raw_days = context.fetch_days(&days)?;
     let mut resolver = HomeResolver::new(DiskHomeSource::new(&vault));
+    let mut reports = Vec::with_capacity(days.len());
+    for day in days.iter().copied() {
+        if !reports.is_empty() {
+            resolver.refresh();
+        }
+        let snapshot = context.assemble_day(
+            vault.clone(),
+            day,
+            raw_days.remove(&day).unwrap_or_default(),
+            &mut resolver,
+        )?;
+        match sync_day(args, &config, &host, snapshot, &mut resolver) {
+            Ok(report) => {
+                if stream_human_reports && !args.format.is_json() {
+                    if !reports.is_empty() && !args.quiet {
+                        println!();
+                    }
+                    print_report(&report, args);
+                }
+                reports.push(report);
+            }
+            Err(error) => {
+                return Ok(SyncRun {
+                    reports,
+                    failure: Some((day, error)),
+                    selected_days: days.len(),
+                });
+            }
+        }
+    }
+    Ok(SyncRun {
+        reports,
+        failure: None,
+        selected_days: days.len(),
+    })
+}
 
-    // Fetch outside any lock; an incomplete snapshot writes nothing.
-    let snapshot = snapshot::fetch_day(vault, &config, day, &mut resolver)?;
+fn resolve_days(
+    args: &SyncArgs,
+    today: NaiveDate,
+) -> Result<Vec<NaiveDate>, GcalError> {
+    let values = if args.days.is_empty() {
+        vec!["today".to_string()]
+    } else {
+        args.days.clone()
+    };
+    let mut days = BTreeSet::new();
+    for value in values {
+        days.insert(classify::resolve_day(&value, today)?);
+    }
+    Ok(days.into_iter().collect())
+}
+
+fn sync_day(
+    args: &SyncArgs,
+    config: &GcalConfig,
+    host: &str,
+    snapshot: snapshot::DaySnapshot,
+    resolver: &mut HomeResolver<DiskHomeSource>,
+) -> Result<SyncReport, GcalError> {
     let (diag_warnings, deprecations) = snapshot_diagnostics(&snapshot);
     let vault = snapshot.vault.clone();
     let day = snapshot.day;
+    let is_today = day == bob_env::current_datetime().date();
     let daily_rel = snapshot.daily_rel.clone();
     let note_path = vault.join(&daily_rel);
     let display_path = display_rel(&vault, &note_path);
@@ -206,7 +307,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
         Err(_) => {
             return waiting(
                 args,
-                &host,
+                host,
                 day,
                 &display_path,
                 WaitingReason::NoteMissing,
@@ -221,7 +322,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
     if let Some(reason) = WaitingReason::of_contents(&contents) {
         return waiting(
             args,
-            &host,
+            host,
             day,
             &display_path,
             reason,
@@ -299,20 +400,14 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
             held: Some(held),
         };
         if !args.dry_run {
-            record_status(&host, day, "held", &report, None);
+            record_status(host, day, "held", &report, None);
         }
         return Ok(report);
     }
     let now = bob_env::current_datetime();
     let mut occurrences = Vec::new();
     for (occurrence, warning) in build_occurrences(
-        &snapshot,
-        &config,
-        &vault,
-        &daily_rel,
-        is_today,
-        &now,
-        &mut resolver,
+        &snapshot, config, &vault, &daily_rel, is_today, &now, resolver,
     ) {
         if let Some(warning) = warning {
             warnings.push(warning);
@@ -354,7 +449,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
             now,
         },
         Some(daily_rel.as_path()),
-        Some(&mut resolver),
+        Some(&mut *resolver),
     );
 
     if args.dry_run {
@@ -409,7 +504,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
             in_sync: skips.in_sync,
             held: None,
         };
-        record_status(&host, day, "unchanged", &report, None);
+        record_status(host, day, "unchanged", &report, None);
         return Ok(report);
     }
 
@@ -463,7 +558,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
                 if let Some(reason) = WaitingReason::of_contents(&current) {
                     return waiting(
                         args,
-                        &host,
+                        host,
                         day,
                         &display_path,
                         reason,
@@ -513,7 +608,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
                         now,
                     },
                     Some(daily_rel.as_path()),
-                    Some(&mut resolver),
+                    Some(&mut *resolver),
                 );
                 let reset_record =
                     reset.as_ref().is_some_and(|reset| reset.had_state);
@@ -545,7 +640,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
                         in_sync: skips.in_sync,
                         held: None,
                     };
-                    record_status(&host, day, "unchanged", &report, None);
+                    record_status(host, day, "unchanged", &report, None);
                     return Ok(report);
                 }
             }
@@ -561,7 +656,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
     // Append the journal only after the note write succeeds.
     append_journal(
         &vault,
-        &host,
+        host,
         &plan,
         &display_path,
         day,
@@ -600,7 +695,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
         in_sync: skips.in_sync,
         held: None,
     };
-    record_status(&host, day, "written", &report, None);
+    record_status(host, day, "written", &report, None);
     Ok(report)
 }
 
@@ -612,13 +707,20 @@ pub(super) fn apply_note_day(
 ) -> Result<(String, String, Vec<String>, Option<String>), GcalError> {
     let args = SyncArgs {
         bob_dir: Some(vault.to_path_buf()),
-        day: day.to_string(),
+        days: vec![day.to_string()],
         dry_run: false,
         force: false,
         format: super::cli::HumanFormat::Human,
         quiet: true,
     };
-    let report = sync(&args)?;
+    let mut result = sync(&args, false)?;
+    if let Some((_, error)) = result.failure.take() {
+        return Err(error);
+    }
+    let report = result
+        .reports
+        .pop()
+        .expect("single-day private note sync returns a report");
     let waiting = report.waiting.as_ref().map(WaitingReason::detail);
     Ok((
         report.status.to_string(),
@@ -1792,6 +1894,30 @@ fn buffer_json(buffer: crate::native::event_task::EventBuffer) -> Value {
 }
 
 fn print_json(report: &SyncReport) {
+    println!("{}", report_json(report));
+}
+
+fn print_json_run(
+    reports: &[SyncReport],
+    failure: Option<(NaiveDate, &GcalError)>,
+) {
+    let mut document = json!({
+        "schema_version": 1,
+        "ok": failure.is_none(),
+        "days": reports.iter().map(report_json).collect::<Vec<_>>(),
+    });
+    if let Some((day, error)) = failure {
+        document["error"] = json!({
+            "day": day.to_string(),
+            "kind": error.kind(),
+            "message": error.message(),
+            "hint": error.hint(),
+        });
+    }
+    println!("{document}");
+}
+
+fn report_json(report: &SyncReport) -> Value {
     let rows: Vec<Value> = report
         .rows
         .iter()
@@ -1823,44 +1949,41 @@ fn print_json(report: &SyncReport) {
             "refreshed": report.stamp_refreshed,
         })
     });
-    println!(
-        "{}",
-        json!({
-            "schema_version": 1,
-            "ok": true,
-            "day": report.day.to_string(),
-            "path": report.path,
-            "status": report.status,
-            "force": report.force,
-            "rows": rows,
-            "in_sync": report.in_sync,
-            "skipped": skipped,
-            "pomodoro": {
-                "entry_line": first_open_entry(report).map(|entry| entry.line),
-                "created": first_open_entry(report)
-                    .is_some_and(|entry| entry.created),
-                "links_added": report.links_added,
-                "links_refiled": report.links_refiled,
-                "links_sorted": report.links_sorted,
-                "entries": json_entries(report),
-            },
-            "waiting": report.waiting.as_ref().map(|reason| json!({
-                "reason": reason.code(),
-                "detail": reason.detail(),
-                "hint": reason.hint(),
-                "line": reason.line(),
-            })),
-            "held": report.held.as_ref().map(|held| json!({
-                "rows": held.rows,
-                "written_at": held.written_at,
-                "detail": held.detail,
-                "hint": held.hint,
-            })),
-            "warnings": report.warnings,
-            "deprecations": report.deprecations,
-            "stamp": stamp,
-        })
-    );
+    json!({
+        "schema_version": 1,
+        "ok": true,
+        "day": report.day.to_string(),
+        "path": report.path,
+        "status": report.status,
+        "force": report.force,
+        "rows": rows,
+        "in_sync": report.in_sync,
+        "skipped": skipped,
+        "pomodoro": {
+            "entry_line": first_open_entry(report).map(|entry| entry.line),
+            "created": first_open_entry(report)
+                .is_some_and(|entry| entry.created),
+            "links_added": report.links_added,
+            "links_refiled": report.links_refiled,
+            "links_sorted": report.links_sorted,
+            "entries": json_entries(report),
+        },
+        "waiting": report.waiting.as_ref().map(|reason| json!({
+            "reason": reason.code(),
+            "detail": reason.detail(),
+            "hint": reason.hint(),
+            "line": reason.line(),
+        })),
+        "held": report.held.as_ref().map(|held| json!({
+            "rows": held.rows,
+            "written_at": held.written_at,
+            "detail": held.detail,
+            "hint": held.hint,
+        })),
+        "warnings": report.warnings,
+        "deprecations": report.deprecations,
+        "stamp": stamp,
+    })
 }
 
 /// Unified diff of the dry-run plan, `---`/`+++` plus `@@` hunks.

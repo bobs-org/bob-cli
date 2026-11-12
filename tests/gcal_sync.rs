@@ -3,7 +3,7 @@
 mod gcal_support;
 
 use gcal_support::{stderr, stdout, FakeGog, GcalEnv};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::fs;
 
 fn prepare(env: &GcalEnv) {
@@ -57,6 +57,36 @@ fn status(env: &GcalEnv) -> Value {
     let path = env.root().join("state/bob/gcal/status.json");
     serde_json::from_str(&fs::read_to_string(path).expect("status file"))
         .expect("status JSON")
+}
+
+fn simple_event(id: &str, title: &str, start: &str, end: &str) -> Value {
+    json!({
+        "id": id,
+        "summary": title,
+        "start": {"dateTime": start},
+        "end": {"dateTime": end},
+        "status": "confirmed",
+        "eventType": "default",
+        "organizer": {"self": true},
+        "attendees": [],
+    })
+}
+
+fn write_daily_note(env: &GcalEnv, date: &str, contents: &str) {
+    let compact = date.replace('-', "");
+    let path = env.vault().join(&date[..4]).join(format!("{compact}.md"));
+    fs::create_dir_all(path.parent().expect("daily parent"))
+        .expect("create daily parent");
+    fs::write(path, contents).expect("write daily note");
+}
+
+fn calendar_event_call_count(fake: &FakeGog) -> usize {
+    fake.calls()
+        .iter()
+        .filter(|call| {
+            call.windows(2).any(|pair| pair == ["calendar", "events"])
+        })
+        .count()
 }
 
 #[test]
@@ -3854,4 +3884,321 @@ fn list_shares_the_skip_words_and_footer() {
     );
     assert_eq!(by_title("Product interview")["skip"], Value::Null);
     assert_eq!(by_title("Dentist")["skip"]["reason"], "removed_by_you");
+}
+
+#[test]
+fn repeated_days_batch_fetch_and_write_in_sorted_deduped_order() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-multi-day");
+    prepare(&env);
+    write_daily_note(
+        &env,
+        "2026-10-31",
+        "# Saturday 2026-10-31\n\n## Pomodoros\n",
+    );
+    let outside = "# Sunday 2026-11-01\n\n## Pomodoros\n";
+    write_daily_note(&env, "2026-11-01", outside);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(
+        &json!({
+            "events": [
+                simple_event("day-a", "Day A", "2026-10-30T09:00:00-04:00", "2026-10-30T10:00:00-04:00"),
+                simple_event("day-b", "Day B", "2026-10-31T09:00:00-04:00", "2026-10-31T10:00:00-04:00"),
+                simple_event("day-c", "Day C", "2026-11-01T09:00:00-04:00", "2026-11-01T10:00:00-04:00"),
+            ],
+            "nextPageToken": null,
+        })
+        .to_string(),
+    );
+
+    let output = sync_output(
+        &env,
+        &fake,
+        &[
+            "-D",
+            "2026-10-31",
+            "-D",
+            "2026-10-30",
+            "-D",
+            "2026-10-30",
+            "-f",
+            "json",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let report: Value =
+        serde_json::from_slice(&output.stdout).expect("wrapper");
+    assert_eq!(report["ok"], true);
+    assert_eq!(report["days"].as_array().expect("days").len(), 2);
+    assert_eq!(report["days"][0]["day"], "2026-10-30");
+    assert_eq!(report["days"][1]["day"], "2026-10-31");
+    let day_a = fs::read_to_string(env.vault().join("2026/20261030.md"))
+        .expect("day A note");
+    let day_b = fs::read_to_string(env.vault().join("2026/20261031.md"))
+        .expect("day B note");
+    assert!(day_a.contains("Day A"), "{day_a}");
+    assert!(!day_a.contains("Day B"), "{day_a}");
+    assert!(day_b.contains("Day B"), "{day_b}");
+    assert!(!day_b.contains("Day A"), "{day_b}");
+    assert_eq!(calendar_event_call_count(&fake), 1, "{:?}", fake.calls());
+    assert_eq!(
+        fake.calls()
+            .iter()
+            .filter(|call| call.iter().any(|arg| arg == "version"))
+            .count(),
+        1,
+        "{:?}",
+        fake.calls()
+    );
+    assert_eq!(
+        fake.calls()
+            .iter()
+            .filter(|call| call
+                .windows(2)
+                .any(|pair| pair == ["calendar", "calendars"]))
+            .count(),
+        1,
+        "{:?}",
+        fake.calls()
+    );
+    assert_eq!(
+        fs::read_to_string(env.vault().join("2026/20261101.md")).unwrap(),
+        outside,
+        "unselected days stay untouched"
+    );
+
+    for (date, title) in [("2026-10-30", "Day A"), ("2026-10-31", "Day B")] {
+        let path = env
+            .vault()
+            .join(&date[..4])
+            .join(format!("{}.md", date.replace('-', "")));
+        let note = fs::read_to_string(&path).expect("read synced note");
+        let note = note
+            .lines()
+            .filter(|line| !(line.starts_with("- [") && line.contains(title)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(path, format!("{note}\n")).expect("remove selected row");
+    }
+    let forced = sync_output(
+        &env,
+        &fake,
+        &["-D", "2026-10-30", "-D", "2026-10-31", "-F", "-f", "json"],
+    );
+    assert_eq!(forced.status.code(), Some(0), "{}", stderr(&forced));
+    let forced: Value =
+        serde_json::from_slice(&forced.stdout).expect("wrapper");
+    assert_eq!(forced["days"][0]["force"], true);
+    assert_eq!(forced["days"][1]["force"], true);
+    assert!(today_note(&env).contains("Day A"));
+    assert!(fs::read_to_string(env.vault().join("2026/20261031.md"))
+        .expect("day B note")
+        .contains("Day B"));
+    assert_eq!(
+        fs::read_to_string(env.vault().join("2026/20261101.md")).unwrap(),
+        outside,
+        "-F resets selected days only"
+    );
+}
+
+#[test]
+fn noncontiguous_days_fetch_separate_runs_and_skip_the_gap() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-multi-gap");
+    prepare(&env);
+    let middle = "# Saturday 2026-10-31\n\n## Pomodoros\n";
+    write_daily_note(&env, "2026-10-31", middle);
+    write_daily_note(
+        &env,
+        "2026-11-01",
+        "# Sunday 2026-11-01\n\n## Pomodoros\n",
+    );
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(
+        &json!({
+            "events": [
+                simple_event("day-a", "Day A", "2026-10-30T09:00:00-04:00", "2026-10-30T10:00:00-04:00"),
+                simple_event("day-c", "Day C", "2026-11-01T09:00:00-04:00", "2026-11-01T10:00:00-04:00"),
+            ],
+            "nextPageToken": null,
+        })
+        .to_string(),
+    );
+    let output =
+        sync_output(&env, &fake, &["-D", "2026-10-30", "-D", "2026-11-01"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(calendar_event_call_count(&fake), 2, "{:?}", fake.calls());
+    assert_eq!(
+        fs::read_to_string(env.vault().join("2026/20261031.md")).unwrap(),
+        middle,
+        "the gap day is not reconciled"
+    );
+    assert!(fs::read_to_string(env.vault().join("2026/20261101.md"))
+        .expect("day C note")
+        .contains("Day C"));
+}
+
+#[test]
+fn invalid_repeated_day_fails_before_any_google_call_or_write() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-multi-bad-day");
+    prepare(&env);
+    let before = today_note(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+
+    let output = sync_output(
+        &env,
+        &fake,
+        &["-D", "2026-10-30", "-D", "nonsense", "-f", "json"],
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    let report: Value = serde_json::from_slice(&output.stdout).expect("error");
+    assert_eq!(report["error"]["kind"], "bad_day");
+    assert!(fake.calls().is_empty(), "{:?}", fake.calls());
+    assert_eq!(today_note(&env), before);
+    assert!(journal_lines(&env).is_empty());
+}
+
+#[test]
+fn waiting_day_does_not_block_the_next_selected_day() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-multi-waiting");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(
+        &json!({
+            "events": [simple_event(
+                "today-event",
+                "Today event",
+                "2026-10-30T09:00:00-04:00",
+                "2026-10-30T10:00:00-04:00",
+            )],
+            "nextPageToken": null,
+        })
+        .to_string(),
+    );
+    let output = sync_output(
+        &env,
+        &fake,
+        &["-D", "yesterday", "-D", "today", "-f", "json"],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let report: Value =
+        serde_json::from_slice(&output.stdout).expect("wrapper");
+    assert_eq!(report["days"][0]["day"], "2026-10-29");
+    assert_eq!(report["days"][0]["status"], "waiting");
+    assert_eq!(report["days"][1]["day"], "2026-10-30");
+    assert_eq!(report["days"][1]["status"], "written");
+    assert!(today_note(&env).contains("Today event"));
+}
+
+#[test]
+fn multi_day_json_stops_on_day_error_with_completed_reports() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-multi-error");
+    prepare(&env);
+    let foreign_stamp = "*↻ synced 12:00 · [other@example.com](https://calendar.google.com/calendar/r/day/2026/10/31?authuser=other%40example.com)*";
+    write_daily_note(
+        &env,
+        "2026-10-31",
+        &format!("# Saturday 2026-10-31\n\n## Events\n\n{foreign_stamp}\n\n## Pomodoros\n"),
+    );
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(
+        &json!({
+            "events": [
+                simple_event("day-a", "Day A", "2026-10-30T09:00:00-04:00", "2026-10-30T10:00:00-04:00"),
+                simple_event("day-b", "Day B", "2026-10-31T09:00:00-04:00", "2026-10-31T10:00:00-04:00"),
+            ],
+            "nextPageToken": null,
+        })
+        .to_string(),
+    );
+    let output = sync_output(
+        &env,
+        &fake,
+        &["-D", "2026-10-30", "-D", "2026-10-31", "-f", "json"],
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    let report: Value =
+        serde_json::from_slice(&output.stdout).expect("wrapper");
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["days"].as_array().expect("days").len(), 1);
+    assert_eq!(report["days"][0]["day"], "2026-10-30");
+    assert_eq!(report["error"]["day"], "2026-10-31");
+    assert_eq!(report["error"]["kind"], "account_changed");
+    assert!(today_note(&env).contains("Day A"));
+    assert!(!fs::read_to_string(env.vault().join("2026/20261031.md"))
+        .expect("day B note")
+        .contains("Day B"));
+}
+
+#[test]
+fn multi_day_dry_run_prints_both_diffs_without_writing() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-multi-dry");
+    prepare(&env);
+    write_daily_note(
+        &env,
+        "2026-10-31",
+        "# Saturday 2026-10-31\n\n## Pomodoros\n",
+    );
+    let before_a = today_note(&env);
+    let before_b = fs::read_to_string(env.vault().join("2026/20261031.md"))
+        .expect("day B");
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(
+        &json!({
+            "events": [
+                simple_event("day-a", "Day A", "2026-10-30T09:00:00-04:00", "2026-10-30T10:00:00-04:00"),
+                simple_event("day-b", "Day B", "2026-10-31T09:00:00-04:00", "2026-10-31T10:00:00-04:00"),
+            ],
+            "nextPageToken": null,
+        })
+        .to_string(),
+    );
+    let output = sync_output(
+        &env,
+        &fake,
+        &["-D", "2026-10-30", "-D", "2026-10-31", "-d"],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let printed = stdout(&output);
+    assert_eq!(printed.matches("--- ").count(), 2, "{printed}");
+    assert_eq!(today_note(&env), before_a);
+    assert_eq!(
+        fs::read_to_string(env.vault().join("2026/20261031.md")).unwrap(),
+        before_b
+    );
+    assert!(journal_lines(&env).is_empty());
+}
+
+#[test]
+fn event_spanning_midnight_keeps_existing_start_day_classification() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-multi-midnight");
+    prepare(&env);
+    write_daily_note(
+        &env,
+        "2026-10-31",
+        "# Saturday 2026-10-31\n\n## Pomodoros\n",
+    );
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(
+        &json!({
+            "events": [simple_event(
+                "overnight",
+                "Overnight event",
+                "2026-10-30T23:00:00-04:00",
+                "2026-10-31T01:00:00-04:00",
+            )],
+            "nextPageToken": null,
+        })
+        .to_string(),
+    );
+    let output =
+        sync_output(&env, &fake, &["-D", "2026-10-30", "-D", "2026-10-31"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(calendar_event_call_count(&fake), 1, "{:?}", fake.calls());
+    assert!(today_note(&env).contains("Overnight event"));
+    let next_day = fs::read_to_string(env.vault().join("2026/20261031.md"))
+        .expect("day B note");
+    assert!(
+        !next_day.contains("Overnight event"),
+        "short timed events remain filed to their local start day: {next_day}"
+    );
 }

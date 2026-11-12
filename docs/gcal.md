@@ -409,10 +409,10 @@ as a footer.
 
 ## Sync
 
-`bob gcal sync` reconciles one bounded, idempotent day — today by default,
-`-D` for another day whose note already exists. Bob never creates daily notes;
-when the note, its `## Pomodoros` section, or Templater's rendering of it is
-missing, sync writes nothing and exits 0 with
+`bob gcal sync` reconciles one or more bounded, idempotent days — today by
+default, or use `-D DAY` repeatedly for existing daily notes. Bob never
+creates daily notes. If a note is missing, lacks its `## Pomodoros` section,
+or still needs Templater rendering, sync writes nothing and exits 0 with
 `waiting for 2026/20261030.md · <detail>` and a dim `hint:` line.
 
 Core Daily Notes copies the raw template, `<% … %>` tags and `## Pomodoros`
@@ -436,11 +436,20 @@ template already has a Pomodoros section.
 ```bash
 bob gcal sync
 bob gcal sync -D tomorrow
+bob gcal sync -D today -D tomorrow
 bob gcal sync -d
 bob gcal sync -F
 bob gcal sync -F -d
 bob gcal sync -q
 ```
+
+Repeated `-D` values resolve before any Google fetch; duplicate dates collapse
+and the remaining days run in ascending date order. Bob fetches each configured
+calendar once for each contiguous run of selected days, then reconciles the
+days in order so earlier note and journal changes can inform later days. All
+Google fetches finish before the first write. A waiting or held day does not
+stop the run. `-F` resets every selected day's sync journal and reapplies that
+day's Google snapshot.
 
 The run fetches every configured calendar outside any lock, classifies each
 event, chooses roots, and folds the per-host journal. The plan then inserts
@@ -584,6 +593,12 @@ into meeting-time order. A sort-only human summary looks like
 `✓ Events unchanged · Pomodoros ↕2 links sorted`; a refile-only summary looks
 like `✓ Events updated · Pomodoros ↪1 refiled`; other Pomodoro summaries append
 `, ↕2 sorted` or `, ↪1 refiled` when applicable.
+
+A multi-day JSON run wraps the unchanged per-day reports in one document:
+`{"schema_version":1,"ok":true,"days":[…]}`. If a day fails, the run stops
+after that day's error, and the wrapper contains the completed reports,
+`"ok":false`, and an `error` object with `day`, `kind`, `message`, and `hint`.
+A run resolving to one unique day keeps the existing single-report document.
 
 ### Skipped events
 

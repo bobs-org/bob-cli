@@ -20,7 +20,7 @@ Commands:
   login      Connect Google Calendar (read-only) in one guided step
   logout     Remove Bob's Calendar grant only; prints the Google revoke URL
   note       List, show, preview, and write private event notes
-  sync       Write one day's Events rows and MEET links
+  sync       Write one or more days of Events rows and MEET links
   help       Print this message or the help of the given subcommand(s)
 
 Options:
