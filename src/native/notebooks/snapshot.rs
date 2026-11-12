@@ -15,13 +15,12 @@ use std::{
 
 use crate::native::{
     albums::{parse_album_declaration, AlbumDeclaration},
-    config::config_path,
     projects::{
         frontmatter_is_album, frontmatter_is_area, frontmatter_is_notebook,
         frontmatter_is_project, frontmatter_value, is_excluded_directory,
         is_markdown_file, parse_frontmatter,
     },
-    records::schema::{RecordDiagnostic, RecordType},
+    records::schema::RecordDiagnostic,
     vault_links::NoteIndex,
 };
 
@@ -67,11 +66,6 @@ pub(crate) struct VaultSnapshot {
     pub(crate) discovered: BTreeSet<PathBuf>,
     pub(crate) files: BTreeMap<PathBuf, SnapshotFile>,
     pub(crate) record_ids: BTreeSet<String>,
-    config_record_ids: BTreeSet<String>,
-    #[allow(dead_code)] // Consumed by the album registry/report phases.
-    pub(crate) config_record_types: Vec<RecordType>,
-    #[allow(dead_code)] // Consumed by the album registry/report phases.
-    pub(crate) config_diagnostic: Option<RecordDiagnostic>,
     /// Parsed album claims and schema findings are independent of filesystem
     /// errors, so a broken declaration never turns a readable vault partial.
     pub(crate) album_declarations: BTreeMap<PathBuf, AlbumDeclaration>,
@@ -85,39 +79,14 @@ pub(crate) struct VaultSnapshot {
 impl VaultSnapshot {
     /// One sorted vault walk plus one read per included note.
     pub(crate) fn load(bob_dir: &Path) -> Self {
-        Self::load_with_config(bob_dir, &config_path())
-    }
-
-    /// Load a snapshot using the caller's effective config path. Album
-    /// registry callers pass both paths explicitly so `-b` never changes
-    /// the vault while silently selecting another host's records config.
-    pub(crate) fn load_with_config(bob_dir: &Path, config_path: &Path) -> Self {
         let mut relative_paths: Vec<PathBuf> = Vec::new();
         let mut io_errors = Vec::new();
         collect_markdown(bob_dir, bob_dir, &mut relative_paths, &mut io_errors);
         relative_paths.sort();
         relative_paths.dedup();
 
-        let (config_record_types, config_diagnostic) =
-            match crate::native::config::records::load_records_config_from(
-                config_path,
-            ) {
-                Ok(config) => (config.types, None),
-                Err(diagnostic) => (Vec::new(), Some(diagnostic)),
-            };
-        let mut config_record_ids = config_record_types
-            .iter()
-            .map(|record_type| record_type.id.clone())
-            .collect::<BTreeSet<_>>();
-        // Semantic config failures can still leave a valid YAML map of record
-        // declarations. Preserve those structural nouns for frontmatter
-        // recognition even though no config kind is usable.
-        if config_diagnostic.is_some()
-            && let Ok(text) = fs::read_to_string(config_path)
-        {
-            config_record_ids.extend(recover_record_ids(&text));
-        }
-
+        // Record kinds and their schemas now live only in album notes. A
+        // legacy `records:` config key is unknown configuration and ignored.
         let mut contents_by_path = BTreeMap::new();
         for relative in &relative_paths {
             match fs::read_to_string(bob_dir.join(relative)) {
@@ -133,10 +102,7 @@ impl VaultSnapshot {
         let mut snapshot = Self {
             discovered: relative_paths.into_iter().collect(),
             files: BTreeMap::new(),
-            record_ids: config_record_ids.clone(),
-            config_record_ids,
-            config_record_types,
-            config_diagnostic,
+            record_ids: BTreeSet::new(),
             album_declarations: BTreeMap::new(),
             album_schema_diagnostics: Vec::new(),
             io_errors,
@@ -212,7 +178,7 @@ impl VaultSnapshot {
                 declarations.insert(path.clone(), declaration);
             }
         }
-        self.record_ids = self.config_record_ids.clone();
+        self.record_ids.clear();
         self.record_ids.extend(
             declarations
                 .values()
@@ -240,24 +206,6 @@ impl VaultSnapshot {
         }
         self.files = files;
     }
-}
-
-fn recover_record_ids(text: &str) -> BTreeSet<String> {
-    let Ok(serde_yaml::Value::Mapping(root)) =
-        serde_yaml::from_str::<serde_yaml::Value>(text)
-    else {
-        return BTreeSet::new();
-    };
-    let records_key = serde_yaml::Value::String("records".to_owned());
-    let Some(serde_yaml::Value::Mapping(records)) = root.get(&records_key)
-    else {
-        return BTreeSet::new();
-    };
-    records
-        .keys()
-        .filter_map(serde_yaml::Value::as_str)
-        .map(str::to_owned)
-        .collect()
 }
 
 impl SnapshotFile {

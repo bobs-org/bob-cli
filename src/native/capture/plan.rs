@@ -147,10 +147,9 @@ pub(super) fn plan_capture_batch_with_config_path(
         || request.forced_sub_bullet_target.is_some()
         || request.forced_drawer.is_some();
     // One memoized record route policy per batch: lexical candidates
-    // first, so ordinary drafts skip config and filesystem reads.
+    // first, so ordinary drafts skip filesystem reads.
     let record_policy = super::super::capture_record::record_policy_for_draft(
         &request.bob_dir,
-        config_path,
         &request.raw_text,
     );
     let mut notebook_policy =
@@ -255,7 +254,6 @@ pub(super) fn plan_capture_batch_with_config_path(
     if let Some(route) = request.forced_route.as_deref()
         && let Some(error) = album_task_home_refusal(
             &request.bob_dir,
-            config_path,
             record_context.policy(),
             route,
         )
@@ -270,7 +268,6 @@ pub(super) fn plan_capture_batch_with_config_path(
         if inherits
             && let Some(error) = album_task_home_refusal(
                 &request.bob_dir,
-                config_path,
                 record_context.policy(),
                 &global.route,
             )
@@ -1340,13 +1337,12 @@ fn assign_ref_verdicts(
 /// Refuse an album as a task home before anything stages. Valid albums
 /// name their owner and record route; broken albums report their schema
 /// problem without inventing an owner or offering an unsafe rewrite.
-/// Returns `None` when the route is not an album, so config and ordinary
-/// task routes pass through. Per-route policy decisions win; forced and
+/// Returns `None` when the route is not an album, so ordinary task routes
+/// pass through. Per-route policy decisions win; forced and
 /// global routes that never pass through lexical candidates resolve
 /// boundedly (one album head plus its owner chain) here instead.
 fn album_task_home_refusal(
     bob_dir: &Path,
-    config_path: Option<&Path>,
     policy: &capture_language::RecordRoutePolicy,
     route: &str,
 ) -> Option<CaptureError> {
@@ -1389,11 +1385,8 @@ fn album_task_home_refusal(
         )),
         Some(_) => None,
         None => {
-            let path = config_path
-                .map(Path::to_path_buf)
-                .unwrap_or_else(super::super::config::config_path);
             match super::super::records::context::RecordContext::resolve_route_head(
-                bob_dir, &path, route, None,
+                bob_dir, route, None,
             ) {
                 Ok(super::super::records::context::RecordKindResolution::Valid {
                     kind,
@@ -2034,7 +2027,6 @@ pub(super) fn plan_capture_item(
         && let Some(route) = parsed_item.parsed.route.as_deref()
         && let Some(error) = album_task_home_refusal(
             &request.bob_dir,
-            config_path,
             record_context.policy(),
             route,
         )

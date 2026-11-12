@@ -81,9 +81,8 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob periods migrate`](periods.md#bob-periods-migrate) | Adopt the period-note tree (dry run by default) |
 | [`bob periods show`](periods.md#bob-periods-show) | Show a period's live stats and child summaries |
 | [`bob query`](query.md) | Run Dataview or Tasks queries against the vault |
-| [`bob records`](records.md) | List, inspect, check, scaffold, and create or update Record Notes |
-| [`bob records check`](records.md#bob-records-check) | Check Record Notes against their album or config schemas |
-| [`bob records init`](records.md#bob-records-init) | Scaffold a record type's notes and starter Base |
+| [`bob records`](records.md) | List, inspect, check, create, and update Record Notes |
+| [`bob records check`](records.md#bob-records-check) | Check Record Notes against their album schemas |
 | [`bob records list`](records.md#bob-records-list) | List Record Note collections (default) |
 | [`bob records new`](records.md#bob-records-new) | Create one Record Note from its schema |
 | [`bob records show`](records.md#bob-records-show) | Show one record schema and its common values |
@@ -173,7 +172,7 @@ Vault:
   notebooks    Inspect or maintain notebook notes
   periods      Manage period notes: weeks, quarters, years, and all time
   query        Run Dataview or Tasks queries against the vault
-  records      List, inspect, check, scaffold, and create or update Record Notes
+  records      List, inspect, check, create, and update Record Notes
   ref          Find, list, read, rename, and plan references for today; sync
                Highlights PDFs into them
   vault-sync   Reconcile the vault through Git (default: run) or show status

@@ -102,10 +102,10 @@ anything is written, and any failure rolls the whole batch back.
 | `@@route` | Draft-wide destination, anywhere in the draft, for otherwise-unrouted items (notes when the route is a notebook); also routes default (routeless) refs (source `global`) |
 | `%t` | Mark the draft's first item as a [template](#bulk-templates): expand one capture item per row below it; captures exactly like the expansion |
 | `@route` with task text | Write a task to `<route>.md` (default route is `mac_inbox`) |
-| `Title @dir/` or `@dir/ Title` | Create a Record Note in that configured folder (see [Record notes](#record-notes)) |
+| `Title @dir/` or `@dir/ Title` | Create a Record Note in an album folder (see [Record notes](#record-notes)) |
 | `Title @dir/^stem` | Same, with an explicit filename stem |
 | `Title @dir/stem` | Reserved: refused until capture can append to an existing note |
-| `Title @eat` | Stays a task; warns `record_collection_route` and teaches `@eat/` |
+| `Title @eat` | An album route refuses with `album_holds_no_tasks` and teaches `@eat/` |
 | `@route+id @route+id <note>` | Apply the same note, child bullets, and item operations to each named existing task (see [Several tasks on one line](#several-tasks-on-one-line)) |
 | `@route` alone on its line, with no bullets or other markers | Pull the note's unlinked, unblocked Pending, Next, and Ready tasks into today's Pomodoros through the explicit Pull-In choice; see [Pulling ready tasks from a note](#pulling-ready-tasks-from-a-note) |
 | `- ^<id>` in a sealed project-note item | Move that open top-level task from the parent note into this slot in the new project's `## Tasks` section; see [Moving parent tasks in](#moving-parent-tasks-in) |
@@ -6574,14 +6574,14 @@ refusal writes nothing, including the project note.
 
 ### Record notes
 
-A Record Note is one durable thing of an album or transitional-config record
-kind, such as a restaurant in `eat/`. Album schemas own their noun and
-directory; `records:` serves only kinds no album claims. They are not Task
+A Record Note is one durable thing defined by an album schema, such as a
+restaurant in `eat/`. The album owns its noun and directory. A leftover
+`records:` key in host configuration is ignored. Record Notes are not Task
 Types (`#fix`, `bob types`). See [Record notes](records.md) for schema,
 rendering, and `bob records`.
 
-When an album or config kind owns a folder, a leading or trailing `@dir/` or
-`@dir/^stem` claims the item as record creation **before** transfer,
+When an album owns a folder, a leading or trailing `@dir/` or `@dir/^stem`
+claims the item as record creation **before** transfer,
 dependency, directive, type, task-ID, or ordinary task-bullet parsing.
 Route-first (`@eat/ Ramen Nagi`) and title-first (`Ramen Nagi @eat/`) are
 the same claim. A bare `@eat/` needs a title (`record_title`); it is never
@@ -6608,16 +6608,13 @@ bullets under a field refuse with `record_field_nested`. A first-level
 `key: value` with one colon stays a note and warns
 `record_field_single_colon`.
 
-Only an album or unclaimed-config folder claims creation. An existing
-non-record folder yields `record_folder_not_record`. A configured type id
-used as the folder (`@restaurant/`) yields `record_type_as_folder` and names
+Only an album folder claims creation. An existing non-record folder yields
+`record_folder_not_record`. An album noun used as the folder (`@restaurant/`)
+yields `record_type_as_folder` and names
 the real directory. Unknown `@notafolder/` stays literal task text. A broken
-album yields `album_schema_invalid` with file, line, and key path and never
-falls back to config; a malformed `records:` block yields
-`records_config_invalid` for unclaimed routes; incomplete discovery yields
-`record_discovery_incomplete`. Album failures are isolated per route, and
-transitional uses warn `records_config_deprecated`. Unrelated capture keeps
-working. A bare album route (`Blaze @eat`) refuses with
+album yields `album_schema_invalid` with file, line, and key path; incomplete
+discovery yields `record_discovery_incomplete`. Album failures are isolated
+per route. Unrelated capture keeps working. A bare album route (`Blaze @eat`) refuses with
 `album_holds_no_tasks` and a safe `@eat/` rewrite limited to the route token
 (when the owner resolves); other task-home routes (`-P`, move, inbox) teach
 the owner the same way. Album creates write `parent: "[[<album>]]"` and
@@ -6651,10 +6648,10 @@ no rewrite. This is the same create-to-update rewrite used by the later
 Similar records picker; accepting a `record_target` row below keeps authored
 parent text as the update's first note.
 
-`Blaze @eat` stays a task. Parse adds `record_collection_route` plus a
-rewrite that replaces only the route token with `@eat/`. Applying that
-rewrite parses as record creation. Heading, task-ID, escaped, and
-forced-literal routes do not get the warning.
+`Blaze @eat` refuses with `album_holds_no_tasks` and offers a rewrite that
+replaces only the route token with `@eat/`. Applying that rewrite parses as
+record creation. Heading, task-ID, escaped, and forced-literal routes do not
+get the refusal.
 
 `--dry-run` prints `would create` or `would update` plus the exact Markdown
 that commit writes. Album-backed drafts also print the staged album index
@@ -6709,11 +6706,10 @@ a list member containing `,`) omits `record.edit`. An untouched pre-filled
 edit changes no bytes. `record.edit` carries ordinary
 value-completion continuation (`next_missing_field: false`) even when
 value suggestions are empty; clients must not apply it merely because a
-response refreshed. Unknown fields, non-record cursors, and malformed
-`records:` config stay read-only (empty success plus the usual diagnostic
-codes) and never fall through to a task completion context.
+response refreshed. Unknown fields and non-record cursors stay read-only and
+never fall through to a task completion context.
 
-With the caret in a configured `@dir/` route or partial existing stem,
+With the caret in an album `@dir/` route or partial existing stem,
 `record_target` offers existing notes from that folder's lazy index. Exact
 and prefix matches on stem or title rank before fuzzy title matches, with
 stable title/stem ties. Only grammar-addressable stems are offered, so a
@@ -8581,7 +8577,7 @@ directive still succeed. If `TEXT` is omitted and stdin is piped, it reads the
 complete piped stdin stream, like `bob capture`. Only a missing `TEXT` or a
 bad flag is an error (exit 2); every other input succeeds.
 
-For an album or config kind, a claimed `@dir/` record draft adds a
+For an album, a claimed `@dir/` record draft adds a
 `record` object to the result and its item row. The object includes `action:
 "create"`, the type, label, emoji, `dir`, destination `path` and `stem`,
 `stem_source` (`title` or `explicit`), title, missing required fields, count of
@@ -8598,11 +8594,11 @@ See [Record notes](#record-notes) and
 [JSON outputs](reference/json-outputs.md#record-notes).
 
 `bob capture-targets` lists inbox, area, project, and notebook routes, then
-record folders from albums and unclaimed config kinds, sorted together by folder.
+album record folders sorted by folder.
 JSON notebook rows have `kind: "notebook"`, `title`, `breadcrumb`, and optional
 `summary` and `owner`. Record rows have `kind: "record"`, `type`, optional
 `emoji`, and an indexed note `count`; their route is the directory followed by `/`.
-Here `type` is the album's record noun or the config type id, such as `restaurant`.
+Here `type` is the album's record noun, such as `restaurant`.
 Album rows also carry `title`, optional `summary` and `owner`, and `breadcrumb`.
 Human output groups them under “Notebooks” and “Record folders”. Invalid album
 claims hide only their own routes; incomplete discovery hides all record routes.
@@ -10047,7 +10043,7 @@ in these contexts; `record.edit` is present only on named-field responses.
 Parse record objects carry the same `assist_version: 1`. A near-spelling
 warning uses code `record_value_near` with `authored` and `proposed` on
 complete (parse reports the same message and code with no rewrite).
-Configured record folders in the local route menu insert `eat/ ` (trailing
+Album-backed record folders in the local route menu insert `eat/ ` (trailing
 space), label `🍽️ New restaurant · 92`, and the same next-field
 continuation. See [Guided fields](#guided-fields).
 
@@ -10493,7 +10489,7 @@ list and call `bob capture` directly:
 On a successful scan, `capture-targets` returns `mac_inbox` first even when
 `mac_inbox.md` does not exist, followed by top-level area notes,
 non-terminal project notes, notebook notes (route `stem`, `kind: "notebook"`),
-then record folders from albums and unclaimed config kinds (route `dir/`,
+then album record folders (route `dir/`,
 `kind: "record"`). Each group is sorted by route. Notebooks are included
 automatically by this command and route completion; the internal
 `scan_capture_targets` omits them. Eligible note
@@ -10506,7 +10502,7 @@ Nested notes, projects whose status is `done`,
 `canceled`, or `cancelled` (case-insensitively), and other note types are
 omitted. Record rows add `type`, optional `emoji`, and indexed note `count`;
 album rows add `title`, optional `summary` and `owner`, and `breadcrumb`.
-Healthy albums need no `records:` config. Invalid claims hide their own routes;
+Leftover `records:` config is ignored. Invalid albums hide their own routes;
 incomplete discovery hides all record routes and exits 1. Human output groups
 notebook and record rows under “Notebooks” and “Record folders”. JSON has `ok`, `bob_dir`,
 `count`, and an ordered `targets` array; each target has `route`, `name`,

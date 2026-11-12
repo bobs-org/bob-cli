@@ -39,7 +39,7 @@ fn protocol_1_parses_with_schema_version_one() {
         serde_json::json!(["clicolor-force", "progress-env", "run-receipt"])
     );
     let entries = json["entries"].as_array().expect("entries");
-    assert_eq!(entries.len(), 98);
+    assert_eq!(entries.len(), 97);
     assert!(entries.iter().any(|entry| {
         entry["id"] == "clipboard"
             && entry["path"] == serde_json::json!(["clipboard"])
@@ -137,7 +137,6 @@ fn protocol_1_parses_with_schema_version_one() {
     }));
     for (id, command) in [
         ("records-check", "check"),
-        ("records-init", "init"),
         ("records-list", "list"),
         ("records-new", "new"),
         ("records-show", "show"),
@@ -151,6 +150,7 @@ fn protocol_1_parses_with_schema_version_one() {
             "missing catalog entry {id}"
         );
     }
+    assert!(!entries.iter().any(|entry| entry["id"] == "records-init"));
     assert!(entries.iter().any(|entry| {
         entry["id"] == "themes-split"
             && entry["path"] == serde_json::json!(["types", "split"])

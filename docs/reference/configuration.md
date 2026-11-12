@@ -115,27 +115,6 @@ copy:
 
 See the [Copy card](plugins/copy-card.md).
 
-### `records`
-
-`records` is an optional mapping from record type id to a schema. Each type
-requires a safe one-segment `dir`, a display `label`, and an ordered `fields`
-mapping. It may also set `emoji`, a literal `parent` wikilink, `dated_notes`
-(default `false`), and tolerated `legacy` frontmatter patterns. Type ids and
-field keys use lowercase letters, digits, and underscores; built-in type ids
-and reserved frontmatter keys are unavailable.
-
-Fields support `required`, `values`, `list`, `default`, `suggest`, `label`,
-`min`, and `max`. Omit `values` for text; provide a nonempty key-to-label
-mapping for choices; or use `date`, `link`, `url`, or `number`. Defaults must
-validate as values of their field, and `status` cannot have one. Numeric bounds
-apply only to number fields. Shared properties across record types must agree
-on storage kind and scalar/list shape.
-
-Album schemas live in vault notes; [`bob albums create`](../records.md#creating-an-album)
-scaffolds them. Deprecated `records:` serves only kinds no album claims.
-A malformed `records:` block leaves healthy albums and other config sections usable.
-See [Record notes](../records.md) for validation, defaults, and rendering.
-
 ### `plan`
 
 All caps are positive integers. `max_ready_per_note` is limited to 1–999;

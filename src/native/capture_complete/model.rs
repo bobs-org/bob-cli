@@ -44,13 +44,13 @@ pub(super) struct RouteCandidate {
     /// is unchanged for older inputs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) match_kind: Option<&'static str>,
-    /// Record type emoji, present only on configured record-folder rows.
+    /// Album emoji, present only on album-backed record rows.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) emoji: Option<String>,
-    /// Indexed note count, present only on configured record-folder rows.
+    /// Indexed note count, present only on album-backed record rows.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) count: Option<usize>,
-    /// Record type id, present only on configured record-folder rows.
+    /// Album record noun, present only on album-backed record rows.
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub(super) record_type: Option<String>,
     /// Notebook title, present only on notebook rows.

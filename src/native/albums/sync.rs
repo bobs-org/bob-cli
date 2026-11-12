@@ -22,7 +22,6 @@ use super::{
     report::{self, AlbumIssue, AlbumReportEntry},
 };
 use crate::native::{
-    config,
     host_catalog::{
         self, apply_and_commit, CommitInfo, FileEdit, PlannedTxn,
         ReadDependencies, TxnResult,
@@ -403,8 +402,7 @@ fn verify_current_hosts(
     if let Some(error) = snapshot.io_errors.first() {
         return Err(error.clone());
     }
-    let registry =
-        AlbumRegistry::from_snapshot(vault, &config::config_path(), &snapshot);
+    let registry = AlbumRegistry::from_snapshot(vault, &snapshot);
     let report = report::build_report(&registry, &snapshot);
     let catalogs = catalog::plan_catalogs(&snapshot, &registry);
     for host in hosts {
@@ -429,8 +427,7 @@ fn verify_current_hosts(
 /// Read-only combined plan. It takes no lock and runs no Git or sync command.
 pub(crate) fn dry_run(vault: &Path) -> SyncReport {
     let snapshot = VaultSnapshot::load(vault);
-    let registry =
-        AlbumRegistry::from_snapshot(vault, &config::config_path(), &snapshot);
+    let registry = AlbumRegistry::from_snapshot(vault, &snapshot);
     let plan = match plan_sync(vault, &registry, &snapshot) {
         Ok(plan) => plan,
         Err(failure) => return SyncReport::failed(true, failure),
@@ -501,8 +498,7 @@ pub(crate) fn sync_with_existing_lock(
     child_env: &ChildEnv,
 ) -> SyncReport {
     let snapshot = VaultSnapshot::load(vault);
-    let registry =
-        AlbumRegistry::from_snapshot(vault, &config::config_path(), &snapshot);
+    let registry = AlbumRegistry::from_snapshot(vault, &snapshot);
     let plan = match plan_sync(vault, &registry, &snapshot) {
         Ok(plan) => plan,
         Err(failure) => return SyncReport::failed(false, failure),
@@ -527,11 +523,7 @@ pub(crate) fn run_standalone(vault: &Path, json_mode: bool) -> SyncReport {
     let result =
         host_catalog::run_locked(vault, &child_env, json_mode, "album", || {
             let snapshot = VaultSnapshot::load(vault);
-            let registry = AlbumRegistry::from_snapshot(
-                vault,
-                &config::config_path(),
-                &snapshot,
-            );
+            let registry = AlbumRegistry::from_snapshot(vault, &snapshot);
             let plan = plan_sync(vault, &registry, &snapshot)?;
             *captured.borrow_mut() = Some(SyncContext {
                 albums: plan.albums.clone(),
@@ -714,11 +706,7 @@ mod tests {
 
     fn planned(vault: &Path) -> CombinedSyncPlan {
         let snapshot = VaultSnapshot::load(vault);
-        let registry = AlbumRegistry::from_snapshot(
-            vault,
-            &config::config_path(),
-            &snapshot,
-        );
+        let registry = AlbumRegistry::from_snapshot(vault, &snapshot);
         plan_sync(vault, &registry, &snapshot).expect("combined plan")
     }
 

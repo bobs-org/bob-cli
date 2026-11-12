@@ -647,26 +647,6 @@ pub(crate) const ENTRIES: &[Row] = &[
     },
     Row {
         fixed: JSON,
-        preview: Some(DRY_RUN),
-        slots: &[("TYPE", "record-type"), ("type", "record-type")],
-        extra_args: &[StaticArg {
-            name: "PARENT",
-            slot: "text",
-            required: false,
-            repeat: false,
-        }],
-        ..writes(
-            "records-init",
-            &["records", "init"],
-            "Scaffold a Record type",
-            &["records", "init", "scaffold", "type", "base"],
-            Policy::PreviewFirst,
-            Some(DRY_RUN),
-            60,
-        )
-    },
-    Row {
-        fixed: JSON,
         ..reads(
             "records-list",
             &["records", "list"],

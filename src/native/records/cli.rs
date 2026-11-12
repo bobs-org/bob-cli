@@ -1,7 +1,6 @@
 //! Public `bob records` commands.
 
 use std::{
-    collections::BTreeSet,
     ffi::OsString,
     fs, io, iter,
     path::{Path, PathBuf},
@@ -16,36 +15,25 @@ use serde_json::{json, Value};
 
 use super::{
     catalog::RecordCatalog,
-    check::{
-        collect_markdown_outside_config_folders, collect_orphan_records,
-        AlbumMembership, TypeReport,
-    },
+    check::{collect_orphan_records, AlbumMembership, TypeReport},
     context::{
         AlbumRecordIdentity, RecordContext, RecordKindResolution,
         ResolvedRecordKind,
     },
-    init::{plan_init, PieceAction, PlannedPiece},
     plan::{plan_create_with_identity, RecordCreateRequest},
     render::RecordNoteInput,
-    schema::{
-        FieldInputState, FieldKind, RecordFieldInput, RecordType, RecordsConfig,
-    },
+    schema::{FieldInputState, FieldKind, RecordFieldInput, RecordsConfig},
 };
 use crate::native::{
     albums::{
         index::IndexState,
         parse_album_declaration,
-        registry::{
-            AlbumEntry, AlbumRegistry, DiscoveryHealth, RecordTypeSource,
-        },
+        registry::{AlbumEntry, DiscoveryHealth, RecordTypeSource},
         write as album_write, AlbumFinding, AlbumIssueSeverity,
     },
-    capture::{write_staged_files, write_staged_files_guarded, StagedTextFile},
-    config::{self, records::load_records_config},
+    capture::{write_staged_files_guarded, StagedTextFile},
     env as bob_env,
     host_catalog::ReadDependencies,
-    notebooks::snapshot::VaultSnapshot,
-    projects::frontmatter_type_names,
     style::Styler,
     vault_links::VaultLinkResolver,
 };
@@ -78,13 +66,13 @@ pub(crate) fn run_update(args: Vec<OsString>) -> i32 {
     execute_update(&matches)
 }
 
-pub(crate) fn run_init(args: Vec<OsString>) -> i32 {
-    let mut command = build_cli_init();
-    let matches = match matches_for(&mut command, "bob records init", args) {
-        Ok(matches) => matches,
-        Err(code) => return code,
-    };
-    execute_init(&matches)
+pub(crate) fn run_init(_args: Vec<OsString>) -> i32 {
+    report_error(
+        "bob records init",
+        OutputFormat::Human,
+        "record schemas now live in album notes; use `bob albums create` to create an album and its record schema",
+        2,
+    )
 }
 
 pub(crate) fn run_show(args: Vec<OsString>) -> i32 {
@@ -169,9 +157,9 @@ pub(crate) fn run_show(args: Vec<OsString>) -> i32 {
 
 pub(crate) fn build_cli_check() -> ClapCommand {
     ClapCommand::new("bob records check")
-        .about("Check Record Notes against their album or config schemas")
+        .about("Check Record Notes against their album schemas")
         .long_about(
-            "Lint each record folder from the effective vault's albums, falling back to unclaimed config kinds. Checks the type link, parent membership for album records, required and typed fields, legacy keys, checkboxes, and records filed outside their folder. TYPE accepts a noun or album stem.",
+            "Lint each record folder from the effective vault's album notes. Checks the type link, parent membership, required and typed fields, legacy keys, checkboxes, and records filed outside their folder. TYPE accepts a noun or album stem.",
         )
         .after_help(
             "Examples:\n  bob records check\n  bob records check restaurant\n  bob records check eat\n  bob records check -f json\n\nSee docs/records.md for the schema and lint rules.",
@@ -187,7 +175,7 @@ pub(crate) fn build_cli_list() -> ClapCommand {
     ClapCommand::new("bob records list")
         .about("List Record Note collections (default)")
         .long_about(
-            "Show each album or config record type, its folder, note count, required fields, and source. Invalid albums still contribute their folder counts. This command is read-only. Bare `bob records` runs this command.",
+            "Show each album record type, its folder, note count, and required fields. Invalid albums still contribute their folder counts. This command is read-only. Bare `bob records` runs this command.",
         )
         .after_help(
             "Examples:\n  bob records\n  bob records list\n  bob records list -f json\n\nSee docs/records.md for record schemas.",
@@ -303,28 +291,8 @@ pub(crate) fn build_cli_update() -> ClapCommand {
 
 pub(crate) fn build_cli_init() -> ClapCommand {
     ClapCommand::new("bob records init")
-        .about("Scaffold a record type's notes and starter Base")
-        .long_about(
-            "Create the type note, collection note, and starter Base for a configured record type. Existing files are kept and never overwritten. The collection note's parent comes from required --parent when that note is missing. Init does not create an empty record folder; the first record creates it.",
-        )
-        .after_help(
-            "Examples:\n  bob records init show\n  bob records init movie -p fun\n  bob records init movie -p fun -d\n  bob records init movie -p fun -f json\n\nSee docs/records.md for adding a record type.",
-        )
-        .disable_help_flag(true)
-        .arg(record_type_arg(true).help("Configured record type id"))
-        .arg(bob_dir_arg())
-        .arg(dry_run_arg().help("Print the planned files without writing"))
-        .arg(format_arg())
-        .arg(help_arg())
-        .arg(
-            Arg::new("parent")
-                .short('p')
-                .long("parent")
-                .value_name("NOTE")
-                .help(
-                    "Parent note for a missing collection note; required when <dir>.md does not exist",
-                ),
-        )
+        .hide(true)
+        .about("Retired; create an album with `bob albums create`")
 }
 
 pub(crate) fn build_cli_show() -> ClapCommand {
@@ -442,7 +410,7 @@ fn vault_from(matches: &ArgMatches) -> PathBuf {
 }
 
 fn load_context(vault: &Path) -> RecordContext {
-    RecordContext::discover(vault, &config::config_path())
+    RecordContext::discover(vault)
 }
 
 fn execute_list(matches: &ArgMatches) -> i32 {
@@ -453,12 +421,6 @@ fn execute_list(matches: &ArgMatches) -> i32 {
         report_discovery_errors("bob records list", output_format, &context)
     {
         return code;
-    }
-    if context.album_claims().is_empty()
-        && context.usable_kinds().is_empty()
-        && let Some(error) = context.registry().config_diagnostic.clone()
-    {
-        return report_config_error("bob records list", output_format, error);
     }
     let mut catalog = RecordCatalog::new(&vault);
     let collections = all_collections(&context);
@@ -473,7 +435,7 @@ fn execute_list(matches: &ArgMatches) -> i32 {
         "schema_version": SCHEMA_VERSION,
         "types": rows,
     });
-    // Emit additive config-deprecation warnings without changing payloads.
+    // Keep warning plumbing shared with route resolution.
     let mut seen_warnings = std::collections::BTreeSet::new();
     let mut list_warnings = Vec::new();
     for collection in &collections {
@@ -527,20 +489,7 @@ fn execute_check(matches: &ArgMatches) -> i32 {
                 )
             }
         },
-        None => {
-            if context.album_claims().is_empty()
-                && context.usable_kinds().is_empty()
-                && let Some(error) =
-                    context.registry().config_diagnostic.clone()
-            {
-                return report_config_error(
-                    "bob records check",
-                    output_format,
-                    error,
-                );
-            }
-            all_collections(&context)
-        }
+        None => all_collections(&context),
     };
     let today = bob_env::current_datetime().date();
     let mut catalog = RecordCatalog::new(vault.clone());
@@ -555,7 +504,6 @@ fn execute_check(matches: &ArgMatches) -> i32 {
             today,
         ));
     }
-    add_config_outside_records(&vault, &collections, &mut reports);
     if selected_type.is_none() {
         add_orphan_records(&vault, &context, &mut reports);
     }
@@ -962,191 +910,6 @@ fn execute_update(matches: &ArgMatches) -> i32 {
     0
 }
 
-fn execute_init(matches: &ArgMatches) -> i32 {
-    let output_format = format_from(matches);
-    let vault = vault_from(matches);
-    let type_id = matches.get_one::<String>("type").expect("required by clap");
-    // An album-claimed kind refuses, even when the album is broken: albums
-    // own their record kinds, so a matching config kind is never scaffolded
-    // over them. Unclaimed config kinds keep the existing scaffolding below.
-    let config_path = config::config_path();
-    let snapshot = VaultSnapshot::load_with_config(&vault, &config_path);
-    let registry =
-        AlbumRegistry::from_snapshot(&vault, &config_path, &snapshot);
-    if let Some(path) = registry.claimants(type_id).into_iter().next() {
-        return report_init_claimed(output_format, type_id, &path);
-    }
-    if !snapshot.io_errors.is_empty() {
-        let first = snapshot.io_errors.first().expect("nonempty");
-        let more = snapshot.io_errors.len() - 1;
-        let suffix = if more > 0 {
-            format!(" (+{more} more)")
-        } else {
-            String::new()
-        };
-        return report_error(
-            "bob records init",
-            output_format,
-            &format!(
-                "the vault scan was incomplete: {first}{suffix}; `bob records init` cannot prove `{type_id}` is unclaimed until those paths are readable"
-            ),
-            2,
-        );
-    }
-    let config = match load_records_config() {
-        Ok(config) => config,
-        Err(error) => {
-            return report_config_error(
-                "bob records init",
-                output_format,
-                error,
-            );
-        }
-    };
-    let Some(record_type) = config.record_type(type_id) else {
-        return report_error(
-            "bob records init",
-            output_format,
-            &format!("unknown record type `{type_id}`"),
-            2,
-        );
-    };
-    if let Some(path) =
-        registry.config_claimants(record_type).into_iter().next()
-    {
-        return report_init_claimed(output_format, type_id, &path);
-    }
-    let timezone = crate::native::day_timezone().ok().flatten();
-    let created = crate::native::capture_project_note::format_created_timestamp(
-        bob_env::current_datetime(),
-        timezone,
-    );
-    let parent = matches.get_one::<String>("parent").map(String::as_str);
-    let plan = match plan_init(&vault, record_type, parent, &created) {
-        Ok(plan) => plan,
-        Err(message) => {
-            return report_error(
-                "bob records init",
-                output_format,
-                &message,
-                2,
-            );
-        }
-    };
-    if matches.get_flag("dry-run") {
-        print_init_result(&plan, "planned", output_format);
-        return 0;
-    }
-
-    let mut staged = Vec::new();
-    for piece in plan.creates() {
-        let Some(markdown) = piece.markdown.as_deref() else {
-            continue;
-        };
-        let target = vault.join(&piece.path);
-        staged.push(StagedTextFile {
-            target,
-            target_existed: false,
-            original_target: String::new(),
-            updated_target: markdown.to_owned(),
-        });
-    }
-    if !staged.is_empty()
-        && let Err(error) = write_staged_files(&staged)
-    {
-        return report_error(
-            "bob records init",
-            output_format,
-            &error.message,
-            2,
-        );
-    }
-    print_init_result(&plan, "written", output_format);
-    0
-}
-
-fn report_init_claimed(
-    output_format: OutputFormat,
-    type_id: &str,
-    path: &str,
-) -> i32 {
-    report_error(
-        "bob records init",
-        output_format,
-        &format!(
-            "`{type_id}` is claimed by album {path}; album kinds are born with `bob albums create`, never `bob records init` (see `bob albums create --help`), or edit {path} to change its `record:` schema"
-        ),
-        2,
-    )
-}
-
-fn print_init_result(
-    plan: &super::init::InitPlan,
-    status: &str,
-    format: OutputFormat,
-) {
-    if format == OutputFormat::Json {
-        println!(
-            "{}",
-            json!({
-                "schema_version": SCHEMA_VERSION,
-                "status": status,
-                "type": plan.record_type,
-                "label": plan.label,
-                "dir": plan.dir,
-                "emoji": plan.emoji,
-                "pieces": plan.pieces.iter().map(init_piece_json).collect::<Vec<_>>(),
-            })
-        );
-        return;
-    }
-    let styler = Styler::detect();
-    let emoji = plan.emoji.as_deref().unwrap_or("");
-    let verb = if status == "planned" {
-        "would scaffold"
-    } else if plan.creates().next().is_some() {
-        "scaffolded"
-    } else {
-        "already scaffolded"
-    };
-    println!(
-        "{}  {} {} {}",
-        styler.green("✓"),
-        emoji,
-        verb,
-        styler.bold(&plan.label)
-    );
-    for piece in &plan.pieces {
-        let tag = match piece.action {
-            PieceAction::Create => styler.green("create"),
-            PieceAction::Keep => styler.dim("keep"),
-        };
-        println!("  {tag}  {}", piece.path.display());
-        if status == "planned"
-            && piece.action == PieceAction::Create
-            && let Some(markdown) = piece.markdown.as_deref()
-        {
-            println!(
-                "{}",
-                styler.dim(&format!("--- {} ---", piece.path.display()))
-            );
-            print!("{markdown}");
-            if !markdown.ends_with('\n') {
-                println!();
-            }
-        }
-    }
-}
-
-fn init_piece_json(piece: &PlannedPiece) -> Value {
-    json!({
-        "kind": piece.kind.as_str(),
-        "path": piece.path.display().to_string(),
-        "action": piece.action.as_str(),
-        "markdown": piece.markdown,
-    })
-}
-
 fn parse_field_inputs(
     matches: &ArgMatches,
 ) -> Result<Vec<RecordFieldInput>, String> {
@@ -1505,10 +1268,7 @@ fn print_list(payload: &Value, format: OutputFormat) {
     }
     let rows = payload["types"].as_array().cloned().unwrap_or_default();
     if rows.is_empty() {
-        println!(
-            "No record types in the effective vault or {}.",
-            config::config_path().display()
-        );
+        println!("No record types in the effective vault.");
         return;
     }
     let styler = Styler::detect();
@@ -1848,7 +1608,7 @@ struct PlannedAlbumEdit {
 }
 
 /// Plan the album's records index from the same preimage the record
-/// schema was bound to. Config-backed kinds plan no album write.
+/// schema was bound to. Usable record kinds all come from albums.
 /// Returns a stale-note message when the album changed after kind
 /// resolution; callers write nothing in that case.
 fn plan_album_write_for_record(
@@ -1857,9 +1617,7 @@ fn plan_album_write_for_record(
     kind: &ResolvedRecordKind,
     overlays: &[(PathBuf, String)],
 ) -> Result<Option<PlannedAlbumWrite>, String> {
-    let RecordTypeSource::Album { path } = &kind.sourced.source else {
-        return Ok(None);
-    };
+    let RecordTypeSource::Album { path } = &kind.sourced.source;
     let record_type = kind.record_type();
     let album_relative = PathBuf::from(path);
     let before = match fs::read_to_string(vault.join(&album_relative)) {
@@ -1994,20 +1752,6 @@ impl Collection {
         }
     }
 
-    fn config_dir(&self) -> Option<&str> {
-        match self {
-            Self::Usable(kind)
-                if matches!(
-                    kind.sourced.source,
-                    RecordTypeSource::Config { .. }
-                ) =>
-            {
-                Some(kind.record_type().dir.as_str())
-            }
-            _ => None,
-        }
-    }
-
     fn list_row(&self, folder: &super::catalog::FolderIndex) -> Value {
         match self {
             Self::Usable(kind) => {
@@ -2064,17 +1808,11 @@ fn all_collections(context: &RecordContext) -> Vec<Collection> {
                 RecordTypeSource::Album { path } => {
                     path == &entry.declaration.path
                 }
-                RecordTypeSource::Config { .. } => false,
             })
         {
             collections.push(Collection::Usable(kind.clone()));
         } else {
             collections.push(Collection::InvalidAlbum(entry.clone()));
-        }
-    }
-    for kind in usable {
-        if matches!(kind.sourced.source, RecordTypeSource::Config { .. }) {
-            collections.push(Collection::Usable(kind));
         }
     }
     collections
@@ -2089,9 +1827,9 @@ fn resolve_usable_kind(
         RecordKindResolution::Invalid {
             paths, findings, ..
         } => Err(invalid_claim_message(selector, &paths, &findings)),
-        RecordKindResolution::Unclaimed {
-            config_diagnostic, ..
-        } => Err(unclaimed_message(selector, config_diagnostic.as_ref())),
+        RecordKindResolution::Unclaimed { .. } => {
+            Err(unclaimed_message(selector))
+        }
         RecordKindResolution::DiscoveryIncomplete { errors } => {
             Err(errors.join("\n"))
         }
@@ -2122,9 +1860,9 @@ fn resolve_check_collection(
                     invalid_claim_message(selector, &paths, &findings)
                 })
         }
-        RecordKindResolution::Unclaimed {
-            config_diagnostic, ..
-        } => Err(unclaimed_message(selector, config_diagnostic.as_ref())),
+        RecordKindResolution::Unclaimed { .. } => {
+            Err(unclaimed_message(selector))
+        }
         RecordKindResolution::DiscoveryIncomplete { errors } => {
             Err(errors.join("\n"))
         }
@@ -2148,15 +1886,8 @@ fn invalid_claim_message(
     format!("record type `{selector}` is not usable: {details}")
 }
 
-fn unclaimed_message(
-    selector: &str,
-    config_diagnostic: Option<&super::schema::RecordDiagnostic>,
-) -> String {
-    if let Some(diagnostic) = config_diagnostic {
-        diagnostic.to_string()
-    } else {
-        format!("unknown record type `{selector}`")
-    }
+fn unclaimed_message(selector: &str) -> String {
+    format!("unknown record type `{selector}`")
 }
 
 fn format_album_finding(finding: &AlbumFinding) -> String {
@@ -2226,15 +1957,13 @@ fn check_collection(
             let mut report = TypeReport::new(record_type, folder)
                 .with_source(kind.source_name())
                 .with_album(kind.album.clone());
-            let membership = match &kind.sourced.source {
-                RecordTypeSource::Album { path } => Some(AlbumMembership {
-                    album_path: Path::new(path),
-                    stem: record_type.dir.as_str(),
-                    noun: record_type.id.as_str(),
-                    resolver,
-                }),
-                RecordTypeSource::Config { .. } => None,
-            };
+            let RecordTypeSource::Album { path } = &kind.sourced.source;
+            let membership = Some(AlbumMembership {
+                album_path: Path::new(path),
+                stem: record_type.dir.as_str(),
+                noun: record_type.id.as_str(),
+                resolver,
+            });
             let notes = folder.notes().to_vec();
             for note in &notes {
                 let contents =
@@ -2248,31 +1977,14 @@ fn check_collection(
                 );
             }
             report.check_suggested_values(record_type, folder);
-            match &kind.sourced.source {
-                RecordTypeSource::Album { path } => {
-                    if !vault.join(path).is_file() {
-                        report.push(
-                            "error",
-                            "record_missing_collection_note",
-                            Some(path),
-                            None,
-                            format!("required album note is missing: {path}"),
-                        );
-                    }
-                }
-                RecordTypeSource::Config { .. } => {
-                    require_config_notes(vault, record_type, &mut report);
-                    report.push(
-                        "warning",
-                        "records_config_deprecated",
-                        None,
-                        None,
-                        format!(
-                            "record type {:?} still comes from config; declare it in a root album before the config migration lands",
-                            record_type.id
-                        ),
-                    );
-                }
+            if !vault.join(path).is_file() {
+                report.push(
+                    "error",
+                    "record_missing_collection_note",
+                    Some(path),
+                    None,
+                    format!("required album note is missing: {path}"),
+                );
             }
             report
         }
@@ -2327,92 +2039,6 @@ fn check_collection(
     }
 }
 
-fn require_config_notes(
-    vault: &Path,
-    record_type: &RecordType,
-    report: &mut TypeReport,
-) {
-    for (path, note_kind) in [
-        (PathBuf::from(format!("{}.md", record_type.id)), "type"),
-        (
-            PathBuf::from(format!("{}.md", record_type.dir)),
-            "collection",
-        ),
-    ] {
-        if note_kind == "collection" && record_type.id == record_type.dir {
-            continue;
-        }
-        if !vault.join(&path).is_file() {
-            let path_text = path.display().to_string();
-            report.push(
-                "error",
-                "record_missing_collection_note",
-                Some(&path_text),
-                None,
-                format!(
-                    "required {note_kind} note is missing: {}",
-                    path.display()
-                ),
-            );
-        }
-    }
-}
-
-fn add_config_outside_records(
-    vault: &Path,
-    collections: &[Collection],
-    reports: &mut [TypeReport],
-) {
-    let skip_dirs: BTreeSet<String> = collections
-        .iter()
-        .filter_map(Collection::config_dir)
-        .map(str::to_owned)
-        .collect();
-    let files = collect_markdown_outside_config_folders(vault, &skip_dirs);
-    for (collection, report) in collections.iter().zip(reports.iter_mut()) {
-        let Collection::Usable(kind) = collection else {
-            continue;
-        };
-        if !matches!(kind.sourced.source, RecordTypeSource::Config { .. }) {
-            continue;
-        }
-        let record_type = kind.record_type();
-        for path in &files {
-            let relative = path
-                .strip_prefix(vault)
-                .unwrap_or(path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            if relative.split('/').next() == Some(record_type.dir.as_str()) {
-                continue;
-            }
-            let Ok(contents) = fs::read_to_string(path) else {
-                continue;
-            };
-            let Some(frontmatter) =
-                crate::native::projects::parse_frontmatter(&contents)
-            else {
-                continue;
-            };
-            if frontmatter_type_names(&frontmatter)
-                .iter()
-                .any(|name| name == &record_type.id)
-            {
-                report.push(
-                    "error",
-                    "record_outside_folder",
-                    Some(&relative),
-                    Some("type"),
-                    format!(
-                        "record type {} belongs in {}/",
-                        record_type.id, record_type.dir
-                    ),
-                );
-            }
-        }
-    }
-}
-
 fn add_orphan_records(
     vault: &Path,
     context: &RecordContext,
@@ -2444,14 +2070,6 @@ fn add_orphan_records(
         );
     }
     reports.push(report);
-}
-
-fn report_config_error(
-    command: &str,
-    format: OutputFormat,
-    error: super::schema::RecordDiagnostic,
-) -> i32 {
-    report_error(command, format, &error.to_string(), 2)
 }
 
 fn report_error(

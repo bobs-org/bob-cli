@@ -682,23 +682,21 @@ fn records_help_lists_subcommands_and_options_alphabetically() {
     assert_success(&output);
     let help = stdout(&output);
     assert!(
-        help.contains(
-            "List, inspect, check, scaffold, and create or update Record Notes"
-        ) && help.contains("Bare `bob records` runs the read-only list")
+        help.contains("List, inspect, check, create, and update Record Notes")
+            && help.contains("Bare `bob records` runs the read-only list")
             && help.contains("(default)")
             && help.contains("\n  check ")
-            && help.contains("\n  init ")
             && help.contains("\n  list ")
             && help.contains("\n  new ")
             && help.contains("\n  show ")
-            && help.contains("\n  update "),
+            && help.contains("\n  update ")
+            && !help.contains("\n  init "),
         "expected records help and default command:\n{help}"
     );
     assert_text_order(
         &help,
         &[
             "\n  check ",
-            "\n  init ",
             "\n  list ",
             "\n  new ",
             "\n  show ",
@@ -709,31 +707,14 @@ fn records_help_lists_subcommands_and_options_alphabetically() {
 }
 
 #[test]
-fn records_init_help_lists_options_alphabetically() {
+fn records_init_is_hidden_but_direct_invocation_teaches_album_create() {
     let output = bob_command()
-        .args(["records", "init", "--help"])
+        .args(["records", "init", "restaurant"])
         .output()
-        .expect("run bob records init --help");
+        .expect("run retired records init");
 
-    assert_success(&output);
-    let help = stdout(&output);
-    assert!(
-        help.contains(
-            "Create the type note, collection note, and starter Base"
-        ) && help.contains("never overwritten")
-            && help.contains("bob records init movie -p fun"),
-        "expected records init help:\n{help}"
-    );
-    assert_text_order(
-        &help,
-        &[
-            "-b, --bob-dir",
-            "-d, --dry-run",
-            "-f, --format",
-            "-h, --help",
-            "-p, --parent",
-        ],
-    );
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(format_output(&output).contains("bob albums create"));
     assert_stdout_has_no_ansi(&output);
 }
 

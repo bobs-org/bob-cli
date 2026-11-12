@@ -11,7 +11,7 @@ List capture routes for inbox, area, project, and record notes
 ```text title="bob capture-targets --help"
 List the routable Bob notes that capture pickers can offer.
 
-The command reads top-level area and non-terminal project notes, opt-in notebook notes, plus configured record folders. It always pins mac_inbox first as the default task-capture target. It is read-only.
+The command reads top-level area and non-terminal project notes, opt-in notebook notes, plus album record folders. It always pins mac_inbox first as the default task-capture target. It is read-only.
 
 Usage: bob capture-targets [OPTIONS]
 

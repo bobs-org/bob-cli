@@ -81,6 +81,41 @@ fn capture(
 fn write_records_config(temp: &TempDir) -> std::path::PathBuf {
     let config = temp.path().join("config.yml");
     write_file(&config, RECORDS_CONFIG);
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create album vault");
+    let album = vault.join("eat.md");
+    if !album.exists() {
+        write_file(
+            &vault.join("body.md"),
+            "---\ntype: [[area]]\n---\n\n# Body\n",
+        );
+        write_file(
+            &album,
+            concat!(
+                "---\n",
+                "type: [[album]]\n",
+                "parent: \"[[body]]\"\n",
+                "summary: Places to eat.\n",
+                "emoji: \"🍽️\"\n",
+                "record:\n",
+                "  noun: restaurant\n",
+                "  label: Restaurant\n",
+                "  dated_notes: true\n",
+                "  fields:\n",
+                "    status:\n",
+                "      required: true\n",
+                "      values: {to_try: To try, liked: Liked}\n",
+                "    category: {required: true}\n",
+                "    location: {}\n",
+                "    visited: {values: date}\n",
+                "    tags: {list: true}\n",
+                "    website: {values: url}\n",
+                "    rating: {values: number}\n",
+                "---\n\n",
+                "# Restaurants\n"
+            ),
+        );
+    }
     config
 }
 
@@ -274,7 +309,9 @@ fn capture_record_human_success_names_type_and_fields() {
     assert_success(&output);
     let text = stdout(&output);
     assert!(
-        text.contains("new restaurant") && text.contains("eat/ramen_nagi.md"),
+        text.contains("new restaurant")
+            && text.contains("Restaurants")
+            && text.contains("body"),
         "human success header: {text}"
     );
     assert!(text.contains("Liked") || text.contains("liked"), "{text}");
@@ -1200,7 +1237,8 @@ fn capture_update_field_only_and_human_preview() {
     let text = stdout(&committed);
     assert!(
         text.contains("updated restaurant")
-            && text.contains("eat/ninja_sushi.md"),
+            && text.contains("Restaurants")
+            && text.contains("body"),
         "human success names update: {text}"
     );
 }
@@ -1210,8 +1248,24 @@ fn capture_update_undated_podcast_and_missing_notes() {
     let (_temp, vault, config) = complete_fixture();
     fs::create_dir_all(vault.join("podcasts")).expect("podcasts folder");
     write_file(
+        &vault.join("podcasts.md"),
+        concat!(
+            "---\n",
+            "type: [[album]]\n",
+            "parent: \"[[body]]\"\n",
+            "summary: Podcasts.\n",
+            "record:\n",
+            "  noun: podcast\n",
+            "  label: Podcast\n",
+            "  fields:\n",
+            "    status: {required: true}\n",
+            "    category: {}\n",
+            "---\n\n# Podcasts\n"
+        ),
+    );
+    write_file(
         &vault.join("podcasts/talk_python.md"),
-        "---\ntitle: Talk Python\ntype: \"[[podcast]]\"\nstatus: subscribed\ncategory: python\n---\n# Talk Python\n",
+        "---\nparent: \"[[podcasts]]\"\ntitle: Talk Python\ntype: \"[[record]]\"\nstatus: subscribed\ncategory: python\n---\n# Talk Python\n",
     );
     let draft = "Listened to the async episode @podcasts/talk_python";
     let output = capture(&vault, &config, &["-f", "json", draft])
@@ -1809,8 +1863,7 @@ fn album_fixture() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
 #[test]
 fn capture_album_create_writes_canonical_storage_with_metadata() {
     let (_temp, vault, config) = album_fixture();
-    // No fields typed: the album schema (no required fields) wins over the
-    // transitional config, which would demand status/category/location.
+    // The leftover host records schema is ignored; the album owns the route.
     let dry = capture(
         &vault,
         &config,

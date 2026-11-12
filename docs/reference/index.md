@@ -19,7 +19,7 @@ decision pages that stay in lockstep with the tools.
 - [Capture syntax](capture-syntax.md) for every `bob capture` token.
 - [Vault format](vault-format.md) for task lines, lanes, fields, and notes.
 - [Notebooks](../notebooks.md) for task-free notes, capture, and catalogs.
-- [Albums and record notes](../records.md) for albums, configured collections, and field validation.
+- [Albums and record notes](../records.md) for album schemas, collections, and field validation.
 - [Task archives](../task-archive.md) for retention, link repair, and restore.
 - [Configuration](configuration.md) for config keys, environment, and runtimes.
 - [JSON outputs](json-outputs.md) for every machine-readable command envelope.

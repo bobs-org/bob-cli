@@ -59,10 +59,8 @@ pub(crate) fn vault_lines(
 /// Root album stems for `bob albums update`. Read-only scan of the album
 /// registry; config-only kinds are never offered.
 fn album_stems(bob_dir: &Path) -> Vec<String> {
-    let registry = crate::native::albums::registry::AlbumRegistry::discover(
-        bob_dir,
-        &crate::native::config::config_path(),
-    );
+    let registry =
+        crate::native::albums::registry::AlbumRegistry::discover(bob_dir);
     let mut stems = registry
         .albums
         .iter()
@@ -263,10 +261,7 @@ fn record_sets(context: &Context) -> Vec<String> {
 fn record_context(
     context: &Context,
 ) -> crate::native::records::context::RecordContext {
-    crate::native::records::context::RecordContext::discover(
-        &context.bob_dir,
-        &crate::native::config::config_path(),
-    )
+    crate::native::records::context::RecordContext::discover(&context.bob_dir)
 }
 
 /// Record completion accepts either the schema noun or its album/folder
@@ -666,10 +661,8 @@ fn article_notes(context: &Context) -> Vec<String> {
 /// Computed album roots for `bob albums list -r`. Read-only scan;
 /// never broadens the task-route provider.
 fn album_roots(bob_dir: &Path) -> Vec<String> {
-    let registry = crate::native::albums::registry::AlbumRegistry::discover(
-        bob_dir,
-        &crate::native::config::config_path(),
-    );
+    let registry =
+        crate::native::albums::registry::AlbumRegistry::discover(bob_dir);
     let mut roots = registry
         .albums
         .iter()

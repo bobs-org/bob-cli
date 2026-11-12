@@ -417,19 +417,17 @@ Contract: [Albums and record notes](../records.md).
 
 ### Record notes
 
-Each album (or unclaimed `records:` kind) owns one folder. Album records use
-`type: "[[record]]"` and `parent: "[[<album>]]"`; config-backed records use
-`type: "[[<type-id>]]"` and an optional parent. Notes live at `<dir>/<stem>.md`;
-Bob writes `parent` when present, then `type`, `title`, schema fields, and `created`.
+Each album owns one folder. Record notes use `type: "[[record]]"` and
+`parent: "[[<album>]]"`. Notes live at `<dir>/<stem>.md`; Bob writes the
+album parent, type, title, schema fields, and created date.
 Ordinary note bullets live under
 `## Notes`, with dates when `dated_notes: true`.
 
-For a `restaurant` type owning `eat/`, `Ramen Nagi @eat/` plus
-its required field bullets creates `eat/ramen_nagi.md`. `@eat/ramen_nagi`
-updates supplied fields and appends notes; album writes also update the album's
-records index. For config-only kinds, `bob records init restaurant -p food`
-scaffolds missing `restaurant.md`, `eat.md`, and `eat.base`. It refuses any
-kind an album claims; use `bob albums create` for new albums.
+For a `restaurant` album owning `eat/`, `Ramen Nagi @eat/` plus its required
+field bullets creates `eat/ramen_nagi.md`. `@eat/ramen_nagi` updates supplied
+fields and appends notes; record writes also update the album's records index.
+Create new schemas with `bob albums create`. The retired hidden
+`bob records init` command always refuses and points to that command.
 
 Contract: [Albums and record notes](../records.md).
 
@@ -758,7 +756,7 @@ vault/
 | `mail/`, `gmail_inbox.md` | Created by Gmail save/compose and label sync | `gmail.folder`, `gmail.sync.inbox` |
 | Period notes | Created by `bob periods ensure` | Fixed paths in the period tree |
 | `done/` | Created by archive | none |
-| Record folders | Created on first record write | Album stem, or unclaimed `records.<type>.dir` |
+| Record folders | Created on first record write | Album stem |
 | `.obsidian/plugins/obsidian-tasks-plugin/data.json` | Needed for Dataview Tasks and Blocked writes | none |
 
 `.bob/` is machine data (preference journals, Keep import receipts, and
@@ -778,8 +776,8 @@ carries `inbox` and `note` and is read-only. `gmail.save` receipts carry
 subjects. See [Bob Gmail](../gmail.md#sync).
 
 `old_lib/` is the archival predecessor of `lib/`. Ordinary capture routes
-select root-level notes: `@work` writes `work.md`. Album and config record routes
-also address `<dir>/<stem>`. Other nested notes are reached with path-aware
+select root-level notes: `@work` writes `work.md`. Album record routes also
+address `<album>/<stem>`. Other nested notes are reached with path-aware
 `&` / `*` (`&projects/foo:bar`).
 
 Contract: [Reference library default paths](../highlights-ref-sync.md#default-paths).

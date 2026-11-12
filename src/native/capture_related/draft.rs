@@ -36,7 +36,6 @@ pub(super) fn draft_related(
     let policy = capture_parse::load_parse_routing(false);
     let record_policy = crate::native::capture_record::record_policy_for_draft(
         &request.bob_dir,
-        None,
         &request.draft,
     );
     let notebook_policy =

@@ -21,14 +21,14 @@ pub(crate) fn build_cli() -> ClapCommand {
         .about("Capture a task, bullet, record note, or notebook note into the Bob vault")
         .long_about(
             "Capture one or more tasks, bullets, record notes, or notebook notes into the Bob Obsidian vault.\n\n\
-A configured `@dir/` or `@dir/^stem` item creates a Record Note in that folder \
+A route for an album `@dir/` or `@dir/^stem` creates a Record Note in that folder \
 instead of a task. First-level `key:: value` bullets set schema fields; other \
 first-level bullets become notes. `@dir/stem` updates an existing record: parent \
 text is the first note, only supplied fields change, and the write keeps \
 unrelated bytes. Dry-run and commit share the planned Markdown. A local record \
 route wins over a draft-wide `@@route`. Incomplete or invalid records refuse \
-the whole draft before any writes. Record types come from the `records:` config \
-block; they are not Task Types (`#fix`). See docs/records.md and \
+the whole draft before any writes. Record types come from album schemas; they \
+are not Task Types (`#fix`). See docs/records.md and \
 docs/capture.md (Record notes).\n\n\
 A notebook destination writes a note instead of a task (`@nb`, `@nb#section`, \
 `@nb^id`, `@nb+id`); `@@nb` is draft-wide. A complete `@parent^id@` caret seal \

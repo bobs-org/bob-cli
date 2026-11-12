@@ -33,7 +33,6 @@ use crate::native::{
         AlbumIssueSeverity,
     },
     capture::StagedTextFile,
-    config,
     host_catalog::{self, CommitInfo, PlannedTxn, TxnResult},
     notebooks::snapshot::VaultSnapshot,
     ob,
@@ -270,8 +269,7 @@ fn read_stdin() -> Result<String, UpdateFailure> {
 fn load_complete(
     vault: &Path,
 ) -> Result<(VaultSnapshot, AlbumRegistry), UpdateFailure> {
-    let config_path = config::config_path();
-    let snapshot = VaultSnapshot::load_with_config(vault, &config_path);
+    let snapshot = VaultSnapshot::load(vault);
     if let Some(first) = snapshot.io_errors.first() {
         let more = snapshot.io_errors.len() - 1;
         let suffix = if more > 0 {
@@ -288,7 +286,7 @@ fn load_complete(
             ),
         ));
     }
-    let registry = AlbumRegistry::from_snapshot(vault, &config_path, &snapshot);
+    let registry = AlbumRegistry::from_snapshot(vault, &snapshot);
     if !matches!(registry.health, DiscoveryHealth::Complete) {
         return Err(UpdateFailure::runtime(
             "discovery_incomplete",
@@ -352,16 +350,7 @@ pub(crate) fn dry_run(
         Ok(loaded) => loaded,
         Err(failure) => return failed_report(true, stem, failure),
     };
-    let config_path = config::config_path();
-    match plan_update(
-        vault,
-        &config_path,
-        &snapshot,
-        &registry,
-        stem,
-        &envelope,
-        today(),
-    ) {
+    match plan_update(vault, &snapshot, &registry, stem, &envelope, today()) {
         Ok(plan) => report_of_plan(true, &plan),
         Err(error) => failed_report(true, stem, plan_failure(&error)),
     }
@@ -470,12 +459,11 @@ fn verify_installed(
             slash(relative)
         ));
     }
-    let config_path = config::config_path();
-    let snapshot = VaultSnapshot::load_with_config(vault, &config_path);
+    let snapshot = VaultSnapshot::load(vault);
     if let Some(error) = snapshot.io_errors.first() {
         return Err(error.clone());
     }
-    let registry = AlbumRegistry::from_snapshot(vault, &config_path, &snapshot);
+    let registry = AlbumRegistry::from_snapshot(vault, &snapshot);
     let Some(entry) = registry
         .albums
         .iter()
@@ -543,16 +531,7 @@ pub(crate) fn run_standalone(
     // lock, and detect the no-op path before any sync lifecycle.
     let preflight = match load_complete(vault) {
         Ok((snapshot, registry)) => {
-            let config_path = config::config_path();
-            plan_update(
-                vault,
-                &config_path,
-                &snapshot,
-                &registry,
-                stem,
-                &envelope,
-                today(),
-            )
+            plan_update(vault, &snapshot, &registry, stem, &envelope, today())
         }
         Err(failure) => return failed_report(false, stem, failure),
     };
@@ -573,8 +552,7 @@ pub(crate) fn run_standalone(
         json_mode,
         "album",
         || {
-            let config_path = config::config_path();
-            let snapshot = VaultSnapshot::load_with_config(vault, &config_path);
+            let snapshot = VaultSnapshot::load(vault);
             if let Some(first) = snapshot.io_errors.first() {
                 return Err(TxnFailure::new(
                 "io",
@@ -582,15 +560,9 @@ pub(crate) fn run_standalone(
                 Some("fix the unreadable paths, then retry; nothing was written".to_owned()),
             ));
             }
-            let registry =
-                AlbumRegistry::from_snapshot(vault, &config_path, &snapshot);
+            let registry = AlbumRegistry::from_snapshot(vault, &snapshot);
             let fresh = UpdatePlanForTxn::fresh(
-                vault,
-                &config_path,
-                &snapshot,
-                &registry,
-                stem,
-                &envelope,
+                vault, &snapshot, &registry, stem, &envelope,
             );
             match fresh {
                 Ok(plan) => {
@@ -725,21 +697,12 @@ struct UpdatePlanForTxn;
 impl UpdatePlanForTxn {
     fn fresh(
         vault: &Path,
-        config_path: &Path,
         snapshot: &VaultSnapshot,
         registry: &AlbumRegistry,
         stem: &str,
         envelope: &Envelope,
     ) -> Result<UpdatePlan, UpdatePlanError> {
-        plan_update(
-            vault,
-            config_path,
-            snapshot,
-            registry,
-            stem,
-            envelope,
-            today(),
-        )
+        plan_update(vault, snapshot, registry, stem, envelope, today())
     }
 }
 

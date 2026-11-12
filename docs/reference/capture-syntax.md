@@ -194,7 +194,7 @@ Contract: [Routing and insertion](../capture.md#routing-and-insertion).
 
 ### `@dir/` / `@dir/^stem` / `@dir/stem` {#record-notes}
 
-Requires an album or config [record kind](../records.md#schema).
+Requires an album [record kind](../records.md#schema).
 
 ```text
 Ramen Nagi @eat/

@@ -575,10 +575,9 @@ mod tests {
     }
 
     fn report_plan(vault: &Path) -> CatalogPlan {
-        let config = vault.join("missing-config.yml");
-        let snapshot = VaultSnapshot::load_with_config(vault, &config);
+        let snapshot = VaultSnapshot::load(vault);
         assert!(snapshot.io_errors.is_empty(), "{:?}", snapshot.io_errors);
-        let registry = AlbumRegistry::from_snapshot(vault, &config, &snapshot);
+        let registry = AlbumRegistry::from_snapshot(vault, &snapshot);
         plan_catalogs(&snapshot, &registry)
     }
 
@@ -675,9 +674,8 @@ mod tests {
             album("body", "Eating out", "Places.", "restaurant", "🍽️");
         write(vault, "eat.md", &album_before);
 
-        let config = vault.join("missing-config.yml");
-        let snapshot = VaultSnapshot::load_with_config(vault, &config);
-        let registry = AlbumRegistry::from_snapshot(vault, &config, &snapshot);
+        let snapshot = VaultSnapshot::load(vault);
+        let registry = AlbumRegistry::from_snapshot(vault, &snapshot);
         let initial = plan_catalogs(&snapshot, &registry);
         let body_after_first_sync = initial
             .host(Path::new("body.md"))
@@ -692,7 +690,7 @@ mod tests {
             (PathBuf::from("body.md"), body_after_first_sync),
             (PathBuf::from("eat.md"), album_after),
         ]);
-        let registry = AlbumRegistry::from_snapshot(vault, &config, &overlay);
+        let registry = AlbumRegistry::from_snapshot(vault, &overlay);
         let moved = plan_catalogs(&overlay, &registry);
 
         let old_owner = moved
@@ -713,12 +711,11 @@ mod tests {
             .contains("[[eat|Eating out]]"));
     }
 
-    fn deps_of(vault: &Path) -> (ReadDependencies, PathBuf) {
-        let config = vault.join("missing-config.yml");
-        let snapshot = VaultSnapshot::load_with_config(vault, &config);
+    fn deps_of(vault: &Path) -> ReadDependencies {
+        let snapshot = VaultSnapshot::load(vault);
         assert!(snapshot.io_errors.is_empty(), "{:?}", snapshot.io_errors);
-        let registry = AlbumRegistry::from_snapshot(vault, &config, &snapshot);
-        (catalog_read_dependencies(&snapshot, &registry), config)
+        let registry = AlbumRegistry::from_snapshot(vault, &snapshot);
+        catalog_read_dependencies(&snapshot, &registry)
     }
 
     #[test]
@@ -732,7 +729,7 @@ mod tests {
             "eat.md",
             &album("body", "Eat", "Places.", "restaurant", ""),
         );
-        let (deps, _) = deps_of(vault);
+        let deps = deps_of(vault);
         deps.validate(vault).expect("fresh plan matches disk");
         write(
             vault,
@@ -758,7 +755,7 @@ mod tests {
             "eat.md",
             &album("body", "Eat", "Places.", "restaurant", ""),
         );
-        let (deps, _) = deps_of(vault);
+        let deps = deps_of(vault);
         write(
             vault,
             "areas/body.md",

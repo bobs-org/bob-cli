@@ -31,7 +31,7 @@ use crate::native::{
     vault_links::{LinkResolution, VaultLinkResolver},
 };
 
-use super::schema::{RecordDiagnostic, RecordType};
+use super::schema::RecordType;
 use crate::native::albums::registry::{
     AlbumEntry, AlbumRegistry, DiscoveryHealth, RecordTypeSource,
     RouteResolution, SourcedRecordType,
@@ -66,13 +66,12 @@ impl ResolvedRecordKind {
     pub(crate) fn source_name(&self) -> &'static str {
         match &self.sourced.source {
             RecordTypeSource::Album { .. } => "album",
-            RecordTypeSource::Config { .. } => "config",
         }
     }
 
     /// One canonical JSON fragment for all record payload surfaces.
-    /// Config-backed results omit `album`; album-backed results always use
-    /// the same `{stem,title,owner,breadcrumb}` object.
+    /// Album-backed results use the stable
+    /// `{stem,title,owner,breadcrumb}` object.
     pub(crate) fn metadata_json(&self) -> serde_json::Value {
         #[derive(Serialize)]
         struct Metadata<'a> {
@@ -95,15 +94,12 @@ impl ResolvedRecordKind {
             RecordTypeSource::Album { .. } => {
                 super::render::RecordRenderIdentity::Album
             }
-            RecordTypeSource::Config { .. } => {
-                super::render::RecordRenderIdentity::Config
-            }
         }
     }
 }
 
-/// Consumer-facing route result. A config fallback carries its deprecation
-/// warning here; invalid album claims remain visible with their diagnostics.
+/// Consumer-facing album route result. Invalid album claims remain visible
+/// with their diagnostics.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum RecordKindResolution {
     Valid {
@@ -118,7 +114,6 @@ pub(crate) enum RecordKindResolution {
     },
     Unclaimed {
         health: DiscoveryHealth,
-        config_diagnostic: Option<RecordDiagnostic>,
     },
     DiscoveryIncomplete {
         errors: Vec<String>,
@@ -132,9 +127,9 @@ pub(crate) struct RecordContext {
 }
 
 impl RecordContext {
-    pub(crate) fn discover(bob_dir: &Path, config_path: &Path) -> Self {
+    pub(crate) fn discover(bob_dir: &Path) -> Self {
         Self {
-            registry: AlbumRegistry::discover(bob_dir, config_path),
+            registry: AlbumRegistry::discover(bob_dir),
         }
     }
 
@@ -180,9 +175,7 @@ impl RecordContext {
         &self,
         kind: &ResolvedRecordKind,
     ) -> Option<&str> {
-        let RecordTypeSource::Album { path } = &kind.sourced.source else {
-            return None;
-        };
+        let RecordTypeSource::Album { path } = &kind.sourced.source;
         self.registry
             .albums
             .iter()
@@ -209,23 +202,19 @@ impl RecordContext {
     /// never the record folder or unrelated note bodies.
     pub(crate) fn resolve_route_head(
         bob_dir: &Path,
-        config_path: &Path,
         selector: &str,
         known: Option<&Self>,
     ) -> io::Result<RecordKindResolution> {
-        let matched_context = known.filter(|context| {
-            context.registry.is_for_target(bob_dir, config_path)
-        });
+        let matched_context =
+            known.filter(|context| context.registry.is_for_target(bob_dir));
         let route = registry::resolve_route_head(
             bob_dir,
-            config_path,
             selector,
             matched_context.map(|context| &context.registry),
         )?;
         let health = match &route {
             RouteResolution::AlbumValid { health, .. }
             | RouteResolution::AlbumInvalid { health, .. }
-            | RouteResolution::Config { health, .. }
             | RouteResolution::Unclaimed { health, .. } => health.clone(),
             RouteResolution::DiscoveryIncomplete { errors } => {
                 return Ok(RecordKindResolution::DiscoveryIncomplete {
@@ -252,18 +241,6 @@ impl RecordContext {
                     health,
                 })
             }
-            RouteResolution::Config {
-                record_type,
-                finding,
-                ..
-            } => Ok(RecordKindResolution::Valid {
-                kind: ResolvedRecordKind {
-                    sourced: record_type,
-                    album: None,
-                },
-                warnings: vec![finding],
-                health,
-            }),
             RouteResolution::AlbumInvalid {
                 paths, findings, ..
             } => Ok(RecordKindResolution::Invalid {
@@ -271,12 +248,9 @@ impl RecordContext {
                 findings,
                 health,
             }),
-            RouteResolution::Unclaimed {
-                config_diagnostic, ..
-            } => Ok(RecordKindResolution::Unclaimed {
-                health,
-                config_diagnostic,
-            }),
+            RouteResolution::Unclaimed { .. } => {
+                Ok(RecordKindResolution::Unclaimed { health })
+            }
             RouteResolution::DiscoveryIncomplete { .. } => {
                 unreachable!("handled above")
             }
@@ -293,15 +267,6 @@ impl RecordContext {
                 warnings: Vec::new(),
                 health,
             },
-            RouteResolution::Config {
-                record_type,
-                finding,
-                health,
-            } => RecordKindResolution::Valid {
-                kind: self.resolve_sourced(record_type),
-                warnings: vec![finding],
-                health,
-            },
             RouteResolution::AlbumInvalid {
                 paths,
                 findings,
@@ -311,13 +276,9 @@ impl RecordContext {
                 findings,
                 health,
             },
-            RouteResolution::Unclaimed {
-                health,
-                config_diagnostic,
-            } => RecordKindResolution::Unclaimed {
-                health,
-                config_diagnostic,
-            },
+            RouteResolution::Unclaimed { health } => {
+                RecordKindResolution::Unclaimed { health }
+            }
             RouteResolution::DiscoveryIncomplete { errors } => {
                 RecordKindResolution::DiscoveryIncomplete { errors }
             }
@@ -336,9 +297,7 @@ impl RecordContext {
         &self,
         sourced: &SourcedRecordType,
     ) -> Option<AlbumRecordIdentity> {
-        let RecordTypeSource::Album { path } = &sourced.source else {
-            return None;
-        };
+        let RecordTypeSource::Album { path } = &sourced.source;
         self.registry
             .albums
             .iter()
@@ -371,9 +330,7 @@ fn route_album_identity_with_source(
     sourced: &SourcedRecordType,
     source: RoutePresentationSource,
 ) -> io::Result<AlbumRecordIdentity> {
-    let RecordTypeSource::Album { path } = &sourced.source else {
-        unreachable!("only album routes need presentation metadata")
-    };
+    let RecordTypeSource::Album { path } = &sourced.source;
     let relative_path = PathBuf::from(path);
     let album_head = source.read_head(&relative_path)?.unwrap_or_default();
     let declaration =
@@ -627,10 +584,9 @@ mod tests {
     fn full_context_resolves_noun_and_stem_with_shared_album_metadata() {
         let temp = tempfile::tempdir().expect("fixture");
         let vault = temp.path().join("vault");
-        let config = temp.path().join("config.yml");
         album_vault(&vault);
 
-        let context = RecordContext::discover(&vault, &config);
+        let context = RecordContext::discover(&vault);
         let by_noun = context.lookup_noun("restaurant");
         let by_stem = context.lookup_stem("eat");
         let RecordKindResolution::Valid { kind, warnings, .. } = by_noun else {
@@ -675,7 +631,6 @@ mod tests {
     fn route_metadata_reads_only_the_album_and_its_owner_chain() {
         let temp = tempfile::tempdir().expect("fixture");
         let vault = temp.path().join("vault");
-        let config = temp.path().join("config.yml");
         album_vault(&vault);
         fs::create_dir_all(vault.join("eat")).expect("record folder");
         fs::write(vault.join("eat/record.md"), [0xff, 0xfe])
@@ -684,7 +639,7 @@ mod tests {
             .expect("binary unrelated body");
 
         let RouteResolution::AlbumValid { record_type, .. } =
-            registry::resolve_route_head(&vault, &config, "eat", None)
+            registry::resolve_route_head(&vault, "eat", None)
                 .expect("route head")
         else {
             panic!("expected route-valid album")
@@ -718,7 +673,6 @@ mod tests {
         let temp = tempfile::tempdir().expect("fixture");
         let first = temp.path().join("first");
         let second = temp.path().join("second");
-        let config = temp.path().join("config.yml");
         album_vault(&first);
         album_vault(&second);
         write(
@@ -730,10 +684,8 @@ mod tests {
             "---\ntype: [[album]]\nparent: \"[[dev]]\"\nrecord:\n  noun: restaurant\n  fields: {cuisine: {}}\n---\n# Second\n",
         );
 
-        let first_kind =
-            RecordContext::discover(&first, &config).resolve("eat");
-        let second_kind =
-            RecordContext::discover(&second, &config).resolve("eat");
+        let first_kind = RecordContext::discover(&first).resolve("eat");
+        let second_kind = RecordContext::discover(&second).resolve("eat");
         let RecordKindResolution::Valid { kind: first, .. } = first_kind else {
             panic!("first vault album should resolve")
         };
@@ -748,7 +700,7 @@ mod tests {
     }
 
     #[test]
-    fn config_fallback_exposes_warning_without_album_metadata() {
+    fn legacy_records_config_does_not_resolve_a_record_kind() {
         let temp = tempfile::tempdir().expect("fixture");
         let vault = temp.path().join("vault");
         let config = temp.path().join("config.yml");
@@ -758,20 +710,11 @@ mod tests {
             "records:\n  book:\n    dir: books\n    label: Book\n    fields: {}\n",
         );
 
-        let context = RecordContext::discover(&vault, &config);
-        let RecordKindResolution::Valid { kind, warnings, .. } =
-            context.lookup_noun("book")
-        else {
-            panic!("expected config kind")
-        };
-        assert_eq!(kind.source_name(), "config");
-        assert_eq!(kind.album, None);
-        assert_eq!(warnings.len(), 1);
-        assert_eq!(warnings[0].code, "records_config_deprecated");
-        assert_eq!(
-            kind.metadata_json(),
-            serde_json::json!({"source": "config"})
-        );
+        let context = RecordContext::discover(&vault);
+        assert!(matches!(
+            context.lookup_noun("book"),
+            RecordKindResolution::Unclaimed { .. }
+        ));
     }
 
     #[test]
@@ -789,7 +732,7 @@ mod tests {
             "records:\n  restaurant:\n    dir: eat\n    label: Restaurant\n    fields: {}\n",
         );
 
-        let context = RecordContext::discover(&vault, &config);
+        let context = RecordContext::discover(&vault);
         assert_eq!(context.invalid_album_claims().len(), 1);
         assert!(context.album_claims()[0].usable_type.is_none());
         assert!(matches!(

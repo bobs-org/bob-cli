@@ -37,6 +37,36 @@ const RECORDS_CONFIG: &str = r#"records:
 fn write_records_config(temp: &TempDir) -> std::path::PathBuf {
     let config = temp.path().join("config.yml");
     write_file(&config, RECORDS_CONFIG);
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("body.md"),
+        "---\ntype: [[area]]\n---\n\n# Body\n",
+    );
+    write_file(
+        &vault.join("eat.md"),
+        concat!(
+            "---\n",
+            "type: [[album]]\n",
+            "parent: \"[[body]]\"\n",
+            "summary: Places to eat.\n",
+            "emoji: \"🍽️\"\n",
+            "record:\n",
+            "  noun: restaurant\n",
+            "  label: Restaurant\n",
+            "  fields:\n",
+            "    status:\n",
+            "      required: true\n",
+            "      values:\n",
+            "        to_try: To try\n",
+            "        liked: Liked\n",
+            "    category: {required: true, suggest: true}\n",
+            "    location: {required: true, suggest: true}\n",
+            "    visited: {values: date}\n",
+            "    companions: {values: link, list: true, default: [\"[[kelly]]\"]}\n",
+            "---\n\n",
+            "# Ideas\n"
+        ),
+    );
     config
 }
 
@@ -47,7 +77,7 @@ fn fixture() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
     let config = write_records_config(&temp);
     write_file(
         &vault.join("eat/nagi.md"),
-        "---\nparent: \"[[eat]]\"\ntype: \"[[restaurant]]\"\n\
+        "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\n\
          title: Nagi\nstatus: liked\ncategory: Ramen\nlocation: Clark\n---\n# Nagi\n",
     );
     write_file(
@@ -81,7 +111,6 @@ fn fixture() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
         "---\nparent: \"[[eat]]\"\ntype: \"[[restaurant]]\"\n\
          title: Cheese 3\nstatus: liked\ncategory: Cheesesteaks\nlocation: Clark\n---\n# Cheese 3\n",
     );
-    write_file(&vault.join("eat.md"), "# Ideas\n## Tasks\n");
     (temp, vault, config)
 }
 

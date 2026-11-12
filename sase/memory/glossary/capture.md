@@ -9,7 +9,7 @@ the draft into capture items, each a parent line plus optional authored child bu
 and each item's markers decide what it does. That is far more than GTD inbox capture: an
 item may create a task (default `mac_inbox.md`, an [[inbox-file]]), bullet, sub-bullet,
 project note (a [[project-note-capture]]), a note in a [[notebook]], a notebook, or
-record note (a note of a config-declared record type, see `docs/records.md`); queue a bare public URL as a background reference job, never touching
+record note (a [[record-note]] in an [[album-note]], see `docs/records.md`); queue a bare public URL as a background reference job, never touching
 the network; link, start, complete, or relate existing tasks (`@route:id`, `!note:id`,
 `&`, `*`); or start, adjust, shift, or close today's Pomodoro (`=`, `+N`, `++N`, `x`).
 bob plans every edit against in-memory snapshots of the target notes and today's daily

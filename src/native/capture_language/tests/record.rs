@@ -7,10 +7,10 @@
 
 use super::super::model::*;
 use super::super::record::{
-    RecordRoutePolicy, RECORDS_CONFIG_INVALID_CODE, RECORD_FIELD_NESTED_CODE,
-    RECORD_FOLDER_NOT_RECORD_CODE, RECORD_MARKER_UNSUPPORTED_CODE,
-    RECORD_SHAPE_CODE, RECORD_STEM_CODE, RECORD_TITLE_CODE,
-    RECORD_TYPE_AS_FOLDER_CODE,
+    AlbumRouteMeta, PerRouteDecision, RecordRoutePolicy,
+    RECORD_FIELD_NESTED_CODE, RECORD_FOLDER_NOT_RECORD_CODE,
+    RECORD_MARKER_UNSUPPORTED_CODE, RECORD_SHAPE_CODE, RECORD_STEM_CODE,
+    RECORD_TITLE_CODE, RECORD_TYPE_AS_FOLDER_CODE,
 };
 use super::*;
 use crate::native::records::schema::parse_records_config;
@@ -29,7 +29,25 @@ records:
 fn configured_policy() -> RecordRoutePolicy {
     let config = parse_records_config(CONFIG, Path::new("/config.yml"))
         .expect("test records config is valid");
-    RecordRoutePolicy::from_config(&config, Some(Path::new("/config.yml")))
+    let record_type = config.record_type("restaurant").unwrap().clone();
+    RecordRoutePolicy::absent()
+        .insert_type_alias("restaurant".to_owned(), "eat".to_owned())
+        .insert_route("restaurant".to_owned(), PerRouteDecision::Unclaimed)
+        .insert_route(
+            "eat".to_owned(),
+            PerRouteDecision::AlbumValid {
+                record_type,
+                album: AlbumRouteMeta {
+                    stem: "eat".to_owned(),
+                    title: "Restaurants".to_owned(),
+                    owner: Some("body".to_owned()),
+                    breadcrumb: vec![
+                        "Body".to_owned(),
+                        "Restaurants".to_owned(),
+                    ],
+                },
+            },
+        )
 }
 
 fn strict_options(
@@ -71,7 +89,7 @@ fn strict(raw: &str) -> Result<ParsedCaptureText, String> {
 }
 
 #[test]
-fn draft_policy_glue_finds_configured_dirs() {
+fn draft_policy_resolves_album_routes_from_the_vault() {
     let dir = std::env::temp_dir().join(format!(
         "bob-record-glue-{}-{}",
         std::process::id(),
@@ -81,15 +99,19 @@ fn draft_policy_glue_finds_configured_dirs() {
             .as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
-    let config = dir.join("config.yml");
-    std::fs::write(&config, CONFIG).unwrap();
+    std::fs::write(dir.join("body.md"), "---\ntype: [[area]]\n---\n# Body\n")
+        .unwrap();
+    std::fs::write(
+        dir.join("eat.md"),
+        "---\ntype: [[album]]\nparent: \"[[body]]\"\nsummary: Places\nrecord:\n  noun: restaurant\n  label: Restaurant\n  fields: {}\n---\n# Restaurants\n",
+    )
+    .unwrap();
     let policy = crate::native::capture_record::record_policy_for_draft(
         &dir,
-        Some(&config),
         "Ramen Nagi @eat/",
     );
-    assert!(policy.configured_dir("eat").is_some(), "eat is configured");
-    assert!(policy.configured_dir("nope").is_none());
+    assert!(policy.is_usable_record_route("eat"), "eat is an album");
+    assert!(!policy.is_usable_record_route("nope"));
     assert_eq!(
         crate::native::capture_language::candidate_dirs("Ramen Nagi @eat/"),
         vec!["eat".to_string()]
@@ -422,24 +444,18 @@ fn configured_type_id_as_folder_names_its_directory() {
 }
 
 #[test]
-fn malformed_config_refuses_candidates() {
-    let policy = RecordRoutePolicy::invalid(
-        Path::new("/config.yml"),
-        "configuration root must be a mapping".to_string(),
-    );
+fn legacy_records_config_does_not_claim_capture_routes() {
+    let policy = RecordRoutePolicy::absent();
     for raw in ["@eat/ Ramen", "Ramen @eat/", "Ramen @notafolder/"] {
-        let error = parse_capture_draft_with_options_coded(
+        let parsed = parse_capture_text_with_options(
             raw,
             None,
             None,
             &strict_options(Some(&policy)),
         )
-        .expect_err("malformed config refuses")
-        .code
-        .expect("code");
-        assert_eq!(error, RECORDS_CONFIG_INVALID_CODE, "{raw}");
+        .expect("legacy config has no capture behavior");
+        assert!(matches!(parsed.kind, CaptureKind::Task), "{raw}");
     }
-    // Items without a record candidate keep working under malformed config.
     let parsed = parse_capture_text_with_options(
         "Buy milk @work",
         None,

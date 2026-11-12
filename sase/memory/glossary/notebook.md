@@ -33,6 +33,8 @@ notes in that section; plain first-level siblings remain top-region notes.
 behavior, while a bare `%n` stays a Pomodoro note. Task-only markers are
 refused with a rewrite to the owner's route.
 
-Not a [[reference-note]], a record note, a [[task-drawer]], a [[period-note]],
-the Pomodoro note `%n` writes, or an Obsidian folder. See `docs/notebooks.md`
-and [[decisions:notebook-routes-write-notes]].
+Not a [[reference-note]], a [[record-note]] or [[album-note]], a [[task-drawer]],
+a [[period-note]], the Pomodoro note `%n` writes, or an Obsidian folder. An album
+and a notebook are siblings under an area or project; neither can parent the
+other. See
+`docs/notebooks.md` and [[decisions:notebook-routes-write-notes]].

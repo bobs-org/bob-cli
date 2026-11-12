@@ -339,7 +339,6 @@ fn expand_capture(matches: &ArgMatches, output_format: OutputFormat) -> i32 {
     // another vault keeps its opaque field values during expansion.
     let record_policy = super::capture_record::record_policy_for_draft(
         &cli::bob_dir_from_matches(matches),
-        None,
         &raw,
     );
     let template_analysis = capture_language::template::analyze_for_capture(

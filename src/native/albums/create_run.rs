@@ -19,7 +19,6 @@ use super::{
 };
 use crate::native::{
     capture::StagedTextFile,
-    config,
     host_catalog::{self, CommitInfo, PlannedTxn},
     notebooks::snapshot::VaultSnapshot,
     ob,
@@ -178,8 +177,7 @@ fn refusal_failure(refusal: CreateRefusal) -> TxnFailure {
 /// Load the vault and refuse a partial view: an unreadable file must never
 /// read as an empty subtree and drop catalog rows.
 fn load_complete(vault: &Path) -> Result<VaultSnapshot, TxnFailure> {
-    let config_path = config::config_path();
-    let snapshot = VaultSnapshot::load_with_config(vault, &config_path);
+    let snapshot = VaultSnapshot::load(vault);
     if let Some(first) = snapshot.io_errors.first() {
         let more = snapshot.io_errors.len() - 1;
         let suffix = if more > 0 {
@@ -212,8 +210,7 @@ pub(crate) fn dry_run(vault: &Path, request: &CreateRequest) -> CreateReport {
         Ok(snapshot) => snapshot,
         Err(failure) => return CreateReport::failed(true, failure),
     };
-    let config_path = config::config_path();
-    match plan_create(vault, &snapshot, &config_path, request) {
+    match plan_create(vault, &snapshot, request) {
         Ok(plan) => CreateReport {
             dry_run: true,
             warnings: plan.warnings.clone(),
@@ -243,12 +240,11 @@ pub(crate) fn verify_installed_create(
     plan: &CreatePlan,
     hosts: &[PathBuf],
 ) -> Result<(), String> {
-    let config_path = config::config_path();
-    let snapshot = VaultSnapshot::load_with_config(vault, &config_path);
+    let snapshot = VaultSnapshot::load(vault);
     if let Some(error) = snapshot.io_errors.first() {
         return Err(error.clone());
     }
-    let registry = AlbumRegistry::from_snapshot(vault, &config_path, &snapshot);
+    let registry = AlbumRegistry::from_snapshot(vault, &snapshot);
     let Some(entry) = registry
         .albums
         .iter()
@@ -364,8 +360,7 @@ pub(crate) fn run_standalone(
     let result =
         host_catalog::run_locked(vault, &child_env, json_mode, "album", || {
             let snapshot = load_complete(vault)?;
-            let config_path = config::config_path();
-            let plan = plan_create(vault, &snapshot, &config_path, request)
+            let plan = plan_create(vault, &snapshot, request)
                 .map_err(refusal_failure)?;
             Ok(planned_txn(vault, plan))
         });

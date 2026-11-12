@@ -855,13 +855,9 @@ pub(super) fn mix_record_section_create(
         return None;
     };
     let dir = field.route.as_deref()?.trim_end_matches('/');
-    let config_path = config::config_path();
     let resolution =
         crate::native::records::context::RecordContext::resolve_route_head(
-            bob_dir,
-            &config_path,
-            dir,
-            None,
+            bob_dir, dir, None,
         )
         .ok()?;
     let crate::native::records::context::RecordKindResolution::Valid {

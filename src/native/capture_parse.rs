@@ -126,7 +126,6 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
     // skip config and filesystem reads via lexical preflight.
     let record_policy = super::capture_record::record_policy_for_draft(
         &super::env::bob_dir(),
-        None,
         &raw_text,
     );
     let bob_dir = super::env::bob_dir();
@@ -3374,9 +3373,8 @@ fn parse_update_record_field(
     }
 }
 
-/// Additive per-route warnings (for example `records_config_deprecated`)
-/// resolved alongside the route. One diagnostic per distinct route/message so
-/// mixed config/album batches do not duplicate warnings.
+/// Additive per-route warnings resolved alongside the route. One diagnostic
+/// per distinct route/message prevents duplicate notices in a batch.
 fn record_route_warning_diagnostics(
     entries: &[super::capture_record::RecordParseEntry],
     policy: Option<&capture_language::RecordRoutePolicy>,
@@ -3655,28 +3653,6 @@ fn collection_route_diagnostics(
                         rewrite: None,
                     });
                 }
-                Some(capture_language::PerRouteDecision::ConfigValid {
-                    record_type,
-                }) => {
-                    let label = record_type.label.as_str();
-                    return Some(Diagnostic {
-                        severity: Severity::Warning,
-                        code: "record_collection_route",
-                        message: format!(
-                            "{}.md is the {label} collection — `@{route}/` creates a record note",
-                            route,
-                        ),
-                        range: Some((span.start, span.end)),
-                        rewrite: Some(DiagnosticRewrite {
-                            start: span.start,
-                            end: span.end,
-                            replacement: format!("@{route}/"),
-                            label: format!(
-                                "Use `@{route}/` to create a {label} note"
-                            ),
-                        }),
-                    });
-                }
                 Some(
                     capture_language::PerRouteDecision::DiscoveryIncomplete {
                         errors,
@@ -3699,27 +3675,7 @@ fn collection_route_diagnostics(
                 }
                 _ => {}
             }
-            let record_type = policy.configured_dir(route)?;
-            let label = policy
-                .records_config()?
-                .record_type(record_type)?
-                .label
-                .as_str();
-            Some(Diagnostic {
-                severity: Severity::Warning,
-                code: "record_collection_route",
-                message: format!(
-                    "{}.md is the {label} collection — `@{route}/` creates a record note",
-                    route,
-                ),
-                range: Some((span.start, span.end)),
-                rewrite: Some(DiagnosticRewrite {
-                    start: span.start,
-                    end: span.end,
-                    replacement: format!("@{route}/"),
-                    label: format!("Use `@{route}/` to create a {label} note"),
-                }),
-            })
+            None
         })
         .collect()
 }
@@ -4470,48 +4426,55 @@ mod tests {
         serde_json::from_str(&success_json(&parse(input))).expect("json")
     }
 
-    fn record_parse_config(vault: &std::path::Path) -> std::path::PathBuf {
-        let path = vault.join("config.yml");
+    fn write_record_album(vault: &std::path::Path) {
+        std::fs::create_dir_all(vault.join("eat"))
+            .expect("create restaurant record folder");
         std::fs::write(
-            &path,
-            r#"records:
-  restaurant:
-    dir: eat
-    label: Restaurant
-    emoji: "🍽️"
-    dated_notes: true
-    fields:
-      status:
-        required: true
-        values:
-          to_try: "🔖 To try"
-          liked: "💚 Liked"
-      category:
-        required: true
-      location:
-        required: true
-      companions:
-        values: link
-        list: true
-        default: ["[[kelly]]"]
-      visited:
-        values: date
+            vault.join("body.md"),
+            "---\ntype: [[area]]\n---\n# Body\n",
+        )
+        .expect("write record owner");
+        std::fs::write(
+            vault.join("eat.md"),
+            r#"---
+type: [[album]]
+parent: "[[body]]"
+summary: Restaurants and cafes.
+record:
+  noun: restaurant
+  label: Restaurant
+  emoji: "🍽️"
+  dated_notes: true
+  fields:
+    status:
+      required: true
+      values:
+        to_try: "🔖 To try"
+        liked: "💚 Liked"
+    category:
+      required: true
+    location:
+      required: true
+    companions:
+      values: link
+      list: true
+      default: ["[[kelly]]"]
+    visited:
+      values: date
+---
+# Restaurants and Cafes
 "#,
         )
-        .expect("write record test config");
-        path
+        .expect("write restaurant album");
     }
 
     fn parse_with_records(
         input: &str,
         vault: &std::path::Path,
     ) -> CaptureParseResult {
-        let config = record_parse_config(vault);
-        let policy = super::super::capture_record::record_policy_for_draft(
-            vault,
-            Some(&config),
-            input,
-        );
+        write_record_album(vault);
+        let policy =
+            super::super::capture_record::record_policy_for_draft(vault, input);
         let options = EditorParseOptions {
             url_routing: None,
             has_global_destination: false,
@@ -4651,7 +4614,7 @@ mod tests {
     }
 
     #[test]
-    fn record_parse_reports_invalid_records_configuration() {
+    fn record_parse_ignores_legacy_records_configuration() {
         let vault = tempfile::tempdir().expect("scratch vault");
         let config = vault.path().join("config.yml");
         std::fs::write(&config, "records: [not, a, mapping]\n")
@@ -4659,7 +4622,6 @@ mod tests {
         let input = "Ninja Sushi @eat/";
         let policy = super::super::capture_record::record_policy_for_draft(
             vault.path(),
-            Some(&config),
             input,
         );
         let options = EditorParseOptions {
@@ -4671,11 +4633,13 @@ mod tests {
         };
         let parsed = CaptureParseResult::new(input.to_string(), &options);
         let value = serde_json::to_value(parsed).unwrap();
-        assert!(value["diagnostics"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|diagnostic| diagnostic["code"] == "records_config_invalid"));
+        assert!(!value["diagnostics"].as_array().unwrap().iter().any(
+            |diagnostic| {
+                diagnostic["code"] == "records_config_invalid"
+                    || diagnostic["code"] == "records_config_deprecated"
+                    || diagnostic["code"] == "record_collection_route"
+            }
+        ));
     }
 
     fn album_vault(root: &std::path::Path) {
@@ -4697,11 +4661,8 @@ mod tests {
         vault: &std::path::Path,
     ) -> serde_json::Value {
         // No config file: album resolution must not need transitional config.
-        let policy = super::super::capture_record::record_policy_for_draft(
-            vault,
-            Some(&vault.join("missing-config.yml")),
-            input,
-        );
+        let policy =
+            super::super::capture_record::record_policy_for_draft(vault, input);
         let options = EditorParseOptions {
             url_routing: None,
             has_global_destination: false,
@@ -4883,30 +4844,32 @@ mod tests {
         assert_eq!(single_colon["severity"], "warning");
 
         let collection = record_json("Blaze @eat", vault.path());
-        let warning = collection["diagnostics"]
+        let refusal = collection["diagnostics"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|diagnostic| diagnostic["code"] == "record_collection_route")
-            .expect("collection near-miss warning");
-        let start = warning["rewrite"]["start"].as_u64().unwrap() as usize;
-        let end = warning["rewrite"]["end"].as_u64().unwrap() as usize;
+            .find(|diagnostic| diagnostic["code"] == "album_holds_no_tasks")
+            .expect("album task-home refusal");
+        let start = refusal["rewrite"]["start"].as_u64().unwrap() as usize;
+        let end = refusal["rewrite"]["end"].as_u64().unwrap() as usize;
         let fixed = format!(
             "{}{}{}",
             "Blaze @eat"[..start].to_string(),
-            warning["rewrite"]["replacement"].as_str().unwrap(),
+            refusal["rewrite"]["replacement"].as_str().unwrap(),
             "Blaze @eat"[end..].to_string(),
         );
         assert_eq!(record_json(&fixed, vault.path())["mode"], "record_note");
 
         for literal in ["Blaze \\@eat", "Blaze @eat+task-id", "@eat#Dinner"] {
             let value = record_json(literal, vault.path());
-            assert!(value["diagnostics"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|diagnostic| diagnostic["code"]
-                    != "record_collection_route"));
+            assert!(
+                value["diagnostics"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|diagnostic| diagnostic["code"]
+                        != "album_holds_no_tasks")
+            );
         }
     }
 

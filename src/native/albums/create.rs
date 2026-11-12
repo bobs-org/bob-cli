@@ -454,7 +454,6 @@ fn colliding_root_name(names: &[String], stem: &str) -> Option<String> {
 pub(crate) fn plan_create(
     vault: &Path,
     snapshot: &VaultSnapshot,
-    config_path: &Path,
     request: &CreateRequest,
 ) -> Result<CreatePlan, CreateRefusal> {
     let inputs = validate_inputs(
@@ -509,8 +508,7 @@ pub(crate) fn plan_create(
 
     // Any existing album claim participates, including broken ones; a
     // matching config kind never blocks creation (it is superseded).
-    let base_registry =
-        AlbumRegistry::from_snapshot(vault, config_path, snapshot);
+    let base_registry = AlbumRegistry::from_snapshot(vault, snapshot);
     for key in [&stem, &inputs.noun] {
         let conflicts = base_registry.claimants(key);
         if !conflicts.is_empty() {
@@ -650,8 +648,7 @@ pub(crate) fn plan_create(
         (md_path.clone(), contents.clone()),
         (base_path.clone(), base_contents.clone()),
     ]);
-    let overlay_registry =
-        AlbumRegistry::from_snapshot(vault, config_path, &overlay);
+    let overlay_registry = AlbumRegistry::from_snapshot(vault, &overlay);
     let entry = overlay_registry
         .albums
         .iter()
@@ -973,12 +970,11 @@ mod tests {
         vault: &Path,
         mutate: impl FnOnce(&mut CreateRequest),
     ) -> Result<CreatePlan, CreateRefusal> {
-        let config = vault.join("missing-config.yml");
-        let snapshot = VaultSnapshot::load_with_config(vault, &config);
+        let snapshot = VaultSnapshot::load(vault);
         assert!(snapshot.io_errors.is_empty(), "{:?}", snapshot.io_errors);
         let mut request = plan_request();
         mutate(&mut request);
-        plan_create(vault, &snapshot, &config, &request)
+        plan_create(vault, &snapshot, &request)
     }
 
     #[test]

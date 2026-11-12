@@ -20,7 +20,7 @@ use super::{
     source::{self, ParsedStatement, ResolvedStatement, SourceError},
 };
 use crate::native::{
-    albums::registry::{DiscoveryHealth, RecordTypeSource},
+    albums::registry::DiscoveryHealth,
     bank::model,
     capture::StagedTextFile,
     host_catalog::{
@@ -602,13 +602,9 @@ fn load_restaurants(
     ),
     TxnFailure,
 > {
-    let config_path = crate::native::config::config_path();
-    let config_preimage = optional_file_bytes(&config_path)?;
     let root_md_entries = directory_names(vault, Some("md"))?;
-    let context = RecordContext::discover(vault, &config_path);
-    if optional_file_bytes(&config_path)? != config_preimage
-        || directory_names(vault, Some("md"))? != root_md_entries
-    {
+    let context = RecordContext::discover(vault);
+    if directory_names(vault, Some("md"))? != root_md_entries {
         return Err(failure(
             "bank_import_registry",
             "the records registry changed while it was being read",
@@ -616,7 +612,6 @@ fn load_restaurants(
         ));
     }
     let mut registry_dependencies = Vec::new();
-    registry_dependencies.push((config_path.clone(), config_preimage));
     for album in &context.registry().albums {
         let path = vault.join(&album.declaration.path);
         let bytes = fs::read(&path).map_err(|error| {
@@ -656,15 +651,7 @@ fn load_restaurants(
     }
 
     let kind = match context.resolve("eat") {
-        RecordKindResolution::Valid { kind, .. } => {
-            if let RecordTypeSource::Config { path } = &kind.sourced.source
-                && path != &config_path
-            {
-                registry_dependencies
-                    .push((path.clone(), optional_file_bytes(path)?));
-            }
-            Some(kind)
-        }
+        RecordKindResolution::Valid { kind, .. } => Some(kind),
         RecordKindResolution::DiscoveryIncomplete { errors } => {
             return Err(failure(
                 "bank_import_registry",
@@ -769,18 +756,6 @@ fn load_restaurants(
         dir_entries,
         root_md_entries,
     ))
-}
-
-fn optional_file_bytes(path: &Path) -> Result<Option<Vec<u8>>, TxnFailure> {
-    match fs::read(path) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(failure(
-            "bank_import_registry",
-            format!("could not read {}: {error}", path.display()),
-            "fix the records registry and retry",
-        )),
-    }
 }
 
 fn directory_names(

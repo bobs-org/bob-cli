@@ -75,7 +75,7 @@ pub(crate) fn build_cli() -> ClapCommand {
         .long_about(
             "List the routable Bob notes that capture pickers can offer.\n\n\
 The command reads top-level area and non-terminal project notes, opt-in \
-notebook notes, plus configured record folders. It always pins mac_inbox \
+notebook notes, plus album record folders. It always pins mac_inbox \
 first as the default task-capture target. It is read-only.",
         )
         .after_help(
@@ -219,13 +219,13 @@ pub(crate) struct CaptureTarget {
     pub(crate) status: Option<String>,
     pub(crate) relative_path: String,
     pub(crate) project_name_aliases: Vec<String>,
-    /// Record type id, present only on configured record-folder rows.
+    /// Album record noun, present only on album-backed record rows.
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub(crate) record_type: Option<String>,
-    /// Record type emoji, present only on configured record-folder rows.
+    /// Album emoji, present only on album-backed record rows.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) emoji: Option<String>,
-    /// Indexed note count, present only on configured record-folder rows.
+    /// Indexed note count, present only on album-backed record rows.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) count: Option<usize>,
     /// Notebook title, present only on notebook rows.
@@ -253,7 +253,7 @@ pub(crate) enum CaptureTargetKind {
 }
 
 pub(crate) fn scan_capture_targets(bob_dir: &Path) -> CaptureTargetsReport {
-    scan_capture_targets_with_config(bob_dir, &super::config::config_path())
+    scan_capture_targets_inner(bob_dir)
 }
 
 /// Opt-in route scan that also offers notebooks as capture destinations.
@@ -264,17 +264,13 @@ pub(crate) fn scan_capture_targets(bob_dir: &Path) -> CaptureTargetsReport {
 pub(crate) fn scan_capture_targets_with_notebooks(
     bob_dir: &Path,
 ) -> CaptureTargetsReport {
-    scan_capture_targets_with_notebooks_config(
-        bob_dir,
-        &super::config::config_path(),
-    )
+    scan_capture_targets_with_notebooks_inner(bob_dir)
 }
 
-fn scan_capture_targets_with_notebooks_config(
+fn scan_capture_targets_with_notebooks_inner(
     bob_dir: &Path,
-    config_path: &Path,
 ) -> CaptureTargetsReport {
-    let mut report = scan_capture_targets_with_config(bob_dir, config_path);
+    let mut report = scan_capture_targets_inner(bob_dir);
     if !report.issues.is_empty() {
         return report;
     }
@@ -360,10 +356,7 @@ fn collect_notebook_targets(bob_dir: &Path) -> Vec<CaptureTarget> {
     targets
 }
 
-fn scan_capture_targets_with_config(
-    bob_dir: &Path,
-    config_path: &Path,
-) -> CaptureTargetsReport {
+fn scan_capture_targets_inner(bob_dir: &Path) -> CaptureTargetsReport {
     let mut report = CaptureTargetsReport {
         targets: vec![default_inbox_target()],
         warnings: Vec::new(),
@@ -392,7 +385,7 @@ fn scan_capture_targets_with_config(
     sort_targets(&mut projects);
     report.targets.extend(areas);
     report.targets.extend(projects);
-    append_record_targets(bob_dir, config_path, &mut report);
+    append_record_targets(bob_dir, &mut report);
     let conflicts = alias_conflict_warnings(&report.targets);
     report.warnings.extend(conflicts.iter().cloned());
     report.alias_warnings.extend(conflicts);
@@ -600,16 +593,11 @@ fn target_from_route(
     }
 }
 
-fn append_record_targets(
-    bob_dir: &Path,
-    config_path: &Path,
-    report: &mut CaptureTargetsReport,
-) {
-    let context = RecordContext::discover(bob_dir, config_path);
-    // A partial album-registry walk hides every record capture target,
-    // including config-defined kinds that predate the registry. This is
-    // intentional and matches the completion provider, which also offers
-    // no record types unless discovery is Complete. The root scan above
+fn append_record_targets(bob_dir: &Path, report: &mut CaptureTargetsReport) {
+    let context = RecordContext::discover(bob_dir);
+    // A partial album-registry walk hides every record capture target. This
+    // matches the completion provider, which also offers no record types
+    // unless discovery is Complete. The root scan above
     // already reports unreadable files, so skip registry errors that name
     // an already-reported failure instead of listing one file twice.
     if let super::albums::registry::DiscoveryHealth::Partial(errors) =
@@ -629,7 +617,7 @@ fn append_record_targets(
 
     // A broken album still owns its noun and folder, so report its schema
     // findings while keeping it out of the actionable record routes. Other
-    // valid albums and transitional config kinds remain available.
+    // valid albums remain available.
     for album in context.invalid_album_claims() {
         for finding in &album.findings {
             if finding.severity != super::albums::AlbumIssueSeverity::Error {
@@ -654,20 +642,6 @@ fn append_record_targets(
             .then_with(|| left.record_type().id.cmp(&right.record_type().id))
     });
     let mut catalog = RecordCatalog::new(bob_dir);
-    let mut seen_deprecations = std::collections::BTreeSet::new();
-    for kind in &record_types {
-        if kind.source_name() == "config"
-            && seen_deprecations.insert(kind.record_type().id.clone())
-        {
-            report.warnings.push(ScanNote::path(
-                PathBuf::from("."),
-                format!(
-                    "records_config_deprecated: record type {:?} still comes from config; declare it in a root album before the config migration lands",
-                    kind.record_type().id
-                ),
-            ));
-        }
-    }
     for kind in record_types {
         let record_type = kind.record_type();
         let count = catalog.folder(&record_type.dir).notes().len();
@@ -1039,10 +1013,7 @@ mod tests {
         );
         write_file(&temp.path().join("Bad.md"), "---\ntype: [[area]]\n---\n");
 
-        let report = scan_capture_targets_with_config(
-            temp.path(),
-            &temp.path().join("records-config.yml"),
-        );
+        let report = scan_capture_targets_inner(temp.path());
         let routes = report
             .targets
             .iter()
@@ -1065,18 +1036,21 @@ mod tests {
     #[test]
     fn scan_appends_indexed_record_folders_after_note_targets() {
         let temp = TempDir::new("bob-cli-capture-targets-records");
-        let config = temp.path().join("config.yml");
         write_file(
-            &config,
-            "records:\n  restaurant:\n    dir: eat\n    label: Restaurant\n    emoji: \"🍽️\"\n    fields:\n      status:\n        required: true\n        values: {liked: \"💚 Liked\"}\n  podcast:\n    dir: podcasts\n    label: Podcast\n    fields:\n      status:\n        required: true\n        values: {subscribed: \"Subscribed\"}\n",
+            &temp.path().join("eat.md"),
+            "---\ntype: [[album]]\nparent: \"[[cash]]\"\nemoji: \"🍽️\"\nrecord:\n  noun: restaurant\n  label: Restaurant\n  fields:\n    status:\n      required: true\n      values: {liked: \"💚 Liked\"}\n---\n# Restaurants\n",
+        );
+        write_file(
+            &temp.path().join("podcasts.md"),
+            "---\ntype: [[album]]\nparent: \"[[cash]]\"\nrecord:\n  noun: podcast\n  fields:\n    status:\n      required: true\n      values: {subscribed: Subscribed}\n---\n# Podcasts\n",
         );
         write_file(&temp.path().join("cash.md"), "---\ntype: [[area]]\n---\n");
         write_file(
             &temp.path().join("eat/ninja_sushi.md"),
-            "---\ntype: [[restaurant]]\ntitle: Ninja Sushi\nstatus: liked\n---\n",
+            "---\ntype: [[record]]\nparent: \"[[eat]]\"\ntitle: Ninja Sushi\nstatus: liked\n---\n",
         );
 
-        let report = scan_capture_targets_with_config(temp.path(), &config);
+        let report = scan_capture_targets_inner(temp.path());
         assert!(report.issues.is_empty());
         let routes = report
             .targets
@@ -1121,7 +1095,6 @@ mod tests {
     #[test]
     fn scan_uses_album_registry_and_enriches_record_target_metadata() {
         let temp = TempDir::new("bob-cli-capture-targets-album");
-        let config = temp.path().join("config.yml");
         write_file(
             &temp.path().join("body.md"),
             "---\ntype: [[area]]\n---\n# Body\n",
@@ -1146,7 +1119,7 @@ mod tests {
             "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\n---\n# Nagi\n",
         );
 
-        let report = scan_capture_targets_with_config(temp.path(), &config);
+        let report = scan_capture_targets_inner(temp.path());
         assert!(report.issues.is_empty(), "{:?}", report.issues);
         let target = report
             .targets
@@ -1190,11 +1163,6 @@ mod tests {
     #[test]
     fn broken_album_is_reported_without_hiding_healthy_or_config_routes() {
         let temp = TempDir::new("bob-cli-capture-targets-broken-album");
-        let config = temp.path().join("config.yml");
-        write_file(
-            &config,
-            "records:\n  restaurant:\n    dir: eat\n    label: Legacy restaurant\n    fields: {}\n  book:\n    dir: books\n    label: Book\n    fields: {}\n",
-        );
         write_file(
             &temp.path().join("body.md"),
             "---\ntype: [[area]]\n---\n# Body\n",
@@ -1212,7 +1180,7 @@ mod tests {
             "---\nparent: \"[[podcasts]]\"\ntype: \"[[record]]\"\n---\n# Show\n",
         );
 
-        let report = scan_capture_targets_with_config(temp.path(), &config);
+        let report = scan_capture_targets_inner(temp.path());
         assert!(report.issues.is_empty(), "{:?}", report.issues);
         let record_routes = report
             .targets
@@ -1220,7 +1188,7 @@ mod tests {
             .filter(|target| target.kind == CaptureTargetKind::Record)
             .map(|target| target.route.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(record_routes, ["books/", "podcasts/"]);
+        assert_eq!(record_routes, ["podcasts/"]);
         let podcast = report
             .targets
             .iter()
@@ -1239,11 +1207,10 @@ mod tests {
     }
 
     #[test]
-    fn absent_or_invalid_record_config_keeps_task_targets() {
+    fn legacy_records_config_does_not_add_capture_routes() {
         let temp = TempDir::new("bob-cli-capture-targets-records-isolation");
         write_file(&temp.path().join("cash.md"), "---\ntype: [[area]]\n---\n");
-        let missing = temp.path().join("missing-config.yml");
-        let report = scan_capture_targets_with_config(temp.path(), &missing);
+        let report = scan_capture_targets_inner(temp.path());
         assert!(report.issues.is_empty());
         assert_eq!(
             report
@@ -1253,12 +1220,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["mac_inbox", "cash"]
         );
-
-        let malformed = temp.path().join("malformed-config.yml");
-        write_file(&malformed, "records: [not, a, mapping]\n");
-        let report = scan_capture_targets_with_config(temp.path(), &malformed);
-        assert!(report.issues.is_empty());
-        assert_eq!(report.targets.len(), 2);
         assert!(report
             .targets
             .iter()
@@ -1268,15 +1229,15 @@ mod tests {
     #[test]
     fn partial_registry_hides_every_record_capture_target() {
         let temp = TempDir::new("bob-cli-capture-targets-partial-registry");
-        let config = temp.path().join("config.yml");
+        write_file(&temp.path().join("body.md"), "---\ntype: [[area]]\n---\n");
         write_file(
-            &config,
-            "records:\n  restaurant:\n    dir: eat\n    label: Restaurant\n    fields: {}\n",
+            &temp.path().join("eat.md"),
+            "---\ntype: [[album]]\nparent: \"[[body]]\"\nrecord: {noun: restaurant}\n---\n# Eat\n",
         );
         write_file(&temp.path().join("cash.md"), "---\ntype: [[area]]\n---\n");
         write_file(
             &temp.path().join("eat/ninja.md"),
-            "---\ntype: [[restaurant]]\n---\n",
+            "---\ntype: [[record]]\nparent: \"[[eat]]\"\n---\n",
         );
         let locked = temp.path().join("locked.md");
         write_file(&locked, "---\ntype: [[area]]\n---\n");
@@ -1286,7 +1247,7 @@ mod tests {
             fs::set_permissions(&locked, fs::Permissions::from_mode(0o000))
                 .expect("remove read permission");
         }
-        let report = scan_capture_targets_with_config(temp.path(), &config);
+        let report = scan_capture_targets_inner(temp.path());
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -1383,10 +1344,7 @@ mod tests {
             "---\ntype: [[area]]\nproject_name_aliases: [\"bob-cli\"]\n---\n",
         );
 
-        let report = scan_capture_targets_with_config(
-            temp.path(),
-            &temp.path().join("records-config.yml"),
-        );
+        let report = scan_capture_targets_inner(temp.path());
         let bob = report
             .targets
             .iter()
@@ -1427,10 +1385,7 @@ mod tests {
             "---\ntype: [[area]]\nproject_name_aliases: [\"bob\"]\n---\n",
         );
 
-        let report = scan_capture_targets_with_config(
-            temp.path(),
-            &temp.path().join("records-config.yml"),
-        );
+        let report = scan_capture_targets_inner(temp.path());
         let warnings = report
             .warnings
             .iter()
@@ -1463,10 +1418,7 @@ mod tests {
             "---\nparent: \"[[dev]]\"\ntype: \"[[notebook]]\"\n---\n\n# Notes\n",
         );
 
-        let base = scan_capture_targets_with_config(
-            temp.path(),
-            &temp.path().join("records-config.yml"),
-        );
+        let base = scan_capture_targets_inner(temp.path());
         assert!(
             base.targets
                 .iter()
@@ -1475,10 +1427,7 @@ mod tests {
             base.targets
         );
 
-        let report = scan_capture_targets_with_notebooks_config(
-            temp.path(),
-            &temp.path().join("records-config.yml"),
-        );
+        let report = scan_capture_targets_with_notebooks(temp.path());
         let routes = report
             .targets
             .iter()

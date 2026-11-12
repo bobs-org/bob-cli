@@ -74,7 +74,6 @@ pub(crate) struct UpdatePlan {
 #[allow(clippy::result_large_err)] // Structured refusals retain actionable fields.
 pub(crate) fn plan_update(
     vault: &Path,
-    config_path: &Path,
     snapshot: &VaultSnapshot,
     registry: &AlbumRegistry,
     requested_stem: &str,
@@ -239,13 +238,7 @@ pub(crate) fn plan_update(
     .map_err(span_error)?;
 
     let mut deps = read_dependencies(
-        vault,
-        config_path,
-        snapshot,
-        registry,
-        folder,
-        &relative,
-        &before,
+        vault, snapshot, registry, folder, &relative, &before,
     )?;
     if !schema_edit.changed {
         // Semantic no-ops return before inspecting or repairing the current
@@ -271,8 +264,7 @@ pub(crate) fn plan_update(
 
     let overlay = snapshot
         .with_overlay([(relative.clone(), schema_edit.contents.clone())]);
-    let overlay_registry =
-        AlbumRegistry::from_snapshot(vault, config_path, &overlay);
+    let overlay_registry = AlbumRegistry::from_snapshot(vault, &overlay);
     if !matches!(overlay_registry.health, DiscoveryHealth::Complete) {
         return Err(plan_error(
             "discovery_incomplete",
@@ -365,7 +357,6 @@ pub(crate) fn plan_update(
 #[allow(clippy::result_large_err)] // Propagate the planner's structured refusal.
 fn read_dependencies(
     vault: &Path,
-    config_path: &Path,
     snapshot: &VaultSnapshot,
     registry: &AlbumRegistry,
     folder: &FolderIndex,
@@ -410,24 +401,6 @@ fn read_dependencies(
         })
         .collect::<Vec<_>>();
     dependencies.insert_namespace(PathBuf::from("."), namespace);
-    // The config can still supply transitional record identities while a
-    // vault is being migrated. Guard its exact bytes whenever registry
-    // discovery consumed that input, including a missing-file preimage.
-    let config_expected = match fs::read(config_path) {
-        Ok(bytes) => Some(bytes),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => {
-            return Err(plan_error(
-                "dependency_read_failed",
-                format!(
-                    "could not read records config {}: {error}",
-                    config_path.display()
-                ),
-                None,
-            ));
-        }
-    };
-    dependencies.insert_bytes(config_path.to_path_buf(), config_expected);
     Ok(dependencies)
 }
 
@@ -514,13 +487,7 @@ mod tests {
         "# Restaurants\n",
     );
 
-    fn setup() -> (
-        tempfile::TempDir,
-        PathBuf,
-        PathBuf,
-        VaultSnapshot,
-        AlbumRegistry,
-    ) {
+    fn setup() -> (tempfile::TempDir, PathBuf, VaultSnapshot, AlbumRegistry) {
         let temp = tempfile::tempdir().expect("temporary vault");
         let vault = temp.path().to_path_buf();
         fs::create_dir_all(vault.join("eat")).expect("record folder");
@@ -535,16 +502,15 @@ mod tests {
             "---\nstatus: ready\n---\n\n# Ninja\n",
         )
         .expect("record");
-        let config = vault.join("missing-records.yml");
-        let snapshot = VaultSnapshot::load_with_config(&vault, &config);
+        let snapshot = VaultSnapshot::load(&vault);
         assert!(snapshot.io_errors.is_empty(), "{:?}", snapshot.io_errors);
-        let registry = AlbumRegistry::from_snapshot(&vault, &config, &snapshot);
-        (temp, vault, config, snapshot, registry)
+        let registry = AlbumRegistry::from_snapshot(&vault, &snapshot);
+        (temp, vault, snapshot, registry)
     }
 
     #[test]
     fn schema_change_composes_with_index_and_guards_record_inputs() {
-        let (_temp, vault, config, snapshot, registry) = setup();
+        let (_temp, vault, snapshot, registry) = setup();
         let record_type =
             registry.albums[0].declaration.record_type.as_ref().unwrap();
         let expect = schema_fingerprint(
@@ -558,7 +524,6 @@ mod tests {
             super::super::protocol::parse_envelope(&request).unwrap();
         let plan = plan_update(
             &vault,
-            &config,
             &snapshot,
             &registry,
             "eat",
@@ -582,7 +547,7 @@ mod tests {
 
     #[test]
     fn empty_operations_do_not_repair_a_missing_index() {
-        let (_temp, vault, config, snapshot, registry) = setup();
+        let (_temp, vault, snapshot, registry) = setup();
         let record_type =
             registry.albums[0].declaration.record_type.as_ref().unwrap();
         let expect = schema_fingerprint(
@@ -595,7 +560,6 @@ mod tests {
             super::super::protocol::parse_envelope(&request).unwrap();
         let plan = plan_update(
             &vault,
-            &config,
             &snapshot,
             &registry,
             "eat",
@@ -610,10 +574,10 @@ mod tests {
 
     #[test]
     fn incomplete_record_scan_refuses_before_index_planning() {
-        let (_temp, vault, config, _snapshot, _registry) = setup();
+        let (_temp, vault, _snapshot, _registry) = setup();
         fs::write(vault.join("eat/bad.md"), [0xff, 0xfe]).unwrap();
-        let snapshot = VaultSnapshot::load_with_config(&vault, &config);
-        let registry = AlbumRegistry::from_snapshot(&vault, &config, &snapshot);
+        let snapshot = VaultSnapshot::load(&vault);
+        let registry = AlbumRegistry::from_snapshot(&vault, &snapshot);
         let record_type =
             registry.albums[0].declaration.record_type.as_ref().unwrap();
         let expect = schema_fingerprint(record_type, None);
@@ -623,7 +587,6 @@ mod tests {
             super::super::protocol::parse_envelope(&request).unwrap();
         let error = plan_update(
             &vault,
-            &config,
             &snapshot,
             &registry,
             "eat",

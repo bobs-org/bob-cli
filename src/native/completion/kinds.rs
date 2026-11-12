@@ -175,16 +175,6 @@ const TABLE: &[Entry] = &[
         kind: Kind::RecordType,
     },
     Entry {
-        path: &["records", "init"],
-        arg: "type",
-        kind: Kind::RecordType,
-    },
-    Entry {
-        path: &["records", "init"],
-        arg: "parent",
-        kind: Kind::VaultNote,
-    },
-    Entry {
         path: &["records", "new"],
         arg: "type",
         kind: Kind::RecordType,

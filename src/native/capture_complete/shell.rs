@@ -1200,13 +1200,9 @@ fn record_section_create_shell_row(
     marker_start: usize,
 ) -> Option<ShellRow> {
     let dir = route.trim_end_matches('/');
-    let config_path = crate::native::config::config_path();
     let resolution =
         crate::native::records::context::RecordContext::resolve_route_head(
-            bob_dir,
-            &config_path,
-            dir,
-            None,
+            bob_dir, dir, None,
         )
         .ok()?;
     let crate::native::records::context::RecordKindResolution::Valid {

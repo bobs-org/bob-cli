@@ -31,14 +31,7 @@ pub(super) fn record_items(
     if intents.is_empty() {
         return Vec::new();
     }
-    let policy =
-        record_policy_for_draft(&request.bob_dir, None, &request.draft);
-    let Some(config) = policy.records_config().cloned() else {
-        return Vec::new();
-    };
-    if policy.config_error().is_some() {
-        return Vec::new();
-    }
+    let policy = record_policy_for_draft(&request.bob_dir, &request.draft);
     let mut catalog = RecordCatalog::new(&request.bob_dir);
     let mut out = Vec::new();
     for item in parsed.items.iter().filter(|item| {
@@ -60,7 +53,8 @@ pub(super) fn record_items(
             out.push(empty_record_item(item, &request.draft, parsed));
             continue;
         }
-        let Some(record_type) = config.by_directory(&intent.dir).cloned()
+        let Some(record_type) =
+            policy.usable_record_type_for_route(&intent.dir).cloned()
         else {
             out.push(empty_record_item(item, &request.draft, parsed));
             continue;

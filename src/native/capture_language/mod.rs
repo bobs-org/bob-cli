@@ -218,7 +218,6 @@ pub(crate) use self::record::RecordNoteIntent;
 pub(crate) use self::record::RecordRoutePolicy;
 pub(crate) use self::record::ALBUM_HOLDS_NO_TASKS_CODE;
 pub(crate) use self::record::ALBUM_SCHEMA_INVALID_CODE;
-pub(crate) use self::record::RECORDS_CONFIG_INVALID_CODE;
 pub(crate) use self::record::RECORD_ASSIST_VERSION;
 pub(crate) use self::record::RECORD_DISCOVERY_INCOMPLETE_CODE;
 pub(crate) use self::rewrite::bullet_sigil_may_need_notebook_policy;

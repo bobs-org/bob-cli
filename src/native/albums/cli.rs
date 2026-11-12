@@ -12,7 +12,7 @@ use super::{
     sync, update::run as update_run,
 };
 use crate::native::{
-    config, env as bob_env, notebooks::snapshot::VaultSnapshot,
+    env as bob_env, notebooks::snapshot::VaultSnapshot,
     records::cli::open_in_obsidian,
 };
 
@@ -310,10 +310,8 @@ fn normalize_root(value: &str) -> String {
 }
 
 fn load_report(bob_dir: &std::path::Path) -> report::AlbumReport {
-    let config_path = config::config_path();
-    let snapshot = VaultSnapshot::load_with_config(bob_dir, &config_path);
-    let registry =
-        AlbumRegistry::from_snapshot(bob_dir, &config_path, &snapshot);
+    let snapshot = VaultSnapshot::load(bob_dir);
+    let registry = AlbumRegistry::from_snapshot(bob_dir, &snapshot);
     report::build_report(&registry, &snapshot)
 }
 

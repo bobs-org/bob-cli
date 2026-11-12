@@ -3,7 +3,7 @@
 //! Parse and execution build one immutable route policy through
 //! [`record_policy_for_draft`]. Parse resolves claimed intents through the
 //! existing planner and one invocation-local folder catalog; ordinary task
-//! drafts avoid both config loading and record-index reads.
+//! drafts avoid record-index reads.
 
 use serde_json::json;
 use std::{
@@ -22,7 +22,6 @@ use super::{
 };
 use super::{
     capture_language::record::RecordNoteIntent,
-    config,
     records::{
         self, FieldInputState, PlannedRecordProperty, PlannedUpdateProperty,
         RecordCatalog, RecordDiagnostic, RecordFieldInput, RecordNoteInput,
@@ -71,11 +70,8 @@ impl CaptureRecordContext {
             .get_or_insert_with(|| RecordCatalog::new(&vault_root))
     }
 
-    /// Usable record schema for one route: album-valid and config-valid
-    /// routes resolve here; every other explicit per-route outcome returns
-    /// `None` so callers refuse instead of planning against a fallback. Only
-    /// the legacy `None` path (no per-route decision) consults the
-    /// transitional config map.
+    /// Usable album schema for one route. Every other route outcome returns
+    /// `None`, so callers cannot plan against an unclaimed folder.
     pub(crate) fn route_kind_for(
         &self,
         dir: &str,
@@ -84,39 +80,21 @@ impl CaptureRecordContext {
             Some(PerRouteDecision::AlbumValid { record_type, album }) => {
                 Some((record_type.clone(), "album", Some(album.clone())))
             }
-            Some(PerRouteDecision::ConfigValid { record_type }) => {
-                Some((record_type.clone(), "config", None))
-            }
             Some(
                 PerRouteDecision::AlbumInvalid { .. }
-                | PerRouteDecision::Unclaimed { .. }
+                | PerRouteDecision::Unclaimed
                 | PerRouteDecision::DiscoveryIncomplete { .. },
-            ) => None,
-            None => self
-                .policy
-                .records_config()
-                .and_then(|config| config.by_directory(dir))
-                .map(|record_type| (record_type.clone(), "config", None)),
+            )
+            | None => None,
         }
     }
 
-    /// Additive per-route warnings (for example `records_config_deprecated`)
-    /// resolved alongside the route.
+    /// Additive route warnings resolved alongside the album.
     pub(crate) fn route_warnings_for(
         &self,
         dir: &str,
     ) -> &[crate::native::albums::AlbumFinding] {
         self.policy.route_warnings(dir)
-    }
-
-    pub(crate) fn config_and_catalog(
-        &mut self,
-    ) -> Option<(&super::records::RecordsConfig, &mut RecordCatalog)> {
-        let config = self.policy.records_config()?;
-        let catalog = self
-            .catalog
-            .get_or_insert_with(|| RecordCatalog::new(&self.vault_root));
-        Some((config, catalog))
     }
 
     #[cfg(test)]
@@ -237,13 +215,11 @@ pub(crate) struct RecordParseIssue {
     pub(crate) range: Option<Range<usize>>,
 }
 
-/// Build the record route policy for one draft: lexical candidates
-/// first, then config load, then `is_dir` stats for candidates only.
-/// No candidates means no config or filesystem reads at all, so
-/// ordinary task drafts pay nothing for record support.
+/// Build the album route policy for one draft from lexical candidates.
+/// No candidates means no filesystem reads, so ordinary task drafts pay
+/// nothing for record support.
 pub(crate) fn record_policy_for_draft(
     vault_root: &Path,
-    config_path: Option<&Path>,
     raw_text: &str,
 ) -> RecordRoutePolicy {
     let folder_candidates = candidate_dirs(raw_text);
@@ -256,28 +232,11 @@ pub(crate) fn record_policy_for_draft(
     if candidates.is_empty() {
         return RecordRoutePolicy::absent().with_vault_root(vault_root);
     }
-    // Effective config path: the caller's explicit path wins, else the
-    // established config location. Per-route album resolution reads at most
-    // one album head plus its owner chain; full discovery runs only to
-    // prove a matching config kind is unclaimed.
-    let path = config_path
-        .map(Path::to_path_buf)
-        .unwrap_or_else(config::config_path);
-    // Legacy config maps stay for transition callers built without
-    // per-route outcomes (tests, older adapters). Per-route decisions win
-    // wherever present.
-    let legacy = match config::records::load_records_config_from(&path) {
-        Ok(records) => RecordRoutePolicy::from_config(&records, Some(&path)),
-        Err(diagnostic) => {
-            RecordRoutePolicy::invalid(&path, diagnostic.message)
-        }
-    };
-    let mut merged = legacy.with_vault_root(vault_root);
+    let mut merged = RecordRoutePolicy::absent().with_vault_root(vault_root);
     for candidate in &candidates {
-        let resolution = RecordContext::resolve_route_head(
-            vault_root, &path, candidate, None,
-        );
-        let (decision, warnings) = match resolution {
+        let resolution =
+            RecordContext::resolve_route_head(vault_root, candidate, None);
+        let (mut decision, warnings) = match resolution {
             Ok(RecordKindResolution::Valid { kind, warnings, .. }) => {
                 if kind.source_name() == "album" {
                     match kind.album.clone() {
@@ -293,20 +252,10 @@ pub(crate) fn record_policy_for_draft(
                             },
                             warnings,
                         ),
-                        None => (
-                            PerRouteDecision::Unclaimed {
-                                config_diagnostic: None,
-                            },
-                            Vec::new(),
-                        ),
+                        None => (PerRouteDecision::Unclaimed, Vec::new()),
                     }
                 } else {
-                    (
-                        PerRouteDecision::ConfigValid {
-                            record_type: kind.record_type().clone(),
-                        },
-                        warnings,
-                    )
+                    (PerRouteDecision::Unclaimed, Vec::new())
                 }
             }
             Ok(RecordKindResolution::Invalid {
@@ -315,12 +264,9 @@ pub(crate) fn record_policy_for_draft(
                 PerRouteDecision::AlbumInvalid { paths, findings },
                 Vec::new(),
             ),
-            Ok(RecordKindResolution::Unclaimed {
-                config_diagnostic, ..
-            }) => (
-                PerRouteDecision::Unclaimed { config_diagnostic },
-                Vec::new(),
-            ),
+            Ok(RecordKindResolution::Unclaimed { .. }) => {
+                (PerRouteDecision::Unclaimed, Vec::new())
+            }
             Ok(RecordKindResolution::DiscoveryIncomplete { errors }) => (
                 PerRouteDecision::DiscoveryIncomplete {
                     errors: errors.clone(),
@@ -336,15 +282,21 @@ pub(crate) fn record_policy_for_draft(
                 Vec::new(),
             ),
         };
+        if let PerRouteDecision::AlbumValid { record_type, album } = &decision
+            && candidate.eq_ignore_ascii_case(&record_type.id)
+            && !candidate.eq_ignore_ascii_case(&record_type.dir)
+        {
+            merged =
+                merged.insert_type_alias(candidate.clone(), album.stem.clone());
+            decision = PerRouteDecision::Unclaimed;
+        }
         merged = merged
             .insert_route(candidate.clone(), decision)
             .insert_route_warnings(candidate.clone(), warnings);
     }
     let mut existing = HashSet::new();
     for dir in &folder_candidates {
-        if merged.configured_dir(dir).is_some()
-            || merged.is_usable_record_route(dir)
-        {
+        if merged.is_usable_record_route(dir) {
             continue;
         }
         if vault_root.join(dir).is_dir() {
@@ -389,8 +341,7 @@ pub(crate) fn resolve_record_intents_with_catalog(
     let Some(policy) = policy else {
         return Vec::new();
     };
-    let legacy_config = policy.records_config();
-    if legacy_config.is_none() && !policy.has_route_decisions() {
+    if !policy.has_route_decisions() {
         return Vec::new();
     }
     let Some(vault_root) = policy.vault_root() else {
@@ -405,8 +356,7 @@ pub(crate) fn resolve_record_intents_with_catalog(
     let mut entries = Vec::with_capacity(intents.len());
 
     for (index, intent) in intents {
-        // Per-route album/config outcomes win. Policies without them
-        // (legacy fixtures) fall back to the config directory map.
+        // Only explicitly resolved album routes can create record notes.
         let (record_type_owned, source, album, render_identity): (
             RecordType,
             &'static str,
@@ -419,48 +369,23 @@ pub(crate) fn resolve_record_intents_with_catalog(
                 Some(album.clone()),
                 super::records::RecordRenderIdentity::Album,
             ),
-            Some(PerRouteDecision::ConfigValid { record_type }) => (
-                record_type.clone(),
-                "config",
-                None,
-                super::records::RecordRenderIdentity::Config,
-            ),
             Some(PerRouteDecision::AlbumInvalid { .. })
-            | Some(PerRouteDecision::Unclaimed { .. })
+            | Some(PerRouteDecision::Unclaimed)
             | Some(PerRouteDecision::DiscoveryIncomplete { .. }) => {
                 // The grammar already refused these routes; no intent
-                // should exist. Skip rather than planning against a
-                // fallback the album owns entirely.
+                // should exist.
                 continue;
             }
-            None => {
-                let Some(config) = legacy_config else {
-                    continue;
-                };
-                let Some(record_type) = config.by_directory(&intent.dir) else {
-                    continue;
-                };
-                (
-                    record_type.clone(),
-                    "config",
-                    None,
-                    super::records::RecordRenderIdentity::Config,
-                )
-            }
+            None => continue,
         };
         let record_type = &record_type_owned;
-        // Album kinds are not in the transitional config. Plan them
-        // against a single-type synthetic config so the existing
-        // planner, catalog, overlay, and collision logic stay unchanged.
+        // Adapt the album schema to the shared planner's single-type input so
+        // its catalog, overlay, and collision logic stay in one place.
         let synthetic;
-        let config: &records::RecordsConfig = if source == "album" {
-            synthetic = records::RecordsConfig {
-                types: vec![record_type.clone()],
-            };
-            &synthetic
-        } else {
-            legacy_config.expect("config route needs legacy config")
+        synthetic = records::RecordsConfig {
+            types: vec![record_type.clone()],
         };
+        let config: &records::RecordsConfig = &synthetic;
         let field_inputs = field_inputs_from_intent(intent);
         let notes = record_note_inputs(intent);
         let near_values =
@@ -1067,7 +992,10 @@ fn plan_issue(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::native::records::{FieldInputState, RecordCreateRequest};
+    use crate::native::capture_language::{AlbumRouteMeta, PerRouteDecision};
+    use crate::native::records::{
+        FieldInputState, RecordCreateRequest, RecordsConfig,
+    };
     use chrono::NaiveDate;
 
     const CONFIG: &str = r#"records:
@@ -1097,9 +1025,27 @@ mod tests {
             &config_path,
         )
         .expect("valid config");
-        let policy =
-            RecordRoutePolicy::from_config(&config, Some(&config_path))
-                .with_vault_root(root);
+        let record_type = config.record_type("restaurant").unwrap().clone();
+        let route_config = RecordsConfig {
+            types: vec![record_type.clone()],
+        };
+        let policy = RecordRoutePolicy::absent()
+            .insert_route(
+                "eat".to_owned(),
+                PerRouteDecision::AlbumValid {
+                    record_type,
+                    album: AlbumRouteMeta {
+                        stem: "eat".to_owned(),
+                        title: "Restaurants".to_owned(),
+                        owner: Some("body".to_owned()),
+                        breadcrumb: vec![
+                            "Body".to_owned(),
+                            "Restaurants".to_owned(),
+                        ],
+                    },
+                },
+            )
+            .with_vault_root(root);
         let mut context = CaptureRecordContext::new(policy, root);
         assert_eq!(context.catalog_files_opened(), 0);
         assert!(!context.catalog_is_loaded("eat"));
@@ -1114,8 +1060,8 @@ mod tests {
             .and_hms_opt(13, 40, 0)
             .unwrap();
         {
-            let (config, catalog) = context.config_and_catalog().unwrap();
-            let config_address = config as *const _;
+            let config = &route_config;
+            let catalog = context.catalog_mut();
             let catalog_address = catalog as *mut _;
             let first = records::plan_create(
                 RecordCreateRequest {
@@ -1137,13 +1083,12 @@ mod tests {
             assert_eq!(catalog.files_opened(), 1);
             assert!(catalog.is_loaded("eat"));
 
-            let (same_config, same_catalog) =
-                context.config_and_catalog().unwrap();
-            assert_eq!(same_config as *const _, config_address);
+            let same_catalog = context.catalog_mut();
             assert_eq!(same_catalog as *mut _, catalog_address);
         }
         {
-            let (config, catalog) = context.config_and_catalog().unwrap();
+            let config = &route_config;
+            let catalog = context.catalog_mut();
             let second = records::plan_create(
                 RecordCreateRequest {
                     config,
@@ -1166,14 +1111,10 @@ mod tests {
         assert!(context.catalog_is_loaded("eat"));
         assert_eq!(context.catalog_files_opened(), 1);
 
-        // An ordinary-task lexical preflight returns before config or index
+        // An ordinary-task lexical preflight returns before album or index
         // reads, leaving its invocation context catalog completely lazy.
-        let absent = record_policy_for_draft(
-            root,
-            Some(&root.join("missing-config.yml")),
-            "Buy milk",
-        );
-        assert!(absent.records_config().is_none());
+        let absent = record_policy_for_draft(root, "Buy milk");
+        assert!(!absent.has_route_decisions());
         let task_context = CaptureRecordContext::new(absent, root);
         assert!(!task_context.catalog_is_loaded("eat"));
         assert_eq!(task_context.catalog_files_opened(), 0);
@@ -1214,12 +1155,8 @@ mod tests {
         let temp = tempfile::tempdir().expect("temporary vault");
         let root = temp.path();
         album_vault(root);
-        // No config file: albums resolve without transitional config.
-        let policy = record_policy_for_draft(
-            root,
-            Some(&root.join("missing-config.yml")),
-            "Ani Ramen House @eat/",
-        );
+        // Album schemas resolve without a host-config record registry.
+        let policy = record_policy_for_draft(root, "Ani Ramen House @eat/");
         let entries = resolve_record_intents(
             &[(0, create_intent("eat", "Ani Ramen House"))],
             Some(&policy),
@@ -1304,11 +1241,8 @@ mod tests {
             "records:\n  restaurant:\n    dir: eat\n    label: Restaurant\n    fields: {}\n",
         )
         .expect("config");
-        let policy = record_policy_for_draft(
-            root,
-            Some(&config_path),
-            "Ramen @eat/\n\nCola @drink/",
-        );
+        let policy =
+            record_policy_for_draft(root, "Ramen @eat/\n\nCola @drink/");
         // The broken album owns its noun and folder: no config fallback.
         assert!(matches!(
             policy.route_decision("eat"),
@@ -1339,7 +1273,6 @@ mod tests {
         album_vault(root);
         let policy = record_policy_for_draft(
             root,
-            Some(&root.join("missing-config.yml")),
             "Ramen Shop @eat/^ramen\n\n@eat/ramen",
         );
         let create = RecordNoteIntent {
@@ -1396,7 +1329,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("temporary vault");
         let root = temp.path();
         album_vault(root);
-        let policy = record_policy_for_draft(root, None, "Buy milk");
+        let policy = record_policy_for_draft(root, "Buy milk");
         assert!(!policy.has_route_decisions());
         assert!(policy.route_decision("eat").is_none());
         let context = CaptureRecordContext::new(policy, root);
@@ -1404,10 +1337,7 @@ mod tests {
     }
 
     #[test]
-    fn suppressed_config_kind_never_resurrects_legacy_route() {
-        // eat.md claims noun `restaurant`; transitional config declares the
-        // same noun with dir `old_eat`. The registry suppresses that entire
-        // config kind, so `Place @old_eat/` must not resurrect its schema.
+    fn legacy_config_never_resurrects_a_record_route() {
         for broken in [false, true] {
             for with_legacy_folder in [false, true] {
                 let temp = tempfile::tempdir().expect("temporary vault");
@@ -1436,14 +1366,10 @@ mod tests {
                     &config_path,
                     "records:\n  restaurant:\n    dir: old_eat\n    label: Restaurant\n    fields: {}\n",
                 )
-                .expect("transitional config");
-                let policy = record_policy_for_draft(
-                    root,
-                    Some(&config_path),
-                    "Place @old_eat/",
-                );
-                // A valid claim suppresses config: no usable schema for the
-                // legacy dir. A broken claim also suppresses it entirely.
+                .expect("legacy config fixture");
+                let policy = record_policy_for_draft(root, "Place @old_eat/");
+                // The old config key never supplies a route, regardless of
+                // whether an album claims the related noun.
                 assert!(
                     policy.route_decision("old_eat").is_none()
                         || matches!(
@@ -1466,11 +1392,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("temporary vault");
         let root = temp.path();
         album_vault(root);
-        let policy = record_policy_for_draft(
-            root,
-            Some(&root.join("missing-config.yml")),
-            "Buy milk @nowhere/",
-        );
+        let policy = record_policy_for_draft(root, "Buy milk @nowhere/");
         assert!(matches!(
             policy.route_decision("nowhere"),
             Some(PerRouteDecision::Unclaimed { .. }) | None
@@ -1499,11 +1421,7 @@ mod tests {
         )
         .expect("bad-byte album");
         std::fs::create_dir_all(root.join("eat")).expect("record folder");
-        let policy = record_policy_for_draft(
-            root,
-            Some(&root.join("missing-config.yml")),
-            "Ramen @eat/",
-        );
+        let policy = record_policy_for_draft(root, "Ramen @eat/");
         assert!(
             matches!(
                 policy.route_decision("eat"),
@@ -1518,11 +1436,7 @@ mod tests {
             .is_none());
         let entries = resolve_record_intents(
             &[(0, create_intent("eat", "Ramen"))],
-            Some(&record_policy_for_draft(
-                root,
-                Some(&root.join("missing-config.yml")),
-                "Ramen @eat/",
-            )),
+            Some(&record_policy_for_draft(root, "Ramen @eat/")),
         );
         assert!(entries.is_empty(), "incomplete route plans nothing");
     }
@@ -1538,11 +1452,7 @@ mod tests {
         std::fs::create_dir_all(root.join("eat")).expect("record folder");
         std::fs::write(root.join("unrelated.md"), b"\xff\xfe bad\n")
             .expect("unrelated bad file");
-        let policy = record_policy_for_draft(
-            root,
-            Some(&root.join("missing-config.yml")),
-            "Ramen @eat/",
-        );
+        let policy = record_policy_for_draft(root, "Ramen @eat/");
         assert!(matches!(
             policy.route_decision("eat"),
             Some(PerRouteDecision::AlbumValid { .. })

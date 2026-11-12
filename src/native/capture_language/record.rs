@@ -29,9 +29,7 @@ use super::markers::{
 use super::model::*;
 use crate::native::albums::AlbumFinding;
 use crate::native::capture_links::is_protected_markup_range;
-use crate::native::records::schema::{
-    RecordDiagnostic, RecordType, RecordsConfig,
-};
+use crate::native::records::schema::RecordType;
 
 /// Strict refusal for task markers outside opaque field values.
 pub(crate) const RECORD_MARKER_UNSUPPORTED_CODE: &str =
@@ -49,8 +47,6 @@ pub(crate) const RECORD_FOLDER_NOT_RECORD_CODE: &str =
     "record_folder_not_record";
 /// Strict refusal for a configured type id used as its folder.
 pub(crate) const RECORD_TYPE_AS_FOLDER_CODE: &str = "record_type_as_folder";
-/// Strict refusal for record candidates under a malformed records block.
-pub(crate) const RECORDS_CONFIG_INVALID_CODE: &str = "records_config_invalid";
 /// Strict refusal when route-local resolution cannot prove the global
 /// discovery is complete. The route keeps its diagnostic and never falls
 /// back to config.
@@ -84,8 +80,7 @@ pub(crate) struct AlbumRouteMeta {
 }
 
 /// Per-route record resolution. Album claims own their noun and folder
-/// entirely: a broken album never falls back to config, and an unclaimed
-/// config route keeps the transitional `records_config_invalid` refusal.
+/// entirely, and a broken album never becomes a task.
 #[derive(Debug, Clone)]
 pub(crate) enum PerRouteDecision {
     AlbumValid {
@@ -96,12 +91,7 @@ pub(crate) enum PerRouteDecision {
         paths: Vec<String>,
         findings: Vec<AlbumFinding>,
     },
-    ConfigValid {
-        record_type: RecordType,
-    },
-    Unclaimed {
-        config_diagnostic: Option<RecordDiagnostic>,
-    },
+    Unclaimed,
     DiscoveryIncomplete {
         errors: Vec<String>,
     },
@@ -109,79 +99,24 @@ pub(crate) enum PerRouteDecision {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RecordRoutePolicy {
-    /// Lower-cased configured directory → record type id.
-    dirs: HashMap<String, String>,
-    /// Lower-cased record type id → its directory.
+    /// Lower-cased album noun → its directory, for the folder teaching refusal.
     type_dirs: HashMap<String, String>,
-    /// Config file path for diagnostics, when known.
-    config_path: Option<String>,
-    /// Malformed `records` block message, when the config failed to parse.
-    /// Retained for policies built without per-route resolution; policies
-    /// with per-route decisions consult each route's own outcome instead.
-    config_error: Option<String>,
-    /// Parsed schema retained for the native capture adapter. The grammar
-    /// itself only consults the directory/type maps above.
-    records_config: Option<RecordsConfig>,
     /// Vault root used to build this policy, for invocation-local indexing
     /// by the native adapter.
     vault_root: Option<PathBuf>,
     /// Lower-cased existing vault-relative directories that are not
     /// record folders.
     existing_dirs: HashSet<String>,
-    /// Lower-cased route → per-route album/config resolution. When present
-    /// for a route, it wins over the global `config_error` above.
+    /// Lower-cased route → per-route album resolution.
     routes: HashMap<String, PerRouteDecision>,
-    /// Lower-cased route → additive warnings (for example
-    /// `records_config_deprecated`) resolved alongside the route.
+    /// Lower-cased route → additive warnings resolved alongside the route.
     route_warnings: HashMap<String, Vec<AlbumFinding>>,
 }
 
 impl RecordRoutePolicy {
-    /// No `records` block: every record candidate stays literal task text.
+    /// No matching album: every record candidate stays literal task text.
     pub(crate) fn absent() -> Self {
         Self::default()
-    }
-
-    /// A malformed `records` block: every record candidate refuses with
-    /// `records_config_invalid`.
-    pub(crate) fn invalid(config_path: &Path, message: String) -> Self {
-        Self {
-            config_path: Some(config_path.display().to_string()),
-            config_error: Some(message),
-            records_config: None,
-            vault_root: None,
-            ..Self::default()
-        }
-    }
-
-    /// Build a policy from a parsed records config.
-    pub(crate) fn from_config(
-        config: &RecordsConfig,
-        config_path: Option<&Path>,
-    ) -> Self {
-        let mut dirs = HashMap::new();
-        let mut type_dirs = HashMap::new();
-        for record_type in &config.types {
-            dirs.insert(
-                record_type.dir.to_ascii_lowercase(),
-                record_type.id.clone(),
-            );
-            type_dirs.insert(
-                record_type.id.to_ascii_lowercase(),
-                record_type.dir.clone(),
-            );
-        }
-        Self {
-            dirs,
-            type_dirs,
-            config_path: config_path.map(|path| path.display().to_string()),
-            config_error: None,
-            records_config: Some(config.clone()),
-            vault_root: None,
-            existing_dirs: HashSet::new(),
-            routes: HashMap::new(),
-            route_warnings: HashMap::new(),
-        }
     }
 
     /// Attach the caller-stat existing directories (lower-cased,
@@ -191,43 +126,22 @@ impl RecordRoutePolicy {
         self
     }
 
-    /// Directory the candidate claims, when it is a configured record
-    /// folder. Callers check this before any filesystem inspection.
-    pub(crate) fn configured_dir(&self, dir: &str) -> Option<&str> {
-        self.dirs.get(dir).map(String::as_str)
-    }
-
-    pub(crate) fn records_config(&self) -> Option<&RecordsConfig> {
-        self.records_config.as_ref()
-    }
-
-    /// Usable schema for one record folder after album claim precedence.
-    /// A broken, incomplete, or unclaimed album-owned route never falls back
-    /// to config. Only the legacy `None` path (policies without per-route
-    /// outcomes) consults the transitional config map.
+    /// Usable album schema for one record folder.
     pub(crate) fn usable_record_type_for_route(
         &self,
         route: &str,
     ) -> Option<&RecordType> {
         match self.route_decision(route) {
-            Some(PerRouteDecision::AlbumValid { record_type, .. })
-            | Some(PerRouteDecision::ConfigValid { record_type }) => {
+            Some(PerRouteDecision::AlbumValid { record_type, .. }) => {
                 Some(record_type)
             }
             Some(
                 PerRouteDecision::AlbumInvalid { .. }
-                | PerRouteDecision::Unclaimed { .. }
+                | PerRouteDecision::Unclaimed
                 | PerRouteDecision::DiscoveryIncomplete { .. },
             ) => None,
-            None => self
-                .records_config
-                .as_ref()
-                .and_then(|config| config.by_directory(route)),
+            None => None,
         }
-    }
-
-    pub(crate) fn config_error(&self) -> Option<&str> {
-        self.config_error.as_deref()
     }
 
     pub(crate) fn vault_root(&self) -> Option<&Path> {
@@ -246,6 +160,17 @@ impl RecordRoutePolicy {
         decision: PerRouteDecision,
     ) -> Self {
         self.routes.insert(route.to_ascii_lowercase(), decision);
+        self
+    }
+
+    /// Mark an album noun that differs from its folder stem so capture can
+    /// teach the route to use the album folder.
+    pub(crate) fn insert_type_alias(
+        mut self,
+        noun: String,
+        directory: String,
+    ) -> Self {
+        self.type_dirs.insert(noun.to_ascii_lowercase(), directory);
         self
     }
 
@@ -283,12 +208,11 @@ impl RecordRoutePolicy {
         !self.routes.is_empty()
     }
 
-    /// Whether the route is a usable album or config record folder.
+    /// Whether the route is a usable album record folder.
     pub(crate) fn is_usable_record_route(&self, route: &str) -> bool {
         matches!(
             self.route_decision(route),
             Some(PerRouteDecision::AlbumValid { .. })
-                | Some(PerRouteDecision::ConfigValid { .. })
         )
     }
 }
@@ -732,7 +656,7 @@ fn album_schema_invalid_message(
 enum RouteResolution {
     /// A configured folder: claim creation.
     Configured,
-    /// A teaching refusal (malformed config, type id, or existing
+    /// A teaching refusal (type id or existing
     /// non-record folder).
     Refused(RecordClaim),
     /// An unknown folder: stay literal task text.
@@ -740,18 +664,15 @@ enum RouteResolution {
 }
 
 /// Resolve a record-shaped route token against the policy: per-route
-/// album/config outcomes win; policies without per-route decisions keep
-/// the legacy configured-folder/type-id/existing-dir/global-config-error
-/// behavior. Album claims own their noun and folder entirely, so a broken
-/// album never falls back to config and never becomes a task.
+/// album outcomes win. Album claims own their noun and folder entirely, so a
+/// broken album never becomes a task.
 fn resolve_record_route(
     route: &RecordRouteToken,
     policy: &RecordRoutePolicy,
 ) -> RouteResolution {
     if let Some(decision) = policy.route_decision(&route.dir) {
         match decision {
-            PerRouteDecision::AlbumValid { .. }
-            | PerRouteDecision::ConfigValid { .. } => {
+            PerRouteDecision::AlbumValid { .. } => {
                 return RouteResolution::Configured;
             }
             PerRouteDecision::AlbumInvalid { paths, findings } => {
@@ -761,23 +682,7 @@ fn resolve_record_route(
                     Some(route.range),
                 ));
             }
-            PerRouteDecision::Unclaimed {
-                config_diagnostic: Some(diagnostic),
-            } => {
-                let path = policy.config_path.as_deref().unwrap_or("<config>");
-                return RouteResolution::Refused(RecordClaim::refused(
-                    RECORDS_CONFIG_INVALID_CODE,
-                    format!(
-                        "`@{}/` cannot claim a record folder: records config `{path}` \
-                         is invalid: {}; fix the `records:` block and retry",
-                        route.dir, diagnostic.message,
-                    ),
-                    Some(route.range),
-                ));
-            }
-            PerRouteDecision::Unclaimed {
-                config_diagnostic: None,
-            } => {
+            PerRouteDecision::Unclaimed => {
                 // Fall through to type-id / existing-dir / literal handling
                 // so unclaimed routes keep their established meaning.
             }
@@ -797,21 +702,8 @@ fn resolve_record_route(
                 ));
             }
         }
-    } else if let Some(detail) = policy.config_error.as_deref() {
-        let path = policy.config_path.as_deref().unwrap_or("<config>");
-        return RouteResolution::Refused(RecordClaim::refused(
-            RECORDS_CONFIG_INVALID_CODE,
-            format!(
-                "`@{}/` cannot claim a record folder: records config `{path}` \
-                 is invalid: {detail}; fix the `records:` block and retry",
-                route.dir,
-            ),
-            Some(route.range),
-        ));
     }
-    if policy.configured_dir(&route.dir).is_some()
-        || policy.is_usable_record_route(&route.dir)
-    {
+    if policy.is_usable_record_route(&route.dir) {
         return RouteResolution::Configured;
     }
     if let Some(actual) = policy.type_dirs.get(&route.dir) {

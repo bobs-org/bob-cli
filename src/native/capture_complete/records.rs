@@ -19,7 +19,7 @@ use super::model::{
 use crate::native::capture_language::{
     self, candidate_collection_routes, candidate_dirs, CompletionContext,
     EditorItemParse, EditorParse, EditorParseOptions, RecordNoteIntent,
-    RecordRoutePolicy, RECORDS_CONFIG_INVALID_CODE, RECORD_ASSIST_VERSION,
+    RecordRoutePolicy, RECORD_ASSIST_VERSION,
 };
 use crate::native::capture_record::{
     record_policy_for_draft, resolve_record_intents_with_catalog,
@@ -77,8 +77,7 @@ pub(super) fn named_field(
 ) -> Result<CaptureCompleteResult, CompleteError> {
     set_files_opened(0);
     let key = request.record_field.unwrap_or("");
-    let policy =
-        record_policy_for_draft(request.bob_dir, None, request.raw_text);
+    let policy = record_policy_for_draft(request.bob_dir, request.raw_text);
     let mut session = Session::open_with_policy(request, policy);
     if let Some(result) = session.route_diagnostic_result() {
         return Ok(result);
@@ -96,8 +95,7 @@ struct Session<'a> {
 
 impl<'a> Session<'a> {
     fn open(request: &'a CompleteRequest<'a>) -> Self {
-        let policy =
-            record_policy_for_draft(request.bob_dir, None, request.raw_text);
+        let policy = record_policy_for_draft(request.bob_dir, request.raw_text);
         Self::open_with_policy(request, policy)
     }
 
@@ -152,7 +150,6 @@ impl<'a> Session<'a> {
                 });
         self.parsed.diagnostics.iter().find(|diagnostic| {
             let is_route_error = diagnostic.code == "album_schema_invalid"
-                || diagnostic.code == RECORDS_CONFIG_INVALID_CODE
                 || diagnostic.code
                     == capture_language::RECORD_DISCOVERY_INCOMPLETE_CODE;
             if !is_route_error {

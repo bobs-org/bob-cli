@@ -4,15 +4,13 @@
 //! reports. [`AlbumRegistry::resolve_route`] only consults that already-known
 //! inventory. [`resolve_route_head`] is the bounded adapter for a caller that
 //! has no inventory: it reads the requested root note's frontmatter only, and
-//! performs an explicit full discovery only when a matching config fallback
-//! needs proof that no album claims it.
+//! performs only the requested route's bounded album lookup.
 //!
 //! A consumer that is producing whole-vault health should keep the discovered
-//! registry and use its `albums`, `usable_types`, `config_diagnostic`, and
-//! `health` together. For example, `AlbumInvalid` retains the album paths and
-//! findings even when no `RecordType` could be built; consumers must not fall
-//! back to config for that claim. A capture path can use
-//! `resolve_route_head(vault, config, "movies", Some(&registry))` to reuse
+//! registry and use its `albums`, `usable_types`, and `health` together. For
+//! example, `AlbumInvalid` retains the album paths and findings even when no
+//! `RecordType` could be built. A capture path can use
+//! `resolve_route_head(vault, "movies", Some(&registry))` to reuse
 //! those checks. Without an inventory, `TargetOnly` means the schema at that
 //! head parsed locally, while global uniqueness and parent checks have not run.
 
@@ -36,14 +34,13 @@ use crate::native::{
     },
     pomodoro_homes::{HomeResolver, IndexedHomeSource},
     projects::wikilink_path_target,
-    records::schema::{PropertyStorageKind, RecordDiagnostic, RecordType},
+    records::schema::{PropertyStorageKind, RecordType},
     vault_links::{LinkResolution, NoteIndex},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RecordTypeSource {
     Album { path: String },
-    Config { path: PathBuf },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -86,14 +83,8 @@ pub(crate) enum RouteResolution {
         findings: Vec<AlbumFinding>,
         health: DiscoveryHealth,
     },
-    Config {
-        record_type: SourcedRecordType,
-        finding: AlbumFinding,
-        health: DiscoveryHealth,
-    },
     Unclaimed {
         health: DiscoveryHealth,
-        config_diagnostic: Option<RecordDiagnostic>,
     },
     DiscoveryIncomplete {
         errors: Vec<String>,
@@ -105,23 +96,17 @@ pub(crate) struct AlbumRegistry {
     pub(crate) albums: Vec<AlbumEntry>,
     #[allow(dead_code)]
     pub(crate) usable_types: Vec<SourcedRecordType>,
-    #[allow(dead_code)]
-    pub(crate) config_diagnostic: Option<RecordDiagnostic>,
     pub(crate) health: DiscoveryHealth,
     pub(crate) vault_root: PathBuf,
-    #[allow(dead_code)]
-    config_path: PathBuf,
     #[allow(dead_code)]
     claims: BTreeMap<String, Vec<usize>>,
 }
 
 impl AlbumRegistry {
-    /// Discover album declarations from one prepared snapshot. The supplied
-    /// paths are retained as registry provenance and must be the effective
-    /// vault/config paths chosen by the command (`-b` included).
+    /// Discover album declarations from one prepared snapshot of the
+    /// effective vault (`-b` included).
     pub(crate) fn from_snapshot(
         bob_dir: &Path,
-        config_path: &Path,
         snapshot: &VaultSnapshot,
     ) -> Self {
         let index = snapshot.index();
@@ -250,50 +235,29 @@ impl AlbumRegistry {
             usable_types.push(sourced);
         }
 
-        // Config fallback is all-or-nothing by id or directory. Any album
-        // claim suppresses the entire config type, including a broken claim.
-        if matches!(health, DiscoveryHealth::Complete) {
-            for record_type in &snapshot.config_record_types {
-                if claimed_config_type(record_type, &albums) {
-                    continue;
-                }
-                usable_types.push(SourcedRecordType {
-                    record_type: record_type.clone(),
-                    source: RecordTypeSource::Config {
-                        path: config_path.to_path_buf(),
-                    },
-                });
-            }
-        }
+        // An album is the only source of a usable record schema.
         Self {
             albums,
             usable_types,
-            config_diagnostic: snapshot.config_diagnostic.clone(),
             health,
             vault_root: bob_dir.to_path_buf(),
-            config_path: config_path.to_path_buf(),
             claims,
         }
     }
 
-    /// Perform a full vault scan using the explicit effective vault and
-    /// config paths.
-    pub(crate) fn discover(bob_dir: &Path, config_path: &Path) -> Self {
-        let snapshot = VaultSnapshot::load_with_config(bob_dir, config_path);
-        Self::from_snapshot(bob_dir, config_path, &snapshot)
+    /// Perform a full scan of the explicit effective vault.
+    pub(crate) fn discover(bob_dir: &Path) -> Self {
+        let snapshot = VaultSnapshot::load(bob_dir);
+        Self::from_snapshot(bob_dir, &snapshot)
     }
 
-    pub(crate) fn is_for_target(
-        &self,
-        bob_dir: &Path,
-        config_path: &Path,
-    ) -> bool {
-        same_registry_target(self, bob_dir, config_path)
+    pub(crate) fn is_for_target(&self, bob_dir: &Path) -> bool {
+        paths_equal(&self.vault_root, bob_dir)
     }
 
     /// Vault-relative paths of every album (valid or broken) claiming
     /// this stem or noun, case-insensitively. Album creation and
-    /// `records init` refuse overlapping claims through this inventory.
+    /// The retired `records init` route refuses overlapping claims through this inventory.
     pub(crate) fn claimants(&self, key: &str) -> Vec<String> {
         let wanted = key.to_ascii_lowercase();
         let mut paths = self
@@ -306,24 +270,6 @@ impl AlbumRegistry {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        paths.sort();
-        paths.dedup();
-        paths
-    }
-
-    /// Vault-relative paths of albums (valid or broken) that claim this
-    /// config kind by noun or directory. Same ownership rule as config
-    /// fallback suppression.
-    pub(crate) fn config_claimants(
-        &self,
-        record_type: &RecordType,
-    ) -> Vec<String> {
-        let mut paths = self
-            .albums
-            .iter()
-            .filter(|album| album_claims_config_type(album, record_type))
-            .map(|album| album.declaration.path.clone())
-            .collect::<Vec<_>>();
         paths.sort();
         paths.dedup();
         paths
@@ -364,52 +310,27 @@ impl AlbumRegistry {
                 health: self.health.clone(),
             };
         }
-        if let Some(record_type) = self.usable_types.iter().find(|sourced| {
-            matches!(sourced.source, RecordTypeSource::Config { .. })
-                && (sourced.record_type.id.eq_ignore_ascii_case(route)
-                    || sourced.record_type.dir.eq_ignore_ascii_case(route))
-        }) {
-            return RouteResolution::Config {
-                record_type: record_type.clone(),
-                finding: AlbumFinding {
-                    code: "records_config_deprecated",
-                    severity: AlbumIssueSeverity::Warning,
-                    path: self.config_path.to_string_lossy().replace('\\', "/"),
-                    line_number: None,
-                    key_path: Some(format!("records.{}", record_type.record_type.id)),
-                    message: format!(
-                        "record type {:?} still comes from config; declare it in a root album before the config migration lands",
-                        record_type.record_type.id
-                    ),
-                    suggestions: Vec::new(),
-                },
-                health: self.health.clone(),
-            };
-        }
         RouteResolution::Unclaimed {
             health: self.health.clone(),
-            config_diagnostic: self.config_diagnostic.clone(),
         }
     }
 }
 
 /// Resolve a target route without reading record folders or unrelated note
 /// bodies. With a known full registry, no filesystem reads occur. Without
-/// one, this reads only `<bob_dir>/<route>.md` through its frontmatter. If a
-/// matching config fallback exists, an explicit full discovery follows to
-/// prove the config kind is not claimed elsewhere.
+/// one, this reads only `<bob_dir>/<route>.md` through its frontmatter and
+/// follows that album's owner chain.
 #[allow(dead_code)]
 pub(crate) fn resolve_route_head(
     bob_dir: &Path,
-    config_path: &Path,
     route: &str,
     known: Option<&AlbumRegistry>,
 ) -> Result<RouteResolution, std::io::Error> {
     let Some(stem) = confined_album_route(route) else {
         return Ok(unsafe_route_resolution(route));
     };
-    if let Some(registry) = known
-        .filter(|registry| same_registry_target(registry, bob_dir, config_path))
+    if let Some(registry) =
+        known.filter(|registry| registry.is_for_target(bob_dir))
     {
         return Ok(registry.resolve_route(&stem));
     }
@@ -486,36 +407,9 @@ pub(crate) fn resolve_route_head(
         });
     }
 
-    let config =
-        crate::native::config::records::load_records_config_from(config_path);
-    let matching_config = config.as_ref().ok().is_some_and(|config| {
-        config.types.iter().any(|record_type| {
-            record_type.id.eq_ignore_ascii_case(route)
-                || record_type.dir.eq_ignore_ascii_case(route)
-        })
-    });
-    if matching_config {
-        let registry = AlbumRegistry::discover(bob_dir, config_path);
-        if let DiscoveryHealth::Partial(errors) = &registry.health {
-            return Ok(RouteResolution::DiscoveryIncomplete {
-                errors: errors.clone(),
-            });
-        }
-        return Ok(registry.resolve_route(route));
-    }
     Ok(RouteResolution::Unclaimed {
         health: DiscoveryHealth::TargetOnly,
-        config_diagnostic: config.err(),
     })
-}
-
-fn same_registry_target(
-    registry: &AlbumRegistry,
-    bob_dir: &Path,
-    config_path: &Path,
-) -> bool {
-    paths_equal(&registry.vault_root, bob_dir)
-        && paths_equal(&registry.config_path, config_path)
 }
 
 fn paths_equal(left: &Path, right: &Path) -> bool {
@@ -992,30 +886,6 @@ fn add_property_conflicts(albums: &mut [AlbumEntry]) {
     }
 }
 
-fn claimed_config_type(
-    record_type: &RecordType,
-    albums: &[AlbumEntry],
-) -> bool {
-    albums
-        .iter()
-        .any(|album| album_claims_config_type(album, record_type))
-}
-
-fn album_claims_config_type(
-    album: &AlbumEntry,
-    record_type: &RecordType,
-) -> bool {
-    album
-        .declaration
-        .noun_claim
-        .as_deref()
-        .is_some_and(|noun| noun.eq_ignore_ascii_case(&record_type.id))
-        || album
-            .declaration
-            .stem
-            .eq_ignore_ascii_case(&record_type.dir)
-}
-
 fn album_breadcrumb(
     residence_chain: &[String],
     root_parent: &str,
@@ -1180,7 +1050,6 @@ mod tests {
     fn snapshot_retains_album_claims_and_reclassifies_overlays() {
         let temp = fixture();
         let vault = temp.path().join("vault");
-        let config = temp.path().join("config.yml");
         write(&vault.join("area.md"), area());
         write(
             &vault.join("meal.md"),
@@ -1199,7 +1068,7 @@ mod tests {
             "---\ntype: [\"[[area]]\", \"[[album]]\"]\nrecord: {noun: mixed}\n---\n",
         );
 
-        let snapshot = VaultSnapshot::load_with_config(&vault, &config);
+        let snapshot = VaultSnapshot::load(&vault);
         assert!(snapshot.contents(Path::new("meal.md")).is_some());
         assert_eq!(snapshot.album_schema_diagnostics.len(), 1);
         assert!(snapshot.io_errors.is_empty());
@@ -1235,50 +1104,37 @@ mod tests {
     }
 
     #[test]
-    fn broken_album_claim_suppresses_config_without_poisoning_unrelated_types()
-    {
+    fn broken_album_claim_does_not_hide_a_valid_album() {
         let temp = fixture();
         let vault = temp.path().join("vault");
-        let config = temp.path().join("config.yml");
         write(&vault.join("area.md"), area());
         write(
             &vault.join("eat.md"),
             "---\ntype: [[album]]\nparent: \"[[area]]\"\nrecord: {noun: restaurant, fields: {status: {values: []}}}\n---\n# Eat\n",
         );
-        write(
-            &config,
-            "records:\n  restaurant:\n    dir: cuisines\n    label: Restaurant\n    fields: {}\n  recipe:\n    dir: eat\n    label: Recipe\n    fields: {}\n  book:\n    dir: books\n    label: Book\n    fields: {}\n",
-        );
+        write(&vault.join("books.md"), &album("books", "book", ""));
 
-        let registry = AlbumRegistry::discover(&vault, &config);
+        let registry = AlbumRegistry::discover(&vault);
         assert_eq!(registry.usable_types.len(), 1);
-        assert_eq!(registry.usable_types[0].record_type.id, "book");
         assert!(!registry
             .usable_types
             .iter()
             .any(|sourced| sourced.record_type.id == "recipe"));
+        assert_eq!(registry.usable_types[0].record_type.id, "book");
         assert!(matches!(
             registry.resolve_route("restaurant"),
             RouteResolution::AlbumInvalid { .. }
         ));
-        match registry.resolve_route("book") {
-            RouteResolution::Config {
-                record_type,
-                finding,
-                ..
-            } => {
-                assert_eq!(record_type.record_type.id, "book");
-                assert_eq!(finding.code, "records_config_deprecated");
-            }
-            other => panic!("expected config fallback, got {other:?}"),
-        }
+        assert!(matches!(
+            registry.resolve_route("book"),
+            RouteResolution::AlbumValid { .. }
+        ));
     }
 
     #[test]
     fn duplicate_nouns_and_property_storage_conflicts_mark_every_album() {
         let temp = fixture();
         let vault = temp.path().join("vault");
-        let config = temp.path().join("config.yml");
         write(&vault.join("area.md"), area());
         write(
             &vault.join("movies.md"),
@@ -1289,7 +1145,7 @@ mod tests {
             &album("shows", "film", "    rating: {}\n"),
         );
 
-        let registry = AlbumRegistry::discover(&vault, &config);
+        let registry = AlbumRegistry::discover(&vault);
         assert_eq!(registry.albums.len(), 2);
         for entry in &registry.albums {
             assert!(entry
@@ -1318,14 +1174,13 @@ mod tests {
     {
         let temp = fixture();
         let vault = temp.path().join("vault");
-        let config = temp.path().join("config.yml");
         write(&vault.join("area.md"), area());
         write(&vault.join("movies.md"), &album("movies", "film", ""));
         write(&vault.join("shows.md"), &album("shows", "movies", ""));
         write(&vault.join("Eat.md"), &album("Eat", "cuisine", ""));
         write(&vault.join("eat.md"), &album("eat", "meal", ""));
 
-        let registry = AlbumRegistry::discover(&vault, &config);
+        let registry = AlbumRegistry::discover(&vault);
         let paths_for = |route: &str| match registry.resolve_route(route) {
             RouteResolution::AlbumInvalid { paths, .. } => paths,
             other => panic!("expected invalid claim, got {other:?}"),
@@ -1346,10 +1201,9 @@ mod tests {
     }
 
     #[test]
-    fn malformed_config_diagnostics_do_not_poison_valid_album_kinds() {
+    fn malformed_album_schema_does_not_hide_valid_album() {
         let temp = fixture();
         let vault = temp.path().join("vault");
-        let config = temp.path().join("config.yml");
         write(&vault.join("area.md"), area());
         write(
             &vault.join("books.md"),
@@ -1359,10 +1213,7 @@ mod tests {
             &vault.join("broken.md"),
             "---\ntype: [[album]]\nparent: \"[[area]]\"\nsummary: Broken schema\nrecord: {noun: broken, fields: {state: {values: []}}}\n---\n",
         );
-        write(&config, "records: [not, a, mapping]\n");
-
-        let registry = AlbumRegistry::discover(&vault, &config);
-        assert!(registry.config_diagnostic.is_some());
+        let registry = AlbumRegistry::discover(&vault);
         assert_eq!(registry.usable_types.len(), 1);
         assert_eq!(registry.usable_types[0].record_type.id, "book");
         assert!(matches!(
@@ -1375,7 +1226,6 @@ mod tests {
     fn parent_scope_handles_unquoted_terminal_project_cycles_and_checkboxes() {
         let temp = fixture();
         let vault = temp.path().join("vault");
-        let config = temp.path().join("config.yml");
         write(&vault.join("area.md"), area());
         write(
             &vault.join("finished.md"),
@@ -1402,7 +1252,7 @@ mod tests {
             "---\ntype: [[record]]\nparent: \"[[cards]]\"\n---\n",
         );
 
-        let registry = AlbumRegistry::discover(&vault, &config);
+        let registry = AlbumRegistry::discover(&vault);
         let cards = registry
             .albums
             .iter()
@@ -1441,7 +1291,6 @@ mod tests {
     #[test]
     fn identical_album_stems_are_scoped_to_the_supplied_vault() {
         let temp = fixture();
-        let config = temp.path().join("config.yml");
         let first = temp.path().join("first");
         let second = temp.path().join("second");
         write(&first.join("area.md"), area());
@@ -1458,8 +1307,8 @@ mod tests {
             &second.join("movies.md"),
             &album("movies", "movie", "    name: {}\n"),
         );
-        let first_registry = AlbumRegistry::discover(&first, &config);
-        let second_registry = AlbumRegistry::discover(&second, &config);
+        let first_registry = AlbumRegistry::discover(&first);
+        let second_registry = AlbumRegistry::discover(&second);
         assert_eq!(first_registry.usable_types.len(), 2);
         let field = |registry: &AlbumRegistry| {
             registry
@@ -1483,7 +1332,6 @@ mod tests {
     fn album_parent_validation_and_notebook_parent_regression() {
         let temp = fixture();
         let vault = temp.path().join("vault");
-        let config = temp.path().join("config.yml");
         write(&vault.join("area.md"), area());
         write(&vault.join("album.md"), &album("album", "collection", ""));
         write(
@@ -1524,8 +1372,8 @@ mod tests {
             "---\ntype: [[album]]\nparent: \"[[shared]]\"\nsummary: Ambiguous parent\nrecord: {noun: ambiguous}\n---\n",
         );
 
-        let snapshot = VaultSnapshot::load_with_config(&vault, &config);
-        let registry = AlbumRegistry::from_snapshot(&vault, &config, &snapshot);
+        let snapshot = VaultSnapshot::load(&vault);
+        let registry = AlbumRegistry::from_snapshot(&vault, &snapshot);
         let finding = |path: &str, code: &str| {
             registry
                 .albums
@@ -1557,20 +1405,19 @@ mod tests {
     }
 
     #[test]
-    fn generic_record_recognition_survives_invalid_config_and_album_overlay() {
+    fn record_recognition_uses_album_claims() {
         let temp = fixture();
         let vault = temp.path().join("vault");
-        let config = temp.path().join("config.yml");
+        write(&vault.join("area.md"), area());
         write(
-            &config,
-            "records:\n  podcast:\n    dir: podcasts\n    fields: {}\n",
+            &vault.join("podcasts.md"),
+            &album("podcasts", "podcast", ""),
         );
         write(
             &vault.join("podcasts/item.md"),
-            "---\ntype: [[podcast]]\n---\n# Episode\n",
+            "---\ntype: [[record]]\nparent: \"[[podcasts]]\"\n---\n# Episode\n",
         );
-        let snapshot = VaultSnapshot::load_with_config(&vault, &config);
-        assert!(snapshot.config_diagnostic.is_some());
+        let snapshot = VaultSnapshot::load(&vault);
         assert_eq!(
             snapshot.files[Path::new("podcasts/item.md")].lite.kind,
             LiteKind::RecordInstance
@@ -1581,7 +1428,6 @@ mod tests {
     fn target_head_resolution_does_not_read_album_body_or_record_folders() {
         let temp = fixture();
         let vault = temp.path().join("vault");
-        let config = temp.path().join("config.yml");
         fs::create_dir_all(&vault).expect("create vault");
         fs::write(
             vault.join("movies.md"),
@@ -1592,7 +1438,7 @@ mod tests {
         fs::write(vault.join("movies/record.md"), [0xff, 0xfe])
             .expect("write unreadable unrelated record body");
 
-        let result = resolve_route_head(&vault, &config, "movies", None)
+        let result = resolve_route_head(&vault, "movies", None)
             .expect("frontmatter head is readable");
         assert!(matches!(
             result,
@@ -1614,7 +1460,6 @@ mod tests {
         let temp = fixture();
         let vault = temp.path().join("vault");
         let outside = temp.path().join("outside.md");
-        let config = temp.path().join("config.yml");
         fs::create_dir_all(&vault).expect("create vault");
         write(
             &outside,
@@ -1624,13 +1469,9 @@ mod tests {
             &vault.join("eat.md"),
             "---\ntype: [[album]]\nparent: \"[[area]]\"\nrecord: {noun: restaurant}\n---\n# Eat\n",
         );
-        write(
-            &config,
-            "records:\n  escaped:\n    dir: escaped\n    label: Escaped\n    fields: {}\n",
-        );
 
         for route in ["../outside", "/tmp/outside", "done", "ref", ".bob"] {
-            match resolve_route_head(&vault, &config, route, None)
+            match resolve_route_head(&vault, route, None)
                 .expect("unsafe routes refuse without I/O")
             {
                 RouteResolution::AlbumInvalid {
@@ -1648,8 +1489,8 @@ mod tests {
             }
         }
 
-        let valid = resolve_route_head(&vault, &config, "eat", None)
-            .expect("bounded head");
+        let valid =
+            resolve_route_head(&vault, "eat", None).expect("bounded head");
         assert!(matches!(
             valid,
             RouteResolution::AlbumValid {
@@ -1664,7 +1505,6 @@ mod tests {
         let temp = fixture();
         let first = temp.path().join("first");
         let second = temp.path().join("second");
-        let config = temp.path().join("config.yml");
         let outside = temp.path().join("outside.md");
         write(&first.join("area.md"), area());
         write(&second.join("area.md"), area());
@@ -1684,7 +1524,7 @@ mod tests {
         {
             use std::os::unix::fs::symlink;
             symlink(&outside, first.join("eat.md")).expect("symlink album");
-            match resolve_route_head(&first, &config, "eat", None)
+            match resolve_route_head(&first, "eat", None)
                 .expect("symlink escape is a refusal")
             {
                 RouteResolution::AlbumInvalid { findings, .. } => {
@@ -1697,14 +1537,10 @@ mod tests {
             }
         }
 
-        let first_registry = AlbumRegistry::discover(&first, &config);
-        let from_second = resolve_route_head(
-            &second,
-            &config,
-            "movies",
-            Some(&first_registry),
-        )
-        .expect("foreign known registry is ignored");
+        let first_registry = AlbumRegistry::discover(&first);
+        let from_second =
+            resolve_route_head(&second, "movies", Some(&first_registry))
+                .expect("foreign known registry is ignored");
         match from_second {
             RouteResolution::AlbumValid { record_type, .. } => {
                 assert_eq!(record_type.record_type.fields[0].key, "name");
@@ -1714,10 +1550,9 @@ mod tests {
     }
 
     #[test]
-    fn broken_noun_recovery_does_not_claim_an_unrelated_config_kind() {
+    fn broken_noun_recovery_preserves_album_claims() {
         let temp = fixture();
         let vault = temp.path().join("vault");
-        let config = temp.path().join("elsewhere").join("config.yml");
         write(&vault.join("area.md"), area());
         write(
             &vault.join("eat.md"),
@@ -1727,12 +1562,7 @@ mod tests {
             &vault.join("books.md"),
             &album("books", "book", "    author: {}\n"),
         );
-        write(
-            &config,
-            "records:\n  restaurant:\n    dir: restaurants\n    label: Restaurant\n    fields: {}\n  leftover:\n    dir: eat\n    label: Leftover\n    fields: {}\n  book:\n    dir: volumes\n    label: Book\n    fields: {}\n",
-        );
-
-        let registry = AlbumRegistry::discover(&vault, &config);
+        let registry = AlbumRegistry::discover(&vault);
         let ids: Vec<&str> = registry
             .usable_types
             .iter()
@@ -1742,10 +1572,6 @@ mod tests {
         assert!(
             ids.contains(&"restaurant"),
             "nested noun must not suppress restaurant: {ids:?}"
-        );
-        assert!(
-            !ids.contains(&"leftover"),
-            "folder claim still suppresses dir eat: {ids:?}"
         );
         let eat = registry
             .albums

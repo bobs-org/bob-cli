@@ -8,6 +8,18 @@ description: Bob's shared vocabulary, generated from the glossary memory web.
 
 Bob's shared vocabulary, generated from the glossary memory web.
 
+### Album Note {#album-note}
+
+A root-level Bob vault Markdown note with frontmatter `type: "[[album]]"` that owns
+one record-note schema and its record folder. The note stem is the folder name and the
+capture route. Its `parent` names an area or project, and its `summary` describes the
+collection. The nested `record:` mapping defines the record noun, label, date policy,
+and ordered fields. `bob albums sync` maintains the generated index and the owner's
+machine-owned `## Albums` catalog. Albums are not notebooks, task types, task homes, or
+root parents: parent and type walks pass through them to the area or project above.
+Record notes are created and updated with `bob records new|update` or capture. See
+`docs/records.md`.
+
 ### Annotation Section {#annotation-section}
 
 *Aliases: section tag, section card.*
@@ -43,6 +55,8 @@ that belong to no finite project; the inboxes (`inbox`, `mac_inbox`, `gkeep_inbo
 area notes whose tasks await triage. The only exceptions are each daily note's templated `^gtd` task, [Event Task](#event-task) rows under `## Events`, and closed tasks that `bob task archive` moved into `done/`; move any other stray task with Ctrl+Shift+M.
 Root-level area notes are `@route` capture targets, and every area note gets the
 per-note Ready cap and `## Tasks` status grouping. `offclock: true|false` sets the clock default for tasks on the root walk beneath it; `offclock_types` sets the clock off only for tasks whose effective type is listed. When both keys are present, `offclock_types` decides (see [Off-Clock Note Defaults Filter By Task Type](../develop/decisions.md#off-clock-note-defaults-filter-by-task-type) and [Off-Clock Follows Tag Then Note Default](../develop/decisions.md#off-clock-follows-tag-then-note-default)).
+Each area or project also lists its descendant albums in a machine-owned `## Albums`
+catalog maintained by `bob albums sync`, beside the `## Notebooks` catalog.
 
 ### Bank Month Note {#bank-month-note}
 
@@ -102,7 +116,7 @@ the draft into capture items, each a parent line plus optional authored child bu
 and each item's markers decide what it does. That is far more than GTD inbox capture: an
 item may create a task (default `mac_inbox.md`, an [Inbox File](#inbox-file)), bullet, sub-bullet,
 project note (a [Project Note Capture](#project-note-capture)), a note in a [Notebook](#notebook), a notebook, or
-record note (a note of a config-declared record type, see `docs/records.md`); queue a bare public URL as a background reference job, never touching
+record note (a [Record Note](#record-note) in an [Album Note](#album-note), see `docs/records.md`); queue a bare public URL as a background reference job, never touching
 the network; link, start, complete, or relate existing tasks (`@route:id`, `!note:id`,
 `&`, `*`); or start, adjust, shift, or close today's Pomodoro (`=`, `+N`, `++N`, `x`).
 bob plans every edit against in-memory snapshots of the target notes and today's daily
@@ -443,9 +457,11 @@ notes in that section; plain first-level siblings remain top-region notes.
 behavior, while a bare `%n` stays a Pomodoro note. Task-only markers are
 refused with a rewrite to the owner's route.
 
-Not a [Reference Note](#reference-note), a record note, a [Task Drawer](#task-drawer), a [Period Note](#period-note),
-the Pomodoro note `%n` writes, or an Obsidian folder. See `docs/notebooks.md`
-and [A Notebook Route Writes Notes; `@@` Stays Draft-Wide](../develop/decisions.md#notebook-routes-write-notes).
+Not a [Reference Note](#reference-note), a [Record Note](#record-note) or [Album Note](#album-note), a [Task Drawer](#task-drawer),
+a [Period Note](#period-note), the Pomodoro note `%n` writes, or an Obsidian folder. An album
+and a notebook are siblings under an area or project; neither can parent the
+other. See
+`docs/notebooks.md` and [A Notebook Route Writes Notes; `@@` Stays Draft-Wide](../develop/decisions.md#notebook-routes-write-notes).
 
 ### Off-Clock Pomodoro {#off-clock-pomodoro}
 
@@ -552,6 +568,16 @@ canceled to `status: canceled`, and reopening a terminal project to `status: wip
 open nonterminal project's status is preserved. New lines include `#prj`; legacy lines
 without that tag remain recognized. See `docs/projects.md` and
 [Projects Block Their Tasks From The ^prj Line](../develop/decisions.md#projects-block-from-prj-line).
+
+### Record Note {#record-note}
+
+A durable item in an [Album Note](#album-note)'s folder, with frontmatter `type: "[[record]]"`
+and `parent` linking to its album. Its schema-defined fields hold facts about the item;
+optional `## Notes` bullets hold observations, with dates when the album enables dated
+notes. The album's generated index catalogs its record notes. Capture can create or
+update one with `@album/` or `@album/<stem>`; `bob records new|update` writes the same
+record-note format and `bob records check` validates it. Record notes are not notebooks,
+references, or tasks. See `docs/records.md`.
 
 ### Reference Note {#reference-note}
 

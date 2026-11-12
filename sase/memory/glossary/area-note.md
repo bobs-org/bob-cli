@@ -14,3 +14,5 @@ that belong to no finite project; the inboxes (`inbox`, `mac_inbox`, `gkeep_inbo
 area notes whose tasks await triage. The only exceptions are each daily note's templated `^gtd` task, [[event-task]] rows under `## Events`, and closed tasks that `bob task archive` moved into `done/`; move any other stray task with Ctrl+Shift+M.
 Root-level area notes are `@route` capture targets, and every area note gets the
 per-note Ready cap and `## Tasks` status grouping. `offclock: true|false` sets the clock default for tasks on the root walk beneath it; `offclock_types` sets the clock off only for tasks whose effective type is listed. When both keys are present, `offclock_types` decides (see [[decisions:off-clock-note-defaults-filter-by-task-type]] and [[decisions:off-clock-follows-tag-then-note-default]]).
+Each area or project also lists its descendant albums in a machine-owned `## Albums`
+catalog maintained by `bob albums sync`, beside the `## Notebooks` catalog.

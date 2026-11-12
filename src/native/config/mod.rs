@@ -15,7 +15,6 @@ pub(crate) mod freshness;
 pub(crate) mod gcal;
 pub(crate) mod gmail;
 pub(crate) mod plan;
-pub(crate) mod records;
 pub(crate) mod relations;
 pub(crate) mod stats;
 pub(crate) mod themes;

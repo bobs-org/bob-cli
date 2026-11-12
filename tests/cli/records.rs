@@ -36,6 +36,30 @@ fn fixture() -> RecordsFixture {
     let config = temp.path().join("config.yml");
     fs::create_dir_all(vault.join("eat")).expect("create record folder");
     write_file(&config, RECORDS_CONFIG);
+    write_file(
+        &vault.join("body.md"),
+        "---\ntype: [[area]]\n---\n\n# Body\n",
+    );
+    write_file(
+        &vault.join("eat.md"),
+        concat!(
+            "---\n",
+            "type: [[album]]\n",
+            "parent: \"[[body]]\"\n",
+            "summary: Places to eat.\n",
+            "emoji: \"🍽️\"\n",
+            "record:\n",
+            "  noun: restaurant\n",
+            "  label: Restaurant\n",
+            "  fields:\n",
+            "    status:\n",
+            "      required: true\n",
+            "      values: {to_try: \"To try\", liked: \"Liked\"}\n",
+            "    category: {required: true, suggest: true}\n",
+            "    location: {required: true}\n",
+            "---\n\n# Restaurants\n"
+        ),
+    );
     RecordsFixture {
         _temp: temp,
         vault,
@@ -107,6 +131,36 @@ fn update_fixture() -> RecordsFixture {
         required: true
 "#,
     );
+    write_file(
+        &vault.join("body.md"),
+        "---\ntype: [[area]]\n---\n\n# Body\n",
+    );
+    write_file(
+        &vault.join("eat.md"),
+        concat!(
+            "---\n",
+            "type: [[album]]\nparent: \"[[body]]\"\nsummary: Places.\n",
+            "record:\n  noun: restaurant\n  label: Restaurant\n  dated_notes: true\n",
+            "  fields:\n",
+            "    status: {required: true, values: {to_try: \"To try\", liked: \"Liked\"}}\n",
+            "    category: {required: true}\n    location: {}\n",
+            "    visited: {values: date}\n    tags: {list: true}\n",
+            "    rating: {values: number}\n",
+            "---\n\n# Restaurants\n"
+        ),
+    );
+    write_file(
+        &vault.join("podcasts.md"),
+        concat!(
+            "---\n",
+            "type: [[album]]\nparent: \"[[body]]\"\nsummary: Podcasts.\n",
+            "record:\n  noun: podcast\n  label: Podcast\n",
+            "  fields:\n",
+            "    status: {required: true, values: {to_try: \"To try\", subscribed: \"Subscribed\"}}\n",
+            "    category: {required: true}\n",
+            "---\n\n# Podcasts\n"
+        ),
+    );
     RecordsFixture {
         _temp: temp,
         vault,
@@ -120,7 +174,8 @@ fn write_ninja_update(vault: &std::path::Path) {
         concat!(
             "---\n",
             "title: Ninja Sushi\n",
-            "type: \"[[restaurant]]\"\n",
+            "parent: \"[[eat]]\"\n",
+            "type: \"[[record]]\"\n",
             "status: to_try\n",
             "category: Sushi\n",
             "location: Clark\n",
@@ -146,15 +201,11 @@ fn json(output: &std::process::Output) -> Value {
 
 fn write_valid_collection(fixture: &RecordsFixture) {
     write_file(
-        &fixture.vault.join("restaurant.md"),
-        "---\ntype: \"[[type]]\"\n---\n\n# Restaurant\n",
-    );
-    write_file(&fixture.vault.join("eat.md"), "# Restaurants\n");
-    write_file(
         &fixture.vault.join("eat/ninja_sushi.md"),
         concat!(
             "---\n",
-            "type: \"[[restaurant]]\"\n",
+            "parent: \"[[eat]]\"\n",
+            "type: \"[[record]]\"\n",
             "title: Ninja Sushi\n",
             "status: liked\n",
             "category: Sushi\n",
@@ -196,7 +247,7 @@ fn list_show_and_check_report_a_valid_collection_as_json() {
     assert_eq!(show_json["fields"][0]["choices"][1]["count"], 1);
     assert_eq!(show_json["fields"][0]["filled"], 1);
     assert_eq!(show_json["fields"][0]["suggest"], false);
-    assert_eq!(show_json["fields"][0]["line"], Value::Null);
+    assert!(show_json["fields"][0]["line"].is_u64());
     assert!(show_json["fields"][0].get("default").is_none());
     assert!(show_json["fields"][0].get("min").is_none());
     assert!(show_json["fields"][0].get("max").is_none());
@@ -383,11 +434,11 @@ fn update_note_only_list_replace_empty_optional_and_warnings() {
     write_ninja_update(&fixture.vault);
     write_file(
         &fixture.vault.join("eat/lists.md"),
-        "---\ntitle: Lists\ntype: \"[[restaurant]]\"\nstatus: liked\ncategory: Ramen\nlocation: Clark\ntags:\n  - old\n  - stale\n---\n## Notes\n",
+        "---\nparent: \"[[eat]]\"\ntitle: Lists\ntype: \"[[record]]\"\nstatus: liked\ncategory: Ramen\nlocation: Clark\ntags:\n  - old\n  - stale\n---\n## Notes\n",
     );
     write_file(
         &fixture.vault.join("podcasts/talk_python.md"),
-        "---\ntitle: Talk Python\ntype: \"[[podcast]]\"\nstatus: subscribed\ncategory: python\n---\n# Talk Python\n",
+        "---\nparent: \"[[podcasts]]\"\ntitle: Talk Python\ntype: \"[[record]]\"\nstatus: subscribed\ncategory: python\n---\n# Talk Python\n",
     );
 
     let note_only = records_command(&fixture)
@@ -505,7 +556,7 @@ fn update_note_only_list_replace_empty_optional_and_warnings() {
 
     write_file(
         &fixture.vault.join("eat/legacy.md"),
-        "---\ntitle: Legacy\ntype: \"[[restaurant]]\"\nstatus: liked\n---\n## Notes\n",
+        "---\nparent: \"[[eat]]\"\ntitle: Legacy\ntype: \"[[restaurant]]\"\nstatus: liked\n---\n## Notes\n",
     );
     let warned = records_command(&fixture)
         .args([
@@ -726,182 +777,19 @@ fn update_preserves_foreign_bytes_and_catalog_covers_update() {
     assert!(slots.contains("SET:record-set"), "SET slot: {slots:?}");
 }
 
-const INIT_CONFIG: &str = r#"
-records:
-  widget:
-    dir: widgets
-    label: Widget
-    emoji: "🧩"
-    fields:
-      status:
-        required: true
-        values:
-          to_try: "🔖 To try"
-          done: "✅ Done"
-"#;
-
-fn init_fixture() -> RecordsFixture {
-    let temp = TempDir::new("bob-cli-records-init");
-    let vault = temp.path().join("vault");
-    let config = temp.path().join("config.yml");
-    fs::create_dir_all(&vault).expect("create vault");
-    write_file(&config, INIT_CONFIG);
-    RecordsFixture {
-        _temp: temp,
-        vault,
-        config,
-    }
-}
-
-fn piece<'a>(payload: &'a Value, kind: &str) -> &'a Value {
-    payload["pieces"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|piece| piece["kind"] == kind)
-        .unwrap_or_else(|| panic!("missing piece {kind}: {payload}"))
-}
-
 #[test]
-fn init_scaffolds_on_a_temporary_vault_without_creating_the_folder() {
-    let fixture = init_fixture();
-    let dry_run = records_command(&fixture)
-        .args(["init", "widget", "-p", "stuff", "-d", "-f", "json"])
-        .output()
-        .expect("dry-run init");
-    assert_success(&dry_run);
-    let dry_json = json(&dry_run);
-    assert_eq!(dry_json["status"], "planned");
-    assert_eq!(piece(&dry_json, "type_note")["action"], "create");
-    assert_eq!(piece(&dry_json, "collection")["action"], "create");
-    assert_eq!(piece(&dry_json, "base")["action"], "create");
-    assert!(!fixture.vault.join("widget.md").exists());
-    assert!(!fixture.vault.join("widgets.md").exists());
-    assert!(!fixture.vault.join("widgets.base").exists());
-    assert!(!fixture.vault.join("widgets").exists());
-
-    let written = records_command(&fixture)
-        .args(["init", "widget", "-p", "stuff", "-f", "json"])
-        .output()
-        .expect("init widget");
-    assert_success(&written);
-    let payload = json(&written);
-    assert_eq!(payload["status"], "written");
-    assert_eq!(payload["type"], "widget");
-    assert_eq!(payload["dir"], "widgets");
-
-    let type_note = fs::read_to_string(fixture.vault.join("widget.md"))
-        .expect("read type note");
-    assert!(type_note.contains("parent: \"[[type]]\""), "{type_note}");
-    assert!(
-        type_note.contains("Schema: `bob records show widget`"),
-        "{type_note}"
-    );
-
-    let collection = fs::read_to_string(fixture.vault.join("widgets.md"))
-        .expect("read collection");
-    assert!(collection.contains("parent: \"[[stuff]]\""), "{collection}");
-    assert!(collection.contains("![[widgets.base]]"), "{collection}");
-
-    let base = fs::read_to_string(fixture.vault.join("widgets.base"))
-        .expect("read Base");
-    let parsed: Value =
-        serde_yaml::from_str(&base).expect("starter Base parses as YAML");
-    assert!(
-        parsed["filters"]["and"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|item| item.as_str() == Some(r#"file.inFolder("widgets")"#)),
-        "{base}"
-    );
-    assert_eq!(
-        parsed["views"][0]["groupBy"]["property"].as_str(),
-        Some("formula.status_label")
-    );
-    assert!(
-        base.contains(r#"if(status == "to_try", "🔖 To try""#),
-        "{base}"
-    );
-    assert!(
-        !fixture.vault.join("widgets").exists(),
-        "init must not create an empty record folder"
-    );
-}
-
-#[test]
-fn init_is_idempotent_and_never_overwrites() {
-    let fixture = init_fixture();
-    let first = records_command(&fixture)
-        .args(["init", "widget", "-p", "stuff"])
-        .output()
-        .expect("first init");
-    assert_success(&first);
-
-    write_file(&fixture.vault.join("widget.md"), "KEEP THE TYPE NOTE\n");
-    write_file(&fixture.vault.join("widgets.md"), "KEEP THE COLLECTION\n");
-    let original_base =
-        fs::read_to_string(fixture.vault.join("widgets.base")).unwrap();
-
-    let second = records_command(&fixture)
-        .args(["init", "widget", "-p", "other", "-f", "json"])
-        .output()
-        .expect("second init");
-    assert_success(&second);
-    let payload = json(&second);
-    assert_eq!(piece(&payload, "type_note")["action"], "keep");
-    assert_eq!(piece(&payload, "collection")["action"], "keep");
-    assert_eq!(piece(&payload, "base")["action"], "keep");
-    assert_eq!(
-        fs::read_to_string(fixture.vault.join("widget.md")).unwrap(),
-        "KEEP THE TYPE NOTE\n"
-    );
-    assert_eq!(
-        fs::read_to_string(fixture.vault.join("widgets.md")).unwrap(),
-        "KEEP THE COLLECTION\n"
-    );
-    assert_eq!(
-        fs::read_to_string(fixture.vault.join("widgets.base")).unwrap(),
-        original_base
-    );
-}
-
-#[test]
-fn init_keeps_an_existing_collection_without_requiring_parent() {
-    let fixture = init_fixture();
-    write_file(&fixture.vault.join("widgets.md"), "already here\n");
+fn records_init_always_refuses_and_teaches_album_create() {
+    let fixture = fixture();
     let output = records_command(&fixture)
-        .args(["init", "widget", "-f", "json"])
+        .args(["init", "restaurant", "-p", "body"])
         .output()
-        .expect("init without parent");
-    assert_success(&output);
-    let payload = json(&output);
-    assert_eq!(piece(&payload, "collection")["action"], "keep");
-    assert_eq!(piece(&payload, "type_note")["action"], "create");
-    assert_eq!(piece(&payload, "base")["action"], "create");
-    assert_eq!(
-        fs::read_to_string(fixture.vault.join("widgets.md")).unwrap(),
-        "already here\n"
-    );
-}
-
-#[test]
-fn init_refuses_a_missing_collection_without_parent() {
-    let fixture = init_fixture();
-    let output = records_command(&fixture)
-        .args(["init", "widget", "-f", "json"])
-        .output()
-        .expect("init missing parent");
-    assert_eq!(output.status.code(), Some(2));
-    let payload = json(&output);
-    let message = payload["error"]["message"].as_str().unwrap_or_default();
-    assert!(
-        message.contains("-p/--parent") && message.contains("widgets.md"),
-        "{message}"
-    );
-    assert!(!fixture.vault.join("widget.md").exists());
-    assert!(!fixture.vault.join("widgets.md").exists());
-    assert!(!fixture.vault.join("widgets.base").exists());
+        .expect("run retired records init");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    let text = format_output(&output);
+    assert!(text.contains("bob albums create"), "{text}");
+    assert!(text.contains("album notes"), "{text}");
+    assert!(!fixture.vault.join("restaurant.md").exists());
+    assert!(!fixture.vault.join("restaurants.base").exists());
 }
 
 fn album_fixture() -> RecordsFixture {
@@ -1815,7 +1703,7 @@ fn record_writes_incomplete_new_writes_neither_file() {
 }
 
 #[test]
-fn record_writes_config_new_carries_no_album_index() {
+fn record_writes_new_ignores_legacy_config_and_rebuilds_album_index() {
     let fixture = fixture();
     write_valid_collection(&fixture);
 
@@ -1834,14 +1722,14 @@ fn record_writes_config_new_carries_no_album_index() {
             "json",
         ])
         .output()
-        .expect("config new");
+        .expect("album new with legacy config");
     assert_success(&created);
     let payload = json(&created);
-    assert_eq!(payload["source"], "config");
-    assert!(
-        payload.get("album_index").is_none(),
-        "config kinds plan no album write: {payload}"
-    );
+    assert_eq!(payload["source"], "album");
+    assert_eq!(payload["album_index"]["state"], "missing", "{payload}");
+    let album = fs::read_to_string(fixture.vault.join("eat.md"))
+        .expect("album index is current");
+    assert!(album.contains("[[eat/ramen_nagi|Ramen Nagi]]"), "{album}");
 }
 
 #[test]

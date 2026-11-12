@@ -13,7 +13,7 @@ use super::super::{
 };
 use super::{write_file, TempDir};
 use crate::native::capture_language::{
-    CompletionContext, RECORDS_CONFIG_INVALID_CODE, RECORD_ASSIST_VERSION,
+    CompletionContext, RECORD_ASSIST_VERSION,
 };
 use crate::native::env::TestEnvGuard;
 use std::ffi::OsStr;
@@ -1016,7 +1016,7 @@ fn named_field_does_not_fall_into_task_completion() {
 }
 
 #[test]
-fn named_field_malformed_config_is_read_only() {
+fn named_field_ignores_legacy_records_config() {
     let vault = RecordVault::new("bob-cli-complete-named-malformed");
     write_file(&vault.config, "records: []\n");
     let raw = "Ramen Nagi @eat/";
@@ -1024,8 +1024,8 @@ fn named_field_malformed_config_is_read_only() {
     assert!(value.context.is_none(), "{value:?}");
     assert!(value.record.is_none());
     assert!(
-        value.diagnostics.iter().any(|diag| {
-            diag.code == RECORDS_CONFIG_INVALID_CODE
+        !value.diagnostics.iter().any(|diag| {
+            diag.message.contains("records config")
                 && diag.field.as_deref() == Some("status")
         }),
         "{:?}",

@@ -63,7 +63,7 @@ fn plan_record_create_item(
         record_context.route_kind_for(&intent.dir)
     else {
         return Err(CaptureError::usage(format!(
-            "`{}/` is not a configured record folder",
+            "`{}/` is not an album record folder",
             intent.dir
         )));
     };
@@ -73,28 +73,15 @@ fn plan_record_create_item(
             finding.code, finding.message
         )));
     }
-    let render_identity = match source {
-        "album" => records::RecordRenderIdentity::Album,
-        _ => records::RecordRenderIdentity::Config,
-    };
-    // Album kinds plan against a single-type synthetic config; the planner
-    // looks types up by id, and album kinds are not in the transitional
-    // config.
+    let render_identity = records::RecordRenderIdentity::Album;
+    // The records planner consumes a single-type schema view supplied by the
+    // album route.
     let synthetic;
-    let (config, catalog) = if source == "album" {
-        synthetic = records::RecordsConfig {
-            types: vec![record_type.clone()],
-        };
-        (&synthetic, record_context.catalog_mut())
-    } else {
-        let Some((config, catalog)) = record_context.config_and_catalog()
-        else {
-            return Err(CaptureError::usage(
-                "record notes need a valid records config",
-            ));
-        };
-        (config, catalog)
+    synthetic = records::RecordsConfig {
+        types: vec![record_type.clone()],
     };
+    let config = &synthetic;
+    let catalog = record_context.catalog_mut();
     let field_inputs = field_inputs_from_intent(&intent);
     let notes = record_note_inputs(&intent);
     let reserved_paths = reserved_paths(planner, &request.bob_dir);
@@ -209,7 +196,7 @@ fn plan_record_update_item(
         record_context.route_kind_for(&intent.dir)
     else {
         return Err(CaptureError::usage(format!(
-            "`{}/` is not a configured record folder",
+            "`{}/` is not an album record folder",
             intent.dir
         )));
     };
@@ -219,21 +206,11 @@ fn plan_record_update_item(
             finding.code, finding.message
         )));
     }
-    let synthetic;
-    let (config, catalog) = if source == "album" {
-        synthetic = records::RecordsConfig {
-            types: vec![record_type.clone()],
-        };
-        (&synthetic, record_context.catalog_mut())
-    } else {
-        let Some((config, catalog)) = record_context.config_and_catalog()
-        else {
-            return Err(CaptureError::usage(
-                "record notes need a valid records config",
-            ));
-        };
-        (config, catalog)
+    let synthetic = records::RecordsConfig {
+        types: vec![record_type.clone()],
     };
+    let config = &synthetic;
+    let catalog = record_context.catalog_mut();
     let stem = intent.update_stem.as_deref().unwrap_or_default();
     let (target, original) = match staged_update_snapshot(
         planner,
@@ -434,8 +411,8 @@ fn existing_record_warning(warning: &RecordDiagnostic) -> String {
 /// Render the album's records index from the current batch overlay and
 /// stage the single final album edit. Repeated items re-render from the
 /// same in-memory postimages, so `into_staged_files` emits one album file
-/// change per affected album. Config-backed records keep their behavior
-/// and never touch the index path.
+/// change per affected album. Every record route belongs to an album, so the
+/// record write and index stay in the same transaction.
 fn stage_album_index(
     request: &CaptureRequest,
     planner: &mut CaptureBatchPlanner,
