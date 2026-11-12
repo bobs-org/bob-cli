@@ -784,11 +784,13 @@ that files the forwarded copy, not the original.
 ## Watch
 
 The link is the wire. Every open `#task` whose own line, or a direct
-link-only child bullet, links a saved mail note watches that thread. The
+link-only child bullet, links a saved mail note watches that thread — a
+Gmail Task ([glossary](reference/glossary.md)). The
 watch follows Ctrl+Shift+M moves and Task Merges. Enrollment is durable:
 removing the Gmail label never ends it. Fetching stops when every linking
 task is closed, cancelled, or deleted; a later open link restores
-membership without the label.
+membership without the label. A Gmail Task's thread opens in the browser
+with Cmd+Enter ([Mail link marks](mail-link-marks.md)).
 
 Each `bob gmail sync` run, including `-l 0`, refreshes currently watched
 threads through the same coordinated read used by discovery. A first watch

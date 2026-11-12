@@ -67,6 +67,10 @@ excluded from whole-vault backfill; see [Bob Gmail](../gmail.md) for details.
 4. Set `BOB_GMAIL_KICK=off` for a capture of another conversation. Confirm its
    URL stays, then retry with `bob gmail link mac_inbox.md`.
 
+With the cursor on the Gmail Task row, Cmd+Enter (vim normal mode) opens
+the thread in the browser — the `⌘↵ Gmail` chip shows exactly when that
+keymap is live.
+
 The exact preview fields and worker behavior are in
 [Capture: Gmail links](../capture.md#gmail-links); the picker and paste
 settings are in [Bob Mail](../reference/plugins/bob-mail.md).

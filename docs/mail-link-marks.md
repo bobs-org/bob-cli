@@ -4,7 +4,9 @@ This guide is the authoritative display contract for Gmail reply signals on
 task lines. The JavaScript mirror lives in bob-ledger-tools:
 `src/142i-mail-link-marks.js` (pure core),
 `src/271e-plugin-mail-link-marks.js` (Live Preview, refresh, and toggle),
-`src/271f-plugin-mail-link-marks-reading.js` (rendered views), and
+`src/271f-plugin-mail-link-marks-reading.js` (rendered views),
+`src/142k-gmail-open-hint.js` (open-hint core) plus
+`src/271i-plugin-gmail-open-hint.js` (open-hint Live Preview chip), and
 `src/142j-no-reply-pills.js` plus `src/264b-plugin-no-reply-pills.js` (the
 no-reply pill, through the task-tag-marks machinery). The "Also: \<who\>
 replied" tooltip pip is part of the blocked-reason tooltip in
@@ -21,7 +23,8 @@ A task whose mail note says the ball is in Bryan's court wears a quiet reply
 badge after the mail link. A Ready row whose `#awaiting_reply` hold is due
 or overdue replaces that tag with a muted no-reply pill. A row still held
 `[?]` for another reason after they reply adds one tooltip line on the
-blocked-reason mark.
+blocked-reason mark. With the cursor on a line where Cmd+Enter will open
+an email, a muted `⌘↵ Gmail` chip sits at the end of that line.
 
 ```text
 they replied
@@ -49,6 +52,9 @@ still blocked, they replied
 - **One lookup, three surfaces.** The first mail wikilink on the line
   supplies `who`, `turn`, and `turn_since` for the badge, the pill, and
   the tooltip pip.
+- **The chip shows exactly where the keymap is live.** The `⌘↵ Gmail`
+  chip appears iff the cursor line's Cmd+Enter press will open an email,
+  driven by one shared availability predicate.
 - **Reversible.** The session toggle `toggle-mail-link-marks` restores
   today's look for the badge. The no-reply pill follows Toggle task tag
   marks. The pip follows Toggle blocked-reason marks.
@@ -113,6 +119,43 @@ appends one tooltip line: `Also: <who> replied`. With no `who` it reads
 awaiting reason is still live (that case already has
 `Also awaiting reply from <who> · nudge …`).
 
+## Gmail open hint
+
+A muted `⌘↵ Gmail` capsule at the end of the cursor's line shows exactly
+where the bob-mail Cmd+Enter keymap will act: `⌘↵ Gmail` on macOS,
+`M-↵ Gmail` elsewhere (honest vim notation off-Mac). The cursor revealing
+the raw `[[…]]` text does not move the chip.
+
+It shows when **all** of these hold:
+
+1. The line can open an email: the first non-embedded `[[mail/…]]`
+   wikilink in the cursor line's own text resolves to a mail note whose
+   `gmail_url` passes `mailIsGmailUrl` (links inside fenced or inline
+   code never count; first mail link wins), or the cursor line is a
+   checkbox task row with no mail link of its own and one of its direct
+   link-only child bullets resolves to such a mail note (first such child
+   wins). Task status does not matter. The whole-note fallback (inside a
+   mail note, any line opens that note's email) is keymap-only and never
+   shows the chip.
+2. The cursor head is on the line (updates on `selectionSet` as well as
+   doc/viewport changes). The chip does not track vim mode.
+3. bob-mail is enabled and exposes the keymap capability flag (set only
+   after the vim mappings register).
+4. The existing mail-link-marks gate is on
+   (`body.bob-mail-link-marks`, command `toggle-mail-link-marks`).
+
+When the reply badge and the chip share a line, the badge keeps its place
+at the link's closing `]]`; the chip sits at end of line.
+
+Host:
+`span.bob-gmail-open-hint[role=img][aria-label="Cmd+Enter opens this email in Gmail"][data-tooltip-position=top]`,
+interface font `0.8em`, muted ink, quiet capsule exactly like the
+no-reply pill (`color-mix` of `--text-muted` at 12%,
+`border-radius: 999px`, `padding: 0.05em 0.45em`),
+`margin-inline-start: 0.35em`, `user-select: none`, listener-free DOM,
+never changes line height. Hidden by
+`body:not(.bob-mail-link-marks)`. Live Preview only.
+
 ## Anatomy and look
 
 - Reply badge: interface font, `0.8em`, muted ink
@@ -122,8 +165,14 @@ awaiting reason is still live (that case already has
 - No-reply pill: interface font, `0.8em`, muted ink, a quiet capsule
   (`color-mix` of `--text-muted` at 12% on transparent),
   `border-radius: 999px`, `padding: 0.05em 0.45em`.
+- Gmail open hint: interface font, `0.8em`, muted ink, a quiet capsule
+  (`color-mix` of `--text-muted` at 12% on transparent),
+  `border-radius: 999px`, `padding: 0.05em 0.45em`,
+  `margin-inline-start: 0.35em`, `user-select: none`. Never changes line
+  height.
 - Toggles: `body:not(.bob-mail-link-marks) .bob-mail-reply-badge { display: none; }`.
-  The no-reply pill is gone when task tag marks are off.
+  The no-reply pill is gone when task tag marks are off. The open hint is
+  gone when mail link marks are off.
 
 ## Conformance vectors
 
@@ -168,8 +217,30 @@ The linked note has `type: [[mail]]`, `who: Ada`, unless a row says otherwise.
 | AP3 | AP1 with `turn: theirs`                                                           | no `replied`                   |
 | AP4 | AP1 with empty `who`                                                              | `Also: replied`                |
 
+**GO — Gmail open hint.**
+
+Today Sat 2026-11-07, `A` =
+`[[mail/2026/261107_lease_renewal|✉️ Lease renewal · Ada]]` resolving to a
+mail note with a valid `gmail_url`; cursor on the stated line; gate on;
+bob-mail capability on.
+
+| #   | Line / condition                                              | Expected        |
+| --- | ------------------------------------------------------------- | --------------- |
+| GO1 | `- [ ] #task A` cursor on line                                | chip            |
+| GO2 | same, cursor on another line                                  | none            |
+| GO3 | task row, mail link on direct link-only child; cursor on task | chip; cursor on child row: chip |
+| GO4 | mail link in a plain log bullet                               | chip            |
+| GO5 | `A` inside inline/fenced code                                 | none            |
+| GO6 | linked note lacks `gmail_url`                                 | none            |
+| GO7 | bob-mail disabled or capability absent                        | none            |
+| GO8 | gate toggle off                                               | none            |
+| GO9 | `- [x] #task A`                                               | chip (status-independent) |
+| GO10 | a line inside a mail note body                               | none            |
+| GO11 | reading view                                                 | none            |
+
 Verification: ML, NR, and AP are covered by
 `scripts/test-ledger-tools-mail-link-marks.cjs` and
-`scripts/test-ledger-tools-no-reply-pills.cjs` in bob-plugins, plus the
-block-marks tooltip tests. The daily-note Gmail sync trigger is covered by
+`scripts/test-ledger-tools-no-reply-pills.cjs` in bob-plugins, GO by
+`scripts/test-ledger-tools-gmail-open-hint.cjs`, plus the block-marks
+tooltip tests. The daily-note Gmail sync trigger is covered by
 `scripts/test-ledger-tools-gcal-events.cjs`.

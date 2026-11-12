@@ -1,0 +1,8 @@
+---
+keyword: Gmail Task
+aliases:
+  - "gmail task"
+  - "email task"
+---
+
+A task wired to a saved Gmail thread: a checkbox `#task` whose own line, or a direct link-only child bullet, carries a wikilink to a saved mail note (frontmatter `type: "[[mail]]"` or a string `gmail_thread_id`). The link is the wire — the task's residence never matters, one thread may wire several Gmail Tasks, and any task status qualifies. Born from `bob gmail sync` filing a labelled thread (one task row routed by its routing label, falling back to the Gmail [[inbox-file]]), a [[capture]] whose Gmail URL swaps to the labelled link, **Bob Mail: Task from this email**, or any hand-written task line that links a mail note. Every _open_ Gmail Task watches its thread: your counted send holds it with exact `#awaiting_reply` plus one `[scheduled::]` nudge date, and a reply or bounce lifts the hold ([[decisions:gmail-reply-wait-is-a-tagged-hold]]). Its row wears the display-only reply badge, no-reply pill, and also-replied tooltip pip (`docs/mail-link-marks.md`); with the cursor anywhere on the row, `<cmd+enter>` (vim normal mode) opens the thread in the browser from the mail note's `gmail_url`, and a muted `⌘↵ Gmail` chip on the cursor row shows exactly when that keymap is live. The gesture is read-only: it never writes, stamps [[task-freshness]], or advances the `]s` walk. Not the mail note itself (the saved snapshot), not an [[event-task]], and not a Pomodoro [[task-link]] to the task; `#awaiting_reply` is a hold a Gmail Task may wear, never what makes it one. A task that merely mentions a thread in a nested note bullet is not a Gmail Task and does not watch. See `docs/gmail.md#watch`.
