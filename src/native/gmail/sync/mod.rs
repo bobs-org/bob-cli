@@ -14,6 +14,8 @@
 //!   notes and `done/` for every `#task` status, returning per-thread
 //!   [`archive_scan::ArchiveThreadEvidence`] with positive closed proof,
 //!   merge holds, and frozen saved message IDs.
+//! - [`archive_state`] folds body-free enablement, open/close generations,
+//!   terminal outcomes, and owned receipts across host journals.
 //! - [`watch_state`] folds body-free `gmail.turn` applied markers and
 //!   one-time `gmail.gone` reports across hosts.
 //! - [`watch`] prepares current thread metadata and note refreshes before
@@ -39,6 +41,8 @@
 /// Wired by the preview/apply phases; covered by unit tests until then.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod archive_scan;
+#[cfg_attr(not(test), allow(dead_code))] // Wired by preview/apply phases.
+pub(crate) mod archive_state;
 pub(crate) mod command;
 pub(crate) mod discover;
 pub(crate) mod enroll;

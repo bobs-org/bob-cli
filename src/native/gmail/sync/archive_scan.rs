@@ -220,6 +220,41 @@ pub(crate) struct ArchiveScan {
 }
 
 impl ArchiveScan {
+    /// Small synthetic scan for the archive-state fold tests. Production
+    /// scans always use [`scan_archive_evidence`].
+    #[cfg(test)]
+    pub(crate) fn test_scan(
+        evidence: ArchiveThreadEvidence,
+        complete: bool,
+    ) -> Self {
+        let mut incomplete_reads = Vec::new();
+        if !complete {
+            incomplete_reads.push("tests/unreadable.md".to_string());
+        }
+        Self {
+            threads: BTreeMap::from([(evidence.key.clone(), evidence)]),
+            warnings: Vec::new(),
+            incomplete_reads,
+            dropped_ambiguous: Vec::new(),
+        }
+    }
+
+    /// Empty scan for state tests that assert missing linkers are not
+    /// interpreted as an open or closed transition.
+    #[cfg(test)]
+    pub(crate) fn test_empty_scan(complete: bool) -> Self {
+        Self {
+            threads: BTreeMap::new(),
+            warnings: Vec::new(),
+            incomplete_reads: if complete {
+                Vec::new()
+            } else {
+                vec!["tests/unreadable.md".to_string()]
+            },
+            dropped_ambiguous: Vec::new(),
+        }
+    }
+
     /// One thread's evidence, when any task links its mail note.
     pub(crate) fn evidence(
         &self,
