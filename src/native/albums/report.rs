@@ -15,7 +15,9 @@ use super::{
 };
 use crate::native::notebooks::snapshot::VaultSnapshot;
 use crate::native::records::{
-    schema::{album_schema_fingerprint, RecordDiagnosticCode, RecordField},
+    schema::{
+        album_schema_fingerprint, RecordDiagnosticCode, RecordField, RecordType,
+    },
     FolderIndex, RecordCatalog,
 };
 
@@ -405,12 +407,7 @@ pub(crate) fn project_album_from_folder(
             .then_with(|| left.message.cmp(&right.message))
     });
     let schema_fingerprint = record_type.map(|record_type| {
-        album_schema_fingerprint(
-            &record_type.id,
-            &record_type.label,
-            declaration.plural.as_deref().unwrap_or(""),
-            record_type,
-        )
+        schema_fingerprint(record_type, declaration.plural.as_deref())
     });
     AlbumProjection {
         entry: AlbumReportEntry {
@@ -444,6 +441,20 @@ pub(crate) fn project_album_from_folder(
         index_plan: plan,
         io_errors,
     }
+}
+
+/// Shared report and writer fingerprint calculation. A missing plural uses
+/// the same empty-string argument as the schema's semantic hash.
+pub(crate) fn schema_fingerprint(
+    record_type: &RecordType,
+    plural: Option<&str>,
+) -> String {
+    album_schema_fingerprint(
+        &record_type.id,
+        &record_type.label,
+        plural.unwrap_or(""),
+        record_type,
+    )
 }
 
 pub(crate) fn resolved_plural(declaration: &AlbumDeclaration) -> String {

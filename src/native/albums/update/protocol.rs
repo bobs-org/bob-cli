@@ -83,6 +83,26 @@ impl std::error::Error for ProtocolError {}
 pub(crate) struct Envelope {
     pub(crate) expect: String,
     pub(crate) ops: Vec<Op>,
+    /// Optional server-produced byte restorations, aligned with `ops`.
+    /// The operation layer ignores these; the span planner resolves each
+    /// schema key path against the current note and checks its preimage.
+    pub(crate) restorations: Vec<Option<Restoration>>,
+}
+
+/// Narrow byte restoration carried by an inverse operation. Paths are
+/// schema key paths, never filesystem paths or client-supplied offsets.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct Restoration {
+    pub(crate) spans: Vec<RestoreSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RestoreSpan {
+    pub(crate) key_path: String,
+    /// Exact current entry bytes, or `None` when the key is absent.
+    pub(crate) expected: Option<String>,
+    /// Exact prior entry bytes, or `None` when the key was absent.
+    pub(crate) prior: Option<String>,
 }
 
 /// The nine v1 operations. Positions are zero-based; `None` means append
@@ -237,13 +257,176 @@ pub(crate) fn parse_envelope(text: &str) -> Result<Envelope, ProtocolError> {
         ProtocolError::envelope("envelope_wrong_type", "ops must be an array")
     })?;
     let mut ops = Vec::with_capacity(ops_array.len());
+    let mut restorations = Vec::with_capacity(ops_array.len());
     for (index, raw) in ops_array.iter().enumerate() {
         ops.push(parse_op(raw, index)?);
+        restorations.push(parse_restoration(raw, index)?);
     }
     Ok(Envelope {
         expect: expect.to_owned(),
         ops,
+        restorations,
     })
+}
+
+fn parse_restoration(
+    raw: &JsonValue,
+    index: usize,
+) -> Result<Option<Restoration>, ProtocolError> {
+    let mapping = raw.as_object().ok_or_else(|| {
+        ProtocolError::op(
+            "envelope_wrong_type",
+            index,
+            "each op must be a JSON object",
+        )
+    })?;
+    let Some(value) = mapping.get("restore") else {
+        return Ok(None);
+    };
+    let object = value.as_object().ok_or_else(|| {
+        ProtocolError::op(
+            "envelope_wrong_type",
+            index,
+            "restore must be an object",
+        )
+    })?;
+    for key in object.keys() {
+        if key != "spans" {
+            return Err(ProtocolError::op(
+                "envelope_unknown_key",
+                index,
+                format!("unknown restore key {key:?}; expected \"spans\""),
+            ));
+        }
+    }
+    let entries = object.get("spans").ok_or_else(|| {
+        ProtocolError::op(
+            "envelope_missing_key",
+            index,
+            "restore requires spans",
+        )
+    })?;
+    let entries = entries.as_array().ok_or_else(|| {
+        ProtocolError::op(
+            "envelope_wrong_type",
+            index,
+            "restore.spans must be an array",
+        )
+    })?;
+    if entries.is_empty() {
+        return Err(ProtocolError::op(
+            "envelope_wrong_type",
+            index,
+            "restore.spans must not be empty",
+        ));
+    }
+    let mut spans = Vec::with_capacity(entries.len());
+    let mut paths = HashSet::new();
+    for entry in entries {
+        let fields = entry.as_object().ok_or_else(|| {
+            ProtocolError::op(
+                "envelope_wrong_type",
+                index,
+                "each restore span must be an object",
+            )
+        })?;
+        for key in fields.keys() {
+            if !["key_path", "expected", "prior"].contains(&key.as_str()) {
+                return Err(ProtocolError::op(
+                    "envelope_unknown_key",
+                    index,
+                    format!("unknown restore span key {key:?}"),
+                ));
+            }
+        }
+        let key_path = fields
+            .get("key_path")
+            .and_then(JsonValue::as_str)
+            .ok_or_else(|| {
+                ProtocolError::op(
+                    "envelope_wrong_type",
+                    index,
+                    "restore span key_path must be a string",
+                )
+            })?
+            .to_owned();
+        if !valid_restore_key_path(&key_path) {
+            return Err(ProtocolError::op_hint(
+                "envelope_wrong_type",
+                index,
+                format!("unsupported restore key_path {key_path:?}"),
+                "restore paths must name an album schema entry under record",
+            ));
+        }
+        if !paths.insert(key_path.clone()) {
+            return Err(ProtocolError::op(
+                "envelope_duplicate_key",
+                index,
+                format!("restore contains duplicate key_path {key_path:?}"),
+            ));
+        }
+        let expected = parse_optional_raw_span(fields, "expected", index)?;
+        let prior = parse_optional_raw_span(fields, "prior", index)?;
+        if !fields.contains_key("expected") || !fields.contains_key("prior") {
+            return Err(ProtocolError::op(
+                "envelope_missing_key",
+                index,
+                "restore spans require expected and prior (use null for an absent key)",
+            ));
+        }
+        spans.push(RestoreSpan {
+            key_path,
+            expected,
+            prior,
+        });
+    }
+    Ok(Some(Restoration { spans }))
+}
+
+fn parse_optional_raw_span(
+    mapping: &serde_json::Map<String, JsonValue>,
+    key: &str,
+    index: usize,
+) -> Result<Option<String>, ProtocolError> {
+    match mapping.get(key) {
+        Some(JsonValue::String(text)) => Ok(Some(text.clone())),
+        Some(JsonValue::Null) => Ok(None),
+        Some(_) => Err(ProtocolError::op(
+            "envelope_wrong_type",
+            index,
+            format!("restore span {key} must be a string or null"),
+        )),
+        None => Ok(None),
+    }
+}
+
+fn valid_restore_key_path(path: &str) -> bool {
+    let parts = path.split('.').collect::<Vec<_>>();
+    match parts.as_slice() {
+        ["record", key] => {
+            ["label", "plural", "dated_notes", "legacy"].contains(key)
+        }
+        ["record", "fields", field] => valid_schema_key(field),
+        ["record", "fields", field, property] => {
+            valid_schema_key(field)
+                && [
+                    "label", "required", "list", "suggest", "default", "min",
+                    "max", "values",
+                ]
+                .contains(property)
+        }
+        ["record", "fields", field, "values", choice] => {
+            valid_schema_key(field) && valid_schema_key(choice)
+        }
+        _ => false,
+    }
+}
+
+fn valid_schema_key(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
 fn parse_op(raw: &JsonValue, index: usize) -> Result<Op, ProtocolError> {
@@ -289,7 +472,7 @@ fn reject_unknown_op_keys(
     index: usize,
 ) -> Result<(), ProtocolError> {
     for key in mapping.keys() {
-        if !allowed.contains(&key.as_str()) {
+        if key != "restore" && !allowed.contains(&key.as_str()) {
             return Err(ProtocolError::op(
                 "envelope_unknown_key",
                 index,
@@ -938,5 +1121,22 @@ mod tests {
         )
         .expect("move parses");
         assert_eq!(envelope.ops[0].name(), "field.move");
+    }
+
+    #[test]
+    fn restoration_metadata_is_typed_and_limited_to_schema_key_paths() {
+        let envelope = parse_envelope(
+            r#"{"schema_version":1,"expect":"sha256:x","ops":[{"op":"field.set","field":"status","set":{"label":"State"},"restore":{"spans":[{"key_path":"record.fields.status.label","expected":"      label: State\n","prior":"      label: \"Status\"\n"}]}}]}"#,
+        )
+        .expect("scoped restoration parses");
+        let span = &envelope.restorations[0].as_ref().unwrap().spans[0];
+        assert_eq!(span.key_path, "record.fields.status.label");
+        assert_eq!(span.expected.as_deref(), Some("      label: State\n"));
+
+        let forged = parse_envelope(
+            r#"{"schema_version":1,"expect":"sha256:x","ops":[{"op":"field.set","field":"status","set":{"label":"State"},"restore":{"spans":[{"key_path":"../summary","expected":null,"prior":"x"}]}}]}"#,
+        )
+        .expect_err("arbitrary path refuses");
+        assert_eq!(forged.code, "envelope_wrong_type");
     }
 }

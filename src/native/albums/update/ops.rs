@@ -205,7 +205,10 @@ pub(crate) fn apply_ops(
     })
 }
 
-fn apply_one(
+/// Apply one already-parsed operation to an ordered raw schema mapping.
+/// The command planner uses this only while composing byte spans; the
+/// envelope is still validated atomically by [`apply_ops`] afterwards.
+pub(crate) fn apply_one(
     op: &Op,
     index: usize,
     raw: &mut Mapping,

@@ -26,6 +26,10 @@
 //!   `restore_key` and `choice.add` accepts `restore_value`. Each only
 //!   creates an absent key, never renames, and inverse field removals
 //!   restore required/default/bounds through a follow-up `field.set`.
+//!   Inverse ops may also carry `restore: {"spans":[{"key_path":
+//!   "record.fields.status.label","expected":"...","prior":"..."}]}`.
+//!   `expected` and `prior` are exact schema-entry bytes or `null` for an
+//!   absent key; paths are resolved under `record` and no offsets are trusted.
 //!
 //! Interfaces handed to schema-spans:
 //! - `protocol::parse_envelope(&str) -> Result<Envelope, ProtocolError>`
@@ -39,4 +43,6 @@
 //!   planner's registry overlay checks.
 
 pub(crate) mod ops;
+pub(crate) mod plan;
 pub(crate) mod protocol;
+pub(crate) mod spans;
