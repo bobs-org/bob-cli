@@ -200,6 +200,25 @@ impl LoginUi {
         );
     }
 
+    /// Summary for the Gmail modify grant. The grant is broader than the
+    /// label-only archive operations Bob performs with it.
+    pub(crate) fn summary_modify(&self, account: &str) {
+        if self.json {
+            return;
+        }
+        eprintln!();
+        eprintln!(
+            "{} Connected. Google's Gmail modify grant can read, change, and send mail for {account}.",
+            self.styler.green("✓")
+        );
+        eprintln!(
+            "  Bob uses it here only to archive saved messages by changing labels; restoring is explicit."
+        );
+        eprintln!(
+            "  This scope cannot permanently delete Gmail messages. Sending still requires Bob's separate compose workflow and confirmation."
+        );
+    }
+
     pub(crate) fn writer_note(&self, writer: &str) {
         if self.json {
             return;

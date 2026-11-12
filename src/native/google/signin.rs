@@ -336,10 +336,7 @@ fn paste_flow(
             project,
         )? {
             PasteOutcome::SignedIn => {
-                ui.note(&format!(
-                    "✓ signed in · read-only {} access granted",
-                    ui.service().service_name
-                ));
+                ui.note(&sign_in_success_note(gog, ui));
                 return Ok(());
             }
             PasteOutcome::RetryFresh => continue,
@@ -448,6 +445,15 @@ fn allow_labels(gog: &Gog, ui: &LoginUi) -> String {
     if gog
         .extra_scopes()
         .iter()
+        .any(|scope| scope.contains("gmail.modify"))
+    {
+        labels.push_str(
+            " and \"Read, compose, and send emails from your Gmail account\"",
+        );
+    }
+    if gog
+        .extra_scopes()
+        .iter()
         .any(|scope| scope.contains("gmail.compose"))
     {
         labels.push_str(" and \"Manage drafts and send emails\"");
@@ -544,10 +550,7 @@ fn browser_flow(
         drop(wait);
         match result {
             Ok(BrowserWait::SignedIn) => {
-                ui.note(&format!(
-                    "✓ signed in · read-only {} access granted",
-                    ui.service().service_name
-                ));
+                ui.note(&sign_in_success_note(gog, ui));
                 return Ok(());
             }
             Ok(BrowserWait::Denied) => match browser_denied(ui) {
@@ -562,6 +565,35 @@ fn browser_flow(
                 );
             }
             Err(error) => return Err(error),
+        }
+    }
+}
+
+fn sign_in_success_note(gog: &Gog, ui: &LoginUi) -> String {
+    let has_modify = gog
+        .extra_scopes()
+        .iter()
+        .any(|scope| scope.contains("gmail.modify"));
+    let has_compose = gog
+        .extra_scopes()
+        .iter()
+        .any(|scope| scope.contains("gmail.compose"));
+    match (has_modify, has_compose) {
+        (true, true) => {
+            "✓ signed in · Gmail modify and compose consent complete"
+                .to_string()
+        }
+        (true, false) => {
+            "✓ signed in · Gmail modify consent complete".to_string()
+        }
+        (false, true) => {
+            "✓ signed in · Gmail compose consent complete".to_string()
+        }
+        (false, false) => {
+            format!(
+                "✓ signed in · read-only {} access granted",
+                ui.service().service_name
+            )
         }
     }
 }

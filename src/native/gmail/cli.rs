@@ -47,7 +47,7 @@ pub(crate) fn build_cli() -> ClapCommand {
 }
 
 fn top_after_help() -> &'static str {
-    "Running `bob gmail` with no command lists saved threads (offline, read-only). `-r` adds live message counts.\n\nExamples:\n  bob gmail                   List saved threads\n  bob gmail -a                List every saved thread\n  bob gmail -r                Fetch live new-message counts\n  bob gmail -f json           List saved threads as JSON\n  bob gmail new -t EMAIL      Create a local compose note\n  bob gmail peek URL          Preview a Gmail link\n  bob gmail reply NOTE        Add a Reply section\n  bob gmail send NOTE         Preview and confirm a Gmail draft send\n  bob gmail save URL          Save a Gmail thread\n  bob gmail search            Search recent inbox threads\n  bob gmail save ID -d        Preview a save without writing\n  bob gmail link tasks.md     Swap Gmail URLs for labelled links\n  bob gmail link -a -d        Preview a backfill of old URLs\n  bob gmail sync              File labelled threads into area or project notes\n  bob gmail sync -d           Preview the label sync\n  bob gmail sync -l 0         Watch and adopt only; file no new threads\n  bob gmail attach NOTE 1     Import the first listed attachment\n  bob gmail draft NOTE        Create or update and preview a Gmail draft\n  bob gmail login             Connect Gmail in one guided step\n  bob gmail login -a EMAIL    Sign in as this account\n  bob gmail login -s compose  Also grant the compose scope (Mac only)\n  bob gmail doctor            Diagnose gog, the client, and the vault\n  bob gmail logout -y         Remove Bob's Gmail grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      overrides gmail.gog and gog on PATH\n  BOB_GMAIL_BROWSER  Browser executable; selects browser sign-in (otherwise automatic)"
+    "Running `bob gmail` with no command lists saved threads (offline, read-only). `-r` adds live message counts.\n\nExamples:\n  bob gmail                   List saved threads\n  bob gmail -a                List every saved thread\n  bob gmail -r                Fetch live new-message counts\n  bob gmail -f json           List saved threads as JSON\n  bob gmail new -t EMAIL      Create a local compose note\n  bob gmail peek URL          Preview a Gmail link\n  bob gmail reply NOTE        Add a Reply section\n  bob gmail send NOTE         Preview and confirm a Gmail draft send\n  bob gmail save URL          Save a Gmail thread\n  bob gmail search            Search recent inbox threads\n  bob gmail save ID -d        Preview a save without writing\n  bob gmail link tasks.md     Swap Gmail URLs for labelled links\n  bob gmail link -a -d        Preview a backfill of old URLs\n  bob gmail sync              File labelled threads into area or project notes\n  bob gmail sync -d           Preview the label sync\n  bob gmail sync -l 0         Watch and adopt only; file no new threads\n  bob gmail attach NOTE 1     Import the first listed attachment\n  bob gmail draft NOTE        Create or update and preview a Gmail draft\n  bob gmail login             Connect Gmail in one guided step\n  bob gmail login -a EMAIL    Sign in as this account\n  bob gmail login -s compose  Also grant the compose scope (Mac only)\n  bob gmail login -s modify   Grant Gmail modify for label archiving\n  bob gmail doctor            Diagnose gog, the client, and the vault\n  bob gmail logout -y         Remove Bob's Gmail grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      overrides gmail.gog and gog on PATH\n  BOB_GMAIL_BROWSER  Browser executable; selects browser sign-in (otherwise automatic)"
 }
 fn attach_command() -> ClapCommand {
     ClapCommand::new("attach")
@@ -302,7 +302,7 @@ fn search_command() -> ClapCommand {
 
 fn login_command() -> ClapCommand {
     ClapCommand::new("login")
-        .about("Connect Gmail (read-only) in one guided step")
+        .about("Connect Gmail in one guided step")
         .long_about(
             "Connect Gmail in one guided step.\n\n\
              Uses an isolated `--client bob-gmail` token bucket so removing \
@@ -315,7 +315,11 @@ fn login_command() -> ClapCommand {
              access. `-c FILE` replaces Bob's stored client. `-m` forces \
              paste sign-in. `-s compose` also requests the Gmail compose \
              scope (which also permits sending); the gate is the \
-             preview/confirm step plus keeping that grant off agent hosts.",
+             preview/confirm step plus keeping that grant off agent hosts. \
+             `-s modify` requests Gmail's broader modify scope for Bob's \
+             label-only archive and explicit restore flow; it does not permit \
+             permanent deletion. Bob's send workflow still requires compose \
+             setup and confirmation.",
         )
         .disable_help_flag(true)
         .arg(account_arg())
@@ -328,7 +332,7 @@ fn login_command() -> ClapCommand {
 }
 
 fn login_after_help() -> &'static str {
-    "Examples:\n  bob gmail login\n  bob gmail login -a you@example.com\n  bob gmail login -c ~/Downloads/client_secret.json\n  bob gmail login -m\n  bob gmail login -s compose\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      overrides gmail.gog and gog on PATH\n  BOB_GMAIL_BROWSER  Browser executable; selects browser sign-in (otherwise automatic)"
+    "Examples:\n  bob gmail login\n  bob gmail login -a you@example.com\n  bob gmail login -c ~/Downloads/client_secret.json\n  bob gmail login -m\n  bob gmail login -s compose\n  bob gmail login -s modify\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      overrides gmail.gog and gog on PATH\n  BOB_GMAIL_BROWSER  Browser executable; selects browser sign-in (otherwise automatic)"
 }
 
 fn logout_command() -> ClapCommand {
@@ -594,9 +598,9 @@ fn scope_arg() -> Arg {
         .long("scope")
         .short('s')
         .value_name("SCOPE")
-        .value_parser(["readonly", "compose"])
+        .value_parser(["compose", "modify", "readonly"])
         .default_value("readonly")
-        .help("OAuth scope: readonly, or compose (also permits sending)")
+        .help("OAuth scope: compose, modify for label archiving, or readonly")
 }
 
 /// `doctor`/`login`/`logout` output format.
@@ -659,6 +663,7 @@ impl ListFormat {
 pub(crate) enum LoginScope {
     Readonly,
     Compose,
+    Modify,
 }
 
 impl LoginScope {
@@ -669,6 +674,7 @@ impl LoginScope {
             .unwrap_or("readonly")
         {
             "compose" => Self::Compose,
+            "modify" => Self::Modify,
             _ => Self::Readonly,
         }
     }
@@ -677,6 +683,7 @@ impl LoginScope {
         match self {
             Self::Readonly => "readonly",
             Self::Compose => "compose",
+            Self::Modify => "modify",
         }
     }
 }
@@ -1148,6 +1155,16 @@ mod tests {
         assert!(args.format.is_json());
         assert!(args.manual);
         assert_eq!(args.scope, LoginScope::Compose);
+    }
+
+    #[test]
+    fn login_accepts_modify_scope() {
+        let args = LoginArgs::from_matches(&sub_matches_for(
+            &["bob gmail", "login", "-s", "modify"],
+            "login",
+        ));
+        assert_eq!(args.scope, LoginScope::Modify);
+        assert_eq!(args.scope.as_str(), "modify");
     }
 
     #[test]

@@ -64,6 +64,12 @@ pub(crate) struct GmailSyncSettings {
     /// `None` when unset or null; validated entries otherwise.
     pub(crate) route_prefixes: Option<Vec<String>>,
     pub(crate) reply_wait_days: Option<u32>,
+    /// `None` when unset or null; otherwise whether archive is enabled.
+    pub(crate) archive: Option<bool>,
+    /// `None` when unset or null; otherwise the receipt label name.
+    pub(crate) archive_label: Option<String>,
+    /// `None` when unset or null; otherwise a positive burst limit.
+    pub(crate) archive_max: Option<u32>,
 }
 
 impl Default for GmailPullSettings {
@@ -391,7 +397,85 @@ fn parse_sync(
         inbox: optional_string("sync.inbox", get("inbox"), path)?,
         route_prefixes: parse_route_prefixes(get("route_prefixes"), path)?,
         reply_wait_days: parse_reply_wait_days(get("reply_wait_days"), path)?,
+        archive: parse_archive_mode(get("archive"), path)?,
+        archive_label: parse_archive_label(get("archive_label"), path)?,
+        archive_max: parse_archive_max(get("archive_max"), path)?,
     }))
+}
+
+/// `gmail.sync.archive` accepts only the explicit strings `off` and `on`.
+fn parse_archive_mode(
+    value: Option<serde_yaml::Value>,
+    path: &Path,
+) -> Result<Option<bool>, ConfigError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let invalid = || {
+        ConfigError::Invalid(format!(
+            "gmail.sync.archive in {} must be 'off' or 'on'; got {}",
+            path.display(),
+            render_scalar(&value)
+        ))
+    };
+    match &value {
+        serde_yaml::Value::String(value) if value == "off" => Ok(Some(false)),
+        serde_yaml::Value::String(value) if value == "on" => Ok(Some(true)),
+        _ => Err(invalid()),
+    }
+}
+
+/// `gmail.sync.archive_label` is a non-empty label name when present.
+fn parse_archive_label(
+    value: Option<serde_yaml::Value>,
+    path: &Path,
+) -> Result<Option<String>, ConfigError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    match value {
+        serde_yaml::Value::String(value) if !value.trim().is_empty() => {
+            Ok(Some(value.trim().to_string()))
+        }
+        other => Err(ConfigError::Invalid(format!(
+            "gmail.sync.archive_label in {} must be a non-empty string; got {}",
+            path.display(),
+            render_scalar(&other)
+        ))),
+    }
+}
+
+/// `gmail.sync.archive_max` is a positive integer when present.
+fn parse_archive_max(
+    value: Option<serde_yaml::Value>,
+    path: &Path,
+) -> Result<Option<u32>, ConfigError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let invalid = || {
+        ConfigError::Invalid(format!(
+            "gmail.sync.archive_max in {} must be a positive integer; got {}",
+            path.display(),
+            render_scalar(&value)
+        ))
+    };
+    let serde_yaml::Value::Number(number) = &value else {
+        return Err(invalid());
+    };
+    match number.as_u64().map(u32::try_from) {
+        Some(Ok(max)) if max > 0 => Ok(Some(max)),
+        _ => Err(invalid()),
+    }
 }
 
 /// `gmail.sync.route_prefixes`: distinct non-empty strings without `/` or
@@ -641,8 +725,77 @@ mod tests {
                 inbox: Some("gmail_inbox.md".to_string()),
                 route_prefixes: Some(vec!["#".to_string(), "+".to_string()]),
                 reply_wait_days: Some(5),
+                archive: None,
+                archive_label: None,
+                archive_max: None,
             })
         );
+    }
+
+    #[test]
+    fn parses_strict_archive_settings() {
+        let sync = parse(
+            "gmail:\n  sync:\n    archive: on\n    archive_label: Work/closed\n    archive_max: 12\n",
+        )
+        .expect("archive settings")
+        .sync
+        .expect("sync block");
+        assert_eq!(sync.archive, Some(true));
+        assert_eq!(sync.archive_label.as_deref(), Some("Work/closed"));
+        assert_eq!(sync.archive_max, Some(12));
+
+        let sync = parse(
+            "gmail:\n  sync:\n    archive: off\n    archive_label:\n    archive_max:\n",
+        )
+        .expect("null archive settings")
+        .sync
+        .expect("sync block");
+        assert_eq!(sync.archive, Some(false));
+        assert_eq!(sync.archive_label, None);
+        assert_eq!(sync.archive_max, None);
+    }
+
+    #[test]
+    fn rejects_invalid_archive_settings_by_key() {
+        for (text, key) in [
+            ("gmail:\n  sync:\n    archive: true\n", "gmail.sync.archive"),
+            ("gmail:\n  sync:\n    archive: yes\n", "gmail.sync.archive"),
+            (
+                "gmail:\n  sync:\n    archive: enabled\n",
+                "gmail.sync.archive",
+            ),
+            (
+                "gmail:\n  sync:\n    archive_label: 3\n",
+                "gmail.sync.archive_label",
+            ),
+            (
+                "gmail:\n  sync:\n    archive_label: ''\n",
+                "gmail.sync.archive_label",
+            ),
+            (
+                "gmail:\n  sync:\n    archive_max: 0\n",
+                "gmail.sync.archive_max",
+            ),
+            (
+                "gmail:\n  sync:\n    archive_max: -1\n",
+                "gmail.sync.archive_max",
+            ),
+            (
+                "gmail:\n  sync:\n    archive_max: 1.5\n",
+                "gmail.sync.archive_max",
+            ),
+            (
+                "gmail:\n  sync:\n    archive_max: \"10\"\n",
+                "gmail.sync.archive_max",
+            ),
+            (
+                "gmail:\n  sync:\n    archive_max: 4294967296\n",
+                "gmail.sync.archive_max",
+            ),
+        ] {
+            let error = parse(text).expect_err(text);
+            assert!(error.message().contains(key), "{text}: {error}");
+        }
     }
 
     #[test]

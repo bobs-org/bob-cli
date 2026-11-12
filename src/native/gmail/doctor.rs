@@ -228,21 +228,55 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
     match (gog.as_ref(), selected_account.as_deref()) {
         (Some(gog), Some(email)) => match gog.accounts(Some(CLIENT)) {
             Ok(entries) => {
-                let scopes = entries
+                let entry = entries
                     .iter()
-                    .find(|entry| entry.email.eq_ignore_ascii_case(email))
-                    .map(|entry| entry.scopes.clone())
+                    .find(|entry| entry.email.eq_ignore_ascii_case(email));
+                let scopes = entry
+                    .map(|entry| entry.scopes.as_slice())
                     .unwrap_or_default();
+                let has_modify =
+                    scopes.iter().any(|scope| scope.contains("gmail.modify"));
                 let has_compose = scopes.iter().any(|scope| {
                     scope.contains("gmail.compose")
                         || scope.contains("gmail.send")
                 });
-                let has_readonly = entries.iter().any(|entry| {
-                    entry.email.eq_ignore_ascii_case(email)
-                        && entry
-                            .has_service_scope(&crate::native::google::GMAIL)
-                });
-                if has_readonly && has_compose {
+                let has_readonly =
+                    scopes.iter().any(|scope| scope.contains("gmail.readonly"))
+                        || (!has_modify
+                            && entry.is_some_and(|entry| {
+                                entry.has_service_scope(
+                                    &crate::native::google::GMAIL,
+                                )
+                            }));
+                if has_readonly && has_modify && has_compose {
+                    checks.push(Check {
+                        id: "scopes",
+                        status: CheckStatus::Ok,
+                        summary: "readonly+modify+compose".to_string(),
+                        fix: None,
+                    });
+                } else if has_readonly && has_modify {
+                    checks.push(Check {
+                        id: "scopes",
+                        status: CheckStatus::Ok,
+                        summary: "readonly+modify".to_string(),
+                        fix: None,
+                    });
+                } else if has_modify && has_compose {
+                    checks.push(Check {
+                        id: "scopes",
+                        status: CheckStatus::Ok,
+                        summary: "modify+compose".to_string(),
+                        fix: None,
+                    });
+                } else if has_modify {
+                    checks.push(Check {
+                        id: "scopes",
+                        status: CheckStatus::Ok,
+                        summary: "modify".to_string(),
+                        fix: None,
+                    });
+                } else if has_readonly && has_compose {
                     checks.push(Check {
                         id: "scopes",
                         status: CheckStatus::Ok,

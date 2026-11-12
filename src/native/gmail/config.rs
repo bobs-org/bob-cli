@@ -14,10 +14,13 @@ pub(crate) const DEFAULT_LINK_LABEL: &str = "✉️ {subject} · {who}";
 pub(crate) const DEFAULT_PULL_INBOX: &str = "gmail_inbox.md";
 pub(crate) const DEFAULT_SYNC_LABEL: &str = "bob";
 pub(crate) const DEFAULT_REPLY_WAIT_DAYS: u32 = 3;
+pub(crate) const DEFAULT_ARCHIVE_MAX: u32 = 10;
 pub(crate) const DEFAULT_TIMEOUT_SECS: u64 = 60;
 pub(crate) const ASSUME_TTY_ENV: &str = "BOB_GMAIL_ASSUME_TTY";
 pub(crate) const COMPOSE_SCOPE: &str =
     "https://www.googleapis.com/auth/gmail.compose";
+pub(crate) const MODIFY_SCOPE: &str =
+    "https://www.googleapis.com/auth/gmail.modify";
 
 /// Resolved `bob gmail` configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +39,9 @@ pub(crate) struct GmailConfig {
     sync_inbox: String,
     route_prefixes: Vec<String>,
     reply_wait_days: u32,
+    archive_enabled: bool,
+    archive_label: String,
+    archive_max: u32,
     gog: Option<PathBuf>,
     timeout_secs: u64,
 }
@@ -131,6 +137,21 @@ impl GmailConfig {
             Some(label) => Some(label),
             None => Some(DEFAULT_SYNC_LABEL.to_string()),
         };
+        let archive_enabled = sync.archive.unwrap_or(false);
+        if archive_enabled && sync_label.is_none() {
+            return Err(GmailError::setup(
+                "config",
+                "gmail.sync.archive: on requires an enabled gmail.sync.label"
+                    .to_string(),
+            ));
+        }
+        let archive_label = sync.archive_label.unwrap_or_else(|| {
+            format!(
+                "{}/closed",
+                sync_label.as_deref().unwrap_or(DEFAULT_SYNC_LABEL)
+            )
+        });
+        validate_archive_label(&archive_label, sync_label.as_deref())?;
         let sync_inbox = match sync.inbox {
             Some(inbox) => {
                 validate_inbox("gmail.sync.inbox", &inbox)?;
@@ -155,6 +176,9 @@ impl GmailConfig {
             reply_wait_days: sync
                 .reply_wait_days
                 .unwrap_or(DEFAULT_REPLY_WAIT_DAYS),
+            archive_enabled,
+            archive_label,
+            archive_max: sync.archive_max.unwrap_or(DEFAULT_ARCHIVE_MAX),
             gog: settings.gog,
             timeout_secs,
         })
@@ -224,6 +248,18 @@ impl GmailConfig {
         self.reply_wait_days
     }
 
+    pub(crate) fn archive_enabled(&self) -> bool {
+        self.archive_enabled
+    }
+
+    pub(crate) fn archive_label(&self) -> &str {
+        &self.archive_label
+    }
+
+    pub(crate) fn archive_max(&self) -> u32 {
+        self.archive_max
+    }
+
     pub(crate) fn timeout(&self) -> Duration {
         Duration::from_secs(self.timeout_secs)
     }
@@ -231,6 +267,55 @@ impl GmailConfig {
     pub(crate) fn gog(&self) -> Option<&Path> {
         self.gog.as_deref()
     }
+}
+
+fn validate_archive_label(
+    archive_label: &str,
+    sync_label: Option<&str>,
+) -> Result<(), GmailError> {
+    if archive_label.trim().is_empty() {
+        return Err(GmailError::setup(
+            "config",
+            "gmail.sync.archive_label must not be empty".to_string(),
+        ));
+    }
+    if is_reserved_gmail_label(archive_label) {
+        return Err(GmailError::setup(
+            "config",
+            format!(
+                "gmail.sync.archive_label {archive_label:?} is a reserved Gmail label"
+            ),
+        ));
+    }
+    if sync_label.is_some_and(|label| label.eq_ignore_ascii_case(archive_label))
+    {
+        return Err(GmailError::setup(
+            "config",
+            "gmail.sync.archive_label must differ from the Gmail enrollment label"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn is_reserved_gmail_label(label: &str) -> bool {
+    const RESERVED: &[&str] = &[
+        "INBOX",
+        "SPAM",
+        "TRASH",
+        "UNREAD",
+        "STARRED",
+        "IMPORTANT",
+        "SENT",
+        "DRAFT",
+        "CHAT",
+    ];
+    RESERVED
+        .iter()
+        .any(|reserved| label.eq_ignore_ascii_case(reserved))
+        || label
+            .get(.."CATEGORY_".len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("CATEGORY_"))
 }
 
 /// An inbox key must be a safe relative path inside the vault.
@@ -339,6 +424,9 @@ mod tests {
         assert_eq!(config.sync_inbox(), "gmail_inbox.md");
         assert!(config.route_prefixes().is_empty(), "no-prefix mode");
         assert_eq!(config.reply_wait_days(), 3);
+        assert!(!config.archive_enabled());
+        assert_eq!(config.archive_label(), "bob/closed");
+        assert_eq!(config.archive_max(), 10);
     }
 
     #[test]
@@ -377,6 +465,112 @@ mod tests {
             resolve(sync(Some("bob"), None), pull(Some(""), None)),
             Some("bob".to_string())
         );
+    }
+
+    #[test]
+    fn archive_defaults_follow_the_resolved_enrollment_label() {
+        let config = GmailConfig::from_settings(bob_config::GmailSettings {
+            sync: sync(Some("work"), None),
+            ..settings()
+        })
+        .expect("custom sync label");
+        assert!(!config.archive_enabled());
+        assert_eq!(config.archive_label(), "work/closed");
+
+        let config = GmailConfig::from_settings(bob_config::GmailSettings {
+            sync: sync(None, None),
+            pull: pull(Some("legacy"), None),
+            ..settings()
+        })
+        .expect("legacy label fallback");
+        assert_eq!(config.archive_label(), "legacy/closed");
+
+        let config = GmailConfig::from_settings(bob_config::GmailSettings {
+            sync: sync(Some(""), None),
+            ..settings()
+        })
+        .expect("disabled sync with archive off");
+        assert_eq!(config.sync_label(), None);
+        assert!(!config.archive_enabled());
+    }
+
+    #[test]
+    fn archive_custom_settings_resolve_and_require_enabled_sync() {
+        let config = GmailConfig::from_settings(bob_config::GmailSettings {
+            sync: Some(bob_config::GmailSyncSettings {
+                label: Some("work".to_string()),
+                archive: Some(true),
+                archive_label: Some("Bob Archive".to_string()),
+                archive_max: Some(7),
+                ..Default::default()
+            }),
+            ..settings()
+        })
+        .expect("archive config");
+        assert!(config.archive_enabled());
+        assert_eq!(config.archive_label(), "Bob Archive");
+        assert_eq!(config.archive_max(), 7);
+
+        let error = GmailConfig::from_settings(bob_config::GmailSettings {
+            sync: Some(bob_config::GmailSyncSettings {
+                label: Some(String::new()),
+                archive: Some(true),
+                ..Default::default()
+            }),
+            ..settings()
+        })
+        .expect_err("archive cannot run with sync disabled");
+        assert!(error.message().contains("gmail.sync.archive"));
+        assert!(error.message().contains("gmail.sync.label"));
+    }
+
+    #[test]
+    fn archive_receipt_label_rejects_reserved_names_and_enrollment_collisions()
+    {
+        for archive_label in ["INBOX", "trash", "CATEGORY_updates"] {
+            let error = GmailConfig::from_settings(bob_config::GmailSettings {
+                sync: Some(bob_config::GmailSyncSettings {
+                    archive_label: Some(archive_label.to_string()),
+                    ..Default::default()
+                }),
+                ..settings()
+            })
+            .expect_err("reserved label");
+            assert!(error.message().contains("reserved Gmail label"));
+        }
+
+        let error = GmailConfig::from_settings(bob_config::GmailSettings {
+            sync: Some(bob_config::GmailSyncSettings {
+                label: Some("Work/Closed".to_string()),
+                archive_label: Some("work/closed".to_string()),
+                ..Default::default()
+            }),
+            ..settings()
+        })
+        .expect_err("default receipt label collision");
+        assert!(error.message().contains("enrollment label"));
+
+        let error = GmailConfig::from_settings(bob_config::GmailSettings {
+            sync: Some(bob_config::GmailSyncSettings {
+                label: Some("watch".to_string()),
+                archive_label: Some("WATCH".to_string()),
+                ..Default::default()
+            }),
+            ..settings()
+        })
+        .expect_err("custom receipt label collision");
+        assert!(error.message().contains("enrollment label"));
+
+        let error = GmailConfig::from_settings(bob_config::GmailSettings {
+            sync: Some(bob_config::GmailSyncSettings {
+                archive_label: Some("old/closed".to_string()),
+                ..Default::default()
+            }),
+            pull: pull(Some("old/closed"), None),
+            ..settings()
+        })
+        .expect_err("legacy enrollment label collision");
+        assert!(error.message().contains("enrollment label"));
     }
 
     #[test]

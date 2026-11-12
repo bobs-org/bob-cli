@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, quote, urlparse
 CLIENT = "bob-gmail"
 READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 COMPOSE_SCOPE = "https://www.googleapis.com/auth/gmail.compose"
+MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
 EMAIL = "you@example.com"
 
 FLAGS_WITH_VALUE = {
@@ -309,6 +310,13 @@ def scenario_defaults(name: str) -> dict:
     elif name == "compose_withheld":
         # The user leaves Google's compose checkbox unticked at consent.
         defaults["withhold_compose"] = True
+    elif name == "modify_grant":
+        defaults["accounts"] = [
+            connected_account(EMAIL, [READONLY_SCOPE, MODIFY_SCOPE])
+        ]
+    elif name == "modify_withheld":
+        # The user leaves Google's Gmail modify checkbox unticked at consent.
+        defaults["withhold_modify"] = True
     elif name == "no_scope":
         defaults["accounts"] = [
             {
@@ -1109,12 +1117,14 @@ if op == "auth_add":
             )
         if not got_code:
             fail("no code found in URL")
-        # Grant readonly; add compose when the original step-1 requested it.
+        # Grant readonly and every requested Gmail extra scope not withheld.
         extra = ""
         for i, item in enumerate(args):
             if item == "--extra-scopes" and i + 1 < len(args):
                 extra = args[i + 1]
         scopes = [READONLY_SCOPE]
+        if MODIFY_SCOPE in extra and not state.get("withhold_modify"):
+            scopes.append(MODIFY_SCOPE)
         if COMPOSE_SCOPE in extra and not state.get("withhold_compose"):
             scopes.append(COMPOSE_SCOPE)
         accounts = [

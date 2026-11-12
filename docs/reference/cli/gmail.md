@@ -19,7 +19,7 @@ Commands:
   draft   Create or update a Gmail draft and show its exact preview
   link    Swap Gmail URLs for labelled links to saved mail notes
   list    List saved Gmail threads (offline unless --remote)
-  login   Connect Gmail (read-only) in one guided step
+  login   Connect Gmail in one guided step
   logout  Remove Bob's Gmail grant only; prints the Google revoke URL
   new     Create a local Gmail compose note
   peek    Preview Gmail thread metadata without saving it
@@ -73,6 +73,7 @@ Examples:
   bob gmail login             Connect Gmail in one guided step
   bob gmail login -a EMAIL    Sign in as this account
   bob gmail login -s compose  Also grant the compose scope (Mac only)
+  bob gmail login -s modify   Grant Gmail modify for label archiving
   bob gmail doctor            Diagnose gog, the client, and the vault
   bob gmail logout -y         Remove Bob's Gmail grant only
 

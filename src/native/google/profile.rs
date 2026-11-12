@@ -50,6 +50,8 @@ fn gmail_service(value: &str) -> bool {
 fn gmail_scope(value: &str) -> bool {
     value == "https://www.googleapis.com/auth/gmail.readonly"
         || value.contains("gmail.readonly")
+        || value == "https://www.googleapis.com/auth/gmail.modify"
+        || value.contains("gmail.modify")
 }
 
 pub(crate) const GCAL: GoogleService = GoogleService {

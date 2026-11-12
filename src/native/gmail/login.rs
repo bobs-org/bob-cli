@@ -6,7 +6,7 @@ use super::{
     account,
     client::ClientOrigin,
     client_setup::{ensure_client, ResolvedClient},
-    config::{GmailConfig, COMPOSE_SCOPE},
+    config::{GmailConfig, COMPOSE_SCOPE, MODIFY_SCOPE},
     gog::{Gog, API_CONSOLE_URL, CLIENT},
     login_ui::LoginUi,
     signin, ui, GmailError, LoginArgs,
@@ -49,20 +49,36 @@ fn login(
     ui: &LoginUi,
 ) -> Result<LoginReport, GmailError> {
     let wants_compose = args.scope == super::cli::LoginScope::Compose;
+    let wants_modify = args.scope == super::cli::LoginScope::Modify;
     let mut gog = Gog::resolve(
         crate::native::google::GMAIL,
         config.gog(),
         config.timeout(),
     )?;
-    if wants_compose {
-        gog = gog.with_extra_scopes(vec![COMPOSE_SCOPE.to_string()]);
-    }
     let _version = gog.require_version()?;
-    ui.title_with_access(if wants_compose {
-        "compose"
-    } else {
-        "read-only"
+    ui.title_with_access(match args.scope {
+        super::cli::LoginScope::Readonly => "read-only",
+        super::cli::LoginScope::Compose => "compose",
+        super::cli::LoginScope::Modify => "modify",
     });
+    if wants_modify {
+        let archive_use = if config.archive_enabled() {
+            format!(
+                "Bob uses it only for label-based archiving of saved messages (receipt label {:?}, limit {} per run); restore is explicit.",
+                config.archive_label(),
+                config.archive_max()
+            )
+        } else {
+            format!(
+                "Archive mode is off; if enabled, Bob uses this grant only for label-based archiving of saved messages (receipt label {:?}, limit {} per run); restore is explicit.",
+                config.archive_label(),
+                config.archive_max()
+            )
+        };
+        ui.note_interactive(&format!(
+            "Google's Gmail modify grant is broad: it can read, change, and send mail. {archive_use} This scope cannot permanently delete messages. Sending in Bob still uses the separate compose workflow and requires confirmation."
+        ));
+    }
 
     let resolved = ensure_client(&gog, args.credentials.as_deref(), ui)?;
     render_client_step(ui, &resolved);
@@ -72,6 +88,18 @@ fn login(
         config.account(),
         ui,
     )?;
+
+    let existing_scopes = granted_scopes(&gog, &account);
+    let mut extra_scopes = Vec::new();
+    if wants_modify || existing_scopes.iter().any(|scope| scope == "modify") {
+        extra_scopes.push(MODIFY_SCOPE.to_string());
+    }
+    if wants_compose || existing_scopes.iter().any(|scope| scope == "compose") {
+        extra_scopes.push(COMPOSE_SCOPE.to_string());
+    }
+    if !extra_scopes.is_empty() {
+        gog = gog.with_extra_scopes(extra_scopes);
+    }
 
     let listed = gog.accounts(Some(CLIENT))?;
     let has_grant = listed.iter().any(|entry| {
@@ -89,14 +117,18 @@ fn login(
         match gog.search(&account, "in:inbox", 1) {
             // A read-only grant cannot satisfy `-s compose`: Google adds a
             // scope only through a fresh consent, so sign in again below.
-            Ok(_)
-                if wants_compose
-                    && !has_compose(&granted_scopes(&gog, &account)) =>
-            {
+            Ok(_) if wants_compose && !has_compose(&existing_scopes) => {
                 ui.step_warn(
                     2,
                     "Sign in",
                     "the saved sign-in is read-only; signing in again to add compose…",
+                );
+            }
+            Ok(_) if wants_modify && !has_modify(&existing_scopes) => {
+                ui.step_warn(
+                    2,
+                    "Sign in",
+                    "the saved sign-in lacks Gmail modify; signing in again to add it…",
                 );
             }
             Ok(_) => {
@@ -172,6 +204,14 @@ fn login(
         );
         return Err(compose_not_granted());
     }
+    if wants_modify && !has_modify(&granted) {
+        ui.step_fail(
+            3,
+            "Check",
+            "Google granted read-only Gmail access but not modify",
+        );
+        return Err(modify_not_granted());
+    }
     let report = build_report(
         &account,
         &resolved,
@@ -189,6 +229,10 @@ fn has_compose(granted: &[String]) -> bool {
     granted.iter().any(|scope| scope == "compose")
 }
 
+fn has_modify(granted: &[String]) -> bool {
+    granted.iter().any(|scope| scope == "modify")
+}
+
 /// Google's consent screen lets each scope be unticked; an unticked compose
 /// box still yields a working read-only grant, so say so instead of
 /// reporting success.
@@ -204,6 +248,17 @@ fn compose_not_granted() -> GmailError {
     )
 }
 
+fn modify_not_granted() -> GmailError {
+    GmailError::runtime(
+        "modify_not_granted",
+        "Google granted read-only Gmail access but not the modify scope"
+            .to_string(),
+    )
+    .with_hint(
+        "rerun `bob gmail login -s modify` and allow Google's Gmail modify permission; Bob uses it for label-based archive and explicit restore, cannot permanently delete messages, and still requires the separate confirmed compose workflow to send",
+    )
+}
+
 fn granted_scopes(gog: &Gog, account: &str) -> Vec<String> {
     let Ok(entries) = gog.accounts(Some(CLIENT)) else {
         return Vec::new();
@@ -215,8 +270,20 @@ fn granted_scopes(gog: &Gog, account: &str) -> Vec<String> {
         return Vec::new();
     };
     let mut scopes = Vec::new();
-    if entry.has_service_scope(&crate::native::google::GMAIL) {
+    let has_modify = entry
+        .scopes
+        .iter()
+        .any(|scope| scope == MODIFY_SCOPE || scope.contains("gmail.modify"));
+    if entry.scopes.iter().any(|scope| {
+        scope == "https://www.googleapis.com/auth/gmail.readonly"
+            || scope.contains("gmail.readonly")
+    }) || (!has_modify
+        && entry.has_service_scope(&crate::native::google::GMAIL))
+    {
         scopes.push("readonly".to_string());
+    }
+    if has_modify {
+        scopes.push("modify".to_string());
     }
     if entry
         .scopes
@@ -241,12 +308,15 @@ fn finish_login(
     testing_tip: bool,
 ) -> Result<LoginReport, GmailError> {
     let compose = has_compose(&report.granted_scopes);
-    if compose {
+    let modify = has_modify(&report.granted_scopes);
+    if modify {
+        ui.summary_modify(&report.account);
+    } else if compose {
         ui.summary_compose(&report.account);
     } else {
         ui.summary(&report.account);
     }
-    if compose {
+    if compose && !modify {
         ui.note(
             "Compose scope granted: gmail.compose also permits sending; \
              every send still goes through a previewed draft.",

@@ -310,6 +310,121 @@ fn login_compose_fails_when_google_withholds_compose() {
 }
 
 #[test]
+fn login_modify_requests_only_the_exact_gmail_modify_scope() {
+    let env = GmailEnv::new("bob-cli-gmail-login-modify");
+    let fake = FakeGog::new(&env, "gog").scenario("no_client");
+    let client = env.root().join("client.json");
+    fs::write(
+        &client,
+        r#"{"installed":{"client_id":"123456789012-abc.apps.googleusercontent.com","client_secret":"test-secret-123","project_id":"my-proj"}}"#,
+    )
+    .expect("write client json");
+    let output = run_gmail_paste(
+        &env,
+        &fake,
+        &[
+            "login",
+            "-m",
+            "-c",
+            client.to_str().expect("utf8 path"),
+            "-s",
+            "modify",
+            "-f",
+            "json",
+        ],
+    );
+    assert_success(&output, "login modify");
+    let doc = json_stdout(&output);
+    assert_eq!(doc["scope"], "modify");
+    assert_eq!(
+        doc["granted_scopes"],
+        serde_json::json!(["readonly", "modify"])
+    );
+    let auth_add = auth_add_calls(&fake).pop().expect("auth add");
+    assert!(auth_add.iter().any(|arg| arg == "--gmail-scope"));
+    assert!(auth_add.iter().any(|arg| arg == "readonly"));
+    let extra = auth_add
+        .windows(2)
+        .find(|pair| pair[0] == "--extra-scopes")
+        .map(|pair| pair[1].as_str())
+        .expect("extra scope");
+    assert_eq!(extra, "https://www.googleapis.com/auth/gmail.modify");
+    assert!(!extra.contains("gmail.compose"));
+    assert!(!extra.contains("mail.google.com"));
+    assert!(!extra.contains("gmail.settings"));
+    let err = stderr(&output);
+    assert!(err.contains("Gmail modify grant is broad"), "{err}");
+    assert!(err.contains("only for label-based archiving"), "{err}");
+    assert!(err.contains("restore is explicit"), "{err}");
+    assert!(err.contains("cannot permanently delete"), "{err}");
+    assert!(err.contains("separate compose workflow"), "{err}");
+    assert!(
+        err.contains("Read, compose, and send emails from your Gmail account"),
+        "{err}"
+    );
+}
+
+#[test]
+fn login_modify_preserves_an_existing_compose_grant() {
+    let env = GmailEnv::new("bob-cli-gmail-login-modify-compose");
+    let fake = FakeGog::new(&env, "gog").scenario("compose_grant");
+    let output = run_gmail_paste(
+        &env,
+        &fake,
+        &["login", "-m", "-s", "modify", "-f", "json"],
+    );
+    assert_success(&output, "login modify with existing compose");
+    let doc = json_stdout(&output);
+    assert_eq!(
+        doc["granted_scopes"],
+        serde_json::json!(["readonly", "modify", "compose"])
+    );
+    let auth_add = auth_add_calls(&fake).pop().expect("auth add");
+    let extra = auth_add
+        .windows(2)
+        .find(|pair| pair[0] == "--extra-scopes")
+        .map(|pair| pair[1].as_str())
+        .expect("extra scope");
+    assert!(extra.contains("https://www.googleapis.com/auth/gmail.modify"));
+    assert!(extra.contains("https://www.googleapis.com/auth/gmail.compose"));
+}
+
+#[test]
+fn login_modify_reports_when_google_withholds_the_scope() {
+    let env = GmailEnv::new("bob-cli-gmail-login-modify-withheld");
+    let fake = FakeGog::new(&env, "gog").scenario("modify_withheld");
+    let output = run_gmail_paste(
+        &env,
+        &fake,
+        &["login", "-m", "-s", "modify", "-f", "json"],
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let doc = json_stdout(&output);
+    assert_eq!(doc["error"]["kind"], "modify_not_granted");
+    assert!(doc["error"]["hint"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("explicit restore"));
+    assert!(!stderr(&output).contains("Connected."));
+}
+
+#[test]
+fn login_modify_on_an_existing_modify_grant_is_already_connected() {
+    let env = GmailEnv::new("bob-cli-gmail-login-modify-existing");
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    let output =
+        run_gmail(&env, &fake, &["login", "-s", "modify", "-f", "json"]);
+    assert_success(&output, "login with existing modify");
+    let doc = json_stdout(&output);
+    assert_eq!(doc["already_connected"], true);
+    assert_eq!(
+        doc["granted_scopes"],
+        serde_json::json!(["readonly", "modify"])
+    );
+    assert!(auth_add_calls(&fake).is_empty());
+}
+
+#[test]
 fn login_read_only_never_claims_compose() {
     let env = GmailEnv::new("bob-cli-gmail-login-readonly-note");
     let fake = FakeGog::new(&env, "gog");
@@ -903,6 +1018,18 @@ fn doctor_reports_healthy_setup() {
         check(&doc, "thread_ids")
     );
     assert_eq!(check(&doc, "scopes")["status"], "ok");
+}
+
+#[test]
+fn doctor_reports_the_modify_scope_without_mislabeling_it_as_readonly() {
+    let env = GmailEnv::new("bob-cli-gmail-doctor-modify");
+    env.write_journal_rules();
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    let output = run_gmail(&env, &fake, &["doctor", "-f", "json"]);
+    assert_success(&output, "doctor modify");
+    let doc = json_stdout(&output);
+    assert_eq!(check(&doc, "scopes")["status"], "ok");
+    assert_eq!(check(&doc, "scopes")["summary"], "readonly+modify");
 }
 
 #[test]
