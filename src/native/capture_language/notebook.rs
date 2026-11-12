@@ -476,6 +476,14 @@ pub(crate) fn staged_notebook_sections(
     let draft = super::draft::split_capture_draft(raw_text);
     for item in &draft.items {
         for operation in notebook_section_operations(policy, item) {
+            // The selector under the caret is not an earlier operation,
+            // even when its `#` lies before the selector range. Keep the
+            // lexer-owned span so the staged view needs no second lexer.
+            if operation.selector_range.start <= at_offset
+                && at_offset <= operation.selector_range.end
+            {
+                continue;
+            }
             if operation.offset >= at_offset {
                 continue;
             }
@@ -533,6 +541,7 @@ fn notebook_section_operations(
     };
     vec![super::section_bullet::NotebookSectionOperation {
         offset: range.0,
+        selector_range: range.0..range.1,
         selector: selector.clone(),
         exact: *exact_section,
         route: claim.marker.route,

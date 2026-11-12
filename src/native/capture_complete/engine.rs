@@ -948,6 +948,20 @@ fn build_result_inner(
         replacement = trimmed;
     }
 
+    // Resolve the notebook target once so empty section menus still carry
+    // their notebook chrome and typed query. The row-kind check remains a
+    // fallback for notebook section candidates produced without a target.
+    let notebook_target = (field.context == CompletionContext::Section
+        || field.context == CompletionContext::NotebookSectionBullet)
+        .then(|| {
+            super::candidates::notebook_menu_target(
+                &notebook_policy,
+                field.route.as_deref().unwrap_or_default(),
+                field.replacement.0,
+            )
+        })
+        .flatten();
+
     // Bob owns the search query for task pickers and relation completion.
     // Relation target queries are decoded here so clients never parse a
     // quoted note component; relation target and label contexts carry
@@ -996,7 +1010,10 @@ fn build_result_inner(
     // `section` menu keeps its query-free shape.
     let query = match field.context {
         CompletionContext::NotebookSectionBullet => Some(field.query.clone()),
-        CompletionContext::Section if is_notebook_section_menu(&candidates) => {
+        CompletionContext::Section
+            if notebook_target.is_some()
+                || is_notebook_section_menu(&candidates) =>
+        {
             Some(field.query.clone())
         }
         _ => query,
@@ -1083,21 +1100,8 @@ fn build_result_inner(
     } else {
         None
     };
-    let place_menu = place_menu_for(
-        &field,
-        &candidates,
-        drawer_target.as_ref(),
-        (field.context == CompletionContext::Section
-            || field.context == CompletionContext::NotebookSectionBullet)
-            .then(|| {
-                super::candidates::notebook_menu_target(
-                    &notebook_policy,
-                    field.route.as_deref().unwrap_or_default(),
-                    field.replacement.0,
-                )
-            })
-            .flatten(),
-    );
+    let place_menu =
+        place_menu_for(&field, drawer_target.as_ref(), notebook_target);
     Ok(CaptureCompleteResult {
         ok: true,
         schema_version: SCHEMA_VERSION,
@@ -1191,7 +1195,6 @@ fn is_notebook_section_menu(candidates: &Candidates) -> bool {
 /// absent.
 fn place_menu_for(
     field: &capture_language::CompletionField,
-    candidates: &Candidates,
     drawer_target: Option<&super::model::DrawerTarget>,
     notebook_target: Option<super::candidates::NotebookMenuTarget>,
 ) -> Option<super::model::PlaceMenu> {
@@ -1234,8 +1237,7 @@ fn place_menu_for(
     }
     let target = notebook_target?;
     if field.context == CompletionContext::NotebookSectionBullet
-        || (field.context == CompletionContext::Section
-            && is_notebook_section_menu(candidates))
+        || field.context == CompletionContext::Section
     {
         let caption = match (&target.owner, target.is_new) {
             (Some(owner), false) => {
@@ -1453,7 +1455,10 @@ fn initial_selection(
         result.context,
         Some(CompletionContext::NotebookSectionBullet)
     ) || (matches!(result.context, Some(CompletionContext::Section))
-        && is_notebook_section_menu(&result.candidates))
+        && result
+            .place_menu
+            .as_ref()
+            .is_some_and(|menu| menu.kind == "notebook_section"))
     {
         if result.query.as_deref() == Some("") {
             return Some("none");

@@ -228,6 +228,7 @@ pub(super) fn notebook_bullet_candidates(
             Some(raw_text),
             Some(replacement),
             route,
+            NotebookSectionSpelling::Bullet,
         )
         .unwrap_or(Candidates::Section(Vec::new())),
         None => Candidates::Section(Vec::new()),
@@ -264,6 +265,7 @@ pub(super) fn section_candidates_with_raw(
                 raw_text,
                 replacement,
                 route,
+                NotebookSectionSpelling::Glued,
             )?,
             Vec::new(),
         ));
@@ -291,6 +293,7 @@ pub(super) fn section_candidates_with_raw(
                 raw_text,
                 replacement,
                 route,
+                NotebookSectionSpelling::Glued,
             )?,
             Vec::new(),
         ));
@@ -336,6 +339,7 @@ fn notebook_section_candidates(
     raw_text: Option<&str>,
     replacement: Option<(usize, usize)>,
     route: &str,
+    spelling: NotebookSectionSpelling,
 ) -> Result<Candidates, CompleteError> {
     use crate::native::capture_language::notebook::{
         NotebookSectionProvenance, StagedNotebookSection,
@@ -361,7 +365,21 @@ fn notebook_section_candidates(
             }
         })
         .collect();
-    notebook_section_rows(&staged, None, query, raw_text, replacement, route)
+    notebook_section_rows(
+        &staged,
+        None,
+        query,
+        raw_text,
+        replacement,
+        route,
+        spelling,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum NotebookSectionSpelling {
+    Bullet,
+    Glued,
 }
 
 fn notebook_section_rows(
@@ -371,6 +389,7 @@ fn notebook_section_rows(
     raw_text: Option<&str>,
     replacement: Option<(usize, usize)>,
     route: &str,
+    spelling: NotebookSectionSpelling,
 ) -> Result<Candidates, CompleteError> {
     use crate::native::capture_language::notebook::{
         resolve_notebook_section, NotebookSectionProvenance,
@@ -434,8 +453,12 @@ fn notebook_section_rows(
     let mut draft_rows = Vec::new();
     for (_, index) in ranked {
         let section = &staged[index];
-        let (replacement, refused) =
-            notebook_section_row(&section.as_heading(), &headings, route);
+        let (replacement, refused) = notebook_section_row(
+            &section.as_heading(),
+            &headings,
+            route,
+            spelling,
+        );
         let mut row =
             SectionCandidate::plain(replacement, section.title.clone(), 2);
         if let Some(target) = target {
@@ -507,11 +530,11 @@ fn notebook_section_rows(
                         });
                     Some((title, quoted, None))
                 } else {
-                    // Bare slug when the resolver would create it.
-                    let slug =
-                        crate::native::capture_language::selector_slug(&title);
-                    let selector =
-                        if slug.is_empty() { title.clone() } else { slug };
+                    // Choose a spelling that creates exactly the title
+                    // advertised by this row when the resolver sees it.
+                    let selector = notebook_section_create_spelling(
+                        query, &title, &headings,
+                    );
                     Some((title, selector, None))
                 }
             }
@@ -698,11 +721,13 @@ fn notebook_section_row(
     heading: &crate::native::capture_language::notebook::NotebookSection,
     headings: &[crate::native::capture_language::notebook::NotebookSection],
     route: &str,
+    spelling: NotebookSectionSpelling,
 ) -> (String, Option<String>) {
     if let Some(replacement) = notebook_section_replacement(
         &heading.title,
         heading.line_index,
         headings,
+        spelling,
     ) {
         return (replacement, None);
     }
@@ -742,6 +767,7 @@ fn notebook_section_replacement(
     title: &str,
     line_index: usize,
     headings: &[crate::native::capture_language::notebook::NotebookSection],
+    spelling: NotebookSectionSpelling,
 ) -> Option<String> {
     use crate::native::capture_language::notebook::{
         resolve_notebook_section, NotebookSectionResolution,
@@ -752,8 +778,15 @@ fn notebook_section_replacement(
             && !value.starts_with('"')
             && !value.starts_with('\u{201c}')
     }
-    // Bare title when it round-trips to this heading.
-    if unquoted_spelling(title)
+    // Bare title when the relevant scanner accepts it whole and it
+    // round-trips to this heading.
+    let bare_title = match spelling {
+        NotebookSectionSpelling::Bullet => {
+            crate::native::capture_language::section_bullet::bare_selector_is_literal(title)
+        }
+        NotebookSectionSpelling::Glued => unquoted_spelling(title),
+    };
+    if bare_title
         && let NotebookSectionResolution::Existing {
             line_index: found, ..
         } = resolve_notebook_section(title, false, headings)
@@ -761,15 +794,17 @@ fn notebook_section_replacement(
     {
         return Some(title.to_string());
     }
-    let slug = crate::native::capture_language::selector_slug(title);
-    if !slug.is_empty()
-        && unquoted_spelling(&slug)
-        && let NotebookSectionResolution::Existing {
-            line_index: found, ..
-        } = resolve_notebook_section(&slug, false, headings)
-        && found == line_index
-    {
-        return Some(slug);
+    if matches!(spelling, NotebookSectionSpelling::Glued) {
+        let slug = crate::native::capture_language::selector_slug(title);
+        if !slug.is_empty()
+            && unquoted_spelling(&slug)
+            && let NotebookSectionResolution::Existing {
+                line_index: found, ..
+            } = resolve_notebook_section(&slug, false, headings)
+            && found == line_index
+        {
+            return Some(slug);
+        }
     }
     // Quoted exact title as the explicit spelling.
     if let NotebookSectionResolution::Existing {
@@ -780,6 +815,31 @@ fn notebook_section_replacement(
         return Some(format!("\"{}\"", quote_escape(title)));
     }
     None
+}
+
+fn notebook_section_create_spelling(
+    query: &str,
+    title: &str,
+    headings: &[crate::native::capture_language::notebook::NotebookSection],
+) -> String {
+    use crate::native::capture_language::notebook::{
+        resolve_notebook_section, NotebookSectionResolution,
+    };
+    let creates_title = |selector: &str| {
+        matches!(
+            resolve_notebook_section(selector, false, headings),
+            NotebookSectionResolution::Create { title: created }
+                if created == title
+        )
+    };
+    if creates_title(query) {
+        return query.to_string();
+    }
+    let slug = crate::native::capture_language::selector_slug(title);
+    if !slug.is_empty() && creates_title(&slug) {
+        return slug;
+    }
+    format!("\"{}\"", quote_escape(title))
 }
 
 /// For a configured record collection's local `@dir#` token, expand the

@@ -43,6 +43,10 @@ fn vault(temp: &TempDir) -> std::path::PathBuf {
             "- note two [created::2026-11-08]\n",
         ),
     );
+    write_file(
+        &vault.join("empty_nb.md"),
+        "---\nparent: \"[[dev]]\"\ntype: \"[[notebook]]\"\n---\n\n# Empty notebook\n",
+    );
     vault
 }
 
@@ -200,6 +204,85 @@ fn bullet_replacement_covers_only_the_selector() {
 }
 
 #[test]
+fn empty_notebook_section_menus_keep_chrome_without_rows() {
+    let temp = TempDir::new("bob-cli-complete-section-empty-notebook");
+    let vault = vault(&temp);
+    let cases = [
+        ("Note @empty_nb#", "Note @empty_nb#".len()),
+        ("@empty_nb#\n- top note", "@empty_nb#".len()),
+        (
+            "New @dev^empty@ %n\n- top note\n\nMore @dev_empty#",
+            "New @dev^empty@ %n\n- top note\n\nMore @dev_empty#".len(),
+        ),
+    ];
+    for (draft, cursor) in cases {
+        let json = complete_at(&temp, &vault, draft, cursor);
+        assert_eq!(json["context"], "section", "{draft}: {json}");
+        assert!(rows(&json).is_empty(), "{draft}: {json}");
+        assert_eq!(json["query"], "", "{draft}: {json}");
+        assert_eq!(json["initial_selection"], "none", "{draft}: {json}");
+        assert_eq!(
+            json["place_menu"]["kind"], "notebook_section",
+            "{draft}: {json}"
+        );
+        assert_eq!(
+            json["place_menu"]["empty_hint"], "Type a section name",
+            "{draft}: {json}"
+        );
+    }
+
+    let area = end_complete(&temp, &vault, "@dev#");
+    assert!(area["place_menu"].is_null(), "{area}");
+}
+
+#[test]
+fn bullet_titles_prefer_exact_multi_word_selector() {
+    let temp = TempDir::new("bob-cli-complete-section-bullet-title");
+    let vault = vault(&temp);
+    let bullet = end_complete(&temp, &vault, "@dev_tools\n- #api");
+    let api_design = rows(&bullet)
+        .iter()
+        .find(|row| row["title"] == "API Design")
+        .expect("API Design row");
+    assert_eq!(
+        api_design["replacement"], "\"API Design\"\n  - ",
+        "{bullet}"
+    );
+
+    let glued = end_complete(&temp, &vault, "More @dev_tools#api");
+    let api_design = rows(&glued)
+        .iter()
+        .find(|row| row["title"] == "API Design")
+        .expect("API Design row");
+    assert_eq!(api_design["replacement"], "api-design", "{glued}");
+}
+
+#[test]
+fn glued_selector_excludes_its_own_section_from_the_staged_view() {
+    let temp = TempDir::new("bob-cli-complete-section-glued-self");
+    let vault = vault(&temp);
+    let draft = "Note @dev_tools#Zeta";
+    let json = end_complete(&temp, &vault, draft);
+    assert_eq!(rows(&json).len(), 1, "{json}");
+    let create = &rows(&json)[0];
+    assert_eq!(create["kind"], "notebook_section_create", "{json}");
+    assert_eq!(create["group"], "new", "{json}");
+    assert_eq!(create["creates"], true, "{json}");
+    assert!(
+        !rows(&json).iter().any(|row| row["group"] == "draft"),
+        "{json}"
+    );
+
+    let draft = "Earlier @dev_tools#Zeta\n\nLater @dev_tools#Ze";
+    let json = end_complete(&temp, &vault, draft);
+    let zeta = rows(&json)
+        .iter()
+        .find(|row| row["title"] == "Zeta")
+        .expect("earlier Zeta row");
+    assert_eq!(zeta["group"], "draft", "{json}");
+}
+
+#[test]
 fn bullet_typed_query_ranks_prefix_before_substring() {
     let temp = TempDir::new("bob-cli-complete-section-bullet-rank");
     let vault = vault(&temp);
@@ -273,7 +356,9 @@ fn bullet_menu_round_trips_through_parse_and_dry_run() {
         "@dev_tools\n- #".to_string(),
         "@dev_tools\n- #o".to_string(),
         "@dev_tools\n- #wireguard".to_string(),
+        "@dev_tools\n- #API-keys".to_string(),
         "More @dev_tools#".to_string(),
+        "More @dev_tools#API-keys".to_string(),
     ];
     // A `%n` draft contributes its staged draft-group row.
     drafts
@@ -339,6 +424,29 @@ fn bullet_menu_round_trips_through_parse_and_dry_run() {
                 "{spliced}: {parsed}"
             );
         }
+    }
+}
+
+#[test]
+fn typed_capitals_create_spelling_round_trips_in_both_menus() {
+    let temp = TempDir::new("bob-cli-complete-section-typed-capitals");
+    let vault = vault(&temp);
+    for draft in ["@dev_tools\n- #API-keys", "More @dev_tools#API-keys"] {
+        let json = end_complete(&temp, &vault, draft);
+        let create = rows(&json)
+            .iter()
+            .find(|row| row["kind"] == "notebook_section_create")
+            .expect("create row");
+        assert_eq!(create["title"], "API Keys", "{draft}: {json}");
+        assert_eq!(
+            create["replacement"],
+            if draft.starts_with("@") {
+                "API-keys\n  - "
+            } else {
+                "API-keys"
+            },
+            "{draft}: {json}"
+        );
     }
 }
 

@@ -786,5 +786,5 @@ fn notebook_create_row_keeps_typed_capitals() {
         })
         .expect("create row");
     assert_eq!(create.title, "API Keys");
-    assert_eq!(create.replacement, "api-keys");
+    assert_eq!(create.replacement, "API-keys");
 }

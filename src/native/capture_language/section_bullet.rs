@@ -73,6 +73,22 @@ pub(crate) fn scan_leading(
     Some(shift_hit(parse_hit(body, start, sigil, escaped), base))
 }
 
+/// Whether an unquoted selector is consumed whole by the section-bullet
+/// scanner as this exact selector. Completion uses the same lexer rule
+/// when choosing a title spelling for a bullet row.
+pub(crate) fn bare_selector_is_literal(selector: &str) -> bool {
+    let body = format!("#{selector}");
+    matches!(
+        scan_leading(&body, 0),
+        Some(SectionBulletHit::Complete {
+            selector: found,
+            exact: false,
+            leftover,
+            ..
+        }) if found == selector && leftover.is_empty()
+    )
+}
+
 /// Scan a whole physical first-level child line (`- `, `* `, or `+ `).
 #[cfg(test)]
 pub(crate) fn scan_first_level_line(
@@ -911,6 +927,7 @@ pub(crate) fn section_operations_from_item(
                 for section in plan.sections {
                     operations.push(NotebookSectionOperation {
                         offset: section.selector_span.start,
+                        selector_range: section.selector_span.clone(),
                         selector: section.selector,
                         exact: section.exact || section.all_caps,
                         route: created.to_string(),
@@ -921,6 +938,7 @@ pub(crate) fn section_operations_from_item(
                 for section in plan.sections {
                     operations.push(NotebookSectionOperation {
                         offset: section.selector_span.start,
+                        selector_range: section.selector_span.clone(),
                         selector: section.selector,
                         exact: section.exact || section.all_caps,
                         route: created.to_string(),
@@ -936,6 +954,7 @@ pub(crate) fn section_operations_from_item(
         for section in plan.sections {
             operations.push(NotebookSectionOperation {
                 offset: section.selector_span.start,
+                selector_range: section.selector_span.clone(),
                 selector: section.selector,
                 exact: section.exact,
                 route: route.to_string(),
@@ -948,6 +967,7 @@ pub(crate) fn section_operations_from_item(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NotebookSectionOperation {
     pub(crate) offset: usize,
+    pub(crate) selector_range: Range<usize>,
     pub(crate) selector: String,
     pub(crate) exact: bool,
     pub(crate) route: String,
