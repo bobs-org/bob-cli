@@ -29,6 +29,7 @@ fn import_command_help_and_option_aliases_are_complete() {
     ] {
         assert!(help.contains(option), "missing {option} in:\n{help}");
     }
+    assert!(help.contains("<FILE>..."), "FILE is required in:\n{help}");
     let parsed = super::build_cli_import()
         .try_get_matches_from([
             "bob bank import",
@@ -50,6 +51,12 @@ fn import_command_help_and_option_aliases_are_complete() {
             .unwrap()
             .count(),
         2
+    );
+    assert!(
+        super::build_cli_import()
+            .try_get_matches_from(["bob bank import"])
+            .is_err(),
+        "omitting FILE is a clap usage error"
     );
 }
 

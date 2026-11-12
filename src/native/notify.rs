@@ -56,7 +56,7 @@ fn run_loop(args: &Args) -> i32 {
             }
 
             match pomodoro_status() {
-                Ok(Some(output)) if output.contains("OVERDUE") => break,
+                Ok(Some(output)) if pomodoro_is_done(&output) => break,
                 Ok(_) => loop_count = 1,
                 Err(_) => loop_count = 1,
             }
@@ -211,6 +211,10 @@ fn usage() -> String {
     )
 }
 
+fn pomodoro_is_done(output: &str) -> bool {
+    output.starts_with("[OVERDUE")
+}
+
 fn persist_notification(count: i32) -> bool {
     count >= 10
 }
@@ -293,6 +297,15 @@ mod tests {
             }
             _ => panic!("oversized sleep value should be a usage error"),
         }
+    }
+
+    #[test]
+    fn overdue_status_matches_the_line_prefix() {
+        assert!(pomodoro_is_done(
+            "[OVERDUE by 10m] 0945-1015 Review crate skeleton\n"
+        ));
+        assert!(!pomodoro_is_done("0945-1015 Chase OVERDUE invoices\n"));
+        assert!(!pomodoro_is_done("[<5m] Chase OVERDUE invoices\n"));
     }
 
     #[test]

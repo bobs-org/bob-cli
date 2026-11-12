@@ -274,8 +274,9 @@ def build_preview(
 def complete_line(raw_line: str, completion_date: date) -> str:
     anchor = " ^ref"
     head = raw_line
-    if head.endswith(anchor):
-        head = head[: -len(anchor)]
+    match = BLOCK_ID.search(head)
+    if match:
+        head = head[: match.start()]
     head = head.rstrip()
     head = re.sub(r"^(\s*(?:>\s?)*\s*-\s*\[)[^\]](\])", r"\1x\2", head, count=1)
     completion = f"[completion:: {completion_date.isoformat()}]"

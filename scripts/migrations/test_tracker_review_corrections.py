@@ -101,6 +101,30 @@ class CutoffTests(unittest.TestCase):
         finally:
             tmp.cleanup()
 
+    def test_complete_line_strips_anchor_by_match_span(self):
+        line = "- [ ] #task Old [created:: 2026-09-01] ^ref  "
+        after = complete_line(line, date(2026, 10, 3))
+        self.assertEqual(after.count("^ref"), 1)
+        self.assertTrue(after.endswith("^ref"))
+        self.assertIn("- [x]", after)
+        self.assertIn("[completion:: 2026-10-03]", after)
+        self.assertNotIn("^ref  ", after)
+        tmp = make_vault({"a.md": line + "\n"})
+        try:
+            manifest = build_preview(
+                tmp.vault, date(2026, 9, 26), date(2026, 10, 3), "head"
+            )
+            self.assertEqual(len(manifest["entries"]), 1)
+            self.assertEqual(manifest["entries"][0]["after_line"].count("^ref"), 1)
+            report = apply_manifest(tmp.vault, manifest)
+            self.assertEqual(len(report["applied"]), 1)
+            data = (tmp.vault / "a.md").read_text(encoding="utf-8")
+            self.assertEqual(data.count("^ref"), 1)
+            self.assertIn("[completion:: 2026-10-03]", data)
+            self.assertIn("- [x]", data)
+        finally:
+            tmp.cleanup()
+
     def test_completion_format_and_idempotence(self):
         line = "- [ ] #task Old [created:: 2026-09-01] [fresh:: 2026-09-02] ^ref"
         after = complete_line(line, date(2026, 10, 3))

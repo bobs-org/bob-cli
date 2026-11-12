@@ -301,6 +301,16 @@ fn failure(
     TxnFailure::new(code, message, Some(hint.to_owned()))
 }
 
+/// Empty FILE list is refused input: clap requires FILE, and non-CLI
+/// callers of execute_import must fail the same way.
+pub(crate) fn missing_files_failure() -> TxnFailure {
+    failure(
+        "bank_import_missing_files",
+        "pass at least one FILE",
+        "bob bank import FILE...",
+    )
+}
+
 /// Parse every source before a write command enters the shared maintenance
 /// path. A malformed member refuses the full batch.
 pub(crate) fn prepare_sources(
@@ -1487,6 +1497,20 @@ mod tests {
             .exists());
         assert!(git(&vault.path, &["log", "-1", "--format=%s"])
             .starts_with("bank: import 1 rows (checking)"));
+    }
+
+    #[test]
+    fn missing_files_is_refused_input() {
+        let failure = missing_files_failure();
+        assert_eq!(failure.code, "bank_import_missing_files");
+        let report = ImportReport::failed(
+            false,
+            NaiveDate::from_ymd_opt(2026, 11, 13).unwrap(),
+            failure,
+        );
+        assert_eq!(report.exit_code(), 2);
+        assert_eq!(report.to_json()["ok"], json!(false));
+        assert_eq!(super::super::cli::run_import(Vec::new()), 2);
     }
 
     #[test]

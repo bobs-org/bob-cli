@@ -159,7 +159,9 @@ function get_latest_ledger_pomodoro() {
       return sprintf("%02d%02d", $hour, $minute);
     }
 
-    while (my $line = <>) {
+    my $path = $ARGV[0];
+    open(my $fh, "<", $path) or die "cannot read $path: $!";
+    while (my $line = <$fh>) {
       if ($line =~ /^##\s+Pomodoros(?:\s.*)?$/) {
         $in_pomodoros = 1;
         next;

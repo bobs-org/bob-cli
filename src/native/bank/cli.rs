@@ -164,6 +164,7 @@ pub(crate) fn build_cli_import() -> ClapCommand {
         .arg(
             Arg::new("files")
                 .value_name("FILE")
+                .required(true)
                 .num_args(1..)
                 .value_parser(OsStringValueParser::new())
                 .help("QFX/OFX or the supported Wells Fargo CSV export; repeatable"),
@@ -331,6 +332,19 @@ fn execute_import(matches: &ArgMatches) -> i32 {
         .get_many::<OsString>("files")
         .map(|files| files.map(PathBuf::from).collect::<Vec<_>>())
         .unwrap_or_default();
+    if paths.is_empty() {
+        let report = import_run::ImportReport::failed(
+            dry_run,
+            today,
+            import_run::missing_files_failure(),
+        );
+        if json {
+            println!("{}", report.to_json());
+        } else {
+            import_run::print_human(&report);
+        }
+        return report.exit_code();
+    }
     let requested_account = opt_string(matches, "account");
     let prepared = match import_run::prepare_sources(&paths) {
         Ok(prepared) => prepared,

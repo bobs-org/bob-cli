@@ -187,9 +187,10 @@ stay byte-identical. Bryan's edits always win.
 
 `bob bank import FILE... [-a ALIAS] [-d]` plans the whole batch before
 writing, then records posted exports in one guarded, committed
-transaction. Files are parsed before the maintenance path is entered, so
-a malformed member refuses the full batch with no vault, journal, Git,
-or sync change. Files process in `(posted, input-file order, record
+transaction. Omitting FILE is refused input (exit 2) before the
+maintenance lock or pre-sync. Files are parsed before the maintenance
+path is entered, so a malformed member refuses the full batch with no
+vault, journal, Git, or sync change. Files process in `(posted, input-file order, record
 order)`; the same pure planner feeds preview and apply, so `-d`
 after-images equal a real run on the same snapshot and clock.
 

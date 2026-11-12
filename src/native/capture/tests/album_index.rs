@@ -358,6 +358,11 @@ fn damaged_folder_refuses_batch_and_writes_nothing() {
         "reports the affected path: {}",
         error.message
     );
+    assert_eq!(error.kind, CaptureErrorKind::Io);
+    assert_eq!(
+        error.typed, None,
+        "damaged albums are persistent io, not a retryable note_changed"
+    );
     assert!(
         !vault.join("eat/ramen_nagi.md").exists(),
         "writes neither record nor index"
@@ -398,6 +403,11 @@ fn unreadable_member_refuses_while_malformed_member_allows_write() {
         error.message.contains("eat"),
         "names the album: {}",
         error.message
+    );
+    assert_eq!(error.kind, CaptureErrorKind::Io);
+    assert_eq!(
+        error.typed, None,
+        "unreadable members are persistent io, not a retryable note_changed"
     );
     std::fs::remove_file(vault.join("eat/unreadable.md")).expect("cleanup");
     std::fs::write(

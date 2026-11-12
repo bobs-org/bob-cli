@@ -489,8 +489,7 @@ fn stage_album_index(
                     album_relative.display()
                 )
             });
-        return Err(CaptureError::io(reason)
-            .with_typed(CaptureFailureKind::NoteChanged));
+        return Err(CaptureError::io(reason));
     }
     match planned.edit {
         Some(edit) => {

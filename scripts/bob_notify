@@ -48,7 +48,7 @@ function run() {
         continue
       fi
 
-      if [[ "${bob_pomodoro_output}" == *'OVERDUE'* ]]; then
+      if [[ "${bob_pomodoro_output}" == '[OVERDUE'* ]]; then
         break
       else
         loop_count=1
