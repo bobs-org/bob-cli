@@ -504,11 +504,257 @@ fn used_removal_and_prohibited_rewrites_refuse_with_counts() {
     assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
 
     // Removing an index_by field refuses rather than changing top-level bytes.
-    let indexed = fs::read_to_string(vault.join("eat.md"))
+    // `index_by` lives at the album top level, not under `record:`.
+    // Add an unused `location` field so both `index_by` and `index_facets`
+    // have a real unused target; `status` stays used to prove the index
+    // guard runs before the usage guard.
+    let with_location =
+        fs::read_to_string(vault.join("eat.md")).unwrap().replace(
+            "    status:\n",
+            "    location:\n      label: Location\n    status:\n",
+        );
+    write(&vault, "eat.md", &with_location);
+    commit_all(&vault, "add location field");
+    let _ = run(&vault, &temp, &["sync", "-f", "json"]);
+    let indexed = fs::read_to_string(vault.join("eat.md")).unwrap().replace(
+        "record:\n",
+        "index_by: status\nindex_facets:\n  - location\nrecord:\n",
+    );
+    write(&vault, "eat.md", &indexed);
+    commit_all(&vault, "add index refs");
+    let _ = run(&vault, &temp, &["sync", "-f", "json"]);
+    let indexed_head = head(&vault);
+    let expect_indexed = fingerprint(&vault, &temp);
+    for field in ["status", "location"] {
+        let body = envelope(
+            &expect_indexed,
+            &format!(r#"{{"op":"field.remove","field":"{field}"}}"#),
+        );
+        let output = run(
+            &vault,
+            &temp,
+            &[
+                "update",
+                "eat",
+                "-f",
+                "json",
+                "-i",
+                write_envelope(&temp, "idx.json", &body).to_str().unwrap(),
+            ],
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{field}: {}",
+            format_output(&output)
+        );
+        let payload = json(&output);
+        assert_eq!(payload["error"]["code"], "index_reference", "{payload}");
+        assert_eq!(
+            payload["error"]["field"],
+            serde_json::json!(field),
+            "{payload}"
+        );
+    }
+    assert_eq!(
+        subject(&vault),
+        "add index refs",
+        "index refusals commit nothing new"
+    );
+    assert_eq!(head(&vault), indexed_head);
+    let _ = before;
+}
+
+#[test]
+fn grouping_prefers_status_and_reports_regrouping() {
+    let temp = TempDir::new("album-update-grouping");
+    let vault = fixture(&temp);
+    // Add an unused `category` choices field after `status`.
+    let expect = fingerprint(&vault, &temp);
+    let body = envelope(
+        &expect,
+        r#"{"op":"field.add","label":"Category","kind":"choices","position":1,"choices":[{"label":"Family"}]}"#,
+    );
+    let added = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "add.json", &body).to_str().unwrap(),
+        ],
+    );
+    assert_eq!(added.status.code(), Some(0), "{}", format_output(&added));
+    // Move `category` before `status`; the authoritative group stays `status`.
+    let expect_moved = json(&added)["after_fingerprint"]
+        .as_str()
         .unwrap()
-        .replace("record:\n", "record:\nindex_by: status\n");
-    let _ = indexed;
-    assert_eq!(head(&vault), before);
+        .to_owned();
+    let body = envelope(
+        &expect_moved,
+        r#"{"op":"field.move","field":"category","position":0}"#,
+    );
+    let output = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-d",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "move.json", &body).to_str().unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let payload = json(&output);
+    assert_eq!(payload["group_before"], serde_json::json!("status"));
+    assert_eq!(payload["group_after"], serde_json::json!("status"));
+}
+
+#[test]
+fn nonempty_cancelling_batch_is_a_no_op_without_lock_or_commit() {
+    let temp = TempDir::new("album-update-nonempty-noop");
+    let vault = fixture(&temp);
+    let before_head = head(&vault);
+    let before_bytes = fs::read(vault.join("eat.md")).unwrap();
+    let expect = fingerprint(&vault, &temp);
+    // Album label is explicit `Restaurant`; setting it away and back
+    // restores the initial schema and order, so the batch must return
+    // original bytes and no edit, even with a held lock and broken remote.
+    let body = envelope(
+        &expect,
+        r#"{"op":"album.set","set":{"label":"Temporary"}},{"op":"album.set","set":{"label":"Restaurant"}}"#,
+    );
+    let path = write_envelope(&temp, "noop.json", &body);
+    let _held = hold_lock(&temp);
+    let output = run(
+        &vault,
+        &temp,
+        &["update", "eat", "-f", "json", "-i", path.to_str().unwrap()],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let payload = json(&output);
+    assert_eq!(payload["changed"], false);
+    assert_eq!(payload["changes"], serde_json::json!([]));
+    assert_eq!(fs::read(vault.join("eat.md")).unwrap(), before_bytes);
+    assert_eq!(head(&vault), before_head);
+    let remote = temp.path().join("remote.git");
+    fs::remove_dir_all(&remote).expect("break remote");
+    let output = run(
+        &vault,
+        &temp,
+        &["update", "eat", "-f", "json", "-i", path.to_str().unwrap()],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    assert_eq!(json(&output)["changed"], false);
+}
+
+#[test]
+fn all_nine_ops_accept_hostile_unicode_labels() {
+    let temp = TempDir::new("album-update-nine");
+    let vault = fixture(&temp);
+    let mut expect = fingerprint(&vault, &temp);
+    // Unicode labels exercise derived keys, emoji splitting, and quoting.
+    // Each step applies so the next `expect` matches the moved vault.
+    let unicode = "Café 🍰 naïve";
+    let mut run_step = |index: usize, op: &str| -> Value {
+        let body = envelope(&expect, op);
+        let output = run(
+            &vault,
+            &temp,
+            &[
+                "update",
+                "eat",
+                "-f",
+                "json",
+                "-i",
+                write_envelope(&temp, &format!("step{index}.json"), &body)
+                    .to_str()
+                    .unwrap(),
+            ],
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "step {index} {op}: {}",
+            format_output(&output)
+        );
+        let payload = json(&output);
+        assert_eq!(payload["ok"], true, "step {index}: {payload}");
+        expect = payload["after_fingerprint"].as_str().unwrap().to_owned();
+        payload
+    };
+    run_step(
+        0,
+        &format!(r#"{{"op":"album.set","set":{{"label":"{unicode} Eats"}}}}"#),
+    );
+    run_step(
+        1,
+        &format!(
+            r#"{{"op":"field.add","label":"{unicode} Notes","position":1}}"#
+        ),
+    );
+    run_step(
+        2,
+        r#"{"op":"field.set","field":"status","set":{"suggest":true}}"#,
+    );
+    run_step(3, r#"{"op":"field.move","field":"status","position":1}"#);
+    let added = run_step(
+        4,
+        &format!(
+            r#"{{"op":"choice.add","field":"status","label":"{unicode} Regular","emoji":"🔁","position":2}}"#
+        ),
+    );
+    let value = added["derived_keys"][0].as_str().unwrap().to_owned();
+    assert!(!value.is_empty(), "unicode choice derives a key: {added}");
+    run_step(
+        5,
+        &format!(
+            r#"{{"op":"choice.set","field":"status","value":"{value}","set":{{"label":"{unicode} Regular!"}}}}"#
+        ),
+    );
+    run_step(
+        6,
+        &format!(
+            r#"{{"op":"choice.move","field":"status","value":"{value}","position":0}}"#
+        ),
+    );
+    run_step(
+        7,
+        &format!(
+            r#"{{"op":"choice.remove","field":"status","value":"{value}"}}"#
+        ),
+    );
+    // The Unicode field key derives from its label; remove it by that key.
+    let field_key = {
+        let payload =
+            run_step(8, r#"{"op":"field.move","field":"status","position":0}"#);
+        // Derive the Unicode field key from the last list report.
+        let _ = payload;
+        // `normalize_stem` lowercases and strips accents/punctuation.
+        // Read the current album to find the derived key.
+        let list = run(&vault, &temp, &["list", "-f", "json"]);
+        let albums = json(&list)["albums"].as_array().unwrap().clone();
+        let fields = albums[0]["fields"].as_array().unwrap().clone();
+        fields
+            .iter()
+            .find(|field| {
+                field["label"].as_str().unwrap().contains("naïve Notes")
+            })
+            .unwrap()["key"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    run_step(
+        9,
+        &format!(r#"{{"op":"field.remove","field":"{field_key}"}}"#),
+    );
 }
 
 #[test]

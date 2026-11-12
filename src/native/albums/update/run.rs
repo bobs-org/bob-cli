@@ -432,11 +432,6 @@ struct ApplyContext {
     changed: bool,
 }
 
-#[allow(dead_code)]
-fn planned_txn(_vault: &Path, _plan: &UpdatePlan) -> PlannedTxn<ApplyContext> {
-    unreachable!("changed applies build their transaction inside run_locked");
-}
-
 fn staged_subject(stem: &str, ops: &[Op], per_op: &[OpResult]) -> String {
     format!("albums: update {stem}.md ({})", short_summary(ops, per_op))
 }
@@ -768,6 +763,7 @@ fn op_to_json(op: &Op) -> Value {
             position,
             choices,
             restore_key,
+            restore_values,
         } => {
             let mut payload = json!({"op": name, "label": label});
             if kind != "text" {
@@ -798,6 +794,14 @@ fn op_to_json(op: &Op) -> Value {
             }
             if let Some(key) = restore_key {
                 payload["restore_key"] = Value::String(key.clone());
+            }
+            if let Some(values) = restore_values {
+                payload["restore_values"] = Value::Array(
+                    values
+                        .iter()
+                        .map(|value| Value::String(value.clone()))
+                        .collect(),
+                );
             }
             payload
         }

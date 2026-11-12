@@ -24,9 +24,12 @@
 //!    "position":0}`
 //! - `{"op":"choice.remove","field":"status","value":"regular"}`
 //! - Undo-only restoration metadata: `field.add` accepts
-//!   `restore_key` and `choice.add` accepts `restore_value`. Each only
-//!   creates an absent key, never renames, and inverse field removals
-//!   restore required/default/bounds through a follow-up `field.set`.
+//!   `restore_key` and `restore_values`, `choice.add` accepts
+//!   `restore_value`. Each only creates an absent key, never renames,
+//!   and inverse field removals restore required/default/bounds (and
+//!   absent label/explicit suggest-false) through a follow-up `field.set`.
+//!   `restore_values` preserves stored choice keys in declaration order
+//!   when they differ from their labels.
 //!   Inverse ops may also carry `restore: {"spans":[{"key_path":
 //!   "record.fields.status.label","expected":"...","prior":"..."}]}`.
 //!   `expected` and `prior` are exact schema-entry bytes or `null` for an

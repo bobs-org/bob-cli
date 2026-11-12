@@ -106,8 +106,8 @@ pub(crate) struct RestoreSpan {
 }
 
 /// The nine v1 operations. Positions are zero-based; `None` means append
-/// for adds. `restore_key` / `restore_value` are Undo-only restoration
-/// metadata: they create an absent key, never rename an existing key.
+/// for adds. `restore_key` / `restore_value` / `restore_values` are Undo-only
+/// restoration metadata: they create absent keys, never rename existing keys.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Op {
     AlbumSet {
@@ -122,6 +122,7 @@ pub(crate) enum Op {
         position: Option<usize>,
         choices: Vec<ChoiceDraft>,
         restore_key: Option<String>,
+        restore_values: Option<Vec<String>>,
     },
     FieldSet {
         field: String,
@@ -684,6 +685,7 @@ fn parse_field_add(
             "position",
             "choices",
             "restore_key",
+            "restore_values",
         ],
         index,
     )?;
@@ -703,6 +705,30 @@ fn parse_field_add(
     let suggest = optional_bool(mapping, "suggest", index, false)?;
     let position = optional_position(mapping, "position", index)?;
     let restore_key = optional_string(mapping, "restore_key", index)?;
+    let restore_values = match mapping.get("restore_values") {
+        None => None,
+        Some(value) => {
+            let array = value.as_array().ok_or_else(|| {
+                ProtocolError::op(
+                    "envelope_wrong_type",
+                    index,
+                    "restore_values must be an array of stored choice keys",
+                )
+            })?;
+            let mut values = Vec::with_capacity(array.len());
+            for entry in array {
+                let text = entry.as_str().ok_or_else(|| {
+                    ProtocolError::op(
+                        "envelope_wrong_type",
+                        index,
+                        "each restore value must be a string",
+                    )
+                })?;
+                values.push(text.to_owned());
+            }
+            Some(values)
+        }
+    };
     let choices = match mapping.get("choices") {
         None => Vec::new(),
         Some(value) => {
@@ -782,6 +808,29 @@ fn parse_field_add(
             "choices are only valid for kind choices",
         ));
     }
+    if let Some(values) = restore_values.as_ref() {
+        if restore_key.is_none() {
+            return Err(ProtocolError::op(
+                "envelope_wrong_type",
+                index,
+                "restore_values requires restore_key",
+            ));
+        }
+        if kind != "choices" && !values.is_empty() {
+            return Err(ProtocolError::op(
+                "envelope_wrong_type",
+                index,
+                "restore_values is only valid for kind choices",
+            ));
+        }
+        if values.len() != choices.len() {
+            return Err(ProtocolError::op(
+                "envelope_wrong_type",
+                index,
+                "restore_values length must match choices length",
+            ));
+        }
+    }
     Ok(Op::FieldAdd {
         label,
         kind,
@@ -790,6 +839,7 @@ fn parse_field_add(
         position,
         choices,
         restore_key,
+        restore_values,
     })
 }
 

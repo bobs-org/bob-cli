@@ -296,20 +296,33 @@ albums output convention, preserving unchanged combined labels.
 
 Required, bounds, and default changes report newly invalid records without
 silently changing them or refusing a valid schema just because existing
-records now have findings. Counts include all immediate Markdown members, not
-only healthy rows. A scan that cannot prove completeness refuses. Prohibited
-intent refuses explicitly with the usage count and an `edit in YAML (y)`
-hint: field/choice rename, choice merge, noun change, kind/list-shape change,
-and used removal. A removed field named by `index_by` or `index_facets`
-refuses rather than changing those top-level bytes. The group field recomputes
-after moves and removals and previews the regrouping. A cross-album storage
-clash names the conflicting key and album paths.
+records now have findings. Counts include all immediate Markdown members,
+including readable invalid records and list values, not only healthy rows;
+per-op effects stay distinct from already invalid rows, and multiple edits to
+the same field in one ordered envelope count each transition. URL, numeric
+bounds, list, and default kinds validate through the shared schema parser. A
+scan that cannot prove completeness refuses. Prohibited intent refuses
+explicitly with its target and complete-scan usage count plus an
+`edit in YAML (y)` hint: field/choice key rename, kind/list-shape change,
+merge, noun change, and used removal. Typed errors carry `field`/`choice`,
+`key_path` where applicable, and `affected`. A removed field named by
+`index_by` or `index_facets` refuses rather than changing those top-level
+bytes. The group field prefers `status` choices, otherwise the first choices
+field, and recomputes after moves and removals to preview the regrouping. A
+cross-album storage clash names the conflicting key and album paths.
 
 Dry run previews the entire intended edit, including the index diff, and
 reports zero record-file changes. It takes no lock, performs no Git or sync
-commands, and writes no vault or cache files. A schema no-op returns before
-the shared lock and triggers neither sync nor index repair, even with a stale
-index or an unavailable remote. A changed apply takes the shared vault lock,
+commands, and writes no vault or cache files. A net semantic no-op — an empty
+envelope or a batch restoring exactly its initial schema and order — returns
+original bytes and no edit before any canonical emission or index repair,
+comparing ordered raw schema and presence state rather than emitted bytes;
+explicit absent-versus-false/unset stays distinct. Real no-op apply takes no
+lock, invokes no sync, and makes no commit, even under a held lock with an
+unavailable remote and even for nonempty cancelling batches, and never repairs
+a stale or damaged index. Atomic batches may temporarily empty a choices
+mapping when later ops make the final schema valid; usage safety still refuses
+at the removal, and final schema validation stays mandatory. A changed apply takes the shared vault lock,
 pre-syncs, replans fresh with the original `expect` (preflight bytes are never
 applied after pre-sync), then installs one album-note edit and makes one
 scoped `albums: update <stem>.md (<short op summary>)` commit — a count
@@ -332,17 +345,25 @@ warnings), 2 for invalid requests or semantic refusals, 1 for runtime, lock,
 or transaction failures. JSON stdout stays one parseable document.
 
 Undo of a removed unused field or choice retains its original stored key even
-when it differs from its current label. Optional restoration metadata on
-inverse add operations carries that identity: `field.add` accepts
-`restore_key` and `choice.add` accepts `restore_value`. Each only creates an
-absent key, goes through collision and schema validation, and cannot rename an
-existing key. Required, default, and bounds return through ordinary inverse
-`field.set` operations after the optional field has been re-added. Normal
-inverse ops restore semantics and order; narrowly scoped `restore.spans`
-entries preserve original quoting, comments, or absent keys with exact current
-(`expected`) and prior bytes (or null for an absent key) under schema key
-paths below `record`. Paths resolve on the server; no offsets are trusted.
-Undo rechecks usage, collisions, fingerprint, and schema rules. The exact Undo
+when it differs from its current label, along with ordering, absent keys,
+explicit false, typed defaults and bounds, comments, quoting, BOM, and
+LF/CRLF. Optional restoration metadata on inverse add operations carries that
+identity: `field.add` accepts `restore_key` and `restore_values` (stored
+choice keys in declaration order when they differ from their labels),
+`choice.add` accepts `restore_value`. Each only creates an absent key, goes
+through collision and schema validation, and cannot rename an existing key.
+Required, default, bounds, absent label, and explicit suggest-false return
+through ordinary inverse `field.set` operations after the optional field has
+been re-added. Normal inverse ops restore semantics and order; narrowly
+scoped `restore.spans` entries preserve original quoting, comments, or absent
+keys with exact current (`expected`) and prior bytes (or null for an absent
+key) under schema key paths below `record`. Restoration of an absent entry is
+checked against its server-resolved path, indentation, and expected absence.
+The final restored model agrees with the independently validated semantic
+inverse, including meaningful order. Paths resolve on the server; no offsets
+are trusted. Tampered or stale restoration cannot change noun, kind,
+unrelated fields, or invalid schemas. Undo rechecks usage, collisions,
+fingerprint, and schema rules. The exact Undo
 request replays the returned `inverse_ops` with the returned `after`
 fingerprint as its new `expect`:
 

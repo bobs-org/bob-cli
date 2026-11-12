@@ -228,6 +228,7 @@ pub(crate) fn apply_one(
             position,
             choices,
             restore_key,
+            restore_values,
         } => apply_field_add(
             label,
             kind,
@@ -236,6 +237,7 @@ pub(crate) fn apply_one(
             *position,
             choices,
             restore_key.as_deref(),
+            restore_values.as_deref(),
             index,
             raw,
             inputs,
@@ -266,7 +268,7 @@ pub(crate) fn apply_one(
             inputs,
         ),
         Op::ChoiceSet { field, value, set } => {
-            apply_choice_set(field, value, set, index, raw)
+            apply_choice_set(field, value, set, index, raw, inputs)
         }
         Op::ChoiceMove {
             field,
@@ -296,7 +298,7 @@ fn apply_album_set(
         match key.as_str() {
             "label" | "plural" | "dated_notes" => {}
             "noun" => {
-                return Err(OpError::refusal(
+                let mut error = OpError::refusal(
                     "noun_change_prohibited",
                     index,
                     format!(
@@ -304,15 +306,19 @@ fn apply_album_set(
                         inputs.before_type.id
                     ),
                     MIGRATION_HINT,
-                ));
+                );
+                error.key_path = Some("record.noun".to_owned());
+                return Err(error);
             }
             "legacy" => {
-                return Err(OpError::refusal(
+                let mut error = OpError::refusal(
                     "legacy_change_prohibited",
                     index,
                     "legacy patterns are not editable through ops",
                     MIGRATION_HINT,
-                ));
+                );
+                error.key_path = Some("record.legacy".to_owned());
+                return Err(error);
             }
             _ => {
                 return Err(unknown_set_key(index, key, ALLOWED_SET, None));
@@ -323,20 +329,24 @@ fn apply_album_set(
         if !ALLOWED_UNSET.contains(&key.as_str()) {
             match key.as_str() {
                 "noun" => {
-                    return Err(OpError::refusal(
+                    let mut error = OpError::refusal(
                         "noun_change_prohibited",
                         index,
                         "noun is not editable through ops",
                         MIGRATION_HINT,
-                    ));
+                    );
+                    error.key_path = Some("record.noun".to_owned());
+                    return Err(error);
                 }
                 "legacy" => {
-                    return Err(OpError::refusal(
+                    let mut error = OpError::refusal(
                         "legacy_change_prohibited",
                         index,
                         "legacy patterns are not editable through ops",
                         MIGRATION_HINT,
-                    ));
+                    );
+                    error.key_path = Some("record.legacy".to_owned());
+                    return Err(error);
                 }
                 _ => {
                     return Err(unknown_set_key(
@@ -480,6 +490,7 @@ fn apply_field_add(
     position: Option<usize>,
     choices: &[ChoiceDraft],
     restore_key: Option<&str>,
+    restore_values: Option<&[String]>,
     index: usize,
     raw: &mut Mapping,
     inputs: &ApplyInputs<'_>,
@@ -569,46 +580,101 @@ fn apply_field_add(
         }
     };
 
-    // Validate choice drafts for choices-kind additions.
+    // Validate choice drafts for choices-kind additions. Undo restores
+    // carry stored keys in `restore_values` so identities survive even
+    // when they differ from their labels.
     if kind == "choices" {
-        let mut seen = HashSet::new();
-        for draft in choices {
-            if draft.label.trim().is_empty() {
+        if let Some(values) = restore_values {
+            if values.len() != choices.len() {
                 return Err(OpError::invalid(
-                    "invalid_choice",
+                    "envelope_wrong_type",
                     index,
-                    "each choice requires a non-empty label",
+                    "restore_values length must match choices length",
                 ));
             }
-            let value = normalize_stem(&draft.label).ok_or_else(|| {
-                OpError::invalid(
-                    "derived_key_invalid",
-                    index,
-                    format!(
-                        "choice label {:?} has no alphanumeric characters for a value",
-                        draft.label
-                    ),
-                )
-            })?;
-            if !seen.insert(value.clone()) {
-                return Err(OpError::invalid(
-                    "derived_key_collision",
-                    index,
-                    format!(
-                        "duplicate choice value {value:?} in the same field.add"
-                    ),
-                ));
+            let mut seen = HashSet::new();
+            for value in values {
+                if value.trim().is_empty() {
+                    return Err(OpError::invalid(
+                        "derived_key_invalid",
+                        index,
+                        "restore value must be a non-empty string",
+                    ));
+                }
+                if !valid_identifier(value) {
+                    return Err(OpError::invalid(
+                        "derived_key_invalid",
+                        index,
+                        format!(
+                            "restore value {value:?} must match [a-z][a-z0-9_]*"
+                        ),
+                    ));
+                }
+                if !seen.insert(value.clone()) {
+                    return Err(OpError::invalid(
+                        "derived_key_collision",
+                        index,
+                        format!(
+                            "duplicate choice value {value:?} in the same field.add"
+                        ),
+                    ));
+                }
             }
-            if choice_exists(raw, &derived, &value) {
-                return Err(OpError::invalid(
-                    "derived_key_collision",
-                    index,
-                    format!(
-                        "choice value {value:?} already exists on field {derived:?}"
-                    ),
-                ));
+            for draft in choices {
+                if draft.label.trim().is_empty() {
+                    return Err(OpError::invalid(
+                        "invalid_choice",
+                        index,
+                        "each choice requires a non-empty label",
+                    ));
+                }
+            }
+        } else {
+            let mut seen = HashSet::new();
+            for draft in choices {
+                if draft.label.trim().is_empty() {
+                    return Err(OpError::invalid(
+                        "invalid_choice",
+                        index,
+                        "each choice requires a non-empty label",
+                    ));
+                }
+                let value = normalize_stem(&draft.label).ok_or_else(|| {
+                    OpError::invalid(
+                        "derived_key_invalid",
+                        index,
+                        format!(
+                            "choice label {:?} has no alphanumeric characters for a value",
+                            draft.label
+                        ),
+                    )
+                })?;
+                if !seen.insert(value.clone()) {
+                    return Err(OpError::invalid(
+                        "derived_key_collision",
+                        index,
+                        format!(
+                            "duplicate choice value {value:?} in the same field.add"
+                        ),
+                    ));
+                }
+                if choice_exists(raw, &derived, &value) {
+                    return Err(OpError::invalid(
+                        "derived_key_collision",
+                        index,
+                        format!(
+                            "choice value {value:?} already exists on field {derived:?}"
+                        ),
+                    ));
+                }
             }
         }
+    } else if restore_values.is_some_and(|values| !values.is_empty()) {
+        return Err(OpError::invalid(
+            "envelope_wrong_type",
+            index,
+            "restore_values is only valid for kind choices",
+        ));
     }
 
     let order = field_order(raw);
@@ -656,15 +722,30 @@ fn apply_field_add(
         }
         "choices" => {
             let mut values = Mapping::new();
-            for draft in choices {
-                let value = normalize_stem(&draft.label)
-                    .expect("choice value validated above");
-                let combined =
-                    combine_choice_label(draft.emoji.as_deref(), &draft.label);
-                values.insert(
-                    YamlValue::String(value),
-                    YamlValue::String(combined),
-                );
+            if let Some(stored) = restore_values {
+                for (draft, value) in choices.iter().zip(stored.iter()) {
+                    let combined = combine_choice_label(
+                        draft.emoji.as_deref(),
+                        &draft.label,
+                    );
+                    values.insert(
+                        YamlValue::String(value.clone()),
+                        YamlValue::String(combined),
+                    );
+                }
+            } else {
+                for draft in choices {
+                    let value = normalize_stem(&draft.label)
+                        .expect("choice value validated above");
+                    let combined = combine_choice_label(
+                        draft.emoji.as_deref(),
+                        &draft.label,
+                    );
+                    values.insert(
+                        YamlValue::String(value),
+                        YamlValue::String(combined),
+                    );
+                }
             }
             field_map.insert(
                 YamlValue::String("values".to_owned()),
@@ -722,32 +803,47 @@ fn apply_field_set(
         match key.as_str() {
             "label" | "required" | "suggest" | "default" | "min" | "max" => {}
             "key" => {
-                return Err(OpError::refusal(
+                let mut error = OpError::refusal(
                     "field_rename_prohibited",
                     index,
                     format!(
                         "field keys never change; field {field:?} keeps its stored key"
                     ),
                     MIGRATION_HINT,
-                ));
+                );
+                error.field = Some(field.to_owned());
+                if folder_complete(inputs.folder) {
+                    error.affected = Some(filled_for(inputs.folder, field));
+                }
+                return Err(error);
             }
             "kind" | "values" | "choices" => {
-                return Err(OpError::refusal(
+                let mut error = OpError::refusal(
                     "kind_change_prohibited",
                     index,
                     format!("field {field:?} kind never changes through ops"),
                     MIGRATION_HINT,
-                ));
+                );
+                error.field = Some(field.to_owned());
+                if folder_complete(inputs.folder) {
+                    error.affected = Some(filled_for(inputs.folder, field));
+                }
+                return Err(error);
             }
             "list" => {
-                return Err(OpError::refusal(
+                let mut error = OpError::refusal(
                     "list_change_prohibited",
                     index,
                     format!(
                         "field {field:?} list shape never changes through ops"
                     ),
                     MIGRATION_HINT,
-                ));
+                );
+                error.field = Some(field.to_owned());
+                if folder_complete(inputs.folder) {
+                    error.affected = Some(filled_for(inputs.folder, field));
+                }
+                return Err(error);
             }
             _ => {
                 return Err(unknown_set_key(
@@ -763,30 +859,45 @@ fn apply_field_set(
         match key.as_str() {
             "label" | "required" | "suggest" | "default" | "min" | "max" => {}
             "key" => {
-                return Err(OpError::refusal(
+                let mut error = OpError::refusal(
                     "field_rename_prohibited",
                     index,
                     format!("field {field:?} key never changes"),
                     MIGRATION_HINT,
-                ));
+                );
+                error.field = Some(field.to_owned());
+                if folder_complete(inputs.folder) {
+                    error.affected = Some(filled_for(inputs.folder, field));
+                }
+                return Err(error);
             }
             "kind" | "values" | "choices" => {
-                return Err(OpError::refusal(
+                let mut error = OpError::refusal(
                     "kind_change_prohibited",
                     index,
                     format!("field {field:?} kind never changes through ops"),
                     MIGRATION_HINT,
-                ));
+                );
+                error.field = Some(field.to_owned());
+                if folder_complete(inputs.folder) {
+                    error.affected = Some(filled_for(inputs.folder, field));
+                }
+                return Err(error);
             }
             "list" => {
-                return Err(OpError::refusal(
+                let mut error = OpError::refusal(
                     "list_change_prohibited",
                     index,
                     format!(
                         "field {field:?} list shape never changes through ops"
                     ),
                     MIGRATION_HINT,
-                ));
+                );
+                error.field = Some(field.to_owned());
+                if folder_complete(inputs.folder) {
+                    error.affected = Some(filled_for(inputs.folder, field));
+                }
+                return Err(error);
             }
             _ => {
                 return Err(unknown_set_key(
@@ -861,12 +972,11 @@ fn apply_field_set(
         ));
     }
 
-    // Capture before validation state for newly-invalid accounting.
-    let before_field = inputs
-        .before_type
-        .field(field)
-        .cloned()
-        .or_else(|| field_from_raw(field, &field_map));
+    // Capture before validation state for newly-invalid accounting from
+    // the current ordered operation state, so multiple edits to the same
+    // field in one envelope count each transition rather than the original.
+    let before_field = field_from_raw(field, &field_map)
+        .or_else(|| inputs.before_type.field(field).cloned());
     let newly_invalid = match before_field {
         Some(before) => {
             // Apply set/unset to a scratch copy to build the after
@@ -1144,38 +1254,71 @@ fn apply_field_remove(
     }
 
     // Snapshot the removed field for the restoration inverse: the add
-    // carries the original stored key even when it differs from the
-    // current label, plus kind/list/suggest/choices/position. Required,
-    // default, and bounds return through an ordinary follow-up set.
+    // carries the original stored key even when it differs from the current
+    // label, plus kind/list/suggest/position and stored choice identities
+    // via `restore_values` so keys survive even when they differ from their
+    // labels. Required, default, bounds, absent label, and explicit
+    // suggest-false return through ordinary follow-up sets/unsets.
     let position = field_order(raw)
         .iter()
         .position(|key| key == field)
         .unwrap_or(0);
-    let label = mapping_string(&field_map, "label")
-        .unwrap_or_else(|| title_case(field));
+    let prior_label = mapping_string(&field_map, "label");
+    let label_for_add =
+        prior_label.clone().unwrap_or_else(|| title_case(field));
     let kind = field_kind_name(&field_map);
     let list = mapping_bool(&field_map, "list").unwrap_or(false);
-    let suggest = mapping_bool(&field_map, "suggest").unwrap_or(false);
-    let choices = choice_drafts_from_raw(&field_map);
+    let suggest_opt = mapping_bool(&field_map, "suggest");
+    let suggest = suggest_opt.unwrap_or(false);
     let required = mapping_bool(&field_map, "required");
     let default = field_map
         .get(YamlValue::String("default".to_owned()))
         .cloned();
     let min = mapping_number(&field_map, "min");
     let max = mapping_number(&field_map, "max");
+    let original_choices: Vec<(String, String)> = choice_order(&field_map)
+        .into_iter()
+        .filter_map(|value| {
+            choice_label_in_map(&field_map, &value).map(|label| (value, label))
+        })
+        .collect();
+    let (choice_drafts, restore_values) = if kind == "choices" {
+        let mut drafts = Vec::with_capacity(original_choices.len());
+        let mut values = Vec::with_capacity(original_choices.len());
+        for (value, combined) in &original_choices {
+            let (icon, rest) = split_icon(combined);
+            drafts.push(ChoiceDraft {
+                label: rest.to_owned(),
+                emoji: icon.map(str::to_owned),
+            });
+            values.push(value.clone());
+        }
+        (drafts, Some(values))
+    } else {
+        (Vec::new(), None)
+    };
 
     remove_field(raw, field);
 
     let mut inverse = vec![Op::FieldAdd {
-        label,
+        label: label_for_add,
         kind: kind.to_owned(),
         list,
         suggest,
         position: Some(position),
-        choices,
+        choices: choice_drafts,
         restore_key: Some(field.to_owned()),
+        restore_values,
     }];
     let mut restore_set = HashMap::new();
+    let mut restore_unset = Vec::new();
+    if prior_label.is_none() {
+        restore_unset.push("label".to_owned());
+    }
+    // Explicit suggest:false must stay distinct from absent.
+    if suggest_opt == Some(false) {
+        restore_set.insert("suggest".to_owned(), JsonValue::Bool(false));
+    }
     if let Some(required) = required {
         restore_set.insert("required".to_owned(), JsonValue::Bool(required));
     }
@@ -1188,11 +1331,13 @@ fn apply_field_remove(
     if let Some(max) = max {
         restore_set.insert("max".to_owned(), JsonValue::from(max));
     }
-    if !restore_set.is_empty() {
+    if !restore_set.is_empty() || !restore_unset.is_empty() {
+        restore_unset.sort();
+        restore_unset.dedup();
         inverse.push(Op::FieldSet {
             field: field.to_owned(),
             set: restore_set,
-            unset: Vec::new(),
+            unset: restore_unset,
         });
     }
 
@@ -1332,19 +1477,27 @@ fn apply_choice_set(
     set: &HashMap<String, JsonValue>,
     index: usize,
     raw: &mut Mapping,
+    inputs: &ApplyInputs<'_>,
 ) -> Result<OpResult, OpError> {
     const ALLOWED: &[&str] = &["label", "emoji"];
     for key in set.keys() {
         if !ALLOWED.contains(&key.as_str()) {
             if key == "value" {
-                return Err(OpError::refusal(
+                let mut error = OpError::refusal(
                     "choice_rename_prohibited",
                     index,
                     format!(
                         "choice values never change; {value:?} keeps its stored value"
                     ),
                     MIGRATION_HINT,
-                ));
+                );
+                error.field = Some(field.to_owned());
+                error.choice = Some(value.to_owned());
+                if folder_complete(inputs.folder) {
+                    error.affected =
+                        Some(count_for(inputs.folder, field, value));
+                }
+                return Err(error);
             }
             return Err(unknown_set_key(index, key, ALLOWED, Some(field)));
         }
@@ -1606,19 +1759,13 @@ fn apply_choice_remove(
         error.affected = Some(count);
         return Err(error);
     }
-    let remaining: Vec<String> = choice_order(&field_map)
+    // Atomic batches may temporarily empty a choices mapping when later
+    // ops restore validity; usage safety stays enforced above and the final
+    // schema validation remains mandatory.
+    let _remaining: Vec<String> = choice_order(&field_map)
         .into_iter()
         .filter(|item| item != value)
         .collect();
-    if remaining.is_empty() {
-        return Err(OpError::invalid(
-            "invalid_schema",
-            index,
-            format!(
-                "choice {value:?} is the last choice on {field:?}; choices mappings must not be empty"
-            ),
-        ));
-    }
 
     let position = choice_order(&field_map)
         .iter()
@@ -1977,21 +2124,6 @@ fn remove_choice(field_map: &mut Mapping, value: &str) {
     );
 }
 
-fn choice_drafts_from_raw(field_map: &Mapping) -> Vec<ChoiceDraft> {
-    choice_order(field_map)
-        .into_iter()
-        .filter_map(|value| {
-            choice_label_in_map(field_map, &value).map(|combined| {
-                let (icon, rest) = split_icon(&combined);
-                ChoiceDraft {
-                    label: rest.to_owned(),
-                    emoji: icon.map(str::to_owned),
-                }
-            })
-        })
-        .collect()
-}
-
 fn combine_choice_label(emoji: Option<&str>, label: &str) -> String {
     match emoji {
         Some(icon) if !icon.trim().is_empty() => {
@@ -2018,10 +2150,20 @@ fn title_case(key: &str) -> String {
 }
 
 fn group_field_key(record_type: &RecordType) -> Option<String> {
+    // Share the authoritative selector with `grouping.rs::group_field`:
+    // prefer `status` choices, otherwise the first choices field.
     record_type
         .fields
         .iter()
-        .find(|field| matches!(field.kind, FieldKind::Choices(_)))
+        .find(|field| {
+            field.key == "status" && matches!(field.kind, FieldKind::Choices(_))
+        })
+        .or_else(|| {
+            record_type
+                .fields
+                .iter()
+                .find(|field| matches!(field.kind, FieldKind::Choices(_)))
+        })
         .map(|field| field.key.clone())
 }
 
@@ -2116,50 +2258,34 @@ fn field_from_raw(
     key: &str,
     map: &Mapping,
 ) -> Option<crate::native::records::schema::RecordField> {
-    use crate::native::records::schema::RecordField;
-    let label = mapping_string(map, "label").unwrap_or_else(|| title_case(key));
-    let required = mapping_bool(map, "required").unwrap_or(false);
-    let list = mapping_bool(map, "list").unwrap_or(false);
-    let suggest = mapping_bool(map, "suggest").unwrap_or(false);
-    let kind = match field_kind_name(map) {
-        "date" => FieldKind::Date,
-        "link" => FieldKind::Link,
-        "url" => {
-            return None;
-        }
-        "number" => FieldKind::Number,
-        "choices" => {
-            let choices = choice_order(map)
-                .into_iter()
-                .filter_map(|value| {
-                    choice_label_in_map(map, &value).map(|label| {
-                        crate::native::records::schema::RecordChoice {
-                            value,
-                            label,
-                        }
-                    })
-                })
-                .collect::<Vec<_>>();
-            FieldKind::Choices(choices)
-        }
-        _ => FieldKind::Text,
-    };
-    // Defaults/bounds need full YAML parsing; for newly-invalid
-    // counting the required/bounds path only needs the kind plus
-    // required/list/suggest. Return a partial field when defaults
-    // are present so callers still count required changes.
-    let _ = (map, required, list, suggest, label.clone());
-    Some(RecordField {
-        key: key.to_owned(),
-        label,
-        kind,
-        required,
-        list,
-        default: None,
-        suggest,
-        min: mapping_number(map, "min"),
-        max: mapping_number(map, "max"),
-    })
+    // Share the authoritative schema parser so URL, numeric bounds, list
+    // values, defaults, and choice identities validate exactly like the
+    // final candidate. A minimal record mapping isolates the single field.
+    use std::path::Path as StdPath;
+    let mut fields = Mapping::new();
+    fields.insert(
+        YamlValue::String(key.to_owned()),
+        YamlValue::Mapping(map.clone()),
+    );
+    let mut record = Mapping::new();
+    record.insert(
+        YamlValue::String("noun".to_owned()),
+        YamlValue::String("test".to_owned()),
+    );
+    record.insert(
+        YamlValue::String("fields".to_owned()),
+        YamlValue::Mapping(fields),
+    );
+    let value = YamlValue::Mapping(record);
+    let parsed = crate::native::records::schema::parse_album_record_schema(
+        Some(&value),
+        StdPath::new("album.md"),
+        "test",
+        None,
+        &HashMap::new(),
+        1,
+    );
+    parsed.record_type?.field(key).cloned()
 }
 
 // ---------------------------------------------------------------------------
@@ -2571,6 +2697,7 @@ fields:
             position: None,
             choices: Vec::new(),
             restore_key: None,
+            restore_values: None,
         }];
         let outcome = apply_ops(&ops, &inputs).expect("field.add applies");
         assert_eq!(outcome.derived_keys[0].as_deref(), Some("notes"));
@@ -2676,6 +2803,7 @@ fields:
                 position: None,
                 choices: Vec::new(),
                 restore_key: None,
+                restore_values: None,
             },
             Op::FieldSet {
                 field: "category".to_owned(),
@@ -2718,6 +2846,7 @@ fields:
                 position: None,
                 choices: Vec::new(),
                 restore_key: None,
+                restore_values: None,
             },
             Op::FieldMove {
                 field: "missing".to_owned(),
@@ -2746,6 +2875,7 @@ fields:
             position: None,
             choices: Vec::new(),
             restore_key: None,
+            restore_values: None,
         }];
         let error = apply_ops(&ops, &inputs).expect_err("collision refuses");
         assert_eq!(error.code, "derived_key_collision");
@@ -2759,6 +2889,7 @@ fields:
             position: None,
             choices: Vec::new(),
             restore_key: None,
+            restore_values: None,
         }];
         let error = apply_ops(&ops, &inputs).expect_err("reserved refuses");
         assert_eq!(error.code, "derived_key_reserved");
@@ -2772,6 +2903,7 @@ fields:
             position: None,
             choices: Vec::new(),
             restore_key: None,
+            restore_values: None,
         }];
         let error = apply_ops(&ops, &inputs).expect_err("empty refuses");
         assert_eq!(error.code, "derived_key_invalid");
@@ -3272,6 +3404,7 @@ fields:
             position: Some(0),
             choices: Vec::new(),
             restore_key: None,
+            restore_values: None,
         }];
         let outcome = apply_ops(&ops, &inputs).expect("prepend applies");
         assert_eq!(outcome.after_type.fields[0].key, "extra");
@@ -3285,6 +3418,7 @@ fields:
             position: Some(len),
             choices: Vec::new(),
             restore_key: None,
+            restore_values: None,
         }];
         apply_ops(&ops, &inputs).expect("append applies");
 
@@ -3296,6 +3430,7 @@ fields:
             position: Some(len + 1),
             choices: Vec::new(),
             restore_key: None,
+            restore_values: None,
         }];
         let error = apply_ops(&ops, &inputs).expect_err("oob refuses");
         assert_eq!(error.code, "position_out_of_range");
@@ -3375,6 +3510,7 @@ fields:
             position: Some(0),
             choices: Vec::new(),
             restore_key: None,
+            restore_values: None,
         }];
         let outcome = apply_ops(&forward, &inputs).expect("add applies");
         let after_raw = outcome.after_raw.clone();
@@ -3473,5 +3609,201 @@ fields:
         .expect("wire examples parse");
         assert_eq!(envelope.ops.len(), 3);
         assert_eq!(envelope.ops[2].name(), "choice.add");
+    }
+
+    #[test]
+    fn group_prefers_status_over_first_choices() {
+        let raw = record_raw(
+            r#"
+noun: restaurant
+fields:
+  category:
+    values:
+      family: Family
+  status:
+    values:
+      ready: Ready
+"#,
+        );
+        let (record_type, _) = parse_type(&raw, "eat");
+        assert_eq!(
+            group_field_key(&record_type),
+            Some("status".to_owned()),
+            "status wins even when it is not first"
+        );
+        let moved = record_raw(
+            r#"
+noun: restaurant
+fields:
+  status:
+    values:
+      ready: Ready
+  category:
+    values:
+      family: Family
+"#,
+        );
+        let (moved_type, _) = parse_type(&moved, "eat");
+        assert_eq!(group_field_key(&moved_type), Some("status".to_owned()));
+    }
+
+    #[test]
+    fn required_url_counts_newly_invalid() {
+        let vault = TempVault::new();
+        vault.write("eat/example.md", "---\ntitle: Example\n---\n# Example\n");
+        let mut catalog = RecordCatalog::new(vault.path.clone());
+        let folder = catalog.folder("eat").clone();
+        let raw = record_raw(
+            r#"
+noun: restaurant
+fields:
+  website:
+    values: url
+"#,
+        );
+        let (before_type, before_plural) = parse_type(&raw, "eat");
+        let inputs =
+            inputs_for(&raw, &before_type, before_plural.as_deref(), &folder);
+        let ops = vec![Op::FieldSet {
+            field: "website".to_owned(),
+            set: HashMap::from([(
+                "required".to_owned(),
+                JsonValue::Bool(true),
+            )]),
+            unset: Vec::new(),
+        }];
+        let outcome = apply_ops(&ops, &inputs).expect("required url applies");
+        assert_eq!(outcome.per_op[0].newly_invalid, 1);
+    }
+
+    #[test]
+    fn atomic_last_choice_replacement_allows_empty_intermediate() {
+        let raw = record_raw(
+            r#"
+noun: restaurant
+fields:
+  category:
+    values:
+      old_key: Old label
+"#,
+        );
+        let (before_type, before_plural) = parse_type(&raw, "eat");
+        let (_vault, mut catalog) = empty_folder();
+        let folder = catalog.folder("eat").clone();
+        let inputs =
+            inputs_for(&raw, &before_type, before_plural.as_deref(), &folder);
+        let ops = vec![
+            Op::ChoiceRemove {
+                field: "category".to_owned(),
+                value: "old_key".to_owned(),
+            },
+            Op::ChoiceAdd {
+                field: "category".to_owned(),
+                label: "New label".to_owned(),
+                emoji: None,
+                position: Some(0),
+                restore_value: None,
+            },
+        ];
+        let outcome =
+            apply_ops(&ops, &inputs).expect("atomic replacement applies");
+        assert_eq!(outcome.per_op.len(), 2);
+        assert!(outcome.after_type.field("category").is_some());
+    }
+
+    #[test]
+    fn prohibited_kind_change_carries_target_and_count() {
+        let vault = TempVault::new();
+        vault.write(
+            "eat/one.md",
+            "---\ntitle: One\nstatus: ready\n---\n# One\n",
+        );
+        let mut catalog = RecordCatalog::new(vault.path.clone());
+        let folder = catalog.folder("eat").clone();
+        let raw = record_raw(
+            r#"
+noun: restaurant
+fields:
+  status:
+    values:
+      ready: Ready
+"#,
+        );
+        let (before_type, before_plural) = parse_type(&raw, "eat");
+        let inputs =
+            inputs_for(&raw, &before_type, before_plural.as_deref(), &folder);
+        let ops = vec![Op::FieldSet {
+            field: "status".to_owned(),
+            set: HashMap::from([(
+                "kind".to_owned(),
+                JsonValue::String("text".to_owned()),
+            )]),
+            unset: Vec::new(),
+        }];
+        let error = apply_ops(&ops, &inputs).expect_err("kind refuses");
+        assert_eq!(error.code, "kind_change_prohibited");
+        assert_eq!(error.field, Some("status".to_owned()));
+        assert_eq!(error.affected, Some(1));
+    }
+
+    #[test]
+    fn field_remove_inverse_preserves_keys_and_absent_label() {
+        let raw = record_raw(
+            r#"
+noun: restaurant
+fields:
+  category:
+    label: Category
+    values:
+      old_key: Display label
+      other_key: Another label
+"#,
+        );
+        let (before_type, before_plural) = parse_type(&raw, "eat");
+        let (_vault, mut catalog) = empty_folder();
+        let folder = catalog.folder("eat").clone();
+        let inputs =
+            inputs_for(&raw, &before_type, before_plural.as_deref(), &folder);
+        let outcome = apply_ops(
+            &[Op::FieldRemove {
+                field: "category".to_owned(),
+            }],
+            &inputs,
+        )
+        .expect("remove applies");
+        assert_eq!(outcome.inverse_ops.len(), 1);
+        let Op::FieldAdd {
+            restore_key,
+            restore_values,
+            choices,
+            ..
+        } = &outcome.inverse_ops[0]
+        else {
+            panic!("inverse is field.add with restore");
+        };
+        assert_eq!(restore_key.as_deref(), Some("category"));
+        assert_eq!(
+            restore_values.as_deref(),
+            Some(&["old_key".to_owned(), "other_key".to_owned()][..])
+        );
+        assert_eq!(choices.len(), 2);
+        let (after_type, after_plural) = parse_type(&outcome.after_raw, "eat");
+        let after_inputs = ApplyInputs {
+            before_raw: &outcome.after_raw,
+            before_type: &after_type,
+            before_plural: after_plural.as_deref(),
+            stem: "eat",
+            folder: &folder,
+            index_refs: &EMPTY_REFS,
+            other_fields: &[],
+            today: NaiveDate::from_ymd_opt(2026, 11, 8).expect("today"),
+        };
+        let restored = apply_ops(&outcome.inverse_ops, &after_inputs)
+            .expect("inverse validates");
+        assert!(restored.after_type.field("category").is_some());
+        assert_eq!(
+            restored.after_type.field("category").unwrap().kind,
+            before_type.field("category").unwrap().kind
+        );
     }
 }

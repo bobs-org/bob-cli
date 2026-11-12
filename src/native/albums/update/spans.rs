@@ -113,6 +113,19 @@ pub(crate) fn apply_schema_ops(
             Some("record".to_owned()),
         ));
     }
+    // Net semantic no-ops return original bytes before any canonical
+    // emission or index repair, comparing ordered raw schema/presence
+    // state rather than emitted bytes. Explicit absent-versus-false/unset
+    // stays distinct because presence is part of the ordered mapping.
+    // Plural lives inside the record mapping when authored; derived
+    // display plurals do not affect byte identity.
+    if mappings_equal_ordered(&initial_raw, &outcome.after_raw) {
+        return Ok(SchemaSpanEdit {
+            contents: markdown.to_owned(),
+            changed: false,
+            inverse_ops: Vec::new(),
+        });
+    }
 
     let mut current_text = markdown.to_owned();
     let mut current_raw = initial_raw;
@@ -889,6 +902,11 @@ fn patch_mapping(
                 lines, entry, old_value, new_value, &path, newline, overrides,
             )?;
             output.extend(raw);
+        } else if let Some(prior) = overrides.get(&path) {
+            // Ordinary inverse insertion cannot restore prior bytes through
+            // canonical emission; emit the server-resolved prior entry
+            // directly after validating its key and indentation.
+            output.extend(validate_absent_restore(prior, key, indent, &path)?);
         } else {
             output.extend(render_entry(key, new_value, indent, newline));
         }
@@ -916,6 +934,67 @@ fn patch_entry(
         return Ok(lines[entry.start..=entry.end].to_vec());
     }
     let (inline, _) = line_value(lines, entry)?;
+    // Flow empty mappings (`fields: {}`) cannot be patched through the block
+    // path above, yet inverse restores need their nested absent entries.
+    // When overrides name nested paths under this entry, rebuild the block
+    // from server-resolved priors instead of canonical emission.
+    if let (Some(old_map), Some(new_map)) = (old.as_mapping(), new.as_mapping())
+    {
+        let has_nested_override = overrides
+            .keys()
+            .any(|key| key.starts_with(&format!("{path}.")));
+        if has_nested_override && !new_map.is_empty() && inline.trim() == "{}" {
+            let child_indent = entry.indent + 2;
+            let mut result = lines[entry.key_line..entry.key_line + 1].to_vec();
+            // Strip the flow `{}` so the block children have a clean parent.
+            // Block parents carry no trailing gap; comments keep their
+            // leading whitespace via `trailing`.
+            {
+                let key_line = &mut result[0];
+                let prefix = &key_line.text[..entry.colon + 1];
+                let (_, comment) =
+                    split_comment(&key_line.text[entry.colon + 1..]);
+                let trailing = whitespace_before_comment(
+                    &key_line.text[entry.colon + 1..],
+                );
+                key_line.text = format!("{prefix}{trailing}{comment}");
+                if key_line.ending.is_empty() {
+                    key_line.ending = newline.to_owned();
+                }
+            }
+            for (key_value, new_value) in new_map {
+                let key = key_value.as_str().ok_or_else(|| {
+                    error(
+                        "unsupported_yaml",
+                        "schema mapping keys must be strings",
+                        None,
+                        None,
+                    )
+                })?;
+                let child_path = format!("{path}.{key}");
+                if let Some(prior) = overrides.get(&child_path) {
+                    // Nested absent entries restore whole subtrees; deeper
+                    // overrides under the same path are contained in `prior`.
+                    result.extend(validate_absent_restore(
+                        prior,
+                        key,
+                        child_indent,
+                        &child_path,
+                    )?);
+                } else {
+                    result.extend(render_entry(
+                        key,
+                        new_value,
+                        child_indent,
+                        newline,
+                    ));
+                }
+            }
+            // Ensure the old flow value does not leak into the new block.
+            let _ = old_map;
+            return Ok(result);
+        }
+    }
     if let (Some(old_map), Some(new_map)) = (old.as_mapping(), new.as_mapping())
         && inline.is_empty()
     {
@@ -989,6 +1068,13 @@ fn ordered_yaml_eq(left: &YamlValue, right: &YamlValue) -> bool {
     }
 }
 
+fn mappings_equal_ordered(left: &Mapping, right: &Mapping) -> bool {
+    ordered_yaml_eq(
+        &YamlValue::Mapping(left.clone()),
+        &YamlValue::Mapping(right.clone()),
+    )
+}
+
 fn validate_restore_fragment(
     prior: &str,
     entry: &Entry,
@@ -1036,6 +1122,66 @@ fn validate_restore_fragment(
     Ok(fragment)
 }
 
+fn validate_absent_restore(
+    prior: &str,
+    key: &str,
+    indent: usize,
+    path: &str,
+) -> Result<Vec<Line>, SpanError> {
+    // Restoration of an absent entry: `expected` was `None` (already checked
+    // against the current note) and `prior` carries the exact server-resolved
+    // bytes. Check the resolved path, key, and indentation; never trust
+    // client offsets.
+    if has_yaml_feature(&split_lines(prior)) {
+        return Err(error(
+            "schema_restore_invalid",
+            "restore span contains an anchor, alias, or tag",
+            None,
+            Some(path.to_owned()),
+        ));
+    }
+    let fragment = split_lines(prior);
+    let first = fragment
+        .iter()
+        .position(|line| !blank_or_comment(&line.text))
+        .ok_or_else(|| {
+            error(
+                "schema_restore_invalid",
+                "restore entry is empty",
+                None,
+                Some(path.to_owned()),
+            )
+        })?;
+    let actual_indent = indentation(&fragment[first].text);
+    let (parsed_key, _) = parse_key(&fragment[first].text, actual_indent)
+        .ok_or_else(|| {
+            error(
+                "schema_restore_invalid",
+                "restore bytes do not begin with a YAML key",
+                None,
+                Some(path.to_owned()),
+            )
+        })?;
+    if parsed_key != key || actual_indent != indent {
+        return Err(error(
+            "schema_restore_invalid",
+            "restore bytes do not match the resolved schema key and indentation",
+            None,
+            Some(path.to_owned()),
+        ));
+    }
+    let top = block_entries(&fragment, first, fragment.len(), indent)?;
+    if top.len() != 1 {
+        return Err(error(
+            "schema_restore_invalid",
+            "restore bytes must contain exactly one schema entry",
+            None,
+            Some(path.to_owned()),
+        ));
+    }
+    Ok(fragment)
+}
+
 fn replace_entry_value(
     lines: &[Line],
     entry: &Entry,
@@ -1045,9 +1191,12 @@ fn replace_entry_value(
     let mut key_line = lines[entry.key_line].clone();
     let prefix = &key_line.text[..entry.colon + 1];
     let (_, comment) = split_comment(&key_line.text[entry.colon + 1..]);
-    let gap = gap_after_colon(&key_line.text[entry.colon + 1..]);
     if is_nonempty_container(value) {
-        key_line.text = format!("{prefix}{gap}{comment}");
+        // Block parents carry no trailing gap; comments keep their leading
+        // whitespace so `values:` never gains a trailing space.
+        let trailing =
+            whitespace_before_comment(&key_line.text[entry.colon + 1..]);
+        key_line.text = format!("{prefix}{trailing}{comment}");
         if key_line.ending.is_empty() {
             key_line.ending = newline.to_owned();
         }
@@ -1055,6 +1204,7 @@ fn replace_entry_value(
         output.extend(render_container(value, entry.indent + 2, newline));
         output
     } else {
+        let gap = gap_after_colon(&key_line.text[entry.colon + 1..]);
         let trailing =
             whitespace_before_comment(&key_line.text[entry.colon + 1..]);
         key_line.text =
@@ -1606,6 +1756,7 @@ mod tests {
                 position: None,
                 choices: Vec::new(),
                 restore_key: None,
+                restore_values: None,
             },
             Op::FieldSet {
                 field: "keywords".to_owned(),
@@ -1623,5 +1774,138 @@ mod tests {
         let (_, actual) = parse_record_mapping(&edit.contents).unwrap();
         assert!(actual.get(YamlValue::String("fields".to_owned())).is_some());
         inverse_roundtrip(original, &edit, &raw, &ty);
+    }
+
+    #[test]
+    fn unlabeled_field_and_diverged_choices_round_trip_byte_identical() {
+        // Unlabeled text field with unusual quoting and comments.
+        let original = concat!(
+            "---\nrecord:\n  noun: place\n  label: Place\n  fields:\n",
+            "    title_note: # keep field comment\n",
+            "      suggest: true # keep suggest\n",
+            "---\n",
+        );
+        let (edit, raw, ty) = apply(
+            original,
+            &[Op::FieldRemove {
+                field: "title_note".to_owned(),
+            }],
+        );
+        inverse_roundtrip(original, &edit, &raw, &ty);
+
+        // Choices whose stored keys differ from their labels.
+        let original = concat!(
+            "---\nrecord:\n  noun: place\n  label: Place\n  fields:\n",
+            "    category:\n",
+            "      label: Category\n",
+            "      values:\n",
+            "        old_key: Display label\n",
+            "        other_key: Another label\n",
+            "---\n",
+        );
+        let (edit, raw, ty) = apply(
+            original,
+            &[Op::FieldRemove {
+                field: "category".to_owned(),
+            }],
+        );
+        assert_eq!(edit.inverse_ops.len(), 1);
+        inverse_roundtrip(original, &edit, &raw, &ty);
+    }
+
+    #[test]
+    fn net_semantic_noop_returns_original_bytes() {
+        let original = concat!(
+            "---\nrecord:\n  noun: place\n  label: Place\n  fields:\n",
+            "    title_note:\n",
+            "      label: \"Original\"\n",
+            "---\n",
+        );
+        let operations = [
+            Op::FieldSet {
+                field: "title_note".to_owned(),
+                set: HashMap::from([(
+                    "label".to_owned(),
+                    serde_json::json!("Temporary"),
+                )]),
+                unset: Vec::new(),
+            },
+            Op::FieldSet {
+                field: "title_note".to_owned(),
+                set: HashMap::from([(
+                    "label".to_owned(),
+                    serde_json::json!("Original"),
+                )]),
+                unset: Vec::new(),
+            },
+        ];
+        let (edit, _, _) = apply(original, &operations);
+        assert!(!edit.changed, "cancelling batch is a net no-op");
+        assert_eq!(edit.contents, original);
+        assert!(edit.inverse_ops.is_empty());
+    }
+
+    #[test]
+    fn tampered_restore_cannot_change_unrelated_fields() {
+        let original = concat!(
+            "---\nrecord:\n  noun: place\n  label: Place\n  fields:\n",
+            "    status:\n",
+            "      values:\n",
+            "        ready: Ready\n",
+            "---\n",
+        );
+        let (edit, _, _) = apply(
+            original,
+            &[Op::FieldRemove {
+                field: "status".to_owned(),
+            }],
+        );
+        // Tamper the restoration to target an unrelated field.
+        let mut tampered = edit.inverse_ops.clone();
+        if let Some(first) = tampered.first_mut()
+            && let Some(restoration) = first.restore.as_mut()
+            && let Some(span) = restoration.spans.first_mut()
+        {
+            span.key_path = "record.fields.other".to_owned();
+        }
+        let inverse: Vec<Op> =
+            tampered.iter().map(|item| item.op.clone()).collect();
+        let restorations: Vec<Option<Restoration>> =
+            tampered.iter().map(|item| item.restore.clone()).collect();
+        let parsed = parse_record_mapping(&edit.contents).unwrap().1;
+        let parsed_type = parse_album_record_schema(
+            Some(&YamlValue::Mapping(parsed.clone())),
+            Path::new("eat.md"),
+            "eat",
+            None,
+            &HashMap::new(),
+            1,
+        )
+        .record_type
+        .unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let mut catalog = RecordCatalog::new(temp.path());
+        let folder = catalog.folder("eat");
+        let inputs = ApplyInputs {
+            before_raw: &parsed,
+            before_type: &parsed_type,
+            before_plural: None,
+            stem: "eat",
+            folder,
+            index_refs: &IndexRefs::default(),
+            other_fields: &[],
+            today: NaiveDate::from_ymd_opt(2026, 11, 12).unwrap(),
+        };
+        let outcome =
+            ops::apply_ops(&inverse, &inputs).expect("inverse validates");
+        let tampered_result = apply_schema_ops(
+            &edit.contents,
+            &inverse,
+            &restorations,
+            &outcome,
+            &inputs,
+        );
+        assert!(tampered_result.is_err(), "tampered restoration must refuse");
+        assert_eq!(tampered_result.unwrap_err().code, "schema_restore_invalid");
     }
 }
