@@ -473,7 +473,7 @@ fn dirty_paths(
     if rel_paths.is_empty() {
         return Ok(Vec::new());
     }
-    let output = ob::git_command(bob_dir, child_env)
+    let output = ob::git_command_literal(bob_dir, child_env)
         .arg("status")
         .arg("--porcelain")
         .arg("--")

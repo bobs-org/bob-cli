@@ -676,7 +676,7 @@ pub(crate) fn unstage_paths(
     child_env: &ob::ChildEnv,
     paths: &[PathBuf],
 ) -> String {
-    let output = ob::git_command(vault, child_env)
+    let output = ob::git_command_literal(vault, child_env)
         .arg("reset")
         .arg("--quiet")
         .arg("HEAD")
@@ -782,6 +782,39 @@ mod tests {
                 Some(OsStr::new("/nonexistent-bob-cli-test-config.yml")),
             ),
         ])
+    }
+
+    #[test]
+    fn unstage_paths_leaves_a_glob_matching_sibling_staged() {
+        let temp = tempfile::tempdir().expect("scratch dir");
+        let vault = temp.path();
+        git(vault, &["init", "-q"]);
+        git(vault, &["config", "user.email", "t@t"]);
+        git(vault, &["config", "user.name", "t"]);
+        fs::write(vault.join("What is Rust?.md"), "old named\n")
+            .expect("named note");
+        fs::write(vault.join("What is RustX.md"), "old sibling\n")
+            .expect("sibling note");
+        git(vault, &["add", "-A"]);
+        git(vault, &["commit", "-qm", "init"]);
+        fs::write(vault.join("What is Rust?.md"), "new named\n")
+            .expect("edit named note");
+        fs::write(vault.join("What is RustX.md"), "new sibling\n")
+            .expect("edit sibling note");
+        git(vault, &["add", "-A"]);
+
+        let report = unstage_paths(
+            vault,
+            &ob::child_env(),
+            &[PathBuf::from("What is Rust?.md")],
+        );
+
+        assert_eq!(report, "", "unstage succeeds");
+        assert_eq!(
+            git_lines(vault, &["diff", "--cached", "--name-only"]),
+            vec!["What is RustX.md".to_string()],
+            "unstaging the question-mark filename must not unstage its glob sibling"
+        );
     }
 
     fn one_file_plan(before: &str, after: &str) -> Vec<FileRewrite> {

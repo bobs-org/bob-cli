@@ -1830,7 +1830,7 @@ pub(crate) fn git_path_is_dirty(
     child_env: &ob::ChildEnv,
     relative: &Path,
 ) -> Result<bool, String> {
-    let output = ob::git_command(vault, child_env)
+    let output = ob::git_command_literal(vault, child_env)
         .arg("status")
         .arg("--porcelain")
         .arg("--")
@@ -2014,6 +2014,38 @@ pub(crate) fn commit_subject(subject: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dirty_check_ignores_a_glob_matching_sibling() {
+        let vault = tempfile::tempdir().expect("temporary vault");
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(vault.path())
+                .args(args)
+                .status()
+                .expect("git runs");
+            assert!(status.success(), "git {args:?} failed");
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "t@t"]);
+        git(&["config", "user.name", "t"]);
+        fs::write(vault.path().join("What is Rust?.md"), "named\n").unwrap();
+        fs::write(vault.path().join("What is RustX.md"), "sibling\n").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "init"]);
+        fs::write(vault.path().join("What is RustX.md"), "edited sibling\n")
+            .unwrap();
+
+        let dirty = git_path_is_dirty(
+            vault.path(),
+            &ob::child_env(),
+            Path::new("What is Rust?.md"),
+        )
+        .expect("git status");
+
+        assert!(!dirty, "a dirty glob sibling must not mark the clean note");
+    }
 
     #[test]
     fn image_imports_promote_atomically_and_reuse_identical_files() {
