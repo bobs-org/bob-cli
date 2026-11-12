@@ -62,6 +62,7 @@ Examples:
   bob gcal sync               Write today's Events and MEET links
   bob gcal sync -F            Rewrite today's Events from Google as on a first sync
   bob gcal sync -d            Preview the exact Markdown a sync writes
+  bob gcal sync -n 7          Catch up the last week, today included
   bob gcal logout -y          Remove Bob's Calendar grant only
 
 Environment:

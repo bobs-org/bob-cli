@@ -47,7 +47,7 @@ bob gcal [list] [-a] [-b|--bob-dir DIR] [-D|--day DAY] [-f|--format table|json]
 bob gcal login [-a|--account EMAIL] [-c|--credentials FILE] [-f|--format human|json] [-m|--manual]
 bob gcal logout [-a|--account EMAIL] [-f|--format human|json] [-y|--force]
 bob gcal note [-A|--adopt] [-a|--all] [-b|--bob-dir DIR] [-C|--calendar ID] [-c|--clear] [-D|--day DAY] [-d|--dry-run] [-e|--edit] [-f|--format human|json] [-h|--help] [-i|--event-id ID] [-l|--list] [-s|--scope event|series] [QUERY...] [[--] TEXT...]
-bob gcal sync [-b|--bob-dir DIR] [-D|--day DAY] [-d|--dry-run] [-f|--format human|json] [-q|--quiet]
+bob gcal sync [-b|--bob-dir DIR] [-D|--day DAY] [-d|--dry-run] [-F|--force] [-f|--format human|json] [-h|--help] [-n|--last-n-days N] [-q|--quiet]
 ```
 
 Running `bob gcal` with no subcommand runs `bob gcal list`. The list is
@@ -437,15 +437,19 @@ template already has a Pomodoros section.
 bob gcal sync
 bob gcal sync -D tomorrow
 bob gcal sync -D today -D tomorrow
+bob gcal sync -n 7
 bob gcal sync -d
 bob gcal sync -F
 bob gcal sync -F -d
 bob gcal sync -q
 ```
 
-Repeated `-D` values resolve before any Google fetch; duplicate dates collapse
-and the remaining days run in ascending date order. Bob fetches each configured
-calendar once for each contiguous run of selected days, then reconciles the
+Repeated `-D` values resolve before any Google fetch; duplicate dates collapse.
+`-n N` adds the N local days ending today (`-n 2` is equivalent to
+`-D today -D yesterday`) and combines with explicit `-D` values; the merged
+dates run in ascending order. N must be an integer from 1 through 366. Bob
+fetches each configured calendar once for each contiguous run of selected
+days, then reconciles the
 days in order so earlier note and journal changes can inform later days. All
 Google fetches finish before the first write. A waiting or held day does not
 stop the run. `-F` resets every selected day's sync journal and reapplies that

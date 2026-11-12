@@ -4353,6 +4353,139 @@ fn invalid_repeated_day_fails_before_any_google_call_or_write() {
 }
 
 #[test]
+fn last_n_days_matches_repeated_days_in_output_notes_and_journal() {
+    let last_n = GcalEnv::new("bob-cli-gcal-sync-last-n");
+    let repeated = GcalEnv::new("bob-cli-gcal-sync-last-n-expanded");
+    for env in [&last_n, &repeated] {
+        prepare(env);
+        write_daily_note(
+            env,
+            "2026-10-29",
+            "# Thursday 2026-10-29\n\n## Pomodoros\n",
+        );
+    }
+    let last_n_fake = FakeGog::new(&last_n, "fake-gog");
+    let repeated_fake = FakeGog::new(&repeated, "fake-gog");
+    for fake in [&last_n_fake, &repeated_fake] {
+        fake.events_json("{\"events\":[],\"nextPageToken\":null}");
+    }
+
+    let counted = sync_output(&last_n, &last_n_fake, &["-n", "2"]);
+    let expanded = sync_output(
+        &repeated,
+        &repeated_fake,
+        &["-D", "today", "-D", "yesterday"],
+    );
+    assert_eq!(counted.status.code(), Some(0), "{}", stderr(&counted));
+    assert_eq!(expanded.status.code(), Some(0), "{}", stderr(&expanded));
+    assert_eq!(stdout(&counted), stdout(&expanded));
+    assert_eq!(
+        fs::read_to_string(last_n.vault().join("2026/20261029.md")).unwrap(),
+        fs::read_to_string(repeated.vault().join("2026/20261029.md")).unwrap()
+    );
+    assert_eq!(today_note(&last_n), today_note(&repeated));
+    assert_eq!(journal_lines(&last_n), journal_lines(&repeated));
+    assert_eq!(calendar_event_call_count(&last_n_fake), 1);
+    assert_eq!(calendar_event_call_count(&repeated_fake), 1);
+}
+
+#[test]
+fn last_one_day_keeps_the_single_day_json_shape() {
+    let counted = GcalEnv::new("bob-cli-gcal-sync-last-one");
+    let explicit = GcalEnv::new("bob-cli-gcal-sync-last-one-explicit");
+    prepare(&counted);
+    prepare(&explicit);
+    let counted_fake = FakeGog::new(&counted, "fake-gog");
+    let explicit_fake = FakeGog::new(&explicit, "fake-gog");
+    counted_fake.events_json("{\"events\":[],\"nextPageToken\":null}");
+    explicit_fake.events_json("{\"events\":[],\"nextPageToken\":null}");
+
+    let counted_output =
+        sync_output(&counted, &counted_fake, &["-n", "1", "-f", "json"]);
+    let explicit_output =
+        sync_output(&explicit, &explicit_fake, &["-D", "today", "-f", "json"]);
+    assert_eq!(
+        counted_output.status.code(),
+        Some(0),
+        "{}",
+        stderr(&counted_output)
+    );
+    assert_eq!(
+        explicit_output.status.code(),
+        Some(0),
+        "{}",
+        stderr(&explicit_output)
+    );
+    assert_eq!(stdout(&counted_output), stdout(&explicit_output));
+    let report: Value = serde_json::from_slice(&counted_output.stdout)
+        .expect("single day JSON");
+    assert!(report.get("days").is_none());
+    assert_eq!(report["day"], "2026-10-30");
+}
+
+#[test]
+fn last_n_days_unions_with_explicit_days_in_one_sorted_run() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-last-n-union");
+    prepare(&env);
+    write_daily_note(
+        &env,
+        "2026-10-29",
+        "# Thursday 2026-10-29\n\n## Pomodoros\n",
+    );
+    write_daily_note(
+        &env,
+        "2026-10-31",
+        "# Saturday 2026-10-31\n\n## Pomodoros\n",
+    );
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json("{\"events\":[],\"nextPageToken\":null}");
+
+    let output =
+        sync_output(&env, &fake, &["-n", "2", "-D", "tomorrow", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let report: Value =
+        serde_json::from_slice(&output.stdout).expect("JSON wrapper");
+    assert_eq!(report["days"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        report["days"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|day| day["day"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["2026-10-29", "2026-10-30", "2026-10-31"]
+    );
+    assert_eq!(calendar_event_call_count(&fake), 1, "{:?}", fake.calls());
+}
+
+#[test]
+fn invalid_last_n_days_fails_before_any_google_call() {
+    for value in ["0", "abc", "367"] {
+        let env = GcalEnv::new("bob-cli-gcal-sync-last-n-invalid");
+        prepare(&env);
+        let fake = FakeGog::new(&env, "fake-gog");
+        fake.events_json("{\"events\":[],\"nextPageToken\":null}");
+
+        let output = sync_output(&env, &fake, &["-n", value, "-f", "json"]);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{value}: {}",
+            stderr(&output)
+        );
+        let report: Value =
+            serde_json::from_slice(&output.stdout).expect("error JSON");
+        assert_eq!(report["error"]["kind"], "bad_last_n_days", "{value}");
+        assert_eq!(
+            report["error"]["hint"],
+            "use an integer between 1 and 366 (1 = today only)",
+            "{value}"
+        );
+        assert!(fake.calls().is_empty(), "{value}: {:?}", fake.calls());
+    }
+}
+
+#[test]
 fn waiting_day_does_not_block_the_next_selected_day() {
     let env = GcalEnv::new("bob-cli-gcal-sync-multi-waiting");
     prepare(&env);

@@ -12,7 +12,7 @@ use std::{
     time::Duration,
 };
 
-use chrono::{NaiveDate, Timelike};
+use chrono::{Duration as ChronoDuration, NaiveDate, Timelike};
 use serde_json::{json, Value};
 
 use super::{
@@ -91,7 +91,17 @@ fn record_last_error(
             .iter()
             .filter_map(|value| classify::resolve_day(value, today).ok())
             .min()
-            .or_else(|| args.days.is_empty().then_some(today))
+            .into_iter()
+            .chain(
+                args.last_n_days
+                    .as_deref()
+                    .and_then(|value| last_n_days_start(value, today).ok()),
+            )
+            .min()
+            .or_else(|| {
+                (args.days.is_empty() && args.last_n_days.is_none())
+                    .then_some(today)
+            })
     });
     let Some(day) = day else {
         return;
@@ -288,7 +298,38 @@ fn resolve_days(
     for value in values {
         days.insert(classify::resolve_day(&value, today)?);
     }
+    if let Some(value) = args.last_n_days.as_deref() {
+        let start = last_n_days_start(value, today)?;
+        days.extend(start.iter_days().take_while(|day| *day <= today));
+    }
     Ok(days.into_iter().collect())
+}
+
+fn last_n_days_start(
+    value: &str,
+    today: NaiveDate,
+) -> Result<NaiveDate, GcalError> {
+    let n = value
+        .trim()
+        .parse::<u32>()
+        .ok()
+        .filter(|n| (1..=366).contains(n));
+    let Some(n) = n else {
+        return Err(GcalError::setup(
+            "bad_last_n_days",
+            format!("invalid last-n-days value {value:?}"),
+        )
+        .with_hint("use an integer between 1 and 366 (1 = today only)"));
+    };
+    today
+        .checked_sub_signed(ChronoDuration::days(i64::from(n - 1)))
+        .ok_or_else(|| {
+            GcalError::setup(
+                "bad_last_n_days",
+                format!("last-n-days value {n} extends before the supported date range"),
+            )
+            .with_hint("use an integer between 1 and 366 (1 = today only)")
+        })
 }
 
 fn sync_day(
@@ -717,6 +758,7 @@ pub(super) fn apply_note_day(
     let args = SyncArgs {
         bob_dir: Some(vault.to_path_buf()),
         days: vec![day.to_string()],
+        last_n_days: None,
         dry_run: false,
         force: false,
         format: super::cli::HumanFormat::Human,
@@ -2436,5 +2478,55 @@ mod waiting_tests {
     #[test]
     fn missing_note_has_its_own_code() {
         assert_eq!(WaitingReason::NoteMissing.code(), "note_missing");
+    }
+}
+
+#[cfg(test)]
+mod resolve_days_tests {
+    use super::*;
+
+    fn args(days: &[&str], last_n_days: Option<&str>) -> SyncArgs {
+        SyncArgs {
+            bob_dir: None,
+            days: days.iter().map(|day| (*day).to_string()).collect(),
+            last_n_days: last_n_days.map(str::to_string),
+            dry_run: false,
+            force: false,
+            format: super::super::cli::HumanFormat::Human,
+            quiet: false,
+        }
+    }
+
+    #[test]
+    fn last_n_days_expands_and_unions_with_explicit_days() {
+        let today = NaiveDate::from_ymd_opt(2026, 10, 30).unwrap();
+        assert_eq!(
+            resolve_days(&args(&["today"], Some("2")), today).unwrap(),
+            [NaiveDate::from_ymd_opt(2026, 10, 29).unwrap(), today,]
+        );
+        assert_eq!(
+            resolve_days(&args(&["today", "tomorrow"], Some("2")), today)
+                .unwrap(),
+            [
+                NaiveDate::from_ymd_opt(2026, 10, 29).unwrap(),
+                today,
+                NaiveDate::from_ymd_opt(2026, 10, 31).unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn invalid_last_n_days_has_structured_setup_error_and_hint() {
+        let today = NaiveDate::from_ymd_opt(2026, 10, 30).unwrap();
+        for value in ["0", "-1", "abc", "367"] {
+            let error = resolve_days(&args(&["today"], Some(value)), today)
+                .expect_err("invalid count");
+            assert_eq!(error.kind(), "bad_last_n_days", "{value}");
+            assert_eq!(
+                error.hint(),
+                Some("use an integer between 1 and 366 (1 = today only)"),
+                "{value}"
+            );
+        }
     }
 }

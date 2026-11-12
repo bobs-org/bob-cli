@@ -37,7 +37,7 @@ pub(crate) fn build_cli() -> ClapCommand {
 }
 
 fn top_after_help() -> &'static str {
-    "Running `bob gcal` with no command runs `bob gcal list`.\n\nExamples:\n  bob gcal                    Show today's events and what sync would do\n  bob gcal -D tomorrow        List tomorrow in Bob's timezone\n  bob gcal -a -f json         Include omitted events as JSON\n  bob gcal login              Connect Google Calendar in one guided step\n  bob gcal login -a EMAIL     Sign in as this account\n  bob gcal login -c PATH      Replace Bob's stored Desktop-app client JSON\n  bob gcal login -m           Paste the redirect address (automatic over SSH)\n  bob gcal calendars          List calendars with ids for config\n  bob gcal doctor             Diagnose gog, the client, and the vault\n  bob gcal note               List private event notes for the next 90 days\n  bob gcal note -a            List every upcoming event, noted or not\n  bob gcal note deerwood      Show one event and its private note\n  bob gcal sync               Write today's Events and MEET links\n  bob gcal sync -F            Rewrite today's Events from Google as on a first sync\n  bob gcal sync -d            Preview the exact Markdown a sync writes\n  bob gcal logout -y          Remove Bob's Calendar grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH\n  BOB_GCAL_BROWSER   Browser executable; selects browser sign-in (otherwise automatic)"
+    "Running `bob gcal` with no command runs `bob gcal list`.\n\nExamples:\n  bob gcal                    Show today's events and what sync would do\n  bob gcal -D tomorrow        List tomorrow in Bob's timezone\n  bob gcal -a -f json         Include omitted events as JSON\n  bob gcal login              Connect Google Calendar in one guided step\n  bob gcal login -a EMAIL     Sign in as this account\n  bob gcal login -c PATH      Replace Bob's stored Desktop-app client JSON\n  bob gcal login -m           Paste the redirect address (automatic over SSH)\n  bob gcal calendars          List calendars with ids for config\n  bob gcal doctor             Diagnose gog, the client, and the vault\n  bob gcal note               List private event notes for the next 90 days\n  bob gcal note -a            List every upcoming event, noted or not\n  bob gcal note deerwood      Show one event and its private note\n  bob gcal sync               Write today's Events and MEET links\n  bob gcal sync -F            Rewrite today's Events from Google as on a first sync\n  bob gcal sync -d            Preview the exact Markdown a sync writes\n  bob gcal sync -n 7          Catch up the last week, today included\n  bob gcal logout -y          Remove Bob's Calendar grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH\n  BOB_GCAL_BROWSER   Browser executable; selects browser sign-in (otherwise automatic)"
 }
 
 fn calendars_command() -> ClapCommand {
@@ -127,7 +127,8 @@ fn sync_command() -> ClapCommand {
         .long_about(
             "Write one or more days of Events rows and MEET links: reconcile \
              each bounded, idempotent day (today by default, repeat `-D` \
-             for several existing daily notes). Google events are fetched in \
+             for several existing daily notes, or use `-n N` for the last N \
+             days ending today; `-n` combines with `-D`). Google events are fetched in \
              one pass before any day is written. `-d` prints the exact unified \
              diffs of the plans and writes nothing. `-F` resets every selected \
              day's sync journal and reapplies Google over its Events rows and \
@@ -145,11 +146,12 @@ fn sync_command() -> ClapCommand {
         .arg(sync_force_arg())
         .arg(human_format_arg())
         .arg(help_arg())
+        .arg(last_n_days_arg())
         .arg(quiet_arg())
 }
 
 fn sync_after_help() -> &'static str {
-    "Examples:\n  bob gcal sync\n  bob gcal sync -D yesterday\n  bob gcal sync -D tomorrow\n  bob gcal sync -D today -D tomorrow\n  bob gcal sync -d\n  bob gcal sync -F\n  bob gcal sync -F -d\n  bob gcal sync -q\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH\n  BOB_NOW            Local datetime override for default day selection"
+    "Examples:\n  bob gcal sync\n  bob gcal sync -D yesterday\n  bob gcal sync -D tomorrow\n  bob gcal sync -D today -D tomorrow\n  bob gcal sync -n 7\n  bob gcal sync -d\n  bob gcal sync -F\n  bob gcal sync -F -d\n  bob gcal sync -q\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH\n  BOB_NOW            Local datetime override for default day selection"
 }
 
 fn doctor_command() -> ClapCommand {
@@ -304,6 +306,16 @@ fn sync_day_arg() -> Arg {
         .value_parser(OsStringValueParser::new())
         .action(ArgAction::Append)
         .help("Local day: today, tomorrow, yesterday, or YYYY-MM-DD (repeat to sync several days)")
+}
+
+fn last_n_days_arg() -> Arg {
+    Arg::new("last-n-days")
+        .long("last-n-days")
+        .short('n')
+        .value_name("N")
+        .allow_hyphen_values(true)
+        .value_parser(OsStringValueParser::new())
+        .help("Sync the last N days ending today (2 = today and yesterday; combines with -D)")
 }
 
 fn manual_arg() -> Arg {
@@ -600,6 +612,7 @@ impl LoginArgs {
 pub(crate) struct SyncArgs {
     pub bob_dir: Option<PathBuf>,
     pub days: Vec<String>,
+    pub last_n_days: Option<String>,
     pub dry_run: bool,
     pub force: bool,
     pub format: HumanFormat,
@@ -616,6 +629,9 @@ impl SyncArgs {
                 .flatten()
                 .map(|value| value.to_string_lossy().trim().to_string())
                 .collect(),
+            last_n_days: matches
+                .get_one::<OsString>("last-n-days")
+                .map(|value| value.to_string_lossy().trim().to_string()),
             dry_run: matches.get_flag("dry-run"),
             force: matches.get_flag("force"),
             format: HumanFormat::from_matches(matches),
@@ -819,6 +835,40 @@ mod tests {
             "sync",
         ));
         assert_eq!(args.days, ["tomorrow", "2026-10-30"]);
+    }
+
+    #[test]
+    fn sync_args_read_last_n_days_aliases_and_default_to_none() {
+        let short = SyncArgs::from_matches(&sub_matches_for(
+            &["bob gcal", "sync", "-n", "3"],
+            "sync",
+        ));
+        assert_eq!(short.last_n_days.as_deref(), Some("3"));
+
+        let long = SyncArgs::from_matches(&sub_matches_for(
+            &["bob gcal", "sync", "--last-n-days", "3"],
+            "sync",
+        ));
+        assert_eq!(long.last_n_days.as_deref(), Some("3"));
+
+        let negative = SyncArgs::from_matches(&sub_matches_for(
+            &["bob gcal", "sync", "-n", "-1"],
+            "sync",
+        ));
+        assert_eq!(negative.last_n_days.as_deref(), Some("-1"));
+
+        let combined = SyncArgs::from_matches(&sub_matches_for(
+            &["bob gcal", "sync", "-n", "3", "-D", "tomorrow"],
+            "sync",
+        ));
+        assert_eq!(combined.last_n_days.as_deref(), Some("3"));
+        assert_eq!(combined.days, ["today", "tomorrow"]);
+
+        let absent = SyncArgs::from_matches(&sub_matches_for(
+            &["bob gcal", "sync"],
+            "sync",
+        ));
+        assert_eq!(absent.last_n_days, None);
     }
 
     #[test]

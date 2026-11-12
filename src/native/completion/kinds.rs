@@ -439,6 +439,12 @@ const TABLE: &[Entry] = &[
         arg: "day",
         kind: Kind::FreeText,
     },
+    // `bob gcal sync -n` takes a count of local days ending today.
+    Entry {
+        path: &[],
+        arg: "last-n-days",
+        kind: Kind::FreeText,
+    },
     // `bob bank ack ID...` takes bank row IDs (^bank-hex, bank-hex, or hex).
     Entry {
         path: &[],
