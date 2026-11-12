@@ -57,6 +57,8 @@ FLAGS_WITH_VALUE = {
     "--signature-from",
     "--signature-file",
     "--attach",
+    "--add-label",
+    "--remove-label",
 }
 
 # Flag inventory recorded from gog v0.44.0 `--help` (bob's minimum gog).
@@ -138,6 +140,10 @@ COMMAND_FLAGS = {
     ("auth", "remove"): frozenset(),
     ("gmail", "url"): frozenset(),
     ("gmail", "labels", "list"): frozenset(),
+    ("gmail", "labels", "create"): frozenset(),
+    ("gmail", "batch", "modify"): frozenset(
+        {"--add-label", "--remove-label"}
+    ),
     ("gmail", "drafts", "send"): frozenset(),
     ("auth", "credentials", "set"): frozenset(
         {"--domain", "--expand-env", "--insecure"}
@@ -588,6 +594,10 @@ def op_name() -> str:
         return "attachment"
     if pos[:3] == ["gmail", "labels", "list"]:
         return "labels_list"
+    if pos[:3] == ["gmail", "labels", "create"]:
+        return "labels_create"
+    if pos[:3] == ["gmail", "batch", "modify"]:
+        return "batch_modify"
     if pos[:3] == ["gmail", "messages", "search"]:
         return "search"
     if pos[:1] == ["gmail"]:
@@ -646,6 +656,23 @@ if isinstance(after_spec, dict):
             after_spec.get("stderr") or "gog failed",
             int(after_spec.get("code") or 1),
         )
+
+if op in {"labels_create", "batch_modify"}:
+    expected_command = {
+        "labels_create": "gmail.labels.create",
+        "batch_modify": "gmail.batch.modify",
+    }[op]
+    if (
+        "--gmail-no-send" not in args
+        or "--readonly" in args
+        or "--no-input" not in args
+        or "--json" not in args
+        or flag_value("--color") != "never"
+        or flag_value("--client") != CLIENT
+        or not flag_value("--account")
+        or flag_value("--enable-commands-exact") != expected_command
+    ):
+        fail("fake gog: archive write has an unexpected transport fence", 2)
 
 if op == "version":
     dump(
@@ -1516,6 +1543,89 @@ if op == "labels_list":
                 ]
             }
         )
+    raise SystemExit(0)
+
+if op == "labels_create":
+    name = pos[3] if len(pos) > 3 else ""
+    if not name.strip() or any(ord(ch) < 32 or ord(ch) == 127 for ch in name):
+        fail("fake gog: invalid Gmail label name", 2)
+    labels = list(state.get("labels") or [
+        {"id": "Label_1", "name": "Promotions", "type": "user"},
+        {"id": "INBOX", "name": "INBOX", "type": "system"},
+    ])
+    race = state.get("label_create_race")
+    if isinstance(race, dict) and race.get("name") == name:
+        label = {
+            "id": race.get("id") or "Label_RACE",
+            "name": name,
+            "type": "user",
+        }
+        if not any(item.get("name") == name for item in labels):
+            labels.append(label)
+        state["labels"] = labels
+        state.pop("label_create_race", None)
+        save_state(state)
+        fail("alreadyExists: label was created concurrently", 1)
+    if any(item.get("name") == name for item in labels):
+        fail("alreadyExists: Gmail label already exists", 1)
+    used = {item.get("id") for item in labels}
+    next_id = 1
+    while f"Label_{next_id}" in used:
+        next_id += 1
+    label = {"id": f"Label_{next_id}", "name": name, "type": "user"}
+    labels.append(label)
+    state["labels"] = labels
+    save_state(state)
+    dump({"label": label})
+    raise SystemExit(0)
+
+if op == "batch_modify":
+    ids = pos[3:]
+    add_labels = flag_values("--add-label")
+    remove_labels = flag_values("--remove-label")
+    if not ids or len(ids) > 1000 or len(set(ids)) != len(ids):
+        fail("fake gog: message IDs must be 1–1000 unique IDs", 2)
+    if any(not item or len(item) > 256 or any(ch not in "0123456789abcdefABCDEF" for ch in item) for item in ids):
+        fail("fake gog: invalid Gmail message id", 2)
+    labels = list(state.get("labels") or [
+        {"id": "Label_1", "name": "Promotions", "type": "user"},
+        {"id": "INBOX", "name": "INBOX", "type": "system"},
+    ])
+    user_label_ids = {
+        item.get("id") for item in labels
+        if item.get("type") == "user" or (
+            item.get("type") is None and str(item.get("id", "")).startswith("Label_")
+        )
+    }
+    archive_shape = len(add_labels) == 1 and add_labels[0] in user_label_ids and remove_labels == ["INBOX"]
+    restore_shape = add_labels == ["INBOX"] and len(remove_labels) == 1 and remove_labels[0] in user_label_ids
+    let_go_shape = not add_labels and len(remove_labels) == 1 and remove_labels[0] in user_label_ids
+    if not (archive_shape or restore_shape or let_go_shape):
+        fail("fake gog: unsupported Gmail label delta", 2)
+
+    messages = state.get("messages") or {}
+    race = state.pop("batch_race_before_modify", None)
+    if isinstance(race, dict):
+        race_id = race.get("message_id")
+        if race_id in messages:
+            messages[race_id]["labelIds"] = list(race.get("labelIds") or [])
+    for message_id in ids:
+        if message_id not in messages:
+            fail("notFound: fake Gmail message does not exist", 1)
+
+    for message_id in ids:
+        current = set(messages[message_id].get("labelIds") or [])
+        current.difference_update(remove_labels)
+        current.update(add_labels)
+        messages[message_id]["labelIds"] = sorted(current)
+    state["messages"] = messages
+    save_state(state)
+    dump({
+        "modified": ids,
+        "count": len(ids),
+        "addedLabels": add_labels,
+        "removedLabels": remove_labels,
+    })
     raise SystemExit(0)
 
 fail(f"fake gog: unknown command {pos}", 2)

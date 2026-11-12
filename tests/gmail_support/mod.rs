@@ -276,6 +276,21 @@ impl FakeGog {
             .expect("write fake failure state");
     }
 
+    pub(crate) fn clear_failure(&self, operation: &str) {
+        let mut state: serde_json::Value = fs::read(&self.state)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        if let Some(failures) = state
+            .get_mut("fail")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            failures.remove(operation);
+        }
+        fs::write(&self.state, serde_json::to_vec(&state).unwrap())
+            .expect("clear fake failure state");
+    }
+
     /// Set paged discovery responses in order, each `{"threads": [{"id":
     /// ...}], "nextPageToken": ...}`. The fake serves page 0 when
     /// `pageToken` is absent from `--params` and page N when `pageToken`
@@ -418,6 +433,79 @@ impl FakeGog {
         state["labels"] = labels;
         fs::write(&self.state, serde_json::to_vec(&state).unwrap())
             .expect("write fake labels state");
+    }
+
+    /// Seed a stateful set of Gmail messages keyed by message ID. Each entry
+    /// is `{"threadId": ..., "labelIds": [...]}`.
+    pub(crate) fn set_messages(&self, messages: serde_json::Value) {
+        let mut state: serde_json::Value = fs::read(&self.state)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        state["messages"] = messages;
+        fs::write(&self.state, serde_json::to_vec(&state).unwrap())
+            .expect("write fake message labels");
+    }
+
+    /// Inject a newly arrived message label state immediately before the
+    /// next batch modification, modeling a reply after preflight.
+    pub(crate) fn set_batch_race_before_modify(
+        &self,
+        message_id: &str,
+        label_ids: &[&str],
+    ) {
+        let mut state: serde_json::Value = fs::read(&self.state)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        state["batch_race_before_modify"] = serde_json::json!({
+            "message_id": message_id,
+            "labelIds": label_ids,
+        });
+        fs::write(&self.state, serde_json::to_vec(&state).unwrap())
+            .expect("write fake batch race");
+    }
+
+    /// Make the next create of this exact name lose a first-use race. The
+    /// concurrent label appears in `labels.list`, while create returns an
+    /// already-exists error.
+    pub(crate) fn set_label_create_race(&self, name: &str, id: &str) {
+        let mut state: serde_json::Value = fs::read(&self.state)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        state["label_create_race"] =
+            serde_json::json!({"name": name, "id": id});
+        fs::write(&self.state, serde_json::to_vec(&state).unwrap())
+            .expect("write fake label-create race");
+    }
+
+    /// Invoke the fake gog directly for adapter-boundary tests.
+    pub(crate) fn invoke(&self, args: &[&str]) -> Output {
+        let mut command = Command::new(&self.path);
+        command.args(args);
+        command
+            .env("BOB_GMAIL_FAKE_LOG", &self.log)
+            .env("BOB_GMAIL_FAKE_STATE", &self.state)
+            .env("BOB_GMAIL_FAKE_HOME", &self.home)
+            .env("BOB_GMAIL_FAKE_STDIN_LOG", &self.stdin_log)
+            .env("BOB_GMAIL_FAKE_SCENARIO", &self.scenario)
+            .output()
+            .expect("run fake gog")
+    }
+
+    pub(crate) fn message_labels(&self, message_id: &str) -> Vec<String> {
+        let state: serde_json::Value = serde_json::from_slice(
+            &fs::read(&self.state).expect("fake state exists"),
+        )
+        .expect("fake state is JSON");
+        state["messages"][message_id]["labelIds"]
+            .as_array()
+            .expect("fake message labels")
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::to_string)
+            .collect()
     }
 
     /// Simulate an edit made in Gmail itself: replace one header on the

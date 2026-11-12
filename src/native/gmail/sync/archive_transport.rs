@@ -1,0 +1,531 @@
+//! Constrained label operations used by Gmail archive-on-close.
+//!
+//! Callers cannot supply arbitrary label deltas or arbitrary message IDs. A
+//! receipt label is resolved to a user label first, and every operation is
+//! reduced to the one allowed label pair before it reaches gog.
+
+use std::collections::{BTreeSet, HashSet};
+
+use super::super::{
+    gog::{GmailLabel, Gog},
+    GmailError,
+};
+
+pub(crate) const MAX_BATCH_MESSAGES: usize = 1000;
+
+/// A validated user label with a stable Gmail ID.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReceiptLabel {
+    id: String,
+    name: String,
+}
+
+impl ReceiptLabel {
+    pub(crate) fn new(
+        label: &GmailLabel,
+        enrollment: &GmailLabel,
+    ) -> Result<Self, GmailError> {
+        let id = label.id.trim();
+        let name = label.name.trim();
+        let valid_id = !id.is_empty()
+            && id.len() <= 512
+            && id.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')
+            });
+        let reserved = is_reserved_label_name(name)
+            || matches!(
+                id.to_ascii_uppercase().as_str(),
+                "INBOX"
+                    | "SPAM"
+                    | "TRASH"
+                    | "UNREAD"
+                    | "STARRED"
+                    | "IMPORTANT"
+                    | "SENT"
+                    | "DRAFT"
+                    | "CHAT"
+            )
+            || id.to_ascii_uppercase().starts_with("CATEGORY_");
+        let user_label = label.is_user();
+        let aliases_enrollment = name
+            .eq_ignore_ascii_case(enrollment.name.trim())
+            || id == enrollment.id;
+        if !valid_id
+            || name.is_empty()
+            || name.len() > 512
+            || name.chars().any(char::is_control)
+            || !user_label
+            || reserved
+            || aliases_enrollment
+        {
+            return Err(GmailError::setup(
+                "archive_label",
+                "the Gmail receipt label is invalid, reserved, or aliases the enrollment label".to_string(),
+            ));
+        }
+        Ok(Self {
+            id: id.to_string(),
+            name: name.to_string(),
+        })
+    }
+
+    pub(crate) fn id(&self) -> &str {
+        &self.id
+    }
+
+    #[allow(dead_code)] // Retained for the preview/apply outcome boundary.
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+/// Resolve the configured label, creating it on first approved use. A
+/// concurrent create may win between list and create; after a create error,
+/// re-list and accept only the exact now-existing valid user label.
+#[allow(dead_code)] // Wired by the serial preview/apply phases.
+pub(crate) fn resolve_or_create_receipt_label(
+    gog: &Gog,
+    account: &str,
+    name: &str,
+    enrollment: &GmailLabel,
+) -> Result<ReceiptLabel, GmailError> {
+    validate_receipt_name(name, enrollment)?;
+    let labels = gog.labels_list(account)?;
+    if let Some(label) = unique_named_label(&labels, name)? {
+        return ReceiptLabel::new(label, enrollment);
+    }
+
+    match gog.archive_label_create(account, name) {
+        Ok(label) => ReceiptLabel::new(&label, enrollment),
+        Err(create_error) => {
+            if let Ok(labels) = gog.labels_list(account)
+                && let Some(label) = unique_named_label(&labels, name)?
+            {
+                return ReceiptLabel::new(label, enrollment);
+            }
+            Err(create_error)
+        }
+    }
+}
+
+fn unique_named_label<'a>(
+    labels: &'a [GmailLabel],
+    name: &str,
+) -> Result<Option<&'a GmailLabel>, GmailError> {
+    let mut matches = labels.iter().filter(|label| label.name == name);
+    let Some(first) = matches.next() else {
+        return Ok(None);
+    };
+    if matches.next().is_some() {
+        return Err(GmailError::setup(
+            "archive_label",
+            "the configured Gmail receipt label name is ambiguous".to_string(),
+        ));
+    }
+    Ok(Some(first))
+}
+
+fn validate_receipt_name(
+    name: &str,
+    enrollment: &GmailLabel,
+) -> Result<(), GmailError> {
+    let name = name.trim();
+    if name.is_empty()
+        || name.len() > 512
+        || name.chars().any(char::is_control)
+        || is_reserved_label_name(name)
+        || name.eq_ignore_ascii_case(enrollment.name.trim())
+    {
+        return Err(GmailError::setup(
+            "archive_label",
+            "the Gmail receipt label is invalid, reserved, or aliases the enrollment label".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// One explicit, sorted list of message IDs accepted by Gmail batch modify.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MessageIds(Vec<String>);
+
+impl MessageIds {
+    pub(crate) fn new(
+        ids: impl IntoIterator<Item = String>,
+    ) -> Result<Self, GmailError> {
+        let ids: Vec<String> = ids.into_iter().collect();
+        if ids.is_empty()
+            || ids.len() > MAX_BATCH_MESSAGES
+            || ids.iter().any(|id| {
+                id.is_empty()
+                    || id.len() > 256
+                    || !id.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+        {
+            return Err(invalid_message_ids());
+        }
+        let unique: BTreeSet<String> = ids.iter().cloned().collect();
+        if unique.len() != ids.len() {
+            return Err(invalid_message_ids());
+        }
+        Ok(Self(unique.into_iter().collect()))
+    }
+
+    pub(crate) fn as_slice(&self) -> &[String] {
+        &self.0
+    }
+}
+
+/// The only operations this boundary can express.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LabelOperation {
+    Archive,
+    Restore,
+    LetGo,
+}
+
+/// Current labels observed for one validated message ID.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MessageLabelState {
+    pub(crate) message_id: String,
+    pub(crate) label_ids: BTreeSet<String>,
+}
+
+/// A safe batch request. Fields are private so arbitrary remote deltas cannot
+/// escape this module's operation mapping.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LabelDiff {
+    message_ids: MessageIds,
+    add: Vec<String>,
+    remove: Vec<String>,
+}
+
+impl LabelDiff {
+    pub(crate) fn for_messages(
+        operation: LabelOperation,
+        receipt: &ReceiptLabel,
+        messages: &[MessageLabelState],
+    ) -> Result<Self, GmailError> {
+        let message_ids = MessageIds::new(
+            messages.iter().map(|message| message.message_id.clone()),
+        )?;
+        let expected: HashSet<&str> =
+            message_ids.as_slice().iter().map(String::as_str).collect();
+        if messages.len() != expected.len()
+            || messages.iter().any(|message| {
+                !expected.contains(message.message_id.as_str())
+                    || message.label_ids.iter().any(|label| {
+                        label.is_empty() || label.chars().any(char::is_control)
+                    })
+            })
+        {
+            return Err(invalid_message_ids());
+        }
+
+        let has_any = |label: &str| {
+            messages
+                .iter()
+                .any(|message| message.label_ids.contains(label))
+        };
+        let lacks_any = |label: &str| {
+            messages
+                .iter()
+                .any(|message| !message.label_ids.contains(label))
+        };
+
+        let (add, remove) = match operation {
+            LabelOperation::Archive => (
+                lacks_any(receipt.id()).then(|| receipt.id().to_string()),
+                has_any("INBOX").then(|| "INBOX".to_string()),
+            ),
+            LabelOperation::Restore => (
+                lacks_any("INBOX").then(|| "INBOX".to_string()),
+                has_any(receipt.id()).then(|| receipt.id().to_string()),
+            ),
+            LabelOperation::LetGo => (
+                None,
+                has_any(receipt.id()).then(|| receipt.id().to_string()),
+            ),
+        };
+
+        Ok(Self {
+            message_ids,
+            add: add.into_iter().collect(),
+            remove: remove.into_iter().collect(),
+        })
+    }
+
+    pub(crate) fn message_ids(&self) -> &[String] {
+        self.message_ids.as_slice()
+    }
+
+    pub(crate) fn add_labels(&self) -> &[String] {
+        &self.add
+    }
+
+    pub(crate) fn remove_labels(&self) -> &[String] {
+        &self.remove
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.add.is_empty() && self.remove.is_empty()
+    }
+}
+
+fn invalid_message_ids() -> GmailError {
+    GmailError::setup(
+        "message_ids",
+        "Gmail label mutation requires 1–1000 unique, valid message IDs"
+            .to_string(),
+    )
+}
+
+fn is_reserved_label_name(name: &str) -> bool {
+    const RESERVED: &[&str] = &[
+        "INBOX",
+        "SPAM",
+        "TRASH",
+        "UNREAD",
+        "STARRED",
+        "IMPORTANT",
+        "SENT",
+        "DRAFT",
+        "CHAT",
+    ];
+    RESERVED
+        .iter()
+        .any(|reserved| name.eq_ignore_ascii_case(reserved))
+        || name
+            .get(.."CATEGORY_".len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("CATEGORY_"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn receipt() -> ReceiptLabel {
+        ReceiptLabel::new(
+            &GmailLabel {
+                id: "Label_42".to_string(),
+                name: "Saved, closed\\later".to_string(),
+                kind: Some("user".to_string()),
+            },
+            &GmailLabel {
+                id: "Label_1".to_string(),
+                name: "saved".to_string(),
+                kind: Some("user".to_string()),
+            },
+        )
+        .unwrap()
+    }
+
+    fn message(id: &str, labels: &[&str]) -> MessageLabelState {
+        MessageLabelState {
+            message_id: id.to_string(),
+            label_ids: labels
+                .iter()
+                .map(|label| (*label).to_string())
+                .collect(),
+        }
+    }
+
+    fn apply(labels: &mut BTreeSet<String>, diff: &LabelDiff) {
+        for label in diff.remove_labels() {
+            labels.remove(label);
+        }
+        for label in diff.add_labels() {
+            labels.insert(label.clone());
+        }
+    }
+
+    #[test]
+    fn receipt_label_requires_a_non_reserved_non_alias_user_label() {
+        for label in [
+            GmailLabel {
+                id: "INBOX".into(),
+                name: "Inbox".into(),
+                kind: Some("system".into()),
+            },
+            GmailLabel {
+                id: "Label_2".into(),
+                name: "saved".into(),
+                kind: Some("user".into()),
+            },
+            GmailLabel {
+                id: "Label_3".into(),
+                name: "Custom".into(),
+                kind: Some("system".into()),
+            },
+            GmailLabel {
+                id: "Label_4".into(),
+                name: "CATEGORY_PERSONAL".into(),
+                kind: Some("user".into()),
+            },
+        ] {
+            assert!(
+                ReceiptLabel::new(
+                    &label,
+                    &GmailLabel {
+                        id: "Label_1".into(),
+                        name: "saved".into(),
+                        kind: Some("user".into())
+                    }
+                )
+                .is_err(),
+                "accepted {label:?}"
+            );
+        }
+        assert!(ReceiptLabel::new(
+            &GmailLabel {
+                id: "Label_2".into(),
+                name: "Separate".into(),
+                kind: Some("user".into())
+            },
+            &GmailLabel {
+                id: "Label_2".into(),
+                name: "Enrollment".into(),
+                kind: Some("user".into())
+            }
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn message_ids_reject_empty_duplicates_invalid_and_over_limit_lists() {
+        assert!(MessageIds::new(Vec::<String>::new()).is_err());
+        assert!(MessageIds::new(vec!["abcd".into(), "abcd".into()]).is_err());
+        assert!(MessageIds::new(vec!["not-hex".into()]).is_err());
+        assert!(MessageIds::new(
+            (0..=MAX_BATCH_MESSAGES).map(|_| "abcd".to_string())
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn label_diffs_preserve_unrelated_labels_and_are_idempotent() {
+        let receipt = receipt();
+        // Enumerate every combination of the two owned labels and six
+        // unrelated labels over a three-message thread.
+        let labels = [
+            "INBOX", "Label_42", "UNREAD", "STARRED", "Label_8", "Label_9",
+            "Label_10", "Label_11",
+        ];
+        for mask in 0u16..(1 << labels.len()) {
+            let base: BTreeSet<String> = labels
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| mask & (1 << index) != 0)
+                .map(|(_, label)| (*label).to_string())
+                .collect();
+            for operation in [
+                LabelOperation::Archive,
+                LabelOperation::Restore,
+                LabelOperation::LetGo,
+            ] {
+                let states = ["a1", "a2", "a3"].map(|id| MessageLabelState {
+                    message_id: id.to_string(),
+                    label_ids: base.clone(),
+                });
+                let diff =
+                    LabelDiff::for_messages(operation, &receipt, &states)
+                        .unwrap();
+                let changed: BTreeSet<&str> = diff
+                    .add_labels()
+                    .iter()
+                    .chain(diff.remove_labels())
+                    .map(String::as_str)
+                    .collect();
+                let allowed: BTreeSet<&str> =
+                    ["INBOX", receipt.id()].into_iter().collect();
+                assert!(
+                    changed.is_subset(&allowed),
+                    "unexpected diff {diff:?}"
+                );
+                assert!(
+                    diff.add_labels().len() <= 1
+                        && diff.remove_labels().len() <= 1
+                );
+                for state in &states {
+                    let mut after = state.label_ids.clone();
+                    apply(&mut after, &diff);
+                    for unrelated in [
+                        "UNREAD", "STARRED", "Label_8", "Label_9", "Label_10",
+                        "Label_11",
+                    ] {
+                        assert_eq!(
+                            after.contains(unrelated),
+                            state.label_ids.contains(unrelated)
+                        );
+                    }
+                }
+                let after_states: Vec<_> = states
+                    .iter()
+                    .map(|state| {
+                        let mut label_ids = state.label_ids.clone();
+                        apply(&mut label_ids, &diff);
+                        MessageLabelState {
+                            message_id: state.message_id.clone(),
+                            label_ids,
+                        }
+                    })
+                    .collect();
+                let repeated =
+                    LabelDiff::for_messages(operation, &receipt, &after_states)
+                        .unwrap();
+                assert!(repeated.is_empty(), "not idempotent: {operation:?}");
+                if operation == LabelOperation::LetGo {
+                    for (before, after) in
+                        states.iter().zip(after_states.iter())
+                    {
+                        assert_eq!(
+                            before.label_ids.contains("INBOX"),
+                            after.label_ids.contains("INBOX")
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn restoring_an_archived_message_reverses_only_the_owned_pair() {
+        let receipt = receipt();
+        let initial = BTreeSet::from([
+            "INBOX".to_string(),
+            "UNREAD".to_string(),
+            "Label_8".to_string(),
+        ]);
+        let before = ["a1"].map(|id| MessageLabelState {
+            message_id: id.to_string(),
+            label_ids: initial.clone(),
+        });
+        let archive =
+            LabelDiff::for_messages(LabelOperation::Archive, &receipt, &before)
+                .unwrap();
+        let mut archived_labels = initial.clone();
+        apply(&mut archived_labels, &archive);
+        let archived = ["a1"].map(|id| MessageLabelState {
+            message_id: id.to_string(),
+            label_ids: archived_labels.clone(),
+        });
+        let restore = LabelDiff::for_messages(
+            LabelOperation::Restore,
+            &receipt,
+            &archived,
+        )
+        .unwrap();
+        apply(&mut archived_labels, &restore);
+        assert_eq!(archived_labels, initial);
+    }
+
+    #[test]
+    fn label_diff_requires_exact_message_state_membership() {
+        let receipt = receipt();
+        assert!(LabelDiff::for_messages(
+            LabelOperation::Archive,
+            &receipt,
+            &[message("a1", &["INBOX"]), message("a1", &["INBOX"])],
+        )
+        .is_err());
+    }
+}

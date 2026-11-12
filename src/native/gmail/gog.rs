@@ -12,6 +12,7 @@ use super::GmailError;
 pub(crate) use crate::native::google::Gog;
 
 use super::model::{GmailDraft, GmailThread};
+use super::sync::archive_transport::LabelDiff;
 use crate::native::google::parse_json;
 
 pub(crate) const CLIENT: &str = crate::native::google::GMAIL.client_bucket;
@@ -88,6 +89,14 @@ pub(crate) struct DraftReceipt {
 pub(crate) struct SentReceipt {
     pub(crate) message_id: String,
     pub(crate) thread_id: String,
+}
+
+/// Receipt for one successful Gmail `messages.batchModify` request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BatchModifyReceipt {
+    pub(crate) message_ids: Vec<String>,
+    pub(crate) added_label_ids: Vec<String>,
+    pub(crate) removed_label_ids: Vec<String>,
 }
 
 fn read_flags(account: &str) -> Vec<OsString> {
@@ -336,6 +345,38 @@ impl Gog {
         })
     }
 
+    /// Create one user label through the separately fenced first-use path.
+    /// The returned label must match the requested name and be a user label;
+    /// callers validate collisions with the enrollment label before use.
+    pub(crate) fn archive_label_create(
+        &self,
+        account: &str,
+        name: &str,
+    ) -> Result<GmailLabel, GmailError> {
+        let output = self
+            .run(archive_label_create_argv(account, name))
+            .map_err(redact_gmail_archive_error)?;
+        parse_archive_label(&output.stdout, name)
+    }
+
+    /// Apply one validated operation to one explicit message list. There is
+    /// no thread-level/generic archive operation at this boundary. An empty
+    /// pure diff returns `None` without starting gog.
+    #[allow(dead_code)] // Wired by the serial archive apply phase.
+    pub(crate) fn archive_batch_modify(
+        &self,
+        account: &str,
+        diff: &LabelDiff,
+    ) -> Result<Option<BatchModifyReceipt>, GmailError> {
+        if diff.is_empty() {
+            return Ok(None);
+        }
+        let output = self
+            .run(archive_batch_modify_argv(account, diff))
+            .map_err(redact_gmail_archive_error)?;
+        parse_batch_modify_receipt(&output.stdout, diff).map(Some)
+    }
+
     /// Download one attachment's bytes through the narrowly allowed
     /// Discovery read
     /// (`api call gmail v1 gmail.users.messages.attachments.get`).
@@ -385,6 +426,168 @@ fn draft_write_flags(account: &str, allowed_command: &str) -> Vec<OsString> {
     flags.push(OsString::from("--enable-commands-exact"));
     flags.push(OsString::from(allowed_command));
     flags
+}
+
+/// Shared exact-fenced Gmail write flags. This intentionally omits
+/// `--readonly`, retains `--gmail-no-send`, and enables one exact command.
+fn archive_write_flags(account: &str, allowed_command: &str) -> Vec<OsString> {
+    let mut flags = draft_base_flags(account);
+    flags.push(OsString::from("--enable-commands-exact"));
+    flags.push(OsString::from(allowed_command));
+    flags
+}
+
+fn archive_label_create_argv(account: &str, name: &str) -> Vec<OsString> {
+    let mut args = archive_write_flags(account, "gmail.labels.create");
+    args.extend([
+        OsString::from("gmail"),
+        OsString::from("labels"),
+        OsString::from("create"),
+        OsString::from(name),
+    ]);
+    args
+}
+
+fn archive_batch_modify_argv(account: &str, diff: &LabelDiff) -> Vec<OsString> {
+    let mut args = archive_write_flags(account, "gmail.batch.modify");
+    args.extend([
+        OsString::from("gmail"),
+        OsString::from("batch"),
+        OsString::from("modify"),
+    ]);
+    args.extend(diff.message_ids().iter().map(OsString::from));
+    for label in diff.add_labels() {
+        args.push(OsString::from("--add-label"));
+        args.push(OsString::from(label));
+    }
+    for label in diff.remove_labels() {
+        args.push(OsString::from("--remove-label"));
+        args.push(OsString::from(label));
+    }
+    args
+}
+
+fn parse_archive_label(
+    stdout: &str,
+    requested_name: &str,
+) -> Result<GmailLabel, GmailError> {
+    let bad = || {
+        GmailError::runtime(
+            "bad_json",
+            "gog returned an invalid Gmail label receipt".to_string(),
+        )
+    };
+    let value: serde_json::Value =
+        serde_json::from_str(stdout.trim()).map_err(|_| bad())?;
+    let raw = value.get("label").ok_or_else(bad)?.clone();
+    let label: GmailLabel = serde_json::from_value(raw).map_err(|_| bad())?;
+    if label.name != requested_name || !label.is_user() || label.id.is_empty() {
+        return Err(bad());
+    }
+    Ok(label)
+}
+
+fn parse_batch_modify_receipt(
+    stdout: &str,
+    diff: &LabelDiff,
+) -> Result<BatchModifyReceipt, GmailError> {
+    let bad = || {
+        GmailError::runtime(
+            "bad_json",
+            "gog returned an invalid Gmail batch-modify receipt".to_string(),
+        )
+    };
+    let value: serde_json::Value =
+        serde_json::from_str(stdout.trim()).map_err(|_| bad())?;
+    let expected_messages = diff.message_ids();
+    let expected_added = diff.add_labels();
+    let expected_removed = diff.remove_labels();
+    let messages = value
+        .get("modified")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|values| {
+            values
+                .iter()
+                .map(serde_json::Value::as_str)
+                .collect::<Option<Vec<_>>>()
+        })
+        .ok_or_else(bad)?;
+    let count = value
+        .get("count")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(bad)?;
+    let added = value
+        .get("addedLabels")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|values| {
+            values
+                .iter()
+                .map(serde_json::Value::as_str)
+                .collect::<Option<Vec<_>>>()
+        })
+        .ok_or_else(bad)?;
+    let removed = value
+        .get("removedLabels")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|values| {
+            values
+                .iter()
+                .map(serde_json::Value::as_str)
+                .collect::<Option<Vec<_>>>()
+        })
+        .ok_or_else(bad)?;
+    if count != expected_messages.len() as u64
+        || messages
+            != expected_messages
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+        || added
+            != expected_added
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+        || removed
+            != expected_removed
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+    {
+        return Err(bad());
+    }
+    Ok(BatchModifyReceipt {
+        message_ids: expected_messages.to_vec(),
+        added_label_ids: expected_added.to_vec(),
+        removed_label_ids: expected_removed.to_vec(),
+    })
+}
+
+fn redact_gmail_archive_error(error: GmailError) -> GmailError {
+    let (message, hint) = match error.kind() {
+        "invalid_grant" => ("the bob-gmail sign-in needs renewal", None),
+        "not_logged_in" => ("no bob-gmail Gmail grant is stored", None),
+        "insufficient_scope" => (
+            "the bob-gmail grant lacks Gmail modify access",
+            Some(
+                "run `bob gmail login -s modify` on the approved archive host",
+            ),
+        ),
+        "network" => (
+            "gog could not reach Google while changing Gmail labels",
+            None,
+        ),
+        "timeout" => ("gog timed out while changing Gmail labels", None),
+        "rate_limited" => (
+            "Gmail throttled the label change; retry on a later run",
+            None,
+        ),
+        "transient" => ("Gmail had a transient label-change failure", None),
+        "api_disabled" => {
+            ("the Gmail API is not enabled for this Cloud project", None)
+        }
+        _ => return redact_gmail_setup_error(error, "Gmail label mutation"),
+    };
+    redact_keeping_hint(&error, message, hint)
 }
 
 fn draft_base_flags(account: &str) -> Vec<OsString> {
@@ -819,6 +1022,155 @@ fn decode_attachment_base64(cleaned: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn archive_diff() -> LabelDiff {
+        use super::super::sync::archive_transport::{
+            LabelOperation, MessageLabelState, ReceiptLabel,
+        };
+        use std::collections::BTreeSet;
+
+        let receipt = ReceiptLabel::new(
+            &GmailLabel {
+                id: "Label_42".to_string(),
+                name: "Receipt,\\name".to_string(),
+                kind: Some("user".to_string()),
+            },
+            &GmailLabel {
+                id: "Label_1".to_string(),
+                name: "Enrollment".to_string(),
+                kind: Some("user".to_string()),
+            },
+        )
+        .expect("validated receipt label");
+        LabelDiff::for_messages(
+            LabelOperation::Archive,
+            &receipt,
+            &[MessageLabelState {
+                message_id: "aaaaaaaaaaaaaaaa".to_string(),
+                label_ids: BTreeSet::from(["INBOX".to_string()]),
+            }],
+        )
+        .expect("validated label diff")
+    }
+
+    #[test]
+    fn archive_argv_uses_the_exact_write_fence_and_literal_label_flags() {
+        let diff = archive_diff();
+        let argv = archive_batch_modify_argv("you@example.com", &diff);
+        let args: Vec<String> = argv
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        for flag in [
+            "--no-input",
+            "--json",
+            "--color",
+            "never",
+            "--client",
+            "bob-gmail",
+            "--account",
+            "you@example.com",
+            "--gmail-no-send",
+            "--enable-commands-exact",
+            "gmail.batch.modify",
+            "--add-label",
+            "--remove-label",
+            "Label_42",
+            "INBOX",
+            "aaaaaaaaaaaaaaaa",
+        ] {
+            assert!(
+                args.iter().any(|arg| arg == flag),
+                "missing {flag}: {args:?}"
+            );
+        }
+        assert!(
+            !args.iter().any(|arg| arg == "--readonly"),
+            "write must omit readonly: {args:?}"
+        );
+        assert!(
+            !args.iter().any(|arg| arg == "--add" || arg == "--remove"),
+            "comma-splitting flags are forbidden: {args:?}"
+        );
+
+        let name = "Receipt, with\\slash";
+        let create: Vec<String> =
+            archive_label_create_argv("you@example.com", name)
+                .iter()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect();
+        assert_eq!(create.last().map(String::as_str), Some(name));
+        assert_eq!(
+            create
+                .windows(2)
+                .find(|pair| pair[0] == "--enable-commands-exact")
+                .unwrap()[1],
+            "gmail.labels.create"
+        );
+        assert!(!create.iter().any(|arg| arg == "--readonly"));
+        assert!(create.iter().any(|arg| arg == "--gmail-no-send"));
+    }
+
+    #[test]
+    fn archive_receipts_are_strict_and_body_free() {
+        let diff = archive_diff();
+        let good = r#"{"modified":["aaaaaaaaaaaaaaaa"],"count":1,"addedLabels":["Label_42"],"removedLabels":["INBOX"]}"#;
+        let receipt =
+            parse_batch_modify_receipt(good, &diff).expect("valid receipt");
+        assert_eq!(receipt.message_ids, ["aaaaaaaaaaaaaaaa"]);
+        assert_eq!(receipt.added_label_ids, ["Label_42"]);
+        assert_eq!(receipt.removed_label_ids, ["INBOX"]);
+
+        for bad in [
+            r#"{"modified":["bbbbbbbbbbbbbbbb"],"count":1,"addedLabels":["Label_42"],"removedLabels":["INBOX"]}"#,
+            r#"{"modified":["aaaaaaaaaaaaaaaa"],"count":2,"addedLabels":["Label_42"],"removedLabels":["INBOX"]}"#,
+            r#"{"modified":["aaaaaaaaaaaaaaaa"],"count":1,"addedLabels":["TRASH"],"removedLabels":["INBOX"]}"#,
+            "PRIVATE_SENTINEL malformed response",
+        ] {
+            let error = parse_batch_modify_receipt(bad, &diff)
+                .expect_err("reject malformed receipt");
+            assert_eq!(error.kind(), "bad_json");
+            assert!(!error.message().contains("PRIVATE_SENTINEL"));
+        }
+
+        let created = parse_archive_label(
+            r#"{"label":{"id":"Label_42","name":"Receipt","type":"user"}}"#,
+            "Receipt",
+        )
+        .expect("valid label receipt");
+        assert_eq!(created.id, "Label_42");
+        for bad in [
+            r#"{"label":{"id":"INBOX","name":"Receipt","type":"system"}}"#,
+            r#"{"label":{"id":"Label_42","name":"Wrong","type":"user"}}"#,
+            "SECRET-LABEL-RESPONSE",
+        ] {
+            let error = parse_archive_label(bad, "Receipt")
+                .expect_err("reject invalid label receipt");
+            assert_eq!(error.kind(), "bad_json");
+            assert!(!error.message().contains("SECRET"));
+        }
+    }
+
+    #[test]
+    fn archive_write_errors_preserve_failure_kind_and_redact_remote_text() {
+        for (kind, expected_hint) in [
+            ("invalid_grant", None),
+            ("timeout", None),
+            ("rate_limited", None),
+            ("transient", None),
+            ("insufficient_scope", Some("bob gmail login -s modify")),
+        ] {
+            let error = redact_gmail_archive_error(GmailError::runtime(
+                kind,
+                "PRIVATE_SENTINEL remote body".to_string(),
+            ));
+            assert_eq!(error.kind(), kind);
+            assert!(!error.message().contains("PRIVATE_SENTINEL"));
+            if let Some(hint) = expected_hint {
+                assert!(error.hint().is_some_and(|value| value.contains(hint)));
+            }
+        }
+    }
 
     #[test]
     fn decodes_standard_and_url_safe_padded_and_unpadded() {

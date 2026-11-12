@@ -43,6 +43,8 @@
 pub(crate) mod archive_scan;
 #[cfg_attr(not(test), allow(dead_code))] // Wired by preview/apply phases.
 pub(crate) mod archive_state;
+#[allow(dead_code)] // Wired by the serial preview/apply phases.
+pub(crate) mod archive_transport;
 pub(crate) mod command;
 pub(crate) mod discover;
 pub(crate) mod enroll;
