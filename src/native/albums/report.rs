@@ -16,7 +16,8 @@ use super::{
 use crate::native::notebooks::snapshot::VaultSnapshot;
 use crate::native::records::{
     schema::{
-        album_schema_fingerprint, RecordDiagnosticCode, RecordField, RecordType,
+        album_label, album_schema_fingerprint, album_singular,
+        RecordDiagnosticCode, RecordField, RecordType,
     },
     FolderIndex, RecordCatalog,
 };
@@ -99,6 +100,7 @@ pub(crate) struct AlbumReportEntry {
     pub(crate) noun: Option<String>,
     pub(crate) label: Option<String>,
     pub(crate) plural: Option<String>,
+    pub(crate) singular: Option<String>,
     pub(crate) dated_notes: Option<bool>,
     pub(crate) legacy: Option<Vec<String>>,
     pub(crate) schema_fingerprint: Option<String>,
@@ -130,6 +132,7 @@ impl AlbumReportEntry {
             "noun": self.noun,
             "label": self.label,
             "plural": self.plural,
+            "singular": self.singular,
             "dated_notes": self.dated_notes,
             "legacy": self.legacy,
             "schema_fingerprint": self.schema_fingerprint,
@@ -352,11 +355,17 @@ pub(crate) fn project_album_from_folder(
         &members,
     );
     let complete = folder_complete(folder);
+    let plural = resolved_plural(declaration);
+    let singular = resolved_singular(declaration);
+    let nouns = index::RecordNouns {
+        singular: &singular,
+        plural: &plural,
+    };
     let mut plan = index::plan_index(
         &declaration.path,
         entry.contents.as_deref(),
         &declaration.stem,
-        &resolved_plural(declaration),
+        &nouns,
         schema_fields,
         &grouping,
         declaration.index_by.as_deref(),
@@ -409,6 +418,10 @@ pub(crate) fn project_album_from_folder(
     let schema_fingerprint = record_type.map(|record_type| {
         schema_fingerprint(record_type, declaration.plural.as_deref())
     });
+    let singular = declaration
+        .plural
+        .as_ref()
+        .map(|_| resolved_singular(declaration));
     AlbumProjection {
         entry: AlbumReportEntry {
             stem: declaration.stem.clone(),
@@ -419,6 +432,7 @@ pub(crate) fn project_album_from_folder(
             noun: declaration.noun_claim.clone(),
             label: declaration.label.clone(),
             plural: declaration.plural.clone(),
+            singular,
             dated_notes: record_type.map(|record_type| record_type.dated_notes),
             legacy: record_type.map(|record_type| record_type.legacy.clone()),
             schema_fingerprint,
@@ -468,6 +482,16 @@ pub(crate) fn resolved_plural(declaration: &AlbumDeclaration) -> String {
                 .map(|noun| format!("{noun}s"))
         })
         .unwrap_or_else(|| "records".to_owned())
+}
+
+pub(crate) fn resolved_singular(declaration: &AlbumDeclaration) -> String {
+    if let Some(label) = declaration.label.as_deref() {
+        return album_singular(label);
+    }
+    if let Some(noun) = declaration.noun_claim.as_deref() {
+        return album_singular(&album_label(noun));
+    }
+    "record".to_owned()
 }
 
 fn stem_of_parent(path: Option<&Path>) -> Option<String> {

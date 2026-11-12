@@ -1120,7 +1120,7 @@ fn created_album_accepts_records_and_stays_clean() {
         "first record creates the folder"
     );
     let album = read(&vault, "eat.md");
-    assert!(album.contains("1 restaurants"), "{album}");
+    assert!(album.contains("1 restaurant"), "{album}");
     assert!(album.contains("[[eat/ninja_sushi|Ninja Sushi]]"), "{album}");
 
     // Capture writes through the same album machinery.

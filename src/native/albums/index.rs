@@ -65,16 +65,22 @@ pub(crate) fn records_spec(head_title: &str) -> RegionSpec<'_> {
     }
 }
 
+/// Borrowed display nouns for the records index tally.
+pub(crate) struct RecordNouns<'a> {
+    pub(crate) singular: &'a str,
+    pub(crate) plural: &'a str,
+}
+
 /// Render the owned callout lines, including the `[!records]` head.
 pub(crate) fn render_callout(
     album_stem: &str,
-    plural: &str,
+    nouns: &RecordNouns<'_>,
     fields: &[RecordField],
     grouping: &RecordGrouping,
     index_by: Option<&str>,
     total: usize,
 ) -> Vec<String> {
-    let tally = tally_text(plural, grouping, total);
+    let tally = tally_text(nouns, grouping, total);
     let spec = records_spec(&tally);
     let mut rows = vec![">".to_string()];
     if total == 0 {
@@ -110,7 +116,7 @@ pub(crate) fn plan_index(
     path: &str,
     contents: Option<&str>,
     album_stem: &str,
-    plural: &str,
+    nouns: &RecordNouns<'_>,
     fields: &[RecordField],
     grouping: &RecordGrouping,
     index_by: Option<&str>,
@@ -118,7 +124,7 @@ pub(crate) fn plan_index(
     folder_complete: bool,
 ) -> IndexPlan {
     let callout =
-        render_callout(album_stem, plural, fields, grouping, index_by, total);
+        render_callout(album_stem, nouns, fields, grouping, index_by, total);
     if !folder_complete {
         return IndexPlan {
             state: IndexState::Damaged,
@@ -147,7 +153,7 @@ pub(crate) fn plan_index(
             )],
         };
     };
-    let tally = tally_text(plural, grouping, total);
+    let tally = tally_text(nouns, grouping, total);
     let spec = records_spec(&tally);
     let planned = host_catalog::plan_host_region(
         PathBuf::from(path),
@@ -335,19 +341,42 @@ fn format_scalar(field: &RecordField, raw: &str) -> String {
     }
 }
 
-fn tally_text(plural: &str, grouping: &RecordGrouping, total: usize) -> String {
-    let safe_plural = inert_text(plural);
+fn tally_text(
+    nouns: &RecordNouns<'_>,
+    grouping: &RecordGrouping,
+    total: usize,
+) -> String {
+    let safe_plural = inert_text(nouns.plural);
+    let safe_singular = inert_text(nouns.singular);
     if total == 0 {
         return format!("No {safe_plural} yet");
+    }
+    if total == 1 {
+        let mut parts = vec![format!("1 {safe_singular}")];
+        for group in &grouping.groups {
+            parts.push(tally_fragment(&group.label, group.count));
+        }
+        if grouping.needs_status > 0 {
+            parts.push(needs_status_fragment(grouping.needs_status));
+        }
+        return parts.join(" · ");
     }
     let mut parts = vec![format!("{total} {safe_plural}")];
     for group in &grouping.groups {
         parts.push(tally_fragment(&group.label, group.count));
     }
     if grouping.needs_status > 0 {
-        parts.push(format!("⚠️ {} need a status", grouping.needs_status));
+        parts.push(needs_status_fragment(grouping.needs_status));
     }
     parts.join(" · ")
+}
+
+fn needs_status_fragment(count: usize) -> String {
+    if count == 1 {
+        "⚠️ 1 needs a status".to_owned()
+    } else {
+        format!("⚠️ {count} need a status")
+    }
 }
 
 fn tally_fragment(label: &str, count: usize) -> String {
@@ -498,6 +527,10 @@ mod tests {
         lines.join("\n")
     }
 
+    fn nouns<'a>(singular: &'a str, plural: &'a str) -> RecordNouns<'a> {
+        RecordNouns { singular, plural }
+    }
+
     fn eat_fields() -> Vec<RecordField> {
         vec![
             choices(
@@ -519,7 +552,7 @@ mod tests {
         let grouping = group_records(&fields, Some("location"), &[], &[]);
         let lines = render_callout(
             "eat",
-            "restaurants",
+            &nouns("restaurant", "restaurants"),
             &fields,
             &grouping,
             Some("location"),
@@ -575,7 +608,7 @@ mod tests {
         let grouping = group_records(&fields, Some("location"), &[], &records);
         let lines = render_callout(
             "eat",
-            "restaurants",
+            &nouns("restaurant", "restaurants"),
             &fields,
             &grouping,
             Some("location"),
@@ -584,7 +617,7 @@ mod tests {
         assert_eq!(
             join(&lines),
             "\
-> [!records] 4 restaurants · 🔖 2 to try · 💚 1 liked · ⚠️ 1 need a status
+> [!records] 4 restaurants · 🔖 2 to try · 💚 1 liked · ⚠️ 1 needs a status
 >
 > - **🔖 To try** · 2
 >   - [[eat/ani_ramen_house|Ani Ramen House]] — Ramen · Clark
@@ -626,7 +659,7 @@ mod tests {
         let grouping = group_records(&fields, None, &[], &records);
         let lines = render_callout(
             "podcasts",
-            "podcasts",
+            &nouns("podcast", "podcasts"),
             &fields,
             &grouping,
             None,
@@ -654,7 +687,7 @@ mod tests {
         let grouping = group_records(&fields, None, &[], &records);
         let lines = render_callout(
             "movies",
-            "movies",
+            &nouns("movie", "movies"),
             &fields,
             &grouping,
             None,
@@ -671,7 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn tv_shaped_index_uses_acronym_plural() {
+    fn tv_shaped_index_keeps_acronym_singular_and_plural() {
         let fields = vec![choices(
             "status",
             &[("to_watch", "To watch"), ("watched", "Watched")],
@@ -682,11 +715,34 @@ mod tests {
             &[("status", scalar("to_watch"))],
         )];
         let grouping = group_records(&fields, None, &[], &records);
-        let lines =
-            render_callout("tv", "TV shows", &fields, &grouping, None, 1);
-        assert!(
-            join(&lines).starts_with("> [!records] 1 TV shows · 1 to watch")
+        let lines = render_callout(
+            "tv",
+            &nouns("TV show", "TV shows"),
+            &fields,
+            &grouping,
+            None,
+            1,
         );
+        assert!(join(&lines).starts_with("> [!records] 1 TV show · 1 to watch"));
+        let two = vec![
+            record(
+                "tv/severance.md",
+                "Severance",
+                &[("status", scalar("to_watch"))],
+            ),
+            record("tv/silo.md", "Silo", &[("status", scalar("watched"))]),
+        ];
+        let grouping_two = group_records(&fields, None, &[], &two);
+        let two_lines = render_callout(
+            "tv",
+            &nouns("TV show", "TV shows"),
+            &fields,
+            &grouping_two,
+            None,
+            two.len(),
+        );
+        assert!(join(&two_lines)
+            .starts_with("> [!records] 2 TV shows · 1 to watch"));
     }
 
     #[test]
@@ -696,15 +752,29 @@ mod tests {
         let grouping = group_records(&fields, Some("location"), &[], &records);
         let lines = render_callout(
             "eat",
-            "restaurants",
+            &nouns("restaurant", "restaurants"),
             &fields,
             &grouping,
             Some("location"),
             1,
         );
         let text = join(&lines);
-        assert!(text.contains("⚠️ 1 need a status"));
+        assert!(text.contains("⚠️ 1 needs a status"));
         assert!(text.contains("[[eat/mystery_spot|mystery spot]]"));
+        let two = vec![
+            record("eat/mystery_spot.md", "mystery spot", &[]),
+            record("eat/other_spot.md", "other spot", &[]),
+        ];
+        let grouping_two = group_records(&fields, Some("location"), &[], &two);
+        let two_lines = render_callout(
+            "eat",
+            &nouns("restaurant", "restaurants"),
+            &fields,
+            &grouping_two,
+            Some("location"),
+            two.len(),
+        );
+        assert!(join(&two_lines).contains("⚠️ 2 need a status"));
     }
 
     #[test]
@@ -722,8 +792,14 @@ mod tests {
             ],
         )];
         let grouping = group_records(&fields, None, &[], &records);
-        let lines =
-            render_callout("eat", "restaurants", &fields, &grouping, None, 1);
+        let lines = render_callout(
+            "eat",
+            &nouns("restaurant", "restaurants"),
+            &fields,
+            &grouping,
+            None,
+            1,
+        );
         let text = join(&lines);
         assert!(text.contains("[[eat/weird|Foo Bar x]]"));
         assert!(text.contains(r"Ramen \*x\*"));
@@ -760,8 +836,14 @@ mod tests {
             &["companions".to_owned(), "notes".to_owned()],
             &records,
         );
-        let lines =
-            render_callout("eat", "restaurants", &fields, &grouping, None, 1);
+        let lines = render_callout(
+            "eat",
+            &nouns("restaurant", "restaurants"),
+            &fields,
+            &grouping,
+            None,
+            1,
+        );
         assert!(join(&lines).contains("[[eat/a|A]] — Kelly, Pat"));
         assert!(!join(&lines).contains("Kelly, Pat ·"));
     }
@@ -786,7 +868,7 @@ mod tests {
         assert!(!grouping.groups[0].subgroups.is_empty());
         let lines = render_callout(
             "eat",
-            "restaurants",
+            &nouns("restaurant", "restaurants"),
             &fields,
             &grouping,
             Some("location"),
@@ -822,7 +904,7 @@ mod tests {
         );
         let lines = render_callout(
             "eat",
-            "restaurants",
+            &nouns("restaurant", "restaurants"),
             &fields,
             &grouping,
             Some("location"),
@@ -839,8 +921,14 @@ mod tests {
             record("eat/a.md", "Same", &[("location", scalar("Clark"))]),
         ];
         let grouping = group_records(&fields, None, &[], &records);
-        let lines =
-            render_callout("eat", "restaurants", &fields, &grouping, None, 2);
+        let lines = render_callout(
+            "eat",
+            &nouns("restaurant", "restaurants"),
+            &fields,
+            &grouping,
+            None,
+            2,
+        );
         let text = join(&lines);
         let a = text.find("[[eat/a|Same]]").unwrap();
         let b = text.find("[[eat/b|Same]]").unwrap();
@@ -856,7 +944,7 @@ mod tests {
             "eat.md",
             Some(text),
             "eat",
-            "restaurants",
+            &nouns("restaurant", "restaurants"),
             &fields,
             &grouping,
             Some("location"),
@@ -873,7 +961,7 @@ mod tests {
             "eat.md",
             Some(&after),
             "eat",
-            "restaurants",
+            &nouns("restaurant", "restaurants"),
             &fields,
             &grouping,
             Some("location"),
@@ -890,7 +978,7 @@ mod tests {
         let grouping = group_records(&fields, Some("location"), &[], &[]);
         let callout = join(&render_callout(
             "eat",
-            "restaurants",
+            &nouns("restaurant", "restaurants"),
             &fields,
             &grouping,
             Some("location"),
@@ -903,7 +991,7 @@ mod tests {
             "eat.md",
             Some(&moved),
             "eat",
-            "restaurants",
+            &nouns("restaurant", "restaurants"),
             &fields,
             &grouping,
             Some("location"),
@@ -918,7 +1006,7 @@ mod tests {
             "eat.md",
             Some(&dup),
             "eat",
-            "restaurants",
+            &nouns("restaurant", "restaurants"),
             &fields,
             &grouping,
             Some("location"),
@@ -941,7 +1029,7 @@ mod tests {
             "eat.md",
             Some(fenced),
             "eat",
-            "restaurants",
+            &nouns("restaurant", "restaurants"),
             &fields,
             &grouping,
             Some("location"),
@@ -960,7 +1048,7 @@ mod tests {
             "eat.md",
             Some(crlf),
             "eat",
-            "restaurants",
+            &nouns("restaurant", "restaurants"),
             &fields,
             &grouping,
             Some("location"),
@@ -980,7 +1068,7 @@ mod tests {
             "eat.md",
             Some("# Eat\n"),
             "eat",
-            "restaurants",
+            &nouns("restaurant", "restaurants"),
             &fields,
             &grouping,
             Some("location"),
@@ -994,7 +1082,7 @@ mod tests {
             "eat.md",
             None,
             "eat",
-            "restaurants",
+            &nouns("restaurant", "restaurants"),
             &fields,
             &grouping,
             Some("location"),
@@ -1014,15 +1102,17 @@ mod tests {
     #[test]
     fn hostile_plural_and_choice_labels_stay_on_one_inert_line() {
         let hostile_plural = "restaurants\n## Injected";
+        let hostile_singular = "restaurant\n## Injected";
         let hostile_label =
             "To try\n## Injected [x](y) *bold* `code` [[link]] #tag";
         let fields = vec![choices("status", &[("to_try", hostile_label)])];
         let records =
             vec![record("eat/one.md", "One", &[("status", scalar("to_try"))])];
         let grouping = group_records(&fields, None, &[], &records);
+        let hostile = nouns(hostile_singular, hostile_plural);
         let lines = render_callout(
             "eat",
-            hostile_plural,
+            &hostile,
             &fields,
             &grouping,
             None,
@@ -1039,8 +1129,8 @@ mod tests {
             join(&lines)
         );
         assert!(
-            head.contains("restaurants"),
-            "normal plural text survives: {head}"
+            head.contains("restaurant"),
+            "normal singular text survives: {head}"
         );
         // Second render of the same bytes is a no-op: plan against the
         // installed text yields Current with no edit.
@@ -1050,7 +1140,7 @@ mod tests {
             "eat.md",
             Some(&text),
             "eat",
-            hostile_plural,
+            &hostile,
             &fields,
             &regroup,
             None,
@@ -1061,7 +1151,7 @@ mod tests {
         assert!(plan.edit.is_none());
         let empty = render_callout(
             "eat",
-            hostile_plural,
+            &hostile,
             &fields,
             &group_records(&fields, None, &[], &[]),
             None,
@@ -1071,6 +1161,66 @@ mod tests {
         assert!(
             !empty_head.contains('\n'),
             "empty-album plural is also inert: {empty_head:?}"
+        );
+    }
+
+    #[test]
+    fn tally_text_uses_singular_for_one_and_plural_otherwise() {
+        let fields = eat_fields();
+        let empty_grouping = group_records(&fields, None, &[], &[]);
+        assert_eq!(
+            tally_text(&nouns("restaurant", "restaurants"), &empty_grouping, 0),
+            "No restaurants yet"
+        );
+        let one = vec![record("eat/one.md", "One", &[])];
+        let one_grouping = group_records(&fields, None, &[], &one);
+        assert!(tally_text(
+            &nouns("restaurant", "restaurants"),
+            &one_grouping,
+            1
+        )
+        .starts_with("1 restaurant"));
+        assert!(tally_text(
+            &nouns("restaurant", "restaurants"),
+            &one_grouping,
+            1
+        )
+        .contains("⚠️ 1 needs a status"));
+        let two = vec![
+            record("eat/one.md", "One", &[]),
+            record("eat/two.md", "Two", &[]),
+        ];
+        let two_grouping = group_records(&fields, None, &[], &two);
+        let two_tally =
+            tally_text(&nouns("restaurant", "restaurants"), &two_grouping, 2);
+        assert!(two_tally.starts_with("2 restaurants"));
+        assert!(two_tally.contains("⚠️ 2 need a status"));
+        let acronym_one = vec![record(
+            "tv/severance.md",
+            "Severance",
+            &[("status", scalar("to_watch"))],
+        )];
+        let tv_fields = vec![choices(
+            "status",
+            &[("to_watch", "To watch"), ("watched", "Watched")],
+        )];
+        let acronym_grouping =
+            group_records(&tv_fields, None, &[], &acronym_one);
+        assert!(tally_text(
+            &nouns("TV show", "TV shows"),
+            &acronym_grouping,
+            1
+        )
+        .starts_with("1 TV show"));
+        let irregular = vec![record("people/ada.md", "Ada", &[])];
+        let irregular_grouping = group_records(&fields, None, &[], &irregular);
+        assert!(
+            tally_text(&nouns("person", "people"), &irregular_grouping, 1)
+                .starts_with("1 person")
+        );
+        assert!(
+            tally_text(&nouns("person", "people"), &irregular_grouping, 1)
+                .contains("⚠️ 1 needs a status")
         );
     }
 }

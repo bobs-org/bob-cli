@@ -120,7 +120,7 @@ fn dry_run_shows_index_and_catalog_diffs_without_writing() {
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["dry_run"], true);
     assert_eq!(changed_paths(&payload), ["body.md", "eat.md"]);
-    assert!(diff_for(&payload, "eat.md").contains("> [!records] 1 restaurants"));
+    assert!(diff_for(&payload, "eat.md").contains("> [!records] 1 restaurant"));
     assert!(diff_for(&payload, "body.md").contains("> [!albums]"));
     assert_eq!(payload["catalogs"][0]["path"], "body.md");
     assert_eq!(payload["catalogs"][0]["state"], "missing");
@@ -210,10 +210,7 @@ fn hand_edited_and_duplicate_index_regions_are_repaired() {
     let repaired = fs::read_to_string(vault.join("eat.md")).unwrap();
     assert_eq!(repaired.matches("> [!records]").count(), 1, "{repaired}");
     assert_eq!(repaired.matches("## Records").count(), 1, "{repaired}");
-    assert!(
-        repaired.contains("> [!records] 1 restaurants"),
-        "{repaired}"
-    );
+    assert!(repaired.contains("> [!records] 1 restaurant"), "{repaired}");
 }
 
 #[test]

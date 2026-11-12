@@ -849,7 +849,7 @@ fn apply_commits_one_scoped_update_and_preserves_other_files() {
     );
     let after = fs::read_to_string(vault.join("eat.md")).unwrap();
     assert!(after.contains("regular:"), "{after}");
-    assert!(after.contains("[!records] 1 restaurants"), "{after}");
+    assert!(after.contains("[!records] 1 restaurant"), "{after}");
     assert_eq!(payload["sync"]["pre"], "ok");
     assert!(!payload["inverse_ops"].as_array().unwrap().is_empty());
 }

@@ -18,9 +18,9 @@ use chrono_tz::Tz;
 use super::{
     catalog::{self, AlbumCatalogRecord},
     grouping::group_records,
-    index::plan_index,
+    index::{plan_index, RecordNouns},
     registry::AlbumRegistry,
-    report::resolved_plural,
+    report::{resolved_plural, resolved_singular},
     AlbumDeclaration,
 };
 use crate::native::{
@@ -605,6 +605,11 @@ pub(crate) fn plan_create(
             )
         })?;
     let plural = resolved_plural(&declaration);
+    let singular = resolved_singular(&declaration);
+    let nouns = RecordNouns {
+        singular: &singular,
+        plural: &plural,
+    };
     let grouping = group_records(&[], None, &[], &[]);
     let intro = render_intro(&plural, &stem);
     let before = format!("{head}\n{intro}");
@@ -612,7 +617,7 @@ pub(crate) fn plan_create(
         &md_path.to_string_lossy().replace('\\', "/"),
         Some(&before),
         &stem,
-        &plural,
+        &nouns,
         &[],
         &grouping,
         None,

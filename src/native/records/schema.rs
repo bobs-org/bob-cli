@@ -727,6 +727,7 @@ pub(crate) fn validate_field_values(
 
 /// Parse the ordered `records:` config block without adding strict record
 /// validation to shared `RawConfig` consumers.
+#[cfg(test)]
 pub(crate) fn parse_records_config(
     text: &str,
     path: &Path,
@@ -1144,8 +1145,8 @@ pub(crate) fn album_label(noun: &str) -> String {
     label
 }
 
-fn album_plural(label: &str) -> String {
-    let lowered = if label
+pub(crate) fn album_singular(label: &str) -> String {
+    if label
         .as_bytes()
         .get(0..2)
         .is_some_and(|prefix| prefix.iter().all(u8::is_ascii_uppercase))
@@ -1157,8 +1158,11 @@ fn album_plural(label: &str) -> String {
             .next()
             .map(|first| first.to_lowercase().chain(chars).collect())
             .unwrap_or_default()
-    };
-    format!("{lowered}s")
+    }
+}
+
+fn album_plural(label: &str) -> String {
+    format!("{}s", album_singular(label))
 }
 
 fn recover_album_noun(value: &Value) -> Option<String> {
@@ -2152,6 +2156,16 @@ mod tests {
         assert_eq!(
             album.to_string(),
             "eat.md:8 record.fields.location.requred: unknown option requred"
+        );
+    }
+
+    #[test]
+    fn album_singular_lowers_the_label_unless_acronym() {
+        assert_eq!(super::album_singular("Restaurant"), "restaurant");
+        assert_eq!(super::album_singular("TV show"), "TV show");
+        assert_eq!(
+            super::album_singular(&super::album_label("restaurant")),
+            "restaurant"
         );
     }
 

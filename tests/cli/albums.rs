@@ -354,6 +354,7 @@ fn album_schema_json_reports_attributes_usage_lines_and_fingerprint() {
     let payload = json(&output);
     let eat = album_by_stem(&payload, "eat");
     assert_eq!(eat["dated_notes"], true);
+    assert_eq!(eat["singular"], "restaurant");
     assert_eq!(eat["legacy"], serde_json::json!(["lid", "source_*"]));
     let fingerprint = eat["schema_fingerprint"].as_str().unwrap();
     assert!(fingerprint.starts_with("sha256:"));
@@ -1250,7 +1251,7 @@ fn eat_records_index() -> &'static str {
     "\
 ## Records
 
-> [!records] 4 restaurants · 🔖 2 to try · 💚 1 liked · ⚠️ 1 need a status
+> [!records] 4 restaurants · 🔖 2 to try · 💚 1 liked · ⚠️ 1 needs a status
 >
 > - **🔖 To try** · 2
 >   - [[eat/ani_ramen_house|Ani Ramen House]] — Ramen · Clark

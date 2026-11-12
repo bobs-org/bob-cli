@@ -13,8 +13,8 @@ use std::{
 
 use super::{
     grouping::{group_records, GroupingRecord},
-    index::{plan_index, IndexState},
-    report::resolved_plural,
+    index::{plan_index, IndexState, RecordNouns},
+    report::{resolved_plural, resolved_singular},
     AlbumDeclaration, AlbumFinding,
 };
 use crate::native::{
@@ -115,11 +115,17 @@ pub(crate) fn plan_album_write(
         &declaration.index_facets,
         &grouping_records,
     );
+    let plural = resolved_plural(declaration);
+    let singular = resolved_singular(declaration);
+    let nouns = RecordNouns {
+        singular: &singular,
+        plural: &plural,
+    };
     let planned = plan_index(
         &declaration.path,
         Some(album_before),
         &declaration.stem,
-        &resolved_plural(declaration),
+        &nouns,
         schema_fields,
         &grouping,
         declaration.index_by.as_deref(),

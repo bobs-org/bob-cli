@@ -61,8 +61,8 @@ record:
   and `record`.
 - **`record.fields`:** optional. Field kinds, defaults, lists, choices, and
   legacy patterns follow [Schema](#schema) below. `label` defaults to the
-  noun in title case; `plural` lowercases that label unless it starts with
-  an acronym, then appends `s`.
+  noun in title case; the display `singular` is that lowered label
+  (acronym labels stay as-is), and `plural` is the singular plus `s`.
 - **Summary:** one plain line; more than 140 characters produces a warning.
 - **Grouping:** `status` choices when present, otherwise the first choices
   field, otherwise none. Empty groups are omitted. Missing, unknown, or
@@ -80,7 +80,8 @@ record:
   show labels, links show display text, lists join with `, `, numbers stay
   plain, and empty values disappear.
 - **Records index:** a bob-owned `[!records]` callout whose title is the
-  tally (`N <plural>` plus nonzero group counts, then `⚠️ k need a status`).
+  tally (`N <plural>`, `1 <singular>` for a single record, plus nonzero
+  group counts, then `⚠️ k need a status`, `needs` when k is 1).
   Rows are `[[<album>/<stem>|<title>]]`; alias text drops `|[]#^`, then
   alias and facets escape active Markdown.
   Empty albums keep a teaching index (`No restaurants yet` / `Name @eat/`).
@@ -168,7 +169,8 @@ warning summary.
 
 List and check share one JSON envelope (`schema_version: 1`). Albums are
 ordered by path. `parent` is the parent stem. `ok` is false when error
-findings exist or runtime I/O failed. See
+findings exist or runtime I/O failed. Each album carries `noun`, `label`,
+`plural`, and the additive display `singular`. See
 [JSON outputs](reference/json-outputs.md#album-reports).
 
 Each album's ordered `fields[]` includes its label, kind, flags, typed default
