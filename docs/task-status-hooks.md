@@ -285,6 +285,8 @@ completion path a timed close uses for a meeting that ended inside the
 session. A cluster fully covered by on-clock sessions does not settle.
 Cancelled, done, and unlinked rows never settle. Settling is idempotent, and
 `--dry-run` previews it.
+Reconcile settles only today's ledger; `bob gcal sync -D yesterday` closes
+eligible ended Event Tasks in an earlier day's note instead.
 
 Human output prints `◌ settled {title} {span} off the clock` per event
 (`would settle` under `--dry-run`); JSON adds a `settled[]` array with the

@@ -94,7 +94,7 @@ pub(super) fn plan_refile<C: ClockLookup + ?Sized>(
             input,
             &contents,
             &events,
-            &moved,
+            &moved.block_id,
             event,
             &plan_out.moved_rows,
             daily_rel,
@@ -161,6 +161,7 @@ pub(super) fn plan_refile<C: ClockLookup + ?Sized>(
                     event,
                     phase,
                     true,
+                    false,
                     daily_rel,
                     &mut clock,
                 ) {
@@ -200,6 +201,7 @@ pub(super) fn plan_refile<C: ClockLookup + ?Sized>(
                             event,
                             LinkPhase::Past,
                             true,
+                            false,
                             daily_rel,
                             &mut clock,
                         )
@@ -229,13 +231,13 @@ fn classify_filing<C: ClockLookup + ?Sized>(
     input: &SyncPlanInput<'_>,
     contents: &str,
     events: &[EventNoteRow],
-    moved: &MovedRow,
+    block_id: &str,
     event: &EventNoteRow,
     moved_rows: &[MovedRow],
     daily_rel: Option<&std::path::Path>,
     clock: &mut Option<&mut C>,
 ) -> Filing {
-    let Some(mentions) = ledger_mentions(contents, &moved.block_id) else {
+    let Some(mentions) = ledger_mentions(contents, block_id) else {
         return Filing::Unlinked;
     };
     if mentions.is_empty() {
@@ -252,7 +254,7 @@ fn classify_filing<C: ClockLookup + ?Sized>(
     }
 
     let untouched =
-        lifecycle::row_untouched(contents, event.line_index, &moved.block_id);
+        lifecycle::row_untouched(contents, event.line_index, block_id);
     if untouched
         && mentions.iter().all(|mention| {
             mention.exact_plain
@@ -272,7 +274,7 @@ fn classify_filing<C: ClockLookup + ?Sized>(
             == 1
     {
         return Filing::Planned {
-            block_id: moved.block_id.clone(),
+            block_id: block_id.to_string(),
         };
     }
 
@@ -297,7 +299,7 @@ fn classify_filing<C: ClockLookup + ?Sized>(
         && entry.name.as_deref() == Some("MEET")
         && entry.time_range.is_some()
         && let Some(members) = closed_members
-        && members.iter().any(|member| member == &moved.block_id)
+        && members.iter().any(|member| member == block_id)
     {
         return Filing::BobClosed {
             digest: entry.pomodoro_ref.digest.clone(),
@@ -306,6 +308,506 @@ fn classify_filing<C: ClockLookup + ?Sized>(
     }
 
     Filing::Yours
+}
+
+#[derive(Clone)]
+struct CloseCandidate {
+    occurrence: PlannedOccurrence,
+    block_id: String,
+}
+
+/// Close untouched journaled Event Tasks when their note day has passed.
+/// Birth rows and Google-moved rows keep their existing planner paths.
+pub(super) fn plan_clock_passed_close<C: ClockLookup + ?Sized>(
+    input: &SyncPlanInput<'_>,
+    working: &mut WorkingNote,
+    plan_out: &mut SyncPlan,
+    refile_wants: &[WantedLink],
+    daily_rel: Option<&std::path::Path>,
+    mut clock: Option<&mut C>,
+) -> Vec<WantedLink> {
+    if note_day(input) >= input.today {
+        return Vec::new();
+    }
+
+    let birth_ids: HashSet<String> = plan::collect_wanted_links(
+        input,
+        working,
+        plan_out,
+        daily_rel,
+        clock.as_mut().map(|clock| &mut **clock),
+    )
+    .into_iter()
+    .map(|link| link.block_id)
+    .collect();
+    let moved_ids: HashSet<&str> = plan_out
+        .moved_rows
+        .iter()
+        .map(|row| row.block_id.as_str())
+        .collect();
+    let refile_ids: HashSet<&str> = refile_wants
+        .iter()
+        .map(|link| link.block_id.as_str())
+        .collect();
+    let contents = working.as_string();
+    let events = event_task::events_in_note(&contents, note_day(input));
+    let mut candidates = Vec::new();
+    let mut seen = HashSet::new();
+    for occurrence in &input.occurrences {
+        if !occurrence.task || occurrence.link_phase != Some(LinkPhase::Past) {
+            continue;
+        }
+        let Some(block_id) = existing_block_id(input, plan_out, occurrence)
+        else {
+            continue;
+        };
+        if birth_ids.contains(&block_id)
+            || moved_ids.contains(block_id.as_str())
+            || refile_ids.contains(block_id.as_str())
+            || !seen.insert(block_id.clone())
+        {
+            continue;
+        }
+        let Some(event) = unique_event_by_id(&events, &block_id).cloned()
+        else {
+            continue;
+        };
+        if event.span.is_none()
+            || !lifecycle::row_untouched(&contents, event.line_index, &block_id)
+        {
+            continue;
+        }
+        candidates.push(CloseCandidate {
+            occurrence: occurrence.clone(),
+            block_id,
+        });
+    }
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+
+    let candidates_by_id: HashMap<String, CloseCandidate> = candidates
+        .iter()
+        .cloned()
+        .map(|candidate| (candidate.block_id.clone(), candidate))
+        .collect();
+    let moved_rows = plan_out.moved_rows.clone();
+    let mut wants = Vec::new();
+    let mut handled = HashSet::new();
+    let mut removed_filing = false;
+
+    for candidate in &candidates {
+        if handled.contains(&candidate.block_id) {
+            continue;
+        }
+        let contents = working.as_string();
+        let events = event_task::events_in_note(&contents, note_day(input));
+        let Some(event) = unique_event_by_id(&events, &candidate.block_id)
+        else {
+            continue;
+        };
+        let Some(occurrence) = input.occurrences.iter().find(|occurrence| {
+            occurrence.calendar_id == candidate.occurrence.calendar_id
+                && occurrence.event_id == candidate.occurrence.event_id
+        }) else {
+            continue;
+        };
+        let filing = classify_filing(
+            input,
+            &contents,
+            &events,
+            &candidate.block_id,
+            event,
+            &moved_rows,
+            daily_rel,
+            &mut clock,
+        );
+        match filing {
+            Filing::Planned { block_id } => {
+                let (without, removed) =
+                    lifecycle::remove_meet_link(&contents, &block_id);
+                if removed {
+                    working.replace(&without);
+                    removed_filing = true;
+                }
+                let current = working.as_string();
+                let current_events =
+                    event_task::events_in_note(&current, note_day(input));
+                if let Some(event) =
+                    unique_event_by_id(&current_events, &block_id)
+                {
+                    complete_row(working, event.line_index, &input.day_string);
+                    let updated = working.as_string();
+                    let updated_events =
+                        event_task::events_in_note(&updated, note_day(input));
+                    if let Some(event) =
+                        unique_event_by_id(&updated_events, &block_id)
+                        && let Some(want) = wanted_for_event(
+                            input,
+                            &updated,
+                            event,
+                            LinkPhase::Past,
+                            false,
+                            true,
+                            daily_rel,
+                            &mut clock,
+                        )
+                    {
+                        wants.push(want);
+                        record_closed_row(
+                            plan_out,
+                            occurrence,
+                            &input.day_string,
+                            plan::resolved_off_clock(
+                                &mut clock,
+                                daily_rel,
+                                updated_events
+                                    .iter()
+                                    .find(|row| {
+                                        row.block_id.as_deref()
+                                            == Some(block_id.as_str())
+                                    })
+                                    .and_then(|row| {
+                                        line_spans(&updated)
+                                            .get(row.line_index)
+                                            .map(|line| line.text)
+                                    }),
+                                occurrence.off_clock,
+                            ),
+                        );
+                    }
+                }
+                handled.insert(block_id);
+            }
+            Filing::Running => {
+                let running_entry =
+                    running_entry_for(&contents, &candidate.block_id);
+                let closed = running_entry.and_then(|entry| {
+                    close_bob_running_entry(
+                        input,
+                        working,
+                        plan_out,
+                        &entry,
+                        &candidates_by_id,
+                        daily_rel,
+                        &mut clock,
+                    )
+                });
+                if let Some(members) = closed {
+                    handled.extend(members);
+                } else {
+                    report_open_kept(
+                        input,
+                        plan_out,
+                        occurrence,
+                        &candidate.block_id,
+                        "its timed Pomodoro is not a Bob-shaped MEET; close or cancel it in the note",
+                    );
+                    handled.insert(candidate.block_id.clone());
+                }
+            }
+            Filing::Unlinked => {
+                report_open_kept(
+                    input,
+                    plan_out,
+                    occurrence,
+                    &candidate.block_id,
+                    "it has no MEET link; close or cancel it in the note",
+                );
+                handled.insert(candidate.block_id.clone());
+            }
+            Filing::Yours | Filing::BobClosed { .. } => {
+                report_open_kept(
+                    input,
+                    plan_out,
+                    occurrence,
+                    &candidate.block_id,
+                    "its MEET filing is yours; close or cancel it in the note",
+                );
+                handled.insert(candidate.block_id.clone());
+            }
+        }
+    }
+
+    if removed_filing {
+        let current = working.as_string();
+        let (cleaned, removed) =
+            lifecycle::remove_childless_untimed_meet(&current);
+        if removed > 0 {
+            plan_out.entries_removed += removed;
+        }
+        working.replace(&cleaned);
+    }
+
+    wants
+}
+
+fn existing_block_id(
+    input: &SyncPlanInput<'_>,
+    plan_out: &SyncPlan,
+    occurrence: &PlannedOccurrence,
+) -> Option<String> {
+    if let Some(upgraded) = plan_out.rows_upgraded.iter().find(|row| {
+        row.calendar_id == occurrence.calendar_id
+            && row.event_id == occurrence.event_id
+    }) {
+        return Some(upgraded.block_id.clone());
+    }
+    let key = occurrence_key(&occurrence.calendar_id, &occurrence.event_id);
+    if let Some(row) = input
+        .journal
+        .get(&(key, input.day_string.clone()))
+        .and_then(|state| state.row.as_ref())
+        && !row.block_id.is_empty()
+    {
+        return Some(row.block_id.clone());
+    }
+    plan_out
+        .rows_restored
+        .iter()
+        .find(|row| {
+            row.calendar_id == occurrence.calendar_id
+                && row.event_id == occurrence.event_id
+        })
+        .map(|row| row.block_id.clone())
+        .or_else(|| {
+            plan_out
+                .rows_adopted
+                .iter()
+                .find(|row| {
+                    row.calendar_id == occurrence.calendar_id
+                        && row.event_id == occurrence.event_id
+                })
+                .map(|row| row.block_id.clone())
+        })
+}
+
+fn record_closed_row(
+    plan_out: &mut SyncPlan,
+    occurrence: &PlannedOccurrence,
+    completion: &str,
+    off_clock: bool,
+) {
+    plan_out.rows_closed.push(plan::ClosedRow {
+        calendar_id: occurrence.calendar_id.clone(),
+        event_id: occurrence.event_id.clone(),
+        time_label: occurrence.time_label.clone(),
+        title: occurrence.title.clone(),
+        completion: completion.to_string(),
+        root: occurrence.root.clone(),
+        source: occurrence.source.clone(),
+        off_clock,
+        buffer: occurrence.buffer,
+    });
+}
+
+fn report_open_kept(
+    input: &SyncPlanInput<'_>,
+    plan_out: &mut SyncPlan,
+    occurrence: &PlannedOccurrence,
+    block_id: &str,
+    detail: &str,
+) {
+    push_kept_once(
+        input,
+        plan_out,
+        &occurrence.calendar_id,
+        &occurrence.event_id,
+        occurrence.title.clone(),
+        format!("left ^{block_id} open: {detail}"),
+        "kept_open",
+    );
+}
+
+fn running_entry_for(contents: &str, block_id: &str) -> Option<PomodoroEntry> {
+    let mentions = ledger_mentions(contents, block_id)?;
+    let entries = capture_pomodoros::scan(contents).entries;
+    mentions.into_iter().find_map(|mention| {
+        entries.get(mention.entry_index).and_then(|entry| {
+            (entry.state == PomodoroState::Open && entry.time_range.is_some())
+                .then(|| entry.clone())
+        })
+    })
+}
+
+fn close_bob_running_entry<C: ClockLookup + ?Sized>(
+    input: &SyncPlanInput<'_>,
+    working: &mut WorkingNote,
+    plan_out: &mut SyncPlan,
+    entry: &PomodoroEntry,
+    candidates: &HashMap<String, CloseCandidate>,
+    daily_rel: Option<&std::path::Path>,
+    clock: &mut Option<&mut C>,
+) -> Option<Vec<String>> {
+    if entry.state != PomodoroState::Open
+        || entry.name.as_deref() != Some("MEET")
+    {
+        return None;
+    }
+    let contents = working.as_string();
+    let lines = line_spans(&contents);
+    let header_index = entry.line.checked_sub(1)?;
+    let header = lines.get(header_index)?.text;
+    let time_range = entry.time_range.as_deref()?;
+    let (start_min, mut current_end) = parse_meet_range(time_range)?;
+    let off_clock =
+        bob_running_clock(header, time_range, start_min, current_end)?;
+    if current_end <= start_min {
+        current_end += 1440;
+    }
+
+    let end_line = child_block_end_line(&lines, header_index)
+        .min(lines.len().saturating_sub(1));
+    let mut members = Vec::new();
+    let mut link_lines = Vec::new();
+    let mut expected_ids = HashSet::new();
+    let scan = capture_pomodoros::scan(&contents);
+    let entry_index = scan
+        .entries
+        .iter()
+        .position(|candidate| candidate.line == entry.line)?;
+    let mut max_buffered_end = current_end;
+    for index in header_index + 1..=end_line {
+        let line = lines.get(index)?.text;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let block_id = trimmed.strip_prefix("- [[#^")?.strip_suffix("]]")?;
+        if trimmed != format!("- [[#^{block_id}]]")
+            || child_block_end_line(&lines, index) != index
+            || !expected_ids.insert(block_id.to_string())
+        {
+            return None;
+        }
+        let candidate = candidates.get(block_id)?;
+        if candidate.occurrence.link_phase != Some(LinkPhase::Past) {
+            return None;
+        }
+        let events = event_task::events_in_note(&contents, note_day(input));
+        let event = unique_event_by_id(&events, block_id)?;
+        if event.span.is_none()
+            || !lifecycle::row_untouched(&contents, event.line_index, block_id)
+        {
+            return None;
+        }
+        let mentions = ledger_mentions(&contents, block_id)?;
+        if mentions.len() != 1
+            || mentions[0].entry_index != entry_index
+            || mentions[0].line_index != index
+            || !mentions[0].exact_plain
+            || !mentions[0].childless
+        {
+            return None;
+        }
+        let span = event.span?;
+        let (_, end) = event_task::buffered_timeline_range(
+            i32::from(span.start_min),
+            span.end_on_timeline(),
+            event.buffer,
+        );
+        max_buffered_end = max_buffered_end.max(end);
+        members.push((block_id.to_string(), candidate.clone(), event.clone()));
+        link_lines.push(index);
+    }
+    if members.is_empty() || members.len() != entry.child_count {
+        return None;
+    }
+    let indent = lines
+        .get(*link_lines.first()?)
+        .map(|line| indentation(line.text))?;
+    if link_lines.iter().any(|index| {
+        lines
+            .get(*index)
+            .is_none_or(|line| indentation(line.text) != indent)
+    }) {
+        return None;
+    }
+
+    let (span, _) =
+        plan::format_meet_span(start_min, max_buffered_end, off_clock);
+    let mut updated_header = format!("- [x] {span} — MEET");
+    if let Some(line) = working.lines.get_mut(header_index) {
+        *line = std::mem::take(&mut updated_header);
+    } else {
+        return None;
+    }
+    for (index, (block_id, candidate, event)) in
+        link_lines.into_iter().zip(&members)
+    {
+        let line = working.lines.get_mut(index)?;
+        let pad = line.len() - line.trim_start().len();
+        let indent = &line[..pad];
+        *line = format!("{indent}- 🍅 ~~[[#^{block_id}]]~~");
+        complete_row(working, event.line_index, &input.day_string);
+        let current_contents = working.as_string();
+        let row_line = line_spans(&current_contents)
+            .get(event.line_index)
+            .map(|line| line.text);
+        let effective_off = plan::resolved_off_clock(
+            clock,
+            daily_rel,
+            row_line,
+            candidate.occurrence.off_clock,
+        );
+        record_closed_row(
+            plan_out,
+            &candidate.occurrence,
+            &input.day_string,
+            effective_off,
+        );
+        plan_out.links_closed.push(plan::PlannedLink {
+            calendar_id: candidate.occurrence.calendar_id.clone(),
+            event_id: candidate.occurrence.event_id.clone(),
+            block_id: block_id.clone(),
+        });
+    }
+    Some(members.into_iter().map(|(id, _, _)| id).collect())
+}
+
+fn parse_meet_range(value: &str) -> Option<(i32, i32)> {
+    let (start, end) = value.split_once('-')?;
+    let parse = |value: &str| -> Option<i32> {
+        if value.len() != 4 || !value.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return None;
+        }
+        let hour = value[..2].parse::<i32>().ok()?;
+        let minute = value[2..].parse::<i32>().ok()?;
+        (hour < 24 && minute < 60).then_some(hour * 60 + minute)
+    };
+    Some((parse(start)?, parse(end)?))
+}
+
+fn bob_running_clock(
+    header: &str,
+    time_range: &str,
+    start_min: i32,
+    end_min: i32,
+) -> Option<bool> {
+    for (key, off_clock) in [("t", false), ("off", true)] {
+        let prefix = format!("- [ ] (**{time_range}** [{key}:: ");
+        let Some(minutes) = header
+            .strip_prefix(&prefix)
+            .and_then(|value| value.strip_suffix("m]) — MEET"))
+        else {
+            continue;
+        };
+        if minutes.is_empty()
+            || !minutes.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            continue;
+        }
+        let duration = minutes.parse::<i32>().ok()?;
+        let mut end_min = end_min;
+        if end_min <= start_min {
+            end_min += 1440;
+        }
+        if minutes == duration.to_string() && duration == end_min - start_min {
+            return Some(off_clock);
+        }
+    }
+    None
 }
 
 fn ledger_mentions(contents: &str, block_id: &str) -> Option<Vec<Mention>> {
@@ -462,6 +964,7 @@ fn bob_closed_members<C: ClockLookup + ?Sized>(
             title: event.title.clone(),
             off_clock,
             refiled: false,
+            closed: false,
         });
     }
     let clusters = plan::cluster_past(old_spans);
@@ -574,6 +1077,7 @@ fn wanted_for_event<C: ClockLookup + ?Sized>(
     event: &EventNoteRow,
     phase: LinkPhase,
     refiled: bool,
+    closed: bool,
     daily_rel: Option<&std::path::Path>,
     clock: &mut Option<&mut C>,
 ) -> Option<WantedLink> {
@@ -608,6 +1112,7 @@ fn wanted_for_event<C: ClockLookup + ?Sized>(
         title: event.title.clone(),
         off_clock,
         refiled,
+        closed,
     })
 }
 

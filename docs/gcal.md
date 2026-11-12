@@ -535,15 +535,26 @@ meeting time or parsed buffer, sync re-files only an untouched placeholder
 link or a Bob-shaped closed MEET whose Event Task rows are still in their
 born-done state. A past move closes a row that was under the placeholder; a
 Bob-written closed MEET can be retimed or split, and a row moved into the
-current or future phase is reopened. Running entries and other filing are
-left alone; a kept MEET edit is reported once as `kept_meet`. A clock-tag-only
-change, title or description update, a kept span edit, and the clock passing
-without a Google change never trigger re-filing. Existing unlinked rows still
-earn an open-MEET link only on today's note, and only when the event has not
-ended.
+current or future phase is reopened. On a same-day sync, running entries and
+other filing are left alone; a kept MEET edit is reported once as `kept_meet`.
+A clock-tag-only change, title or description update, a kept span edit, and
+the clock passing without a Google change never trigger same-day re-filing.
 
-A past day (`-D yesterday`) gains closed MEET entries and `[x]` rows completed
-on that note's day. A
+A past-day sync (`-D yesterday`) also closes previously synced, untouched
+open Event Task rows whose buffered event has ended. A row under the open
+untimed MEET placeholder moves to a closed MEET with a struck link; adjacent
+events cluster by buffered span and split by clock verdict. A stale running
+MEET closes in place only when it has Bob's exact timed-MEET header and every
+child is an untouched, included past Event Task link. Its end extends to the
+latest member's buffered end, and its existing `[t::]` or `[off::]` duration
+is recomputed. Other running entries and hand-filed MEET links stay open and
+are reported once as `kept_open`. An unlinked open row stays open, receives no
+new link, and is reported once as `kept_open`. Touched rows are left alone.
+The close writes `[x]` and `[completion:: <note day>]`; a repeat is a no-op.
+Today's and future notes keep their existing live-session behavior. A past day
+also gains the closed MEET entries and completed rows used for events first
+synced after they ended. On today's note, an unlinked row can still receive an
+open-MEET link only while its event has not ended. A
 future day (`-D tomorrow`) gains a MEET placeholder and `[*]` rows; task
 status hooks rule R9 may clear those `[*]` rows to `[ ]` until that day
 becomes today, when the MEET link raises them again.
@@ -571,9 +582,11 @@ Events section is held), `rows`
 `null`, `description_lines`, the bullet lines this run wrote for the
 row, reasons included, 0 otherwise, and `detail`, the reason text of a
 `removed` row — `removed by you` or the lifecycle reason — else `null`),
+`completion` (the note-day date for a `closed` row, else `null`),
 `in_sync` (included events already in the note that needed no change),
 `skipped` (see [Skipped events](#skipped-events)), `pomodoro`
-(`entry_line`, `created`, `links_added`, `links_refiled`, `links_sorted`, `entries`),
+(`entry_line`, `created`, `links_added`, `links_refiled`, `links_closed`,
+`links_sorted`, `entries`),
 `warnings`, `deprecations`, and `stamp`
 (`account`, `synced_at`, `refreshed`, or `null` when there is no Events
 section and for `waiting`). Human rows append the buffer label to the time
@@ -588,11 +601,16 @@ ledger order. `entry_line` and `created` describe the first open entry in
 that list (`null` / `false` when the run linked only under closed entries).
 `links_added` counts new links, closed entries included. `links_refiled` counts
 existing links moved after a Google span change; those do not append another
-`gcal.link` journal record. `links_sorted` counts Event Task link lines moved
-into meeting-time order. A sort-only human summary looks like
+`gcal.link` journal record. `links_closed` counts existing links struck by a
+past-day close; it does not append another `gcal.link` journal record.
+`links_sorted` counts Event Task link lines moved into meeting-time order. A
+sort-only human summary looks like
 `✓ Events unchanged · Pomodoros ↕2 links sorted`; a refile-only summary looks
 like `✓ Events updated · Pomodoros ↪1 refiled`; other Pomodoro summaries append
-`, ↕2 sorted` or `, ↪1 refiled` when applicable.
+`, ↕2 sorted`, `, ↪1 refiled`, or `, ✔2 closed` when applicable. A close-only
+summary looks like `✓ Events updated · Pomodoros +1 entry, ✔2 closed`, or
+`✓ Events updated · Pomodoros ✔2 closed` when a stale running MEET closes in
+place.
 
 A multi-day JSON run wraps the unchanged per-day reports in one document:
 `{"schema_version":1,"ok":true,"days":[…]}`. If a day fails, the run stops
@@ -726,7 +744,9 @@ session stays on the calendar and off the Worked clock. `#on` explicitly
 forces on-clock and wins over any off spelling. The closed MEET uses
 `[off:: Nm]` with the event's real duration; Worked stats and
 `bob pomodoro --worked` leave those minutes out, while homes can attribute
-them. The spellings `#offclock`, `#off-clock`, and legacy `#untracked`
+them. A past-day `bob gcal sync` also closes an ended, untouched off-clock
+Event Task nobody started, recording its buffered span in a closed `[off::]`
+MEET. The spellings `#offclock`, `#off-clock`, and legacy `#untracked`
 remain accepted forever but are deprecated: sync and list report them and
 point at `#off`.
 
@@ -996,10 +1016,15 @@ render of its event:
   dedicated struck 🍅 links, and every member remains born done with no
   other ledger link. Bob-shaped closed entries are removed and rebuilt from
   the members' current spans; a moved row entering Current or Future is
-  reopened and routed by the normal birth rules. A running entry is left
-  alone. Other filing is kept and reported once as `kept_meet`. A
-  clock-tag-only change, title/root/description-only change, kept span edit,
-  or a passing clock does not trigger this re-file.
+  reopened and routed by the normal birth rules. Same-day sync leaves running
+  entries alone. A past-day sync closes a stale running MEET in place when
+  its header and all dedicated child links still have Bob's exact shape;
+  otherwise it stays open and is reported once as `kept_open`. Other filing is
+  kept and reported once as `kept_meet`. A clock-tag-only change,
+  title/root/description-only change, kept span edit, or a passing clock does
+  not trigger same-day re-filing. A past-day sync separately closes an ended,
+  untouched placeholder-filed row; an unlinked row stays open without a new
+  link and is reported once as `kept_open`.
 - A Maybe context row whose RSVP went Yes upgrades in place to an Event
   Task and is filed under a MEET by phase. A Yes task row whose RSVP went
   Maybe stays a task and is reported once.
@@ -1018,8 +1043,10 @@ render of its event:
   reported as `learned from your 2026-10-29 edit`. A later edit, including
   a change back, re-teaches the series. Series splits are a cancel plus
   an insert, never a fuzzy match.
-- Missed meetings are never auto-cancelled. `list` ends with the open
-  Event Tasks still sitting in the previous 7 daily notes, for example
+- Missed meetings are never auto-cancelled. A past-day sync closes ended,
+  untouched rows filed under Bob's placeholder or Bob-shaped running MEET;
+  hand-filed and unlinked rows stay open with a once-only `kept_open` notice.
+  `list` ends with the remaining open Event Tasks in the previous 7 daily notes, for example
   `2 past meetings still open: Thu Dentist, Tue Weekly 1:1 · close or
   cancel them in their notes`.
 

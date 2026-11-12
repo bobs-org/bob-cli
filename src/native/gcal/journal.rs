@@ -974,6 +974,7 @@ pub(crate) struct SyncStatus {
     pub context_added: usize,
     pub links_added: usize,
     pub links_refiled: usize,
+    pub links_closed: usize,
     pub error: Option<String>,
     /// Waiting reason code for a `waiting` outcome (additive).
     pub reason: Option<String>,
@@ -1003,6 +1004,7 @@ pub(crate) fn write_status(status: &SyncStatus) -> std::io::Result<()> {
         "context_added": status.context_added,
         "links_added": status.links_added,
         "links_refiled": status.links_refiled,
+        "links_closed": status.links_closed,
         "error": status.error,
         "reason": status.reason,
         "forced": status.forced,
@@ -1049,6 +1051,10 @@ pub(crate) fn read_status() -> Option<SyncStatus> {
             .unwrap_or(0) as usize,
         links_refiled: object
             .get("links_refiled")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize,
+        links_closed: object
+            .get("links_closed")
             .and_then(Value::as_u64)
             .unwrap_or(0) as usize,
         error: object

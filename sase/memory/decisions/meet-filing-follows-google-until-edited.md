@@ -9,7 +9,8 @@ aliases:
   - gcal meet refile
   - moved meeting refile
 metadata:
-  status: accepted
+  status: superseded-in-part
+  superseded_by: "decisions:past-day-sync-closes-bob-filed-meetings"
 decided: 2026-11-05
 ---
 
@@ -65,3 +66,7 @@ and § Reconciling Google-side changes; `tests/gcal_sync.rs`; the 2026-11-05
 [[decisions:ended-off-clock-events-settle]]
 
 [[glossary:event-task]]
+
+Superseded in part: the clause that the clock passing without a Google
+change never triggers re-filing is retired for past note days. See
+[[decisions:past-day-sync-closes-bob-filed-meetings]].

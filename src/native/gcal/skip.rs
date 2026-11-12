@@ -337,7 +337,12 @@ pub(crate) fn summarize(
     for row in &plan.rows_gone {
         changed.insert(key_of(&row.calendar_id, &row.event_id));
     }
-    for link in plan.links_added.iter().chain(plan.links_refiled.iter()) {
+    for link in plan
+        .links_added
+        .iter()
+        .chain(plan.links_refiled.iter())
+        .chain(plan.links_closed.iter())
+    {
         changed.insert(key_of(&link.calendar_id, &link.event_id));
     }
     for moved in &plan.moved_rows {

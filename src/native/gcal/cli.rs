@@ -131,7 +131,8 @@ fn sync_command() -> ClapCommand {
              one pass before any day is written. `-d` prints the exact unified \
              diffs of the plans and writes nothing. `-F` resets every selected \
              day's sync journal and reapplies Google over its Events rows and \
-             MEET links. Writes \
+             MEET links. A past-day sync also closes eligible open Bob-filed \
+             Event Tasks and stale Bob-shaped timed MEET entries. Writes \
              nothing, and exits 0 with a reason and hint, while the note is \
              missing, has no `## Pomodoros`, or still has Templater tags \
              (`<% … %>`) Templater has not rendered.",
@@ -148,7 +149,7 @@ fn sync_command() -> ClapCommand {
 }
 
 fn sync_after_help() -> &'static str {
-    "Examples:\n  bob gcal sync\n  bob gcal sync -D tomorrow\n  bob gcal sync -D today -D tomorrow\n  bob gcal sync -d\n  bob gcal sync -F\n  bob gcal sync -F -d\n  bob gcal sync -q\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH\n  BOB_NOW            Local datetime override for default day selection"
+    "Examples:\n  bob gcal sync\n  bob gcal sync -D yesterday\n  bob gcal sync -D tomorrow\n  bob gcal sync -D today -D tomorrow\n  bob gcal sync -d\n  bob gcal sync -F\n  bob gcal sync -F -d\n  bob gcal sync -q\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH\n  BOB_NOW            Local datetime override for default day selection"
 }
 
 fn doctor_command() -> ClapCommand {

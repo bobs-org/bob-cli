@@ -256,6 +256,20 @@ pub(crate) struct CancelledRow {
     pub reason: String,
 }
 
+/// One previously open Event Task closed by a past-day sync.
+#[derive(Debug, Clone)]
+pub(crate) struct ClosedRow {
+    pub calendar_id: String,
+    pub event_id: String,
+    pub time_label: String,
+    pub title: String,
+    pub completion: String,
+    pub root: Option<String>,
+    pub source: Option<String>,
+    pub off_clock: bool,
+    pub buffer: crate::native::event_task::EventBuffer,
+}
+
 /// One MEET link the plan appends.
 #[derive(Debug, Clone)]
 pub(crate) struct PlannedLink {
@@ -288,6 +302,8 @@ pub(crate) struct SyncPlan {
     pub links_added: Vec<PlannedLink>,
     /// Existing MEET links moved after a Google-side span update.
     pub links_refiled: Vec<PlannedLink>,
+    /// Existing open Event Task links closed by a past-day sync.
+    pub links_closed: Vec<PlannedLink>,
     /// Rows whose Google-owned occupied span changed this run.
     pub(super) moved_rows: Vec<MovedRow>,
     /// Event Task link lines this run moved into meeting-time order.
@@ -300,6 +316,8 @@ pub(crate) struct SyncPlan {
     pub rows_held: Vec<PlannedRow>,
     /// Untouched tasks cancelled for declined, deleted, or moved events.
     pub rows_cancelled: Vec<CancelledRow>,
+    /// Previously open Event Tasks closed by a past-day sync.
+    pub rows_closed: Vec<ClosedRow>,
     /// Untouched context rows removed for declined or deleted events.
     pub rows_removed: Vec<GoneRow>,
     /// Context rows upgraded in place to Event Tasks (Maybe went Yes).
@@ -610,12 +628,22 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
         daily_rel,
         reborrow_clock(&mut clock),
     );
+    let close_wants = super::refile::plan_clock_passed_close(
+        input,
+        &mut working,
+        &mut plan,
+        &refile_wants,
+        daily_rel,
+        reborrow_clock(&mut clock),
+    );
+    let mut meet_wants = refile_wants;
+    meet_wants.extend(close_wants);
 
     plan_meet_pomodoros(
         input,
         &mut working,
         &mut plan,
-        refile_wants,
+        meet_wants,
         daily_rel,
         reborrow_clock(&mut clock),
     );
@@ -647,8 +675,10 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
         && plan.rows_removed.is_empty()
         && plan.links_added.is_empty()
         && plan.links_refiled.is_empty()
+        && plan.links_closed.is_empty()
         && plan.rows_updated.is_empty()
         && plan.rows_cancelled.is_empty()
+        && plan.rows_closed.is_empty()
         && plan.rows_upgraded.is_empty()
         && plan.journal_refreshes.is_empty()
         && plan.kept.is_empty()
@@ -662,6 +692,7 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
         plan.rows_removed.clear();
         plan.links_added.clear();
         plan.links_refiled.clear();
+        plan.links_closed.clear();
         plan.moved_rows.clear();
         plan.links_sorted = 0;
         plan.rows_updated.clear();
@@ -2598,7 +2629,10 @@ fn plan_meet_pomodoros<C: ClockLookup + ?Sized>(
         record_or_bump(&mut touched, state, entry_line, time, created, added);
     }
 
-    if !plan.links_added.is_empty() || !plan.links_refiled.is_empty() {
+    if !plan.links_added.is_empty()
+        || !plan.links_refiled.is_empty()
+        || !plan.links_closed.is_empty()
+    {
         working.replace(&contents);
         touched.sort_by_key(|entry| entry.line_0);
         plan.pomodoro_entries = touched
@@ -2626,6 +2660,7 @@ pub(super) struct WantedLink {
     pub title: String,
     pub off_clock: bool,
     pub refiled: bool,
+    pub closed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -2666,7 +2701,7 @@ impl OpenMeetTargets {
     }
 }
 
-fn collect_wanted_links<C: ClockLookup + ?Sized>(
+pub(super) fn collect_wanted_links<C: ClockLookup + ?Sized>(
     input: &SyncPlanInput<'_>,
     working: &WorkingNote,
     plan: &SyncPlan,
@@ -2874,6 +2909,7 @@ fn wanted_link(
         title: occurrence.title.clone(),
         off_clock,
         refiled: false,
+        closed: false,
     }
 }
 
@@ -3041,7 +3077,9 @@ fn append_links(
             event_id: link.event_id.clone(),
             block_id: link.block_id.clone(),
         };
-        if link.refiled {
+        if link.closed {
+            plan.links_closed.push(planned);
+        } else if link.refiled {
             plan.links_refiled.push(planned);
         } else {
             plan.links_added.push(planned);

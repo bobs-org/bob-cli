@@ -889,6 +889,301 @@ fn past_day_gets_closed_meet_entries() {
 }
 
 #[test]
+fn past_day_sync_closes_a_previously_synced_placeholder_row() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-past-day-close-placeholder");
+    prepare(&env);
+    write_daily_note(
+        &env,
+        "2026-10-30",
+        "# Friday 2026-10-30\n\n## Pomodoros\n",
+    );
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&clock_envelope(vec![clock_event(
+        "past-close",
+        "Past close",
+        "2026-10-30T18:00:00-04:00",
+        "2026-10-30T18:30:00-04:00",
+    )]));
+
+    let first = sync_at(
+        &env,
+        &fake,
+        &["-D", "2026-10-30", "-f", "json"],
+        "2026-10-30 12:00:00",
+    );
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    let link_records_before = journal_lines(&env)
+        .iter()
+        .filter(|line| {
+            line["kind"] == "gcal.link"
+                && line["key"]["event_id"] == "past-close"
+        })
+        .count();
+    assert_eq!(link_records_before, 1);
+
+    let closed = sync_at(
+        &env,
+        &fake,
+        &["-D", "2026-10-30", "-f", "json"],
+        "2026-10-31 09:00:00",
+    );
+    assert_eq!(closed.status.code(), Some(0), "{}", stderr(&closed));
+    let report: Value = serde_json::from_str(&stdout(&closed)).expect("JSON");
+    assert_eq!(report["rows"][0]["action"], "closed");
+    assert_eq!(report["rows"][0]["completion"], "2026-10-30");
+    assert_eq!(report["pomodoro"]["links_closed"], 1);
+    assert_eq!(report["pomodoro"]["links_added"], 0);
+    let path = env.vault().join("2026/20261030.md");
+    let note = fs::read_to_string(&path).expect("past note");
+    assert!(
+        note.contains("- [x] (**1800-1830** [t:: 30m]) — MEET"),
+        "{note}"
+    );
+    assert!(note.contains("[completion:: 2026-10-30]"), "{note}");
+    assert!(note.contains("🍅 ~~[[#^past-close]]~~"), "{note}");
+    assert!(!note.contains("- [ ] () — MEET"), "{note}");
+    assert_eq!(status(&env)["links_closed"], 1);
+    let link_records_after = journal_lines(&env)
+        .iter()
+        .filter(|line| {
+            line["kind"] == "gcal.link"
+                && line["key"]["event_id"] == "past-close"
+        })
+        .count();
+    assert_eq!(link_records_after, link_records_before);
+
+    let repeated = sync_at(
+        &env,
+        &fake,
+        &["-D", "2026-10-30", "-f", "json"],
+        "2026-10-31 09:00:00",
+    );
+    assert_eq!(repeated.status.code(), Some(0), "{}", stderr(&repeated));
+    let repeated_report: Value =
+        serde_json::from_str(&stdout(&repeated)).expect("JSON");
+    assert_eq!(repeated_report["pomodoro"]["links_closed"], 0);
+    assert_eq!(fs::read_to_string(path).expect("past note"), note);
+}
+
+#[test]
+fn past_day_sync_closes_bob_shaped_running_meet_in_place() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-past-day-close-running");
+    prepare(&env);
+    write_daily_note(
+        &env,
+        "2026-10-30",
+        "# Friday 2026-10-30\n\n## Pomodoros\n",
+    );
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&clock_envelope(vec![
+        clock_event(
+            "running-first",
+            "Running first",
+            "2026-10-30T17:00:00-04:00",
+            "2026-10-30T18:00:00-04:00",
+        ),
+        clock_event(
+            "running-second",
+            "Running second",
+            "2026-10-30T18:00:00-04:00",
+            "2026-10-30T19:00:00-04:00",
+        ),
+    ]));
+
+    let first = sync_at(
+        &env,
+        &fake,
+        &["-D", "2026-10-30", "-f", "json"],
+        "2026-10-30 17:30:00",
+    );
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    let before = fs::read_to_string(env.vault().join("2026/20261030.md"))
+        .expect("past note");
+    assert!(
+        before.contains("- [ ] (**1700-1800** [t:: 60m]) — MEET"),
+        "{before}"
+    );
+    let link_records_before = journal_lines(&env)
+        .iter()
+        .filter(|line| line["kind"] == "gcal.link")
+        .count();
+
+    let closed = sync_at(
+        &env,
+        &fake,
+        &["-D", "2026-10-30", "-f", "json"],
+        "2026-10-31 09:00:00",
+    );
+    assert_eq!(closed.status.code(), Some(0), "{}", stderr(&closed));
+    let report: Value = serde_json::from_str(&stdout(&closed)).expect("JSON");
+    assert_eq!(report["pomodoro"]["links_closed"], 2);
+    assert_eq!(report["rows"].as_array().expect("rows").len(), 2);
+    assert!(report["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|row| row["action"] == "closed"));
+    let after = fs::read_to_string(env.vault().join("2026/20261030.md"))
+        .expect("past note");
+    assert!(
+        after.contains("- [x] (**1700-1900** [t:: 120m]) — MEET"),
+        "{after}"
+    );
+    assert_eq!(after.matches("🍅 ~~[[#^").count(), 2, "{after}");
+    assert!(!after.contains("- [ ] (**1700-1800**"), "{after}");
+    assert!(after.contains("[completion:: 2026-10-30]"), "{after}");
+    assert_eq!(
+        journal_lines(&env)
+            .iter()
+            .filter(|line| line["kind"] == "gcal.link")
+            .count(),
+        link_records_before,
+    );
+}
+
+#[test]
+fn past_day_sync_keeps_a_edited_running_meet_open() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-past-day-keep-running");
+    prepare(&env);
+    write_daily_note(
+        &env,
+        "2026-10-30",
+        "# Friday 2026-10-30\n\n## Pomodoros\n",
+    );
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&clock_envelope(vec![clock_event(
+        "edited-running",
+        "Edited running",
+        "2026-10-30T17:00:00-04:00",
+        "2026-10-30T18:00:00-04:00",
+    )]));
+    let first =
+        sync_at(&env, &fake, &["-D", "2026-10-30"], "2026-10-30 17:30:00");
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+
+    let path = env.vault().join("2026/20261030.md");
+    let note = fs::read_to_string(&path).expect("past note");
+    let edited = note.replace(
+        "\t- [[#^edited-running]]\n",
+        "\t- [[#^edited-running]]\n\t- human note\n",
+    );
+    assert_ne!(edited, note, "expected a running MEET link in {note}");
+    fs::write(&path, edited).expect("add a hand-written MEET child");
+
+    let kept = sync_at(
+        &env,
+        &fake,
+        &["-D", "2026-10-30", "-f", "json"],
+        "2026-10-31 09:00:00",
+    );
+    assert_eq!(kept.status.code(), Some(0), "{}", stderr(&kept));
+    let report: Value = serde_json::from_str(&stdout(&kept)).expect("JSON");
+    assert_eq!(report["pomodoro"]["links_closed"], 0);
+    assert!(
+        report["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| {
+                warning.as_str().is_some_and(|warning| {
+                    warning.contains("left ^edited-running open")
+                })
+            }),
+        "{report}"
+    );
+    let after = fs::read_to_string(&path).expect("past note");
+    assert!(
+        after.contains("- [ ] (**1700-1800** [t:: 60m]) — MEET"),
+        "{after}"
+    );
+    assert!(
+        row_for(&after, "^edited-running").starts_with("- [*] #task"),
+        "{after}"
+    );
+    assert!(after.contains("\t- human note"), "{after}");
+}
+
+#[test]
+fn past_day_sync_keeps_unlinked_open_rows_once() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-past-day-keep-unlinked");
+    prepare(&env);
+    write_daily_note(
+        &env,
+        "2026-10-30",
+        "# Friday 2026-10-30\n\n## Pomodoros\n",
+    );
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&clock_envelope(vec![clock_event(
+        "unlinked-past",
+        "Unlinked past",
+        "2026-10-30T18:00:00-04:00",
+        "2026-10-30T18:30:00-04:00",
+    )]));
+    let first =
+        sync_at(&env, &fake, &["-D", "2026-10-30"], "2026-10-30 12:00:00");
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+
+    let path = env.vault().join("2026/20261030.md");
+    let note = fs::read_to_string(&path).expect("past note");
+    let without_link = note.replace("\t- [[#^unlinked-past]]\n", "");
+    assert_ne!(
+        without_link, note,
+        "expected original planned link in {note}"
+    );
+    fs::write(&path, without_link).expect("remove the old MEET link");
+
+    let kept = sync_at(
+        &env,
+        &fake,
+        &["-D", "2026-10-30", "-f", "json"],
+        "2026-10-31 09:00:00",
+    );
+    assert_eq!(kept.status.code(), Some(0), "{}", stderr(&kept));
+    let report: Value = serde_json::from_str(&stdout(&kept)).expect("JSON");
+    assert_eq!(report["pomodoro"]["links_closed"], 0);
+    assert!(
+        report["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| {
+                warning.as_str().is_some_and(|warning| {
+                    warning.contains("kept_open")
+                        || warning.contains("left ^unlinked-past open")
+                })
+            }),
+        "{report}"
+    );
+    let note = fs::read_to_string(&path).expect("past note");
+    assert!(
+        row_for(&note, "^unlinked-past").starts_with("- [*] #task"),
+        "{note}"
+    );
+    assert!(!note.contains("[[#^unlinked-past]]"), "{note}");
+
+    let again = sync_at(
+        &env,
+        &fake,
+        &["-D", "2026-10-30", "-f", "json"],
+        "2026-10-31 09:00:00",
+    );
+    assert_eq!(again.status.code(), Some(0), "{}", stderr(&again));
+    let report: Value = serde_json::from_str(&stdout(&again)).expect("JSON");
+    assert!(
+        !report["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| {
+                warning.as_str().is_some_and(|warning| {
+                    warning.contains("left ^unlinked-past open")
+                })
+            }),
+        "{report}"
+    );
+}
+
+#[test]
 fn past_completed_row_stays_syncable_and_reconcile_stable() {
     let env = GcalEnv::new("bob-cli-gcal-sync-past-rootless");
     prepare(&env);

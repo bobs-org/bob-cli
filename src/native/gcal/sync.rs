@@ -108,6 +108,7 @@ fn record_last_error(
             entries: Vec::new(),
             links_added: 0,
             links_refiled: 0,
+            links_closed: 0,
             links_sorted: 0,
             warnings: Vec::new(),
             deprecations: Vec::new(),
@@ -142,6 +143,8 @@ struct ReportRow {
     skip: Option<SkipReason>,
     /// Additional detail such as a span reset.
     detail: Option<String>,
+    /// Completion date written by a past-day close.
+    completion: Option<String>,
     /// Private-note summary; never includes note text.
     note: Value,
 }
@@ -154,6 +157,7 @@ struct SyncReport {
     entries: Vec<MeetPomodoroEntry>,
     links_added: usize,
     links_refiled: usize,
+    links_closed: usize,
     links_sorted: usize,
     warnings: Vec<String>,
     deprecations: Vec<diagnostics::Deprecation>,
@@ -385,6 +389,7 @@ fn sync_day(
             entries: Vec::new(),
             links_added: 0,
             links_refiled: 0,
+            links_closed: 0,
             links_sorted: 0,
             warnings,
             deprecations,
@@ -463,6 +468,7 @@ fn sync_day(
             entries: plan.pomodoro_entries.clone(),
             links_added: plan.links_added.len(),
             links_refiled: plan.links_refiled.len(),
+            links_closed: plan.links_closed.len(),
             links_sorted: plan.links_sorted,
             warnings: merge_warnings(warnings, &plan.warnings),
             deprecations,
@@ -490,6 +496,7 @@ fn sync_day(
             entries: Vec::new(),
             links_added: 0,
             links_refiled: 0,
+            links_closed: 0,
             links_sorted: 0,
             warnings: merge_warnings(warnings, &plan.warnings),
             deprecations,
@@ -623,6 +630,7 @@ fn sync_day(
                         entries: Vec::new(),
                         links_added: 0,
                         links_refiled: 0,
+                        links_closed: 0,
                         links_sorted: 0,
                         warnings: merge_warnings(
                             warnings.clone(),
@@ -681,6 +689,7 @@ fn sync_day(
         entries: plan.pomodoro_entries.clone(),
         links_added: plan.links_added.len(),
         links_refiled: plan.links_refiled.len(),
+        links_closed: plan.links_closed.len(),
         links_sorted: plan.links_sorted,
         warnings,
         deprecations,
@@ -747,6 +756,7 @@ fn waiting(
         entries: Vec::new(),
         links_added: 0,
         links_refiled: 0,
+        links_closed: 0,
         links_sorted: 0,
         warnings,
         deprecations,
@@ -1324,6 +1334,7 @@ fn report_rows(
             description_lines: written_description_lines(&added.description),
             skip: None,
             detail: added.detail.clone(),
+            completion: None,
             note: listed_note(snapshot, &added.calendar_id, &added.event_id),
         });
     }
@@ -1345,6 +1356,7 @@ fn report_rows(
             description_lines: written_description_lines(&restored.description),
             skip: None,
             detail: restored.detail.clone(),
+            completion: None,
             note: listed_note(
                 snapshot,
                 &restored.calendar_id,
@@ -1370,6 +1382,7 @@ fn report_rows(
             description_lines: 0,
             skip: None,
             detail: None,
+            completion: None,
             note: listed_note(
                 snapshot,
                 &adopted.calendar_id,
@@ -1410,6 +1423,7 @@ fn report_rows(
             description_lines: 0,
             skip: Some(skip),
             detail: None,
+            completion: None,
             note: listed_note(snapshot, &gone.calendar_id, &gone.event_id),
         });
     }
@@ -1431,6 +1445,7 @@ fn report_rows(
             description_lines: updated.wrote_description_lines,
             skip: None,
             detail: updated.detail.clone(),
+            completion: None,
             note: listed_note(
                 snapshot,
                 &updated.calendar_id,
@@ -1456,7 +1471,26 @@ fn report_rows(
             description_lines: held.wrote_description_lines,
             skip: None,
             detail: held.detail.clone(),
+            completion: None,
             note: listed_note(snapshot, &held.calendar_id, &held.event_id),
+        });
+    }
+    for closed in &plan.rows_closed {
+        rows.push(ReportRow {
+            action: "closed",
+            kind: "task",
+            time: closed.time_label.clone(),
+            title: closed.title.clone(),
+            root: closed.root.clone(),
+            source: closed.source.clone(),
+            off_clock: closed.off_clock,
+            untracked: closed.off_clock,
+            buffer: closed.buffer,
+            description_lines: 0,
+            skip: None,
+            detail: None,
+            completion: Some(closed.completion.clone()),
+            note: listed_note(snapshot, &closed.calendar_id, &closed.event_id),
         });
     }
     for cancelled in &plan.rows_cancelled {
@@ -1473,6 +1507,7 @@ fn report_rows(
             description_lines: 0,
             skip: None,
             detail: None,
+            completion: None,
             note: Value::Null,
         });
     }
@@ -1490,6 +1525,7 @@ fn report_rows(
             description_lines: 0,
             skip: Some(SkipReason::removed_in_google(&removed.reason)),
             detail: None,
+            completion: None,
             note: listed_note(
                 snapshot,
                 &removed.calendar_id,
@@ -1511,6 +1547,7 @@ fn report_rows(
             description_lines: written_description_lines(&upgraded.description),
             skip: None,
             detail: upgraded.detail.clone(),
+            completion: None,
             note: listed_note(
                 snapshot,
                 &upgraded.calendar_id,
@@ -1532,6 +1569,7 @@ fn report_rows(
             description_lines: 0,
             skip: None,
             detail: None,
+            completion: None,
             note: Value::Null,
         });
     }
@@ -1847,6 +1885,7 @@ fn record_status(
         context_added,
         links_added: report.links_added,
         links_refiled: report.links_refiled,
+        links_closed: report.links_closed,
         error,
         reason: report
             .waiting
@@ -1933,6 +1972,7 @@ fn report_json(report: &SyncReport) -> Value {
                 "untracked": row.untracked,
                 "buffer": buffer_json(row.buffer),
                 "description_lines": row.description_lines,
+                "completion": row.completion,
                 "detail": row.detail.as_deref().or_else(|| {
                     row.skip.as_ref().map(|skip| skip.detail.as_str())
                 }),
@@ -1965,6 +2005,7 @@ fn report_json(report: &SyncReport) -> Value {
                 .is_some_and(|entry| entry.created),
             "links_added": report.links_added,
             "links_refiled": report.links_refiled,
+            "links_closed": report.links_closed,
             "links_sorted": report.links_sorted,
             "entries": json_entries(report),
         },
@@ -2042,6 +2083,14 @@ fn print_human(report: &SyncReport) {
         if row.action == "held" {
             continue;
         }
+        if row.action == "closed" {
+            let time = match row.buffer.label() {
+                Some(label) => format!("{} {label}", human_time(&row.time)),
+                None => human_time(&row.time),
+            };
+            println!("  ✔ closed  {time}  {}", row.title);
+            continue;
+        }
         let sigil = match row.action {
             "added" => "+",
             "adopted" => "=",
@@ -2101,29 +2150,50 @@ fn print_human(report: &SyncReport) {
     };
     let tasks = count("added", "task");
     let context = count("added", "context");
+    let closed_rows = count("closed", "task");
     let created_entries =
         report.entries.iter().filter(|entry| entry.created).count();
     let stamp_only = report.status == "written"
         && report.rows.is_empty()
         && report.links_added == 0
         && report.links_refiled == 0
+        && report.links_closed == 0
         && report.links_sorted == 0
         && created_entries == 0;
     let sort_only = report.status == "written"
         && report.rows.is_empty()
         && report.links_added == 0
         && report.links_refiled == 0
+        && report.links_closed == 0
         && report.links_sorted > 0
         && created_entries == 0;
     let refile_only = report.status == "written"
         && report.links_refiled > 0
         && report.links_added == 0
+        && report.links_closed == 0
         && report.links_sorted == 0
         && created_entries == 0
         && !report.rows.is_empty()
         && report.rows.iter().all(|row| row.action == "updated");
+    let closed_only = report.status == "written"
+        && closed_rows > 0
+        && report.rows.iter().all(|row| row.action == "closed")
+        && report.links_added == 0
+        && report.links_refiled == 0
+        && report.links_sorted == 0;
     let summary = if report.status == "unchanged" {
         "✓ Events unchanged · Pomodoros unchanged".to_string()
+    } else if closed_only && created_entries > 0 {
+        let entry_word = if created_entries == 1 {
+            "entry"
+        } else {
+            "entries"
+        };
+        format!(
+            "✓ Events updated · Pomodoros +{created_entries} {entry_word}, ✔{closed_rows} closed"
+        )
+    } else if closed_only {
+        format!("✓ Events updated · Pomodoros ✔{closed_rows} closed")
     } else if refile_only {
         format!(
             "✓ Events updated · Pomodoros ↪{} refiled",
@@ -2173,12 +2243,16 @@ fn print_human(report: &SyncReport) {
         if report.links_refiled > 0 {
             pomodoros.push_str(&format!(", ↪{} refiled", report.links_refiled));
         }
+        if report.links_closed > 0 {
+            pomodoros.push_str(&format!(", ✔{} closed", report.links_closed));
+        }
         pomodoros
     };
     let summary = if report.force && report.status == "written" {
         if report.rows.is_empty()
             && report.links_added == 0
             && report.links_refiled == 0
+            && report.links_closed == 0
             && report.links_sorted == 0
             && report.entries.is_empty()
             && !report.stamp_refreshed
@@ -2187,6 +2261,7 @@ fn print_human(report: &SyncReport) {
         } else if report.rows.is_empty()
             && report.links_added == 0
             && report.links_refiled == 0
+            && report.links_closed == 0
             && report.links_sorted == 0
             && report.stamp_refreshed
         {
