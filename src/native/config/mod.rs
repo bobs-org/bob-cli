@@ -31,7 +31,7 @@ pub(crate) use day_timezone::load_day_timezone;
 pub(crate) use dependencies::load_dependencies_config;
 pub(crate) use freshness::{load_freshness_config, FreshnessConfig};
 pub(crate) use gcal::{
-    color_id_for_key, color_name_for_id, load_gcal_config,
+    color_id_for_key, color_name_for_id, load_gcal_config, GcalAckMode,
     GcalCalendarSettings, GcalDescriptionMode, GcalSettings, GcalTentative,
 };
 pub(crate) use gmail::{

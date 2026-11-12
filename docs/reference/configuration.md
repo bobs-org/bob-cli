@@ -280,6 +280,7 @@ The adapter can be replaced with `BOB_GKEEP_ADAPTER`. See the
 | `gcal.calendars` | Sequence of ids or `{id, root?}` maps | `[primary]` | Calendars to sync; `primary` matches the account's primary calendar. |
 | `gcal.colors` | Mapping of Google event colour names or ids (`lavender`/`1` through `tomato`/`11`) to roots | `{}` | Event-colour root source, checked after an `@route` token and before the calendar's root. Unknown colour keys are a setup error. |
 | `gcal.tentative` | `context` or `task` | `context` | Whether a busy Maybe event becomes a context row or an Event Task. |
+| `gcal.ack` | `external` or `off` | `external` | Whether the external-event acknowledgement workflow is enabled; `off` is the kill switch. |
 | `gcal.description` | `bullets` or `off` | `bullets` | Whether sync copies event descriptions as Event Task bullets; `off` is the kill switch. |
 | `gcal.description_lines` | Integer at least 2 | `8` | Most copied description lines per Event Task, overflow line included; buffer reasons are extra. |
 | `gcal.gog` | Absolute executable path; a leading `~/` is expanded | `gog` on `PATH`, then standard install locations | Configured gog executable for Calendar. |

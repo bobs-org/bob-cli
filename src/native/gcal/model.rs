@@ -161,6 +161,13 @@ impl AppliedNote {
 }
 
 impl GcalEvent {
+    /// External events are those organized by someone else or created from
+    /// a Gmail reservation, which can list the account owner as organizer.
+    #[allow(dead_code)] // The tag and review phases classify external events.
+    pub(crate) fn is_external(&self) -> bool {
+        !self.organizer_is_self || self.event_type == "fromGmail"
+    }
+
     /// Drop `root` unless a note route won, and `bullets` unless a note
     /// bullet is actually rendered.
     pub(crate) fn finalize_note_fields(
@@ -699,6 +706,39 @@ mod tests {
         assert!(!debug.contains("secret.example"), "{debug}");
         assert_eq!(parsed.route_hint.as_deref(), Some("love"));
         assert_eq!(parsed.description.lines.len(), 1);
+    }
+
+    #[test]
+    fn external_includes_missing_organizer_and_gmail_events() {
+        assert!(event("No organizer", None).is_external());
+
+        let owned_gmail = GcalEvent::from_google(
+            "primary",
+            json!({
+                "id": "flight",
+                "summary": "Flight",
+                "eventType": "fromGmail",
+                "organizer": {"self": true},
+                "start": {"dateTime": "2026-11-01T12:00:00-04:00"},
+                "end": {"dateTime": "2026-11-01T13:00:00-04:00"}
+            }),
+        )
+        .expect("Gmail event");
+        assert!(owned_gmail.organizer_is_self);
+        assert!(owned_gmail.is_external());
+
+        let owned = GcalEvent::from_google(
+            "primary",
+            json!({
+                "id": "owned",
+                "summary": "Owned",
+                "organizer": {"self": true},
+                "start": {"dateTime": "2026-11-01T12:00:00-04:00"},
+                "end": {"dateTime": "2026-11-01T13:00:00-04:00"}
+            }),
+        )
+        .expect("owned event");
+        assert!(!owned.is_external());
     }
 
     #[test]

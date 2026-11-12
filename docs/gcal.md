@@ -104,6 +104,7 @@ gcal:
     #   root: body
   colors: {} # e.g. {tomato: job, sage: body}
   tentative: context # context | task
+  ack: external # external | off
   description: bullets # bullets | off
   description_lines: 8 # most copied lines per Event Task, overflow line included; buffer reasons are extra
   timeout_secs: 60
@@ -141,6 +142,8 @@ gcal:
   mapped root is checked against the vault for each event.
 - `tentative` controls whether a busy Maybe event is context (default) or an
   Event Task (`task`).
+- `ack` enables the external-event acknowledgement workflow (`external`,
+  default) or disables it (`off`).
 - `description` controls whether sync copies each event's human description
   as bullets under its Event Task (`bullets`, default) or writes none
   (`off`, the kill switch).

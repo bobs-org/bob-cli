@@ -10,7 +10,7 @@
 //! written to the vault.
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -31,6 +31,8 @@ pub(crate) const NAMESPACE: Namespace = Namespace {
 
 /// Canonical text larger than this makes a `gcal.note` record malformed.
 pub(crate) const MAX_NOTE_BYTES: usize = 2048;
+/// Combined display metadata larger than this makes a `gcal.ack` record malformed.
+pub(crate) const MAX_ACK_SEEN_BYTES: usize = 4096;
 
 /// Journaled state for one (occurrence key, day).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -155,6 +157,10 @@ type NoteKey = (String, String, String);
 pub(crate) struct NoteBook {
     events: BTreeMap<NoteKey, FoldedNote>,
     series: BTreeMap<NoteKey, FoldedNote>,
+    /// Identities that have ever had a valid nonempty note, independent
+    /// of whether the current folded note was later cleared.
+    noted_events: BTreeSet<NoteKey>,
+    noted_series: BTreeSet<NoteKey>,
     /// `gcal.note` lines [`load_notes`] skipped as malformed.
     pub malformed: usize,
 }
@@ -204,6 +210,165 @@ impl NoteBook {
     pub(crate) fn iter(&self) -> impl Iterator<Item = &FoldedNote> {
         self.events.values().chain(self.series.values())
     }
+
+    #[allow(dead_code)] // Used by AckBook once the row-tag phase lands.
+    fn has_nonempty_history(
+        &self,
+        account: &str,
+        calendar_id: &str,
+        event_id: &str,
+        series_id: Option<&str>,
+    ) -> bool {
+        self.noted_events
+            .contains(&note_key(account, calendar_id, event_id))
+            || series_id.is_some_and(|series| {
+                self.noted_series.contains(&note_key(
+                    account,
+                    calendar_id,
+                    series,
+                ))
+            })
+    }
+}
+
+/// Whether an acknowledgement applies to one event or its whole series.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AckScope {
+    Event,
+    Series,
+}
+
+impl AckScope {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Event => "event",
+            Self::Series => "series",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "event" => Some(Self::Event),
+            "series" => Some(Self::Series),
+            _ => None,
+        }
+    }
+}
+
+/// The gesture or client that wrote an acknowledgement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AckVia {
+    Ack,
+    Row,
+    Mac,
+    Plugin,
+}
+
+impl AckVia {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Ack => "ack",
+            Self::Row => "row",
+            Self::Mac => "mac",
+            Self::Plugin => "plugin",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "ack" => Some(Self::Ack),
+            "row" => Some(Self::Row),
+            "mac" => Some(Self::Mac),
+            "plugin" => Some(Self::Plugin),
+            _ => None,
+        }
+    }
+}
+
+/// Display-only identity captured when an event was acknowledged.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct AckSeen {
+    pub title: Option<String>,
+    pub start: Option<String>,
+    pub end: Option<String>,
+    pub original_start: Option<String>,
+}
+
+/// One folded `gcal.ack` receipt, including a deliberate clear.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FoldedAck {
+    pub account: String,
+    pub scope: AckScope,
+    pub calendar_id: String,
+    pub key: String,
+    pub acked: bool,
+    pub via: AckVia,
+    pub seen: AckSeen,
+    pub host: String,
+    pub ts: DateTime<FixedOffset>,
+}
+
+type AckKey = NoteKey;
+
+/// Last-writer-wins fold of `gcal.ack` records, kept separate from the
+/// occurrence state so daily resets and forced syncs cannot clear it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct AckBook {
+    events: BTreeMap<AckKey, FoldedAck>,
+    series: BTreeMap<AckKey, FoldedAck>,
+    pub malformed: usize,
+}
+
+impl AckBook {
+    #[allow(dead_code)] // The tag and review phases query folded receipts.
+    pub(crate) fn event(
+        &self,
+        account: &str,
+        calendar_id: &str,
+        event_id: &str,
+    ) -> Option<&FoldedAck> {
+        self.events.get(&note_key(account, calendar_id, event_id))
+    }
+
+    #[allow(dead_code)] // The tag and review phases query folded receipts.
+    pub(crate) fn series(
+        &self,
+        account: &str,
+        calendar_id: &str,
+        series: &str,
+    ) -> Option<&FoldedAck> {
+        self.series.get(&note_key(account, calendar_id, series))
+    }
+
+    /// An explicit live event/series receipt or any historical nonempty
+    /// note answers this event. Note clears do not erase review history.
+    #[allow(dead_code)] // The tag and review phases query combined evidence.
+    pub(crate) fn acked(
+        &self,
+        notes: &NoteBook,
+        account: &str,
+        calendar_id: &str,
+        event_id: &str,
+        series_id: Option<&str>,
+    ) -> bool {
+        self.event(account, calendar_id, event_id)
+            .is_some_and(|ack| ack.acked)
+            || series_id.is_some_and(|series| {
+                self.series(account, calendar_id, series)
+                    .is_some_and(|ack| ack.acked)
+            })
+            || notes.has_nonempty_history(
+                account,
+                calendar_id,
+                event_id,
+                series_id,
+            )
+    }
+
+    #[allow(dead_code)] // Later review surfaces inspect all receipts.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &FoldedAck> {
+        self.events.values().chain(self.series.values())
+    }
 }
 
 fn note_key(account: &str, calendar_id: &str, part: &str) -> NoteKey {
@@ -225,6 +390,20 @@ pub(crate) struct NewNote {
     pub scope: NoteScope,
     pub text: String,
     pub seen: Option<NoteSeen>,
+}
+
+/// A new `gcal.ack` receipt to append.
+#[allow(dead_code)] // The review command constructs this in a later phase.
+#[derive(Debug, Clone)]
+pub(crate) struct NewAck {
+    pub account: String,
+    pub calendar_id: String,
+    pub event_id: Option<String>,
+    pub series: Option<String>,
+    pub scope: AckScope,
+    pub acked: bool,
+    pub via: AckVia,
+    pub seen: AckSeen,
 }
 
 /// A new `gcal.row` to append.
@@ -301,6 +480,7 @@ pub(crate) fn load_state(
         if !is_gcal
             || event.kind == "gcal.series_root"
             || event.kind == "gcal.note"
+            || event.kind == "gcal.ack"
         {
             continue;
         }
@@ -551,6 +731,18 @@ pub(crate) fn load_notes(
         }
         match parse_note_record(event) {
             Some(note) => {
+                if !note.text.is_empty() {
+                    let key =
+                        note_key(&note.account, &note.calendar_id, &note.key);
+                    match note.scope {
+                        NoteScope::Event => {
+                            book.noted_events.insert(key);
+                        }
+                        NoteScope::Series => {
+                            book.noted_series.insert(key);
+                        }
+                    }
+                }
                 let key = note_key(&note.account, &note.calendar_id, &note.key);
                 match note.scope {
                     NoteScope::Event => {
@@ -558,6 +750,59 @@ pub(crate) fn load_notes(
                     }
                     NoteScope::Series => {
                         book.series.insert(key, note);
+                    }
+                }
+            }
+            None => {
+                malformed += 1;
+                if malformed <= pref_journal::MAX_MALFORMED_WARNINGS {
+                    warnings.push(format!(
+                        "skipping malformed gcal journal line {}:{}",
+                        event.path, event.line
+                    ));
+                }
+            }
+        }
+    }
+    if malformed > pref_journal::MAX_MALFORMED_WARNINGS {
+        warnings
+            .push(format!("skipped {malformed} malformed gcal journal lines"));
+    }
+    book.malformed = malformed;
+    Ok((book, warnings))
+}
+
+/// Fold every `gcal.ack` record by `(account, calendar, scope key)` in
+/// writer order. Explicit clears remain in the book as `acked: false`.
+#[allow(dead_code)] // The tag and review phases consume the folded book.
+pub(crate) fn load_acks(
+    vault: &Path,
+) -> std::io::Result<(AckBook, Vec<String>)> {
+    let (stored, mut warnings) = pref_journal::read_raw(vault, NAMESPACE)?;
+    let mut ordered = stored.iter().collect::<Vec<_>>();
+    pref_journal::sort_by_writer_order(&mut ordered, |event| {
+        (
+            event.ts,
+            event.host.as_str(),
+            event.path.as_str(),
+            event.line,
+        )
+    });
+    let mut book = AckBook::default();
+    let mut malformed = 0usize;
+    for event in ordered {
+        if event.kind.as_str() != "gcal.ack" {
+            continue;
+        }
+        match parse_ack_record(event) {
+            Some(ack) => {
+                let key = note_key(&ack.account, &ack.calendar_id, &ack.key);
+                match ack.scope {
+                    AckScope::Event => {
+                        book.events.insert(key, ack);
+                    }
+                    AckScope::Series => {
+                        book.series.insert(key, ack);
                     }
                 }
             }
@@ -615,6 +860,47 @@ pub(crate) fn append_note(
             "original_start": seen.original_start,
         });
     }
+    let line = serde_json::to_string(&value)
+        .unwrap_or_else(|_| "{}".to_string())
+        + "\n";
+    pref_journal::append_line(vault, NAMESPACE, host, &line)?;
+    Ok(line)
+}
+
+/// Append one `gcal.ack` receipt with a single `O_APPEND` write.
+#[allow(dead_code)] // The review command appends through this in a later phase.
+pub(crate) fn append_ack(
+    vault: &Path,
+    host: &str,
+    ack: &NewAck,
+) -> std::io::Result<String> {
+    let mut key = json!({"calendar_id": ack.calendar_id});
+    match ack.scope {
+        AckScope::Event => {
+            key["event_id"] = json!(ack.event_id.as_deref().unwrap_or(""));
+        }
+        AckScope::Series => {
+            key["series"] = json!(ack.series.as_deref().unwrap_or(""));
+        }
+    }
+    let value = json!({
+        "v": 1,
+        "ts": pref_journal::event_timestamp()
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
+        "host": host,
+        "kind": "gcal.ack",
+        "account": ack.account,
+        "key": key,
+        "scope": ack.scope.as_str(),
+        "acked": ack.acked,
+        "via": ack.via.as_str(),
+        "seen": {
+            "title": ack.seen.title,
+            "start": ack.seen.start,
+            "end": ack.seen.end,
+            "original_start": ack.seen.original_start,
+        },
+    });
     let line = serde_json::to_string(&value)
         .unwrap_or_else(|_| "{}".to_string())
         + "\n";
@@ -719,6 +1005,7 @@ pub(crate) fn malformed_count(vault: &Path) -> usize {
                 && parse_series_root(&event).is_none()
                 && parse_reset(&event).is_none()
                 && parse_note_record(&event).is_none()
+                && parse_ack_record(&event).is_none()
             {
                 count += 1;
             }
@@ -786,6 +1073,80 @@ fn parse_note_record(event: &StoredEvent) -> Option<FoldedNote> {
         host: event.host.clone(),
         ts: event.ts,
     })
+}
+
+/// Parse one `gcal.ack` receipt. The scope, matching key, boolean, via,
+/// and all four display-only `seen` fields are required; seen fields may
+/// be null. Oversized display metadata is malformed.
+fn parse_ack_record(event: &StoredEvent) -> Option<FoldedAck> {
+    if event.kind.as_str() != "gcal.ack" {
+        return None;
+    }
+    let object = event.value.as_object()?;
+    let account = object.get("account")?.as_str()?.to_string();
+    if account.is_empty() {
+        return None;
+    }
+    let scope = AckScope::parse(object.get("scope")?.as_str()?)?;
+    let key = object.get("key")?.as_object()?;
+    let calendar_id = key.get("calendar_id")?.as_str()?.to_string();
+    if calendar_id.is_empty() {
+        return None;
+    }
+    let key_part = match scope {
+        AckScope::Event => key.get("event_id")?.as_str()?.to_string(),
+        AckScope::Series => key.get("series")?.as_str()?.to_string(),
+    };
+    if key_part.is_empty() {
+        return None;
+    }
+    let acked = object.get("acked")?.as_bool()?;
+    let via = AckVia::parse(object.get("via")?.as_str()?)?;
+    let seen = object.get("seen")?.as_object()?;
+    let title = parse_seen_field(seen, "title")?;
+    let start = parse_seen_field(seen, "start")?;
+    let end = parse_seen_field(seen, "end")?;
+    let original_start = parse_seen_field(seen, "original_start")?;
+    let seen_bytes = [
+        title.as_deref(),
+        start.as_deref(),
+        end.as_deref(),
+        original_start.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(str::len)
+    .sum::<usize>();
+    if seen_bytes > MAX_ACK_SEEN_BYTES {
+        return None;
+    }
+    Some(FoldedAck {
+        account,
+        scope,
+        calendar_id,
+        key: key_part,
+        acked,
+        via,
+        seen: AckSeen {
+            title,
+            start,
+            end,
+            original_start,
+        },
+        host: event.host.clone(),
+        ts: event.ts,
+    })
+}
+
+fn parse_seen_field(
+    object: &serde_json::Map<String, Value>,
+    name: &str,
+) -> Option<Option<String>> {
+    match object.get(name)? {
+        Value::Null => Some(None),
+        Value::String(value) => Some(Some(value.clone())),
+        _ => None,
+    }
 }
 
 /// Parse one `gcal.series_root` record without folding it.
@@ -1237,6 +1598,14 @@ mod tests {
             "old",
         )
         .expect("series root");
+        ack_record(
+            dir.path(),
+            "mac",
+            "2026-10-30T05:45:00-04:00",
+            json!({
+                "key": {"calendar_id": "primary", "event_id": "e1"}
+            }),
+        );
 
         append_reset(dir.path(), host, "2026-10-30").expect("reset");
         append_row_for("2026-10-30", "restored");
@@ -1267,6 +1636,11 @@ mod tests {
             .expect("other day remains");
         assert_eq!(next_day.row.as_ref().expect("row").block_id, "next-day");
         assert_eq!(load_series_roots(dir.path()).expect("series").len(), 1);
+        let (acks, warnings) = load_acks(dir.path()).expect("acks");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(acks
+            .event("you@example.com", "primary", "e1")
+            .is_some_and(|ack| ack.acked));
         assert_eq!(malformed_count(dir.path()), 0);
     }
 
@@ -1427,6 +1801,32 @@ mod tests {
         pref_journal::append_line(dir, NAMESPACE, host, &line).expect("append");
     }
 
+    fn ack_record(dir: &Path, host: &str, ts: &str, extra: serde_json::Value) {
+        let mut value = json!({
+            "v": 1,
+            "ts": ts,
+            "host": host,
+            "kind": "gcal.ack",
+            "account": "you@example.com",
+            "key": {"calendar_id": "primary", "event_id": "e1"},
+            "scope": "event",
+            "acked": true,
+            "via": "ack",
+            "seen": {
+                "title": "Screening",
+                "start": "2026-11-12T12:00:00-05:00",
+                "end": "2026-11-12T12:30:00-05:00",
+                "original_start": null,
+            }
+        });
+        for (name, field) in extra.as_object().expect("object") {
+            value[name] = field.clone();
+        }
+        let line = serde_json::to_string(&value).expect("json") + "\n";
+        pref_journal::append_line(dir, NAMESPACE, host, &line)
+            .expect("append ack");
+    }
+
     #[test]
     fn notes_fold_last_writer_wins_and_clears() {
         let dir = tempfile::tempdir().expect("vault");
@@ -1525,6 +1925,7 @@ mod tests {
             row_extra(),
         );
         note_record(dir.path(), "mac", "2026-10-30T06:00:00-04:00", json!({}));
+        ack_record(dir.path(), "mac", "2026-10-30T07:00:00-04:00", json!({}));
         let (state, warnings, newest) = load_state(dir.path()).expect("fold");
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(
@@ -1538,6 +1939,224 @@ mod tests {
             ))
             .is_none());
         assert_eq!(malformed_count(dir.path()), 0);
+    }
+
+    #[test]
+    fn ack_fold_is_account_guarded_and_last_writer_wins_across_hosts() {
+        let dir = tempfile::tempdir().expect("vault");
+        let ts = "2026-11-09T10:00:00-05:00";
+        ack_record(dir.path(), "athena", ts, json!({"acked": true}));
+        ack_record(
+            dir.path(),
+            "mac",
+            ts,
+            json!({"acked": false, "via": "row"}),
+        );
+        ack_record(
+            dir.path(),
+            "mac",
+            "2026-11-09T11:00:00-05:00",
+            json!({
+                "account": "other@example.com",
+                "key": {"calendar_id": "primary", "event_id": "private"}
+            }),
+        );
+        let (book, warnings) = load_acks(dir.path()).expect("acks");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let receipt = book
+            .event("you@example.com", "primary", "e1")
+            .expect("event receipt");
+        assert!(!receipt.acked);
+        assert_eq!(receipt.via, AckVia::Row);
+        assert_eq!(receipt.host, "mac");
+        assert!(!book.acked(
+            &NoteBook::default(),
+            "you@example.com",
+            "primary",
+            "private",
+            None
+        ));
+        assert!(book.acked(
+            &NoteBook::default(),
+            "other@example.com",
+            "primary",
+            "private",
+            None
+        ));
+    }
+
+    #[test]
+    fn ack_scope_is_stable_by_identity_and_note_history_survives_clear() {
+        let dir = tempfile::tempdir().expect("vault");
+        ack_record(
+            dir.path(),
+            "mac",
+            "2026-11-09T10:00:00-05:00",
+            json!({"seen": {
+                "title": "Screening",
+                "start": "2026-11-09T12:00:00-05:00",
+                "end": "2026-11-09T12:30:00-05:00",
+                "original_start": null
+            }}),
+        );
+        ack_record(
+            dir.path(),
+            "mac",
+            "2026-11-09T11:00:00-05:00",
+            json!({
+                "key": {"calendar_id": "primary", "series": "weekly"},
+                "scope": "series"
+            }),
+        );
+        note_record(
+            dir.path(),
+            "mac",
+            "2026-11-09T12:00:00-05:00",
+            json!({
+                "key": {"calendar_id": "primary", "event_id": "noted"},
+                "text": "@family"
+            }),
+        );
+        note_record(
+            dir.path(),
+            "mac",
+            "2026-11-09T13:00:00-05:00",
+            json!({
+                "key": {"calendar_id": "primary", "event_id": "noted"},
+                "text": ""
+            }),
+        );
+        note_record(
+            dir.path(),
+            "mac",
+            "2026-11-09T14:00:00-05:00",
+            json!({
+                "key": {"calendar_id": "primary", "series": "noted-series"},
+                "scope": "series",
+                "text": "@family"
+            }),
+        );
+        note_record(
+            dir.path(),
+            "mac",
+            "2026-11-09T15:00:00-05:00",
+            json!({
+                "key": {"calendar_id": "primary", "series": "noted-series"},
+                "scope": "series",
+                "text": ""
+            }),
+        );
+        let (acks, ack_warnings) = load_acks(dir.path()).expect("acks");
+        let (notes, note_warnings) = load_notes(dir.path()).expect("notes");
+        assert!(ack_warnings.is_empty(), "{ack_warnings:?}");
+        assert!(note_warnings.is_empty(), "{note_warnings:?}");
+
+        let event_ack = acks
+            .event("you@example.com", "primary", "e1")
+            .expect("event ack");
+        assert_eq!(
+            event_ack.seen.start.as_deref(),
+            Some("2026-11-09T12:00:00-05:00")
+        );
+        assert!(acks.acked(&notes, "you@example.com", "primary", "e1", None));
+        assert!(!acks.acked(
+            &notes,
+            "you@example.com",
+            "primary",
+            "moved-id",
+            None
+        ));
+        assert!(acks.acked(
+            &notes,
+            "you@example.com",
+            "primary",
+            "future-instance",
+            Some("weekly")
+        ));
+        assert!(acks.acked(
+            &notes,
+            "you@example.com",
+            "primary",
+            "noted",
+            None
+        ));
+        assert!(notes
+            .event("you@example.com", "primary", "noted")
+            .is_some_and(|note| note.cleared));
+        assert!(acks.acked(
+            &notes,
+            "you@example.com",
+            "primary",
+            "future-noted-instance",
+            Some("noted-series")
+        ));
+        assert!(!acks.acked(
+            &notes,
+            "other@example.com",
+            "primary",
+            "noted",
+            None
+        ));
+    }
+
+    #[test]
+    fn append_ack_round_trips_and_ack_survives_reset() {
+        let dir = tempfile::tempdir().expect("vault");
+        append_ack(
+            dir.path(),
+            "mac",
+            &NewAck {
+                account: "you@example.com".to_string(),
+                calendar_id: "primary".to_string(),
+                event_id: None,
+                series: Some("weekly".to_string()),
+                scope: AckScope::Series,
+                acked: true,
+                via: AckVia::Plugin,
+                seen: AckSeen {
+                    title: Some("Swings".to_string()),
+                    start: Some("2026-11-09T10:00:00-05:00".to_string()),
+                    end: Some("2026-11-09T10:30:00-05:00".to_string()),
+                    original_start: None,
+                },
+            },
+        )
+        .expect("append");
+        append_reset(dir.path(), "mac", "2026-11-09").expect("reset");
+        let (book, warnings) = load_acks(dir.path()).expect("fold");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let ack = book
+            .series("you@example.com", "primary", "weekly")
+            .expect("series ack survives reset");
+        assert_eq!(ack.via, AckVia::Plugin);
+        assert!(ack.acked);
+        assert_eq!(malformed_count(dir.path()), 0);
+    }
+
+    #[test]
+    fn malformed_ack_receipts_are_counted_and_warn_with_the_existing_budget() {
+        let dir = tempfile::tempdir().expect("vault");
+        ack_record(
+            dir.path(),
+            "mac",
+            "2026-11-09T10:00:00-05:00",
+            json!({"via": "unknown"}),
+        );
+        ack_record(
+            dir.path(),
+            "mac",
+            "2026-11-09T11:00:00-05:00",
+            json!({"seen": {
+                "title": "x".repeat(MAX_ACK_SEEN_BYTES + 1),
+                "start": null,
+                "end": null,
+                "original_start": null
+            }}),
+        );
+        let (book, warnings) = load_acks(dir.path()).expect("acks");
+        assert_eq!(book.malformed, 2);
+        assert_eq!(warnings.len(), 2);
+        assert_eq!(malformed_count(dir.path()), 2);
     }
 
     #[test]

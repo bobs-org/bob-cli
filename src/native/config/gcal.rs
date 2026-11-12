@@ -12,6 +12,7 @@ pub(crate) struct GcalSettings {
     pub(crate) calendars: Option<Vec<GcalCalendarSettings>>,
     pub(crate) colors: BTreeMap<String, String>,
     pub(crate) tentative: Option<GcalTentative>,
+    pub(crate) ack: Option<GcalAckMode>,
     pub(crate) description: Option<GcalDescriptionMode>,
     pub(crate) description_lines: Option<u64>,
     pub(crate) gog: Option<PathBuf>,
@@ -30,6 +31,14 @@ pub(crate) struct GcalCalendarSettings {
 pub(crate) enum GcalTentative {
     Context,
     Task,
+}
+
+/// Whether external calendar events use the acknowledgement workflow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum GcalAckMode {
+    #[default]
+    External,
+    Off,
 }
 
 /// Whether `bob gcal sync` copies event descriptions as Event Task bullets.
@@ -99,6 +108,7 @@ fn parse_gcal_value(
         calendars: parse_calendars(get("calendars"), path)?,
         colors: parse_colors(get("colors"), path)?,
         tentative: parse_tentative(get("tentative"), path)?,
+        ack: parse_ack_mode(get("ack"), path)?,
         description: parse_description_mode(get("description"), path)?,
         description_lines: parse_description_lines(
             get("description_lines"),
@@ -235,6 +245,33 @@ fn parse_description_mode(
         "off" => Ok(Some(GcalDescriptionMode::Off)),
         other => Err(ConfigError::Invalid(format!(
             "gcal.description in {} must be bullets or off; got {other:?}",
+            path.display()
+        ))),
+    }
+}
+
+fn parse_ack_mode(
+    value: Option<serde_yaml::Value>,
+    path: &Path,
+) -> Result<Option<GcalAckMode>, ConfigError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let serde_yaml::Value::String(text) = value else {
+        return Err(ConfigError::Invalid(format!(
+            "gcal.ack in {} must be external or off; got {}",
+            path.display(),
+            render_scalar(&value)
+        )));
+    };
+    match text.trim() {
+        "external" => Ok(Some(GcalAckMode::External)),
+        "off" => Ok(Some(GcalAckMode::Off)),
+        other => Err(ConfigError::Invalid(format!(
+            "gcal.ack in {} must be external or off; got {other:?}",
             path.display()
         ))),
     }
@@ -591,6 +628,23 @@ mod tests {
         let settings =
             parse("gcal:\n  description: off\n").expect("kill switch");
         assert_eq!(settings.description, Some(GcalDescriptionMode::Off));
+    }
+
+    #[test]
+    fn ack_key_accepts_external_or_off_and_rejects_other_values() {
+        assert_eq!(parse("gcal:\n").unwrap().ack, None);
+        assert_eq!(
+            parse("gcal:\n  ack: external\n").unwrap().ack,
+            Some(GcalAckMode::External)
+        );
+        assert_eq!(
+            parse("gcal:\n  ack: off\n").unwrap().ack,
+            Some(GcalAckMode::Off)
+        );
+        for text in ["gcal:\n  ack: always\n", "gcal:\n  ack: true\n"] {
+            let error = parse(text).expect_err(text);
+            assert!(error.message().contains("gcal.ack"), "{error}");
+        }
     }
 
     #[test]

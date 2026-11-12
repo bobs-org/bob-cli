@@ -29,6 +29,8 @@ pub(crate) struct GcalConfig {
     colors: BTreeMap<String, String>,
     #[allow(dead_code)]
     tentative: bob_config::GcalTentative,
+    #[allow(dead_code)]
+    ack: bob_config::GcalAckMode,
     description: bob_config::GcalDescriptionMode,
     description_lines: usize,
     gog: Option<PathBuf>,
@@ -128,6 +130,7 @@ impl GcalConfig {
             tentative: settings
                 .tentative
                 .unwrap_or(bob_config::GcalTentative::Context),
+            ack: settings.ack.unwrap_or_default(),
             description: settings.description.unwrap_or_default(),
             description_lines: description_lines_usize,
             gog: settings.gog,
@@ -159,6 +162,11 @@ impl GcalConfig {
     #[allow(dead_code)]
     pub(crate) fn tentative(&self) -> bob_config::GcalTentative {
         self.tentative
+    }
+
+    #[allow(dead_code)] // The tag and queue phases consume this setting.
+    pub(crate) fn ack_mode(&self) -> bob_config::GcalAckMode {
+        self.ack
     }
 
     pub(crate) fn description_lines(&self) -> usize {
@@ -234,6 +242,7 @@ mod tests {
             calendars: None,
             colors: BTreeMap::new(),
             tentative: None,
+            ack: None,
             description: None,
             description_lines: None,
             gog: None,
@@ -250,6 +259,7 @@ mod tests {
         assert_eq!(config.timeout(), Duration::from_secs(60));
         assert!(config.description_bullets());
         assert_eq!(config.description_lines(), 8);
+        assert_eq!(config.ack_mode(), bob_config::GcalAckMode::External);
         assert!(config.syncs("primary", true));
         assert!(config.syncs("you@example.com", true));
         assert!(!config.syncs("work", false));
@@ -283,5 +293,15 @@ mod tests {
         .expect_err("one line is not enough for content plus overflow");
         assert_eq!(error.exit_code(), 2);
         assert!(error.message().contains("gcal.description_lines"));
+    }
+
+    #[test]
+    fn ack_key_resolves_to_external_by_default_or_off() {
+        let config = GcalConfig::from_settings(bob_config::GcalSettings {
+            ack: Some(bob_config::GcalAckMode::Off),
+            ..settings()
+        })
+        .expect("ack config");
+        assert_eq!(config.ack_mode(), bob_config::GcalAckMode::Off);
     }
 }
