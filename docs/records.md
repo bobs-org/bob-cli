@@ -197,13 +197,13 @@ the empty-state records index. `-d` prints the new-file and catalog diffs
 without locks, writes, Git, or sync. Validation and refusals exit 2
 (unknown or cyclic parents, existing destinations, claimed stems or nouns,
 an existing record folder even when empty, or a damaged affected catalog).
-Runtime failures exit 1. A damaged catalog refuses the whole creation. `-o` opens the album
-in Obsidian only after a committed creation, and an opener failure is a
-warning, never a rollback. Human success ends with a paste-ready nested
+Runtime failures exit 1. A damaged catalog refuses the whole creation. `-o`
+opens the album in Obsidian only after a committed creation; an opener
+failure warns without rolling back. Human success ends with a paste-ready nested
 `fields:` example and a `bob albums check` hint; JSON follows the
 notebook-style envelope with the created `album` identity, `changed`,
-`changes`, `catalogs`, and `findings`. A created album accepts capture and
-`records new|update` immediately, and a following sync is a no-op.
+`changes`, `catalogs`, and `findings`. The created album is ready for record
+creation; its index and affected owner catalogs are already synchronized.
 
 Destination checks for `<stem>.md` and `<stem>.base` ignore case and include
 directories and dangling symlinks. A matching transitional config kind does
@@ -304,12 +304,12 @@ not get its default reinserted.
 
 ## The note Bob writes
 
-Bob writes the parent, then `type`, `title`, schema fields in order,
+Bob writes the parent when present, then `type`, `title`, schema fields in order,
 and `created`. Album records use `parent: "[[<album>]]"` and `type: "[[record]]"`;
 config-backed records use their type id and an optional parent. Empty optional
 values and legacy keys are omitted. Strings use typed YAML quoting, including
-links and values that YAML might otherwise
-interpret as booleans or null.
+links and values that YAML might otherwise interpret as booleans or null.
+For the [album schema above](#albums):
 
 ```markdown
 ---
@@ -319,9 +319,6 @@ title: "Ramen Nagi"
 status: liked
 category: "Ramen"
 location: "Clark"
-companions:
-  - "[[kelly]]"
-visited: 2026-11-08
 created: 2026-11-08T12:41:07-0500
 ---
 
@@ -329,7 +326,7 @@ created: 2026-11-08T12:41:07-0500
 
 ## Notes
 
-- 2026-11-08: Spicy tuna was great; Kelly loved the salmon.
+- Spicy tuna was great; Kelly loved the salmon.
 ```
 
 `created` uses Bob's configured timezone and `BOB_NOW` when set. `## Notes` is
@@ -399,7 +396,7 @@ bullets become notes. `@eat/^ramen-nagi` sets an explicit stem.
 `@eat/ramen_nagi` without a caret updates the existing record: parent text
 is the first note, only supplied fields change, and unrelated bytes stay
 put. `capture-parse` and `bob capture --dry-run` show the same planned
-Markdown that commit writes. For an album, `Blaze @eat` refuses with
+Markdown that commit writes. For a healthy album, `Blaze @eat` refuses with
 `album_holds_no_tasks` and teaches `@eat/`. For a config-only collection, it
 stays a task and warns `record_collection_route`.
 
@@ -422,7 +419,7 @@ from `bob types`, which manages Task Types. Bare
 | --- | --- |
 | `bob records check [TYPE]` | Lint record folders, album membership, and typed records filed outside their folder. Exits 1 on errors. |
 | `bob records init TYPE` | Scaffold an unclaimed config kind's type note, collection note, and starter Base. Existing files are kept. |
-| `bob records list` | Show kinds, schema source, album identity, folder, note count, and required fields. |
+| `bob records list` | Show kinds, albums, folders, note counts, and required fields; JSON also names each schema's source. |
 | `bob records new TYPE TITLE` | Create one record through the same planner used by capture. |
 | `bob records show TYPE` | Show the schema, choice labels, defaults, and common suggested values. |
 | `bob records update TYPE STEM` | Edit one existing record in place through the shared update planner. |
@@ -491,10 +488,11 @@ byte-identical.
 
 ## Adding a record type
 
-New album kinds use [`bob albums create`](#creating-an-album), then optional
-`record.fields` in the album note. For a transitional config kind, declare
-it under `records:` in `config.yml` before running `bob records init TYPE`.
-For the restaurant config above:
+New albums start with [`bob albums create`](#creating-an-album); optional
+fields go under `record.fields` in the album note before records use them.
+For a config-only kind, declare it under `records:` in `config.yml` before
+running `bob records init TYPE`. With the restaurant config above and no
+album claiming `restaurant` or `eat`:
 
 ```sh
 bob records init restaurant -p food

@@ -40,18 +40,18 @@ missing or drifting; those are reportable states.
 ## 2. Preview the sync
 
 ```bash
-bob plugins sync --repo /home/alex/src/bob-plugins -b /path/to/vault --dry-run
+bob plugins sync --repo /home/alex/src/bob-plugins -b /path/to/vault --dry-run --no-pull
 ```
 
-The dry run prints the same diffs and skip decisions as a real sync, with
-`would copy` wording. Confirm the printed source path: inside a bob-plugins
-checkout, a bare sync selects that checkout. Pass `--repo` to select another
-source and `--no-pull` to preview its current files without a Git refresh.
+Confirm the source path, diffs, and `would copy` decisions. `--no-pull` keeps
+preview and deployment on the files inspected in step 1, which refreshes the
+checkout first. Inside a bob-plugins checkout, a bare sync selects that
+checkout; `--repo` selects the source explicitly.
 
 ## 3. Deploy and reload
 
 ```bash
-bob plugins sync --repo /home/alex/src/bob-plugins -b /path/to/vault
+bob plugins sync --repo /home/alex/src/bob-plugins -b /path/to/vault --no-pull
 ```
 
 Confirm `copied` or `up to date` for each managed file. Enable **Bob Ledger
@@ -86,9 +86,9 @@ skipped, unrun, or failing check, do not claim rollout success.
 
 Uncommitted vault edits are skipped with `skipped <file> (dirty in vault; use
 -F/--force)`. Read the printed diff, commit or discard the vault change, and
-rerun the sync. Do not make `--force` a habit. Sync refuses overwriting
-another checkout's protected uncommitted or non-ancestor deploy (exit 1) and prints
-preview and force recovery commands. In a Git vault, ignore
+rerun the sync. Do not make `--force` a habit. A
+[deployment-protection refusal](../plugins.md#deploy-protection-guard) exits 1;
+follow the printed preview and recovery commands. In a Git vault, ignore
 `.obsidian/plugins/*/.bob-deploy.json` so the provenance stamp stays out of
 version control. When a plugin's whole vault folder (`.obsidian/plugins/<id>/`)
 is not ignored or holds tracked files, sync and list print a `warning` line

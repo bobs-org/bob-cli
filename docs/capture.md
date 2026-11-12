@@ -8597,11 +8597,12 @@ validates typed values through the records planner without writing a note.
 See [Record notes](#record-notes) and
 [JSON outputs](reference/json-outputs.md#record-notes).
 
-`bob capture-targets` appends notebook notes after inbox, area, and
-project routes, then album and unclaimed config record folders. Notebook rows have
-`kind: "notebook"`, `title`, `summary`, `owner`, and `breadcrumb`; JSON
-record rows have `kind: "record"`, `type`, `emoji`, and
-an indexed note `count`; their route is the directory followed by `/`.
+`bob capture-targets` lists inbox, area, project, and notebook routes, then
+record folders from albums and unclaimed config kinds, sorted together by folder.
+JSON notebook rows have `kind: "notebook"`, `title`, `breadcrumb`, and optional
+`summary` and `owner`. Record rows have `kind: "record"`, `type`, optional
+`emoji`, and an indexed note `count`; their route is the directory followed by `/`.
+Here `type` is the album's record noun or the config type id, such as `restaurant`.
 Album rows also carry `title`, optional `summary` and `owner`, and `breadcrumb`.
 Human output groups them under “Notebooks” and “Record folders”. Invalid album
 claims hide only their own routes; incomplete discovery hides all record routes.
@@ -10490,17 +10491,17 @@ list and call `bob capture` directly:
    for a sub-bullet.
 
 On a successful scan, `capture-targets` returns `mac_inbox` first even when
-`mac_inbox.md` does not exist, followed by top-level area notes and
-non-terminal project notes, with each group sorted by route, then opt-in
-notebook notes (route `stem`, `kind: "notebook"`), then album and unclaimed
-config record folders (route `dir/`, `kind: "record"`). The
-`scan_capture_targets` stays without notebooks; only `bob capture-targets`
-and route completion use the opt-in notebook scanner. Eligible note
+`mac_inbox.md` does not exist, followed by top-level area notes,
+non-terminal project notes, notebook notes (route `stem`, `kind: "notebook"`),
+then record folders from albums and unclaimed config kinds (route `dir/`,
+`kind: "record"`). Each group is sorted by route. Notebooks are included
+automatically by this command and route completion; the internal
+`scan_capture_targets` omits them. Eligible note
 filenames must already be lowercase and may contain only ASCII letters,
 digits, `_`, and `-`. Area and project classification comes from YAML
 frontmatter `type: "[[area]]"` or `type: "[[project]]"`; the equivalent bare
 values are also accepted. Notebook rows come from root notes with
-`type: "[[notebook]]"` and add `title`, `summary`, `owner`, and `breadcrumb`.
+`type: "[[notebook]]"` and add `title`, `breadcrumb`, and optional `summary` and `owner`.
 Nested notes, projects whose status is `done`,
 `canceled`, or `cancelled` (case-insensitively), and other note types are
 omitted. Record rows add `type`, optional `emoji`, and indexed note `count`;

@@ -61,8 +61,8 @@ that need them report a setup error when the `priority` property is absent.
 | --- | --- | --- |
 | `timezone` | IANA timezone name, such as `America/New_York` | Unset uses the host's system timezone. When set, Bob uses this timezone for its current date and time, daily-note selection, and date stamps. Invalid names are configuration errors. |
 
-A `BOB_NOW` or `DATE` date/time overrides the clock. Offset-free values name
-wall time in Bob's timezone; an RFC 3339 `BOB_NOW` with an offset or `Z`
+A valid `BOB_NOW` overrides `DATE`; either overrides the live clock.
+Offset-free values name wall time in Bob's timezone; an RFC 3339 `BOB_NOW` with an offset or `Z`
 preserves its instant and converts to that timezone. Created/captured stamps
 use the same zone. A `DATE` command, such as `DATE=date`, runs with `TZ` set to
 the configured timezone. See the
@@ -133,7 +133,7 @@ on storage kind and scalar/list shape.
 
 Album schemas live in vault notes; [`bob albums create`](../records.md#creating-an-album)
 scaffolds them. Deprecated `records:` serves only kinds no album claims.
-Malformed config leaves healthy albums and other config sections usable.
+A malformed `records:` block leaves healthy albums and other config sections usable.
 See [Record notes](../records.md) for validation, defaults, and rendering.
 
 ### `plan`

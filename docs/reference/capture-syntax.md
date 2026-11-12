@@ -96,7 +96,7 @@ Incomplete **picker** input cannot execute.
 | Marker | Context | Meaning |
 | --- | --- | --- |
 | `+` | `+[N]`, `++[N]`, `+query` | Resize, shift, or open the parent-task picker |
-| `,` | Parent picker; glued `@route:id` / `@route^id` | Alias `+`; continue target runs with ` +`; switch colon/caret separators |
+| `,` | Parent picker; glued `@route:id` / `@route^id` | Alias `+`; continue target runs with ` +`; change `:`/`^` to `+` |
 | `.` | Right after `@route`; after a space following text | Alias `^`, `@`, or `&`; spaced `;` aliases `*` |
 | `+` | `@route+id`; typed-last owner; after `#name` | Child/Ensure Next, typed-last alias, or name suffix |
 | `%n` | Item edge; `@parent^id@` | Pomodoro note; create a notebook |
@@ -1348,10 +1348,10 @@ Contract: [Sub-bullets under existing tasks](../capture.md#sub-bullets-under-exi
 
 ### Drawer bullets and several notes {#drawer-bullets}
 
-A task's first-level `- #requirements` with nested notes names a
-drawer (ALL-CAPS with notes too). Empty `- #drawer` is
-refused; empty ALL-CAPS stays a note. Under a route-only notebook `@nb` or
-`@parent^id@ %n`, `- #Section` names an H2; nest notes or write `\#git`.
+A task's first-level `- #requirements` with nested notes names a drawer;
+ALL-CAPS works too. Empty `- #drawer` fails; empty ALL-CAPS stays a note.
+Under a route-only notebook `@nb` or `@parent^id@ %n`, `- #Section` selects
+a `##` heading; nest notes or escape `\#git`.
 
 A note-less `@route+id` files each first-level bullet as a separate note;
 drawer bullets append inside their drawers. With `@route+id#drawer`, every

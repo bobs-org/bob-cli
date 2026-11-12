@@ -54,10 +54,10 @@ bob bank report [-b DIR] [-D DAY] [-f human|json] [-m MONTH] [-w WEEK] [-y YEAR]
 The scan reads `bank.md` and `bank/*.md` only. It never scans the whole
 vault.
 
-With no `bank.md` and no `bank/` folder, commands other than `import` print a
-teaching empty state that names this page and a paste-ready `bank:` block,
-then exit 0. `import` requires a valid hub and refuses missing configuration
-with exit 2. `check` exits 1 with `bank_hub_missing` when `bank/` exists
+With no `bank.md` and no `bank/` folder, commands other than `import` exit 0.
+Human output names this page and includes a paste-ready `bank:` block;
+JSON reports an empty result. `import` requires a valid hub and refuses
+missing configuration with exit 2. `check` exits 1 with `bank_hub_missing` when `bank/` exists
 without `bank.md`, or when `bank.md` has no `bank:` mapping.
 
 Bank rows never carry `#task`, so they stay invisible to `bob plan`,

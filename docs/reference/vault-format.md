@@ -420,7 +420,7 @@ Contract: [Albums and record notes](../records.md).
 Each album (or unclaimed `records:` kind) owns one folder. Album records use
 `type: "[[record]]"` and `parent: "[[<album>]]"`; config-backed records use
 `type: "[[<type-id>]]"` and an optional parent. Notes live at `<dir>/<stem>.md`;
-Bob writes `parent`, `type`, `title`, schema fields, and `created` in that order.
+Bob writes `parent` when present, then `type`, `title`, schema fields, and `created`.
 Ordinary note bullets live under
 `## Notes`, with dates when `dated_notes: true`.
 
