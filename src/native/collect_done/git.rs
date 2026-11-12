@@ -197,7 +197,7 @@ fn stage_git_paths(
     child_env: &ChildEnv,
     paths: &[PathBuf],
 ) -> Result<(), GitFailure> {
-    let mut command = ob::git_command(vault, child_env);
+    let mut command = ob::git_command_literal(vault, child_env);
     command.arg("add").arg("--").args(paths);
     run_git_success(command, "git add")
 }
@@ -207,7 +207,7 @@ fn git_has_staged_changes(
     child_env: &ChildEnv,
     paths: &[PathBuf],
 ) -> Result<bool, GitFailure> {
-    let mut command = ob::git_command(vault, child_env);
+    let mut command = ob::git_command_literal(vault, child_env);
     command
         .arg("diff")
         .arg("--cached")
@@ -232,7 +232,7 @@ fn commit_git_paths(
     message: &str,
     paths: &[PathBuf],
 ) -> Result<(), GitFailure> {
-    let mut command = ob::git_command(vault, child_env);
+    let mut command = ob::git_command_literal(vault, child_env);
     command
         .arg("commit")
         .arg("-m")
@@ -292,4 +292,81 @@ pub(super) fn collect_done_commit_message() -> String {
         super::COMMAND_NAME,
         bob_env::current_datetime().format("%Y-%m-%d")
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    fn run_git(vault: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(vault)
+            .args(args)
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn collect_done_git_paths_keep_glob_siblings_out_of_the_commit() {
+        let temp = tempfile::tempdir().expect("vault");
+        let vault = temp.path();
+        run_git(vault, &["init", "-q"]);
+        run_git(vault, &["config", "user.email", "test@example.com"]);
+        run_git(vault, &["config", "user.name", "Test"]);
+        run_git(vault, &["config", "commit.gpgsign", "false"]);
+        fs::write(vault.join("What is Rust?.md"), "old named file\n")
+            .expect("named file");
+        fs::write(vault.join("What is RustX.md"), "old sibling\n")
+            .expect("sibling");
+        run_git(vault, &["add", "-A"]);
+        run_git(vault, &["commit", "-q", "-m", "fixture"]);
+
+        fs::write(vault.join("What is Rust?.md"), "new named file\n")
+            .expect("edit named file");
+        fs::write(vault.join("What is RustX.md"), "new sibling\n")
+            .expect("edit sibling");
+        let child_env = ob::child_env();
+        let named = [PathBuf::from("What is Rust?.md")];
+
+        stage_git_paths(vault, &child_env, &named).expect("stage named path");
+        assert!(git_has_staged_changes(vault, &child_env, &named)
+            .expect("diff named"));
+        assert!(
+            !git_has_staged_changes(
+                vault,
+                &child_env,
+                &[PathBuf::from("What is RustX.md")],
+            )
+            .expect("diff sibling"),
+            "staging the question-mark filename must not stage its glob sibling"
+        );
+        commit_git_paths(vault, &child_env, "literal filename", &named)
+            .expect("commit named path");
+
+        let committed = Command::new("git")
+            .arg("-C")
+            .arg(vault)
+            .args(["show", "HEAD:What is Rust?.md"])
+            .output()
+            .expect("read committed file");
+        assert!(committed.status.success());
+        assert_eq!(committed.stdout, b"new named file\n");
+        let sibling_diff = Command::new("git")
+            .arg("-C")
+            .arg(vault)
+            .args(["diff", "--quiet", "HEAD", "--", "What is RustX.md"])
+            .status()
+            .expect("check sibling worktree diff");
+        assert!(
+            !sibling_diff.success(),
+            "the sibling edit remains in the worktree after committing the named file"
+        );
+    }
 }

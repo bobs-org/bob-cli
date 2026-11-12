@@ -1899,7 +1899,7 @@ fn restore_from_base(
         intent,
     )?;
     if !restore.is_empty() {
-        let status = ob::git_command(vault, child_env)
+        let status = ob::git_command_literal(vault, child_env)
             .arg("checkout")
             .arg(&intent.base_head)
             .arg("--")
@@ -1954,7 +1954,7 @@ fn restore_from_base(
         ));
     }
     if !restore.is_empty() {
-        let differs = ob::git_command(vault, child_env)
+        let differs = ob::git_command_literal(vault, child_env)
             .args(["diff", "--quiet", &intent.base_head, "--"])
             .args(&restore)
             .status()
@@ -1983,7 +1983,7 @@ fn paths_tracked_in_commit(
 ) -> std::result::Result<Vec<PathBuf>, CommandError> {
     let mut tracked = Vec::new();
     for path in candidates {
-        let output = ob::git_command(vault, child_env)
+        let output = ob::git_command_literal(vault, child_env)
             .args(["ls-tree", "--name-only", base, "--"])
             .arg(path)
             .output()
@@ -2098,7 +2098,7 @@ fn validated_paths(
                 "ignoring malformed overwrite intent with invalid path {raw}; remove it to proceed"
             ))
         };
-        if raw.is_empty() || path.is_absolute() {
+        if raw.is_empty() || raw.starts_with(':') || path.is_absolute() {
             return Err(invalid());
         }
         // `Path::components()` skips interior `.` (so `ref/./note.md`
@@ -2519,6 +2519,40 @@ mod tests {
     }
 
     #[test]
+    fn stale_glob_path_does_not_restore_a_matching_sibling() {
+        let vault_temp = fixture_vault();
+        let vault = vault_temp.path();
+        let config = test_config(vault);
+        let state_temp = tempfile::tempdir().expect("state root");
+        let state = state_temp.path();
+
+        write_file(vault, "ref/blogs/What is RustX.md", b"committed sibling\n");
+        run_git(vault, &["add", "-A"]);
+        run_git(vault, &["commit", "-q", "-m", "glob sibling"]);
+        let base = git_output(vault, &["rev-parse", "HEAD"]);
+        write_file(
+            vault,
+            "ref/blogs/What is RustX.md",
+            b"user's newer sibling edit\n",
+        );
+        let intent = save_pending(
+            state,
+            &config,
+            &pending_intent(&base, None, &["ref/blogs/What is Rust?.md"], &[]),
+        );
+
+        recover(state, &config, &intent, false).expect("recover stale path");
+
+        assert_eq!(
+            fs::read(vault.join("ref/blogs/What is RustX.md"))
+                .expect("sibling"),
+            b"user's newer sibling edit\n",
+            "a stale wildcard-like intent path must not overwrite its sibling"
+        );
+        assert!(!intent_file(state, &config).exists());
+    }
+
+    #[test]
     fn committed_intent_is_retained_and_cleared() {
         let vault_temp = fixture_vault();
         let vault = vault_temp.path();
@@ -2910,7 +2944,15 @@ mod tests {
 
     #[test]
     fn validated_paths_rejects_empty_curdir_and_dot_components() {
-        for invalid in ["", ".", "./foo", "foo/./bar", "foo/../bar", "/abs"] {
+        for invalid in [
+            "",
+            ".",
+            "./foo",
+            "foo/./bar",
+            "foo/../bar",
+            "/abs",
+            ":(glob)**",
+        ] {
             let error =
                 validated_paths(&[invalid.to_string()]).expect_err(invalid);
             assert!(

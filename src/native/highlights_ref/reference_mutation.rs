@@ -94,7 +94,7 @@ pub(crate) fn latest_commit_for_path(
     child_env: &ob::ChildEnv,
     path: &Path,
 ) -> std::result::Result<Option<(String, String)>, String> {
-    let output = ob::git_command(vault, child_env)
+    let output = ob::git_command_literal(vault, child_env)
         .args(["log", "-1", "--format=%H%x00%s", "--"])
         .arg(path)
         .output()
@@ -118,7 +118,7 @@ pub(crate) fn unstage_paths(
     child_env: &ob::ChildEnv,
     paths: &[PathBuf],
 ) -> std::result::Result<(), String> {
-    let output = ob::git_command(vault, child_env)
+    let output = ob::git_command_literal(vault, child_env)
         .arg("reset")
         .arg("--quiet")
         .arg("HEAD")

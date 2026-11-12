@@ -977,7 +977,7 @@ fn manifest_commit_paths(
                 )));
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let tracked = ob::git_command(vault, child_env)
+                let tracked = ob::git_command_literal(vault, child_env)
                     .args(["ls-files", "--error-unmatch", "--"])
                     .arg(relative)
                     .output()
