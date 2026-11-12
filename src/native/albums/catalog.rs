@@ -214,19 +214,22 @@ pub(crate) fn plan_catalogs(
 }
 
 /// Owner, ancestor, and declaration preimages catalog rows actually use,
-/// plus vault-root Markdown membership so a concurrent new or removed album
-/// is noticed before install.
+/// plus the claim and identity inputs planning actually reads: ordinary-note
+/// frontmatter (a root note can become an album without a filename change),
+/// ancestry headers, and Markdown membership of every discovered folder so
+/// a nested stem colliding with a path-aware link is noticed. Record bodies
+/// stay out of this set.
 pub(crate) fn catalog_read_dependencies(
     snapshot: &VaultSnapshot,
     registry: &AlbumRegistry,
 ) -> ReadDependencies {
     let mut dependencies = ReadDependencies::default();
+    let mut content_guarded = BTreeSet::new();
     for album in &registry.albums {
         if let Some(contents) = &album.contents {
-            dependencies.insert(
-                PathBuf::from(&album.declaration.path),
-                Some(contents.clone()),
-            );
+            let path = PathBuf::from(&album.declaration.path);
+            dependencies.insert(path.clone(), Some(contents.clone()));
+            content_guarded.insert(path);
         }
     }
     for (path, file) in &snapshot.files {
@@ -236,23 +239,91 @@ pub(crate) fn catalog_read_dependencies(
         }
         if let Some(contents) = snapshot.contents(path) {
             dependencies.insert(path.clone(), Some(contents.to_owned()));
+            content_guarded.insert(path.clone());
         }
     }
-    let members = snapshot
-        .discovered
-        .iter()
-        .filter(|path| is_vault_root_markdown(path))
-        .cloned()
-        .collect::<Vec<_>>();
-    dependencies.insert_directory_membership(PathBuf::new(), Some(members));
+    for (path, file) in &snapshot.files {
+        if content_guarded.contains(path) {
+            continue;
+        }
+        let expected = match file.contents.as_deref() {
+            Some(contents) => yaml_frontmatter(contents),
+            None => {
+                match crate::native::records::catalog::read_frontmatter_head(
+                    &registry.vault_root.join(path),
+                ) {
+                    Ok(head) => head,
+                    Err(_) => continue,
+                }
+            }
+        };
+        dependencies.insert_frontmatter(path.clone(), expected);
+    }
+    let mut by_directory: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
+    for path in &snapshot.discovered {
+        if !is_markdown_note(path) {
+            continue;
+        }
+        let directory = path
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(PathBuf::new);
+        by_directory
+            .entry(directory)
+            .or_default()
+            .push(path.clone());
+    }
+    for (directory, mut members) in by_directory {
+        members.sort();
+        members.dedup();
+        dependencies.insert_directory_membership(directory, Some(members));
+    }
     dependencies
 }
 
-fn is_vault_root_markdown(path: &Path) -> bool {
-    path.components().count() == 1
-        && path
-            .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+/// `None` is current after a legitimate last-row removal (`HostOutcome::Nothing`).
+/// Damaged catalogs have no edit and must not be treated as installed.
+pub(crate) fn host_catalog_is_current(plan: Option<&HostPlan>) -> bool {
+    match plan {
+        None => true,
+        Some(plan) => {
+            plan.record.state == CatalogState::Current && plan.edit.is_none()
+        }
+    }
+}
+
+/// A required host must still appear in the plan and be healthy.
+pub(crate) fn required_host_catalog_is_current(
+    plan: Option<&HostPlan>,
+) -> bool {
+    plan.is_some_and(|plan| {
+        plan.record.state == CatalogState::Current && plan.edit.is_none()
+    })
+}
+
+fn is_markdown_note(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+}
+
+fn yaml_frontmatter(contents: &str) -> Option<String> {
+    let mut lines = contents.split_inclusive('\n');
+    let first = lines.next()?;
+    if trim_line_ending(first) != "---" {
+        return None;
+    }
+    let mut yaml = String::new();
+    for line in lines {
+        if trim_line_ending(line) == "---" {
+            return Some(yaml);
+        }
+        yaml.push_str(line);
+    }
+    None
+}
+
+fn trim_line_ending(line: &str) -> &str {
+    line.trim_end_matches('\n').trim_end_matches('\r')
 }
 
 fn build_graph(
@@ -640,5 +711,88 @@ mod tests {
             .unwrap()
             .after
             .contains("[[eat|Eating out]]"));
+    }
+
+    fn deps_of(vault: &Path) -> (ReadDependencies, PathBuf) {
+        let config = vault.join("missing-config.yml");
+        let snapshot = VaultSnapshot::load_with_config(vault, &config);
+        assert!(snapshot.io_errors.is_empty(), "{:?}", snapshot.io_errors);
+        let registry = AlbumRegistry::from_snapshot(vault, &config, &snapshot);
+        (catalog_read_dependencies(&snapshot, &registry), config)
+    }
+
+    #[test]
+    fn catalog_dependencies_notice_an_ordinary_note_becoming_an_album() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path();
+        write(vault, "body.md", "---\ntype: [[area]]\n---\n\n# Body\n");
+        write(vault, "plain.md", "# Plain\n");
+        write(
+            vault,
+            "eat.md",
+            &album("body", "Eat", "Places.", "restaurant", ""),
+        );
+        let (deps, _) = deps_of(vault);
+        deps.validate(vault).expect("fresh plan matches disk");
+        write(
+            vault,
+            "plain.md",
+            "---\ntype: [[album]]\nparent: \"[[body]]\"\nsummary: Stolen.\nrecord:\n  fields: {}\n---\n\n# Stolen\n",
+        );
+        let error = deps.validate(vault).expect_err("frontmatter changed");
+        assert!(error.message.contains("plain.md"), "{}", error.message);
+    }
+
+    #[test]
+    fn catalog_dependencies_notice_a_nested_identity_change() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path();
+        write(vault, "body.md", "---\ntype: [[area]]\n---\n\n# Body\n");
+        write(
+            vault,
+            "areas/twin.md",
+            "---\ntype: [[area]]\n---\n\n# Twin\n",
+        );
+        write(
+            vault,
+            "eat.md",
+            &album("body", "Eat", "Places.", "restaurant", ""),
+        );
+        let (deps, _) = deps_of(vault);
+        write(
+            vault,
+            "areas/body.md",
+            "---\ntype: [[area]]\n---\n\n# Nested Body\n",
+        );
+        let error = deps.validate(vault).expect_err("nested membership");
+        assert!(
+            error.message.contains("Markdown membership"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn damaged_host_plans_are_not_current() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path();
+        write(
+            vault,
+            "body.md",
+            "---\ntype: [[area]]\n---\n\n# Body\n\n## Albums\n\n> [!albums\n> - partial\n",
+        );
+        write(
+            vault,
+            "eat.md",
+            &album("body", "Eat", "Places.", "restaurant", ""),
+        );
+        let plan = report_plan(vault);
+        let host = plan.host(Path::new("body.md")).expect("damaged host");
+        assert_eq!(host.record.state, CatalogState::Damaged);
+        assert!(host.edit.is_none());
+        assert!(!host_catalog_is_current(Some(host)));
+        assert!(!required_host_catalog_is_current(Some(host)));
+        assert!(host_catalog_is_current(None));
+        assert!(!required_host_catalog_is_current(None));
     }
 }

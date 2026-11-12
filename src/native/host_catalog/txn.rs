@@ -46,6 +46,9 @@ pub(crate) struct ReadDependencies {
     frontmatter: BTreeMap<PathBuf, Option<String>>,
     directories: BTreeMap<PathBuf, Option<Vec<PathBuf>>>,
     directory_entries: BTreeMap<PathBuf, (Option<String>, Vec<String>)>,
+    /// Case-insensitive `*.md` / `*.base` names (any entry kind). Capture
+    /// temp files use another extension, so they do not invalidate a plan.
+    namespaces: BTreeMap<PathBuf, Vec<String>>,
 }
 
 impl ReadDependencies {
@@ -95,6 +98,18 @@ impl ReadDependencies {
             .insert(path, (extension.map(str::to_owned), expected));
     }
 
+    /// Guard the `*.md` / `*.base` namespace of a directory, compared
+    /// case-insensitively by name and including directories and symlinks.
+    pub(crate) fn insert_namespace(
+        &mut self,
+        path: PathBuf,
+        mut expected: Vec<String>,
+    ) {
+        expected.sort();
+        expected.dedup();
+        self.namespaces.insert(path, expected);
+    }
+
     /// Fold another plan's read inputs into this one. Later entries for the
     /// same path replace earlier ones.
     pub(crate) fn extend(&mut self, other: Self) {
@@ -102,6 +117,7 @@ impl ReadDependencies {
         self.frontmatter.extend(other.frontmatter);
         self.directories.extend(other.directories);
         self.directory_entries.extend(other.directory_entries);
+        self.namespaces.extend(other.namespaces);
     }
 
     pub(crate) fn iter(
@@ -233,8 +249,57 @@ impl ReadDependencies {
                 )));
             }
         }
+        for (relative, expected) in &self.namespaces {
+            let absolute = vault.join(relative);
+            let mut actual = album_namespace_names(&absolute)?;
+            actual.sort();
+            if &actual != expected {
+                return Err(changed_after_planning(format!(
+                    "namespace {} changed on disk after planning",
+                    relative.display()
+                )));
+            }
+        }
         Ok(())
     }
+}
+
+fn album_namespace_names(
+    directory: &Path,
+) -> Result<Vec<String>, CaptureError> {
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Vec::new());
+        }
+        Err(error) => {
+            return Err(read_failed(format!(
+                "read directory {}: {error}",
+                directory.display()
+            )));
+        }
+    };
+    let mut names = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            read_failed(format!(
+                "read directory {}: {error}",
+                directory.display()
+            ))
+        })?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if is_album_namespace_name(&name) {
+            names.push(name);
+        }
+    }
+    Ok(names)
+}
+
+pub(crate) fn is_album_namespace_name(name: &str) -> bool {
+    Path::new(name).extension().is_some_and(|extension| {
+        extension.eq_ignore_ascii_case("md")
+            || extension.eq_ignore_ascii_case("base")
+    })
 }
 
 fn markdown_membership(
@@ -1406,5 +1471,27 @@ mod tests {
             fs::read_to_string(vault.join("host.md")).unwrap(),
             "host\n"
         );
+    }
+
+    #[test]
+    fn changed_album_namespace_refuses_before_staged_writes() {
+        let (_temp, vault) = scratch();
+        let mut namespace_deps = ReadDependencies::default();
+        namespace_deps.insert_namespace(
+            PathBuf::from("."),
+            vec!["ancestor.md".to_owned(), "host.md".to_owned()],
+        );
+        let planned =
+            plan(&vault, staged(&vault, "host\n", "host+\n"), namespace_deps);
+        fs::write(vault.join("EAT.base"), "filters: {}\n").unwrap();
+
+        let error = apply_and_commit(&vault, &Vec::new(), planned)
+            .expect_err("uppercase Base invalidates the namespace");
+        assert_eq!(error.code, "stale_note");
+        assert_eq!(
+            fs::read_to_string(vault.join("host.md")).unwrap(),
+            "host\n"
+        );
+        assert!(!vault.join("new_note.md").exists());
     }
 }

@@ -15,8 +15,10 @@ through the effective vault (`--bob-dir`/`-b` wins over `BOB_DIR`); an album
 claiming a noun or directory owns that kind entirely, even when invalid.
 Transitional config `records:` serves only kinds no album claims, and every
 such use warns `records_config_deprecated`. `bob records init` refuses kinds
-an album claims (even a broken album) with exit 2 and teaches
-`bob albums create`; unclaimed config kinds keep the existing scaffolding.
+an album claims (even a broken album, and even when only the config
+directory overlaps the album folder) with exit 2 and teaches
+`bob albums create`. It also refuses when the vault scan cannot prove the
+kind is unclaimed. Unclaimed config kinds keep the existing scaffolding.
 
 This contract covers album reports, schema loading, value validation, filename
 planning, and the Markdown Bob writes. Capture creates notes through the same

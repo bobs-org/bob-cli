@@ -9,12 +9,13 @@ use serde_json::{json, Value};
 use similar::TextDiff;
 
 use super::{
-    catalog::AlbumCatalogRecord,
+    catalog::{self, AlbumCatalogRecord},
     create::{
         plan_create, validate_inputs, CreatePlan, CreateRefusal, CreateRequest,
     },
     registry::AlbumRegistry,
     report::AlbumIssue,
+    AlbumIssueSeverity,
 };
 use crate::native::{
     capture::StagedTextFile,
@@ -227,71 +228,90 @@ pub(crate) fn dry_run(vault: &Path, request: &CreateRequest) -> CreateReport {
 }
 
 /// Re-read the vault and report anything the install did not leave exact:
-/// the new declaration bytes, the starter Base, and every affected host
-/// catalog. A mismatch rolls the transaction back.
+/// the new declaration's valid claim/schema, the starter Base, and every
+/// affected host catalog. A mismatch rolls the transaction back.
 fn verify_create(
     vault: PathBuf,
     plan: CreatePlan,
     hosts: Vec<PathBuf>,
 ) -> Box<dyn FnOnce() -> Result<(), String>> {
-    Box::new(move || {
-        let config_path = config::config_path();
-        let snapshot = VaultSnapshot::load_with_config(&vault, &config_path);
-        if let Some(error) = snapshot.io_errors.first() {
-            return Err(error.clone());
+    Box::new(move || verify_installed_create(&vault, &plan, &hosts))
+}
+
+pub(crate) fn verify_installed_create(
+    vault: &Path,
+    plan: &CreatePlan,
+    hosts: &[PathBuf],
+) -> Result<(), String> {
+    let config_path = config::config_path();
+    let snapshot = VaultSnapshot::load_with_config(vault, &config_path);
+    if let Some(error) = snapshot.io_errors.first() {
+        return Err(error.clone());
+    }
+    let registry = AlbumRegistry::from_snapshot(vault, &config_path, &snapshot);
+    let Some(entry) = registry
+        .albums
+        .iter()
+        .find(|entry| Path::new(&entry.declaration.path) == plan.path)
+    else {
+        return Err(format!(
+            "{} is missing after the write",
+            slash(&plan.path)
+        ));
+    };
+    if entry
+        .findings
+        .iter()
+        .any(|finding| finding.severity == AlbumIssueSeverity::Error)
+    {
+        return Err(format!(
+            "{} has registry errors after the write",
+            slash(&plan.path)
+        ));
+    }
+    if entry.usable_type.is_none() {
+        return Err(format!(
+            "{} is not a usable album after the write",
+            slash(&plan.path)
+        ));
+    }
+    if entry.parent_path.is_none()
+        || entry.owner.is_none()
+        || entry.root.is_none()
+    {
+        return Err(format!(
+            "{} has no owner chain after the write",
+            slash(&plan.path)
+        ));
+    }
+    let catalogs = catalog::plan_catalogs(&snapshot, &registry);
+    for host in hosts {
+        let key = slash(host);
+        if !catalog::required_host_catalog_is_current(catalogs.host(host)) {
+            return Err(format!("{key} is still not current after the write"));
         }
-        let registry =
-            AlbumRegistry::from_snapshot(&vault, &config_path, &snapshot);
-        let Some(entry) = registry
-            .albums
-            .iter()
-            .find(|entry| Path::new(&entry.declaration.path) == plan.path)
-        else {
-            return Err(format!(
-                "{} is missing after the write",
-                slash(&plan.path)
-            ));
-        };
-        if entry.parent_path.is_none()
-            || entry.owner.is_none()
-            || entry.root.is_none()
-        {
-            return Err(format!(
-                "{} has no owner chain after the write",
-                slash(&plan.path)
-            ));
-        }
-        let catalogs = super::catalog::plan_catalogs(&snapshot, &registry);
-        for host in &hosts {
-            let key = slash(host);
-            if catalogs.host(host).is_some_and(|plan| plan.edit.is_some()) {
+    }
+    for (relative, expected) in [
+        (&plan.path, &plan.contents),
+        (&plan.base_path, &plan.base_contents),
+    ] {
+        match fs::read_to_string(vault.join(relative)) {
+            Ok(actual) if actual == *expected => {}
+            Ok(_) => {
                 return Err(format!(
-                    "{key} is still not current after the write"
+                    "{} differs from the plan after the write",
+                    slash(relative)
+                ));
+            }
+            Err(error) => {
+                return Err(format!(
+                    "could not re-read {}: {error}",
+                    slash(relative)
                 ));
             }
         }
-        for (relative, expected) in [
-            (&plan.path, &plan.contents),
-            (&plan.base_path, &plan.base_contents),
-        ] {
-            match fs::read_to_string(vault.join(relative)) {
-                Ok(actual) if actual == *expected => {}
-                Ok(_) => {
-                    return Err(format!(
-                        "{} differs from the plan after the write",
-                        slash(relative)
-                    ));
-                }
-                Err(error) => {
-                    return Err(format!(
-                        "could not re-read {}: {error}",
-                        slash(relative)
-                    ));
-                }
-            }
-        }
-        Ok(())
-    })
+    }
+    Ok(())
 }
 
 /// Stage the new album, its Base, and affected hosts as one guarded

@@ -26,7 +26,7 @@ use super::{
 use crate::native::{
     capture_project_note::format_created_timestamp,
     highlights_ref::humanize_stem,
-    host_catalog::{FileEdit, ReadDependencies},
+    host_catalog::{txn::is_album_namespace_name, FileEdit, ReadDependencies},
     notebooks::{
         create::normalize_parent,
         scan::link_destination,
@@ -296,8 +296,41 @@ pub(crate) struct CreatePlan {
     pub(crate) deps: ReadDependencies,
 }
 
-fn destination_exists(vault: &Path, relative: &Path) -> bool {
-    fs::symlink_metadata(vault.join(relative)).is_ok()
+/// Vault-root names as `ReadDependencies::insert_directory` will re-list them:
+/// `DirEntry` names, no symlink follow, every kind of entry.
+fn vault_root_entry_names(vault: &Path) -> Result<Vec<String>, CreateRefusal> {
+    let mut names = Vec::new();
+    let entries = fs::read_dir(vault).map_err(|error| {
+        CreateRefusal::new(
+            "album_namespace_unreadable",
+            format!("could not inspect the vault root: {error}"),
+            None,
+        )
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            CreateRefusal::new(
+                "album_namespace_unreadable",
+                format!("could not read a vault-root entry: {error}"),
+                None,
+            )
+        })?;
+        names.push(entry.file_name().to_string_lossy().into_owned());
+    }
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
+
+fn colliding_root_name(names: &[String], stem: &str) -> Option<String> {
+    let md = format!("{stem}.md");
+    let base = format!("{stem}.base");
+    names
+        .iter()
+        .find(|name| {
+            name.eq_ignore_ascii_case(&md) || name.eq_ignore_ascii_case(&base)
+        })
+        .cloned()
 }
 
 /// Resolve and plan a creation over `snapshot`. The base `registry` feeds
@@ -323,20 +356,17 @@ pub(crate) fn plan_create(
 
     // Either destination already claims the name, whatever lives there:
     // a note, a directory, or a symlink (names compare ignoring case).
-    for destination in [&md_path, &base_path] {
-        if snapshot.contains_ignore_case(destination)
-            || destination_exists(vault, destination)
-        {
-            let name = destination.to_string_lossy();
-            return Err(CreateRefusal::new(
-                "album_exists",
-                format!("{name} already exists (names compare ignoring case)"),
-                Some(
-                    "choose another stem, or write into the existing note"
-                        .to_string(),
-                ),
-            ));
-        }
+    // The Markdown snapshot cannot see `.base` files or non-file entries.
+    let root_entries = vault_root_entry_names(vault)?;
+    if let Some(existing) = colliding_root_name(&root_entries, &stem) {
+        return Err(CreateRefusal::new(
+            "album_exists",
+            format!("{existing} already exists (names compare ignoring case)"),
+            Some(
+                "choose another stem, or write into the existing note"
+                    .to_string(),
+            ),
+        ));
     }
     // Never claim a populated record folder silently; the first record
     // creates the folder, so anything already there predates the album.
@@ -597,10 +627,17 @@ pub(crate) fn plan_create(
     // membership evidence comes from the base snapshot: the guarded
     // install validates these inputs against the disk before writing, so
     // overlay bytes (which include the staged files) would always refuse.
+    // Vault-root names (every kind) make a later uppercase `.base` or
+    // directory invalidate the same plan.
     let mut deps = catalog::catalog_read_dependencies(snapshot, &base_registry);
     deps.insert(md_path.clone(), None);
     deps.insert(base_path.clone(), None);
     deps.insert_directory_membership(PathBuf::from(&stem), None);
+    let namespace = root_entries
+        .into_iter()
+        .filter(|name| is_album_namespace_name(name))
+        .collect();
+    deps.insert_namespace(PathBuf::from("."), namespace);
 
     let parent_stem = parent_path
         .file_stem()
@@ -833,5 +870,255 @@ mod tests {
             .unwrap_err();
             assert_eq!(refusal.code, code, "{parent}");
         }
+    }
+
+    #[test]
+    fn plan_refuses_case_insensitive_non_file_destinations() {
+        let (_temp, vault) = plan_fixture();
+        std::fs::write(vault.join("EAT.base"), "filters: {}\n").expect("base");
+        let refusal = plan_over(&vault, |_| {}).unwrap_err();
+        assert_eq!(refusal.code, "album_exists");
+        assert!(refusal.message.contains("EAT.base"), "{}", refusal.message);
+
+        std::fs::remove_file(vault.join("EAT.base")).expect("remove base");
+        std::fs::create_dir_all(vault.join("EAT.md")).expect("dir dest");
+        let refusal = plan_over(&vault, |_| {}).unwrap_err();
+        assert_eq!(refusal.code, "album_exists");
+        assert!(refusal.message.contains("EAT.md"), "{}", refusal.message);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plan_refuses_dangling_symlink_destinations() {
+        let (_temp, vault) = plan_fixture();
+        std::os::unix::fs::symlink("missing-target", vault.join("EAT.base"))
+            .expect("dangling symlink");
+        let refusal = plan_over(&vault, |_| {}).unwrap_err();
+        assert_eq!(refusal.code, "album_exists");
+        assert!(refusal.message.contains("EAT.base"), "{}", refusal.message);
+    }
+
+    #[test]
+    fn stale_plan_notices_a_collision_introduced_after_planning() {
+        let (_temp, vault) = plan_fixture();
+        let plan = plan_over(&vault, |_| {}).expect("plan");
+        std::fs::write(vault.join("EAT.base"), "filters: {}\n")
+            .expect("plant base");
+        let error = plan.deps.validate(&vault).expect_err("namespace changed");
+        assert!(error.message.contains("namespace"), "{}", error.message);
+    }
+
+    #[test]
+    fn stale_plan_notices_an_ordinary_note_becoming_a_claim() {
+        let (_temp, vault) = plan_fixture();
+        std::fs::write(vault.join("plain.md"), "# Plain\n").expect("plain");
+        let plan = plan_over(&vault, |_| {}).expect("plan");
+        std::fs::write(
+            vault.join("plain.md"),
+            "---\ntype: [[album]]\nparent: \"[[body]]\"\nsummary: Stolen.\nrecord:\n  noun: restaurant\n---\n\n# Stolen\n",
+        )
+        .expect("claim");
+        let error = plan.deps.validate(&vault).expect_err("claim appeared");
+        assert!(error.message.contains("plain.md"), "{}", error.message);
+    }
+
+    #[test]
+    fn stale_plan_notices_a_nested_identity_and_host_preimage_change() {
+        let (_temp, vault) = plan_fixture();
+        std::fs::create_dir_all(vault.join("areas")).expect("areas");
+        std::fs::write(
+            vault.join("areas/twin.md"),
+            "---\ntype: [[area]]\n---\n\n# Twin\n",
+        )
+        .expect("twin");
+        let plan = plan_over(&vault, |_| {}).expect("plan");
+        std::fs::write(
+            vault.join("areas/body.md"),
+            "---\ntype: [[area]]\n---\n\n# Nested Body\n",
+        )
+        .expect("nested body");
+        let error = plan
+            .deps
+            .validate(&vault)
+            .expect_err("nested identity changed");
+        assert!(
+            error.message.contains("Markdown membership"),
+            "{}",
+            error.message
+        );
+
+        let (_temp, vault) = plan_fixture();
+        let plan = plan_over(&vault, |_| {}).expect("plan");
+        std::fs::write(
+            vault.join("body.md"),
+            "---\ntype: [[area]]\n---\n\n# Body edited\n",
+        )
+        .expect("host");
+        let error = plan.deps.validate(&vault).expect_err("host changed");
+        assert!(error.message.contains("body.md"), "{}", error.message);
+    }
+
+    fn git_fixture() -> (tempfile::TempDir, PathBuf) {
+        let (temp, vault) = plan_fixture();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&vault)
+                .args(args)
+                .output()
+                .expect("git");
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "t@t"]);
+        git(&["config", "user.name", "t"]);
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "init"]);
+        (temp, vault)
+    }
+
+    fn staged_from_plan(
+        vault: &Path,
+        plan: &CreatePlan,
+    ) -> Vec<crate::native::capture::StagedTextFile> {
+        let mut files = vec![
+            crate::native::capture::StagedTextFile {
+                target: vault.join(&plan.path),
+                target_existed: false,
+                original_target: String::new(),
+                updated_target: plan.contents.clone(),
+            },
+            crate::native::capture::StagedTextFile {
+                target: vault.join(&plan.base_path),
+                target_existed: false,
+                original_target: String::new(),
+                updated_target: plan.base_contents.clone(),
+            },
+        ];
+        files.extend(crate::native::host_catalog::staged_rewrites(
+            vault,
+            &plan.edits,
+        ));
+        files
+    }
+
+    #[test]
+    fn apply_refuses_a_stale_plan_without_writing() {
+        let (_temp, vault) = git_fixture();
+        let plan = plan_over(&vault, |_| {}).expect("plan");
+        std::fs::write(vault.join("plain.md"), "# Plain\n").expect("plain");
+        let txn = crate::native::host_catalog::PlannedTxn {
+            files: staged_from_plan(&vault, &plan),
+            appends: Vec::new(),
+            deps: plan.deps.clone(),
+            subject: "albums: create eat.md".to_owned(),
+            verify: Box::new(|| Ok(())),
+            context: (),
+            kind: "album",
+        };
+        let error = crate::native::host_catalog::apply_and_commit(
+            &vault,
+            &Vec::new(),
+            txn,
+        )
+        .expect_err("stale");
+        assert_eq!(error.code, "stale_note");
+        assert!(!vault.join("eat.md").exists());
+        assert!(!vault.join("eat.base").exists());
+        assert_eq!(
+            std::fs::read_to_string(vault.join("body.md")).unwrap(),
+            "---\ntype: [[area]]\n---\n\n# Body\n"
+        );
+    }
+
+    #[test]
+    fn verify_failure_rolls_back_album_base_and_owner() {
+        let (_temp, vault) = git_fixture();
+        let plan = plan_over(&vault, |_| {}).expect("plan");
+        let body_before =
+            std::fs::read_to_string(vault.join("body.md")).unwrap();
+        let txn = crate::native::host_catalog::PlannedTxn {
+            files: staged_from_plan(&vault, &plan),
+            appends: Vec::new(),
+            deps: plan.deps.clone(),
+            subject: "albums: create eat.md".to_owned(),
+            verify: Box::new(|| Err("forced verifier failure".to_owned())),
+            context: (),
+            kind: "album",
+        };
+        let error = crate::native::host_catalog::apply_and_commit(
+            &vault,
+            &Vec::new(),
+            txn,
+        )
+        .expect_err("verify");
+        assert_eq!(error.code, "verify_failed");
+        assert!(!vault.join("eat.md").exists());
+        assert!(!vault.join("eat.base").exists());
+        assert_eq!(
+            std::fs::read_to_string(vault.join("body.md")).unwrap(),
+            body_before
+        );
+    }
+
+    #[test]
+    fn rollback_preserves_an_intervening_owner_edit() {
+        let (_temp, vault) = git_fixture();
+        let plan = plan_over(&vault, |_| {}).expect("plan");
+        let owner = vault.join("body.md");
+        let txn = crate::native::host_catalog::PlannedTxn {
+            files: staged_from_plan(&vault, &plan),
+            appends: Vec::new(),
+            deps: plan.deps.clone(),
+            subject: "albums: create eat.md".to_owned(),
+            verify: Box::new({
+                let owner = owner.clone();
+                move || {
+                    std::fs::write(&owner, "later user edit\n")
+                        .expect("intervening edit");
+                    Err("forced verifier failure".to_owned())
+                }
+            }),
+            context: (),
+            kind: "album",
+        };
+        let error = crate::native::host_catalog::apply_and_commit(
+            &vault,
+            &Vec::new(),
+            txn,
+        )
+        .expect_err("verify");
+        assert_eq!(error.code, "verify_failed");
+        assert!(!vault.join("eat.md").exists());
+        assert!(!vault.join("eat.base").exists());
+        assert_eq!(
+            std::fs::read_to_string(&owner).unwrap(),
+            "later user edit\n"
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_damaged_required_host() {
+        let (_temp, vault) = plan_fixture();
+        let plan = plan_over(&vault, |_| {}).expect("plan");
+        std::fs::write(vault.join(&plan.path), &plan.contents).expect("album");
+        std::fs::write(vault.join(&plan.base_path), &plan.base_contents)
+            .expect("base");
+        std::fs::write(
+            vault.join("body.md"),
+            "---\ntype: [[area]]\n---\n\n# Body\n\n## Albums\n\n> [!albums\n> - partial\n",
+        )
+        .expect("damage");
+        let error = super::super::create_run::verify_installed_create(
+            &vault,
+            &plan,
+            &[PathBuf::from("body.md")],
+        )
+        .expect_err("damaged");
+        assert!(error.contains("body.md"), "{error}");
     }
 }

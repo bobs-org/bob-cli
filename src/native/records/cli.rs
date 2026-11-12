@@ -978,12 +978,26 @@ fn execute_init(matches: &ArgMatches) -> i32 {
     // An album-claimed kind refuses, even when the album is broken: albums
     // own their record kinds, so a matching config kind is never scaffolded
     // over them. Unclaimed config kinds keep the existing scaffolding below.
-    if let Some(path) = album_claimant(&vault, type_id) {
+    let config_path = config::config_path();
+    let snapshot = VaultSnapshot::load_with_config(&vault, &config_path);
+    let registry =
+        AlbumRegistry::from_snapshot(&vault, &config_path, &snapshot);
+    if let Some(path) = registry.claimants(type_id).into_iter().next() {
+        return report_init_claimed(output_format, type_id, &path);
+    }
+    if !snapshot.io_errors.is_empty() {
+        let first = snapshot.io_errors.first().expect("nonempty");
+        let more = snapshot.io_errors.len() - 1;
+        let suffix = if more > 0 {
+            format!(" (+{more} more)")
+        } else {
+            String::new()
+        };
         return report_error(
             "bob records init",
             output_format,
             &format!(
-                "`{type_id}` is claimed by album {path}; album kinds are born with `bob albums create`, never `bob records init` (see `bob albums create --help`), or edit {path} to change its `record:` schema"
+                "the vault scan was incomplete: {first}{suffix}; `bob records init` cannot prove `{type_id}` is unclaimed until those paths are readable"
             ),
             2,
         );
@@ -1006,6 +1020,11 @@ fn execute_init(matches: &ArgMatches) -> i32 {
             2,
         );
     };
+    if let Some(path) =
+        registry.config_claimants(record_type).into_iter().next()
+    {
+        return report_init_claimed(output_format, type_id, &path);
+    }
     let timezone = crate::native::day_timezone().ok().flatten();
     let created = crate::native::capture_project_note::format_created_timestamp(
         bob_env::current_datetime(),
@@ -1055,17 +1074,19 @@ fn execute_init(matches: &ArgMatches) -> i32 {
     0
 }
 
-/// The first album (valid or broken) claiming this noun or stem, by
-/// vault-relative path. A partial vault scan cannot prove a kind is
-/// unclaimed, so it answers nothing and init keeps its existing behavior.
-fn album_claimant(vault: &Path, kind: &str) -> Option<String> {
-    let config_path = config::config_path();
-    let snapshot = VaultSnapshot::load_with_config(vault, &config_path);
-    if !snapshot.io_errors.is_empty() {
-        return None;
-    }
-    let registry = AlbumRegistry::from_snapshot(vault, &config_path, &snapshot);
-    registry.claimants(kind).into_iter().next()
+fn report_init_claimed(
+    output_format: OutputFormat,
+    type_id: &str,
+    path: &str,
+) -> i32 {
+    report_error(
+        "bob records init",
+        output_format,
+        &format!(
+            "`{type_id}` is claimed by album {path}; album kinds are born with `bob albums create`, never `bob records init` (see `bob albums create --help`), or edit {path} to change its `record:` schema"
+        ),
+        2,
+    )
 }
 
 fn print_init_result(

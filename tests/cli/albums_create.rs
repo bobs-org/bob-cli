@@ -60,7 +60,12 @@ fn fixture(temp: &TempDir) -> PathBuf {
     write(&vault, "taken.md", "# Taken\n");
     write(&vault, "Mixed.md", "# Mixed\n");
     write(&vault, "bbase.base", "filters: {}\n");
+    write(&vault, "UPPER.base", "filters: {}\n");
     fs::create_dir_all(vault.join("exactdir.md")).expect("dir destination");
+    fs::create_dir_all(vault.join("CASEBASE.base")).expect("base dir");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("missing-target", vault.join("DANGLE.md"))
+        .expect("dangling symlink");
     write(
         &vault,
         "eat.md",
@@ -141,16 +146,27 @@ fn snapshot(vault: &Path) -> Vec<(PathBuf, Vec<u8>)> {
             {
                 continue;
             }
-            if child.is_dir() {
+            let metadata =
+                fs::symlink_metadata(&child).unwrap_or_else(|error| {
+                    panic!("stat {}: {error}", child.display())
+                });
+            if metadata.is_dir() {
                 stack.push(child);
             } else {
-                entries.push((
-                    child
-                        .strip_prefix(vault)
-                        .expect("vault-relative")
-                        .to_path_buf(),
-                    fs::read(&child).expect("read file"),
-                ));
+                let relative = child
+                    .strip_prefix(vault)
+                    .expect("vault-relative")
+                    .to_path_buf();
+                let bytes = if metadata.file_type().is_symlink() {
+                    fs::read_link(&child)
+                        .expect("read link")
+                        .to_string_lossy()
+                        .into_owned()
+                        .into_bytes()
+                } else {
+                    fs::read(&child).expect("read file")
+                };
+                entries.push((relative, bytes));
             }
         }
     }
@@ -597,6 +613,19 @@ fn create_refusals_exit_two_and_leave_the_vault_alone() {
             "album_exists",
         ),
         (
+            refusal_args("upper", "ok", "body", "A summary.", &[]),
+            "album_exists",
+        ),
+        (
+            refusal_args("casebase", "ok", "body", "A summary.", &[]),
+            "album_exists",
+        ),
+        #[cfg(unix)]
+        (
+            refusal_args("dangle", "ok", "body", "A summary.", &[]),
+            "album_exists",
+        ),
+        (
             refusal_args("restaurant", "ok", "body", "A summary.", &[]),
             "album_noun_duplicate",
         ),
@@ -755,9 +784,10 @@ fn create_under_a_nested_project_updates_every_owner_host() {
 }
 
 #[test]
-fn create_replans_and_refuses_a_concurrent_album() {
+fn create_replans_when_the_destination_appears_between_commands() {
     let temp = TempDir::new("album-create-concurrent");
     let vault = clean_vault(&temp);
+    let files = snapshot(&vault);
 
     let dry = run(
         &vault,
@@ -777,8 +807,10 @@ fn create_replans_and_refuses_a_concurrent_album() {
     );
     assert_success(&dry);
     assert_eq!(json(&dry)["ok"], true);
+    assert_eq!(snapshot(&vault), files, "dry run writes nothing");
 
-    // Another writer claims the destination before the real run.
+    // Another writer claims the destination before a separately planned
+    // real run; this is replan coverage, not same-plan race proof.
     write(&vault, "eat.md", "# Racing writer\n");
     let output = run(
         &vault,
@@ -797,8 +829,13 @@ fn create_replans_and_refuses_a_concurrent_album() {
     );
     assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
     assert_eq!(json(&output)["error"]["code"], "album_exists");
+    assert_eq!(
+        read(&vault, "eat.md"),
+        "# Racing writer\n",
+        "refusal does not replace the planted note"
+    );
 
-    // Another writer claims only the noun.
+    // A later command on a still-unclaimed noun replans and succeeds.
     let output = run(
         &vault,
         &temp,
@@ -814,10 +851,41 @@ fn create_replans_and_refuses_a_concurrent_album() {
             "json",
         ],
     );
-    // `restaurant` is unclaimed on this vault: the dry plan succeeds and
-    // the real run claims it.
     assert_success(&output);
     assert_eq!(json(&output)["ok"], true);
+}
+
+#[test]
+fn create_dry_run_refuses_mixed_case_non_file_destinations() {
+    let temp = TempDir::new("album-create-namespace");
+    let vault = fixture(&temp);
+    for stem in ["upper", "casebase"] {
+        let files = snapshot(&vault);
+        let output = run(
+            &vault,
+            &temp,
+            &[
+                "create",
+                "body",
+                stem,
+                "-n",
+                "ok",
+                "-s",
+                "A summary.",
+                "-d",
+                "-f",
+                "json",
+            ],
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{stem}: {}",
+            format_output(&output)
+        );
+        assert_eq!(json(&output)["error"]["code"], "album_exists");
+        assert_eq!(snapshot(&vault), files, "{stem} dry-run writes nothing");
+    }
 }
 
 #[test]
@@ -1128,9 +1196,14 @@ fn created_album_accepts_records_and_stays_clean() {
 // ------------------------------------------------------- records init
 
 const INIT_CONFIG: &str = r#"records:
-  restaurant:
+  eatery:
     dir: eat
-    label: Restaurant
+    label: Eatery
+    fields:
+      status: {required: true}
+  cafe:
+    dir: bistro
+    label: Cafe
     fields:
       status: {required: true}
   podcast:
@@ -1171,6 +1244,8 @@ fn records_init_refuses_album_claimed_kinds() {
         command.output().expect("run bob records init")
     };
 
+    let files = snapshot(&vault);
+
     // A valid album claim refuses by noun.
     let output = init(&["init", "restaurant", "-f", "json"]);
     assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
@@ -1178,6 +1253,12 @@ fn records_init_refuses_album_claimed_kinds() {
     let message = payload["error"]["message"].as_str().unwrap();
     assert!(message.contains("eat.md"), "{message}");
     assert!(message.contains("bob albums create"), "{message}");
+    assert_eq!(snapshot(&vault), files);
+
+    // Dry-run of a claimed kind also writes nothing.
+    let output = init(&["init", "restaurant", "-d", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert_eq!(snapshot(&vault), files);
 
     // A broken album still claims its noun.
     let output = init(&["init", "bistro", "-f", "json"]);
@@ -1186,10 +1267,29 @@ fn records_init_refuses_album_claimed_kinds() {
         .as_str()
         .unwrap()
         .contains("bob albums create"));
+    assert_eq!(snapshot(&vault), files);
 
     // Stems claim too.
     let output = init(&["init", "eat", "-f", "json"]);
     assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert_eq!(snapshot(&vault), files);
+
+    // Folder-only overlap: config id `eatery` uses dir `eat`.
+    let output = init(&["init", "eatery", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    let payload = json(&output);
+    let message = payload["error"]["message"].as_str().unwrap();
+    assert!(message.contains("eat.md"), "{message}");
+    assert!(message.contains("bob albums create"), "{message}");
+    assert_eq!(snapshot(&vault), files);
+
+    // Broken declaration still claims its directory.
+    let output = init(&["init", "cafe", "-d", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    let payload = json(&output);
+    let message = payload["error"]["message"].as_str().unwrap();
+    assert!(message.contains("bistro.md"), "{message}");
+    assert_eq!(snapshot(&vault), files);
 
     // Unclaimed config kinds keep the existing scaffolding.
     let output = init(&["init", "podcast", "-p", "body", "-f", "json"]);
@@ -1205,6 +1305,48 @@ fn records_init_refuses_album_claimed_kinds() {
         .as_str()
         .unwrap()
         .contains("unknown record type"));
+}
+
+#[test]
+fn records_init_refuses_partial_discovery() {
+    let temp = TempDir::new("album-create-init-partial");
+    let vault = temp.path().join("vault");
+    let config = temp.path().join("config.yml");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_file(&config, INIT_CONFIG);
+    write(&vault, "body.md", "---\ntype: [[area]]\n---\n\n# Body\n");
+    fs::write(vault.join("noise.md"), [0xff, 0xfe, 0x00])
+        .expect("invalid utf-8");
+    let files = snapshot(&vault);
+
+    let init = |args: &[&str]| {
+        let mut command = bob_command();
+        command
+            .arg("records")
+            .args(args)
+            .env("BOB_DIR", &vault)
+            .env("BOB_CONFIG_FILE", &config)
+            .env("BOB_NOW", NOW)
+            .env("NO_COLOR", "1");
+        command.output().expect("run bob records init")
+    };
+
+    for args in [
+        ["init", "podcast", "-p", "body", "-f", "json"].as_slice(),
+        ["init", "podcast", "-p", "body", "-d", "-f", "json"].as_slice(),
+    ] {
+        let output = init(args);
+        assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+        let payload = json(&output);
+        let message = payload["error"]["message"].as_str().unwrap();
+        assert!(
+            message.contains("cannot prove") && message.contains("podcast"),
+            "{message}"
+        );
+        assert_eq!(snapshot(&vault), files, "partial discovery writes nothing");
+        assert!(!vault.join("podcasts.md").exists());
+        assert!(!vault.join("podcasts.base").exists());
+    }
 }
 
 // ------------------------------------------------------- help/completion

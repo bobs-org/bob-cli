@@ -419,10 +419,7 @@ fn verify_current_hosts(
             }
             continue;
         }
-        if catalogs
-            .host(Path::new(&key))
-            .is_some_and(|plan| plan.edit.is_some())
-        {
+        if !catalog::host_catalog_is_current(catalogs.host(Path::new(&key))) {
             return Err(format!("{key} is still not current after the write"));
         }
     }

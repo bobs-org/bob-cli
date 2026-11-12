@@ -311,6 +311,24 @@ impl AlbumRegistry {
         paths
     }
 
+    /// Vault-relative paths of albums (valid or broken) that claim this
+    /// config kind by noun or directory. Same ownership rule as config
+    /// fallback suppression.
+    pub(crate) fn config_claimants(
+        &self,
+        record_type: &RecordType,
+    ) -> Vec<String> {
+        let mut paths = self
+            .albums
+            .iter()
+            .filter(|album| album_claims_config_type(album, record_type))
+            .map(|album| album.declaration.path.clone())
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths.dedup();
+        paths
+    }
+
     /// Resolve a route against this registry's complete inventory. A
     /// conflicting or invalid album claim always refuses the route, and the
     /// returned health makes the scope of global checks explicit.
@@ -978,17 +996,24 @@ fn claimed_config_type(
     record_type: &RecordType,
     albums: &[AlbumEntry],
 ) -> bool {
-    albums.iter().any(|album| {
-        album
+    albums
+        .iter()
+        .any(|album| album_claims_config_type(album, record_type))
+}
+
+fn album_claims_config_type(
+    album: &AlbumEntry,
+    record_type: &RecordType,
+) -> bool {
+    album
+        .declaration
+        .noun_claim
+        .as_deref()
+        .is_some_and(|noun| noun.eq_ignore_ascii_case(&record_type.id))
+        || album
             .declaration
-            .noun_claim
-            .as_deref()
-            .is_some_and(|noun| noun.eq_ignore_ascii_case(&record_type.id))
-            || album
-                .declaration
-                .stem
-                .eq_ignore_ascii_case(&record_type.dir)
-    })
+            .stem
+            .eq_ignore_ascii_case(&record_type.dir)
 }
 
 fn album_breadcrumb(
