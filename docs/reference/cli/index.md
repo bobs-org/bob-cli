@@ -59,6 +59,7 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | --- | --- |
 | [`bob albums`](albums.md) | Inspect album notes |
 | [`bob albums check`](albums.md#bob-albums-check) | Check albums against the contract |
+| [`bob albums create`](albums.md#bob-albums-create) | Create an album with its Base and catalog rows |
 | [`bob albums list`](albums.md#bob-albums-list) | List albums grouped by root (default) |
 | [`bob albums sync`](albums.md#bob-albums-sync) | Repair generated records indexes and album catalogs |
 | [`bob articles`](articles.md) | Format and inspect article notes with bob-owned section numbers |

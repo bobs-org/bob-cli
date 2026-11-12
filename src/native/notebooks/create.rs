@@ -375,7 +375,7 @@ pub(crate) fn plan_create(
 }
 
 /// `PARENT` as typed: a stem, `stem.md`, a path, or a pasted `[[wikilink]]`.
-fn normalize_parent(raw: &str) -> String {
+pub(crate) fn normalize_parent(raw: &str) -> String {
     let trimmed = raw.trim();
     let inner = trimmed
         .strip_prefix("[[")

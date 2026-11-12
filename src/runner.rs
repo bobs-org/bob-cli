@@ -425,6 +425,14 @@ const ALBUMS_MEMBERS: &[Member] = &[
         },
     },
     Member {
+        name: "create",
+        about: "Create an album with its Base and catalog rows",
+        leaf: Leaf {
+            native_command: NativeCommand::AlbumsCreate,
+            script_command: None,
+        },
+    },
+    Member {
         name: "list",
         about: "List albums grouped by root (default)",
         leaf: Leaf {
@@ -452,6 +460,8 @@ Examples:
   bob albums check -f json         Findings as JSON
   bob albums sync -d               Preview index repairs as diffs
   bob albums sync                  Repair every healthy album index
+  bob albums create body eat -n restaurant -s 'Places to eat.'
+                                   Create eat.md with its Base and catalog rows
 
 See docs/records.md for the album contract.
 Run 'bob albums <command> --help' for more information on a command.";
@@ -994,7 +1004,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
             members: ALBUMS_MEMBERS,
             default: Some("list"),
             extra_about: Some(
-                "Bare `bob albums` runs the read-only list. `list` shows albums grouped by root. `check` lints albums against the contract. `sync` repairs generated records indexes in one guarded transaction. `bob albums create` ships in a later phase.",
+                "Bare `bob albums` runs the read-only list. `list` shows albums grouped by root. `check` lints albums against the contract. `sync` repairs generated records indexes and album catalogs in one guarded transaction. `create` makes an album with its Base and catalog rows in one guarded commit.",
             ),
             after_help: ALBUMS_AFTER_HELP,
             usage: "bob albums [COMMAND]",
@@ -2529,6 +2539,7 @@ mod tests {
         let expected = [
             NativeCommand::Articles,
             NativeCommand::AlbumsCheck,
+            NativeCommand::AlbumsCreate,
             NativeCommand::AlbumsList,
             NativeCommand::AlbumsSync,
             NativeCommand::AttachmentsImport,

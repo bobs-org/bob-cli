@@ -50,8 +50,56 @@ pub(crate) fn vault_lines(
         Kind::ArticleNote => Some(article_notes(context)),
         Kind::NotebookRoot => Some(notebook_roots(&context.bob_dir)),
         Kind::AlbumRoot => Some(album_roots(&context.bob_dir)),
+        Kind::AlbumParent => Some(album_parents(&context.bob_dir)),
         Kind::Choices | Kind::Dirs | Kind::Files(_) | Kind::FreeText => None,
     }
+}
+
+/// Areas and projects that can own a new album, as extensionless
+/// vault-relative paths. Read-only scan; never broadens the task-route
+/// provider.
+fn album_parents(bob_dir: &Path) -> Vec<String> {
+    let snapshot =
+        crate::native::notebooks::snapshot::VaultSnapshot::load(bob_dir);
+    let mut areas = Vec::new();
+    let mut projects = Vec::new();
+    for (path, file) in &snapshot.files {
+        let slashed = path.to_string_lossy().replace('\\', "/");
+        let relative = slashed
+            .strip_suffix(".md")
+            .or_else(|| slashed.strip_suffix(".MD"))
+            .unwrap_or(&slashed)
+            .to_owned();
+        match file.lite.kind {
+            crate::native::notebooks::snapshot::LiteKind::Area => areas.push((
+                relative,
+                "area".to_string(),
+                "album parents".to_string(),
+            )),
+            crate::native::notebooks::snapshot::LiteKind::Project {
+                ..
+            } => projects.push((
+                relative,
+                "project".to_string(),
+                "album parents".to_string(),
+            )),
+            _ => {}
+        }
+    }
+    areas.sort();
+    projects.sort();
+    areas
+        .into_iter()
+        .chain(projects)
+        .filter_map(|(relative, description, group)| {
+            protocol::candidate_line(
+                OsStr::new(&relative),
+                &description,
+                &group,
+                false,
+            )
+        })
+        .collect()
 }
 
 fn record_types(context: &Context) -> Vec<String> {

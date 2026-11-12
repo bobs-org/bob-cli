@@ -7,9 +7,13 @@ use clap::{
     Command as ClapCommand,
 };
 
-use super::{output, registry::AlbumRegistry, report, sync};
+use super::{
+    create::CreateRequest, create_run, output, registry::AlbumRegistry, report,
+    sync,
+};
 use crate::native::{
     config, env as bob_env, notebooks::snapshot::VaultSnapshot,
+    records::cli::open_in_obsidian,
 };
 
 const COMMAND_NAME: &str = "bob albums";
@@ -62,11 +66,23 @@ pub(crate) fn run_sync(args: Vec<OsString>) -> i32 {
     execute_sync(&matches)
 }
 
+pub(crate) fn run_create(args: Vec<OsString>) -> i32 {
+    let mut command = build_cli_create();
+    let name = command.get_name().to_owned();
+    let matches = match command.try_get_matches_from_mut(
+        std::iter::once(OsString::from(name)).chain(args),
+    ) {
+        Ok(matches) => matches,
+        Err(error) => return print_clap_error(error),
+    };
+    execute_create(&matches)
+}
+
 pub(crate) fn build_cli_list() -> ClapCommand {
     ClapCommand::new("bob albums list")
         .about("List albums grouped by root (default)")
         .long_about(
-            "Albums grouped by root, with titles, record counts, group counts, freshness, and issue markers. The report also includes health for each generated `## Albums` owner catalog, including stale catalogs whose last album was removed. Run `bob albums sync` to repair catalog findings. This command is read-only. Bare `bob albums` runs this command. `bob albums create` ships in a later phase.",
+            "Albums grouped by root, with titles, record counts, group counts, freshness, and issue markers. The report also includes health for each generated `## Albums` owner catalog, including stale catalogs whose last album was removed. Run `bob albums sync` to repair catalog findings. This command is read-only. Bare `bob albums` runs this command.",
         )
         .after_help(
             "Examples:\n  bob albums\n  bob albums list\n  bob albums list -r body -f json\n\nSee docs/records.md for the album contract.",
@@ -107,6 +123,78 @@ pub(crate) fn build_cli_sync() -> ClapCommand {
         .arg(dry_run_arg())
         .arg(format_arg())
         .arg(help_arg())
+}
+
+pub(crate) fn build_cli_create() -> ClapCommand {
+    ClapCommand::new("bob albums create")
+        .about("Create an album with its Base and catalog rows")
+        .long_about(
+            "Create STEM.md at the vault root as an album owned by PARENT (an area or project of any status), with its starter STEM.base and every affected owner catalog row, in one guarded write and one scoped `albums: create <stem>.md` commit. STEM is lower-cased to a vault-root capture route. `-n` is required and follows the record noun rule; `-s` is required and a summary over 140 characters only warns. The title defaults to the humanized stem and the label to the noun-derived label. Validation or refusal exits 2.",
+        )
+        .after_help(
+            "Examples:\n  bob albums create body eat -n restaurant -s 'Places to eat around here.'\n  bob albums create fun movies -n movie -s 'Films.' -t Movies -e '🎬'\n  bob albums create body eat -n restaurant -s 'Places.' -d\n  bob albums create body eat -n restaurant -s 'Places.' -o\n\nSee docs/records.md for the album creation contract.",
+        )
+        .disable_help_flag(true)
+        .arg(
+            Arg::new("parent")
+                .value_name("PARENT")
+                .required(true)
+                .help("Parent area or project (stem or path)"),
+        )
+        .arg(
+            Arg::new("stem")
+                .value_name("STEM")
+                .required(true)
+                .help("Album stem; names <stem>.md, <stem>.base, and <stem>/"),
+        )
+        .arg(bob_dir_arg())
+        .arg(dry_run_arg())
+        .arg(
+            Arg::new("emoji")
+                .long("emoji")
+                .short('e')
+                .value_name("EMOJI")
+                .help("One-line emoji for the album and its rows"),
+        )
+        .arg(format_arg())
+        .arg(help_arg())
+        .arg(
+            Arg::new("label")
+                .long("label")
+                .short('l')
+                .value_name("LABEL")
+                .help("One-line record label; defaults to the noun-derived label"),
+        )
+        .arg(
+            Arg::new("noun")
+                .long("noun")
+                .short('n')
+                .value_name("NOUN")
+                .required(true)
+                .help("Record noun matching [a-z][a-z0-9_]*"),
+        )
+        .arg(
+            Arg::new("open")
+                .long("open")
+                .short('o')
+                .action(ArgAction::SetTrue)
+                .help("Open the new album in Obsidian after creating it"),
+        )
+        .arg(
+            Arg::new("summary")
+                .long("summary")
+                .short('s')
+                .value_name("SUMMARY")
+                .required(true)
+                .help("One-line summary of what the album collects"),
+        )
+        .arg(
+            Arg::new("title")
+                .long("title")
+                .short('t')
+                .value_name("TITLE")
+                .help("One-line title; defaults to the humanized stem"),
+        )
 }
 
 fn bob_dir_arg() -> Arg {
@@ -253,6 +341,47 @@ fn execute_sync(matches: &ArgMatches) -> i32 {
         println!("{}", report.to_json());
     } else {
         sync::print_human(&report);
+    }
+    report.exit_code()
+}
+
+fn execute_create(matches: &ArgMatches) -> i32 {
+    let bob_dir = vault_from(matches);
+    let json = format_is_json(matches);
+    let dry_run = matches.get_flag("dry-run");
+    let text = |name: &str| {
+        matches.get_one::<String>(name).cloned().unwrap_or_default()
+    };
+    let request = CreateRequest {
+        parent: text("parent"),
+        stem: text("stem"),
+        noun: text("noun"),
+        summary: text("summary"),
+        title: matches.get_one::<String>("title").cloned(),
+        label: matches.get_one::<String>("label").cloned(),
+        emoji: matches.get_one::<String>("emoji").cloned(),
+        now: bob_env::current_datetime(),
+        timezone: bob_env::configured_timezone(),
+    };
+    let mut report = if dry_run {
+        create_run::dry_run(&bob_dir, &request)
+    } else {
+        create_run::run_standalone(&bob_dir, &request, json)
+    };
+    // Open only after a committed creation; failure to open is a warning
+    // and never rolls the file back.
+    if matches.get_flag("open")
+        && !dry_run
+        && report.failure.is_none()
+        && let Some(plan) = &report.plan
+        && let Err(message) = open_in_obsidian(&bob_dir, &plan.path)
+    {
+        report.warnings.push(message);
+    }
+    if json {
+        println!("{}", report.to_json());
+    } else {
+        create_run::print_human(&report);
     }
     report.exit_code()
 }

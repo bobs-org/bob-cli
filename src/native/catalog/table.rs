@@ -1499,6 +1499,11 @@ pub(crate) const EXCLUDED: &[Excluded] = &[
                  or the Bob plugin's Create notebook command",
     },
     Excluded {
+        path: &["albums", "create"],
+        reason: "Needs a parent, stem, noun, and summary; create albums \
+                 from a terminal",
+    },
+    Excluded {
         path: &["pomodoro", "notify"],
         reason: "Long-running notifier that never exits",
     },

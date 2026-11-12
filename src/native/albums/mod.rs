@@ -2,6 +2,8 @@
 
 pub(crate) mod catalog;
 pub(crate) mod cli;
+pub(crate) mod create;
+pub(crate) mod create_run;
 pub(crate) mod grouping;
 pub(crate) mod index;
 pub(crate) mod output;
@@ -10,7 +12,9 @@ pub(crate) mod report;
 pub(crate) mod sync;
 pub(crate) mod write;
 
-pub(crate) use cli::{build_cli_check, build_cli_list, build_cli_sync};
+pub(crate) use cli::{
+    build_cli_check, build_cli_create, build_cli_list, build_cli_sync,
+};
 
 use std::{collections::HashMap, path::Path};
 

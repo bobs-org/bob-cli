@@ -63,6 +63,8 @@ pub(crate) enum Kind {
     NotebookRoot,
     /// A computed album root for `bob albums list -r`.
     AlbumRoot,
+    /// An area or project that can own a new album.
+    AlbumParent,
 }
 
 struct Entry {
@@ -84,6 +86,41 @@ const TABLE: &[Entry] = &[
         path: &["albums", "list"],
         arg: "root",
         kind: Kind::AlbumRoot,
+    },
+    Entry {
+        path: &["albums", "create"],
+        arg: "parent",
+        kind: Kind::AlbumParent,
+    },
+    Entry {
+        path: &["albums", "create"],
+        arg: "stem",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["albums", "create"],
+        arg: "noun",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["albums", "create"],
+        arg: "summary",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["albums", "create"],
+        arg: "label",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["albums", "create"],
+        arg: "emoji",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["albums", "create"],
+        arg: "title",
+        kind: Kind::FreeText,
     },
     Entry {
         path: &["articles", "adopt"],

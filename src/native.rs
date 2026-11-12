@@ -137,6 +137,7 @@ mod vault_task_loss;
 pub(crate) enum NativeCommand {
     Articles,
     AlbumsCheck,
+    AlbumsCreate,
     AlbumsList,
     AlbumsSync,
     AttachmentsImport,
@@ -236,6 +237,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
     match command {
         NativeCommand::Articles => articles::run(args),
         NativeCommand::AlbumsCheck => albums::cli::run_check(args),
+        NativeCommand::AlbumsCreate => albums::cli::run_create(args),
         NativeCommand::AlbumsList => albums::cli::run_list(args),
         NativeCommand::AlbumsSync => albums::cli::run_sync(args),
         NativeCommand::AttachmentsImport => attachments::run_import(args),

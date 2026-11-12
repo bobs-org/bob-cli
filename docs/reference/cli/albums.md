@@ -11,14 +11,15 @@ Inspect album notes
 ```text title="bob albums --help"
 Inspect album notes
 
-Bare `bob albums` runs the read-only list. `list` shows albums grouped by root. `check` lints albums against the contract. `sync` repairs generated records indexes in one guarded transaction. `bob albums create` ships in a later phase.
+Bare `bob albums` runs the read-only list. `list` shows albums grouped by root. `check` lints albums against the contract. `sync` repairs generated records indexes and album catalogs in one guarded transaction. `create` makes an album with its Base and catalog rows in one guarded commit.
 
 Usage: bob albums [COMMAND]
 
 Commands:
-  check  Check albums against the contract
-  list   List albums grouped by root (default)
-  sync   Repair generated records indexes and album catalogs
+  check   Check albums against the contract
+  create  Create an album with its Base and catalog rows
+  list    List albums grouped by root (default)
+  sync    Repair generated records indexes and album catalogs
 
 Options:
   -h, --help  Print help
@@ -32,6 +33,8 @@ Examples:
   bob albums check -f json         Findings as JSON
   bob albums sync -d               Preview index repairs as diffs
   bob albums sync                  Repair every healthy album index
+  bob albums create body eat -n restaurant -s 'Places to eat.'
+                                   Create eat.md with its Base and catalog rows
 
 See docs/records.md for the album contract.
 Run 'bob albums <command> --help' for more information on a command.
@@ -66,12 +69,71 @@ Examples:
 See docs/records.md for the album contract.
 ```
 
+## bob albums create
+
+Create an album with its Base and catalog rows
+
+```text title="bob albums create --help"
+Create STEM.md at the vault root as an album owned by PARENT (an area or project of any status), with its starter STEM.base and every affected owner catalog row, in one guarded write and one scoped `albums: create <stem>.md` commit. STEM is lower-cased to a vault-root capture route. `-n` is required and follows the record noun rule; `-s` is required and a summary over 140 characters only warns. The title defaults to the humanized stem and the label to the noun-derived label. Validation or refusal exits 2.
+
+Usage: bob albums create [OPTIONS] --noun <NOUN> --summary <SUMMARY> <PARENT> <STEM>
+
+Arguments:
+  <PARENT>
+          Parent area or project (stem or path)
+
+  <STEM>
+          Album stem; names <stem>.md, <stem>.base, and <stem>/
+
+Options:
+  -b, --bob-dir <DIR>
+          Bob vault root; defaults to BOB_DIR or ~/bob
+
+  -d, --dry-run
+          Print planned unified diffs; write nothing
+
+  -e, --emoji <EMOJI>
+          One-line emoji for the album and its rows
+
+  -f, --format <FORMAT>
+          Output format: human or json
+
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Show help
+
+  -l, --label <LABEL>
+          One-line record label; defaults to the noun-derived label
+
+  -n, --noun <NOUN>
+          Record noun matching [a-z][a-z0-9_]*
+
+  -o, --open
+          Open the new album in Obsidian after creating it
+
+  -s, --summary <SUMMARY>
+          One-line summary of what the album collects
+
+  -t, --title <TITLE>
+          One-line title; defaults to the humanized stem
+
+Examples:
+  bob albums create body eat -n restaurant -s 'Places to eat around here.'
+  bob albums create fun movies -n movie -s 'Films.' -t Movies -e '🎬'
+  bob albums create body eat -n restaurant -s 'Places.' -d
+  bob albums create body eat -n restaurant -s 'Places.' -o
+
+See docs/records.md for the album creation contract.
+```
+
 ## bob albums list
 
 List albums grouped by root (default)
 
 ```text title="bob albums list --help"
-Albums grouped by root, with titles, record counts, group counts, freshness, and issue markers. The report also includes health for each generated `## Albums` owner catalog, including stale catalogs whose last album was removed. Run `bob albums sync` to repair catalog findings. This command is read-only. Bare `bob albums` runs this command. `bob albums create` ships in a later phase.
+Albums grouped by root, with titles, record counts, group counts, freshness, and issue markers. The report also includes health for each generated `## Albums` owner catalog, including stale catalogs whose last album was removed. Run `bob albums sync` to repair catalog findings. This command is read-only. Bare `bob albums` runs this command.
 
 Usage: bob albums list [OPTIONS]
 

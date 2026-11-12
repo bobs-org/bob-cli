@@ -100,6 +100,7 @@ pub(crate) struct HostPlan {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct CatalogPlan {
     pub(crate) hosts: Vec<HostPlan>,
+    album_hosts: BTreeMap<PathBuf, Vec<PathBuf>>,
 }
 
 impl CatalogPlan {
@@ -118,6 +119,16 @@ impl CatalogPlan {
         self.hosts
             .iter()
             .find(|host| Path::new(&host.record.path) == path)
+    }
+
+    /// Owner-chain hosts that gain a row for one album, through its root
+    /// inclusive. Album creation stages only these hosts so unrelated stale
+    /// catalogs are never repaired as a side effect.
+    pub(crate) fn hosts_for_album(&self, album_path: &Path) -> Vec<PathBuf> {
+        self.album_hosts
+            .get(album_path)
+            .cloned()
+            .unwrap_or_default()
     }
 }
 
@@ -195,7 +206,11 @@ pub(crate) fn plan_catalogs(
         }
         hosts.push(HostPlan { record, edit });
     }
-    CatalogPlan { hosts }
+    let mut album_hosts = BTreeMap::new();
+    for album in graph.albums.values() {
+        album_hosts.insert(album.path.clone(), album.hosts.clone());
+    }
+    CatalogPlan { hosts, album_hosts }
 }
 
 /// Owner, ancestor, and declaration preimages catalog rows actually use,

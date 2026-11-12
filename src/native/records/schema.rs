@@ -957,7 +957,8 @@ fn album_optional_string(
     Ok(Some(text.to_owned()))
 }
 
-fn album_label(noun: &str) -> String {
+/// The registry's noun-derived label rule, shared with album creation.
+pub(crate) fn album_label(noun: &str) -> String {
     let mut label = noun.replace('_', " ");
     if let Some(first) = label.get_mut(..1) {
         first.make_ascii_uppercase();
@@ -1807,7 +1808,14 @@ fn mapping_get<'a>(mapping: &'a Mapping, key: &str) -> Option<&'a Value> {
     mapping.get(Value::String(key.to_owned()))
 }
 
-fn valid_identifier(value: &str) -> bool {
+/// Reserved nouns an album `record.noun` may never claim: today's record
+/// ids plus the `album`/`record` storage spellings.
+pub(crate) fn album_noun_reserved(noun: &str) -> bool {
+    ALBUM_RESERVED_RECORD_IDS.contains(&noun)
+}
+
+/// The `[a-z][a-z0-9_]*` identifier alphabet shared with album creation.
+pub(crate) fn valid_identifier(value: &str) -> bool {
     let bytes = value.as_bytes();
     !bytes.is_empty()
         && bytes[0].is_ascii_lowercase()

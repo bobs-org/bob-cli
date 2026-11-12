@@ -538,7 +538,10 @@ pub(crate) fn analyze(snapshot: &VaultSnapshot) -> Analysis {
 
 /// The wikilink destination that resolves to `path`: the bare stem when it
 /// is unambiguous, otherwise the extensionless vault-relative path.
-pub(super) fn link_destination(index: &NoteIndex, path: &Path) -> String {
+/// Wikilink destination for a note: the bare stem when it resolves
+/// unambiguously, otherwise the extensionless vault-relative path.
+/// Shared with album creation so new album parents stay path-qualified.
+pub(crate) fn link_destination(index: &NoteIndex, path: &Path) -> String {
     let stem = stem_of(path);
     if index.resolve_detailed(None, &stem).path() == Some(path) {
         return stem;

@@ -25,6 +25,9 @@ impl NativeCommand {
             NativeCommand::AlbumsCheck => {
                 crate::native::albums::build_cli_check()
             }
+            NativeCommand::AlbumsCreate => {
+                crate::native::albums::build_cli_create()
+            }
             NativeCommand::AlbumsList => {
                 crate::native::albums::build_cli_list()
             }

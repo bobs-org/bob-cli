@@ -36,13 +36,16 @@ use crate::native::{
     albums::{
         index::IndexState,
         parse_album_declaration,
-        registry::{AlbumEntry, DiscoveryHealth, RecordTypeSource},
+        registry::{
+            AlbumEntry, AlbumRegistry, DiscoveryHealth, RecordTypeSource,
+        },
         write as album_write, AlbumFinding, AlbumIssueSeverity,
     },
     capture::{write_staged_files, write_staged_files_guarded, StagedTextFile},
     config::{self, records::load_records_config},
     env as bob_env,
     host_catalog::ReadDependencies,
+    notebooks::snapshot::VaultSnapshot,
     projects::frontmatter_type_names,
     style::Styler,
     vault_links::VaultLinkResolver,
@@ -972,6 +975,19 @@ fn execute_init(matches: &ArgMatches) -> i32 {
     let output_format = format_from(matches);
     let vault = vault_from(matches);
     let type_id = matches.get_one::<String>("type").expect("required by clap");
+    // An album-claimed kind refuses, even when the album is broken: albums
+    // own their record kinds, so a matching config kind is never scaffolded
+    // over them. Unclaimed config kinds keep the existing scaffolding below.
+    if let Some(path) = album_claimant(&vault, type_id) {
+        return report_error(
+            "bob records init",
+            output_format,
+            &format!(
+                "`{type_id}` is claimed by album {path}; album kinds are born with `bob albums create`, never `bob records init` (see `bob albums create --help`), or edit {path} to change its `record:` schema"
+            ),
+            2,
+        );
+    }
     let config = match load_records_config() {
         Ok(config) => config,
         Err(error) => {
@@ -1037,6 +1053,19 @@ fn execute_init(matches: &ArgMatches) -> i32 {
     }
     print_init_result(&plan, "written", output_format);
     0
+}
+
+/// The first album (valid or broken) claiming this noun or stem, by
+/// vault-relative path. A partial vault scan cannot prove a kind is
+/// unclaimed, so it answers nothing and init keeps its existing behavior.
+fn album_claimant(vault: &Path, kind: &str) -> Option<String> {
+    let config_path = config::config_path();
+    let snapshot = VaultSnapshot::load_with_config(vault, &config_path);
+    if !snapshot.io_errors.is_empty() {
+        return None;
+    }
+    let registry = AlbumRegistry::from_snapshot(vault, &config_path, &snapshot);
+    registry.claimants(kind).into_iter().next()
 }
 
 fn print_init_result(

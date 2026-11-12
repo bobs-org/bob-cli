@@ -291,6 +291,26 @@ impl AlbumRegistry {
         same_registry_target(self, bob_dir, config_path)
     }
 
+    /// Vault-relative paths of every album (valid or broken) claiming
+    /// this stem or noun, case-insensitively. Album creation and
+    /// `records init` refuse overlapping claims through this inventory.
+    pub(crate) fn claimants(&self, key: &str) -> Vec<String> {
+        let wanted = key.to_ascii_lowercase();
+        let mut paths = self
+            .claims
+            .get(&wanted)
+            .map(|indices| {
+                indices
+                    .iter()
+                    .map(|index| self.albums[*index].declaration.path.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        paths.sort();
+        paths.dedup();
+        paths
+    }
+
     /// Resolve a route against this registry's complete inventory. A
     /// conflicting or invalid album claim always refuses the route, and the
     /// returned health makes the scope of global checks explicit.

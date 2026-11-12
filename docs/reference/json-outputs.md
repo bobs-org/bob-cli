@@ -169,16 +169,14 @@ sets `one_off: true`.
 | `bob albums list` | `-f json` | Albums, groups, counts, issues, and owner `catalogs` | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
 | `bob albums check` | `-f json` | Same report as list | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
 | `bob albums sync` | `-f json` | Index entries, owner `catalogs`, and transaction results | `schema_version: 1` | [Albums and record notes](../records.md#syncing-records-indexes) |
+| `bob albums create` | `-f json` | `album`, `changed`, `changes[]`, `catalogs`, `commit`, `error` | `schema_version: 1` | [Albums and record notes](../records.md#creating-an-album) |
 
-Album rows add index state; see the [album contract](../records.md#albums)
-for their payload.
+Album rows add index state; [album contract](../records.md#albums) has the
+payload.
 
-`catalogs[]` has `host`, `path`, `root`, `state`, `albums`, and `issues`
-(`current|missing|stale|damaged`). Missing/stale warns
-`album_catalog_stale`; damage errors `album_catalog_damaged`. Findings affect
-counts and `ok`; `bob albums list -r ROOT` filters catalogs too.
-
-Sync returns index entries and transaction results; see the sync contract.
+`catalogs[]` has `host`, `path`, `root`, `state`, `albums`, `issues`.
+Missing/stale warns `album_catalog_stale`; damage errors
+`album_catalog_damaged`. Findings affect counts and `ok`.
 
 ### Notebook reports {#notebook-reports}
 

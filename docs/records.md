@@ -14,7 +14,9 @@ vault-root note that owns one kind: its stem is the folder and capture route
 through the effective vault (`--bob-dir`/`-b` wins over `BOB_DIR`); an album
 claiming a noun or directory owns that kind entirely, even when invalid.
 Transitional config `records:` serves only kinds no album claims, and every
-such use warns `records_config_deprecated`. `bob records init` is unchanged.
+such use warns `records_config_deprecated`. `bob records init` refuses kinds
+an album claims (even a broken album) with exit 2 and teaches
+`bob albums create`; unclaimed config kinds keep the existing scaffolding.
 
 This contract covers album reports, schema loading, value validation, filename
 planning, and the Markdown Bob writes. Capture creates notes through the same
@@ -111,12 +113,13 @@ record:
   Markdown members still count when the schema is broken.
 
 `bob albums` lives in the Vault section of `bob --help`. Bare `bob albums`
-defaults to the read-only `list`. `bob albums create` ships in a later phase.
+defaults to the read-only `list`.
 
 ```text
 bob albums [list] [-b DIR] [-f human|json] [-r ROOT]
 bob albums check [-b DIR] [-f human|json]
 bob albums sync [-b DIR] [-d] [-f human|json]
+bob albums create PARENT STEM -n NOUN -s SUMMARY [-b DIR] [-d] [-e EMOJI] [-f human|json] [-l LABEL] [-o] [-t TITLE]
 ```
 
 - Every long option has a short alias; options stay alphabetical.
@@ -166,6 +169,39 @@ List and check share one JSON envelope (`schema_version: 1`). Albums are
 ordered by path. `parent` is the parent stem. `ok` is false when error
 findings exist or runtime I/O failed. See
 [JSON outputs](reference/json-outputs.md#album-reports).
+
+### Creating an album
+
+`bob albums create PARENT STEM -n NOUN -s SUMMARY` writes a new album note
+at the vault root with its starter `<stem>.base` and every affected owner
+catalog row, in one guarded write and one scoped `albums: create <stem>.md`
+commit. `PARENT` names an area or project of any status (stem or
+path-qualified when ambiguous); `STEM` is lower-cased to a vault-root
+capture route and names `<stem>.md`, `<stem>.base`, and the future
+`<stem>/` record folder. `-n` follows the record noun rule (`album` and
+`record` join the reserved built-in note types); `-s` is required and one
+line, warning past 140 characters. The title defaults to the humanized stem
+and the label to the noun-derived label; `-t`, `-l`, and `-e` take single
+lines.
+
+```sh
+bob albums create body eat -n restaurant -s 'Places to eat around here.'
+```
+
+The new note carries canonical frontmatter (`parent`, `type`, `summary`,
+optional `emoji`, `created`, then `record:` with `noun` and `label`),
+an H1, an intro teaching `Name @<stem>/` and linking `<stem>.base`, and
+the empty-state records index. `-d` prints the new-file and catalog diffs
+without locks, writes, Git, or sync. Validation and refusals exit 2
+(unknown or cyclic parents, existing destinations, claimed stems or nouns,
+a populated record folder, or a damaged affected catalog); runtime failures
+exit 1. A damaged catalog refuses the whole creation. `-o` opens the album
+in Obsidian only after a committed creation, and an opener failure is a
+warning, never a rollback. Human success ends with a paste-ready nested
+`fields:` example and a `bob albums check` hint; JSON follows the
+notebook-style envelope with the created `album` identity, `changed`,
+`changes`, `catalogs`, and `findings`. A created album accepts capture and
+`records new|update` immediately, and a following sync is a no-op.
 
 A broken album refuses only its own route and stays visible; other albums,
 unclaimed config kinds, and notebook catalogs keep working. Each album's
@@ -468,6 +504,11 @@ It never edits an existing file: those pieces are reported as `keep`. It
 does not create an empty `<dir>/` folder, because git cannot sync one. The
 records planner creates the folder when it writes the first record. Writes
 use the same no-replace install as capture.
+
+A kind an album already claims refuses with exit 2, even when that album is
+broken: albums own their record kinds, so `init` never scaffolds over them.
+Create album kinds with `bob albums create` (see
+[Creating an album](#creating-an-album)) instead.
 
 After the scaffold, create records with capture (`<title> @<dir>/`) or
 `bob records new`.

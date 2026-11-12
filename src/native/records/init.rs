@@ -205,7 +205,11 @@ fn collection_heading(label: &str) -> String {
     }
 }
 
-fn base_markdown(record_type: &RecordType) -> String {
+/// Starter Base for one record kind: `file.inFolder("<dir>")` plus
+/// `note.type == link("<id>")`, grouped by the status label formula when a
+/// status choices field exists. Album creation reuses this renderer with
+/// the generic `record` type id so new albums browse the same way.
+pub(crate) fn base_markdown(record_type: &RecordType) -> String {
     let dir = yaml_double_quoted(&record_type.dir);
     let type_id = yaml_double_quoted(&record_type.id);
     let display_name = yaml_plain_or_quoted(&record_type.label);
