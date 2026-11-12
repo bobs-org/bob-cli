@@ -161,3 +161,44 @@ pub(crate) fn open_in_obsidian(
             format!("could not open the note in Obsidian: {error}")
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::native::bank::config::BankConfig;
+
+    #[test]
+    fn ensure_places_missing_day_after_the_complete_prior_section() {
+        let temp = tempfile::tempdir().expect("temporary vault");
+        fs::create_dir_all(temp.path().join("bank")).expect("bank directory");
+        let original = concat!(
+            "---\nparent: \"[[bank]]\"\n---\n\n# November 2026\n\n",
+            "## Wed Nov 11\n\n- [x] $5.00 Prior purchase\n",
+            "  - original child\nKeep this prose.\n\n",
+            "An isolated note.\n- [ ] call the bank\n- [ ] $\n\n",
+            "## Sat Nov 14\n\n- [ ] $8.00 Later day\n",
+        );
+        fs::write(temp.path().join("bank/2026-11.md"), original)
+            .expect("month note");
+        let config = BankConfig {
+            accounts: Vec::new(),
+            categories: Vec::new(),
+            rules: Vec::new(),
+            stale_after: 10,
+        };
+        let date = NaiveDate::from_ymd_opt(2026, 11, 12).unwrap();
+        let plan = plan(temp.path(), date, "", &config).expect("ensure plan");
+        let updated = plan.updated_contents.expect("heading insertion");
+        let inserted = updated.find("## Thu Nov 12\n").unwrap();
+        for content in [
+            "  - original child",
+            "Keep this prose.",
+            "An isolated note.",
+            "- [ ] call the bank",
+            "- [ ] $",
+        ] {
+            assert!(updated.find(content).unwrap() < inserted, "{content}");
+        }
+        assert!(inserted < updated.find("## Sat Nov 14\n").unwrap());
+    }
+}

@@ -429,6 +429,7 @@ pub(crate) fn plan_import(
         restaurants,
         restaurant_deps,
         registry_dependencies,
+        restaurant_directory,
         restaurant_dir_entries,
         root_md_entries,
     ) = load_restaurants(vault)?;
@@ -467,11 +468,13 @@ pub(crate) fn plan_import(
         journal.directory_entries.clone(),
     );
     deps.insert_directory(PathBuf::from("."), Some("md"), root_md_entries);
-    deps.insert_directory(
-        PathBuf::from("eat"),
-        Some("md"),
-        restaurant_dir_entries,
-    );
+    if let Some(directory) = restaurant_directory {
+        deps.insert_directory(
+            PathBuf::from(directory),
+            Some("md"),
+            restaurant_dir_entries,
+        );
+    }
     for (path, preimage) in registry_dependencies {
         deps.insert_bytes(path, preimage);
     }
@@ -527,6 +530,7 @@ fn load_restaurants(
         Vec<RestaurantEntry>,
         Vec<ReadDep>,
         Vec<(PathBuf, Option<Vec<u8>>)>,
+        Option<String>,
         Vec<String>,
         Vec<String>,
     ),
@@ -609,10 +613,12 @@ fn load_restaurants(
     };
     let mut entries = Vec::new();
     let mut deps = Vec::new();
+    let mut restaurant_directory = None;
     let mut dir_entries = Vec::new();
     if let Some(kind) = kind {
         let record_type = kind.record_type();
         let directory = &record_type.dir;
+        restaurant_directory = Some(directory.clone());
         let record_directory = vault.join(directory);
         let before_entries = directory_names(&record_directory, Some("md"))?;
         let mut catalog = RecordCatalog::new(vault);
@@ -679,9 +685,11 @@ fn load_restaurants(
                 ));
             }
             if let Some(title) = &record.title {
+                let mut link_path = record.relative_path.clone();
+                link_path.set_extension("");
                 entries.push(RestaurantEntry {
                     title: title.clone(),
-                    stem: record.stem.clone(),
+                    path: link_path.to_string_lossy().replace('\\', "/"),
                     emoji: record_type.emoji.clone(),
                 });
             }
@@ -691,6 +699,7 @@ fn load_restaurants(
         entries,
         deps,
         registry_dependencies,
+        restaurant_directory,
         dir_entries,
         root_md_entries,
     ))
@@ -759,11 +768,29 @@ pub(crate) fn source_error_failure(error: SourceError) -> TxnFailure {
 }
 
 fn plan_refusal_failure(refusal: PlanRefusal) -> TxnFailure {
-    failure(
-        "bank_import_plan",
-        refusal.message(),
-        "resolve the listed conflict and retry",
-    )
+    let (code, hint) = match &refusal {
+        PlanRefusal::IdentityConflict { .. } => (
+            "bank_import_identity_conflict",
+            "use a consistent export for each transaction identity; no rows were written",
+        ),
+        PlanRefusal::DuplicateUnjournaledId { .. } => (
+            "bank_import_duplicate_id",
+            "resolve the duplicate bank IDs in the listed month notes, then retry",
+        ),
+        PlanRefusal::MissingConfig => (
+            "bank_import_config",
+            "fix bank.md before importing",
+        ),
+        PlanRefusal::IncompleteRead { .. } => (
+            "bank_import_incomplete_read",
+            "fix the listed bank files and retry",
+        ),
+        PlanRefusal::IdCollision { .. } => (
+            "bank_import_id_collision",
+            "resolve the row ID collision and retry",
+        ),
+    };
+    failure(code, refusal.message(), hint)
 }
 
 fn text_diff_for(edit: &MonthEdit) -> String {
@@ -875,6 +902,31 @@ pub(crate) fn apply(
                         now_stamp,
                         &host,
                     )?;
+                if !appends.is_empty() {
+                    match crate::native::vault_git::check_ignore_quiet(
+                        vault,
+                        &child_env,
+                        Path::new(&format!(".bob/bank/{host}.jsonl")),
+                    ) {
+                        Ok(crate::native::vault_git::IgnoreQuiet::Ignored) => {
+                            return Err(failure(
+                                "bank_import_journal_ignored",
+                                "refusing import; Git ignores the bank journal destination",
+                                "add `!/.bob/bank/*.jsonl` to the vault .gitignore allowlist, then retry",
+                            ));
+                        }
+                        Ok(
+                            crate::native::vault_git::IgnoreQuiet::Trackable,
+                        ) => {}
+                        Err(error) => {
+                            return Err(failure(
+                                "bank_import_journal_ignore_check",
+                                format!("cannot verify bank journal Git policy: {error}"),
+                                "check the vault worktree and .gitignore rules, then retry",
+                            ));
+                        }
+                    }
+                }
                 let txn = planned_txn(
                     vault,
                     plan,
@@ -1083,11 +1135,66 @@ mod tests {
         TestVault { _temp: temp, path }
     }
 
+    fn syncable_vault() -> TestVault {
+        let vault = vault();
+        let remote = vault._temp.path().join("remote.git");
+        let output = Command::new("git")
+            .args(["init", "--bare", "-q"])
+            .arg(&remote)
+            .output()
+            .expect("initialize local sync remote");
+        assert!(output.status.success());
+        let remote = remote.to_string_lossy().into_owned();
+        let branch = git(&vault.path, &["branch", "--show-current"]);
+        git(&vault.path, &["remote", "add", "origin", &remote]);
+        git(
+            &vault.path,
+            &["push", "--quiet", "--set-upstream", "origin", &branch],
+        );
+        git(&vault.path, &["remote", "set-head", "origin", &branch]);
+        vault
+    }
+
+    fn sync_environment(vault: &TestVault) -> TestEnvGuard {
+        let lock = vault._temp.path().join("sync.lock");
+        let state = vault._temp.path().join("sync-state.json");
+        TestEnvGuard::set(&[
+            ("BOB_DIR", Some(vault.path.as_os_str())),
+            (
+                "BOB_CONFIG_FILE",
+                Some(OsStr::new("/nonexistent-bob-bank-import-test.yml")),
+            ),
+            ("BOB_NOW", Some(OsStr::new("2026-11-13T12:00:00"))),
+            ("BOB_VAULT_SYNC_LOCK_FILE", Some(lock.as_os_str())),
+            ("BOB_VAULT_SYNC_STATE_FILE", Some(state.as_os_str())),
+            ("BOB_VAULT_SYNC_NOTIFY", Some(OsStr::new("0"))),
+        ])
+    }
+
     fn prepared(label: &str, order: usize, contents: &str) -> PreparedSource {
         PreparedSource {
             label: label.to_owned(),
             statement: source::parse_export(label, contents.as_bytes(), order)
                 .expect("synthetic CSV parses"),
+        }
+    }
+
+    fn prepared_ofx(
+        label: &str,
+        order: usize,
+        amount: &str,
+        bank_id: &str,
+    ) -> PreparedSource {
+        let contents = format!(
+            "<OFX><STMTRS><CURDEF>USD</CURDEF><BANKACCTFROM><ACCTTYPE>CHECKING</ACCTTYPE></BANKACCTFROM>\
+<BANKTRANLIST><DTSTART>20261101</DTSTART><DTEND>20261113</DTEND><STMTTRN>\
+<DTPOSTED>20261112</DTPOSTED><TRNAMT>{amount}</TRNAMT><FITID>{bank_id}</FITID>\
+<NAME>TEST CAFE</NAME></STMTTRN></BANKTRANLIST></STMTRS></OFX>"
+        );
+        PreparedSource {
+            label: label.to_owned(),
+            statement: source::parse_export(label, contents.as_bytes(), order)
+                .expect("synthetic OFX parses"),
         }
     }
 
@@ -1134,6 +1241,252 @@ mod tests {
         assert!(paths
             .lines()
             .any(|path| path == ".bob/bank/test-host.jsonl"));
+    }
+
+    #[test]
+    fn apply_refuses_ignored_journal_before_rows_and_commits_when_allowed() {
+        let vault = syncable_vault();
+        let _guard = sync_environment(&vault);
+        let ignore = "/.bob/bank/*.jsonl\n";
+        fs::write(vault.path.join(".gitignore"), ignore).unwrap();
+        git(&vault.path, &["add", ".gitignore"]);
+        git(&vault.path, &["commit", "-qm", "ignore bank journal"]);
+        git(&vault.path, &["push", "--quiet"]);
+
+        let input = prepared("checking.csv", 0, CSV);
+        let today = NaiveDate::from_ymd_opt(2026, 11, 13).unwrap();
+        let refused = apply(
+            &vault.path,
+            std::slice::from_ref(&input),
+            Some("checking"),
+            "2026-11-13T17:00:00+00:00",
+            today,
+            true,
+        );
+        assert_eq!(
+            refused.failure.as_ref().map(|error| error.code),
+            Some("bank_import_journal_ignored")
+        );
+        assert_eq!(refused.exit_code(), 2);
+        assert!(!vault.path.join("bank/2026-11.md").exists());
+        assert!(!vault.path.join(".bob/bank").exists());
+        assert_eq!(
+            fs::read_to_string(vault.path.join(".gitignore")).unwrap(),
+            ignore
+        );
+
+        fs::write(vault.path.join(".gitignore"), "!/.bob/bank/*.jsonl\n")
+            .unwrap();
+        git(&vault.path, &["add", ".gitignore"]);
+        git(&vault.path, &["commit", "-qm", "allow bank journal"]);
+        git(&vault.path, &["push", "--quiet"]);
+        let applied = apply(
+            &vault.path,
+            std::slice::from_ref(&input),
+            Some("checking"),
+            "2026-11-13T17:00:00+00:00",
+            today,
+            true,
+        );
+        assert!(applied.failure.is_none(), "{:?}", applied.failure);
+        let commit = applied.commit.expect("one scoped import commit");
+        assert_eq!(commit.subject, "bank: import 1 rows (checking)");
+        let paths =
+            git(&vault.path, &["show", "--name-only", "--format=", "HEAD"]);
+        assert!(paths.lines().any(|path| path == "bank/2026-11.md"));
+        let journal = format!(".bob/bank/{}.jsonl", pref_journal::host_label());
+        assert!(paths.lines().any(|path| path == journal));
+    }
+
+    #[test]
+    fn malformed_cli_source_returns_before_any_sync_or_write() {
+        let vault = syncable_vault();
+        let _guard = sync_environment(&vault);
+        let source_path = vault._temp.path().join("truncated.qfx");
+        fs::write(
+            &source_path,
+            "<OFX><STMTRS><BANKTRANLIST><DTSTART>20261101</DTSTART>\
+<DTEND>20261112</DTEND><STMTTRN><TRNAMT>-1.00</TRNAMT><FITID>x</FITID>",
+        )
+        .unwrap();
+        let state = vault._temp.path().join("sync-state.json");
+        assert!(!state.exists());
+        let code = super::super::cli::run_import(vec![
+            "-b".into(),
+            vault.path.as_os_str().to_owned(),
+            "-f".into(),
+            "json".into(),
+            source_path.as_os_str().to_owned(),
+        ]);
+        assert_eq!(code, 2);
+        assert!(!state.exists(), "malformed input must not enter vault sync");
+        assert!(!vault.path.join("bank/2026-11.md").exists());
+        assert!(!vault.path.join(".bob/bank").exists());
+        assert_eq!(git(&vault.path, &["status", "--porcelain"]), "");
+    }
+
+    #[test]
+    fn conflicting_multi_file_apply_refuses_without_rows_or_journal() {
+        let vault = syncable_vault();
+        let _guard = sync_environment(&vault);
+        let sources = [
+            prepared_ofx("first.qfx", 0, "-10.00", "same-id"),
+            prepared_ofx("second.qfx", 1, "-20.00", "same-id"),
+        ];
+        let report = apply(
+            &vault.path,
+            &sources,
+            Some("checking"),
+            "2026-11-13T17:00:00+00:00",
+            NaiveDate::from_ymd_opt(2026, 11, 13).unwrap(),
+            true,
+        );
+        assert_eq!(report.exit_code(), 2);
+        let failure = report
+            .failure
+            .as_ref()
+            .expect("conflicting identity refuses");
+        assert_eq!(failure.code, "bank_import_identity_conflict");
+        assert!(failure.message.contains("second.qfx record 1 field TRNAMT"));
+        assert!(!failure.message.contains("same-id"));
+        assert!(!vault.path.join("bank/2026-11.md").exists());
+        assert!(!vault.path.join(".bob/bank").exists());
+        assert_eq!(git(&vault.path, &["status", "--porcelain"]), "");
+    }
+
+    #[test]
+    fn lock_refusal_precedes_sync_and_planning() {
+        let vault = syncable_vault();
+        let _guard = sync_environment(&vault);
+        let held = crate::native::ob::acquire_lock_quiet_if_held()
+            .expect("lock check")
+            .expect("test holds the isolated lock");
+        let report = apply(
+            &vault.path,
+            &[prepared("checking.csv", 0, CSV)],
+            Some("checking"),
+            "2026-11-13T17:00:00+00:00",
+            NaiveDate::from_ymd_opt(2026, 11, 13).unwrap(),
+            true,
+        );
+        drop(held);
+        assert_eq!(
+            report.failure.as_ref().map(|error| error.code),
+            Some("lock_busy")
+        );
+        assert!(!vault.path.join("bank/2026-11.md").exists());
+        assert!(!vault.path.join(".bob/bank").exists());
+        assert!(!vault._temp.path().join("sync-state.json").exists());
+    }
+
+    #[test]
+    fn apply_after_presync_uses_the_remote_bank_config() {
+        let vault = syncable_vault();
+        let _guard = sync_environment(&vault);
+        let remote = vault._temp.path().join("remote.git");
+        let clone = vault._temp.path().join("remote-writer");
+        let output = Command::new("git")
+            .args(["clone", "--quiet"])
+            .arg(&remote)
+            .arg(&clone)
+            .output()
+            .expect("clone sync remote");
+        assert!(output.status.success());
+        git(&clone, &["config", "user.email", "test@example.invalid"]);
+        git(&clone, &["config", "user.name", "Bank Import Test"]);
+        let bank = fs::read_to_string(clone.join("bank.md")).unwrap();
+        let updated = bank.replace(
+            "    dining: 🍽️ Dining\n---",
+            "    dining: 🍽️ Dining\n  rules:\n    - match: SMASHBURGER\n      payee: Synced Cafe\n---",
+        );
+        assert_ne!(updated, bank);
+        fs::write(clone.join("bank.md"), updated).unwrap();
+        git(&clone, &["add", "bank.md"]);
+        git(&clone, &["commit", "-qm", "update bank naming rule"]);
+        git(&clone, &["push", "--quiet"]);
+
+        let report = apply(
+            &vault.path,
+            &[prepared("checking.csv", 0, CSV)],
+            Some("checking"),
+            "2026-11-13T17:00:00+00:00",
+            NaiveDate::from_ymd_opt(2026, 11, 13).unwrap(),
+            true,
+        );
+        assert!(report.failure.is_none(), "{:?}", report.failure);
+        assert_eq!(report.plan.as_ref().unwrap().rows[0].payee, "Synced Cafe");
+        assert!(fs::read_to_string(vault.path.join("bank.md"))
+            .unwrap()
+            .contains("payee: Synced Cafe"));
+    }
+
+    #[test]
+    fn fixed_clock_dry_run_and_apply_write_identical_month_and_journal_bytes() {
+        let vault = syncable_vault();
+        let _guard = sync_environment(&vault);
+        let source = prepared("checking.csv", 0, CSV);
+        let today = NaiveDate::from_ymd_opt(2026, 11, 13).unwrap();
+        let preview = dry_run(
+            &vault.path,
+            std::slice::from_ref(&source),
+            Some("checking"),
+            "2026-11-13T17:00:00+00:00",
+            today,
+        );
+        let preview_plan = preview.plan.expect("dry-run plan");
+        let month = preview_plan.month_edits[0].after.clone();
+        let journal = preview_plan.journal_events.concat();
+        let applied = apply(
+            &vault.path,
+            std::slice::from_ref(&source),
+            Some("checking"),
+            "2026-11-13T17:00:00+00:00",
+            today,
+            true,
+        );
+        assert!(applied.failure.is_none(), "{:?}", applied.failure);
+        assert_eq!(
+            fs::read_to_string(vault.path.join("bank/2026-11.md")).unwrap(),
+            month
+        );
+        let journal_path = vault
+            .path
+            .join(format!(".bob/bank/{}.jsonl", pref_journal::host_label()));
+        assert_eq!(fs::read_to_string(journal_path).unwrap(), journal);
+    }
+
+    #[test]
+    fn post_sync_failure_keeps_the_local_commit_and_journal() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let vault = syncable_vault();
+        let _guard = sync_environment(&vault);
+        let hook = vault._temp.path().join("remote.git/hooks/pre-receive");
+        fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let report = apply(
+            &vault.path,
+            &[prepared("checking.csv", 0, CSV)],
+            Some("checking"),
+            "2026-11-13T17:00:00+00:00",
+            NaiveDate::from_ymd_opt(2026, 11, 13).unwrap(),
+            true,
+        );
+        assert!(report.failure.is_none(), "{:?}", report.failure);
+        assert!(report.commit.is_some());
+        assert_eq!(report.sync_post, Some("failed"));
+        assert!(report.warnings.iter().any(|warning| {
+            warning.contains("committed locally")
+                && warning.contains("run bob vault-sync")
+        }));
+        assert!(vault.path.join("bank/2026-11.md").exists());
+        assert!(vault
+            .path
+            .join(format!(".bob/bank/{}.jsonl", pref_journal::host_label()))
+            .exists());
+        assert!(git(&vault.path, &["log", "-1", "--format=%s"])
+            .starts_with("bank: import 1 rows (checking)"));
     }
 
     #[test]
@@ -1234,6 +1587,78 @@ mod tests {
         assert_eq!(
             git(&vault.path, &["status", "--porcelain"]),
             "?? new-record.md"
+        );
+    }
+
+    #[test]
+    fn nonlegacy_restaurant_directory_links_and_guards_its_inputs() {
+        let vault = vault();
+        let config_path = vault._temp.path().join("config.yml");
+        fs::write(
+            &config_path,
+            "records:\n  eat:\n    dir: restaurants\n    label: Restaurant\n    emoji: 🍽️\n    fields: {}\n",
+        )
+        .unwrap();
+        let _guard = TestEnvGuard::set(&[
+            ("BOB_CONFIG_FILE", Some(config_path.as_os_str())),
+            ("BOB_NOW", Some(OsStr::new("2026-11-13T12:00:00"))),
+        ]);
+        fs::create_dir_all(vault.path.join("restaurants")).unwrap();
+        fs::write(
+            vault.path.join("restaurants/test_cafe.md"),
+            "---\ntitle: Test Cafe\n---\n",
+        )
+        .unwrap();
+
+        let first =
+            prepared("cafe.csv", 0, "11/12/2026,-13.71,*,,TST*TEST CAFE\n");
+        let txn = planned(&vault.path, std::slice::from_ref(&first));
+        assert_eq!(
+            txn.context.rows[0].links,
+            vec!["[[restaurants/test_cafe|🍽️]]".to_owned()]
+        );
+        let (commit, _) = apply_and_commit(&vault.path, &Vec::new(), txn)
+            .expect("unchanged configured restaurant registry applies");
+        assert!(commit.is_some());
+        let note =
+            fs::read_to_string(vault.path.join("bank/2026-11.md")).unwrap();
+        assert!(note.contains("[[restaurants/test_cafe|🍽️]]"));
+
+        let changed_source = prepared(
+            "another-cafe.csv",
+            0,
+            "11/13/2026,-4.25,*,,TST*NEW CAFE\n",
+        );
+        let stale = planned(&vault.path, std::slice::from_ref(&changed_source));
+        let original_rows =
+            fs::read(vault.path.join("bank/2026-11.md")).unwrap();
+        fs::write(
+            vault.path.join("restaurants/test_cafe.md"),
+            "---\ntitle: Renamed Cafe\n---\n",
+        )
+        .unwrap();
+        let error = apply_and_commit(&vault.path, &Vec::new(), stale)
+            .expect_err("changed restaurant input makes the plan stale");
+        assert_eq!(error.code, "stale_note");
+        assert_eq!(
+            fs::read(vault.path.join("bank/2026-11.md")).unwrap(),
+            original_rows
+        );
+
+        let stale_membership =
+            planned(&vault.path, std::slice::from_ref(&changed_source));
+        fs::write(
+            vault.path.join("restaurants/new_cafe.md"),
+            "---\ntitle: New Cafe\n---\n",
+        )
+        .unwrap();
+        let error =
+            apply_and_commit(&vault.path, &Vec::new(), stale_membership)
+                .expect_err("new restaurant membership makes the plan stale");
+        assert_eq!(error.code, "stale_note");
+        assert_eq!(
+            fs::read(vault.path.join("bank/2026-11.md")).unwrap(),
+            original_rows
         );
     }
 

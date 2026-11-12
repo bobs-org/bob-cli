@@ -683,8 +683,10 @@ git -C ~/bob check-ignore -v .bob/bank/apollo.jsonl
 
 A negated last match (`!/.bob/bank/*.jsonl`) means the file is
 trackable. The directory is created on the first import; its absence is
-expected until then. The vault root `.gitattributes` unions concurrent
-journal appends:
+expected until then. Before installing month rows, `bob bank import`
+checks this journal destination and refuses if Git still ignores it; it
+does not force-add ignored data. The vault root `.gitattributes` unions
+concurrent journal appends:
 
 ```gitattributes
 .bob/bank/*.jsonl merge=union

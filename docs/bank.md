@@ -205,7 +205,10 @@ Two export shapes, told apart by content: OFX/QFX (an `OFXHEADER` or
 
 OFX accepts 1.x SGML leaf tags without closing tags and 2.x XML,
 including preambles, CRLF/BOM, ordinary entities, and Wells Fargo
-header/`CHARSET` noise. Parsed fields are `TRNTYPE`, `DTPOSTED`,
+header/`CHARSET` noise. Transaction, transaction-list, statement, and
+ledger-balance aggregate containers must close and nest correctly; a
+truncated container refuses before the maintenance/sync lifecycle. Parsed
+fields are `TRNTYPE`, `DTPOSTED`,
 `TRNAMT`, `FITID`, `NAME`, and `MEMO`; coverage comes from
 `BANKTRANLIST`'s `DTSTART`/`DTEND`; the ledger balance (never available
 balance) comes from `LEDGERBAL`'s `BALAMT`/`DTASOF`; the account kind
@@ -250,7 +253,10 @@ resurrected. A row installed before a crash but not yet journaled is
 recognized on retry and the missing journal evidence is filled without
 writing a second row. A transaction dated before its account `start` is
 recorded as `before_start` — journaled for audit, with no row written
-or matched.
+or matched. Repeated transaction identities must keep their posted date
+and cents across batch files and the folded journal; conflicts refuse the
+entire batch. If an unjournaled matching bank ID appears on multiple rows,
+import refuses with the source file and record so it does not choose a row.
 
 Anything else matches at most one typed row: same non-`cash` account,
 exactly equal signed cents, no bank ID yet, posted within
@@ -261,9 +267,11 @@ a tie. `$20` and `$24` stay separate because cents must be exactly
 equal.
 
 Otherwise import renders an unchecked canonical row under its posted
-day with the shared month/day helpers, appending after the day's
-existing row blocks without separating a row from its children, and
-preserving BOM, CRLF, and free prose. Dates can cross months.
+day with the shared month/day helpers. A new day heading follows the
+whole previous day section, preserving trailing prose, checklist lines,
+and fenced content; rows append after existing row blocks without
+separating a row from its children. BOM and CRLF are preserved. Dates can
+cross months.
 
 ### Naming
 
@@ -357,6 +365,12 @@ installed; later external edits are preserved and incomplete rollback
 is reported. A commit that succeeded stays committed. Post-sync failure
 keeps the local commit and prints the recovery hint instead of rolling
 back.
+
+Before installing month rows, real apply checks the destination
+`.bob/bank/<host>.jsonl` against Git ignore rules. If Git ignores it,
+import refuses without writing rows or a journal and shows the vault
+`.gitignore` allowlist line `!/.bob/bank/*.jsonl`; it never force-adds
+ignored data. Dry run does not run Git.
 
 Dry run invokes only the shared pure planner and shows exact month and
 journal after-images/diffs. A dry run creates no directories, appends

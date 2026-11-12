@@ -152,7 +152,7 @@ See docs/bank.md for the bank contract.
 Import posted bank transactions
 
 ```text title="bob bank import --help"
-Plans the whole batch before writing. Existing rows are matched only by account, exact signed cents, and the documented posted-date window; new rows and the private bank journal commit together. Refused input exits 2; runtime failures exit 1.
+Plans the whole batch before writing. Existing rows are matched only by account, exact signed cents, and the documented posted-date window; new rows and the private bank journal commit together. An ignored journal destination is refused before rows are installed. Refused input exits 2; runtime failures exit 1.
 
 Usage: bob bank import [OPTIONS] [FILE]...
 

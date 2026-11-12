@@ -244,7 +244,7 @@ fn strip_store_numbers(text: &str) -> Option<String> {
     let mut out = String::with_capacity(text.len());
     let mut changed = false;
     let mut chars = text.char_indices().peekable();
-    while let Some((_, ch)) = chars.next() {
+    while let Some((index, ch)) = chars.next() {
         if ch == '#'
             && let Some((_, next)) = chars.peek()
             && next.is_ascii_digit()
@@ -258,6 +258,21 @@ fn strip_store_numbers(text: &str) -> Option<String> {
                     out.push(digit);
                     break;
                 }
+            }
+            changed = true;
+        } else if ch == '#'
+            && text
+                .get(index + ch.len_utf8()..)
+                .is_some_and(|tail| tail.starts_with("••••"))
+        {
+            // Historical journal descriptions mask store digits before
+            // writing. Remove only this exact redaction token when it is
+            // preceded by the store-number marker.
+            if out.ends_with(' ') {
+                out.pop();
+            }
+            for _ in 0..4 {
+                chars.next();
             }
             changed = true;
         } else {
@@ -274,7 +289,8 @@ fn strip_card_suffix(text: &str) -> Option<String> {
     }
     let tail = &words[words.len() - 3..];
     let digits = |word: &str| {
-        word.len() == 4 && word.bytes().all(|byte| byte.is_ascii_digit())
+        (word.len() == 4 && word.bytes().all(|byte| byte.is_ascii_digit()))
+            || word == "••••"
     };
     let is_card_trailer = tail[0].starts_with('S')
         && tail[0].len() > 1

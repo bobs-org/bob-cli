@@ -39,10 +39,13 @@ pub(crate) fn mask_digits(text: &str) -> String {
     out
 }
 
-/// Merchant key from masked, whitespace-collapsed, lowercased text.
+/// Merchant key from conservatively cleaned, masked, whitespace-collapsed,
+/// lowercased text. The same function handles old journal descriptions, so
+/// append-only history remains comparable without rewriting stored events.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn merchant_key(text: &str) -> String {
-    mask_digits(text)
+    let cleaned = super::naming::clean_description(text);
+    mask_digits(&cleaned)
         .split_whitespace()
         .map(str::to_ascii_lowercase)
         .collect::<Vec<_>>()
@@ -135,7 +138,13 @@ mod tests {
         assert_eq!(mask_digits("CARD 1234"), "CARD ••••");
         assert_eq!(mask_digits("A12B345C6789D"), "A12B345C••••D");
         assert_eq!(mask_digits("room 123"), "room 123");
-        assert_eq!(merchant_key("SQ *SMASH 1234"), "sq *smash ••••");
+        assert_eq!(merchant_key("SQ *SMASH"), "smash");
+        assert_eq!(merchant_key("TST*SMASH"), "smash");
+        assert_ne!(merchant_key("TST*SMASH"), merchant_key("TST*MARKET"));
+        assert_eq!(
+            merchant_key("WHOLEFDS #4821"),
+            merchant_key(&mask_digits("WHOLEFDS #4821"))
+        );
     }
 
     #[test]

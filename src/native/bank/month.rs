@@ -288,10 +288,28 @@ fn insert_after_line(
     let mut last_before = None;
     for day in &parsed.days {
         if day.date < date {
-            last_before = Some(day_end_line(day, logical));
+            last_before = Some(day_section_end_line(day, logical));
         }
     }
     last_before
+}
+
+/// Last line owned by a day section, ending immediately before the next
+/// level-one or level-two heading. Unlike `day_end_line`, this deliberately
+/// includes trailing prose, blank-separated notes, and plain checklist lines
+/// after the last recognized bank row. Fenced content is not mistaken for a
+/// heading boundary.
+fn day_section_end_line(day: &DaySection, logical: &[&str]) -> usize {
+    let fenced = fenced_lines(logical, 0..logical.len());
+    for index in day.heading_line..logical.len() {
+        if fenced.contains(&index) {
+            continue;
+        }
+        if atx_heading(logical[index]).is_some_and(|(level, _)| level <= 2) {
+            return index;
+        }
+    }
+    logical.len()
 }
 
 /// Last line of a day's contiguous block: the heading (or last row) plus any
@@ -494,6 +512,46 @@ mod tests {
         assert!(after.starts_with('\u{feff}'));
         assert!(after.contains("\r\n## Fri Nov 13\r\n"));
         assert!(after.contains("## Thu Nov 12"));
+    }
+
+    #[test]
+    fn missing_day_follows_the_entire_prior_section_before_a_later_day() {
+        let text = concat!(
+            "---\r\nparent: \"[[bank]]\"\r\n---\r\n\r\n",
+            "# November 2026\r\n\r\n",
+            "## Wed Nov 11\r\n\r\n",
+            "- [x] $5.00 Prior purchase [acct:: checking]\r\n",
+            "  - original child\r\n",
+            "Keep this prose on November 11.\r\n\r\n",
+            "An isolated note.\r\n",
+            "- [ ] call the bank about the fee\r\n",
+            "- [ ] $\r\n",
+            "```text\r\n## Fri Nov 13\r\n```\r\n",
+            "## Sat Nov 14\r\n\r\n- [ ] $8.00 Later day\r\n",
+        );
+        let text = format!("\u{feff}{text}");
+        let date = NaiveDate::from_ymd_opt(2026, 11, 12).unwrap();
+        let edit = plan_insert_day(&text, month(), date).unwrap();
+        let after = edit.apply(&text);
+        let inserted = after.find("## Thu Nov 12\r\n").unwrap();
+        let later = after.find("## Sat Nov 14\r\n").unwrap();
+        assert!(after.starts_with('\u{feff}'));
+        for content in [
+            "  - original child",
+            "Keep this prose on November 11.",
+            "An isolated note.",
+            "- [ ] call the bank about the fee",
+            "- [ ] $",
+            "## Fri Nov 13",
+        ] {
+            assert!(
+                after.find(content).unwrap() < inserted,
+                "{content:?} moved out of the prior day section:\n{after}"
+            );
+        }
+        assert!(inserted < later, "{after}");
+        assert!(after.contains("\r\n"));
+        assert!(!after.replace("\r\n", "").contains('\n'));
     }
 
     #[test]

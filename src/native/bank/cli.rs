@@ -155,7 +155,7 @@ pub(crate) fn build_cli_import() -> ClapCommand {
     ClapCommand::new("bob bank import")
         .about("Import posted bank transactions from QFX, OFX, or Wells Fargo CSV")
         .long_about(
-            "Plans the whole batch before writing. Existing rows are matched only by account, exact signed cents, and the documented posted-date window; new rows and the private bank journal commit together. Refused input exits 2; runtime failures exit 1.",
+            "Plans the whole batch before writing. Existing rows are matched only by account, exact signed cents, and the documented posted-date window; new rows and the private bank journal commit together. An ignored journal destination is refused before rows are installed. Refused input exits 2; runtime failures exit 1.",
         )
         .after_help(
             "Examples:\n  bob bank import ~/Downloads/*.qfx\n  bob bank import -d ~/Downloads/checking.qfx\n  bob bank import -a checking -f json ~/Downloads/export.csv\n\nSee docs/bank.md for import matching and recovery behavior.",

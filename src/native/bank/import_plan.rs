@@ -64,7 +64,7 @@ pub(crate) struct ReadDep {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RestaurantEntry {
     pub(crate) title: String,
-    pub(crate) stem: String,
+    pub(crate) path: String,
     pub(crate) emoji: Option<String>,
 }
 
@@ -72,9 +72,9 @@ impl RestaurantEntry {
     pub(crate) fn link(&self) -> String {
         match &self.emoji {
             Some(emoji) if !emoji.is_empty() => {
-                format!("[[eat/{}|{emoji}]]", self.stem)
+                format!("[[{}|{emoji}]]", self.path)
             }
-            _ => format!("[[eat/{}]]", self.stem),
+            _ => format!("[[{}]]", self.path),
         }
     }
 }
@@ -107,6 +107,15 @@ pub(crate) enum PlanRefusal {
     IncompleteRead { paths: Vec<String> },
     /// Both the 8- and 12-character ID prefixes name a different key.
     IdCollision { prefix: String },
+    /// Immutable transaction money fields disagree across this batch or the
+    /// folded journal.
+    IdentityConflict {
+        file: String,
+        record: usize,
+        field: &'static str,
+    },
+    /// More than one unjournaled row matches this transaction's recovery ID.
+    DuplicateUnjournaledId { file: String, record: usize },
 }
 
 impl PlanRefusal {
@@ -121,6 +130,12 @@ impl PlanRefusal {
             ),
             Self::IdCollision { prefix } => format!(
                 "refusing import; row ID prefix {prefix} names two identities"
+            ),
+            Self::IdentityConflict { file, record, field } => format!(
+                "refusing import; {file} record {record} field {field} conflicts with prior transaction evidence"
+            ),
+            Self::DuplicateUnjournaledId { file, record } => format!(
+                "refusing import; {file} record {record} matches an unjournaled bank ID present on multiple rows"
             ),
         }
     }
@@ -204,6 +219,7 @@ struct Planner<'a> {
     file_counts: Vec<ImportCounts>,
     counts: ImportCounts,
     batch_keys: HashSet<String>,
+    batch_money: HashMap<String, (NaiveDate, i64)>,
 }
 
 #[derive(Debug, Clone)]
@@ -253,6 +269,7 @@ impl<'a> Planner<'a> {
             file_counts: Vec::new(),
             counts: ImportCounts::default(),
             batch_keys: HashSet::new(),
+            batch_money: HashMap::new(),
         }
     }
 
@@ -361,6 +378,46 @@ impl<'a> Planner<'a> {
     ) -> Result<(), PlanRefusal> {
         let alias = statement.alias.clone();
         let key = transaction_key(&alias, &txn.bank_id);
+        let file =
+            input
+                .file_labels
+                .get(file_index)
+                .cloned()
+                .unwrap_or_else(|| {
+                    format!("file-{}", statement.statement.source_order)
+                });
+        let conflicting_field = |previous: (NaiveDate, i64)| {
+            if previous.0 != txn.posted {
+                Some("DTPOSTED")
+            } else if previous.1 != txn.cents {
+                Some("TRNAMT")
+            } else {
+                None
+            }
+        };
+        if let Some(previous) = self.batch_money.get(&key).copied()
+            && let Some(field) = conflicting_field(previous)
+        {
+            return Err(PlanRefusal::IdentityConflict {
+                file,
+                record: txn.record_order + 1,
+                field,
+            });
+        }
+        if let Some(previous) = input.journal.transactions.get(&key)
+            && let Some(field) =
+                conflicting_field((previous.posted, previous.cents))
+        {
+            return Err(PlanRefusal::IdentityConflict {
+                file,
+                record: txn.record_order + 1,
+                field,
+            });
+        }
+        self.batch_money
+            .entry(key.clone())
+            .or_insert((txn.posted, txn.cents));
+
         // Overlapping files emit one event per identity; a repeat of a
         // batch key counts as seen.
         if !self.batch_keys.insert(key.clone()) {
@@ -385,6 +442,12 @@ impl<'a> Planner<'a> {
                 note: Some(recovered.path),
             });
             return Ok(());
+        }
+        if self.has_duplicate_unjournaled_recovery_id(input, &key) {
+            return Err(PlanRefusal::DuplicateUnjournaledId {
+                file,
+                record: txn.record_order + 1,
+            });
         }
         if let Some(start) = statement.account_start
             && txn.posted < start
@@ -517,6 +580,24 @@ impl<'a> Planner<'a> {
         Some(recovered)
     }
 
+    fn has_duplicate_unjournaled_recovery_id(
+        &self,
+        input: &'a PlanInput<'a>,
+        key: &str,
+    ) -> bool {
+        let id8: String = key.chars().take(8).collect();
+        let id12: String = key.chars().take(12).collect();
+        let mut matches = self.rows.iter().filter(|row| {
+            let Some(id) = row.row.id.as_deref() else {
+                return false;
+            };
+            (id == id8 || id == id12)
+                && key.starts_with(id)
+                && !input.journal.ids.contains_key(id)
+        });
+        matches.next().is_some() && matches.next().is_some()
+    }
+
     fn reserve_id(&mut self, key: &str) -> Result<String, PlanRefusal> {
         self.ids
             .reserve(key)
@@ -605,7 +686,10 @@ impl<'a> Planner<'a> {
             let Some(event) = input.journal.transactions.get(key) else {
                 continue;
             };
-            if event.merchant != merchant {
+            // Old append-only events stored the uncleaned key. Recompute
+            // from their preserved masked source description so existing
+            // journal bytes remain comparable without migration.
+            if merchant_key(&event.desc) != merchant {
                 continue;
             }
             if self
@@ -1765,7 +1849,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_ids_are_reported_and_left_alone() {
+    fn duplicate_unjournaled_ids_refuse_without_rewriting_existing_rows() {
         let config = hub();
         // The bank ID of "dup-key" already sits on two different rows, so
         // neither recovery nor matching may choose between them.
@@ -1780,7 +1864,8 @@ mod tests {
             vec![row_a.as_str(), row_b.as_str()],
         )])]);
         let journal = JournalSnapshot::default();
-        let plan = run_plan(
+        let original = scan.months[0].contents.clone();
+        let refused = run_plan(
             &config,
             &scan,
             &journal,
@@ -1792,18 +1877,137 @@ mod tests {
             )],
             vec!["dup.qfx"],
             Vec::new(),
+        );
+        assert_eq!(
+            refused,
+            Err(PlanRefusal::DuplicateUnjournaledId {
+                file: "dup.qfx".to_owned(),
+                record: 1,
+            })
+        );
+        assert_eq!(scan.months[0].contents, original);
+        assert_eq!(id8.len(), 8);
+    }
+
+    #[test]
+    fn conflicting_identity_money_is_refused_across_batch_files() {
+        let config = hub();
+        let scan = scan_with(vec![november(&[])]);
+        let journal = JournalSnapshot::default();
+        let refused = run_plan(
+            &config,
+            &scan,
+            &journal,
+            vec![
+                stmt(
+                    "checking",
+                    0,
+                    vec![txn(
+                        nov(12),
+                        -1000,
+                        "repeat",
+                        "SQ *TEST CAFE",
+                        Some("POS"),
+                    )],
+                    &digest("money-a"),
+                ),
+                stmt(
+                    "checking",
+                    1,
+                    vec![txn(
+                        nov(12),
+                        -2000,
+                        "repeat",
+                        "TST*TEST CAFE",
+                        Some("POS"),
+                    )],
+                    &digest("money-b"),
+                ),
+            ],
+            vec!["first.qfx", "second.qfx"],
+            Vec::new(),
+        );
+        assert_eq!(
+            refused,
+            Err(PlanRefusal::IdentityConflict {
+                file: "second.qfx".to_owned(),
+                record: 1,
+                field: "TRNAMT",
+            })
+        );
+        assert!(!PlanRefusal::IdentityConflict {
+            file: "second.qfx".to_owned(),
+            record: 1,
+            field: "TRNAMT",
+        }
+        .message()
+        .contains("repeat"));
+    }
+
+    #[test]
+    fn journaled_identity_money_conflict_is_refused_but_description_change_is_not(
+    ) {
+        let config = hub();
+        let scan = scan_with(vec![november(&[])]);
+        let journal = snapshot_with(vec![journal_event(
+            "checking",
+            "old-money",
+            TxnOutcome::Written,
+            Some("bank/2026-11.md"),
+            nov(11),
+            -1000,
+            "SQ *TEST CAFE",
+        )]);
+        let conflict = run_plan(
+            &config,
+            &scan,
+            &journal,
+            vec![stmt(
+                "checking",
+                0,
+                vec![txn(
+                    nov(11),
+                    -2000,
+                    "old-money",
+                    "TST*TEST CAFE",
+                    Some("POS"),
+                )],
+                &digest("journal-money-conflict"),
+            )],
+            vec!["conflict.qfx"],
+            Vec::new(),
+        );
+        assert_eq!(
+            conflict,
+            Err(PlanRefusal::IdentityConflict {
+                file: "conflict.qfx".to_owned(),
+                record: 1,
+                field: "TRNAMT",
+            })
+        );
+
+        let changed_description = run_plan(
+            &config,
+            &scan,
+            &journal,
+            vec![stmt(
+                "checking",
+                0,
+                vec![txn(
+                    nov(11),
+                    -1000,
+                    "old-money",
+                    "changed source text",
+                    Some("POS"),
+                )],
+                &digest("journal-description-change"),
+            )],
+            vec!["changed.qfx"],
+            Vec::new(),
         )
-        .expect("plan");
-        assert!(plan.findings.iter().any(|finding| {
-            finding.code == "bank_import_duplicate_id"
-                && finding.message.contains(&format!("^bank-{id8}"))
-        }));
-        // A fresh waiting row is written instead of reusing the duplicate.
-        assert_eq!(plan.counts.new, 1);
-        assert_eq!(plan.counts.seen, 0);
-        let edit = &plan.month_edits[0];
-        // The two originals keep their exact ID; the fresh row extends it.
-        assert_eq!(edit.after.matches(&format!("^bank-{id8}\n")).count(), 2);
+        .expect("source description is not immutable money evidence");
+        assert_eq!(changed_description.counts.seen, 1);
+        assert_eq!(changed_description.counts.new, 0);
     }
 
     #[test]
@@ -2106,6 +2310,54 @@ mod tests {
     }
 
     #[test]
+    fn learned_merchant_uses_cleaned_masked_description_from_old_journal() {
+        let config = hub();
+        let bank_id = "old-cafe";
+        let key = transaction_key("checking", bank_id);
+        let id: String = key.chars().take(8).collect();
+        let row = format!(
+            "- [x] $10.00 My preferred cafe [acct:: checking] ^bank-{id}\n"
+        );
+        let scan = scan_with(vec![november(&[(11, vec![row.as_str()])])]);
+        let mut old_event = journal_event(
+            "checking",
+            bank_id,
+            TxnOutcome::Written,
+            Some("bank/2026-11.md"),
+            nov(11),
+            -1000,
+            "SQ *TEST CAFE",
+        );
+        // This is the value written by the previous raw-text key algorithm.
+        old_event.merchant = "sq *test cafe".to_owned();
+        let journal = snapshot_with(vec![old_event]);
+
+        let plan = run_plan(
+            &config,
+            &scan,
+            &journal,
+            vec![stmt(
+                "checking",
+                0,
+                vec![txn(
+                    nov(12),
+                    -1100,
+                    "new-cafe",
+                    "TST*TEST CAFE",
+                    Some("POS"),
+                )],
+                &digest("cleaned-cafe"),
+            )],
+            vec!["new.qfx"],
+            Vec::new(),
+        )
+        .expect("cleaned merchant match");
+        assert!(plan.month_edits[0].after.contains(
+            "- [ ] $11.00 My preferred cafe [acct:: checking] ^bank-"
+        ));
+    }
+
+    #[test]
     fn most_recent_teaches_with_deterministic_tiebreak() {
         let config = hub();
         let id_for = |bank_id: &str| {
@@ -2194,7 +2446,7 @@ mod tests {
     fn restaurant(title: &str, stem: &str) -> RestaurantEntry {
         RestaurantEntry {
             title: title.to_owned(),
-            stem: stem.to_owned(),
+            path: format!("eat/{stem}"),
             emoji: Some("🍔".to_owned()),
         }
     }
@@ -2357,7 +2609,11 @@ mod tests {
         let row = "- [ ] $13.71 Smashburger Card 1234";
         let mut contents = String::from("---\nparent: \"[[bank]]\"\ntype: \"[[bank_month]]\"\nmonth: 2026-11\ncreated: 2026-11-01T00:00:00+00:00\n---\n\n# November 2026\n\n```bob-bank\nview: month\n```\n\n## Thu Nov 12\n\n");
         contents.push_str(row);
-        contents.push_str("\n  - receipt saved\n\nFree prose stays.\n");
+        contents.push_str(
+            "\n  - receipt saved\n\nFree prose stays.\n\nAn isolated note.\n\
+- [ ] call the bank about the fee\n- [ ] $\n\n```text\n## Fri Nov 13\n```\n\
+\n## Sat Nov 14\n\n- [ ] $8.00 Later day\n",
+        );
         let contents = contents.replace('\n', "\r\n");
         let contents = format!("\u{feff}{contents}");
         let (path, month) = month_path_for(2026, 11);
@@ -2405,6 +2661,17 @@ mod tests {
         assert!(edit.after.contains(&format!("{row} ^bank-{id}\r\n")));
         // The new row lands under its own day with CRLF endings.
         assert!(edit.after.contains("## Fri Nov 13\r\n"));
+        let inserted = edit.after.find("## Fri Nov 13\r\n").unwrap();
+        for content in [
+            "Free prose stays.",
+            "An isolated note.",
+            "- [ ] call the bank about the fee",
+            "- [ ] $",
+            "```text",
+        ] {
+            assert!(edit.after.find(content).unwrap() < inserted, "{content}");
+        }
+        assert!(inserted < edit.after.find("## Sat Nov 14\r\n").unwrap());
         assert!(edit
             .after
             .contains("- [ ] $2.00 Newsstand [acct:: checking] ^bank-"));

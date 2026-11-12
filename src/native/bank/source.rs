@@ -335,6 +335,7 @@ fn parse_ofx(
     file_digest: String,
     source_order: usize,
 ) -> Result<ParsedStatement, SourceError> {
+    validate_aggregate_boundaries(file, text)?;
     let upper = text.to_ascii_uppercase();
     let bank = block_inners(text, &upper, "STMTRS");
     let cards = block_inners(text, &upper, "CCSTMTRS");
@@ -779,13 +780,94 @@ fn block_inners<'a>(text: &'a str, upper: &str, tag: &str) -> Vec<&'a str> {
         let Some(rel_end) =
             upper.get(start..).and_then(|rest| rest.find(&close_u))
         else {
-            inners.push(&text[start..]);
             break;
         };
         inners.push(&text[start..start + rel_end]);
         from = start + rel_end + close.len();
     }
     inners
+}
+
+/// OFX aggregate tags are structural boundaries, even in OFX 1.x SGML where
+/// leaf tags may omit their closing tags. Check the containers this parser
+/// consumes before extracting any record so a missing close cannot absorb a
+/// later transaction or let malformed bytes reach the write lifecycle.
+fn validate_aggregate_boundaries(
+    file: &str,
+    text: &str,
+) -> Result<(), SourceError> {
+    const AGGREGATES: &[&str] =
+        &["STMTRS", "CCSTMTRS", "BANKTRANLIST", "STMTTRN", "LEDGERBAL"];
+
+    let upper = text.to_ascii_uppercase();
+    let mut stack: Vec<(&'static str, Option<usize>)> = Vec::new();
+    let mut next_record = 0usize;
+    let mut from = 0usize;
+
+    loop {
+        let mut next: Option<(usize, usize, &'static str, bool)> = None;
+        for &tag in AGGREGATES {
+            for (token, closing) in
+                [(format!("</{tag}>"), true), (format!("<{tag}>"), false)]
+            {
+                if let Some(relative) = upper[from..].find(&token) {
+                    let found = (from + relative, token.len(), tag, closing);
+                    if next.is_none_or(|current| found.0 < current.0) {
+                        next = Some(found);
+                    }
+                }
+            }
+        }
+        let Some((position, length, tag, closing)) = next else {
+            break;
+        };
+        from = position + length;
+
+        if closing {
+            match stack.pop() {
+                Some((opened, _)) if opened == tag => {}
+                Some((opened, record)) => {
+                    return Err(SourceError::new(
+                        file,
+                        record,
+                        Some(opened),
+                        format!("misnested aggregate close {tag}"),
+                        None,
+                    ));
+                }
+                None => {
+                    return Err(SourceError::new(
+                        file,
+                        None,
+                        Some(tag),
+                        "unexpected aggregate close",
+                        None,
+                    ));
+                }
+            }
+        } else {
+            let record = if tag == "STMTTRN" {
+                next_record += 1;
+                Some(next_record)
+            } else {
+                stack.iter().find_map(|(opened, record)| {
+                    (*opened == "STMTTRN").then_some(*record).flatten()
+                })
+            };
+            stack.push((tag, record));
+        }
+    }
+
+    if let Some((tag, record)) = stack.last() {
+        return Err(SourceError::new(
+            file,
+            *record,
+            Some(tag),
+            "truncated aggregate container",
+            None,
+        ));
+    }
+    Ok(())
 }
 
 fn leaf(text: &str, upper: &str, tag: &str) -> Option<String> {
@@ -1069,6 +1151,43 @@ NEWFILEUID:NONE{nl}{nl}<OFX>{nl}<BANKMSGSRSV1>{nl}<STMTTRNRS>{nl}<STMTRS>{nl}\
             err.message.contains("truncated") || err.field == Some("FITID")
         );
         assert!(!err.display().contains("1234567890"));
+    }
+
+    #[test]
+    fn aggregate_boundaries_reject_truncation_and_misnested_transactions() {
+        let first = ofx_body(false, "CHECKING", "-10.00", "first");
+        let second = "<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20261112<TRNAMT>-20.00\
+<FITID>second<NAME>OTHER SHOP</STMTTRN>";
+        let two = first
+            .replace("</BANKTRANLIST>", &format!("{second}</BANKTRANLIST>"));
+
+        let missing_transaction_close = two.replacen("</STMTTRN>", "", 1);
+        let error =
+            parse_export("two.ofx", missing_transaction_close.as_bytes(), 0)
+                .expect_err("first transaction close is required");
+        assert_eq!(error.file, "two.ofx");
+        assert_eq!(error.record, Some(1));
+        assert_eq!(error.field, Some("STMTTRN"));
+        assert!(error.message.contains("misnested"));
+        assert!(!error.display().contains("first"));
+        assert!(!error.display().contains("second"));
+
+        let missing_statement_close = two.replacen("</STMTRS>", "", 1);
+        let error = parse_export(
+            "statement.ofx",
+            missing_statement_close.as_bytes(),
+            0,
+        )
+        .expect_err("statement close is required");
+        assert_eq!(error.field, Some("STMTRS"));
+        assert!(error.message.contains("truncated"));
+
+        let cut_after_fields = first.replacen("</STMTTRN>", "", 1);
+        let error = parse_export("cut.ofx", cut_after_fields.as_bytes(), 0)
+            .expect_err(
+                "complete leaves do not make an incomplete aggregate valid",
+            );
+        assert_eq!(error.field, Some("STMTTRN"));
     }
 
     #[test]
