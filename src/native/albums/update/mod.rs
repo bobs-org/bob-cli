@@ -1,0 +1,42 @@
+//! Guarded album schema update internals, test-only until schema-command.
+//!
+//! `protocol` parses the JSON envelope once; `ops` applies ordered
+//! operations with complete-record impact accounting, shared Rust
+//! validation, typed refusals, and semantic inverses. The command layer
+//! in schema-spans and schema-command consumes these interfaces.
+//!
+//! Wire examples handed to schema-spans:
+//! - `{"schema_version":1,"expect":"sha256:…","ops":[]}` is a valid
+//!   no-op envelope; `-i -` reads stdin and omitted `-i` means the same.
+//! - `{"op":"album.set","set":{"label":"Eateries"},"unset":["plural"]}`
+//! - `{"op":"field.add","label":"Status","kind":"choices","position":0,
+//!    "choices":[{"label":"To try"},{"label":"Liked","emoji":"💚"}]}`
+//! - `{"op":"field.set","field":"status",
+//!    "set":{"required":true},"unset":[]}`
+//! - `{"op":"field.move","field":"status","position":0}`
+//! - `{"op":"field.remove","field":"status"}`
+//! - `{"op":"choice.add","field":"status","label":"Regular",
+//!    "emoji":"🔁","position":2}`
+//! - `{"op":"choice.set","field":"status","value":"regular",
+//!    "set":{"label":"Regular","emoji":"🔁"}}` (empty emoji removes icon)
+//! - `{"op":"choice.move","field":"status","value":"regular",
+//!    "position":0}`
+//! - `{"op":"choice.remove","field":"status","value":"regular"}`
+//! - Undo-only restoration metadata: `field.add` accepts
+//!   `restore_key` and `choice.add` accepts `restore_value`. Each only
+//!   creates an absent key, never renames, and inverse field removals
+//!   restore required/default/bounds through a follow-up `field.set`.
+//!
+//! Interfaces handed to schema-spans:
+//! - `protocol::parse_envelope(&str) -> Result<Envelope, ProtocolError>`
+//! - `ops::apply_ops(&[Op], &ApplyInputs) -> Result<OpOutcome, OpError>`
+//! - `ops::ApplyInputs { before_raw, before_type, before_plural, stem,
+//!   folder, index_refs, other_fields, today }`
+//! - `ops::OpOutcome { after_raw, after_type, after_plural, per_op,
+//!   derived_keys, consequence, inverse_ops, group_before/after }`
+//! - `ops::IndexRefs { index_by, index_facets }` and
+//!   `ops::OtherAlbumField { path, key, storage, list }` for the
+//!   planner's registry overlay checks.
+
+pub(crate) mod ops;
+pub(crate) mod protocol;

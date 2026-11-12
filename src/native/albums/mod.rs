@@ -10,6 +10,8 @@ pub(crate) mod output;
 pub(crate) mod registry;
 pub(crate) mod report;
 pub(crate) mod sync;
+#[cfg(test)]
+pub(crate) mod update;
 pub(crate) mod write;
 
 pub(crate) use cli::{
