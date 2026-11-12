@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use chrono::{Local, NaiveDate, TimeZone, Utc};
+use chrono::NaiveDate;
 use serde_json::{json, Value};
 
 use super::{
@@ -1235,23 +1235,15 @@ pub(crate) fn print_human(report: &ImportReport) {
     }
 }
 
+/// The run's single frozen instant: wall time in Bob's configured zone (the
+/// host zone when unset) with its `±HH:MM` offset, so a month note this
+/// import creates carries the same `created:` shape as `bob bank ensure`.
+/// Journal events normalize it to UTC when they serialize `ts`.
 pub(crate) fn now_stamp(datetime: chrono::NaiveDateTime) -> String {
-    let timestamp =
-        if let Some(timezone) = crate::native::env::configured_timezone() {
-            timezone
-                .from_local_datetime(&datetime)
-                .single()
-                .or_else(|| timezone.from_local_datetime(&datetime).earliest())
-                .map(|timestamp| timestamp.with_timezone(&Utc))
-        } else {
-            Local
-                .from_local_datetime(&datetime)
-                .single()
-                .or_else(|| Local.from_local_datetime(&datetime).earliest())
-                .map(|timestamp| timestamp.with_timezone(&Utc))
-        }
-        .unwrap_or_else(|| datetime.and_utc());
-    timestamp.to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
+    super::month::created_stamp(
+        datetime,
+        crate::native::env::configured_timezone(),
+    )
 }
 
 #[cfg(test)]

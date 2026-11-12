@@ -91,8 +91,9 @@ pub(crate) struct PlanInput<'a> {
     pub(crate) file_labels: Vec<String>,
     pub(crate) restaurants: Vec<RestaurantEntry>,
     pub(crate) restaurant_deps: Vec<ReadDep>,
-    /// Single frozen clock instant for this plan (`created` stamps and
-    /// journal `ts` fields), formatted `%Y-%m-%dT%H:%M:%S+00:00`.
+    /// Single frozen clock instant for this plan, RFC 3339 with an offset
+    /// (`%Y-%m-%dT%H:%M:%S%:z`). New month notes copy it verbatim as their
+    /// `created:` stamp; journal `ts` fields store the same instant in UTC.
     pub(crate) now_stamp: String,
     /// Host label stamped on new journal events.
     pub(crate) host: String,

@@ -90,7 +90,10 @@ fn proof_for(
         .iter()
         .filter(|event| event.account == account.alias)
         .max_by_key(|event| event.ts)
-        .map(|event| event.ts.with_timezone(&chrono::Local).date_naive());
+        .map(|event| match crate::native::env::configured_timezone() {
+            Some(zone) => event.ts.with_timezone(&zone).date_naive(),
+            None => event.ts.with_timezone(&chrono::Local).date_naive(),
+        });
     if account.kind == AccountKind::Cash {
         return AccountProof {
             status: "untracked",

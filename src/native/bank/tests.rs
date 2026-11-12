@@ -606,6 +606,41 @@ fn ensure_line_lands_after_free_note_children() {
 }
 
 #[test]
+fn ensure_stamps_created_from_bob_now_in_the_configured_zone() {
+    let root = temp_vault("ensure-created-zone");
+    let config_file = root.join("bob-config.yml");
+    fs::write(&config_file, "timezone: America/New_York\n").expect("config");
+    let _guard = TestEnvGuard::set(&[
+        ("BOB_CONFIG_FILE", Some(config_file.as_os_str())),
+        ("BOB_NOW", Some(OsStr::new("2026-11-12T07:30:00"))),
+        ("DATE", None),
+    ]);
+    write(root.as_path(), "bank.md", valid_hub());
+    let config = match super::config::parse_bank_config(valid_hub()) {
+        super::config::ConfigParse::Ok(config) => config,
+        other => panic!("expected ok, got {other:?}"),
+    };
+    let plan =
+        super::ensure::plan(root.as_path(), today(), valid_hub(), &config)
+            .expect("plan");
+    assert!(plan.created_note);
+    let contents = plan.updated_contents.expect("contents");
+    assert_eq!(
+        contents,
+        canonical_template(month(), "2026-11-12T07:30:00-05:00", today())
+    );
+    assert_eq!(
+        super::import_run::now_stamp(
+            NaiveDate::from_ymd_opt(2026, 11, 12)
+                .unwrap()
+                .and_hms_opt(7, 30, 0)
+                .unwrap()
+        ),
+        "2026-11-12T07:30:00-05:00"
+    );
+}
+
+#[test]
 fn ensure_refuses_a_note_changed_after_planning() {
     let _guard = guard();
     let root = temp_vault("ensure-stale-preimage");

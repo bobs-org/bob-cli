@@ -137,6 +137,10 @@ view: month
 - [ ] +$1,250.00 Payroll [cat:: income]
 ````
 
+`ensure` and `import` write this template once when the note is missing.
+`created` is the write time in the configured `timezone` (the host zone when
+unset) with an `±HH:MM` offset, and honors `BOB_NOW`.
+
 **Day headings.** Canonical form: `## Thu Nov 12`. Also read: `## Nov 12`,
 `## 2026-11-12`, and `## 2026-11-12 Thu`. Any other `##` heading is not a
 day. An empty day heading is legal and means nothing posted.

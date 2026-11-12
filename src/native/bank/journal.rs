@@ -2,7 +2,7 @@
 
 use std::{collections::BTreeMap, fs, io, path::Path};
 
-use chrono::{DateTime, FixedOffset, NaiveDate};
+use chrono::{DateTime, FixedOffset, NaiveDate, Utc};
 use serde_json::{json, Map, Value};
 
 use crate::native::pref_journal::{
@@ -495,7 +495,9 @@ pub(crate) fn serialize_import(
     host: &str,
     event: &NewImport,
 ) -> String {
-    let ts = ts.to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
+    let ts = ts
+        .with_timezone(&Utc)
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
     let mut value = json!({
         "v": 1,
         "ts": ts,
@@ -536,7 +538,9 @@ pub(crate) fn serialize_txn(
     host: &str,
     event: &NewTxn,
 ) -> String {
-    let ts = ts.to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
+    let ts = ts
+        .with_timezone(&Utc)
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
     let desc = mask_digits(&event.desc);
     let merchant = merchant_key(&event.desc);
     let value = json!({
@@ -635,6 +639,17 @@ mod tests {
         assert!(!import.contains("fitid"));
         assert!(!import.contains("1234567890"));
         assert!(import.contains("\"source\":\"ofx\""));
+    }
+
+    #[test]
+    fn serialized_ts_is_the_same_instant_in_utc() {
+        // The run stamp carries the configured zone's offset; the journal
+        // keeps one UTC shape so per-host files fold without offset noise.
+        let txn = sample_txn("SMASHBURGER");
+        let line = serialize_txn(ts(), "athena", &txn);
+        assert!(line.contains("\"ts\":\"2026-11-12T17:00:00+00:00\""));
+        let import = serialize_import(ts(), "athena", &sample_import());
+        assert!(import.contains("\"ts\":\"2026-11-12T17:00:00+00:00\""));
     }
 
     #[test]

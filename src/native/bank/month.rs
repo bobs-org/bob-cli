@@ -1,6 +1,6 @@
 //! Month-note model, canonical template, and byte-preserving planners.
 
-use chrono::{NaiveDate, Utc};
+use chrono::{NaiveDate, NaiveDateTime};
 
 use crate::native::articles::split_physical_lines;
 use crate::native::markdown::{atx_heading, fenced_lines};
@@ -240,9 +240,26 @@ pub(crate) fn canonical_template(
     )
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+/// The month note's `created:` stamp: `now` as wall time in Bob's configured
+/// zone (the host zone when unset) with an `±HH:MM` offset, the contract
+/// template's shape. Offset resolution is the shared note-writer helper.
+pub(crate) fn created_stamp(
+    now: NaiveDateTime,
+    timezone: Option<chrono_tz::Tz>,
+) -> String {
+    crate::native::capture_project_note::format_timestamp_with_format(
+        now,
+        timezone,
+        "%Y-%m-%dT%H:%M:%S%:z",
+    )
+}
+
+/// [`created_stamp`] for the current time, honoring `BOB_NOW`.
 pub(crate) fn now_created_stamp() -> String {
-    Utc::now().format("%Y-%m-%dT%H:%M:%S+00:00").to_string()
+    created_stamp(
+        crate::native::env::current_datetime(),
+        crate::native::env::configured_timezone(),
+    )
 }
 
 /// Insert a missing day heading in date order, or after the fence.
@@ -501,6 +518,31 @@ mod tests {
         assert!(text.contains("# 🏦 November 2026"));
         assert!(text.contains("```bob-bank"));
         assert!(text.contains("## Thu Nov 12"));
+    }
+
+    #[test]
+    fn created_stamp_uses_the_zone_offset_in_contract_shape() {
+        let eastern: chrono_tz::Tz = "America/New_York".parse().unwrap();
+        let winter = NaiveDate::from_ymd_opt(2026, 11, 12)
+            .unwrap()
+            .and_hms_opt(7, 30, 0)
+            .unwrap();
+        assert_eq!(
+            created_stamp(winter, Some(eastern)),
+            "2026-11-12T07:30:00-05:00"
+        );
+        let summer = NaiveDate::from_ymd_opt(2026, 7, 12)
+            .unwrap()
+            .and_hms_opt(7, 30, 0)
+            .unwrap();
+        assert_eq!(
+            created_stamp(summer, Some(eastern)),
+            "2026-07-12T07:30:00-04:00"
+        );
+        assert_eq!(
+            created_stamp(winter, Some(chrono_tz::UTC)),
+            "2026-11-12T07:30:00+00:00"
+        );
     }
 
     #[test]
