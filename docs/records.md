@@ -67,7 +67,7 @@ record:
   legacy patterns follow [Schema](#schema) below. `label` defaults to the
   noun in title case; `plural` lowercases that label unless it starts with
   an acronym, then appends `s`.
-- **Summary:** one plain line, at most 140 characters.
+- **Summary:** one plain line; more than 140 characters produces a warning.
 - **Grouping:** `status` choices when present, otherwise the first choices
   field, otherwise none. Empty groups are omitted. Missing, unknown, or
   list-mismatched values count as `needs_status`.
@@ -196,14 +196,18 @@ an H1, an intro teaching `Name @<stem>/` and linking `<stem>.base`, and
 the empty-state records index. `-d` prints the new-file and catalog diffs
 without locks, writes, Git, or sync. Validation and refusals exit 2
 (unknown or cyclic parents, existing destinations, claimed stems or nouns,
-a populated record folder, or a damaged affected catalog); runtime failures
-exit 1. A damaged catalog refuses the whole creation. `-o` opens the album
+an existing record folder even when empty, or a damaged affected catalog).
+Runtime failures exit 1. A damaged catalog refuses the whole creation. `-o` opens the album
 in Obsidian only after a committed creation, and an opener failure is a
 warning, never a rollback. Human success ends with a paste-ready nested
 `fields:` example and a `bob albums check` hint; JSON follows the
 notebook-style envelope with the created `album` identity, `changed`,
 `changes`, `catalogs`, and `findings`. A created album accepts capture and
 `records new|update` immediately, and a following sync is a no-op.
+
+Destination checks for `<stem>.md` and `<stem>.base` ignore case and include
+directories and dangling symlinks. A matching transitional config kind does
+not block creation; the album takes ownership of its noun and directory.
 
 A broken album refuses only its own route and stays visible; other albums,
 unclaimed config kinds, and notebook catalogs keep working. Each album's
@@ -221,10 +225,11 @@ album is never blocked solely on unrelated failures.
 
 ## Schema
 
-The `records:` block is optional. If it is absent, Bob has no record types. An
-empty mapping is valid. A present malformed block disables record features and
-reports a typed configuration diagnostic; other config consumers continue to
-load their own sections.
+Album schemas live under `record:` in each album note; no `records:` config
+is required. The optional `records:` mapping below supplies transitional
+kinds that no album claims. An empty mapping is valid. A malformed mapping
+reports a typed configuration diagnostic for config-backed kinds; healthy
+albums and other config sections remain usable.
 
 ```yaml
 records:
@@ -299,15 +304,17 @@ not get its default reinserted.
 
 ## The note Bob writes
 
-Bob writes the optional parent, then `type`, `title`, schema fields in order,
-and `created`. Empty optional values and legacy keys are omitted. Strings use
-typed YAML quoting, including links and values that YAML might otherwise
+Bob writes the parent, then `type`, `title`, schema fields in order,
+and `created`. Album records use `parent: "[[<album>]]"` and `type: "[[record]]"`;
+config-backed records use their type id and an optional parent. Empty optional
+values and legacy keys are omitted. Strings use typed YAML quoting, including
+links and values that YAML might otherwise
 interpret as booleans or null.
 
 ```markdown
 ---
 parent: "[[eat]]"
-type: "[[restaurant]]"
+type: "[[record]]"
 title: "Ramen Nagi"
 status: liked
 category: "Ramen"
@@ -362,10 +369,10 @@ planning never creates a folder or writes a note.
 
 Records configuration is parsed independently of shared configuration. A bad
 `records:` block produces a typed diagnostic with the config path and, when
-available, the record type and field. It disables record features only; task
-capture, planning, hooks, and unrelated config sections keep their existing
-behavior. Loading the schema does not scan the vault or require type and
-collection notes to exist.
+available, the record type and field. It disables config-backed kinds only;
+healthy albums, task capture, planning, hooks, and unrelated config sections
+remain usable. Config schema loading does not require type or collection
+notes to exist; album discovery reads vault declarations and ownership.
 
 A broken album is the same isolation at vault scope: its claim still
 suppresses a matching config kind, neighbouring albums stay usable, and a
@@ -374,8 +381,8 @@ catalog failure. Runtime folder read failures stay in the I/O channel.
 
 ## Capture
 
-`bob capture` creates a record when a configured folder appears as `@dir/` or
-`@dir/^stem` at either edge of the parent line:
+`bob capture` creates a record when an album or config folder appears as
+`@dir/` or `@dir/^stem` at either edge of the parent line:
 
 ```text
 Ramen Nagi @eat/
@@ -392,8 +399,9 @@ bullets become notes. `@eat/^ramen-nagi` sets an explicit stem.
 `@eat/ramen_nagi` without a caret updates the existing record: parent text
 is the first note, only supplied fields change, and unrelated bytes stay
 put. `capture-parse` and `bob capture --dry-run` show the same planned
-Markdown that commit writes. `Blaze @eat` stays a task and warns
-`record_collection_route`, teaching `@eat/`.
+Markdown that commit writes. For an album, `Blaze @eat` refuses with
+`album_holds_no_tasks` and teaches `@eat/`. For a config-only collection, it
+stays a task and warns `record_collection_route`.
 
 `--dry-run` prints the exact bytes commit writes, including the staged album
 index edit (`album_files` in JSON). A later-item failure,
@@ -404,15 +412,17 @@ refuse with `record_exists` and never add a suffix. See
 
 ## `bob records`
 
-The `records` command group manages notes whose frontmatter `type` matches a
-configured record type. It is separate from `bob types`, which manages Task
-Types. Bare `bob records` runs the read-only `list` command.
+The `records` command group manages album-backed and unclaimed config-backed
+record kinds. Except for `init`, `TYPE` accepts the noun or folder stem, such
+as `restaurant` or `eat`; `init` requires the config type id. It is separate
+from `bob types`, which manages Task Types. Bare
+`bob records` runs the read-only `list` command.
 
 | Command | Purpose |
 | --- | --- |
-| `bob records check [TYPE]` | Lint configured folders and find typed records filed outside them. Exits 1 when it finds errors. |
-| `bob records init TYPE` | Scaffold the type note, collection note, and starter Base. Existing files are kept. |
-| `bob records list` | Show each configured type, its folder, note count, and required fields. |
+| `bob records check [TYPE]` | Lint record folders, album membership, and typed records filed outside their folder. Exits 1 on errors. |
+| `bob records init TYPE` | Scaffold an unclaimed config kind's type note, collection note, and starter Base. Existing files are kept. |
+| `bob records list` | Show kinds, schema source, album identity, folder, note count, and required fields. |
 | `bob records new TYPE TITLE` | Create one record through the same planner used by capture. |
 | `bob records show TYPE` | Show the schema, choice labels, defaults, and common suggested values. |
 | `bob records update TYPE STEM` | Edit one existing record in place through the shared update planner. |
@@ -481,8 +491,10 @@ byte-identical.
 
 ## Adding a record type
 
-Declare a type under `records:` in `config.yml` before running
-`bob records init TYPE` to scaffold it. For the restaurant schema above:
+New album kinds use [`bob albums create`](#creating-an-album), then optional
+`record.fields` in the album note. For a transitional config kind, declare
+it under `records:` in `config.yml` before running `bob records init TYPE`.
+For the restaurant config above:
 
 ```sh
 bob records init restaurant -p food

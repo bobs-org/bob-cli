@@ -409,24 +409,27 @@ headings, and row facets. Each album owns a `[!records]` index; each owner
 area or project owns a stable `[!albums]` catalog. `list` and `check` report
 `index.state` and `catalogs[].state` (`current`, `missing`, `stale`,
 `damaged`) without writing. `bob albums sync` repairs both in one guarded
-commit. A broken album fails only its own route. `bob albums create` ships in
-a later phase.
+commit. A broken album fails only its own route. `bob albums create PARENT
+STEM -n NOUN -s SUMMARY` creates the album, starter Base, and affected owner
+catalogs together; the record folder is created with its first record.
 
 Contract: [Albums and record notes](../records.md).
 
 ### Record notes
 
-Each album (or configured `records:` type) owns one folder. A record uses
-`type: "[[<type-id>]]"` and lives at `<dir>/<stem>.md`; its properties come
-from that type's schema. Bob writes `parent` when available, then `type`,
-`title`, schema fields, and `created`. Ordinary note bullets live under
+Each album (or unclaimed `records:` kind) owns one folder. Album records use
+`type: "[[record]]"` and `parent: "[[<album>]]"`; config-backed records use
+`type: "[[<type-id>]]"` and an optional parent. Notes live at `<dir>/<stem>.md`;
+Bob writes `parent`, `type`, `title`, schema fields, and `created` in that order.
+Ordinary note bullets live under
 `## Notes`, with dates when `dated_notes: true`.
 
 For a `restaurant` type owning `eat/`, `Ramen Nagi @eat/` plus
 its required field bullets creates `eat/ramen_nagi.md`. `@eat/ramen_nagi`
-updates supplied fields and appends notes. `bob records init restaurant -p food`
-scaffolds missing `restaurant.md`, `eat.md`, and `eat.base`; `-p/--parent`
-sets the collection note's parent and is required when that note is missing.
+updates supplied fields and appends notes; album writes also update the album's
+records index. For config-only kinds, `bob records init restaurant -p food`
+scaffolds missing `restaurant.md`, `eat.md`, and `eat.base`. It refuses any
+kind an album claims; use `bob albums create` for new albums.
 
 Contract: [Albums and record notes](../records.md).
 
@@ -716,7 +719,8 @@ vault/
 ├── work.md                  # area note; @work
 ├── work_intake_flow.md      # project note from @work^intake-flow@
 ├── work_notes.md            # notebook owned by work.md
-├── eat/ramen_nagi.md        # record, when records.restaurant.dir is eat
+├── eat.md                  # album declaring record.noun: restaurant
+├── eat/ramen_nagi.md        # record owned by eat.md
 ├── 2026/20261020.md         # daily note / Pomodoro ledger
 ├── 2026/2026-W43.md         # ISO week note
 ├── 2026/2026-Q4.md          # 13-week quarter (plus W53 in Q4)
@@ -753,7 +757,7 @@ vault/
 | `mail/`, `gmail_inbox.md` | Created by Gmail save/compose and label sync | `gmail.folder`, `gmail.sync.inbox` |
 | Period notes | Created by `bob periods ensure` | Fixed paths in the period tree |
 | `done/` | Created by archive | none |
-| Record folders | Created on first record write | `records.<type>.dir` |
+| Record folders | Created on first record write | Album stem, or unclaimed `records.<type>.dir` |
 | `.obsidian/plugins/obsidian-tasks-plugin/data.json` | Needed for Dataview Tasks and Blocked writes | none |
 
 `.bob/` is machine data (preference journals, Keep import receipts, and
@@ -773,7 +777,7 @@ carries `inbox` and `note` and is read-only. `gmail.save` receipts carry
 subjects. See [Bob Gmail](../gmail.md#sync).
 
 `old_lib/` is the archival predecessor of `lib/`. Ordinary capture routes
-select root-level notes: `@work` writes `work.md`. Configured record routes
+select root-level notes: `@work` writes `work.md`. Album and config record routes
 also address `<dir>/<stem>`. Other nested notes are reached with path-aware
 `&` / `*` (`&projects/foo:bar`).
 

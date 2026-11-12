@@ -15,7 +15,7 @@ bob bank [list] [-a] [-b DIR] [-f human|json] [-m MONTH]
 bob bank ack [ID...] [-b DIR] [-D DAY] [-d] [-f human|json]
 bob bank check [-b DIR] [-f human|json]
 bob bank ensure [-b DIR] [-D DAY] [-f human|json] [-o]
-bob bank import FILE... [-a] [-b DIR] [-d] [-f human|json]
+bob bank import FILE... [-a ALIAS] [-b DIR] [-d] [-f human|json]
 bob bank report [-b DIR] [-D DAY] [-f human|json] [-m MONTH] [-w WEEK] [-y YEAR]
 ```
 
@@ -54,9 +54,10 @@ bob bank report [-b DIR] [-D DAY] [-f human|json] [-m MONTH] [-w WEEK] [-y YEAR]
 The scan reads `bank.md` and `bank/*.md` only. It never scans the whole
 vault.
 
-With no `bank.md` and no `bank/` folder, every `bob bank` command prints a
+With no `bank.md` and no `bank/` folder, commands other than `import` print a
 teaching empty state that names this page and a paste-ready `bank:` block,
-then exits 0. `check` exits 1 with `bank_hub_missing` when `bank/` exists
+then exit 0. `import` requires a valid hub and refuses missing configuration
+with exit 2. `check` exits 1 with `bank_hub_missing` when `bank/` exists
 without `bank.md`, or when `bank.md` has no `bank:` mapping.
 
 Bank rows never carry `#task`, so they stay invisible to `bob plan`,
@@ -241,8 +242,8 @@ accounts, import refuses and teaches separate per-account exports.
 `-a ALIAS` selects a configured importable account. Otherwise the file's
 OFX kind chooses the unique configured account of that kind. Ambiguity
 refuses with the candidate aliases and a `-a` hint; unknown and `cash`
-aliases refuse. CSV has no kind, so it requires `-a` whenever type-based
-resolution cannot decide. Account and routing numbers select nothing and
+aliases refuse. CSV always requires `-a ALIAS`, even with one configured
+account. Account and routing numbers select nothing and
 are discarded: never stored, never echoed.
 
 ### Matching

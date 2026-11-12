@@ -166,11 +166,11 @@ groups:
         summary: "Attachment origin journal, resolution states, `bob attachments import` / `origin`, and `%c` recording"
         order: 45
       - stem: records
-        summary: "Albums and record notes: vault albums, `bob albums` list/check, schema, capture `@dir/` creation, validation, filename planning, and rendered Markdown"
+        summary: "Albums and record notes: list/check, album create/sync, owner catalogs, schemas, record capture/update, and guarded writes"
         order: 47
       - stem: notebooks
         summary: "`bob notebooks` list, check, sync, and create, the generated Notebooks catalog, JSON, and teaching refusals"
         order: 48
       - stem: bank
-        summary: "Bank hub, month notes, row grammar, and `bob bank check`"
+        summary: "Bank hub, month notes, row grammar, reports, acknowledgements, guarded OFX/CSV imports, journal, and JSON"
         order: 49

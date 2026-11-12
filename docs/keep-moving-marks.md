@@ -271,7 +271,7 @@ count.
 
 ### LP — leaf vectors
 
-The leaf rule and LP1–LP17 are defined in [task-dependencies.md §12.17](task-dependencies.md#1217-lp--leaf-vectors); that table is authoritative.
+The leaf rule and LP1–LP17 are defined in [task-dependencies.md §12.17](task-dependencies.md#1217-lp-leaf-vectors); that table is authoritative.
 
 ### KB — which links and the count (mark)
 

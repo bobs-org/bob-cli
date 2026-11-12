@@ -6580,7 +6580,7 @@ directory; `records:` serves only kinds no album claims. They are not Task
 Types (`#fix`, `bob types`). See [Record notes](records.md) for schema,
 rendering, and `bob records`.
 
-When `records:` names a folder, a leading or trailing `@dir/` or
+When an album or config kind owns a folder, a leading or trailing `@dir/` or
 `@dir/^stem` claims the item as record creation **before** transfer,
 dependency, directive, type, task-ID, or ordinary task-bullet parsing.
 Route-first (`@eat/ Ramen Nagi`) and title-first (`Ramen Nagi @eat/`) are
@@ -8581,7 +8581,7 @@ directive still succeed. If `TEXT` is omitted and stdin is piped, it reads the
 complete piped stdin stream, like `bob capture`. Only a missing `TEXT` or a
 bad flag is an error (exit 2); every other input succeeds.
 
-When `records:` is configured, a claimed `@dir/` record draft adds a
+For an album or config kind, a claimed `@dir/` record draft adds a
 `record` object to the result and its item row. The object includes `action:
 "create"`, the type, label, emoji, `dir`, destination `path` and `stem`,
 `stem_source` (`title` or `explicit`), title, missing required fields, count of
@@ -8597,14 +8597,14 @@ validates typed values through the records planner without writing a note.
 See [Record notes](#record-notes) and
 [JSON outputs](reference/json-outputs.md#record-notes).
 
-`bob capture-targets` appends opt-in notebook notes after inbox, area, and
-project routes, then configured record folders. JSON notebook rows have
+`bob capture-targets` appends notebook notes after inbox, area, and
+project routes, then album and unclaimed config record folders. Notebook rows have
 `kind: "notebook"`, `title`, `summary`, `owner`, and `breadcrumb`; JSON
 record rows have `kind: "record"`, `type`, `emoji`, and
 an indexed note `count`; their route is the directory followed by `/`.
-Human output groups notebook rows under “Notebooks” and record rows under
-“Record folders”. Missing or invalid
-record configuration leaves ordinary capture-target discovery available.
+Album rows also carry `title`, optional `summary` and `owner`, and `breadcrumb`.
+Human output groups them under “Notebooks” and “Record folders”. Invalid album
+claims hide only their own routes; incomplete discovery hides all record routes.
 
 ### Template drafts
 
@@ -10492,8 +10492,8 @@ list and call `bob capture` directly:
 On a successful scan, `capture-targets` returns `mac_inbox` first even when
 `mac_inbox.md` does not exist, followed by top-level area notes and
 non-terminal project notes, with each group sorted by route, then opt-in
-notebook notes (route `stem`, `kind: "notebook"`), then configured
-record folders (route `dir/`, `kind: "record"`). The task-only
+notebook notes (route `stem`, `kind: "notebook"`), then album and unclaimed
+config record folders (route `dir/`, `kind: "record"`). The
 `scan_capture_targets` stays without notebooks; only `bob capture-targets`
 and route completion use the opt-in notebook scanner. Eligible note
 filenames must already be lowercase and may contain only ASCII letters,
@@ -10503,8 +10503,11 @@ values are also accepted. Notebook rows come from root notes with
 `type: "[[notebook]]"` and add `title`, `summary`, `owner`, and `breadcrumb`.
 Nested notes, projects whose status is `done`,
 `canceled`, or `cancelled` (case-insensitively), and other note types are
-omitted. Record rows add `type`, `emoji`, and indexed note `count`; they are
-omitted when `records:` is absent or invalid. Human output groups routes by kind (notebook rows under “Notebooks”, record rows under “Record folders”). JSON output has `ok`, `bob_dir`,
+omitted. Record rows add `type`, optional `emoji`, and indexed note `count`;
+album rows add `title`, optional `summary` and `owner`, and `breadcrumb`.
+Healthy albums need no `records:` config. Invalid claims hide their own routes;
+incomplete discovery hides all record routes and exits 1. Human output groups
+notebook and record rows under “Notebooks” and “Record folders”. JSON has `ok`, `bob_dir`,
 `count`, and an ordered `targets` array; each target has `route`, `name`,
 `label`, `kind`, `is_default`, `status`, `relative_path`, and
 `project_name_aliases` (the note's external names, `[]` when it has none;

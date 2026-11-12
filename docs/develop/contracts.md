@@ -65,6 +65,6 @@ These pages specify behavior that Bob components and their tests must agree on.
 - [Obsidian Sync folder exclusions (historical)](../obsidian-sync-exclusions.md) — Historical: Obsidian Sync folder-exclusion semantics, kept for reference now that the vault syncs through git only
 - [Bob vault Git sync runbook](../vault-git-sync.md) — Git-only Bob vault sync operations, triggers, conflict copies, Keep receipts, and the Stats review journal
 - [Attachment origins](../attachments.md) — Attachment origin journal, resolution states, `bob attachments import` / `origin`, and `%c` recording
-- [Albums and record notes](../records.md) — Albums and record notes: vault albums, `bob albums` list/check, schema, capture `@dir/` creation, validation, filename planning, and rendered Markdown
+- [Albums and record notes](../records.md) — Albums and record notes: list/check, album create/sync, owner catalogs, schemas, record capture/update, and guarded writes
 - [Notebooks](../notebooks.md) — `bob notebooks` list, check, sync, and create, the generated Notebooks catalog, JSON, and teaching refusals
-- [Bank](../bank.md) — Bank hub, month notes, row grammar, and `bob bank check`
+- [Bank](../bank.md) — Bank hub, month notes, row grammar, reports, acknowledgements, guarded OFX/CSV imports, journal, and JSON

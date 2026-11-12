@@ -61,10 +61,11 @@ that need them report a setup error when the `priority` property is absent.
 | --- | --- | --- |
 | `timezone` | IANA timezone name, such as `America/New_York` | Unset uses the host's system timezone. When set, Bob uses this timezone for its current date and time, daily-note selection, and date stamps. Invalid names are configuration errors. |
 
-A `BOB_NOW` or `DATE` date/time keeps precedence over the configured
-timezone. A `DATE` command, such as `DATE=date`, runs with `TZ` set to the
-configured timezone. The key makes Bob's clock consistent across hosts without
-requiring each host's system timezone to match. See the
+A `BOB_NOW` or `DATE` date/time overrides the clock. Offset-free values name
+wall time in Bob's timezone; an RFC 3339 `BOB_NOW` with an offset or `Z`
+preserves its instant and converts to that timezone. Created/captured stamps
+use the same zone. A `DATE` command, such as `DATE=date`, runs with `TZ` set to
+the configured timezone. See the
 [plan contract](../plan.md).
 
 ### `properties` and priority windows
@@ -130,10 +131,10 @@ validate as values of their field, and `status` cannot have one. Numeric bounds
 apply only to number fields. Shared properties across record types must agree
 on storage kind and scalar/list shape.
 
-Deprecated: `records:` serves only unclaimed kinds. A malformed block
-is reported to record features without changing how other config sections are
-loaded. See the [Record Notes contract](../records.md) for field validation,
-defaults, rendering, and filename rules.
+Album schemas live in vault notes; [`bob albums create`](../records.md#creating-an-album)
+scaffolds them. Deprecated `records:` serves only kinds no album claims.
+Malformed config leaves healthy albums and other config sections usable.
+See [Record notes](../records.md) for validation, defaults, and rendering.
 
 ### `plan`
 
@@ -382,7 +383,7 @@ interpret shell quotes unless their contract says otherwise.
 | `BOB_DIR` | `$HOME/bob` | Default vault root when `--bob-dir` is omitted; a leading `~` is expanded. |
 | `BOB_CONFIG_FILE` | `XDG_CONFIG_HOME/bob/config.yml`, else `~/.config/bob/config.yml` | Exact config file; empty means unset; leading `~` and `~/` expand. |
 | `BOB_DAY_FILE` | `<BOB_DIR>/YYYY/YYYYMMDD.md` for the selected day | Exact daily note path for commands that read the Pomodoro ledger. The configured `timezone` determines the selected day when set. |
-| `BOB_NOW` | Current time in configured `timezone`, else the host's system timezone | Valid `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, `YYYY-MM-DD HH:MM:SS`, or `T`-separated timestamp pins Bob's clock. Invalid text is ignored. |
+| `BOB_NOW` | Current time in configured `timezone`, else the host's system timezone | `YYYY-MM-DD`, `YYYY-MM-DD HH:MM[:SS]`, or a `T`-separated timestamp pins wall time. RFC 3339 values with an offset or `Z` pin an instant converted to Bob's timezone. Invalid text is ignored. |
 | `BOB_PRIORITY_ROLL_SEED` | Fresh time/process-derived seed | A nonnegative integer seed makes `$<N>` priority rolls reproducible. |
 | `BOB_CAPTURE_TEMPLATES_FILE` | `$XDG_STATE_HOME/bob-cli/capture/templates.json`, else `$HOME/.local/state/bob-cli/capture/templates.json` | Exact saved-template shelf file. |
 | `BOB_VAULT_SYNC_LOCK_FILE` | `$XDG_RUNTIME_DIR/bob_sync.lock` when that directory exists, otherwise `/tmp/bob_sync.lock` | Shared maintenance lock path for vault sync, nightly maintenance, task reconcile, task reroll, and theme/relation-label journal writes and renames. |
