@@ -2,7 +2,8 @@
 
 A bank hub and monthly notes turn every posted transaction and deposit into
 one checkbox row. Typing a row acknowledges it. Totals are drawn when they
-are shown and never written into notes.
+are shown and never written into notes. Daily ritual:
+[Acknowledge bank transactions](guides/acknowledge-bank-transactions.md).
 
 `bob bank` lives in the Integrations section of `bob --help`. Membership:
 commands over bank rows, bank month notes, and their import journal. Bare

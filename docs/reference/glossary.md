@@ -44,6 +44,31 @@ area notes whose tasks await triage. The only exceptions are each daily note's t
 Root-level area notes are `@route` capture targets, and every area note gets the
 per-note Ready cap and `## Tasks` status grouping. `offclock: true|false` sets the clock default for tasks on the root walk beneath it; `offclock_types` sets the clock off only for tasks whose effective type is listed. When both keys are present, `offclock_types` decides (see [Off-Clock Note Defaults Filter By Task Type](../develop/decisions.md#off-clock-note-defaults-filter-by-task-type) and [Off-Clock Follows Tag Then Note Default](../develop/decisions.md#off-clock-follows-tag-then-note-default)).
 
+### Bank Month Note {#bank-month-note}
+
+*Aliases: bank month, month note.*
+
+A Bob vault note at `bank/YYYY-MM.md` under the bank hub (`bank.md`), with
+`type: "[[bank_month]]"`, `parent: "[[bank]]"`, and `month: YYYY-MM`. The
+filename is authoritative. It reads like a statement: one `##` heading per
+day, oldest first, and [Bank Row](#bank-row)s beneath. Bob writes the note once from
+the canonical template (`bob bank ensure` or `bob bank import`). Totals on
+the month card and in `bob bank report` are drawn at read time and never
+written into the note. Not a [Notebook](#notebook), an album, or a
+[Period Note](#period-note). See `docs/bank.md`.
+
+### Bank Row {#bank-row}
+
+*Aliases: bank row, transaction row.*
+
+One posted transaction or deposit as a top-level checkbox line under a day
+heading in a [Bank Month Note](#bank-month-note) (`- [x] $13.71 Smashburger [cat:: dining]`).
+`[ ]` means waiting and `[x]` means acknowledged. Typed rows start ticked;
+`bob bank import` writes the rest unchecked, once. Bob later only ticks a
+waiting row (`ack`) or appends `^bank-<hex>` to a typed row it matched. It
+never carries `#task`, so it is never a task, and it is never a record
+note. `bob bank check` lints every row. See `docs/bank.md`.
+
 ### Bulk Capture {#bulk-capture}
 
 *Aliases: multi-item capture, batch capture.*

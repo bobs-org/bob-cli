@@ -11,6 +11,7 @@ uses more than one surface appears in each matching group.
 
 ## CLI {#cli}
 
+- [Acknowledge bank transactions](../guides/acknowledge-bank-transactions.md)
 - [Add prerequisites while capturing](../guides/add-prerequisites.md)
 - [Capture a task from anywhere on your Mac](../guides/capture-from-your-mac.md)
 - [Connect Google Calendar](../guides/connect-google-calendar.md)
@@ -44,6 +45,7 @@ uses more than one surface appears in each matching group.
 
 ## Obsidian {#obsidian}
 
+- [Acknowledge bank transactions](../guides/acknowledge-bank-transactions.md)
 - [Deploy the Obsidian plugins](../guides/deploy-obsidian-plugins.md)
 - [Freshness and the review walk](../concepts/freshness-and-the-review-walk.md)
 - [How Bob fits together](../concepts/how-bob-fits-together.md)

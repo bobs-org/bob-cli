@@ -193,6 +193,7 @@ nav:
       - Plan the day:
           - Run the morning review walk: guides/run-morning-review.md
           - Keep Ready lanes under their cap: guides/keep-ready-under-cap.md
+          - Acknowledge bank transactions: guides/acknowledge-bank-transactions.md
       - Projects and dependencies:
           - Add prerequisites while capturing: guides/add-prerequisites.md
           - Link related tasks: guides/link-related-tasks.md

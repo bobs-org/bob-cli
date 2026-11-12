@@ -174,3 +174,4 @@ groups:
       - stem: bank
         summary: "Bank hub, month notes, row grammar, reports, acknowledgements, guarded OFX/CSV imports, journal, and JSON"
         order: 49
+        reader: guides/acknowledge-bank-transactions.md

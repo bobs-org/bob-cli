@@ -31,6 +31,7 @@ and rules. Filter the same pages by CLI, Obsidian, or macOS on
 
 - [Run the morning review walk](run-morning-review.md)
 - [Keep Ready lanes under their cap](keep-ready-under-cap.md)
+- [Acknowledge bank transactions](acknowledge-bank-transactions.md)
 
 ## Projects and dependencies
 

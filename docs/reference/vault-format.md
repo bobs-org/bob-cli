@@ -448,7 +448,8 @@ Bank rows are top-level checkbox lines whose body starts with a `$`
 amount. `[ ]` is waiting and `[x]` is acknowledged. Rows never carry
 `#task`. Empty stubs `- [x] $` are ignored. Totals are drawn, never
 written. `bob bank check` lints the hub, the `bank:` mapping, month notes,
-and rows.
+and rows. Daily ritual:
+[Acknowledge bank transactions](../guides/acknowledge-bank-transactions.md).
 
 Contract: [Bank](../bank.md).
 

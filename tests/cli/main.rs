@@ -4,6 +4,7 @@ mod albums;
 mod albums_create;
 mod albums_sync;
 mod aliases;
+mod bank;
 mod articles;
 mod attachments;
 mod capture;
