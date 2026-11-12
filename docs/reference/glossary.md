@@ -398,14 +398,14 @@ This is not a container, not a Pomodoro home, and not a D6 rename.
 
 *Aliases: review footer.*
 
-The bob-ledger-tools item in Obsidian's desktop status bar that keeps the morning GTD
+The `s` member of the [Walker Footer](#walker-footer): the bob-ledger-tools item in Obsidian's desktop status bar, shown while the review walk is the active bracket walk, that keeps the morning GTD
 review — the tiered `]s` walk over the shared [Task Freshness](#task-freshness) queue — in view
 while you work through it. It answers three questions at a glance: how much is still
 due, where the cursor sits in the walk, and whether the commitment tiers are done
 (after them come ROTTEN upkeep, which is fine to stop partway, and the POST
 closeout). Off a queue row it reads `⟳ Review N due · K commitments` (or
 `Commitments done` / `Upkeep budget met`); the hint becomes the `Alt+P` preview
-when the cursor is on an open task with a priority, and stays `]s next` otherwise.
+when the cursor is on an open task with a priority, and stays `]] next` otherwise.
 On a queue row it reads `⟳ Review r/N · TIER i/M` plus that row's detail and, when the row has a
 recommended roll, the `Alt+P` preview in the hint slot (for example
 `Alt+P roll P2 1/1`); on TICK rows that preview renders as a tinted answer chip. The other nonempty tier
@@ -418,11 +418,11 @@ runs out it drops groups from the end of the walk (marking the cut with `…`), 
 detail, hint, and meter, except on TICK rows, where the meter goes before the `Alt+P` chip.
 Clicking jumps to the next due task like `]s`. It is a read-only projection: it never
 stamps or changes tasks, its numbers are queue positions rather than progress, and it
-hides when Tasks is unavailable. When nothing is due, it hides unless the cursor is
-on an open task with a priority; then it shows only `⟳ Nothing due` plus that preview.
+hides when Tasks is unavailable. When nothing is due, it reads `⟳ Review clear · ✓ N today` — "clear" describes the current eligible queue, not the week's commitments — keeping the `Alt+P` preview when the cursor is
+on an open task with a priority.
 `]s` notices and
 `bob freshness list` keep full tier names, and dashboard ROTTEN chips fold TICKLER
-into ROTTEN where the footer splits them; see [Review Walk Is Tiered With Daily Lane Review](../develop/decisions.md#review-walk-is-tiered).
+into ROTTEN where the footer splits them; see [Review Walk Is Tiered With Daily Lane Review](../develop/decisions.md#review-walk-is-tiered). While review commitments are due off-`s`, a quiet dot on the selector's `s` letter marks them.
 
 ### Notebook {#notebook}
 
@@ -818,7 +818,7 @@ See `docs/capture.md`.
 
 *Aliases: freshness.*
 
-The local calendar date a human last confirmed that an open task still needs doing as written, stored as `[fresh:: YYYY-MM-DD]` before the task's trailing Tasks fields. Supported Bob keymaps, Alt+F, and `bob capture` edits of existing tasks stamp it; creation and automation never do. A visible, non-recurring Ready task is due for review when it is new (no stamp), a tickler (its `scheduled` date arrived after the stamp, or it was automatically unblocked (`[unblocked::]`); machine state `resurfaced`), or rotten (the stamp is at least its interval old; machine `ROTTEN` since schema 2). The interval comes from `[refresh:: N]`, then the note's `task_refresh`, then `freshness.interval` (7 days) — except a Pending (WIP) or Next task in a walked lane, whose lane interval (`pending_interval` / `next_interval`, default 1 day; `false` walks that lane off) overrides the whole chain. The `]s` walk visits one shared queue in tiers PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST; only due tasks walk (a task stamped today drops out). PRE/POST `#gtd` checklist rows (often recurring) resolve by completion, never by a stamp. A non-checklist recurring task is never stamped; once its occurrence date (earliest of scheduled, due, start) arrives it walks in RECURRING until completed, rescheduled past today, linked to Today, or cancelled. NEW holds unconfirmed tasks on `dash`, READY holds only confirmed/exempt tasks, and `rotten.md` holds TICKLER plus expired ROTTEN; see [Recurring Occurrences Walk When Due](../develop/decisions.md#recurring-occurrences-walk-when-due), [Review Walk Is Tiered With Daily Lane Review](../develop/decisions.md#review-walk-is-tiered), [READY Is Freshness-Gated With NEW and ROTTEN Review](../develop/decisions.md#ready-is-freshness-gated), [Today Is Read From The Ledger, Never Written To Tasks](../develop/decisions.md#today-is-read-from-the-ledger), and [Unblocked Tasks Resurface As Ticklers](../develop/decisions.md#unblocked-tasks-resurface-as-ticklers). Freshness never changes a lane, Today, schedule, or priority. Its status-bar view is the [Morning GTD Review Footer](#morning-gtd-review-footer). It is not Zorg `@FRESHNESS`, `bob vault-sync` freshness, or P-level scheduling windows. Freshness stamps alone never change a rung; only explicit decay-card answers do — see [Task Decay](#task-decay) and [Keep Streak](#keep-streak).
+The local calendar date a human last confirmed that an open task still needs doing as written, stored as `[fresh:: YYYY-MM-DD]` before the task's trailing Tasks fields. Supported Bob keymaps, Alt+F, and `bob capture` edits of existing tasks stamp it; creation and automation never do. A visible, non-recurring Ready task is due for review when it is new (no stamp), a tickler (its `scheduled` date arrived after the stamp, or it was automatically unblocked (`[unblocked::]`); machine state `resurfaced`), or rotten (the stamp is at least its interval old; machine `ROTTEN` since schema 2). The interval comes from `[refresh:: N]`, then the note's `task_refresh`, then `freshness.interval` (7 days) — except a Pending (WIP) or Next task in a walked lane, whose lane interval (`pending_interval` / `next_interval`, default 1 day; `false` walks that lane off) overrides the whole chain. The `]s` walk visits one shared queue in tiers PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST; only due tasks walk (a task stamped today drops out). PRE/POST `#gtd` checklist rows (often recurring) resolve by completion, never by a stamp. A non-checklist recurring task is never stamped; once its occurrence date (earliest of scheduled, due, start) arrives it walks in RECURRING until completed, rescheduled past today, linked to Today, or cancelled. NEW holds unconfirmed tasks on `dash`, READY holds only confirmed/exempt tasks, and `rotten.md` holds TICKLER plus expired ROTTEN; see [Recurring Occurrences Walk When Due](../develop/decisions.md#recurring-occurrences-walk-when-due), [Review Walk Is Tiered With Daily Lane Review](../develop/decisions.md#review-walk-is-tiered), [READY Is Freshness-Gated With NEW and ROTTEN Review](../develop/decisions.md#ready-is-freshness-gated), [Today Is Read From The Ledger, Never Written To Tasks](../develop/decisions.md#today-is-read-from-the-ledger), and [Unblocked Tasks Resurface As Ticklers](../develop/decisions.md#unblocked-tasks-resurface-as-ticklers). Freshness never changes a lane, Today, schedule, or priority. Its status-bar view is the `s` walker footer — the [Morning GTD Review Footer](#morning-gtd-review-footer) shown while `s` is the active bracket walk. It is not Zorg `@FRESHNESS`, `bob vault-sync` freshness, or P-level scheduling windows. Freshness stamps alone never change a rung; only explicit decay-card answers do — see [Task Decay](#task-decay) and [Keep Streak](#keep-streak).
 
 ### Task Link {#task-link}
 
@@ -962,6 +962,12 @@ them — sets `root: true`. It is the project grain of
 [Root Parent](#root-parent) reporting: working time groups by root parent, never by
 leaf project. "Top" is never folder depth, size, or status; see
 `docs/pomodoro-homes.md`.
+
+### Walker Footer {#walker-footer}
+
+*Aliases: walk footer, lane footer, links footer.*
+
+One contextual bob-ledger-tools status-bar panel that explains the active bracket walk. Exactly one member shows at a time, chosen by the persisted bracket family (`s` / `w` / `n`) — never by cursor, timer, or remaining work. The three members are the [Morning GTD Review Footer](#morning-gtd-review-footer) for `s`, the lane footer for `w` (a pure view over walk-membership counts with lane answer hints), and the links footer for `n` (a destination compass over the note's prev/next links). Every panel fills the same slots — glyph + position, current group, detail, hint, remaining groups, meter — wears its walk's hues, and sheds end-first as the bar narrows. A selected walk always paints, including calm clear states; clear is distinct from loading/unavailable (Tasks indexing, Today loading) and from the unset family, where no saved walk shows no panel. Positions are queue membership, never completion progress, and the panel is a read-only projection: it never stamps, moves, or creates tasks. While review commitments are due off-`s`, a quiet tier-tinted dot on the selector's `s` letter marks them. The walker footer is not the `[[ s w n ]]` selector, a landing toast, the [Day Strip](#day-strip), or a stats strip.
 
 ### Work Log {#work-log}
 
