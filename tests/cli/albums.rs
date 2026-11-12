@@ -31,6 +31,13 @@ fn area_note() -> &'static str {
     "---\ntype: [[area]]\n---\n\n# Area\n"
 }
 
+fn project_note(parent: &str, root: bool) -> String {
+    format!(
+        "---\ntype: [[project]]\nparent: \"[[{parent}]]\"\n{}---\n\n# Project\n",
+        if root { "root: true\n" } else { "" }
+    )
+}
+
 fn album(
     parent: &str,
     title: &str,
@@ -176,6 +183,12 @@ fn album_by_stem<'a>(payload: &'a Value, stem: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("missing album {stem}"))
 }
 
+fn json(output: &std::process::Output) -> Value {
+    serde_json::from_str(stdout(output).trim()).unwrap_or_else(|error| {
+        panic!("expected JSON ({error}):\n{}", format_output(output))
+    })
+}
+
 #[test]
 fn albums_list_empty_vault_teaches_create() {
     let (_temp, vault) = vault_fixture("albums-empty");
@@ -209,7 +222,21 @@ fn albums_list_and_check_json_shape() {
     assert_eq!(payload["schema_version"], 1);
     assert_eq!(payload["ok"], true);
     assert!(payload.get("index").is_none());
-    assert!(payload.get("catalogs").is_none());
+    assert_eq!(
+        payload["catalogs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|catalog| catalog["path"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["body.md", "mind.md"]
+    );
+    assert_eq!(payload["catalogs"][0]["state"], "missing");
+    assert_eq!(payload["catalogs"][0]["albums"], 3);
+    assert_eq!(
+        payload["catalogs"][0]["issues"][0]["code"],
+        "album_catalog_stale"
+    );
     let albums = payload["albums"].as_array().unwrap();
     assert_eq!(albums.len(), 4);
     let paths: Vec<&str> = albums
@@ -251,7 +278,7 @@ fn albums_list_and_check_json_shape() {
     assert_eq!(payload["counts"]["records"], 4);
     assert_eq!(payload["counts"]["roots"], 2);
     assert_eq!(payload["counts"]["errors"], 0);
-    assert_eq!(payload["counts"]["warnings"], 4);
+    assert_eq!(payload["counts"]["warnings"], 6);
 
     let output = albums_command(&vault)
         .arg("check")
@@ -265,7 +292,7 @@ fn albums_list_and_check_json_shape() {
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["schema_version"], 1);
     assert_eq!(payload["counts"]["errors"], 0);
-    assert_eq!(payload["counts"]["warnings"], 4);
+    assert_eq!(payload["counts"]["warnings"], 6);
 }
 
 #[test]
@@ -299,6 +326,11 @@ fn albums_human_list_groups_by_root_and_shows_freshness() {
     assert!(text.contains("⚠️ 1"), "text:\n{text}");
     assert!(text.contains("2d"), "freshness uses BOB_NOW:\n{text}");
     assert!(text.contains("~1"), "missing index warns:\n{text}");
+    assert!(
+        text.contains("catalog body.md — missing (3 albums)"),
+        "text:\n{text}"
+    );
+    assert!(text.contains("bob albums sync"), "text:\n{text}");
     assert!(!text.contains("No albums."), "text:\n{text}");
 }
 
@@ -322,6 +354,244 @@ fn albums_root_filter_accepts_md_suffix() {
     assert_eq!(stems, ["eat", "movies", "podcasts"]);
     assert_eq!(payload["counts"]["albums"], 3);
     assert_eq!(payload["counts"]["roots"], 1);
+    assert_eq!(payload["catalogs"].as_array().unwrap().len(), 1);
+    assert_eq!(payload["catalogs"][0]["path"], "body.md");
+    assert_eq!(payload["counts"]["warnings"], 4);
+}
+
+#[test]
+fn album_catalogs_follow_project_roots_and_filter_together() {
+    let (_temp, vault) = vault_fixture("albums-catalog-roots");
+    write_note(&vault, "body.md", area_note());
+    write_note(&vault, "projects/outer.md", &project_note("body", false));
+    write_note(
+        &vault,
+        "projects/middle.md",
+        &project_note("projects/outer", false),
+    );
+    write_note(
+        &vault,
+        "projects/boundary.md",
+        &project_note("projects/middle", true),
+    );
+    write_note(
+        &vault,
+        "projects/leaf.md",
+        &project_note("projects/boundary", false),
+    );
+    write_note(
+        &vault,
+        "body_album.md",
+        &album(
+            "body",
+            "Body Album",
+            "Body collection.",
+            "body_item",
+            "",
+            "",
+        ),
+    );
+    write_note(
+        &vault,
+        "middle_album.md",
+        &album(
+            "projects/middle",
+            "Middle Album",
+            "Middle collection.",
+            "middle_item",
+            "",
+            "",
+        ),
+    );
+    write_note(
+        &vault,
+        "boundary_album.md",
+        &album(
+            "projects/boundary",
+            "Boundary Album",
+            "Boundary collection.",
+            "boundary_item",
+            "",
+            "",
+        ),
+    );
+    write_note(
+        &vault,
+        "leaf_album.md",
+        &album(
+            "projects/leaf",
+            "Leaf Album",
+            "Leaf collection.",
+            "leaf_item",
+            "",
+            "",
+        ),
+    );
+
+    let output = albums_command(&vault)
+        .args(["list", "-f", "json"])
+        .output()
+        .expect("list albums and catalogs");
+    assert!(output.status.success(), "{}", format_output(&output));
+    let payload = json(&output);
+    let catalogs = payload["catalogs"].as_array().unwrap();
+    let rows = catalogs
+        .iter()
+        .map(|catalog| {
+            (
+                catalog["path"].as_str().unwrap(),
+                catalog["root"].as_str().unwrap(),
+                catalog["albums"].as_u64().unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rows,
+        [
+            ("body.md", "body", 1),
+            ("projects/boundary.md", "boundary", 2),
+            ("projects/leaf.md", "boundary", 1),
+            ("projects/middle.md", "outer", 1),
+            ("projects/outer.md", "outer", 1),
+        ]
+    );
+
+    let filtered = albums_command(&vault)
+        .args(["list", "-r", "outer", "-f", "json"])
+        .output()
+        .expect("root-filter list");
+    assert!(filtered.status.success(), "{}", format_output(&filtered));
+    let filtered = json(&filtered);
+    assert_eq!(filtered["counts"]["albums"], 1);
+    assert_eq!(filtered["counts"]["roots"], 1);
+    assert_eq!(
+        filtered["catalogs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|catalog| catalog["path"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["projects/middle.md", "projects/outer.md"]
+    );
+}
+
+#[test]
+fn albums_list_reports_catalog_only_damage_and_stale_empty_hosts() {
+    let (_temp, vault) = vault_fixture("albums-catalog-damage");
+    write_note(
+        &vault,
+        "body.md",
+        "---\ntype: [[area]]\n---\n\n# Body\n\n## Albums\n\n> [!albums\n> - partial\n",
+    );
+
+    let listed = albums_command(&vault)
+        .args(["list", "-f", "json"])
+        .output()
+        .expect("list damaged catalog");
+    assert_eq!(listed.status.code(), Some(0), "{}", format_output(&listed));
+    let payload = json(&listed);
+    assert_eq!(payload["ok"], false);
+    assert_eq!(payload["counts"]["albums"], 0);
+    assert_eq!(payload["counts"]["errors"], 1);
+    assert_eq!(payload["catalogs"][0]["state"], "damaged");
+    assert_eq!(
+        payload["catalogs"][0]["issues"][0]["code"],
+        "album_catalog_damaged"
+    );
+
+    let checked = albums_command(&vault)
+        .args(["check", "-f", "json"])
+        .output()
+        .expect("check damaged catalog");
+    assert_eq!(
+        checked.status.code(),
+        Some(1),
+        "{}",
+        format_output(&checked)
+    );
+
+    let (_stale_temp, stale_vault) =
+        vault_fixture("albums-catalog-empty-stale");
+    write_note(
+        &stale_vault,
+        "body.md",
+        "---\ntype: [[area]]\n---\n\n# Body\n\n## Albums\n\n> [!albums]\n>\n> - old row\n",
+    );
+    let list = albums_command(&stale_vault)
+        .arg("list")
+        .output()
+        .expect("list empty stale catalog");
+    assert!(list.status.success(), "{}", format_output(&list));
+    let text = stdout(&list);
+    assert!(text.contains("No albums."), "text:\n{text}");
+    assert!(
+        text.contains("catalog body.md — stale (0 albums)"),
+        "text:\n{text}"
+    );
+    assert!(text.contains("bob albums sync"), "text:\n{text}");
+}
+
+#[test]
+fn structurally_owned_schema_invalid_album_remains_in_catalog() {
+    let (_temp, vault) = vault_fixture("albums-catalog-invalid-schema");
+    write_note(&vault, "body.md", area_note());
+    write_note(
+        &vault,
+        "broken.md",
+        "---\ntype: [[album]]\nparent: \"[[body]]\"\nsummary: Broken.\nrecord:\n  fields: {}\n---\n\n# Broken\n",
+    );
+    write_note(
+        &vault,
+        "notes.md",
+        "---\ntype: [[notebook]]\nparent: \"[[body]]\"\nsummary: Notes.\n---\n\n# Notes\n",
+    );
+    write_note(
+        &vault,
+        "orphan.md",
+        &album("notes", "Orphan", "No area owner.", "orphan_record", "", ""),
+    );
+    let listed = albums_command(&vault)
+        .args(["list", "-f", "json"])
+        .output()
+        .expect("list invalid schema");
+    assert_eq!(listed.status.code(), Some(0), "{}", format_output(&listed));
+    let payload = json(&listed);
+    assert_eq!(payload["catalogs"][0]["path"], "body.md");
+    assert_eq!(payload["catalogs"][0]["albums"], 1);
+    assert_eq!(payload["counts"]["errors"].as_u64().unwrap(), 4);
+    let issue_codes = payload["albums"][0]["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|issue| issue["code"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(issue_codes.contains(&"album_schema_invalid"));
+    assert!(issue_codes.contains(&"album_index_damaged"));
+    let orphan_codes = album_by_stem(&payload, "orphan")["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|issue| issue["code"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(orphan_codes.contains(&"album_parent_kind"));
+    assert!(orphan_codes.contains(&"album_index_damaged"));
+
+    let checked = albums_command(&vault)
+        .arg("check")
+        .output()
+        .expect("human check invalid album and catalog");
+    assert_eq!(
+        checked.status.code(),
+        Some(1),
+        "{}",
+        format_output(&checked)
+    );
+    let text = stdout(&checked);
+    assert!(
+        text.find("broken.md — Broken").unwrap()
+            < text.find("body.md — catalog").unwrap(),
+        "album findings should precede host catalog findings:\n{text}"
+    );
 }
 
 #[test]

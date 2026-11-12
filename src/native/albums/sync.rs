@@ -312,7 +312,7 @@ fn verify_current_hosts(
     }
     let registry =
         AlbumRegistry::from_snapshot(vault, &config::config_path(), &snapshot);
-    let report = report::build_report(&registry);
+    let report = report::build_report(&registry, &snapshot);
     for host in hosts {
         let key = host.to_string_lossy().replace('\\', "/");
         let Some(album) = report.albums.iter().find(|album| album.path == key)

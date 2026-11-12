@@ -16,7 +16,7 @@ use std::path::PathBuf;
 pub(crate) use region::{
     bare_text, canonical_callout, canonical_head, plan_host, plan_host_region,
     EditState, HostOutcome, HostRegionPlan, LegacySpec, Placement,
-    RegionDamage, RegionSpec, LEGACY_BEGIN_MARKER, LEGACY_END_MARKER,
+    RegionDamage, RegionSpec, ALBUMS, LEGACY_BEGIN_MARKER, LEGACY_END_MARKER,
     NOTEBOOKS,
 };
 pub(crate) use txn::{

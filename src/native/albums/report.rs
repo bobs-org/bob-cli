@@ -6,12 +6,14 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use super::{
+    catalog::{self, AlbumCatalogRecord},
     grouping::{group_records, GroupingRecord, RecordGroup},
     index::{self, IndexState},
     registry::{AlbumEntry, AlbumRegistry, DiscoveryHealth},
     write::folder_complete,
     AlbumDeclaration, AlbumFinding, AlbumIssueSeverity,
 };
+use crate::native::notebooks::snapshot::VaultSnapshot;
 use crate::native::records::{
     schema::{RecordDiagnosticCode, RecordField},
     FolderIndex, RecordCatalog,
@@ -176,6 +178,7 @@ pub(crate) struct AlbumCounts {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AlbumReport {
     pub(crate) albums: Vec<AlbumReportEntry>,
+    pub(crate) catalogs: Vec<AlbumCatalogRecord>,
     pub(crate) counts: AlbumCounts,
     pub(crate) io_errors: Vec<String>,
 }
@@ -194,6 +197,8 @@ impl AlbumReport {
     pub(crate) fn filter_root(&mut self, root: &str) {
         self.albums
             .retain(|entry| entry.root.as_deref() == Some(root));
+        self.catalogs
+            .retain(|catalog| catalog.root.as_deref() == Some(root));
         self.recount();
     }
 
@@ -207,6 +212,17 @@ impl AlbumReport {
         let records = self.albums.iter().map(|entry| entry.records).sum();
         let (mut errors, mut warnings) = (0, 0);
         for issue in self.albums.iter().flat_map(|entry| entry.issues.iter()) {
+            match issue.severity {
+                AlbumIssueSeverity::Error => errors += 1,
+                AlbumIssueSeverity::Warning => warnings += 1,
+                AlbumIssueSeverity::Info => {}
+            }
+        }
+        for issue in self
+            .catalogs
+            .iter()
+            .flat_map(|catalog| catalog.issues.iter())
+        {
             match issue.severity {
                 AlbumIssueSeverity::Error => errors += 1,
                 AlbumIssueSeverity::Warning => warnings += 1,
@@ -227,6 +243,7 @@ impl AlbumReport {
             "ok": self.ok(),
             "schema_version": SCHEMA_VERSION,
             "albums": self.albums.iter().map(AlbumReportEntry::to_json).collect::<Vec<_>>(),
+            "catalogs": self.catalogs.iter().map(AlbumCatalogRecord::to_json).collect::<Vec<_>>(),
             "counts": {
                 "albums": self.counts.albums,
                 "records": self.counts.records,
@@ -239,7 +256,10 @@ impl AlbumReport {
 }
 
 /// Build the shared list/check report from a discovered registry.
-pub(crate) fn build_report(registry: &AlbumRegistry) -> AlbumReport {
+pub(crate) fn build_report(
+    registry: &AlbumRegistry,
+    snapshot: &VaultSnapshot,
+) -> AlbumReport {
     let mut catalog = RecordCatalog::new(&registry.vault_root);
     let mut folder_io = Vec::new();
     let mut albums = registry
@@ -252,6 +272,7 @@ pub(crate) fn build_report(registry: &AlbumRegistry) -> AlbumReport {
         })
         .collect::<Vec<_>>();
     albums.sort_by(|left, right| left.path.cmp(&right.path));
+    let catalogs = catalog::plan_catalogs(snapshot, registry).records();
     let mut io_errors = match &registry.health {
         DiscoveryHealth::Partial(errors) => errors.clone(),
         DiscoveryHealth::Complete | DiscoveryHealth::TargetOnly => Vec::new(),
@@ -259,6 +280,7 @@ pub(crate) fn build_report(registry: &AlbumRegistry) -> AlbumReport {
     io_errors.extend(folder_io);
     let mut report = AlbumReport {
         albums,
+        catalogs,
         counts: AlbumCounts {
             albums: 0,
             records: 0,

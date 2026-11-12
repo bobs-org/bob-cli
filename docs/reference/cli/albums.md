@@ -42,7 +42,7 @@ Run 'bob albums <command> --help' for more information on a command.
 Check albums against the contract
 
 ```text title="bob albums check --help"
-Findings grouped by album, plus an album/record/error/warning summary. Exits 1 on any error, 0 otherwise. This command is read-only.
+Findings grouped by album and by owner catalog, plus an album/record/error/warning summary. Catalog warnings and damaged-region errors appear after album findings. Exits 1 on any error, 0 otherwise. This command is read-only.
 
 Usage: bob albums check [OPTIONS]
 
@@ -71,7 +71,7 @@ See docs/records.md for the album contract.
 List albums grouped by root (default)
 
 ```text title="bob albums list --help"
-Albums grouped by root, with titles, record counts, group counts, freshness, and issue markers. This command is read-only. Bare `bob albums` runs this command. `bob albums create` ships in a later phase.
+Albums grouped by root, with titles, record counts, group counts, freshness, and issue markers. The report also includes health for each generated `## Albums` owner catalog, including stale catalogs whose last album was removed. Run `bob albums sync` to repair catalog findings. This command is read-only. Bare `bob albums` runs this command. `bob albums create` ships in a later phase.
 
 Usage: bob albums list [OPTIONS]
 

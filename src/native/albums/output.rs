@@ -8,6 +8,7 @@ use std::{
 use chrono::NaiveDate;
 
 use super::{
+    catalog::{AlbumCatalogRecord, CatalogState},
     report::{AlbumIssue, AlbumReport, AlbumReportEntry},
     AlbumIssueSeverity,
 };
@@ -21,48 +22,80 @@ pub(crate) fn print_list(report: &AlbumReport, bob_dir: &Path) {
     let styler = Styler::detect();
     if report.albums.is_empty() {
         println!("No albums.");
+    } else {
+        let mut groups: BTreeMap<Option<String>, Vec<&AlbumReportEntry>> =
+            BTreeMap::new();
+        for entry in &report.albums {
+            groups.entry(list_group_key(entry)).or_default().push(entry);
+        }
+        let mut ordered_keys: Vec<Option<String>> =
+            groups.keys().cloned().collect();
+        ordered_keys.sort_by(|left, right| match (left, right) {
+            (Some(a), Some(b)) => a
+                .to_lowercase()
+                .cmp(&b.to_lowercase())
+                .then_with(|| a.cmp(b)),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        });
+
+        let source = DiskHomeSource::new(bob_dir);
+        let mut resolver = HomeResolver::new(source);
+
+        for key in ordered_keys {
+            let mut entries = groups.get(&key).cloned().unwrap_or_default();
+            entries.sort_by(|left, right| {
+                left.title
+                    .to_lowercase()
+                    .cmp(&right.title.to_lowercase())
+                    .then_with(|| left.path.cmp(&right.path))
+            });
+            let header = match &key {
+                Some(root) => match hue_for_root(&mut resolver, root) {
+                    Some(code) => styler.xterm256(code, root),
+                    None => styler.bold(root),
+                },
+                None => styler.bold("invalid / unowned"),
+            };
+            println!("{header}");
+            print_rows(&entries, &styler);
+            println!();
+        }
+    }
+
+    print_catalog_statuses(&report.catalogs, &styler);
+    if report.albums.is_empty() {
         println!("Create one with `bob albums create`.");
+    }
+}
+
+fn print_catalog_statuses(catalogs: &[AlbumCatalogRecord], styler: &Styler) {
+    let affected = catalogs
+        .iter()
+        .filter(|catalog| catalog.state != CatalogState::Current)
+        .collect::<Vec<_>>();
+    if affected.is_empty() {
         return;
     }
-
-    let mut groups: BTreeMap<Option<String>, Vec<&AlbumReportEntry>> =
-        BTreeMap::new();
-    for entry in &report.albums {
-        groups.entry(list_group_key(entry)).or_default().push(entry);
-    }
-    let mut ordered_keys: Vec<Option<String>> =
-        groups.keys().cloned().collect();
-    ordered_keys.sort_by(|left, right| match (left, right) {
-        (Some(a), Some(b)) => a
-            .to_lowercase()
-            .cmp(&b.to_lowercase())
-            .then_with(|| a.cmp(b)),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => std::cmp::Ordering::Equal,
-    });
-
-    let source = DiskHomeSource::new(bob_dir);
-    let mut resolver = HomeResolver::new(source);
-
-    for key in ordered_keys {
-        let mut entries = groups.get(&key).cloned().unwrap_or_default();
-        entries.sort_by(|left, right| {
-            left.title
-                .to_lowercase()
-                .cmp(&right.title.to_lowercase())
-                .then_with(|| left.path.cmp(&right.path))
-        });
-        let header = match &key {
-            Some(root) => match hue_for_root(&mut resolver, root) {
-                Some(code) => styler.xterm256(code, root),
-                None => styler.bold(root),
-            },
-            None => styler.bold("invalid / unowned"),
+    println!("Catalogs");
+    for catalog in affected {
+        let severity = if catalog.state == CatalogState::Damaged {
+            styler.red(catalog.state.as_str())
+        } else {
+            styler.yellow(catalog.state.as_str())
         };
-        println!("{header}");
-        print_rows(&entries, &styler);
-        println!();
+        println!(
+            "  catalog {} — {} ({} {}) — run `bob albums sync`",
+            catalog.path,
+            severity,
+            catalog.albums,
+            if catalog.albums == 1 {
+                "album"
+            } else {
+                "albums"
+            },
+        );
     }
 }
 
@@ -245,6 +278,15 @@ pub(crate) fn print_check(report: &AlbumReport) {
         let header = format!("{} — {}", entry.path, entry.title);
         println!("{}", styler.bold(&header));
         print_issues(&entry.issues, &styler);
+        println!();
+    }
+    for catalog in &report.catalogs {
+        if catalog.issues.is_empty() {
+            continue;
+        }
+        any = true;
+        println!("{}", styler.bold(&format!("{} — catalog", catalog.path)));
+        print_issues(&catalog.issues, &styler);
         println!();
     }
     let counts = &report.counts;

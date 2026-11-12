@@ -1,5 +1,6 @@
 //! Album declaration parsing, vault registry, and read-only reports.
 
+pub(crate) mod catalog;
 pub(crate) mod cli;
 pub(crate) mod grouping;
 pub(crate) mod index;

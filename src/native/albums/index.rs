@@ -61,6 +61,7 @@ pub(crate) fn records_spec(head_title: &str) -> RegionSpec<'_> {
         head_title: Some(head_title),
         placement: Placement::BeforeFirstH2,
         legacy: None,
+        strict_bare: false,
     }
 }
 

@@ -49,6 +49,9 @@ pub(crate) struct RegionSpec<'a> {
     pub(crate) head_title: Option<&'a str>,
     pub(crate) placement: Placement<'a>,
     pub(crate) legacy: Option<LegacySpec<'a>>,
+    /// Treat a malformed callout opener using this exact name as damaged
+    /// instead of inserting a second generated region beside it.
+    pub(crate) strict_bare: bool,
 }
 
 /// The notebooks catalog spec: `[!notebooks]`, `## Notebooks`, before Tasks,
@@ -64,6 +67,18 @@ pub(crate) const NOTEBOOKS: RegionSpec<'static> = RegionSpec {
         opener: LEGACY_MARKER_OPENER,
         noun: "notebook catalog",
     }),
+    strict_bare: false,
+};
+
+/// The album-owner catalog spec: `[!albums]`, `## Albums`, after the
+/// `## Notebooks` section (or before Tasks when that section is absent).
+pub(crate) const ALBUMS: RegionSpec<'static> = RegionSpec {
+    callout: "albums",
+    heading: "Albums",
+    head_title: None,
+    placement: Placement::AfterSectionThenTasks("Notebooks"),
+    legacy: None,
+    strict_bare: true,
 };
 
 /// Why a host's managed region cannot be edited safely.
@@ -299,6 +314,17 @@ impl<'a> Scanned<'a> {
         &self,
         spec: &RegionSpec<'_>,
     ) -> Result<Vec<(usize, usize, bool)>, RegionDamage> {
+        if spec.strict_bare
+            && let Some(index) = self.malformed_callout_head(spec.callout)
+        {
+            return Err(damage(
+                index,
+                &format!(
+                    "malformed [!{}] callout head; repair the catalog by hand",
+                    spec.callout
+                ),
+            ));
+        }
         let legacy = match spec.legacy {
             Some(legacy) => self.legacy_pair(&legacy)?,
             None => None,
@@ -319,6 +345,37 @@ impl<'a> Scanned<'a> {
         }
         owned.sort_by_key(|(start, _, _)| *start);
         Ok(owned)
+    }
+
+    /// Find a real, malformed opener for a strict callout. This is limited to
+    /// an exact callout name, so `[!albums-card]` remains authored content.
+    fn malformed_callout_head(&self, callout: &str) -> Option<usize> {
+        (self.body_first..self.lines.len()).find(|index| {
+            if !self.real(*index)
+                || is_callout_head(self.lines[*index].content, callout)
+            {
+                return false;
+            }
+            let line = self.lines[*index].content;
+            let indent = line.chars().take_while(|ch| *ch == ' ').count();
+            if indent > 3 {
+                return false;
+            }
+            let Some(after_gt) = line[indent..].strip_prefix('>') else {
+                return false;
+            };
+            let after_gt = after_gt.trim_start_matches([' ', '\t']);
+            let Some(after_marker) = after_gt.strip_prefix("[!") else {
+                return false;
+            };
+            let name = after_marker
+                .chars()
+                .take_while(|ch| {
+                    ch.is_ascii_alphanumeric() || *ch == '_' || *ch == '-'
+                })
+                .collect::<String>();
+            name.eq_ignore_ascii_case(callout)
+        })
     }
 
     fn first_tasks_heading(&self) -> Option<usize> {
@@ -711,20 +768,13 @@ fn tidy_eof(scanned: &Scanned<'_>, start: usize, end: usize) -> Range<usize> {
 mod tests {
     use super::*;
 
-    const ALBUMS: RegionSpec<'static> = RegionSpec {
-        callout: "albums",
-        heading: "Albums",
-        head_title: None,
-        placement: Placement::AfterSectionThenTasks("Notebooks"),
-        legacy: None,
-    };
-
     const RECORDS: RegionSpec<'static> = RegionSpec {
         callout: "records",
         heading: "Records",
         head_title: Some("104 restaurants · 🔖 11 to try"),
         placement: Placement::BeforeFirstH2,
         legacy: None,
+        strict_bare: false,
     };
 
     fn albums_rows() -> Vec<String> {
@@ -859,6 +909,22 @@ mod tests {
         let front = "---\n> [!albums]\n> - x\n---\n\n# Fun\n";
         let (state, _) = update(plan_host(&ALBUMS, front, &rows));
         assert_eq!(state, EditState::Missing);
+    }
+
+    #[test]
+    fn malformed_album_callout_is_damaged_but_lookalike_is_authored() {
+        let malformed =
+            "---\n---\n\n# Fun\n\n## Albums\n\n> [!albums\n> - partial\n";
+        assert!(matches!(
+            plan_host(&ALBUMS, malformed, &albums_rows()),
+            HostOutcome::Damaged(RegionDamage { line: 8, .. })
+        ));
+
+        let authored = "---\n---\n\n# Fun\n\n> [!albums-card]\n> authored\n";
+        assert!(matches!(
+            plan_host(&ALBUMS, authored, &albums_rows()),
+            HostOutcome::Update { .. }
+        ));
     }
 
     #[test]

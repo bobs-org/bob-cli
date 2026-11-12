@@ -166,12 +166,17 @@ sets `one_off: true`.
 
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
-| `bob albums list` | `-f json` | Albums, groups, counts, issues | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
+| `bob albums list` | `-f json` | Albums, groups, counts, issues, and owner `catalogs` | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
 | `bob albums check` | `-f json` | Same report as list | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
 | `bob albums sync` | `-f json` | Index entries and transaction results | `schema_version: 1` | [Albums and record notes](../records.md#syncing-records-indexes) |
 
 Album rows add index state; see the [album contract](../records.md#albums)
 for their payload.
+
+`catalogs[]` has `host`, `path`, `root`, `state`, `albums`, and `issues`
+(`current|missing|stale|damaged`). Missing/stale warns
+`album_catalog_stale`; damage errors `album_catalog_damaged`. Findings affect
+counts and `ok`; `bob albums list -r ROOT` filters catalogs too.
 
 Sync returns index entries and transaction results; see the sync contract.
 

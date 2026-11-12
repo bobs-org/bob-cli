@@ -8,7 +8,9 @@ use clap::{
 };
 
 use super::{output, registry::AlbumRegistry, report, sync};
-use crate::native::{config, env as bob_env};
+use crate::native::{
+    config, env as bob_env, notebooks::snapshot::VaultSnapshot,
+};
 
 const COMMAND_NAME: &str = "bob albums";
 
@@ -64,7 +66,7 @@ pub(crate) fn build_cli_list() -> ClapCommand {
     ClapCommand::new("bob albums list")
         .about("List albums grouped by root (default)")
         .long_about(
-            "Albums grouped by root, with titles, record counts, group counts, freshness, and issue markers. This command is read-only. Bare `bob albums` runs this command. `bob albums create` ships in a later phase.",
+            "Albums grouped by root, with titles, record counts, group counts, freshness, and issue markers. The report also includes health for each generated `## Albums` owner catalog, including stale catalogs whose last album was removed. Run `bob albums sync` to repair catalog findings. This command is read-only. Bare `bob albums` runs this command. `bob albums create` ships in a later phase.",
         )
         .after_help(
             "Examples:\n  bob albums\n  bob albums list\n  bob albums list -r body -f json\n\nSee docs/records.md for the album contract.",
@@ -80,7 +82,7 @@ pub(crate) fn build_cli_check() -> ClapCommand {
     ClapCommand::new("bob albums check")
         .about("Check albums against the contract")
         .long_about(
-            "Findings grouped by album, plus an album/record/error/warning summary. Exits 1 on any error, 0 otherwise. This command is read-only.",
+            "Findings grouped by album and by owner catalog, plus an album/record/error/warning summary. Catalog warnings and damaged-region errors appear after album findings. Exits 1 on any error, 0 otherwise. This command is read-only.",
         )
         .after_help(
             "Examples:\n  bob albums check\n  bob albums check -f json\n\nSee docs/records.md for the album contract.",
@@ -178,8 +180,11 @@ fn normalize_root(value: &str) -> String {
 }
 
 fn load_report(bob_dir: &std::path::Path) -> report::AlbumReport {
-    let registry = AlbumRegistry::discover(bob_dir, &config::config_path());
-    report::build_report(&registry)
+    let config_path = config::config_path();
+    let snapshot = VaultSnapshot::load_with_config(bob_dir, &config_path);
+    let registry =
+        AlbumRegistry::from_snapshot(bob_dir, &config_path, &snapshot);
+    report::build_report(&registry, &snapshot)
 }
 
 fn print_io_errors(errors: &[String]) {
