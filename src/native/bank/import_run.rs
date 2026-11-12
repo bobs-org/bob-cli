@@ -49,6 +49,7 @@ pub(crate) struct ImportReport {
     pub(crate) dry_run: bool,
     pub(crate) today: NaiveDate,
     pub(crate) config: Option<BankConfig>,
+    pub(crate) accounts: Vec<AccountStatus>,
     pub(crate) plan: Option<BatchPlan>,
     pub(crate) commit: Option<CommitInfo>,
     pub(crate) sync_pre: Option<&'static str>,
@@ -67,6 +68,7 @@ impl ImportReport {
             dry_run,
             today,
             config: None,
+            accounts: Vec::new(),
             plan: None,
             commit: None,
             sync_pre: None,
@@ -87,7 +89,7 @@ impl ImportReport {
 
     pub(crate) fn to_json(&self) -> Value {
         let config = self.config.as_ref();
-        let accounts = config.map(config::account_statuses).unwrap_or_default();
+        let accounts = &self.accounts;
         let categories = config
             .map(|config| config.categories.as_slice())
             .unwrap_or_default();
@@ -134,13 +136,20 @@ impl ImportReport {
             "ok": self.failure.is_none(),
             "today": self.today.format("%Y-%m-%d").to_string(),
             "categories": categories.iter().map(category_json).collect::<Vec<_>>(),
-            "accounts": accounts.iter().map(account_json).collect::<Vec<_>>(),
+            "accounts": accounts.iter().map(AccountStatus::to_json).collect::<Vec<_>>(),
             "issues": {
                 "errors": if self.failure.is_some() { 1 } else { 0 },
                 "warnings": findings.len(),
             },
             "dry_run": self.dry_run,
             "changed": changed,
+            "restored": self.plan.as_ref().map_or(0, |plan| plan.restored_rows.len()),
+            "restored_rows": self.plan.as_ref().map(|plan| {
+                plan.restored_rows
+                    .iter()
+                    .map(|row| model::row_json(row, "checking"))
+                    .collect::<Vec<_>>()
+            }).unwrap_or_default(),
             "changes": changes,
             "findings": findings,
             "commit": commit_json(self.commit.as_ref()),
@@ -169,22 +178,6 @@ fn category_json(category: &Category) -> Value {
         "emoji": category.emoji,
         "label": category.label,
         "builtin": category.builtin,
-    })
-}
-
-fn account_json(account: &AccountStatus) -> Value {
-    json!({
-        "alias": account.alias,
-        "label": account.label,
-        "kind": account.kind.as_str(),
-        "default": account.default,
-        "start": account.start.map(|day| day.format("%Y-%m-%d").to_string()),
-        "status": account.status,
-        "last_import": Value::Null,
-        "balance_cents": Value::Null,
-        "balance_asof": Value::Null,
-        "delta_cents": Value::Null,
-        "hint": account.hint,
     })
 }
 
@@ -301,13 +294,12 @@ fn failure(
     TxnFailure::new(code, message, Some(hint.to_owned()))
 }
 
-/// Empty FILE list is refused input: clap requires FILE, and non-CLI
-/// callers of execute_import must fail the same way.
+/// Empty FILE list is refused unless `-F` explicitly requests restoration.
 pub(crate) fn missing_files_failure() -> TxnFailure {
     failure(
         "bank_import_missing_files",
         "pass at least one FILE",
-        "bob bank import FILE...",
+        "pass QFX, OFX, or CSV files, or use `bob bank import -F` to restore missing rows",
     )
 }
 
@@ -339,10 +331,13 @@ pub(crate) fn plan_import(
     requested_account: Option<&str>,
     now_stamp: &str,
     host: &str,
+    today: NaiveDate,
+    force_restore: bool,
 ) -> Result<
     (
         BatchPlan,
         BankConfig,
+        Vec<AccountStatus>,
         ReadDependencies,
         Vec<StagedTextFile>,
         Vec<PlannedAppend>,
@@ -422,6 +417,15 @@ pub(crate) fn plan_import(
             "fix the listed bank journal files and retry",
         ));
     }
+    let current_rows =
+        model::collect_rows(&scan, Some(&config), Some(&journal));
+    let accounts = super::status::accounts_with_evidence(
+        &config,
+        &journal,
+        &current_rows,
+        today,
+    )
+    .0;
 
     let mut resolved = Vec::<ResolvedStatement>::with_capacity(sources.len());
     for source in sources {
@@ -442,7 +446,18 @@ pub(crate) fn plan_import(
         restaurant_directory,
         restaurant_dir_entries,
         root_md_entries,
-    ) = load_restaurants(vault)?;
+    ) = if sources.is_empty() {
+        (
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            None,
+            Vec::new(),
+            Vec::new(),
+        )
+    } else {
+        load_restaurants(vault)?
+    };
     let plan = import_plan::plan_batch(PlanInput {
         config: Some(&config),
         hub: ReadDep {
@@ -460,6 +475,7 @@ pub(crate) fn plan_import(
         restaurant_deps,
         now_stamp: now_stamp.to_owned(),
         host: host.to_owned(),
+        force_restore,
     })
     .map_err(plan_refusal_failure)?;
 
@@ -477,7 +493,9 @@ pub(crate) fn plan_import(
         Some("jsonl"),
         journal.directory_entries.clone(),
     );
-    deps.insert_directory(PathBuf::from("."), Some("md"), root_md_entries);
+    if !sources.is_empty() {
+        deps.insert_directory(PathBuf::from("."), Some("md"), root_md_entries);
+    }
     if let Some(directory) = restaurant_directory {
         deps.insert_directory(
             PathBuf::from(directory),
@@ -530,7 +548,45 @@ pub(crate) fn plan_import(
         bytes.extend_from_slice(&append.suffix);
         (append.target.clone(), bytes)
     }));
-    Ok((plan, config, deps, staged, appends, verify))
+    Ok((plan, config, accounts, deps, staged, appends, verify))
+}
+
+/// Refresh account status after a successful real import has committed.
+pub(crate) fn refresh_accounts(
+    report: &mut ImportReport,
+    vault: &Path,
+    today: NaiveDate,
+) {
+    let Some(config) = report.config.as_ref() else {
+        return;
+    };
+    let scan = scan::scan_bank(vault);
+    if !scan.io_errors.is_empty() {
+        report.warnings.push(format!(
+            "could not refresh account status: {}",
+            scan.io_errors.join(", ")
+        ));
+        return;
+    }
+    let journal = match journal::load(vault) {
+        Ok(journal) if journal.io_errors.is_empty() => journal,
+        Ok(journal) => {
+            report.warnings.push(format!(
+                "could not refresh account status: {}",
+                journal.io_errors.join(", ")
+            ));
+            return;
+        }
+        Err(error) => {
+            report
+                .warnings
+                .push(format!("could not refresh account status: {error}"));
+            return;
+        }
+    };
+    let rows = model::collect_rows(&scan, Some(config), Some(&journal));
+    report.accounts =
+        super::status::accounts_with_evidence(config, &journal, &rows, today).0;
 }
 
 fn load_restaurants(
@@ -821,15 +877,27 @@ pub(crate) fn planned_txn(
     appends: Vec<PlannedAppend>,
     verify_files: Vec<(PathBuf, Vec<u8>)>,
 ) -> PlannedTxn<BatchPlan> {
-    let aliases = plan
+    let mut aliases = plan
         .files
         .iter()
         .map(|file| file.account.clone())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>()
-        .join(",");
-    let subject = format!("bank: import {} rows ({aliases})", plan.counts.new);
+        .collect::<BTreeSet<_>>();
+    aliases.extend(plan.restored_rows.iter().map(|row| row.account.clone()));
+    let aliases = aliases.into_iter().collect::<Vec<_>>().join(",");
+    let subject = if plan.files.is_empty() && !plan.restored_rows.is_empty() {
+        format!(
+            "bank: import restore {} rows ({aliases})",
+            plan.restored_rows.len()
+        )
+    } else if !plan.restored_rows.is_empty() {
+        format!(
+            "bank: import {} rows, restore {} ({aliases})",
+            plan.counts.new,
+            plan.restored_rows.len()
+        )
+    } else {
+        format!("bank: import {} rows ({aliases})", plan.counts.new)
+    };
     let _ = vault;
     PlannedTxn {
         files,
@@ -856,6 +924,7 @@ pub(crate) fn planned_txn(
 }
 
 /// Dry-run plan with no lock, sync, Git, directory creation, or writes.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn dry_run(
     vault: &Path,
     sources: &[PreparedSource],
@@ -863,17 +932,38 @@ pub(crate) fn dry_run(
     now_stamp: &str,
     today: NaiveDate,
 ) -> ImportReport {
+    dry_run_with_restore(
+        vault,
+        sources,
+        requested_account,
+        now_stamp,
+        today,
+        false,
+    )
+}
+
+pub(crate) fn dry_run_with_restore(
+    vault: &Path,
+    sources: &[PreparedSource],
+    requested_account: Option<&str>,
+    now_stamp: &str,
+    today: NaiveDate,
+    force_restore: bool,
+) -> ImportReport {
     match plan_import(
         vault,
         sources,
         requested_account,
         now_stamp,
         &pref_journal::host_label(),
+        today,
+        force_restore,
     ) {
-        Ok((plan, config, _, _, _, _)) => ImportReport {
+        Ok((plan, config, accounts, _, _, _, _)) => ImportReport {
             dry_run: true,
             today,
             config: Some(config),
+            accounts,
             plan: Some(plan),
             commit: None,
             sync_pre: Some("skipped"),
@@ -887,6 +977,7 @@ pub(crate) fn dry_run(
 
 /// Execute under the shared maintenance lock and sync lifecycle. The plan
 /// closure runs only after pre-sync and reads the fresh vault snapshot.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn apply(
     vault: &Path,
     sources: &[PreparedSource],
@@ -894,6 +985,26 @@ pub(crate) fn apply(
     now_stamp: &str,
     today: NaiveDate,
     json_mode: bool,
+) -> ImportReport {
+    apply_with_restore(
+        vault,
+        sources,
+        requested_account,
+        now_stamp,
+        today,
+        json_mode,
+        false,
+    )
+}
+
+pub(crate) fn apply_with_restore(
+    vault: &Path,
+    sources: &[PreparedSource],
+    requested_account: Option<&str>,
+    now_stamp: &str,
+    today: NaiveDate,
+    json_mode: bool,
+    force_restore: bool,
 ) -> ImportReport {
     let child_env = ob::child_env();
     let host = pref_journal::host_label();
@@ -904,14 +1015,23 @@ pub(crate) fn apply(
             json_mode,
             "bank import",
             || {
-                let (plan, config, deps, files, appends, verify_files) =
-                    plan_import(
-                        vault,
-                        sources,
-                        requested_account,
-                        now_stamp,
-                        &host,
-                    )?;
+                let (
+                    plan,
+                    config,
+                    accounts,
+                    deps,
+                    files,
+                    appends,
+                    verify_files,
+                ) = plan_import(
+                    vault,
+                    sources,
+                    requested_account,
+                    now_stamp,
+                    &host,
+                    today,
+                    force_restore,
+                )?;
                 if !appends.is_empty() {
                     match crate::native::vault_git::check_ignore_quiet(
                         vault,
@@ -954,6 +1074,7 @@ pub(crate) fn apply(
                     context: ApplyContext {
                         plan: txn.context,
                         config,
+                        accounts,
                     },
                     kind: txn.kind,
                 })
@@ -964,6 +1085,7 @@ pub(crate) fn apply(
             dry_run: false,
             today,
             config: Some(result.context.config),
+            accounts: result.context.accounts,
             plan: Some(result.context.plan),
             commit: result.commit,
             sync_pre: Some(result.sync_pre),
@@ -978,6 +1100,7 @@ pub(crate) fn apply(
 struct ApplyContext {
     plan: BatchPlan,
     config: BankConfig,
+    accounts: Vec<AccountStatus>,
 }
 
 pub(crate) fn print_human(report: &ImportReport) {
@@ -1020,10 +1143,48 @@ pub(crate) fn print_human(report: &ImportReport) {
                 .balance_asof
                 .map_or_else(String::new, |day| format!(" on {day}"));
             println!(
-                "  Ledger balance {}{} · unverified",
+                "  Ledger balance {}{}",
                 super::grammar::render_amount(balance),
                 asof
             );
+        }
+    }
+    if !report.accounts.is_empty() {
+        println!("Accounts:");
+        for account in &report.accounts {
+            let state = match account.status {
+                "balanced" => "✓ balanced".to_owned(),
+                "delta" => format!(
+                    "Δ {}",
+                    super::grammar::render_amount(
+                        account.delta_cents.unwrap_or_default()
+                    )
+                ),
+                other => other.to_owned(),
+            };
+            let asof = account
+                .balance_asof
+                .map_or_else(String::new, |date| format!(" · through {date}"));
+            println!("  {} · {state}{asof}", account.label);
+        }
+    }
+    if plan.restore_requested {
+        if plan.restored_rows.is_empty() {
+            println!("No missing journaled rows to restore.");
+        } else {
+            println!(
+                "Restored {} missing journaled rows:",
+                plan.restored_rows.len()
+            );
+            for row in &plan.restored_rows {
+                println!(
+                    "  {} · {} · {} {}",
+                    row.date,
+                    row.account,
+                    super::grammar::render_amount(row.cents),
+                    row.payee
+                );
+            }
         }
     }
     for finding in &plan.findings {
@@ -1099,7 +1260,11 @@ mod tests {
 
     use super::*;
     use crate::native::{
-        bank::journal::TxnOutcome, env::TestEnvGuard,
+        bank::{
+            identity::transaction_key,
+            journal::{serialize_txn, NewTxn, TxnOutcome},
+        },
+        env::TestEnvGuard,
         host_catalog::apply_and_commit,
     };
 
@@ -1212,14 +1377,17 @@ mod tests {
         vault: &Path,
         sources: &[PreparedSource],
     ) -> PlannedTxn<BatchPlan> {
-        let (plan, _config, deps, files, appends, verify) = plan_import(
-            vault,
-            sources,
-            Some("checking"),
-            "2026-11-13T17:00:00+00:00",
-            "test-host",
-        )
-        .expect("import plan");
+        let (plan, _config, _accounts, deps, files, appends, verify) =
+            plan_import(
+                vault,
+                sources,
+                Some("checking"),
+                "2026-11-13T17:00:00+00:00",
+                "test-host",
+                NaiveDate::from_ymd_opt(2026, 11, 13).unwrap(),
+                false,
+            )
+            .expect("import plan");
         planned_txn(vault, plan, deps, files, appends, verify)
     }
 
@@ -1592,6 +1760,52 @@ mod tests {
             snapshot.transactions.values().next().unwrap().outcome,
             TxnOutcome::Written
         );
+    }
+
+    #[test]
+    fn force_import_without_files_restores_a_deleted_journaled_row() {
+        let vault = syncable_vault();
+        let key = transaction_key("checking", "restore-me");
+        let id = key.chars().take(8).collect::<String>();
+        let stamp =
+            chrono::DateTime::parse_from_rfc3339("2026-11-12T12:00:00+00:00")
+                .unwrap();
+        let event = NewTxn {
+            account: "checking".to_owned(),
+            key,
+            id: id.clone(),
+            posted: NaiveDate::from_ymd_opt(2026, 11, 12).unwrap(),
+            cents: -1_000,
+            desc: "SHOPRITE".to_owned(),
+            outcome: TxnOutcome::Written,
+            note: Some("bank/2026-11.md".to_owned()),
+        };
+        let journal_dir = vault.path.join(".bob/bank");
+        fs::create_dir_all(&journal_dir).unwrap();
+        let journal_path = journal_dir.join("restore-host.jsonl");
+        fs::write(&journal_path, serialize_txn(stamp, "restore-host", &event))
+            .unwrap();
+        git(&vault.path, &["add", ".bob/bank/restore-host.jsonl"]);
+        git(
+            &vault.path,
+            &["commit", "-qm", "record imported transaction"],
+        );
+        git(&vault.path, &["push", "--quiet"]);
+        let journal_before = fs::read(&journal_path).unwrap();
+
+        let _guard = sync_environment(&vault);
+        let result = crate::native::bank::cli::run_import(vec![
+            std::ffi::OsString::from("-F"),
+        ]);
+        assert_eq!(result, 0);
+        let month = fs::read_to_string(vault.path.join("bank/2026-11.md"))
+            .expect("restored month note");
+        assert!(month.contains(&format!(
+            "- [ ] $10.00 Shoprite [acct:: checking] ^bank-{id}"
+        )));
+        assert_eq!(fs::read(&journal_path).unwrap(), journal_before);
+        assert!(git(&vault.path, &["log", "-1", "--format=%s"])
+            .contains("bank: import restore 1 rows (checking)"));
     }
 
     #[test]

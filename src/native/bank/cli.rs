@@ -155,17 +155,16 @@ pub(crate) fn build_cli_import() -> ClapCommand {
     ClapCommand::new("bob bank import")
         .about("Import posted bank transactions from QFX, OFX, or Wells Fargo CSV")
         .long_about(
-            "Plans the whole batch before writing. Existing rows are matched only by account, exact signed cents, and the documented posted-date window; new rows and the private bank journal commit together. An ignored journal destination is refused before rows are installed. Refused input exits 2; runtime failures exit 1.",
+            "Plans the whole batch before writing. Existing rows are matched only by account, exact signed cents, and the documented posted-date window; new rows and the private bank journal commit together. `-F` deliberately restores journaled transactions whose rows were deleted. An ignored journal destination is refused before rows are installed. Refused input exits 2; runtime failures exit 1.",
         )
         .after_help(
-            "Examples:\n  bob bank import ~/Downloads/*.qfx\n  bob bank import -d ~/Downloads/checking.qfx\n  bob bank import -a checking -f json ~/Downloads/export.csv\n\nSee docs/bank.md for import matching and recovery behavior.",
+            "Examples:\n  bob bank import ~/Downloads/*.qfx\n  bob bank import -d ~/Downloads/checking.qfx\n  bob bank import -a checking -f json ~/Downloads/export.csv\n  bob bank import -F\n\nSee docs/bank.md for import matching and recovery behavior.",
         )
         .disable_help_flag(true)
         .arg(
             Arg::new("files")
                 .value_name("FILE")
-                .required(true)
-                .num_args(1..)
+                .num_args(0..)
                 .value_parser(OsStringValueParser::new())
                 .help("QFX/OFX or the supported Wells Fargo CSV export; repeatable"),
         )
@@ -179,6 +178,7 @@ pub(crate) fn build_cli_import() -> ClapCommand {
         )
         .arg(bob_dir_arg())
         .arg(dry_run_arg())
+        .arg(restore_missing_arg())
         .arg(format_arg())
         .arg(help_arg())
 }
@@ -281,6 +281,14 @@ fn dry_run_arg() -> Arg {
         .help("Preview diffs without writing")
 }
 
+fn restore_missing_arg() -> Arg {
+    Arg::new("restore-missing")
+        .long("force")
+        .short('F')
+        .action(ArgAction::SetTrue)
+        .help("Restore journaled transactions whose rows are missing")
+}
+
 fn open_arg() -> Arg {
     Arg::new("open")
         .long("open")
@@ -325,6 +333,7 @@ fn execute_import(matches: &ArgMatches) -> i32 {
     let vault = vault_from(matches);
     let json = format_is_json(matches);
     let dry_run = matches.get_flag("dry-run");
+    let force_restore = matches.get_flag("restore-missing");
     let now = bob_env::current_datetime();
     let today = now.date();
     let now_stamp = import_run::now_stamp(now);
@@ -332,7 +341,8 @@ fn execute_import(matches: &ArgMatches) -> i32 {
         .get_many::<OsString>("files")
         .map(|files| files.map(PathBuf::from).collect::<Vec<_>>())
         .unwrap_or_default();
-    if paths.is_empty() {
+    let requested_account = opt_string(matches, "account");
+    if paths.is_empty() && !force_restore {
         let report = import_run::ImportReport::failed(
             dry_run,
             today,
@@ -345,7 +355,6 @@ fn execute_import(matches: &ArgMatches) -> i32 {
         }
         return report.exit_code();
     }
-    let requested_account = opt_string(matches, "account");
     let prepared = match import_run::prepare_sources(&paths) {
         Ok(prepared) => prepared,
         Err(error) => {
@@ -363,23 +372,29 @@ fn execute_import(matches: &ArgMatches) -> i32 {
         }
     };
     let report = if dry_run {
-        import_run::dry_run(
+        import_run::dry_run_with_restore(
             &vault,
             &prepared,
             requested_account.as_deref(),
             &now_stamp,
             today,
+            force_restore,
         )
     } else {
-        import_run::apply(
+        import_run::apply_with_restore(
             &vault,
             &prepared,
             requested_account.as_deref(),
             &now_stamp,
             today,
             json,
+            force_restore,
         )
     };
+    let mut report = report;
+    if !dry_run && report.failure.is_none() {
+        import_run::refresh_accounts(&mut report, &vault, today);
+    }
     if json {
         println!("{}", report.to_json());
     } else {
@@ -501,10 +516,15 @@ fn execute_list(matches: &ArgMatches) -> i32 {
         .as_ref()
         .map(|config| config.categories.clone())
         .unwrap_or_default();
-    let accounts = config.as_ref().map(status::accounts).unwrap_or_default();
-    let journal = super::journal::load(&bob_dir).ok();
+    let journal = super::journal::load(&bob_dir).unwrap_or_default();
     let rows =
-        super::model::collect_rows(&scan, config.as_ref(), journal.as_ref());
+        super::model::collect_rows(&scan, config.as_ref(), Some(&journal));
+    let accounts = config
+        .as_ref()
+        .map(|config| {
+            status::accounts_with_evidence(config, &journal, &rows, today).0
+        })
+        .unwrap_or_default();
     let default_alias = config
         .as_ref()
         .and_then(|config| config.default_account())
@@ -606,15 +626,20 @@ fn execute_report(matches: &ArgMatches) -> i32 {
         .as_ref()
         .map(|config| config.categories.clone())
         .unwrap_or_default();
-    let accounts = config.as_ref().map(status::accounts).unwrap_or_default();
     let default_alias = config
         .as_ref()
         .and_then(|config| config.default_account())
         .map(|account| account.alias.clone())
         .unwrap_or_else(|| "checking".to_owned());
-    let journal = super::journal::load(&bob_dir).ok();
+    let journal = super::journal::load(&bob_dir).unwrap_or_default();
     let rows =
-        super::model::collect_rows(&scan, config.as_ref(), journal.as_ref());
+        super::model::collect_rows(&scan, config.as_ref(), Some(&journal));
+    let accounts = config
+        .as_ref()
+        .map(|config| {
+            status::accounts_with_evidence(config, &journal, &rows, today).0
+        })
+        .unwrap_or_default();
     let heading_lines = list::collect_heading_lines(&scan);
     let built = report::build(
         rows,
@@ -768,7 +793,11 @@ fn execute_ensure(matches: &ArgMatches) -> i32 {
     }
     if json {
         let categories = config.categories.clone();
-        let accounts = status::accounts(&config);
+        let journal = super::journal::load(&bob_dir).unwrap_or_default();
+        let rows =
+            super::model::collect_rows(&scan, Some(&config), Some(&journal));
+        let accounts =
+            status::accounts_with_evidence(&config, &journal, &rows, today).0;
         println!("{}", ensure::to_json(&plan, today, &categories, &accounts));
     } else {
         output::print_ensure(

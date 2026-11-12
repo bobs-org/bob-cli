@@ -7,15 +7,15 @@ are shown and never written into notes.
 `bob bank` lives in the Integrations section of `bob --help`. Membership:
 commands over bank rows, bank month notes, and their import journal. Bare
 `bob bank` runs the read-only `list`. This page is the contract. `check`,
-`list`, `report`, `ensure`, `ack`, and `import` ship now; balance
-verdicts ship in a later phase.
+`list`, `report`, `ensure`, `ack`, and `import` ship now, including account
+balance verdicts and deliberate restoration of missing imported rows.
 
 ```text
 bob bank [list] [-a] [-b DIR] [-f human|json] [-m MONTH]
 bob bank ack [ID...] [-b DIR] [-D DAY] [-d] [-f human|json]
 bob bank check [-b DIR] [-f human|json]
 bob bank ensure [-b DIR] [-D DAY] [-f human|json] [-o]
-bob bank import FILE... [-a ALIAS] [-b DIR] [-d] [-f human|json]
+bob bank import [FILE...] [-a ALIAS] [-b DIR] [-d] [-F] [-f human|json]
 bob bank report [-b DIR] [-D DAY] [-f human|json] [-m MONTH] [-w WEEK] [-y YEAR]
 ```
 
@@ -185,10 +185,11 @@ stay byte-identical. Bryan's edits always win.
 
 ## Import
 
-`bob bank import FILE... [-a ALIAS] [-d]` plans the whole batch before
-writing, then records posted exports in one guarded, committed
+`bob bank import [FILE...] [-a ALIAS] [-d] [-F]` plans the whole batch
+before writing, then records posted exports in one guarded, committed
 transaction. Omitting FILE is refused input (exit 2) before the
-maintenance lock or pre-sync. Files are parsed before the maintenance
+maintenance lock or pre-sync unless `-F` (or `--force`) explicitly
+requests restoration from the journal. Files are parsed before the maintenance
 path is entered, so a malformed member refuses the full batch with no
 vault, journal, Git, or sync change. Files process in `(posted, input-file order, record
 order)`; the same pure planner feeds preview and apply, so `-d`
@@ -381,20 +382,15 @@ replay produces no scoped import commit and no new journal events.
 
 Human output prints one block per file (account, date range; new,
 matched, seen, ambiguous, before-start counts; out/in cents; ledger
-balance and date when present, always marked unverified), then affected
-paths, commit/sync results, and a next action. It respects `NO_COLOR`
-and pipes, and never claims balanced or all caught up. Usage errors
-exit 2.
+balance and date when present), followed by account statuses,
+restoration details, affected paths, commit/sync results, and a next
+action. It respects `NO_COLOR` and pipes. Usage errors exit 2.
 
 ### Current limits
 
-Balance verdicts stay unverified: account `status` remains
-`unverified`, and there are deliberately no balanced/delta/gap/stale
-verdicts, no coverage or presence findings, no twins, and no `-F`
-restoration until the balance phase lands. Also out of scope: plugin UI,
-subscriptions, historical `@BANK` migration, feeds, budgets, pending
-transactions, and multi-currency accounting. CSV is a fallback profile
-with no cross-format fuzzy identity inference.
+Out of scope: plugin UI, subscriptions, historical `@BANK` migration,
+feeds, budgets, pending transactions, and multi-currency accounting. CSV
+is a fallback profile with no cross-format fuzzy identity inference.
 
 ## Commands
 
@@ -419,7 +415,11 @@ both. A row that is already ticked is a no-op.
 
 `import` plans the whole batch, then writes new rows and the journal in
 one scoped commit (see [Import](#import)). `-d` previews month and
-journal diffs without writing anything.
+journal diffs without writing anything. `-F` (or `--force`) deliberately
+recreates rows for journaled transactions that are missing from the month
+notes. It works without source files, restores rows under their posted days,
+and never duplicates a row whose ID is still present. Restored imported rows
+wait for acknowledgment; rows originally matched to typed entries stay ticked.
 
 ## Totals
 
@@ -444,10 +444,27 @@ info hint `bank_inflow_category`: "use refund or income".
 
 ## Account status
 
-Until the balance phase ships, every importable account is
-`unverified` (with the hint `No import yet — bob bank import FILE`) and
-cash is `untracked`. Later statuses: `balanced`, `delta`, `gap`,
-`stale`.
+The first QFX ledger balance at or after an account's `start` anchors its
+opening balance: bob subtracts the journaled transactions posted from
+`start` through that balance's as-of date. Later QFX balances are checked
+against the same derived anchor and current rows carrying journaled IDs.
+Repeated observations do not count a transaction twice. Missing or edited
+rows change the ledger total and are reported separately. QFX import windows
+must form continuous coverage from `start` through the reported balance date.
+
+Importable account statuses are `balanced`, `delta`, `gap`, `stale`, and
+`unverified`; cash accounts are always `untracked`. `balanced` means the
+latest QFX ledger balance agrees and coverage is continuous. `delta` means
+the bank balance differs from the ledger sum. `gap` names a break in QFX
+coverage. `stale` means the latest ledger balance is older than
+`bank.stale_after` days (10 by default). `unverified` means there is no QFX
+ledger balance yet, including CSV-only accounts. The JSON `last_import` is
+the local date of the latest import event; `balance_asof` is the bank's date.
+
+`bob bank check` also reports missing journaled rows, edited amounts,
+possible twins, and ID-less typed rows in covered windows that have no bank
+match. Edits remain in the note and never change the journal's bank amount.
+Possible twins are warnings only; bob never merges them.
 
 ## Findings (`bob bank check`)
 
@@ -477,11 +494,18 @@ follows the envelope below. `issues` counts errors and warnings (not info).
 | `bank_flagged` | info | Each `⚑` row |
 | `bank_inflow_category` | info | An inflow with a spending category |
 
-`bank_journal_malformed` ships with import (warning: a skipped journal
-line, with bounded output). Balance findings (`bank_balance_delta`,
-`bank_coverage_gap`, `bank_row_missing`, `bank_amount_edited`,
-`bank_account_stale`, `bank_row_unmatched`, `bank_twins`) ship with the
-balance phase.
+`bank_journal_malformed` is a warning for a skipped journal line, with
+bounded output. Balance findings are:
+
+| Code | Severity | Trigger |
+| --- | --- | --- |
+| `bank_balance_delta` | error | The latest QFX ledger balance differs from the derived opening anchor plus current rows carrying journaled IDs |
+| `bank_coverage_gap` | warning | QFX import windows have a gap from the configured account start through the latest balance date |
+| `bank_row_missing` | error | A journaled transaction's `^bank-` row is absent; restore deliberately with `bob bank import -F` |
+| `bank_amount_edited` | warning | The row is present but its amount differs from the immutable journal amount |
+| `bank_account_stale` | warning | The latest QFX ledger balance is older than `stale_after` |
+| `bank_row_unmatched` | info | A typed row in a covered window has no exact bank match yet |
+| `bank_twins` | warning | A typed row and imported transaction share a merchant/date window but differ in amount |
 
 ## JSON
 
@@ -511,12 +535,12 @@ without journal evidence, including every journaled `written` row).
 - `import` prints the envelope `ok`, `today`, `categories`, `accounts`,
   `issues`, `dry_run`, `changed`, `changes[] {path, diff?}`,
   `findings[] {code, path, line, message}`, `commit {sha, subject}`,
-  `sync {pre, post}`, and `warnings`, plus the parent-contract
+  `sync {pre, post}`, `restored`, `restored_rows[]`, and `warnings`, plus the parent-contract
   `files[] {file, account, source, start, end, new, matched, seen,
   ambiguous, before_start, out_cents, in_cents, balance_cents,
   balance_asof, status}` and `rows[]` using existing row JSON.
-  `balance_cents`/`balance_asof` report the ledger balance and date with
-  no balanced verdict. Diagnostics identify a file and field/record
+  `balance_cents`/`balance_asof` report the ledger balance and date.
+  Diagnostics identify a file and field/record
   position without echoing private identifiers or raw data.
 
 Shared objects:
@@ -535,13 +559,13 @@ Shared objects:
       "label": "WF Checking",
       "kind": "checking",
       "default": true,
-      "start": "2026-11-12",
-      "status": "unverified",
-      "last_import": null,
-      "balance_cents": null,
-      "balance_asof": null,
-      "delta_cents": null,
-      "hint": "No import yet — bob bank import FILE"
+      "start": "2026-11-01",
+      "status": "balanced",
+      "last_import": "2026-11-14",
+      "balance_cents": 100000,
+      "balance_asof": "2026-11-12",
+      "delta_cents": 0,
+      "hint": "Ledger balance matches through 2026-11-12"
     }
   ],
   "issues": { "errors": 0, "warnings": 0 },

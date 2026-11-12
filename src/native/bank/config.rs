@@ -630,6 +630,28 @@ pub(crate) struct AccountStatus {
     pub(crate) start: Option<NaiveDate>,
     pub(crate) status: &'static str,
     pub(crate) hint: String,
+    pub(crate) last_import: Option<NaiveDate>,
+    pub(crate) balance_cents: Option<i64>,
+    pub(crate) balance_asof: Option<NaiveDate>,
+    pub(crate) delta_cents: Option<i64>,
+}
+
+impl AccountStatus {
+    pub(crate) fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "alias": self.alias,
+            "label": self.label,
+            "kind": self.kind.as_str(),
+            "default": self.default,
+            "start": self.start.map(|date| date.format("%Y-%m-%d").to_string()),
+            "status": self.status,
+            "last_import": self.last_import.map(|date| date.format("%Y-%m-%d").to_string()),
+            "balance_cents": self.balance_cents,
+            "balance_asof": self.balance_asof.map(|date| date.format("%Y-%m-%d").to_string()),
+            "delta_cents": self.delta_cents,
+            "hint": self.hint,
+        })
+    }
 }
 
 pub(crate) fn account_statuses(config: &BankConfig) -> Vec<AccountStatus> {
@@ -654,6 +676,10 @@ pub(crate) fn account_statuses(config: &BankConfig) -> Vec<AccountStatus> {
                 start: account.start,
                 status,
                 hint,
+                last_import: None,
+                balance_cents: None,
+                balance_asof: None,
+                delta_cents: None,
             }
         })
         .collect()

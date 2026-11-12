@@ -52,6 +52,13 @@ pub(crate) fn account_chips(
     for account in accounts {
         let chip = match account.status {
             "balanced" => format!("{} ✓ balanced", account.label),
+            "delta" => format!(
+                "{} Δ {}",
+                account.label,
+                render_amount(account.delta_cents.unwrap_or_default())
+            ),
+            "gap" => format!("{} · coverage gap", account.label),
+            "stale" => format!("{} · stale", account.label),
             "unverified" => format!("{} · unverified", account.label),
             "untracked" => format!("{} · untracked", account.label),
             other => format!("{} · {other}", account.label),

@@ -96,6 +96,7 @@ pub(crate) struct PlanInput<'a> {
     pub(crate) now_stamp: String,
     /// Host label stamped on new journal events.
     pub(crate) host: String,
+    pub(crate) force_restore: bool,
 }
 
 /// Why the whole batch is refused before any mutation shape is produced.
@@ -184,6 +185,9 @@ pub(crate) struct BatchPlan {
     /// New and matched rows in the after-images, ordered by note and line,
     /// ready for `model::row_json`.
     pub(crate) rows: Vec<BankRow>,
+    /// Rows deliberately recreated from journal evidence by `import -F`.
+    pub(crate) restored_rows: Vec<BankRow>,
+    pub(crate) restore_requested: bool,
     pub(crate) month_edits: Vec<MonthEdit>,
     pub(crate) journal_events: Vec<String>,
     pub(crate) read_deps: Vec<ReadDep>,
@@ -216,6 +220,7 @@ struct Planner<'a> {
     pending_rows: BTreeMap<(String, NaiveDate), Vec<PendingRow>>,
     match_edits: BTreeMap<String, Vec<(usize, String)>>,
     txn_events: Vec<NewTxn>,
+    restored_outcomes: HashMap<String, TxnOutcome>,
     file_counts: Vec<ImportCounts>,
     counts: ImportCounts,
     batch_keys: HashSet<String>,
@@ -229,6 +234,7 @@ struct RowState {
 }
 
 struct PendingRow {
+    waiting: bool,
     cents: i64,
     payee: String,
     category: Option<String>,
@@ -266,6 +272,7 @@ impl<'a> Planner<'a> {
             pending_rows: BTreeMap::new(),
             match_edits: BTreeMap::new(),
             txn_events: Vec::new(),
+            restored_outcomes: HashMap::new(),
             file_counts: Vec::new(),
             counts: ImportCounts::default(),
             batch_keys: HashSet::new(),
@@ -302,6 +309,9 @@ impl<'a> Planner<'a> {
             let statement = &input.statements[file_index];
             let txn = &statement.statement.transactions[record_index];
             self.process(input, file_index, statement, txn)?;
+        }
+        if input.force_restore {
+            self.restore_missing(input);
         }
         let mut files = Vec::new();
         for (file_index, statement) in input.statements.iter().enumerate() {
@@ -524,6 +534,7 @@ impl<'a> Planner<'a> {
                     .entry((path.clone(), txn.posted))
                     .or_default()
                     .push(PendingRow {
+                        waiting: true,
                         cents: txn.cents,
                         payee: named.payee,
                         category: named.category,
@@ -604,6 +615,54 @@ impl<'a> Planner<'a> {
             .map_err(|collision| PlanRefusal::IdCollision {
                 prefix: collision.prefix,
             })
+    }
+
+    /// Explicitly restore journaled transactions whose identity-bearing row
+    /// is absent from every scanned month. Existing rows are never rewritten.
+    fn restore_missing(&mut self, input: &'a PlanInput<'a>) {
+        let mut events = input
+            .journal
+            .transactions
+            .values()
+            .filter(|event| {
+                event.outcome != TxnOutcome::BeforeStart
+                    && event.note.is_some()
+                    && !self.rows.iter().any(|row| {
+                        row.row.id.as_deref() == Some(event.id.as_str())
+                    })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        events.sort_by(|left, right| {
+            left.posted
+                .cmp(&right.posted)
+                .then(left.account.cmp(&right.account))
+                .then(left.id.cmp(&right.id))
+        });
+        for event in events {
+            let path = month_path(month_of(event.posted));
+            let learned = self.learn(input, &event.merchant);
+            let named = super::naming::resolve_name(
+                self.config,
+                &event.desc,
+                None,
+                learned.as_ref(),
+                None,
+            );
+            self.pending_rows
+                .entry((path, event.posted))
+                .or_default()
+                .push(PendingRow {
+                    waiting: event.outcome != TxnOutcome::Matched,
+                    cents: event.cents,
+                    payee: named.payee,
+                    category: named.category,
+                    account: event.account.clone(),
+                    links: named.link.into_iter().collect(),
+                    id: event.id.clone(),
+                });
+            self.restored_outcomes.insert(event.id, event.outcome);
+        }
     }
 
     /// The uniquely nearest ID-less row on the same non-cash account with
@@ -890,7 +949,7 @@ impl<'a> Planner<'a> {
                 let current =
                     self.month_texts.get(&path).cloned().unwrap_or_default();
                 let line = render_row(
-                    true,
+                    pending.waiting,
                     pending.cents,
                     &pending.payee,
                     pending.category.as_deref(),
@@ -967,6 +1026,15 @@ impl<'a> Planner<'a> {
             .collect();
         month_edits.sort_by(|left, right| left.path.cmp(&right.path));
         let rows = self.affected_rows(input);
+        let restored_rows = rows
+            .iter()
+            .filter(|row| {
+                row.id
+                    .as_ref()
+                    .is_some_and(|id| self.restored_outcomes.contains_key(id))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
         let changed = !month_edits.is_empty() || !journal_events.is_empty();
         let mut read_deps = Vec::new();
         read_deps.push(input.hub.clone());
@@ -986,6 +1054,8 @@ impl<'a> Planner<'a> {
         BatchPlan {
             files,
             rows,
+            restored_rows,
+            restore_requested: input.force_restore,
             month_edits,
             journal_events,
             read_deps,
@@ -1004,6 +1074,11 @@ impl<'a> Planner<'a> {
                 wanted.insert(event.id.clone(), event.outcome);
             }
         }
+        wanted.extend(
+            self.restored_outcomes
+                .iter()
+                .map(|(id, outcome)| (id.clone(), *outcome)),
+        );
         if wanted.is_empty() {
             return Vec::new();
         }
@@ -1378,7 +1453,60 @@ mod tests {
             restaurant_deps: Vec::new(),
             now_stamp: STAMP.to_owned(),
             host: "athena".to_owned(),
+            force_restore: false,
         })
+    }
+
+    fn restore_plan(
+        config: &BankConfig,
+        scan: &BankScan,
+        journal: &JournalSnapshot,
+    ) -> BatchPlan {
+        plan_batch(PlanInput {
+            config: Some(config),
+            hub: ReadDep {
+                path: "bank.md".to_owned(),
+                preimage: Some(b"hub".to_vec()),
+            },
+            scan,
+            journal,
+            statements: Vec::new(),
+            file_labels: Vec::new(),
+            restaurants: Vec::new(),
+            restaurant_deps: Vec::new(),
+            now_stamp: STAMP.to_owned(),
+            host: "athena".to_owned(),
+            force_restore: true,
+        })
+        .expect("restore plan")
+    }
+
+    fn journal_txn(id: &str, outcome: TxnOutcome) -> (String, TxnEvent) {
+        let key = format!("{id:0<64}");
+        let event = TxnEvent {
+            ts: parse_stamp(STAMP),
+            host: "athena".to_owned(),
+            path: ".bob/bank/athena.jsonl".to_owned(),
+            line: 1,
+            account: "checking".to_owned(),
+            key: key.clone(),
+            id: id.to_owned(),
+            posted: nov(12),
+            cents: -1_000,
+            desc: "SHOPRITE".to_owned(),
+            merchant: "shoprite".to_owned(),
+            outcome,
+            note: Some("bank/2026-11.md".to_owned()),
+        };
+        (key, event)
+    }
+
+    fn journal_with_txn(id: &str, outcome: TxnOutcome) -> JournalSnapshot {
+        let mut journal = JournalSnapshot::default();
+        let (key, event) = journal_txn(id, outcome);
+        journal.ids.insert(id.to_owned(), key.clone());
+        journal.transactions.insert(key, event);
+        journal
     }
 
     fn two_txn_statements() -> Vec<ResolvedStatement> {
@@ -1492,6 +1620,33 @@ mod tests {
         assert!(deps.contains(&"bank/2026-11.md"));
         // No journal files were read in this empty case beyond the hub.
         assert!(first.findings.is_empty());
+    }
+
+    #[test]
+    fn force_restore_recreates_only_missing_journal_rows() {
+        let config = hub();
+        let id = "8f3a2c1d";
+        let journal = journal_with_txn(id, TxnOutcome::Written);
+        let scan = scan_with(vec![november(&[])]);
+        let plan = restore_plan(&config, &scan, &journal);
+        assert_eq!(plan.restored_rows.len(), 1);
+        assert_eq!(plan.restored_rows[0].id.as_deref(), Some(id));
+        assert_eq!(plan.restored_rows[0].cents, -1_000);
+        assert!(!plan.restored_rows[0].acknowledged);
+        assert!(plan.month_edits[0].after.contains(
+            "- [ ] $10.00 Shoprite [acct:: checking] ^bank-8f3a2c1d"
+        ));
+        assert!(plan.journal_events.is_empty());
+        assert!(plan.changed);
+
+        let present = scan_with(vec![november(&[(
+            12,
+            vec!["- [ ] $10.00 Shoprite [acct:: checking] ^bank-8f3a2c1d"],
+        )])]);
+        let no_duplicate = restore_plan(&config, &present, &journal);
+        assert!(no_duplicate.restored_rows.is_empty());
+        assert!(no_duplicate.month_edits.is_empty());
+        assert!(!no_duplicate.changed);
     }
 
     #[test]
@@ -2695,6 +2850,7 @@ mod tests {
             restaurant_deps: Vec::new(),
             now_stamp: STAMP.to_owned(),
             host: "athena".to_owned(),
+            force_restore: false,
         });
         assert_eq!(refused, Err(PlanRefusal::MissingConfig));
         assert!(PlanRefusal::MissingConfig
@@ -2835,6 +2991,7 @@ mod tests {
             restaurant_deps: vec![dep],
             now_stamp: STAMP.to_owned(),
             host: "apollo".to_owned(),
+            force_restore: false,
         })
         .expect("plan");
         let deps: Vec<&str> =

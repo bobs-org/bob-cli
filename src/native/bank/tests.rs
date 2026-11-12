@@ -24,12 +24,13 @@ fn import_command_help_and_option_aliases_are_complete() {
         "-a, --account <ALIAS>",
         "-b, --bob-dir <DIR>",
         "-d, --dry-run",
+        "-F, --force",
         "-f, --format <FORMAT>",
         "-h, --help",
     ] {
         assert!(help.contains(option), "missing {option} in:\n{help}");
     }
-    assert!(help.contains("<FILE>..."), "FILE is required in:\n{help}");
+    assert!(help.contains("[FILE]..."), "FILE is optional in:\n{help}");
     let parsed = super::build_cli_import()
         .try_get_matches_from([
             "bob bank import",
@@ -52,12 +53,14 @@ fn import_command_help_and_option_aliases_are_complete() {
             .count(),
         2
     );
-    assert!(
-        super::build_cli_import()
-            .try_get_matches_from(["bob bank import"])
-            .is_err(),
-        "omitting FILE is a clap usage error"
-    );
+    let empty = super::build_cli_import()
+        .try_get_matches_from(["bob bank import"])
+        .expect("empty source list reaches the runtime guard");
+    assert!(empty.get_many::<std::ffi::OsString>("files").is_none());
+    let restore = super::build_cli_import()
+        .try_get_matches_from(["bob bank import", "-F"])
+        .expect("force restore works without a source file");
+    assert!(restore.get_flag("restore-missing"));
 }
 
 fn month() -> super::grammar::YearMonth {

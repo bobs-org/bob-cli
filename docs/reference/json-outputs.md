@@ -189,7 +189,7 @@ Missing/stale warns `album_catalog_stale`; damage errors
 ### Bank reports {#bank-reports}
 
 `bob bank check|list|report|ensure|ack|import -f json` use
-`schema_version: 1`. See [Bank](../bank.md#json).
+`schema_version: 1`. Bank status and restoration: [Bank](../bank.md#json).
 
 ### Session edits and successor offers
 

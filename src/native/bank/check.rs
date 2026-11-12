@@ -10,13 +10,14 @@ use crate::native::pref_journal::MAX_MALFORMED_WARNINGS;
 
 use super::{
     config::{
-        account_statuses, parse_bank_config, suggest_name, AccountStatus,
-        BankConfig, Category, ConfigDiagnostic, ConfigParse,
+        parse_bank_config, suggest_name, AccountStatus, BankConfig, Category,
+        ConfigDiagnostic, ConfigParse,
     },
     grammar::{looks_like_day_heading, render_day_heading, ParsedRow},
     journal,
     month::{parse_month_note, LocatedRow, LocatedRowKind, MonthNote},
     scan::{is_teaching_empty, BankScan},
+    status,
 };
 
 const SCHEMA_VERSION: u32 = 1;
@@ -87,7 +88,7 @@ impl CheckReport {
             "schema_version": SCHEMA_VERSION,
             "today": self.today.format("%Y-%m-%d").to_string(),
             "categories": self.categories.iter().map(category_json).collect::<Vec<_>>(),
-            "accounts": self.accounts.iter().map(account_json).collect::<Vec<_>>(),
+            "accounts": self.accounts.iter().map(|account| account.to_json()).collect::<Vec<_>>(),
             "issues": {
                 "errors": self.issues.errors,
                 "warnings": self.issues.warnings,
@@ -164,7 +165,41 @@ pub(crate) fn lint(
         let note = parse_month_note(&month.path, &month.contents, month.month);
         lint_month(&note, config.as_ref(), &mut findings, &mut id_seen);
     }
-    lint_journal(vault, &mut findings);
+    let journal_snapshot = lint_journal(vault, &mut findings);
+
+    let (accounts, categories) = match &config {
+        Some(config) => {
+            let rows = super::model::collect_rows(
+                scan,
+                Some(config),
+                Some(&journal_snapshot),
+            );
+            let (accounts, proof_findings) = status::accounts_with_evidence(
+                config,
+                &journal_snapshot,
+                &rows,
+                today,
+            );
+            for item in proof_findings {
+                let severity = match item.severity {
+                    "error" => Severity::Error,
+                    "warning" => Severity::Warning,
+                    _ => Severity::Info,
+                };
+                findings.push(finding(
+                    item.code,
+                    severity,
+                    item.path,
+                    item.line,
+                    item.message,
+                    item.hint,
+                    item.day,
+                ));
+            }
+            (accounts, config.categories.clone())
+        }
+        None => (Vec::new(), Vec::new()),
+    };
 
     findings.sort_by(|left, right| {
         left.path
@@ -172,7 +207,6 @@ pub(crate) fn lint(
             .then(left.line.cmp(&right.line))
             .then(left.code.cmp(right.code))
     });
-
     let errors = findings
         .iter()
         .filter(|finding| finding.severity == Severity::Error)
@@ -181,10 +215,6 @@ pub(crate) fn lint(
         .iter()
         .filter(|finding| finding.severity == Severity::Warning)
         .count();
-    let (accounts, categories) = match &config {
-        Some(config) => (account_statuses(config), config.categories.clone()),
-        None => (Vec::new(), Vec::new()),
-    };
     let note_count = usize::from(scan.hub.is_some()) + scan.months.len();
     CheckReport {
         teaching_empty: false,
@@ -532,35 +562,12 @@ fn lint_parsed(
     }
 }
 
-fn lint_journal(vault: &Path, findings: &mut Vec<Finding>) {
-    match journal::load(vault) {
-        Ok(snapshot) => {
-            for item in snapshot.malformed.iter().take(MAX_MALFORMED_WARNINGS) {
-                findings.push(finding(
-                    "bank_journal_malformed",
-                    Severity::Warning,
-                    &item.path,
-                    Some(item.line),
-                    "skipped malformed bank journal line",
-                    None,
-                    None,
-                ));
-            }
-            if snapshot.malformed.len() > MAX_MALFORMED_WARNINGS {
-                findings.push(finding(
-                    "bank_journal_malformed",
-                    Severity::Warning,
-                    ".bob/bank",
-                    None,
-                    format!(
-                        "skipped {} malformed bank journal lines",
-                        snapshot.malformed.len()
-                    ),
-                    None,
-                    None,
-                ));
-            }
-        }
+fn lint_journal(
+    vault: &Path,
+    findings: &mut Vec<Finding>,
+) -> journal::JournalSnapshot {
+    let snapshot = match journal::load(vault) {
+        Ok(snapshot) => snapshot,
         Err(error) => {
             findings.push(finding(
                 "bank_journal_malformed",
@@ -571,8 +578,46 @@ fn lint_journal(vault: &Path, findings: &mut Vec<Finding>) {
                 None,
                 None,
             ));
+            return journal::JournalSnapshot::default();
         }
+    };
+    for error in &snapshot.io_errors {
+        findings.push(finding(
+            "bank_journal_malformed",
+            Severity::Warning,
+            ".bob/bank",
+            None,
+            format!("could not read bank journal: {error}"),
+            None,
+            None,
+        ));
     }
+    for item in snapshot.malformed.iter().take(MAX_MALFORMED_WARNINGS) {
+        findings.push(finding(
+            "bank_journal_malformed",
+            Severity::Warning,
+            &item.path,
+            Some(item.line),
+            "skipped malformed bank journal line",
+            None,
+            None,
+        ));
+    }
+    if snapshot.malformed.len() > MAX_MALFORMED_WARNINGS {
+        findings.push(finding(
+            "bank_journal_malformed",
+            Severity::Warning,
+            ".bob/bank",
+            None,
+            format!(
+                "skipped {} malformed bank journal lines",
+                snapshot.malformed.len()
+            ),
+            None,
+            None,
+        ));
+    }
+    snapshot
 }
 
 fn config_finding(diagnostic: ConfigDiagnostic) -> Finding {
@@ -624,21 +669,5 @@ fn category_json(category: &Category) -> Value {
         "emoji": category.emoji,
         "label": category.label,
         "builtin": category.builtin,
-    })
-}
-
-fn account_json(account: &AccountStatus) -> Value {
-    json!({
-        "alias": account.alias,
-        "label": account.label,
-        "kind": account.kind.as_str(),
-        "default": account.default,
-        "start": account.start.map(|date| date.format("%Y-%m-%d").to_string()),
-        "status": account.status,
-        "last_import": Value::Null,
-        "balance_cents": Value::Null,
-        "balance_asof": Value::Null,
-        "delta_cents": Value::Null,
-        "hint": account.hint,
     })
 }

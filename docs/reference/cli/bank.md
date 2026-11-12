@@ -152,12 +152,12 @@ See docs/bank.md for the bank contract.
 Import posted bank transactions
 
 ```text title="bob bank import --help"
-Plans the whole batch before writing. Existing rows are matched only by account, exact signed cents, and the documented posted-date window; new rows and the private bank journal commit together. An ignored journal destination is refused before rows are installed. Refused input exits 2; runtime failures exit 1.
+Plans the whole batch before writing. Existing rows are matched only by account, exact signed cents, and the documented posted-date window; new rows and the private bank journal commit together. `-F` deliberately restores journaled transactions whose rows were deleted. An ignored journal destination is refused before rows are installed. Refused input exits 2; runtime failures exit 1.
 
-Usage: bob bank import [OPTIONS] <FILE>...
+Usage: bob bank import [OPTIONS] [FILE]...
 
 Arguments:
-  <FILE>...
+  [FILE]...
           QFX/OFX or the supported Wells Fargo CSV export; repeatable
 
 Options:
@@ -169,6 +169,9 @@ Options:
 
   -d, --dry-run
           Preview diffs without writing
+
+  -F, --force
+          Restore journaled transactions whose rows are missing
 
   -f, --format <FORMAT>
           Output format: human or json
@@ -183,6 +186,7 @@ Examples:
   bob bank import ~/Downloads/*.qfx
   bob bank import -d ~/Downloads/checking.qfx
   bob bank import -a checking -f json ~/Downloads/export.csv
+  bob bank import -F
 
 See docs/bank.md for import matching and recovery behavior.
 ```
