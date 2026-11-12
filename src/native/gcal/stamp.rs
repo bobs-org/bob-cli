@@ -36,9 +36,14 @@ impl Stamp {
         }
     }
 
-    /// Dim human echo: `↻ synced 14:05 · you@example.com` (no URL).
+    /// Dim human echo names the note day and sync time: `↻ synced Fri 2026-10-30 · 14:05 · you@example.com`.
     pub(crate) fn echo(&self, note_day: NaiveDate) -> String {
-        format!("↻ synced {} · {}", self.when_text(note_day), self.account)
+        format!(
+            "↻ synced {} · {} · {}",
+            note_day.format("%a %Y-%m-%d"),
+            self.synced_at.format("%H:%M"),
+            self.account
+        )
     }
 
     pub(crate) fn json_synced_at(&self) -> String {
@@ -373,7 +378,10 @@ mod tests {
         let parsed = parse(&rendered, day()).expect("parse");
         assert_eq!(parsed.account, "you@example.com");
         assert_eq!(parsed.synced_at, at(14, 5));
-        assert_eq!(parsed.echo(day()), "↻ synced 14:05 · you@example.com");
+        assert_eq!(
+            parsed.echo(day()),
+            "↻ synced Fri 2026-10-30 · 14:05 · you@example.com"
+        );
         assert_eq!(parsed.json_synced_at(), "2026-10-30T14:05");
     }
 
@@ -391,7 +399,7 @@ mod tests {
         assert_eq!(parsed.synced_at, synced);
         assert_eq!(
             parsed.echo(friday),
-            "↻ synced Thu 2026-10-29 21:40 · you@example.com"
+            "↻ synced Fri 2026-10-30 · 21:40 · you@example.com"
         );
     }
 

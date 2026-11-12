@@ -2083,7 +2083,8 @@ fn stamp_refreshes_every_run_without_row_churn() {
     let note = today_note(&env);
     assert!(note.contains(&today_stamp("12:00")), "{note}");
     assert!(
-        stdout(&first).contains("↻ synced 12:00 · you@example.com"),
+        stdout(&first)
+            .contains("↻ synced Fri 2026-10-30 · 12:00 · you@example.com"),
         "{}",
         stdout(&first)
     );
@@ -2161,7 +2162,8 @@ fn stamp_refreshes_every_run_without_row_churn() {
         stdout(&human)
     );
     assert!(
-        stdout(&human).contains("↻ synced 13:00 · you@example.com"),
+        stdout(&human)
+            .contains("↻ synced Fri 2026-10-30 · 13:00 · you@example.com"),
         "{}",
         stdout(&human)
     );

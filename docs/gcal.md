@@ -636,7 +636,7 @@ bob gcal sync · 2026/20261109.md
   ⊘ skipped 09:00–09:30  Team sync  declined in Google Calendar
   ⊘ skipped 12:00–12:30  Lunch with Sam  awaiting your reply · RSVP in Google Calendar to add it
 ✓ Events +1 task · Pomodoros +1 entry, +1 link · 3 in sync · 2 skipped
-↻ synced 05:49 · you@example.com
+↻ synced Mon 2026-11-09 · 05:49 · you@example.com
 ```
 
 An unchanged run answers "where is my event?":
@@ -687,9 +687,11 @@ The source is `*↻ synced <when> · [<account>](<day-url>)*`. `<when>` is `HH:M
 in Bob's timezone when the run happened on the note's own day, otherwise
 `Ddd YYYY-MM-DD HH:MM` (for example `synced Thu 2026-10-29 21:40` on Friday's
 note after `bob gcal sync -D tomorrow`). The account is a deep link that opens
-that day in Google Calendar; the human report echoes `↻ synced 14:05 ·
-you@example.com` with no URL. Sync never creates an Events section just to hold
-a stamp. A hand-written section that sync reconciles gets one.
+that day in Google Calendar; the human report echoes
+`↻ synced Ddd YYYY-MM-DD · HH:MM · you@example.com` with no URL. The date is the
+synced note day and the time is the sync wall-clock time. Sync never creates an
+Events section just to hold a stamp. A hand-written section that sync reconciles
+gets one.
 
 The stamp shows the last sync run. Every run at a new minute rewrites it,
 even when the calendar is unchanged. A same-minute rerun writes nothing.

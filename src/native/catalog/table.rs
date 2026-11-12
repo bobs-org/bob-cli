@@ -1274,7 +1274,7 @@ pub(crate) const ENTRIES: &[Row] = &[
         ..writes(
             "gcal-sync",
             &["gcal", "sync"],
-            "Sync Calendar events to today",
+            "Sync Calendar events",
             &["calendar", "google", "gcal", "events", "sync"],
             Policy::PreviewFirst,
             Some(DRY_RUN),

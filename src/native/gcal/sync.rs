@@ -63,6 +63,10 @@ pub(crate) fn run(args: &SyncArgs) -> i32 {
             {
                 print_report(report, args);
             }
+            if !args.format.is_json() && !args.quiet && result.reports.len() > 1
+            {
+                print_multi_day_echo(&result.reports);
+            }
             0
         }
         Err(error) => {
@@ -2341,6 +2345,24 @@ fn print_human(report: &SyncReport) {
         println!("{}", styler.dim(&stamp.echo(report.day)));
     }
     print_warnings_stderr(report);
+}
+
+fn print_multi_day_echo(reports: &[SyncReport]) {
+    if reports
+        .iter()
+        .any(|report| matches!(report.status, "waiting" | "held"))
+    {
+        return;
+    }
+    let Some(stamp) = reports
+        .iter()
+        .rev()
+        .find_map(|report| report.stamp.as_ref())
+    else {
+        return;
+    };
+    let days = reports.len();
+    println!("↻ synced {days} days · {}", stamp.account);
 }
 
 /// ` · 3 in sync · 2 skipped`, dropping zero counts so a quiet day stays
