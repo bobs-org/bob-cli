@@ -6,7 +6,7 @@
 
 use std::{
     cell::RefCell,
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     fs,
     io::{self, BufRead, BufReader},
     path::{Path, PathBuf},
@@ -47,6 +47,8 @@ pub(crate) struct AlbumRecordIdentity {
     pub(crate) title: String,
     pub(crate) owner: Option<String>,
     pub(crate) breadcrumb: Vec<String>,
+    #[serde(skip)]
+    pub(crate) schema_field_lines: HashMap<String, usize>,
 }
 
 /// A resolved schema plus its immutable source and optional album identity.
@@ -351,6 +353,7 @@ fn identity_from_entry(entry: &AlbumEntry) -> AlbumRecordIdentity {
         title: entry.declaration.title.clone(),
         owner: entry.owner.clone(),
         breadcrumb: entry.breadcrumb.clone(),
+        schema_field_lines: entry.declaration.schema_field_lines.clone(),
     }
 }
 
@@ -438,6 +441,7 @@ fn route_album_identity_with_source(
         title: declaration.title,
         owner,
         breadcrumb,
+        schema_field_lines: declaration.schema_field_lines,
     })
 }
 
@@ -592,7 +596,7 @@ fn read_presentation_head(path: &Path) -> io::Result<Option<String>> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path, rc::Rc};
+    use std::{collections::HashMap, fs, path::Path, rc::Rc};
 
     use super::{
         route_album_identity_with_source, AlbumRecordIdentity, RecordContext,
@@ -645,6 +649,7 @@ mod tests {
                     "dev".to_owned(),
                     "Restaurants and Cafes".to_owned()
                 ],
+                schema_field_lines: HashMap::new(),
             })
         );
         assert!(matches!(

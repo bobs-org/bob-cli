@@ -296,6 +296,118 @@ fn albums_list_and_check_json_shape() {
 }
 
 #[test]
+fn album_schema_json_reports_attributes_usage_lines_and_fingerprint() {
+    let (_temp, vault) = vault_fixture("albums-schema-json");
+    write_note(&vault, "body.md", area_note());
+    write_note(&vault, "config.yml", "records: {}\n");
+    let album = concat!(
+        "---\n",
+        "type: [[album]]\n",
+        "parent: \"[[body]]\"\n",
+        "summary: Places to eat.\n",
+        "record:\n",
+        "  noun: restaurant\n",
+        "  label: Restaurant\n",
+        "  plural: restaurants\n",
+        "  dated_notes: true\n",
+        "  fields:\n",
+        "    status:\n",
+        "      required: true\n",
+        "      values:\n",
+        "        to_try: To try\n",
+        "        liked: Liked\n",
+        "    category:\n",
+        "      suggest: true\n",
+        "      default: Ramen\n",
+        "    rating:\n",
+        "      values: number\n",
+        "      min: 0\n",
+        "      max: 5\n",
+        "      default: 0\n",
+        "  legacy:\n",
+        "    - lid\n",
+        "    - source_*\n",
+        "---\n",
+        "\n# Restaurants\n",
+    );
+    write_note(&vault, "eat.md", album);
+    write_note(
+        &vault,
+        "eat/good.md",
+        "---\nstatus: to_try\ncategory: Ramen\nrating: 0\n---\n# Good\n",
+    );
+    write_note(
+        &vault,
+        "eat/invalid.md",
+        "---\nstatus: retired\ncategory: \"\"\nrating: 9\n---\n# Invalid\n",
+    );
+    write_note(
+        &vault,
+        "broken.md",
+        "---\ntype: [[album]]\nparent: \"[[body]]\"\nsummary: Broken.\nrecord: []\n---\n# Broken\n",
+    );
+
+    let output = albums_command(&vault)
+        .args(["list", "-f", "json"])
+        .output()
+        .expect("run albums list JSON");
+    let payload = json(&output);
+    let eat = album_by_stem(&payload, "eat");
+    assert_eq!(eat["dated_notes"], true);
+    assert_eq!(eat["legacy"], serde_json::json!(["lid", "source_*"]));
+    let fingerprint = eat["schema_fingerprint"].as_str().unwrap();
+    assert!(fingerprint.starts_with("sha256:"));
+    assert_eq!(fingerprint.len(), "sha256:".len() + 64);
+
+    let fields = eat["fields"].as_array().unwrap();
+    let status = &fields[0];
+    let expected_status_line = album
+        .lines()
+        .position(|line| line == "    status:")
+        .unwrap()
+        + 1;
+    assert_eq!(status["line"], expected_status_line);
+    assert_eq!(status["filled"], 2);
+    assert_eq!(status["suggest"], false);
+    assert!(status.get("default").is_none());
+    assert!(status.get("min").is_none());
+    assert!(status.get("max").is_none());
+    assert_eq!(status["choices"][0]["count"], 1);
+    assert_eq!(status["choices"][1]["count"], 0);
+
+    let category = &fields[1];
+    assert_eq!(category["filled"], 1);
+    assert_eq!(category["suggest"], true);
+    assert_eq!(category["default"], "Ramen");
+    let rating = &fields[2];
+    assert_eq!(rating["filled"], 2);
+    assert_eq!(rating["default"].as_f64(), Some(0.0));
+    assert_eq!(rating["min"].as_f64(), Some(0.0));
+    assert_eq!(rating["max"].as_f64(), Some(5.0));
+
+    let broken = album_by_stem(&payload, "broken");
+    assert_eq!(broken["dated_notes"], Value::Null);
+    assert_eq!(broken["legacy"], Value::Null);
+    assert_eq!(broken["schema_fingerprint"], Value::Null);
+    assert_eq!(broken["fields"], serde_json::json!([]));
+
+    let show = bob_command()
+        .args(["records", "show", "eat", "-f", "json"])
+        .env("BOB_DIR", &vault)
+        .env("BOB_CONFIG_FILE", vault.join("config.yml"))
+        .env("NO_COLOR", "1")
+        .env("BOB_NOW", "2026-11-10 12:00:00")
+        .output()
+        .expect("run records show JSON");
+    assert!(show.status.success(), "{}", format_output(&show));
+    let shown = json(&show);
+    assert_eq!(shown["fields"][0]["choices"], status["choices"]);
+    assert_eq!(shown["fields"][0]["line"], status["line"]);
+    assert_eq!(shown["fields"][0]["filled"], status["filled"]);
+    assert_eq!(shown["fields"][2]["default"], rating["default"]);
+}
+
+#[test]
 fn albums_bare_defaults_to_list() {
     let (_temp, vault) = vault_fixture("albums-bare");
     four_valid_albums(&vault);

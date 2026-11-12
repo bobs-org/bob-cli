@@ -67,6 +67,8 @@ pub(crate) struct AlbumDeclaration {
     pub(crate) index_facets: Vec<String>,
     /// Physical 1-based line of the `record:` key, when present.
     pub(crate) record_line: Option<usize>,
+    /// Physical 1-based lines for schema field keys, keyed by field name.
+    pub(crate) schema_field_lines: HashMap<String, usize>,
     /// Noun and folder claims survive schema failure so discovery can still
     /// suppress a matching legacy config kind.
     pub(crate) noun_claim: Option<String>,
@@ -130,6 +132,13 @@ pub(crate) fn parse_album_declaration(
     }
 
     let line_by_path = key_line_map(&frontmatter);
+    let schema_field_lines = line_by_path
+        .iter()
+        .filter_map(|(path, line)| {
+            path.strip_prefix("record.fields.")
+                .map(|field| (field.to_owned(), *line))
+        })
+        .collect();
     let record_section = record_section(&frontmatter);
     let record_section_line =
         record_section.as_ref().map(|section| section.line_number);
@@ -273,6 +282,7 @@ pub(crate) fn parse_album_declaration(
         index_by,
         index_facets,
         record_line: record_section_line,
+        schema_field_lines,
         noun_claim: parsed_schema.noun_claim,
         label: parsed_schema.label,
         plural: parsed_schema.plural,

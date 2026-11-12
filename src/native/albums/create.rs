@@ -34,8 +34,11 @@ use crate::native::{
     },
     records::{
         init::base_markdown,
-        schema::{album_label, album_noun_reserved, valid_identifier},
-        yaml_string_scalar, RecordType,
+        schema::{
+            album_label, album_noun_reserved, valid_identifier, FieldKind,
+            RecordDate, RecordField, RecordScalar, RecordType, RecordValue,
+        },
+        yaml_string_scalar,
     },
     vault_links::LinkResolution,
 };
@@ -72,12 +75,124 @@ pub(crate) fn render_new_album(input: &NewAlbumInput<'_>) -> String {
         out.push_str(&format!("emoji: {}\n", yaml_string_scalar(emoji)));
     }
     out.push_str(&format!("created: {}\n", input.created));
-    out.push_str("record:\n");
-    out.push_str(&format!("  noun: {}\n", yaml_string_scalar(input.noun)));
-    out.push_str(&format!("  label: {}\n", yaml_string_scalar(input.label)));
+    out.push_str(&render_album_record_schema(
+        input.noun,
+        input.label,
+        None,
+        false,
+        &[],
+        &[],
+    ));
     out.push_str("---\n\n");
     out.push_str(&format!("# {}\n", input.title));
     out
+}
+
+/// Render the semantic `record:` mapping in Obsidian's block-YAML style.
+/// In particular, sequence items stay indented under their key so a native
+/// Properties edit to a neighboring scalar preserves this block's bytes.
+pub(crate) fn render_album_record_schema(
+    noun: &str,
+    label: &str,
+    plural: Option<&str>,
+    dated_notes: bool,
+    fields: &[RecordField],
+    legacy: &[String],
+) -> String {
+    let mut out = String::from("record:\n");
+    out.push_str(&format!("  noun: {}\n", yaml_string_scalar(noun)));
+    out.push_str(&format!("  label: {}\n", yaml_string_scalar(label)));
+    if let Some(plural) = plural {
+        out.push_str(&format!("  plural: {}\n", yaml_string_scalar(plural)));
+    }
+    if dated_notes {
+        out.push_str("  dated_notes: true\n");
+    }
+    if !fields.is_empty() {
+        out.push_str("  fields:\n");
+        for field in fields {
+            out.push_str(&format!("    {}:\n", field.key));
+            out.push_str(&format!(
+                "      label: {}\n",
+                yaml_string_scalar(&field.label)
+            ));
+            if field.required {
+                out.push_str("      required: true\n");
+            }
+            if field.list {
+                out.push_str("      list: true\n");
+            }
+            if field.suggest {
+                out.push_str("      suggest: true\n");
+            }
+            if let Some(default) = &field.default {
+                render_schema_default(&mut out, default);
+            }
+            if let Some(min) = field.min {
+                out.push_str(&format!("      min: {min}\n"));
+            }
+            if let Some(max) = field.max {
+                out.push_str(&format!("      max: {max}\n"));
+            }
+            match &field.kind {
+                FieldKind::Text => {}
+                FieldKind::Choices(choices) => {
+                    out.push_str("      values:\n");
+                    for choice in choices {
+                        out.push_str(&format!(
+                            "        {}: {}\n",
+                            yaml_string_scalar(&choice.value),
+                            yaml_string_scalar(&choice.label)
+                        ));
+                    }
+                }
+                kind => out
+                    .push_str(&format!("      values: {}\n", kind.kind_name())),
+            }
+        }
+    }
+    if !legacy.is_empty() {
+        out.push_str("  legacy:\n");
+        for pattern in legacy {
+            out.push_str(&format!("    - {}\n", yaml_string_scalar(pattern)));
+        }
+    }
+    out
+}
+
+fn render_schema_default(out: &mut String, default: &RecordValue) {
+    match default {
+        RecordValue::Scalar(value) => out.push_str(&format!(
+            "      default: {}\n",
+            render_schema_scalar(value)
+        )),
+        RecordValue::List(values) => {
+            out.push_str("      default:\n");
+            for value in values {
+                out.push_str(&format!(
+                    "        - {}\n",
+                    render_schema_scalar(value)
+                ));
+            }
+        }
+    }
+}
+
+fn render_schema_scalar(value: &RecordScalar) -> String {
+    match value {
+        RecordScalar::Text(value)
+        | RecordScalar::Choice(value)
+        | RecordScalar::Link(value) => yaml_string_scalar(value),
+        RecordScalar::Date(RecordDate::Resolved(value)) => {
+            yaml_string_scalar(&value.format("%Y-%m-%d").to_string())
+        }
+        RecordScalar::Date(RecordDate::Today) => yaml_string_scalar("today"),
+        RecordScalar::Date(RecordDate::Yesterday) => {
+            yaml_string_scalar("yesterday")
+        }
+        RecordScalar::Url(value) => yaml_string_scalar(value.as_str()),
+        RecordScalar::Number(value) => value.to_string(),
+    }
 }
 
 /// The intro line under the H1: teaches the capture route and links the
@@ -665,6 +780,67 @@ pub(crate) fn plan_create(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::native::records::schema::RecordChoice;
+
+    #[test]
+    fn album_schema_emitter_uses_indented_yaml_sequences() {
+        let fields = [RecordField {
+            key: "status".to_owned(),
+            label: "Status".to_owned(),
+            kind: FieldKind::Choices(vec![
+                RecordChoice {
+                    value: "to_try".to_owned(),
+                    label: "To try".to_owned(),
+                },
+                RecordChoice {
+                    value: "liked".to_owned(),
+                    label: "Liked".to_owned(),
+                },
+            ]),
+            required: true,
+            list: false,
+            default: None,
+            suggest: false,
+            min: None,
+            max: None,
+        }];
+        let legacy = ["lid".to_owned(), "source_*".to_owned()];
+        let rendered = render_album_record_schema(
+            "restaurant",
+            "Restaurant",
+            Some("restaurants"),
+            true,
+            &fields,
+            &legacy,
+        );
+        assert_eq!(
+            rendered,
+            concat!(
+                "record:\n",
+                "  noun: restaurant\n",
+                "  label: Restaurant\n",
+                "  plural: restaurants\n",
+                "  dated_notes: true\n",
+                "  fields:\n",
+                "    status:\n",
+                "      label: Status\n",
+                "      required: true\n",
+                "      values:\n",
+                "        to_try: To try\n",
+                "        liked: Liked\n",
+                "  legacy:\n",
+                "    - lid\n",
+                "    - source_*\n",
+            )
+        );
+        let parsed: serde_yaml::Value =
+            serde_yaml::from_str(&rendered).expect("rendered schema parses");
+        let legacy_items = parsed["record"]["legacy"]
+            .as_sequence()
+            .expect("legacy sequence");
+        assert_eq!(legacy_items[0].as_str(), Some("lid"));
+        assert_eq!(legacy_items[1].as_str(), Some("source_*"));
+    }
 
     fn refusal(
         stem: &str,

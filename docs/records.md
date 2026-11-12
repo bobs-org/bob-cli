@@ -172,6 +172,18 @@ ordered by path. `parent` is the parent stem. `ok` is false when error
 findings exist or runtime I/O failed. See
 [JSON outputs](reference/json-outputs.md#album-reports).
 
+Each album's ordered `fields[]` includes its label, kind, flags, typed default
+when set, optional numeric `min`/`max`, the 1-based source `line`, and `filled`
+record count. Choice entries add `count`, counting each record once even when
+its raw value is invalid elsewhere in the schema. `dated_notes`, `legacy`, and
+`schema_fingerprint` are `null` when the album schema cannot be parsed;
+otherwise `legacy` preserves order and the fingerprint is `sha256:` plus 64
+lowercase hexadecimal digits. The fingerprint hashes the parsed schema's
+semantic content: noun, label, resolved plural, dated-note flag, ordered legacy
+patterns, and ordered fields and choices with every attribute. YAML formatting
+and source lines do not affect it. `bob records show -f json` uses the same
+field shape, with `line: null` for config-backed schemas.
+
 ### Creating an album
 
 `bob albums create PARENT STEM -n NOUN -s SUMMARY` writes a new album note

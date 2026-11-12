@@ -6,7 +6,9 @@ use std::{
 };
 
 use chrono::NaiveDate;
+use serde_json::{json, Number as JsonNumber, Value as JsonValue};
 use serde_yaml::{Mapping, Value};
+use sha2::{Digest, Sha256};
 use url::Url;
 
 const RESERVED_RECORD_IDS: &[&str] = &[
@@ -375,6 +377,182 @@ pub(crate) struct RecordField {
     pub(crate) suggest: bool,
     pub(crate) min: Option<f64>,
     pub(crate) max: Option<f64>,
+}
+
+impl RecordField {
+    /// JSON shape shared by album reports and `bob records show`.
+    pub(crate) fn schema_json(
+        &self,
+        line: Option<usize>,
+        filled: usize,
+        choice_counts: &[usize],
+    ) -> JsonValue {
+        let choices = match &self.kind {
+            FieldKind::Choices(choices) => choices
+                .iter()
+                .enumerate()
+                .map(|(index, choice)| {
+                    json!({
+                        "value": choice.value,
+                        "label": choice.label,
+                        "count": choice_counts.get(index).copied().unwrap_or(0),
+                    })
+                })
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        };
+        let mut field = json!({
+            "key": self.key,
+            "label": self.label,
+            "kind": self.kind.kind_name(),
+            "required": self.required,
+            "list": self.list,
+            "suggest": self.suggest,
+            "line": line,
+            "filled": filled,
+            "choices": choices,
+        });
+        if let Some(default) = &self.default {
+            field["default"] = record_value_json(default);
+        }
+        if let Some(min) = self.min {
+            field["min"] = JsonNumber::from_f64(min)
+                .map(JsonValue::Number)
+                .unwrap_or(JsonValue::Null);
+        }
+        if let Some(max) = self.max {
+            field["max"] = JsonNumber::from_f64(max)
+                .map(JsonValue::Number)
+                .unwrap_or(JsonValue::Null);
+        }
+        field
+    }
+}
+
+fn record_value_json(value: &RecordValue) -> JsonValue {
+    match value {
+        RecordValue::Scalar(value) => record_scalar_json(value),
+        RecordValue::List(values) => {
+            JsonValue::Array(values.iter().map(record_scalar_json).collect())
+        }
+    }
+}
+
+fn record_scalar_json(value: &RecordScalar) -> JsonValue {
+    match value {
+        RecordScalar::Text(value)
+        | RecordScalar::Choice(value)
+        | RecordScalar::Link(value) => JsonValue::String(value.clone()),
+        RecordScalar::Date(RecordDate::Resolved(value)) => {
+            JsonValue::String(value.format("%Y-%m-%d").to_string())
+        }
+        RecordScalar::Date(RecordDate::Today) => {
+            JsonValue::String("today".to_owned())
+        }
+        RecordScalar::Date(RecordDate::Yesterday) => {
+            JsonValue::String("yesterday".to_owned())
+        }
+        RecordScalar::Url(value) => JsonValue::String(value.to_string()),
+        RecordScalar::Number(value) => JsonNumber::from_f64(*value)
+            .map(JsonValue::Number)
+            .unwrap_or(JsonValue::Null),
+    }
+}
+
+/// Fingerprint the parsed, semantic album schema. Source formatting and
+/// source line numbers are deliberately absent; all ordered schema content
+/// and typed attributes are included for reuse by the guarded writer.
+pub(crate) fn album_schema_fingerprint(
+    noun: &str,
+    label: &str,
+    plural: &str,
+    record_type: &RecordType,
+) -> String {
+    let fields = record_type
+        .fields
+        .iter()
+        .map(|field| {
+            json!([
+                field.key,
+                field.label,
+                field_kind_semantic_json(&field.kind),
+                field.required,
+                field.list,
+                field.suggest,
+                field.default.as_ref().map(record_value_semantic_json),
+                float_semantic_json(field.min),
+                float_semantic_json(field.max),
+            ])
+        })
+        .collect::<Vec<_>>();
+    let semantic = json!([
+        noun,
+        label,
+        plural,
+        record_type.dated_notes,
+        record_type.legacy,
+        fields,
+    ]);
+    let bytes = serde_json::to_vec(&semantic)
+        .expect("album schema semantic model is serializable");
+    format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
+}
+
+fn field_kind_semantic_json(kind: &FieldKind) -> JsonValue {
+    match kind {
+        FieldKind::Text => json!(["text"]),
+        FieldKind::Choices(choices) => json!([
+            "choices",
+            choices
+                .iter()
+                .map(|choice| json!([choice.value, choice.label]))
+                .collect::<Vec<_>>(),
+        ]),
+        FieldKind::Date => json!(["date"]),
+        FieldKind::Link => json!(["link"]),
+        FieldKind::Url => json!(["url"]),
+        FieldKind::Number => json!(["number"]),
+    }
+}
+
+fn record_value_semantic_json(value: &RecordValue) -> JsonValue {
+    match value {
+        RecordValue::Scalar(value) => {
+            json!(["scalar", record_scalar_semantic_json(value)])
+        }
+        RecordValue::List(values) => json!([
+            "list",
+            values
+                .iter()
+                .map(record_scalar_semantic_json)
+                .collect::<Vec<_>>(),
+        ]),
+    }
+}
+
+fn record_scalar_semantic_json(value: &RecordScalar) -> JsonValue {
+    match value {
+        RecordScalar::Text(value) => json!(["text", value]),
+        RecordScalar::Choice(value) => json!(["choice", value]),
+        RecordScalar::Date(RecordDate::Resolved(value)) => {
+            json!(["date", value.format("%Y-%m-%d").to_string()])
+        }
+        RecordScalar::Date(RecordDate::Today) => json!(["date", "today"]),
+        RecordScalar::Date(RecordDate::Yesterday) => {
+            json!(["date", "yesterday"])
+        }
+        RecordScalar::Link(value) => json!(["link", value]),
+        RecordScalar::Url(value) => json!(["url", value.as_str()]),
+        RecordScalar::Number(value) => {
+            json!(["number", format!("{:016x}", value.to_bits())])
+        }
+    }
+}
+
+fn float_semantic_json(value: Option<f64>) -> JsonValue {
+    value
+        .map(|number| json!(format!("{:016x}", number.to_bits())))
+        .unwrap_or(JsonValue::Null)
 }
 
 #[derive(Debug, Clone, PartialEq)]

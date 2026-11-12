@@ -192,6 +192,14 @@ fn list_show_and_check_report_a_valid_collection_as_json() {
     let show_json = json(&show);
     assert_eq!(show_json["count"], 1);
     assert_eq!(show_json["fields"][0]["choices"][0]["value"], "to_try");
+    assert_eq!(show_json["fields"][0]["choices"][0]["count"], 0);
+    assert_eq!(show_json["fields"][0]["choices"][1]["count"], 1);
+    assert_eq!(show_json["fields"][0]["filled"], 1);
+    assert_eq!(show_json["fields"][0]["suggest"], false);
+    assert_eq!(show_json["fields"][0]["line"], Value::Null);
+    assert!(show_json["fields"][0].get("default").is_none());
+    assert!(show_json["fields"][0].get("min").is_none());
+    assert!(show_json["fields"][0].get("max").is_none());
     assert_eq!(show_json["fields"][1]["top_values"][0]["value"], "Sushi");
 
     let check = records_command(&fixture)

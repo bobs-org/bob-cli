@@ -238,6 +238,42 @@ impl FolderIndex {
         suggestions_for(self.notes.iter(), field)
     }
 
+    /// Count records with a nonblank value and records using each declared
+    /// choice. Raw frontmatter is used so invalid records remain visible in
+    /// the schema's impact totals; each record counts at most once per choice.
+    pub(crate) fn field_usage(
+        &self,
+        field: &str,
+        choice_values: &[String],
+    ) -> (usize, Vec<usize>) {
+        let mut filled = 0;
+        let mut choice_counts = vec![0; choice_values.len()];
+        for note in &self.notes {
+            let Some(value) = note.fields.iter().find(|item| item.key == field)
+            else {
+                continue;
+            };
+            let values: Vec<&str> = match &value.value {
+                IndexedFieldValue::Scalar(value) => vec![value.as_str()],
+                IndexedFieldValue::List(values) => {
+                    values.iter().map(String::as_str).collect()
+                }
+                IndexedFieldValue::Null | IndexedFieldValue::Unsupported => {
+                    Vec::new()
+                }
+            };
+            if values.iter().any(|value| !value.trim().is_empty()) {
+                filled += 1;
+            }
+            for (index, choice) in choice_values.iter().enumerate() {
+                if values.iter().any(|value| *value == choice) {
+                    choice_counts[index] += 1;
+                }
+            }
+        }
+        (filled, choice_counts)
+    }
+
     /// Near-miss hint for an authored open-text value: a different display
     /// spelling within edit distance 2 that has greater folder frequency.
     pub(crate) fn near_value_hint(

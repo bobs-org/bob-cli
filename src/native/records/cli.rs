@@ -28,8 +28,7 @@ use super::{
     plan::{plan_create_with_identity, RecordCreateRequest},
     render::RecordNoteInput,
     schema::{
-        FieldInputState, FieldKind, RecordDate, RecordFieldInput, RecordScalar,
-        RecordType, RecordValue, RecordsConfig,
+        FieldInputState, FieldKind, RecordFieldInput, RecordType, RecordsConfig,
     },
 };
 use crate::native::{
@@ -116,19 +115,14 @@ pub(crate) fn run_show(args: Vec<OsString>) -> i32 {
         .fields
         .iter()
         .map(|field| {
-            let kind_name = kind_name(&field.kind);
-            let choices: Vec<Value> = match &field.kind {
-                FieldKind::Choices(choices) => choices
-                    .iter()
-                    .map(|choice| {
-                        json!({
-                            "value": choice.value,
-                            "label": choice.label,
-                        })
-                    })
-                    .collect(),
+            let choice_values: Vec<String> = match &field.kind {
+                FieldKind::Choices(choices) => {
+                    choices.iter().map(|choice| choice.value.clone()).collect()
+                }
                 _ => Vec::new(),
             };
+            let (filled, choice_counts) =
+                folder.field_usage(&field.key, &choice_values);
             let top_values: Vec<Value> = if field.suggest {
                 folder
                     .value_suggestions(&field.key)
@@ -144,16 +138,13 @@ pub(crate) fn run_show(args: Vec<OsString>) -> i32 {
             } else {
                 Vec::new()
             };
-            json!({
-                "key": field.key,
-                "label": field.label,
-                "kind": kind_name,
-                "required": field.required,
-                "list": field.list,
-                "default": field.default.as_ref().map(value_display),
-                "choices": choices,
-                "top_values": top_values,
-            })
+            let line = kind.album.as_ref().and_then(|album| {
+                album.schema_field_lines.get(&field.key).copied()
+            });
+            let mut field_json =
+                field.schema_json(line, filled, &choice_counts);
+            field_json["top_values"] = json!(top_values);
+            field_json
         })
         .collect();
     let mut payload = json!({
@@ -1972,6 +1963,7 @@ fn album_identity(entry: &AlbumEntry) -> AlbumRecordIdentity {
         title: entry.declaration.title.clone(),
         owner: entry.owner.clone(),
         breadcrumb: entry.breadcrumb.clone(),
+        schema_field_lines: entry.declaration.schema_field_lines.clone(),
     }
 }
 
@@ -2481,17 +2473,6 @@ fn report_error(
     code
 }
 
-fn kind_name(kind: &FieldKind) -> &'static str {
-    match kind {
-        FieldKind::Text => "text",
-        FieldKind::Choices(_) => "choices",
-        FieldKind::Date => "date",
-        FieldKind::Link => "link",
-        FieldKind::Url => "url",
-        FieldKind::Number => "number",
-    }
-}
-
 fn field_label(kind: &FieldKind) -> &'static str {
     match kind {
         FieldKind::Text => "Aa",
@@ -2500,27 +2481,6 @@ fn field_label(kind: &FieldKind) -> &'static str {
         FieldKind::Link => "↗",
         FieldKind::Url => "↗",
         FieldKind::Number => "#",
-    }
-}
-
-fn value_display(value: &RecordValue) -> String {
-    let one = |value: &RecordScalar| match value {
-        RecordScalar::Text(value)
-        | RecordScalar::Choice(value)
-        | RecordScalar::Link(value) => value.clone(),
-        RecordScalar::Date(RecordDate::Resolved(value)) => {
-            value.format("%Y-%m-%d").to_string()
-        }
-        RecordScalar::Date(RecordDate::Today) => "today".to_owned(),
-        RecordScalar::Date(RecordDate::Yesterday) => "yesterday".to_owned(),
-        RecordScalar::Url(value) => value.to_string(),
-        RecordScalar::Number(value) => value.to_string(),
-    };
-    match value {
-        RecordValue::Scalar(value) => one(value),
-        RecordValue::List(values) => {
-            values.iter().map(one).collect::<Vec<_>>().join(", ")
-        }
     }
 }
 

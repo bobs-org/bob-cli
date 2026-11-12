@@ -15,7 +15,7 @@ use super::{
 };
 use crate::native::notebooks::snapshot::VaultSnapshot;
 use crate::native::records::{
-    schema::{RecordDiagnosticCode, RecordField},
+    schema::{album_schema_fingerprint, RecordDiagnosticCode, RecordField},
     FolderIndex, RecordCatalog,
 };
 
@@ -60,47 +60,30 @@ impl AlbumIssue {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AlbumField {
-    pub(crate) key: String,
-    pub(crate) label: String,
-    pub(crate) kind: &'static str,
-    pub(crate) required: bool,
-    pub(crate) list: bool,
-    pub(crate) choices: Vec<(String, String)>,
+    value: Value,
 }
 
 impl AlbumField {
-    fn from_record_field(field: &RecordField) -> Self {
-        let choices = match &field.kind {
+    fn from_record_field(
+        field: &RecordField,
+        line: Option<usize>,
+        folder: &FolderIndex,
+    ) -> Self {
+        let choice_values: Vec<String> = match &field.kind {
             crate::native::records::schema::FieldKind::Choices(choices) => {
-                choices
-                    .iter()
-                    .map(|choice| (choice.value.clone(), choice.label.clone()))
-                    .collect()
+                choices.iter().map(|choice| choice.value.clone()).collect()
             }
             _ => Vec::new(),
         };
+        let (filled, choice_counts) =
+            folder.field_usage(&field.key, &choice_values);
         Self {
-            key: field.key.clone(),
-            label: field.label.clone(),
-            kind: field.kind.kind_name(),
-            required: field.required,
-            list: field.list,
-            choices,
+            value: field.schema_json(line, filled, &choice_counts),
         }
     }
 
     pub(crate) fn to_json(&self) -> Value {
-        json!({
-            "key": self.key,
-            "label": self.label,
-            "kind": self.kind,
-            "required": self.required,
-            "list": self.list,
-            "choices": self.choices.iter().map(|(value, label)| json!({
-                "value": value,
-                "label": label,
-            })).collect::<Vec<_>>(),
-        })
+        self.value.clone()
     }
 }
 
@@ -114,6 +97,9 @@ pub(crate) struct AlbumReportEntry {
     pub(crate) noun: Option<String>,
     pub(crate) label: Option<String>,
     pub(crate) plural: Option<String>,
+    pub(crate) dated_notes: Option<bool>,
+    pub(crate) legacy: Option<Vec<String>>,
+    pub(crate) schema_fingerprint: Option<String>,
     pub(crate) parent: Option<String>,
     pub(crate) parent_kind: Option<&'static str>,
     pub(crate) owner: Option<String>,
@@ -142,6 +128,9 @@ impl AlbumReportEntry {
             "noun": self.noun,
             "label": self.label,
             "plural": self.plural,
+            "dated_notes": self.dated_notes,
+            "legacy": self.legacy,
+            "schema_fingerprint": self.schema_fingerprint,
             "parent": self.parent,
             "parent_kind": self.parent_kind,
             "owner": self.owner,
@@ -313,15 +302,6 @@ pub(crate) fn project_album_from_folder(
             .as_ref()
             .map(|sourced| &sourced.record_type)
     });
-    let fields: Vec<AlbumField> = record_type
-        .map(|record_type| {
-            record_type
-                .fields
-                .iter()
-                .map(AlbumField::from_record_field)
-                .collect()
-        })
-        .unwrap_or_default();
     let mut io_errors = folder
         .diagnostics()
         .iter()
@@ -345,6 +325,21 @@ pub(crate) fn project_album_from_folder(
         .iter()
         .map(GroupingRecord::from_indexed)
         .collect();
+    let fields: Vec<AlbumField> = record_type
+        .map(|record_type| {
+            record_type
+                .fields
+                .iter()
+                .map(|field| {
+                    AlbumField::from_record_field(
+                        field,
+                        declaration.schema_field_lines.get(&field.key).copied(),
+                        folder,
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let schema_fields: &[RecordField] = record_type
         .map(|record_type| record_type.fields.as_slice())
         .unwrap_or(&[]);
@@ -409,6 +404,14 @@ pub(crate) fn project_album_from_folder(
             .then_with(|| left.code.cmp(right.code))
             .then_with(|| left.message.cmp(&right.message))
     });
+    let schema_fingerprint = record_type.map(|record_type| {
+        album_schema_fingerprint(
+            &record_type.id,
+            &record_type.label,
+            declaration.plural.as_deref().unwrap_or(""),
+            record_type,
+        )
+    });
     AlbumProjection {
         entry: AlbumReportEntry {
             stem: declaration.stem.clone(),
@@ -419,6 +422,9 @@ pub(crate) fn project_album_from_folder(
             noun: declaration.noun_claim.clone(),
             label: declaration.label.clone(),
             plural: declaration.plural.clone(),
+            dated_notes: record_type.map(|record_type| record_type.dated_notes),
+            legacy: record_type.map(|record_type| record_type.legacy.clone()),
+            schema_fingerprint,
             parent: stem_of_parent(entry.parent_path.as_deref()),
             parent_kind: entry.parent_kind,
             owner: entry.owner.clone(),
@@ -464,5 +470,84 @@ fn severity_name(severity: AlbumIssueSeverity) -> &'static str {
         AlbumIssueSeverity::Error => "error",
         AlbumIssueSeverity::Warning => "warning",
         AlbumIssueSeverity::Info => "info",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::album_schema_fingerprint;
+    use crate::native::albums::parse_album_declaration;
+    use std::path::Path;
+
+    const SCHEMA: &str = concat!(
+        "---\n",
+        "type: [[album]]\n",
+        "record:\n",
+        "  noun: restaurant\n",
+        "  label: Restaurant\n",
+        "  plural: restaurants\n",
+        "  dated_notes: true\n",
+        "  fields:\n",
+        "    status:\n",
+        "      required: true\n",
+        "      values:\n",
+        "        to_try: Try\n",
+        "        liked: Like\n",
+        "    category: {suggest: true}\n",
+        "  legacy: [lid, source_*]\n",
+        "---\n",
+    );
+
+    fn fingerprint(source: &str) -> String {
+        let declaration = parse_album_declaration(Path::new("eat.md"), source)
+            .expect("album declaration");
+        let record_type = declaration.record_type.as_ref().expect("schema");
+        album_schema_fingerprint(
+            &record_type.id,
+            &record_type.label,
+            declaration.plural.as_deref().expect("resolved plural"),
+            record_type,
+        )
+    }
+
+    #[test]
+    fn album_schema_fingerprint_ignores_yaml_formatting() {
+        let flow_style = concat!(
+            "---\n",
+            "type: [[album]]\n",
+            "record: {noun: restaurant, label: Restaurant, plural: restaurants, ",
+            "dated_notes: true, fields: {status: {required: true, values: ",
+            "{to_try: Try, liked: Like}}, category: {suggest: true}}, ",
+            "legacy: [lid, source_*]}\n",
+            "---\n",
+        );
+        assert_eq!(fingerprint(SCHEMA), fingerprint(flow_style));
+    }
+
+    #[test]
+    fn album_schema_fingerprint_tracks_order_and_semantic_changes() {
+        let baseline = fingerprint(SCHEMA);
+        let reordered = SCHEMA.replace(
+            "    status:\n      required: true\n      values:\n        to_try: Try\n        liked: Like\n    category: {suggest: true}\n",
+            "    category: {suggest: true}\n    status:\n      required: true\n      values:\n        to_try: Try\n        liked: Like\n",
+        );
+        assert_ne!(baseline, fingerprint(&reordered));
+
+        assert_ne!(
+            baseline,
+            fingerprint(&SCHEMA.replace("label: Restaurant", "label: Eatery"))
+        );
+        assert_ne!(
+            baseline,
+            fingerprint(&SCHEMA.replace("required: true", "required: false"))
+        );
+        assert_ne!(
+            baseline,
+            fingerprint(&SCHEMA.replace("liked: Like", "enjoyed: Like"))
+        );
+        assert_ne!(
+            baseline,
+            fingerprint(&SCHEMA.replace("liked: Like", "liked: Love"))
+        );
     }
 }
