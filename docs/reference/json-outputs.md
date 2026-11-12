@@ -190,8 +190,8 @@ Sync returns index entries and transaction results; see the sync contract.
 
 ### Bank reports {#bank-reports}
 
-`bob bank check|list|report|ensure|ack -f json` use `schema_version: 1`.
-See [Bank](../bank.md#json).
+`bob bank check|list|report|ensure|ack|import -f json` use
+`schema_version: 1`. See [Bank](../bank.md#json).
 
 ### Session edits and successor offers
 

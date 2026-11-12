@@ -660,6 +660,48 @@ git -C ~/bob check-attr merge -- .bob/gcal/apollo.jsonl
 `bob gcal doctor` checks both rules. The journal contract lives in
 [gcal.md](gcal.md#sync).
 
+## Bank import journal
+
+`.bob/bank/<host>.jsonl` is the per-host `bob bank import` journal: which
+posted exports were consumed and which row identities were written,
+matched, or recorded before an account's start. It never carries FITIDs,
+account or routing numbers, or raw export bytes. Each host appends to its
+own file, readers union every `*.jsonl` in the directory and never
+rewrite them, and bob is the only writer. The vault root `.gitignore`
+also carries:
+
+```gitignore
+!/.bob/bank/*.jsonl
+```
+
+Verify the path is not ignored:
+
+```bash
+git -C ~/bob check-ignore -v .bob/bank/apollo.jsonl
+```
+
+A negated last match (`!/.bob/bank/*.jsonl`) means the file is
+trackable. The directory is created on the first import; its absence is
+expected until then. The vault root `.gitattributes` unions concurrent
+journal appends:
+
+```gitattributes
+.bob/bank/*.jsonl merge=union
+```
+
+```bash
+git -C ~/bob check-attr merge -- .bob/bank/apollo.jsonl
+```
+
+The journal contract lives in [bank.md](bank.md#import).
+
+Each import commits once — `bank: import N rows (<alias>)`, with a
+stable comma-separated alias list for multi-account batches — and
+carries both the month-note rows and the journal append in that one
+scoped commit. `N` counts new waiting rows, never matches or journal
+events. Identical replay commits nothing. Undo a bad import with `git
+revert` of the import commit, then `bob vault-sync`.
+
 ## Authored content coverage
 
 The vault allowlist ignores everything by default (`*`) and re-includes only
@@ -724,6 +766,7 @@ The vault root `.gitattributes` also unions concurrent journal appends:
 .bob/relations/*.jsonl merge=union
 .bob/attachments/*.jsonl merge=union
 .bob/gcal/*.jsonl merge=union
+.bob/bank/*.jsonl merge=union
 ```
 
 Check the attribute with:
