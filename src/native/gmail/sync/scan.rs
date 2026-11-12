@@ -35,8 +35,9 @@ use crate::native::{
 /// Checkbox statuses that keep a task open for watching.
 pub(crate) const OPEN_STATUSES: [char; 4] = [' ', '*', '/', '?'];
 
-/// The tag token a watching task must carry exactly.
-const TASK_TAG: &str = "#task";
+/// The tag token a watching task must carry exactly. Archive evidence
+/// reuses the same tag rule so both scans agree on what a task is.
+pub(crate) const TASK_TAG: &str = "#task";
 
 /// Every watching task in the vault, with a per-thread index. Neither
 /// mapping is one-to-one: one task may link several threads, and one
@@ -59,7 +60,9 @@ pub(crate) struct WatchingTask {
     pub(crate) text: String,
     /// The row's trailing `^block-id`, when present.
     pub(crate) block_id: Option<String>,
-    /// The checkbox status: one of [`OPEN_STATUSES`].
+    /// The checkbox status. Watch-only scans guarantee one of
+    /// [`OPEN_STATUSES`]; the archive scan carries any status so unknown
+    /// boxes can veto all-closed inference.
     pub(crate) status: char,
     /// Watched threads in source order, each once.
     pub(crate) targets: Vec<WatchTarget>,
@@ -175,17 +178,51 @@ pub(crate) fn scan_watching_tasks(
                 return Ok(());
             }
             let relative = slashes(note.relative);
-            tasks.extend(scan_note(&relative, note.text, &mut links));
+            tasks.extend(scan_note_tasks(
+                &relative, note.text, &mut links, true, None,
+            ));
             Ok(())
         },
     )?;
     Ok(WatchScan::new(tasks, links.warnings()))
 }
 
+/// A mail-note link the watch scan had to drop: the target names a mail
+/// note (by stem) but resolves to no single indexed identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DroppedMailLink {
+    /// Vault-relative note path of the linking task, `/`-separated.
+    pub(crate) path: String,
+    /// 1-based line number of the linking task row.
+    pub(crate) line: usize,
+    /// The task row's exact source text, without its line ending.
+    pub(crate) text: String,
+    /// The row's trailing `^block-id`, when present.
+    pub(crate) block_id: Option<String>,
+    /// The checkbox status, of any kind.
+    pub(crate) status: char,
+    /// Where the (first) dropped link to the mail note sits.
+    pub(crate) placement: LinkPlacement,
+    /// Lowercase basename stem of the link target.
+    pub(crate) stem: String,
+    /// Why the link could not name one thread.
+    pub(crate) kind: DroppedKind,
+}
+
+/// Why a mail-note link names no single thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DroppedKind {
+    /// The basename matches several notes.
+    Ambiguous,
+    /// The resolved note shares one Gmail thread with other notes.
+    Duplicate(ThreadKey),
+}
+
 /// Resolves wikilink targets to indexed mail-note identities.
-struct MailLinks {
+pub(crate) struct MailLinks {
     by_path: BTreeMap<PathBuf, ThreadKey>,
     duplicate_paths: BTreeSet<PathBuf>,
+    duplicate_keys: BTreeMap<PathBuf, ThreadKey>,
     /// Lowercase basename stems of every mail note: a link whose basename
     /// is not one of these can never resolve to a mail note, so it skips
     /// the filesystem entirely.
@@ -196,7 +233,7 @@ struct MailLinks {
 }
 
 impl MailLinks {
-    fn new(vault: &Path, index: &MailIndex) -> Self {
+    pub(crate) fn new(vault: &Path, index: &MailIndex) -> Self {
         let mut by_path = BTreeMap::new();
         let mut stems = BTreeSet::new();
         for entry in index.by_identity.values() {
@@ -211,17 +248,23 @@ impl MailLinks {
             by_path.insert(path, key);
         }
         let mut duplicate_paths = BTreeSet::new();
-        for (_, _, paths) in &index.duplicates {
+        let mut duplicate_keys = BTreeMap::new();
+        for (account, thread_id, paths) in &index.duplicates {
+            let key = ThreadKey::new(account, thread_id);
             for path in paths {
                 if let Some(stem) = lower_stem(path) {
                     stems.insert(stem);
                 }
                 duplicate_paths.insert(PathBuf::from(path));
+                if let Some(key) = key.clone() {
+                    duplicate_keys.insert(PathBuf::from(path), key);
+                }
             }
         }
         Self {
             by_path,
             duplicate_paths,
+            duplicate_keys,
             stems,
             resolver: VaultLinkResolver::new(vault),
             ambiguous: 0,
@@ -230,7 +273,7 @@ impl MailLinks {
     }
 
     /// The thread and mail-note path a wikilink's inner text names.
-    fn resolve(
+    pub(crate) fn resolve(
         &mut self,
         current: &Path,
         inner: &str,
@@ -258,7 +301,57 @@ impl MailLinks {
         }
     }
 
-    fn warnings(&self) -> Vec<String> {
+    /// The indexed thread an unresolvable link still names exactly: the
+    /// target carries a vault-relative path (it contains a `/`) that
+    /// matches one indexed mail-note path byte for byte. The note file
+    /// itself is gone, so the archive scan attributes the linker and
+    /// refuses the thread instead of losing the row. Returns `None` for
+    /// bare basenames, which no exact path can prove.
+    pub(crate) fn indexed_key_for_missing(
+        &self,
+        inner: &str,
+    ) -> Option<(ThreadKey, String)> {
+        let target = link_target(inner)?;
+        if !target.contains('/') {
+            return None;
+        }
+        let path = target_to_markdown_path(target)?;
+        if let Some(key) = self
+            .by_path
+            .get(&path)
+            .or_else(|| self.duplicate_keys.get(&path))
+        {
+            return Some((key.clone(), slashes(&path)));
+        }
+        None
+    }
+
+    /// Why a mail-stem link resolved to nothing: an ambiguous basename or
+    /// a note that shares one Gmail thread with other notes. Returns `None`
+    /// for links that never named a mail note at all. Re-resolves the
+    /// target, so callers use it only after [`MailLinks::resolve`] fails.
+    pub(crate) fn dropped_kind(
+        &mut self,
+        current: &Path,
+        inner: &str,
+    ) -> Option<(DroppedKind, String)> {
+        let target = link_target(inner)?;
+        let stem = lower_stem(target)?;
+        if !self.stems.contains(&stem) {
+            return None;
+        }
+        match self.resolver.resolve(current, target) {
+            LinkResolution::Found(path) => self
+                .duplicate_keys
+                .get(&path)
+                .cloned()
+                .map(|key| (DroppedKind::Duplicate(key), stem)),
+            LinkResolution::Ambiguous => Some((DroppedKind::Ambiguous, stem)),
+            LinkResolution::Missing => None,
+        }
+    }
+
+    pub(crate) fn warnings(&self) -> Vec<String> {
         let mut warnings = Vec::new();
         if self.ambiguous > 0 {
             warnings.push(format!(
@@ -279,11 +372,16 @@ impl MailLinks {
 }
 
 /// Watching tasks in one note's text. `relative` is the note's
-/// vault-relative path.
-fn scan_note(
+/// vault-relative path. With `open_only` only `[ ]`, `[*]`, `[/]`, `[?]`
+/// rows are returned (the watch rule); otherwise every `#task` row is
+/// returned so unknown boxes can veto archive inference. Dropped
+/// mail-stem links are appended to `dropped` when it is present.
+pub(crate) fn scan_note_tasks(
     relative: &str,
     text: &str,
     links: &mut MailLinks,
+    open_only: bool,
+    dropped: Option<&mut Vec<DroppedMailLink>>,
 ) -> Vec<WatchingTask> {
     let lines: Vec<&str> = text
         .split_inclusive('\n')
@@ -296,16 +394,62 @@ fn scan_note(
     let current = Path::new(relative);
 
     let mut tasks = Vec::new();
+    let mut sink = dropped;
     for (index, line) in lines.iter().enumerate() {
         if hidden(index) {
             continue;
         }
-        let Some(task) = parse_open_task(line) else {
+        let Some(task) = (if open_only {
+            parse_open_task(line)
+        } else {
+            parse_task_row(line)
+        }) else {
             continue;
         };
+        let row_text = (*line).to_string();
+        let row_block = collect_done::trailing_block_id_in_line(line);
         let mut targets: Vec<WatchTarget> = Vec::new();
-        let mut add = |found: Option<(ThreadKey, String)>, placement| {
-            if let Some((key, note)) = found
+        let mut row_dropped: Vec<DroppedMailLink> = Vec::new();
+        // The watch scan keeps its exact behavior and cost: dropped-link
+        // attribution runs only for the archive scan.
+        let collect_dropped = sink.is_some();
+        let mut add = |inner: &str, placement: LinkPlacement| {
+            if let Some((key, note)) = links.resolve(current, inner) {
+                if !targets.iter().any(|target| target.key == key) {
+                    targets.push(WatchTarget {
+                        key,
+                        note,
+                        placement,
+                    });
+                }
+                return;
+            }
+            if !collect_dropped {
+                return;
+            }
+            if let Some((kind, stem)) = links.dropped_kind(current, inner) {
+                if !row_dropped.iter().any(|dropped| {
+                    dropped.kind == kind
+                        && dropped.stem == stem
+                        && dropped.placement == placement
+                }) {
+                    row_dropped.push(DroppedMailLink {
+                        path: relative.to_string(),
+                        line: index + 1,
+                        text: row_text.clone(),
+                        block_id: row_block.clone(),
+                        status: task.status,
+                        placement,
+                        stem,
+                        kind,
+                    });
+                }
+                return;
+            }
+            // The note file is gone but the target names an indexed
+            // mail-note path exactly: attribute the linker so the thread
+            // refuses instead of losing the row.
+            if let Some((key, note)) = links.indexed_key_for_missing(inner)
                 && !targets.iter().any(|target| target.key == key)
             {
                 targets.push(WatchTarget {
@@ -316,15 +460,15 @@ fn scan_note(
             }
         };
         for inner in line_wikilinks(line) {
-            add(links.resolve(current, inner), LinkPlacement::TaskLine);
+            add(inner, LinkPlacement::TaskLine);
         }
         for child in direct_children(&lines, index, task.width, &hidden) {
             if let Some(inner) = link_only_bullet(lines[child]) {
-                add(
-                    links.resolve(current, inner),
-                    LinkPlacement::ChildBullet { line: child + 1 },
-                );
+                add(inner, LinkPlacement::ChildBullet { line: child + 1 });
             }
+        }
+        if let Some(sink) = sink.as_mut() {
+            sink.extend(row_dropped);
         }
         if targets.is_empty() {
             continue;
@@ -332,8 +476,8 @@ fn scan_note(
         tasks.push(WatchingTask {
             path: relative.to_string(),
             line: index + 1,
-            text: (*line).to_string(),
-            block_id: collect_done::trailing_block_id_in_line(line),
+            text: row_text,
+            block_id: row_block,
             status: task.status,
             targets,
         });
@@ -343,7 +487,7 @@ fn scan_note(
 
 /// Fenced-code line indexes from `start`, including fences nested in list
 /// items at any indentation, so code examples under a task never watch.
-fn fenced_lines(lines: &[&str], start: usize) -> BTreeSet<usize> {
+pub(crate) fn fenced_lines(lines: &[&str], start: usize) -> BTreeSet<usize> {
     let mut fenced = BTreeSet::new();
     let mut open = None;
     for (index, line) in lines.iter().enumerate().skip(start) {
@@ -361,26 +505,30 @@ fn fenced_lines(lines: &[&str], start: usize) -> BTreeSet<usize> {
     fenced
 }
 
-struct OpenTask {
+struct TaskRow {
     width: usize,
     status: char,
 }
 
 /// An open `- [s] … #task …` row.
-fn parse_open_task(line: &str) -> Option<OpenTask> {
+fn parse_open_task(line: &str) -> Option<TaskRow> {
+    parse_task_row(line).filter(|task| OPEN_STATUSES.contains(&task.status))
+}
+
+/// Any `- [s] … #task …` row, whatever the box holds. The archive scan
+/// keeps unknown statuses so they veto all-closed inference instead of
+/// vanishing like a closed row.
+fn parse_task_row(line: &str) -> Option<TaskRow> {
     let indentation_end = line
         .find(|character: char| !character.is_whitespace())
         .unwrap_or(line.len());
     let after_open = line[indentation_end..].strip_prefix("- [")?;
     let status = after_open.chars().next()?;
-    if !OPEN_STATUSES.contains(&status) {
-        return None;
-    }
     let body = after_open[status.len_utf8()..].strip_prefix("] ")?;
     if !body.split_whitespace().any(|token| token == TASK_TAG) {
         return None;
     }
-    Some(OpenTask {
+    Some(TaskRow {
         width: indent_width(line),
         status,
     })
@@ -488,7 +636,7 @@ fn link_target(inner: &str) -> Option<&str> {
     (!target.is_empty()).then_some(target)
 }
 
-fn lower_stem(target: &str) -> Option<String> {
+pub(crate) fn lower_stem(target: &str) -> Option<String> {
     let path = target_to_markdown_path(target)?;
     let stem = path.file_stem()?.to_str()?;
     Some(stem.to_lowercase())

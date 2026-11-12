@@ -10,6 +10,10 @@
 //! - [`scan`] walks the vault (with `bob gmail link -a`'s exclusions) for
 //!   open `#task` rows that link an indexed mail note on their own line or
 //!   in a direct link-only child bullet, returning a [`scan::WatchScan`].
+//! - [`archive_scan`] reuses that placement and identity policy across live
+//!   notes and `done/` for every `#task` status, returning per-thread
+//!   [`archive_scan::ArchiveThreadEvidence`] with positive closed proof,
+//!   merge holds, and frozen saved message IDs.
 //! - [`watch_state`] folds body-free `gmail.turn` applied markers and
 //!   one-time `gmail.gone` reports across hosts.
 //! - [`watch`] prepares current thread metadata and note refreshes before
@@ -32,6 +36,9 @@
 //! and deciding never write: the apply step owns durability and appends
 //! enrollment events only after the vault writes they describe are durable.
 
+/// Wired by the preview/apply phases; covered by unit tests until then.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod archive_scan;
 pub(crate) mod command;
 pub(crate) mod discover;
 pub(crate) mod enroll;
