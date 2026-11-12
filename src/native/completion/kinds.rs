@@ -65,6 +65,8 @@ pub(crate) enum Kind {
     AlbumRoot,
     /// An area or project that can own a new album.
     AlbumParent,
+    /// A root album stem for `bob albums update`.
+    AlbumStem,
 }
 
 struct Entry {
@@ -121,6 +123,16 @@ const TABLE: &[Entry] = &[
         path: &["albums", "create"],
         arg: "title",
         kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["albums", "update"],
+        arg: "stem",
+        kind: Kind::AlbumStem,
+    },
+    Entry {
+        path: &["albums", "update"],
+        arg: "input",
+        kind: Kind::Files(None),
     },
     Entry {
         path: &["articles", "adopt"],

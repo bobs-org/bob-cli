@@ -166,7 +166,7 @@ groups:
         summary: "Attachment origin journal, resolution states, `bob attachments import` / `origin`, and `%c` recording"
         order: 45
       - stem: records
-        summary: "Albums and record notes: list/check, album create/sync, owner catalogs, schemas, record capture/update, and guarded writes"
+        summary: "Albums and record notes: list/check, album create/sync/update, owner catalogs, schemas, record capture/update, and guarded writes"
         order: 47
       - stem: notebooks
         summary: "`bob notebooks` list, check, sync, and create, the generated Notebooks catalog, JSON, and teaching refusals"

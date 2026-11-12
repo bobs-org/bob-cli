@@ -11,7 +11,7 @@ Inspect album notes
 ```text title="bob albums --help"
 Inspect album notes
 
-Bare `bob albums` runs the read-only list. `list` shows albums grouped by root. `check` lints albums against the contract. `sync` repairs generated records indexes and album catalogs in one guarded transaction. `create` makes an album with its Base and catalog rows in one guarded commit.
+Bare `bob albums` runs the read-only list. `list` shows albums grouped by root. `check` lints albums against the contract. `sync` repairs generated records indexes and album catalogs in one guarded transaction. `create` makes an album with its Base and catalog rows in one guarded commit. `update` edits one album schema from a JSON envelope in one scoped commit.
 
 Usage: bob albums [COMMAND]
 
@@ -20,6 +20,7 @@ Commands:
   create  Create an album with its Base and catalog rows
   list    List albums grouped by root (default)
   sync    Repair generated records indexes and album catalogs
+  update  Update an album record schema through a guarded JSON envelope
 
 Options:
   -h, --help  Print help
@@ -35,6 +36,8 @@ Examples:
   bob albums sync                  Repair every healthy album index
   bob albums create body eat -n restaurant -s 'Places to eat.'
                                    Create eat.md with its Base and catalog rows
+  bob albums update eat -i envelope.json
+                                   Apply a guarded schema envelope
 
 See docs/records.md for the album contract.
 Run 'bob albums <command> --help' for more information on a command.
@@ -192,6 +195,47 @@ Examples:
   bob albums sync -b ~/bob-work -f json
 
 See docs/records.md for the index, catalog, and sync contract.
+```
+
+## bob albums update
+
+Update an album record schema through a guarded JSON envelope
+
+```text title="bob albums update --help"
+Apply an ordered JSON schema envelope to one root album: validate ordered schema edits, preserve unrelated bytes, rebuild the generated index in the same transaction, and return safe inverse operations for Undo. A stem selects one root album, never a record noun fallback or an arbitrary path. `-i -` reads stdin, and omitted `-i` has the same meaning. A schema no-op previews without a lock or sync; a changed apply takes the shared vault lock, pre-syncs, replans fresh, and makes one scoped `albums: update <stem>.md` commit. Validation or semantic refusal exits 2; runtime, lock, or transaction failures exit 1.
+
+Usage: bob albums update [OPTIONS] <STEM>
+
+Arguments:
+  <STEM>
+          Album stem; names the root <stem>.md note
+
+Options:
+  -b, --bob-dir <DIR>
+          Bob vault root; defaults to BOB_DIR or ~/bob
+
+  -d, --dry-run
+          Print planned unified diffs; write nothing
+
+  -f, --format <FORMAT>
+          Output format: human or json
+
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Show help
+
+  -i, --input <FILE>
+          JSON envelope file; - reads stdin (default)
+
+Examples:
+  bob albums update eat -i envelope.json
+  cat envelope.json | bob albums update eat
+  bob albums update eat -d -i envelope.json
+  bob albums update eat -f json -i envelope.json
+
+See docs/records.md for the update request and result contract.
 ```
 
 ## Related

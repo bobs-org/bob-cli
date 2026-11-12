@@ -9,7 +9,7 @@ use clap::{
 
 use super::{
     create::CreateRequest, create_run, output, registry::AlbumRegistry, report,
-    sync,
+    sync, update::run as update_run,
 };
 use crate::native::{
     config, env as bob_env, notebooks::snapshot::VaultSnapshot,
@@ -76,6 +76,18 @@ pub(crate) fn run_create(args: Vec<OsString>) -> i32 {
         Err(error) => return print_clap_error(error),
     };
     execute_create(&matches)
+}
+
+pub(crate) fn run_update(args: Vec<OsString>) -> i32 {
+    let mut command = build_cli_update();
+    let name = command.get_name().to_owned();
+    let matches = match command.try_get_matches_from_mut(
+        std::iter::once(OsString::from(name)).chain(args),
+    ) {
+        Ok(matches) => matches,
+        Err(error) => return print_clap_error(error),
+    };
+    execute_update(&matches)
 }
 
 pub(crate) fn build_cli_list() -> ClapCommand {
@@ -194,6 +206,36 @@ pub(crate) fn build_cli_create() -> ClapCommand {
                 .short('t')
                 .value_name("TITLE")
                 .help("One-line title; defaults to the humanized stem"),
+        )
+}
+
+pub(crate) fn build_cli_update() -> ClapCommand {
+    ClapCommand::new("bob albums update")
+        .about("Update an album record schema through a guarded JSON envelope")
+        .long_about(
+            "Apply an ordered JSON schema envelope to one root album: validate ordered schema edits, preserve unrelated bytes, rebuild the generated index in the same transaction, and return safe inverse operations for Undo. A stem selects one root album, never a record noun fallback or an arbitrary path. `-i -` reads stdin, and omitted `-i` has the same meaning. A schema no-op previews without a lock or sync; a changed apply takes the shared vault lock, pre-syncs, replans fresh, and makes one scoped `albums: update <stem>.md` commit. Validation or semantic refusal exits 2; runtime, lock, or transaction failures exit 1.",
+        )
+        .after_help(
+            "Examples:\n  bob albums update eat -i envelope.json\n  cat envelope.json | bob albums update eat\n  bob albums update eat -d -i envelope.json\n  bob albums update eat -f json -i envelope.json\n\nSee docs/records.md for the update request and result contract.",
+        )
+        .disable_help_flag(true)
+        .arg(
+            Arg::new("stem")
+                .value_name("STEM")
+                .required(true)
+                .help("Album stem; names the root <stem>.md note"),
+        )
+        .arg(bob_dir_arg())
+        .arg(dry_run_arg())
+        .arg(format_arg())
+        .arg(help_arg())
+        .arg(
+            Arg::new("input")
+                .long("input")
+                .short('i')
+                .value_name("FILE")
+                .value_parser(OsStringValueParser::new())
+                .help("JSON envelope file; - reads stdin (default)"),
         )
 }
 
@@ -384,4 +426,65 @@ fn execute_create(matches: &ArgMatches) -> i32 {
         create_run::print_human(&report);
     }
     report.exit_code()
+}
+
+fn execute_update(matches: &ArgMatches) -> i32 {
+    let bob_dir = vault_from(matches);
+    let json = format_is_json(matches);
+    let dry_run = matches.get_flag("dry-run");
+    let stem = matches
+        .get_one::<String>("stem")
+        .cloned()
+        .unwrap_or_default();
+    let input = matches.get_one::<OsString>("input").cloned();
+    let envelope_text = match update_run::read_envelope_text(input.as_ref()) {
+        Ok(text) => text,
+        Err(failure) => {
+            let report = update_run_error_report(&stem, dry_run, failure);
+            if json {
+                println!("{}", report.to_json());
+            } else {
+                update_run::print_human(&report);
+            }
+            return report.exit_code();
+        }
+    };
+    let report = if dry_run {
+        update_run::dry_run(&bob_dir, &stem, &envelope_text)
+    } else {
+        update_run::run_standalone(&bob_dir, &stem, &envelope_text, json)
+    };
+    if json {
+        println!("{}", report.to_json());
+    } else {
+        update_run::print_human(&report);
+    }
+    report.exit_code()
+}
+
+fn update_run_error_report(
+    stem: &str,
+    dry_run: bool,
+    failure: update_run::UpdateFailure,
+) -> update_run::UpdateReport {
+    update_run::UpdateReport {
+        dry_run,
+        stem: stem.to_owned(),
+        path: format!("{stem}.md"),
+        changed: false,
+        before_fingerprint: String::new(),
+        after_fingerprint: String::new(),
+        consequence: String::new(),
+        group_before: None,
+        group_after: None,
+        per_op: Vec::new(),
+        derived_keys: Vec::new(),
+        inverse_ops: Vec::new(),
+        changes: Vec::new(),
+        commit: None,
+        sync_pre: None,
+        sync_post: None,
+        warnings: Vec::new(),
+        failure: Some(failure),
+    }
 }

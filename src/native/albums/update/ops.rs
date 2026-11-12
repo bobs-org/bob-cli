@@ -15,13 +15,15 @@ use serde_json::Value as JsonValue;
 use serde_yaml::{Mapping, Value as YamlValue};
 
 use super::protocol::{ChoiceDraft, Op};
+#[cfg(test)]
+use crate::native::records::schema::album_schema_fingerprint;
 use crate::native::{
     albums::{output::split_icon, write::folder_complete},
     records::{
         catalog::FolderIndex,
         schema::{
-            album_schema_fingerprint, parse_album_record_schema,
-            valid_identifier, FieldKind, PropertyStorageKind, RecordType,
+            parse_album_record_schema, valid_identifier, FieldKind,
+            PropertyStorageKind, RecordType,
         },
         stem::normalize_stem,
     },
@@ -2396,6 +2398,7 @@ fn describe_set_unset(
 }
 
 /// Semantic fingerprint of the current raw mapping for `expect` checks.
+#[cfg(test)]
 pub(crate) fn fingerprint_raw(raw: &Mapping, stem: &str) -> Option<String> {
     use std::path::Path;
     let value = YamlValue::Mapping(raw.clone());

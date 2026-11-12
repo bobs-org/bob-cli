@@ -524,6 +524,7 @@ impl<'a> Walk<'a> {
             | Kind::NotebookRoot
             | Kind::AlbumRoot
             | Kind::AlbumParent
+            | Kind::AlbumStem
             | Kind::ArticleNote => {
                 // Vault slots read the words before the cursor for
                 // `--bob-dir`, `--route`, `--task`, and `--repo`, so

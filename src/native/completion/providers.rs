@@ -51,8 +51,36 @@ pub(crate) fn vault_lines(
         Kind::NotebookRoot => Some(notebook_roots(&context.bob_dir)),
         Kind::AlbumRoot => Some(album_roots(&context.bob_dir)),
         Kind::AlbumParent => Some(album_parents(&context.bob_dir)),
+        Kind::AlbumStem => Some(album_stems(&context.bob_dir)),
         Kind::Choices | Kind::Dirs | Kind::Files(_) | Kind::FreeText => None,
     }
+}
+
+/// Root album stems for `bob albums update`. Read-only scan of the album
+/// registry; config-only kinds are never offered.
+fn album_stems(bob_dir: &Path) -> Vec<String> {
+    let registry = crate::native::albums::registry::AlbumRegistry::discover(
+        bob_dir,
+        &crate::native::config::config_path(),
+    );
+    let mut stems = registry
+        .albums
+        .iter()
+        .map(|entry| entry.declaration.stem.clone())
+        .collect::<Vec<_>>();
+    stems.sort();
+    stems.dedup();
+    stems
+        .into_iter()
+        .filter_map(|stem| {
+            protocol::candidate_line(
+                OsStr::new(&stem),
+                "album",
+                "album stems",
+                false,
+            )
+        })
+        .collect()
 }
 
 /// Areas and projects that can own a new album, as extensionless

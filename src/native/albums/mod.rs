@@ -10,12 +10,12 @@ pub(crate) mod output;
 pub(crate) mod registry;
 pub(crate) mod report;
 pub(crate) mod sync;
-#[cfg(test)]
 pub(crate) mod update;
 pub(crate) mod write;
 
 pub(crate) use cli::{
     build_cli_check, build_cli_create, build_cli_list, build_cli_sync,
+    build_cli_update,
 };
 
 use std::{collections::HashMap, path::Path};

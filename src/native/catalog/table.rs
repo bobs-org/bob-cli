@@ -1504,6 +1504,11 @@ pub(crate) const EXCLUDED: &[Excluded] = &[
                  from a terminal",
     },
     Excluded {
+        path: &["albums", "update"],
+        reason: "JSON-input schema edit owned by the Schema Card; run it \
+                 from a terminal",
+    },
+    Excluded {
         path: &["pomodoro", "notify"],
         reason: "Long-running notifier that never exits",
     },

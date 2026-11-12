@@ -34,6 +34,9 @@ impl NativeCommand {
             NativeCommand::AlbumsSync => {
                 crate::native::albums::build_cli_sync()
             }
+            NativeCommand::AlbumsUpdate => {
+                crate::native::albums::build_cli_update()
+            }
             NativeCommand::AttachmentsImport => {
                 crate::native::attachments::cli::build_cli_import()
             }

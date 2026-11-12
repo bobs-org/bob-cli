@@ -448,6 +448,14 @@ const ALBUMS_MEMBERS: &[Member] = &[
             script_command: None,
         },
     },
+    Member {
+        name: "update",
+        about: "Update an album record schema through a guarded JSON envelope",
+        leaf: Leaf {
+            native_command: NativeCommand::AlbumsUpdate,
+            script_command: None,
+        },
+    },
 ];
 
 const ALBUMS_AFTER_HELP: &str = "\
@@ -462,6 +470,8 @@ Examples:
   bob albums sync                  Repair every healthy album index
   bob albums create body eat -n restaurant -s 'Places to eat.'
                                    Create eat.md with its Base and catalog rows
+  bob albums update eat -i envelope.json
+                                   Apply a guarded schema envelope
 
 See docs/records.md for the album contract.
 Run 'bob albums <command> --help' for more information on a command.";
@@ -1004,7 +1014,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
             members: ALBUMS_MEMBERS,
             default: Some("list"),
             extra_about: Some(
-                "Bare `bob albums` runs the read-only list. `list` shows albums grouped by root. `check` lints albums against the contract. `sync` repairs generated records indexes and album catalogs in one guarded transaction. `create` makes an album with its Base and catalog rows in one guarded commit.",
+                "Bare `bob albums` runs the read-only list. `list` shows albums grouped by root. `check` lints albums against the contract. `sync` repairs generated records indexes and album catalogs in one guarded transaction. `create` makes an album with its Base and catalog rows in one guarded commit. `update` edits one album schema from a JSON envelope in one scoped commit.",
             ),
             after_help: ALBUMS_AFTER_HELP,
             usage: "bob albums [COMMAND]",
@@ -2552,6 +2562,7 @@ mod tests {
             NativeCommand::AlbumsCreate,
             NativeCommand::AlbumsList,
             NativeCommand::AlbumsSync,
+            NativeCommand::AlbumsUpdate,
             NativeCommand::AttachmentsImport,
             NativeCommand::AttachmentsOrigin,
             NativeCommand::BankAck,

@@ -40,6 +40,9 @@ pub(crate) struct UpdatePlanError {
     pub(crate) line: Option<usize>,
     pub(crate) key_path: Option<String>,
     pub(crate) affected: Option<usize>,
+    pub(crate) op_index: Option<usize>,
+    pub(crate) field: Option<String>,
+    pub(crate) choice: Option<String>,
 }
 
 impl std::fmt::Display for UpdatePlanError {
@@ -437,6 +440,9 @@ fn finding_error(finding: &AlbumFinding) -> UpdatePlanError {
         line: finding.line_number,
         key_path: finding.key_path.clone(),
         affected: None,
+        op_index: None,
+        field: None,
+        choice: None,
     }
 }
 
@@ -449,6 +455,9 @@ fn op_error(error: OpError) -> UpdatePlanError {
         line: None,
         key_path: error.key_path,
         affected: error.affected,
+        op_index: error.op_index,
+        field: error.field,
+        choice: error.choice,
     }
 }
 
@@ -461,6 +470,9 @@ fn span_error(error: SpanError) -> UpdatePlanError {
         line: error.line,
         key_path: error.key_path,
         affected: None,
+        op_index: None,
+        field: None,
+        choice: None,
     }
 }
 
@@ -477,6 +489,9 @@ fn plan_error(
         line: None,
         key_path: None,
         affected: None,
+        op_index: None,
+        field: None,
+        choice: None,
     }
 }
 

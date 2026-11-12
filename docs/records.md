@@ -124,6 +124,7 @@ bob albums [list] [-b DIR] [-f human|json] [-r ROOT]
 bob albums check [-b DIR] [-f human|json]
 bob albums sync [-b DIR] [-d] [-f human|json]
 bob albums create PARENT STEM -n NOUN -s SUMMARY [-b DIR] [-d] [-e EMOJI] [-f human|json] [-l LABEL] [-o] [-t TITLE]
+bob albums update STEM [-b DIR] [-d] [-f human|json] [-i FILE]
 ```
 
 - Every long option has a short alias; options stay alphabetical.
@@ -236,6 +237,127 @@ report `record_outside_album`, and `record_parent_mismatch`,
 identity; human success output names the album and owner. A partial vault scan
 keeps readable partial results but fails inventory checks; a healthy selected
 album is never blocked solely on unrelated failures.
+
+### Updating an album schema
+
+`bob albums update STEM [-i FILE]` applies one ordered JSON envelope to one
+root album: it validates ordered schema edits, preserves unrelated bytes,
+rebuilds the generated `[!records]` index in the same transaction, and returns
+safe inverse operations for Undo. `STEM` selects one root album note, never a
+record noun fallback or an arbitrary path; confinement and symlink safety are
+enforced. `-i -` reads stdin, and omitted `-i` has the same meaning. Options
+stay alphabetical (`-b`, `-d`, `-f`, `-i`). The Schema Card owns this command;
+the command catalog excludes it.
+
+```sh
+bob albums update eat -i envelope.json
+cat envelope.json | bob albums update eat
+bob albums update eat -d -i envelope.json
+```
+
+The envelope is one JSON document with `schema_version: 1`, the semantic
+`expect` fingerprint (`sha256:…` from `bob albums list`), and the ordered
+`ops` array. Unknown versions, keys, operations, duplicate keys, and wrong
+types refuse with structured diagnostics. Parsing happens once; labels, JSON,
+and YAML are never interpolated into shell commands. An empty `ops` array is
+a valid no-op.
+
+```json
+{
+  "schema_version": 1,
+  "expect": "sha256:…",
+  "ops": [
+    { "op": "choice.add", "field": "status", "label": "Regular", "emoji": "🔁", "position": 2 }
+  ]
+}
+```
+
+Positions are zero-based. For moves, the selected entry is removed before
+indexing the remaining list; 0 prepends and the length appends. Adds default
+to append. Out-of-range positions refuse. Stable keys identify targets
+throughout a multi-op envelope, so an op can target a key an earlier op
+created. Failure at any point refuses the whole envelope. Field keys derive
+from labels with `normalize_stem` and enforce the schema identifier rules;
+empty, invalid, reserved, or colliding derived keys refuse with a helpful
+diagnostic instead of silent suffixing. Choices keep the schema's existing
+choice-key rules. Every derived key returns indexed by op position.
+`set`/`unset` cannot name the same attribute; absent means unchanged and
+`unset` removes its YAML key. False, zero, empty strings, and empty lists stay
+distinct from absent and are accepted only when the validator accepts them.
+Null is not an implicit unset. Display label and emoji split/combine with the
+albums output convention, preserving unchanged combined labels.
+
+| Operation | Inputs and behavior |
+| --------- | ------------------- |
+| `album.set` | `set` object with label, plural, dated_notes; optional `unset` array restoring the parser's absent/default state. Noun and legacy are not editable here. |
+| `field.add` | label; optional kind (default text), list, suggest, position. Choices-kind additions supply a nonempty ordered `choices` array of label/emoji objects. A new field is optional; a later `field.set` may make it required. |
+| `field.set` | field key plus `set` for label, required, suggest, default, min, max, and optional `unset` property-name array. Key, kind, list, and choices are not mutable through this op. |
+| `field.move` | field key and position. |
+| `field.remove` | field key; allowed only when the complete scan proves filled = 0 and no retained explicit index reference names it. |
+| `choice.add` | field key, label, optional emoji and position. The field must already be choices-kind. |
+| `choice.set` | field key, stored choice value, and `set` containing label and/or emoji. Omitted components retain their prior value; empty emoji explicitly removes the icon. |
+| `choice.move` | field key, stored choice value, and position. |
+| `choice.remove` | field key and stored choice value; allowed only with count = 0 and a valid remaining schema. |
+
+Required, bounds, and default changes report newly invalid records without
+silently changing them or refusing a valid schema just because existing
+records now have findings. Counts include all immediate Markdown members, not
+only healthy rows. A scan that cannot prove completeness refuses. Prohibited
+intent refuses explicitly with the usage count and an `edit in YAML (y)`
+hint: field/choice rename, choice merge, noun change, kind/list-shape change,
+and used removal. A removed field named by `index_by` or `index_facets`
+refuses rather than changing those top-level bytes. The group field recomputes
+after moves and removals and previews the regrouping. A cross-album storage
+clash names the conflicting key and album paths.
+
+Dry run previews the entire intended edit, including the index diff, and
+reports zero record-file changes. It takes no lock, performs no Git or sync
+commands, and writes no vault or cache files. A schema no-op returns before
+the shared lock and triggers neither sync nor index repair, even with a stale
+index or an unavailable remote. A changed apply takes the shared vault lock,
+pre-syncs, replans fresh with the original `expect` (preflight bytes are never
+applied after pre-sync), then installs one album-note edit and makes one
+scoped `albums: update <stem>.md (<short op summary>)` commit — a count
+summary for multi-op envelopes. One envelope is one gesture and one commit.
+Owner catalogs, record files, and Base files stay byte-identical. The
+post-install verifier checks the actual schema and that the regenerated index
+is current; verification or commit failure rolls back safely. Typed semantic
+failure details survive the transaction path.
+
+JSON uses schema version 1 for dry run, apply, no-op, and refusals alike:
+`ok`, `command: "update"`, `dry_run`, album `stem`/`path`, `changed`,
+before/after fingerprints, ordered per-op results, derived keys, the complete
+scan consequence, `group_before`/`group_after`, changed-file diffs,
+`inverse_ops`, `commit`, `sync`, `warnings`, and a nullable typed `error`.
+Per-op entries carry `index`, `op`, `summary`, `derived_key`, `filled`/`count`,
+and `newly_invalid`. Error codes stay stable and carry `op_index`, `field` /
+`choice`, `path` / `line` / `key_path`, `affected`, and a source-mode hint
+where applicable. Exit 0 for success and no-op (including saved-local sync
+warnings), 2 for invalid requests or semantic refusals, 1 for runtime, lock,
+or transaction failures. JSON stdout stays one parseable document.
+
+Undo of a removed unused field or choice retains its original stored key even
+when it differs from its current label. Optional restoration metadata on
+inverse add operations carries that identity: `field.add` accepts
+`restore_key` and `choice.add` accepts `restore_value`. Each only creates an
+absent key, goes through collision and schema validation, and cannot rename an
+existing key. Required, default, and bounds return through ordinary inverse
+`field.set` operations after the optional field has been re-added. Normal
+inverse ops restore semantics and order; narrowly scoped `restore.spans`
+entries preserve original quoting, comments, or absent keys with exact current
+(`expected`) and prior bytes (or null for an absent key) under schema key
+paths below `record`. Paths resolve on the server; no offsets are trusted.
+Undo rechecks usage, collisions, fingerprint, and schema rules. The exact Undo
+request replays the returned `inverse_ops` with the returned `after`
+fingerprint as its new `expect`:
+
+```json
+{ "schema_version": 1, "expect": "<after_fingerprint>", "ops": "<inverse_ops>" }
+```
+
+A post-sync failure keeps success and local-commit evidence with
+`saved locally; sync failed` guidance; the recovery action is
+`bob vault-sync`, never replaying the ops.
 
 ## Schema
 

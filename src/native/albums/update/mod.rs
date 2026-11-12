@@ -1,9 +1,10 @@
-//! Guarded album schema update internals, test-only until schema-command.
+//! Guarded album schema update internals.
 //!
 //! `protocol` parses the JSON envelope once; `ops` applies ordered
 //! operations with complete-record impact accounting, shared Rust
-//! validation, typed refusals, and semantic inverses. The command layer
-//! in schema-spans and schema-command consumes these interfaces.
+//! validation, typed refusals, and semantic inverses; `spans` preserves
+//! schema bytes; `plan` composes the read-only update; `run` executes the
+//! guarded `bob albums update` transaction and its JSON/human output.
 //!
 //! Wire examples handed to schema-spans:
 //! - `{"schema_version":1,"expect":"sha256:…","ops":[]}` is a valid
@@ -45,4 +46,5 @@
 pub(crate) mod ops;
 pub(crate) mod plan;
 pub(crate) mod protocol;
+pub(crate) mod run;
 pub(crate) mod spans;

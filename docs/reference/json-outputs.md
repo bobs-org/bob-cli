@@ -170,13 +170,10 @@ sets `one_off: true`.
 | `bob albums check` | `-f json` | Same report as list | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
 | `bob albums sync` | `-f json` | Index entries, owner `catalogs`, and transaction results | `schema_version: 1` | [Albums and record notes](../records.md#syncing-records-indexes) |
 | `bob albums create` | `-f json` | `album`, `changed`, `changes[]`, `catalogs`, `commit`, `error` | `schema_version: 1` | [Albums and record notes](../records.md#creating-an-album) |
+| `bob albums update` | `-f json` | `stem`, fingerprints, `inverse_ops` | `schema_version: 1` | [Album update](../records.md#updating-an-album-schema) |
 
-Album rows add index state; [album contract](../records.md#albums) has the
-payload.
-
-`catalogs[]` has `host`, `path`, `root`, `state`, `albums`, `issues`.
-Missing/stale warns `album_catalog_stale`; damage errors
-`album_catalog_damaged`. Findings affect counts and `ok`.
+`catalogs[]`: `host`, `path`, `root`, `state`, `albums`, `issues`; see
+[album contract](../records.md#albums).
 
 ### Notebook reports {#notebook-reports}
 
