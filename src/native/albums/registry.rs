@@ -1562,6 +1562,12 @@ mod tests {
             &vault.join("books.md"),
             &album("books", "book", "    author: {}\n"),
         );
+        // The retired config fallback used to supply this claim; a real
+        // album note carries it now.
+        write(
+            &vault.join("restaurants.md"),
+            &album("restaurants", "restaurant", ""),
+        );
         let registry = AlbumRegistry::discover(&vault);
         let ids: Vec<&str> = registry
             .usable_types

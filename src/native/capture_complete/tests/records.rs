@@ -21,39 +21,47 @@ use std::path::Path;
 
 const NOW: &str = "2026-10-07 13:40:00";
 
-const RECORDS_CONFIG: &str = r#"records:
-  restaurant:
-    dir: eat
-    label: Restaurant
-    emoji: "🍽️"
-    dated_notes: true
-    fields:
-      status:
-        required: true
-        values:
-          to_try: "To try"
-          liked: "Liked"
-      category:
-        required: true
-        suggest: true
-      location:
-        required: true
-        suggest: true
-      visited:
-        values: date
-      tags:
-        list: true
-        suggest: true
-      website:
-        values: url
-      rating:
-        values: number
-      related:
-        values: link
-      companions:
-        values: link
-        list: true
-        default: ["[[kelly]]"]
+const AREA_NOTE: &str = "---\ntype: [[area]]\n---\n# Body\n";
+
+const ALBUM_NOTE: &str = r#"---
+parent: "[[body]]"
+type: [[album]]
+summary: Restaurants and cafes.
+emoji: "🍽️"
+record:
+  noun: restaurant
+  label: Restaurant
+  dated_notes: true
+  fields:
+    status:
+      required: true
+      values:
+        to_try: "To try"
+        liked: "Liked"
+    category:
+      required: true
+      suggest: true
+    location:
+      required: true
+      suggest: true
+    visited:
+      values: date
+    tags:
+      list: true
+      suggest: true
+    website:
+      values: url
+    rating:
+      values: number
+    related:
+      values: link
+    companions:
+      values: link
+      list: true
+      default: ["[[kelly]]"]
+---
+
+# Eat
 "#;
 
 struct RecordVault {
@@ -64,8 +72,12 @@ struct RecordVault {
 impl RecordVault {
     fn new(prefix: &str) -> Self {
         let temp = TempDir::new(prefix);
+        write_file(&temp.path().join("body.md"), AREA_NOTE);
+        write_file(&temp.path().join("eat.md"), ALBUM_NOTE);
+        // Albums are the only source of record schemas; the config stays
+        // empty so no retired `records:` key can leak into the fixture.
         let config = temp.path().join("config.yml");
-        write_file(&config, RECORDS_CONFIG);
+        write_file(&config, "\n");
         Self { temp, config }
     }
 
@@ -77,7 +89,7 @@ impl RecordVault {
         write_file(
             &self.path().join("eat").join(format!("{stem}.md")),
             &format!(
-                "---\nparent: \"[[eat]]\"\ntype: \"[[restaurant]]\"\n\
+                "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\n\
                  title: {stem:?}\nstatus: liked\ncategory: {category:?}\n\
                  location: {location}\n---\n# {stem}\n\n## Notes\n"
             ),
@@ -455,7 +467,12 @@ fn near_value_hint_warns_without_rewriting_cheeseteaks() {
 #[test]
 fn empty_section_query_prepends_record_create_and_expands_the_token() {
     let vault = RecordVault::new("bob-cli-complete-record-section");
-    write_file(&vault.path().join("eat.md"), "# Ideas\n## Tasks\n");
+    // The album note deliberately carries the sections under test: the
+    // create row must lead on an empty query while headings still list.
+    write_file(
+        &vault.path().join("eat.md"),
+        &ALBUM_NOTE.replace("# Eat\n", "# Ideas\n## Tasks\n"),
+    );
     let raw = "@eat#";
     let value = vault.complete(raw, raw.len());
     assert_eq!(value.context, Some(CompletionContext::Section));
@@ -625,7 +642,12 @@ fn broken_album_stays_diagnosed_and_does_not_hide_a_healthy_route() {
 #[test]
 fn typed_section_query_keeps_headings_and_omits_the_create_row() {
     let vault = RecordVault::new("bob-cli-complete-record-section-query");
-    write_file(&vault.path().join("eat.md"), "# Ideas\n");
+    // Keep the album valid so `@eat#Id` exercises the record-route section
+    // path (route-qualified heading rows, no create row on a typed query).
+    write_file(
+        &vault.path().join("eat.md"),
+        &ALBUM_NOTE.replace("# Eat\n", "# Ideas\n"),
+    );
     let raw = "@eat#Id";
     let value = vault.complete(raw, raw.len());
     let Candidates::Section(rows) = &value.candidates else {
@@ -713,7 +735,7 @@ fn list_member_completion_replaces_only_the_member_at_the_caret() {
     let vault = RecordVault::new("bob-cli-complete-record-list");
     write_file(
         &vault.path().join("eat/nagi.md"),
-        "---\nparent: \"[[eat]]\"\ntype: \"[[restaurant]]\"\n\
+        "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\n\
          title: Nagi\nstatus: liked\ncategory: Ramen\nlocation: Clark\n\
          tags: soup\n---\n# Nagi\n",
     );
@@ -901,7 +923,7 @@ fn named_field_list_uses_caret_member_else_the_final_member() {
     let vault = RecordVault::new("bob-cli-complete-named-list");
     write_file(
         &vault.path().join("eat/nagi.md"),
-        "---\nparent: \"[[eat]]\"\ntype: \"[[restaurant]]\"\n\
+        "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\n\
          title: Nagi\nstatus: liked\ncategory: Ramen\nlocation: Clark\n\
          tags: soup\n---\n# Nagi\n",
     );
@@ -1021,17 +1043,25 @@ fn named_field_ignores_legacy_records_config() {
     write_file(&vault.config, "records: []\n");
     let raw = "Ramen Nagi @eat/";
     let value = vault.named_field(raw, raw.len(), "status");
-    assert!(value.context.is_none(), "{value:?}");
-    assert!(value.record.is_none());
+    // A leftover `records:` block is ignored: the album still resolves the
+    // route with no records-config diagnostics attached to the field.
+    assert_eq!(value.context, Some(CompletionContext::RecordValue));
     assert!(
         !value.diagnostics.iter().any(|diag| {
             diag.message.contains("records config")
-                && diag.field.as_deref() == Some("status")
+                || diag.code == "records_config_invalid"
+                || diag.code == "records_config_deprecated"
         }),
         "{:?}",
         value.diagnostics
     );
-    assert_eq!(apply(raw, &value, ""), raw);
+    let rows = value_rows(&value);
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.value.as_str())
+            .collect::<Vec<_>>(),
+        ["to_try", "liked"]
+    );
 }
 
 #[test]
@@ -1066,7 +1096,7 @@ fn mixed_draft_scopes_route_errors_to_the_cursor_item() {
     // and cursor position (before/after) must not change the scoping.
     let temp = TempDir::new("bob-cli-complete-mixed-draft-scoping");
     let config = temp.path().join("config.yml");
-    write_file(&config, RECORDS_CONFIG);
+    write_file(&config, "\n");
     let vault = temp.path().join("vault");
     write_file(&vault.join("body.md"), "---\ntype: [[area]]\n---\n# Body\n");
     write_file(

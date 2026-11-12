@@ -760,31 +760,44 @@ fn cosine_is_symmetric_on_identical_titles() {
     assert!(scores[0] > 0.99, "{}", scores[0]);
 }
 
-const RECORDS_CONFIG: &str = r#"records:
-  restaurant:
-    dir: eat
-    label: Restaurant
-    emoji: "🍽️"
-    dated_notes: true
-    fields:
-      status:
-        required: true
-        values:
-          to_try: "🔖 To try"
-          liked: "💚 Liked"
-      category:
-        required: true
-        suggest: true
-      location:
-        required: true
-        suggest: true
+const ALBUM_NOTE: &str = r#"---
+parent: "[[body]]"
+type: [[album]]
+summary: Restaurants.
+emoji: "🍽️"
+record:
+  noun: restaurant
+  label: Restaurant
+  dated_notes: true
+  fields:
+    status:
+      required: true
+      values:
+        to_try: "🔖 To try"
+        liked: "💚 Liked"
+    category:
+      required: true
+      suggest: true
+    location:
+      required: true
+      suggest: true
+---
+
+# Eat
 "#;
 
 fn record_vault() -> (TempDir, PathBuf) {
     let temp = TempDir::new("bob-cli-capture-related-records");
     write_settings(temp.path());
+    write_file(
+        &temp.path().join("body.md"),
+        "---\ntype: [[area]]\n---\n# Body\n",
+    );
+    write_file(&temp.path().join("eat.md"), ALBUM_NOTE);
+    // Albums are the only source of record schemas; the config stays
+    // empty so no retired `records:` key can leak into the fixture.
     let config = temp.path().join("config.yml");
-    write_file(&config, RECORDS_CONFIG);
+    write_file(&config, "\n");
     write_file(
         &temp.path().join("eat/ninja_sushi.md"),
         "---\nparent: \"[[eat]]\"\ntype: \"[[restaurant]]\"\ntitle: \"Ninja Sushi\"\nstatus: liked\ncategory: \"Sushi\"\nlocation: \"Clark\"\n---\n# Ninja Sushi\n\n## Notes\n",

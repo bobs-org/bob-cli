@@ -4440,10 +4440,10 @@ mod tests {
 type: [[album]]
 parent: "[[body]]"
 summary: Restaurants and cafes.
+emoji: "🍽️"
 record:
   noun: restaurant
   label: Restaurant
-  emoji: "🍽️"
   dated_notes: true
   fields:
     status:

@@ -231,7 +231,10 @@ fn album_create_then_update_renders_final_fields() {
 }
 
 #[test]
-fn config_backed_record_never_stages_an_album_edit() {
+fn records_config_alone_resolves_no_record_route() {
+    // Retirement contract: a `records:` config block without an album note
+    // no longer resolves a record route. The draft plans as an ordinary
+    // task with no record folders, no staged record, and no album edit.
     let (_temp, vault, config) = album_vault_with_config(CONFIG);
     let batch = plan(
         &vault,
@@ -239,9 +242,25 @@ fn config_backed_record_never_stages_an_album_edit() {
         true,
         "The Daily @podcasts/\n- status:: to_try\n- category:: News",
     );
-    assert_eq!(batch.record_folders, vec!["podcasts".to_string()]);
     assert!(
-        !staged_map(&batch).contains_key(&vault.join("eat.md")),
+        batch.record_folders.is_empty(),
+        "retired config stages no record folders: {:?}",
+        batch.record_folders
+    );
+    assert!(
+        batch.album_files.is_empty(),
+        "retired config stages no album edit: {:?}",
+        batch.album_files
+    );
+    let staged = staged_map(&batch);
+    assert!(
+        !staged
+            .keys()
+            .any(|path| path.starts_with(vault.join("podcasts"))),
+        "retired config stages no record note: {staged:?}"
+    );
+    assert!(
+        !staged.contains_key(&vault.join("eat.md")),
         "config record leaves the album alone"
     );
 }

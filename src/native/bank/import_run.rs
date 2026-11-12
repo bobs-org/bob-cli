@@ -1798,16 +1798,19 @@ mod tests {
     #[test]
     fn nonlegacy_restaurant_directory_links_and_guards_its_inputs() {
         let vault = vault();
-        let config_path = vault._temp.path().join("config.yml");
+        // Albums are the only source of record schemas: the `eat` kind the
+        // importer resolves lives on the `restaurants` album now.
         fs::write(
-            &config_path,
-            "records:\n  eat:\n    dir: restaurants\n    label: Restaurant\n    emoji: 🍽️\n    fields: {}\n",
+            vault.path.join("area.md"),
+            "---\ntype: [[area]]\n---\n# Area\n",
         )
         .unwrap();
-        let _guard = TestEnvGuard::set(&[
-            ("BOB_CONFIG_FILE", Some(config_path.as_os_str())),
-            ("BOB_NOW", Some(OsStr::new("2026-11-13T12:00:00"))),
-        ]);
+        fs::write(
+            vault.path.join("restaurants.md"),
+            "---\nparent: \"[[area]]\"\ntype: [[album]]\nsummary: Restaurants.\nemoji: \"🍽️\"\nrecord:\n  noun: eat\n  label: Restaurant\n  fields: {}\n---\n\n# Restaurants\n",
+        )
+        .unwrap();
+        let _guard = environment();
         fs::create_dir_all(vault.path.join("restaurants")).unwrap();
         fs::write(
             vault.path.join("restaurants/test_cafe.md"),
