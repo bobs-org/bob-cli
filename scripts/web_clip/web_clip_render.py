@@ -70,8 +70,6 @@ class BrowserLaunchError(RenderError):
 # ---------------------------------------------------------------------------
 
 _IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
-_SRC_ATTR_RE = re.compile(
-    r"""\bsrc\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""", re.IGNORECASE)
 
 _CONTENT_TYPE = {
     ".css": "text/css",
@@ -259,9 +257,9 @@ def normalize_images(markup: str, assets_dir: str,
     def _replace(match: re.Match) -> str:
         tag = match.group(0)
         manifest["total"] += 1
-        src_match = _SRC_ATTR_RE.search(tag)
-        raw_src = (src_match.group(1).strip("\"'") if src_match else "")
-        raw_src = html.unescape(raw_src)
+        # Positional read: data-bob-origin precedes src and its query string
+        # may itself contain "src=".
+        raw_src = _img_attr(tag, "src") or ""
         if raw_src.startswith("data:"):
             # Localization already decoded data: URIs; anything left is
             # printable as-is under the CSP.
@@ -308,7 +306,7 @@ def normalize_images(markup: str, assets_dir: str,
         with open(os.path.join(render_assets_dir, out_name), "wb") as handle:
             handle.write(jpeg)
         manifest["kept"] += 1
-        return _SRC_ATTR_RE.sub(f'src="assets/{out_name}"', tag, count=1)
+        return _set_img_src(tag, f"assets/{out_name}")
 
     return _IMG_TAG_RE.sub(_replace, markup), manifest
 
@@ -571,10 +569,9 @@ def prefix_part_assets(markup: str, assets_dir: str, prefix: str,
 
     def _replace(match: re.Match) -> str:
         tag = match.group(0)
-        src_match = _SRC_ATTR_RE.search(tag)
-        if not src_match:
+        raw_src = _img_attr(tag, "src")
+        if not raw_src:
             return tag
-        raw_src = html.unescape(src_match.group(1).strip("\"'"))
         if (not raw_src.startswith("assets/")
                 or "/" in raw_src[len("assets/"):]):
             return tag
@@ -583,7 +580,7 @@ def prefix_part_assets(markup: str, assets_dir: str, prefix: str,
         src_path = os.path.join(assets_dir, name)
         if os.path.isfile(src_path):
             shutil.copy2(src_path, os.path.join(dest_dir, new_name))
-        return _SRC_ATTR_RE.sub(f'src="assets/{new_name}"', tag, count=1)
+        return _set_img_src(tag, f"assets/{new_name}")
 
     return _IMG_TAG_RE.sub(_replace, markup)
 
@@ -654,6 +651,28 @@ def _img_attr(tag: str, name: str) -> str | None:
             return html.unescape(next(
                 value for value in match.groups()[1:] if value is not None))
     return None
+
+
+def _set_img_src(tag: str, new_src: str) -> str:
+    """Replace the ``src`` attribute value positionally, preserving quotes.
+
+    Whole-tag ``src=`` searches match the first occurrence anywhere,
+    including inside a preceding ``data-bob-origin`` query string, so the
+    replacement must walk attributes by position instead.
+    """
+    for match in _IMG_ATTR_RE.finditer(tag):
+        if match.group(1).lower() != "src":
+            continue
+        for index in (2, 3, 4):
+            value = match.group(index)
+            if value is None:
+                continue
+            start, end = match.span(index)
+            escaped = html.escape(new_src, quote=True)
+            if index in (2, 3):
+                return tag[:start] + escaped + tag[end:]
+            return tag[:start] + f'"{escaped}"' + tag[end:]
+    return tag
 
 
 def source_images(markup: str) -> str:

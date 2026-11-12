@@ -1133,6 +1133,85 @@ def _install_guard(context, *, target_url: str, html_bytes: bytes | None,
     context.route("**/*", _handle)
 
 
+def _private_landing_url(page, nav, fallback_url: str) -> str | None:
+    """URL of a private-network hop in the landed navigation, if any.
+
+    ``context.route()`` only sees the first URL of a redirect chain — the
+    browser follows server redirects internally — so re-validate the final
+    URL and every redirect hop after ``goto``. Fail-closed: any hop that is
+    not http(s) to a globally routable host is refused.
+    """
+    hops: list[str] = []
+    request = getattr(nav, "request", None) if nav is not None else None
+    seen: set[int] = set()
+    while request is not None and id(request) not in seen:
+        seen.add(id(request))
+        try:
+            hops.append(request.url)
+        except Exception:  # noqa: BLE001 - best effort
+            pass
+        request = getattr(request, "redirected_from", None)
+    try:
+        final_url = page.url
+    except Exception:  # noqa: BLE001 - best effort
+        final_url = None
+    if final_url and final_url not in hops:
+        hops.append(final_url)
+    if not hops:
+        hops.append(fallback_url)
+    for hop in hops:
+        if not _request_host_is_global(hop):
+            return hop
+    return None
+
+
+def _install_ws_guard(context, *, ws_blocked: list[str]) -> None:
+    """Block WebSocket handshakes to private-network hosts.
+
+    ``context.route()`` never sees WebSocket handshakes, so install the
+    separate ``route_web_socket`` handler next to each ``_install_guard``.
+    Sockets to globally routable http(s) hosts are proxied to the server;
+    anything else is closed before it connects.
+    """
+
+    def _handle_ws(wsroute) -> None:
+        try:
+            ws_url = wsroute.url
+        except Exception:  # noqa: BLE001 - best effort
+            ws_url = ""
+        try:
+            parts = urlsplit(ws_url)
+            hostname = parts.hostname or ""
+            allowed = (parts.scheme in ("ws", "wss")
+                       and bool(hostname)
+                       and host_is_global(hostname))
+        except (ValueError, AttributeError):  # noqa: BLE001 - fail closed
+            allowed = False
+        if not allowed:
+            try:
+                ws_blocked.append(ws_url)
+            except Exception:  # noqa: BLE001 - best effort
+                pass
+            try:
+                wsroute.close()
+            except Exception:  # noqa: BLE001 - best effort
+                pass
+            return
+        try:
+            wsroute.connect_to_server()
+        except Exception:  # noqa: BLE001 - best effort
+            try:
+                wsroute.close()
+            except Exception:  # noqa: BLE001 - best effort
+                pass
+
+    route_ws = getattr(context, "route_web_socket", None)
+    if route_ws is None:
+        log("route_web_socket is unavailable; WebSocket guard not installed")
+        return
+    route_ws("**/*", _handle_ws)
+
+
 def _watch_popups(context, keep: list) -> dict:
     """Close popups as they open; returns a guard to disarm around new_page.
 
@@ -1307,8 +1386,12 @@ def _extract_isolated(context, keep: list, snapshot_html: str,
 # ---------------------------------------------------------------------------
 
 _IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
-_SRC_ATTR_RE = re.compile(
-    r"""\bsrc\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""", re.IGNORECASE)
+# Positional attribute scan: a whole-tag ``src=`` search matches the first
+# occurrence anywhere, including inside ``data-bob-origin`` query strings
+# and ``alt``/``title`` prose, so image URLs are parsed here by attribute
+# position instead.
+_IMG_ATTR_RE = re.compile(
+    r'''\s([a-zA-Z_:][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))''')
 _DATA_URI_RE = re.compile(r"^data:([^;,]+)?(;base64)?,(.*)$", re.DOTALL)
 _SVG_TAG_RE = re.compile(
     r"""<svg\b[^>]*data-bob-svg\s*=\s*(["']?)1\1[^>]*>.*?</svg>""",
@@ -1333,6 +1416,32 @@ _PIL_FORMAT_EXT = {
     "WEBP": "webp",
     "AVIF": "avif",
 }
+
+
+def _img_attr(tag: str, name: str) -> str | None:
+    """Read one serialized image attribute, case-insensitively."""
+    for match in _IMG_ATTR_RE.finditer(tag):
+        if match.group(1).lower() == name:
+            return html_module.unescape(next(
+                value for value in match.groups()[1:] if value is not None))
+    return None
+
+
+def _set_img_src(tag: str, new_src: str) -> str:
+    """Replace the ``src`` attribute value positionally, preserving quotes."""
+    for match in _IMG_ATTR_RE.finditer(tag):
+        if match.group(1).lower() != "src":
+            continue
+        for index in (2, 3, 4):
+            value = match.group(index)
+            if value is None:
+                continue
+            start, end = match.span(index)
+            escaped = html_module.escape(new_src, quote=True)
+            if index in (2, 3):
+                return tag[:start] + escaped + tag[end:]
+            return tag[:start] + f'"{escaped}"' + tag[end:]
+    return tag
 
 
 def decode_data_uri(src: str) -> tuple[bytes, str | None] | None:
@@ -1405,10 +1514,9 @@ def _localize_images(api, markup: str, assets_dir: str, page_url: str,
         nonlocal counter, total_bytes
         tag = match.group(0)
         manifest["total"] += 1
-        src_match = _SRC_ATTR_RE.search(tag)
-        # Serialized HTML escapes ampersands; unescape before requesting.
-        raw_src = html_module.unescape(
-            src_match.group(1).strip("\"'") if src_match else "")
+        # Positional read: the serialized tag carries data-bob-origin before
+        # src, and origin queries or alt/title prose may contain "src=".
+        raw_src = _img_attr(tag, "src") or ""
         if time.monotonic() > deadline:
             manifest["failed"] += 1
             warnings.append(f"image skipped past the time budget: {raw_src}")
@@ -1473,11 +1581,13 @@ def _localize_images(api, markup: str, assets_dir: str, page_url: str,
             handle.write(data)
         total_bytes += len(data)
         manifest["kept"] += 1
-        localized = _SRC_ATTR_RE.sub(f'src="assets/{name}"', tag, count=1)
+        localized = _set_img_src(tag, f"assets/{name}")
         if raw_src.startswith(("http://", "https://")):
             origin = html_module.escape(raw_src, quote=True)
+            # Callable replacement: the origin URL is inserted literally, so
+            # a "\1" or "\g" in its query cannot raise invalid group reference.
             localized = re.sub(
-                r"<img\b", f'<img data-bob-origin="{origin}"',
+                r"<img\b", lambda _m: f'<img data-bob-origin="{origin}"',
                 localized, count=1, flags=re.IGNORECASE)
         return localized
 
@@ -1749,8 +1859,10 @@ def run_capture(request: dict, *, allow_headed: bool = True,
             contexts.append(context)
             keep: list = []
             aborted: list[str] = []
+            ws_blocked: list[str] = []
             _install_guard(context, target_url=url, html_bytes=html_bytes,
                            hook=route_hook, aborted=aborted)
+            _install_ws_guard(context, ws_blocked=ws_blocked)
             page = context.new_page()
             keep.append(page)
             popup_guard = _watch_popups(context, keep)
@@ -1807,6 +1919,18 @@ def run_capture(request: dict, *, allow_headed: bool = True,
             if cf_headers.get("cf-mitigated") == "challenge":
                 page.evaluate("window.__bobClipCfMitigated = true")
             final_url = page.url or url
+            # The route guard only sees the first URL of a redirect chain,
+            # so re-validate the landed navigation (skipped for fixture
+            # hooks and --html captures, which serve no live network).
+            if html_bytes is None and route_hook is None:
+                private_hop = _private_landing_url(page, nav, url)
+                if private_hop is not None:
+                    raise AdapterFail(
+                        "network",
+                        "refused a private-network navigation "
+                        f"for {private_hop}",
+                        PRIVATE_HINT)
+            debug["ws_blocked"] = ws_blocked
 
             _check_deadline(deadline)
             settled = _settle_page(page, snapshot_js, poll_secs=POLL_MAX_SECS)
@@ -1831,14 +1955,16 @@ def run_capture(request: dict, *, allow_headed: bool = True,
                 contexts.append(context)
                 keep = []
                 aborted = []
+                ws_blocked = []
                 _install_guard(context, target_url=url, html_bytes=None,
                                hook=route_hook, aborted=aborted)
+                _install_ws_guard(context, ws_blocked=ws_blocked)
                 page = context.new_page()
                 keep.append(page)
                 popup_guard = _watch_popups(context, keep)
                 try:
-                    page.goto(url, wait_until="domcontentloaded",
-                              timeout=GOTO_TIMEOUT_MS)
+                    nav = page.goto(url, wait_until="domcontentloaded",
+                                    timeout=GOTO_TIMEOUT_MS)
                 except PlaywrightTimeoutError as exc:
                     raise AdapterFail(
                         "timeout",
@@ -1849,6 +1975,15 @@ def run_capture(request: dict, *, allow_headed: bool = True,
                         "network", f"headed navigation failed: {exc}",
                         CHALLENGE_STUCK_HINT) from exc
                 final_url = page.url or url
+                if route_hook is None:
+                    private_hop = _private_landing_url(page, nav, url)
+                    if private_hop is not None:
+                        raise AdapterFail(
+                            "network",
+                            "refused a private-network navigation "
+                            f"for {private_hop}",
+                            PRIVATE_HINT)
+                debug["ws_blocked"] = ws_blocked
                 _check_deadline(deadline)
                 settled = _settle_page(page, snapshot_js,
                                        poll_secs=HEADED_WAIT_SECS)
@@ -3557,6 +3692,149 @@ def self_test() -> int:
           and "<img" not in private_markup
           and any("dropped image" in warning for warning in private_warnings)
           and os.listdir(private_dir) == [])
+
+    # -- Redirect/websocket guards and positional img parsing ---------------
+    _set_resolve_override({"public.example": ["8.8.8.8"],
+                           "private.example": ["10.0.0.5"]})
+    try:
+        class _FakeNavRequest:
+            def __init__(self, url, redirected_from=None):
+                self.url = url
+                self.redirected_from = redirected_from
+
+        class _FakeNav:
+            def __init__(self, request):
+                self.request = request
+
+        class _FakePage:
+            def __init__(self, url):
+                self.url = url
+
+        public_page = _FakePage("https://public.example/article")
+        public_nav = _FakeNav(
+            _FakeNavRequest("https://public.example/article"))
+        check("clean navigation has no private hop",
+              _private_landing_url(public_page, public_nav,
+                                   "https://public.example/article") is None)
+        check("private final navigation URL is refused",
+              _private_landing_url(
+                  _FakePage("http://192.168.1.1/admin"),
+                  _FakeNav(_FakeNavRequest("http://192.168.1.1/admin")),
+                  "https://public.example/article")
+              == "http://192.168.1.1/admin")
+        redirect_chain = _FakeNavRequest(
+            "https://public.example/article",
+            _FakeNavRequest("https://private.example/login",
+                            _FakeNavRequest("https://public.example/start")))
+        check("redirect chain through a private host is refused",
+              _private_landing_url(
+                  public_page, _FakeNav(redirect_chain),
+                  "https://public.example/start")
+              == "https://private.example/login")
+        check("non-http landing is refused fail-closed",
+              _private_landing_url(
+                  _FakePage("about:blank"), None,
+                  "https://public.example/article") == "about:blank")
+
+        class _FakeWsRoute:
+            def __init__(self, url):
+                self.url = url
+                self.connected = False
+                self.closed = False
+
+            def connect_to_server(self):
+                self.connected = True
+
+            def close(self):
+                self.closed = True
+
+        class _FakeWsContext:
+            def __init__(self):
+                self.pattern = None
+                self.handler = None
+
+            def route_web_socket(self, pattern, handler):
+                self.pattern = pattern
+                self.handler = handler
+
+        ws_context = _FakeWsContext()
+        ws_blocked: list[str] = []
+        _install_ws_guard(ws_context, ws_blocked=ws_blocked)
+        check("websocket guard installs a catch-all route",
+              ws_context.pattern == "**/*"
+              and ws_context.handler is not None)
+        if ws_context.handler is not None:
+            public_ws = _FakeWsRoute("wss://public.example/socket")
+            ws_context.handler(public_ws)
+            private_ws = _FakeWsRoute("ws://private.example:8080/")
+            ws_context.handler(private_ws)
+            malformed_ws = _FakeWsRoute("ws://[::1")
+            ws_context.handler(malformed_ws)
+            check("public websocket is proxied to the server",
+                  public_ws.connected and not public_ws.closed)
+            check("private and malformed websockets are closed",
+                  private_ws.closed and not private_ws.connected
+                  and malformed_ws.closed and not malformed_ws.connected
+                  and ws_blocked == ["ws://private.example:8080/",
+                                     "ws://[::1"])
+        _install_ws_guard(object(), ws_blocked=ws_blocked)
+        check("websocket guard tolerates no route_web_socket", True)
+    finally:
+        _set_resolve_override(None)
+
+    src_query_dir = os.path.join(offline_dir, "origin-assets")
+    src_query_out = os.path.join(offline_dir, "origin-render")
+    os.makedirs(src_query_dir, exist_ok=True)
+    try:
+        from PIL import Image as _OriginImage
+        _OriginImage.new("RGB", (80, 80), (10, 120, 200)).save(
+            os.path.join(src_query_dir, "img-001.png"))
+        origin_png_ok = True
+    except Exception:  # noqa: BLE001 - pillow is a hard dep here
+        origin_png_ok = False
+    check("origin-query fixture image written", origin_png_ok)
+    if origin_png_ok:
+        origin_markup = (
+            '<img data-bob-origin="https://cdn.example/p?src='
+            'https%3A%2F%2Fother&amp;x=1" src="assets/img-001.png" '
+            'alt="figure">')
+        normalized, normalized_images = _render.normalize_images(
+            origin_markup, src_query_dir, src_query_out, [])
+        check("data-bob-origin query containing src= survives render",
+              normalized_images["kept"] == 1
+              and normalized_images["failed"] == 0
+              and 'src="assets/img-001.jpg"' in normalized
+              and 'data-bob-origin="https://cdn.example/p?src='
+              'https%3A%2F%2Fother&amp;x=1"' in normalized)
+        prefixed_dir = os.path.join(offline_dir, "origin-prefixed")
+        os.makedirs(prefixed_dir, exist_ok=True)
+        prefixed = _render.prefix_part_assets(
+            normalized, src_query_out, "p1-", prefixed_dir)
+        check("prefixed part keeps the origin and rewrites src",
+              'src="assets/p1-img-001.jpg"' in prefixed
+              and 'data-bob-origin="https://cdn.example/p?src='
+              'https%3A%2F%2Fother&amp;x=1"' in prefixed
+              and os.path.isfile(
+                  os.path.join(prefixed_dir, "p1-img-001.jpg")))
+
+    alt_src_markup, alt_src_images = _localize_images(
+        _ImageApi(),
+        '<img alt="see src=evil" '
+        'src="data:image/png;base64,bm90LWltYWdl" title="t">',
+        localized_dir, "https://example.com/article",
+        time.monotonic() + 30, [])
+    check("alt text containing src= does not shadow the src attribute",
+          alt_src_images["kept"] == 1 and "<img" in alt_src_markup)
+
+    backslash_markup, backslash_images = _localize_images(
+        _ImageApi(),
+        '<img src="https://example.com/i.png?q=\\1" alt="x">',
+        localized_dir, "https://example.com/article",
+        time.monotonic() + 30, [])
+    check("backslash in image URL completes localization",
+          backslash_images["kept"] == 1
+          and 'data-bob-origin="https://example.com/i.png?q=\\1"'
+          in backslash_markup)
 
     svg_pipeline_src = '<p>keep</p><svg data-bob-svg="1"><circle r="3"/></svg>'
     sanitized_svg = sanitize_html(svg_pipeline_src)
