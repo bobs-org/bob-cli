@@ -114,6 +114,8 @@ record:
   folder members, or null. A missing folder is an empty album. Immediate
   Markdown members still count when the schema is broken.
 
+The Obsidian presentation of these cards is [Album cards](reference/plugins/albums.md).
+
 `bob albums` lives in the Vault section of `bob --help`. Bare `bob albums`
 defaults to the read-only `list`.
 
