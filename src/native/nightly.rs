@@ -55,7 +55,7 @@ const STEPS: &[Step] = &[
     },
     Step {
         name: "albums",
-        blurb: "Repair generated records indexes",
+        blurb: "Repair generated records indexes and album catalogs",
         run: run_albums_step,
     },
     Step {
@@ -161,7 +161,7 @@ workflow:
   4. report article notes that need formatting (write nothing)
   5. report period-note problems (write nothing)
   6. repair generated notebook catalogs (one scoped commit when any changed)
-  7. repair generated album records indexes (one scoped commit when any changed)
+  7. repair generated album records indexes and owner catalogs (one scoped commit when any changed)
   8. run vault-sync against the vault
 
 environment:

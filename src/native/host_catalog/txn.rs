@@ -95,6 +95,15 @@ impl ReadDependencies {
             .insert(path, (extension.map(str::to_owned), expected));
     }
 
+    /// Fold another plan's read inputs into this one. Later entries for the
+    /// same path replace earlier ones.
+    pub(crate) fn extend(&mut self, other: Self) {
+        self.files.extend(other.files);
+        self.frontmatter.extend(other.frontmatter);
+        self.directories.extend(other.directories);
+        self.directory_entries.extend(other.directory_entries);
+    }
+
     pub(crate) fn iter(
         &self,
     ) -> impl Iterator<Item = (&Path, Option<&[u8]>)> + '_ {

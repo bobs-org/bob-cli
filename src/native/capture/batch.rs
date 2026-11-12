@@ -592,6 +592,11 @@ pub(super) fn plan_capture_to_target(
                 section_prefix.as_deref(),
                 *exact,
             )?;
+            reject_generated_albums_selector(
+                &contents,
+                section_prefix.as_deref(),
+                *exact,
+            )?;
             insert_bullet_line(
                 &contents,
                 capture_block,

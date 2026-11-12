@@ -1146,7 +1146,7 @@ fn nightly_has_seven_ordered_steps_and_syncs_catalogs_once() {
             "step 3/7 · articles",
             "step 4/7 · period notes",
             "step 5/7 · notebooks — Repair generated notebook catalogs",
-            "step 6/7 · albums — Repair generated records indexes",
+            "step 6/7 · albums — Repair generated records indexes and album catalogs",
             "step 7/7 · vault-sync",
             "All steps passed",
         ],

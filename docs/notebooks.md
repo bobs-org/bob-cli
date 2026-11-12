@@ -263,7 +263,9 @@ naming, the picker icon and parent rules, and Create notebook here.
 - **Section protection.** `## Notebooks` is never a section-bullet target or
   completion row: `@dev#notebooks` refuses with
   `notebooks_section_generated` instead of writing before the first
-  heading or into the callout.
+  heading or into the callout. Owner `## Albums` catalogs use the same
+  shared region engine (`[!albums]` after `## Notebooks`) and the same
+  protection: `@body#albums` refuses with `albums_section_generated`.
 - `bob projects sync` never lists a notebook on a Sub-projects line.
 
 ## Sync

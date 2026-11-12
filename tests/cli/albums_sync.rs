@@ -84,8 +84,27 @@ fn subject(vault: &Path) -> String {
         .to_owned()
 }
 
+fn changed_paths(payload: &Value) -> Vec<String> {
+    payload["changed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap().to_owned())
+        .collect()
+}
+
+fn diff_for<'a>(payload: &'a Value, path: &str) -> &'a str {
+    payload["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|change| change["path"] == path)
+        .and_then(|change| change["diff"].as_str())
+        .unwrap_or_else(|| panic!("missing diff for {path}: {payload}"))
+}
+
 #[test]
-fn dry_run_shows_index_diff_without_writing() {
+fn dry_run_shows_index_and_catalog_diffs_without_writing() {
     let temp = TempDir::new("album-sync-dry");
     let vault = temp.path().join("vault");
     fs::create_dir_all(vault.join("eat")).expect("eat folder");
@@ -93,46 +112,50 @@ fn dry_run_shows_index_diff_without_writing() {
     write(&vault, "eat.md", ALBUM);
     write(&vault, "eat/one.md", RECORD);
     let before_album = fs::read(vault.join("eat.md")).unwrap();
+    let before_body = fs::read(vault.join("body.md")).unwrap();
     let output = run(&vault, &temp, &["sync", "-d", "-f", "json"]);
 
     assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
     let payload = json(&output);
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["dry_run"], true);
-    assert_eq!(payload["changed"], serde_json::json!(["eat.md"]));
-    assert!(payload["changes"][0]["diff"]
-        .as_str()
-        .unwrap()
-        .contains("> [!records] 1 restaurants"));
+    assert_eq!(changed_paths(&payload), ["body.md", "eat.md"]);
+    assert!(diff_for(&payload, "eat.md").contains("> [!records] 1 restaurants"));
+    assert!(diff_for(&payload, "body.md").contains("> [!albums]"));
+    assert_eq!(payload["catalogs"][0]["path"], "body.md");
+    assert_eq!(payload["catalogs"][0]["state"], "missing");
     assert_eq!(fs::read(vault.join("eat.md")).unwrap(), before_album);
+    assert_eq!(fs::read(vault.join("body.md")).unwrap(), before_body);
     assert!(!vault.join(".git").exists());
 }
 
 #[test]
-fn real_sync_commits_only_changed_albums_and_then_becomes_a_noop() {
+fn real_sync_commits_indexes_and_catalogs_then_becomes_a_noop() {
     let temp = TempDir::new("album-sync-real");
     let vault = fixture(&temp, false);
     let before = head(&vault);
-    let body_before = fs::read(vault.join("body.md")).unwrap();
 
     let first = run(&vault, &temp, &["sync", "-f", "json"]);
     assert_eq!(first.status.code(), Some(0), "{}", format_output(&first));
     let payload = json(&first);
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["command"], "sync");
-    assert_eq!(payload["commit"]["subject"], "albums: sync (1 notes)");
-    assert_eq!(payload["changed"], serde_json::json!(["eat.md"]));
+    assert_eq!(payload["commit"]["subject"], "albums: sync (2 notes)");
+    assert_eq!(changed_paths(&payload), ["body.md", "eat.md"]);
     assert_eq!(payload["albums"][0]["index"]["state"], "current");
+    assert_eq!(payload["catalogs"][0]["state"], "current");
     assert_ne!(head(&vault), before);
-    assert_eq!(subject(&vault), "albums: sync (1 notes)");
-    assert_eq!(fs::read(vault.join("body.md")).unwrap(), body_before);
+    assert_eq!(subject(&vault), "albums: sync (2 notes)");
+    let body = fs::read_to_string(vault.join("body.md")).unwrap();
+    assert!(body.contains("> [!albums]"), "{body}");
+    assert!(body.contains("[[eat|Restaurants]]"), "{body}");
     assert_eq!(
         stdout(&git_in(
             &vault,
             ["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"],
         ))
         .trim(),
-        "eat.md"
+        "body.md\neat.md"
     );
 
     let after_first = head(&vault);
@@ -155,8 +178,8 @@ fn damaged_album_stays_unchanged_while_healthy_indexes_commit() {
     assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
     let payload = json(&output);
     assert_eq!(payload["ok"], false);
-    assert_eq!(payload["commit"]["subject"], "albums: sync (1 notes)");
-    assert_eq!(payload["changed"], serde_json::json!(["eat.md"]));
+    assert_eq!(payload["commit"]["subject"], "albums: sync (2 notes)");
+    assert_eq!(changed_paths(&payload), ["body.md", "eat.md"]);
     let broken = payload["albums"]
         .as_array()
         .unwrap()
@@ -182,7 +205,7 @@ fn hand_edited_and_duplicate_index_regions_are_repaired() {
     let output = run(&vault, &temp, &["sync", "-f", "json"]);
     assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
     let payload = json(&output);
-    assert_eq!(payload["changed"], serde_json::json!(["eat.md"]));
+    assert_eq!(changed_paths(&payload), ["body.md", "eat.md"]);
     assert_eq!(payload["albums"][0]["index"]["state"], "current");
     let repaired = fs::read_to_string(vault.join("eat.md")).unwrap();
     assert_eq!(repaired.matches("> [!records]").count(), 1, "{repaired}");
@@ -223,5 +246,214 @@ fn nightly_continues_after_album_failure_and_publishes_healthy_indexes() {
         stdout(&git_in(&vault, ["rev-parse", "origin/master"])).trim(),
         head(&vault),
         "nightly's final vault-sync still publishes the healthy album index"
+    );
+    let body = fs::read_to_string(vault.join("body.md")).unwrap();
+    assert!(body.contains("> [!albums]"), "{body}");
+    assert!(
+        stdout(&git_in(
+            &vault,
+            ["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"],
+        ))
+        .contains("body.md"),
+        "nightly also published the owner catalog"
+    );
+}
+
+#[test]
+fn reparenting_updates_both_owner_catalogs_in_one_commit() {
+    let temp = TempDir::new("album-sync-reparent");
+    let vault = fixture(&temp, false);
+    write(&vault, "mind.md", "---\ntype: [[area]]\n---\n\n# Mind\n");
+    commit_all(&vault, "add mind");
+    assert_eq!(run(&vault, &temp, &["sync"]).status.code(), Some(0));
+
+    let eat = fs::read_to_string(vault.join("eat.md")).unwrap();
+    write(&vault, "eat.md", &eat.replace("[[body]]", "[[mind]]"));
+    commit_all(&vault, "reparent eat");
+    let output = run(&vault, &temp, &["sync", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let payload = json(&output);
+    assert_eq!(changed_paths(&payload), ["body.md", "mind.md"]);
+    let body = fs::read_to_string(vault.join("body.md")).unwrap();
+    assert!(!body.contains("> [!albums]"), "{body}");
+    let mind = fs::read_to_string(vault.join("mind.md")).unwrap();
+    assert!(mind.contains("[[eat|Restaurants]]"), "{mind}");
+}
+
+#[test]
+fn catalog_only_changes_commit_without_touching_indexes() {
+    let temp = TempDir::new("album-sync-catalog-only");
+    let vault = fixture(&temp, false);
+    assert_eq!(run(&vault, &temp, &["sync"]).status.code(), Some(0));
+    let eat_before = fs::read(vault.join("eat.md")).unwrap();
+    write(
+        &vault,
+        "body.md",
+        "---\ntype: [[area]]\n---\n\n# Body\n\n## Albums\n\n> [!albums]\n>\n> - stale\n",
+    );
+    commit_all(&vault, "stale catalog");
+
+    let output = run(&vault, &temp, &["sync", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let payload = json(&output);
+    assert_eq!(changed_paths(&payload), ["body.md"]);
+    assert_eq!(payload["catalogs"][0]["state"], "current");
+    assert_eq!(fs::read(vault.join("eat.md")).unwrap(), eat_before);
+    let body = fs::read_to_string(vault.join("body.md")).unwrap();
+    assert!(body.contains("[[eat|Restaurants]]"), "{body}");
+}
+
+#[test]
+fn damaged_host_catalog_is_skipped_while_healthy_hosts_commit() {
+    let temp = TempDir::new("album-sync-damaged-host");
+    let vault = fixture(&temp, false);
+    write(&vault, "mind.md", "---\ntype: [[area]]\n---\n\n# Mind\n");
+    write(
+        &vault,
+        "movies.md",
+        "---\ntype: [[album]]\nparent: \"[[mind]]\"\nsummary: Films.\nrecord:\n  noun: movie\n---\n\n# Movies\n",
+    );
+    write(
+        &vault,
+        "body.md",
+        "---\ntype: [[area]]\n---\n\n# Body\n\n## Albums\n\n> [!albums\n> - partial\n",
+    );
+    commit_all(&vault, "damage body catalog");
+
+    let damaged_before = fs::read(vault.join("body.md")).unwrap();
+    let output = run(&vault, &temp, &["sync", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let payload = json(&output);
+    assert_eq!(payload["ok"], false);
+    assert_eq!(fs::read(vault.join("body.md")).unwrap(), damaged_before);
+    let catalogs = payload["catalogs"].as_array().unwrap();
+    let body = catalogs
+        .iter()
+        .find(|catalog| catalog["path"] == "body.md")
+        .unwrap();
+    assert_eq!(body["state"], "damaged");
+    assert_eq!(body["issues"][0]["code"], "album_catalog_damaged");
+    let changed = changed_paths(&payload);
+    assert!(changed.contains(&"eat.md".to_owned()), "{changed:?}");
+    assert!(changed.contains(&"mind.md".to_owned()), "{changed:?}");
+    assert!(!changed.contains(&"body.md".to_owned()), "{changed:?}");
+    let mind = fs::read_to_string(vault.join("mind.md")).unwrap();
+    assert!(mind.contains("[[movies|Movies]]"), "{mind}");
+}
+
+#[test]
+fn capture_cannot_target_the_generated_albums_section() {
+    let temp = TempDir::new("album-capture-protect");
+    let vault = fixture(&temp, false);
+    write(
+        &vault,
+        "body.md",
+        "---\ntype: [[area]]\n---\n\n# Body\n\n## Albums\n\n> [!albums]\n>\n> - 🍽️ **[[eat|Restaurants]]** — Places.\n\n## Ideas\n\n- keep\n",
+    );
+    commit_all(&vault, "seed catalog");
+    let before = fs::read_to_string(vault.join("body.md")).unwrap();
+
+    for target in ["@body#albums", "@body#album", "@body#Albums", "@body#al"] {
+        let mut command = bob_command();
+        command
+            .arg("capture")
+            .arg(format!("an idea {target}"))
+            .env("BOB_DIR", &vault)
+            .env("BOB_NOW", "2026-11-09")
+            .env("NO_COLOR", "1");
+        let output = command.output().unwrap();
+        assert!(
+            !output.status.success(),
+            "{target}: {}",
+            format_output(&output)
+        );
+        let text = format_output(&output);
+        assert!(text.contains("generated album catalog"), "{target}: {text}");
+        assert!(
+            text.contains("albums_section_generated")
+                || text.contains("generated album catalog"),
+            "{target}: {text}"
+        );
+        assert_eq!(
+            fs::read_to_string(vault.join("body.md")).unwrap(),
+            before,
+            "{target} wrote nothing"
+        );
+    }
+
+    let mut dry = bob_command();
+    dry.arg("capture")
+        .arg("--dry-run")
+        .arg("an idea @body#albums")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-11-09")
+        .env("NO_COLOR", "1");
+    let dry_output = dry.output().unwrap();
+    assert!(
+        !dry_output.status.success(),
+        "{}",
+        format_output(&dry_output)
+    );
+    assert_eq!(fs::read_to_string(vault.join("body.md")).unwrap(), before);
+
+    let mut neighbor = bob_command();
+    neighbor
+        .arg("capture")
+        .arg("an idea @body#Ideas")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-11-09")
+        .env("NO_COLOR", "1");
+    let neighbor_output = neighbor.output().unwrap();
+    assert!(
+        neighbor_output.status.success(),
+        "{}",
+        format_output(&neighbor_output)
+    );
+    let after = fs::read_to_string(vault.join("body.md")).unwrap();
+    assert!(after.contains("- an idea"), "{after}");
+    assert!(after.contains("> [!albums]"), "{after}");
+
+    let draft = "@body#";
+    let complete = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg(draft.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("capture-complete");
+    assert_eq!(
+        complete.status.code(),
+        Some(0),
+        "{}",
+        format_output(&complete)
+    );
+    let payload: Value =
+        serde_json::from_str(stdout(&complete).trim()).expect("json");
+    let labels = payload["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|row| {
+            row["title"]
+                .as_str()
+                .or_else(|| row["replacement"].as_str())
+                .or_else(|| row["label"].as_str())
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        !labels
+            .iter()
+            .any(|label| label.to_lowercase().contains("albums")),
+        "{labels:?}"
+    );
+    assert!(
+        labels.iter().any(|label| label.contains("Ideas")),
+        "{labels:?}"
     );
 }

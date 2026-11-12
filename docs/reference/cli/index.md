@@ -60,7 +60,7 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob albums`](albums.md) | Inspect album notes |
 | [`bob albums check`](albums.md#bob-albums-check) | Check albums against the contract |
 | [`bob albums list`](albums.md#bob-albums-list) | List albums grouped by root (default) |
-| [`bob albums sync`](albums.md#bob-albums-sync) | Repair generated records indexes |
+| [`bob albums sync`](albums.md#bob-albums-sync) | Repair generated records indexes and album catalogs |
 | [`bob articles`](articles.md) | Format and inspect article notes with bob-owned section numbers |
 | [`bob attachments`](attachments.md) | Copy files into the vault and show where copies came from |
 | [`bob attachments import`](attachments.md#bob-attachments-import) | Copy image and file paths into the vault |

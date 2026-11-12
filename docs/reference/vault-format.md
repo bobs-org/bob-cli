@@ -391,9 +391,11 @@ text, emphasis stripped), otherwise the first `aliases:` entry, otherwise
 the humanized stem. Owner is the nearest area or project on the parent
 chain; root is the owner's Root Parent. Counts are column-zero note bullets;
 `last_note` is the latest `[created::]` date. Areas and projects carry a
-generated `## Notebooks` catalog of the notebooks beneath them. See
-`docs/notebooks.md` for the contract, the catalog, `bob notebooks list`,
-`check`, `sync`, and `create`, and the teaching refusals.
+generated `## Notebooks` catalog of the notebooks beneath them, and a
+generated `## Albums` catalog of the albums beneath them. Both catalogs
+use the shared host-catalog engine: bob owns the callout bytes; Bryan owns
+their position. See `docs/notebooks.md` for the notebook contract and
+`docs/records.md` for album catalog rows, sync, and section protection.
 
 Contract: [Notebooks](../notebooks.md).
 
@@ -403,10 +405,12 @@ An album is a vault-root Markdown file with `type: "[[album]]"`. Its stem is
 the record folder and route. Canonical records use `type: "[[record]]"`;
 `record.noun` names the kind and legacy type spelling. `record.fields` is
 optional. `index_by` and `index_facets` shape grouping peeks, subgroup
-headings, and row facets. Each album owns a `[!records]` index; `list` and
-`check` report `index.state` (`current`, `missing`, `stale`, `damaged`)
-without writing. A broken album fails only its own route. `bob albums create`
-ships in a later phase.
+headings, and row facets. Each album owns a `[!records]` index; each owner
+area or project owns a stable `[!albums]` catalog. `list` and `check` report
+`index.state` and `catalogs[].state` (`current`, `missing`, `stale`,
+`damaged`) without writing. `bob albums sync` repairs both in one guarded
+commit. A broken album fails only its own route. `bob albums create` ships in
+a later phase.
 
 Contract: [Albums and record notes](../records.md).
 

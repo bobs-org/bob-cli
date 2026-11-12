@@ -1198,6 +1198,125 @@ fn explicit_notebooks_selector_refuses_instead_of_falling_through() {
     .expect("eligible heading exists");
 }
 
+const GENERATED_ALBUMS: &str = concat!(
+    "# Body\n",
+    "\n",
+    "## Notebooks\n",
+    "\n",
+    "> [!notebooks]\n",
+    ">\n",
+    "> - **[[git|Git]]**\n",
+    "\n",
+    "## Albums\n",
+    "\n",
+    "> [!albums]\n",
+    ">\n",
+    "> - 🍽️ **[[eat|Restaurants]]** — Places.\n",
+    "\n",
+    "## Ideas\n",
+    "\n",
+    "- one\n",
+    "\n",
+    "## Tasks\n",
+);
+
+#[test]
+fn generated_albums_section_is_never_completed() {
+    let titles: Vec<String> =
+        super::super::section_completion_rows(GENERATED_ALBUMS, "")
+            .into_iter()
+            .map(|row| row.title)
+            .collect();
+    assert_eq!(titles, vec!["Body".to_string(), "Ideas".to_string()]);
+    assert!(
+        super::super::section_completion_rows(GENERATED_ALBUMS, "albums")
+            .is_empty()
+    );
+    assert!(
+        super::super::section_completion_rows(GENERATED_ALBUMS, "al")
+            .is_empty()
+    );
+    let headings: Vec<String> =
+        super::super::non_tasks_section_headings(GENERATED_ALBUMS)
+            .into_iter()
+            .map(|heading| heading.title)
+            .collect();
+    assert_eq!(headings, vec!["Body".to_string(), "Ideas".to_string()]);
+}
+
+#[test]
+fn generated_albums_section_is_never_a_bullet_target() {
+    let (updated, _) = super::super::insert_bullet_line(
+        GENERATED_ALBUMS,
+        BULLET,
+        Some("Ideas"),
+        false,
+    );
+    assert!(updated.contains(&format!("- one\n{BULLET}")), "{updated}");
+    let callout = "> [!albums]\n>\n> - 🍽️ **[[eat|Restaurants]]** — Places.\n";
+    assert!(updated.contains(callout), "{updated}");
+    let before_block = updated.split("> [!albums]").next().unwrap();
+    assert!(!before_block.contains(BULLET));
+    let after_callout = updated.split(callout).nth(1).unwrap_or("");
+    assert!(!after_callout.starts_with(BULLET));
+}
+
+#[test]
+fn explicit_albums_selector_refuses_instead_of_falling_through() {
+    for (selector, exact) in [
+        ("albums", false),
+        ("Albums", true),
+        ("album", false),
+        ("al", false),
+    ] {
+        let error = super::super::reject_generated_albums_selector(
+            GENERATED_ALBUMS,
+            Some(selector),
+            exact,
+        )
+        .expect_err(selector);
+        assert!(
+            error.message.contains("generated album catalog"),
+            "{selector}: {}",
+            error.message
+        );
+        assert_eq!(error.code.as_deref(), Some("albums_section_generated"));
+    }
+    for (contents, selector) in [
+        (GENERATED_ALBUMS, Some("Ideas")),
+        (GENERATED_ALBUMS, Some("zzz")),
+        (GENERATED_ALBUMS, None),
+        ("## Ideas\n", Some("albums")),
+    ] {
+        super::super::reject_generated_albums_selector(
+            contents, selector, false,
+        )
+        .expect("not refused");
+    }
+    super::super::reject_generated_albums_selector(
+        "## Albums\n\n## Albums Extra\n",
+        Some("albums"),
+        false,
+    )
+    .expect("eligible heading exists");
+    let fenced = concat!(
+        "# Body\n",
+        "\n",
+        "```md\n",
+        "## Albums\n",
+        "> [!albums]\n",
+        "```\n",
+        "\n",
+        "## Ideas\n",
+    );
+    super::super::reject_generated_albums_selector(
+        fenced,
+        Some("albums"),
+        false,
+    )
+    .expect("fenced example is not a generated heading");
+}
+
 #[test]
 fn heading_matches_bullet_selector_is_raw_or_identity() {
     assert!(super::super::heading_matches_bullet_selector(

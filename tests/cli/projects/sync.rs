@@ -1019,3 +1019,33 @@ fn projects_sync_does_not_hoist_without_open_prj() {
         "live sync must leave the missing-^prj note unchanged"
     );
 }
+
+#[test]
+fn projects_sync_never_lists_an_album_as_a_sub_project() {
+    let temp = TempDir::new("bob-cli-projects-sync-album");
+    let vault = temp.path().join("vault");
+
+    write_file(
+        &vault.join("Parent.md"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n- [ ] #task Needs priority\n",
+    );
+    write_file(
+        &vault.join("Child.md"),
+        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [ ] #task Finish child #hide ^prj\n- [ ] #task Needs priority\n",
+    );
+    write_file(
+        &vault.join("eat.md"),
+        "---\ntype: [[album]]\nparent: \"[[Parent]]\"\nsummary: Places.\nrecord:\n  noun: restaurant\n---\n\n# Restaurants\n",
+    );
+
+    let output = bob_command()
+        .args(["projects", "sync", "--bob-dir"])
+        .arg(&vault)
+        .output()
+        .expect("projects sync");
+    assert_success(&output);
+    let parent = fs::read_to_string(vault.join("Parent.md")).expect("parent");
+    assert!(parent.contains("[[Child]]"), "{parent}");
+    assert!(!parent.contains("eat"), "{parent}");
+    assert!(!parent.contains("Restaurants"), "{parent}");
+}

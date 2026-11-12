@@ -1,13 +1,14 @@
-//! `bob albums sync`: rebuild stale records indexes through one guarded
-//! host-catalog transaction.
+//! `bob albums sync`: rebuild stale records indexes and owner catalogs
+//! through one guarded host-catalog transaction.
 //!
-//! Planning reuses the album report's index projection. Standalone execution
-//! uses the shared lock/pre-sync/commit/post-sync lifecycle; nightly calls the
-//! lock-free core while its outer runner owns those steps.
+//! Planning composes the album-index projection with the owner-catalog
+//! planner from one snapshot. Standalone execution uses the shared
+//! lock/pre-sync/commit/post-sync lifecycle; nightly calls the lock-free
+//! core while its outer runner owns those steps.
 
 use std::{
     cell::RefCell,
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
 
@@ -15,6 +16,7 @@ use serde_json::{json, Value};
 use similar::TextDiff;
 
 use super::{
+    catalog::{self, AlbumCatalogRecord, CatalogState},
     index::IndexState,
     registry::{AlbumRegistry, DiscoveryHealth},
     report::{self, AlbumIssue, AlbumReportEntry},
@@ -56,6 +58,15 @@ impl ChangedFile {
 #[derive(Debug, Clone)]
 pub(crate) struct IndexSyncPlan {
     pub(crate) albums: Vec<AlbumReportEntry>,
+    pub(crate) edits: Vec<FileEdit>,
+    pub(crate) dependencies: ReadDependencies,
+    pub(crate) io_errors: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CombinedSyncPlan {
+    pub(crate) albums: Vec<AlbumReportEntry>,
+    pub(crate) catalogs: Vec<AlbumCatalogRecord>,
     pub(crate) changes: Vec<ChangedFile>,
     pub(crate) edits: Vec<FileEdit>,
     pub(crate) dependencies: ReadDependencies,
@@ -65,6 +76,7 @@ pub(crate) struct IndexSyncPlan {
 #[derive(Debug, Clone)]
 pub(crate) struct SyncContext {
     pub(crate) albums: Vec<AlbumReportEntry>,
+    pub(crate) catalogs: Vec<AlbumCatalogRecord>,
     pub(crate) changes: Vec<ChangedFile>,
     pub(crate) io_errors: Vec<String>,
 }
@@ -73,6 +85,7 @@ pub(crate) struct SyncContext {
 pub(crate) struct SyncReport {
     pub(crate) dry_run: bool,
     pub(crate) albums: Vec<AlbumReportEntry>,
+    pub(crate) catalogs: Vec<AlbumCatalogRecord>,
     pub(crate) changes: Vec<ChangedFile>,
     pub(crate) commit: Option<CommitInfo>,
     pub(crate) sync_pre: Option<&'static str>,
@@ -87,6 +100,7 @@ impl SyncReport {
         Self {
             dry_run,
             albums: Vec::new(),
+            catalogs: Vec::new(),
             changes: Vec::new(),
             commit: None,
             sync_pre: None,
@@ -101,6 +115,10 @@ impl SyncReport {
         self.albums
             .iter()
             .any(|album| album.index == IndexState::Damaged)
+            || self
+                .catalogs
+                .iter()
+                .any(|catalog| catalog.state == CatalogState::Damaged)
     }
 
     fn ok(&self) -> bool {
@@ -116,6 +134,9 @@ impl SyncReport {
             .albums
             .iter()
             .flat_map(|album| album.issues.iter().map(AlbumIssue::to_json))
+            .chain(self.catalogs.iter().flat_map(|catalog| {
+                catalog.issues.iter().map(AlbumIssue::to_json)
+            }))
             .collect::<Vec<_>>();
         let records =
             self.albums.iter().map(|album| album.records).sum::<usize>();
@@ -125,20 +146,24 @@ impl SyncReport {
             .filter_map(|album| album.root.as_deref())
             .collect::<BTreeSet<_>>()
             .len();
-        let errors = self
+        let mut errors = 0usize;
+        let mut warnings = 0usize;
+        for issue in self
             .albums
             .iter()
-            .flat_map(|album| &album.issues)
-            .filter(|issue| issue.severity == super::AlbumIssueSeverity::Error)
-            .count();
-        let warnings = self
-            .albums
-            .iter()
-            .flat_map(|album| &album.issues)
-            .filter(|issue| {
-                issue.severity == super::AlbumIssueSeverity::Warning
-            })
-            .count();
+            .flat_map(|album| album.issues.iter())
+            .chain(
+                self.catalogs
+                    .iter()
+                    .flat_map(|catalog| catalog.issues.iter()),
+            )
+        {
+            match issue.severity {
+                super::AlbumIssueSeverity::Error => errors += 1,
+                super::AlbumIssueSeverity::Warning => warnings += 1,
+                super::AlbumIssueSeverity::Info => {}
+            }
+        }
         let mut payload = json!({
             "schema_version": SCHEMA_VERSION,
             "ok": self.ok(),
@@ -152,9 +177,10 @@ impl SyncReport {
                 }
                 item
             }).collect::<Vec<_>>(),
-            // The entries are the same deterministic index report used by
-            // `albums list` and `albums check`.
+            // The entries are the same deterministic index/catalog report used
+            // by `albums list` and `albums check`.
             "albums": self.albums.iter().map(AlbumReportEntry::to_json).collect::<Vec<_>>(),
+            "catalogs": self.catalogs.iter().map(AlbumCatalogRecord::to_json).collect::<Vec<_>>(),
             "counts": {
                 "albums": self.albums.len(),
                 "records": records,
@@ -247,14 +273,6 @@ pub(crate) fn plan_indexes(
     }
     albums.sort_by(|left, right| left.path.cmp(&right.path));
     edits.sort_by(|left, right| left.path.cmp(&right.path));
-    let changes = edits
-        .iter()
-        .map(|edit| ChangedFile {
-            path: slash(&edit.path),
-            before: edit.before.clone(),
-            after: edit.after.clone(),
-        })
-        .collect();
 
     // The snapshot is the discovery source for album declarations; require
     // it to contain each declaration preimage used above.
@@ -274,14 +292,88 @@ pub(crate) fn plan_indexes(
 
     Ok(IndexSyncPlan {
         albums,
-        changes,
         edits,
         dependencies,
         io_errors,
     })
 }
 
-fn planned_txn(vault: &Path, plan: IndexSyncPlan) -> PlannedTxn<SyncContext> {
+/// Compose index and catalog plans from one snapshot/registry. Edits share
+/// one final preimage and postimage per path.
+pub(crate) fn plan_sync(
+    vault: &Path,
+    registry: &AlbumRegistry,
+    snapshot: &VaultSnapshot,
+) -> Result<CombinedSyncPlan, TxnFailure> {
+    let indexes = plan_indexes(vault, registry, snapshot)?;
+    let catalogs = catalog::plan_catalogs(snapshot, registry);
+    let mut dependencies = indexes.dependencies;
+    dependencies.extend(catalog::catalog_read_dependencies(snapshot, registry));
+    let catalog_edits = catalogs
+        .edits()
+        .into_iter()
+        .cloned()
+        .collect::<Vec<FileEdit>>();
+    let edits = merge_edits(indexes.edits, catalog_edits);
+    let changes = edits
+        .iter()
+        .map(|edit| ChangedFile {
+            path: slash(&edit.path),
+            before: edit.before.clone(),
+            after: edit.after.clone(),
+        })
+        .collect();
+    Ok(CombinedSyncPlan {
+        albums: indexes.albums,
+        catalogs: catalogs.records(),
+        changes,
+        edits,
+        dependencies,
+        io_errors: indexes.io_errors,
+    })
+}
+
+fn merge_edits(
+    indexes: Vec<FileEdit>,
+    catalogs: Vec<FileEdit>,
+) -> Vec<FileEdit> {
+    let mut by_path = BTreeMap::new();
+    for edit in indexes.into_iter().chain(catalogs) {
+        match by_path.remove(&edit.path) {
+            None => {
+                by_path.insert(edit.path.clone(), edit);
+            }
+            Some(existing) => {
+                let merged = if existing.after == edit.before {
+                    FileEdit {
+                        path: existing.path,
+                        before: existing.before,
+                        after: edit.after,
+                    }
+                } else if edit.after == existing.before {
+                    FileEdit {
+                        path: existing.path,
+                        before: edit.before,
+                        after: existing.after,
+                    }
+                } else {
+                    FileEdit {
+                        path: existing.path,
+                        before: existing.before,
+                        after: edit.after,
+                    }
+                };
+                by_path.insert(merged.path.clone(), merged);
+            }
+        }
+    }
+    by_path.into_values().collect()
+}
+
+fn planned_txn(
+    vault: &Path,
+    plan: CombinedSyncPlan,
+) -> PlannedTxn<SyncContext> {
     let hosts = plan.edits.iter().map(|edit| edit.path.clone()).collect();
     let files = host_catalog::staged_rewrites(vault, &plan.edits);
     let count = files.len();
@@ -295,6 +387,7 @@ fn planned_txn(vault: &Path, plan: IndexSyncPlan) -> PlannedTxn<SyncContext> {
         verify,
         context: SyncContext {
             albums: plan.albums,
+            catalogs: plan.catalogs,
             changes: plan.changes,
             io_errors: plan.io_errors,
         },
@@ -313,31 +406,42 @@ fn verify_current_hosts(
     let registry =
         AlbumRegistry::from_snapshot(vault, &config::config_path(), &snapshot);
     let report = report::build_report(&registry, &snapshot);
+    let catalogs = catalog::plan_catalogs(&snapshot, &registry);
     for host in hosts {
         let key = host.to_string_lossy().replace('\\', "/");
-        let Some(album) = report.albums.iter().find(|album| album.path == key)
-        else {
-            return Err(format!("{key} disappeared after the write"));
-        };
-        if album.index != IndexState::Current {
+        if let Some(album) =
+            report.albums.iter().find(|album| album.path == key)
+        {
+            if album.index != IndexState::Current {
+                return Err(format!(
+                    "{key} is still not current after the write"
+                ));
+            }
+            continue;
+        }
+        if catalogs
+            .host(Path::new(&key))
+            .is_some_and(|plan| plan.edit.is_some())
+        {
             return Err(format!("{key} is still not current after the write"));
         }
     }
     Ok(())
 }
 
-/// Read-only index plan. It takes no lock and runs no Git or sync command.
+/// Read-only combined plan. It takes no lock and runs no Git or sync command.
 pub(crate) fn dry_run(vault: &Path) -> SyncReport {
     let snapshot = VaultSnapshot::load(vault);
     let registry =
         AlbumRegistry::from_snapshot(vault, &config::config_path(), &snapshot);
-    let plan = match plan_indexes(vault, &registry, &snapshot) {
+    let plan = match plan_sync(vault, &registry, &snapshot) {
         Ok(plan) => plan,
         Err(failure) => return SyncReport::failed(true, failure),
     };
     SyncReport {
         dry_run: true,
         albums: plan.albums,
+        catalogs: plan.catalogs,
         changes: plan.changes,
         commit: None,
         sync_pre: None,
@@ -350,6 +454,7 @@ pub(crate) fn dry_run(vault: &Path) -> SyncReport {
 
 fn report_of(result: TxnResult<SyncContext>) -> SyncReport {
     let mut albums = result.context.albums;
+    let mut catalogs = result.context.catalogs;
     if result.commit.is_some() {
         for album in &mut albums {
             if result
@@ -364,10 +469,24 @@ fn report_of(result: TxnResult<SyncContext>) -> SyncReport {
                     .retain(|issue| issue.code != "album_index_stale");
             }
         }
+        for catalog in &mut catalogs {
+            if result
+                .context
+                .changes
+                .iter()
+                .any(|change| change.path == catalog.path)
+            {
+                catalog.state = CatalogState::Current;
+                catalog
+                    .issues
+                    .retain(|issue| issue.code != "album_catalog_stale");
+            }
+        }
     }
     SyncReport {
         dry_run: false,
         albums,
+        catalogs,
         changes: result.context.changes,
         commit: result.commit,
         sync_pre: Some(result.sync_pre),
@@ -387,7 +506,7 @@ pub(crate) fn sync_with_existing_lock(
     let snapshot = VaultSnapshot::load(vault);
     let registry =
         AlbumRegistry::from_snapshot(vault, &config::config_path(), &snapshot);
-    let plan = match plan_indexes(vault, &registry, &snapshot) {
+    let plan = match plan_sync(vault, &registry, &snapshot) {
         Ok(plan) => plan,
         Err(failure) => return SyncReport::failed(false, failure),
     };
@@ -404,7 +523,7 @@ pub(crate) fn sync_with_existing_lock(
 }
 
 /// Standalone real execution: shared lock, pre-sync, guarded transaction,
-/// one scoped commit, then post-sync only when an index changed.
+/// one scoped commit, then post-sync only when an index or catalog changed.
 pub(crate) fn run_standalone(vault: &Path, json_mode: bool) -> SyncReport {
     let child_env = ob::child_env();
     let captured: RefCell<Option<SyncContext>> = RefCell::new(None);
@@ -416,9 +535,10 @@ pub(crate) fn run_standalone(vault: &Path, json_mode: bool) -> SyncReport {
                 &config::config_path(),
                 &snapshot,
             );
-            let plan = plan_indexes(vault, &registry, &snapshot)?;
+            let plan = plan_sync(vault, &registry, &snapshot)?;
             *captured.borrow_mut() = Some(SyncContext {
                 albums: plan.albums.clone(),
+                catalogs: plan.catalogs.clone(),
                 changes: plan.changes.clone(),
                 io_errors: plan.io_errors.clone(),
             });
@@ -430,6 +550,7 @@ pub(crate) fn run_standalone(vault: &Path, json_mode: bool) -> SyncReport {
             let mut report = SyncReport::failed(false, failure);
             if let Some(context) = captured.into_inner() {
                 report.albums = context.albums;
+                report.catalogs = context.catalogs;
                 report.changes = context.changes;
                 report.io_errors = context.io_errors;
             }
@@ -482,6 +603,25 @@ pub(crate) fn print_human(report: &SyncReport) {
             }
         }
     }
+    for catalog in &report.catalogs {
+        if catalog.state == CatalogState::Damaged {
+            for issue in &catalog.issues {
+                if issue.severity == super::AlbumIssueSeverity::Error {
+                    let line = issue
+                        .line
+                        .map(|line| format!(":{line}"))
+                        .unwrap_or_default();
+                    println!(
+                        "{} {}{line} [{}] {}",
+                        styler.red("✗"),
+                        issue.path,
+                        issue.code,
+                        issue.message
+                    );
+                }
+            }
+        }
+    }
     if report.dry_run {
         for change in &report.changes {
             print!("{}", color_diff(&change.diff(), &styler));
@@ -490,16 +630,19 @@ pub(crate) fn print_human(report: &SyncReport) {
             && report.failure.is_none()
             && !report.damaged()
         {
-            println!("{} album indexes are current", styler.green("✓"));
+            println!(
+                "{} album indexes and catalogs are current",
+                styler.green("✓")
+            );
         } else if !report.changes.is_empty() {
             println!(
-                "{} dry run: {} album {} would change; nothing was written",
+                "{} dry run: {} {} would change; nothing was written",
                 styler.yellow("!"),
                 report.changes.len(),
                 if report.changes.len() == 1 {
-                    "index"
+                    "note"
                 } else {
-                    "indexes"
+                    "notes"
                 }
             );
         }
@@ -511,13 +654,13 @@ pub(crate) fn print_human(report: &SyncReport) {
     match &report.commit {
         Some(commit) => {
             println!(
-                "{} synced {} album {} ({})",
+                "{} synced {} {} ({})",
                 styler.green("✓"),
                 report.changes.len(),
                 if report.changes.len() == 1 {
-                    "index"
+                    "note"
                 } else {
-                    "indexes"
+                    "notes"
                 },
                 &commit.sha[..commit.sha.len().min(9)]
             );
@@ -526,7 +669,10 @@ pub(crate) fn print_human(report: &SyncReport) {
             }
         }
         None if !report.damaged() => {
-            println!("{} album indexes are current", styler.green("✓"));
+            println!(
+                "{} album indexes and catalogs are current",
+                styler.green("✓")
+            );
         }
         None => {}
     }
@@ -569,14 +715,14 @@ mod tests {
     const ALBUM: &str = "---\ntype: [[album]]\nparent: \"[[body]]\"\nsummary: Places.\nrecord:\n  noun: restaurant\n  fields:\n    status:\n      values: {to_try: To try, liked: Liked}\n---\n\n# Restaurants\n";
     const RECORD: &str = "---\ntype: [[record]]\nparent: \"[[eat]]\"\ntitle: One\nstatus: to_try\n---\n\n# One\n";
 
-    fn planned(vault: &Path) -> IndexSyncPlan {
+    fn planned(vault: &Path) -> CombinedSyncPlan {
         let snapshot = VaultSnapshot::load(vault);
         let registry = AlbumRegistry::from_snapshot(
             vault,
             &config::config_path(),
             &snapshot,
         );
-        plan_indexes(vault, &registry, &snapshot).expect("index plan")
+        plan_sync(vault, &registry, &snapshot).expect("combined plan")
     }
 
     fn fixture() -> (tempfile::TempDir, PathBuf) {
@@ -639,5 +785,49 @@ mod tests {
             error.typed,
             Some(crate::native::capture::CaptureFailureKind::NoteChanged)
         );
+    }
+
+    #[test]
+    fn owner_preimage_and_new_album_membership_are_guarded() {
+        let (_temp, vault) = fixture();
+        let plan = planned(&vault);
+        fs::write(
+            vault.join("body.md"),
+            "---\ntype: [[area]]\n---\n\n# Body\n\nAuthored.\n",
+        )
+        .expect("owner edit");
+        assert!(plan.dependencies.validate(&vault).is_err());
+
+        let plan = planned(&vault);
+        fs::write(
+            vault.join("movies.md"),
+            "---\ntype: [[album]]\nparent: \"[[body]]\"\nsummary: Films.\nrecord:\n  noun: movie\n---\n\n# Movies\n",
+        )
+        .expect("new album");
+        let error = plan.dependencies.validate(&vault).unwrap_err();
+        assert_eq!(
+            error.typed,
+            Some(crate::native::capture::CaptureFailureKind::NoteChanged)
+        );
+    }
+
+    #[test]
+    fn combined_plan_includes_the_owner_catalog_edit() {
+        let (_temp, vault) = fixture();
+        let plan = planned(&vault);
+        let paths = plan
+            .changes
+            .iter()
+            .map(|change| change.path.as_str())
+            .collect::<Vec<_>>();
+        assert!(paths.contains(&"eat.md"), "{paths:?}");
+        assert!(paths.contains(&"body.md"), "{paths:?}");
+        let body = plan
+            .changes
+            .iter()
+            .find(|change| change.path == "body.md")
+            .unwrap();
+        assert!(body.after.contains("> [!albums]"), "{}", body.after);
+        assert!(body.after.contains("[[eat|Restaurants]]"), "{}", body.after);
     }
 }

@@ -18,7 +18,7 @@ Usage: bob albums [COMMAND]
 Commands:
   check  Check albums against the contract
   list   List albums grouped by root (default)
-  sync   Repair generated records indexes
+  sync   Repair generated records indexes and album catalogs
 
 Options:
   -h, --help  Print help
@@ -101,10 +101,10 @@ See docs/records.md for the album contract.
 
 ## bob albums sync
 
-Repair generated records indexes
+Repair generated records indexes and album catalogs
 
 ```text title="bob albums sync --help"
-Repair each album's generated [!records] index from its record folder. A real run takes the shared vault lock, pre-syncs, guards album declarations, record frontmatter, and folder membership, then makes one scoped commit `albums: sync (N notes)` when indexes change. Current indexes write and commit nothing and skip post-sync. `--dry-run` plans diffs without a lock or sync cycle. Damaged albums are left intact, healthy albums continue, and any damaged album or runtime failure exits 1.
+Repair each album's generated [!records] index and each owner's generated `## Albums` catalog from one snapshot. A real run takes the shared vault lock, pre-syncs, guards album declarations, record frontmatter, folder membership, and the owner/ancestor/declaration inputs catalog rows use, then makes one scoped commit `albums: sync (N notes)` when indexes or catalogs change. Current indexes and catalogs write and commit nothing and skip post-sync. `--dry-run` plans diffs without a lock or sync cycle. Damaged albums and damaged catalogs are left intact, healthy regions continue, and any damaged region or runtime failure exits 1.
 
 Usage: bob albums sync [OPTIONS]
 
@@ -129,7 +129,7 @@ Examples:
   bob albums sync -d
   bob albums sync -b ~/bob-work -f json
 
-See docs/records.md for the index and sync contract.
+See docs/records.md for the index, catalog, and sync contract.
 ```
 
 ## Related

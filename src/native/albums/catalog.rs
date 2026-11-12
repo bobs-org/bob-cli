@@ -11,7 +11,9 @@ use std::{
 
 use super::{registry::AlbumRegistry, report::AlbumIssue, AlbumIssueSeverity};
 use crate::native::{
-    host_catalog::{self, EditState, FileEdit, HostOutcome, ALBUMS},
+    host_catalog::{
+        self, EditState, FileEdit, HostOutcome, ReadDependencies, ALBUMS,
+    },
     notebooks::{
         catalog::inert_text,
         snapshot::{display_slash, LiteKind, VaultSnapshot},
@@ -105,7 +107,6 @@ impl CatalogPlan {
         self.hosts.iter().map(|host| host.record.clone()).collect()
     }
 
-    #[allow(dead_code)]
     pub(crate) fn edits(&self) -> Vec<&FileEdit> {
         self.hosts
             .iter()
@@ -113,7 +114,6 @@ impl CatalogPlan {
             .collect()
     }
 
-    #[allow(dead_code)]
     pub(crate) fn host(&self, path: &Path) -> Option<&HostPlan> {
         self.hosts
             .iter()
@@ -196,6 +196,48 @@ pub(crate) fn plan_catalogs(
         hosts.push(HostPlan { record, edit });
     }
     CatalogPlan { hosts }
+}
+
+/// Owner, ancestor, and declaration preimages catalog rows actually use,
+/// plus vault-root Markdown membership so a concurrent new or removed album
+/// is noticed before install.
+pub(crate) fn catalog_read_dependencies(
+    snapshot: &VaultSnapshot,
+    registry: &AlbumRegistry,
+) -> ReadDependencies {
+    let mut dependencies = ReadDependencies::default();
+    for album in &registry.albums {
+        if let Some(contents) = &album.contents {
+            dependencies.insert(
+                PathBuf::from(&album.declaration.path),
+                Some(contents.clone()),
+            );
+        }
+    }
+    for (path, file) in &snapshot.files {
+        if !matches!(file.lite.kind, LiteKind::Area | LiteKind::Project { .. })
+        {
+            continue;
+        }
+        if let Some(contents) = snapshot.contents(path) {
+            dependencies.insert(path.clone(), Some(contents.to_owned()));
+        }
+    }
+    let members = snapshot
+        .discovered
+        .iter()
+        .filter(|path| is_vault_root_markdown(path))
+        .cloned()
+        .collect::<Vec<_>>();
+    dependencies.insert_directory_membership(PathBuf::new(), Some(members));
+    dependencies
+}
+
+fn is_vault_root_markdown(path: &Path) -> bool {
+    path.components().count() == 1
+        && path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
 }
 
 fn build_graph(

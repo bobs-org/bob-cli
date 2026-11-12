@@ -92,6 +92,20 @@ record:
   `album_index_damaged` and leave the authored region intact. Album-backed
   record writes rebuild this index inside their own transaction (see
   [`bob records`](#bob-records)).
+- **Owner catalogs:** each area or project that owns albums, or that already
+  has a `## Albums` region, carries a bob-owned `[!albums]` callout of
+  stable rows. Direct albums come first, then descendant owners as
+  `> - 🧩 [[project]]` groups. A row is
+  `> - <emoji> **[[stem|Title]]** — <summary>`; missing emoji or summary is
+  omitted. Counts, dates, freshness, peeks, and colors are never written.
+  First insertion lands at the end of an existing `## Notebooks` section,
+  otherwise before the first real `## Tasks`, otherwise at EOF. Later edits
+  stay at the existing callout. Empty subtrees delete the callout and remove
+  the heading only when its section is then blank. `list` and `check` report
+  `catalogs[].state` as `current`, `missing`, `stale`, or `damaged`. Missing
+  and stale warn `album_catalog_stale` with `bob albums sync`; damage errors
+  `album_catalog_damaged` and leave the authored region intact. Record
+  capture and `records new|update` never rewrite owner notes.
 - **`last_record`:** the latest valid `created` date (`YYYY-MM-DD`) among
   folder members, or null. A missing folder is an empty album. Immediate
   Markdown members still count when the schema is broken.
@@ -117,27 +131,30 @@ bob albums sync [-b DIR] [-d] [-f human|json]
 
 ### Syncing records indexes
 
-`bob albums sync` plans every album index from one coherent album inventory
-and each album's direct Markdown folder members. `-d` prints the unified diffs
-without taking the maintenance lock, writing files, running Git, or syncing
-the vault. A real run takes the shared maintenance lock, pre-syncs the vault,
-guards album preimages, record frontmatter, and folder membership, writes all
-healthy album indexes, then makes one scoped `albums: sync (N notes)` commit.
+`bob albums sync` plans every album index and every owner catalog from one
+coherent snapshot and album inventory. `-d` prints the unified diffs without
+taking the maintenance lock, writing files, running Git, or syncing the vault.
+A real run takes the shared maintenance lock, pre-syncs the vault, guards
+album preimages, record frontmatter, folder membership, and the
+owner/ancestor/declaration inputs catalog rows use, writes all healthy
+indexes and catalogs, then makes one scoped `albums: sync (N notes)` commit.
 It runs a post-sync only when it made that commit. A current run writes and
 commits nothing and skips post-sync.
 
-Damaged or invalid albums remain unchanged. Sync continues with healthy
-albums, reports each damaged album and its records, and exits 1 if an album is
-damaged or a runtime operation fails. An unreadable or incomplete source is
-never treated as an empty folder. In `bob nightly`, album sync runs directly
-after `notebooks` and before the final `vault-sync`; a failed maintenance step
-does not prevent that final publish.
+Damaged or invalid albums and damaged owner catalogs remain unchanged. Sync
+continues with healthy regions, reports each skipped damaged region, and
+exits 1 if an album or catalog is damaged or a runtime operation fails. An
+unreadable or incomplete source is never treated as an empty folder. In
+`bob nightly`, album sync runs directly after `notebooks` and before the
+final `vault-sync`; a failed maintenance step does not prevent that final
+publish.
 
 JSON uses schema version 1. `albums[]` repeats the list/check entry shape;
-`counts.damaged` counts unsafe or invalid indexes. `findings[]` flattens album
-issues, while `changes[]` includes path and dry-run diff. `commit`, `sync`,
-`warnings[]`, and `io_errors[]` report transaction state; `ok` is false on
-damage or runtime failure.
+`catalogs[]` repeats the owner-catalog report. `counts.damaged` counts unsafe
+or invalid indexes. `findings[]` flattens album and catalog issues, while
+`changes[]` includes path and dry-run diff. `commit`, `sync`, `warnings[]`,
+and `io_errors[]` report transaction state; `ok` is false on damage or runtime
+failure.
 
 Human `list` groups albums by root with root hues, record and group counts,
 freshness (`today` / `Nd` / `Nw`, using `BOB_NOW` when set), and `!N` / `~N`
