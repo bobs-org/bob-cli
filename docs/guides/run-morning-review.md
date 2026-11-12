@@ -65,8 +65,10 @@ Press `]s` or `Ctrl+Alt+J` to land on the next due row (`[s` /
 `Ctrl+Alt+K` go backward). `]s` from outside starts at PRE when PRE is due.
 `[S` / `]S` cycle occupied review groups and always land on the destination
 group's first due task. From ROTTEN, `]S` jumps to POST's first row. The
-status-bar review footer shows the remaining due count and the current tier
-while the cursor is on a queue row.
+status-bar walker footer's `s` review panel shows the remaining due count
+and the current tier while `s` is the active bracket walk and the cursor is
+on a queue row (off-`s`, a quiet dot on the selector's `s` marks due review
+commitments).
 
 Confirm the caret is on the same note and line `bob freshness` listed, and
 that a landing toast names the tier.

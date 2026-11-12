@@ -30,6 +30,7 @@ Dependency Link (task dep link, dep link); Task Drawer (drawer); Task Freshness
 (freshness); Task Link (task block link); Task Mention (mention, text mention); Task
 Merge; Task Relation (relation, LINKS line, LINKED FROM line); Task Split; Task
 Successor (successor); Task Type (type, theme, pomodoro theme, pomodoro-theme);
-Top-Level Project (top project); Work Log
+Top-Level Project (top project); Walker Footer (walk footer, lane footer, links footer);
+Work Log
 
 <!-- /sase:strands -->

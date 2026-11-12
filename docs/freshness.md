@@ -592,7 +592,7 @@ Schema history is historical: schemas 6–12 accepted a project and/or reference
 
 Bob-ledger-tools keeps top-level api v3 and advances api.freshness.version to 14. The current namespace advertises trackerReview, recurringTier, checklistTiers, `checklistStages`, and `markUnblockedLine`; it no longer advertises referenceReview or refTagIdentity. Namespace v14 queue entries carry `stage`, `stageIndex`, `stageRank`, and `stageTotal`, while `config()` exposes normalized `preStages` and `postStages`. `reviewEntryView()` supplies the same uppercase stage detail to the footer and navigation landing toasts, with a stage-local count only for stages with multiple due rows; a narrow footer drops that count before shortening the stage name. JS writers call `api.freshness.markUnblockedLine` (namespace ≥ v12). When it is missing, they recover without the field and `console.warn`. Its queue and footer use the nine current groups, and public config/count fallbacks match warm snapshots. Navigation may present a REFERENCES entry only when explicitly marked as legacy from a freshness namespace <=10; the new producer never creates one, and the compatibility path preserves old loaded-provider rows until plugin reload.
 
-Dashboard freshness.reviewModel NEW/ROTTEN chips still project memoized evaluated states onto the existing visible Ready pool. Hidden review-only rows never feed a badge for a section that excludes them. The status bar footer, ]s, and CLI use the full review counts. The desktop footer shows nonempty groups in walk order with short labels WIP for PENDING, RECUR for RECURRING, and TICKS for TICKLER; it splits TICKLER from ROTTEN so the commitment/upkeep boundary is visible. The desktop footer paints each group and the current tier in that tier's own color, marks the commitments/upkeep boundary with a hairline divider, and drops groups from the end of the walk (marked `…`) when space runs out. Dashboard ROTTEN chips still fold TICKLER plus ROTTEN. Review r/N and TIER i/M are queue positions, not completed-task counts. Jump notices and CLI output use full tier names.
+Dashboard freshness.reviewModel NEW/ROTTEN chips still project memoized evaluated states onto the existing visible Ready pool. Hidden review-only rows never feed a badge for a section that excludes them. The status bar footer, ]s, and CLI use the full review counts. The desktop walker footer shows its `s` review panel only while `s` is the active bracket walk (a quiet dot on the selector's `s` marks due commitments off-`s`); it shows nonempty groups in walk order with short labels WIP for PENDING, RECUR for RECURRING, and TICKS for TICKLER; it splits TICKLER from ROTTEN so the commitment/upkeep boundary is visible. With nothing due the `s` panel reads `⟳ Review clear` instead of hiding. The desktop footer paints each group and the current tier in that tier's own color, marks the commitments/upkeep boundary with a hairline divider, and drops groups from the end of the walk (marked `…`) when space runs out. Dashboard ROTTEN chips still fold TICKLER plus ROTTEN. Review r/N and TIER i/M are queue positions, not completed-task counts. Jump notices and CLI output use full tier names.
 
 **One-release legacy budget key.** A config that still sets
 `freshness.stale_daily_budget` keeps working for one release: when
@@ -783,12 +783,13 @@ same default as any other generic stamp.
    hint, not "closes the review". Manual `[S` / `]S` still cycle occupied
    groups.
 
-The Obsidian footer keeps a condensed version of that `]s` notice
-visible while the cursor is on a review task, including the compact Alt+P
-roll preview in its hint slot when the row has a recommendation; the full
-preview detail is in its tooltip. Off the walk, it shows the Alt+P preview
-for an open task with a priority, and the `]s next` hint otherwise. When
-nothing is due, the footer shows only that preview. On a TICKLER row the Alt+P
+The Obsidian walker footer keeps a condensed version of that `]s` notice
+in its `s` panel, visible only while `s` is the active bracket walk, including
+the compact Alt+P roll preview in its hint slot when the row has a
+recommendation; the full preview detail is in its tooltip. Off the walk, it
+shows the Alt+P preview for an open task with a priority, and the `]] next`
+hint otherwise. When nothing is due, the `s` panel reads `⟳ Review clear`
+(with the Alt+P preview kept on a prioritized cursor row). On a TICKLER row the Alt+P
 preview shows as a highlighted `Alt+P` answer chip (for example `Alt+P decay P2→P3`),
 red when the recommendation is cancel.
 Its trailing group summary omits the current review group;
@@ -934,7 +935,7 @@ render empty, and NEW/ROTTEN badges show `–` (never zero). Native
 and READY is ungated there; `bob freshness list` is the headless
 review interface.
 
-The current JSON contract is schema_version 16. It includes config interval, pending_interval/next_interval, project_interval, rotten_daily_budget, `pre_stages`, `post_stages`, and normalized decay (`enabled`, `keeps`, `enter`, and `limits: {pending, next, ready}` as integer or `false`); counts due/new/resurfaced/rotten/fresh, pending_due/next_due/projects_due/pre_due/post_due/recurring_due, a nine-key by_tier histogram, walk, decide, refreshed_today, upkeep_today, budget, and budget_met; queue rows with the nine current tiers, lane/state/bucket, interval_source task/note/config/default/pending/next/project, due metadata, keeps, decide (true on due PENDING, NEXT, and Ready ROTTEN/TICKLER at the rung limit), `returned_by`, `unblocked_on` when present, `stage`, `stage_rank`, and `stage_total`; and warnings. It has no reference interval, references_due, references tier, or reference interval source. Counts cover the whole vault regardless of --limit. The Obsidian footer abbreviates PENDING as WIP, RECURRING as RECUR, and TICKLER as TICKS; it omits empty groups and the current group. A NEW project counts once in PROJECTS. References follow their ordinary state and lane groups.
+The current JSON contract is schema_version 16. It includes config interval, pending_interval/next_interval, project_interval, rotten_daily_budget, `pre_stages`, `post_stages`, and normalized decay (`enabled`, `keeps`, `enter`, and `limits: {pending, next, ready}` as integer or `false`); counts due/new/resurfaced/rotten/fresh, pending_due/next_due/projects_due/pre_due/post_due/recurring_due, a nine-key by_tier histogram, walk, decide, refreshed_today, upkeep_today, budget, and budget_met; queue rows with the nine current tiers, lane/state/bucket, interval_source task/note/config/default/pending/next/project, due metadata, keeps, decide (true on due PENDING, NEXT, and Ready ROTTEN/TICKLER at the rung limit), `returned_by`, `unblocked_on` when present, `stage`, `stage_rank`, and `stage_total`; and warnings. It has no reference interval, references_due, references tier, or reference interval source. Counts cover the whole vault regardless of --limit. The Obsidian walker footer's `s` panel abbreviates PENDING as WIP, RECURRING as RECUR, and TICKLER as TICKS; it omits empty groups and the current group. A NEW project counts once in PROJECTS. References follow their ordinary state and lane groups.
 
 Seed options: -d/--dry-run, -F/--force, -f/--format human|json. Ready tasks without a valid `fresh` are grouped by note
 and bin-packed largest-note-first into 7 buckets; a note bigger than
@@ -987,7 +988,7 @@ an invalid `freshness:` block or a non-Dataview task format.
 | ------- | ----- |
 | bob freshness | fresh-cli: schema 16 tiered walk with checklist stages PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST; ordinary reference freshness, project cadence for ^prj, recurring occurrences, PRE/POST checklists, per-rung decay limits, lane `decide`, and `[unblocked::]` ticklers. |
 | `bob capture` | capture-stamps (landed: plan_task_link + `x` close stamp via `stamp_fresh`; existing-dependent `&` dependency stamp via the same helper; a `*` edit to T stamps T the same way; capture never stamps trackers, a new N, or an existing owner's target-ID and lane edits) |
-| bob-ledger-tools | ledger-freshness (landed: api v3 `api.freshness` + status bar in 1.8.0; tracking review under namespace v6 with the `trackerReview` capability; persistent review footer with additive `reviewEntryView` and the compact `api.quickRoll` preview in its hint slot) |
+| bob-ledger-tools | ledger-freshness (landed: api v3 `api.freshness` + status bar in 1.8.0; tracking review under namespace v6 with the `trackerReview` capability; walker footer (review `s` panel with additive `reviewEntryView` and the compact `api.quickRoll` preview in its hint slot, plus lane `w` and links `n` panels)) |
 | bob-navigation-hotkeys | nav-review, nav-stamps (landed: Alt+N + Ctrl+Shift+P/Ctrl+Shift+M/! stamping + refresh row in 1.44.0; PROJECTS tier walk with `trackerReview` capability and legacy v3/v4 fallback; `]s` landing notices append the Alt+P recommended-roll preview; additive `api.quickRoll` v1) |
 | task-status-cycler | cycler-link-stamps (landed: Alt+[/Alt+] + Ctrl+Enter reopen stamping in 1.18.0) |
 | block-id-prompt | cycler-link-stamps (landed: Ctrl+Shift+Enter + ^^ stamping in 1.16.0) |
