@@ -579,12 +579,42 @@ fn atomic_write(target: &Path, bytes: &str) -> io::Result<()> {
     temp_name.push(format!(".{}.tmp", std::process::id()));
     let temp = target.with_file_name(temp_name);
     let _ = fs::remove_file(&temp);
-    fs::write(&temp, bytes)?;
+    let mut file = fs::File::create(&temp)?;
+    let write_result = io::Write::write_all(&mut file, bytes.as_bytes())
+        .and_then(|()| file.sync_all());
+    if let Err(error) = write_result {
+        drop(file);
+        let _ = fs::remove_file(&temp);
+        return Err(error);
+    }
+    drop(file);
     match fs::rename(&temp, target) {
         Ok(()) => Ok(()),
         Err(error) => {
             let _ = fs::remove_file(&temp);
             Err(error)
         }
+    }
+}
+
+#[cfg(test)]
+mod atomic_write_tests {
+    use super::atomic_write;
+
+    #[test]
+    fn atomic_write_installs_the_synced_temp_file() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let target = directory.path().join("period.md");
+        atomic_write(&target, "updated period\n").expect("write period");
+        assert_eq!(
+            std::fs::read_to_string(&target).expect("period note"),
+            "updated period\n"
+        );
+        assert_eq!(
+            std::fs::read_dir(directory.path())
+                .expect("directory")
+                .count(),
+            1
+        );
     }
 }

@@ -5,6 +5,9 @@ use std::{
     process::Command,
 };
 
+#[cfg(unix)]
+use std::fs;
+
 #[cfg(test)]
 use std::{cell::RefCell, collections::HashMap};
 
@@ -309,6 +312,50 @@ pub(crate) fn create_state_lock_file(
 }
 
 pub fn bob_cli_cache_dir() -> PathBuf {
+    cache_home_path().join("bob-cli")
+}
+
+/// The cache home is checked on the shared-temp fallback before script
+/// materialization. Explicit user cache locations retain their existing rules.
+pub(crate) fn ensure_bob_cli_cache_home() -> Result<PathBuf, String> {
+    if let Some(home) = configured_cache_home() {
+        return Ok(home);
+    }
+    let home = fallback_cache_home();
+    #[cfg(unix)]
+    {
+        ensure_owned_private_dir(&home, effective_uid())?;
+        Ok(home)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = home;
+        Err(
+            "secure temporary cache fallback requires a Unix user id; set HOME or XDG_CACHE_HOME".to_string(),
+        )
+    }
+}
+
+/// Prepare and validate the directory used for Bob state under the cache.
+pub(crate) fn ensure_bob_cli_cache_dir() -> Result<PathBuf, String> {
+    let home = ensure_bob_cli_cache_home()?;
+    let cache = home.join("bob-cli");
+    if configured_cache_home().is_none() {
+        #[cfg(unix)]
+        {
+            ensure_owned_private_dir(&cache, effective_uid())?;
+        }
+        #[cfg(not(unix))]
+        {
+            return Err(
+                "secure temporary cache fallback requires a Unix user id; set HOME or XDG_CACHE_HOME".to_string(),
+            );
+        }
+    }
+    Ok(cache)
+}
+
+fn configured_cache_home() -> Option<PathBuf> {
     var_os("XDG_CACHE_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
@@ -317,8 +364,89 @@ pub fn bob_cli_cache_dir() -> PathBuf {
                 .filter(|value| !value.is_empty())
                 .map(|home| PathBuf::from(home).join(".cache"))
         })
-        .unwrap_or_else(|| env::temp_dir().join("bob-cli-cache"))
-        .join("bob-cli")
+}
+
+fn cache_home_path() -> PathBuf {
+    configured_cache_home().unwrap_or_else(fallback_cache_home)
+}
+
+fn fallback_cache_home() -> PathBuf {
+    #[cfg(unix)]
+    {
+        env::temp_dir().join(format!("bob-cli-cache-{}", effective_uid()))
+    }
+    #[cfg(not(unix))]
+    {
+        env::temp_dir().join(format!("bob-cli-cache-{}", std::process::id()))
+    }
+}
+
+#[cfg(unix)]
+fn effective_uid() -> u32 {
+    // SAFETY: geteuid has no preconditions and returns the process' effective uid.
+    unsafe { libc::geteuid() }
+}
+
+#[cfg(unix)]
+fn ensure_owned_private_dir(path: &Path, uid: u32) -> Result<(), String> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+
+    let mut builder = fs::DirBuilder::new();
+    builder.mode(0o700);
+    match builder.create(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => {
+            return Err(format!(
+                "create secure cache directory {}: {error}",
+                path.display()
+            ));
+        }
+    }
+
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        format!("inspect cache directory {}: {error}", path.display())
+    })?;
+    if !metadata.file_type().is_dir() {
+        return Err(format!(
+            "refusing insecure cache directory {}: expected a real directory",
+            path.display()
+        ));
+    }
+    if metadata.uid() != uid {
+        return Err(format!(
+            "refusing insecure cache directory {}: owned by uid {}, expected uid {uid}",
+            path.display(),
+            metadata.uid()
+        ));
+    }
+    if metadata.permissions().mode() & 0o022 != 0 {
+        return Err(format!(
+            "refusing insecure cache directory {}: group or other users can write to it",
+            path.display()
+        ));
+    }
+    if metadata.permissions().mode() & 0o077 != 0 {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(
+            |error| {
+                format!("secure cache directory {}: {error}", path.display())
+            },
+        )?;
+    }
+
+    let verified = fs::symlink_metadata(path).map_err(|error| {
+        format!("verify cache directory {}: {error}", path.display())
+    })?;
+    if !verified.file_type().is_dir()
+        || verified.uid() != uid
+        || verified.permissions().mode() & 0o022 != 0
+    {
+        return Err(format!(
+            "refusing insecure cache directory {}: ownership or permissions changed during validation",
+            path.display()
+        ));
+    }
+    Ok(())
 }
 
 pub fn expand_tilde(path: &Path) -> PathBuf {
@@ -545,7 +673,13 @@ mod tests {
 
     use chrono::{Duration, TimeZone, Timelike, Utc};
 
-    use super::{current_datetime, localized_datetime, TestEnvGuard};
+    use super::{
+        current_datetime, ensure_bob_cli_cache_dir, localized_datetime,
+        TestEnvGuard,
+    };
+
+    #[cfg(unix)]
+    use super::ensure_owned_private_dir;
 
     #[test]
     fn configured_timezone_keeps_the_eastern_day_through_utc_midnight() {
@@ -627,5 +761,49 @@ mod tests {
             Some(OsStr::new("2026-11-11T15:00:00Z")),
         )]);
         assert_eq!(current_datetime().to_string(), "2026-11-11 10:00:00");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secure_temp_cache_directory_is_private_and_owned() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let directory = tempfile::tempdir().expect("temp parent");
+        let path = directory.path().join("cache");
+        let uid = unsafe { libc::geteuid() };
+        ensure_owned_private_dir(&path, uid).expect("secure cache directory");
+        let metadata = std::fs::metadata(&path).expect("cache metadata");
+        assert_eq!(metadata.uid(), uid);
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o700);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secure_temp_cache_refuses_group_or_other_writable_directories() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().expect("temp parent");
+        let path = directory.path().join("cache");
+        std::fs::create_dir(&path).expect("cache directory");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o770))
+            .expect("permissive mode");
+
+        let error = ensure_owned_private_dir(&path, unsafe { libc::geteuid() })
+            .expect_err("writable cache must be refused");
+        assert!(error.contains("group or other users can write"));
+    }
+
+    #[test]
+    fn cache_dir_uses_configured_home_without_secure_temp_setup() {
+        let directory = tempfile::tempdir().expect("cache parent");
+        let cache_home = directory.path().join("xdg-cache");
+        let _guard = TestEnvGuard::set(&[
+            ("XDG_CACHE_HOME", Some(cache_home.as_os_str())),
+            ("HOME", None),
+        ]);
+        assert_eq!(
+            ensure_bob_cli_cache_dir().expect("configured cache"),
+            cache_home.join("bob-cli")
+        );
     }
 }

@@ -330,31 +330,70 @@ fn save_recovery_token(master_token: &str) -> Result<PathBuf, String> {
                 })?;
         }
     }
+    save_recovery_token_to(&path, master_token)?;
+    Ok(path)
+}
+
+fn save_recovery_token_to(
+    path: &std::path::Path,
+    master_token: &str,
+) -> Result<(), String> {
+    let parent = path.parent().ok_or_else(|| {
+        format!("cannot determine parent directory for {}", path.display())
+    })?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| format!("path has no file name: {}", path.display()))?;
+    let temp = parent.join(format!(
+        ".{}.{}-{}.tmp",
+        name.to_string_lossy(),
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or(0)
+    ));
     let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
         options.mode(0o600);
     }
     let file = options
-        .open(&path)
-        .map_err(|error| format!("write {}: {error}", path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(fs::Permissions::from_mode(0o600))
-            .map_err(|error| format!("write {}: {error}", path.display()))?;
-    }
-    {
+        .open(&temp)
+        .map_err(|error| format!("create {}: {error}", temp.display()))?;
+    let write_result = (|| {
         use std::io::Write as _;
         let mut file = file;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(fs::Permissions::from_mode(0o600))
+                .map_err(|error| {
+                    format!("secure {}: {error}", temp.display())
+                })?;
+        }
         file.write_all(format!("{master_token}\n").as_bytes())
-            .map_err(|error| format!("write {}: {error}", path.display()))?;
+            .map_err(|error| format!("write {}: {error}", temp.display()))?;
         file.sync_all()
-            .map_err(|error| format!("write {}: {error}", path.display()))?;
+            .map_err(|error| format!("sync {}: {error}", temp.display()))?;
+        Ok::<(), String>(())
+    })();
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&temp);
+        return Err(error);
     }
-    Ok(path)
+    fs::rename(&temp, path).map_err(|error| {
+        let _ = fs::remove_file(&temp);
+        format!("install {}: {error}", path.display())
+    })?;
+    fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| {
+            format!("sync directory {}: {error}", parent.display())
+        })?;
+    Ok(())
 }
 
 /// `1 note in inbox` or `N notes in inbox`.
@@ -395,5 +434,36 @@ mod tests {
                 .join("gkeep")
                 .join("master_token.recovered")
         );
+    }
+
+    #[test]
+    fn recovery_token_is_atomically_replaced_with_private_permissions() {
+        let directory = std::env::temp_dir().join(format!(
+            "bob-gkeep-token-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&directory).expect("temp directory");
+        let path = directory.join("master_token.recovered");
+        fs::write(&path, "old token\n").expect("old token");
+
+        save_recovery_token_to(&path, "new token").expect("store token");
+
+        assert_eq!(fs::read_to_string(&path).expect("token"), "new token\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path)
+                    .expect("token metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
     }
 }

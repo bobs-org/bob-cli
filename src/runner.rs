@@ -1759,7 +1759,8 @@ pub fn run_script(
 }
 
 pub fn materialize_scripts() -> Result<PathBuf, RunnerError> {
-    let script_dir = script_cache_dir();
+    bob_env::ensure_bob_cli_cache_dir().map_err(RunnerError::new)?;
+    let script_dir = script_cache_dir()?;
     fs::create_dir_all(&script_dir).map_err(|error| {
         RunnerError::new(format!(
             "failed to create script cache directory {}: {error}",
@@ -2081,6 +2082,11 @@ fn run_command_or_report(
         return 2;
     }
 
+    if let Err(error) = bob_env::ensure_bob_cli_cache_dir() {
+        eprintln!("{invocation}: {error}");
+        return 1;
+    }
+
     if use_script_fallback()
         && let Some(script_command) = script_command
     {
@@ -2111,24 +2117,28 @@ fn use_script_fallback() -> bool {
     )
 }
 
-fn script_cache_dir() -> PathBuf {
-    cache_home().join("bob-cli").join("scripts").join(format!(
+fn script_cache_dir() -> Result<PathBuf, RunnerError> {
+    Ok(cache_home()?.join("bob-cli").join("scripts").join(format!(
         "{}-{:016x}",
         env!("CARGO_PKG_VERSION"),
         embedded_assets_hash()
-    ))
+    )))
 }
 
-fn cache_home() -> PathBuf {
-    bob_env::var_os("XDG_CACHE_HOME")
+fn cache_home() -> Result<PathBuf, RunnerError> {
+    if let Some(home) = bob_env::var_os("XDG_CACHE_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .or_else(|| {
-            bob_env::var_os("HOME")
-                .filter(|value| !value.is_empty())
-                .map(|home| PathBuf::from(home).join(".cache"))
-        })
-        .unwrap_or_else(|| env::temp_dir().join("bob-cli-cache"))
+    {
+        return Ok(home);
+    }
+    if let Some(home) = bob_env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .map(|home| PathBuf::from(home).join(".cache"))
+    {
+        return Ok(home);
+    }
+    bob_env::ensure_bob_cli_cache_home().map_err(RunnerError::new)
 }
 
 fn write_asset(

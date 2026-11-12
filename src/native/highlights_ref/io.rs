@@ -184,12 +184,24 @@ pub(super) fn atomic_write(path: &Path, contents: &str) -> Result<()> {
 
     let temp_path = temporary_write_path(path)?;
     let _ = fs::remove_file(&temp_path);
-    fs::write(&temp_path, contents).map_err(|error| {
+    let mut file = fs::File::create(&temp_path).map_err(|error| {
         CommandError::new(format!(
             "write temporary file {}: {error}",
             temp_path.display()
         ))
     })?;
+    let write_result =
+        std::io::Write::write_all(&mut file, contents.as_bytes())
+            .and_then(|()| file.sync_all());
+    if let Err(error) = write_result {
+        drop(file);
+        let _ = fs::remove_file(&temp_path);
+        return Err(CommandError::new(format!(
+            "write temporary file {}: {error}",
+            temp_path.display()
+        )));
+    }
+    drop(file);
     fs::rename(&temp_path, path).map_err(|error| {
         let _ = fs::remove_file(&temp_path);
         CommandError::new(format!("install file {}: {error}", path.display()))
@@ -348,5 +360,27 @@ pub(super) fn change_action(
         "update"
     } else {
         "create"
+    }
+}
+
+#[cfg(test)]
+mod atomic_write_tests {
+    use super::atomic_write;
+
+    #[test]
+    fn atomic_write_installs_the_synced_temp_file() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let target = directory.path().join("reference.md");
+        atomic_write(&target, "updated reference\n").expect("write note");
+        assert_eq!(
+            std::fs::read_to_string(&target).expect("reference note"),
+            "updated reference\n"
+        );
+        assert_eq!(
+            std::fs::read_dir(directory.path())
+                .expect("directory")
+                .count(),
+            1
+        );
     }
 }

@@ -64,6 +64,14 @@ fn write_new_file_atomically(
     destination: &Path,
     contents: &[u8],
 ) -> Result<(), String> {
+    write_new_file_atomically_with(destination, contents, || Ok(()))
+}
+
+fn write_new_file_atomically_with(
+    destination: &Path,
+    contents: &[u8],
+    before_install: impl FnOnce() -> io::Result<()>,
+) -> Result<(), String> {
     let parent = destination.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)
         .map_err(|error| format!("create {}: {error}", parent.display()))?;
@@ -103,28 +111,132 @@ fn write_new_file_atomically(
             ));
         }
         drop(file);
-        if destination.exists() {
+        if let Err(error) = before_install() {
             let _ = fs::remove_file(&temp);
             return Err(format!(
-                "save clipboard file {}: destination appeared after planning",
-                destination.display()
+                "prepare clipboard file {}: {error}",
+                destination.display(),
             ));
         }
-        match fs::rename(&temp, destination) {
-            Ok(()) => {
-                return Ok(());
-            }
-            Err(error) => {
-                let _ = fs::remove_file(&temp);
-                return Err(format!(
-                    "save clipboard file {}: {error}",
-                    destination.display()
-                ));
-            }
+        let result = install_new_file(&temp, destination, contents);
+        if result.is_err() {
+            let _ = fs::remove_file(&temp);
         }
+        return result;
     }
     Err(format!(
         "could not allocate temporary clipboard file for {}",
         destination.display()
     ))
+}
+
+fn install_new_file(
+    temporary: &Path,
+    destination: &Path,
+    contents: &[u8],
+) -> Result<(), String> {
+    match fs::hard_link(temporary, destination) {
+        Ok(()) => {
+            let _ = fs::remove_file(temporary);
+            Ok(())
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            Err(format!(
+                "save clipboard file {}: destination appeared after planning",
+                destination.display()
+            ))
+        }
+        Err(error) if hard_link_unsupported(&error) => {
+            let result = install_new_file_create_new(destination, contents);
+            let _ = fs::remove_file(temporary);
+            result
+        }
+        Err(error) => Err(format!(
+            "save clipboard file {}: {error}",
+            destination.display()
+        )),
+    }
+}
+
+fn install_new_file_create_new(
+    destination: &Path,
+    contents: &[u8],
+) -> Result<(), String> {
+    let mut file = match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            return Err(format!(
+                "save clipboard file {}: destination appeared after planning",
+                destination.display()
+            ));
+        }
+        Err(error) => {
+            return Err(format!(
+                "save clipboard file {}: {error}",
+                destination.display()
+            ));
+        }
+    };
+    if let Err(error) = file.write_all(contents).and_then(|()| file.sync_all())
+    {
+        let _ = fs::remove_file(destination);
+        return Err(format!(
+            "write clipboard file {}: {error}",
+            destination.display()
+        ));
+    }
+    Ok(())
+}
+
+fn hard_link_unsupported(error: &io::Error) -> bool {
+    match error.kind() {
+        io::ErrorKind::Unsupported
+        | io::ErrorKind::PermissionDenied
+        | io::ErrorKind::CrossesDevices => true,
+        _ => matches!(
+            error.raw_os_error(),
+            Some(libc::EPERM | libc::EXDEV | libc::ENOTSUP)
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir() -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "bob-clip-atomic-{}-{}",
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&path).expect("temporary directory");
+        path
+    }
+
+    #[test]
+    fn attachment_install_refuses_a_destination_planted_after_planning() {
+        let dir = temp_dir();
+        let destination = dir.join("photo.png");
+        let error = write_new_file_atomically_with(
+            &destination,
+            b"capture bytes",
+            || fs::write(&destination, b"concurrent bytes"),
+        )
+        .expect_err("a planted destination must not be replaced");
+        assert!(error.contains("destination appeared after planning"));
+        assert_eq!(
+            fs::read(destination).expect("planted file"),
+            b"concurrent bytes"
+        );
+        assert_eq!(
+            fs::read_dir(dir).expect("temp directory").count(),
+            1,
+            "temporary file is removed after the refused install"
+        );
+    }
 }

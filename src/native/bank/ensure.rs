@@ -38,6 +38,7 @@ pub(crate) fn plan(
     let path = super::model::month_path(month);
     let target = bob_dir.join(&path);
     let existing = fs::read_to_string(&target).ok();
+    let original = existing.clone().unwrap_or_default();
     let existed = existing.is_some();
     let (mut contents, created_note) = match existing {
         Some(text) => (text, false),
@@ -72,10 +73,7 @@ pub(crate) fn plan(
         updated_contents: updated,
         target,
         existed,
-        original: fs::read_to_string(
-            bob_dir.join(super::model::month_path(month)),
-        )
-        .unwrap_or_default(),
+        original,
     })
 }
 

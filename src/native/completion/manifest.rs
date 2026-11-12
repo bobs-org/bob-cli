@@ -5,8 +5,8 @@
 //! with `schema_version: 1`. A corrupt manifest warns on stderr and reads
 //! as empty, so a damaged record can only make installs more conservative.
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::{collections::BTreeMap, io::Write as _};
 
 use serde::{Deserialize, Serialize};
 
@@ -157,8 +157,19 @@ pub(crate) fn atomic_write(
         std::process::id(),
         nanos_suffix()
     ));
-    std::fs::write(&temp, bytes)
-        .map_err(|error| format!("cannot write {}: {error}", temp.display()))?;
+    let mut file = std::fs::File::create(&temp).map_err(|error| {
+        format!("cannot create {}: {error}", temp.display())
+    })?;
+    let write_result = file.write_all(bytes).and_then(|()| file.sync_all());
+    if let Err(error) = write_result {
+        drop(file);
+        let _ = std::fs::remove_file(&temp);
+        return Err(format!(
+            "cannot write or sync {}: {error}",
+            temp.display()
+        ));
+    }
+    drop(file);
     std::fs::rename(&temp, path).map_err(|error| {
         let _ = std::fs::remove_file(&temp);
         format!("cannot move {} into place: {error}", path.display())
@@ -186,4 +197,26 @@ pub(crate) fn adapter_sha256(shell: Shell) -> String {
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::Digest;
     hex::encode(sha2::Sha256::digest(bytes))
+}
+
+#[cfg(test)]
+mod atomic_write_tests {
+    use super::atomic_write;
+
+    #[test]
+    fn atomic_write_installs_the_synced_temp_file() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let target = directory.path().join("manifest.json");
+        atomic_write(&target, b"updated manifest\n").expect("write manifest");
+        assert_eq!(
+            std::fs::read(&target).expect("manifest"),
+            b"updated manifest\n"
+        );
+        assert_eq!(
+            std::fs::read_dir(directory.path())
+                .expect("directory")
+                .count(),
+            1
+        );
+    }
 }

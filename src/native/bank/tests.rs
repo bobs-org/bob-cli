@@ -596,6 +596,45 @@ fn ensure_line_lands_after_free_note_children() {
 }
 
 #[test]
+fn ensure_refuses_a_note_changed_after_planning() {
+    let _guard = guard();
+    let root = temp_vault("ensure-stale-preimage");
+    write(root.as_path(), "bank.md", valid_hub());
+    let config = match super::config::parse_bank_config(valid_hub()) {
+        super::config::ConfigParse::Ok(config) => config,
+        other => panic!("expected ok, got {other:?}"),
+    };
+    let other_day = NaiveDate::from_ymd_opt(2026, 11, 11).unwrap();
+    let original =
+        canonical_template(month(), "2026-11-12T07:30:00-05:00", other_day);
+    write(root.as_path(), "bank/2026-11.md", &original);
+
+    let plan =
+        super::ensure::plan(root.as_path(), today(), valid_hub(), &config)
+            .expect("plan");
+    assert_eq!(plan.original, original);
+    let concurrent = format!("{original}\n- [ ] concurrent edit\n");
+    write(root.as_path(), "bank/2026-11.md", &concurrent);
+    let staged = crate::native::capture::StagedTextFile {
+        target: plan.target,
+        target_existed: plan.existed,
+        original_target: plan.original,
+        updated_target: plan.updated_contents.expect("planned contents"),
+    };
+
+    let error = crate::native::capture::write_staged_files_guarded(
+        &[staged],
+        || Ok(()),
+    )
+    .expect_err("stale planning snapshot must be refused");
+    assert!(error.message.contains("changed on disk after planning"));
+    assert_eq!(
+        fs::read_to_string(root.join("bank/2026-11.md")).expect("note"),
+        concurrent
+    );
+}
+
+#[test]
 fn ack_ticks_ids_day_and_reports_unknown() {
     let _guard = guard();
     let root = temp_vault("ack");
