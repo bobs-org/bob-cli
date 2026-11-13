@@ -887,7 +887,7 @@ pub(super) fn is_cancel_log_child(line: &str) -> bool {
     trimmed.starts_with('❌') && trimmed.contains("CANCEL LOG")
 }
 
-fn is_direct_prj_child(
+pub(super) fn is_direct_prj_child(
     sub_block: &PrjSubBlock,
     line: &PrjSubBlockLine,
 ) -> bool {

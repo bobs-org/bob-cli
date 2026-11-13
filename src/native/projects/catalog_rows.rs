@@ -12,6 +12,40 @@ pub(crate) const CLOSED_GROUP_LABEL: &str = "**Closed**";
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const ROW_SEPARATOR: &str = " — ";
 
+/// Render one catalog row: `> - [glyph ]**[[link]]**[ — criterion]`.
+/// Closed-group indentation is applied by the planner; every row parses
+/// back through [`parse_catalog`] to the same key and state.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn render_row(
+    link_inner: &str,
+    state: CatalogRowState,
+    criterion: Option<&str>,
+) -> String {
+    let mut row = String::from("> - ");
+    let glyph = match state {
+        CatalogRowState::Open => None,
+        CatalogRowState::Scheduled => Some(SCHEDULED_GLYPH),
+        CatalogRowState::Blocked => Some(BLOCKED_GLYPH),
+        CatalogRowState::Warning => Some(WARNING_GLYPH),
+        CatalogRowState::Done => Some(DONE_GLYPH),
+        CatalogRowState::Canceled => Some(CANCELED_GLYPH),
+    };
+    if let Some(glyph) = glyph {
+        row.push_str(glyph);
+        row.push(' ');
+    }
+    row.push_str("**[[");
+    row.push_str(link_inner);
+    row.push_str("]]**");
+    if let Some(criterion) = criterion
+        && !criterion.is_empty()
+    {
+        row.push_str(ROW_SEPARATOR);
+        row.push_str(criterion);
+    }
+    row
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CatalogRowState {
     Open,
