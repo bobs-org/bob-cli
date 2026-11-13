@@ -222,6 +222,59 @@ fn list_shows_ack_states_and_counts_unacked() {
 }
 
 #[test]
+fn list_marks_moved_event_receipts_stale_in_json_and_human_output() {
+    let env = GcalEnv::new("bob-cli-gcal-list-ack-stale");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&list_events_json(vec![timed_external(
+        "moved-ack",
+        "Moved interview",
+        "2026-10-30T14:00:00-04:00",
+        "2026-10-30T14:30:00-04:00",
+    )]));
+    append_journal_line(
+        &env,
+        &json!({
+            "v": 1,
+            "ts": "2026-10-30T11:00:00-04:00",
+            "host": "test-host",
+            "kind": "gcal.ack",
+            "account": ACCOUNT,
+            "key": {"calendar_id": "primary", "event_id": "moved-ack"},
+            "scope": "event",
+            "acked": true,
+            "via": "ack",
+            "seen": {
+                "title": "PRIVATE_SEEN_TITLE",
+                "start": "2026-10-30T13:00:00-04:00",
+                "end": "2026-10-30T13:30:00-04:00",
+                "original_start": null,
+            },
+        }),
+    );
+
+    let report = run_list_json(&env, &fake, &[]);
+    let row = report["events"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .find(|row| row["event_id"] == "moved-ack")
+        .expect("moved event");
+    assert_eq!(row["ack"]["state"], "acked");
+    assert_eq!(row["ack_stale"], true);
+    assert_eq!(row["ack"].as_object().unwrap().len(), 4);
+    assert!(!report.to_string().contains("PRIVATE_SEEN_TITLE"));
+
+    let output = list_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("ack stale · moved since ack?"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
 fn bare_gcal_lists_today_and_json_keeps_only_public_normalized_fields() {
     let env = GcalEnv::new("bob-cli-gcal-list");
     prepare(&env);

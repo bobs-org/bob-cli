@@ -3789,6 +3789,34 @@ fn sync_row_json_carries_ack_evidence_and_counts() {
 }
 
 #[test]
+fn sync_row_json_marks_a_moved_live_event_receipt_stale() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-ack-stale");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    let mut envelope: Value =
+        serde_json::from_str(&unacked_envelope()).expect("event envelope");
+    envelope["events"][0]["start"]["dateTime"] =
+        json!("2026-10-30T14:00:00-04:00");
+    envelope["events"][0]["end"]["dateTime"] =
+        json!("2026-10-30T15:00:00-04:00");
+    fake.events_json(&serde_json::to_string(&envelope).expect("envelope"));
+    append_ack_receipt(&env, "primary", "ext-open", "event");
+
+    let output = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let report: Value = serde_json::from_slice(&output.stdout).expect("JSON");
+    let row = report["rows"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .find(|row| row["title"] == "External review")
+        .expect("external row");
+    assert_eq!(row["ack"]["state"], "acked");
+    assert_eq!(row["ack_stale"], true);
+    assert!(!row["ack"].to_string().contains("seen"));
+}
+
+#[test]
 fn deleting_the_tag_files_an_inferred_ack_once() {
     let env = GcalEnv::new("bob-cli-gcal-sync-inferred-ack");
     prepare(&env);

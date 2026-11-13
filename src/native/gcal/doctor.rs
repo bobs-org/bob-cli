@@ -41,6 +41,7 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
                 "today",
                 "journal",
                 "notes",
+                "acks",
                 "writer",
             ] {
                 checks.push(skipped(id, "no gcal config"));
@@ -243,12 +244,18 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
         selected_account.as_deref(),
         gog.as_ref(),
     ));
+    checks.push(acks_check(
+        &bob_dir,
+        selected_account.as_deref(),
+        gog.as_ref(),
+    ));
     checks.push(writer_check(config.writer(), &host));
     checks.push(last_sync_check());
     finish(args, &host, checks)
 }
 
 const NOTES_LOOKUP_CAP: usize = 25;
+const ACKS_LOOKUP_CAP: usize = 25;
 
 fn notes_check(
     vault: &Path,
@@ -411,6 +418,154 @@ fn is_notes_not_found(error: &GcalError) -> bool {
     error.kind() == "not_found"
         || error.message().to_ascii_lowercase().contains("not found")
         || error.message().to_ascii_lowercase().contains("no such")
+}
+
+fn acks_check(vault: &Path, account: Option<&str>, gog: Option<&Gog>) -> Check {
+    let (book, _) = match journal::load_acks(vault) {
+        Ok(loaded) => loaded,
+        Err(_) => {
+            return Check {
+                id: "acks",
+                status: CheckStatus::Warn,
+                summary: "could not read acknowledgement receipts".to_string(),
+                fix: Some("inspect .bob/gcal/<host>.jsonl".to_string()),
+            };
+        }
+    };
+    let folded: Vec<_> = book.iter().collect();
+    let malformed = book.malformed;
+    let Some(account) = account else {
+        let live = folded.iter().filter(|receipt| receipt.acked).count();
+        let clears = folded.len().saturating_sub(live);
+        return Check {
+            id: "acks",
+            status: if malformed == 0 {
+                CheckStatus::Skip
+            } else {
+                CheckStatus::Warn
+            },
+            summary: format!(
+                "{live} live · {clears} clears · {malformed} malformed · account not resolved; orphan and stale checks skipped"
+            ),
+            fix: (malformed > 0)
+                .then(|| "inspect .bob/gcal/<host>.jsonl".to_string()),
+        };
+    };
+    let live: Vec<_> = folded
+        .iter()
+        .copied()
+        .filter(|receipt| {
+            receipt.acked && receipt.account.eq_ignore_ascii_case(account)
+        })
+        .collect();
+    let clears = folded
+        .iter()
+        .filter(|receipt| {
+            !receipt.acked && receipt.account.eq_ignore_ascii_case(account)
+        })
+        .count();
+    let foreign = folded
+        .iter()
+        .filter(|receipt| !receipt.account.eq_ignore_ascii_case(account))
+        .count();
+    let mut orphaned = Vec::new();
+    let mut stale = Vec::new();
+    let mut not_checked = 0usize;
+    if let Some(gog) = gog {
+        for (index, receipt) in live.iter().enumerate() {
+            if index >= ACKS_LOOKUP_CAP {
+                not_checked += live.len() - ACKS_LOOKUP_CAP;
+                break;
+            }
+            match gog.event(&receipt.calendar_id, &receipt.key, account) {
+                Ok(raw) => {
+                    match GcalEvent::from_google(&receipt.calendar_id, raw) {
+                        Ok(event) => {
+                            if event.status == "cancelled" {
+                                orphaned.push(*receipt);
+                            }
+                            if receipt.scope == journal::AckScope::Event
+                                && journal::ack_is_stale(
+                                    receipt,
+                                    &event.ack_seen(),
+                                )
+                            {
+                                stale.push(*receipt);
+                            }
+                        }
+                        Err(_) => not_checked += 1,
+                    }
+                }
+                Err(error) if is_notes_not_found(&error) => {
+                    orphaned.push(*receipt)
+                }
+                Err(_) => not_checked += 1,
+            }
+        }
+    } else {
+        not_checked = live.len();
+    }
+
+    let mut issues = Vec::new();
+    let mut fixes = Vec::new();
+    if !orphaned.is_empty() {
+        issues.push(format!("{} orphaned", orphaned.len()));
+        fixes.push(ack_clear_command(orphaned[0]));
+    }
+    if !stale.is_empty() {
+        issues.push(format!("{} stale", stale.len()));
+        fixes.push(format!(
+            "bob gcal ack -i {} -C {} -s event",
+            stale[0].key, stale[0].calendar_id
+        ));
+    }
+    if foreign > 0 {
+        issues.push(format!("{foreign} foreign-account"));
+        let first = folded
+            .iter()
+            .find(|receipt| !receipt.account.eq_ignore_ascii_case(account))
+            .expect("foreign count has a matching receipt");
+        fixes.push(format!(
+            "sign in as {} to review that account's receipts",
+            first.account
+        ));
+    }
+    if malformed > 0 {
+        issues.push(format!("{malformed} malformed"));
+        fixes.push("inspect .bob/gcal/<host>.jsonl".to_string());
+    }
+    if not_checked > 0 {
+        issues.push(format!("{not_checked} not checked"));
+    }
+    let status = if issues.is_empty() {
+        CheckStatus::Ok
+    } else {
+        CheckStatus::Warn
+    };
+    Check {
+        id: "acks",
+        status,
+        summary: format!(
+            "{} live · {clears} clears · {} orphaned · {} stale · {foreign} foreign-account · {malformed} malformed · {not_checked} not checked",
+            live.len(),
+            orphaned.len(),
+            stale.len(),
+        ),
+        fix: if fixes.is_empty() {
+            None
+        } else {
+            Some(fixes.join("\n"))
+        },
+    }
+}
+
+fn ack_clear_command(receipt: &journal::FoldedAck) -> String {
+    format!(
+        "bob gcal ack -c -i {} -C {} -s {}",
+        receipt.key,
+        receipt.calendar_id,
+        receipt.scope.as_str()
+    )
 }
 
 fn fail_from(error: &GcalError, id: &'static str) -> Check {
@@ -705,6 +860,7 @@ fn display_path(path: &Path, bob_dir: &Path) -> String {
 
 fn human_label(id: &str) -> &str {
     match id {
+        "acks" => "ack receipts",
         "default_root" => "default root",
         "last_sync" => "last sync",
         other => other,

@@ -127,7 +127,7 @@ fn ack_command() -> ClapCommand {
         .about("Review and acknowledge external Event Tasks")
         .long_about(
             "Bob asks once about every event you can't describe in Google: press `a` when Bob's handling is right, or `n` to write a private note. Until you answer, that Event Task carries an `#unacked` tag.\n\n\
-             A bare command lists the review queue in this build. A selector acknowledges one event unless `-c` clears its explicit receipt. `-d` and `-f json` only preview; they never write or prompt.",
+             Bare `ack` starts the one-key review session on a TTY; off a TTY it lists the queue with a hint. Explicit walks such as `-n` and `-a` need a TTY; use `-l`, `-f json`, or a one-shot selector in scripts. A selector acknowledges one event unless `-c` clears its explicit receipt. Clear needs a selector and never clears note history or another scope. On recurring cards, `a` defaults to All events; notes default to This event. `-d` and `-f json` only preview; they never write or prompt.",
         )
         .disable_help_flag(true)
         .arg(ack_all_arg())
@@ -136,9 +136,9 @@ fn ack_command() -> ClapCommand {
         .arg(ack_clear_arg())
         .arg(ack_day_arg())
         .arg(ack_dry_run_arg())
-        .arg(event_id_arg())
         .arg(ack_format_arg())
         .arg(help_arg())
+        .arg(event_id_arg())
         .arg(ack_list_arg())
         .arg(next_n_days_arg())
         .arg(quiet_arg())
@@ -258,7 +258,7 @@ fn doctor_command() -> ClapCommand {
     ClapCommand::new("doctor")
         .about(
             "Check the Calendar setup: gog, client, account, token, \
-             calendars, default root, today, journal, notes, and writer",
+             calendars, default root, today, journal, notes, acks, and writer",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
@@ -268,7 +268,7 @@ fn doctor_command() -> ClapCommand {
 }
 
 fn doctor_after_help() -> &'static str {
-    "The `notes` check reports how many private event notes fold, then warns on orphans (gone, cancelled, or declined events and series), unresolved routes, foreign-account notes, malformed `gcal.note` records, and notes past the 25-lookup cap.\n\nExamples:\n  bob gcal doctor\n  bob gcal doctor -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH"
+    "The `notes` check reports folded private notes, then warns on orphans (gone, cancelled, or declined events and series), unresolved routes, foreign-account notes, malformed `gcal.note` records, and notes past the 25-lookup cap. The `acks` check reports live receipts and explicit clears separately, plus malformed and foreign-account records, orphaned live receipts, stale event receipts, and lookups skipped by the 25-record cap. Series receipts look up their series key; only live event receipts can be stale.\n\nExamples:\n  bob gcal doctor\n  bob gcal doctor -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH"
 }
 
 fn login_command() -> ClapCommand {

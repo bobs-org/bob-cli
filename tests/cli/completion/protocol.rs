@@ -124,6 +124,19 @@ fn saved_template_group_and_format_complete_as_commands_and_static_choices() {
 }
 
 #[test]
+fn gcal_ack_completes_scope_and_format_choices() {
+    let scopes = complete(&["bob", "gcal", "ack", "--scope", ""]);
+    assert_success(&scopes);
+    assert_eq!(values(&scopes), vec!["event", "series"]);
+    assert!(groups(&scopes).iter().all(|group| group == "scope"));
+
+    let formats = complete(&["bob", "gcal", "ack", "--format", ""]);
+    assert_success(&formats);
+    assert_eq!(values(&formats), vec!["human", "json"]);
+    assert!(groups(&formats).iter().all(|group| group == "format"));
+}
+
+#[test]
 fn task_move_is_discoverable_with_its_options() {
     let group = complete(&["bob", "task", ""]);
     assert_success(&group);

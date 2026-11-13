@@ -166,6 +166,8 @@ struct ReportRow {
     unacked: bool,
     /// Additive review evidence object; never note or ack text.
     ack: Value,
+    /// A live event receipt's captured times differ from this event.
+    ack_stale: bool,
 }
 
 struct SyncReport {
@@ -1431,6 +1433,25 @@ fn row_ack(
         .json()
 }
 
+fn row_ack_stale(
+    acks: &journal::AckBook,
+    account: &str,
+    snapshot: &snapshot::DaySnapshot,
+    calendar_id: &str,
+    event_id: &str,
+) -> bool {
+    let Some(listed) = snapshot.events.iter().find(|listed| {
+        listed.event.key.calendar_id == calendar_id
+            && listed.event.key.event_id == event_id
+    }) else {
+        return false;
+    };
+    acks.event(account, calendar_id, event_id)
+        .is_some_and(|receipt| {
+            journal::ack_is_stale(receipt, &listed.event.ack_seen())
+        })
+}
+
 /// Open task rows carrying Bob's warning tag in the final note: the
 /// end-of-run unacked count for human and JSON surfaces. Counts the
 /// lines, not the books, so dry runs, unchanged runs, and hand-typed
@@ -1487,6 +1508,13 @@ fn report_rows(
                 &added.calendar_id,
                 &added.event_id,
             ),
+            ack_stale: row_ack_stale(
+                acks,
+                &account,
+                snapshot,
+                &added.calendar_id,
+                &added.event_id,
+            ),
         });
     }
     for restored in &plan.rows_restored {
@@ -1524,6 +1552,13 @@ fn report_rows(
                 &restored.calendar_id,
                 &restored.event_id,
             ),
+            ack_stale: row_ack_stale(
+                acks,
+                &account,
+                snapshot,
+                &restored.calendar_id,
+                &restored.event_id,
+            ),
         });
     }
     for adopted in &plan.rows_adopted {
@@ -1557,6 +1592,13 @@ fn report_rows(
                 &account,
                 ack_on,
                 adopted.row_kind == "task",
+                snapshot,
+                &adopted.calendar_id,
+                &adopted.event_id,
+            ),
+            ack_stale: row_ack_stale(
+                acks,
+                &account,
                 snapshot,
                 &adopted.calendar_id,
                 &adopted.event_id,
@@ -1611,6 +1653,13 @@ fn report_rows(
             note: listed_note(snapshot, &gone.calendar_id, &gone.event_id),
             unacked: false,
             ack: gone_ack,
+            ack_stale: row_ack_stale(
+                acks,
+                &account,
+                snapshot,
+                &gone.calendar_id,
+                &gone.event_id,
+            ),
         });
     }
     for updated in &plan.rows_updated {
@@ -1648,6 +1697,13 @@ fn report_rows(
                 &updated.calendar_id,
                 &updated.event_id,
             ),
+            ack_stale: row_ack_stale(
+                acks,
+                &account,
+                snapshot,
+                &updated.calendar_id,
+                &updated.event_id,
+            ),
         });
     }
     for held in &plan.rows_held {
@@ -1677,6 +1733,13 @@ fn report_rows(
                 &account,
                 ack_on,
                 held.row_kind == "task",
+                snapshot,
+                &held.calendar_id,
+                &held.event_id,
+            ),
+            ack_stale: row_ack_stale(
+                acks,
+                &account,
                 snapshot,
                 &held.calendar_id,
                 &held.event_id,
@@ -1711,6 +1774,13 @@ fn report_rows(
                 &closed.calendar_id,
                 &closed.event_id,
             ),
+            ack_stale: row_ack_stale(
+                acks,
+                &account,
+                snapshot,
+                &closed.calendar_id,
+                &closed.event_id,
+            ),
         });
     }
     for cancelled in &plan.rows_cancelled {
@@ -1731,6 +1801,7 @@ fn report_rows(
             note: Value::Null,
             unacked: false,
             ack: journal::AckStatus::not_required().json(),
+            ack_stale: false,
         });
     }
     for removed in &plan.rows_removed {
@@ -1755,6 +1826,13 @@ fn report_rows(
             ),
             unacked: false,
             ack: journal::AckStatus::not_required().json(),
+            ack_stale: row_ack_stale(
+                acks,
+                &account,
+                snapshot,
+                &removed.calendar_id,
+                &removed.event_id,
+            ),
         });
     }
     for upgraded in &plan.rows_upgraded {
@@ -1788,6 +1866,13 @@ fn report_rows(
                 &upgraded.calendar_id,
                 &upgraded.event_id,
             ),
+            ack_stale: row_ack_stale(
+                acks,
+                &account,
+                snapshot,
+                &upgraded.calendar_id,
+                &upgraded.event_id,
+            ),
         });
     }
     for learned in &plan.learned {
@@ -1808,6 +1893,7 @@ fn report_rows(
             note: Value::Null,
             unacked: false,
             ack: journal::AckStatus::not_required().json(),
+            ack_stale: false,
         });
     }
     rows
@@ -2251,6 +2337,7 @@ fn report_json(report: &SyncReport) -> Value {
                 }),
                 "note": row.note,
                 "ack": row.ack,
+                "ack_stale": row.ack_stale,
             })
         })
         .collect();
@@ -2415,7 +2502,15 @@ fn print_human(report: &SyncReport) {
         } else {
             String::new()
         };
-        println!("  {sigil} {:<7} {detail}{bullets}{unacked}", row.kind);
+        let stale = if row.ack_stale {
+            "  ⚠ ack stale · moved since ack?"
+        } else {
+            ""
+        };
+        println!(
+            "  {sigil} {:<7} {detail}{bullets}{unacked}{stale}",
+            row.kind
+        );
     }
     for entry in &report.entries {
         println!("  {}", meet_human_line(entry));

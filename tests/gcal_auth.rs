@@ -1106,6 +1106,7 @@ fn doctor_json_healthy_setup() {
             "journal",
             "journal_malformed",
             "notes",
+            "acks",
             "writer",
             "last_sync",
         ]
@@ -1476,6 +1477,33 @@ fn series_note(series: &str, text: &str) -> Value {
     })
 }
 
+fn ack_receipt(
+    key: Value,
+    scope: &str,
+    account: &str,
+    acked: bool,
+    start: &str,
+    end: &str,
+) -> Value {
+    json!({
+        "v": 1,
+        "ts": "2026-10-30T12:00:00-04:00",
+        "host": HOST,
+        "kind": "gcal.ack",
+        "account": account,
+        "key": key,
+        "scope": scope,
+        "acked": acked,
+        "via": "ack",
+        "seen": {
+            "title": "PRIVATE_SEEN_TITLE",
+            "start": start,
+            "end": end,
+            "original_start": null,
+        },
+    })
+}
+
 fn google_event(id: &str, status: &str, answer: &str) -> Value {
     json!({
         "id": id,
@@ -1501,6 +1529,201 @@ fn notes_from(env: &GcalEnv, fake: &FakeGog) -> Value {
     let output = run_gcal(env, fake, &["doctor", "-f", "json"]);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     check(&json_stdout(&output), "notes").clone()
+}
+
+fn acks_from(env: &GcalEnv, fake: &FakeGog) -> Value {
+    let output = run_gcal(env, fake, &["doctor", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    check(&json_stdout(&output), "acks").clone()
+}
+
+#[test]
+fn doctor_ack_check_reports_clears_orphans_foreign_malformed_and_stale() {
+    let env = GcalEnv::new("bob-cli-gcal-doctor-acks-matrix");
+    env.prepare_healthy_vault();
+    let fake = FakeGog::new(&env, "gog");
+    let seen_start = "2026-10-30T09:00:00-04:00";
+    let seen_end = "2026-10-30T10:00:00-04:00";
+    append_journal(
+        &env,
+        ack_receipt(
+            json!({"calendar_id": "primary", "event_id": "live"}),
+            "event",
+            ACCOUNT,
+            true,
+            seen_start,
+            seen_end,
+        ),
+    );
+    lookup_event(&fake, "live", "confirmed", "accepted");
+    append_journal(
+        &env,
+        ack_receipt(
+            json!({"calendar_id": "primary", "event_id": "moved"}),
+            "event",
+            ACCOUNT,
+            true,
+            "2026-10-30T08:00:00-04:00",
+            "2026-10-30T09:00:00-04:00",
+        ),
+    );
+    lookup_event(&fake, "moved", "confirmed", "accepted");
+    append_journal(
+        &env,
+        ack_receipt(
+            json!({"calendar_id": "primary", "series": "series-master"}),
+            "series",
+            ACCOUNT,
+            true,
+            "2026-10-30T07:00:00-04:00",
+            "2026-10-30T08:00:00-04:00",
+        ),
+    );
+    lookup_event(&fake, "series-master", "confirmed", "accepted");
+    append_journal(
+        &env,
+        ack_receipt(
+            json!({"calendar_id": "primary", "event_id": "missing"}),
+            "event",
+            ACCOUNT,
+            true,
+            seen_start,
+            seen_end,
+        ),
+    );
+    append_journal(
+        &env,
+        ack_receipt(
+            json!({"calendar_id": "primary", "event_id": "cancelled"}),
+            "event",
+            ACCOUNT,
+            true,
+            seen_start,
+            seen_end,
+        ),
+    );
+    lookup_event(&fake, "cancelled", "cancelled", "accepted");
+    append_journal(
+        &env,
+        ack_receipt(
+            json!({"calendar_id": "primary", "event_id": "cleared"}),
+            "event",
+            ACCOUNT,
+            false,
+            seen_start,
+            seen_end,
+        ),
+    );
+    append_journal(
+        &env,
+        ack_receipt(
+            json!({"calendar_id": "primary", "event_id": "foreign"}),
+            "event",
+            "other@example.com",
+            true,
+            seen_start,
+            seen_end,
+        ),
+    );
+    append_journal(
+        &env,
+        json!({
+            "v": 1,
+            "ts": "2026-10-30T12:00:00-04:00",
+            "host": HOST,
+            "kind": "gcal.ack",
+            "account": ACCOUNT,
+            "key": {"calendar_id": "primary", "event_id": "bad"},
+            "scope": "this-and-following",
+            "acked": true,
+            "via": "ack",
+        }),
+    );
+    let journal_path = env.vault().join(".bob/gcal/test-host.jsonl");
+    let before = fs::read_to_string(&journal_path).expect("journal before");
+
+    let acks = acks_from(&env, &fake);
+    assert_eq!(acks["status"], "warn", "{acks}");
+    let summary = acks["summary"].as_str().unwrap_or_default();
+    for expected in [
+        "5 live",
+        "1 clears",
+        "2 orphaned",
+        "1 stale",
+        "1 foreign-account",
+        "1 malformed",
+        "0 not checked",
+    ] {
+        assert!(summary.contains(expected), "missing {expected}: {acks}");
+    }
+    let fixes = acks["fix"].as_str().unwrap_or_default();
+    assert!(fixes.contains("bob gcal ack -c -i"), "{fixes}");
+    assert!(
+        fixes.contains("bob gcal ack -i moved -C primary -s event"),
+        "{fixes}"
+    );
+    assert!(fixes.contains("inspect .bob/gcal/<host>.jsonl"), "{fixes}");
+    assert!(!acks.to_string().contains("PRIVATE_SEEN_TITLE"));
+    assert_eq!(
+        fs::read_to_string(journal_path).expect("journal after"),
+        before,
+        "doctor diagnostics must not modify receipt history"
+    );
+}
+
+#[test]
+fn doctor_ack_lookup_errors_and_cap_are_not_reported_as_orphans() {
+    let env = GcalEnv::new("bob-cli-gcal-doctor-acks-cap");
+    env.prepare_healthy_vault();
+    let fake = FakeGog::new(&env, "gog");
+    for index in 0..26 {
+        let id = format!("ack-{index:02}");
+        append_journal(
+            &env,
+            ack_receipt(
+                json!({"calendar_id": "primary", "event_id": id}),
+                "event",
+                ACCOUNT,
+                true,
+                "2026-10-30T09:00:00-04:00",
+                "2026-10-30T10:00:00-04:00",
+            ),
+        );
+        if index == 0 {
+            fake.event_lookup(
+                "ack-00",
+                r#"{"_fail":{"stderr":"connection reset","code":1}}"#,
+            );
+        } else if index < 25 {
+            lookup_event(&fake, &id, "confirmed", "accepted");
+        }
+    }
+
+    let acks = acks_from(&env, &fake);
+    assert_eq!(acks["status"], "warn", "{acks}");
+    let summary = acks["summary"].as_str().unwrap_or_default();
+    assert!(summary.contains("26 live"), "{acks}");
+    assert!(summary.contains("0 orphaned"), "{acks}");
+    assert!(summary.contains("2 not checked"), "{acks}");
+}
+
+#[test]
+fn doctor_keeps_the_ack_check_visible_when_config_setup_fails() {
+    let env = GcalEnv::new("bob-cli-gcal-doctor-acks-setup");
+    env.write_config("gcal:\n  timeout_secs: soon\n");
+    let fake = FakeGog::new(&env, "gog");
+    let output = run_gcal(&env, &fake, &["doctor", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let doc = json_stdout(&output);
+    assert_eq!(check(&doc, "acks")["status"], "skip");
+    assert!(
+        check(&doc, "acks")["summary"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("no gcal config"),
+        "{}",
+        check(&doc, "acks")
+    );
 }
 
 #[test]

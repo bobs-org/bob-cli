@@ -170,6 +170,20 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
             )
         })
         .collect();
+    let ack_stale: Vec<bool> = events
+        .iter()
+        .map(|event| {
+            ack_book
+                .event(
+                    &snapshot.account,
+                    &event.event.key.calendar_id,
+                    &event.event.key.event_id,
+                )
+                .is_some_and(|receipt| {
+                    journal::ack_is_stale(receipt, &event.event.ack_seen())
+                })
+        })
+        .collect();
     let mut counts = counts(events);
     counts.unacked = ack_states
         .iter()
@@ -187,6 +201,7 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
             args.include_omitted,
             &cells,
             &ack_states,
+            &ack_stale,
             last_sync_json(&newest),
             &past_open,
             &journal_warnings,
@@ -203,6 +218,7 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
             args.include_omitted,
             &cells,
             &ack_states,
+            &ack_stale,
             (day, is_today),
             &last_sync_human(&newest, unrendered, held),
             &journal_warnings,
@@ -650,6 +666,7 @@ fn print_json(
     include_omitted: bool,
     cells: &[VaultCell],
     ack_states: &[journal::AckStatus],
+    ack_stale: &[bool],
     last_sync: Value,
     past_open: &[(NaiveDate, String)],
     journal_warnings: &[String],
@@ -660,8 +677,9 @@ fn print_json(
         .iter()
         .zip(cells)
         .zip(ack_states)
-        .filter(|((event, _), _)| include_omitted || !matches!(event.inclusion, Inclusion::Omitted(_)))
-        .map(|((event, cell), ack)| {
+        .zip(ack_stale)
+        .filter(|(((event, _), _), _)| include_omitted || !matches!(event.inclusion, Inclusion::Omitted(_)))
+        .map(|(((event, cell), ack), ack_stale)| {
             let root = event.root.as_ref();
             json!({
                 "time": event.time,
@@ -689,6 +707,7 @@ fn print_json(
                 "vault": cell.vault,
                 "skip": cell.skip_json(),
                 "ack": ack.json(),
+                "ack_stale": ack_stale,
             })
         })
         .collect();
@@ -727,6 +746,7 @@ fn print_table(
     include_omitted: bool,
     cells: &[VaultCell],
     ack_states: &[journal::AckStatus],
+    ack_stale: &[bool],
     (day_for_hint, is_today): (NaiveDate, bool),
     sync_state: &str,
     journal_warnings: &[String],
@@ -748,16 +768,19 @@ fn print_table(
     );
     let headers = ["TIME", "EVENT", "RSVP", "ROOT", "VAULT"];
     let mut rows = Vec::new();
-    let shown: Vec<(&ListedEvent, &VaultCell, &journal::AckStatus)> = events
-        .iter()
-        .zip(cells)
-        .zip(ack_states)
-        .filter(|((event, _), _)| {
-            include_omitted || !matches!(event.inclusion, Inclusion::Omitted(_))
-        })
-        .map(|((event, cell), ack)| (event, cell, ack))
-        .collect();
-    for (event, cell, ack) in &shown {
+    let shown: Vec<(&ListedEvent, &VaultCell, &journal::AckStatus, bool)> =
+        events
+            .iter()
+            .zip(cells)
+            .zip(ack_states)
+            .zip(ack_stale)
+            .filter(|(((event, _), _), _)| {
+                include_omitted
+                    || !matches!(event.inclusion, Inclusion::Omitted(_))
+            })
+            .map(|(((event, cell), ack), stale)| (event, cell, ack, *stale))
+            .collect();
+    for (event, cell, ack, _) in &shown {
         let root_label = event
             .root
             .as_ref()
@@ -800,7 +823,7 @@ fn print_table(
         &styler.dim(&format_row(&headers.map(str::to_string), &widths)),
     );
     output.push('\n');
-    for ((event, _, ack), row) in shown.iter().zip(rows.iter()) {
+    for ((event, _, ack, stale), row) in shown.iter().zip(rows.iter()) {
         let mut cells = row.clone();
         if let Some(label) = buffer_label(event) {
             cells[0] = format!("{} {}", event.time, styler.dim(&label));
@@ -818,6 +841,9 @@ fn print_table(
         }
         output.push_str(&format_row(&cells, &widths));
         output.push('\n');
+        if *stale {
+            output.push_str("  ⚠ ack stale · moved since ack?\n");
+        }
         if let Some(root) = event.root.as_ref() {
             for warning in &root.warnings {
                 output.push_str(&styler.yellow(&format!(

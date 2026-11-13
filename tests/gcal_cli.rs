@@ -49,6 +49,7 @@ fn top_help_pins_the_command_surface() {
         "expected about:\n{help}"
     );
     for (subcommand, about) in [
+        ("ack", "Review and acknowledge external Event Tasks"),
         ("calendars", "calendars with id"),
         ("doctor", "Check the Calendar setup"),
         ("list", "List a local day of events"),
@@ -218,6 +219,8 @@ fn logout_and_doctor_help_carry_examples() {
                 "bob gcal doctor",
                 "BOB_DIR",
                 "notes",
+                "acks",
+                "stale event receipts",
                 "25-lookup",
             ],
         ),
