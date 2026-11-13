@@ -556,28 +556,23 @@ fn is_bullet_section(
     reserved: &BTreeSet<usize>,
 ) -> bool {
     heading.title != "Tasks"
-        && !is_generated_notebooks_heading(heading)
-        && !is_generated_albums_heading(heading)
+        && !is_generated_catalog_heading(heading)
         && !reserved.contains(&heading.line_index)
 }
 
-/// The bob-written `## Notebooks` catalog heading. Its section belongs to
-/// `bob notebooks sync`, so it is never a bullet target or completion row.
-fn is_generated_notebooks_heading(heading: &MarkdownHeading<'_>) -> bool {
-    heading.level == 2 && heading.title == "Notebooks"
+/// Bob-written catalog headings belong to their catalog sync command, so they
+/// are never bullet targets or completion rows.
+fn is_generated_catalog_heading(heading: &MarkdownHeading<'_>) -> bool {
+    heading.level == 2
+        && crate::native::host_catalog::GENERATED_CATALOGS
+            .iter()
+            .any(|spec| heading.title == spec.heading)
 }
 
-/// The bob-written `## Albums` catalog heading. Its section belongs to
-/// `bob albums sync`, so it is never a bullet target or completion row.
-fn is_generated_albums_heading(heading: &MarkdownHeading<'_>) -> bool {
-    heading.level == 2 && heading.title == "Albums"
-}
-
-/// Refuse a section selector that can only mean the generated
-/// `## Notebooks` catalog. Excluding that heading from targeting alone
-/// would let the selector fall through to the pre-heading section and
-/// write there silently; an explicit selection must refuse instead.
-pub(super) fn reject_generated_notebooks_selector(
+/// Refuse a selector that can only mean a generated catalog heading.
+/// Excluding it from targeting alone would let the selector fall through to
+/// the pre-heading section and write there silently.
+pub(super) fn reject_generated_catalog_selector(
     contents: &str,
     selector: Option<&str>,
     exact: bool,
@@ -587,64 +582,45 @@ pub(super) fn reject_generated_notebooks_selector(
     };
     let lines = line_spans(contents);
     let headings = markdown_headings(&lines);
-    let Some(generated) = headings
-        .iter()
-        .find(|heading| is_generated_notebooks_heading(heading))
-    else {
-        return Ok(());
-    };
-    if resolved_bullet_heading_line(contents, selector, exact).is_some() {
-        return Ok(());
+    let specifications = [
+        (
+            &crate::native::host_catalog::NOTEBOOKS,
+            "`## Notebooks` is the generated notebook catalog (written by \
+             `bob notebooks sync`) and is not a section target; pick another \
+             section, or capture into one of its notebooks",
+            "notebooks_section_generated",
+        ),
+        (
+            &crate::native::host_catalog::ALBUMS,
+            "`## Albums` is the generated album catalog (written by \
+             `bob albums sync`) and is not a section target; pick another \
+             section, or capture into one of its albums",
+            "albums_section_generated",
+        ),
+        (
+            &crate::native::host_catalog::PROJECTS,
+            "`## Projects` is the generated sub-project catalog (written by \
+             `bob projects sync`) and is not a section target; pick another \
+             section, or capture into one of its projects",
+            "projects_section_generated",
+        ),
+    ];
+    for (spec, message, code) in specifications {
+        let Some(generated) = headings.iter().find(|heading| {
+            heading.level == 2 && heading.title == spec.heading
+        }) else {
+            continue;
+        };
+        if resolved_bullet_heading_line(contents, selector, exact).is_some() {
+            return Ok(());
+        }
+        if raw_heading_matches(generated.title, Some(selector), exact)
+            || slug_heading_matches(generated.title, selector, exact)
+        {
+            return Err(CaptureError::usage_code(message, code));
+        }
     }
-    let matches_generated =
-        raw_heading_matches(generated.title, Some(selector), exact)
-            || slug_heading_matches(generated.title, selector, exact);
-    if !matches_generated {
-        return Ok(());
-    }
-    Err(CaptureError::usage_code(
-        "`## Notebooks` is the generated notebook catalog (written by \
-         `bob notebooks sync`) and is not a section target; pick another \
-         section, or capture into one of its notebooks",
-        "notebooks_section_generated",
-    ))
-}
-
-/// Refuse a section selector that can only mean the generated
-/// `## Albums` catalog. Excluding that heading from targeting alone
-/// would let the selector fall through to the pre-heading section and
-/// write there silently; an explicit selection must refuse instead.
-pub(super) fn reject_generated_albums_selector(
-    contents: &str,
-    selector: Option<&str>,
-    exact: bool,
-) -> Result<(), CaptureError> {
-    let Some(selector) = selector else {
-        return Ok(());
-    };
-    let lines = line_spans(contents);
-    let headings = markdown_headings(&lines);
-    let Some(generated) = headings
-        .iter()
-        .find(|heading| is_generated_albums_heading(heading))
-    else {
-        return Ok(());
-    };
-    if resolved_bullet_heading_line(contents, selector, exact).is_some() {
-        return Ok(());
-    }
-    let matches_generated =
-        raw_heading_matches(generated.title, Some(selector), exact)
-            || slug_heading_matches(generated.title, selector, exact);
-    if !matches_generated {
-        return Ok(());
-    }
-    Err(CaptureError::usage_code(
-        "`## Albums` is the generated album catalog (written by \
-         `bob albums sync`) and is not a section target; pick another \
-         section, or capture into one of its albums",
-        "albums_section_generated",
-    ))
+    Ok(())
 }
 
 pub(super) fn last_bullet_block_insert_index_in_range(

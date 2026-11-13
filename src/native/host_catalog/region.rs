@@ -81,6 +81,23 @@ pub(crate) const ALBUMS: RegionSpec<'static> = RegionSpec {
     strict_bare: true,
 };
 
+/// The direct-child project catalog spec: `[!projects]`, `## Projects`,
+/// before the first H2 on its first write, with strict malformed-opener
+/// handling.
+pub(crate) const PROJECTS: RegionSpec<'static> = RegionSpec {
+    callout: "projects",
+    heading: "Projects",
+    head_title: None,
+    placement: Placement::BeforeFirstH2,
+    legacy: None,
+    strict_bare: true,
+};
+
+/// Every Bob-owned catalog heading that capture and task-container code must
+/// protect as structural.
+pub(crate) const GENERATED_CATALOGS: &[RegionSpec<'static>] =
+    &[NOTEBOOKS, ALBUMS, PROJECTS];
+
 /// Why a host's managed region cannot be edited safely.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RegionDamage {

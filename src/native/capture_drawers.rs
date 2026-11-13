@@ -547,7 +547,9 @@ pub(crate) fn is_structural_h2_key(key: &str) -> bool {
     {
         return true;
     }
-    false
+    crate::native::host_catalog::GENERATED_CATALOGS
+        .iter()
+        .any(|spec| key == drawer_key(spec.heading))
 }
 
 // ---------------------------------------------------------------------------

@@ -1163,7 +1163,7 @@ fn explicit_notebooks_selector_refuses_instead_of_falling_through() {
         ("note", false),
         ("n", false),
     ] {
-        let error = super::super::reject_generated_notebooks_selector(
+        let error = super::super::reject_generated_catalog_selector(
             GENERATED_NOTEBOOKS,
             Some(selector),
             exact,
@@ -1183,14 +1183,14 @@ fn explicit_notebooks_selector_refuses_instead_of_falling_through() {
         (GENERATED_NOTEBOOKS, None),
         ("## Ideas\n", Some("notebooks")),
     ] {
-        super::super::reject_generated_notebooks_selector(
+        super::super::reject_generated_catalog_selector(
             contents, selector, false,
         )
         .expect("not refused");
     }
     // A user's own non-generated `Notebooks` heading elsewhere still wins
     // when it is an eligible match.
-    super::super::reject_generated_notebooks_selector(
+    super::super::reject_generated_catalog_selector(
         "## Notebooks\n\n## Notebooks Extra\n",
         Some("notebooks"),
         false,
@@ -1269,7 +1269,7 @@ fn explicit_albums_selector_refuses_instead_of_falling_through() {
         ("album", false),
         ("al", false),
     ] {
-        let error = super::super::reject_generated_albums_selector(
+        let error = super::super::reject_generated_catalog_selector(
             GENERATED_ALBUMS,
             Some(selector),
             exact,
@@ -1288,12 +1288,12 @@ fn explicit_albums_selector_refuses_instead_of_falling_through() {
         (GENERATED_ALBUMS, None),
         ("## Ideas\n", Some("albums")),
     ] {
-        super::super::reject_generated_albums_selector(
+        super::super::reject_generated_catalog_selector(
             contents, selector, false,
         )
         .expect("not refused");
     }
-    super::super::reject_generated_albums_selector(
+    super::super::reject_generated_catalog_selector(
         "## Albums\n\n## Albums Extra\n",
         Some("albums"),
         false,
@@ -1309,9 +1309,91 @@ fn explicit_albums_selector_refuses_instead_of_falling_through() {
         "\n",
         "## Ideas\n",
     );
-    super::super::reject_generated_albums_selector(
+    super::super::reject_generated_catalog_selector(
         fenced,
         Some("albums"),
+        false,
+    )
+    .expect("fenced example is not a generated heading");
+}
+
+const GENERATED_PROJECTS: &str = concat!(
+    "# Body\n",
+    "\n",
+    "## Projects\n",
+    "\n",
+    "> [!projects]\n",
+    ">\n",
+    "> - **[[child]]** — A child project.\n",
+    "\n",
+    "## Ideas\n",
+    "\n",
+    "- one\n",
+);
+
+#[test]
+fn generated_projects_section_is_never_completed_or_a_bullet_target() {
+    let titles: Vec<String> =
+        super::super::section_completion_rows(GENERATED_PROJECTS, "")
+            .into_iter()
+            .map(|row| row.title)
+            .collect();
+    assert_eq!(titles, vec!["Body".to_string(), "Ideas".to_string()]);
+    let headings: Vec<String> =
+        super::super::non_tasks_section_headings(GENERATED_PROJECTS)
+            .into_iter()
+            .map(|heading| heading.title)
+            .collect();
+    assert_eq!(headings, vec!["Body".to_string(), "Ideas".to_string()]);
+
+    let (updated, _) = super::super::insert_bullet_line(
+        GENERATED_PROJECTS,
+        BULLET,
+        Some("Ideas"),
+        false,
+    );
+    assert!(updated.contains(&format!("- one\n{BULLET}")), "{updated}");
+    let callout = "> [!projects]\n>\n> - **[[child]]** — A child project.\n";
+    assert!(updated.contains(callout), "{updated}");
+    assert!(!updated
+        .split(callout)
+        .nth(1)
+        .unwrap_or("")
+        .starts_with(BULLET));
+}
+
+#[test]
+fn explicit_projects_selector_refuses_instead_of_falling_through() {
+    for (selector, exact) in [
+        ("projects", false),
+        ("Projects", true),
+        ("project", false),
+        ("pro", false),
+    ] {
+        let error = super::super::reject_generated_catalog_selector(
+            GENERATED_PROJECTS,
+            Some(selector),
+            exact,
+        )
+        .expect_err(selector);
+        assert!(error.message.contains("generated sub-project catalog"));
+        assert_eq!(error.code.as_deref(), Some("projects_section_generated"));
+    }
+    for (contents, selector) in [
+        (GENERATED_PROJECTS, Some("Ideas")),
+        (GENERATED_PROJECTS, Some("zzz")),
+        (GENERATED_PROJECTS, None),
+        ("## Ideas\n", Some("projects")),
+    ] {
+        super::super::reject_generated_catalog_selector(
+            contents, selector, false,
+        )
+        .expect("not refused");
+    }
+    let fenced = "```md\n## Projects\n> [!projects]\n```\n## Ideas\n";
+    super::super::reject_generated_catalog_selector(
+        fenced,
+        Some("projects"),
         false,
     )
     .expect("fenced example is not a generated heading");

@@ -587,12 +587,7 @@ pub(super) fn plan_capture_to_target(
             exact,
             ..
         } => {
-            reject_generated_notebooks_selector(
-                &contents,
-                section_prefix.as_deref(),
-                *exact,
-            )?;
-            reject_generated_albums_selector(
+            reject_generated_catalog_selector(
                 &contents,
                 section_prefix.as_deref(),
                 *exact,

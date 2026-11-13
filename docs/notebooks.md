@@ -266,6 +266,8 @@ naming, the picker icon and parent rules, and Create notebook here.
   heading or into the callout. Owner `## Albums` catalogs use the same
   shared region engine (`[!albums]` after `## Notebooks`) and the same
   protection: `@body#albums` refuses with `albums_section_generated`.
+- The generated `## Projects` catalog uses the same protection:
+  `@body#projects` refuses with `projects_section_generated`.
 - `bob projects sync` never lists a notebook on a Sub-projects line.
 
 ## Sync

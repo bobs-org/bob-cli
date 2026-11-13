@@ -191,6 +191,21 @@ fn capture_prj_drawer_structural_and_reserved_refuse() {
             "use `@proj#<Heading>` to capture into a project `##` section",
         ),
         (
+            "structural-notebooks",
+            "jot @proj+prj#notebooks",
+            "use `@proj#<Heading>` to capture into a project `##` section",
+        ),
+        (
+            "structural-albums",
+            "jot @proj+prj#albums",
+            "use `@proj#<Heading>` to capture into a project `##` section",
+        ),
+        (
+            "structural-projects",
+            "jot @proj+prj#projects",
+            "use `@proj#<Heading>` to capture into a project `##` section",
+        ),
+        (
             "reserved-links",
             "jot @proj+prj#links",
             "`LINKS` is managed by Bob; name the section something else",
@@ -204,7 +219,10 @@ fn capture_prj_drawer_structural_and_reserved_refuse() {
                 if json { "json" } else { "human" }
             ));
             let vault = temp.path().join("vault");
-            write_file(&vault.join("proj.md"), PROJECT_NOTE);
+            let note = format!(
+                "{PROJECT_NOTE}\n## Notebooks\n\n> [!notebooks]\n>\n> - row\n\n## Albums\n\n> [!albums]\n>\n> - row\n\n## Projects\n\n> [!projects]\n>\n> - row\n"
+            );
+            write_file(&vault.join("proj.md"), &note);
             let mut command = bob_command();
             command.arg("capture").arg("-b").arg(&vault);
             if json {
@@ -236,7 +254,7 @@ fn capture_prj_drawer_structural_and_reserved_refuse() {
             );
             assert_eq!(
                 fs::read_to_string(vault.join("proj.md")).expect("read note"),
-                PROJECT_NOTE,
+                note,
                 "{name} / {json} must leave the note unchanged"
             );
         }

@@ -7534,7 +7534,9 @@ selector that can only mean it (`@note#notebooks`) refuses with
 `notebooks_section_generated` instead of falling through to the pre-heading
 section. The bob-written `## Albums` catalog heading is protected the same
 way (see [owner catalogs](records.md#albums)): `@body#albums` refuses with
-`albums_section_generated`. A matching non-H1 section is preferred; a matching H1 heading is used only when no
+`albums_section_generated`. The bob-written `## Projects` catalog is protected
+too: `@body#projects` refuses with `projects_section_generated`. A matching
+non-H1 section is preferred; a matching H1 heading is used only when no
 non-H1 heading matches. If no heading matches, the bullet goes into the
 pre-heading (zeroth) section. When the destination note is an article
 (`type: "[[article]]"`), selectors also match on heading identity: the title

@@ -726,7 +726,7 @@ fn mg15_section_slug_title_cases_and_exact_literal_preserves_text() {
 
 #[test]
 fn section_resolver_uses_existing_headings_and_refuses_structural_titles() {
-    let snapshot = snapshot(&[
+    let base_snapshot = snapshot(&[
         ("src.md", "- [ ] #task Source ^src\n"),
         (
             "areas/work.md",
@@ -734,7 +734,7 @@ fn section_resolver_uses_existing_headings_and_refuses_structural_titles() {
         ),
     ]);
     let existing = prepare(
-        &snapshot,
+        &base_snapshot,
         &request(
             &["src:src"],
             MergeContainer::Section {
@@ -751,7 +751,7 @@ fn section_resolver_uses_existing_headings_and_refuses_structural_titles() {
         .contains("## Future Work\n- Existing\n- Source\n"));
 
     let reserved = prepare(
-        &snapshot,
+        &base_snapshot,
         &request(
             &["src:src"],
             MergeContainer::Section {
@@ -765,6 +765,32 @@ fn section_resolver_uses_existing_headings_and_refuses_structural_titles() {
     )
     .expect_err("Tasks is structural");
     assert_eq!(reserved.code, "merge_section_reserved");
+
+    for title in ["Notebooks", "Albums", "Projects"] {
+        let catalog_note = format!(
+            "## {title}\n\n> [!{}]\n>\n> - row\n",
+            title.to_ascii_lowercase()
+        );
+        let catalog_snapshot = snapshot(&[
+            ("src.md", "- [ ] #task Source ^src\n"),
+            ("areas/work.md", &catalog_note),
+        ]);
+        let error = prepare(
+            &catalog_snapshot,
+            &request(
+                &["src:src"],
+                MergeContainer::Section {
+                    note: "areas/work".to_string(),
+                    selector: DrawerSelector {
+                        text: title.to_string(),
+                        exact: false,
+                    },
+                },
+            ),
+        )
+        .expect_err("generated catalog heading is reserved");
+        assert_eq!(error.code, "merge_section_reserved", "{title}");
+    }
 }
 
 #[test]
